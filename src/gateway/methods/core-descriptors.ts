@@ -85,6 +85,8 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["question.get", null, "operator.questions", "2026.7"],
   ["question.list", null, "operator.questions", "2026.7"],
   ["plugin.approval.list", null, "operator.approvals", "<=2026.7"],
+  ["plugin.approval.external.prepare", null, "operator.approvals", "2026.8"],
+  ["plugin.approval.external.start", null, "operator.approvals", "2026.8"],
   ["plugin.approval.request", null, "operator.approvals", "<=2026.7"],
   ["plugin.approval.waitDecision", null, "operator.approvals", "<=2026.7"],
   ["plugin.approval.resolve", null, "operator.approvals", "<=2026.7"],

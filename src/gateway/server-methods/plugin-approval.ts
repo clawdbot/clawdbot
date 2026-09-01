@@ -4,10 +4,14 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
+  formatValidationErrors,
+  validatePluginApprovalExternalPrepareParams,
+  validatePluginApprovalExternalStartParams,
   validatePluginApprovalRequestParams,
   validatePluginApprovalResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { sanitizeApprovalScope, type ApprovalScope } from "../../infra/approval-scope.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import {
   exceedsApprovalTextLimit,
@@ -21,12 +25,15 @@ import type {
   PluginApprovalResolved,
 } from "../../infra/plugin-approvals.js";
 import {
+  normalizePluginExternalResolution,
   PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
   PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
   resolvePluginApprovalTimeoutMs,
   truncatePluginApprovalDetail,
 } from "../../infra/plugin-approvals.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
+import { canReviewOperatorApproval } from "../operator-approval-authorization.js";
+import type { PluginExternalVerificationRuntime } from "../plugin-external-verification-runtime.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { runApprovalRequestDeliveries } from "./approval-request-delivery.js";
@@ -42,7 +49,6 @@ import {
   resolveApprovalDecisionParams,
 } from "./approval-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
 
 type PluginApprovalIosPushDelivery = {
   handleRequested?: (
@@ -58,7 +64,11 @@ type PluginApprovalIosPushDelivery = {
 /** Create plugin approval handlers backed by the shared approval manager. */
 export function createPluginApprovalHandlers(
   manager: ExecApprovalManager<PluginApprovalRequestPayload>,
-  opts?: { forwarder?: ExecApprovalForwarder; iosPushDelivery?: PluginApprovalIosPushDelivery },
+  opts?: {
+    forwarder?: ExecApprovalForwarder;
+    iosPushDelivery?: PluginApprovalIosPushDelivery;
+    externalVerificationRuntime?: PluginExternalVerificationRuntime;
+  },
 ): GatewayRequestHandlers {
   return {
     "plugin.approval.list": async ({ respond, client, context }) => {
@@ -73,18 +83,144 @@ export function createPluginApprovalHandlers(
         undefined,
       );
     },
-    "plugin.approval.request": async ({ params, client, respond, context }) => {
-      if (
-        !assertValidParams(
-          params,
-          validatePluginApprovalRequestParams,
-          "plugin.approval.request",
-          respond,
-        )
-      ) {
+    "plugin.approval.external.prepare": async ({ params, respond, client }) => {
+      if (!validatePluginApprovalExternalPrepareParams(params)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `invalid plugin.approval.external.prepare params: ${formatValidationErrors(
+              validatePluginApprovalExternalPrepareParams.errors,
+            )}`,
+          ),
+        );
+        return;
+      }
+      if (!canReviewOperatorApproval(client)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.FORBIDDEN,
+            "external verification actions require an authorized approval reviewer",
+          ),
+        );
         return;
       }
       const p = params as {
+        id: string;
+        decision: "allow-once" | "allow-always";
+      };
+      try {
+        const prepared = opts?.externalVerificationRuntime?.prepareNativeAction({
+          approvalId: p.id,
+          decision: p.decision,
+          reviewerDeviceId: client?.connect.device?.id,
+        });
+        if (!prepared) {
+          throw new Error("external verification approval runtime is not available");
+        }
+        respond(true, { intent: prepared.intent, actionToken: prepared.token }, undefined);
+      } catch (error) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)),
+        );
+      }
+    },
+    "plugin.approval.external.start": async ({ params, respond, client }) => {
+      if (!validatePluginApprovalExternalStartParams(params)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `invalid plugin.approval.external.start params: ${formatValidationErrors(
+              validatePluginApprovalExternalStartParams.errors,
+            )}`,
+          ),
+        );
+        return;
+      }
+      if (!canReviewOperatorApproval(client)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.FORBIDDEN,
+            "external verification actions require an authorized approval reviewer",
+          ),
+        );
+        return;
+      }
+      const p = params as {
+        id: string;
+        decision: "allow-once" | "allow-always";
+        actionToken: string;
+      };
+      try {
+        const dispatched = await opts?.externalVerificationRuntime?.dispatchNativeAction({
+          approvalId: p.id,
+          decision: p.decision,
+          reviewerDeviceId: client?.connect.device?.id,
+          token: p.actionToken,
+        });
+        if (!dispatched) {
+          throw new Error("external verification approval runtime is not available");
+        }
+        const attemptOutcome = dispatched.attempt?.outcome;
+        if (
+          attemptOutcome === "failed" ||
+          attemptOutcome === "cancelled" ||
+          attemptOutcome === "timed-out"
+        ) {
+          throw new Error(`external verification attempt ${attemptOutcome}`);
+        }
+        respond(
+          true,
+          { outcome: dispatched.outcome, presentations: dispatched.presentations },
+          undefined,
+        );
+      } catch (error) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)),
+        );
+      }
+    },
+    "plugin.approval.request": async ({ params, client, respond, context }) => {
+      const internalRequest =
+        client?.internal?.approvalRuntime === true &&
+        typeof params === "object" &&
+        params !== null &&
+        !Array.isArray(params);
+      // SAFETY: internalRequest already proved params is a non-array object.
+      const rawParams = internalRequest ? (params as Record<string, unknown>) : null;
+      const publicParams = rawParams
+        ? Object.fromEntries(
+            Object.entries(rawParams).filter(
+              ([key]) => key !== "externalResolution" && key !== "runId" && key !== "sessionId",
+            ),
+          )
+        : params;
+      if (!validatePluginApprovalRequestParams(publicParams)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `invalid plugin.approval.request params: ${formatValidationErrors(
+              validatePluginApprovalRequestParams.errors,
+            )}`,
+          ),
+        );
+        return;
+      }
+      // SAFETY: validatePluginApprovalRequestParams accepted publicParams above.
+      const p = publicParams as {
         pluginId?: string | null;
         title: string;
         description: string;
@@ -104,9 +240,72 @@ export function createPluginApprovalHandlers(
         timeoutMs?: number;
         twoPhase?: boolean;
       };
+      let externalResolution: PluginApprovalRequestPayload["externalResolution"];
+      try {
+        externalResolution = internalRequest
+          ? normalizePluginExternalResolution(
+              // SAFETY: normalizePluginExternalResolution validates or throws on this shape.
+              rawParams?.externalResolution as PluginApprovalRequestPayload["externalResolution"],
+            )
+          : null;
+      } catch (error) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `invalid external verification: ${String(error)}`),
+        );
+        return;
+      }
+      const runId = internalRequest
+        ? normalizeOptionalString(rawParams?.runId as string | undefined) // SAFETY: normalizeOptionalString rejects every non-string value.
+        : null;
+      const pluginId = normalizeOptionalString(p.pluginId ?? undefined);
+      const toolName = normalizeOptionalString(p.toolName ?? undefined);
+      const trustedAgentRuntime = client?.internal?.agentRuntimeIdentity;
+      // Ownership for external verification is host-derived: the signed agent
+      // runtime identity owner wins; an explicit payload pluginId only reaches
+      // here from trusted in-process approval-runtime clients.
+      const externalOwnerPluginId = trustedAgentRuntime?.approvalOwnerPluginId ?? pluginId;
+      if (externalResolution && !runId) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "external verification requires a host-derived run id",
+          ),
+        );
+        return;
+      }
+      if (externalResolution && (!externalOwnerPluginId || !toolName)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "external verification requires host-derived plugin and tool ownership",
+          ),
+        );
+        return;
+      }
+      if (
+        externalResolution &&
+        p.allowedDecisions?.some(
+          (decision) => decision === "allow-once" || decision === "allow-always",
+        )
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "generic and external allow decisions cannot overlap",
+          ),
+        );
+        return;
+      }
       const twoPhase = p.twoPhase === true;
       const timeoutMs = resolvePluginApprovalTimeoutMs(p.timeoutMs);
-      const trustedAgentRuntime = client?.internal?.agentRuntimeIdentity;
 
       if (
         trustedAgentRuntime &&
@@ -196,13 +395,16 @@ export function createPluginApprovalHandlers(
           rawDetail === null
             ? null
             : truncatePluginApprovalDetail(sanitizeExecApprovalWarningText(rawDetail)),
+        // SAFETY: schema validation constrained severity to the closed union above.
         severity: (p.severity as PluginApprovalRequestPayload["severity"]) ?? null,
         toolName: sanitizeMeta(p.toolName),
         toolCallId: p.toolCallId ?? null,
+        ...(externalResolution ? { externalResolution } : {}),
         ...(Array.isArray(p.allowedDecisions)
           ? {
               allowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions({
                 allowedDecisions: p.allowedDecisions,
+                externalResolution,
               }),
             }
           : {}),
@@ -210,7 +412,10 @@ export function createPluginApprovalHandlers(
           trustedAgentRuntime?.agentId ??
           (sessionOwner?.ok ? sessionOwner.agentId : sanitizeMeta(p.agentId)),
         sessionKey,
-        runId: trustedAgentRuntime?.operationalRunInstance.runId ?? null,
+        sessionId: internalRequest
+          ? normalizeOptionalString(rawParams?.sessionId as string | undefined) // SAFETY: normalizeOptionalString rejects every non-string value.
+          : null,
+        runId: trustedAgentRuntime?.operationalRunInstance.runId ?? runId,
         turnSourceChannel: trustedAgentRuntime
           ? normalizeTrimmedString(trustedAgentRuntime.turnSourceChannel)
           : normalizeTrimmedString(p.turnSourceChannel),
@@ -224,6 +429,19 @@ export function createPluginApprovalHandlers(
           ? (trustedAgentRuntime.turnSourceThreadId ?? null)
           : (p.turnSourceThreadId ?? null),
       };
+
+      // The abort owner records its tombstone before sweeping approvals. Keep
+      // this check adjacent to creation so an already-aborted run cannot park.
+      if (runId && context.chatRunState.hasAbortMarker(runId)) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "approval run already aborted", {
+            details: { reason: "PLUGIN_APPROVAL_RUN_ABORTED" },
+          }),
+        );
+        return;
+      }
 
       // Always server-generate the ID — never accept plugin-provided IDs.
       // Kind-prefix so /approve routing can distinguish plugin vs exec IDs deterministically.
