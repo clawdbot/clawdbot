@@ -139,6 +139,24 @@ Authoritative REST reads request revalidation with `Cache-Control: max-age=0`
 and supply concrete repository paths. Writer identity comes from the authenticated
 GraphQL viewer, not a relay's REST caller profile.
 
+Before entering a PR worktree, `scripts/pr` checks that viewer with one request.
+Rate-limit failures stop the operation before fetch or merge side effects and
+report only safe metadata from that same response: HTTP status, quota resource,
+remaining quota, limit, UTC reset time, and retry delay when available.
+Respect `retry-after` before retrying manually; wait for the primary reset only
+when that budget is exhausted. A future primary reset is not the unblock time for
+a secondary throttle with quota remaining. Without a usable retry delay or an
+exhausted budget's reset, wait at least 60 seconds. A zero remaining balance alone
+does not attribute an HTTP 200 failure to rate limiting: malformed or missing
+viewer data and unrelated errors still fail, with exhaustion reported separately.
+An unknown reset is reported as unknown; a separate pooled REST quota is not
+evidence about the failed viewer request. Refreshing credentials does not restore
+quota. Only missing or rejected authentication suggests manually configuring or
+refreshing the intended active credential; forbidden, server, transport, and
+malformed responses remain blocking failures without login advice. The preflight
+does not retry, switch accounts, or change GitHub CLI routing, and it does not
+print raw response bodies, headers, or CLI errors.
+
 The default `rollup` mode waits for the attached CI workflow to succeed and
 for the remaining rollup checks to finish without failures. Supersession stays
 within workflow identity; `Auto response` is excluded from the wait.

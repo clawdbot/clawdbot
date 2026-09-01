@@ -262,7 +262,7 @@ const advanceMain=()=>{
 };
 if(args[0]==="repo") out(args.includes("--jq")?s.repo.nameWithOwner:s.repo);
 else if(args[0]==="api"&&args.includes("user")) out("relay-reader");
-else if(args.includes("graphql")&&args.includes("query=query { viewer { login } }")) out(s.operator);
+else if(args.includes("graphql")&&args.includes("query=query { viewer { login } }")) out(args.includes("--include") ? "HTTP/2.0 200 OK\\n\\n" + JSON.stringify({data:{viewer:{login:s.operator}}}) : s.operator);
 else if(args[0]==="pr"&&args[1]==="checks") {
   if(s.duringChecks?.head) s.pr.headRefOid=s.duringChecks.head;
   if(s.duringChecks?.artifact) fs.appendFileSync(process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/"+s.duringChecks.artifact,"\\n# changed during checks\\n");

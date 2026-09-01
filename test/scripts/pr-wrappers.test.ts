@@ -769,7 +769,7 @@ exit 99
       join(fixture.bin, "gh"),
       `#!/bin/sh
 if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
-  printf 'fixture-user\\n'
+  printf 'HTTP/2.0 200 OK\\n\\n{"data":{"viewer":{"login":"fixture-user"}}}\\n'
   exit 0
 fi
 echo "Unexpected gh call: $*" >&2
@@ -1123,36 +1123,269 @@ exit 99
     );
   });
 
-  it("verifies local GitHub auth through GraphQL when REST quota is unavailable", () => {
-    const dir = tempDirs.make("openclaw-pr-auth-");
-    const gh = join(dir, "gh");
-    writeFileSync(
-      gh,
-      `#!/bin/sh
-if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
-  printf 'monalisa\\n'
-  exit 0
-fi
-exit 1
-`,
-    );
-    chmodSync(gh, 0o755);
+  const viewer = { data: { viewer: { login: "fixture-user" } } };
+  const quota = {
+    "X-RateLimit-Resource": "graphql",
+    "X-RateLimit-Limit": "5000",
+    "X-RateLimit-Remaining": "0",
+    "X-RateLimit-Reset": "1893456000",
+  };
+  const rateError = { errors: [{ type: "RATE_LIMITED", message: "synthetic-private-detail" }] };
+  const preflightCases: {
+    name: string;
+    status?: number;
+    code: number;
+    body?: unknown;
+    rawBody?: string;
+    headers?: Record<string, string>;
+    diagnostic?: string;
+    details?: string[];
+    absent?: string[];
+  }[] = [
+    {
+      name: "primary GraphQL quota exhaustion",
+      status: 200,
+      code: 1,
+      body: rateError,
+      headers: quota,
+      diagnostic: "rate limited",
+      details: ["resource=graphql; remaining=0; limit=5000", "reset=2030-01-01T00:00:00Z", "Wait"],
+    },
+    {
+      name: "primary HTTP 403 exhaustion",
+      status: 403,
+      code: 1,
+      body: { message: "API rate limit exceeded for synthetic-private-detail" },
+      headers: quota,
+      diagnostic: "rate limited",
+      details: ["remaining=0", "Wait"],
+    },
+    {
+      name: "HTTP 429 throttle",
+      status: 429,
+      code: 1,
+      body: {},
+      diagnostic: "rate limited",
+      details: ["reset=unknown", "reset time is unknown", "Wait"],
+    },
+    ...[200, 403].map((status) => ({
+      name: `secondary HTTP ${status} throttle`,
+      status,
+      code: 1,
+      body: { message: "You have exceeded a secondary rate limit. synthetic-private-detail" },
+      headers: { ...quota, "Retry-After": "60", "X-RateLimit-Remaining": "50" },
+      diagnostic: "rate limited",
+      details: [
+        "remaining=50",
+        "reset=2030-01-01T00:00:00Z",
+        "retry-after=60s",
+        "Wait at least 60 seconds",
+      ],
+      absent: ["until 2030-01-01T00:00:00Z"],
+    })),
+    {
+      name: "secondary throttle without retry header",
+      status: 403,
+      code: 1,
+      body: { message: "You have exceeded a secondary rate limit." },
+      diagnostic: "rate limited",
+      details: ["reset=unknown", "Wait"],
+    },
+    {
+      name: "invalid quota metadata",
+      status: 200,
+      code: 1,
+      body: rateError,
+      headers: {
+        "X-RateLimit-Resource": "synthetic-private-detail",
+        "X-RateLimit-Remaining": "no",
+        "X-RateLimit-Limit": "5000synthetic-private-detail",
+        "X-RateLimit-Reset": "999999999999999",
+        "Retry-After": "synthetic-private-detail",
+      },
+      diagnostic: "rate limited",
+      details: ["resource=unknown; remaining=unknown; limit=unknown; reset=unknown"],
+    },
+    {
+      name: "rejected authentication",
+      status: 401,
+      code: 1,
+      body: { message: "Bad credentials synthetic-private-detail" },
+      diagnostic: "authentication unavailable",
+    },
+    { name: "missing authentication", code: 4, diagnostic: "authentication unavailable" },
+    ...[403, 500, 503].map((status) => ({
+      name: `HTTP ${status} failure`,
+      status,
+      code: 1,
+      body: { message: "synthetic-private-detail" },
+      diagnostic: "failed",
+    })),
+    { name: "transport failure", code: 1, diagnostic: "failed" },
+    {
+      name: "unknown GraphQL error",
+      status: 200,
+      code: 1,
+      body: { errors: [{ type: "SYNTHETIC_UNKNOWN", message: "synthetic-private-detail" }] },
+      headers: quota,
+      diagnostic: "failed",
+      details: [
+        "Observed exhausted primary quota",
+        "remaining=0",
+        "failure cause remains unverified",
+      ],
+    },
+    {
+      name: "malformed body",
+      status: 200,
+      code: 1,
+      rawBody: "{synthetic-private-detail",
+      headers: quota,
+      diagnostic: "failed",
+      details: [
+        "Observed exhausted primary quota",
+        "remaining=0",
+        "failure cause remains unverified",
+      ],
+    },
+    {
+      name: "successful process without viewer",
+      status: 200,
+      code: 0,
+      body: { data: { viewer: null } },
+      headers: quota,
+      diagnostic: "failed",
+      details: [
+        "Observed exhausted primary quota",
+        "remaining=0",
+        "failure cause remains unverified",
+      ],
+    },
+    {
+      name: "empty viewer",
+      status: 200,
+      code: 0,
+      body: { data: { viewer: { login: "  " } } },
+      diagnostic: "failed",
+    },
+    {
+      name: "wrong viewer type",
+      status: 200,
+      code: 0,
+      body: { data: { viewer: { login: 42 } } },
+      diagnostic: "failed",
+    },
+    {
+      name: "partial viewer with errors",
+      status: 200,
+      code: 0,
+      body: { ...viewer, errors: [{ type: "FORBIDDEN" }] },
+      diagnostic: "failed",
+    },
+    {
+      name: "viewer with failed process",
+      status: 200,
+      code: 1,
+      body: viewer,
+      diagnostic: "failed",
+    },
+    { name: "missing HTTP framing", code: 0, body: viewer, diagnostic: "failed" },
+    { name: "valid viewer", status: 200, code: 0, body: viewer },
+    { name: "successful last quota request", status: 200, code: 0, body: viewer, headers: quota },
+  ];
 
+  it.each([
+    ...preflightCases.map((scenario) => ({ ...scenario, route: "default" })),
+    { ...preflightCases[0]!, route: "override" },
+  ])("GitHub API preflight: $name ($route)", ({ route, ...scenario }) => {
+    const dir = tempDirs.make("openclaw-pr-auth-");
+    const env = isolatedWrapperEnv(dir);
+    const bin = join(dir, "bin");
+    mkdirSync(bin);
+    const pathGh = join(bin, "gh");
+    const gh = route === "default" ? pathGh : join(dir, "selected-gh");
+    const calls = join(dir, "calls.jsonl");
+    const headers =
+      scenario.status === undefined
+        ? ""
+        : `HTTP/2.0 ${scenario.status} Synthetic\nContent-Type: application/json\r\n` +
+          Object.entries(scenario.headers ?? {})
+            .map(([name, value]) => `${name}: ${value}\r\n`)
+            .join("") +
+          "X-Request-Id: synthetic-private-detail\r\n\r\n";
+    const body =
+      scenario.rawBody ?? (scenario.body === undefined ? "" : JSON.stringify(scenario.body));
+    const fakeGh = `#!${process.execPath}
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + "\\n");
+if (args.includes("--include")) process.stdout.write(${JSON.stringify(headers)});
+process.stdout.write(${JSON.stringify(body)});
+console.error("gh: synthetic-private-detail");
+process.exit(${scenario.code});
+`;
+    writeFileSync(
+      pathGh,
+      route === "default" ? fakeGh : "#!/bin/sh\necho UNEXPECTED_ROUTE >&2\nexit 99\n",
+      { mode: 0o755 },
+    );
+    if (route === "override") {
+      writeFileSync(gh, fakeGh, { mode: 0o755 });
+    }
     const result = spawnSync(
       "bash",
       [
         "-c",
-        "source scripts/lib/plain-gh.sh; source scripts/pr-lib/worktree.sh; ensure_gh_api_auth",
+        [
+          "set -euo pipefail",
+          "source scripts/lib/plain-gh.sh",
+          'source "$PWD/scripts/pr-lib/worktree.sh"',
+          'repo_root() { printf "%s\\n" "$HOME"; }',
+          "mark_pr_operation_side_effects_started() { echo UNEXPECTED_SIDE_EFFECT; return 99; }",
+          scenario.diagnostic ? "enter_worktree 42 false || exit 1" : "ensure_gh_api_auth",
+        ].join("\n"),
       ],
       {
         cwd: process.cwd(),
-        env: { ...isolatedWrapperEnv(dir), OPENCLAW_GH_BIN: gh, GH_TOKEN: "synthetic-token" },
         encoding: "utf8",
+        env: {
+          ...env,
+          OPENCLAW_GH_BIN: route === "override" ? gh : "",
+          GH_TOKEN: "synthetic-token",
+        },
       },
     );
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
+    expect(result.status, result.stderr).toBe(scenario.diagnostic ? 1 : 0);
+    expect(result.stdout).not.toContain("UNEXPECTED");
+    expect(result.stdout + result.stderr).not.toMatch(/synthetic-private-detail|UNEXPECTED_ROUTE/);
+    if (scenario.diagnostic) {
+      expect(result.stderr).toContain(`GitHub API preflight ${scenario.diagnostic}`);
+      for (const detail of scenario.details ?? []) {
+        expect(result.stderr).toContain(detail);
+      }
+      for (const detail of scenario.absent ?? []) {
+        expect(result.stderr).not.toContain(detail);
+      }
+      if (scenario.diagnostic === "failed") {
+        expect(result.stderr).not.toContain("preflight rate limited");
+      }
+      if (scenario.diagnostic === "authentication unavailable") {
+        expect(result.stderr).toContain(
+          "Configure or refresh the intended active credential manually",
+        );
+      } else {
+        expect(result.stderr).not.toMatch(/login|refresh|invalid credentials/i);
+      }
+    } else {
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toBe("");
+    }
+    expect(
+      readFileSync(calls, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+    ).toEqual([["api", "graphql", "-f", "query=query { viewer { login } }", "--include"]]);
   });
 
   it.each(["default", "override"])(

@@ -366,7 +366,8 @@ else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(own
 } else if (endpoint === "user") out(args[args.indexOf("--jq")+1] === ".login" ? "relay-reader" : {login:"relay-reader"});
 else if (endpoint === "graphql" && args.includes("query=query { viewer { login } }")) {
   const json = JSON.stringify({data:{viewer:value.actor}});
-  out(cp.execFileSync("jq", ["-r", args[args.indexOf("--jq") + 1]], {input:json,encoding:"utf8"}).trim());
+  if (args.includes("--include")) out("HTTP/2.0 200 OK\\n\\n" + json);
+  else out(cp.execFileSync("jq", ["-r", args[args.indexOf("--jq") + 1]], {input:json,encoding:"utf8"}).trim());
 } else {
   if (!endpoint) fail("unexpected command");
   const mutable = endpoint.startsWith("orgs/") ||

@@ -26,18 +26,11 @@ repo_root() {
 }
 
 ensure_gh_api_auth() {
-  # gh auth status fetches token scopes through REST and misreports quota
-  # failures as invalid credentials. GraphQL verifies the active local token
-  # without sending maintainers through a login that cannot restore quota.
-  if gh_plain api graphql -f 'query=query { viewer { login } }' --jq .data.viewer.login >/dev/null 2>&1; then
-    return 0
-  fi
-
-  cat >&2 <<'EOF'
-GitHub CLI auth is not usable for non-interactive API calls.
-Run `gh auth login -h github.com` (or refresh the current token) and retry.
-EOF
-  return 1
+  # Diagnose only this viewer request's budget. A pooled REST probe can describe
+  # a different credential; raw response/error text must never reach diagnostics.
+  local response exit_code=0
+  response=$(gh_plain api graphql -f 'query=query { viewer { login } }' --include 2>/dev/null) || exit_code=$?
+  printf '%s' "$response" | node "$(dirname "${BASH_SOURCE[0]}")/gh-api-preflight.mjs" "$exit_code"
 }
 
 ensure_full_pr_worktree_checkout() {

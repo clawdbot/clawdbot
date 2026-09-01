@@ -146,7 +146,7 @@ function runShell(fixture: Fixture, commands: string[], env?: NodeJS.ProcessEnv)
         'source "$3"',
         'fixture_root="$4"',
         'script_parent_dir="$fixture_root"',
-        "gh_plain() { :; }",
+        `gh_plain() { printf 'HTTP/2.0 200 OK\\n\\n{"data":{"viewer":{"login":"fixture-user"}}}\\n'; }`,
         "mark_pr_operation_side_effects_started() { :; }",
         'pr_meta_json() { local head; head=$(git rev-parse refs/pull/42/head); jq -cn --arg head "$head" \'{number:42,title:"fixture",url:"https://example.invalid/42",state:"OPEN",isDraft:false,author:{login:"fixture"},baseRefName:"main",headRefName:"review/pr",headRefOid:$head,headRepository:{nameWithOwner:"fixture/repo",url:""},headRepositoryOwner:{login:"fixture"},additions:1,deletions:0,changedFiles:3}\'; }',
         ...commands,
@@ -179,7 +179,7 @@ function traceEntryCommands(failure: string, code = 73) {
     ...["git", "cd", "pwd", "mkdir", "rm", "mv", "trash"].map(
       (name) => `${name}() { trace_command ${name} "$@" || return $?; command ${name} "$@"; }`,
     ),
-    'gh_plain() { trace_command gh_plain "$@"; }',
+    `gh_plain() { trace_command gh_plain "$@" || return $?; printf 'HTTP/2.0 200 OK\\n\\n{"data":{"viewer":{"login":"fixture-user"}}}\\n'; }`,
   ];
 }
 
@@ -249,7 +249,7 @@ describePosix("scripts/pr worktree containment", () => {
                 "bash",
                 [
                   "-c",
-                  'set -euo pipefail\nsource "$1"\nsource "$2"\nsource "$3"\nscript_parent_dir="$4"\ngh_plain() { :; }\nmark_pr_operation_side_effects_started() { :; }\nreview_checkout_main "$5"',
+                  `set -euo pipefail\nsource "$1"\nsource "$2"\nsource "$3"\nscript_parent_dir="$4"\ngh_plain() { printf 'HTTP/2.0 200 OK\\n\\n{"data":{"viewer":{"login":"fixture-user"}}}\\n'; }\nmark_pr_operation_side_effects_started() { :; }\nreview_checkout_main "$5"`,
                   "pr-concurrency",
                   commonScript,
                   worktreeScript,
@@ -321,7 +321,7 @@ describePosix("scripts/pr worktree containment", () => {
       expectEntryStopped(fixture, result);
       expect(reviewState(worktree)).toEqual(before);
       if (failure.includes("gh_plain")) {
-        expect(result.stderr).toContain("GitHub CLI auth is not usable");
+        expect(result.stderr).toContain("GitHub API preflight failed");
       }
     });
   }
