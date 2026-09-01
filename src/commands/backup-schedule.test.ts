@@ -140,6 +140,22 @@ describe("scheduled backups", () => {
     expect(gatewayRpc.call).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["empty", ""],
+    ["whitespace-only", "   "],
+  ])("rejects an %s scheduled backup interval", async (_label, every) => {
+    const runtime = createTestRuntime();
+
+    await expect(
+      backupEnableCommand(runtime, {
+        repository: "/tmp/openclaw-backups",
+        every,
+      }),
+    ).rejects.toThrow(/duration/i);
+
+    expect(gatewayRpc.call).not.toHaveBeenCalled();
+  });
+
   it("atomically converges an existing declaration and removes it idempotently", async () => {
     gatewayRpc.call.mockResolvedValueOnce({
       created: false,
