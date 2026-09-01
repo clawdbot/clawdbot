@@ -289,15 +289,25 @@ export async function readCurrentCodexScheduledAppPolicy(params: {
   };
 }
 
-function readToolApprovalMode(
+function readCurrentToolPolicy(
   config: Record<string, unknown>,
   appId: string,
   toolName: string,
-  fallback: CodexAppToolApprovalMode = "auto",
-): CodexAppToolApprovalMode {
+  fallbackApprovalMode: CodexAppToolApprovalMode = "auto",
+): { enabled: boolean; approvalMode: CodexAppToolApprovalMode } {
   const app = asOptionalRecord(asOptionalRecord(config.apps)?.[appId]);
   const tool = asOptionalRecord(asOptionalRecord(app?.tools)?.[toolName]);
-  return normalizeAppToolApprovalMode(tool?.approval_mode) ?? fallback;
+  const defaultToolsEnabled = app?.default_tools_enabled;
+  return {
+    enabled:
+      typeof tool?.enabled === "boolean"
+        ? tool.enabled
+        : typeof defaultToolsEnabled === "boolean"
+          ? defaultToolsEnabled
+          : true,
+    approvalMode:
+      normalizeAppToolApprovalMode(tool?.approval_mode) ?? fallbackApprovalMode,
+  };
 }
 
 /** Captures only apps callable on the exact active Codex client/thread. */
@@ -557,14 +567,20 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
     appPatch.tools = Object.fromEntries(
       [...toolNames].toSorted().map((toolName) => {
         const capturedMode = captured.tools[toolName] ?? storedAppCeiling;
+        const currentToolPolicy = readCurrentToolPolicy(
+          currentPolicy.config,
+          appId,
+          toolName,
+          currentAppCeiling,
+        );
         return [
           toolName,
           {
-            enabled: true,
+            enabled: currentToolPolicy.enabled,
             approval_mode: intersectToolApprovalMode(
               intersectToolApprovalMode(capturedMode, storedAppCeiling),
               intersectToolApprovalMode(
-                readToolApprovalMode(currentPolicy.config, appId, toolName, currentAppCeiling),
+                currentToolPolicy.approvalMode,
                 currentAppCeiling,
               ),
             ),

@@ -420,6 +420,46 @@ describe("scheduled Codex app authority", () => {
     });
   });
 
+  it.each([
+    {
+      name: "explicit tool disablement",
+      appConfig: { tools: { edit: { enabled: false } } },
+      expectedEnabled: false,
+    },
+    {
+      name: "app default disablement",
+      appConfig: { default_tools_enabled: false },
+      expectedEnabled: false,
+    },
+    {
+      name: "explicit tool enablement over app default disablement",
+      appConfig: {
+        default_tools_enabled: false,
+        tools: { edit: { enabled: true } },
+      },
+      expectedEnabled: true,
+    },
+  ])("preserves $name from the current Codex config", ({ appConfig, expectedEnabled }) => {
+    const intersected = intersectCodexPluginThreadConfigWithScheduledAuthority(
+      threadConfig(),
+      authority(),
+      {
+        config: { apps: { calendar: appConfig } },
+        toolNamesByApp: new Map([["calendar", new Set(["edit"])]]),
+      },
+    );
+
+    expect(intersected.configPatch).toMatchObject({
+      apps: {
+        calendar: {
+          tools: {
+            edit: { enabled: expectedEnabled },
+          },
+        },
+      },
+    });
+  });
+
   it("removes tools missing from current inventory and rotates the fingerprint", () => {
     const full = intersectCodexPluginThreadConfigWithScheduledAuthority(
       threadConfig(),
