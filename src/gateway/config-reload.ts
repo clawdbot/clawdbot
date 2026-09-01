@@ -208,7 +208,7 @@ export function startGatewayConfigReloader(opts: {
     nextConfig: OpenClawConfig,
     ownership: GatewayConfigReloadTransactionOwnership,
     sourceConfig: OpenClawConfig,
-  ) => Promise<void>;
+  ) => Promise<void | GatewayHotReloadApplicationStatus>;
   onHotReload: (
     plan: GatewayReloadPlan,
     nextConfig: OpenClawConfig,
@@ -740,11 +740,22 @@ export function startGatewayConfigReloader(opts: {
       await opts.onConfigChange?.(plan, nextConfig);
       // No-op plans still change the runtime config snapshot. Commit before
       // marking applied so getRuntimeConfig() readers do not stay stale until restart.
-      await opts.onNoopConfigCommit(plan, nextConfig, ownership, nextSourceConfig);
+      let applicationStatus: void | GatewayHotReloadApplicationStatus;
+      try {
+        applicationStatus = await opts.onNoopConfigCommit(
+          plan,
+          nextConfig,
+          ownership,
+          nextSourceConfig,
+        );
+      } catch (error) {
+        ownership.rollbackRuntimeEnv();
+        throw error;
+      }
       assertCurrent();
       await appliedRevision.apply(plan, nextConfig, nextConfigRevisionHash);
       await commitReloadBaseline();
-      settleRuntimeApplication();
+      settleRuntimeApplication(applicationStatus ?? "applied");
       return;
     }
     if (followUp.requiresRestart) {
@@ -758,7 +769,7 @@ export function startGatewayConfigReloader(opts: {
       await commitReloadBaseline();
       // The accepted restart owns snapshot republication at next startup.
       markPluginMetadataRefreshApplied();
-      application?.settle("failed");
+      application?.settle("restart-pending");
       return;
     }
     if (plan.restartGateway) {
@@ -766,7 +777,7 @@ export function startGatewayConfigReloader(opts: {
       await prepareRestart(plan, nextConfig, ownership, nextSourceConfig);
       await commitReloadBaseline();
       markPluginMetadataRefreshApplied();
-      application?.settle("failed");
+      application?.settle("restart-pending");
       return;
     }
 

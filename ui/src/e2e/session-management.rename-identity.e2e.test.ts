@@ -1,19 +1,18 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   captureUiProofEnabled,
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
   requireRecord,
-  sessionRow,
   sessionsListResponse,
   waitForPatch,
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
-const proofDir = path.join(process.cwd(), ".artifacts/control-ui-e2e/session-identity-20260827");
 
 suite.define(() => {
   it.each(["sessions", "sidebar", "header"] as const)(
@@ -24,7 +23,9 @@ suite.define(() => {
         locale: "en-US",
         serviceWorkers: "block",
         viewport,
-        recordVideo: captureUiProofEnabled ? { dir: proofDir, size: viewport } : undefined,
+        recordVideo: captureUiProofEnabled
+          ? { dir: path.join(suite.artifactDir, "session-identity-20260827"), size: viewport }
+          : undefined,
       });
       const page = await context.newPage();
       const video = page.video();
@@ -47,9 +48,14 @@ suite.define(() => {
       });
       const capture = async (stage: string) => {
         if (captureUiProofEnabled) {
-          await mkdir(proofDir, { recursive: true });
+          await mkdir(path.join(suite.artifactDir, "session-identity-20260827"), {
+            recursive: true,
+          });
           await page.screenshot({
-            path: path.join(proofDir, `${surface}-${stage}.png`),
+            path: path.join(
+              path.join(suite.artifactDir, "session-identity-20260827"),
+              `${surface}-${stage}.png`,
+            ),
             animations: "disabled",
             fullPage: true,
           });
@@ -139,7 +145,9 @@ suite.define(() => {
       } finally {
         await context.close();
         if (video) {
-          await video.saveAs(path.join(proofDir, `${surface}.webm`));
+          await video.saveAs(
+            path.join(path.join(suite.artifactDir, "session-identity-20260827"), `${surface}.webm`),
+          );
         }
       }
     },

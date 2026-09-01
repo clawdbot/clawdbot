@@ -6,6 +6,7 @@ import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import type { NodeWorkerSupervisorReceipt } from "../../worker/node-supervisor-protocol.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import type { createDeviceWorkerRuntime } from "./device-provider.js";
+import { measureNodeWorkerLaunchBytes } from "./node-launch-adapter.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import {
   BUILD,
@@ -67,6 +68,7 @@ describe("node worker tunnel lifetime", () => {
     const record = environment();
     let currentClaim = turnClaim();
     const authorizations: boolean[] = [];
+    const launchSizes: number[] = [];
     const manager = createNodeWorkerTunnelManager({
       gatewayDeviceId: "gateway-device-1",
       getEnvironment: () => record,
@@ -74,6 +76,7 @@ describe("node worker tunnel lifetime", () => {
       getTransport: transport,
       launchNodeWorker: vi.fn<NodeWorkerLaunch>(async (request) => {
         authorizations.push(request.isDispatchAuthorized());
+        launchSizes.push(measureNodeWorkerLaunchBytes(request.deviceId, request.input));
         return {
           launchId: request.input.launchId,
           planHash: "b".repeat(64),
@@ -93,10 +96,17 @@ describe("node worker tunnel lifetime", () => {
     const staleClaim = currentClaim;
     currentClaim = { ...staleClaim, claimId: "claim-2", placementGeneration: 5 };
 
-    await handle.launchTurn({ plan: plan(), turnClaim: staleClaim });
-    await handle.launchTurn({ plan: plan(), turnClaim: currentClaim });
+    const launchPlan = plan();
+    const snapshot = structuredClone(launchPlan);
+    const sizes = [staleClaim, currentClaim].map((claim) =>
+      handle.measureLaunchTurn(launchPlan, claim),
+    );
+    await handle.launchTurn({ plan: launchPlan, turnClaim: staleClaim });
+    await handle.launchTurn({ plan: launchPlan, turnClaim: currentClaim });
 
     expect(authorizations).toEqual([false, true]);
+    expect(launchSizes).toEqual(sizes);
+    expect(launchPlan).toEqual(snapshot);
   });
 
   it("projects a terminal gateway connection failure into the launch result", async () => {

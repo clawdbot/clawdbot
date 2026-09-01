@@ -29,6 +29,18 @@ type PluginRuntimeGatewayRequestScope = {
     },
     invoke: (assertCurrent: () => void, signal: AbortSignal) => Promise<T>,
   ) => Promise<T | undefined>;
+  /** Closure-bound admitted owner used to validate placement grant bindings. */
+  nodePlacementGrantAuthority?: {
+    agentId: string;
+    sessionKey: string;
+    runId: string;
+    assertCurrent: (request: {
+      pluginId: string;
+      command: string;
+      nodeId: string;
+      workspace: OpenClawPluginNodeWorkspace;
+    }) => void;
+  };
   context?: GatewayRequestContext;
   resolveGatewayContext?: GatewayContextResolver;
   client?: GatewayRequestOptions["client"];
@@ -78,13 +90,23 @@ export const getGatewayContextResolver = (owner: object) => gatewayContextResolv
 
 export const clearGatewayContextResolver = (owner: object) => gatewayContextResolvers.delete(owner);
 
+/** Carry only closure-bound node authorities into a nested request scope. */
+export function getPluginRuntimeGatewayNodeAuthorities() {
+  const scope = pluginRuntimeGatewayRequestScope.getStore();
+  return {
+    invokeWithSessionNodeAuthority: scope?.invokeWithSessionNodeAuthority,
+    nodePlacementGrantAuthority: scope?.nodePlacementGrantAuthority,
+  };
+}
+
 export function getSharedGatewayContextResolver(
   owners: readonly object[],
 ): GatewayContextResolver | undefined {
   const first = owners[0] ? gatewayContextResolvers.get(owners[0]) : undefined;
-  return first && owners.every((owner) => gatewayContextResolvers.get(owner) === first)
+  // Absence permits ambient routing; incompatible owners must retain a rejecting binding.
+  return owners.every((owner) => gatewayContextResolvers.get(owner) === first)
     ? first
-    : undefined;
+    : () => undefined;
 }
 
 /**

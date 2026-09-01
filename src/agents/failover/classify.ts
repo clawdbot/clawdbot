@@ -51,16 +51,10 @@ import {
   type PreparedProviderFailoverOwner,
 } from "./provider-patterns.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./signal.js";
-export {
-  isBilling429MessageForProvider,
-  isGenericUnknownStreamErrorMessage,
-  isTransientHttpError,
-  isUnclassifiedNoBodyHttpSignal,
-} from "./classification-rules.js";
+export { isUnclassifiedNoBodyHttpSignal } from "./classification-rules.js";
 export {
   isContextOverflowError,
   isLikelyContextOverflowError,
-  isProviderRequestSizeCeilingError,
   isReasoningConstraintErrorMessage,
 } from "./context-overflow.js";
 export {
@@ -69,6 +63,7 @@ export {
   isOverloadedErrorMessage,
   isPeriodicUsageLimitErrorMessage,
   isProviderCompletedErrorFinishReasonMessage,
+  isProviderRequestSizeCeilingError,
   isRateLimitErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
@@ -279,7 +274,7 @@ function mergeMessageAndDetailClassification(
 
 export function classifyFailoverSignal(
   signal: FailoverSignal,
-  opts?: { providerPlugin?: PreparedProviderFailoverOwner },
+  opts?: { providerPlugin?: PreparedProviderFailoverOwner | null },
 ): FailoverClassification | null {
   const inferredStatus = inferSignalStatus(signal);
   const explicitStatus =
@@ -339,10 +334,13 @@ export function classifyFailoverSignal(
   }
   // Message/detail semantics stay ahead of generic structured types so an
   // invalid-request wrapper cannot hide billing, context, or provider policy.
+  const codeReason = classifyFailoverReasonFromCode(signal.code);
   const effectiveMessageClassification = providerPluginReason
     ? toPluginClassification(providerPluginReason)
-    : (messageOrDetailClassification ?? errorTypeClassification);
-  const codeReason = classifyFailoverReasonFromCode(signal.code);
+    : mergeMessageAndDetailClassification(
+        messageOrDetailClassification ?? errorTypeClassification,
+        codeReason ? toReasonClassification(codeReason) : null,
+      );
   if (codeReason === "auth_permanent") {
     return toReasonClassification(codeReason);
   }
@@ -421,7 +419,7 @@ function isCliSessionExpiredErrorMessage(raw: string): boolean {
 
 export function classifyFailoverReason(
   raw: string,
-  opts?: { provider?: string; providerPlugin?: PreparedProviderFailoverOwner },
+  opts?: { provider?: string; providerPlugin?: PreparedProviderFailoverOwner | null },
 ): FailoverReason | null {
   return failoverReasonFromClassification(
     classifyFailoverSignal(

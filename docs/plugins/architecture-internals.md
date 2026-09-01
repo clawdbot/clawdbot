@@ -129,6 +129,11 @@ hashing. Activation and runtime service generations can change while their
 package metadata stays fixed. Account health and authentication state are not
 part of the immutable package inventory.
 
+Provider auth aliases are normalized and indexed with the snapshot. Lookups
+select among those prepared candidates using the current workspace trust config;
+they do not cache trust decisions or credentials. Callers supplying a partial
+manifest view keep fresh per-call projection rather than sharing mutable metadata.
+
 Explicit install, update, registry refresh, and doctor operations use isolated
 generations of the same cache type, acquired after their lifecycle lease. They may inspect changed files and rebuild the persisted
 installed index, but cannot clear or replace the running Gateway's inventory.
@@ -147,6 +152,20 @@ Actual code imports retain their boundary and file-identity checks before first
 execution. Consent checks use a fresh inspection after an awaited approval so
 changed artifacts cannot inherit approval for older capabilities. Failed module
 evaluation remains retryable; a successful import is shared across consumers.
+
+The CLI invocation owns one operation cache across config reads, output metadata,
+command ownership, nested registration, and actions. Standalone registration uses
+its caller's active generation. Config validation covers every
+workspace; execution uses the original selected workspace snapshot, or shared
+roots when no workspace owner is proven. Exact config/source identities and
+revision checks fence retained registrars. Preparation closes before Commander
+actions, while its cache scope lasts through action completion for late imports.
+Changed package files require a new operation; changing activation inputs does
+not retire compatible package facts. SDK alias maps are prepared on first alias
+or transformer demand under their captured host and permission scope. State
+registration uses a light facade that the full runtime later adopts; only the
+registry proxy grants store access. Config reads import the writer only when an
+actual write begins.
 
 Registered services, hooks, tools, session MCP overlays, generated skill-link
 publication, and activation state remain runtime-owned.
@@ -259,7 +278,7 @@ listed here.
 | _(built-in model lookup)_         | OpenClaw tries the normal registry/catalog path first                                                          | _(not a plugin hook)_                                                                                                                         |
 | `normalizeModelId`                | Normalize legacy or preview model-id aliases before lookup                                                     | Provider owns alias cleanup before canonical model resolution                                                                                 |
 | `normalizeTransport`              | Normalize provider-family `api` / `baseUrl` before generic model assembly                                      | Provider owns transport cleanup for custom provider ids in the same transport family                                                          |
-| `normalizeConfig`                 | Normalize `models.providers.<id>` before runtime/provider resolution                                           | Provider needs config cleanup that should live with the plugin; bundled Google-family helpers also backstop supported Google config entries   |
+| `normalizeConfig`                 | Normalize `models.providers.<id>` before runtime/provider resolution                                           | Provider needs config cleanup that should live with the owning plugin                                                                         |
 | `applyNativeStreamingUsageCompat` | Apply native streaming-usage compat rewrites to config providers                                               | Provider needs endpoint-driven native streaming usage metadata fixes                                                                          |
 | `resolveConfigApiKey`             | Resolve env-marker auth for config providers before runtime auth loading                                       | Providers expose their own env-marker API-key resolution hooks                                                                                |
 | `resolveSyntheticAuth`            | Surface local/self-hosted or config-backed auth without persisting plaintext                                   | Provider can operate with a synthetic/local credential marker                                                                                 |
@@ -298,13 +317,25 @@ listed here.
 | `validateReplayTurns`             | Final replay-turn validation or reshaping before the embedded runner                                           | Provider transport needs stricter turn validation after generic sanitation                                                                    |
 | `onModelSelected`                 | Run provider-owned post-selection side effects                                                                 | Provider needs telemetry or provider-owned state when a model becomes active                                                                  |
 
-`normalizeModelId`, `normalizeTransport`, and `normalizeConfig` first check the
-matched provider plugin, then fall through other hook-capable provider plugins
-until one actually changes the model id or transport/config. That keeps
-alias/compat provider shims working without requiring the caller to know which
-bundled plugin owns the rewrite. If no provider hook rewrites a supported
-Google-family config entry, the bundled Google config normalizer still applies
-that compatibility cleanup.
+Normalization dispatch is hook-specific:
+
+- `normalizeModelId` uses the matched provider hook's non-empty result. If none
+  is returned, OpenClaw applies manifest-declared model-ID normalization; it does
+  not try other providers' normalization hooks.
+- `normalizeTransport` tries the matched provider first. Only if that does not
+  change `api` or `baseUrl` and the provider has no `models.providers.<id>` entry
+  does it try other transport hooks, stopping at the first change.
+- `normalizeConfig` uses the owning bundled provider's lightweight policy surface
+  first. If that surface has no `normalizeConfig` hook, OpenClaw may call the
+  matched runtime owner, provided runtime loading is allowed and, when a config
+  is supplied, that owner has explicit plugin activation. It never scans other
+  providers' hooks or falls through after the owning hook returns no change.
+  Config assembly passes `allowRuntimePluginLoad: false`, so it uses bundled
+  policy without loading provider runtime.
+
+Google-family config cleanup is implemented by the Google plugin's own
+`normalizeConfig` hook, shared with its lightweight policy surface. It is not a
+separate core compatibility backstop.
 
 If the provider needs a fully custom wire protocol or custom request executor,
 that is a different class of extension. These hooks are for provider behavior
@@ -657,6 +688,8 @@ Notes:
 - Canonically equivalent paths with the same `match` mode occupy one route. Static `api.registerHttpRoute(...)` calls from the same plugin replace that route; another plugin cannot replace it.
 - Overlapping routes with different `auth` levels are rejected. Keep `exact`/`prefix` fallthrough chains on the same auth level only.
 - Dynamic lifecycle code using `registerPluginHttpRoute(...)` from `openclaw/plugin-sdk/webhook-ingress` must set `replaceExisting: true` to refresh its own canonical route. Named registrations can replace only the same nonempty `pluginId`; when either side sets a route `source`, both must set the same nonempty source. Same-plugin source-less-to-source-less refresh and anonymous-to-anonymous refresh remain supported for shipped SDK callers, but named and anonymous routes cannot replace each other.
+- Set `reuseExistingSameOwner: true` to share a canonical route with the same nonempty `pluginId` and `source`. A dynamically created route remains until its last holder releases it; reusing a static `api.registerHttpRoute(...)` route leaves its lifetime with the plugin registry.
+- Channel lifecycle callbacks use their Gateway's route registry. Startup routes expire when their task settles or recovery abandons it; `stopAccount` routes expire when that stop attempt settles or times out. Recovery revokes abandoned task routes before replacement startup, even if startup fails. Expired callbacks cannot dynamically register or replace routes.
 - Treat route `source` as a stable same-plugin sub-owner, not a diagnostic label. Existing source-less callers may keep omitting it; source-aware callers must keep it unchanged across refreshes.
 - Dynamic lifecycle registration logs and returns a no-op unregister callback on rejection by default. Set `throwOnFailure: true` when readiness depends on that route; required bundled webhook transports use strict registration so they cannot report ready without live ingress.
 - `auth: "plugin"` routes do **not** receive operator runtime scopes automatically. They are for plugin-managed webhooks/signature verification, not privileged Gateway helper calls.
@@ -1142,7 +1175,7 @@ Recommended sequence:
    stay explicit over time.
 
 This is how OpenClaw stays opinionated without becoming hardcoded to one
-provider's worldview. See the [Capability Cookbook](/tools/capability-cookbook)
+provider's worldview. See [Adding capabilities](/plugins/adding-capabilities)
 for a concrete file checklist and worked example.
 
 ### Capability checklist

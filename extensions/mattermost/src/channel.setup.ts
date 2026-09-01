@@ -2,13 +2,12 @@
 import type { ChannelPlugin } from "./channel-api.js";
 import {
   describeMattermostAccount,
-  isMattermostConfigured,
   mattermostConfigAdapter,
   mattermostMeta,
   resolveMattermostGatewayAuthBypassPaths,
 } from "./channel-config-shared.js";
 import { MattermostChannelConfigSchema } from "./config-surface.js";
-import type { ResolvedMattermostAccount } from "./mattermost/accounts.js";
+import { isMattermostConfigured, type ResolvedMattermostAccount } from "./mattermost/accounts.js";
 import { mattermostSetupContract } from "./setup-core.js";
 import { mattermostSetupWizard } from "./setup-surface.js";
 

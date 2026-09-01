@@ -13,13 +13,16 @@ import {
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   CUSTODIAN_PANEL_TOGGLE_EVENT,
+  HOME_PANEL_TOGGLE_EVENT,
   DEBUG_OVERLAY_REQUEST_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
+  isHomePanelShortcut,
   isTerminalPanelShortcut,
   KEYBOARD_SHORTCUTS_REQUEST_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../components/panel-toggle-contract.ts";
 import { rememberSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
+import { focusWithoutTooltip } from "../components/tooltip.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import {
@@ -59,7 +62,11 @@ import {
   restoreToastFromNavDrawer,
   visibleNavDrawerToggle,
 } from "./navigation-surface.ts";
-import { isBrowserPanelAvailable, isDesktopPanelAvailable } from "./panel-availability.ts";
+import {
+  isBrowserPanelAvailable,
+  isDesktopPanelAvailable,
+  isHomePanelAvailable,
+} from "./panel-availability.ts";
 import { NAV_WIDTH_MAX, NAV_WIDTH_MIN } from "./settings.ts";
 import { retryStaleChunkReloadWhenReachable } from "./stale-chunk-reload.ts";
 
@@ -86,7 +93,7 @@ export interface ShellChromeHost extends HTMLElement {
   readonly terminalPanelElement: OptionalCustomElement;
   readonly browserPanelElement: OptionalCustomElement;
   readonly desktopPanelElement: OptionalCustomElement;
-  readonly custodianPanelElement: OptionalCustomElement;
+  readonly assistantPanelElement: OptionalCustomElement;
   readonly execApprovalElement: OptionalCustomElement;
   readonly commandPalette: CommandPaletteElement | undefined;
   readonly approvalOverlay: (HTMLElement & { show(): void; dialogOpen?: boolean }) | undefined;
@@ -132,54 +139,35 @@ export class ShellChromeOwner {
     const host = this.host;
     host.nativeHistoryState = readNativeHistoryState();
     host.addEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget, options);
-    window.addEventListener(COMMAND_PALETTE_OPEN_EVENT, this.handleCommandPaletteOpen, options);
-    window.addEventListener(
-      SHELL_NAV_DRAWER_TOGGLE_EVENT,
-      this.handleShellNavDrawerToggle,
-      options,
-    );
-    window.addEventListener(DEBUG_OVERLAY_REQUEST_EVENT, this.handleDebugOverlayRequest, options);
-    window.addEventListener(
-      KEYBOARD_SHORTCUTS_REQUEST_EVENT,
-      this.handleKeyboardShortcutsRequest,
-      options,
-    );
     document.addEventListener("keydown", this.handleDocumentKeydown, {
       capture: true,
       signal: this.listeners.signal,
     });
     document.addEventListener("keydown", this.handleDocumentKeydownBubble, options);
-    window.addEventListener("resize", this.handleWindowResize, options);
     window.addEventListener("dragover", this.handleUnhandledFileDrag, options);
     window.addEventListener("drop", this.handleUnhandledFileDrag, options);
-    window.addEventListener(NATIVE_HISTORY_STATE_EVENT, this.handleNativeHistoryState, options);
     // Shipped Mac hosts use these same events even when native web chrome is absent.
-    window.addEventListener(
-      "openclaw:native-toggle-sidebar",
-      this.handleNativeToggleSidebar,
-      options,
-    );
-    window.addEventListener("openclaw:native-open-search", this.handleNativeOpenSearch, options);
-    window.addEventListener(
-      "openclaw:native-toggle-search",
-      this.handleNativeToggleSearch,
-      options,
-    );
-    window.addEventListener("openclaw:native-new-session", this.handleNativeNewSession, options);
-    window.addEventListener("openclaw:native-navigate", this.handleNativeNavigate, options);
-    window.addEventListener(
-      TERMINAL_PANEL_TOGGLE_EVENT,
-      this.handleDeferredTerminalToggle,
-      options,
-    );
-    window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle, options);
-    window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleDeferredDesktopToggle, options);
-    window.addEventListener(
-      CUSTODIAN_PANEL_TOGGLE_EVENT,
-      this.handleDeferredCustodianToggle,
-      options,
-    );
-    window.addEventListener(SHELL_APPROVALS_OPEN_EVENT, this.handleApprovalsOpen, options);
+    for (const [type, listener] of [
+      [COMMAND_PALETTE_OPEN_EVENT, this.handleCommandPaletteOpen],
+      [SHELL_NAV_DRAWER_TOGGLE_EVENT, this.handleShellNavDrawerToggle],
+      [DEBUG_OVERLAY_REQUEST_EVENT, this.handleDebugOverlayRequest],
+      [KEYBOARD_SHORTCUTS_REQUEST_EVENT, this.handleKeyboardShortcutsRequest],
+      ["resize", this.handleWindowResize],
+      [NATIVE_HISTORY_STATE_EVENT, this.handleNativeHistoryState],
+      ["openclaw:native-toggle-sidebar", this.handleNativeToggleSidebar],
+      ["openclaw:native-open-search", this.handleNativeOpenSearch],
+      ["openclaw:native-toggle-search", this.handleNativeToggleSearch],
+      ["openclaw:native-new-session", this.handleNativeNewSession],
+      ["openclaw:native-navigate", this.handleNativeNavigate],
+      [TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle],
+      [BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle],
+      [DESKTOP_PANEL_TOGGLE_EVENT, this.handleDeferredDesktopToggle],
+      [CUSTODIAN_PANEL_TOGGLE_EVENT, this.handleDeferredAssistantToggle],
+      [HOME_PANEL_TOGGLE_EVENT, this.handleDeferredAssistantToggle],
+      [SHELL_APPROVALS_OPEN_EVENT, this.handleApprovalsOpen],
+    ] as const) {
+      window.addEventListener(type, listener, options);
+    }
     this.navDrawerSwipe.connect();
     if (isMobileNavLayout()) {
       this.navDrawerSwipe.load();
@@ -240,10 +228,11 @@ export class ShellChromeOwner {
 
   /** Native Mac chrome hides in-page toggles, so restoration falls back to content. */
   restoreFocusTo = (target: HTMLElement | null | undefined): void =>
-    (target?.isConnected && target.checkVisibility()
-      ? target
-      : this.host.querySelector<HTMLElement>(".content")
-    )?.focus();
+    focusWithoutTooltip(
+      target?.isConnected && target.checkVisibility()
+        ? target
+        : this.host.querySelector<HTMLElement>(".content"),
+    );
 
   closeNavDrawer(options: { restoreFocus?: boolean } = {}): void {
     const host = this.host;
@@ -424,6 +413,13 @@ export class ShellChromeOwner {
     ) {
       event.preventDefault();
       window.dispatchEvent(new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT));
+      return;
+    }
+    // Unlike the terminal panel, the assistant panel never handles its own
+    // keydown, so the shell owns this chord on every route.
+    if (isHomePanelShortcut(event) && isHomePanelAvailable(host.context?.gateway)) {
+      event.preventDefault();
+      window.dispatchEvent(new CustomEvent(HOME_PANEL_TOGGLE_EVENT));
       return;
     }
     if (event.defaultPrevented) {
@@ -631,16 +627,21 @@ export class ShellChromeOwner {
     );
   };
 
-  readonly handleDeferredCustodianToggle = (event: Event): void => {
+  readonly handleDeferredAssistantToggle = (event: Event): void => {
     const host = this.host;
-    if (isOptionalElementDefined(host.custodianPanelElement)) {
+    if (isOptionalElementDefined(host.assistantPanelElement)) {
       return;
     }
     const snapshot = host.context?.gateway?.snapshot;
-    if (canCallGatewayMethod(snapshot, "openclaw.chat", "operator.admin")) {
+    const home = event.type === HOME_PANEL_TOGGLE_EVENT;
+    if (
+      home
+        ? isHomePanelAvailable(host.context?.gateway)
+        : canCallGatewayMethod(snapshot, "openclaw.chat", "operator.admin")
+    ) {
       this.requestLazyElement(
-        host.custodianPanelElement,
-        lazyShellEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, event),
+        host.assistantPanelElement,
+        lazyShellEvent(home ? HOME_PANEL_TOGGLE_EVENT : CUSTODIAN_PANEL_TOGGLE_EVENT, event),
       );
     } else {
       event.preventDefault();
@@ -656,7 +657,8 @@ export class ShellChromeOwner {
       [TERMINAL_PANEL_TOGGLE_EVENT]: host.terminalPanelElement,
       [BROWSER_PANEL_TOGGLE_EVENT]: host.browserPanelElement,
       [DESKTOP_PANEL_TOGGLE_EVENT]: host.desktopPanelElement,
-      [CUSTODIAN_PANEL_TOGGLE_EVENT]: host.custodianPanelElement,
+      [CUSTODIAN_PANEL_TOGGLE_EVENT]: host.assistantPanelElement,
+      [HOME_PANEL_TOGGLE_EVENT]: host.assistantPanelElement,
       [SHELL_APPROVALS_OPEN_EVENT]: host.execApprovalElement,
     };
     return elements[eventType];
@@ -696,12 +698,13 @@ export class ShellChromeOwner {
 
   retryPendingLazyAction(canReload: () => boolean): Promise<boolean> {
     const event = this.pendingLazyAction;
-    return event
-      ? retryStaleChunkReloadWhenReachable({
-          canReload: () =>
-            canReload() && this.pendingLazyAction === event && persistLazyShellAction(event),
-        })
-      : Promise.resolve(false);
+    // Render-owned surfaces need recovery too, but have no user action to persist for replay.
+    return retryStaleChunkReloadWhenReachable({
+      canReload: () =>
+        canReload() &&
+        this.pendingLazyAction === event &&
+        (!event || persistLazyShellAction(event)),
+    });
   }
 
   private dispatchLazyShellEvent({ eventType, detail }: LazyShellEvent): boolean {

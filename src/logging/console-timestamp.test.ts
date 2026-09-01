@@ -61,19 +61,4 @@ describe("formatConsoleTimestamp", () => {
     const now = new Date();
     expect(formatConsoleTimestamp("json")).toBe(formatExpectedLocalIsoWithOffset(now));
   });
-
-  it("timestamp contains the correct local date components", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-17T18:01:02.345Z"));
-
-    const before = new Date();
-    const result = formatConsoleTimestamp("compact");
-    const after = new Date();
-    // The date portion should match the local date
-    const datePart = result.slice(0, 10);
-    const beforeDate = `${before.getFullYear()}-${String(before.getMonth() + 1).padStart(2, "0")}-${String(before.getDate()).padStart(2, "0")}`;
-    const afterDate = `${after.getFullYear()}-${String(after.getMonth() + 1).padStart(2, "0")}-${String(after.getDate()).padStart(2, "0")}`;
-    // Allow for date boundary crossing during test
-    expect([beforeDate, afterDate]).toContain(datePart);
-  });
 });

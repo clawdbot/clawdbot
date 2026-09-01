@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { RouteId } from "../../../app-route-paths.ts";
 import type { ApplicationContext } from "../../../app/context.ts";
 import type { ApplicationGatewaySnapshot } from "../../../app/gateway.ts";
+import type { BrowserTabTarget } from "../../../components/browser/browser-target.ts";
 import { BROWSER_PANEL_TOGGLE_EVENT } from "../../../components/panel-toggle-contract.ts";
 import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
@@ -65,11 +66,15 @@ function container() {
   return host;
 }
 
-async function card(context: ApplicationContext<RouteId>, latest = true) {
+async function card(
+  context: ApplicationContext<RouteId>,
+  latest = true,
+  tab: BrowserTabTarget = { target: "host", profile: "managed", targetId: "tab-1" },
+) {
   const host = container();
   render(
     renderToolPreview(
-      { kind: "browser-tab", targetId: "tab-1", url: "https://example.com/page" },
+      { kind: "browser-tab", ...tab, url: "https://example.com/page" },
       "chat_tool",
       {
         browserTabRevision: "one",
@@ -103,7 +108,31 @@ describe("browser tab card", () => {
     expect(event).toBeInstanceOf(CustomEvent);
     expect(event instanceof CustomEvent ? event.detail : undefined).toEqual({
       open: true,
-      targetId: "tab-1",
+      browserTab: { targetId: "tab-1", profile: "managed", target: "host" },
+    });
+  });
+
+  it.each([
+    { target: "host", profile: "managed", targetId: "t1" },
+    { target: "node", node: "node-a", profile: "work", targetId: "t1" },
+  ] as const)("keeps $target/$profile on the thumbnail and open action", async (tab) => {
+    const gateway = gatewayContext();
+    const element = await card(gateway.context, true, tab);
+    await vi.waitFor(() => expect(element.shadowRoot?.querySelector("img")).not.toBeNull());
+    expect(gateway.request).toHaveBeenCalledWith("browser.request", {
+      method: "POST",
+      path: "/screenshot",
+      target: tab.target,
+      ...("node" in tab ? { node: tab.node } : {}),
+      query: { profile: tab.profile },
+      body: { targetId: "t1", type: "png" },
+    });
+    const toggle = vi.fn<(event: Event) => void>();
+    element.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, toggle);
+    element.shadowRoot?.querySelector<HTMLButtonElement>(".shot")?.click();
+    expect(toggle).toHaveBeenCalledOnce();
+    expect(toggle.mock.calls[0]?.[0]).toMatchObject({
+      detail: { open: true, browserTab: tab },
     });
   });
 
@@ -133,7 +162,7 @@ describe("browser tab card", () => {
       toolCallId: id,
       toolName: "browser",
       content: "ok",
-      details: { browserTab: { targetId: "tab-1", title: id } },
+      details: { browserTab: { profile: "managed", target: "host", targetId: "tab-1", title: id } },
     });
     const host = container();
     const messages = [message("old"), message("new")];
@@ -184,7 +213,7 @@ describe("browser tab card", () => {
       toolCallId: id,
       toolName: "browser",
       content: "ok",
-      details: { browserTab: { targetId, title: id } },
+      details: { browserTab: { profile: "managed", target: "host", targetId, title: id } },
     });
     const messages = [message("old", "tab-1"), message("new", "tab-1"), message("other", "tab-2")];
     const host = container();

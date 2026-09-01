@@ -66,6 +66,7 @@ it.each([
   [["scripts/e2e/cron-mcp-cleanup-seed.ts"], ["cron-mcp-cleanup"]],
   [["scripts/e2e/mcp-code-mode-gateway-seed.ts"], ["mcp-code-mode-gateway"]],
   [["scripts/e2e/lib/mcp-code-mode-probe-server.ts"], ["mcp-code-mode-gateway"]],
+  [["scripts/e2e/lib/mcp-code-mode/scenario.sh"], ["mcp-code-mode-gateway"]],
   [["scripts/e2e/update-channel-switch-docker.sh"], ["update-channel-switch"]],
   [["scripts/e2e/lib/update-channel-switch/assertions.mjs"], ["update-channel-switch"]],
   [
@@ -89,12 +90,22 @@ it.each([
   [[".github/workflows/ci.yml"], allDockerSeedLanes],
   [["scripts/lib/ci-changed-node-test-plan.mts"], allDockerSeedLanes],
   [["scripts\\e2e\\lib\\mcp-code-mode-probe-server.ts"], ["mcp-code-mode-gateway"]],
+  [["scripts\\e2e\\lib\\mcp-code-mode\\scenario.sh"], ["mcp-code-mode-gateway"]],
   [["scripts/e2e/install-e2e.ts", "docs/ci.md"], []],
 ])("resolves Docker seed lanes for %j", (changedPaths, expected) => {
   expect(resolveChangedDockerSeedLanes(changedPaths)).toEqual(expected);
 });
 
 describe("CI changed Node test plan", () => {
+  it("leaves native Chromium tests to checks-ui while retaining changed Node-driven tests", () => {
+    const browser = "ui/src/components/markdown-mermaid.runtime.browser.test.ts";
+    const node = "ui/src/components/form-controls.browser.test.ts";
+    const shards = createChangedNodeTestShards([browser, node]);
+    expect(shards).not.toBeNull();
+    const targets = shards?.flatMap((shard) => shard.targets ?? []);
+    expect(targets).toContain(node);
+    expect(targets).not.toContain(browser);
+  });
   it.each([
     "extensions/copilot/index.ts",
     "extensions/copilot/harness.ts",
@@ -103,11 +114,11 @@ describe("CI changed Node test plan", () => {
     const hostTest = "src/agents/prepared-model-runtime.copilot.integration.test.ts";
     const shards = createChangedNodeTestShards([changedPath]);
     expect(shards).not.toBeNull();
-    expect(shards).toHaveLength(2);
+    expect(shards).toHaveLength(createChangedExtensionFallbackShards([changedPath]).length + 1);
     expect(shards?.flatMap((shard) => shard.targets ?? [])).toEqual([hostTest]);
-    expect(shards?.flatMap((shard) => shard.configs)).toEqual([
-      "test/vitest/vitest.extensions.config.ts",
-    ]);
+    expect(new Set(shards?.flatMap((shard) => shard.configs))).toEqual(
+      new Set(["test/vitest/vitest.extensions.config.ts"]),
+    );
     expect(buildVitestRunPlans([hostTest])).toEqual([
       {
         config: "test/vitest/vitest.agents-core.config.ts",
@@ -217,6 +228,22 @@ describe("CI changed Node test plan", () => {
     // Build-input classification: only sources and the build pipeline can
     // change dist bytes; repo scripts, workflows, and qa scenarios cannot.
     expect(hasBuildArtifactAffectingChange(["scripts/build-all.mts"])).toBe(true);
+    for (const changedPath of [
+      "tsdown.config.ts",
+      "tsdown.ai.config.ts",
+      "scripts/tsdown-build.mts",
+      "scripts/write-plugin-sdk-entry-dts.ts",
+      "scripts/write-unified-entry-dts.ts",
+      "scripts/lib/build-artifact-cache.mts",
+      "scripts/lib/compiler-input-snapshot.mts",
+      "scripts/lib/declaration-stage.mts",
+      "scripts/lib/tsdown-declaration-inputs.mts",
+      "scripts/lib/tsdown-declaration-writer.mts",
+      "scripts/lib/tsdown-config-groups.mts",
+      "scripts/lib/tsdown-output-roots.mts",
+    ]) {
+      expect(hasBuildArtifactAffectingChange([changedPath]), changedPath).toBe(true);
+    }
     expect(hasBuildArtifactAffectingChange(["tsconfig.json"])).toBe(true);
     expect(hasBuildArtifactAffectingChange(["scripts/run-vitest.mjs"])).toBe(false);
     expect(hasBuildArtifactAffectingChange([".github/workflows/ci.yml"])).toBe(false);
@@ -240,6 +267,14 @@ describe("CI changed Node test plan", () => {
     expect(hasQaSmokeAffectingChange([".github/actions/setup-node-env/action.yml"])).toBe(true);
     expect(hasQaSmokeAffectingChange(["scripts/lib/ci-changed-node-test-plan.mts"])).toBe(true);
     expect(hasQaSmokeAffectingChange([".github/workflows/labeler.yml"])).toBe(false);
+  });
+
+  it.each([
+    "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts",
+    "extensions/browser/src/browser/extension-install.test-support.ts",
+    "extensions/browser/chrome-extension/relay-key.test-support.ts",
+  ])("keeps the built native-host proof selected when only %s changes", (changedPath) => {
+    expect(hasBuildArtifactAffectingChange([changedPath])).toBe(true);
   });
 
   it("classifies prompt-snapshot impact by surface and generator import graph", () => {
@@ -422,6 +457,17 @@ describe("CI changed Node test plan", () => {
     );
   });
 
+  it("declares one-config extension jobs serial for the CI worker budget", () => {
+    const shards = createChangedExtensionFallbackShards([
+      "scripts/lib/ci-changed-node-test-plan.mts",
+    ]);
+
+    expect(shards.length).toBeGreaterThan(1);
+    expect(shards.every((shard) => shard.configs.length === 1 && !shard.targets)).toBe(true);
+    expect(shards.every((shard) => shard.planConcurrency === 1)).toBe(true);
+    expect(shards.every((shard) => Number.isInteger(shard.predictedSeconds))).toBe(true);
+  });
+
   it("covers every extension config when the extension inventory changes", () => {
     expectAllExtensionConfigs(
       createChangedExtensionFallbackShards(["scripts/lib/changed-extensions.mts"]),
@@ -442,6 +488,8 @@ describe("CI changed Node test plan", () => {
       {
         checkName: "checks-node-changed-extensions-config",
         configs: ["test/vitest/vitest.extension-discord.config.ts"],
+        planConcurrency: 1,
+        predictedSeconds: expect.any(Number),
         requiresDist: false,
         runner: "blacksmith-8vcpu-ubuntu-2404",
         shardName: "changed-extensions-config",
@@ -523,6 +571,32 @@ describe("CI changed Node test plan", () => {
     expect(shards).toHaveLength(Math.ceil(targets.length / 10));
   });
 
+  it.each([
+    ["test/vitest/vitest.extensions.config.ts", "extensions/copilot/index.ts"],
+    ["test/vitest/vitest.extension-qa.config.ts", "extensions/qa-lab/src/cli.runtime.ts"],
+    ["test/vitest/vitest.extension-providers.config.ts", "extensions/anthropic/index.ts"],
+  ])("partitions the whole %s for direct and core-driven plugin changes", (config, changedPath) => {
+    const direct = createChangedExtensionFallbackShards([changedPath]);
+    const broad = createChangedExtensionFallbackShards([
+      "scripts/lib/ci-changed-node-test-plan.mts",
+    ]).filter((shard) => shard.configs.includes(config));
+
+    expect(direct.length).toBeGreaterThan(1);
+    expect(direct.every((shard) => shard.configs.length === 1 && shard.configs[0] === config)).toBe(
+      true,
+    );
+    expect(direct.every((shard) => !shard.includePatterns && !shard.targets)).toBe(true);
+    const shardArgs = (shards: typeof direct) => shards.map((shard) => shard.env);
+    expect(shardArgs(direct)).toEqual(
+      direct.map((_, index) => ({
+        OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify([
+          `--shard=${index + 1}/${direct.length}`,
+        ]),
+      })),
+    );
+    expect(shardArgs(broad)).toEqual(shardArgs(direct));
+  });
+
   it("preserves Matrix process bounds in mixed package fallbacks", () => {
     const shards = createChangedExtensionFallbackShards([
       "packages/gateway-protocol/src/frame-guards.ts",
@@ -574,6 +648,7 @@ describe("CI changed Node test plan", () => {
         checkName: "checks-node-changed-extensions-config",
         configs: ["test/vitest/vitest.extension-memory.config.ts"],
         planConcurrency: 1,
+        predictedSeconds: expect.any(Number),
         requiresDist: false,
         runner: "blacksmith-8vcpu-ubuntu-2404",
         shardName: "changed-extensions-config",
@@ -582,27 +657,36 @@ describe("CI changed Node test plan", () => {
   });
 
   it("prebuilds private QA dist before the QA Lab extension fallback", () => {
-    expect(createChangedExtensionFallbackShards(["extensions/qa-lab/src/cli.runtime.ts"])).toEqual([
-      expect.objectContaining({
+    const shards = createChangedExtensionFallbackShards(["extensions/qa-lab/src/cli.runtime.ts"]);
+    expect(shards.length).toBeGreaterThan(1);
+    for (const shard of shards) {
+      expect(shard).toMatchObject({
         configs: ["test/vitest/vitest.extension-qa.config.ts"],
         pretestBuildMode: "private-qa",
-      }),
-    ]);
+      });
+    }
   });
 
   it("routes lifecycle edits to the prepared QA config without losing boundary coverage", () => {
     const target = "extensions/qa-lab/src/suite-process-lifecycle.test.ts";
-    expect(createChangedNodeTestShards([target])).toEqual([
-      expect.objectContaining({
+    const shards = createChangedNodeTestShards([target]);
+    expect(shards).not.toBeNull();
+    const qaShards = shards?.filter((shard) => shard.pretestBuildMode === "private-qa") ?? [];
+    expect(qaShards.length).toBeGreaterThan(1);
+    for (const shard of qaShards) {
+      expect(shard).toMatchObject({
         configs: ["test/vitest/vitest.extension-qa.config.ts"],
         pretestBuildMode: "private-qa",
-      }),
+      });
+    }
+    expect(shards?.filter((shard) => !qaShards.includes(shard))).toEqual([
       expect.objectContaining({ configs: ["test/vitest/vitest.boundary.config.ts"] }),
     ]);
   });
 
   it("fails safe when a targeted config needs special shard setup", () => {
     expect(createChangedNodeTestShards(["scripts/docs-i18n/main.go"])).toBeNull();
+    expect(createChangedNodeTestShards(["test/scripts/docs-i18n.test.ts"])).toBeNull();
     expect(createChangedNodeTestShards(["src/tui/tui-pty-harness.e2e.test.ts"])).toBeNull();
   });
 
@@ -663,6 +747,7 @@ describe("CI changed Node test plan", () => {
       checkName: "checks-node-changed-extensions-config",
       configs: ["test/vitest/vitest.extension-memory.config.ts"],
       planConcurrency: 1,
+      predictedSeconds: expect.any(Number),
       requiresDist: false,
       runner: "blacksmith-8vcpu-ubuntu-2404",
       shardName: "changed-extensions-config",

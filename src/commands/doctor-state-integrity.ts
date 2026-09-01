@@ -27,11 +27,6 @@ import {
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
-import {
-  formatSessionArchiveTimestamp,
-  isPrimarySessionTranscriptFileName,
-} from "../config/sessions/artifacts.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import {
   resolveSessionFilePathCore,
@@ -51,6 +46,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { safeRealpathSync } from "../infra/boundary-path.js";
+import { findGitRoot } from "../infra/git-root.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import {
   loadLegacySessionStore,
@@ -58,7 +54,6 @@ import {
 } from "../infra/state-migrations.legacy-session-store.js";
 import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { shortenHomePath } from "../utils.js";
 import { repairHeartbeatPoisonedMainSession } from "./doctor-heartbeat-main-session-repair.js";
 import { describeHeartbeatSessionTargetIssues } from "./doctor-heartbeat-session-target.js";
@@ -71,7 +66,7 @@ import {
   createPluginSessionStateDoctorScanner,
   runPluginSessionStateDoctorRepairs,
 } from "./doctor-session-state-providers.js";
-import { countLabel, formatFilePreview } from "./doctor-state-integrity-format.js";
+import { countLabel } from "./doctor-state-integrity-format.js";
 
 const STATE_INTEGRITY_CHECK_ID = "core/doctor/state-integrity";
 
@@ -163,10 +158,6 @@ function tryResolveNativeRealPath(targetPath: string): string | null {
   } catch {
     return null;
   }
-}
-
-function resolveComparableTranscriptPath(filePath: string): string {
-  return tryResolveNativeRealPath(filePath) ?? path.resolve(filePath);
 }
 
 function areComparablePathsEqual(leftPath: string, rightPath: string): boolean {
@@ -736,15 +727,6 @@ function hasPairingPolicy(value: unknown): boolean {
     }
   }
   return false;
-}
-
-function isSlashRoutingSessionKey(sessionKey: string): boolean {
-  const raw = normalizeOptionalLowercaseString(sessionKey);
-  if (!raw) {
-    return false;
-  }
-  const scoped = parseAgentSessionKey(raw)?.rest ?? raw;
-  return /^[^:]+:slash:[^:]+(?:$|:)/.test(scoped);
 }
 
 function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
@@ -1319,9 +1301,7 @@ export async function noteStateIntegrity(
     inspectLegacyStore: boolean,
   ) => {
     const { agentId, storePath } = target;
-    const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId, env, homedir);
     const absoluteStorePath = path.resolve(storePath);
-    const displaySessionsDir = shortenHomePath(sessionsDir);
 
     const sqliteStorePath = resolveSqliteTargetFromSessionStorePath(absoluteStorePath, {
       agentId,
@@ -1338,10 +1318,10 @@ export async function noteStateIntegrity(
       (candidate): candidate is [string, SessionEntry] =>
         candidate[1] != null && typeof candidate[1] === "object",
     );
-    const legacyOrder = new Map(legacyEntries.map(([sessionKey], index) => [sessionKey, index]));
+    const legacySessionKeys = new Set(legacyEntries.map(([sessionKey]) => sessionKey));
     const sqliteSessionKeys = new Set<string>();
     const isSessionKeyOccupied = (sessionKey: string) =>
-      sqliteSessionKeys.has(sessionKey) || legacyOrder.has(sessionKey);
+      sqliteSessionKeys.has(sessionKey) || legacySessionKeys.has(sessionKey);
     const mainKey = resolveCanonicalMainSessionKey({
       agentId,
       mainKey: cfg.session?.mainKey,
@@ -1352,21 +1332,7 @@ export async function noteStateIntegrity(
     const sqlitePluginStateScanner = createPluginSessionStateDoctorScanner({ agentId, cfg, env });
     const legacyPluginStateScanner = createPluginSessionStateDoctorScanner({ agentId, cfg, env });
     let mainEntry: SessionEntry | undefined;
-    let sqliteNewKeyIndex = 0;
-    const recent: Array<{ entry: SessionEntry; order: number; sessionKey: string }> = [];
-    const addRecent = (sessionKey: string, entry: SessionEntry, order: number) => {
-      recent.push({ entry, order, sessionKey });
-      recent.sort((left, right) => {
-        const leftUpdated = typeof left.entry.updatedAt === "number" ? left.entry.updatedAt : 0;
-        const rightUpdated = typeof right.entry.updatedAt === "number" ? right.entry.updatedAt : 0;
-        return rightUpdated - leftUpdated || left.order - right.order;
-      });
-      if (recent.length > 5) {
-        recent.pop();
-      }
-    };
-    const inspectMergedEntry = (sessionKey: string, entry: SessionEntry, order: number) => {
-      addRecent(sessionKey, entry, order);
+    const inspectMergedEntry = (sessionKey: string, entry: SessionEntry) => {
       if (sessionKey === mainKey) {
         mainEntry = entry;
       }
@@ -1382,22 +1348,19 @@ export async function noteStateIntegrity(
       ({ entry, sessionKey }) => {
         sqliteSessionKeys.add(sessionKey);
         sqlitePluginStateScanner.scanEntry(sessionKey, entry);
-        const order = legacyOrder.get(sessionKey) ?? legacyEntries.length + sqliteNewKeyIndex++;
-        inspectMergedEntry(sessionKey, entry, order);
+        inspectMergedEntry(sessionKey, entry);
         const recovery = inspectMainSessionRecoveryEntry(sessionKey, entry);
         if (recovery) {
           mainRecoveryWedged.push(recovery);
         }
       },
     );
-    let mergedEntryCount = sqliteEntryCount;
     for (const [sessionKey, entry] of legacyEntries) {
       if (sqliteSessionKeys.has(sessionKey)) {
         continue;
       }
       legacyPluginStateScanner.scanEntry(sessionKey, entry);
-      inspectMergedEntry(sessionKey, entry, legacyOrder.get(sessionKey) ?? mergedEntryCount);
-      mergedEntryCount += 1;
+      inspectMergedEntry(sessionKey, entry);
     }
     const sessionPathOpts = resolveSessionFilePathOptions({ agentId, storePath });
     await noteMainSessionRecoveryIntegrity({
@@ -1408,36 +1371,9 @@ export async function noteStateIntegrity(
       confirmRepair: (params) => prompter.confirmRuntimeRepair(params),
       countLabel,
     });
-    if (mergedEntryCount > 0) {
-      const recentTranscriptCandidates = recent
-        .map(({ entry, sessionKey }) => [sessionKey, entry] as const)
-        .filter(([key]) => !isSlashRoutingSessionKey(key));
-      const missing = recentTranscriptCandidates.filter(([key, entry]) => {
-        if (sqliteSessionKeys.has(key)) {
-          return false;
-        }
-        const sessionId = entry.sessionId;
-        if (!sessionId) {
-          return false;
-        }
-        const legacySessionFile = (entry as SessionEntry & { sessionFile?: string }).sessionFile;
-        if (parseSqliteSessionFileMarker(legacySessionFile)) {
-          return false;
-        }
-        const transcriptPath = resolveSessionFilePathCore(sessionId, entry, sessionPathOpts);
-        return !existsFile(transcriptPath);
-      });
-      if (missing.length > 0) {
-        warnings.push(
-          [
-            `- ${missing.length}/${recentTranscriptCandidates.length} recent sessions are missing transcripts.`,
-            `  Verify sessions in store: ${formatCliCommand(`openclaw sessions --store "${sqliteStorePath}"`)}`,
-            `  Preview cleanup impact: ${formatCliCommand(`openclaw sessions cleanup --store "${sqliteStorePath}" --dry-run --fix-missing`)}`,
-            `  Prune missing entries: ${formatCliCommand(`openclaw sessions cleanup --store "${sqliteStorePath}" --enforce --fix-missing`)}`,
-          ].join("\n"),
-        );
-      }
-
+    // Session SQLite migration owns legacy transcript validation and archival.
+    // Repeating it here turns healthy pending imports into integrity warnings.
+    if (sqliteEntryCount > 0 || legacyEntries.length > 0) {
       if (wedgedSubagentSessions.length > 0) {
         const wedgedCount = countLabel(wedgedSubagentSessions.length, "wedged subagent session");
         warnings.push(
@@ -1565,70 +1501,6 @@ export async function noteStateIntegrity(
         }
       }
     }
-
-    // SQLite transcript ownership is repaired by the import/migration workflow.
-    // Never offer generic file archival against a live canonical session store.
-    if (sqliteEntryCount === 0 && inspectLegacyStore && existsDir(sessionsDir)) {
-      const referencedTranscriptPaths = new Set<string>();
-      for (const [, entry] of legacyEntries) {
-        if (!entry?.sessionId) {
-          continue;
-        }
-        try {
-          referencedTranscriptPaths.add(
-            resolveComparableTranscriptPath(
-              resolveSessionFilePathCore(entry.sessionId, entry, sessionPathOpts),
-            ),
-          );
-        } catch {
-          // ignore invalid legacy paths
-        }
-      }
-      const sessionDirEntries = fs.readdirSync(sessionsDir, { withFileTypes: true });
-      const orphanTranscriptPaths = sessionDirEntries
-        .filter((entry) => entry.isFile() && isPrimarySessionTranscriptFileName(entry.name))
-        .map((entry) => path.join(sessionsDir, entry.name))
-        .filter(
-          (filePath) => !referencedTranscriptPaths.has(resolveComparableTranscriptPath(filePath)),
-        );
-      if (orphanTranscriptPaths.length > 0) {
-        const orphanCount = countLabel(orphanTranscriptPaths.length, "orphan transcript file");
-        const orphanPreview = formatFilePreview(orphanTranscriptPaths);
-        warnings.push(
-          [
-            `- Found ${orphanCount} in ${displaySessionsDir}.`,
-            "  These .jsonl files are no longer referenced by sessions.json, so they are not part of any active session history.",
-            "  Doctor can archive them safely by renaming each file to *.deleted.<timestamp>.",
-            `  Examples: ${orphanPreview}`,
-          ].join("\n"),
-        );
-        const archiveOrphans = await prompter.confirmRuntimeRepair({
-          message: `Archive ${orphanCount} in ${displaySessionsDir}? This only renames them to *.deleted.<timestamp>.`,
-          initialValue: false,
-          requiresInteractiveConfirmation: true,
-        });
-        if (archiveOrphans) {
-          let archived = 0;
-          const archivedAt = formatSessionArchiveTimestamp();
-          for (const orphanPath of orphanTranscriptPaths) {
-            const archivedPath = `${orphanPath}.deleted.${archivedAt}`;
-            try {
-              fs.renameSync(orphanPath, archivedPath);
-              archived += 1;
-            } catch (err) {
-              warnings.push(
-                `- Failed to archive orphan transcript ${shortenHomePath(orphanPath)}: ${String(err)}`,
-              );
-            }
-          }
-          if (archived > 0) {
-            changes.push(
-              `- Archived ${countLabel(archived, "orphan transcript file")} in ${displaySessionsDir} as .deleted timestamped backups.`,
-            );
-          }
-        }
-      }
-    }
   };
 
   // A fixed store can map to several agent-owned SQLite targets but only one legacy JSON file.
@@ -1658,8 +1530,8 @@ export function collectWorkspaceBackupTip(workspaceDir: string): string | null {
   if (!existsDir(workspaceDir)) {
     return null;
   }
-  const gitMarker = path.join(workspaceDir, ".git");
-  if (fs.existsSync(gitMarker)) {
+  const resolvedWorkspaceDir = safeRealpathSync(workspaceDir);
+  if (!resolvedWorkspaceDir || findGitRoot(resolvedWorkspaceDir)) {
     return null;
   }
   return "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended";

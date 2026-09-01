@@ -10,10 +10,13 @@
 import { html, nothing, render } from "lit";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
+import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
 import "../components/modal-dialog.ts";
 import { postNativeUpdate } from "./native-link-routing.ts";
 import type { ConfirmAndStartUpdateParams, UpdateProgress } from "./update-confirmation.ts";
-import { formatUpdateTargetLabel } from "./update-overlay-helpers.ts";
+import { formatUpdateTargetLabel } from "./update-schedule-projection.ts";
+
+registerUpdateActionsEnglish();
 
 /** Bounds the wait for the request to be accepted before calling it a no-start. */
 const UPDATE_ACCEPT_GRACE_MS = 4_000;
@@ -24,7 +27,12 @@ type DialogPhase =
   | { kind: "working"; connected: boolean }
   | { kind: "failed"; message: string };
 
-let updateDialogActive = false;
+let updateDialog: { closeFailed: () => void } | null = null;
+
+/** The triage surface takes over only after the initiating dialog reports failure. */
+export function closeFailedUpdateDialog(): void {
+  updateDialog?.closeFailed();
+}
 
 function formatInstalledAndAvailable(
   updateAvailable: UpdateAvailable | null,
@@ -59,10 +67,9 @@ export async function confirmAndStartUpdateRuntime(
 ): Promise<void> {
   // Native confirms block reentrancy; refuse a second request rather than
   // stacking a dialog over an update that is already being reported.
-  if (updateDialogActive) {
+  if (updateDialog) {
     return;
   }
-  updateDialogActive = true;
   const host = document.createElement("div");
   document.body.append(host);
   // One surface owns the outcome at a time: the ambient copy stays hidden while
@@ -99,8 +106,15 @@ export async function confirmAndStartUpdateRuntime(
       render(nothing, host);
       host.remove();
       document.body.classList.remove(UPDATE_DIALOG_OPEN_CLASS);
-      updateDialogActive = false;
+      updateDialog = null;
       resolve();
+    };
+    updateDialog = {
+      closeFailed: () => {
+        if (phase.kind === "failed") {
+          finish();
+        }
+      },
     };
 
     const draw = () => {

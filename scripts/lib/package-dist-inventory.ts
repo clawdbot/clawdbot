@@ -3,16 +3,11 @@ import path from "node:path";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { writeJson } from "../../src/infra/json-files.ts";
 import { collectPackageDistInventory } from "../../src/infra/package-dist-inventory.ts";
-import {
-  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
-  PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
-} from "./package-dist-inventory-contract.mts";
+import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "./package-dist-inventory-contract.mts";
+import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "./package-lifecycle-marker.mjs";
 
 export { LOCAL_BUILD_METADATA_DIST_PATHS } from "./local-build-metadata-paths.mts";
-export {
-  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
-  PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
-} from "./package-dist-inventory-contract.mts";
+export { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "./package-dist-inventory-contract.mts";
 
 const INSTALL_STAGE_DEBRIS_DIR_PATTERN = /^\.openclaw-install-stage(?:-[^/]+)?$/iu;
 
@@ -124,13 +119,9 @@ async function writePackageDistInventoryFile(
   packageRoot: string,
   entries: string[],
 ): Promise<string[]> {
-  // The packed guard intentionally stays outside the inventory until preinstall removes it.
-  // An updater that skips lifecycle scripts rejects the staged package before activation.
-  const inventory = sortUniqueStrings(
-    entries.filter((relativePath) => relativePath !== PACKAGE_INSTALL_GUARD_RELATIVE_PATH),
-  );
+  const inventory = sortUniqueStrings(entries);
   const inventoryPath = path.join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
-  await writeJson(inventoryPath, inventory, { trailingNewline: true });
+  await writeJson(inventoryPath, inventory, { mode: 0o644, trailingNewline: true });
   return inventory;
 }
 
@@ -139,14 +130,14 @@ export async function writePackageDistInventory(packageRoot: string): Promise<st
   return writePackageDistInventoryFile(packageRoot, await collectPackageDistInventory(packageRoot));
 }
 
-async function writePackageInstallGuardMarker(packageRoot: string): Promise<void> {
-  const markerPath = path.join(packageRoot, PACKAGE_INSTALL_GUARD_RELATIVE_PATH);
+async function writePackageLifecyclePendingMarker(packageRoot: string): Promise<void> {
+  const markerPath = path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH);
   await fs.mkdir(path.dirname(markerPath), { recursive: true });
-  await fs.writeFile(markerPath, "OpenClaw package preinstall has not completed.\n", "utf8");
+  await fs.writeFile(markerPath, "pending\n", "utf8");
 }
 
 export async function writePackageDistInventoryForPublish(packageRoot: string): Promise<string[]> {
   const inventory = await writePackageDistInventory(packageRoot);
-  await writePackageInstallGuardMarker(packageRoot);
+  await writePackageLifecyclePendingMarker(packageRoot);
   return inventory;
 }

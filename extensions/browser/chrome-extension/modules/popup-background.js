@@ -5,10 +5,7 @@ import {
   parsePairingString,
 } from "./relay-core.js";
 import { isTabSelected } from "./relay-tab-groups.js";
-
-function isValidTabId(value) {
-  return Number.isSafeInteger(value) && value >= 0;
-}
+import { isValidTabId } from "./tab-eligibility.js";
 
 function errorResponse(sendResponse, error) {
   sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
@@ -41,7 +38,6 @@ export function createPopupMessageHandler({
   closeRelaySocket,
   connectRelay,
   setBadge,
-  attachingTabs,
   detachDebugger,
   removeTabFromOpenClawGroup,
   addTabToOpenClawGroup,
@@ -251,7 +247,6 @@ export function createPopupMessageHandler({
                   const selected = await isTabSelected(await chromeApi.tabs.get(tabId));
                   if (!msg.grant && selected) {
                     policy.invalidateTab(tabId);
-                    await Promise.allSettled([attachingTabs.get(tabId)]);
                     await detachDebugger(tabId);
                     await removeTabFromOpenClawGroup(tabId);
                   } else if (msg.grant && !selected) {

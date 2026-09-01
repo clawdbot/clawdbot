@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import type { RouteLocation, RouterState } from "@openclaw/uirouter";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, GatewayAgentRow } from "../api/types.ts";
 import type { RouteId } from "../app-routes.ts";
@@ -15,6 +15,7 @@ import {
 } from "../components/panel-toggle-contract.ts";
 import { i18n } from "../i18n/index.ts";
 import { SESSION_FACE_PREFERENCE_PARAM } from "../lib/sessions/route-navigation.ts";
+import { createSessionCapabilityHarness } from "../lib/sessions/session-capability.test-support.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
 import {
@@ -50,6 +51,12 @@ vi.mock("./stale-chunk-reload.ts", async () => {
     scheduleStaleChunkReload: vi.fn(async () => true),
   };
 });
+
+function createRouteSessions() {
+  const { sessions } = createSessionCapabilityHarness(vi.fn());
+  onTestFinished(() => sessions.dispose());
+  return sessions;
+}
 
 type AppLifecycleState = {
   loginToken: string;
@@ -475,7 +482,7 @@ describe("OpenClaw shell route session commits", () => {
         agents: { state: { agentsList: { mainKey: "main" } } },
         agentSelection: { state: { selectedId: "main" } },
         gateway: { snapshot: { hello: null } },
-        sessions: { state: { result: null } },
+        sessions: createRouteSessions(),
         navigate,
       } as unknown as ApplicationContext,
     };
@@ -503,7 +510,7 @@ describe("OpenClaw shell route session commits", () => {
         agents: { state: { agentsList: { defaultId: "research", mainKey: "main" } } },
         agentSelection: { state: { selectedId: "research" } },
         gateway: { snapshot: { hello: null } },
-        sessions: { state: { result: null } },
+        sessions: createRouteSessions(),
         navigate,
       } as unknown as ApplicationContext,
     };
@@ -532,7 +539,7 @@ describe("OpenClaw shell route session commits", () => {
         },
         agentSelection: { set: vi.fn(), state: { selectedId: null } },
         gateway: { setSessionKey: vi.fn(), snapshot },
-        sessions: { state: { result: null } },
+        sessions: createRouteSessions(),
         replace,
       } as unknown as ApplicationContext,
     };
@@ -560,6 +567,7 @@ describe("OpenClaw shell route session commits", () => {
           setSessionKey,
         },
         agentSelection: { set: setAgent },
+        sessions: createRouteSessions(),
       } as unknown as ApplicationContext,
     };
     shell.activeSessionKey = "agent:main:session-a";
@@ -610,7 +618,10 @@ describe("OpenClaw shell server preferences", () => {
       },
     } as unknown as ApplicationContext["runtimeConfig"];
     const context = {
-      gateway: { connection: { gatewayUrl: "ws://sidebar.test" } },
+      gateway: {
+        connection: { gatewayUrl: "ws://sidebar.test" },
+        snapshot: { phase: "connected" },
+      },
       navigation: { update: updateNavigation },
       theme: { refresh: refreshTheme },
       // reconcileServerUiPrefs only accepts the current context's capability.
@@ -941,7 +952,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
         gateway: { setSessionKey, snapshot: { hello: null } },
         agents: { state: { agentsList: { mainKey: "main" } } },
         agentSelection: { state: { selectedId: "main" }, set: setAgent },
-        sessions: { state: { result: null } },
+        sessions: createRouteSessions(),
         navigate,
       } as unknown as ApplicationContext,
     };

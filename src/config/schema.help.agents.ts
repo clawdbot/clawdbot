@@ -82,6 +82,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Optional per-model runtime policy for this agent. Use this for agent-specific model exceptions instead of setting a whole-agent runtime.",
   "agents.entries.*.models.*.agentRuntime.id":
     'Per-agent model runtime id: "openclaw", "auto", a registered plugin harness id such as "codex", or a supported CLI backend alias such as "claude-cli".',
+  "agents.entries.*.models.*.codeMode":
+    "OpenClaw Code Mode for this agent and exact provider/model: On forces it on, Off disables it, and Default inherits the agent activation setting, then the shared model override, then tools.codeMode.enabled. This does not change the selected runtime or Codex native Code Mode.",
   "agents.defaults.imageModel.primary":
     "Optional image model (provider/model) used when the primary model lacks image input.",
   "agents.defaults.imageModel.fallbacks": "Ordered fallback image models (provider/model).",
@@ -147,7 +149,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.postCompactionSections":
     'Opt-in AGENTS.md H2/H3 section names re-injected after compaction. Leave unset or set [] to disable reinjection. Explicitly set ["Session Startup", "Red Lines"] to enable the legacy default pair.',
   "agents.defaults.compaction.timeoutSeconds":
-    "Maximum time in seconds allowed for a single compaction operation before it is aborted (default: 180). Increase this for very large sessions that need more time to summarize, or decrease it to fail faster on unresponsive models.",
+    "Safety window in seconds for each built-in compaction model request (default: 180). Multi-stage compaction refreshes the window as each serial request starts, so the complete compaction can take longer; plugin-owned compaction receives one window for the complete operation.",
   "agents.defaults.compaction.model":
     "Optional provider/model or configured bare alias used only for compaction summarization. Bare aliases resolve before dispatch; a configured literal model ID wins if it collides with an alias. Leave unset to keep using the primary agent model.",
   "agents.defaults.compaction.maxActiveTranscriptBytes":

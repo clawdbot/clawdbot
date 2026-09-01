@@ -1,5 +1,4 @@
 // Applies parsed directives to session state, config overrides, and run options.
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { modelKey } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
@@ -186,6 +185,7 @@ export async function applyInlineDirectiveOverrides(params: {
   let { provider, model } = params;
   let { contextTokens } = params;
   const directiveModelState = {
+    modelPolicy: modelState.modelPolicy,
     allowedModelKeys: modelState.allowedModelKeys,
     allowedModelCatalog: modelState.allowedModelCatalog,
     policyAliasIndex: modelState.policyAliasIndex,
@@ -193,6 +193,7 @@ export async function applyInlineDirectiveOverrides(params: {
   };
   const createDirectiveHandlingBase = () => ({
     cfg,
+    agentId,
     directives,
     sessionEntry,
     sessionStore,
@@ -215,6 +216,7 @@ export async function applyInlineDirectiveOverrides(params: {
   });
 
   let directiveAck: ReplyPayload | undefined;
+  let selectionCatalog = modelState.allowedModelCatalog;
 
   // Fire on the reason, not the boolean: a temporarily-unavailable override
   // surfaces a notice without destroying the pin, so resetModelOverride stays false.
@@ -294,6 +296,7 @@ export async function applyInlineDirectiveOverrides(params: {
       defaultProvider,
       defaultModel,
       aliasIndex,
+      modelPolicy: modelState.modelPolicy,
       allowedModelKeys: modelState.allowedModelKeys,
       allowedModelCatalog: modelState.allowedModelCatalog,
       provider,
@@ -399,6 +402,7 @@ export async function applyInlineDirectiveOverrides(params: {
         defaultProvider,
         defaultModel,
         aliasIndex,
+        modelPolicy: modelState.modelPolicy,
         allowedModelKeys: modelState.allowedModelKeys,
         allowedModelCatalog: modelState.allowedModelCatalog,
         provider,
@@ -439,7 +443,7 @@ export async function applyInlineDirectiveOverrides(params: {
           defaultModel,
           currentProvider: provider,
           currentModel: model,
-          allowedModelKeys: modelState.allowedModelKeys,
+          modelPolicy: modelState.modelPolicy,
           modelCatalog: modelState.allowedModelCatalog,
           thinkingCatalog: modelState.allowedModelCatalog,
           canPersistStickyModelSelection,
@@ -499,6 +503,7 @@ export async function applyInlineDirectiveOverrides(params: {
       const targetSessionEntry = sessionStore[sessionKey] ?? sessionEntry;
       statusReply = await buildStatusReply({
         cfg,
+        agentId,
         command,
         sessionEntry: targetSessionEntry,
         sessionKey,
@@ -543,9 +548,10 @@ export async function applyInlineDirectiveOverrides(params: {
       };
     }
     ({ provider, model } = persistenceState.outcome);
+    selectionCatalog = persistenceState.outcome.modelCatalog ?? selectionCatalog;
   }
 
-  const selectedCatalogEntry = modelState.allowedModelCatalog.find(
+  const selectedCatalogEntry = selectionCatalog.find(
     (entry) => modelKey(entry.provider, entry.id) === modelKey(provider, model),
   );
   contextTokens = resolveContextTokens({
@@ -556,7 +562,7 @@ export async function applyInlineDirectiveOverrides(params: {
         provider,
         modelId: model,
         config: cfg,
-        agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
+        agentId,
         sessionKey,
       }).runtime,
       config: cfg,

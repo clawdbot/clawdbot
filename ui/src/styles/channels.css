@@ -347,11 +347,6 @@
   gap: var(--space-2);
 }
 
-wa-radio-group.channels-wizard__options::part(radios) {
-  display: grid;
-  gap: var(--space-2);
-}
-
 .channels-wizard__option {
   display: flex;
   flex-direction: column;

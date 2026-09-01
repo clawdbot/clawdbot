@@ -4,6 +4,7 @@ import path from "node:path";
 // Covers CLI-backed attempt execution and session-binding persistence.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { persistAcpDispatchTranscript } from "../../auto-reply/reply/dispatch-acp-transcript.runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   formatSqliteSessionFileMarker,
@@ -16,6 +17,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
+import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
@@ -32,6 +34,7 @@ import { createTestPreparedRunAdmission } from "../admitted-run-context.test-sup
 import { clearRuntimeAuthProfileStoreSnapshots } from "../auth-profiles/runtime-snapshots.js";
 import { saveAuthProfileStore } from "../auth-profiles/store.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
+import { buildCliMcpGrantContext } from "../cli-runner/mcp-grant-context.js";
 import { createCronCreatorAuthorityCapability } from "../cron-creator-authority-context.js";
 import type { RunEmbeddedAgentInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
@@ -2344,6 +2347,50 @@ describe("CLI attempt execution", () => {
     });
   });
 
+  it.each([false, true])(
+    "persists ACP assistant media ownership only when the dispatcher supplies it: %s",
+    async (managed) => {
+      const sessionKey = "agent:main:direct:acp-media-ownership";
+      const sessionEntry = makeSessionEntry("session-acp-media-ownership");
+      await writeSessionStoreSeed({ [sessionKey]: sessionEntry });
+      const finalText = "Artifacts ready\nMEDIA:./report.png";
+
+      await persistAcpDispatchTranscript({
+        cfg: { session: { store: storePath } },
+        agentId: "main",
+        sessionKey,
+        expectedSessionId: sessionEntry.sessionId,
+        promptText: "Prepare the report",
+        finalText,
+        prepareAssistantTranscriptMessage: managed
+          ? (message, sourceText) => {
+              expect(sourceText).toBe(finalText);
+              return applyAssistantDeliveryDirectives(message, {
+                managedMediaUrls: ["./report.png"],
+              });
+            }
+          : undefined,
+      });
+
+      const messages = await readSessionMessages({
+        agentId: "main",
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        storePath,
+      });
+      expect(messages).toHaveLength(2);
+      expect(messages[1]).toMatchObject({
+        role: "assistant",
+        content: [{ type: "text", text: finalText }],
+      });
+      if (managed) {
+        expect(messages[1]).toHaveProperty("openclawDelivery.mediaUrls", ["./report.png"]);
+      } else {
+        expect(messages[1]).not.toHaveProperty("openclawDelivery");
+      }
+    },
+  );
+
   it("persists a media-only ACP user turn when the reply is empty", async () => {
     const sessionKey = "agent:main:direct:acp-media-only";
     const sessionFile = path.join(tmpDir, "session-acp-media-only.jsonl");
@@ -2905,6 +2952,97 @@ describe("CLI attempt execution", () => {
       suppressNextUserMessagePersistence: false,
     });
   });
+
+  it.each([
+    {
+      label: "a fallback completion report",
+      isFallbackRetry: true,
+      inputProvenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+      expected: "report_only",
+    },
+    {
+      label: "a fallback answering ordinary user input",
+      isFallbackRetry: true,
+      inputProvenance: { kind: "external_user" },
+      expected: undefined,
+    },
+    {
+      label: "a primary completion report",
+      isFallbackRetry: false,
+      inputProvenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+      expected: undefined,
+    },
+  ])(
+    "stamps the command-fallback CLI grant delegation capability for $label",
+    async ({ isFallbackRetry, inputProvenance, expected }) => {
+      const runId = `run-command-fallback-delegation-${String(isFallbackRetry)}-${expected}`;
+      const sessionKey = `agent:main:direct:${runId}`;
+      const sessionEntry: SessionEntry = {
+        sessionId: `session-${runId}`,
+        updatedAt: Date.now(),
+      };
+      const cfg = {
+        session: { store: storePath },
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      await writeSessionStoreSeed({ [sessionKey]: sessionEntry });
+      runCliAgentMock.mockResolvedValueOnce(makeCliResult("delegation gate"));
+
+      await runAgentAttempt({
+        providerOverride: "anthropic",
+        originalProvider: "anthropic",
+        modelOverride: "claude-opus-4-7",
+        cfg,
+        sessionEntry,
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        sessionAgentId: "main",
+        sessionFile: path.join(tmpDir, `${runId}.jsonl`),
+        workspaceDir: tmpDir,
+        body: "report the completion",
+        isFallbackRetry,
+        resolvedThinkLevel: "medium",
+        timeoutMs: 1_000,
+        runId,
+        opts: {
+          message: "report the completion",
+          inputProvenance,
+        } as RunAgentAttemptParams["opts"],
+        runContext: {} as RunAgentAttemptParams["runContext"],
+        spawnedBy: undefined,
+        messageChannel: "telegram",
+        skillsSnapshot: undefined,
+        resolvedVerboseLevel: undefined,
+        agentDir,
+        onAgentEvent: vi.fn(),
+        authProfileProvider: "anthropic",
+        sessionStore: { [sessionKey]: sessionEntry },
+        storePath,
+        sessionHasHistory: false,
+      });
+
+      // The command loop is a second fallback entry point; its CLI grant must
+      // carry the same gate as the auto-reply candidate or the loopback surface
+      // resolves to full.
+      const grantContext = buildCliMcpGrantContext({
+        run: firstRunCliAgentArg() as unknown as Parameters<
+          typeof buildCliMcpGrantContext
+        >[0]["run"],
+        config: cfg,
+        requireExplicitMessageTarget: false,
+        agentId: "main",
+        modelProvider: "anthropic",
+        modelId: "claude-opus-4-7",
+      });
+      expect(grantContext.delegationCapability).toBe(expected);
+    },
+  );
 
   it("routes canonical Anthropic models through the configured Claude CLI runtime", async () => {
     const sessionKey = "agent:main:direct:canonical-claude-cli";
@@ -3961,7 +4099,7 @@ describe("embedded attempt harness pinning", () => {
     });
   });
 
-  it("forwards runtime toolsAllow into embedded attempts", async () => {
+  it("forwards invocation tool restrictions into embedded attempts", async () => {
     const sessionEntry = makeSessionEntry("tools-allow-session");
     runEmbeddedAgentMock.mockResolvedValueOnce({
       meta: { durationMs: 1 },
@@ -3971,10 +4109,13 @@ describe("embedded attempt harness pinning", () => {
       sessionEntry,
       body: "read only",
       runId: "run-tools-allow",
-      opts: { toolsAllow: ["read", "web_search"] },
+      opts: { toolsAllow: ["read", "web_search"], codeModeOverride: false },
     });
 
-    expectMockArgFields(runEmbeddedAgentMock, { toolsAllow: ["read", "web_search"] });
+    expectMockArgFields(runEmbeddedAgentMock, {
+      toolsAllow: ["read", "web_search"],
+      codeModeOverride: false,
+    });
   });
 
   it("lets provider/model runtime policy choose Codex without storing a session harness pin", async () => {

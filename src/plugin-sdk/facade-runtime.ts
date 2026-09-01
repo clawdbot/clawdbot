@@ -8,7 +8,7 @@ import { getCachedPluginSourceModuleLoader } from "../plugins/plugin-module-load
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 import {
   loadBundledPluginPublicSurfaceModuleSyncCore as loadBundledPluginPublicSurfaceModuleSyncLight,
-  loadFacadeModuleAtLocationSync as loadFacadeModuleAtLocationSyncShared,
+  loadFacadeModuleAtLocationSync,
   resetFacadeLoaderStateForTest,
   type FacadeModuleLocation,
 } from "./facade-loader.js";
@@ -48,10 +48,7 @@ function resolveRegistryPluginModuleLocation(params: {
   artifactBasename: string;
   env?: NodeJS.ProcessEnv;
 }): { modulePath: string; boundaryRoot: string } | null {
-  return loadFacadeActivationCheckRuntime().resolveRegistryPluginModuleLocation({
-    ...params,
-    resolutionKey: createFacadeResolutionKey(params),
-  });
+  return loadFacadeActivationCheckRuntime().resolveRegistryPluginModuleLocation(params);
 }
 
 function resolveFacadeModuleLocationUncached(params: {
@@ -184,18 +181,6 @@ function setFacadeActivationCheckRuntimeForTest(module: FacadeActivationCheckRun
   setFacadeActivationCheckRuntimeModule(module);
 }
 
-function loadFacadeModuleAtLocationSync<T extends object>(params: {
-  location: FacadeModuleLocation;
-  trackedPluginId: string | (() => string);
-  runtimeDeps?: {
-    pluginId: string;
-    env?: NodeJS.ProcessEnv;
-  };
-  loadModule?: (modulePath: string) => T;
-}): T {
-  return loadFacadeModuleAtLocationSyncShared(params);
-}
-
 function buildFacadeActivationCheckParams(
   params: BundledPluginPublicSurfaceParams,
   location: FacadeModuleLocation | null = resolveFacadeModuleLocation(params),
@@ -204,7 +189,6 @@ function buildFacadeActivationCheckParams(
     ...params,
     location,
     sourceExtensionsRoot: OPENCLAW_SOURCE_EXTENSIONS_ROOT,
-    resolutionKey: createFacadeResolutionKey(params),
   };
 }
 
@@ -227,10 +211,6 @@ export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(
   return loadFacadeModuleAtLocationSync<T>({
     location,
     trackedPluginId,
-    runtimeDeps: {
-      pluginId: params.dirName,
-      ...(params.env ? { env: params.env } : {}),
-    },
   });
 }
 

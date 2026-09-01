@@ -116,7 +116,7 @@ function agentWorkspaceToolDenyFindings(
         target: entry.source,
         requirement: `oc://${policyDocName}/${requirementPath}`,
         fixHint:
-          "Add the tool to tools.deny or agents.list[].tools.deny, or update policy after review.",
+          "Add the tool to tools.deny or agents.entries.<id>.tools.deny, or update policy after review.",
       };
     });
 }

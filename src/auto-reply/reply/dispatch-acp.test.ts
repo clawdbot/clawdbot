@@ -8,6 +8,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
 import type { MediaUnderstandingSkipError } from "../../../packages/media-understanding-common/src/errors.js";
+import type { AcpSessionResolution } from "../../acp/control-plane/manager.types.js";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { AcpSessionStoreEntry } from "../../acp/runtime/session-meta.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
@@ -49,7 +50,7 @@ import {
 } from "./test-fixtures/acp-runtime.js";
 
 const managerMocks = vi.hoisted(() => ({
-  resolveSession: vi.fn(),
+  resolveSession: vi.fn<() => AcpSessionResolution>(),
   runTurn: vi.fn(),
   getObservabilitySnapshot: vi.fn(() => ({
     turns: { queueDepth: 0 },
@@ -326,6 +327,7 @@ function setReadyAcpResolution() {
   managerMocks.resolveSession.mockReturnValue({
     kind: "ready",
     sessionKey,
+    agentId: "codex-acp",
     meta: createAcpSessionMeta(),
   });
 }
@@ -347,6 +349,7 @@ function createAcpConfigWithVisibleToolTags(): OpenClawConfig {
 async function runDispatch(params: {
   bodyForAgent: string;
   runId?: string;
+  onAgentRunStart?: Parameters<typeof tryDispatchAcpReplyCore>[0]["onAgentRunStart"];
   cfg?: OpenClawConfig;
   dispatcher?: ReplyDispatcher;
   shouldRouteToOriginating?: boolean;
@@ -382,6 +385,7 @@ async function runDispatch(params: {
     cfg: params.cfg ?? createAcpTestConfig(),
     dispatcher: params.dispatcher ?? createDispatcher().dispatcher,
     ...(params.runId ? { runId: params.runId } : {}),
+    onAgentRunStart: params.onAgentRunStart,
     sessionKey: targetSessionKey,
     images: params.images,
     abortSignal: params.abortSignal,
@@ -677,6 +681,7 @@ describe("tryDispatchAcpReplyCore", () => {
       managerMocks.resolveSession.mockReturnValue({
         kind: "ready",
         sessionKey: resolvedSessionKey,
+        agentId: "codex-acp",
         meta: createAcpSessionMeta({ agent: "private-agent-must-not-leak" }),
       });
       managerMocks.runTurn.mockImplementationOnce(
@@ -896,17 +901,36 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(auditMocks.emitAcpLifecycleError).not.toHaveBeenCalled();
   });
 
-  it("keeps caller-owned run ids on the shared lifecycle path", async () => {
+  it.each<{
+    name: string;
+    onAgentRunStart?: Parameters<typeof tryDispatchAcpReplyCore>[0]["onAgentRunStart"];
+    accepted?: boolean;
+  }>([
+    { name: "no observer", onAgentRunStart: undefined },
+    { name: "void observer", onAgentRunStart: () => {} },
+    { name: "legacy boolean result", onAgentRunStart: () => true },
+    {
+      name: "legacy object result",
+      onAgentRunStart: () => ({ completionSource: "reply-dispatch" }),
+    },
+    { name: "asynchronous result", onAgentRunStart: () => Promise.resolve("reply-dispatch") },
+    { name: "completion owner", onAgentRunStart: () => "reply-dispatch", accepted: true },
+  ])("requires a synchronous completion acknowledgement from $name", async (scenario) => {
     setReadyAcpResolution();
 
-    await runDispatch({ bodyForAgent: "audit this turn", runId: "caller-run" });
+    await runDispatch({
+      bodyForAgent: "audit this turn",
+      runId: "caller-run",
+      onAgentRunStart: scenario.onAgentRunStart,
+    });
 
-    expect(auditMocks.emitAcpLifecycleStart).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "caller-run", auditOnly: false }),
-    );
-    expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "caller-run", auditOnly: false }),
-    );
+    const expected = expect.objectContaining({
+      runId: "caller-run",
+      auditOnly: false,
+      completionSource: scenario.accepted ? "reply-dispatch" : undefined,
+    });
+    expect(auditMocks.emitAcpLifecycleStart).toHaveBeenCalledWith(expected);
+    expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(expected);
   });
 
   it("keeps audit run ids unique when channel message ids repeat", async () => {
@@ -2889,7 +2913,7 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(managerMocks.runTurn).not.toHaveBeenCalled();
     expect(dispatcherCall(dispatcher.sendFinalReply).isError).toBe(true);
     expect(dispatcherCall(dispatcher.sendFinalReply).text).toContain(
-      "cannot enforce its tool policy",
+      "cannot enforce its permission or tool policy",
     );
     expect(auditMocks.emitAcpLifecycleError).toHaveBeenCalledWith(
       expect.objectContaining({ terminalOutcome: "blocked" }),
@@ -2950,6 +2974,7 @@ describe("tryDispatchAcpReplyCore", () => {
     managerMocks.resolveSession.mockReturnValue({
       kind: "stale",
       sessionKey,
+      agentId: "codex-acp",
       error: new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP metadata is missing."),
     });
     policyMocks.resolveAcpDispatchPolicyError.mockReturnValue(
@@ -2976,6 +3001,7 @@ describe("tryDispatchAcpReplyCore", () => {
     managerMocks.resolveSession.mockReturnValue({
       kind: "stale",
       sessionKey: canonicalSessionKey,
+      agentId: "main",
       error: new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP metadata is missing."),
     });
     bindingServiceMocks.unbind.mockResolvedValueOnce([
@@ -3036,6 +3062,7 @@ describe("tryDispatchAcpReplyCore", () => {
     managerMocks.resolveSession.mockReturnValue({
       kind: "ready",
       sessionKey: canonicalSessionKey,
+      agentId: "main",
       meta: createAcpSessionMeta(),
     });
     managerMocks.runTurn.mockRejectedValueOnce(
@@ -3081,6 +3108,7 @@ describe("tryDispatchAcpReplyCore", () => {
     managerMocks.resolveSession.mockReturnValue({
       kind: "ready",
       sessionKey: canonicalSessionKey,
+      agentId: "main",
       meta: createAcpSessionMeta({
         identity: {
           state: "pending",
@@ -3148,6 +3176,7 @@ describe("tryDispatchAcpReplyCore", () => {
     managerMocks.resolveSession.mockReturnValue({
       kind: "ready",
       sessionKey: canonicalSessionKey,
+      agentId: "main",
       meta: createAcpSessionMeta({
         identity: {
           state: "pending",

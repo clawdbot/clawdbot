@@ -73,6 +73,8 @@ export type MessageActionInput = {
   toolContext?: ChannelThreadingToolContext;
   /** @internal Host media grant captured before untrusted caller code can mutate config. */
   mediaAccess?: OutboundMediaAccess;
+  /** @internal Workspace transport reader whose use remains subject to sender policy. */
+  workspaceMediaAccess?: OutboundMediaAccess;
   gateway?: MessageActionGateway;
   deps?: OutboundSendDeps;
   sessionKey?: string;
@@ -231,6 +233,24 @@ export function resolveMessageActionOutcome(
       .map(normalizeOptionalString)
       .find(Boolean) ?? `Message ${result.action} failed.`;
   return { ok: false, error };
+}
+
+export function resolveMessageActionMessageId(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== "object") {
+    return undefined;
+  }
+  // SAFETY: The object check intentionally keeps array and prototype-backed payloads readable.
+  const record = payload as Record<string, unknown>;
+  const direct = normalizeOptionalString(record.messageId);
+  if (direct) {
+    return direct;
+  }
+  const result = record.result;
+  if (!result || typeof result !== "object") {
+    return undefined;
+  }
+  // SAFETY: The nested object check preserves the same permissive payload contract.
+  return normalizeOptionalString((result as Record<string, unknown>).messageId);
 }
 
 export type ResolvedActionContext = {

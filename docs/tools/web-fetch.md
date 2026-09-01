@@ -101,6 +101,13 @@ Fast cache hits and quick network responses finish before the timer fires, so
 they never show a progress line. Canceling the call clears the timer. The
 progress line is channel UI state only and never contains fetched page content.
 
+OpenClaw passes cancellation to fallback providers. Providers that honor the
+signal can stop their requests; core rejects late results even when a provider
+ignores cancellation. Already-canceled calls reject even when a cached result
+exists. If cancellation occurs during fetching, fallback processing, or
+connection cleanup, OpenClaw rejects the call instead of returning success or
+adding a result to the fetch cache.
+
 ## Config
 
 ```json5

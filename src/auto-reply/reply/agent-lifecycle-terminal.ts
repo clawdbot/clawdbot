@@ -1,4 +1,7 @@
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { classifyOAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
+import { getFailoverErrorCode } from "../../agents/failover/error.js";
+import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
 import { AGENT_RUN_RESTART_ABORT_STOP_REASON } from "../../agents/run-termination.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -21,6 +24,7 @@ const DEFERRED_TERMINAL_METADATA_KEYS = [
   "aborted",
   "livenessState",
   "replayInvalid",
+  "errorObservation",
 ] as const;
 
 export function resolveAgentLifecycleTerminalMetadata(meta: unknown): Record<string, unknown> {
@@ -99,7 +103,20 @@ export function createAgentLifecycleTerminalBackstop(params: {
       data.aborted = true;
       data.stopReason = AGENT_RUN_RESTART_ABORT_STOP_REASON;
     } else if (phase === "error") {
-      data.error = formatErrorMessage(resultOrError);
+      const oauthFailure = classifyOAuthRefreshFailureError(resultOrError);
+      data.error =
+        renderFailoverCodeUserCopy(getFailoverErrorCode(resultOrError)) ??
+        (oauthFailure?.summary ? `⚠️ ${oauthFailure.summary}` : undefined) ??
+        formatErrorMessage(resultOrError);
+      if (oauthFailure?.summary) {
+        data.errorObservation = {
+          ...(oauthFailure.provider ? { provider: oauthFailure.provider } : {}),
+          ...(oauthFailure.reason ? { failoverReason: oauthFailure.reason } : {}),
+          providerRuntimeFailureKind: "auth_refresh",
+          ...(oauthFailure.errorType ? { providerErrorType: oauthFailure.errorType } : {}),
+          ...(oauthFailure.status ? { httpStatus: oauthFailure.status } : {}),
+        };
+      }
       Object.assign(data, terminationFields);
     } else {
       const meta =

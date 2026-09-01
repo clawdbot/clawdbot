@@ -105,17 +105,19 @@ function preserveRuntimeToolMetadata<TSchemaType extends TSchema = TSchema, TRes
 export function normalizeAgentRuntimeTools<
   TSchemaType extends TSchema = TSchema,
   TResult = unknown,
->(params: AgentRuntimeToolPolicyParams<TSchemaType, TResult>): AgentTool<TSchemaType, TResult>[] {
+>(
+  params: Omit<AgentRuntimeToolPolicyParams<TSchemaType, TResult>, "tools"> & {
+    tools: readonly AgentTool<TSchemaType, TResult>[];
+  },
+): AgentTool<TSchemaType, TResult>[] {
   const planContext = runtimePlanToolContext(params);
   const normalizableToolProjection = filterProviderNormalizableTools(params.tools);
   params.onPreNormalizationSchemaDiagnostics?.(
     normalizableToolProjection.diagnostics,
     params.tools,
   );
-  const normalizableTools = [...normalizableToolProjection.tools] as AgentTool<
-    TSchemaType,
-    TResult
-  >[];
+  // Projection owns this fresh array, so normalizers can mutate it without changing raw input.
+  const normalizableTools = normalizableToolProjection.tools;
   const planNormalized = params.runtimePlan?.tools.normalize(normalizableTools, planContext);
   // Empty fallback input cannot gain provider-specific schema changes. Avoid loading a provider
   // runtime just to return the same empty list; runtime plans still receive their normal callback.

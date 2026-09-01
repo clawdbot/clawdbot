@@ -30,7 +30,6 @@ type ProviderCostStats = {
   output?: number;
   cacheRead?: number;
   cacheWrite?: number;
-  provider: string | null;
 };
 
 function readCostValue(
@@ -41,11 +40,8 @@ function readCostValue(
 }
 
 function latestProviderCostStats(messages: unknown[] | undefined): ProviderCostStats | null {
-  if (!messages?.length) {
-    return null;
-  }
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = readCostRecord(messages[index]);
+  for (let index = (messages?.length ?? 0) - 1; index >= 0; index -= 1) {
+    const message = readCostRecord(messages?.[index]);
     if (message?.role === "user") {
       return null;
     }
@@ -54,9 +50,7 @@ function latestProviderCostStats(messages: unknown[] | undefined): ProviderCostS
     }
     const directCost = readCostRecord(message.cost);
     const usageCost = readCostRecord(readCostRecord(message.usage)?.cost);
-    const stats: ProviderCostStats = {
-      provider: typeof message.provider === "string" ? message.provider.trim() || null : null,
-    };
+    const stats: ProviderCostStats = {};
     for (const key of ["input", "output", "cacheRead", "cacheWrite"] as const) {
       const cost = readCostValue(directCost, key) ?? readCostValue(usageCost, key);
       if (cost !== undefined) {
@@ -68,6 +62,17 @@ function latestProviderCostStats(messages: unknown[] | undefined): ProviderCostS
     ) {
       return stats;
     }
+  }
+  return null;
+}
+
+function latestAssistantProvider(messages: unknown[] | undefined): string | null {
+  for (let index = (messages?.length ?? 0) - 1; index >= 0; index -= 1) {
+    const message = readCostRecord(messages?.[index]);
+    if (message?.role !== "assistant" || isTranscriptOnlyOpenClawAssistantMessage(message)) {
+      continue;
+    }
+    return typeof message.provider === "string" ? message.provider.trim() || null : null;
   }
   return null;
 }
@@ -319,7 +324,15 @@ export function renderContextNotice(
         isMonitoredAuthProvider,
       )
     : [];
-  if (!model && quotaGroups.length === 0) {
+  const currentProvider =
+    session?.modelProvider?.trim() || latestAssistantProvider(options.messages);
+  const normalizedProvider = currentProvider?.toLowerCase();
+  const currentGroup = normalizedProvider
+    ? quotaGroups.find((group) =>
+        group.providers.some((id) => id.trim().toLowerCase() === normalizedProvider),
+      )
+    : undefined;
+  if (!model && !currentGroup) {
     return nothing;
   }
   const summary = model
@@ -332,18 +345,6 @@ export function renderContextNotice(
   const percentage = model ? `${model.approximate ? "~" : ""}${model.pct}%` : null;
   const dashOffset = model ? RING_CIRCUMFERENCE * (1 - model.pct / 100) : RING_CIRCUMFERENCE;
   const providerCosts = model ? latestProviderCostStats(options.messages) : null;
-  const findQuotaGroup = (provider: string | null | undefined) => {
-    const normalizedProvider = provider?.trim().toLowerCase();
-    return normalizedProvider
-      ? quotaGroups.find((group) =>
-          group.providers.some((id) => id.trim().toLowerCase() === normalizedProvider),
-        )
-      : undefined;
-  };
-  const currentGroup = findQuotaGroup(session?.modelProvider?.trim() || providerCosts?.provider);
-  const planGroups = currentGroup
-    ? [currentGroup, ...quotaGroups.filter((group) => group !== currentGroup)]
-    : quotaGroups;
   // Plan-billed sessions hide dollar estimates: subscription usage is bounded
   // by the plan windows below, and per-token math would misread as real spend.
   // Billing mode is provider-level: session rows do not record which auth
@@ -459,7 +460,7 @@ export function renderContextNotice(
                 </dl>
               `
             : nothing}
-          ${planGroups.map((group) => renderQuotaGroup(group, usageHref))}
+          ${currentGroup ? renderQuotaGroup(currentGroup, usageHref) : nothing}
         </section>
       </details>
     </div>

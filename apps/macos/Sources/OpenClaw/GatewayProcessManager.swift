@@ -134,10 +134,36 @@ final class GatewayProcessManager {
         didSet { CanvasManager.shared.refreshDebugStatus() }
     }
 
+    /// Pause removes managed service records without changing installation responsibility.
+    /// Remember the established owner, not just that this port once answered.
+    private var gatewayOwnership: (port: Int, installation: Installation)?
+
     private(set) var log: String = ""
     private(set) var environmentStatus: GatewayEnvironmentStatus = .checking
     private(set) var existingGatewayDetails: String?
     private(set) var lastFailureReason: String?
+
+    enum Installation {
+        case managed, external, unreadable
+
+        static let ownershipFailure =
+            "Could not read the Gateway service ownership record. Check the Gateway LaunchAgent and retry."
+    }
+
+    var installation: Installation {
+        self.installation(for: GatewayEnvironment.gatewayPort(), whenMissing: .managed)
+    }
+
+    private func installation(for port: Int, whenMissing: Installation) -> Installation {
+        if GatewayLaunchAgentManager.isLaunchAgentWriteDisabled() { return .external }
+        guard let arguments = GatewayLaunchAgentManager.launchdProgramArguments() else { return .unreadable }
+        if !arguments.isEmpty {
+            return CLIInstallPrompter.launchAgentUsesManagedCLI(programArguments: arguments) ? .managed : .external
+        }
+        if let gatewayOwnership, gatewayOwnership.port == port { return gatewayOwnership.installation }
+        return whenMissing
+    }
+
     private var desiredActive = false
     private var environmentRefreshTask: Task<Void, Never>?
     private var lastEnvironmentRefresh: Date?
@@ -162,6 +188,7 @@ final class GatewayProcessManager {
     private var gatewayStartTaskGeneration: UInt64?
     #if DEBUG
     private var testingConnection: GatewayConnection?
+    private var testingLaunchAgentDisableWaitHook: (() -> Void)?
     private var testingSkipControlChannelRefresh = false
     private var testingControlChannelRefreshForces: [Bool] = []
     #endif
@@ -277,6 +304,9 @@ final class GatewayProcessManager {
         // A stop may already be uninstalling launchd. Wait until it finishes so a newer start's
         // attach/install is ordered last; loop because another stop can supersede it while waiting.
         while let disableTask = self.launchAgentDisableTask {
+            #if DEBUG
+            self.testingLaunchAgentDisableWaitHook?()
+            #endif
             await disableTask.value
         }
     }
@@ -584,7 +614,9 @@ final class GatewayProcessManager {
             context: context,
             deadlinePolicy: .fixed(timeout: hasListener ? 6.5 : 2))
         if !hasListener, case .failed = terminal {
+            guard self.isCurrentGatewayReadiness(context) else { return true }
             self.existingGatewayDetails = nil
+            self.gatewayOwnership = nil
             return false
         }
         let published = await self.publishGatewayReadinessTerminal(terminal, context: context)
@@ -1040,8 +1072,8 @@ extension GatewayProcessManager {
             guard await self.canPublishGatewayReadiness(instance: instance, context: context) else {
                 return false
             }
-            let replaced = context.launchAgentInstalled ||
-                self.launchAgentInstallGeneration == context.generation ||
+            let installed = context.launchAgentInstalled || self.launchAgentInstallGeneration == context.generation
+            let replaced = installed ||
                 Self.gatewayPIDChanged(from: context.endpointPIDBeforeProbe, to: instance?.pid) ||
                 Self.gatewayPIDChanged(from: startingPID, to: instance?.pid)
             let details: String?
@@ -1059,6 +1091,15 @@ extension GatewayProcessManager {
             }
             self.setLaunchAgentReadinessState(candidate: nil, failure: nil)
             self.clearLastFailure()
+            // Only installation evidence replaces a remembered owner. A readiness path
+            // may reuse an independent listener, so its purpose does not establish ownership.
+            if installed {
+                self.gatewayOwnership = nil
+            }
+            self.gatewayOwnership = (
+                context.port,
+                self.installation(
+                    for: context.port, whenMissing: installed ? .managed : .external))
             if case .attach = context.purpose {
                 self.existingGatewayDetails = details
                 self.status = .attachedExisting(details: details)
@@ -1172,6 +1213,10 @@ extension GatewayProcessManager {
 
 #if DEBUG
 extension GatewayProcessManager {
+    func _testSetLaunchAgentDisableWaitHook(_ hook: (() -> Void)?) {
+        self.testingLaunchAgentDisableWaitHook = hook
+    }
+
     func setTestingConnection(_ connection: GatewayConnection?) {
         self.testingConnection = connection
     }
@@ -1229,6 +1274,20 @@ extension GatewayProcessManager {
     }
 
     func setTestingStatus(_ status: Status) {
+        self.gatewayOwnership = nil
+        switch status {
+        case .running, .attachedExisting:
+            let port = GatewayEnvironment.gatewayPort()
+            let whenMissing: Installation = if case .attachedExisting = status {
+                .external
+            } else {
+                .managed
+            }
+            self.gatewayOwnership = (
+                port, self.installation(for: port, whenMissing: whenMissing))
+        case .stopped, .starting, .failed:
+            break
+        }
         self.status = status
     }
 

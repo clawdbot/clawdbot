@@ -38,7 +38,7 @@ export {
   resolveControlCommandGate,
   resolveStoredModelOverride,
 } from "openclaw/plugin-sdk/command-auth-native";
-export { buildModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
+export { buildPreparedModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 export {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveAllowlistProviderRuntimeGroupPolicy,

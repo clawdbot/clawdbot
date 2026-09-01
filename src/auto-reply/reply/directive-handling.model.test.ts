@@ -376,9 +376,9 @@ vi.mock("../../agents/prepared-model-catalog.js", () => {
   return {
     loadPreparedModelCatalog: loadModelCatalog,
     loadProviderScopedThinkingCatalog: loadModelCatalog,
-    loadPreparedModelCatalogSnapshot: async () => {
+    loadPreparedModelCatalogOwnerSnapshot: async () => {
       const entries = await loadModelCatalog();
-      return { entries, routeVariants: entries };
+      return { modelCatalog: { entries, routeVariants: entries }, authModes: {} };
     },
   };
 });
@@ -564,7 +564,10 @@ function resolveModelSelectionForCommand(params: {
 }) {
   return resolveModelSelectionFromDirective({
     directives: parseInlineSessionDirectives(params.command),
-    cfg: params.cfg ?? ({ commands: { text: true } } as unknown as OpenClawConfig),
+    cfg: params.cfg ?? {
+      commands: { text: true },
+      agents: { defaults: { modelPolicy: { allow: [...params.allowedModelKeys] } } },
+    },
     agentId: params.agentId,
     agentDir: TEST_AGENT_DIR,
     defaultProvider: "anthropic",
@@ -578,6 +581,7 @@ function resolveModelSelectionForCommand(params: {
 
 async function persistModelDirectiveForTest(params: {
   command: string;
+  agentId?: string;
   profiles?: Record<string, ApiKeyProfile>;
   cfg?: OpenClawConfig;
   aliasIndex?: ModelAliasIndex;
@@ -602,7 +606,8 @@ async function persistModelDirectiveForTest(params: {
   const sessionEntry = params.sessionEntry ?? createSessionEntry();
   const provider = params.provider ?? "anthropic";
   const model = params.model ?? "claude-opus-4-6";
-  const sessionKey = "agent:main:dm:1";
+  const agentId = params.agentId ?? "main";
+  const sessionKey = `agent:${agentId}:dm:1`;
   const modelState = createFastTestModelSelectionState({
     agentCfg: cfg.agents?.defaults,
     provider,
@@ -614,7 +619,7 @@ async function persistModelDirectiveForTest(params: {
   const result = await applyInlineDirectiveOverrides({
     ctx: { Body: commandBody, Provider: "telegram", Surface: "telegram" },
     cfg,
-    agentId: "main",
+    agentId,
     agentDir: TEST_AGENT_DIR,
     workspaceDir: "/tmp/workspace",
     agentCfg: cfg.agents?.defaults ?? {},
@@ -691,6 +696,7 @@ function createDirectiveHandlingParams(
   const sessionEntry = overrides.sessionEntry ?? createSessionEntry();
   return {
     cfg: baseConfig(),
+    agentId: "main",
     directives: parseInlineSessionDirectives(""),
     sessionEntry,
     sessionStore: { [sessionKey]: sessionEntry },
@@ -734,8 +740,6 @@ function externalChannelPolicy(overrides: Partial<HandleDirectiveParams> = {}) {
 
 function expectExecDefaults(sessionEntry: SessionEntry, persisted: boolean) {
   expect(sessionEntry.execHost).toBe(persisted ? "node" : undefined);
-  expect(sessionEntry.execSecurity).toBe(persisted ? "allowlist" : undefined);
-  expect(sessionEntry.execAsk).toBe(persisted ? "always" : undefined);
   expect(sessionEntry.execNode).toBe(persisted ? "worker-1" : undefined);
 }
 
@@ -1435,7 +1439,10 @@ describe("/model chat UX", () => {
 
   it("auto-applies closest match for typos", () => {
     const directives = parseInlineSessionDirectives("/model anthropic/claud-opus-4-5");
-    const cfg = { commands: { text: true } } as unknown as OpenClawConfig;
+    const cfg: OpenClawConfig = {
+      commands: { text: true },
+      agents: { defaults: { modelPolicy: { allow: ["anthropic/claude-opus-4-6"] } } },
+    };
 
     const resolved = resolveModelSelectionFromDirective({
       directives,
@@ -1654,17 +1661,14 @@ describe("/model chat UX", () => {
     expect(sessionEntry.authProfileOverride).toBe(OPENAI_DATE_PROFILE_ID);
   });
 
-  it.each([
-    ["openai/gpt-4o", "openai", "gpt-4o"],
-    ["codex/gpt-5.5", "codex", "gpt-5.5"],
-  ])("persists provider-compatible runtime overrides for %s", async (modelKey, provider, model) => {
+  it("persists provider-compatible runtime overrides", async () => {
     const { persisted, sessionEntry } = await persistModelDirectiveForTest({
-      command: `/model ${modelKey} --runtime codex hello`,
-      allowedModelKeys: [modelKey],
+      command: "/model openai/gpt-4o --runtime codex hello",
+      allowedModelKeys: ["openai/gpt-4o"],
     });
 
-    expect(sessionEntry.providerOverride).toBe(provider);
-    expect(sessionEntry.modelOverride).toBe(model);
+    expect(sessionEntry.providerOverride).toBe("openai");
+    expect(sessionEntry.modelOverride).toBe("gpt-4o");
     expect(sessionEntry.agentRuntimeOverride).toBe("codex");
     expect(persisted.directiveAck?.text).toContain("Runtime set to codex for this session.");
   });
@@ -1868,26 +1872,29 @@ describe("/model chat UX", () => {
     expect(sessionEntry.authProfileOverride).toBe(OPENAI_DATE_PROFILE_ID);
   });
 
-  it("resolves agentDir from the target session agent before wrapper agentDir", async () => {
-    vi.mocked(resolveSessionAgentId).mockReturnValue("target");
+  it("resolves directive agentDir from the prepared target owner", async () => {
     vi.mocked(resolveAgentDir).mockReturnValue("/tmp/target-agent");
 
     await persistModelDirectiveForTest({
       command: "/model openai/gpt-4o hello",
+      agentId: "target",
       allowedModelKeys: ["openai/gpt-4o"],
       sessionEntry: createSessionEntry(),
     });
 
-    expect(resolveSessionAgentId).toHaveBeenCalledWith({
-      sessionKey: "agent:main:dm:1",
-      config: baseConfig(),
-    });
     expect(resolveAgentDir).toHaveBeenCalledWith(baseConfig(), "target");
   });
 
   it("persists explicit auth profiles after @YYYYMMDD version suffixes in mixed-content messages", async () => {
     const { sessionEntry } = await persistModelDirectiveForTest({
       command: `/model custom/vertex-ai_claude-haiku-4-5@${OPENAI_DATE_PROFILE_ID}@work hello`,
+      cfg: {
+        models: {
+          providers: {
+            custom: { api: "openai-responses", baseUrl: "https://custom.invalid/v1", models: [] },
+          },
+        },
+      },
       profiles: {
         work: {
           type: "api_key",
@@ -2010,10 +2017,10 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
   });
 
   it("uses the target session agent when persisting a model selection", async () => {
-    vi.mocked(resolveSessionAgentId).mockReturnValue("work");
     const sessionEntry = createSessionEntry();
 
     await runHandleCommand("/model openai/gpt-4o -a", {
+      agentId: "work",
       sessionEntry,
       stickyModelSelectionTarget: "agent",
       canPersistStickyModelSelection: true,
@@ -2199,10 +2206,9 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
   });
 
   it("persists an explicitly agent-scoped mixed-command model selection", async () => {
-    vi.mocked(resolveSessionAgentId).mockReturnValue("work");
-
     await persistModelDirectiveForTest({
       command: "/model openai/gpt-4o -a continue with the request",
+      agentId: "work",
       allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
     });
 
@@ -2636,7 +2642,9 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       nextAuthProfileIdSource: "user",
       nextThinking: {
         level: undefined,
-        catalog: allowedModelCatalog,
+        catalog: expect.arrayContaining([
+          expect.objectContaining({ provider: "anthropic", id: "claude-opus-4-6" }),
+        ]),
         agentRuntime: "openclaw",
       },
     });
@@ -2975,9 +2983,10 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     );
 
     expect(result?.text).toContain("operator.admin");
+    expect(result?.text).toContain(
+      "Exec policy for this run only (security=allowlist, ask=always).",
+    );
     expect(sessionEntry.execHost).toBeUndefined();
-    expect(sessionEntry.execSecurity).toBeUndefined();
-    expect(sessionEntry.execAsk).toBeUndefined();
     expect(sessionEntry.execNode).toBeUndefined();
   });
 
@@ -3006,19 +3015,39 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(sessionEntry.verboseLevel).toBe("full");
   });
 
-  it("allows internal operator.admin exec persistence in directive-only handling", async () => {
-    const sessionEntry = createSessionEntry();
-    const result = await runHandleCommand(
-      "/exec host=node security=allowlist ask=always node=worker-1",
-      { sessionEntry, surface: "webchat", gatewayClientScopes: ["operator.admin"] },
-    );
+  it.each([
+    { options: "security=deny", policy: "security=deny", scope: "operator.write" },
+    { options: "ask=always", policy: "ask=always", scope: "operator.write" },
+    {
+      options: "host=node security=allowlist ask=always node=worker-1",
+      policy: "security=allowlist, ask=always",
+      placement: { execHost: "node", execNode: "worker-1" },
+      scope: "operator.admin",
+    },
+  ])(
+    "acknowledges /exec $options policy for this run only",
+    async ({ options, policy, placement, scope }) => {
+      const sessionEntry = createSessionEntry();
+      const initialEntry = { ...sessionEntry };
+      const result = await runHandleCommand(`/exec ${options}`, {
+        sessionEntry,
+        surface: "webchat",
+        gatewayClientScopes: [scope],
+      });
 
-    expect(result?.text).toContain("Exec defaults set");
-    expect(sessionEntry.execHost).toBe("node");
-    expect(sessionEntry.execSecurity).toBe("allowlist");
-    expect(sessionEntry.execAsk).toBe("always");
-    expect(sessionEntry.execNode).toBe("worker-1");
-  });
+      expect(result?.text).toContain(`Exec policy for this run only (${policy}).`);
+      if (placement) {
+        expect(result?.text).toContain("Exec defaults set (host=node, node=worker-1).");
+      } else {
+        expect(result?.text).not.toContain("operator.admin");
+      }
+      expect(sessionEntry).toEqual({
+        ...initialEntry,
+        ...placement,
+        updatedAt: expect.any(Number),
+      });
+    },
+  );
 });
 
 describe("canonical session directive persistence policy", () => {

@@ -45,12 +45,10 @@ import {
   normalizeManifestChannelCommandDefaults,
 } from "./manifest.js";
 import { checkMinHostVersion } from "./min-host-version.js";
-import { resolveTrustedSourceLinkedOfficialClawHubInstall } from "./official-external-install-records.js";
+import { isTrustedOfficialPluginInstallRecord } from "./official-external-install-records.js";
 import {
   getOfficialExternalPluginCatalogEntryForPackage,
   getOfficialExternalPluginCatalogManifest,
-  resolveOfficialExternalPluginId,
-  resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
 import { satisfiesPluginApiRange, resolvePackagePluginApiRange } from "./package-compat.js";
 import { isPathInside } from "./path-safety.js";
@@ -428,6 +426,7 @@ function buildRecord(params: {
     id: pluginId,
     backupResources: params.manifest.backupResources,
     doctorContract: params.manifest.doctorContract,
+    doctorHealthChecks: params.manifest.doctorHealthChecks,
     sessionRouteStateOwners: params.manifest.sessionRouteStateOwners,
     name: normalizeOptionalString(params.manifest.name) ?? params.candidate.packageName,
     description:
@@ -712,17 +711,6 @@ function matchesInstalledPluginRecord(params: {
   );
 }
 
-function npmSpecMatchesPackage(value: string | undefined, packageName: string): boolean {
-  const normalized = value?.trim();
-  if (!normalized) {
-    return false;
-  }
-  if (normalized === packageName) {
-    return true;
-  }
-  return normalized.startsWith(`${packageName}@`);
-}
-
 function isTrustedOfficialPluginInstall(params: {
   pluginId: string;
   candidate: PluginCandidate;
@@ -747,42 +735,15 @@ function isTrustedOfficialPluginInstall(params: {
   if (!packageName) {
     return false;
   }
-  const catalogEntry = getOfficialExternalPluginCatalogEntryForPackage(packageName);
-  if (!catalogEntry || resolveOfficialExternalPluginId(catalogEntry) !== installOwner) {
-    return false;
-  }
-  const officialInstall = resolveOfficialExternalPluginInstall(catalogEntry);
   const installRecord = params.installRecords[installOwner];
-  if (!installRecord) {
-    return false;
-  }
-  const officialClawHubInstall =
-    installRecord.source === "clawhub"
-      ? resolveTrustedSourceLinkedOfficialClawHubInstall({
-          pluginId: installOwner,
-          record: installRecord,
-        })
-      : undefined;
-  // Local npm-pack archives also persist source="npm". Only registry installs
-  // may inherit catalog trust; local artifacts and source links stay untrusted.
-  if (
-    installRecord.source === "npm" &&
-    installRecord.artifactKind === undefined &&
-    installRecord.sourcePath === undefined &&
-    officialInstall?.npmSpec === packageName &&
-    [
-      installRecord.resolvedName,
-      installRecord.spec,
-      installRecord.resolvedSpec,
-      params.candidate.packageName,
-    ].some((value) => npmSpecMatchesPackage(value, packageName))
-  ) {
-    return true;
-  }
-  if (installRecord.source === "clawhub" && officialClawHubInstall) {
-    return true;
-  }
-  return false;
+  return Boolean(
+    installRecord &&
+    isTrustedOfficialPluginInstallRecord({
+      pluginId: installOwner,
+      packageName,
+      record: installRecord,
+    }),
+  );
 }
 
 function resolveDuplicatePrecedenceRank(params: {
@@ -792,7 +753,7 @@ function resolveDuplicatePrecedenceRank(params: {
   env: NodeJS.ProcessEnv;
   installRecords: Record<string, PluginInstallRecord>;
 }): number {
-  if (params.candidate.origin === "config") {
+  if (params.candidate.origin === "config" || params.candidate.configSelected) {
     return 0;
   }
   if (

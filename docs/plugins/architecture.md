@@ -144,6 +144,8 @@ Plugin-aware config validation, startup auto-enable, and Gateway plugin bootstra
 
 After startup, runtime readers reuse that inventory without filesystem discovery, manifest rereads, or freshness checks. Narrow plugin selections are in-memory views of the same inventory. Changing config, account state, or an agent's run workspace does not invalidate it. Plugin installs, updates, removals, manifest edits, and discovery-root changes become visible to the runtime after a Gateway restart.
 
+Model-id normalization policies are prepared with each snapshot or narrowed view. Model selection, catalogs, and runtime normalization carry that view forward instead of rebuilding policies from its plugin list. An empty view remains authoritative and cannot inherit policies from a broader process snapshot.
+
 The snapshot and lookup table keep repeated startup decisions on the fast path:
 
 - channel ownership
@@ -196,6 +198,7 @@ Core passes runtime scope into that discovery step. Important fields include:
 
 - `accountId`
 - `currentChannelId`
+- `chatType` (`direct`, `group`, or `channel` when the inbound route establishes it)
 - `currentThreadTs`
 - `currentMessageId`
 - `sessionKey`
@@ -203,7 +206,7 @@ Core passes runtime scope into that discovery step. Important fields include:
 - `agentId`
 - trusted inbound `requesterSenderId`
 
-That matters for context-sensitive plugins. A channel can hide or expose message actions based on the active account, current room/thread/message, or trusted requester identity without hardcoding channel-specific branches in the core `message` tool.
+That matters for context-sensitive plugins. A channel can hide or expose message actions based on the active account, current room/thread/message, authoritative conversation type, or trusted requester identity without hardcoding channel-specific branches in the core `message` tool. Treat `chatType` as discovery scope supplied by the current inbound route, not something to infer again from an opaque channel id; it is absent when that route did not establish the conversation type.
 
 This is why embedded-runner routing changes are still plugin work: the runner is responsible for forwarding the current chat/session identity into the plugin discovery boundary so the shared `message` tool exposes the right channel-owned surface for the current turn.
 
@@ -369,7 +372,7 @@ That avoids baking one provider's video assumptions into core. The plugin owns t
 
 Video generation already uses that same sequence: core owns the typed capability contract and runtime helper, and vendor plugins register `api.registerVideoGenerationProvider(...)` implementations against it.
 
-Need a concrete rollout checklist? See [Capability Cookbook](/tools/capability-cookbook).
+Need a concrete rollout checklist? See [Adding capabilities](/plugins/adding-capabilities).
 
 ## Contracts and enforcement
 
@@ -433,7 +436,13 @@ Use allowlists and explicit install/load paths for non-bundled plugins. Treat wo
 For bundled workspace package names, keep the plugin id anchored in the npm name: `@openclaw/<id>` by default, or an approved typed suffix such as `-provider`, `-plugin`, `-speech`, `-sandbox`, or `-media-understanding` when the package intentionally exposes a narrower plugin role.
 
 <Note>
-**Trust note:** `plugins.allow` trusts **plugin ids**, not source provenance. A workspace plugin with the same id as a bundled plugin intentionally shadows the bundled copy when that workspace plugin is enabled/allowlisted. This is normal and useful for local development, patch testing, and hotfixes. Bundled-plugin trust is resolved from the source snapshot — the manifest and code on disk at load time — rather than from install metadata. A corrupted or substituted install record cannot silently widen a bundled plugin's trust surface beyond what the actual source claims.
+**Trust note:** `plugins.allow` permits **plugin ids** to load; it does not verify source provenance or choose which same-id copy loads. An auto-discovered workspace plugin does not shadow a bundled plugin merely because that id is enabled or allowlisted.
+
+For intentional local overrides, use `plugins.load.paths` to select the plugin path. Tracked global installs can also override ordinary bundled copies, while bundled plugins from `OPENCLAW_DEV_SOURCE_ROOT` retain priority over tracked globals. See [Discovery precedence](/plugins/manifest#discovery-precedence-duplicate-plugin-ids) for the full order.
+
+An alias of the same independently validated bundled entry retains bundled provenance; a different local copy does not inherit trust from its name or allowlist entry. Checkout runners supply the development selector automatically, including for compiled plugins. See [development debugging](/help/debugging#dev-profile--dev-gateway---dev).
+
+Bundled-plugin trust is resolved from the source snapshot — the manifest and code on disk at load time — rather than from install metadata. A corrupted or substituted install record cannot silently widen a bundled plugin's trust surface beyond what the actual source claims.
 </Note>
 
 ## Export boundary

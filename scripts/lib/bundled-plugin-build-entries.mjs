@@ -7,7 +7,10 @@ import {
   bundledDistPluginFile,
   bundledPluginFile,
 } from "./bundled-plugin-paths.mjs";
-import { shouldBuildBundledCluster } from "./optional-bundled-clusters.mjs";
+import {
+  OPTIONAL_BUNDLED_BUILD_ENV,
+  shouldBuildBundledCluster,
+} from "./optional-bundled-clusters.mjs";
 import { collectRootPackageExcludedExtensionDirs } from "./root-package-bundled-plugin-excludes.mjs";
 
 export { collectRootPackageExcludedExtensionDirs };
@@ -15,10 +18,15 @@ export { collectRootPackageExcludedExtensionDirs };
 const TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
 /** Bundled plugin directories built with core but not packaged as standalone npm plugins. */
 export const NON_PACKAGED_BUNDLED_PLUGIN_DIRS = new Set(["qa-channel", "qa-lab"]);
-const EXCLUDED_CORE_BUNDLED_PLUGIN_DIRS = new Set(["qqbot", "whatsapp"]);
 const BUNDLED_PLUGIN_BUILD_IDS_ENV = "OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS";
 /** @internal Shared repository-script contract. */
 export const DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV = "OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS";
+// Declaration caches must distinguish every selector that changes this entry graph.
+export const BUNDLED_PLUGIN_BUILD_ENV_NAMES = [
+  BUNDLED_PLUGIN_BUILD_IDS_ENV,
+  DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV,
+  OPTIONAL_BUNDLED_BUILD_ENV,
+];
 const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9-]*$/u;
 const TOP_LEVEL_PRIVATE_TEST_SURFACE_RE =
   /(?:^|[._-])(?:test|spec|test-support|test-helpers|test-fixtures|test-harness|mock-setup)(?:[._-]|$)/u;
@@ -89,7 +97,7 @@ function isExcludedTopLevelPublicSurfaceFile(fileName) {
   const normalizedName = fileName.toLowerCase();
   return (
     normalizedName.endsWith(".d.ts") ||
-    /^config-api\.(?:[cm]?[jt]s)$/u.test(normalizedName) ||
+    /^config(?:-doctor)?-api\.(?:[cm]?[jt]s)$/u.test(normalizedName) ||
     TOP_LEVEL_PRIVATE_TEST_SURFACE_RE.test(normalizedName) ||
     normalizedName.includes(".fixture.") ||
     normalizedName.includes(".snap")
@@ -252,9 +260,6 @@ export function collectBundledPluginBuildEntries(params = {}) {
     if (!shouldBuildBundledDistEntry(packageJson) && !dockerSelectedBuildIds?.has(dirName)) {
       continue;
     }
-    if (EXCLUDED_CORE_BUNDLED_PLUGIN_DIRS.has(dirName)) {
-      continue;
-    }
 
     entries.push({
       id: dirName,
@@ -296,6 +301,36 @@ export function collectBundledPluginBuildEntries(params = {}) {
     );
   }
   return entries.filter((entry) => filteredBuildIds.has(entry.id));
+}
+
+/** Retain channel config migrations with core schemas, independently of plugin installation. */
+export function collectChannelConfigDoctorBuildEntries(params = {}) {
+  const cwd = params.cwd ?? process.cwd();
+  const entries = {};
+  for (const { pluginDir } of collectBundledPluginCandidates(
+    cwd,
+    path.join(cwd, BUNDLED_PLUGIN_ROOT_DIR),
+  )) {
+    const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
+    if (!fs.existsSync(manifestPath)) {
+      continue;
+    }
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    if (manifest.doctorContract?.configRepair !== true || !manifest.channels?.length) {
+      continue;
+    }
+    const source = path.join(pluginDir, "config-doctor-api.ts");
+    if (!fs.existsSync(source)) {
+      throw new Error(`Missing config-only doctor entrypoint: ${source}`);
+    }
+    for (const channelId of manifest.channels) {
+      if (!PLUGIN_ID_RE.test(channelId) || entries[channelId]) {
+        throw new Error(`Invalid or duplicate config doctor channel: ${channelId}`);
+      }
+      entries[channelId] = toPosixPath(path.relative(cwd, source));
+    }
+  }
+  return entries;
 }
 
 /**

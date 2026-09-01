@@ -1,9 +1,12 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { composeTranscriptDisplay } from "../../chat/transcript-display-position.js";
 import type { SessionTranscriptReadScope } from "../../config/sessions/session-accessor.js";
 import {
   readTranscriptDisplayDelta,
   type SessionTranscriptDisplayDeltaResult,
-} from "../../config/sessions/session-accessor.sqlite-delta.js";
+} from "../../config/sessions/session-accessor.sqlite-history-events.js";
+import { createCurrentUserProfileMessageProjector } from "../chat-display-projection.js";
+import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import {
   projectSessionMessagePayload,
   type SessionMessageProjectionState,
@@ -68,6 +71,9 @@ export function readChatHistoryDelta(params: {
     streamErrorFallbackPending: false,
     turnBoundaryPending: false,
   };
+  const projectCurrentUserProfile = createCurrentUserProfileMessageProjector(
+    resolveCurrentUserProfileDisplay,
+  );
   const messages: Record<string, unknown>[] = [];
   for (const row of result.events) {
     const event = readMessageEvent(row.event);
@@ -79,7 +85,9 @@ export function readChatHistoryDelta(params: {
       message: event.message,
       ...(event.messageId ? { messageId: event.messageId } : {}),
       messageSeq: row.messageSeq,
+      transcriptPosition: row.displayPosition,
       projectionState,
+      projectCurrentUserProfile,
       sessionKey: params.sessionKey,
       sessionSnapshot: params.sessionSnapshot,
     });
@@ -95,6 +103,6 @@ export function readChatHistoryDelta(params: {
     activeLeafEntryId: result.activeLeafEntryId,
     deltaCursor: result.cursor,
     kind: "delta",
-    messages,
+    messages: composeTranscriptDisplay(messages, (envelope) => envelope.message),
   };
 }

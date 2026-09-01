@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { expectDefined } from "@openclaw/normalization-core";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -748,15 +749,11 @@ async function resolvePendingApproval(
     }
   }
 
-  const expiresInDaysRaw =
-    opts.expiresInDays === undefined ? undefined : Number.parseInt(opts.expiresInDays, 10);
-  if (
-    expiresInDaysRaw !== undefined &&
-    (!Number.isInteger(expiresInDaysRaw) || expiresInDaysRaw < 1 || expiresInDaysRaw > 3650)
-  ) {
+  const expiresInDays = parseStrictPositiveInteger(opts.expiresInDays);
+  if (opts.expiresInDays !== undefined && (expiresInDays === undefined || expiresInDays > 3650)) {
     exitWithError("--expires-in-days must be a whole number of days between 1 and 3650.");
   }
-  if (expiresInDaysRaw !== undefined && decision !== "allow-always") {
+  if (expiresInDays !== undefined && decision !== "allow-always") {
     exitWithError("--expires-in-days only applies to allow-always.");
   }
   const result = (await callGatewayFromCli(
@@ -766,7 +763,7 @@ async function resolvePendingApproval(
       id,
       kind: current.presentation.kind,
       decision,
-      ...(expiresInDaysRaw !== undefined ? { grantExpiresInDays: expiresInDaysRaw } : {}),
+      ...(expiresInDays !== undefined ? { grantExpiresInDays: expiresInDays } : {}),
     },
     approvalCallOptions,
   )) as ApprovalResolveResult;
@@ -1253,15 +1250,14 @@ export function registerExecApprovalsCli(program: Command) {
     .option("--limit <n>", "Maximum rows to return (default 200)")
     .action(async (opts: ExecApprovalsCliOpts & { limit?: string }) => {
       try {
-        const limitRaw = opts.limit === undefined ? undefined : Number.parseInt(opts.limit, 10);
-        const limit =
-          limitRaw !== undefined && Number.isInteger(limitRaw) && limitRaw >= 1
-            ? limitRaw
-            : undefined;
+        const limit = parseStrictPositiveInteger(opts.limit);
+        if (opts.limit !== undefined && limit === undefined) {
+          exitWithError("--limit must be a positive integer.");
+        }
         const result = (await callGatewayFromCli(
           "exec.approval.grants.list",
           opts,
-          limit ? { limit } : {},
+          limit !== undefined ? { limit } : {},
         )) as { grants: StandingGrantCliEntry[] }; // SAFETY: matches ExecApprovalGrantsListResultSchema.
         if (opts.json) {
           defaultRuntime.writeJson(result, 0);

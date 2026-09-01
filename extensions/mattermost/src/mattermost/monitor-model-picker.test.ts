@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   authorize: vi.fn(),
   buildEventPlan: vi.fn(),
-  buildModelsProviderData: vi.fn(),
+  buildPreparedModelsProviderData: vi.fn(),
   deliverReply: vi.fn(),
   dispatch: vi.fn(),
   parseContext: vi.fn(),
@@ -39,7 +39,7 @@ vi.mock("./runtime-api.js", async () => {
   const actual = await vi.importActual<typeof import("./runtime-api.js")>("./runtime-api.js");
   return {
     ...actual,
-    buildModelsProviderData: mocks.buildModelsProviderData,
+    buildPreparedModelsProviderData: mocks.buildPreparedModelsProviderData,
   };
 });
 
@@ -66,7 +66,7 @@ describe("Mattermost model-picker interaction dispatch", () => {
       channelDisplay: "Lifecycle",
       roomLabel: "#lifecycle",
     });
-    mocks.buildModelsProviderData.mockResolvedValue({ providers: [{ id: "openai" }] });
+    mocks.buildPreparedModelsProviderData.mockResolvedValue({ providers: [{ id: "openai" }] });
     mocks.deliverReply.mockResolvedValue({
       outcome: "text",
       visibleReplySent: true,

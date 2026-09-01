@@ -286,6 +286,10 @@ export const BrowserToolOutputSchema = Type.Object(
             targetId: Type.Optional(Type.String()),
             title: Type.Optional(Type.String()),
             url: Type.Optional(Type.String()),
+            urlUnavailableReason: optionalStringEnum([
+              "navigation_blocked",
+              "navigation_check_failed",
+            ] as const),
             type: Type.Optional(Type.String()),
           },
           { additionalProperties: true },

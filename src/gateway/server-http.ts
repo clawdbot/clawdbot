@@ -19,7 +19,7 @@ import {
 import { runHttpConnectionRequest } from "../infra/http-request-lifecycle.js";
 import { parseDevicePairingJoinRequestPath } from "../pairing/join-code.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { resolveAssistantIdentity } from "./assistant-identity.js";
+import { resolveAssistantAgentId } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
@@ -40,6 +40,7 @@ import {
   classifyNodeWorkerBundleTransferPath,
   classifyNodeWorkspaceTransferPath,
   classifyWorkerGatewayPath,
+  classifyWorkerBootstrapArtifactTransferPath,
 } from "./gateway-http-route-contracts.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import {
@@ -79,6 +80,10 @@ import {
   handleNodeWorkspaceTransferHttpRequest,
   type NodeWorkspaceTransferHttpCallback,
 } from "./worker-environments/node-workspace-transfer-http.js";
+import {
+  handleWorkerBootstrapArtifactTransferHttpRequest,
+  type WorkerBootstrapArtifactTransferHttpCallback,
+} from "./worker-environments/worker-bootstrap-artifact-transfer-http.js";
 
 type PluginHttpRequestHandler = (
   req: IncomingMessage,
@@ -167,6 +172,7 @@ export function createGatewayHttpServer(opts: {
   joinRateLimiter?: AuthRateLimiter;
   /** Authenticator/dispatcher for the reserved node worker bundle namespace. */
   handleNodeWorkerBundleTransferRequest?: NodeWorkerBundleTransferHttpCallback;
+  handleWorkerBootstrapArtifactTransferRequest?: WorkerBootstrapArtifactTransferHttpCallback;
   /** Authenticator/dispatcher for the reserved node workspace transfer namespace. */
   handleNodeWorkspaceTransferRequest?: NodeWorkspaceTransferHttpCallback;
   getReadiness?: ReadinessChecker;
@@ -345,7 +351,7 @@ export function createGatewayHttpServer(opts: {
         (await getControlUiModule()).handleControlUiHttpRequest(req, res, {
           ...controlUiRouteOptions,
           terminalEnabled: opts.isTerminalEnabled?.() ?? isTerminalConfigEnabled(configSnapshot),
-          agentId: resolveAssistantIdentity({ cfg: configSnapshot }).agentId,
+          agentId: resolveAssistantAgentId(configSnapshot),
           root: controlUiRoot,
         });
       const handleStandaloneControlUiRequest = async () => {
@@ -390,6 +396,18 @@ export function createGatewayHttpServer(opts: {
         respondNotFound(res);
         return true;
       });
+
+      addAdmittedStage(
+        classifyWorkerBootstrapArtifactTransferPath(scopedRequestPath) !== "outside",
+        () =>
+          handleWorkerBootstrapArtifactTransferHttpRequest({
+            req,
+            res,
+            clientIp: ingressAttribution.rateLimit.subject.key,
+            rateLimiter: joinRateLimiter,
+            callback: opts.handleWorkerBootstrapArtifactTransferRequest,
+          }),
+      );
 
       addAdmittedStage(classifyNodeWorkerBundleTransferPath(scopedRequestPath) !== "outside", () =>
         handleNodeWorkerBundleTransferHttpRequest({
@@ -659,7 +677,7 @@ export function createGatewayHttpServer(opts: {
       addRequestStage(controlUiEnabled, async () =>
         (await getControlUiModule()).handleControlUiAssistantMediaRequest(req, res, {
           ...controlUiRouteOptions,
-          agentId: resolveAssistantIdentity({ cfg: configSnapshot }).agentId,
+          agentId: resolveAssistantAgentId(configSnapshot),
         }),
       );
       addRequestStage(controlUiEnabled, async () =>

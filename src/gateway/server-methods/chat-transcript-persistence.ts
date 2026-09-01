@@ -1,5 +1,6 @@
 // Transcript persistence and source-reply rewrites shared by chat send and abort.
 import { asOptionalRecord as transcriptEventRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Result } from "@openclaw/normalization-core/result";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import {
   findTranscriptEvent,
@@ -12,11 +13,14 @@ import {
   type SessionTranscriptWriteScope,
   type TranscriptEvent,
 } from "../../config/sessions/session-accessor.js";
+import type { SessionLifecycleRevisionExpectation } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import { splitMediaFromOutput } from "../../media/parse.js";
+import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../../shared/assistant-display-content.js";
+import { loadSessionEntry } from "../session-utils.js";
 import {
   sanitizeAssistantDisplayText,
   type AssistantDisplayContentBlock,
@@ -30,8 +34,25 @@ type TranscriptAppendResult = {
   ok: boolean;
   messageId?: string;
   message?: Record<string, unknown>;
+  /** Set when the commit predicate declined the append; not an error. */
+  skipped?: boolean;
   error?: string;
 };
+
+export type ChatAbortOrigin = "rpc" | "stop-command" | "placement-abandon";
+
+export type ChatAbortSessionSnapshot = Result<
+  Pick<
+    ReturnType<typeof loadSessionEntry>,
+    "cfg" | "storePath" | "entry" | "canonicalKey" | "agentId"
+  >,
+  unknown
+>;
+
+export type AbortedPartialSnapshot = {
+  runId: string;
+  abortOrigin: ChatAbortOrigin;
+} & Result<Parameters<typeof appendAssistantTranscriptMessage>[0], unknown>;
 
 type AssistantTranscriptScopeParams = {
   sessionId: string;
@@ -52,6 +73,97 @@ export type SourceReplyContentState = {
   hasManagedOutgoingContent: boolean;
   backedManagedOutgoingContent: boolean;
 };
+
+function replaceAssistantTextWithDisplayText(
+  message: Record<string, unknown>,
+  displayContent: AssistantDisplayContentBlock[],
+): AssistantDisplayContentBlock[] {
+  const original = Array.isArray(message.content)
+    ? (message.content as AssistantDisplayContentBlock[])
+    : [];
+  const content: AssistantDisplayContentBlock[] = [];
+  const seenText = new Set<string>();
+  for (const block of original) {
+    if (block.type === "thinking" || block.type === "toolCall") {
+      content.push(block);
+      continue;
+    }
+    if (block.type !== "text" || typeof block.text !== "string") {
+      continue;
+    }
+    const splitText = splitMediaFromOutput(block.text).text;
+    if (splitText === block.text && /\bMEDIA:/iu.test(block.text)) {
+      continue;
+    }
+    const text = sanitizeAssistantDisplayText(splitText, {
+      preserveBoundaries: true,
+    });
+    if (text) {
+      if (text === block.text) {
+        content.push(block);
+      } else {
+        const { textSignature: _textSignature, ...rest } = block;
+        content.push({ ...rest, text });
+      }
+      seenText.add(text);
+    }
+  }
+  for (const block of displayContent) {
+    if (block.type === "text" && typeof block.text === "string" && !seenText.has(block.text)) {
+      content.push(block);
+    }
+  }
+  return content;
+}
+
+function mergeAssistantDisplayContent(
+  modelContent: AssistantDisplayContentBlock[],
+  preparedDisplayContent: AssistantDisplayContentBlock[],
+): AssistantDisplayContentBlock[] {
+  const remainingDisplayContent = [...preparedDisplayContent];
+  const content: AssistantDisplayContentBlock[] = [];
+  for (const block of modelContent) {
+    if (block.type !== "text" || typeof block.text !== "string") {
+      content.push(block);
+      continue;
+    }
+    const matchingTextIndex = remainingDisplayContent.findIndex(
+      (candidate) => candidate.type === "text" && candidate.text === block.text,
+    );
+    if (matchingTextIndex < 0) {
+      content.push(block);
+      continue;
+    }
+    const nextTextOffset = remainingDisplayContent
+      .slice(matchingTextIndex + 1)
+      .findIndex((candidate) => candidate.type === "text");
+    const segmentEnd =
+      nextTextOffset < 0 ? remainingDisplayContent.length : matchingTextIndex + nextTextOffset + 1;
+    content.push(...remainingDisplayContent.splice(0, segmentEnd));
+  }
+  content.push(...remainingDisplayContent);
+  return content;
+}
+
+function buildAssistantDisplayRewrite(params: {
+  message: Record<string, unknown>;
+  displayContent: AssistantDisplayContentBlock[];
+  managedMediaUrls?: readonly string[];
+}): Record<string, unknown> {
+  const prepared = applyAssistantDeliveryDirectives(
+    {
+      ...params.message,
+      content: params.displayContent.map((block) => Object.assign({}, block)),
+    },
+    { managedMediaUrls: params.managedMediaUrls },
+  );
+  const content = replaceAssistantTextWithDisplayText(params.message, prepared.content);
+  return {
+    ...prepared,
+    content,
+    [ASSISTANT_DISPLAY_CONTENT_FIELD]: mergeAssistantDisplayContent(content, prepared.content),
+  };
+}
 
 export function assistantTranscriptScope(
   params: AssistantTranscriptScopeParams,
@@ -136,43 +248,6 @@ function findAssistantTranscriptMessageByTurnIndexAndMediaInEvents(
   return exactMediaMatch ? { messageId, message } : null;
 }
 
-function mergeManagedMediaIntoAssistantContent(params: {
-  message: Record<string, unknown>;
-  replacement: AssistantDisplayContentBlock[];
-}): AssistantDisplayContentBlock[] | null {
-  const original = Array.isArray(params.message.content)
-    ? (params.message.content as AssistantDisplayContentBlock[])
-    : [];
-  const managedBlocks = params.replacement.filter((block) => block?.type !== "text");
-  if (managedBlocks.length === 0) {
-    return null;
-  }
-  let replaced = false;
-  const merged: AssistantDisplayContentBlock[] = [];
-  for (const block of original) {
-    if (block?.type !== "text" || typeof block.text !== "string") {
-      merged.push(block);
-      continue;
-    }
-    const split = splitMediaFromOutput(block.text);
-    const visibleText = sanitizeAssistantDisplayText(split.text, {
-      preserveBoundaries: true,
-    });
-    if (visibleText) {
-      const { textSignature: _textSignature, ...rest } = block;
-      merged.push({
-        ...rest,
-        text: visibleText,
-      });
-    }
-    if (split.mediaUrls?.length && !replaced) {
-      merged.push(...managedBlocks);
-      replaced = true;
-    }
-  }
-  return replaced ? merged : null;
-}
-
 function findSourceReplyTranscriptMirrorByIdempotencyKeyInEvents(
   events: readonly TranscriptEvent[],
   idempotencyKey: string,
@@ -255,6 +330,8 @@ async function transcriptExists(scope: SessionTranscriptWriteScope): Promise<boo
 }
 
 export async function appendAssistantTranscriptMessage(params: {
+  expectedSessionId?: string;
+  expectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
   sessionKey: string;
   message: string;
   label?: string;
@@ -267,7 +344,7 @@ export async function appendAssistantTranscriptMessage(params: {
   idempotencyKey?: string;
   abortMeta?: {
     aborted: true;
-    origin: "rpc" | "stop-command" | "placement-abandon";
+    origin: ChatAbortOrigin;
     runId: string;
   };
   ttsSupplement?: GatewayInjectedTtsSupplementMarker;
@@ -280,8 +357,9 @@ export async function appendAssistantTranscriptMessage(params: {
   if (!params.createIfMissing && !(await transcriptExists(scope))) {
     return { ok: false, error: "transcript not found" };
   }
-
   const appended = await appendInjectedAssistantMessageToTranscript({
+    expectedSessionId: params.expectedSessionId,
+    expectedLifecycleRevision: params.expectedLifecycleRevision,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     storePath: params.storePath,
@@ -295,6 +373,79 @@ export async function appendAssistantTranscriptMessage(params: {
     config: params.cfg,
   });
   return appended;
+}
+
+export function captureAbortedPartial(params: {
+  runId: string;
+  sessionKey: string;
+  sessionId: string;
+  agentId?: string;
+  text: string;
+  abortOrigin: ChatAbortOrigin;
+  session?: ChatAbortSessionSnapshot;
+}): AbortedPartialSnapshot {
+  const { runId, abortOrigin } = params;
+  try {
+    const session = params.session ?? {
+      ok: true,
+      value: loadSessionEntry(
+        params.sessionKey,
+        params.agentId ? { agentId: params.agentId } : undefined,
+      ),
+    };
+    if (!session.ok) {
+      throw session.error;
+    }
+    const { cfg, storePath, entry, canonicalKey, agentId } = session.value;
+    if (entry?.sessionId !== params.sessionId) {
+      throw new Error("Aborted partial transcript session changed before persistence");
+    }
+    // Snapshot the incarnation before signaling. Reset can keep the SID, and
+    // the guarded writer rechecks both facts inside its commit transaction.
+    return {
+      runId,
+      abortOrigin,
+      ok: true,
+      value: {
+        sessionKey: canonicalKey,
+        sessionId: params.sessionId,
+        expectedSessionId: params.sessionId,
+        expectedLifecycleRevision: entry.lifecycleRevision ?? null,
+        agentId,
+        storePath,
+        cfg,
+        message: params.text,
+        createIfMissing: true,
+        idempotencyKey: `${runId}:assistant`,
+        abortMeta: { aborted: true, origin: abortOrigin, runId },
+      },
+    };
+  } catch (error) {
+    // Preparation is fallible metadata I/O, never a prerequisite for cancellation.
+    return { runId, abortOrigin, ok: false, error };
+  }
+}
+
+export async function persistAbortedPartials(params: {
+  context: { logGateway: { warn: (message: string) => void } };
+  snapshots: AbortedPartialSnapshot[];
+}): Promise<void> {
+  for (const snapshot of params.snapshots) {
+    if (!snapshot.ok) {
+      throw snapshot.error;
+    }
+    const appended = await appendAssistantTranscriptMessage(snapshot.value);
+    if (appended.skipped) {
+      continue;
+    }
+    if (!appended.ok) {
+      const error = `chat.abort transcript append failed: ${appended.error ?? "unknown error"}`;
+      params.context.logGateway.warn(error);
+      if (snapshot.abortOrigin === "placement-abandon") {
+        throw new Error(error);
+      }
+    }
+  }
 }
 
 async function touchAssistantTranscriptSessionEntry(
@@ -398,16 +549,14 @@ export async function rewriteSourceReplyTranscriptMirrors(params: {
       if (!replacement) {
         return event;
       }
-      const message = applyAssistantDeliveryDirectives(
-        {
+      const message = buildAssistantDisplayRewrite({
+        message: {
           ...replacement.message,
           idempotencyKey: replacement.request.idempotencyKey,
-          content: replacement.request.state.persistedContent.map((block) =>
-            Object.assign({}, block),
-          ),
         },
-        { managedMediaUrls: replacement.request.metadata?.mediaUrls },
-      );
+        displayContent: replacement.request.state.persistedContent,
+        managedMediaUrls: replacement.request.metadata?.mediaUrls,
+      });
       return Object.assign({}, event as Record<string, unknown>, {
         message,
       });
@@ -439,13 +588,11 @@ export async function rewriteAssistantTranscriptMessageByIdempotencyKey(params: 
     const rewrittenEvents = events.map((event) =>
       transcriptEventId(event) === target.messageId
         ? Object.assign({}, event as Record<string, unknown>, {
-            message: applyAssistantDeliveryDirectives(
-              {
-                ...target.message,
-                content: params.content.map((block) => Object.assign({}, block)),
-              },
-              { managedMediaUrls: params.managedMediaUrls },
-            ),
+            message: buildAssistantDisplayRewrite({
+              message: target.message,
+              displayContent: params.content,
+              managedMediaUrls: params.managedMediaUrls,
+            }),
           })
         : event,
     );
@@ -486,20 +633,11 @@ export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(param
   if (!targetRow) {
     return null;
   }
-  const mergedContent = mergeManagedMediaIntoAssistantContent({
+  const rewrittenMessage = buildAssistantDisplayRewrite({
     message: target.message,
-    replacement: params.content,
+    displayContent: params.content,
+    managedMediaUrls: params.mediaUrls,
   });
-  if (!mergedContent) {
-    return null;
-  }
-  const rewrittenMessage = applyAssistantDeliveryDirectives(
-    {
-      ...target.message,
-      content: mergedContent,
-    },
-    { managedMediaUrls: params.mediaUrls },
-  );
   const rewrittenEvent = Object.assign({}, targetRow.event as Record<string, unknown>, {
     message: rewrittenMessage,
   });

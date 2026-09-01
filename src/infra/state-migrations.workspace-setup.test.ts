@@ -3,6 +3,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { assertNoUnmigratedWorkspaceState } from "../agents/workspace-legacy-state.js";
 import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import {
   deleteWorkspaceState,
@@ -21,6 +22,21 @@ const HASH = "a".repeat(64);
 
 describe("legacy workspace Doctor migration", () => {
   const { detect, migrate, setup } = useWorkspaceMigrationTestFixture();
+
+  async function writeEmptyReservedAttestation(
+    context: ReturnType<typeof setup>,
+    claimed = false,
+  ): Promise<string> {
+    const identity = resolveWorkspaceStateIdentity(context.workspaceDir);
+    const attestationPath = path.join(
+      context.stateDir,
+      "workspace-attestations",
+      `${identity.workspaceKey}.attested`,
+    );
+    await fsp.mkdir(path.dirname(attestationPath), { recursive: true });
+    await fsp.writeFile(`${attestationPath}${claimed ? ".doctor-importing" : ""}`, "", "utf8");
+    return attestationPath;
+  }
 
   it("detects configured and orphan sources only for explicit Doctor repair", async () => {
     const context = setup();
@@ -630,6 +646,7 @@ describe("legacy workspace Doctor migration", () => {
     const result = await migrate(context);
 
     expect(result.warnings[0]).toMatch(/legacy workspace/i);
+    expect(result.warnings[0]).toContain(sourcePath);
     expect(fs.existsSync(sourcePath)).toBe(true);
     expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
     const identity = resolveWorkspaceStateIdentity(context.workspaceDir);
@@ -638,6 +655,91 @@ describe("legacy workspace Doctor migration", () => {
         .db.prepare("SELECT workspace_key FROM workspace_setup_state WHERE workspace_key = ?")
         .get(identity.workspaceKey),
     ).toBeUndefined();
+  });
+
+  it("discards an empty reserved hashed attestation and unblocks the workspace", async () => {
+    const context = setup();
+    const identity = resolveWorkspaceStateIdentity(context.workspaceDir);
+    const attestationPath = await writeEmptyReservedAttestation(context);
+
+    expect(detect(context).hasLegacy).toBe(true);
+    expect(() => assertNoUnmigratedWorkspaceState({ workspaceDir: context.workspaceDir })).toThrow(
+      /requires migration/,
+    );
+
+    const result = await migrate(context);
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes[0]).toContain(attestationPath);
+    expect(fs.existsSync(attestationPath)).toBe(false);
+    expect(fs.existsSync(`${attestationPath}.doctor-importing`)).toBe(false);
+    expect(detect(context).hasLegacy).toBe(false);
+    expect(() =>
+      assertNoUnmigratedWorkspaceState({ workspaceDir: context.workspaceDir }),
+    ).not.toThrow();
+    expect(
+      openOpenClawStateDatabase({ env: context.env })
+        .db.prepare("SELECT workspace_key FROM workspace_setup_state WHERE workspace_key = ?")
+        .get(identity.workspaceKey),
+    ).toBeUndefined();
+  });
+
+  it("restores an empty reserved hashed attestation that changes before claim", async () => {
+    const context = setup();
+    const attestationPath = await writeEmptyReservedAttestation(context);
+    const replacementPath = path.join(context.homeDir, "empty-attestation-replacement");
+    await fsp.writeFile(replacementPath, "", "utf8");
+    const replacementInode = fs.statSync(replacementPath).ino;
+    const originalInode = fs.statSync(attestationPath).ino;
+
+    const result = await migrateLegacyWorkspaceState({
+      detected: detect(context),
+      env: context.env,
+      stateDir: context.stateDir,
+      beforeClaim: (source) => {
+        if (source.sourcePath === attestationPath) {
+          fs.renameSync(replacementPath, attestationPath);
+        }
+      },
+    });
+
+    expect(result.warnings[0]).toContain(attestationPath);
+    expect(result.warnings[0]).toMatch(/changed before Doctor could claim/i);
+    expect(fs.existsSync(`${attestationPath}.doctor-importing`)).toBe(false);
+    expect(fs.existsSync(attestationPath)).toBe(true);
+    expect(fs.statSync(attestationPath).ino).toBe(replacementInode);
+    expect(fs.statSync(attestationPath).ino).not.toBe(originalInode);
+  });
+
+  it("discards an empty reserved hashed attestation claim left by an interrupted import", async () => {
+    const context = setup();
+    const attestationPath = await writeEmptyReservedAttestation(context, true);
+    const claimPath = `${attestationPath}.doctor-importing`;
+
+    const result = await migrate(context);
+
+    expect(result.warnings).toEqual([]);
+    expect(fs.existsSync(attestationPath)).toBe(false);
+    expect(fs.existsSync(claimPath)).toBe(false);
+    expect(detect(context).hasLegacy).toBe(false);
+    expect(() =>
+      assertNoUnmigratedWorkspaceState({ workspaceDir: context.workspaceDir }),
+    ).not.toThrow();
+  });
+
+  it("retains an empty workspace-sibling file and does not treat it as reserved state", async () => {
+    const context = setup();
+    const siblingPath = `${context.workspaceDir}.attested`;
+    await fsp.writeFile(siblingPath, "", "utf8");
+
+    expect(detect(context).hasLegacy).toBe(false);
+    const result = await migrate(context);
+
+    expect(result.warnings).toEqual([]);
+    expect(fs.existsSync(siblingPath)).toBe(true);
+    expect(() =>
+      assertNoUnmigratedWorkspaceState({ workspaceDir: context.workspaceDir }),
+    ).not.toThrow();
   });
 
   it("rejects a setup source beneath a symlinked workspace subdirectory", async () => {
@@ -796,11 +898,9 @@ describe("legacy workspace Doctor migration", () => {
     const identity = resolveWorkspaceStateIdentity(context.workspaceDir);
     const setupPath = path.join(context.workspaceDir, "openclaw-workspace-state.json");
     const seededAt = "2026-07-15T00:00:00.000Z";
-    await fsp.writeFile(
-      setupPath,
-      JSON.stringify({ version: 1, bootstrapSeededAt: seededAt }),
-      "utf8",
-    );
+    const setupSource = JSON.stringify({ version: 1, bootstrapSeededAt: seededAt });
+    const claimPath = `${setupPath}.doctor-importing`;
+    await fsp.writeFile(setupPath, setupSource, "utf8");
     const first = await migrateLegacyWorkspaceState({
       detected: detect(context),
       env: context.env,
@@ -810,13 +910,21 @@ describe("legacy workspace Doctor migration", () => {
       },
     });
     expect(first.warnings[0]).toContain("legacy cleanup failed");
-    expect(fs.existsSync(`${setupPath}.doctor-importing`)).toBe(true);
+    expect(first.warnings[0]).toContain(setupPath);
+    expect(fs.existsSync(claimPath)).toBe(true);
     const db = openOpenClawStateDatabase({ env: context.env }).db;
 
+    await fsp.writeFile(claimPath, "{invalid", "utf8");
+    const unreadable = await migrate(context);
+    expect(unreadable.warnings[0]).toContain(setupPath);
+    expect(unreadable.warnings[0]).toContain("invalid JSON");
+    expect(await fsp.readFile(claimPath, "utf8")).toBe("{invalid");
+
+    await fsp.writeFile(claimPath, setupSource, "utf8");
     const retry = await migrate(context);
 
     expect(retry.warnings).toEqual([]);
-    expect(fs.existsSync(`${setupPath}.doctor-importing`)).toBe(false);
+    expect(fs.existsSync(claimPath)).toBe(false);
     expect(
       db
         .prepare("SELECT bootstrap_seeded_at FROM workspace_setup_state WHERE workspace_key = ?")
@@ -829,9 +937,7 @@ describe("legacy workspace Doctor migration", () => {
         )
         .get(path.join(identity.workspacePath, "openclaw-workspace-state.json")),
     ).toEqual({
-      source_sha256: createHash("sha256")
-        .update(JSON.stringify({ version: 1, bootstrapSeededAt: seededAt }))
-        .digest("hex"),
+      source_sha256: createHash("sha256").update(setupSource).digest("hex"),
       removed_source: 1,
     });
   });

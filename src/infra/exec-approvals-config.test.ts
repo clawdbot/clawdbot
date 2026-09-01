@@ -197,6 +197,10 @@ describe("persisted exec approvals schema", () => {
     { name: "version", value: { version: 2 } },
     { name: "socket token", value: { version: 1, socket: { token: 42 } } },
     { name: "policy enum", value: { version: 1, defaults: { security: "none" } } },
+    ...["lastUsedAt", "lastUsedCommand"].map((field) => ({
+      name: `null ${field}`,
+      value: { version: 1, agents: { main: { allowlist: [{ pattern: "ls", [field]: null }] } } },
+    })),
     {
       name: "allowlist metadata",
       value: {

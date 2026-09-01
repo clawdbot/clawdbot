@@ -32,6 +32,7 @@ import {
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunRegistryTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -50,6 +51,7 @@ import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcri
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { projectAssistantDisplayContent } from "../../shared/assistant-display-content.js";
 import {
   disposeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
@@ -61,7 +63,8 @@ import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shar
 import { consumeCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { STALE_WORKER_BUILD_REASON } from "../worker-environments/admission.js";
-import { handleChatSend, handleChatSendWithRuntimeTools } from "./chat-send-handler.js";
+import { agentWaitHandler } from "./agent-wait.js";
+import { handleChatSend, handleTrustedInternalChatSend } from "./chat-send-handler.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 type ProjectedDispatchParams = Parameters<
@@ -500,6 +503,7 @@ vi.mock("../../agents/sandbox/context.js", async () => {
 });
 
 vi.mock("../../auto-reply/reply/stage-sandbox-media.js", () => ({
+  SANDBOX_MEDIA_MAX_BYTES: 50 * 1024 * 1024,
   stageSandboxMedia: vi.fn(
     async (params: {
       ctx: { media?: Array<{ path?: string; contentType?: string; workspaceDir?: string }> };
@@ -741,7 +745,7 @@ async function appendSourceReplyMirrorEntry(params: {
   });
 }
 
-async function readActiveAssistantTranscriptMessages(): Promise<Array<Record<string, unknown>>> {
+async function readRawActiveAssistantTranscriptMessages(): Promise<Array<Record<string, unknown>>> {
   return readTranscriptJsonLines(mockState.transcriptPath)
     .map((entry) => entry.message)
     .filter(
@@ -750,6 +754,10 @@ async function readActiveAssistantTranscriptMessages(): Promise<Array<Record<str
         message !== null &&
         (message as { role?: unknown }).role === "assistant",
     );
+}
+
+async function readActiveAssistantTranscriptMessages(): Promise<Array<Record<string, unknown>>> {
+  return (await readRawActiveAssistantTranscriptMessages()).map(projectAssistantDisplayContent);
 }
 
 function extractFirstTextBlock(payload: unknown): string | undefined {
@@ -827,16 +835,22 @@ function lastNodeSendCall(context: ChatContext) {
 }
 
 function findAssistantTranscriptUpdates() {
-  return mockState.emittedTranscriptUpdates.filter(
-    (update) =>
-      typeof update.message === "object" &&
-      update.message !== null &&
-      (update.message as { role?: unknown }).role === "assistant",
-  );
+  return mockState.emittedTranscriptUpdates
+    .filter(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant",
+    )
+    .map((update) => {
+      const message = update.message as Record<string, unknown>;
+      const projected = projectAssistantDisplayContent(message);
+      return projected === message ? update : Object.assign({}, update, { message: projected });
+    });
 }
 
 function findAssistantUpdateWithBlock(predicate: (block: Record<string, any>) => boolean) {
-  return mockState.emittedTranscriptUpdates.find((update) => {
+  return findAssistantTranscriptUpdates().find((update) => {
     const message = update.message as { role?: unknown; content?: unknown } | undefined;
     return (
       message?.role === "assistant" &&
@@ -1315,7 +1329,9 @@ async function runNonStreamingChatSend(params: {
     context: params.context,
   };
   if (params.runtimeToolsAllow) {
-    await handleChatSendWithRuntimeTools(handlerOptions, params.runtimeToolsAllow);
+    await handleTrustedInternalChatSend(handlerOptions, undefined, {
+      toolsAllow: params.runtimeToolsAllow,
+    });
   } else {
     await handler(handlerOptions);
   }
@@ -1382,16 +1398,14 @@ async function expectUnpersistedAgentRunFinal(params: {
       (entry as { role?: string }).role === "assistant",
   );
   if (params.expectedMediaFailure) {
-    expect(assistantUpdates).toHaveLength(1);
-    expect(assistantUpdates[0]?.message).toMatchObject({
-      role: "assistant",
-      content: [
-        { type: "text", text: params.payload.text },
-        { type: "attachment_error", attachment: params.expectedMediaFailure },
-      ],
-    });
     expect(assistantEntries).toHaveLength(1);
+    const message = (assistantEntries[0] as { message?: Record<string, unknown> }).message;
+    const modelContent = Array.isArray(message?.content) ? message.content : [];
+    expect(JSON.stringify(assistantUpdates)).toContain('"type":"attachment_error"');
+    expect(JSON.stringify(assistantUpdates)).toContain(params.expectedMediaFailure.label);
     expect(JSON.stringify(assistantUpdates)).not.toContain(staleAudioPath);
+    expect(JSON.stringify(modelContent)).not.toContain("attachment_error");
+    expect(JSON.stringify(message?.openclawDisplayContent)).toContain("attachment_error");
     return;
   }
 
@@ -2839,7 +2853,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       message: "hello from codex",
     });
 
-    const assistantEntries = await readActiveAssistantTranscriptMessages();
+    const rawAssistantEntries = await readRawActiveAssistantTranscriptMessages();
+    const assistantEntries = rawAssistantEntries.map(projectAssistantDisplayContent);
+    expect(JSON.stringify(rawAssistantEntries[0]?.content)).not.toContain("attachment_error");
     expect(JSON.stringify(assistantEntries[0])).toContain('"type":"attachment_error"');
     expect(JSON.stringify(assistantEntries[0])).toContain('"label":"report.7z"');
     expect(JSON.stringify(assistantEntries[0])).not.toContain("Media failed");
@@ -3200,7 +3216,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(mockState.loadSessionEntryCalls).toContainEqual({
       rawKey: "agent:work:main",
-      opts: { agentId: "work", includeStoreChildEntries: true },
+      opts: { agentId: "work", clone: false, includeStoreChildEntries: true },
     });
   });
 
@@ -3401,6 +3417,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         });
 
         const messages = await readActiveAssistantTranscriptMessages();
+        const rawMessages = await readRawActiveAssistantTranscriptMessages();
         expect(messages).toHaveLength(3);
         expect(messages[0]?.content).toEqual([
           { type: "text", text: `Stale reply\nMEDIA:${mediaUrl}` },
@@ -3409,18 +3426,24 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         const content = Array.isArray(messages[1]?.content)
           ? (messages[1].content as Array<Record<string, unknown>>)
           : [];
-        expect(content[0]).toEqual({ type: "thinking", thinking: "preserve runtime reasoning" });
         expect(content.filter((block) => block.type === "text")).toEqual([
           { type: "text", text: "Earlier chunk" },
           { type: "text", text: "Image reply" },
         ]);
         expect(content.filter((block) => block.type === "image")).toHaveLength(1);
-        expect(content.at(-1)).toEqual({
-          type: "toolCall",
-          id: "call-1",
-          name: "read",
-          arguments: {},
-        });
+        expect(content.map((block) => block.type)).toEqual([
+          "thinking",
+          "text",
+          "text",
+          "image",
+          "toolCall",
+        ]);
+        expect(rawMessages[1]?.content).toEqual([
+          { type: "thinking", thinking: "preserve runtime reasoning" },
+          { type: "text", text: "Earlier chunk" },
+          { type: "text", text: "Image reply" },
+          { type: "toolCall", id: "call-1", name: "read", arguments: {} },
+        ]);
         expect(JSON.stringify(content)).toContain("artifact_managed_image_");
         expect(JSON.stringify(content)).not.toContain("MEDIA:");
         expect(messages[1]?.openclawDelivery).toEqual({ mediaUrls: [mediaUrl] });
@@ -3546,7 +3569,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
-  it("persists a named failure when agent-run media disappears before delivery", async () => {
+  it("keeps text while excluding the failure card from durable history for agent-run media", async () => {
     await expectUnpersistedAgentRunFinal({
       transcriptPrefix: "openclaw-chat-send-agent-stale-tts-",
       idempotencyKey: "idem-stale-agent-media",
@@ -3604,6 +3627,87 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(assistantEntries.map((entry) => entry.idempotencyKey)).toStrictEqual([
       mirrorIdempotencyKey,
     ]);
+  });
+
+  it("broadcasts a writer-owned settled fallback that is already in the transcript", async () => {
+    await createTranscriptFixture("openclaw-chat-send-settled-fallback-");
+    const idempotencyKey = "run-settled:settled-finalization-fallback";
+    const text =
+      "The tool run finished, but no final summary was produced. I did not repeat any completed actions.";
+    await appendSourceReplyMirrorEntry({ idempotencyKey, text });
+    mockState.sessionEntry = {
+      lifecycleRevision: "revision-a",
+      activeWriterRunId: "run-settled",
+    };
+    setAgentRunReplies([
+      {
+        kind: "final",
+        payload: setReplyPayloadMetadata({ text }, {
+          assistantTranscriptOwned: true,
+          assistantTranscriptIdempotencyKey: idempotencyKey,
+          deliverDespiteSourceReplySuppression: true,
+          sessionWriterDeliveryAuthority: {
+            agentId: "main",
+            expectedLifecycleRevision: "revision-a",
+            expectedSessionId: mockState.sessionId,
+            expectedWriterRunId: "run-settled",
+            sessionKey: "main",
+            storePath: mockState.storePath,
+          },
+        } as never),
+      },
+    ]);
+    const { context, send } = createChatRequestFixture();
+
+    await send({
+      idempotencyKey: "idem-settled-fallback",
+      waitFor: "dedupe",
+    });
+
+    expect(extractFirstTextBlock(lastBroadcastPayload(context))).toBe(text);
+    expect(await readActiveAssistantTranscriptMessages()).toHaveLength(1);
+  });
+
+  it("drops a settled fallback when its writer is replaced after transcript persistence", async () => {
+    await createTranscriptFixture("openclaw-chat-send-stale-settled-fallback-");
+    const idempotencyKey = "run-settled:settled-finalization-fallback";
+    const text =
+      "The tool run finished, but no final summary was produced. I did not repeat any completed actions.";
+    await appendSourceReplyMirrorEntry({ idempotencyKey, text });
+    mockState.sessionEntry = {
+      lifecycleRevision: "revision-a",
+      activeWriterRunId: "run-settled",
+    };
+    mockState.onAfterAgentRunStart = () => {
+      mockState.sessionEntry = {
+        lifecycleRevision: "revision-a",
+        activeWriterRunId: "replacement-run",
+      };
+    };
+    const sourceReply = createMainSourceReply({ idempotencyKey, text });
+    setReplyPayloadMetadata(sourceReply.payload, {
+      assistantTranscriptOwned: true,
+      assistantTranscriptIdempotencyKey: idempotencyKey,
+      sessionWriterDeliveryAuthority: {
+        agentId: "main",
+        expectedLifecycleRevision: "revision-a",
+        expectedSessionId: mockState.sessionId,
+        expectedWriterRunId: "run-settled",
+        sessionKey: "main",
+        storePath: mockState.storePath,
+      },
+    } as never);
+    setAgentRunReplies([sourceReply]);
+    const { context, send } = createChatRequestFixture();
+
+    await send({
+      idempotencyKey: "idem-stale-settled-fallback",
+      waitFor: "dedupe",
+    });
+
+    expect(context.broadcast).not.toHaveBeenCalled();
+    expect(context.nodeSendToSession).not.toHaveBeenCalled();
+    expect(await readActiveAssistantTranscriptMessages()).toHaveLength(1);
   });
 
   it("broadcasts agent-run status notices without source reply mirrors", async () => {
@@ -4267,51 +4371,182 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(finalBroadcasts).toStrictEqual([]);
   });
 
-  it.each([
-    ["after start", true],
-    ["before launch", false],
-  ] as const)("broadcasts returned agent-run error payloads $0", async (_name, agentStarted) => {
-    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-agent-returned-error-");
-    const errorMessage = agentStarted
-      ? "LLM idle timeout (120s): no response from model"
-      : STALE_WORKER_BUILD_REASON;
-    mockState.triggerAgentRunStart = agentStarted;
+  it("labels additional returned agent errors instead of flattening them", async () => {
+    await createTranscriptFixture("openclaw-chat-send-multiple-agent-errors-");
+    mockState.triggerAgentRunStart = true;
     mockState.dispatchedReplies = [
-      {
-        kind: "final",
-        payload: {
-          text: errorMessage,
-          isError: true,
-        },
-      },
+      { kind: "final", payload: { text: "Primary execution failed", isError: true } },
+      { kind: "final", payload: { text: "Workspace recovery failed", isError: true } },
+      { kind: "final", payload: { text: "Workspace recovery failed", isError: true } },
     ];
-    const { context, send } = createChatRequestFixture();
-    const runId = agentStarted ? "idem-agent-returned-error" : "idem-agent-rejected-before-launch";
+    const { send } = createChatRequestFixture();
 
     const broadcast = await send({
-      idempotencyKey: runId,
-      message: "please keep working",
+      idempotencyKey: "idem-multiple-agent-errors",
+      message: "run on the worker",
     });
 
     expect(broadcast).toMatchObject({
-      runId,
-      sessionKey: "agent:main:main",
       state: "error",
-      errorMessage,
+      errorMessage: "Primary execution failed\n\nAdditional error: Workspace recovery failed",
     });
-    expect(broadcast).not.toHaveProperty("message");
-    const dedupe = context.dedupe.get(`chat:${runId}`);
-    expect(dedupe?.ok).toBe(false);
-    expect(dedupe?.payload).toMatchObject({
-      runId,
-      status: "error",
-      summary: errorMessage,
-    });
-    const userUpdate = findUserUpdate();
-    expectUserUpdateIdentity(userUpdate);
-    const assistantUpdates = findAssistantTranscriptUpdates();
-    expect(assistantUpdates).toStrictEqual([]);
   });
+
+  it.each([
+    ["error payload after start", true, "error", undefined],
+    ["error payload before launch", false, "error", undefined],
+    ["recorded failure with ordinary output", true, "ordinary", "failed"],
+    ["recorded failure without output", true, "empty", "failed"],
+    ["recorded failure with source reply", true, "source", "failed"],
+    ["recorded success with ordinary output", true, "ordinary", "completed"],
+    ["recorded success with a recoverable warning", true, "warning", "completed"],
+    ["recorded success with only a tool warning", true, "warning-only", "completed"],
+    ["recorded success with source reply plus warning", true, "source-warning", "completed"],
+  ] as const)(
+    "projects agent-run terminal: $0",
+    async (name, agentStarted, presentation, outcome) => {
+      const fixtureDir = await createGatewayUserTurnSqliteFixture(
+        "openclaw-chat-send-agent-terminal-",
+      );
+      const runId = `idem-agent-terminal-${name.replaceAll(" ", "-")}`;
+      const failed = outcome === "failed" || presentation === "error";
+      const sourceReply = presentation === "source" || presentation === "source-warning";
+      const replyText = presentation === "warning-only" ? "⚠️ Exec failed" : "Partial agent reply";
+      const errorMessage =
+        presentation === "error"
+          ? agentStarted
+            ? "LLM idle timeout (120s): no response from model"
+            : STALE_WORKER_BUILD_REASON
+          : "agent run failed";
+      const mirrorIdempotencyKey = `${runId}:internal-source-reply:0`;
+      const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
+      mockState.triggerAgentRunStart = agentStarted;
+      if (outcome) {
+        await appendTestTranscriptMessage({
+          eventId: `${runId}:user`,
+          role: "user",
+          content: "please keep working",
+          now: 0,
+          parentId: null,
+        });
+        mockState.triggerUserMessagePersisted = true;
+      }
+      if (sourceReply) {
+        writeSavedPng(fixtureDir, "source-terminal.png");
+        await appendSourceReplyMirrorEntry({
+          idempotencyKey: mirrorIdempotencyKey,
+          text: replyText,
+        });
+        mockState.dispatchedReplies = [
+          createMainSourceReply({
+            idempotencyKey: mirrorIdempotencyKey,
+            text: replyText,
+            mediaUrls: [mediaUrl],
+          }),
+        ];
+      } else if (presentation === "empty" || presentation === "warning-only") {
+        mockState.finalText = "";
+      } else if (presentation === "error") {
+        mockState.dispatchedReplies = [
+          {
+            kind: "final",
+            payload: { text: errorMessage, isError: true },
+          },
+        ];
+      } else {
+        mockState.runtimeAssistantTextsBeforeDelivery = [replyText];
+        mockState.dispatchedReplies = [{ kind: "final", payload: { text: replyText } }];
+      }
+      if (
+        presentation === "warning" ||
+        presentation === "warning-only" ||
+        presentation === "source-warning"
+      ) {
+        mockState.dispatchedReplies.push({
+          kind: "final",
+          payload: { text: "⚠️ Exec failed", isError: true },
+        });
+      }
+      if (outcome) {
+        const dispatch = expectDefined(
+          dispatchInboundMessageMock.getMockImplementation(),
+          "default chat dispatch fixture",
+        );
+        dispatchInboundMessageMock.mockImplementationOnce(async (params: TestDispatchParams) =>
+          recordAgentRunTerminalOutcome(await dispatch(params), outcome),
+        );
+      }
+      const { context, send } = createChatRequestFixture();
+
+      await send({
+        idempotencyKey: runId,
+        message: "please keep working",
+        waitFor: "none",
+      });
+      // Admission already owns a dedupe entry; observe the first terminal write, not key presence.
+      await waitForAssertion(() => {
+        expect(["ok", "error"]).toContain(context.dedupe.get(`chat:${runId}`)?.payload?.status);
+      });
+      const dedupe = context.dedupe.get(`chat:${runId}`);
+      expect(dedupe?.ok).toBe(!failed);
+      expect(dedupe?.payload).toMatchObject({
+        runId,
+        status: failed ? "error" : "ok",
+        ...(failed ? { summary: errorMessage } : {}),
+      });
+      const waitRespond = vi.fn<RespondFn>();
+      await agentWaitHandler({
+        params: { runId, timeoutMs: 0 },
+        respond: waitRespond,
+        context,
+        req: {} as never,
+        client: null,
+        isWebchatConnect: () => false,
+      });
+      expect(waitRespond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ runId, status: failed ? "error" : "ok" }),
+      );
+      const broadcasts = context.broadcast.mock.calls
+        .filter(([event]) => event === "chat")
+        .map(([, payload]) => payload);
+      if (failed) {
+        expect(broadcasts).toEqual([
+          expect.objectContaining({
+            runId,
+            sessionKey: "agent:main:main",
+            state: "error",
+            errorMessage,
+          }),
+        ]);
+        expect(broadcasts[0]).not.toHaveProperty("message");
+      } else if (sourceReply || presentation === "warning-only") {
+        expect(broadcasts).toEqual([expect.objectContaining({ runId, state: "final" })]);
+        expect(extractFirstTextBlock(broadcasts[0])).toBe(replyText);
+      } else {
+        expect(broadcasts).toEqual([]);
+      }
+      const assistantEntries = await readActiveAssistantTranscriptMessages();
+      if (presentation === "error" || presentation === "empty") {
+        expect(assistantEntries).toEqual([]);
+        expect(findAssistantTranscriptUpdates()).toEqual([]);
+      } else {
+        expect(assistantEntries).toHaveLength(1);
+        expect(JSON.stringify(assistantEntries[0]?.content)).toContain(replyText);
+      }
+      if (sourceReply) {
+        expect(assistantEntries[0]?.idempotencyKey).toBe(mirrorIdempotencyKey);
+        expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
+        expect(JSON.stringify(assistantEntries[0]?.content)).not.toContain(mediaUrl);
+        expect(fs.existsSync(mockState.transcriptPath)).toBe(false);
+      }
+      if (presentation === "error") {
+        expectUserUpdateIdentity(findUserUpdate());
+      } else {
+        expect(readPersistedUserMessages()).toHaveLength(1);
+      }
+    },
+  );
 
   it("keeps visible text on non-agent TTS final media because no model transcript exists", async () => {
     const transcriptDir = await createTranscriptFixture("openclaw-chat-send-command-tts-final-");
@@ -5398,7 +5633,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   ] satisfies ChatDeliveryRoutingCase[])(
     "chat.send %s",
     async (...[_name, id, delivery, sessionKey, options = {}]: ChatDeliveryRoutingCase) => {
-      await createTranscriptFixture(`openclaw-chat-send-${id}-`);
+      await createTranscriptFixture(`openclaw-chat-send-${id}-`, { agentId: "main", sessionKey });
       mockState.finalText = "ok";
       mockState.mainSessionKey = options.mainSessionKey ?? "main";
       mockState.sessionEntry = {
@@ -6061,12 +6296,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           ?.replyToCurrent === true,
     );
     const transcriptMessage = transcriptUpdate?.message as Record<string, any> | undefined;
+    const displayContent = Array.isArray(transcriptMessage?.openclawDisplayContent)
+      ? transcriptMessage.openclawDisplayContent
+      : transcriptMessage?.content;
     expect(transcriptMessage?.role).toBe("assistant");
-    expect(transcriptMessage?.content?.[0]).toEqual({
+    expect(displayContent?.[0]).toEqual({
       type: "text",
       text: "Image reply",
     });
-    expect(transcriptMessage?.content?.[1]).toMatchObject({
+    expect(displayContent?.[1]).toMatchObject({
       type: "image",
       artifactId: expect.stringMatching(/^artifact_managed_image_/u),
       mimeType: "image/png",
@@ -6427,6 +6665,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
+    const { ensureSandboxWorkspaceForSession } = await import("../../agents/sandbox/context.js");
+    const { stageSandboxMedia } = await import("../../auto-reply/reply/stage-sandbox-media.js");
+    expect(ensureSandboxWorkspaceForSession).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main" }),
+    );
+    expect(stageSandboxMedia).toHaveBeenCalledWith(expect.objectContaining({ agentId: "main" }));
+
     expect(mockState.lastDispatchCtx?.media).toEqual([
       {
         path: "media/inbound/report.pdf",
@@ -6623,16 +6868,18 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     ]);
   });
 
-  it("passes already-managed oversized inbound PDFs through staging instead of rejecting", async () => {
-    // #90097: a managed inbound PDF above the sandbox staging cap is read
-    // host-side (media-understanding) rather than copied into the sandbox, so
-    // it must reach dispatch with its managed media path instead of a 4xx.
+  it("stages already-managed PDFs above the generic media-store limit", async () => {
+    // #90097: the sandbox staging ceiling is intentionally higher than the
+    // generic media-store limit, so a 6 MiB PDF should still land in the
+    // workspace rather than taking the oversized host-path fallback.
     await createReadyChatTranscript("openclaw-chat-send-managed-pdf-pass-through-");
     useChatTestModel("vision-model");
     setSavedMediaResults(["/home/user/.openclaw/media/inbound/huge.pdf", "application/pdf"]);
     mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
+    mockState.stagedRelativePaths = ["media/inbound/huge.pdf"];
     const { send } = createChatRequestFixture();
-    // 6MB PDF — above STAGED_MEDIA_MAX_BYTES (5MB) but below the 20MB parse cap.
+    // 6 MiB PDF — above MEDIA_MAX_BYTES (5 MiB) but below both the default
+    // 20 MiB parser cap and the 50 MiB sandbox staging cap.
     const oversized = Buffer.alloc(6 * 1024 * 1024);
     oversized.set(Buffer.from("%PDF-1.4\n"), 0);
 
@@ -6647,13 +6894,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
-    // Reaches dispatch with the managed media path; not staged into the sandbox,
-    // so no workspace dir, and the media-store entry is kept (not cleaned up).
+    // Reaches dispatch through the same staged workspace path as other files.
     expect(mockState.lastDispatchCtx?.media).toEqual([
       {
-        path: "/home/user/.openclaw/media/inbound/huge.pdf",
+        path: "media/inbound/huge.pdf",
         contentType: "application/pdf",
-        workspaceDir: "/home/user/.openclaw/media/inbound",
+        workspaceDir: "/sandbox/workspace",
       },
     ]);
     expect(mockState.deleteMediaBufferCalls).toEqual([]);
@@ -6776,14 +7022,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     ]);
   });
 
-  it("rejects sandbox-oversized non-image attachments as 4xx before staging", async () => {
-    // Regression: resolveChatAttachmentMaxBytes defaults to 20MB, but
-    // stageSandboxMedia caps each file at STAGED_MEDIA_MAX_BYTES (5MB) and
-    // silently drops oversize files. Without a pre-check, a sandbox session
-    // accepting a 5-20MB non-image would fail staging and surface as a
-    // retryable 5xx UNAVAILABLE, misleading clients into retrying a
-    // deterministically broken request. Managed PDFs pass through (see above);
-    // other oversized non-image files must still be rejected.
+  it("stages non-image attachments above the generic media-store limit", async () => {
+    // Regression: Gateway used MEDIA_MAX_BYTES (5 MiB) as a pre-staging cap
+    // even though stageSandboxMedia accepts files up to 50 MiB.
     await createReadyChatTranscript("openclaw-chat-send-sandbox-oversize-");
     useChatTestModel("vision-model");
     setSavedMediaResults([
@@ -6791,8 +7032,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       "application/octet-stream",
     ]);
     mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
-    const { respond, send } = createChatRequestFixture();
-    // 6MB buffer — above STAGED_MEDIA_MAX_BYTES (5MB) but below the 20MB parse cap.
+    mockState.stagedRelativePaths = ["media/inbound/huge.bin"];
+    const { send } = createChatRequestFixture();
+    // 6 MiB buffer — above MEDIA_MAX_BYTES but below the default 20 MiB parser
+    // cap and the canonical 50 MiB sandbox staging cap.
     const oversized = Buffer.alloc(6 * 1024 * 1024);
     oversized.set(Buffer.from("OPENCLAW-BINARY\n"), 0);
     const oversizedPayload = oversized.toString("base64");
@@ -6806,20 +7049,16 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         ],
       },
       expectBroadcast: false,
-      waitFor: "none",
     });
 
-    expect(mockState.lastDispatchCtx).toBeUndefined();
-    expect(respond).toHaveBeenCalledTimes(1);
-    const [ok, payload, error] = lastRespondCall(respond) ?? [];
-    expect(ok).toBe(false);
-    expect(payload).toBeUndefined();
-    // 4xx, not 5xx — retrying a file that exceeds the staging cap cannot
-    // succeed, so the failure must be surfaced as a client-side rejection.
-    expect(error?.code).toBe(ErrorCodes.INVALID_REQUEST);
-    expect(responseErrorMessage(error)).toMatch(/sandbox staging limit/i);
-    // Orphaned media-store entries are cleaned up before the 4xx surfaces.
-    expect(mockState.deleteMediaBufferCalls).toEqual([{ id: "saved-media", subdir: "inbound" }]);
+    expect(mockState.lastDispatchCtx?.media).toEqual([
+      {
+        path: "media/inbound/huge.bin",
+        contentType: "application/octet-stream",
+        workspaceDir: "/sandbox/workspace",
+      },
+    ]);
+    expect(mockState.deleteMediaBufferCalls).toEqual([]);
   });
 
   it("passes imageOrder for mixed inline and offloaded chat.send attachments", async () => {

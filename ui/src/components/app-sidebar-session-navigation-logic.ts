@@ -4,7 +4,6 @@ import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { SIDEBAR_NAV_ROUTES, type NavigationRouteId } from "../app-navigation.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { t } from "../i18n/index.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
 import {
   isCronSessionKey,
@@ -32,7 +31,7 @@ import {
   isAcpSessionKey,
   isUiGlobalScopeConfigured,
   normalizeAgentId,
-  resolveUiCanonicalMainSessionKey,
+  readSessionDefaults,
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
   resolveUiSessionNavigationParentKey,
@@ -232,6 +231,7 @@ export function buildSidebarSessionNavigationState(input: {
       draftOwnedBySelf: isSidebarDraftOwnedBySelf(row, context?.gateway.snapshot.selfUser?.id),
       category: normalizeOptionalString(row.category),
       icon: normalizeOptionalString(row.icon),
+      color: normalizeOptionalString(row.color),
       channelAvatarUrl: normalizeOptionalString(row.channelAvatarUrl),
       boardFace: row.boardFace,
       channel: channelInfo.channel,
@@ -243,6 +243,10 @@ export function buildSidebarSessionNavigationState(input: {
       worktreeId: row.worktree?.id,
       execNode: row.execNode,
       placementState: row.placement?.state,
+      placementProviderId:
+        row.placement && "providerId" in row.placement ? row.placement.providerId : undefined,
+      placementProfileId:
+        row.placement && "profileId" in row.placement ? row.placement.profileId : undefined,
       diskSpaceStatus:
         row.placement?.state === "active" ? row.placement.diskSpace?.status : undefined,
       workspaceConflictCount:
@@ -483,13 +487,6 @@ export function resolveSidebarAgentResumeKey(
   return latest?.key ?? buildAgentMainSessionKey({ agentId, mainKey });
 }
 
-export function resolveSidebarAgentChipSubtitle(latest: SessionRow | null): string {
-  if (latest && isSessionRunActive(latest)) {
-    return t("agentChip.working");
-  }
-  return latest ? resolveSessionDisplayName(latest.key, latest) : t("agentChip.ready");
-}
-
 export function collectKnownSidebarSessionCatalogIds(input: {
   loadedCatalogIds: readonly string[];
   hasLoaded: boolean;
@@ -515,7 +512,7 @@ export function resolveSidebarMainSessionKey(input: {
   // Global-scope gateways advertise the canonical main session as the
   // literal "global" key; a synthesized agent key would never match it.
   if (isUiGlobalScopeConfigured(host)) {
-    return resolveUiCanonicalMainSessionKey(host);
+    return normalizeOptionalString(readSessionDefaults(host)?.mainSessionKey) ?? "global";
   }
   return buildAgentMainSessionKey({
     agentId: input.agentId,

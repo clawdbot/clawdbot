@@ -40,7 +40,7 @@ import {
   activateSecretsRuntimeSnapshotState,
   activateSecretsRuntimeSnapshotStateIfCurrent,
   clearSecretsRuntimeSnapshotState,
-  collectSecretStoreRefKeysInConfig,
+  collectSecretStoreRefKeysInSnapshot,
   getActiveSecretsRuntimeConfigSnapshot,
   getActiveSecretsRuntimeSnapshotState,
   getActiveSecretsRuntimeSnapshotRevisionState,
@@ -64,13 +64,18 @@ describe("secret store references", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    expect(collectSecretStoreRefKeysInConfig(config, "TEAM_API_KEY")).toEqual(
-      new Set(["store:default:TEAM_API_KEY"]),
-    );
     expect(
-      collectSecretStoreRefKeysInConfig(
+      collectSecretStoreRefKeysInSnapshot({ sourceConfig: config, authStores: [] }, "TEAM_API_KEY"),
+    ).toEqual(new Set(["store:default:TEAM_API_KEY"]));
+    expect(
+      collectSecretStoreRefKeysInSnapshot(
         {
-          gateway: { auth: { token: { source: "env", provider: "default", id: "TEAM_API_KEY" } } },
+          sourceConfig: {
+            gateway: {
+              auth: { token: { source: "env", provider: "default", id: "TEAM_API_KEY" } },
+            },
+          },
+          authStores: [],
         },
         "TEAM_API_KEY",
       ),

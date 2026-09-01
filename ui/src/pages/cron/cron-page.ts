@@ -2,11 +2,12 @@ import { consume } from "@lit/context";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { AgentsListResult, CronJob } from "../../api/types.ts";
-import { titleForRoute } from "../../app-navigation.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { renderSettingsPageHeader } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
@@ -16,11 +17,9 @@ import {
   createInitialCronState,
   getVisibleCronJobs,
   hasCronFormErrors,
-  loadCronFailingCount,
   loadCronJobsPage,
   loadCronModelSuggestions,
   loadCronRuns,
-  loadCronScopeStats,
   loadCronStatus,
   loadMoreCronRuns,
   normalizeCronFormState,
@@ -219,8 +218,6 @@ class CronPage extends OpenClawLightDomElement {
     void this.context.channels.refresh(false);
     await Promise.all([
       this.runCronTask((current) => loadCronStatus(current)),
-      this.runCronTask((current) => loadCronFailingCount(current)),
-      this.runCronTask((current) => loadCronScopeStats(current)),
       this.runCronTask((current) =>
         loadCronJobsPage(current, { tableFilters: options.tableFilters }),
       ),
@@ -419,26 +416,23 @@ class CronPage extends OpenClawLightDomElement {
     });
     const canManage = this.canManageCron;
     return html`
-      <section class="content-header">
-        <div>
-          <div class="page-title">${titleForRoute("cron")}</div>
-        </div>
-        ${renderAgentScopeControl({
+      ${renderSettingsPageHeader({
+        title: titleForRoute("cron"),
+        subtitle: subtitleForRoute("cron"),
+        actions: renderAgentScopeControl({
           agents: this.agentsList?.agents ?? [],
           selection: this.context.agentSelection,
-        })}
-      </section>
+        }),
+      })}
       ${renderSettingsWorkspace(
         renderCron({
           basePath: this.context.basePath,
           agentId: fallbackAgentId,
           loading: this.cron.cronLoading,
+          hasLoaded: this.cron.cronJobsSnapshotRevision !== null,
+          listError: this.cron.cronJobsError,
           canManage,
           status: this.cron.cronStatus,
-          failingCount: this.cron.cronFailingCount,
-          agentScoped: this.cron.cronAgentId !== null,
-          scopedTotal: this.cron.cronScopedTotal,
-          scopedNextWakeAtMs: this.cron.cronScopedNextWakeAtMs,
           jobs: getVisibleCronJobs(this.cron),
           jobsLoadingMore: this.cron.cronJobsLoadingMore,
           jobsTotal: this.cron.cronJobsTotal,

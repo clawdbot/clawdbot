@@ -80,8 +80,6 @@ export type NextcloudTalkAccountConfig = {
   streaming?: ChannelDeliveryStreamingConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
-  /** Media upload max size in MB. */
-  mediaMaxMb?: number;
   /** Network policy overrides for self-hosted Nextcloud Talk on trusted private/internal hosts. */
   network?: NextcloudTalkNetworkConfig;
 };

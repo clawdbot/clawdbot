@@ -20,4 +20,24 @@ describe("runAbortableTimeout", () => {
 
     expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
+
+  it("restarts the timeout window when work reports progress", async () => {
+    vi.useFakeTimers();
+    const pending = runAbortableTimeout(async (_signal, resetTimeout) => {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 20);
+      });
+      resetTimeout();
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 20);
+      });
+      return "ok";
+    }, 30);
+
+    await vi.advanceTimersByTimeAsync(20);
+    await vi.advanceTimersByTimeAsync(20);
+
+    await expect(pending).resolves.toBe("ok");
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });

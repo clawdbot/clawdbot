@@ -124,11 +124,33 @@ function resolvePackageFallbackForBundledDir(params: {
       return builtCandidate;
     }
   }
-  return resolveBundledPluginSourcePublicSurfacePath({
-    sourceRoot: path.join(normalizedRootDir, "extensions"),
-    dirName: params.dirName,
-    artifactBasename: params.artifactBasename,
-  });
+  return (
+    resolveRetainedConfigDoctorPath(params) ??
+    resolveBundledPluginSourcePublicSurfacePath({
+      sourceRoot: path.join(normalizedRootDir, "extensions"),
+      dirName: params.dirName,
+      artifactBasename: params.artifactBasename,
+    })
+  );
+}
+
+function resolveRetainedConfigDoctorPath(params: {
+  rootDir: string;
+  dirName: string;
+  artifactBasename: string;
+}): string | null {
+  if (params.artifactBasename !== "config-doctor-api.js") {
+    return null;
+  }
+  // Externalizing a channel removes its runtime entry, but shipped config still needs
+  // its core-version migration before that plugin can be installed or granted capabilities.
+  for (const dist of ["dist", "dist-runtime"]) {
+    const candidate = path.resolve(params.rootDir, dist, "config-doctor", `${params.dirName}.js`);
+    if (pluginCacheExistsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
 }
 
 function sameExistingPath(left: string, right: string): boolean {
@@ -242,5 +264,5 @@ export function resolveBundledPluginPublicSurfacePath(params: {
       return candidate;
     }
   }
-  return null;
+  return resolveRetainedConfigDoctorPath({ ...params, dirName, artifactBasename });
 }

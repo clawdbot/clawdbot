@@ -4,6 +4,7 @@
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -35,19 +36,21 @@ const DEV_UPDATE_SCHEDULE = {
   },
 };
 
-const HANDOFF_STARTED_RESPONSE = {
-  ok: true,
-  handoff: { status: "started" },
-  result: { reason: "managed-service-handoff-started", status: "skipped" },
-} as const;
-
 const HANDOFF_PENDING_SENTINEL = {
   sentinel: {
     kind: "update",
     status: "skipped",
-    stats: { reason: "managed-service-handoff-started" },
+    ts: 1_000,
+    stats: { handoffId: "lifecycle-handoff", reason: "managed-service-handoff-started" },
   },
 };
+
+const HANDOFF_STARTED_RESPONSE = {
+  ok: true,
+  handoff: { status: "started" },
+  result: { reason: "managed-service-handoff-started", status: "skipped" },
+  sentinel: { payload: HANDOFF_PENDING_SENTINEL.sentinel },
+} as const;
 
 async function openUpdateConfirmation(page: Page): Promise<void> {
   await page.locator(".sidebar-issues-button").click();
@@ -62,7 +65,7 @@ suite.define(() => {
   it.each(["light", "dark"] as const)(
     "narrates a dev-channel update through to its recorded success (%s)",
     async (colorScheme) => {
-      const artifactDir = path.resolve(`.artifacts/control-ui-e2e/update-lifecycle-${colorScheme}`);
+      const artifactDir = createControlUiE2eArtifactDir(`update-lifecycle-${colorScheme}`);
       await suite.withPage(
         {
           colorScheme,
@@ -79,14 +82,17 @@ suite.define(() => {
               "update.run": HANDOFF_STARTED_RESPONSE,
               "update.status": {
                 sequence: [
+                  { sentinel: null },
                   HANDOFF_PENDING_SENTINEL,
                   {
                     sentinel: {
                       kind: "update",
                       status: "ok",
+                      ts: 2_000,
                       // A git install keeps its version and moves its commit;
                       // the post-restart finalizer stamps both.
                       stats: {
+                        handoffId: "lifecycle-handoff",
                         after: {
                           sha: "9f3c21a0000000000000000000000000000000aa",
                           version: "2026.8.1",
@@ -149,9 +155,7 @@ suite.define(() => {
   it.each(["light", "dark"] as const)(
     "names the recorded cause when the install fails (%s)",
     async (colorScheme) => {
-      const artifactDir = path.resolve(
-        `.artifacts/control-ui-e2e/update-failure-cause-${colorScheme}`,
-      );
+      const artifactDir = createControlUiE2eArtifactDir(`update-failure-cause-${colorScheme}`);
       await suite.withPage(
         {
           colorScheme,
@@ -167,12 +171,15 @@ suite.define(() => {
               "update.run": HANDOFF_STARTED_RESPONSE,
               "update.status": {
                 sequence: [
+                  { sentinel: null },
                   HANDOFF_PENDING_SENTINEL,
                   {
                     sentinel: {
                       kind: "update",
                       status: "error",
+                      ts: HANDOFF_PENDING_SENTINEL.sentinel.ts,
                       stats: {
+                        handoffId: "lifecycle-handoff",
                         reason: "deps-install-failed",
                         steps: [
                           { name: "fetch", log: { exitCode: 0, stderrTail: "" } },
@@ -212,7 +219,7 @@ suite.define(() => {
           await page
             .locator("openclaw-modal-dialog")
             .getByText(
-              "The update failed at install: ENOSPC: no space left on device, write. Dependency install failed. Fix the install error and retry.",
+              "The update failed at install: ENOSPC: no space left on device, write. Dependency install failed. Fix the install error and retry. If Ask OpenClaw is unavailable, run `openclaw triage` on the Gateway host. Diagnose the cause before retrying.",
               { exact: true },
             )
             .waitFor({ timeout: 20_000 });

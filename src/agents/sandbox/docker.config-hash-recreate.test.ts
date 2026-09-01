@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   computeSandboxConfigHash,
@@ -171,7 +171,7 @@ let ensureSandboxContainer: typeof import("./docker.js").ensureSandboxContainer;
 let resolveDockerEnvPolicyEpoch: typeof import("./docker.js").resolveDockerEnvPolicyEpoch;
 let PODMAN_SANDBOX_ENGINE: typeof import("./docker.js").PODMAN_SANDBOX_ENGINE;
 
-async function loadFreshDockerModuleForTest() {
+beforeAll(async () => {
   vi.resetModules();
   vi.doMock("./registry.js", () => ({
     readRegistryEntry: registryMocks.readRegistryEntry,
@@ -184,7 +184,7 @@ async function loadFreshDockerModuleForTest() {
   }));
   ({ ensureSandboxContainer, resolveDockerEnvPolicyEpoch, PODMAN_SANDBOX_ENGINE } =
     await import("./docker.js"));
-}
+});
 
 function createSandboxConfig(
   dns: string[],
@@ -263,7 +263,7 @@ async function ensureSandboxCreateCallForTest(params: {
 }
 
 describe("ensureSandboxContainer config-hash recreation", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     spawnState.calls.length = 0;
     spawnState.containerExists = true;
     spawnState.inspectRunning = true;
@@ -278,7 +278,6 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     registryMocks.updateRegistry.mockClear();
     registryMocks.updateRegistry.mockResolvedValue(undefined);
     runtimeMocks.log.mockClear();
-    await loadFreshDockerModuleForTest();
   });
 
   it("serializes concurrent provisioning for one container", async () => {

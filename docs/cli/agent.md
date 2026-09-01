@@ -10,7 +10,7 @@ title: "Agent"
 
 Run one agent turn through the Gateway. The explicit `--local` flag is the only embedded execution path.
 
-Pass at least one session selector: `--to`, `--session-key`, `--session-id`, or `--agent`.
+Pass at least one session selector: `--to`, `--session-key`, `--session-id`, or `--agent`. Explicitly blank or whitespace-only selector values are rejected before local or Gateway dispatch, even when another selector supplies a valid target. Omit an unused selector instead of passing an empty value.
 
 A completed turn exits `0`. Error, timeout, and cancellation outcomes exit `1`, after any text or JSON result is written. A received `SIGINT` or `SIGTERM` instead preserves the signal-specific exit status described below.
 
@@ -87,7 +87,7 @@ Plain output writes only the final assistant text to stdout. Diagnostics use std
 
 Run-stat fields are additive and may be absent:
 
-- `costUsd`: estimated USD cost of the run's accumulated usage, including cache read/write pricing; omitted when the model has no cost data.
+- `costUsd`: sum of recorded per-call USD costs, preserving request pricing tiers and retry-model prices, including cache reads/writes. When per-call costs are incomplete, only flat-price estimates are available; tiered estimates are omitted rather than pricing combined usage as one request. Omitted when cost is unavailable.
 - `codeModeEngaged`: `true` only when [code mode](/tools/code-mode) actually owned the model tool surface for the run. `tools.codeMode.enabled=true` alone does not guarantee engagement, and harnesses that own their native tool surface always read `false` because OpenClaw code mode never owns their tools.
 - `assistantTurns`: completed assistant/provider round trips in the run; omitted when none completed.
 - `bridgeCalls`: inner tool-search/code-mode bridge call counts (`search`/`describe`/`call`). These are invisible to the provider; outer tool calls stay in `meta.toolSummary.calls` of the full run metadata.
@@ -175,6 +175,20 @@ openclaw agent --agent ops --message "Run locally" --local
 - After transient handshake retries are exhausted, a Gateway timeout or closed connection fails the command; the CLI never silently reruns the turn embedded. Transport loss is ambiguous — the Gateway may have accepted and may still finish the turn — so the stderr hint says to check `openclaw gateway status` and the session transcript before retrying or rerunning with `--local`, to avoid executing the turn twice.
 - `SIGTERM`/`SIGINT` interrupt a waiting Gateway-backed request; if the Gateway already accepted the run, the CLI also sends `chat.abort` for that run id before exiting. `--local` runs receive the same signal but do not send `chat.abort`. A launcher child that terminates from the first forwarded `SIGINT` or `SIGTERM` exits with status 130 or 143, respectively. If the internal run-dedup key already has an active run for this session, the response reports `status: "in_flight"` and the non-JSON CLI prints a stderr diagnostic instead of an empty reply. For external cron/systemd wrappers, keep a hard-kill backstop such as `timeout -k 60 600 openclaw agent ...` so the supervisor can reap the process if shutdown cannot drain.
 - When this command triggers `models.json` regeneration, SecretRef-managed provider credentials are persisted as non-secret markers (for example env var names, `secretref-env:ENV_VAR_NAME`, or `secretref-managed`), never resolved secret plaintext. Marker writes come from the active source config snapshot, not from resolved runtime secret values.
+
+## JSON failures
+
+Failures keep the [CLI error envelope](/cli#json-failures): `ok: false` and
+`error.type: "cli_error"`. When the Gateway returned a run ID, the envelope also
+includes top-level `runId` and `origin: "gateway"`. This includes cached final
+errors without a fresh acceptance response, and a timeout or lost connection
+after acceptance.
+
+`origin` identifies the run's Gateway ownership; it does not prove the run failed
+or stopped. After transport loss, check the session transcript before retrying.
+Omitted provenance means the CLI observed no Gateway run identity, not that no
+run happened. Local errors and rejections without a Gateway run ID omit these
+fields. A locally generated idempotency key alone is not Gateway provenance.
 
 ## JSON delivery status
 

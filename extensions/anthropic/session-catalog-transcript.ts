@@ -11,6 +11,7 @@ export type ClaudeTranscriptItem = {
   timestamp?: string;
   model?: string;
   uuid?: string;
+  resumeCursor?: string;
   truncated?: true;
 };
 

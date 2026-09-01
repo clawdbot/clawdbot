@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
@@ -23,6 +24,27 @@ function projectHistoryTransports(message: Record<string, unknown>) {
 }
 
 describe("managed document chat history", () => {
+  it("projects durable display content without dropping canonical assistant blocks", () => {
+    const canonical = [
+      { type: "text", text: "Slides ready" },
+      { type: "toolCall", id: "call-1", name: "read", arguments: {} },
+    ];
+    const attachment = {
+      type: "attachment",
+      attachment: { kind: "document", label: "slides.pptx" },
+    };
+    const message = {
+      role: "assistant",
+      content: canonical,
+      openclawDisplayContent: [...canonical, attachment],
+    };
+
+    for (const messages of projectHistoryTransports(message)) {
+      expect(messages).toEqual([{ role: "assistant", content: [...canonical, attachment] }]);
+    }
+    expect(message.content).toBe(canonical);
+  });
+
   it("keeps the attachment envelope while stripping URL capabilities", () => {
     const message = {
       role: "assistant",
@@ -930,90 +952,36 @@ describe("chat display message-tool projection", () => {
   });
 });
 
-describe("chat display tool-result detail projection", () => {
-  it.each([
-    [
-      { targetId: "tab-1", url: "https://example.com", title: "Example", extra: "drop" },
-      { targetId: "tab-1", url: "https://example.com", title: "Example" },
-    ],
-    [
-      {
-        targetId: "x".repeat(127) + "😀",
-        url: "u".repeat(2047) + "😀",
-        title: "t".repeat(511) + "😀",
-      },
-      { targetId: "x".repeat(127), url: "u".repeat(2047), title: "t".repeat(511) },
-    ],
-    [{ targetId: "tab-1", url: 42, title: [] }, { targetId: "tab-1" }],
-    [null, undefined],
-    [[], undefined],
-    ["tab-1", undefined],
-    [{}, undefined],
-    [{ targetId: 1 }, undefined],
-    [{ targetId: "  " }, undefined],
-  ])("projects only bounded browser tab descriptor fields (%j)", (browserTab, expected) => {
-    const result = { type: "toolResult", toolName: "browser", details: { browserTab } };
-    const [standalone, nested] = sanitizeChatHistoryMessages([
-      { role: "toolResult", ...result },
-      { role: "assistant", content: [result] },
-    ]) as Array<Record<string, unknown>>;
-    const block = (nested?.content as Array<Record<string, unknown>> | undefined)?.[0];
-    for (const projected of [standalone, block]) {
-      expect(projected?.details).toEqual(expected ? { browserTab: expected } : undefined);
-    }
-  });
-
-  it("omits opaque provider replay state from display history", () => {
-    const [message] = sanitizeChatHistoryMessages([
+describe("TTS supplement matching", () => {
+  it("matches later audio against the text left by an earlier supplement", () => {
+    const marker = { textSha256: createHash("sha256").update("same").digest("hex") };
+    const firstAudio = { type: "audio", url: "https://example.test/first.mp3" };
+    const secondAudio = { type: "audio", url: "https://example.test/second.mp3" };
+    const caption = { type: "input_text", text: "caption" };
+    const messages = [
+      { role: "assistant", content: [{ type: "text", text: "same" }], timestamp: 1 },
+      { role: "assistant", content: [{ type: "text", text: "same" }], timestamp: 2 },
       {
         role: "assistant",
-        content: [{ type: "text", text: "visible" }],
-        providerReplay: {
-          type: "openai-responses-compaction",
-          data: "opaque-display-compaction",
-        },
+        content: [caption, firstAudio],
+        openclawTtsSupplement: marker,
       },
-    ]) as Array<Record<string, unknown>>;
+      { role: "assistant", content: [secondAudio], openclawTtsSupplement: marker },
+    ];
+    const original = structuredClone(messages);
 
-    expect(message).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "visible" }],
-    });
-    expect(message).not.toHaveProperty("providerReplay");
-    expect(JSON.stringify(message)).not.toContain("opaque-display-compaction");
-  });
-
-  it("keeps authoritative write booleans and strips unrelated details", () => {
-    const [overwrite, created, invalid] = sanitizeChatHistoryMessages([
+    expect(projectChatDisplayMessages(messages)).toEqual([
       {
-        role: "toolResult",
-        toolCallId: "write-1",
-        toolName: "write",
-        content: [{ type: "text", text: "ok" }],
-        details: { changed: true, created: false, diff: "-1 old\n+1 new", private: "drop" },
+        role: "assistant",
+        content: [{ type: "text", text: "same" }, secondAudio],
+        timestamp: 1,
       },
       {
-        role: "toolResult",
-        toolCallId: "write-2",
-        toolName: "write",
-        content: [{ type: "text", text: "ok" }],
-        details: { changed: true, created: true },
+        role: "assistant",
+        content: [{ type: "text", text: "same" }, caption, firstAudio],
+        timestamp: 2,
       },
-      {
-        role: "toolResult",
-        toolCallId: "write-3",
-        toolName: "write",
-        content: [{ type: "text", text: "ok" }],
-        details: { changed: "true", created: 1 },
-      },
-    ]) as Array<Record<string, unknown>>;
-
-    expect(overwrite?.details).toEqual({
-      changed: true,
-      created: false,
-      diff: "-1 old\n+1 new",
-    });
-    expect(created?.details).toEqual({ changed: true, created: true });
-    expect(invalid).not.toHaveProperty("details");
+    ]);
+    expect(messages).toEqual(original);
   });
 });

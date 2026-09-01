@@ -1,4 +1,4 @@
-import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tools.js";
+import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { copyBeforeToolCallHookMarker } from "./before-tool-call-metadata.js";
 import { copyChannelAgentToolMeta } from "./channel-tool-metadata.js";

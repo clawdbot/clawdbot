@@ -7,6 +7,8 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { formatCliCommand } from "../cli/command-format.js";
+import { formatInstallationTargetCommand } from "../cli/installation-target-format.js";
 import { resolveGatewayWindowsTaskName } from "../daemon/constants.js";
 import { resolveLaunchAgentLabel } from "../daemon/launchd-label.js";
 import { resolveLaunchAgentPlistPath } from "../daemon/launchd-service-files.js";
@@ -18,8 +20,10 @@ import {
   isPidAlive,
   isPidDefinitelyDead,
 } from "../shared/pid-alive.js";
+import { SKIPPED_UPDATE_OUTCOMES } from "../shared/update-outcome.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveExecutableFromPathEnv } from "./executable-path.js";
+import { resolveInstallationTarget } from "./installation-target-context.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase, resolveNodeSqliteLocation } from "./node-sqlite.js";
 import type { GatewayRestartIntent } from "./restart-intent.js";
@@ -28,6 +32,7 @@ import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 import type { UpdateChannel } from "./update-channels.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
+  MANAGED_SERVICE_UPDATE_SAFE_EXIT_CODE,
   type ControlPlaneUpdateSentinelMetaFile,
 } from "./update-control-plane-sentinel.js";
 import { applyDevUpdateTargetEnv, type DevUpdateTarget } from "./update-dev-target.js";
@@ -598,18 +603,47 @@ function writeRestartSentinelPayload(db, payload, currentRevision) {
       ].join(" "),
     ).run(updatedAtMs, floorPayload, updatedAtMs);
   }
-  return changed;
+  return changed ? updatedAtMs : null;
 }
 
-function markUpdateSentinelFailureIfPending(reason, restored) {
+let triageFailure;
+
+function isFailedUpdatePayload(payload) {
+  return payload.status === "error" || (payload.status === "skipped" &&
+    !params.nonFailureSkippedReasons.includes(payload.stats?.reason));
+}
+
+function captureFailedUpdateResult() {
+  // The current CLI writes this only for a terminal failure after its cleanup.
+  // Its presence triggers diagnostics, never permission to restart the service.
+  if (fs.existsSync(params.triageContextPath)) {
+    triageFailure = { reason: "managed-service-handoff-failed" };
+    return true;
+  }
+  const db = openStateDatabase();
+  if (!db) return false;
+  try {
+    const payload = readRestartSentinelRecord(db)?.payload;
+    if (payload?.kind !== "update" || payload.stats?.handoffId !== params.handoffId ||
+      !isFailedUpdatePayload(payload)) return false;
+    triageFailure = { payload, reason: payload.stats.reason || "managed-service-handoff-failed" };
+    return true;
+  } finally {
+    db.close();
+  }
+}
+
+function markUpdateSentinelFailureIfPending(reason, restored, expectedRevision) {
   let metaFile;
   try {
     metaFile = JSON.parse(fs.readFileSync(params.metaPath, "utf-8"));
   } catch {}
   const meta = metaFile && metaFile.version === 1 && metaFile.meta ? metaFile.meta : {};
+  const status = reason === "managed-service-handoff-cancelled" && restored !== false
+    ? "skipped" : "error";
   const fallbackPayload = {
     kind: "update",
-    status: "error",
+    status,
     ts: Date.now(),
     message: typeof meta.note === "string" ? meta.note : null,
     stats: {
@@ -629,42 +663,58 @@ function markUpdateSentinelFailureIfPending(reason, restored) {
   if (meta.deliveryContext && typeof meta.deliveryContext === "object") {
     fallbackPayload.deliveryContext = meta.deliveryContext;
   }
+  if (status === "error") {
+    triageFailure ??= { payload: fallbackPayload, reason };
+  }
+  if (triageFailure && typeof restored === "boolean") triageFailure.restored = restored;
   const db = openStateDatabase();
-  if (!db) return false;
-  let recorded = false;
+  if (!db) return null;
+  let recorded = null;
   try {
     runManagedUpdateLeaseTransaction(db, () => {
       assertStateDatabaseWriteAllowed(db);
       const current = readRestartSentinelRecord(db);
+      if (expectedRevision !== undefined && (!current || current.revision !== expectedRevision)) return;
       let payload = current && current.payload;
       const handoffId = typeof params.handoffId === "string" ? params.handoffId.trim() : "";
+      if (payload?.kind === "update" && payload.stats?.handoffId === handoffId &&
+        (triageFailure || isFailedUpdatePayload(payload))) {
+        triageFailure ??= { reason };
+        triageFailure.payload = payload;
+      }
       if (
-        (payload && (payload.kind !== "update" || payload.status !== "skipped" ||
-          !["managed-service-handoff-started", "restart-health-pending"].includes(payload.stats?.reason)) &&
-          !(typeof restored === "boolean" && payload.kind === "update" && payload.status === "error")) ||
+        (payload && (payload.kind !== "update" || (!isFailedUpdatePayload(payload) &&
+          (payload.status !== "skipped" ||
+            !["managed-service-handoff-started", "restart-health-pending", "managed-service-handoff-cancelled"].includes(payload.stats?.reason))))) ||
         (payload && handoffId && (!payload.stats || payload.stats.handoffId !== handoffId))
       ) {
         return;
       }
       if (payload) {
-        payload = { ...payload, status: "error" };
+        const failed = isFailedUpdatePayload(payload);
+        payload = {
+          ...payload, status: failed ? payload.status : status,
+          stats: { ...(payload.stats || {}), ...(failed ? {} : { reason }) },
+        };
         delete payload.continuation;
-        payload.stats = { ...(payload.stats || {}), reason };
       } else {
         payload = fallbackPayload;
       }
+      if (isFailedUpdatePayload(payload)) payload.doctorHint = params.triageHint;
       if (typeof restored === "boolean") {
         payload.stats.steps = [
           ...(payload.stats.steps || []),
           { name: "service-restore", command: params.serviceRecovery.kind, log: { exitCode: restored ? 0 : 1 } },
         ];
       }
-      if (!writeRestartSentinelPayload(db, payload, current ? current.revision : null)) {
+      recorded = writeRestartSentinelPayload(db, payload, current ? current.revision : null);
+      if (recorded === null) {
         throw new Error("restart sentinel changed before guarded failure write");
       }
-      recorded = true;
+      if (triageFailure) triageFailure.payload = payload;
     });
   } catch (err) {
+    recorded = null;
     appendLog("failed to write update sentinel failure: " + (err && err.stack ? err.stack : String(err)));
   } finally {
     try {
@@ -710,6 +760,7 @@ function isLaunchdNotLoaded(result) {
 let parkedServiceGeneration = null;
 let parkedServiceInvocation = null;
 let restorationArmed = false;
+let recoverySentinelRevision;
 let pendingServiceStop;
 
 async function parkGatewayService() {
@@ -825,14 +876,121 @@ async function restoreGatewayService(reason) {
   } else if (recovery?.kind === "schtasks") {
     restored = (await runServiceCommand("schtasks.exe", ["/Run", "/TN", recovery.taskName])).code === 0;
   }
+  return recordServiceRecovery(reason, restored);
+}
+
+function recordServiceRecovery(reason, restored, expectedRevision) {
   appendLog("gateway service recovery " + (restored ? "succeeded" : "failed"));
   const recorded = markUpdateSentinelFailureIfPending(
-    restored ? reason : "managed-service-handoff-restore-failed", restored,
+    restored ? reason : "managed-service-handoff-restore-failed", restored, expectedRevision,
   );
-  if (!recorded) {
+  if (!recorded && expectedRevision === undefined) {
     appendLog("managed update restoration result could not be durably recorded");
   }
-  return restored && recorded;
+  return restored && recorded !== null;
+}
+
+function killOwnedCommand(child) {
+  if (process.platform === "win32") {
+    spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {
+      stdio: "ignore", windowsHide: true, timeout: 5000,
+    });
+  } else {
+    try { process.kill(-child.pid, "SIGKILL"); } catch {}
+  }
+  try { child.kill("SIGKILL"); } catch {}
+}
+
+async function runOwnedUpdateCommand(commandArgv, timeoutMs) {
+  const outputFd = fs.openSync(params.logPath, "a", 0o600);
+  let timeout;
+  try {
+    const child = spawn(process.execPath, ["-e", ${JSON.stringify(HANDOFF_COMMAND_RUNNER_SCRIPT)}, JSON.stringify(commandArgv)], {
+      cwd: params.cwd,
+      env: process.env,
+      detached: true,
+      stdio: ["pipe", outputFd, outputFd],
+    });
+    const exited = new Promise((resolve) => {
+      child.once("error", (error) => resolve({ error }));
+      child.once("exit", (code, signal) => resolve({ code, signal }));
+    });
+    child.stdin.on("error", () => {});
+    const runnerIdentity = buildLeaseProcessPayload(child.pid);
+    if (!bindManagedUpdateLeaseToProcess(child.pid, undefined, runnerIdentity)) {
+      killOwnedCommand(child);
+      await exited;
+      throw new Error("managed update runner lease binding failed");
+    }
+    try {
+      // Sending the gate can start mutation even if its write callback fails.
+      // From here, only the updater can authorize recovery of this installation.
+      restorationArmed = false;
+      if (timeoutMs !== undefined) {
+        timeout = setTimeout(() => {
+          appendLog("owned command exceeded its update timeout");
+          killOwnedCommand(child);
+        }, timeoutMs);
+      }
+      await new Promise((resolve, reject) => {
+        child.stdin.once("error", reject);
+        child.stdin.once("close", () => reject(new Error("managed update runner stdin closed")));
+        child.once("exit", () => reject(new Error("managed update runner exited before its gate")));
+        child.stdin.write("go", (error) => error ? reject(error) : resolve());
+      });
+      child.stdin.end();
+    } catch (error) {
+      killOwnedCommand(child);
+      await exited;
+      bindManagedUpdateLeaseToProcess(process.pid, runnerIdentity);
+      throw error;
+    }
+    appendLog("managed update command pid=" + (child.pid || "unknown"));
+    const exit = await exited;
+    if (!bindManagedUpdateLeaseToProcess(process.pid, runnerIdentity)) {
+      throw new Error("managed update command lease binding was lost");
+    }
+    if (exit.error) throw exit.error;
+    appendLog("managed update command exited code=" + (exit.code ?? "null") + " signal=" + (exit.signal || "null"));
+    return exit;
+  } finally {
+    clearTimeout(timeout);
+    fs.closeSync(outputFd);
+  }
+}
+
+async function collectUpdateFailureTriage() {
+  try {
+    if (!triageFailure || !ownsManagedUpdateLease()) return;
+    appendLog("If triage is unavailable, run " + params.triageRecoveryCommand + " on the Gateway host.");
+    // The helper and outer updater start from the same installation. Preserve
+    // its complete export; absent exports have only the helper's observed failure.
+    const recordedFailure = fs.existsSync(params.triageContextPath);
+    if (recordedFailure) {
+      appendLog("Saved update failure: " + params.triageContextPath);
+      appendLog("Reuse this diagnostic context on the Gateway host: " + params.triageContextCommand);
+    }
+    const failure = recordedFailure
+      ? JSON.parse(fs.readFileSync(params.triageContextPath, "utf8"))
+      : { error: "Managed update failed: " + (triageFailure.payload?.stats?.reason || triageFailure.reason) };
+    const recovery = typeof triageFailure.restored === "boolean"
+      ? "Helper service recovery " + (triageFailure.restored ? "succeeded." : "failed.")
+      : "Helper service recovery outcome was not recorded; inspect the handoff log before restarting.";
+    failure.error = [failure.error, recovery].filter(Boolean).join("\n");
+    // Keep the canonical export intact even when installed triage cannot start.
+    // Only this private annotated input is removed with the helper's other files.
+    fs.writeFileSync(params.triageInputPath, JSON.stringify(failure), { mode: 0o600, flag: "wx" });
+    appendLog("starting diagnostic-only update triage after service recovery settled");
+    const exit = await runOwnedUpdateCommand(
+      [...params.triageCommandArgv, "--update-result", params.triageInputPath],
+      Math.min(params.recoveryTimeoutMs, 60_000),
+    );
+    appendLog(!exit.signal && exit.code === 0
+      ? "update triage completed; diagnostic report is above"
+      : "update triage could not complete; " + params.triageHint);
+  } catch (error) {
+    appendLog("update triage could not complete: " + String(error) + "; " + params.triageHint);
+  }
 }
 
 (async () => {
@@ -1000,85 +1158,36 @@ async function restoreGatewayService(reason) {
     }
 
     appendLog("starting managed update command: " + params.commandLabel);
-    let outputFd;
-    try {
-      outputFd = fs.openSync(params.logPath, "a", 0o600);
-      const child = spawn(process.execPath, ["-e", ${JSON.stringify(HANDOFF_COMMAND_RUNNER_SCRIPT)}, JSON.stringify(params.commandArgv)], {
-        cwd: params.cwd,
-        env: process.env,
-        detached: true,
-        stdio: ["pipe", outputFd, outputFd],
-      });
-      const exited = new Promise((resolve) => {
-        child.once("error", (err) => resolve({ error: err }));
-        child.once("exit", (code, signal) => resolve({ code, signal }));
-      });
-      child.stdin.on("error", () => {});
-      const runnerIdentity = buildLeaseProcessPayload(child.pid);
-      if (!bindManagedUpdateLeaseToProcess(child.pid, undefined, runnerIdentity)) {
-        try {
-          child.kill("SIGKILL");
-        } catch {}
-        await exited;
-        throw new Error("managed update runner lease binding failed");
+    const exit = await runOwnedUpdateCommand(params.commandArgv);
+    if (exit.signal || exit.code !== 0 || captureFailedUpdateResult()) {
+      if (!exit.signal && exit.code === ${MANAGED_SERVICE_UPDATE_SAFE_EXIT_CODE} && params.serviceRecovery) {
+        // The installed CLI checks current config, service ownership and readiness.
+        // Native restoration would bypass those checks after a rollback.
+        appendLog("updater verified recovery; checking the installed gateway before restart");
+        // Startup can consume this notification during recovery. Retain its exact
+        // revision so later annotation cannot recreate it or replace a newer outcome.
+        recoverySentinelRevision = markUpdateSentinelFailureIfPending("managed-service-handoff-failed");
+        const recovery = await runOwnedUpdateCommand(params.recoveryCommandArgv, params.recoveryTimeoutMs);
+        recordServiceRecovery("managed-service-handoff-failed", !recovery.signal && recovery.code === 0, recoverySentinelRevision);
+      } else {
+        appendLog("updater exited without requesting helper recovery; inspect the update result before restarting");
+        markUpdateSentinelFailureIfPending("managed-service-handoff-failed");
       }
-      try {
-        await new Promise((resolve, reject) => {
-          child.stdin.once("error", reject);
-          child.stdin.once("close", () => reject(new Error("managed update runner stdin closed")));
-          child.once("exit", () => reject(new Error("managed update runner exited before its gate")));
-          child.stdin.write("go", (error) => error ? reject(error) : resolve());
-        });
-        child.stdin.end();
-      } catch (error) {
-        try { child.kill("SIGKILL"); } catch {}
-        await exited;
-        bindManagedUpdateLeaseToProcess(process.pid, runnerIdentity);
-        throw error;
-      }
-      appendLog("managed update command pid=" + (child.pid || "unknown"));
-      const exit = await exited;
-      if (!bindManagedUpdateLeaseToProcess(process.pid, runnerIdentity)) {
-        process.exitCode = 1;
-        return;
-      }
-      if (exit && exit.error) {
-        appendLog("managed update command failed to start: " + (exit.error && exit.error.stack ? exit.error.stack : String(exit.error)));
-        if (params.serviceRecovery) await restoreGatewayService("managed-service-handoff-spawn-failed");
-        else markUpdateSentinelFailureIfPending("managed-service-handoff-spawn-failed");
-        process.exitCode = 1;
-        return;
-      }
-      appendLog(
-        "managed update command exited code=" +
-          (exit && exit.code !== null && exit.code !== undefined ? exit.code : "null") +
-          " signal=" +
-          (exit && exit.signal ? exit.signal : "null"),
-      );
-      if (exit && (exit.signal || (typeof exit.code === "number" && exit.code !== 0))) {
-        if (params.serviceRecovery) await restoreGatewayService("managed-service-handoff-failed");
-        else markUpdateSentinelFailureIfPending("managed-service-handoff-failed");
-        process.exitCode = exit.code || 1;
-      }
-    } finally {
-      if (outputFd !== undefined) {
-        try {
-          fs.closeSync(outputFd);
-        } catch {
-          // Ignore close failures.
-        }
-      }
+      process.exitCode = 1;
     }
   } catch (err) {
     appendLog("handoff failed: " + (err && err.stack ? err.stack : String(err)));
     if (managedUpdateLeaseOwned) {
       bindManagedUpdateLeaseToProcess(process.pid);
       if (restorationArmed) await restoreGatewayService("managed-service-handoff-helper-failed");
-      else markUpdateSentinelFailureIfPending("managed-service-handoff-helper-failed");
+      else markUpdateSentinelFailureIfPending("managed-service-handoff-helper-failed", undefined, recoverySentinelRevision);
     }
     process.exitCode = 1;
   } finally {
     clearTimeout(parentExitDeadline);
+    // Recovery owns availability. Diagnostics run once only after its terminal
+    // outcome, while this helper still owns the installation lease.
+    await collectUpdateFailureTriage();
     releaseManagedUpdateLease();
     process.stdin.destroy();
     cleanupSensitiveFiles();
@@ -1146,25 +1255,34 @@ function resolveUpdateCliArgv(params: {
     updateArgs.push("--timeout", String(Math.max(1, Math.ceil(params.timeoutMs / 1000))));
   }
 
+  return resolveManagedServiceCliArgv(params, updateArgs);
+}
+
+function resolveManagedServiceCliArgv(
+  params: { execPath?: string; argv1?: string },
+  args: string[],
+): string[] {
   const execPath = params.execPath?.trim();
   const argv1 = params.argv1?.trim();
   if (execPath && argv1) {
-    return [execPath, argv1, ...updateArgs];
+    return [execPath, argv1, ...args];
   }
   if (execPath && !/^(?:node|bun)(?:\.exe)?$/iu.test(path.basename(execPath))) {
-    return [execPath, ...updateArgs];
+    return [execPath, ...args];
   }
-  return ["openclaw", ...updateArgs];
+  return ["openclaw", ...args];
 }
 
-export function formatManagedServiceUpdateCommand(params?: {
-  timeoutMs?: number;
-  channel?: UpdateChannel;
-  tag?: string;
-}): string {
-  return resolveUpdateCliArgv(params ?? {})
-    .toSpliced(3, 1)
-    .join(" ");
+export function formatManagedServiceUpdateCommand(
+  params?: { timeoutMs?: number; channel?: UpdateChannel; tag?: string },
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return formatCliCommand(
+    resolveUpdateCliArgv(params ?? {})
+      .toSpliced(3, 1)
+      .join(" "),
+    env,
+  );
 }
 
 type GatewayServiceRecovery =
@@ -1275,6 +1393,15 @@ async function spawnManagedServiceUpdateHandoff(
   const scriptPath = path.join(dir, "handoff.cjs");
   const paramsPath = path.join(dir, "handoff.json");
   const metaPath = path.join(dir, "sentinel-meta.json");
+  const triageInputPath = path.join(dir, "update-failure.json");
+  const serviceEnv = params.env ?? process.env;
+  const installationTarget = resolveInstallationTarget(serviceEnv);
+  const triageContextPath = path.join(
+    installationTarget.stateDir,
+    "logs",
+    "support",
+    `openclaw-update-failure-${randomUUID()}.json`,
+  );
   const logPath = path.join(dir, "handoff.log");
   const commandArgv = resolveUpdateCliArgv({
     timeoutMs: params.timeoutMs,
@@ -1283,16 +1410,14 @@ async function spawnManagedServiceUpdateHandoff(
     execPath: params.execPath ?? process.execPath,
     argv1: params.argv1 ?? process.argv[1],
   });
-  const commandLabel = formatManagedServiceUpdateCommand({
-    timeoutMs: params.timeoutMs,
-    channel: params.channel,
-    tag: params.tag,
-  });
+  const commandLabel = formatManagedServiceUpdateCommand(
+    { timeoutMs: params.timeoutMs, channel: params.channel, tag: params.tag },
+    params.env,
+  );
   const metaFile: ControlPlaneUpdateSentinelMetaFile = {
     version: 1,
-    meta: { ...params.meta, root: rootIdentity },
+    meta: { ...params.meta, root: rootIdentity, triageContextPath },
   };
-  const serviceEnv = params.env ?? process.env;
   let spawnCommand = params.execPath ?? process.execPath;
   const spawnArgs = [scriptPath, paramsPath];
   if (params.supervisor === "systemd") {
@@ -1330,8 +1455,33 @@ async function spawnManagedServiceUpdateHandoff(
     parentExitDeadlineAt: Date.now() + parentExitTimeoutMs,
     cwd: dir,
     commandArgv,
+    recoveryCommandArgv: resolveManagedServiceCliArgv(
+      { execPath: params.execPath ?? process.execPath, argv1: params.argv1 ?? process.argv[1] },
+      ["gateway", "restart", "--preserve-definition", "--json"],
+    ),
+    recoveryTimeoutMs: params.timeoutMs ?? 30 * 60_000,
+    triageCommandArgv: resolveManagedServiceCliArgv(
+      { execPath: params.execPath ?? process.execPath, argv1: params.argv1 ?? process.argv[1] },
+      ["triage", "--json", "--non-interactive"],
+    ),
+    triageContextPath,
+    triageInputPath,
+    triageContextCommand: formatInstallationTargetCommand(
+      ["openclaw", "triage", "--update-result", triageContextPath],
+      installationTarget,
+      { env: serviceEnv },
+    ),
+    triageRecoveryCommand: formatInstallationTargetCommand(
+      ["openclaw", "triage"],
+      installationTarget,
+      { env: serviceEnv },
+    ),
+    // This hint becomes a model/channel notice; host paths remain in the helper log.
+    triageHint:
+      "Update triage runs after service recovery; see the managed update helper log for the outcome and the installation-specific openclaw triage command.",
     commandLabel,
     handoffId: params.handoffId,
+    nonFailureSkippedReasons: Object.keys(SKIPPED_UPDATE_OUTCOMES),
     logPath,
     metaPath,
     stateDatabasePath,
@@ -1339,7 +1489,7 @@ async function spawnManagedServiceUpdateHandoff(
     updateLeaseDatabasePath: resolveManagedUpdateLeaseDatabasePath(),
     updateLeaseKey: rootIdentity,
     updateLeaseOwner: params.handoffId,
-    sensitivePaths: [scriptPath, paramsPath, metaPath],
+    sensitivePaths: [scriptPath, paramsPath, metaPath, triageInputPath],
     serviceRecovery: resolveGatewayServiceRecovery(params.supervisor, serviceEnv),
   };
 
@@ -1653,7 +1803,7 @@ export async function cancelManagedServiceUpdateHandoff(
 export function buildManagedServiceHandoffUnavailableMessage(command: string): string {
   return [
     "OpenClaw updates cannot safely run inside the live gateway process without a managed-service handoff.",
-    `Run \`${command}\` from a shell outside the gateway service, or restart/update from the host UI.`,
+    `Stop the foreground Gateway, run \`${command}\` from a shell, then launch the Gateway again. For a managed deployment, use its host's stop, update, and restart workflow.`,
   ].join("\n");
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

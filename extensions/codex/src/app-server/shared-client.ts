@@ -1075,14 +1075,10 @@ async function startInitializedCodexAppServerClient(params: {
     const runtimeArtifactModule = params.runtimeArtifactMode
       ? await import("./runtime-artifact.js")
       : undefined;
-    const nativeCommandBeforeStart =
-      startOptions.commandSource === "resolved-managed"
-        ? resolveManagedCodexNativeCommand(startOptions.command)
-        : undefined;
     const runtimeArtifactBeforeStart = runtimeArtifactModule
       ? await runtimeArtifactModule.captureCodexAppServerRuntimeArtifactBeforeStart({
           startOptions,
-          spawnIdentity: resolveCodexAppServerSpawnIdentity(startOptions, nativeCommandBeforeStart),
+          spawnIdentity: resolveCodexAppServerSpawnIdentity(startOptions),
           signal: params.runtimeArtifactSignal,
         })
       : undefined;
@@ -1101,7 +1097,26 @@ async function startInitializedCodexAppServerClient(params: {
       throw new Error("Codex app-server runtime artifact does not match verified inference");
     }
     assertDesktopGenerationCurrent();
-    const client = CodexAppServerClient.start(startOptions);
+    let starting: Promise<CodexAppServerClient> | undefined;
+    let client: CodexAppServerClient;
+    try {
+      client = await withCodexAppServerAcquireDeadline(
+        resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt),
+        (starting = CodexAppServerClient.start(startOptions, () => {
+          assertDesktopGenerationCurrent();
+          resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt);
+        })),
+        params.abandonSignal,
+      );
+    } catch (error) {
+      // A timed-out registration may settle later; it cannot publish a live
+      // client after the acquisition owner has already released its claim.
+      void starting?.then(
+        (lateClient) => lateClient.close(),
+        () => {},
+      );
+      throw error;
+    }
     const nativeCommandAtStart =
       startOptions.commandSource === "resolved-managed"
         ? resolveManagedCodexNativeCommand(startOptions.command)
@@ -1143,14 +1158,10 @@ async function startInitializedCodexAppServerClient(params: {
     let runtimeArtifact: AgentHarnessRuntimeArtifactBinding | undefined;
     try {
       if (runtimeArtifactModule && runtimeArtifactBeforeStart) {
-        const nativeCommand =
-          startOptions.commandSource === "resolved-managed"
-            ? resolveManagedCodexNativeCommand(startOptions.command)
-            : undefined;
         runtimeArtifact = await runtimeArtifactModule.finalizeCodexAppServerRuntimeArtifact({
           before: runtimeArtifactBeforeStart,
           startOptions,
-          spawnIdentity: resolveCodexAppServerSpawnIdentity(startOptions, nativeCommand),
+          spawnIdentity: resolveCodexAppServerSpawnIdentity(startOptions),
           runtimeIdentity: client.getRuntimeIdentity(),
           signal: params.runtimeArtifactSignal,
         });

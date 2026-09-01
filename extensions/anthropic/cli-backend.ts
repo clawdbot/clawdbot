@@ -39,10 +39,12 @@ type ClaudeCliPreparedExecution = CliBackendPreparedExecution & {
 };
 
 const CLAUDE_CLI_CREDENTIAL_FINGERPRINT_KEY = randomBytes(32);
-// Agent SDK query() writes this value into process.env. Seed it before core
+// SDK import and query() set these in process.env. Seed them before core
 // fingerprints the child env so the first resumed turn keeps its warm query.
-const CLAUDE_AGENT_SDK_VERSION =
-  anthropicPluginPackage.dependencies["@anthropic-ai/claude-agent-sdk"];
+const CLAUDE_AGENT_SDK_ENV = {
+  CLAUDE_AGENT_SDK_VERSION: anthropicPluginPackage.dependencies["@anthropic-ai/claude-agent-sdk"],
+  NoDefaultCurrentDirectoryInExePath: "1",
+};
 const CLAUDE_CLI_DEFAULT_ARGS = [
   "-p",
   "--output-format",
@@ -230,6 +232,7 @@ export function buildAnthropicCliBackend(
     resolveModelId: ({ modelId, contextWindow }) =>
       resolveClaudeCliContextWindowModelId(modelId, contextWindow),
     authEpochMode: "profile-only",
+    autoSelectAuthProfile: false,
     prepareExecution: (context) => {
       const prepare = () => {
         const credentialContext = context as typeof context & {
@@ -249,7 +252,7 @@ export function buildAnthropicCliBackend(
               }
             : undefined;
         const env = {
-          ...(agentSdkExecution ? { CLAUDE_AGENT_SDK_VERSION } : {}),
+          ...(agentSdkExecution ? CLAUDE_AGENT_SDK_ENV : {}),
           ...resolveClaudeCliAutoCompactEnv(context.contextTokenBudget),
           ...(context.contextWindow === "200k" ? { CLAUDE_CODE_DISABLE_1M_CONTEXT: "1" } : {}),
           ...resolveClaudeCliThinkingEnv(context.thinkingLevel, context.modelId),

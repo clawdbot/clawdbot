@@ -427,6 +427,18 @@ export function isLoopbackHost(host: string): boolean {
   return isLoopbackAddress(parsed.unbracketedHost);
 }
 
+// Gateway-local policy rejects dotted localhost and intentionally allows any URL scheme.
+export function isLoopbackGatewayUrl(rawUrl: string): boolean {
+  try {
+    const hostname = new URL(rawUrl).hostname.toLowerCase();
+    const unbracketed =
+      hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+    return unbracketed === "localhost" || isLoopbackIpAddress(unbracketed);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Local-facing host check for inbound requests:
  * - loopback hosts (localhost/127.x/::1 and mapped forms)

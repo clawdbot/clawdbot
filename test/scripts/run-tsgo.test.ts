@@ -2,6 +2,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
@@ -10,12 +11,10 @@ import {
   shouldSkipSparseTsgoGuardError,
 } from "../../scripts/lib/tsgo-sparse-guard.mts";
 import { resolveTsgoTimeoutMs } from "../../scripts/run-tsgo.mts";
-import {
-  isProcessAlive,
-  waitForChildClose,
-  waitForDead,
-  waitForPidFile,
-} from "../helpers/process-wait.js";
+import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
+import { isProcessAlive, waitForDead, waitForPidFile } from "../helpers/process-wait.js";
+import { withTestTimeout } from "../helpers/promise.js";
+import { createTempDirTracker } from "../helpers/temp-dir.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -294,6 +293,28 @@ describe.skipIf(process.platform === "win32")("run-tsgo watchdog", () => {
     }
   }
 
+  function withSupervisorClock(cwd: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+    const preloadPath = path.join(cwd, "supervisor-clock.mjs");
+    // Scale both cleanup owners so an outer cutoff that races inner reaping still fails.
+    // Compiler/watchdog timers, readiness checks, and OS signals retain real time.
+    fs.writeFileSync(
+      preloadPath,
+      `if (process.argv[1] === ${JSON.stringify(path.resolve("scripts/run-tsgo.mts"))}) {
+  const realNow = Date.now.bind(Date);
+  const startedAt = realNow();
+  Date.now = () => startedAt + (realNow() - startedAt) * 5;
+} else if (process.argv[1] === ${JSON.stringify(path.resolve("scripts/run-tsgo.mjs"))}) {
+  const realSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (callback, delay, ...args) =>
+    realSetTimeout(callback, delay / 5, ...args);
+}\n`,
+    );
+    return {
+      ...env,
+      NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(preloadPath).href}`,
+    };
+  }
+
   function runFakeTsgo(
     cwd: string,
     timeoutMs: string | undefined,
@@ -307,8 +328,10 @@ describe.skipIf(process.platform === "win32")("run-tsgo watchdog", () => {
         {
           cwd,
           encoding: "utf8",
-          env:
+          env: withSupervisorClock(
+            cwd,
             timeoutMs === undefined ? baseEnv : { ...baseEnv, OPENCLAW_TSGO_TIMEOUT_MS: timeoutMs },
+          ),
           // spawnSync blocks this thread, so vitest's own per-test budget can never
           // fire; a regression here would hang the worker instead of failing.
           timeout: 25_000,
@@ -365,10 +388,16 @@ child.once("message", () => process.exit(0));
         .toEqual([]);
     } finally {
       for (const pidFile of [descendantPidPath, path.join(cwd, "fake-tsgo.pid")]) {
-        if (!fs.existsSync(pidFile)) continue;
+        if (!fs.existsSync(pidFile)) {
+          continue;
+        }
         const pid = Number(fs.readFileSync(pidFile, "utf8"));
-        if (!Number.isSafeInteger(pid) || pid <= 1) continue;
-        if (isProcessAlive(pid)) process.kill(pid, "SIGKILL");
+        if (!Number.isSafeInteger(pid) || pid <= 1) {
+          continue;
+        }
+        if (isProcessAlive(pid)) {
+          process.kill(pid, "SIGKILL");
+        }
         await waitForDead(pid, 2_000);
       }
     }
@@ -428,30 +457,41 @@ child.once("message", () => process.exit(0));
   it.each(["wrapper", "spawn"])(
     "reaps a wedged compiler on SIGTERM during %s",
     async (phase) => {
-      const cwd = fs.realpathSync(createTempDir("openclaw-run-tsgo-signal-"));
-      const pidFile = path.join(cwd, "fake-tsgo.pid");
-      fs.writeFileSync(path.join(cwd, "tsconfig.extensions.json"), "{}\n");
-      writeFakeTsgo(
-        cwd,
-        '#!/bin/sh\ntrap \'\' TERM HUP INT\necho $$ > "$(dirname "$0")/../../fake-tsgo.pid"\nwhile true; do sleep 1; done\n',
-      );
-      const preloadPath = path.join(cwd, "signal-during-spawn.mjs");
-      // Hold the real spawn boundary until the compiler is ready, then deliver an
-      // OS signal before the supervisor can register the returned child.
-      fs.writeFileSync(
-        preloadPath,
-        `
+      const fixtureDirs = createTempDirTracker();
+      // Detached compilers can outlive Vitest's temporary namespace. Retain their
+      // diagnostics outside it until both the wrapper and compiler are joined.
+      const artifacts = path.resolve(".artifacts/tsgo-signal");
+      fs.mkdirSync(artifacts, { recursive: true });
+      const cwd = fixtureDirs.make("fixture-", fs.realpathSync(artifacts));
+      let retainFixture = false;
+      try {
+        const pidFile = path.join(cwd, "fake-tsgo.pid");
+        // Give this fixture its own artifact lock rather than the enclosing checkout's.
+        fs.writeFileSync(path.join(cwd, "package.json"), '{"private":true}\n');
+        fs.writeFileSync(path.join(cwd, "pnpm-workspace.yaml"), "packages: []\n");
+        fs.writeFileSync(path.join(cwd, "tsconfig.extensions.json"), "{}\n");
+        writeFakeTsgo(
+          cwd,
+          '#!/bin/sh\ntrap \'\' TERM HUP INT\necho $$ > "$(dirname "$0")/../../fake-tsgo.pid"\nwhile true; do sleep 1; done\n',
+        );
+        const preloadPath = path.join(cwd, "signal-during-spawn.mjs");
+        // Hold the real spawn boundary until the compiler is ready, then deliver an
+        // OS signal before the supervisor can register the returned child.
+        fs.writeFileSync(
+          preloadPath,
+          `
 import childProcess from "node:child_process";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
+import { performance } from "node:perf_hooks";
 const spawn = childProcess.spawn;
 childProcess.spawn = (...args) => {
   const child = spawn(...args);
   if (args[0] === ${JSON.stringify(path.join(cwd, "node_modules/.bin/tsgo"))}) {
     const pidFile = ${JSON.stringify(pidFile)};
-    const deadline = Date.now() + 10_000;
+    const deadline = performance.now() + 10_000;
     while (!fs.existsSync(pidFile) || Number(fs.readFileSync(pidFile, "utf8")) !== child.pid) {
-      if (Date.now() >= deadline) throw new Error("compiler readiness timed out");
+      if (performance.now() >= deadline) throw new Error("compiler readiness timed out");
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
     }
     process.kill(process.pid, "SIGTERM");
@@ -460,39 +500,77 @@ childProcess.spawn = (...args) => {
 };
 syncBuiltinESMExports();
 `,
-      );
-      const wrapper = spawn(
-        process.execPath,
-        [path.resolve("scripts/run-tsgo.mjs"), "-p", "tsconfig.extensions.json"],
-        {
-          cwd,
-          stdio: "ignore",
-          env: {
-            ...process.env,
-            NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""}${phase === "spawn" ? ` --import=${pathToFileURL(preloadPath).href}` : ""}`,
+        );
+        const wrapper = spawn(
+          process.execPath,
+          [path.resolve("scripts/run-tsgo.mjs"), "-p", "tsconfig.extensions.json"],
+          {
+            cwd,
+            stdio: ["ignore", "ignore", "pipe"],
+            env: withSupervisorClock(cwd, {
+              ...process.env,
+              NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""}${phase === "spawn" ? ` --import=${pathToFileURL(preloadPath).href}` : ""}`,
+            }),
           },
-        },
-      );
-      const wrapperClose = waitForChildClose(wrapper, 15_000);
+        );
+        retainFixture = true;
+        const deadline = performance.now() + 15_000;
+        const stderr = createBoundedChildOutput();
+        wrapper.stderr.on("data", (chunk) => stderr.append(chunk));
+        wrapper.once("error", (error) => stderr.append(`wrapper spawn error: ${error.message}\n`));
+        // A work deadline must not consume the real completion needed by teardown.
+        const wrapperClose = new Promise<{
+          code: number | null;
+          signal: NodeJS.Signals | null;
+        }>((resolve) => {
+          wrapper.once("close", (code, signal) => resolve({ code, signal }));
+        });
+        const errors: unknown[] = [];
+        try {
+          const compilerPid = await waitForPidFile(pidFile, 10_000);
+          if (phase === "wrapper") {
+            wrapper.kill("SIGTERM");
+          }
 
-      try {
-        const compilerPid = await waitForPidFile(pidFile, 10_000);
-        if (phase === "wrapper") {
-          wrapper.kill("SIGTERM");
+          const wrapperResult = await withTestTimeout(
+            wrapperClose,
+            Math.max(0, deadline - performance.now()),
+            "child did not close before timeout",
+          );
+          expect([
+            { code: 143, signal: null },
+            { code: null, signal: "SIGTERM" },
+          ]).toContainEqual(wrapperResult);
+          await expect(waitForDead(compilerPid, 2_000)).resolves.toBeUndefined();
+        } catch (error) {
+          errors.push(error);
         }
-
-        const wrapperResult = await wrapperClose;
-        expect([
-          { code: 143, signal: null },
-          { code: null, signal: "SIGTERM" },
-        ]).toContainEqual(wrapperResult);
-        await expect(waitForDead(compilerPid, 2_000)).resolves.toBeUndefined();
+        try {
+          if (wrapper.exitCode === null && wrapper.signalCode === null) {
+            wrapper.kill("SIGKILL");
+          }
+          reapFakeTsgo(cwd);
+          const compilerPid = readFakeTsgoPid(cwd);
+          await Promise.all([
+            withTestTimeout(wrapperClose, 2_000, "wrapper did not close during cleanup"),
+            compilerPid === undefined ? undefined : waitForDead(compilerPid, 2_000),
+          ]);
+          retainFixture = false;
+        } catch (error) {
+          errors.push(error);
+        }
+        if (errors.length > 0) {
+          const cause = errors.length === 1 ? errors[0] : new AggregateError(errors);
+          const retained = retainFixture ? `\nfixture retained at ${cwd}` : "";
+          throw new Error(
+            `${errors.map(String).join("\n")}\nwrapper exitCode=${wrapper.exitCode}, signalCode=${wrapper.signalCode}${retained}\n${stderr.text()}`,
+            { cause },
+          );
+        }
       } finally {
-        if (wrapper.exitCode === null && wrapper.signalCode === null) {
-          wrapper.kill("SIGKILL");
+        if (!retainFixture) {
+          fixtureDirs.cleanup();
         }
-        reapFakeTsgo(cwd);
-        await wrapperClose;
       }
     },
     20_000,

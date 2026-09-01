@@ -4,23 +4,16 @@ import path from "node:path";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import { onAgentEvent } from "../../infra/agent-events.js";
 import {
   resetAgentRunRegistryForTest,
   rotateAgentRunRegistryLifecycleGeneration,
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
-import { createPluginRecord } from "../../plugins/loader-records.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import {
-  getActivePluginRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "../../plugins/runtime.js";
+import { withInstallationTarget } from "../../infra/installation-target-context.js";
 import {
   bindGatewayContextResolver,
-  getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import {
@@ -60,6 +53,33 @@ const mockRewrap = vi.mocked(rewrapToolWithBeforeToolCallHook);
 const mockRunBefore = vi.mocked(runBeforeToolCallHook);
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
 type HostAttempt = Parameters<typeof createAgentHarnessHostCapabilities>[0]["attempt"];
+
+type HostRevocationContext = {
+  host: ReturnType<typeof createAgentHarnessHostCapabilities>;
+  attempt: HostAttempt;
+  admission: PreparedAgentRunAdmission;
+};
+
+const policyRevocations = [
+  {
+    name: "lexical host closure",
+    revoke: async ({ host }: HostRevocationContext) => {
+      host.close();
+    },
+  },
+  {
+    name: "exact authority release",
+    revoke: async ({ attempt }: HostRevocationContext) => {
+      expect(closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBe(true);
+    },
+  },
+  {
+    name: "replacement owner",
+    revoke: async ({ attempt }: HostRevocationContext) => {
+      await admittedAttempt(attempt.runId);
+    },
+  },
+];
 
 const admissions: PreparedAgentRunAdmission[] = [];
 
@@ -141,155 +161,54 @@ describe("agent harness host capability", () => {
     mockCallGatewayTool.mockReset();
   });
 
-  it("binds Full node invocation to the exact live admission, session and placement", async () => {
-    const previousRegistry = getActivePluginRegistry();
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "host-full-node-"));
-    const sessionTarget = {
-      agentId: "main",
-      sessionKey: "agent:main:session-1",
-      sessionId: "session-1",
-      storePath: path.join(root, "sessions.json"),
-    };
-    try {
-      for (const change of [
-        "none",
-        "ordinary",
-        "close",
-        "admission",
-        "restart",
-        "permission",
-        "session",
-        "placement",
-        "gateway",
-        "plugin",
-        "plugin-reload",
-      ] as const) {
-        await upsertSessionEntryCore(sessionTarget, {
-          sessionId: "session-1",
-          updatedAt: Date.now(),
-          permissionMode: "full",
-        });
-        const { attempt, admission } = await admittedAttempt(`run-${change}`, {
-          permissionMode: change === "ordinary" ? "workspace" : "full",
-          sessionTarget,
-        });
-        let placementActive = true;
-        const registry = createEmptyPluginRegistry();
-        registry.plugins.push(
-          createPluginRecord({
-            id: "fixture",
-            source: "fixture",
-            origin: "bundled",
-            enabled: true,
-            configSchema: true,
-          }),
-        );
-        setActivePluginRegistry(registry);
-        const context = {} as GatewayRequestContext;
-        const assertPlacementCurrent = vi.fn(() => {
-          if (!placementActive) {
-            throw new Error("placement no longer current");
-          }
-        });
-        let currentContext = context;
-        bindGatewayContextResolver(attempt.admittedRunContext, () => currentContext);
-        const host = createAgentHarnessHostCapabilities({
-          attempt,
-          pluginId: "fixture",
-          requiredNodeCommands: ["fixture.exec"],
-        });
-        const dispatched = vi.fn(async () => "launched");
-        await withPluginRuntimeGatewayRequestScope(
-          { isWebchatConnect: () => false, assertNodeExecutionCurrent: assertPlacementCurrent },
-          () =>
-            host.runWithScope(async () => {
-              const invoke = getPluginRuntimeGatewayRequestScope()?.invokeWithSessionNodeAuthority;
-              expect(invoke).toBeTypeOf("function");
-              const ready = createDeferred();
-              const release = createDeferred();
-              const result = invoke!(
-                {
-                  source: "session-full",
-                  command: "fixture.exec",
-                  pluginId: change === "plugin" ? "other" : "fixture",
-                  nodeId: "node-1",
-                  workspace: {
-                    workspaceDir: "/node/workspace",
-                    sessionKey: sessionTarget.sessionKey,
-                    sessionId: "session-1",
-                    environmentId: "environment-1",
-                    ownerEpoch: 2,
-                  },
-                },
-                async (assertCurrent) => {
-                  ready.resolve();
-                  await release.promise;
-                  assertCurrent();
-                  return await dispatched();
-                },
-              );
-              void result.catch(() => {});
-              if (change === "ordinary") {
-                await expect(result).resolves.toBeUndefined();
-                expect(dispatched).not.toHaveBeenCalled();
-                return;
-              }
-              if (change === "plugin") {
-                await expect(result).rejects.toThrow("no longer current");
-                expect(dispatched).not.toHaveBeenCalled();
-                return;
-              }
-              await ready.promise;
-              switch (change) {
-                case "close":
-                  host.close();
-                  break;
-                case "admission":
-                  admission.close();
-                  break;
-                case "restart":
-                  rotateAgentRunRegistryLifecycleGeneration();
-                  break;
-                case "permission":
-                  await upsertSessionEntryCore(sessionTarget, { permissionMode: "workspace" });
-                  break;
-                case "session":
-                  await upsertSessionEntryCore(sessionTarget, { sessionId: "replacement" });
-                  break;
-                case "placement":
-                  placementActive = false;
-                  break;
-                case "gateway":
-                  currentContext = {} as GatewayRequestContext;
-                  break;
-                case "plugin-reload":
-                  setActivePluginRegistry(createEmptyPluginRegistry());
-                  break;
-                case "none":
-                  break;
-              }
-              release.resolve();
-              if (change === "none") {
-                await expect(result).resolves.toBe("launched");
-                expect(dispatched).toHaveBeenCalledOnce();
-              } else {
-                await expect(result).rejects.toThrow(/no longer (active|current)/);
-                expect(dispatched).not.toHaveBeenCalled();
-              }
-            }),
-        );
+  it.each(["host closure", "authority release", "gateway restart"])(
+    "binds output usage to its original run and rejects reporting after %s",
+    async (revocation) => {
+      const onUsage = vi.fn();
+      const forgedCallback = vi.fn();
+      const { attempt } = await admittedAttempt("run-usage", {
+        onAgentEvent: onUsage,
+      });
+      let host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+      const events: Array<{ runId: string; sessionKey?: string; outputTokens: unknown }> = [];
+      const stop = onAgentEvent((event) => {
+        if (event.stream === "usage") {
+          events.push({
+            runId: event.runId,
+            sessionKey: event.sessionKey,
+            outputTokens: event.data.outputTokens,
+          });
+        }
+      });
+      try {
+        host.capabilities.reportOutputTokens?.(12);
         host.close();
-        admission.close();
+        host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+        attempt.runId = "forged-run";
+        attempt.lifecycleGeneration = "forged-generation";
+        attempt.sessionKey = "forged-session";
+        attempt.onAgentEvent = forgedCallback;
+        host.capabilities.reportOutputTokens?.(8);
+        if (revocation === "host closure") {
+          host.close();
+        } else if (revocation === "authority release") {
+          closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext);
+        } else {
+          rotateAgentRunRegistryLifecycleGeneration();
+        }
+        expect(() => host.capabilities.reportOutputTokens?.(100)).toThrow("no longer active");
+        expect(events).toEqual([
+          { runId: "run-usage", sessionKey: "agent:main:session-1", outputTokens: 12 },
+          { runId: "run-usage", sessionKey: "agent:main:session-1", outputTokens: 20 },
+        ]);
+        expect(onUsage.mock.calls.map(([event]) => event.data.outputTokens)).toEqual([12, 20]);
+        expect(forgedCallback).not.toHaveBeenCalled();
+      } finally {
+        stop();
+        host.close();
       }
-    } finally {
-      if (previousRegistry) {
-        setActivePluginRegistry(previousRegistry);
-      } else {
-        resetPluginRuntimeStateForTest();
-      }
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 
   it("overwrites plugin policy fields with the host snapshot and revokes lexically", async () => {
     const { attempt, admission } = await admittedAttempt();
@@ -391,18 +310,24 @@ describe("agent harness host capability", () => {
   it("keeps prepared environment access closure-bound", async () => {
     vi.stubEnv("GH_TOKEN", "");
     vi.stubEnv("GITHUB_TOKEN", "");
-    const { attempt } = await admittedAttempt("run-local-env", {
-      config: {
-        tools: { github: { profileId: "ghp_11111111111111111111111111111111" } },
-      },
-    });
-    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+    const config = { tools: { github: { profileId: "ghp_11111111111111111111111111111111" } } };
+    const { attempt } = await admittedAttempt("run-local-env", { config });
+    const target = { stateDir: "/state", configPath: "/config", defaultWorkspaceDir: "/workspace" };
+    const host = withInstallationTarget(target, () =>
+      createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" }),
+    );
 
     expect(host.capabilities.preparedEnvironment?.()).toMatchObject({
       credentialScrubEnv: { GH_TOKEN: "", GITHUB_TOKEN: "" },
       localIdentityEnv: expect.objectContaining({ GH_CONFIG_DIR: expect.any(String) }),
       managedLocalIdentity: true,
+      localProcessEnv: {
+        OPENCLAW_STATE_DIR: "/state",
+        OPENCLAW_CONFIG_PATH: "/config",
+        OPENCLAW_WORKSPACE_DIR: "/workspace",
+      },
     });
+    expect(Object.isFrozen(host.capabilities.preparedEnvironment?.().localProcessEnv)).toBe(true);
     host.close();
     expect(() => host.capabilities.preparedEnvironment?.()).toThrow("no longer active");
   });
@@ -578,45 +503,11 @@ describe("agent harness host capability", () => {
   });
 
   it.each(
-    [
-      {
-        name: "lexical host closure",
-        revoke: async ({
-          host,
-        }: {
-          host: ReturnType<typeof createAgentHarnessHostCapabilities>;
-          attempt: HostAttempt;
-        }) => {
-          host.close();
-        },
-      },
-      {
-        name: "exact authority release",
-        revoke: async ({
-          attempt,
-        }: {
-          host: ReturnType<typeof createAgentHarnessHostCapabilities>;
-          attempt: HostAttempt;
-        }) => {
-          expect(closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBe(true);
-        },
-      },
-      {
-        name: "replacement owner",
-        revoke: async ({
-          attempt,
-        }: {
-          host: ReturnType<typeof createAgentHarnessHostCapabilities>;
-          attempt: HostAttempt;
-        }) => {
-          await admittedAttempt(attempt.runId);
-        },
-      },
-    ].flatMap((entry) =>
+    policyRevocations.flatMap((entry) =>
       (["resolve", "reject"] as const).map((settlement) => Object.assign({ settlement }, entry)),
     ),
   )("rejects a deferred policy $settlement after $name", async ({ revoke, settlement }) => {
-    const { attempt } = await admittedAttempt("run-policy-race");
+    const { attempt, admission } = await admittedAttempt("run-policy-race");
     const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
     const hookStarted = createDeferred<(() => boolean | void) | undefined>();
     const hookResult = createDeferred<{ blocked: false; params: { command: string } }>();
@@ -631,7 +522,7 @@ describe("agent harness host capability", () => {
     });
     const receiptAuthority = await hookStarted.promise;
     expect(receiptAuthority).toEqual(expect.any(Function));
-    await revoke({ attempt, host });
+    await revoke({ attempt, admission, host });
     expect(receiptAuthority?.()).toBe(false);
     if (settlement === "resolve") {
       hookResult.resolve({ blocked: false, params: { command: "true" } });
@@ -693,28 +584,11 @@ describe("agent harness host capability", () => {
   });
 
   it.each([
-    {
-      name: "lexical host closure",
-      revoke: async ({ host }: { host: ReturnType<typeof createAgentHarnessHostCapabilities> }) => {
-        host.close();
-      },
-    },
-    {
-      name: "exact authority release",
-      revoke: async ({ attempt }: { attempt: HostAttempt }) => {
-        expect(closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBe(true);
-      },
-    },
+    ...policyRevocations,
     {
       name: "outer admission abort",
-      revoke: async ({ admission }: { admission: PreparedAgentRunAdmission }) => {
+      revoke: async ({ admission }: HostRevocationContext) => {
         admission.close();
-      },
-    },
-    {
-      name: "replacement owner",
-      revoke: async ({ attempt }: { attempt: HostAttempt }) => {
-        await admittedAttempt(attempt.runId);
       },
     },
   ])("rejects late approval results after $name", async ({ name, revoke }) => {
@@ -771,6 +645,47 @@ describe("agent harness host capability", () => {
     await expect(
       host.capabilities.waitForApproval({ approvalId: "approval-1", timeoutMs: 1_000 }),
     ).resolves.toEqual({ decision: "deny", terminalReason: "timeout" });
+  });
+
+  it("carries native-turn closure through policy, approval registration, and decision waits", async () => {
+    const { attempt } = await admittedAttempt("run-native-approval-scope");
+    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+    const turn = new AbortController();
+    const scopes: AbortSignal[] = [];
+    const captureScope = () => {
+      scopes.push(AbortSignal.any([...(getGatewayToolCallerIdentity()?.approvalSignals ?? [])]));
+    };
+    mockRunBefore.mockImplementationOnce(async ({ params }) => {
+      captureScope();
+      return { blocked: false, params };
+    });
+    mockCallGatewayTool.mockImplementation(async () => {
+      captureScope();
+      return { id: "approval", decision: "allow-once" };
+    });
+    await host.capabilities.runBeforeToolCall({
+      toolName: "exec",
+      params: {},
+      signal: turn.signal,
+    });
+    await host.capabilities.requestApproval({
+      title: "Run command",
+      description: "Native command",
+      severity: "warning",
+      toolName: "exec",
+      timeoutMs: 1_000,
+      signal: turn.signal,
+    });
+    await host.capabilities.waitForApproval({
+      approvalId: "approval",
+      timeoutMs: 1_000,
+      signal: turn.signal,
+    });
+    expect(scopes).toHaveLength(3);
+    turn.abort();
+    expect(scopes.every((signal) => signal.aborted)).toBe(true);
+    expect(() => host.capabilities.assertActive()).not.toThrow();
+    host.close();
   });
 
   it("revokes a retained bound tool when the same run id gets a replacement owner", async () => {

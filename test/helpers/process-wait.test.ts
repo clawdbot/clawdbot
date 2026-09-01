@@ -1,12 +1,78 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fsSync from "node:fs";
-import { afterEach, expect, it, vi } from "vitest";
-import { isProcessAlive, waitForChildClose, waitForDead } from "./process-wait.js";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  isProcessAlive,
+  waitForChildClose,
+  waitForDead,
+  waitForFile,
+  waitForPidFile,
+} from "./process-wait.js";
 import { withTestTimeout } from "./promise.js";
+import { useAutoCleanupTempDirTracker } from "./temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
+});
+
+describe.each([
+  { name: "file", wait: waitForFile, expected: undefined },
+  { name: "PID", wait: waitForPidFile, expected: 42 },
+])("$name readiness", ({ wait, expected }) => {
+  it("observes readiness after a delayed wake crosses the deadline", async () => {
+    vi.useFakeTimers();
+    const file = path.join(tempDirs.make("openclaw-process-wait-"), "ready");
+    const result = wait(file, 20).catch((error: unknown) => error);
+
+    // The producer finishes while the waiting worker cannot run its pending poll.
+    fsSync.writeFileSync(file, "42\n");
+    vi.setSystemTime(Date.now() + 25);
+    await vi.advanceTimersByTimeAsync(5);
+    expect(await result).toBe(expected);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("rejects a file still missing when the deadline passes", async () => {
+    vi.useFakeTimers();
+    const file = path.join(tempDirs.make("openclaw-process-wait-"), "missing");
+    const result = wait(file, 20).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(await result).toMatchObject({ message: expect.stringContaining("timeout waiting for") });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+it.each(["", "invalid", "0", "-1"])("rejects PID contents %j at the deadline", async (contents) => {
+  vi.useFakeTimers();
+  const file = path.join(tempDirs.make("openclaw-process-wait-"), "pid");
+  fsSync.writeFileSync(file, contents);
+  const result = waitForPidFile(file, 20).catch((error: unknown) => error);
+  await vi.advanceTimersByTimeAsync(20);
+  expect(await result).toEqual(new Error(`timeout waiting for pid in ${file}`));
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it("waits through an open-truncate window for valid PID contents", async () => {
+  vi.useFakeTimers();
+  const file = path.join(tempDirs.make("openclaw-process-wait-"), "pid");
+  fsSync.writeFileSync(file, "");
+  let settled = false;
+  const result = waitForPidFile(file, 20)
+    .finally(() => {
+      settled = true;
+    })
+    .catch((error: unknown) => error);
+  await vi.advanceTimersByTimeAsync(5);
+  expect(settled).toBe(false);
+  fsSync.writeFileSync(file, "42\n");
+  await vi.advanceTimersByTimeAsync(5);
+  expect(await result).toBe(42);
+  expect(vi.getTimerCount()).toBe(0);
 });
 
 it("stops waiting when a Linux process is a zombie", async () => {

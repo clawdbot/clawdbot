@@ -182,7 +182,7 @@ export type CodeModeConfig =
   | boolean
   | "auto"
   | {
-      /** Enable generic OpenClaw code mode. Default: false. "auto" engages only models whose catalog flags `codeMode: "preferred"`. */
+      /** OpenClaw Code Mode default, overridden by per-model codeMode. Default: false; "auto" engages catalog-preferred models. */
       enabled?: boolean | "auto";
       /** Guest runtime. Only quickjs-wasi is supported. */
       runtime?: "quickjs-wasi";
@@ -515,13 +515,13 @@ export type ToolsConfig = {
    * Session tool visibility controls which sessions can be targeted by session tools
    * (sessions_list, sessions_history, sessions_search, sessions_send).
    *
-   * Default: "tree" (current session + spawned subagent sessions).
+   * Default: "agent" (all sessions belonging to the current agent).
    */
   sessions?: {
     /**
      * - "self": only the current session
-     * - "tree": current session + sessions spawned by this session (default)
-     * - "agent": any session belonging to the current agent id (can include other users)
+     * - "tree": current session + sessions spawned by this session
+     * - "agent": any session belonging to the current agent id (default; can include other users)
      * - "all": any session (cross-agent still requires tools.agentToAgent)
      */
     visibility?: SessionsToolsVisibility;
@@ -541,7 +541,7 @@ export type ToolsConfig = {
   loopDetection?: ToolLoopDetectionConfig;
   /** Compact large OpenClaw, MCP, and client tool catalogs behind search/call tools. */
   toolSearch?: ToolSearchConfig;
-  /** Generic code mode: expose exec/wait and hide normal tools behind a QuickJS catalog bridge. */
+  /** Global Code Mode defaults and limits; agent/model settings can override activation. */
   codeMode?: CodeModeConfig;
   /** Collector-mode subagents and wait controls. */
   swarm?: SwarmConfig;

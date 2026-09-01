@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   isPrivateNodeInvokeCommand,
   NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
@@ -18,6 +17,7 @@ import {
 import type { NodeWorkerBundleStatus } from "../shared/node-list-types.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { sameWorkerProtocolFeatures } from "../worker/worker-build-identity.js";
+import { buildNodeInvokeRequest, serializeNodeEvent } from "./node-invoke-request.js";
 import { NODE_INVOKE_PAIRING_CHANGED_ABORT } from "./node-registry-private-token.js";
 import type { NodeInvokeStreamController, PendingInvoke } from "./node-registry.invoke-stream.js";
 import {
@@ -38,6 +38,7 @@ import {
   type NodeWorkerBundleStatusObservation,
   type NodeWorkerSupervisorNodeProof,
 } from "./node-runner-inventory-runtime.js";
+import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
 
 export type {
   NodeRunnerStateChange,
@@ -71,7 +72,7 @@ type NodeInvokeParams = {
   signal?: AbortSignal;
   idempotencyKey?: string;
   sessionKey?: string;
-  onDispatchReady?: (invokeId: string) => void;
+  onDispatchReady?: (invokeId: string, deadlineAtMs?: number) => void;
   isDispatchAuthorized?: () => boolean;
 };
 
@@ -142,7 +143,11 @@ type NodeRegistryPrivateState = {
   bundleStatusByConn: Map<string, NodeWorkerBundleStatusObservation>;
   runnerState: NodeRunnerStatePublisher;
   generationBoundInvokes: WeakMap<PendingInvoke, GenerationBoundPendingInvoke>;
-  invokeCore: (params: NodeInvokeParams, allowPrivateCommand: boolean) => Promise<NodeInvokeResult>;
+  invokeCore: (
+    params: NodeInvokeParams,
+    allowPrivateCommand: boolean,
+    isCompletionAuthorized?: () => boolean,
+  ) => Promise<NodeInvokeResult>;
   updateRunnerInventory: (params: {
     nodeId: string;
     connId: string | undefined;
@@ -249,6 +254,7 @@ async function invokeNodeRegistryCore(
   state: NodeRegistryPrivateState,
   params: NodeInvokeParams,
   allowPrivateCommand: boolean,
+  isCompletionAuthorized?: () => boolean,
 ): Promise<NodeInvokeResult> {
   let timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000, 0);
   // Explicit budgets include pairing and serialization; omitted budgets retain
@@ -327,16 +333,25 @@ async function invokeNodeRegistryCore(
     command: params.command,
     params: params.params,
   });
-  const payload = {
+  const payload = buildNodeInvokeRequest({
     id: requestId,
     nodeId: params.nodeId,
     command: params.command,
-    paramsJSON:
-      "params" in params && invokeParams !== undefined ? JSON.stringify(invokeParams) : null,
+    params: "params" in params ? invokeParams : undefined,
     timeoutMs,
     idempotencyKey: params.idempotencyKey,
-    sessionKey: normalizeOptionalString(params.sessionKey),
-  };
+    sessionKey: params.sessionKey,
+  });
+  if (
+    params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND &&
+    Buffer.byteLength(serializeNodeEvent("node.invoke.request", payload), "utf8") >
+      MAX_PAYLOAD_BYTES
+  ) {
+    return {
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: "worker launch exceeds the node payload limit" },
+    };
+  }
   const systemRunEvent = resolvePendingSystemRunEvent({
     command: params.command,
     params: invokeParams,
@@ -374,6 +389,8 @@ async function invokeNodeRegistryCore(
       progressChunks: new Map(),
       nextInputSeq: 0,
       ...(params.onProgress ? { onProgress: params.onProgress } : {}),
+      // Lifecycle cleanup retains its exact owner through reply settlement.
+      ...(isCompletionAuthorized ? { isCompletionAuthorized } : {}),
     };
     const generationController = params.expectedPairingGeneration
       ? new AbortController()
@@ -398,9 +415,11 @@ async function invokeNodeRegistryCore(
       ...(signal ? { signal } : {}),
     });
   });
-  if (!state.context.pendingInvokes.has(requestId)) {
+  const pendingAtDispatch = state.context.pendingInvokes.get(requestId);
+  if (!pendingAtDispatch) {
     return await result;
   }
+  const dispatchDeadlineAtMs = pendingAtDispatch.deadlineAtMs;
   const ok = state.context.sendEventToSession(node, "node.invoke.request", payload);
   if (!ok) {
     const pending = state.context.pendingInvokes.get(requestId);
@@ -421,7 +440,7 @@ async function invokeNodeRegistryCore(
       ...systemRunEvent,
     });
   }
-  params.onDispatchReady?.(requestId);
+  params.onDispatchReady?.(requestId, dispatchDeadlineAtMs);
   return await result;
 }
 
@@ -435,8 +454,8 @@ export function registerNodeRegistryPrivateRuntime(
   state.bundleStatusByConn = new Map();
   state.runnerState = createNodeRunnerStatePublisher(context.getNode, state.runnerInventoryByConn);
   state.generationBoundInvokes = new WeakMap();
-  state.invokeCore = async (params, allowPrivateCommand) =>
-    await invokeNodeRegistryCore(state, params, allowPrivateCommand);
+  state.invokeCore = async (params, allowPrivateCommand, isCompletionAuthorized) =>
+    await invokeNodeRegistryCore(state, params, allowPrivateCommand, isCompletionAuthorized);
   state.updateRunnerInventory = (params) => updateWorkerRunnerInventory(state, params);
   state.workerSupervisorTransport = {
     listCurrentNodes: async () => {
@@ -527,6 +546,7 @@ export function registerNodeRegistryPrivateRuntime(
           ...(params.onDispatchReady ? { onDispatchReady: params.onDispatchReady } : {}),
         },
         true,
+        isProofCurrent,
       );
     },
   };
@@ -578,6 +598,17 @@ export function invokePublicNodeRegistry(
     throw new Error("node registry private runtime was not initialized");
   }
   return state.invokeCore(params, false);
+}
+
+export function invokeLifecycleNodeRegistry(
+  nodeRegistry: object,
+  params: NodeInvokeParams & { isDispatchAuthorized: () => boolean },
+): Promise<NodeInvokeResult> {
+  const state = NODE_REGISTRY_PRIVATE_STATES.get(nodeRegistry);
+  if (!state) {
+    throw new Error("node registry private runtime was not initialized");
+  }
+  return state.invokeCore(params, false, params.isDispatchAuthorized);
 }
 
 export function updateNodeRunnerInventory(params: {

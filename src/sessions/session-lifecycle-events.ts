@@ -4,11 +4,13 @@ import { notifyListeners, registerListener } from "../shared/listeners.js";
 export type SessionLifecycleEvent = {
   sessionKey: string;
   agentId?: string;
-  reason: string;
   parentSessionKey?: string;
   label?: string;
   displayName?: string;
-};
+} & (
+  | { reason: string; swarmGroupId?: never; kind?: never; text?: never }
+  | { reason: "swarm-note"; swarmGroupId: string; kind: "phase" | "log"; text: string }
+);
 
 export type SessionIdentityMutationTarget = {
   sessionId?: string;

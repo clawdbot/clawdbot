@@ -20,6 +20,12 @@ export function assistantGroupIsForwardedBoundary(group: MessageGroup): boolean 
   });
 }
 
+// Display attribution also accepts projected source metadata; turn ownership
+// above still requires the original sessions_send provenance.
+export function hasForwardedSource(group: MessageGroup): boolean {
+  return Boolean(group.senderSession) || assistantGroupIsForwardedBoundary(group);
+}
+
 function groupStartsProjectedTurnBoundary(group: MessageGroup): boolean {
   return asRecord(asRecord(group.messages[0]?.message)?.["__openclaw"])?.turnBoundary === true;
 }

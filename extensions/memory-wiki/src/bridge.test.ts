@@ -7,7 +7,7 @@ import {
   type MemoryPluginPublicArtifact,
   registerMemoryCapability,
 } from "openclaw/plugin-sdk/memory-host-core";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { syncMemoryWikiBridgeSources } from "./bridge.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -30,6 +30,7 @@ describe("syncMemoryWikiBridgeSources", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     clearMemoryPluginState();
   });
 
@@ -133,12 +134,18 @@ describe("syncMemoryWikiBridgeSources", () => {
     expect(memoryPage).toContain("sourceType: memory-bridge");
     expect(memoryPage).toContain("## Bridge Source");
 
+    const readFile = vi.spyOn(fs, "readFile");
     const second = await syncMemoryWikiBridgeSources({ config, appConfig });
 
     expect(second.importedCount).toBe(0);
     expect(second.updatedCount).toBe(0);
     expect(second.skippedCount).toBe(3);
     expect(second.removedCount).toBe(0);
+    expect(
+      readFile.mock.calls.some(
+        ([filePath]) => typeof filePath === "string" && filePath.startsWith(vaultDir),
+      ),
+    ).toBe(false);
 
     const logLines = (await fs.readFile(path.join(vaultDir, ".openclaw-wiki", "log.jsonl"), "utf8"))
       .trim()

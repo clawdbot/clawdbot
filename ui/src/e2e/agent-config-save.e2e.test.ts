@@ -1,8 +1,8 @@
 // Control UI E2E proves per-agent config writes use the canonical keyed shape.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -13,7 +13,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "agent-config-save");
+let proofDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    proofDir = createControlUiE2eArtifactDir("agent-config-save");
+  }
+});
 
 const requireRecord = createRequireRecord("record", "expected-object-value");
 
@@ -52,7 +57,6 @@ suite.define(() => {
         const reload = agentsPage.getByRole("button", { name: "Reload Config" });
         await reload.waitFor();
         if (captureUiProof) {
-          await mkdir(proofDir, { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
@@ -194,7 +198,6 @@ suite.define(() => {
         await page.getByRole("alert").filter({ hasText: "mock validation failure" }).waitFor();
 
         if (captureUiProof) {
-          await mkdir(proofDir, { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,

@@ -53,7 +53,7 @@ export type AcpSessionStoreEntry = {
   storeReadFailed?: boolean;
 };
 
-function rowToAcpSessionMeta(row: AcpSessionRow): SessionAcpMeta {
+export function rowToAcpSessionMeta(row: AcpSessionRow): SessionAcpMeta {
   const identity = safeParseJsonRecord(row.identity_json ?? "") as SessionAcpIdentity | undefined;
   const runtimeOptions = safeParseJsonRecord(row.runtime_options_json ?? "") as
     | AcpSessionRuntimeOptions
@@ -645,6 +645,7 @@ export async function upsertAcpSessionMeta(params: {
       { env: params.env, path: params.databasePath },
     );
     await clearLegacyEmbeddedAcpMetadata({
+      agentId: storeEntry.agentId,
       storePath: storeEntry.storePath,
       sessionKeys: [storageSessionKey, patched?.sessionKey],
     });
@@ -673,6 +674,7 @@ export async function upsertAcpSessionMeta(params: {
     return null;
   }
   await clearLegacyEmbeddedAcpMetadata({
+    agentId: storeEntry.agentId,
     storePath: storeEntry.storePath,
     sessionKeys: [storageSessionKey, persisted.sessionKey],
   });

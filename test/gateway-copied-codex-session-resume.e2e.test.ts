@@ -1,7 +1,7 @@
-// A copied persisted Codex session must reactivate its installed harness owner on Gateway startup.
+// Admission prepares the trusted harness selected by a copied persisted session.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { upsertSessionEntry } from "../src/plugin-sdk/session-store-runtime.js";
@@ -23,9 +23,13 @@ afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
 });
 
-function buildCopiedStateConfig(): OpenClawConfig {
+function buildCopiedStateConfig(enabled: boolean | undefined): OpenClawConfig {
   return {
-    plugins: { enabled: true, slots: { memory: "none" } },
+    plugins: {
+      enabled: true,
+      entries: enabled === undefined ? {} : { codex: { enabled } },
+      slots: { memory: "none" },
+    },
     models: {
       providers: {
         "copied-session-proof": {
@@ -143,10 +147,48 @@ async function installCodexHarnessFixture(stateDir: string, config: OpenClawConf
 }
 
 describe("Gateway copied Codex session resume", () => {
-  it(
-    "resumes a copied persisted Codex session when config no longer selects its harness",
-    async () => {
-      const config = buildCopiedStateConfig();
+  it.each([
+    {
+      name: "resumes a copied persisted Codex session when config no longer selects its harness",
+      enabled: true,
+    },
+    {
+      name: "rejects a copied session whose harness plugin is explicitly disabled",
+      enabled: false,
+    },
+    {
+      name: "rejects a copied session whose installed harness has no explicit trust",
+      enabled: undefined,
+    },
+    {
+      name: "selects a lazy harness from cron with per-agent model overrides",
+      enabled: true,
+      cron: true,
+    },
+  ])(
+    "$name",
+    async ({ enabled, cron }) => {
+      const config = buildCopiedStateConfig(enabled);
+      if (cron) {
+        config.agents!.entries = {
+          main: {
+            model: {
+              primary: "copied-session-proof/alternate-model",
+              fallbacks: ["copied-session-proof/proof-model"],
+            },
+          },
+        };
+        config.agents!.defaults!.models = {
+          "copied-session-proof/cron-model": { agentRuntime: { id: "codex" } },
+        };
+        for (const id of ["alternate-model", "cron-model"]) {
+          config.models!.providers!["copied-session-proof"]!.models.push({
+            ...config.models!.providers!["copied-session-proof"]!.models[0]!,
+            id,
+            name: id,
+          });
+        }
+      }
       const instance = await createOpenClawTestInstance({
         name: "copied-codex-session-resume",
         config,
@@ -154,6 +196,7 @@ describe("Gateway copied Codex session resume", () => {
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
           OPENCLAW_SKIP_PROVIDERS: undefined,
           OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+          ...(cron ? { OPENCLAW_SKIP_CRON: undefined } : {}),
         },
       });
       instances.push(instance);
@@ -181,7 +224,38 @@ describe("Gateway copied Codex session resume", () => {
         requestTimeoutMs: 30_000,
       });
       try {
-        const payload = await client.request(
+        if (cron) {
+          const job = await client.request<{ id: string }>("cron.add", {
+            name: "Copied session cron runtime",
+            agentId: "main",
+            enabled: true,
+            schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
+            sessionTarget: "isolated",
+            wakeMode: "now",
+            payload: {
+              kind: "agentTurn",
+              message: "Resume this copied conversation from cron.",
+              model: "copied-session-proof/cron-model",
+            },
+            delivery: { mode: "none" },
+          });
+          try {
+            await client.request("cron.run", { id: job.id, mode: "force" });
+            await vi.waitFor(
+              async () => {
+                const history = await client.request<{
+                  entries: Array<{ status: string; summary?: string; error?: string }>;
+                }>("cron.runs", { id: job.id, limit: 1 });
+                expect(history.entries).toMatchObject([{ status: "ok", summary: VISIBLE_REPLY }]);
+              },
+              { timeout: 30_000, interval: 100 },
+            );
+          } finally {
+            await client.request("cron.remove", { id: job.id });
+          }
+          return;
+        }
+        const request = client.request(
           "agent",
           {
             sessionKey: SESSION_KEY,
@@ -193,7 +267,13 @@ describe("Gateway copied Codex session resume", () => {
           { expectFinal: true, timeoutMs: 30_000 },
         );
 
-        expect(payload).toMatchObject({
+        if (enabled !== true) {
+          await expect(request).rejects.toThrow(
+            "plugin registration is missing from this prepared run",
+          );
+          return;
+        }
+        expect(await request).toMatchObject({
           status: "ok",
           result: { payloads: [{ text: VISIBLE_REPLY }] },
         });

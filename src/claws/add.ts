@@ -284,7 +284,7 @@ export async function applyClawAddPlan(
         );
       } catch (error) {
         clearUnownedInstallRecord(plan.agent.finalId, ["pending", "partial"], options);
-        throw new ClawAddMutationError("provenance_failed", (error as Error).message);
+        throw new ClawAddMutationError("provenance_failed", coerceErrorMessage(error));
       }
     }
   }

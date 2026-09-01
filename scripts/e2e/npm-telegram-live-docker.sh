@@ -34,8 +34,10 @@ resolve_credential_source() {
   if [ -n "${CI:-}" ] && [ -n "${OPENCLAW_QA_CONVEX_SITE_URL:-}" ]; then
     if [ -n "${OPENCLAW_QA_CONVEX_SECRET_CI:-}" ] || [ -n "${OPENCLAW_QA_CONVEX_SECRET_MAINTAINER:-}" ]; then
       printf "convex"
+      return 0
     fi
   fi
+  printf "convex"
 }
 
 resolve_credential_role() {
@@ -208,24 +210,8 @@ validate_credential_preflight() {
     return 0
   fi
 
-  local missing=()
-  for key in \
-    OPENCLAW_QA_TELEGRAM_GROUP_ID \
-    OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN \
-    OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN; do
-    if [ -z "${!key:-}" ]; then
-      missing+=("$key")
-    fi
-  done
-  if [ "${#missing[@]}" -gt 0 ]; then
-    {
-      echo "Missing required Telegram QA credential env before Docker work: ${missing[*]}"
-      echo "Use one of:"
-      echo "  direct Telegram env: OPENCLAW_QA_TELEGRAM_GROUP_ID, OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN, OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN"
-      echo "  Convex env: OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE=convex plus OPENCLAW_QA_CONVEX_SITE_URL and a role secret"
-    } >&2
-    exit 1
-  fi
+  echo "Telegram package QA requires Convex credential mode." >&2
+  exit 1
 }
 
 validate_credential_preflight
@@ -292,9 +278,6 @@ for key in \
   OPENCLAW_LIVE_OPENAI_KEY \
   OPENCLAW_LIVE_ANTHROPIC_KEY \
   OPENCLAW_LIVE_GEMINI_KEY \
-  OPENCLAW_QA_TELEGRAM_GROUP_ID \
-  OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN \
-  OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN \
   OPENCLAW_QA_CONVEX_SITE_URL \
   OPENCLAW_QA_CONVEX_SECRET_CI \
   OPENCLAW_QA_CONVEX_SECRET_MAINTAINER \
@@ -455,6 +438,7 @@ run_logged_print_heartbeat "npm-telegram-live-suite" 60 docker_e2e_run_with_harn
   -v "$ROOT_DIR/node_modules:/trusted-harness/node_modules:ro" \
   -v "$ROOT_DIR/packages:/app/packages:ro" \
   -v "$ROOT_DIR/extensions:/app/extensions:ro" \
+  -v "$ROOT_DIR/.agents:/app/.agents:ro" \
   -v "$ROOT_DIR/taxonomy.yaml:/app/taxonomy.yaml:ro" \
   -v "$ROOT_DIR/qa/scenarios:/app/qa/scenarios:ro" \
   -v "$ROOT_DIR/taxonomy.yaml:/app/taxonomy.yaml:ro" \

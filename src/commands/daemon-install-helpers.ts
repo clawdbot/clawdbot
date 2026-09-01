@@ -416,6 +416,10 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
         );
         continue;
       }
+      const value = Object.hasOwn(params.env, key) ? params.env[key]?.trim() : undefined;
+      if (!value) {
+        continue;
+      }
       if (isBlockedExecSecretRefPassEnvKey(key)) {
         params.warn?.(
           `Exec SecretRef passEnv ref "${key}" blocked by host-env security policy`,
@@ -424,10 +428,6 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
         continue;
       }
       if (Object.hasOwn(params.durableEnvironment, key)) {
-        continue;
-      }
-      const value = params.env[key]?.trim();
-      if (!value) {
         continue;
       }
       entries[key] = value;

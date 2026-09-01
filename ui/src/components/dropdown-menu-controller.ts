@@ -1,4 +1,5 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
+import { consumeTooltipEscape } from "./tooltip.ts";
 import { trackDropdownKeyboardDismissal } from "./web-awesome.ts";
 
 type DropdownMenuHost = ReactiveControllerHost & HTMLElement;
@@ -29,6 +30,9 @@ export class DropdownMenuController implements ReactiveController {
   }
 
   private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
+    if (event.defaultPrevented || consumeTooltipEscape(event, this.host.ownerDocument)) {
+      return;
+    }
     this.options.onKeydown?.(event);
     if (event.defaultPrevented) {
       return;

@@ -19,6 +19,9 @@ import {
   type SessionMessageCutMutationResult,
 } from "../../config/sessions/session-accessor.js";
 import { MEDIA_MAX_BYTES, readMediaBuffer } from "../../media/store.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
+import { withSessionInitializationSource } from "../../sessions/session-initialization.js";
 import {
   isCompetingSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
@@ -34,6 +37,7 @@ import {
   resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
   tryResolveSessionCompatibilityOwnerAgentId,
 } from "../session-request-agent.js";
+import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -201,6 +205,11 @@ async function mutateSessionAtMessage(
   action: MessageCutAction,
 ): Promise<void> {
   const { params, respond, context, client } = options;
+  const { sessionMutationCommitGuard, sessionMutationAuthorization } = options;
+  const commitGuard = () => {
+    sessionMutationCommitGuard?.();
+    sessionMutationAuthorization?.assertCurrent();
+  };
   const sessionKey = typeof params.sessionKey === "string" ? params.sessionKey.trim() : "";
   const entryId =
     action === "switch"
@@ -231,6 +240,23 @@ async function mutateSessionAtMessage(
       undefined,
       errorShape(ErrorCodes.INVALID_REQUEST, `session not found: ${sessionKey}`),
     );
+    return;
+  }
+  const rejectInitializing = (pending: boolean | undefined) => {
+    if (!pending) {
+      return false;
+    }
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `Session ${sessionKey} is initializing; retry ${action} later.`,
+      ),
+    );
+    return true;
+  };
+  if (rejectInitializing(initial.entry.initializationPending)) {
     return;
   }
   if (action === "fork") {
@@ -275,7 +301,7 @@ async function mutateSessionAtMessage(
   let blockedByActiveRun = false;
   await runExclusiveSessionLifecycleMutation({
     scope: initial.storePath,
-    identities: [initialSessionId, initialLifecycleRevision],
+    identities: lifecycleIdentities,
     prepare: async () => {
       const current = loadAccessorSessionEntryForGatewayTarget({
         key: sessionKey,
@@ -306,6 +332,9 @@ async function mutateSessionAtMessage(
         }).active;
     },
     run: async () => {
+      // A queued sharing mutation can revoke participation without rotating the source identity.
+      // Revalidate under the shared lifecycle fence before delegating or writing history.
+      commitGuard();
       if (!targetStillCurrent) {
         respond(
           false,
@@ -343,6 +372,9 @@ async function mutateSessionAtMessage(
         );
         return;
       }
+      if (rejectInitializing(current.entry.initializationPending)) {
+        return;
+      }
       const upstreamLink = readSessionUpstreamLink(current.canonicalKey, current.target.agentId);
       const archived = current.entry.archivedAt !== undefined;
       if ((archived || upstreamLink) && action !== "fork") {
@@ -363,7 +395,12 @@ async function mutateSessionAtMessage(
         return;
       }
       const targetKey =
-        action === "fork" ? buildDashboardSessionKey(current.target.agentId) : current.canonicalKey;
+        action === "fork"
+          ? buildDashboardSessionKey(current.target.agentId, {
+              incognito:
+                current.entry.incognito === true || isIncognitoSessionKey(current.canonicalKey),
+            })
+          : current.canonicalKey;
       const expectedState = {
         sessionId: current.entry.sessionId,
         lifecycleRevision: current.entry.lifecycleRevision,
@@ -383,24 +420,42 @@ async function mutateSessionAtMessage(
       const sandbox = action === "fork" ? resolveCreatorSandbox(cfg, creation) : undefined;
       const upstreamFork =
         upstreamLink && upstreamForkHarness
-          ? await upstreamForkHarness.fork({
-              targetKey,
-              sandbox,
-              source: {
-                agentId: current.target.agentId,
-                sessionId: current.entry.sessionId,
-                sessionKey: current.canonicalKey,
-                storePath: current.storePath,
-                entryId,
+          ? await withSessionInitializationSource(
+              () => {
+                commitGuard();
+                const source = loadAccessorSessionEntryForGatewayTarget({
+                  key: sessionKey,
+                  cfg,
+                  agentId: requestedAgent.agentId,
+                });
+                if (
+                  source.entry?.sessionId !== initialSessionId ||
+                  source.entry.lifecycleRevision !== initialLifecycleRevision ||
+                  source.entry.initializationPending === true
+                ) {
+                  throw new Error(`Session ${sessionKey} changed during fork initialization`);
+                }
               },
-              upstream: {
-                catalogId: upstreamLink.catalogId,
-                hostId: upstreamLink.hostId,
-                kind: upstreamLink.upstreamKind,
-                threadId: upstreamLink.threadId,
-                ref: upstreamLink.upstreamRef,
-              },
-            })
+              () =>
+                upstreamForkHarness.fork({
+                  targetKey,
+                  sandbox,
+                  source: {
+                    agentId: current.target.agentId,
+                    sessionId: initialSessionId,
+                    sessionKey: current.canonicalKey,
+                    storePath: current.storePath,
+                    entryId,
+                  },
+                  upstream: {
+                    catalogId: upstreamLink.catalogId,
+                    hostId: upstreamLink.hostId,
+                    kind: upstreamLink.upstreamKind,
+                    threadId: upstreamLink.threadId,
+                    ref: upstreamLink.upstreamRef,
+                  },
+                }),
+            )
           : undefined;
       if (upstreamFork?.status === "failed") {
         respond(
@@ -437,42 +492,35 @@ async function mutateSessionAtMessage(
         return;
       }
       let result: MessageCutMutationResult;
+      const mutationParams = {
+        agentId: current.target.agentId,
+        commitGuard,
+        sessionKey: current.canonicalKey,
+        sessionStoreKey: current.sessionStoreKey,
+        storePath: current.storePath,
+      };
       try {
         result = await (action === "fork"
           ? forkSessionAtMessage(
               {
-                agentId: current.target.agentId,
+                ...mutationParams,
                 entryId,
-                sessionKey: current.canonicalKey,
-                sessionStoreKey: current.sessionStoreKey,
-                storePath: current.storePath,
                 targetKey,
                 creation: { ...creation, sandbox },
               },
               expectedState,
             )
           : action === "rewind"
-            ? rewindSessionToMessage(
-                {
-                  agentId: current.target.agentId,
-                  entryId,
-                  sessionKey: current.canonicalKey,
-                  sessionStoreKey: current.sessionStoreKey,
-                  storePath: current.storePath,
-                },
-                expectedState,
-              )
-            : switchSessionBranch(
-                {
-                  agentId: current.target.agentId,
-                  leafEntryId: entryId,
-                  sessionKey: current.canonicalKey,
-                  sessionStoreKey: current.sessionStoreKey,
-                  storePath: current.storePath,
-                },
-                expectedState,
-              ));
-      } catch {
+            ? rewindSessionToMessage({ ...mutationParams, entryId }, expectedState)
+            : switchSessionBranch({ ...mutationParams, leafEntryId: entryId }, expectedState));
+      } catch (error) {
+        if (error instanceof SessionMutationAuthorizationChangedError) {
+          throw error;
+        }
+        if (error instanceof ModelSelectionLockedError) {
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+          return;
+        }
         respond(
           false,
           undefined,

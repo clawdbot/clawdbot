@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
   peekSessionMcpRuntime: vi.fn(),
 }));
 
-vi.mock("../agents/agent-bundle-mcp-runtime.js", () => ({
+vi.mock("../agents/agent-bundle-mcp-manager-api.js", () => ({
   completeDeferredSessionMcpRuntimeRetirement: mocks.completeRetirement,
   peekSessionMcpRuntime: mocks.peekSessionMcpRuntime,
 }));

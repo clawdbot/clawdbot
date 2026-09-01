@@ -16,13 +16,29 @@ import { fnv1aUtf16 } from "../../lib/fnv1a.ts";
 
 const MAX_TITLE_INPUT_CHARS = 2_000;
 const MAX_ITEMS_PER_REQUEST = 24;
+const MAX_RETAINED_TITLES = 128;
+const MAX_RETAINED_FAILURES = 128;
+const FAILURE_RETRY_MS = 5 * 60_000;
+const MAX_WORK_ITEMS_PER_SESSION = 48;
+const MAX_WORK_ITEMS_TOTAL = 96;
+const MAX_SATURATED_SESSIONS = MAX_WORK_ITEMS_TOTAL;
+const SATURATED_SESSION_RETRY_MS = 5 * 60_000;
 const REQUEST_DEBOUNCE_MS = 250;
 const MIN_COMMAND_CHARS_FOR_TITLE = 12;
 const MIN_GENERIC_INPUT_CHARS_FOR_TITLE = 120;
 
+const TOOL_TITLES_CHANGED_EVENT = "openclaw:tool-titles-changed";
+const DEFAULT_HISTORY_OWNER = {};
+
+export function subscribeToolTitleChanges(listener: () => void): () => void {
+  globalThis.addEventListener(TOOL_TITLES_CHANGED_EVENT, listener);
+  return () => globalThis.removeEventListener(TOOL_TITLES_CHANGED_EVENT, listener);
+}
+
 const titlesByKey = new Map<string, string>();
-const pendingKeys = new Set<string>();
-const failedKeys = new Set<string>();
+const pendingKeys = new Map<string, PendingItem>();
+const failedKeys = new Map<string, number>();
+const saturatedSessions = new Map<string, SaturatedSession>();
 // Bumped whenever titles land; chat threads include it in their lit guard()
 // dependencies so cached row subtrees repaint with the new titles.
 let titlesVersion = 0;
@@ -36,24 +52,34 @@ export function getToolTitlesVersion(): number {
 // belong to a different pane than the one that queued the item.
 type PendingItem = {
   key: string;
+  ownerKey: string;
   name: string;
   input: string;
   sessionKey: string;
   agentId: string | null;
   client: GatewayBrowserClient;
-  notify: (() => void) | null;
+};
+type SaturatedSession = {
+  expiresAt: number;
+  resumeAfterKey: string | null;
+  cursorMissingHistoryOwner: object | null;
+  cursorMissingHistoryVersion: number | null;
 };
 type ToolTitlesResult = { titles?: Record<string, string>; disabled?: boolean };
 
 // Set when the gateway reports the opt-in is off; cleared on a new client
 // (a different gateway may have titles enabled).
 let titlesDisabledByGateway = false;
-let queue = new Map<string, PendingItem>();
+const queue = new Map<string, PendingItem>();
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 let activeClient: GatewayBrowserClient | null = null;
 let activeSessionKey: string | null = null;
 let activeAgentId: string | null = null;
-let notifyUpdate: (() => void) | null = null;
+let activeSchedulingEnabled = true;
+let activeHistoryOwner = DEFAULT_HISTORY_OWNER;
+let activeHistoryVersion = 0;
+let fetcherGeneration = 0;
+let activeFlush: object | null = null;
 
 /** FNV-1a over name + serialized args; stable across renders of one call. */
 function digest(name: string, input: string): string {
@@ -75,6 +101,192 @@ function serializeArgs(args: unknown): string | null {
     return null;
   }
 }
+
+function readLru<T>(entries: Map<string, T>, key: string): T | undefined {
+  if (!entries.has(key)) {
+    return undefined;
+  }
+  const value = entries.get(key);
+  if (value === undefined) {
+    return undefined;
+  }
+  entries.delete(key);
+  entries.set(key, value);
+  return value;
+}
+
+function storeLru<T>(entries: Map<string, T>, key: string, value: T, limit: number): void {
+  entries.delete(key);
+  entries.set(key, value);
+  while (entries.size > limit) {
+    entries.delete(entries.keys().next().value!);
+  }
+}
+
+function hasUnexpired(entries: Map<string, number>, key: string): boolean {
+  const expiresAt = readLru(entries, key);
+  if (expiresAt === undefined) {
+    return false;
+  }
+  if (expiresAt <= Date.now()) {
+    entries.delete(key);
+    return false;
+  }
+  return true;
+}
+
+function storeFailure(key: string): void {
+  storeLru(failedKeys, key, Date.now() + FAILURE_RETRY_MS, MAX_RETAINED_FAILURES);
+}
+
+function notifyTitlesChanged(): void {
+  titlesVersion += 1;
+  if (typeof globalThis.dispatchEvent === "function") {
+    globalThis.dispatchEvent(new Event(TOOL_TITLES_CHANGED_EVENT));
+  }
+}
+
+function clearRetainedTitleState(): void {
+  const hadTitles = titlesByKey.size > 0;
+  titlesByKey.clear();
+  failedKeys.clear();
+  if (hadTitles) {
+    notifyTitlesChanged();
+  }
+}
+
+function queueOwnerKey(sessionKey: string, agentId: string | null): string {
+  return `${sessionKey}\u0000${agentId ?? ""}`;
+}
+
+function saturateSession(ownerKey: string, resumeAfterKey: string | null): void {
+  storeLru(
+    saturatedSessions,
+    ownerKey,
+    {
+      expiresAt: Date.now() + SATURATED_SESSION_RETRY_MS,
+      resumeAfterKey,
+      cursorMissingHistoryOwner: null,
+      cursorMissingHistoryVersion: null,
+    },
+    MAX_SATURATED_SESSIONS,
+  );
+}
+
+function prepareTranscriptRequests(
+  ownerKey: string,
+  candidates: Iterable<{ name: string; args?: unknown }>,
+): { requests: Array<{ key: string; input: string; name: string }>; startIndex: number } | null {
+  const saturation = readLru(saturatedSessions, ownerKey);
+  if (saturation && saturation.expiresAt > Date.now()) {
+    return null;
+  }
+  const requests: Array<{ key: string; input: string; name: string }> = [];
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    const request = resolveToolTitleRequest(candidate.name, candidate.args);
+    if (!request || seen.has(request.key)) {
+      continue;
+    }
+    seen.add(request.key);
+    requests.push({ ...request, name: candidate.name });
+  }
+  if (!saturation) {
+    return { requests, startIndex: 0 };
+  }
+  if (saturation.resumeAfterKey === null) {
+    saturatedSessions.delete(ownerKey);
+    return { requests, startIndex: 0 };
+  }
+  // Live rows can restore the cursor without changing the history revision.
+  // Search before suppressing another render of a previously missing cursor.
+  const cursorIndex = requests.findIndex((request) => request.key === saturation.resumeAfterKey);
+  if (cursorIndex >= 0) {
+    // Resume after the last admitted row. Re-admitting LRU-evicted rows before
+    // this cursor would spend every later bounded window without making progress.
+    saturatedSessions.delete(ownerKey);
+    return { requests, startIndex: cursorIndex + 1 };
+  }
+  if (saturation.cursorMissingHistoryVersion === null) {
+    saturation.cursorMissingHistoryOwner = activeHistoryOwner;
+    saturation.cursorMissingHistoryVersion = activeHistoryVersion;
+    return null;
+  }
+  if (
+    saturation.cursorMissingHistoryOwner === activeHistoryOwner &&
+    saturation.cursorMissingHistoryVersion === activeHistoryVersion
+  ) {
+    return null;
+  }
+  // The prior complete projection did not contain the cursor, so retention or
+  // compaction removed it. Resume from this projection's first remaining row.
+  saturatedSessions.delete(ownerKey);
+  return { requests, startIndex: 0 };
+}
+
+function discardQueuedOwner(ownerKey: string): void {
+  let discarded = false;
+  for (const [key, item] of queue) {
+    if (item.ownerKey === ownerKey) {
+      queue.delete(key);
+      discarded = true;
+    }
+  }
+  if (!discarded) {
+    return;
+  }
+  // Cool down only the failed owner. Other sessions can resolve through a
+  // different utility model and must retain their independently queued work.
+  saturateSession(ownerKey, null);
+}
+
+function countSessionWork(ownerKey: string): number {
+  let count = 0;
+  for (const item of queue.values()) {
+    if (item.ownerKey === ownerKey) {
+      count += 1;
+    }
+  }
+  for (const item of pendingKeys.values()) {
+    if (item.ownerKey === ownerKey) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function clearFlushTimer(): void {
+  if (!flushTimer) {
+    return;
+  }
+  clearTimeout(flushTimer);
+  flushTimer = null;
+}
+
+function retireTransientState(): void {
+  fetcherGeneration += 1;
+  activeFlush = null;
+  queue.clear();
+  pendingKeys.clear();
+  saturatedSessions.clear();
+  clearFlushTimer();
+}
+
+function scheduleFlush(): void {
+  if (flushTimer || activeFlush !== null || queue.size === 0 || titlesDisabledByGateway) {
+    return;
+  }
+  const generation = fetcherGeneration;
+  flushTimer = setTimeout(() => {
+    flushTimer = null;
+    if (generation !== fetcherGeneration) {
+      scheduleFlush();
+      return;
+    }
+    void flushTitleQueue(generation);
+  }, REQUEST_DEBOUNCE_MS);
+}
+
 /**
  * Only calls where a purpose summary beats the deterministic label qualify:
  * shell commands and arg-heavy generic/MCP tools. File reads/edits/writes
@@ -110,12 +322,28 @@ export function getToolCallTitle(name: string, args: unknown): string | undefine
   if (!request) {
     return undefined;
   }
-  const cached = titlesByKey.get(request.key);
-  if (cached) {
-    return cached;
+  return readLru(titlesByKey, request.key);
+}
+
+export function scheduleToolTitlesForTranscript(
+  candidates: Iterable<{ name: string; args?: unknown }>,
+): void {
+  if (!activeSchedulingEnabled || titlesDisabledByGateway || !activeClient || !activeSessionKey) {
+    return;
   }
-  scheduleTitleRequest(name, request);
-  return undefined;
+  const ownerKey = queueOwnerKey(activeSessionKey, activeAgentId);
+  const prepared = prepareTranscriptRequests(ownerKey, candidates);
+  if (!prepared) {
+    return;
+  }
+  const { requests, startIndex } = prepared;
+  for (let index = startIndex; index < requests.length; index++) {
+    const request = requests[index]!;
+    scheduleTitleRequest(request.name, request);
+    if (saturatedSessions.has(ownerKey)) {
+      break;
+    }
+  }
 }
 
 export function configureToolTitleFetcher(params: {
@@ -123,26 +351,23 @@ export function configureToolTitleFetcher(params: {
   sessionKey: string | null;
   /** Selected agent; required for global-session keys where the gateway would otherwise resolve the default agent. */
   agentId?: string | null;
-  onTitlesChanged: (() => void) | null;
+  /** Only the active presented pane schedules work; sibling panes read the shared cache. */
+  schedulingEnabled?: boolean;
+  /** History owner revision; duplicate renders of one request retain the same value. */
+  historyOwner?: object;
+  historyVersion?: number;
 }): void {
-  if (!params.client) {
-    titlesDisabledByGateway = false;
-    titlesByKey.clear();
-    pendingKeys.clear();
-    failedKeys.clear();
-    queue = new Map();
-    if (flushTimer) {
-      clearTimeout(flushTimer);
-      flushTimer = null;
-    }
-  }
   if (params.client !== activeClient) {
+    retireTransientState();
     titlesDisabledByGateway = false;
+    clearRetainedTitleState();
   }
   activeClient = params.client;
   activeSessionKey = params.sessionKey;
   activeAgentId = params.agentId ?? null;
-  notifyUpdate = params.onTitlesChanged;
+  activeSchedulingEnabled = params.schedulingEnabled !== false;
+  activeHistoryOwner = params.historyOwner ?? DEFAULT_HISTORY_OWNER;
+  activeHistoryVersion = params.historyVersion ?? 0;
 }
 
 function scheduleTitleRequest(name: string, request: { key: string; input: string }): void {
@@ -151,33 +376,49 @@ function scheduleTitleRequest(name: string, request: { key: string; input: strin
     !activeClient ||
     !activeSessionKey ||
     titlesByKey.has(request.key) ||
-    pendingKeys.has(request.key) ||
-    failedKeys.has(request.key) ||
-    queue.has(request.key)
+    hasUnexpired(failedKeys, request.key)
   ) {
+    return;
+  }
+  const existing = pendingKeys.get(request.key) ?? queue.get(request.key);
+  if (existing) {
+    return;
+  }
+  const ownerKey = queueOwnerKey(activeSessionKey, activeAgentId);
+  const sessionWork = countSessionWork(ownerKey);
+  if (
+    sessionWork >= MAX_WORK_ITEMS_PER_SESSION ||
+    pendingKeys.size + queue.size >= MAX_WORK_ITEMS_TOTAL
+  ) {
+    saturateSession(ownerKey, null);
     return;
   }
   queue.set(request.key, {
     key: request.key,
+    ownerKey,
     name,
     input: request.input,
     sessionKey: activeSessionKey,
     agentId: activeAgentId,
     client: activeClient,
-    notify: notifyUpdate,
   });
-  flushTimer ??= setTimeout(() => {
-    flushTimer = null;
-    void flushTitleQueue();
-  }, REQUEST_DEBOUNCE_MS);
+  if (
+    sessionWork + 1 >= MAX_WORK_ITEMS_PER_SESSION ||
+    pendingKeys.size + queue.size >= MAX_WORK_ITEMS_TOTAL
+  ) {
+    saturateSession(ownerKey, request.key);
+  }
+  scheduleFlush();
 }
 
-async function flushTitleQueue(): Promise<void> {
+async function flushTitleQueue(generation: number): Promise<void> {
+  if (generation !== fetcherGeneration || activeFlush !== null) {
+    return;
+  }
   // One request per scheduling pane (client + session + agent); other panes'
   // items stay queued for the follow-up flush.
   const head = queue.values().next().value;
   if (!head) {
-    queue = new Map();
     return;
   }
   const batch: PendingItem[] = [];
@@ -193,59 +434,62 @@ async function flushTitleQueue(): Promise<void> {
   }
   for (const item of batch) {
     queue.delete(item.key);
-    pendingKeys.add(item.key);
+    pendingKeys.set(item.key, item);
   }
-  const hasBacklog = queue.size > 0;
+  const flush = {};
+  activeFlush = flush;
   try {
     const result = await head.client.request<ToolTitlesResult>("chat.toolTitles", {
       sessionKey: head.sessionKey,
       ...(head.agentId ? { agentId: head.agentId } : {}),
       items: batch.map((item) => ({ id: item.key, name: item.name, input: item.input })),
     });
-    if (result?.disabled === true) {
-      titlesDisabledByGateway = true;
-      queue = new Map();
+    if (generation !== fetcherGeneration) {
       return;
     }
-    const titles = result?.titles ?? {};
+    if (result?.disabled === true) {
+      titlesDisabledByGateway = true;
+      queue.clear();
+      clearFlushTimer();
+      return;
+    }
+    const titles = asNullableRecord(result?.titles);
     let changed = false;
     for (const item of batch) {
-      const rawTitle = titles[item.key];
+      const rawTitle = titles?.[item.key];
       const title = typeof rawTitle === "string" ? rawTitle.trim() : "";
       if (title) {
-        titlesByKey.set(item.key, title);
+        failedKeys.delete(item.key);
+        storeLru(titlesByKey, item.key, title, MAX_RETAINED_TITLES);
         changed = true;
       } else {
-        failedKeys.add(item.key);
+        storeFailure(item.key);
       }
     }
-    if (changed) {
-      titlesVersion += 1;
-      // Split panes can contribute rows for the same session to one batch;
-      // every contributing pane must repaint, not just the head's.
-      const notified = new Set<() => void>();
-      for (const item of batch) {
-        if (item.notify && !notified.has(item.notify)) {
-          notified.add(item.notify);
-          item.notify();
-        }
-      }
+    if (!changed) {
+      discardQueuedOwner(head.ownerKey);
+      return;
     }
+    notifyTitlesChanged();
   } catch {
+    if (generation !== fetcherGeneration) {
+      return;
+    }
     // Gateway without the method, no usable cheap model, transient errors:
     // titles are decorative, so fail closed and keep deterministic labels.
     for (const item of batch) {
-      failedKeys.add(item.key);
+      storeFailure(item.key);
     }
+    discardQueuedOwner(head.ownerKey);
   } finally {
     for (const item of batch) {
-      pendingKeys.delete(item.key);
+      if (pendingKeys.get(item.key) === item) {
+        pendingKeys.delete(item.key);
+      }
     }
-    if (hasBacklog && !flushTimer) {
-      flushTimer = setTimeout(() => {
-        flushTimer = null;
-        void flushTitleQueue();
-      }, REQUEST_DEBOUNCE_MS);
+    if (activeFlush === flush) {
+      activeFlush = null;
     }
+    scheduleFlush();
   }
 }

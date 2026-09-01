@@ -249,6 +249,7 @@ type ContextEnginePromptCacheUsage = {
 };
 
 type ContextEnginePromptCacheObservationChangeCode =
+  | "aggregateToolResultTruncation"
   | "cacheRetention"
   | "model"
   | "streamStrategy"

@@ -71,7 +71,7 @@ export async function withCodexConversationThreadActivity<T>(
 export async function retainCodexAppServerBindingSubscription(
   client: CodexAppServerClient,
   threadId: string,
-  ownership?: CodexAppServerLiveThreadOwnership,
+  ownership?: Partial<CodexAppServerLiveThreadOwnership>,
 ): Promise<boolean> {
   return await retainCodexAppServerLiveThread(
     client,

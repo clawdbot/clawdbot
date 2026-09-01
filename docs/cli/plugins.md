@@ -157,6 +157,13 @@ already tracked install do not require it. `--force` does not bypass
 install safety checks.
 </Warning>
 
+Bundled plugins and verified first-party catalog plugins do not require
+`--accept-capabilities` for install, enable, update, or Doctor repair. Local
+copies and unverified sources still require capability consent even when their
+package name matches an official plugin. This exemption does not grant OAuth,
+operating-system, or runtime tool permissions. See
+[capability consent](/plugins/manage-plugins#capability-consent).
+
 `plugins search` queries ClawHub for installable `code-plugin` and
 `bundle-plugin` packages (not skills; use `openclaw skills search` for those).
 Default `--limit` is 20, capped at 100. It only reads the remote catalog: no
@@ -183,13 +190,15 @@ third-party packages, and non-npm sources are not rewritten.
   <Accordion title="Config includes and invalid-config repair">
     If your `plugins` section is backed by a single-file `$include`, `plugins install/update/enable/disable/uninstall` write through to that included file and leave `openclaw.json` untouched. Root includes, include arrays, and includes with sibling overrides fail closed instead of flattening. See [Config includes](/gateway/configuration) for the supported shapes.
 
-    If config is invalid before install, `plugins install` normally fails closed and tells you to run `openclaw doctor --fix` first. During Gateway startup and hot reload, invalid plugin config fails closed like any other invalid config; `openclaw doctor --fix` can quarantine the invalid plugin entry. The only pre-existing-config exception is a narrow bundled-plugin recovery path for plugins that explicitly opt into `openclaw.install.allowInvalidConfigRecovery`.
+    If config is invalid before install, `plugins install` normally fails closed and tells you to run `openclaw doctor --fix` first. Gateway startup can apply [safe legacy-key migrations](/gateway/doctor#detailed-behavior-and-rationale), but plugin config that remains invalid still fails closed; hot reload also rejects invalid plugin config. `openclaw doctor --fix` can quarantine the invalid plugin entry. The only pre-existing-config exception for plugin installation is a narrow bundled-plugin recovery path for plugins that explicitly opt into `openclaw.install.allowInvalidConfigRecovery`.
 
     When the existing host config is valid but the newly installed plugin's own config is absent, OpenClaw records the install disabled instead of writing an invalid enabled entry. Configure `plugins.entries.<id>.config`, then run `openclaw plugins enable <id>`. If an existing plugin config entry is present but invalid, install fails without rewriting it.
 
   </Accordion>
   <Accordion title="--force confirmation and reinstall vs update">
     `--force` confirms a non-ClawHub source without prompting. It does not bypass `security.installPolicy` or remaining install safety checks. When the plugin or hook pack is already installed, it also reuses the existing target and overwrites it in place. Use it after reviewing an arbitrary npm, local, archive, git, or marketplace source, or when intentionally reinstalling the same id. For routine upgrades of an already tracked npm plugin, prefer `openclaw plugins update <id-or-npm-spec>`.
+
+    Reinstalling preserves an authored `plugins.entries.<id>.enabled: false`. `--force` does not approve capabilities: when no valid prior acceptance can be reused, review and accept them before the install commits. Use `openclaw plugins enable <id>` to activate the plugin afterward. See [Capability consent](/plugins/manage-plugins#capability-consent).
 
     If you run `plugins install` for a plugin id that is already installed, OpenClaw stops and points you at `plugins update <id-or-npm-spec>` for a normal upgrade, or at `plugins install <package> --force` when you genuinely want to overwrite the current install from a different source. Arbitrary sources still show the interactive provenance warning; noninteractive installs must pass `--force` after review. Trusted ClawHub and OpenClaw-catalog sources do not need it. With `--link`, `--force` confirms the source but does not change the linked-path install mode.
 
@@ -424,7 +433,9 @@ openclaw plugins uninstall <id> --force
 
 `uninstall` prints a preview of what will be removed. Multi-entry packages name the package owner and every affected child before prompting. Pass `--force` to skip the confirmation prompt (useful for scripts and non-interactive runs); without it, uninstall requires an interactive TTY. `--dry-run` prints the same preview and exits without prompting or changing anything.
 
-If OpenClaw cannot prove exactly one package owner and a complete child list, lifecycle mutations fail closed without changing package files, config, or the installed index. Run `openclaw plugins registry --refresh`, inspect `openclaw plugins doctor`, and use `openclaw doctor --fix` for repairable legacy index state. If ownership is still ambiguous, reinstall the package before retrying update or uninstall.
+If a tracked package has no discovered plugin entries, uninstall can remove its exact install record and same-owner policy, including owner-keyed channel config that no other discovered plugin claims. This recovery is allowed only when no other install record shares its package path and no discovered plugin matches its id or recorded paths. Unrelated policy remains unchanged. Registry refresh rebuilds discovery metadata; it does not remove these orphan install records.
+
+Discovered packages with missing, ambiguous, or conflicting ownership still fail closed without changing package files, config, or the installed index. Run `openclaw plugins registry --refresh`, inspect `openclaw plugins doctor`, and use `openclaw doctor --fix` for repairable legacy index state. If ownership is still ambiguous, reinstall the package before retrying update or uninstall.
 
 <Note>
 `--keep-config` is supported as a deprecated alias for `--keep-files`.
@@ -443,6 +454,8 @@ openclaw plugins update openclaw-codex-app-server --acknowledge-install-policy-w
 
 Updates apply to tracked plugin installs in the managed plugin index and tracked hook-pack installs in shared SQLite state. They reuse the source that the user already chose when installing the plugin, so they do not require a second source acknowledgement.
 
+`update --all` reports and skips orphaned path-source install records so remaining plugins can update. Remove an orphan record with `openclaw plugins uninstall <id>` when its files are no longer needed.
+
 <AccordionGroup>
   <Accordion title="Resolving plugin id vs npm spec">
     When you pass a plugin id, OpenClaw reuses the recorded install spec for that plugin. For a multi-entry package, a child id resolves to its package owner and updates every sibling together. If the new package version removes or renames children, OpenClaw removes the retired children's entries, allow/deny policy, exact child load paths, channel config, and memory/context slot selections while preserving retained/new children and unrelated plugins. Previously stored dist-tags such as `@beta` and exact pinned versions continue to be used on later `update <id>` runs.
@@ -459,9 +472,9 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
 
   </Accordion>
   <Accordion title="Beta channel updates">
-    Targeted `openclaw plugins update <id-or-npm-spec>` reuses the tracked plugin spec unless you pass a new spec. For floating trusted official records, it uses the canonical registry-channel resolver to choose the install target without rewriting the stored selector. Bulk `openclaw plugins update --all` uses the same resolver when it syncs trusted official plugin records to the official catalog target. An installed beta core therefore keeps official plugins on the beta release line when `update.channel` is unset, matching the core updater instead of silently normalizing them to stable/latest. Explicit `beta`, `dev`, and `extended-stable` selections retain their existing precedence.
+    Targeted `openclaw plugins update <id-or-npm-spec>` reuses the tracked plugin spec unless you pass a new spec. For floating trusted official records, it uses the canonical registry-channel resolver to choose the install target without rewriting the stored selector. Bulk `openclaw plugins update --all` uses the same resolver when it syncs trusted official plugin records to the official catalog target. On an installed beta core, eligible official npm plugins target that exact core version when the effective plugin update channel is beta. This prevents a moving plugin `@beta` tag from selecting a different beta release. Targeted updates with an explicitly configured stable channel retain that selection. Explicit `beta`, `dev`, and `extended-stable` selections retain their existing precedence.
 
-    `openclaw update` also knows the active OpenClaw update channel: on the beta channel, default-line npm and ClawHub plugin records try `@beta` first. They fall back to the recorded default/latest spec if no plugin beta release exists; npm plugins also fall back when the beta package exists but fails install validation. That fallback is reported as a warning and does not fail the core update. Exact versions and explicit tags stay pinned to that selector for targeted updates except while completing the trusted plugin id replacement above.
+    `openclaw update` resolves plugin targets from the newly installed core, so a one-off beta `--tag` also aligns eligible official npm plugins even when the configured channel is stable. Other default-line npm and ClawHub plugin records on the beta channel try `@beta` first. They fall back to the recorded default/latest spec if no plugin beta release exists; npm plugins also fall back when the beta package exists but fails install validation. That fallback is reported as a warning and does not fail the core update. Exact versions and explicit tags stay pinned to that selector for targeted updates except while completing the trusted plugin id replacement above.
 
   </Accordion>
   <Accordion title="Version checks and integrity drift">
@@ -488,6 +501,8 @@ openclaw plugins inspect --all
 ```
 
 Inspect shows identity, load status, source, manifest capabilities, policy flags, diagnostics, install metadata, bundle capabilities, and any detected MCP or LSP server support without importing plugin runtime by default. JSON output includes the plugin manifest contracts, such as `contracts.agentToolResultMiddleware` and `contracts.trustedToolPolicies`, so operators can audit trusted-surface declarations before enabling or restarting a plugin. Add `--runtime` to load the plugin module and include registered hooks, tools, commands, services, gateway methods, and HTTP routes. Runtime inspection reports missing plugin dependencies directly; installs and repairs stay in `openclaw plugins install`, `openclaw plugins update`, and `openclaw doctor --fix`.
+
+For multi-entry packages, inspecting any child shows the shared package install metadata. `inspect --all --json` includes that same record for each child. If package ownership is missing or ambiguous, inspection omits install metadata rather than attributing an unrelated install record.
 
 Plugin-owned CLI commands are usually installed as root `openclaw` command groups, but plugins may also register nested commands under a core parent such as `openclaw nodes`. After `inspect --runtime` shows a command under `cliCommands`, run it at the listed path; for example a plugin that registers `demo-git` can be verified with `openclaw demo-git ping`.
 
@@ -533,6 +548,8 @@ openclaw plugins registry --json
 The local plugin registry is OpenClaw's persisted cold read model for installed plugin identity, enablement, source metadata, and contribution ownership. Normal startup, provider owner lookup, channel setup classification, and plugin inventory can read it without importing plugin runtime modules.
 
 Use `plugins registry` to inspect whether the persisted registry is present, current, or stale. Use `--refresh` to rebuild it from the persisted plugin index, config policy, and manifest/package metadata. This is a repair path, not a runtime activation path.
+
+When persisted and derived plugin records differ, the command lists each differing plugin with both sources. JSON output returns the same rows in `differences`. Policy staleness reports `policy-changed` in `refreshReasons` and leaves `differences` empty because policy validation runs before record comparison; a policy refresh can still update enabled fields. A refresh rereads and verifies its persisted replacement before it reports success. If plugin package files keep changing during verification, stop those updates and run `openclaw plugins registry --refresh` again.
 
 `openclaw doctor --fix` also repairs registry-adjacent managed npm drift. If an orphaned or recovered `@openclaw/*` package under a managed plugin npm project or the legacy flat managed npm root shadows a bundled plugin, doctor removes that stale package and rebuilds the registry so startup validates against the bundled manifest. When an authoritative install record selects one managed generation but older flat or generation directories remain, doctor retires those stale trees for pruning after the gateway restarts. Doctor also relinks the host `openclaw` package into managed npm plugins that declare `peerDependencies.openclaw`, so package-local runtime imports such as `openclaw/plugin-sdk/*` resolve after updates or npm repairs.
 

@@ -105,10 +105,10 @@
   "dependencies": {
     "@anthropic-ai/sdk": "0.120.0",
     "@google/genai": "2.18.0",
-    "@mistralai/mistralai": "2.5.0",
+    "@mistralai/mistralai": "2.6.4",
     "openai": "7.5.0",
     "partial-json": "0.1.7",
-    "typebox": "1.3.16"
+    "typebox": "1.3.17"
   },
   "devDependencies": {
     "@openclaw/model-catalog-core": "workspace:*",

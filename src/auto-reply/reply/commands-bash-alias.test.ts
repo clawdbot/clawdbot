@@ -1,57 +1,33 @@
 /** Tests bash command aliases and chat shortcut handling. */
-import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
 import { handleBashCommand } from "./commands-bash.js";
-import type { HandleCommandsParams } from "./commands-types.js";
+import { buildCommandTestParams } from "./commands.test-harness.js";
 
-const resolveSessionAgentIdMock = vi.hoisted(() => vi.fn(() => "main"));
 const handleBashChatCommandMock = vi.hoisted(() =>
   vi.fn(async () => ({ text: "No active bash job" })),
 );
-
-vi.mock("../../agents/agent-scope.js", () => ({
-  resolveSessionAgentId: resolveSessionAgentIdMock,
-}));
 
 vi.mock("./bash-command.js", () => ({
   handleBashChatCommand: handleBashChatCommandMock,
 }));
 
-function buildBashParams(commandBodyNormalized: string): HandleCommandsParams {
-  return {
-    cfg: {
+function buildBashParams(commandBody: string) {
+  const params = buildCommandTestParams(
+    commandBody,
+    {
       commands: { bash: true, text: true },
-      whatsapp: { allowFrom: ["*"] },
-    } as OpenClawConfig,
-    ctx: {
-      Provider: "whatsapp",
-      Surface: "whatsapp",
-      CommandSource: "text",
-      CommandBody: commandBodyNormalized,
+      channels: { whatsapp: { allowFrom: ["*"] } },
     },
-    command: {
-      commandBodyNormalized,
-      isAuthorizedSender: true,
-      senderIsOwner: true,
-      senderId: "owner",
-      channel: "whatsapp",
-      channelId: "whatsapp",
-      surface: "whatsapp",
-      ownerList: [],
-      from: "test-user",
-      to: "test-bot",
-    },
-    sessionKey: "agent:main:whatsapp:direct:test-user",
-    elevated: { enabled: true, allowed: true, failures: [] },
-    isGroup: false,
-  } as unknown as HandleCommandsParams;
+    { SenderId: "owner", From: "test-user", To: "test-bot" },
+  );
+  params.sessionKey = "agent:main:whatsapp:direct:test-user";
+  params.command.senderIsOwner = true;
+  return params;
 }
 
 describe("handleBashCommand alias routing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    resolveSessionAgentIdMock.mockReturnValue("target");
   });
 
   it("routes !poll and !stop through the bash chat handler", async () => {
@@ -65,22 +41,18 @@ describe("handleBashCommand alias routing", () => {
 
   it("uses the canonical target session agent for /bash routing", async () => {
     const params = buildBashParams("/bash pwd");
-    params.agentId = "main";
+    params.agentId = "target";
     params.sessionKey = "agent:target:whatsapp:direct:test-user";
 
     const result = await handleBashCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
     expect(handleBashChatCommandMock).toHaveBeenCalledTimes(1);
-    const [bashParams] = expectDefined(
-      (
-        handleBashChatCommandMock.mock.calls as unknown as Array<
-          [{ agentId?: string; sessionKey?: string }]
-        >
-      )[0],
-      "(handleBashChatCommandMock.mock.calls as unknown as Array<\n        [{ agentId?: string; sessionKey?: string }]\n      >)[0] test invariant",
+    expect(handleBashChatCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "target",
+        sessionKey: "agent:target:whatsapp:direct:test-user",
+      }),
     );
-    expect(bashParams.agentId).toBe("target");
-    expect(bashParams.sessionKey).toBe("agent:target:whatsapp:direct:test-user");
   });
 });

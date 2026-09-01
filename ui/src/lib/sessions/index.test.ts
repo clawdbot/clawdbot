@@ -401,11 +401,15 @@ describe("createSessionCapability", () => {
       sessions.delete(key, { expectedSessionId: "session-before-replacement" }),
     ).resolves.toEqual({ deleted: false });
     expect(sessions.state.deletedSessions).toEqual([]);
-    expect(request).toHaveBeenCalledWith("sessions.delete", {
-      key,
-      deleteTranscript: true,
-      expectedSessionId: "session-before-replacement",
-    });
+    expect(request).toHaveBeenCalledWith(
+      "sessions.delete",
+      {
+        key,
+        deleteTranscript: true,
+        expectedSessionId: "session-before-replacement",
+      },
+      { timeoutMs: 10 * 60_000 },
+    );
     sessions.dispose();
   });
 
@@ -451,11 +455,15 @@ describe("createSessionCapability", () => {
     expect(deletedSnapshots.some((keys) => keys.includes(deletedKey))).toBe(true);
     expect(deletedSnapshots.some((keys) => keys.includes(keptKey))).toBe(false);
     expect(request).toHaveBeenCalledTimes(4);
-    expect(request).toHaveBeenCalledWith("sessions.delete", {
-      key: deletedKey,
-      deleteTranscript: true,
-      archivedOnly: true,
-    });
+    expect(request).toHaveBeenCalledWith(
+      "sessions.delete",
+      {
+        key: deletedKey,
+        deleteTranscript: true,
+        archivedOnly: true,
+      },
+      { timeoutMs: 10 * 60_000 },
+    );
     unsubscribe();
     sessions.dispose();
   });
@@ -930,7 +938,10 @@ describe("createSessionCapability", () => {
         throw new Error(`Unexpected request: ${method}`);
       }
       listCalls += 1;
-      const result = sessionsResult([{ key: visibleKey, kind: "direct", updatedAt: 1 }], 1);
+      const result = sessionsResult(
+        [{ key: visibleKey, sessionId: "deleted-generation", kind: "direct", updatedAt: 1 }],
+        1,
+      );
       return listCalls === 1 ? result : await refreshed.promise;
     });
     const client = { request } as unknown as GatewayBrowserClient;
@@ -946,7 +957,7 @@ describe("createSessionCapability", () => {
     emitEvent({
       type: "event",
       event: "sessions.changed",
-      payload: { sessionKey: visibleKey, reason: "delete" },
+      payload: { sessionKey: visibleKey, sessionId: "deleted-generation", reason: "delete" },
     });
 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));

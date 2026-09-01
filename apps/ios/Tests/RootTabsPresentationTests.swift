@@ -688,12 +688,27 @@ struct RootTabsPresentationTests {
         #expect(RootTabs.sidebarWidth(containerWidth: 402, isDrawerLayout: true) == 340)
     }
 
-    @Test func `sidebar shows configured agent rows with sane clamping`() {
-        #expect(RootSidebar.shownAgentCount(configured: 1, total: 5) == 1)
-        #expect(RootSidebar.shownAgentCount(configured: 3, total: 5) == 3)
-        #expect(RootSidebar.shownAgentCount(configured: 0, total: 5) == 1)
-        #expect(RootSidebar.shownAgentCount(configured: 3, total: 2) == 2)
-        #expect(RootSidebar.shownAgentCount(configured: 1, total: 0) == 1)
+    @Test func `sidebar session accessibility names pin and unread state`() {
+        #expect(RootSidebar.sessionAccessibilityValue(isPinned: false, isUnread: false).isEmpty)
+        #expect(RootSidebar.sessionAccessibilityValue(isPinned: true, isUnread: false) == "Pinned")
+        #expect(RootSidebar.sessionAccessibilityValue(isPinned: false, isUnread: true) == "Unread")
+        #expect(RootSidebar.sessionAccessibilityValue(isPinned: true, isUnread: true) == "Pinned, Unread")
+    }
+
+    @Test func `iOS sidebar moves pinned sessions ahead of the remaining inventory`() {
+        let sections = ChatSessionSidebarModel.sections(
+            sessions: [
+                Self.sessionEntry(key: "pinned", pinned: true),
+                Self.sessionEntry(key: "recent"),
+            ],
+            currentSessionKey: "recent",
+            excludesMainSession: true,
+            query: "")
+
+        let layout = RootSidebar.sessionLayout(sections)
+
+        #expect(layout.pinnedNodes.map(\.session.key) == ["pinned"])
+        #expect(layout.sections.map(\.id) == ["recent"])
     }
 
     @Test func `sidebar agent badges use canonical identity fallback`() {
@@ -1123,6 +1138,7 @@ struct RootTabsPresentationTests {
     private static func sessionEntry(
         key: String,
         archived: Bool? = nil,
+        pinned: Bool? = nil,
         totalTokens: Int? = nil,
         totalTokensFresh: Bool? = nil,
         contextTokens: Int? = nil,
@@ -1151,6 +1167,7 @@ struct RootTabsPresentationTests {
             modelProvider: nil,
             model: nil,
             contextTokens: contextTokens,
+            pinned: pinned,
             archived: archived,
             observerDigest: observerDigest,
             lastReadAt: lastReadAt,

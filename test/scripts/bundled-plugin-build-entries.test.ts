@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  collectChannelConfigDoctorBuildEntries,
   collectRootPackageExcludedExtensionDirs,
   DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV,
   listBundledPluginBuildEntries,
@@ -26,6 +27,47 @@ function pickEntries(entries: Record<string, string>, keys: readonly string[]) {
 }
 
 describe("bundled plugin build entries", () => {
+  it("retains manifest-owned config repairs independently of runtime package exclusions", () => {
+    const cwd = tempDirs.make("openclaw-config-doctor-entries-");
+    const pluginDir = path.join(cwd, "extensions", "external-owner");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(cwd, "package.json"),
+      JSON.stringify({
+        files: ["dist/**", "!dist/extensions/external-owner/**"],
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/external-owner",
+        openclaw: { build: { bundledDist: false } },
+      }),
+    );
+    const manifest = {
+      id: "external-owner",
+      channels: ["renamed-channel"],
+      doctorContract: { configRepair: true, stateMigrations: true },
+    };
+    const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    expect(() => collectChannelConfigDoctorBuildEntries({ cwd })).toThrow(
+      /Missing config-only doctor entrypoint/,
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "config-doctor-api.ts"),
+      "export const legacyConfigRules = [];\n",
+    );
+    expect(collectChannelConfigDoctorBuildEntries({ cwd })).toEqual({
+      "renamed-channel": "extensions/external-owner/config-doctor-api.ts",
+    });
+    fs.writeFileSync(
+      manifestPath,
+      JSON.stringify({ ...manifest, doctorContract: { stateMigrations: true } }),
+    );
+    expect(collectChannelConfigDoctorBuildEntries({ cwd })).toEqual({});
+  });
+
   const bundledChannelEntrySources = ["index.ts", "channel-entry.ts", "setup-entry.ts"];
   const forEachBundledChannelEntry = (
     visit: (params: { entryPath: string; entry: string; pluginId: string }) => void,
@@ -214,7 +256,7 @@ describe("bundled plugin build entries", () => {
     delete baselineEnv[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV];
     const dockerEnv = {
       ...baselineEnv,
-      [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "slack clickclack,slack,msteams",
+      [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "slack clickclack,slack,msteams,whatsapp",
     };
     const entries = listBundledPluginBuildEntries({ env: dockerEnv });
     const baselineArtifacts = listBundledPluginPackArtifacts({ env: baselineEnv });
@@ -222,7 +264,7 @@ describe("bundled plugin build entries", () => {
     const reorderedEntries = listBundledPluginBuildEntries({
       env: {
         ...baselineEnv,
-        [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "msteams,clickclack slack",
+        [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "whatsapp,msteams,clickclack slack",
       },
     });
     const entryKeys = Object.keys(entries);
@@ -231,6 +273,8 @@ describe("bundled plugin build entries", () => {
     expect(entries["extensions/slack/index"]).toBe("extensions/slack/index.ts");
     expect(entries["extensions/slack/setup-entry"]).toBe("extensions/slack/setup-entry.ts");
     expect(entries["extensions/msteams/index"]).toBe("extensions/msteams/index.ts");
+    expect(entries["extensions/whatsapp/index"]).toBe("extensions/whatsapp/index.ts");
+    expect(entries["extensions/whatsapp/setup-entry"]).toBe("extensions/whatsapp/setup-entry.ts");
     expect(entries["extensions/clawrouter/index"]).toBe("extensions/clawrouter/index.ts");
     expect(entryKeys.findIndex((entry) => entry.startsWith("extensions/clickclack/"))).toBeLessThan(
       entryKeys.findIndex((entry) => entry.startsWith("extensions/slack/")),
@@ -240,6 +284,7 @@ describe("bundled plugin build entries", () => {
     expectNoPrefixMatches(artifacts, "dist/extensions/clickclack/");
     expectNoPrefixMatches(artifacts, "dist/extensions/msteams/");
     expectNoPrefixMatches(artifacts, "dist/extensions/slack/");
+    expectNoPrefixMatches(artifacts, "dist/extensions/whatsapp/");
   });
 
   it("sorts Docker-selected build entries without git metadata", () => {
@@ -289,21 +334,6 @@ describe("bundled plugin build entries", () => {
     } finally {
       readdirSpy.mockRestore();
     }
-  });
-
-  it("preserves known dependency-only Docker plugin selections", () => {
-    const baselineEnv = { ...process.env };
-    delete baselineEnv[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV];
-    const baselineEntries = listBundledPluginBuildEntries({ env: baselineEnv });
-    const selectedEntries = listBundledPluginBuildEntries({
-      env: {
-        ...baselineEnv,
-        [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "whatsapp",
-      },
-    });
-
-    expect(selectedEntries).toEqual(baselineEntries);
-    expectNoPrefixMatches(Object.keys(selectedEntries), "extensions/whatsapp/");
   });
 
   it("preserves known package-less bundled Docker plugin selections", () => {

@@ -174,21 +174,5 @@ export function createDiscordPluginBase(params: {
       collectUnsupportedSecretRefConfigCandidates,
       collectRuntimeConfigAssignments,
     },
-  } as Pick<
-    ChannelPlugin<ResolvedDiscordAccount>,
-    | "id"
-    | "meta"
-    | "setupWizard"
-    | "capabilities"
-    | "commands"
-    | "doctor"
-    | "streaming"
-    | "reload"
-    | "configSchema"
-    | "config"
-    | "setupContract"
-    | "messaging"
-    | "security"
-    | "secrets"
-  >;
+  };
 }

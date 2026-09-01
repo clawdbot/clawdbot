@@ -19,6 +19,7 @@ import {
   resolveEffectiveAgentSkillFilter,
 } from "../discovery/agent-filter.js";
 import { normalizeSkillFilter } from "../discovery/filter.js";
+import { assertUnambiguousManagedSkillNames } from "../library/command-name.js";
 import { getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { mergeRemoteNodeSkillEntries } from "../runtime/remote-skills.js";
 import { fingerprintSkillSnapshotConfig } from "../runtime/snapshot-config-fingerprint.js";
@@ -164,6 +165,7 @@ function filterSkillEntries(
   eligibility?: SkillEligibilityContext,
 ): SkillEntry[] {
   const bundledAllowlist = resolveBundledAllowlist(config);
+  assertUnambiguousManagedSkillNames(entries);
   let filtered = entries.filter((entry) =>
     shouldIncludeSkill({ entry, config, bundledAllowlist, eligibility }),
   );
