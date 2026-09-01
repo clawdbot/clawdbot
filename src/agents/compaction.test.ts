@@ -587,4 +587,30 @@ describe("pruneHistoryForContextShare", () => {
     expect(keptToolResults).toHaveLength(0);
     expect(pruned.droppedMessages).toBe(pruned.droppedMessagesList.length);
   });
+
+  it("accounts for orphaned tool_results removed from the retained suffix", () => {
+    const messages: AgentMessage[] = [
+      makeMessage(1, 4000),
+      makeToolResult(2, "missing-call", "orphan-result ".repeat(500)),
+      makeMessage(3, 4000),
+    ];
+    const chunks = splitMessagesByTokenShare(messages, 2);
+    const retained = chunks.slice(1).flat();
+    const retainedTokens = estimateMessagesTokens(retained);
+    const totalTokens = estimateMessagesTokens(messages);
+    const pruned = pruneHistoryForContextShare({
+      messages,
+      maxContextTokens: Math.ceil(totalTokens),
+      maxHistoryShare: 0.5,
+      parts: 2,
+    });
+
+    expect(chunks[0]).toContain(messages[0]);
+    expect(retained).toContain(messages[1]);
+    expect(pruned.messages).not.toContain(messages[1]);
+    expect(pruned.droppedMessagesList).toEqual([messages[0], messages[1]]);
+    expect(pruned.droppedMessages).toBe(2);
+    expect(pruned.droppedTokens).toBe(estimateMessagesTokens([messages[0], messages[1]]));
+    expect(retainedTokens).toBeGreaterThan(0);
+  });
 });

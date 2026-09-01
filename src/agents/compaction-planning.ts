@@ -336,12 +336,15 @@ function pruneHistoryForContextShare(params: {
     }
     const dropped = chunks[0]!;
     // Dropping a call owner also drops orphaned results; providers reject replay without the pair.
-    const repairReport = repairToolUseResultPairing(chunks.slice(1).flat());
+    const retained = chunks.slice(1).flat();
+    const repairReport = repairToolUseResultPairing(retained);
+    const retainedAfterRepair = new Set(repairReport.messages);
+    const repairedDropped = retained.filter((message) => !retainedAfterRepair.has(message));
 
     droppedChunks += 1;
-    droppedMessages += dropped.length + repairReport.droppedOrphanCount;
-    droppedTokens += estimateMessagesTokens(dropped);
-    allDroppedMessages.push(...dropped);
+    droppedMessages += dropped.length + repairedDropped.length;
+    droppedTokens += estimateMessagesTokens(dropped) + estimateMessagesTokens(repairedDropped);
+    allDroppedMessages.push(...dropped, ...repairedDropped);
     keptMessages = repairReport.messages;
   }
 
