@@ -2305,13 +2305,21 @@ describe("package acceptance workflow", () => {
       OPENCLAW_RELEASE_PUBLISH_FULL_REF: "${{ inputs.release_publish_full_ref }}",
       OPENCLAW_RELEASE_PUBLISH_PARENT_STATE_POLICY:
         "${{ inputs.release_publish_run_id != '' && (github.actor == 'github-actions[bot]' && 'active-or-failure' || 'manual-recovery') || '' }}",
-      OPENCLAW_RELEASE_TOOLING_ALLOW_PREVALIDATED_REF: "true",
       OPENCLAW_RELEASE_TOOLING_FULL_REF: "${{ github.ref }}",
-      OPENCLAW_RELEASE_TOOLING_IDENTITY_REQUIRED: "true",
       OPENCLAW_RELEASE_TOOLING_REF: "${{ github.ref_name }}",
       OPENCLAW_RELEASE_TOOLING_REPOSITORY: "${{ github.repository }}",
       OPENCLAW_RELEASE_TOOLING_SHA: "${{ github.workflow_sha }}",
     });
+
+    expect(oidcPublish.env).toMatchObject({
+      TARBALL_PATH: "${{ steps.publication_evidence.outputs.tarball_path }}",
+      PUBLISH_TAG: "${{ steps.publication_evidence.outputs.publish_tag }}",
+    });
+    expect(oidcPublish.run).toContain("node scripts/release-tooling-identity.mjs verify");
+    expect(oidcPublish.run).toContain(
+      '--release-publish-parent-state-policy "$OPENCLAW_RELEASE_PUBLISH_PARENT_STATE_POLICY"',
+    );
+    expect(oidcPublish.run).not.toContain("plugin-npm-publish.sh");
 
     const bootstrapPublish = workflowStep(pluginPublishJob, "Publish approved bootstrap tarball");
     expect(bootstrapPublish.env).toMatchObject({
@@ -2476,10 +2484,14 @@ describe("package acceptance workflow", () => {
       const script = releasePublishOrchestration(
         workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish"),
       ).run;
-      if (!script) throw new Error("Missing publish orchestration");
+      if (!script) {
+        throw new Error("Missing publish orchestration");
+      }
       const start = script.indexOf('openclaw_result=""');
       const end = script.indexOf('if [[ ( -n "${openclaw_npm_run_id}"', start);
-      if (start < 0 || end < start) throw new Error("Missing native publication stage");
+      if (start < 0 || end < start) {
+        throw new Error("Missing native publication stage");
+      }
       const root = tempDirs.make("android-detached-publish-");
       const result = spawnSync(
         "bash",
@@ -2538,7 +2550,9 @@ printf 'core_failed=%s\n' "$failed"
         expect(summary).toContain("completion not awaited");
         expect(summary).toContain("https://github.com/openclaw/openclaw/actions/runs/456");
       }
-      if (!assetsVerified) expect(summary).not.toContain("releases/download");
+      if (!assetsVerified) {
+        expect(summary).not.toContain("releases/download");
+      }
     },
   );
 
@@ -6784,7 +6798,9 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
           jobName === "run_slack_desktop",
         );
       }
-      if (jobName === "run_web_ui_chat") continue;
+      if (jobName === "run_web_ui_chat") {
+        continue;
+      }
       const install = workflowStep(job, "Install Crabbox CLI").run ?? "";
       const gitCalls = install
         .split("\n")
