@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   runNodeHost: vi.fn(),
   runNodeDaemonInstall: vi.fn(),
   fetchWithSsrFGuard: vi.fn(),
+  readRegularFile: vi.fn(),
   loadNodeHostConfig: vi.fn<() => Promise<NodeHostConfig | null>>(async () => null),
   mutateConfigFileWithRetry: vi.fn(),
   runtime: {
@@ -34,6 +35,11 @@ vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/net/fetch-guard.js")>();
   mocks.fetchWithSsrFGuard.mockImplementation(actual.fetchWithSsrFGuard);
   return { fetchWithSsrFGuard: mocks.fetchWithSsrFGuard };
+});
+vi.mock("../infra/regular-file.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/regular-file.js")>();
+  mocks.readRegularFile.mockImplementation(actual.readRegularFile);
+  return { readRegularFile: mocks.readRegularFile };
 });
 vi.mock("../runtime.js", () => ({ defaultRuntime: mocks.runtime }));
 
@@ -170,6 +176,56 @@ describe("connect cli", () => {
         expect.objectContaining({ forceWorkerRuns: true }),
       );
       await expect(fs.stat(targetFile)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not delete the target file when reading it fails", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-connect-target-fail-"));
+    const targetFile = path.join(root, "setup-code");
+    await fs.writeFile(targetFile, setupCode(), { mode: 0o600 });
+    mocks.readRegularFile.mockRejectedValueOnce(new Error("permission denied"));
+    try {
+      await runConnect(["--target-file", targetFile, "--ephemeral"]);
+
+      expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+      expect(mocks.runNodeHost).not.toHaveBeenCalled();
+      await expect(fs.stat(targetFile)).resolves.toBeDefined();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not delete an empty target file", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-connect-target-empty-"));
+    const targetFile = path.join(root, "setup-code");
+    await fs.writeFile(targetFile, "");
+    try {
+      await runConnect(["--target-file", targetFile, "--ephemeral"]);
+
+      expect(mocks.runtime.error).toHaveBeenCalledWith("Connect target file is empty.");
+      expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+      expect(mocks.runNodeHost).not.toHaveBeenCalled();
+      await expect(fs.stat(targetFile)).resolves.toBeDefined();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("includes the --target-file flag and size limit in read errors", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-connect-target-err-"));
+    const targetFile = path.join(root, "setup-code");
+    await fs.writeFile(targetFile, setupCode(), { mode: 0o600 });
+    mocks.readRegularFile.mockRejectedValueOnce(new Error("File exceeds 65536 bytes"));
+    try {
+      await runConnect(["--target-file", targetFile]);
+
+      expect(mocks.runtime.error).toHaveBeenCalledWith(expect.stringContaining("--target-file"));
+      expect(mocks.runtime.error).toHaveBeenCalledWith(expect.stringContaining("65536"));
+      expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+      expect(mocks.runNodeHost).not.toHaveBeenCalled();
+      await expect(fs.stat(targetFile)).resolves.toBeDefined();
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
