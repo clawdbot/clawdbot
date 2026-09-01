@@ -190,11 +190,11 @@ extension OpenClawChatComposer {
             }
             .labelsHidden()
             #if os(macOS)
-                .pickerStyle(.inline)
+            .pickerStyle(.inline)
             #endif
-                .disabled(
-                    !self.viewModel.composerModelMutationAvailable ||
-                        self.viewModel.isUpdatingSessionSettings)
+            .disabled(
+                !self.viewModel.composerModelMutationAvailable ||
+                    self.viewModel.isUpdatingSessionSettings)
             #if os(macOS)
             if self.viewModel.modelSelectionID != OpenClawChatViewModel.defaultModelSelectionID {
                 Divider()
@@ -213,22 +213,22 @@ extension OpenClawChatComposer {
         .menuIndicator(.hidden)
         .tint(OpenClawChatTheme.muted)
         #if os(macOS)
-            // Mac session settings remain editable during a response; pinning is
-            // local and stays available while a Gateway settings save is pending.
-                .fixedSize()
+        // Mac session settings remain editable during a response; pinning is
+        // local and stays available while a Gateway settings save is pending.
+        .fixedSize()
         #else
-                .disabled(
-                    !self.viewModel.showsModelPicker ||
-                        !self.viewModel.composerModelMutationAvailable ||
-                        self.viewModel.isUpdatingSessionSettings ||
-                        self.viewModel.hasActiveRunForComposerSettings)
+        .disabled(
+            !self.viewModel.showsModelPicker ||
+                !self.viewModel.composerModelMutationAvailable ||
+                self.viewModel.isUpdatingSessionSettings ||
+                self.viewModel.hasActiveRunForComposerSettings)
         #endif
-            .help(self.cleanInlineModelDisabledHint ?? self.viewModel.composerInlineModelLabel)
-            .accessibilityLabel("Model")
-            .accessibilityValue(self.viewModel.composerInlineModelLabel)
-            .accessibilityHint(self.cleanInlineModelDisabledHint ?? "")
-            .accessibilityIdentifier("chat-composer-inline-model")
-            .layoutPriority(1)
+        .help(self.cleanInlineModelDisabledHint ?? self.viewModel.composerInlineModelLabel)
+        .accessibilityLabel("Model")
+        .accessibilityValue(self.viewModel.composerInlineModelLabel)
+        .accessibilityHint(self.cleanInlineModelDisabledHint ?? "")
+        .accessibilityIdentifier("chat-composer-inline-model")
+        .layoutPriority(1)
     }
 
     @ViewBuilder
@@ -321,15 +321,15 @@ extension OpenClawChatComposer {
             !self.viewModel.composerEffortMutationAvailable ||
                 self.viewModel.isUpdatingSessionSettings)
         #if os(macOS)
-            .fixedSize()
+        .fixedSize()
         #else
-            .disabled(self.viewModel.hasActiveRunForComposerSettings)
+        .disabled(self.viewModel.hasActiveRunForComposerSettings)
         #endif
-            .help(self.cleanInlineEffortDisabledHint ?? self.viewModel.composerInlineEffortLabel)
-            .accessibilityLabel("Effort")
-            .accessibilityValue(self.viewModel.composerInlineEffortLabel)
-            .accessibilityHint(self.cleanInlineEffortDisabledHint ?? "")
-            .accessibilityIdentifier("chat-composer-inline-effort")
+        .help(self.cleanInlineEffortDisabledHint ?? self.viewModel.composerInlineEffortLabel)
+        .accessibilityLabel("Effort")
+        .accessibilityValue(self.viewModel.composerInlineEffortLabel)
+        .accessibilityHint(self.cleanInlineEffortDisabledHint ?? "")
+        .accessibilityIdentifier("chat-composer-inline-effort")
     }
 
     private var cleanInlineModelDisabledHint: String? {
