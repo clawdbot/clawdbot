@@ -548,7 +548,10 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
         },
       },
     };
-    expect(resolveInstalledPluginPackageOwnership(orphanedOwner, "orphaned").ok).toBe(false);
+    expect(resolveInstalledPluginPackageOwnership(orphanedOwner, "orphaned")).toMatchObject({
+      ok: true,
+      value: { installOwner: "orphaned", pluginIds: [] },
+    });
     expect(hasMissingInstalledPluginOwnerMetadata(orphanedOwner, env)).toBe(false);
 
     const legacyAmbiguous = {

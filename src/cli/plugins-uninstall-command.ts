@@ -138,6 +138,7 @@ async function runPluginUninstallCommandUnlocked(
     return;
   }
   const { installOwner: pluginId, pluginIds: ownedPluginIds } = ownership.value;
+  const policyPluginIds = ownedPluginIds.length > 0 ? ownedPluginIds : [pluginId];
   const channelIds =
     ownedPluginIds.length === 1 && ownedPluginIds[0] === requestedPluginId
       ? plugin?.channelIds
@@ -158,7 +159,7 @@ async function runPluginUninstallCommandUnlocked(
         extensionsDir,
       },
       {
-        runtimePluginIds: ownedPluginIds,
+        runtimePluginIds: policyPluginIds,
         runtimeLoadPaths: ownedPluginIds.flatMap(
           (entryId) => report.plugins.find((entry) => entry.id === entryId)?.source ?? [],
         ),
@@ -278,7 +279,7 @@ async function runPluginUninstallCommandUnlocked(
     if (plan.directoryRemoval) {
       const disabledConfig = prepareConfigForPendingPluginDirectoryRemovalSet(
         sourceConfig,
-        ownedPluginIds,
+        policyPluginIds,
       );
       const disabledCommit = await tracePluginLifecyclePhaseAsync(
         "config disable",
@@ -321,7 +322,7 @@ async function runPluginUninstallCommandUnlocked(
             extensionsDir,
           },
           {
-            runtimePluginIds: ownedPluginIds,
+            runtimePluginIds: policyPluginIds,
             runtimeLoadPaths: ownedPluginIds.flatMap(
               (entryId) => report.plugins.find((entry) => entry.id === entryId)?.source ?? [],
             ),

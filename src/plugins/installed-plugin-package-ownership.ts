@@ -92,16 +92,6 @@ export function resolveInstalledPluginPackageOwnership(
     )
     .map((entry) => entry.pluginId)
     .toSorted();
-  if (pluginIds.length === 0) {
-    return ownershipError(
-      pluginId,
-      `package owner "${installOwner}" has no authoritative runtime child list`,
-    );
-  }
-  if (target && !pluginIds.includes(target.pluginId)) {
-    return ownershipError(pluginId, `does not belong to package owner "${installOwner}"`);
-  }
-
   const hasUnsafePackageEntry = index.plugins.some(
     (entry) =>
       installRecordPathMatchesPluginRoot(installRecord, entry.rootDir, env) &&
@@ -111,6 +101,21 @@ export function resolveInstalledPluginPackageOwnership(
   if (hasUnsafePackageEntry) {
     return ownershipError(pluginId, `package owner "${installOwner}" has conflicting child rows`);
   }
+  if (pluginIds.length === 0) {
+    if (target) {
+      return ownershipError(
+        pluginId,
+        `package owner "${installOwner}" has no authoritative runtime child list`,
+      );
+    }
+    // The exact durable owner still identifies an unambiguous tombstone after its
+    // package files disappear. Keep it actionable for update skipping and uninstall.
+    return { ok: true, value: { installOwner, installRecord, pluginIds } };
+  }
+  if (target && !pluginIds.includes(target.pluginId)) {
+    return ownershipError(pluginId, `does not belong to package owner "${installOwner}"`);
+  }
+
   return { ok: true, value: { installOwner, installRecord, pluginIds } };
 }
 

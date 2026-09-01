@@ -2058,6 +2058,7 @@ export async function uninstallManagedPlugin(params: {
       throw new ManagedPluginLifecycleError(ownership.error);
     }
     const { installOwner, pluginIds: ownedPluginIds } = ownership.value;
+    const policyPluginIds = ownedPluginIds.length > 0 ? ownedPluginIds : [installOwner];
     const ownedManifests = ownedPluginIds.flatMap((entryId) => {
       const manifest = metadata.byPluginId.get(entryId);
       return manifest ? [manifest] : [];
@@ -2077,7 +2078,7 @@ export async function uninstallManagedPlugin(params: {
           extensionsDir,
         },
         {
-          runtimePluginIds: ownedPluginIds,
+          runtimePluginIds: policyPluginIds,
           runtimeLoadPaths: ownedPluginIds.flatMap(
             (entryId) => metadata.byPluginId.get(entryId)?.source ?? [],
           ),
@@ -2093,7 +2094,7 @@ export async function uninstallManagedPlugin(params: {
     if (plan.directoryRemoval) {
       const disabledConfig = prepareConfigForPendingPluginDirectoryRemovalSet(
         snapshot.config,
-        ownedPluginIds,
+        policyPluginIds,
       );
       await replaceConfigFile({
         nextConfig: disabledConfig,
@@ -2125,7 +2126,7 @@ export async function uninstallManagedPlugin(params: {
             extensionsDir,
           },
           {
-            runtimePluginIds: ownedPluginIds,
+            runtimePluginIds: policyPluginIds,
             runtimeLoadPaths: ownedPluginIds.flatMap(
               (entryId) => metadata.byPluginId.get(entryId)?.source ?? [],
             ),
