@@ -74,12 +74,11 @@ function writeRpcResponse(
     writeJsonBody(response, 200, body);
     return;
   }
-  const id = Array.isArray(value) ? null : value.id;
-  writeJsonResponse(
-    response,
-    200,
-    createRpcError(id, -32000, "A2A response exceeds the 1 MiB limit"),
-  );
+  const errorMessage = "A2A response exceeds the 1 MiB limit";
+  const bounded = Array.isArray(value)
+    ? value.map((entry) => createRpcError(entry.id, -32000, errorMessage))
+    : createRpcError(value.id, -32000, errorMessage);
+  writeJsonResponse(response, 200, bounded);
 }
 
 function resolvePeerName(request: IncomingMessage, config: A2aChannelConfig): string | undefined {

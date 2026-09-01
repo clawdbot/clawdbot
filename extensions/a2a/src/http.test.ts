@@ -349,6 +349,33 @@ describe("A2A HTTP authentication and request limits", () => {
     });
     expect(Buffer.byteLength(await response.text())).toBeLessThan(1_024);
   });
+
+  it("preserves batch response IDs when aggregate results exceed the response limit", async () => {
+    const harness = await startHttpHarness();
+    const taskA = harness.taskStore.create("ctx-large-a", "alpha");
+    const taskB = harness.taskStore.create("ctx-large-b", "alpha");
+    harness.taskStore.completeNext(taskA.contextId, "a".repeat(600 * 1024), "alpha");
+    harness.taskStore.completeNext(taskB.contextId, "b".repeat(600 * 1024), "alpha");
+
+    const response = await harness.post([
+      { jsonrpc: "2.0", id: "large-a", method: "GetTask", params: { id: taskA.id } },
+      { jsonrpc: "2.0", id: "large-b", method: "GetTask", params: { id: taskB.id } },
+    ]);
+
+    await expect(response.json()).resolves.toEqual([
+      {
+        jsonrpc: "2.0",
+        id: "large-a",
+        error: { code: -32000, message: expect.stringContaining("response") },
+      },
+      {
+        jsonrpc: "2.0",
+        id: "large-b",
+        error: { code: -32000, message: expect.stringContaining("response") },
+      },
+    ]);
+    expect(Buffer.byteLength(await response.text())).toBeLessThan(1_024);
+  });
 });
 
 describe("A2A JSON-RPC protocol boundary", () => {
