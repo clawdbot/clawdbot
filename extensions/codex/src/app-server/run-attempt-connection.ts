@@ -137,7 +137,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const preparedShellEnvironment = preparedEnvironment
     ? {
         ...preparedEnvironment.credentialScrubEnv,
-        ...(!remoteExec ? preparedEnvironment.localIdentityEnv : undefined),
+        ...(sandbox?.enabled || remoteExec ? undefined : preparedEnvironment.localIdentityEnv),
         ...preparedEnvironment.localProcessEnv,
       }
     : undefined;
