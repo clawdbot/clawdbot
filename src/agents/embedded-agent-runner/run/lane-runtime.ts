@@ -37,7 +37,7 @@ export async function withEmbeddedRunLaneProgressHeartbeat<T>(
 export function resolveEmbeddedRunLaneTimeoutMs(timeoutMs: number): number {
   const defaultLaneTimeoutMs = DEFAULT_AGENT_TIMEOUT_MS + EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS;
   // "No timeout" resolves to the timer-safe MAX_TIMER sentinel upstream.
-  // Lane ownership still caps at the default agent deadline in that case.
+  // This is the preflight/legacy idle backstop; a runtime deadline handoff replaces it.
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs >= MAX_TIMER_TIMEOUT_MS) {
     return defaultLaneTimeoutMs;
   }

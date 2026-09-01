@@ -47,7 +47,6 @@ function makeTimeoutInput(
       failureSignal: undefined,
       ...preparedOverrides,
     },
-    shouldSurfaceCodexCompletionTimeout: false,
     attempt,
     terminalState: resolveEmbeddedRunAttemptTerminalState({
       attempt,

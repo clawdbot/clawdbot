@@ -10,7 +10,10 @@ import {
   retainQueuedAgentRunContext,
 } from "../../../infra/agent-run-registry.js";
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../../process/command-queue.js";
-import type { CommandQueueEnqueueOptions } from "../../../process/command-queue.types.js";
+import type {
+  CommandQueueEnqueueOptions,
+  CommandQueueTaskDeadline,
+} from "../../../process/command-queue.types.js";
 import { withSessionPlacementTurnAdmission } from "../../session-placement-admission.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
 import {
@@ -45,6 +48,20 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
   const laneTaskAbortController = new AbortController();
   const laneTaskReleaseController = new AbortController();
   let laneTaskProgressAtMs = Date.now();
+  let laneTaskDeadline: CommandQueueTaskDeadline | undefined;
+  let notifyLaneTaskDeadline:
+    | ((deadline: CommandQueueTaskDeadline | undefined) => void)
+    | undefined;
+  const setLaneTaskDeadline = (deadline: CommandQueueTaskDeadline | undefined) => {
+    laneTaskDeadline =
+      deadline?.kind === "bounded"
+        ? {
+            kind: "bounded",
+            deadlineAtMs: deadline.deadlineAtMs + EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
+          }
+        : deadline;
+    notifyLaneTaskDeadline?.(laneTaskDeadline);
+  };
   let releaseQueuedRunContext: ReturnType<typeof retainQueuedAgentRunContext>;
   let queuedRunAbortSignal: AbortSignal | undefined;
   let releaseCapacityWait: (() => void) | undefined;
@@ -96,6 +113,15 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       {
         ...opts,
         taskTimeoutProgressAtMs: () => laneTaskProgressAtMs,
+        taskTimeoutSubscribe: (onDeadline) => {
+          notifyLaneTaskDeadline = onDeadline;
+          onDeadline(laneTaskDeadline);
+          return () => {
+            if (notifyLaneTaskDeadline === onDeadline) {
+              notifyLaneTaskDeadline = undefined;
+            }
+          };
+        },
         taskTimeoutAbortSignal: laneTaskAbortController.signal,
         taskTimeoutAbortGraceMs: EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
         taskTimeoutReleaseSignal: laneTaskReleaseController.signal,
@@ -272,6 +298,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     laneTaskAbortController,
     laneTaskReleaseController,
     noteLaneTaskProgress,
+    setLaneTaskDeadline,
     throwIfAborted,
   };
 }

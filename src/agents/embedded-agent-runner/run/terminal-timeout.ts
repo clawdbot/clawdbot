@@ -6,6 +6,7 @@ import { resolveRunLivenessState } from "./incomplete-turn-resolution.js";
 import {
   isEmbeddedRunTerminalAbort,
   isEmbeddedRunTerminalTimeout,
+  isEmbeddedRunTimeoutFinal,
   type EmbeddedRunTerminalState,
 } from "./terminal-outcome.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
@@ -28,17 +29,18 @@ type EmbeddedRunTerminalPreparedFacts = {
 
 export function resolveEmbeddedRunTerminalTimeout(input: {
   terminalPrepared: EmbeddedRunTerminalPreparedFacts;
-  shouldSurfaceCodexCompletionTimeout: boolean;
   attempt: EmbeddedRunAttemptResult;
   terminalState: EmbeddedRunTerminalState;
   resolveReplayInvalid: (incompleteTurnText?: string | null) => boolean;
   setTerminalLifecycleMeta: NonNullable<EmbeddedRunAttemptResult["setTerminalLifecycleMeta"]>;
   startedAtMs: number;
 }): EmbeddedAgentRunResult | undefined {
+  const timeoutFinal = isEmbeddedRunTimeoutFinal(input.attempt);
   if (
     !input.terminalPrepared.timedOutDuringPrompt ||
-    input.terminalPrepared.hasSuccessfulFinalAssistantAfterPromptTimeout ||
-    (!input.shouldSurfaceCodexCompletionTimeout && hasMessagingToolDeliveryEvidence(input.attempt))
+    (!timeoutFinal &&
+      (input.terminalPrepared.hasSuccessfulFinalAssistantAfterPromptTimeout ||
+        hasMessagingToolDeliveryEvidence(input.attempt)))
   ) {
     return undefined;
   }
@@ -77,7 +79,7 @@ export function resolveEmbeddedRunTerminalTimeout(input: {
   input.setTerminalLifecycleMeta({ replayInvalid, livenessState, ...timeoutAttribution });
   return {
     payloads: [
-      ...(input.terminalPrepared.hasPartialAssistantTextAfterPromptTimeout
+      ...(input.terminalPrepared.hasPartialAssistantTextAfterPromptTimeout && !timeoutFinal
         ? []
         : input.terminalPrepared.payloadsWithToolMedia || []),
       { text: timeoutText, isError: true },
@@ -93,7 +95,7 @@ export function resolveEmbeddedRunTerminalTimeout(input: {
       replayInvalid,
       livenessState,
       ...timeoutAttribution,
-      ...(input.shouldSurfaceCodexCompletionTimeout
+      ...(timeoutFinal
         ? {
             error: {
               kind: "incomplete_turn" as const,

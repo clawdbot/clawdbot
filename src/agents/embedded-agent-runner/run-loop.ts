@@ -628,7 +628,6 @@ export async function runPreparedEmbeddedLoop(
 
       const terminalTimeoutResult = resolveEmbeddedRunTerminalTimeout({
         terminalPrepared,
-        shouldSurfaceCodexCompletionTimeout: recovery.shouldSurfaceCodexCompletionTimeout,
         attempt: terminalAttempt,
         terminalState: resolvedTerminalState,
         resolveReplayInvalid: resolveReplayInvalidForAttempt,

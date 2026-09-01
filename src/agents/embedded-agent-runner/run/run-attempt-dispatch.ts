@@ -1,5 +1,8 @@
+import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import type { CommandQueueTaskDeadline } from "../../../process/command-queue.types.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-task-runtime-scope.js";
+import { getAdmittedRunDelegatedAuthority } from "../../admitted-run-context.js";
 import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { resolveDelegationCapability } from "../../delegation-capability.js";
@@ -108,6 +111,7 @@ type AttemptControl = {
   laneTaskAbortController: AbortController;
   laneTaskReleaseController: AbortController;
   noteLaneTaskProgress: () => void;
+  setLaneTaskDeadline: (deadline: CommandQueueTaskDeadline | undefined) => void;
   onToolOutcome: ToolOutcomeObserver;
   isTurnTainted: () => boolean;
   allocateToolOutcomeOrdinal: (toolCallId?: string) => number;
@@ -256,6 +260,23 @@ export async function dispatchEmbeddedRunAttempt(input: {
   if (!params.admittedRunContext) {
     throw new Error("embedded attempt reached dispatch without an admitted run context");
   }
+  const admittedRunContext = params.admittedRunContext;
+  const deadlineAuthority = getAdmittedRunDelegatedAuthority(admittedRunContext);
+  let attemptActive = true;
+  let runtimeDeadlineOwned = false;
+  const isDeadlineOwnerCurrent = () =>
+    attemptActive &&
+    !cancellationRequested &&
+    isAgentEventLifecycleGenerationCurrent(control.lifecycleGeneration) &&
+    deadlineAuthority !== undefined &&
+    getAdmittedRunDelegatedAuthority(admittedRunContext) === deadlineAuthority;
+  const onAttemptDeadlineChanged = (deadline: CommandQueueTaskDeadline) => {
+    if (!isDeadlineOwnerCurrent() || attemptAbortController.signal.aborted) {
+      return;
+    }
+    runtimeDeadlineOwned = true;
+    control.setLaneTaskDeadline(deadline);
+  };
   if (params.permissionMode) {
     // Attempts narrow this shared run-owned policy before recovery can reuse it.
     params.execOverrides ??= {};
@@ -468,13 +489,26 @@ export async function dispatchEmbeddedRunAttempt(input: {
     onAttemptTimeoutArmed: control.pluginHarnessOwnsTransport
       ? undefined
       : startLaneProgressHeartbeat,
-    onAttemptTimeout: control.pluginHarnessOwnsTransport ? undefined : armAttemptTimeoutRelease,
+    onAttemptDeadlineChanged: control.pluginHarnessOwnsTransport
+      ? onAttemptDeadlineChanged
+      : undefined,
+    onAttemptTimeout: (reason) => {
+      if (
+        attemptActive &&
+        (!control.pluginHarnessOwnsTransport || (runtimeDeadlineOwned && isDeadlineOwnerCurrent()))
+      ) {
+        armAttemptTimeoutRelease(reason);
+      }
+    },
     onAttemptAbort: () => {
+      if (!attemptActive || (runtimeDeadlineOwned && !isDeadlineOwnerCurrent())) {
+        return;
+      }
       cancellationRequested = true;
       if (!params.abortSignal?.aborted) {
         params.replyOperation?.abortByUser();
       }
-      if (!control.pluginHarnessOwnsTransport) {
+      if (!control.pluginHarnessOwnsTransport || runtimeDeadlineOwned) {
         stopLaneProgressHeartbeat();
         control.laneTaskAbortController.abort();
       }
@@ -580,8 +614,14 @@ export async function dispatchEmbeddedRunAttempt(input: {
       throw control.getPostCompactionAbortError() ?? err;
     })
     .finally(() => {
+      attemptActive = false;
       clearAttemptTimeoutRelease();
       stopLaneProgressHeartbeat();
+      if (runtimeDeadlineOwned) {
+        // Attempt completion is real progress; retries/preflight return to the lane's idle owner.
+        control.noteLaneTaskProgress();
+        control.setLaneTaskDeadline(undefined);
+      }
       parentAbortSignal?.removeEventListener?.("abort", relayParentAbort);
       control.clearPostCompactionAbortController(attemptAbortController);
     });

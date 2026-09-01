@@ -1,6 +1,7 @@
 // Diagnostic logger records structured runtime events, timings, and health snapshots.
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { resolveCompactionTimeoutMs } from "../agents/embedded-agent-runner/compaction-safety-timeout.js";
+import { resolveActiveEmbeddedRunRecoveryBlocker } from "../agents/embedded-agent-runner/run-state.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -989,12 +990,16 @@ function logSessionAttention(
   const stuckSessionAbortMs =
     params.abortThresholdMs ?? resolveStalledEmbeddedRunAbortMs(params.thresholdMs);
   const queueDepth = resolveDiagnosticQueuedBacklog(state);
+  const runtimeOwnsLiveness = state.sessionId
+    ? resolveActiveEmbeddedRunRecoveryBlocker(state.sessionId) === "runtime_owned_wait"
+    : false;
   const classification = classifySessionAttention({
     state: state.state as "idle" | "processing" | "waiting" | undefined,
     queueDepth,
     activity,
     staleMs: params.thresholdMs,
     stuckSessionAbortMs,
+    runtimeOwnsLiveness,
   });
   const recoveryEligible =
     classification.recoveryEligible ||

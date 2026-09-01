@@ -88,8 +88,12 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     notifyToolResult,
     resolveAttemptFastModeParam,
   } = runInput.progressController;
-  const { laneTaskAbortController, laneTaskReleaseController, noteLaneTaskProgress } =
-    runInput.laneController;
+  const {
+    laneTaskAbortController,
+    laneTaskReleaseController,
+    noteLaneTaskProgress,
+    setLaneTaskDeadline,
+  } = runInput.laneController;
   const {
     requestedModelId,
     expectedHarnessArtifact,
@@ -295,6 +299,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       laneTaskAbortController,
       laneTaskReleaseController,
       noteLaneTaskProgress,
+      setLaneTaskDeadline,
       onToolOutcome: input.observeToolOutcome,
       isTurnTainted: input.isTurnTainted,
       allocateToolOutcomeOrdinal: input.allocateToolOutcomeOrdinal,

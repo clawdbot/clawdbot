@@ -678,10 +678,7 @@ export async function runCodexAppServerSideQuestion(
             currentChannelId: params.currentChannelId,
           }).channelId,
           requestTimeoutMs: appServer.requestTimeoutMs,
-          completionTimeoutMs: Math.max(
-            appServer.turnCompletionIdleTimeoutMs,
-            SIDE_QUESTION_COMPLETION_TIMEOUT_MS,
-          ),
+          completionTimeoutMs: SIDE_QUESTION_COMPLETION_TIMEOUT_MS,
           loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
           signal: runAbortController.signal,
           hostCapabilities: sideRunParams.hostCapabilities,
@@ -898,10 +895,7 @@ export async function runCodexAppServerSideQuestion(
     try {
       text = await collector.wait({
         signal: runAbortController.signal,
-        timeoutMs: Math.max(
-          appServer.turnCompletionIdleTimeoutMs,
-          SIDE_QUESTION_COMPLETION_TIMEOUT_MS,
-        ),
+        timeoutMs: SIDE_QUESTION_COMPLETION_TIMEOUT_MS,
       });
     } catch (error) {
       if (error instanceof CodexSideQuestionTimeoutError && !runAbortController.signal.aborted) {

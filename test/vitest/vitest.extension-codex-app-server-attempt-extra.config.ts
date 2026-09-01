@@ -21,6 +21,7 @@ export function createExtensionCodexAppServerAttemptExtraVitestConfig(
       "extensions/codex/src/app-server/run-attempt.notification-burst.test.ts",
       "extensions/codex/src/app-server/run-attempt.reasoning-effort.test.ts",
       "extensions/codex/src/app-server/run-attempt-runtime.authority.test.ts",
+      "extensions/codex/src/app-server/run-attempt.settlement.test.ts",
       "extensions/codex/src/app-server/run-attempt.steering.test.ts",
       "extensions/codex/src/app-server/run-attempt.steering-media.test.ts",
       "extensions/codex/src/app-server/run-attempt.turn-watches.test.ts",
