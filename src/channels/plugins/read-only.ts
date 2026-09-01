@@ -226,10 +226,10 @@ function isManifestChannelAccountEnabled(params: {
   cfg: OpenClawConfig;
   channelId: string;
 }): boolean {
-  const accountEnabled = params.account.config.enabled;
-  return typeof accountEnabled === "boolean"
-    ? accountEnabled
-    : getChannelConfigRecord(params.cfg, params.channelId).enabled !== false;
+  return (
+    getChannelConfigRecord(params.cfg, params.channelId).enabled !== false &&
+    params.account.config.enabled !== false
+  );
 }
 
 function buildManifestChannelPlugin(params: {

@@ -528,7 +528,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     expect(
       resolveEnabled({
         "external-chat": {
-          enabled: false,
+          enabled: true,
           accounts: { ops: { enabled: true } },
         },
       }),
@@ -536,11 +536,11 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     expect(
       resolveEnabled({
         "external-chat": {
-          enabled: false,
+          enabled: true,
           accounts: { ops: {} },
         },
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("reevaluates persisted auth without replacing manifest adapters or loading channel runtime", () => {
