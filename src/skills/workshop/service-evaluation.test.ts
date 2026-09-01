@@ -163,13 +163,10 @@ describe("Skill Workshop proposal evaluation", () => {
       },
       reason: "manual",
     });
-    await expect(inspectSkillProposal(proposal.record.id, { workspaceDir })).resolves.toMatchObject(
-      {
-        record: { evaluation: { id: evaluated.evaluation.id } },
-      },
-    );
+    await expect(inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
+      record: { evaluation: { id: evaluated.evaluation.id } },
+    });
     const eventsAfterEvaluation = listSkillProposalEvents({
-      workspaceDir,
       proposalId: proposal.record.id,
     }).events;
     expect(eventsAfterEvaluation.map((event) => event.type)).toEqual([
@@ -198,13 +195,9 @@ describe("Skill Workshop proposal evaluation", () => {
     });
     expect(revised.record.evaluation).toBeUndefined();
     expect(
-      listSkillProposalEvents({ workspaceDir, proposalId: proposal.record.id }).events.map(
-        (event) => event.type,
-      ),
+      listSkillProposalEvents({ proposalId: proposal.record.id }).events.map((event) => event.type),
     ).toEqual(["created", "evaluation_completed", "revised"]);
-    expect(
-      listSkillProposalEvents({ workspaceDir, proposalId: proposal.record.id }).events[1],
-    ).toMatchObject({
+    expect(listSkillProposalEvents({ proposalId: proposal.record.id }).events[1]).toMatchObject({
       evaluation: { id: evaluated.evaluation.id },
     });
   });
@@ -263,14 +256,10 @@ describe("Skill Workshop proposal evaluation", () => {
     release?.();
 
     await expect(evaluating).rejects.toThrow("changed while evaluation was running");
-    await expect(inspectSkillProposal(proposal.record.id, { workspaceDir })).resolves.toMatchObject(
-      {
-        record: { proposedVersion: "v2" },
-      },
-    );
-    expect(
-      (await inspectSkillProposal(proposal.record.id, { workspaceDir }))?.record.evaluation,
-    ).toBe(undefined);
+    await expect(inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
+      record: { proposedVersion: "v2" },
+    });
+    expect((await inspectSkillProposal(proposal.record.id))?.record.evaluation).toBe(undefined);
   });
 
   it.each(["skill.md", "SKILL.MD"])(
@@ -518,9 +507,7 @@ describe("Skill Workshop proposal evaluation", () => {
     release?.();
 
     await expect(evaluating).rejects.toThrow("changed while evaluation was running");
-    expect(
-      (await inspectSkillProposal(proposal.record.id, { workspaceDir }))!.record.evaluation,
-    ).toBeUndefined();
+    expect((await inspectSkillProposal(proposal.record.id))!.record.evaluation).toBeUndefined();
   });
 
   it("discards evaluator results when the live skill baseline changes during evaluation", async () => {
@@ -559,9 +546,7 @@ describe("Skill Workshop proposal evaluation", () => {
     release?.();
 
     await expect(evaluating).rejects.toThrow("changed while evaluation was running");
-    expect(
-      (await inspectSkillProposal(proposal.record.id, { workspaceDir }))!.record.evaluation,
-    ).toBeUndefined();
+    expect((await inspectSkillProposal(proposal.record.id))!.record.evaluation).toBeUndefined();
   });
 
   it("discards create evaluator results when the target appears during evaluation", async () => {
@@ -596,9 +581,7 @@ describe("Skill Workshop proposal evaluation", () => {
     release?.();
 
     await expect(evaluating).rejects.toThrow("changed while evaluation was running");
-    expect(
-      (await inspectSkillProposal(proposal.record.id, { workspaceDir }))!.record.evaluation,
-    ).toBeUndefined();
+    expect((await inspectSkillProposal(proposal.record.id))!.record.evaluation).toBeUndefined();
   });
 
   it("rejects stale guards after a support-file-only revision", async () => {
@@ -657,9 +640,7 @@ describe("Skill Workshop proposal evaluation", () => {
       }),
     ).rejects.toThrow("requires at least one changed field");
     expect(
-      listSkillProposalEvents({ workspaceDir, proposalId: proposal.record.id }).events.map(
-        (event) => event.type,
-      ),
+      listSkillProposalEvents({ proposalId: proposal.record.id }).events.map((event) => event.type),
     ).toEqual(["created"]);
   });
 
@@ -724,22 +705,20 @@ describe("Skill Workshop proposal evaluation", () => {
       }),
     ).rejects.toThrow("Policy denied the candidate.");
 
-    await expect(inspectSkillProposal(proposal.record.id, { workspaceDir })).resolves.toMatchObject(
-      {
-        record: {
-          status: "pending",
-          evaluation: {
-            trigger: "apply",
-            outcomes: [
-              {
-                status: "completed",
-                result: { decision: "block" },
-              },
-            ],
-          },
+    await expect(inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
+      record: {
+        status: "pending",
+        evaluation: {
+          trigger: "apply",
+          outcomes: [
+            {
+              status: "completed",
+              result: { decision: "block" },
+            },
+          ],
         },
       },
-    );
+    });
     await expect(fs.access(proposal.record.target.skillFile)).rejects.toThrow();
   });
 
@@ -884,13 +863,9 @@ describe("Skill Workshop proposal evaluation", () => {
         expectedRevisionHash: proposal.revisionHash,
       }),
     ).rejects.toThrow("evaluation exceeds 524288 bytes");
+    expect((await inspectSkillProposal(proposal.record.id))!.record.evaluation).toBeUndefined();
     expect(
-      (await inspectSkillProposal(proposal.record.id, { workspaceDir }))!.record.evaluation,
-    ).toBeUndefined();
-    expect(
-      listSkillProposalEvents({ workspaceDir, proposalId: proposal.record.id }).events.map(
-        (event) => event.type,
-      ),
+      listSkillProposalEvents({ proposalId: proposal.record.id }).events.map((event) => event.type),
     ).toEqual(["created"]);
   });
 

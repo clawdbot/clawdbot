@@ -4,6 +4,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayTransportError } from "../gateway/transport-error.js";
+import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -268,11 +269,19 @@ describe("skills workshop cli", () => {
     await runCommand(["skills", "workshop", "apply", proposalId!]);
     expect(mocks.runtimeStdout.at(-1)).toContain("Applied");
     await expect(
-      fs.readFile(path.join(mocks.workspaceDir, "skills", "paris-weather", "SKILL.md"), "utf8"),
+      fs.readFile(
+        path.join(resolveWorkshopSkillsDir(testState.env), "paris-weather", "SKILL.md"),
+        "utf8",
+      ),
     ).resolves.toContain("Check current weather and alerts");
     await expect(
       fs.readFile(
-        path.join(mocks.workspaceDir, "skills", "paris-weather", "references", "weather.md"),
+        path.join(
+          resolveWorkshopSkillsDir(testState.env),
+          "paris-weather",
+          "references",
+          "weather.md",
+        ),
         "utf8",
       ),
     ).resolves.toContain("Use current conditions");
@@ -300,7 +309,7 @@ describe("skills workshop cli", () => {
     mocks.workspaceDir = await tempDirs.make("openclaw-skills-cli-workshop-second-");
     await runCommand(["skills", "workshop", "list"]);
     expect(mocks.runtimeStdout.at(-1)).toContain(`${proposalId}  pending  create`);
-    expect(mocks.runtimeStdout.at(-1)).toContain("[previous workspace]");
+    expect(mocks.runtimeStdout.at(-1)).toContain("first-cli-skill");
     await runCommand(["skills", "workshop", "inspect", proposalId!]);
     expect(mocks.runtimeStdout.at(-1)).toContain("status: proposal");
 

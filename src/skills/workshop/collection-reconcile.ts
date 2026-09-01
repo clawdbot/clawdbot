@@ -3,7 +3,6 @@ import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import type { PluginHookSkillArtifact } from "../../plugins/hook-types.js";
-import { buildWorkspaceSkillStatus } from "../discovery/status.js";
 import {
   dispatchCommittedSkillChangeBestEffort,
   hasCommittedSkillChangeHooks,
@@ -39,12 +38,6 @@ import {
   type WritableSkillCollectionEntry,
 } from "./collection-contracts.js";
 import {
-  prepareCollectionCreateProposals,
-  promoteCollectionCreateProposal,
-  retireCollectionCreateProposals,
-} from "./collection-create-proposal.js";
-import {
-  canonicalSkillCollectionWorkspace,
   pruneOlderSkillCollectionBackups,
   resolveSkillCollectionBackupRoot,
 } from "./collection-paths.js";
@@ -59,62 +52,24 @@ import {
 import { resolveSkillWorkshopConfig } from "./config.js";
 import { clearSkillUsageForRemovedSkills } from "./curator.js";
 import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
-import {
-  listWorkshopOwnedSkillDirs,
-  releaseWorkshopOwnershipClaims,
-  restoreWorkshopOwnershipClaims,
-  restoreWorkshopOwnershipClaimsBestEffort,
-} from "./ownership.js";
 import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 import { prepareSkillProposalDraft } from "./proposal-draft.js";
+import { resolveWorkshopSkillsDir } from "./skills-root.js";
 import { withSkillCollectionLock } from "./target-lock.js";
-import { assertWritableSkillTarget, isWorkspaceOwnedSkillTarget } from "./workspace-skill-read.js";
+import { listWritableWorkshopSkillSummaries } from "./workspace-skill-read.js";
 
+/**
+ * The Workshop's whole editable collection is the contents of its global directory.
+ */
 export function listWritableSkillCollection(
-  workspaceDir: string,
-  options: {
-    agentId?: string;
-    agentIds?: readonly string[];
-    config?: OpenClawConfig;
-    env?: NodeJS.ProcessEnv;
-  } = {},
+  env?: NodeJS.ProcessEnv,
 ): WritableSkillCollectionEntry[] {
-  const byFile = new Map<string, WritableSkillCollectionEntry>();
-  const ownedDirs = listWorkshopOwnedSkillDirs(
-    workspaceDir,
-    options.env ? { env: options.env } : {},
-  );
-  const agentIds = options.agentIds?.length ? options.agentIds : [options.agentId];
-  for (const agentId of agentIds) {
-    const status = buildWorkspaceSkillStatus(workspaceDir, {
-      config: options.config,
-      ...(agentId ? { agentId } : {}),
-    });
-    for (const skill of status.skills) {
-      if (!skill.eligible || skill.blockedByAgentFilter) {
-        continue;
-      }
-      try {
-        assertWritableSkillTarget(workspaceDir, skill);
-      } catch {
-        continue;
-      }
-      // Autonomous reconciliation may drop whole skill directories, so its
-      // inventory is narrower than manual proposal apply's explicit symlink opt-in.
-      if (!isWorkspaceOwnedSkillTarget(workspaceDir, skill)) {
-        continue;
-      }
-      const filePath = path.resolve(skill.filePath);
-      byFile.set(filePath, {
-        name: skill.skillKey,
-        baseDir: path.resolve(skill.baseDir),
-        filePath,
-        workshopOwned: ownedDirs.has(path.resolve(skill.baseDir)),
-        ...(skill.description ? { description: skill.description } : {}),
-      });
-    }
-  }
-  return [...byFile.values()].toSorted((left, right) => left.name.localeCompare(right.name));
+  return listWritableWorkshopSkillSummaries(env).map((skill) => ({
+    name: skill.name,
+    description: skill.description,
+    baseDir: path.resolve(skill.baseDir),
+    filePath: path.resolve(skill.filePath),
+  }));
 }
 
 export async function reconcileSkillCollection(params: {
@@ -124,22 +79,14 @@ export async function reconcileSkillCollection(params: {
   readSkillTreeHashes: ReadonlyMap<string, string>;
   config?: OpenClawConfig;
   agentId?: string;
-  agentIds?: readonly string[];
-  approvedSkillNamesByAgent?: readonly ReadonlySet<string>[];
   env?: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
 }): Promise<SkillCollectionReconcileResult> {
-  const workspaceDir = canonicalSkillCollectionWorkspace(params.workspaceDir);
+  const skillsRoot = resolveWorkshopSkillsDir(params.env);
   const commit = await withSkillCollectionLock(
-    workspaceDir,
     async () => {
       params.assertCurrent?.();
-      const current = listWritableSkillCollection(workspaceDir, {
-        config: params.config,
-        agentId: params.agentId,
-        agentIds: params.agentIds,
-        env: params.env,
-      });
+      const current = listWritableSkillCollection(params.env);
       const currentByName = new Map(current.map((skill) => [skill.name, skill]));
       if (currentByName.size !== current.length) {
         throw new Error("Writable skill names must be unique before collection reconciliation.");
@@ -149,7 +96,6 @@ export async function reconcileSkillCollection(params: {
         current,
         params.readSkillHashes,
         MAX_RECONCILED_SKILLS,
-        params.approvedSkillNamesByAgent,
       );
       const plannedNames = new Set(plan.map((entry) => entry.name));
       const outcome = {
@@ -170,18 +116,18 @@ export async function reconcileSkillCollection(params: {
       );
       params.assertCurrent?.();
       if (plan.length === 0) {
-        const backupRoot = resolveSkillCollectionBackupRoot(workspaceDir, params.env);
+        const backupRoot = resolveSkillCollectionBackupRoot(params.env);
         let backupId = await latestCommittedBackupId(backupRoot);
         if (!backupId) {
           const backup = await createCollectionBackup({
-            workspaceDir,
+            skillsRoot,
             current,
             plan,
             env: params.env,
           });
           try {
             params.assertCurrent?.();
-            await commitCollectionBackup(workspaceDir, backup);
+            await commitCollectionBackup(skillsRoot, backup);
             params.assertCurrent?.();
           } catch (error) {
             await discardPendingCollectionBackup(backup);
@@ -192,7 +138,6 @@ export async function reconcileSkillCollection(params: {
         params.assertCurrent?.();
         const result: SkillCollectionReconcileResult = { backupId, ...outcome };
         recordSkillCollectionReviewHistory(
-          workspaceDir,
           Date.now(),
           result,
           params.env ? { env: params.env } : {},
@@ -203,181 +148,124 @@ export async function reconcileSkillCollection(params: {
         };
       }
       const prepared = await prepareWrites({
-        workspaceDir,
+        skillsRoot,
         current,
         plan,
         config: params.config,
       });
-      const createProposals = await prepareCollectionCreateProposals({
-        workspaceDir,
+      await assertResultCollectionBytes(current, plan, prepared, MAX_RECONCILED_SKILL_BYTES);
+      const backup = await createCollectionBackup({
+        skillsRoot,
         current,
         plan,
-        prepared,
-        config: params.config,
-        agentId: params.agentId,
         env: params.env,
       });
-      // Any failure from here through promotion must retire the staged pending
-      // create rows: they target files that will not exist and would consume
-      // the maxPending budget until an operator cleans them up.
+      const shouldDispatch = hasCommittedSkillChangeHooks();
+      const before = new Map<string, PluginHookSkillArtifact | undefined>();
+      if (shouldDispatch) {
+        for (const entry of plan) {
+          const existing = currentByName.get(entry.name);
+          if (!existing) {
+            continue;
+          }
+          before.set(
+            entry.name,
+            await snapshotCommittedSkillArtifactBestEffort({
+              skillDir: existing.baseDir,
+              skillKey: existing.name,
+              source: "workshop",
+            }),
+          );
+        }
+      }
       try {
-        await assertResultCollectionBytes(current, plan, prepared, MAX_RECONCILED_SKILL_BYTES);
-        const backup = await createCollectionBackup({
-          workspaceDir,
+        await assertCollectionMutationCurrent(
           current,
-          plan,
-          env: params.env,
-        });
-        const shouldDispatch = hasCommittedSkillChangeHooks();
-        const before = new Map<string, PluginHookSkillArtifact | undefined>();
-        if (shouldDispatch) {
-          for (const entry of plan) {
-            const existing = currentByName.get(entry.name);
-            if (!existing) {
-              continue;
-            }
-            before.set(
-              entry.name,
-              await snapshotCommittedSkillArtifactBestEffort({
-                skillDir: existing.baseDir,
-                skillKey: existing.name,
-                source: "workshop",
-              }),
-            );
-          }
-        }
-        try {
-          await assertCollectionMutationCurrent(
-            current,
-            params.readSkillTreeHashes,
-            plannedNames,
-            prepared,
-          );
-          params.assertCurrent?.();
-        } catch (error) {
-          await discardPendingCollectionBackup(backup);
-          throw error;
-        }
-        const droppedSkillDirs = plan.flatMap((entry) => {
-          if (entry.action !== "drop") {
-            return [];
-          }
-          return [currentByName.get(entry.name)!.baseDir];
-        });
-        // Claims end before filesystem mutation so hand-recreated paths are user-authored/read-only.
-        // Reclaim is safe only after rollback has restored the original Workshop directories.
-        releaseWorkshopOwnershipClaims(
-          workspaceDir,
-          droppedSkillDirs,
-          Date.now(),
-          params.env ? { env: params.env } : {},
+          params.readSkillTreeHashes,
+          plannedNames,
+          prepared,
         );
-        const appliedWrites: PreparedWorkspaceSkillMutation[] = [];
-        const droppedSkills: Array<
-          Pick<WritableSkillCollectionEntry, "name" | "baseDir"> & { stagedDir: string }
-        > = [];
-        try {
-          for (const mutation of prepared) {
-            params.assertCurrent?.();
-            await applyWorkspaceSkillMutation(mutation);
-            appliedWrites.push(mutation);
-            params.assertCurrent?.();
-          }
-          for (const entry of plan) {
-            params.assertCurrent?.();
-            if (entry.action !== "drop") {
-              continue;
-            }
-            const skill = currentByName.get(entry.name)!;
-            droppedSkills.push(await stageSkillCollectionDrop({ ...skill, workspaceDir }));
-            params.assertCurrent?.();
-          }
-          params.assertCurrent?.();
-          await commitCollectionBackup(workspaceDir, backup);
-          params.assertCurrent?.();
-        } catch (error) {
-          try {
-            await rollbackSkillCollectionMutation({
-              workspaceDir,
-              appliedWrites,
-              droppedSkills,
-            });
-          } catch (restoreError) {
-            throw new Error(
-              `Skill collection reconciliation failed (${String(error)}) and backup ${backup.manifest.id} could not be restored.`,
-              { cause: restoreError },
-            );
-          }
-          restoreWorkshopOwnershipClaimsBestEffort(
-            workspaceDir,
-            droppedSkillDirs,
-            params.env ? { env: params.env } : {},
-          );
-          await discardPendingCollectionBackup(backup);
-          throw error;
-        }
-        bumpSkillsSnapshotVersion({ reason: "workshop" });
-        await discardStagedSkillCollectionDrops(workspaceDir, droppedSkills);
-        if (droppedSkills.length > 0) {
-          clearSkillUsageForRemovedSkills(
-            droppedSkills.map(({ name }) => currentByName.get(name)!.filePath),
-            params.env ? { env: params.env } : {},
-          );
-        }
-        // Finalize the filesystem before recording ownership. Promotion failures
-        // leave newly written skills visible but read-only.
-        for (const mutation of prepared) {
-          const proposal = createProposals.get(mutation.skillFile.filePath);
-          if (proposal) {
-            await promoteCollectionCreateProposal({
-              proposal,
-              workspaceDir,
-              env: params.env,
-            });
-          }
-        }
-        const result: SkillCollectionReconcileResult = {
-          backupId: backup.manifest.id,
-          ...outcome,
-        };
-        recordSkillCollectionReviewHistory(
-          workspaceDir,
-          Date.now(),
-          result,
-          params.env ? { env: params.env } : {},
-        );
-        await pruneOlderSkillCollectionBackups(backup.backupRoot, backup.manifest.id);
-        const changes: SkillCollectionChange[] = [];
-        if (shouldDispatch) {
-          for (const entry of plan) {
-            const existing = currentByName.get(entry.name);
-            const skillDir = existing?.baseDir ?? path.join(workspaceDir, "skills", entry.name);
-            changes.push({
-              action: entry.action === "drop" ? "removed" : existing ? "updated" : "created",
-              before: before.get(entry.name),
-              after:
-                entry.action === "write"
-                  ? await snapshotCommittedSkillArtifactBestEffort({
-                      skillDir,
-                      skillKey: entry.name,
-                      source: "workshop",
-                    })
-                  : undefined,
-            });
-          }
-        }
-        return {
-          result,
-          changes,
-        };
+        params.assertCurrent?.();
       } catch (error) {
-        await retireCollectionCreateProposals({
-          proposals: createProposals.values(),
-          workspaceDir,
-          env: params.env,
-        });
+        await discardPendingCollectionBackup(backup);
         throw error;
       }
+      const appliedWrites: PreparedWorkspaceSkillMutation[] = [];
+      const droppedSkills: Array<
+        Pick<WritableSkillCollectionEntry, "name" | "baseDir"> & { stagedDir: string }
+      > = [];
+      try {
+        for (const mutation of prepared) {
+          params.assertCurrent?.();
+          await applyWorkspaceSkillMutation(mutation);
+          appliedWrites.push(mutation);
+          params.assertCurrent?.();
+        }
+        for (const entry of plan) {
+          params.assertCurrent?.();
+          if (entry.action !== "drop") {
+            continue;
+          }
+          const skill = currentByName.get(entry.name)!;
+          droppedSkills.push(await stageSkillCollectionDrop({ ...skill, skillsRoot }));
+          params.assertCurrent?.();
+        }
+        params.assertCurrent?.();
+        await commitCollectionBackup(skillsRoot, backup);
+        params.assertCurrent?.();
+      } catch (error) {
+        try {
+          await rollbackSkillCollectionMutation({
+            skillsRoot,
+            appliedWrites,
+            droppedSkills,
+          });
+        } catch (restoreError) {
+          throw new Error(
+            `Skill collection reconciliation failed (${String(error)}) and backup ${backup.manifest.id} could not be restored.`,
+            { cause: restoreError },
+          );
+        }
+        await discardPendingCollectionBackup(backup);
+        throw error;
+      }
+      bumpSkillsSnapshotVersion({ reason: "workshop" });
+      await discardStagedSkillCollectionDrops(skillsRoot, droppedSkills);
+      if (droppedSkills.length > 0) {
+        clearSkillUsageForRemovedSkills(
+          droppedSkills.map(({ name }) => currentByName.get(name)!.filePath),
+          params.env ? { env: params.env } : {},
+        );
+      }
+      const result: SkillCollectionReconcileResult = {
+        backupId: backup.manifest.id,
+        ...outcome,
+      };
+      recordSkillCollectionReviewHistory(Date.now(), result, params.env ? { env: params.env } : {});
+      await pruneOlderSkillCollectionBackups(backup.backupRoot, backup.manifest.id);
+      const changes: SkillCollectionChange[] = [];
+      if (shouldDispatch) {
+        for (const entry of plan) {
+          const existing = currentByName.get(entry.name);
+          const skillDir = existing?.baseDir ?? path.join(skillsRoot, entry.name);
+          changes.push({
+            action: entry.action === "drop" ? "removed" : existing ? "updated" : "created",
+            before: before.get(entry.name),
+            after:
+              entry.action === "write"
+                ? await snapshotCommittedSkillArtifactBestEffort({
+                    skillDir,
+                    skillKey: entry.name,
+                    source: "workshop",
+                  })
+                : undefined,
+          });
+        }
+      }
+      return {
+        result,
+        changes,
+      };
     },
     params.env ? { env: params.env } : {},
   );
@@ -385,7 +273,7 @@ export async function reconcileSkillCollection(params: {
     await dispatchCommittedSkillChangeBestEffort({
       ...change,
       source: "workshop",
-      workspaceDir,
+      workspaceDir: params.workspaceDir,
     });
   }
   return commit.result;
@@ -395,11 +283,10 @@ export async function restoreLatestSkillCollectionBackup(params: {
   workspaceDir: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<SkillCollectionRestoreResult> {
-  const workspaceDir = canonicalSkillCollectionWorkspace(params.workspaceDir);
+  const skillsRoot = resolveWorkshopSkillsDir(params.env);
   const commit = await withSkillCollectionLock(
-    workspaceDir,
     async () => {
-      const backupRoot = resolveSkillCollectionBackupRoot(workspaceDir, params.env);
+      const backupRoot = resolveSkillCollectionBackupRoot(params.env);
       if (!(await pathExists(backupRoot))) {
         throw new Error("No skill collection backup is available.");
       }
@@ -408,20 +295,15 @@ export async function restoreLatestSkillCollectionBackup(params: {
         throw new Error("No skill collection backup is available.");
       }
       const backupDir = path.join(backupRoot, backupId);
-      const manifest = await readCollectionBackupManifest({
-        backupDir,
-        backupId,
-        workspaceDir,
-      });
-      // Restore accepts legacy manifests from before ownership narrowing.
-      // The content-unchanged guard below protects post-cleanup user edits.
-      await assertCollectionResultUnchanged(workspaceDir, manifest);
+      const manifest = await readCollectionBackupManifest({ backupDir, backupId });
+      // Restoring over user edits made since the cleanup would silently lose them.
+      await assertCollectionResultUnchanged(skillsRoot, manifest);
       const affectedDirs = [...new Set([...manifest.skillDirs, ...manifest.resultSkillDirs])];
       const shouldDispatch = hasCommittedSkillChangeHooks();
       const before = new Map<string, PluginHookSkillArtifact | undefined>();
       const beforeExists = new Set<string>();
       for (const relativeDir of affectedDirs) {
-        const skillDir = path.join(workspaceDir, relativeDir);
+        const skillDir = path.join(skillsRoot, relativeDir);
         if (await pathExists(skillDir)) {
           beforeExists.add(relativeDir);
         }
@@ -436,21 +318,13 @@ export async function restoreLatestSkillCollectionBackup(params: {
           );
         }
       }
-      await assertCollectionResultUnchanged(workspaceDir, manifest);
+      await assertCollectionResultUnchanged(skillsRoot, manifest);
       try {
         await restoreSkillCollectionBackupTransaction({
-          workspaceDir,
+          skillsRoot,
           backupDir,
           skillDirs: manifest.skillDirs,
           resultSkillDirs: manifest.resultSkillDirs,
-          commit: () =>
-            restoreWorkshopOwnershipClaims(
-              workspaceDir,
-              manifest.skillDirs.map((relativeDir) => path.join(workspaceDir, relativeDir)),
-              manifest.resultSkillDirs.map((relativeDir) => path.join(workspaceDir, relativeDir)),
-              Date.now(),
-              params.env ? { env: params.env } : {},
-            ),
         });
       } finally {
         bumpSkillsSnapshotVersion({ reason: "workshop" });
@@ -458,7 +332,7 @@ export async function restoreLatestSkillCollectionBackup(params: {
       const changes: SkillCollectionChange[] = [];
       if (shouldDispatch) {
         for (const relativeDir of affectedDirs) {
-          const skillDir = path.join(workspaceDir, relativeDir);
+          const skillDir = path.join(skillsRoot, relativeDir);
           const afterExists = await pathExists(skillDir);
           if (!beforeExists.has(relativeDir) && !afterExists) {
             continue;
@@ -499,14 +373,14 @@ export async function restoreLatestSkillCollectionBackup(params: {
     await dispatchCommittedSkillChangeBestEffort({
       ...change,
       source: "workshop",
-      workspaceDir,
+      workspaceDir: params.workspaceDir,
     });
   }
   return commit.result;
 }
 
 async function prepareWrites(params: {
-  workspaceDir: string;
+  skillsRoot: string;
   current: readonly WritableSkillCollectionEntry[];
   plan: readonly SkillCollectionPlanEntry[];
   config?: OpenClawConfig;
@@ -519,7 +393,7 @@ async function prepareWrites(params: {
       continue;
     }
     const existing = currentByName.get(entry.name);
-    const skillDir = existing?.baseDir ?? path.join(params.workspaceDir, "skills", entry.name);
+    const skillDir = existing?.baseDir ?? path.join(params.skillsRoot, entry.name);
     const skillFile = existing?.filePath ?? path.join(skillDir, "SKILL.md");
     if (!existing && (await pathExists(skillDir))) {
       throw new Error(`New skill directory already exists: ${skillDir}`);
@@ -547,15 +421,11 @@ async function prepareWrites(params: {
     }
     writes.push(
       await prepareWorkspaceSkillMutation({
-        workspaceDir: params.workspaceDir,
+        skillsRoot: params.skillsRoot,
         skillDir,
         skillFile,
         content: resultContent,
         mode: existing ? "update" : "create",
-        symlinkPolicy: {
-          allowWrites: false,
-          allowedTargetRealPaths: [],
-        },
       }),
     );
   }
@@ -563,19 +433,17 @@ async function prepareWrites(params: {
 }
 
 async function assertCollectionResultUnchanged(
-  workspaceDir: string,
+  skillsRoot: string,
   manifest: CollectionBackupManifest,
 ): Promise<void> {
   const resultDirs = new Set(manifest.resultSkillDirs);
   for (const relativeDir of manifest.skillDirs) {
-    if (!resultDirs.has(relativeDir) && (await pathExists(path.join(workspaceDir, relativeDir)))) {
+    if (!resultDirs.has(relativeDir) && (await pathExists(path.join(skillsRoot, relativeDir)))) {
       throw new Error(`Skill collection changed after cleanup: ${path.basename(relativeDir)}`);
     }
   }
   for (const relativeDir of manifest.resultSkillDirs) {
-    const currentHash = await readSkillProposalTargetTreeSha256(
-      path.join(workspaceDir, relativeDir),
-    );
+    const currentHash = await readSkillProposalTargetTreeSha256(path.join(skillsRoot, relativeDir));
     if (currentHash !== manifest.resultSkillHashes[relativeDir]) {
       throw new Error(`Skill collection changed after cleanup: ${path.basename(relativeDir)}`);
     }

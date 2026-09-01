@@ -4,6 +4,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import { readSkillProposalEvents } from "../../skills/workshop/store-evaluation.js";
 import { writeConfigMachineState } from "../../state/config-machine-state.js";
 import {
@@ -228,11 +229,19 @@ describe("skills proposal gateway handlers", () => {
       "PROPOSAL.md",
     );
     await expect(
-      fs.readFile(path.join(mocks.workspaceDir, "skills", "weather-planner", "SKILL.md"), "utf8"),
+      fs.readFile(
+        path.join(resolveWorkshopSkillsDir(testState.env), "weather-planner", "SKILL.md"),
+        "utf8",
+      ),
     ).resolves.toContain("Use current weather and alerts.");
     await expect(
       fs.readFile(
-        path.join(mocks.workspaceDir, "skills", "weather-planner", "references", "weather.md"),
+        path.join(
+          resolveWorkshopSkillsDir(testState.env),
+          "weather-planner",
+          "references",
+          "weather.md",
+        ),
         "utf8",
       ),
     ).resolves.toContain("Use current weather");
@@ -326,7 +335,7 @@ describe("skills proposal gateway handlers", () => {
     });
   });
 
-  it("keeps list and inspect bound to the agent after its workspace changes", async () => {
+  it("keeps list and inspect global for the agent after its workspace changes", async () => {
     const firstWorkspaceDir = mocks.workspaceDir;
     const first = await callHandler("skills.proposals.create", {
       name: "First Gateway Skill",
@@ -348,12 +357,9 @@ describe("skills proposal gateway handlers", () => {
 
     const secondList = await callHandler("skills.proposals.list", {});
     expect(secondList.ok).toBe(true);
-    expect(
-      (secondList.response as { proposals: Array<{ id: string; workspaceMismatch?: true }> })
-        .proposals,
-    ).toEqual([
+    expect((secondList.response as { proposals: Array<{ id: string }> }).proposals).toEqual([
       expect.objectContaining({ id: secondCreated.record.id }),
-      expect.objectContaining({ id: firstCreated.record.id, workspaceMismatch: true }),
+      expect.objectContaining({ id: firstCreated.record.id }),
     ]);
 
     const oldWorkspaceInspect = await callHandler("skills.proposals.inspect", {
@@ -414,7 +420,6 @@ describe("skills proposal gateway handlers", () => {
       response: { events: [], nextSequence: 12 },
     });
     expect(mocks.listSkillProposalEvents).toHaveBeenCalledWith({
-      workspaceDir: mocks.workspaceDir,
       agentId: "main",
       proposalId: "proposal-1",
       afterSequence: 7,

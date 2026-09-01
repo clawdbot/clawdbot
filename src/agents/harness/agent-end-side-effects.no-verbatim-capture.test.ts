@@ -78,7 +78,7 @@ describe("agent-end proposal provenance", () => {
 
     await runAgentEndTurn(workspaceDir, sessionKey, userText);
 
-    const manifest = await listSkillProposals({ workspaceDir });
+    const manifest = await listSkillProposals();
     expect(manifest.proposals).toEqual([]);
   });
 });

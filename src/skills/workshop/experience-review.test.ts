@@ -517,13 +517,13 @@ describe("skill experience review scheduler", () => {
 });
 
 describe("skill experience review prompt", () => {
-  it("matches the settled review contract and tags user-authored skills", () => {
+  it("matches the settled Workshop-only review contract", () => {
     const prompt = buildSkillExperienceReviewPrompt({
       ctx: { runId: "run-1" },
       usedSkills: [{ name: "release-runbook", source: "workspace", activation: "read" }],
       existingSkills: [
-        { name: "release-runbook", description: "Ship releases", userAuthored: false },
-        { name: "local-notes", description: "Local workflow", userAuthored: true },
+        { name: "release-runbook", description: "Ship releases" },
+        { name: "local-notes", description: "Local workflow" },
       ],
     });
     expect(prompt).toContain("this message starts a review pass");
@@ -531,11 +531,11 @@ describe("skill experience review prompt", () => {
     expect(prompt).toContain("One mutation at most, smallest mutation first");
     expect(prompt).toContain("prepare_patch with one non-empty unique old_string, then patch");
     expect(prompt).toContain("Reading and preparing do not spend the mutation");
-    expect(prompt).toContain("Only writable workspace skills can be read or updated");
-    expect(prompt).toContain("only when no writable skill covers this class of work");
+    expect(prompt).toContain("reads and updates only skills generated in the Workshop directory");
+    expect(prompt).toContain("only when no Workshop-generated skill covers this class of work");
     expect(prompt).toContain("Writable skills:");
     expect(prompt).toContain("- release-runbook — Ship releases");
-    expect(prompt).toContain("- local-notes — Local workflow (user-authored)");
+    expect(prompt).toContain("- local-notes — Local workflow");
     expect(prompt).not.toContain("Trajectory:");
 
     const emptyWorkspacePrompt = buildSkillExperienceReviewPrompt({

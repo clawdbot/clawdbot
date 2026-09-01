@@ -36,9 +36,7 @@ export type SkillCollectionRestoreResult = {
 };
 
 export type SkillCollectionReconcileContext = {
-  agentIds?: string[];
   approvedSkillNames?: Set<string>;
-  approvedSkillNamesByAgent?: Array<Set<string>>;
   readSkillHashes?: Map<string, string>;
   readSkillTreeHashes?: Map<string, string>;
   readSkillBytes?: Map<string, number>;
@@ -53,7 +51,6 @@ export type WritableSkillCollectionEntry = {
   description?: string;
   baseDir: string;
   filePath: string;
-  workshopOwned: boolean;
 };
 
 export type SkillCollectionChange = {

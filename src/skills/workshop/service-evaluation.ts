@@ -52,22 +52,13 @@ export async function evaluateSkillProposal(
 ): Promise<SkillProposalEvaluateResult> {
   const correlationId = normalizeSkillProposalCorrelationId(input.correlationId);
   const shouldRunEvaluators = hasSkillProposalEvaluators();
-  const initial = await readRequiredProposal(
-    input.proposalId,
-    input.workspaceDir,
-    input.env,
-    input.agentId,
-  );
+  const initial = await readRequiredProposal(input.proposalId, input.env, input.agentId);
   const snapshot = await withSkillProposalTargetLock(
     initial.record,
     async () => {
-      const read = await readRequiredProposal(
-        input.proposalId,
-        input.workspaceDir,
-        input.env,
-        input.agentId,
-        { reconcile: false },
-      );
+      const read = await readRequiredProposal(input.proposalId, input.env, input.agentId, {
+        reconcile: false,
+      });
       if (read.record.status !== "pending") {
         throw new Error(
           `Only pending proposals can be evaluated. Current status: ${read.record.status}.`,
@@ -159,13 +150,9 @@ export async function evaluateSkillProposal(
   const stored = await withSkillProposalTargetLock(
     read.record,
     async () => {
-      const current = await readRequiredProposal(
-        input.proposalId,
-        input.workspaceDir,
-        input.env,
-        input.agentId,
-        { reconcile: false },
-      );
+      const current = await readRequiredProposal(input.proposalId, input.env, input.agentId, {
+        reconcile: false,
+      });
       if (
         current.record.status !== "pending" ||
         current.record.proposedVersion !== read.record.proposedVersion ||

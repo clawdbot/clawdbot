@@ -59,7 +59,7 @@ describe("resolveSkillWorkshopToolApproval", () => {
     });
 
     expect(result?.requireApproval).toMatchObject({
-      title: "Apply workspace skill proposal",
+      title: "Apply Skill Workshop proposal",
       severity: "warning",
       timeoutMs: 70_000,
       allowedDecisions: ["allow-once", "deny"],
@@ -173,7 +173,7 @@ describe("resolveSkillWorkshopToolApproval", () => {
     });
 
     expect(result?.requireApproval?.description).toBe(
-      "Apply a pending workspace skill proposal into live workspace skills.",
+      "Apply a pending proposal inside the global Skill Workshop directory.",
     );
     expect(result?.requireApproval?.timeoutMs).toBe(70_000);
 
@@ -183,7 +183,7 @@ describe("resolveSkillWorkshopToolApproval", () => {
       config: pendingApprovalConfig,
     });
     expect(withoutWorkspace?.requireApproval?.description).toBe(
-      "Apply a pending workspace skill proposal into live workspace skills.",
+      "Apply a pending proposal inside the global Skill Workshop directory.",
     );
   });
 
@@ -206,11 +206,11 @@ describe("resolveSkillWorkshopToolApproval", () => {
     expect(result?.requireApproval).toMatchObject({
       title: "Restore previous skill collection",
       description:
-        "Replace current workspace skills with the previous collection backup. Later skill changes may be removed.",
+        "Replace current Workshop-generated skills with the previous collection backup. Later Workshop changes may be removed.",
       severity: "warning",
       timeoutMs: 70_000,
       timeoutReason:
-        "The Skill Workshop approval request expired without a decision. This restore call left workspace skills unchanged. Review the current skills, then request the restore again if it is still wanted. Do not retry this tool call in a loop.",
+        "The Skill Workshop approval request expired without a decision. This restore call left Workshop-generated skills unchanged. Review the current skills, then request the restore again if it is still wanted. Do not retry this tool call in a loop.",
       allowedDecisions: ["allow-once", "deny"],
     });
   });
@@ -278,6 +278,6 @@ describe("resolveSkillWorkshopToolApproval", () => {
       },
     });
 
-    expect(result?.requireApproval?.title).toBe("Reject workspace skill proposal");
+    expect(result?.requireApproval?.title).toBe("Reject Skill Workshop proposal");
   });
 });

@@ -9,13 +9,11 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { buildWorkspaceSkillStatus } from "../discovery/status.js";
 import {
   getSkillsSnapshotVersion,
   resetSkillsRefreshStateForTest,
 } from "../runtime/refresh-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
-import { applyAutonomousSkillProposal } from "./autonomous-apply.js";
 import { renderProposalMarkdown, stripProposalFrontmatterForSkill } from "./frontmatter.js";
 import {
   applySkillProposal,
@@ -30,15 +28,17 @@ import {
   resolvePendingSkillProposal,
   reviseSkillProposal,
 } from "./service.js";
+import { resolveWorkshopSkillsDir } from "./skills-root.js";
 import { writeSkillProposalRollback } from "./store-sqlite-rollback.js";
 import {
   hashSkillProposalContent,
   readSkillProposalManifest,
   readSkillProposalRollback,
-  updateSkillProposalRecord,
+  resolveSkillProposalTarget,
 } from "./store.js";
 import { withSkillCollectionLock } from "./target-lock.js";
 import { SKILL_WORKSHOP_ROLLBACK_SCHEMA, type SkillProposalRollback } from "./types.js";
+import { listWritableWorkshopSkillSummaries } from "./workspace-skill-read.js";
 
 const tempDirs = createTrackedTempDirs();
 const stateDirs = createTrackedTempDirs();
@@ -67,6 +67,7 @@ beforeEach(async () => {
     DELETE FROM skill_workshop_proposals;
   `);
   await fs.rm(path.join(stateDir, "skill-workshop"), { recursive: true, force: true });
+  await fs.rm(path.join(stateDir, "workshop-skills"), { recursive: true, force: true });
 });
 
 afterEach(async () => {
@@ -130,6 +131,61 @@ function createSkillProposalRollback(params: {
 }
 
 describe("skill workshop proposals", () => {
+  it("uses one Workshop target across session workspaces", async () => {
+    const firstWorkspaceDir = await fs.realpath(await makeWorkspace());
+    const secondWorkspaceDir = await fs.realpath(await makeWorkspace());
+    const firstTarget = resolveSkillProposalTarget({
+      skillName: "shared-workshop-skill",
+      env: testEnv,
+    });
+    const secondTarget = resolveSkillProposalTarget({
+      skillName: "shared-workshop-skill",
+      env: testEnv,
+    });
+    expect(firstTarget).toEqual(secondTarget);
+
+    const first = await proposeCreateSkill({
+      workspaceDir: firstWorkspaceDir,
+      env: testEnv,
+      name: "shared-workshop-skill",
+      description: "Shared Workshop skill",
+      content: "# Shared Workshop Skill\n",
+    });
+    await applySkillProposal({
+      workspaceDir: firstWorkspaceDir,
+      env: testEnv,
+      proposalId: first.record.id,
+    });
+
+    await expect(
+      proposeCreateSkill({
+        workspaceDir: secondWorkspaceDir,
+        env: testEnv,
+        name: "shared-workshop-skill",
+        description: "Duplicate Workshop skill",
+        content: "# Duplicate\n",
+      }),
+    ).rejects.toThrow(`Skill already exists at ${firstTarget.skillFile}`);
+  });
+
+  it("refuses to update a skill outside the Workshop directory", async () => {
+    const workspaceDir = await fs.realpath(await makeWorkspace());
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "operator-skill"),
+      name: "operator-skill",
+      description: "Operator-owned skill",
+    });
+
+    await expect(
+      proposeUpdateSkill({
+        workspaceDir,
+        env: testEnv,
+        skillName: "operator-skill",
+        content: "# Changed\n",
+      }),
+    ).rejects.toThrow("No Workshop-generated skill matched");
+  });
+
   it("renders proposal markdown with a terminal newline", () => {
     expect(
       renderProposalMarkdown({
@@ -182,7 +238,7 @@ describe("skill workshop proposals", () => {
       ],
     });
     expect(proposal.record.target.skillFile).toBe(
-      path.join(workspaceDir, "skills", "weather-helper", "SKILL.md"),
+      path.join(resolveWorkshopSkillsDir(testEnv), "weather-helper", "SKILL.md"),
     );
     expect(proposal.content).toContain("date: ");
 
@@ -208,21 +264,31 @@ describe("skill workshop proposals", () => {
     );
     await expect(
       fs.readFile(
-        path.join(workspaceDir, "skills", "weather-helper", "references", "weather-api.md"),
+        path.join(
+          resolveWorkshopSkillsDir(testEnv),
+          "weather-helper",
+          "references",
+          "weather-api.md",
+        ),
         "utf8",
       ),
     ).resolves.toContain("Use the current weather endpoint.");
     await expect(
       fs.readFile(
-        path.join(workspaceDir, "skills", "weather-helper", "scripts", "check-weather.js"),
+        path.join(
+          resolveWorkshopSkillsDir(testEnv),
+          "weather-helper",
+          "scripts",
+          "check-weather.js",
+        ),
         "utf8",
       ),
     ).resolves.toContain("parseWeather");
 
-    const status = buildWorkspaceSkillStatus(workspaceDir);
-    expect(status.skills.find((skill) => skill.name === "weather-helper")).toMatchObject({
+    expect(
+      listWritableWorkshopSkillSummaries(testEnv).find((skill) => skill.name === "weather-helper"),
+    ).toMatchObject({
       name: "weather-helper",
-      source: "openclaw-workspace",
       filePath: applied.targetSkillFile,
     });
     expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("applied");
@@ -252,222 +318,6 @@ describe("skill workshop proposals", () => {
     });
   });
 
-  it("lets only an operator apply an update to a user-authored skill", async () => {
-    const workspaceDir = await makeWorkspace();
-    const skillDir = path.join(workspaceDir, "skills", "handwritten");
-    await writeSkill({
-      dir: skillDir,
-      name: "handwritten",
-      description: "Operator-owned skill",
-      body: "# Handwritten\n\nOld body.\n",
-    });
-    const proposal = await proposeUpdateSkill({
-      workspaceDir,
-      skillName: "handwritten",
-      content: "# Handwritten\n\nNew body.\n",
-    });
-
-    await expect(
-      applySkillProposal({
-        workspaceDir,
-        proposalId: proposal.record.id,
-        eventActor: { type: "agent", id: "main" },
-      }),
-    ).rejects.toThrow("Skill Workshop does not own this skill path: handwritten");
-    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
-      "Old body.",
-    );
-
-    await applySkillProposal({
-      workspaceDir,
-      proposalId: proposal.record.id,
-      eventActor: { type: "gateway" },
-    });
-    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
-      "New body.",
-    );
-  });
-
-  it("keeps an operator apply when autonomous review holds a stale pending snapshot", async () => {
-    const workspaceDir = await makeWorkspace();
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "handwritten"),
-      name: "handwritten",
-      description: "Operator-owned skill",
-      body: "# Handwritten\n\nOld body.\n",
-    });
-    const snapshot = await proposeUpdateSkill({
-      workspaceDir,
-      skillName: "handwritten",
-      content: "# Handwritten\n\nNew body.\n",
-    });
-    await applySkillProposal({
-      workspaceDir,
-      proposalId: snapshot.record.id,
-      eventActor: { type: "gateway" },
-    });
-
-    await applyAutonomousSkillProposal({ workspaceDir, proposal: snapshot, reason: "review" });
-
-    const inspected = await inspectSkillProposal(snapshot.record.id, { workspaceDir });
-    expect(inspected?.record.status).toBe("applied");
-    expect(inspected?.record.statusReason).toBeUndefined();
-  });
-
-  it.runIf(process.platform !== "win32")(
-    "allows a pending operator review for a user-authored trusted symlink skill",
-    async () => {
-      const workspaceDir = await makeWorkspace();
-      const targetSkillsDir = await tempDirs.make("openclaw-skill-workshop-target-skills-");
-      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
-      const skillDir = path.join(targetSkillsDir, "shared-skill");
-      await writeSkill({
-        dir: skillDir,
-        name: "shared-skill",
-        description: "Shared skill target",
-        body: "# Shared Skill\n\nOld body.\n",
-      });
-      await fs.mkdir(path.join(skillDir, "references"), { recursive: true });
-      await fs.writeFile(path.join(skillDir, "references", "shared.md"), "Old support.\n", "utf8");
-      const config = {
-        skills: {
-          load: { allowSymlinkTargets: [targetSkillsDir] },
-          workshop: { allowSymlinkTargetWrites: true },
-        },
-      };
-      const proposal = await proposeUpdateSkill({
-        workspaceDir,
-        config,
-        skillName: "shared-skill",
-        content: "# Shared Skill\n\nNew body.\n",
-        supportFiles: [{ path: "references/shared.md", content: "New support.\n" }],
-      });
-      expect(proposal.record).toMatchObject({ kind: "update", status: "pending" });
-      await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
-        "Old body.",
-      );
-      await expect(
-        fs.readFile(path.join(skillDir, "references", "shared.md"), "utf8"),
-      ).resolves.toBe("Old support.\n");
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "blocks trusted workspace skills symlink writes until workshop writes are enabled",
-    async () => {
-      const workspaceDir = await makeWorkspace();
-      const targetSkillsDir = await tempDirs.make("openclaw-skill-workshop-readonly-skills-");
-      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
-      const config = { skills: { load: { allowSymlinkTargets: [targetSkillsDir] } } };
-      const proposal = await proposeCreateSkill({
-        workspaceDir,
-        config,
-        name: "Readonly Symlink Skill",
-        description: "Must not write without explicit workshop opt-in",
-        content: "# Readonly\n\nDo not write.\n",
-        supportFiles: [
-          {
-            path: "references/details.md",
-            content: "This support file must not be written.\n",
-          },
-        ],
-      });
-
-      await expect(
-        applySkillProposal({ workspaceDir, config, proposalId: proposal.record.id }),
-      ).rejects.toThrow("allowSymlinkTargetWrites");
-      await expect(
-        fs.access(path.join(targetSkillsDir, "readonly-symlink-skill", "SKILL.md")),
-      ).rejects.toThrow();
-      await expect(
-        fs.access(path.join(targetSkillsDir, "readonly-symlink-skill", "references", "details.md")),
-      ).rejects.toThrow();
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "validates support file targets against trusted symlink write roots",
-    async () => {
-      const workspaceDir = await makeWorkspace();
-      const targetSkillsDir = await tempDirs.make("openclaw-skill-workshop-support-trusted-");
-      const untrustedSkillsDir = await tempDirs.make("openclaw-skill-workshop-support-untrusted-");
-      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
-      await fs.symlink(untrustedSkillsDir, path.join(workspaceDir, "other-skills"), "dir");
-      const config = {
-        skills: {
-          load: { allowSymlinkTargets: [targetSkillsDir] },
-          workshop: { allowSymlinkTargetWrites: true },
-        },
-      };
-      const proposal = await proposeCreateSkill({
-        workspaceDir,
-        config,
-        name: "Support Escape",
-        description: "Must keep support writes in trusted roots",
-        content: "# Support Escape\n\nDo not write through the wrong skill dir.\n",
-        supportFiles: [
-          {
-            path: "references/details.md",
-            content: "This support file must not be written outside the trusted target.\n",
-          },
-        ],
-      });
-
-      await updateSkillProposalRecord({
-        record: {
-          ...proposal.record,
-          target: {
-            ...proposal.record.target,
-            skillDir: path.join(workspaceDir, "other-skills", "support-escape"),
-          },
-        },
-      });
-
-      await expect(
-        applySkillProposal({ workspaceDir, config, proposalId: proposal.record.id }),
-      ).rejects.toThrow("untrusted symlink target");
-      await expect(
-        fs.access(path.join(untrustedSkillsDir, "support-escape", "references", "details.md")),
-      ).rejects.toThrow();
-      await expect(
-        fs.access(path.join(targetSkillsDir, "support-escape", "SKILL.md")),
-      ).rejects.toThrow();
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "blocks untrusted workspace skills symlink targets before support files are written",
-    async () => {
-      const workspaceDir = await makeWorkspace();
-      const targetSkillsDir = await tempDirs.make("openclaw-skill-workshop-untrusted-skills-");
-      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
-      const proposal = await proposeCreateSkill({
-        workspaceDir,
-        name: "Untrusted Symlink Skill",
-        description: "Must not write through an untrusted symlink",
-        content: "# Untrusted\n\nDo not write.\n",
-        supportFiles: [
-          {
-            path: "references/details.md",
-            content: "This support file must not be written.\n",
-          },
-        ],
-      });
-
-      await expect(
-        applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
-      ).rejects.toThrow("untrusted symlink target");
-      await expect(
-        fs.access(path.join(targetSkillsDir, "untrusted-symlink-skill", "SKILL.md")),
-      ).rejects.toThrow();
-      await expect(
-        fs.access(
-          path.join(targetSkillsDir, "untrusted-symlink-skill", "references", "details.md"),
-        ),
-      ).rejects.toThrow();
-    },
-  );
-
   it("preserves non-proposal frontmatter when proposals become active skills", async () => {
     const workspaceDir = await makeWorkspace();
     const created = await proposeCreateSkill({
@@ -482,7 +332,7 @@ describe("skill workshop proposals", () => {
       applySkillProposal({ workspaceDir, proposalId: created.record.id }),
     ).resolves.toBeDefined();
     const createdSkill = await fs.readFile(
-      path.join(workspaceDir, "skills", "frontmatter-skill", "SKILL.md"),
+      path.join(resolveWorkshopSkillsDir(testEnv), "frontmatter-skill", "SKILL.md"),
       "utf8",
     );
     expect(createdSkill).toContain("user-invocable: false");
@@ -516,7 +366,7 @@ describe("skill workshop proposals", () => {
 
   it("rejects create proposals when the target skill file already exists", async () => {
     const workspaceDir = await makeWorkspace();
-    const skillFile = path.join(workspaceDir, "skills", "empty-skill", "SKILL.md");
+    const skillFile = path.join(resolveWorkshopSkillsDir(testEnv), "empty-skill", "SKILL.md");
     await fs.mkdir(path.dirname(skillFile), { recursive: true });
     await fs.writeFile(skillFile, "", "utf8");
 
@@ -557,7 +407,7 @@ describe("skill workshop proposals", () => {
       body: "# Inspected Manual Skill\n\nAlready active.\n",
     });
 
-    await expect(listSkillProposals({ workspaceDir })).resolves.toMatchObject({
+    await expect(listSkillProposals()).resolves.toMatchObject({
       proposals: expect.arrayContaining([
         expect.objectContaining({
           id: listed.record.id,
@@ -565,9 +415,7 @@ describe("skill workshop proposals", () => {
         }),
       ]),
     });
-    await expect(
-      inspectSkillProposal(inspected.record.id, { workspaceDir }),
-    ).resolves.toMatchObject({
+    await expect(inspectSkillProposal(inspected.record.id)).resolves.toMatchObject({
       record: {
         id: inspected.record.id,
         status: "stale",
@@ -657,9 +505,10 @@ describe("skill workshop proposals", () => {
       "revision-run",
       "later-run",
     ]);
-    await expect(
-      getSkillProposalRunProgress({ workspaceDir, runId: "revision-run" }),
-    ).resolves.toEqual({ mutationCount: 2, proposalIds: [proposal.record.id] });
+    await expect(getSkillProposalRunProgress({ runId: "revision-run" })).resolves.toEqual({
+      mutationCount: 2,
+      proposalIds: [proposal.record.id],
+    });
     expect(removedSupport.record.supportFiles).toBeUndefined();
     await expect(
       fs.access(
@@ -677,7 +526,10 @@ describe("skill workshop proposals", () => {
 
     await applySkillProposal({ workspaceDir, proposalId: proposal.record.id });
     await expect(
-      fs.readFile(path.join(workspaceDir, "skills", "draftable-skill", "SKILL.md"), "utf8"),
+      fs.readFile(
+        path.join(resolveWorkshopSkillsDir(testEnv), "draftable-skill", "SKILL.md"),
+        "utf8",
+      ),
     ).resolves.toBe(
       '---\nname: "draftable-skill"\ndescription: "Revised proposal"\n---\n\n# Draftable\n\nLater body.\n',
     );
@@ -692,9 +544,10 @@ describe("skill workshop proposals", () => {
       content: "# Recovered Proposal\n",
       origin: { runId: "interrupted-run" },
     });
-    await expect(
-      getSkillProposalRunProgress({ workspaceDir, runId: "interrupted-run" }),
-    ).resolves.toEqual({ mutationCount: 1, proposalIds: [proposal.record.id] });
+    await expect(getSkillProposalRunProgress({ runId: "interrupted-run" })).resolves.toEqual({
+      mutationCount: 1,
+      proposalIds: [proposal.record.id],
+    });
   });
 
   it("resolves pending proposals by skill name for tool-driven revisions", async () => {
@@ -738,7 +591,7 @@ describe("skill workshop proposals", () => {
     );
   });
 
-  it("keeps an agent's proposals visible after its workspace changes", async () => {
+  it("keeps an agent's proposals global across session workspace changes", async () => {
     const firstWorkspaceDir = await makeWorkspace();
     const secondWorkspaceDir = await makeWorkspace();
     const first = await proposeCreateSkill({
@@ -770,19 +623,15 @@ describe("skill workshop proposals", () => {
       content: "# Other\n",
     });
 
-    const listed = await listSkillProposals({ agentId: "main", workspaceDir: secondWorkspaceDir });
+    const listed = await listSkillProposals({ agentId: "main" });
     expect(listed.proposals.toSorted((a, b) => a.skillKey.localeCompare(b.skillKey))).toEqual([
-      expect.objectContaining({ id: quarantined.record.id, workspaceMismatch: true }),
-      expect.objectContaining({ id: first.record.id, workspaceMismatch: true }),
+      expect.objectContaining({ id: quarantined.record.id }),
+      expect.objectContaining({ id: first.record.id }),
       expect.objectContaining({ id: second.record.id }),
     ]);
-    expect(listed.proposals.find((entry) => entry.id === second.record.id)).not.toHaveProperty(
-      "workspaceMismatch",
-    );
     await expect(
       inspectSkillProposal(first.record.id, {
         agentId: "main",
-        workspaceDir: secondWorkspaceDir,
       }),
     ).resolves.toMatchObject({ record: { id: first.record.id } });
     await expect(
@@ -808,7 +657,7 @@ describe("skill workshop proposals", () => {
     ).resolves.toMatchObject({ status: "quarantined" });
   });
 
-  it("preserves workspace scoping when no agent identity is supplied", async () => {
+  it("keeps unowned proposals global", async () => {
     const firstWorkspaceDir = await makeWorkspace();
     const secondWorkspaceDir = await makeWorkspace();
     const first = await proposeCreateSkill({
@@ -824,18 +673,18 @@ describe("skill workshop proposals", () => {
       content: "# Second\n",
     });
 
-    await expect(
-      inspectSkillProposal(second.record.id, { workspaceDir: firstWorkspaceDir }),
-    ).resolves.toBeNull();
+    await expect(inspectSkillProposal(second.record.id)).resolves.toMatchObject({
+      record: { id: second.record.id },
+    });
     await expect(
       rejectSkillProposal({
         workspaceDir: firstWorkspaceDir,
         proposalId: second.record.id,
       }),
-    ).rejects.toThrow(`Skill proposal not found: ${second.record.id}`);
-    await expect(
-      inspectSkillProposal(first.record.id, { workspaceDir: firstWorkspaceDir }),
-    ).resolves.toMatchObject({ record: { id: first.record.id } });
+    ).resolves.toMatchObject({ status: "rejected" });
+    await expect(inspectSkillProposal(first.record.id)).resolves.toMatchObject({
+      record: { id: first.record.id },
+    });
   });
 
   it("updates only writable workspace skills and marks stale proposals when the target changes", async () => {
@@ -1028,10 +877,10 @@ describe("skill workshop proposals", () => {
       ["draft-two", "quarantined"],
     ]);
     await expect(
-      fs.access(path.join(workspaceDir, "skills", "draft-one", "SKILL.md")),
+      fs.access(path.join(resolveWorkshopSkillsDir(testEnv), "draft-one", "SKILL.md")),
     ).rejects.toThrow();
     await expect(
-      fs.access(path.join(workspaceDir, "skills", "draft-two", "SKILL.md")),
+      fs.access(path.join(resolveWorkshopSkillsDir(testEnv), "draft-two", "SKILL.md")),
     ).rejects.toThrow();
 
     await expect(
@@ -1106,7 +955,7 @@ describe("skill workshop proposals", () => {
     );
 
     closeOpenClawStateDatabaseForTest();
-    const manifest = await listSkillProposals({ workspaceDir });
+    const manifest = await listSkillProposals();
     expect(manifest.proposals).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: proposal.record.id, status: "applied" }),
@@ -1147,7 +996,6 @@ describe("skill workshop proposals", () => {
       markAcquired = resolve;
     });
     const heldLock = withSkillCollectionLock(
-      workspaceDir,
       async () => {
         markAcquired?.();
         await new Promise<void>((resolve) => {
@@ -1158,7 +1006,7 @@ describe("skill workshop proposals", () => {
     );
     await acquired;
     let settled = false;
-    const listing = listSkillProposals({ workspaceDir }).finally(() => {
+    const listing = listSkillProposals().finally(() => {
       settled = true;
     });
     await new Promise((resolve) => {
@@ -1177,161 +1025,6 @@ describe("skill workshop proposals", () => {
     ).resolves.toMatchObject({ record: { status: "applied" } });
     await expect(fs.readFile(supportFile, "utf8")).resolves.toBe("Partial support.\n");
   });
-
-  it.runIf(process.platform !== "win32")(
-    "recovers a partial create through the apply config",
-    async () => {
-      const workspaceDir = await makeWorkspace();
-      const targetSkillsDir = await tempDirs.make("openclaw-workshop-recovery-symlink-");
-      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
-      const config = {
-        skills: {
-          load: { allowSymlinkTargets: [targetSkillsDir] },
-          workshop: { allowSymlinkTargetWrites: true },
-        },
-      };
-      const proposal = await proposeCreateSkill({
-        workspaceDir,
-        config,
-        name: "Partial Symlink",
-        description: "Recover an allowed symlink target",
-        content: "# Partial Symlink\n\nRetry after recovery.\n",
-        supportFiles: [{ path: "references/proof.md", content: "Symlink support.\n" }],
-      });
-      const targetSupportFile = path.join(
-        targetSkillsDir,
-        "partial-symlink",
-        "references",
-        "proof.md",
-      );
-      await writeSkillProposalRollback({
-        proposalId: proposal.record.id,
-        rollback: createSkillProposalRollback({
-          proposalId: proposal.record.id,
-          targetSkillFile: proposal.record.target.skillFile,
-          action: "create",
-          supportFiles: [{ path: "references/proof.md", existed: false }],
-        }),
-      });
-      await fs.mkdir(path.dirname(targetSupportFile), { recursive: true });
-      await fs.writeFile(targetSupportFile, "Symlink support.\n", "utf8");
-
-      closeOpenClawStateDatabaseForTest();
-      await expect(listSkillProposals({ workspaceDir })).resolves.toMatchObject({
-        proposals: [expect.objectContaining({ id: proposal.record.id, status: "pending" })],
-      });
-      await expect(fs.readFile(targetSupportFile, "utf8")).resolves.toBe("Symlink support.\n");
-
-      await expect(
-        applySkillProposal({ workspaceDir, config, proposalId: proposal.record.id }),
-      ).resolves.toMatchObject({ record: { status: "applied" } });
-      await expect(fs.readFile(targetSupportFile, "utf8")).resolves.toBe("Symlink support.\n");
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "recovers a partial create through the quarantine config",
-    async () => {
-      const workspaceDir = await makeWorkspace();
-      const targetSkillsDir = await tempDirs.make("openclaw-workshop-quarantine-symlink-");
-      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
-      const config = {
-        skills: {
-          load: { allowSymlinkTargets: [targetSkillsDir] },
-          workshop: { allowSymlinkTargetWrites: true },
-        },
-      };
-      const proposal = await proposeCreateSkill({
-        workspaceDir,
-        config,
-        name: "Quarantine Symlink",
-        description: "Recover before quarantining an allowed symlink target",
-        content: "# Quarantine Symlink\n\nRecover before terminal disposal.\n",
-        supportFiles: [{ path: "references/proof.md", content: "Partial support.\n" }],
-      });
-      const targetSupportFile = path.join(
-        targetSkillsDir,
-        "quarantine-symlink",
-        "references",
-        "proof.md",
-      );
-      await writeSkillProposalRollback({
-        proposalId: proposal.record.id,
-        rollback: createSkillProposalRollback({
-          proposalId: proposal.record.id,
-          targetSkillFile: proposal.record.target.skillFile,
-          action: "create",
-          supportFiles: [{ path: "references/proof.md", existed: false }],
-        }),
-      });
-      await fs.mkdir(path.dirname(targetSupportFile), { recursive: true });
-      await fs.writeFile(targetSupportFile, "Partial support.\n", "utf8");
-
-      closeOpenClawStateDatabaseForTest();
-      await expect(
-        quarantineSkillProposal({ workspaceDir, config, proposalId: proposal.record.id }),
-      ).resolves.toMatchObject({ status: "quarantined" });
-      await expect(fs.access(targetSupportFile)).rejects.toThrow();
-      await expect(readSkillProposalRollback(proposal.record.id)).resolves.toBeNull();
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "uses the proposal environment for symlink recovery",
-    async () => {
-      const workspaceDir = await makeWorkspace();
-      const targetSkillsDir = await tempDirs.make("openclaw-workshop-recovery-env-symlink-");
-      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
-      const config = {
-        skills: {
-          load: { allowSymlinkTargets: [targetSkillsDir] },
-          workshop: { allowSymlinkTargetWrites: true },
-        },
-      };
-      const configDir = await tempDirs.make("openclaw-workshop-recovery-env-config-");
-      const configPath = path.join(configDir, "openclaw.json");
-      await fs.writeFile(configPath, JSON.stringify(config), "utf8");
-      const env = { ...testEnv, OPENCLAW_CONFIG_PATH: configPath };
-      const proposal = await proposeCreateSkill({
-        workspaceDir,
-        config,
-        env,
-        name: "Profile Symlink",
-        description: "Recover through the proposal profile",
-        content: "# Profile Symlink\n\nRetry after recovery.\n",
-        supportFiles: [{ path: "references/proof.md", content: "Profile support.\n" }],
-      });
-      const targetSupportFile = path.join(
-        targetSkillsDir,
-        "profile-symlink",
-        "references",
-        "proof.md",
-      );
-      await writeSkillProposalRollback({
-        proposalId: proposal.record.id,
-        rollback: createSkillProposalRollback({
-          proposalId: proposal.record.id,
-          targetSkillFile: proposal.record.target.skillFile,
-          action: "create",
-          supportFiles: [{ path: "references/proof.md", existed: false }],
-        }),
-        store: { env },
-      });
-      await fs.mkdir(path.dirname(targetSupportFile), { recursive: true });
-      await fs.writeFile(targetSupportFile, "Profile support.\n", "utf8");
-
-      closeOpenClawStateDatabaseForTest();
-      await expect(listSkillProposals({ workspaceDir, env })).resolves.toMatchObject({
-        proposals: [expect.objectContaining({ id: proposal.record.id, status: "pending" })],
-      });
-      await expect(fs.access(targetSupportFile)).rejects.toThrow();
-
-      await expect(
-        applySkillProposal({ workspaceDir, config, env, proposalId: proposal.record.id }),
-      ).resolves.toMatchObject({ record: { status: "applied" } });
-      await expect(fs.readFile(targetSupportFile, "utf8")).resolves.toBe("Profile support.\n");
-    },
-  );
 
   it("does not reconcile an interrupted apply from a tampered proposal draft", async () => {
     const workspaceDir = await makeWorkspace();
@@ -1368,7 +1061,7 @@ describe("skill workshop proposals", () => {
     );
 
     closeOpenClawStateDatabaseForTest();
-    await expect(listSkillProposals({ workspaceDir })).resolves.toMatchObject({
+    await expect(listSkillProposals()).resolves.toMatchObject({
       proposals: [expect.objectContaining({ id: proposal.record.id, status: "pending" })],
     });
   });
@@ -1393,7 +1086,7 @@ describe("skill workshop proposals", () => {
     await fs.writeFile(proposal.record.target.skillFile, "# External change\n", "utf8");
 
     closeOpenClawStateDatabaseForTest();
-    await expect(listSkillProposals({ workspaceDir })).resolves.toMatchObject({
+    await expect(listSkillProposals()).resolves.toMatchObject({
       proposals: [expect.objectContaining({ id: proposal.record.id, status: "pending" })],
     });
     await expect(fs.readFile(proposal.record.target.skillFile, "utf8")).resolves.toBe(
@@ -1443,7 +1136,7 @@ describe("skill workshop proposals", () => {
     await fs.writeFile(skillFile, stripProposalFrontmatterForSkill(proposal.content), "utf8");
 
     closeOpenClawStateDatabaseForTest();
-    await expect(listSkillProposals({ workspaceDir })).resolves.toMatchObject({
+    await expect(listSkillProposals()).resolves.toMatchObject({
       proposals: expect.arrayContaining([
         expect.objectContaining({ id: proposal.record.id, status: "applied" }),
       ]),
@@ -1489,7 +1182,7 @@ describe("skill workshop proposals", () => {
     await fs.writeFile(skillFile, stripProposalFrontmatterForSkill(proposal.content), "utf8");
 
     closeOpenClawStateDatabaseForTest();
-    await expect(listSkillProposals({ workspaceDir })).resolves.toMatchObject({
+    await expect(listSkillProposals()).resolves.toMatchObject({
       proposals: expect.arrayContaining([
         expect.objectContaining({ id: proposal.record.id, status: "pending" }),
       ]),
@@ -1531,10 +1224,10 @@ describe("skill workshop proposals", () => {
 
     closeOpenClawStateDatabaseForTest();
     await expect(
-      inspectSkillProposal(proposal.record.id, { agentId: "other", workspaceDir }),
+      inspectSkillProposal(proposal.record.id, { agentId: "other" }),
     ).resolves.toBeNull();
     await fs.rm(proposal.record.target.skillFile);
-    await expect(listSkillProposals({ agentId: "owner", workspaceDir })).resolves.toMatchObject({
+    await expect(listSkillProposals({ agentId: "owner" })).resolves.toMatchObject({
       proposals: [expect.objectContaining({ id: proposal.record.id, status: "pending" })],
     });
   });
@@ -1557,7 +1250,7 @@ describe("skill workshop proposals", () => {
     });
     await fs.mkdir(proposal.record.target.skillFile, { recursive: true });
 
-    await expect(listSkillProposals({ workspaceDir })).resolves.toMatchObject({
+    await expect(listSkillProposals()).resolves.toMatchObject({
       proposals: [expect.objectContaining({ id: proposal.record.id, status: "pending" })],
     });
     await expect(
@@ -1585,9 +1278,9 @@ describe("skill workshop proposals", () => {
         content: "# Second Limited\n",
       }),
     ).rejects.toThrow("pending proposal limit");
-    expect((await listSkillProposals({ workspaceDir })).proposals.map((entry) => entry.id)).toEqual(
-      [first.record.id],
-    );
+    expect((await listSkillProposals()).proposals.map((entry) => entry.id)).toEqual([
+      first.record.id,
+    ]);
 
     await rejectSkillProposal({ workspaceDir, proposalId: first.record.id });
     await expect(
@@ -1599,7 +1292,7 @@ describe("skill workshop proposals", () => {
         content: "x".repeat(1025),
       }),
     ).rejects.toThrow("proposal content is too large");
-    expect((await listSkillProposals({ workspaceDir })).proposals).toHaveLength(1);
+    expect((await listSkillProposals()).proposals).toHaveLength(1);
 
     await createOwnedSkill({
       workspaceDir,
@@ -1784,7 +1477,7 @@ describe("skill workshop proposals", () => {
         content: "# Safe Revision\n\nNo credentials.\n",
       }),
     ).rejects.toThrow("contains a recognized literal credential");
-    const unchanged = await inspectSkillProposal(proposal.record.id, { workspaceDir });
+    const unchanged = await inspectSkillProposal(proposal.record.id);
     expect(unchanged?.record.proposedVersion).toBe("v1");
     expect(unchanged?.content).toContain("Original proposal.");
     expect(unchanged?.content).not.toContain(sample);
@@ -1889,7 +1582,9 @@ describe("skill workshop proposals", () => {
     ).rejects.toThrow("Proposal scan failed");
     expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("quarantined");
     await expect(
-      fs.access(path.join(workspaceDir, "skills", "unsafe-support", "scripts", "run.js")),
+      fs.access(
+        path.join(resolveWorkshopSkillsDir(testEnv), "unsafe-support", "scripts", "run.js"),
+      ),
     ).rejects.toThrow();
   });
 
@@ -1925,7 +1620,7 @@ describe("skill workshop proposals", () => {
       applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
     ).rejects.toThrow("changed without updating metadata");
     await expect(
-      fs.access(path.join(workspaceDir, "skills", "tamper-guard", "SKILL.md")),
+      fs.access(path.join(resolveWorkshopSkillsDir(testEnv), "tamper-guard", "SKILL.md")),
     ).rejects.toThrow();
   });
 });

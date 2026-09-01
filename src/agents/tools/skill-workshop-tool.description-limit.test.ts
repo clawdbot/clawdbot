@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -74,7 +75,7 @@ describe("skill_workshop description validation", () => {
       "Skill proposal description is too large (161 bytes, max 160).",
     );
     await expect(
-      fs.access(path.join(workspaceDir, "skills", "long-description", "SKILL.md")),
+      fs.access(path.join(resolveWorkshopSkillsDir(testState.env), "long-description", "SKILL.md")),
     ).rejects.toThrow();
     expect(collectionReconcile).not.toHaveProperty("result");
   });

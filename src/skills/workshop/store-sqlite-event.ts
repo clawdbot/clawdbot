@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
@@ -124,24 +123,13 @@ export function listStoredSkillProposalEvents(
     query = query.where("skill_workshop_proposal_events.proposal_id", "=", input.proposalId);
   }
   if (input.agentId) {
+    // Proposals all target the one Workshop directory, so an unowned row stays
+    // visible to every agent; only agent ownership narrows the stream.
     query = query.where((eb) =>
       eb.or([
         eb("skill_workshop_proposals.owner_agent_id", "=", input.agentId!),
-        ...(input.workspaceDir
-          ? [
-              eb.and([
-                eb("skill_workshop_proposals.owner_agent_id", "is", null),
-                eb("skill_workshop_proposals.workspace_dir", "=", path.resolve(input.workspaceDir)),
-              ]),
-            ]
-          : []),
+        eb("skill_workshop_proposals.owner_agent_id", "is", null),
       ]),
-    );
-  } else if (input.workspaceDir) {
-    query = query.where(
-      "skill_workshop_proposals.workspace_dir",
-      "=",
-      path.resolve(input.workspaceDir),
     );
   }
   const rows = executeSqliteQuerySync(

@@ -429,8 +429,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       respond,
       context,
       validate: validateSkillsProposalsListParams,
-      run: (_parsedParams, resolved) =>
-        listSkillProposals({ agentId: resolved.agentId, workspaceDir: resolved.workspaceDir }),
+      run: (_parsedParams, resolved) => listSkillProposals({ agentId: resolved.agentId }),
     });
   },
   "skills.proposals.events.list": async ({ params, respond, context }) => {
@@ -442,7 +441,6 @@ export const skillsHandlers: GatewayRequestHandlers = {
       validate: validateSkillsProposalEventsListParams,
       run: async (parsedParams, resolved) =>
         listSkillProposalEvents({
-          workspaceDir: resolved.workspaceDir,
           agentId: resolved.agentId,
           proposalId: parsedParams.proposalId,
           afterSequence: parsedParams.afterSequence,
@@ -460,7 +458,6 @@ export const skillsHandlers: GatewayRequestHandlers = {
       run: async (parsedParams, resolved) => {
         const proposal = await inspectSkillProposal(parsedParams.proposalId, {
           agentId: resolved.agentId,
-          workspaceDir: resolved.workspaceDir,
         });
         if (!proposal) {
           respond(
@@ -578,7 +575,6 @@ export const skillsHandlers: GatewayRequestHandlers = {
         const expectedRevisionHash = parsedParams.expectedRevisionHash;
         const proposal = await inspectSkillProposal(parsedParams.proposalId, {
           agentId: resolved.agentId,
-          workspaceDir: resolved.workspaceDir,
         });
         if (!proposal) {
           respond(

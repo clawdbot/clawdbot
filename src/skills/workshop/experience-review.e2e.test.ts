@@ -209,8 +209,8 @@ describe("Workshop experience review through the real provider and tool owners",
               ),
           );
 
-          const { proposals } = await listSkillProposals({ workspaceDir });
-          const progress = await getSkillProposalRunProgress({ workspaceDir, runId });
+          const { proposals } = await listSkillProposals();
+          const progress = await getSkillProposalRunProgress({ runId });
           const outcomes = Object.entries(readSkillReviewOutcomes().experienceReviews).filter(
             ([key]) => !outcomesBefore.has(key),
           );
@@ -221,7 +221,7 @@ describe("Workshop experience review through the real provider and tool owners",
             const proposal = proposals[0]!;
             expect(proposal.status).toBe("pending");
             expect(progress).toMatchObject({ mutationCount: 1, proposalIds: [proposal.id] });
-            const stored = await inspectSkillProposal(proposal.id, { workspaceDir });
+            const stored = await inspectSkillProposal(proposal.id);
             expect(stored?.record).toMatchObject({ autonomousCapture: true, origin: { runId } });
             expect(stored?.content).toContain(proposalBody);
             await expect(fs.stat(stored!.record.target.skillFile)).rejects.toMatchObject({

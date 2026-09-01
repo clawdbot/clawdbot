@@ -201,7 +201,6 @@ describe("Skill Workshop revision generation atomicity", () => {
     });
     await expect(
       inspectSkillProposal(params.proposal.record.id, {
-        workspaceDir: params.workspaceDir,
         env: testState.env,
       }),
     ).resolves.toMatchObject({
@@ -229,7 +228,6 @@ describe("Skill Workshop revision generation atomicity", () => {
     );
     expect(
       listSkillProposalEvents({
-        workspaceDir,
         proposalId: proposal.record.id,
         env: testState.env,
       }).events.map((event) => event.type),
@@ -249,7 +247,6 @@ describe("Skill Workshop revision generation atomicity", () => {
     const revised = await reviseToVersion(proposal, workspaceDir, 2);
     expect(
       listSkillProposalEvents({
-        workspaceDir,
         proposalId: proposal.record.id,
         env: testState.env,
       }).events.map((event) => event.type),
@@ -268,7 +265,6 @@ describe("Skill Workshop revision generation atomicity", () => {
     const revised = await reviseToVersion(proposal, workspaceDir, 2);
     expect(
       listSkillProposalEvents({
-        workspaceDir,
         proposalId: proposal.record.id,
         env: testState.env,
       }).events.map((event) => event.type),

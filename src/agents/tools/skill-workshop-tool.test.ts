@@ -4,13 +4,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { consumeRunSkillUsage, recordRunSkillUsage } from "../../skills/runtime/run-usage.js";
-import { writeWorkspaceSkills } from "../../skills/test-support/e2e-test-helpers.js";
+import { writeSkill } from "../../skills/test-support/e2e-test-helpers.js";
 import {
   applySkillProposal,
   listSkillProposalEvents,
   proposeCreateSkill,
 } from "../../skills/workshop/service.js";
 import { SKILL_AUTHORING_STANDARDS_PROMPT } from "../../skills/workshop/skill-authoring-standards.js";
+import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import { readSkillProposalRecord } from "../../skills/workshop/store.js";
 import { withSkillCollectionLock } from "../../skills/workshop/target-lock.js";
 import type { SkillWorkshopProposalMutationBudget } from "../../skills/workshop/types.js";
@@ -26,6 +27,23 @@ import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
 let stateDir = "";
+
+async function writeWorkshopSkills(
+  skills: ReadonlyArray<{ name: string; description: string; body?: string }>,
+): Promise<void> {
+  for (const skill of skills) {
+    await writeSkill({
+      dir: path.join(resolveWorkshopSkillsDir(testState.env), skill.name),
+      name: skill.name,
+      description: skill.description,
+      body: skill.body,
+    });
+  }
+}
+
+function workshopSkillPath(name: string, ...parts: string[]): string {
+  return path.join(resolveWorkshopSkillsDir(testState.env), name, ...parts);
+}
 
 async function proposalArtifactPath(
   proposalId: string,
@@ -85,7 +103,7 @@ describe("skill_workshop tool", () => {
 
     expect(JSON.stringify(tool.parameters)).toContain('"enum":["read","reconcile"]');
     expect(JSON.stringify(tool.parameters)).toContain(
-      "Only the skills to change; unlisted skills stay. write requires description and complete SKILL.md content; drop requires a reason. Skills not created by Skill Workshop are read-only.",
+      "Only Workshop-generated skills to change; unlisted skills stay. write requires description and complete SKILL.md content; drop requires a reason.",
     );
     expect(JSON.stringify(tool.parameters)).toContain('"enum":["write","drop"]');
     expect(tool.description).toContain(SKILL_AUTHORING_STANDARDS_PROMPT);
@@ -98,19 +116,19 @@ describe("skill_workshop tool", () => {
     expect(collectionReconcile).toMatchObject({
       result: { kept: [], written: [], dropped: [{ name: "duplicate", reason: "redundant" }] },
     });
-    await expect(fs.access(path.join(workspaceDir, "skills", "duplicate"))).rejects.toThrow();
+    await expect(fs.access(workshopSkillPath("duplicate"))).rejects.toThrow();
 
     const foregroundTool = createSkillWorkshopTool({ workspaceDir, env: testState.env });
     const restored = await foregroundTool.execute("restore", { action: "restore_collection" });
     expect(restored.details).toMatchObject({ restored: ["duplicate"], removed: [] });
     await expect(
-      fs.readFile(path.join(workspaceDir, "skills", "duplicate", "SKILL.md"), "utf8"),
+      fs.readFile(workshopSkillPath("duplicate", "SKILL.md"), "utf8"),
     ).resolves.toContain("Duplicate procedure");
   });
 
   it("reserves the one reconciliation before awaiting its commit", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-collection-concurrent-tool-");
-    await writeWorkspaceSkills(workspaceDir, [{ name: "procedure", description: "Procedure" }]);
+    await writeWorkshopSkills([{ name: "procedure", description: "Procedure" }]);
     const collectionReconcile = { approvedSkillNames: new Set(["procedure"]) };
     const tool = createSkillWorkshopTool({
       workspaceDir,
@@ -124,7 +142,6 @@ describe("skill_workshop tool", () => {
       markAcquired = resolve;
     });
     const heldLock = withSkillCollectionLock(
-      workspaceDir,
       async () => {
         markAcquired?.();
         await new Promise<void>((resolve) => {
@@ -153,7 +170,7 @@ describe("skill_workshop tool", () => {
 
   it("bounds total collection text returned to the reviewer", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-collection-budget-");
-    await writeWorkspaceSkills(workspaceDir, [
+    await writeWorkshopSkills([
       {
         name: "oversized",
         description: "Oversized procedure",
@@ -253,9 +270,7 @@ describe("skill_workshop tool", () => {
       },
     });
     expect(
-      listSkillProposalEvents({ workspaceDir, proposalId: details.id }).events.map(
-        (event) => event.actor,
-      ),
+      listSkillProposalEvents({ proposalId: details.id }).events.map((event) => event.actor),
     ).toEqual([
       { type: "agent", id: "main" },
       { type: "agent", id: "main" },
@@ -597,9 +612,7 @@ describe("skill_workshop tool", () => {
         "utf8",
       ),
     ).resolves.toContain("Use weather API details.");
-    await expect(
-      fs.access(path.join(workspaceDir, "skills", "weather-planner", "SKILL.md")),
-    ).rejects.toThrow();
+    await expect(fs.access(workshopSkillPath("weather-planner", "SKILL.md"))).rejects.toThrow();
 
     const reviewerOrigin = {
       agentId: "main",
@@ -790,16 +803,13 @@ describe("skill_workshop tool", () => {
       scanState: "clean",
     });
     await expect(
-      fs.readFile(path.join(workspaceDir, "skills", "weather-planner", "SKILL.md"), "utf8"),
+      fs.readFile(workshopSkillPath("weather-planner", "SKILL.md"), "utf8"),
     ).resolves.toContain("Check weather before outdoor recommendations.");
     await expect(
-      fs.readFile(path.join(workspaceDir, "skills", "weather-planner", "SKILL.md"), "utf8"),
+      fs.readFile(workshopSkillPath("weather-planner", "SKILL.md"), "utf8"),
     ).resolves.not.toContain("status: proposal");
     await expect(
-      fs.readFile(
-        path.join(workspaceDir, "skills", "weather-planner", "references", "weather.md"),
-        "utf8",
-      ),
+      fs.readFile(workshopSkillPath("weather-planner", "references", "weather.md"), "utf8"),
     ).resolves.toContain("Use weather API details.");
 
     const update = await tool.execute("call-update", {
@@ -831,7 +841,7 @@ describe("skill_workshop tool", () => {
       proposal_id: (revisedUpdate.details as { id: string }).id,
     });
     const revisedSkill = await fs.readFile(
-      path.join(workspaceDir, "skills", "weather-planner", "SKILL.md"),
+      workshopSkillPath("weather-planner", "SKILL.md"),
       "utf8",
     );
     expect(revisedSkill).toContain("Check weather before outdoor recommendations.");
@@ -860,9 +870,7 @@ describe("skill_workshop tool", () => {
       kind: "create",
       skillKey: "rejected-skill",
     });
-    await expect(
-      fs.access(path.join(workspaceDir, "skills", "rejected-skill", "SKILL.md")),
-    ).rejects.toThrow();
+    await expect(fs.access(workshopSkillPath("rejected-skill", "SKILL.md"))).rejects.toThrow();
 
     const quarantined = await tool.execute("call-5", {
       action: "create",
@@ -887,9 +895,7 @@ describe("skill_workshop tool", () => {
       skillKey: "quarantined-skill",
       scanState: "quarantined",
     });
-    await expect(
-      fs.access(path.join(workspaceDir, "skills", "quarantined-skill", "SKILL.md")),
-    ).rejects.toThrow();
+    await expect(fs.access(workshopSkillPath("quarantined-skill", "SKILL.md"))).rejects.toThrow();
   });
 
   it.each(["off", "propose", "auto"] as const)(
@@ -938,7 +944,7 @@ describe("skill_workshop tool", () => {
         name: skillName,
         source: "workspace",
         activation: "read",
-        skillFile: path.join(workspaceDir, "skills", skillName, "SKILL.md"),
+        skillFile: workshopSkillPath(skillName, "SKILL.md"),
       });
       const patch = await tool.execute("repair-patch", patchArgs);
       expect(patch.details).toMatchObject({
@@ -946,7 +952,7 @@ describe("skill_workshop tool", () => {
         kind: "update",
       });
 
-      const skillFile = path.join(workspaceDir, "skills", skillName, "SKILL.md");
+      const skillFile = workshopSkillPath(skillName, "SKILL.md");
       if (mode === "propose") {
         await expect(fs.readFile(skillFile, "utf8")).resolves.toContain(
           "Check weather before outdoor recommendations.",
@@ -973,7 +979,7 @@ describe("skill_workshop tool", () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-repair-alias-");
     const runId = "repair-alias";
     const skillName = "canonical-skill-key";
-    const skillFile = path.join(workspaceDir, "skills", skillName, "SKILL.md");
+    const skillFile = workshopSkillPath(skillName, "SKILL.md");
     const tool = createSkillWorkshopTool({
       workspaceDir,
       config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
@@ -1011,7 +1017,7 @@ describe("skill_workshop tool", () => {
     consumeRunSkillUsage(runId);
   });
 
-  it("keeps proposal discovery scoped to the tool agent across workspace changes", async () => {
+  it("keeps proposal discovery global for the tool agent across workspace changes", async () => {
     const firstWorkspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-first-");
     const secondWorkspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-second-");
     const firstTool = createSkillWorkshopTool({
@@ -1042,13 +1048,8 @@ describe("skill_workshop tool", () => {
       action: "list",
       status: "pending",
     });
-    expect(
-      (listed.details as { proposals: Array<{ id: string; workspaceMismatch?: true }> }).proposals,
-    ).toEqual([
-      expect.objectContaining({
-        id: (second.details as { id: string }).id,
-        workspaceMismatch: true,
-      }),
+    expect((listed.details as { proposals: Array<{ id: string }> }).proposals).toEqual([
+      expect.objectContaining({ id: (second.details as { id: string }).id }),
       expect.objectContaining({ id: (first.details as { id: string }).id }),
     ]);
     await expect(

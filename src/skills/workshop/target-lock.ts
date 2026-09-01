@@ -1,5 +1,4 @@
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
-import { canonicalSkillCollectionWorkspace } from "./collection-paths.js";
 import { hashSkillProposalContent } from "./proposal-hash.js";
 import {
   databaseOptions,
@@ -12,8 +11,8 @@ const TARGET_LEASE_MS = 60_000;
 const TARGET_LEASE_WAIT_MS = 5_000;
 const COLLECTION_LEASE_MS = 10 * 60_000;
 
+/** One Workshop skills tree means one collection lease; every writer serializes on this key. */
 export async function withSkillCollectionLock<T>(
-  workspaceDir: string,
   fn: () => Promise<T>,
   options: SkillWorkshopStoreOptions = {},
 ): Promise<T> {
@@ -21,7 +20,7 @@ export async function withSkillCollectionLock<T>(
   return await withOpenClawStateLease(
     {
       scope: "skill-collection",
-      key: hashSkillProposalContent(canonicalSkillCollectionWorkspace(workspaceDir)),
+      key: "workshop",
       database: { scope: "shared", options: databaseOptions(options) },
       leaseMs: COLLECTION_LEASE_MS,
       waitMs: TARGET_LEASE_WAIT_MS,
@@ -53,13 +52,11 @@ export async function withSkillProposalTargetLock<T>(
 }
 
 export async function withSkillProposalCommitLock<T>(
-  workspaceDir: string,
   record: SkillProposalRecord,
   fn: () => Promise<T>,
   options: SkillWorkshopStoreOptions = {},
 ): Promise<T> {
   return await withSkillCollectionLock(
-    workspaceDir,
     async () => await withSkillProposalTargetLock(record, fn, options),
     options,
   );

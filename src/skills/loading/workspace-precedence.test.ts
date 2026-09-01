@@ -124,6 +124,38 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).not.toContain("Bundled version");
   });
 
+  it("loads Workshop skills below managed and above bundled", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workshop-precedence");
+    const managedDir = path.join(workspaceDir, ".managed");
+    const workshopDir = path.join(workspaceDir, ".workshop");
+    const bundledDir = path.join(workspaceDir, ".bundled");
+    for (const [root, name, description] of [
+      [managedDir, "managed-wins", "Managed version"],
+      [workshopDir, "managed-wins", "Workshop version below managed"],
+      [workshopDir, "workshop-wins", "Workshop version"],
+      [bundledDir, "workshop-wins", "Bundled version below Workshop"],
+    ] as const) {
+      await writeSkill({ dir: path.join(root, name), name, description });
+    }
+
+    const entries = loadMergedWorkspaceSkills({
+      agentWorkspaceDir: workspaceDir,
+      managedSkillsDir: managedDir,
+      workshopSkillsDir: workshopDir,
+      bundledSkillsDir: bundledDir,
+      pluginSkillsDir: path.join(workspaceDir, ".plugin-skills"),
+    });
+
+    expect(entries.find((entry) => entry.skill.name === "managed-wins")?.skill).toMatchObject({
+      source: "openclaw-managed",
+      description: "Managed version",
+    });
+    expect(entries.find((entry) => entry.skill.name === "workshop-wins")?.skill).toMatchObject({
+      source: "openclaw-workshop",
+      description: "Workshop version",
+    });
+  });
+
   it("keeps extraDirs below bundled precedence and reports the collision", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("extra-bundled-collision");
     const extraDir = path.join(workspaceDir, ".extra");

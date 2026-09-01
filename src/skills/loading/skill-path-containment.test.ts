@@ -234,6 +234,34 @@ describe("skill path containment", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "rejects symlinked skills in the Workshop-owned directory",
+    async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      const workshopSkillsDir = path.join(workspaceDir, ".workshop");
+      const outsideDir = await createTempWorkspaceDir();
+      const outsideSkillDir = path.join(outsideDir, "outside-workshop-skill");
+      await writeSkill({
+        dir: outsideSkillDir,
+        name: "outside-workshop-skill",
+        description: "Outside Workshop",
+      });
+      await fs.mkdir(workshopSkillsDir, { recursive: true });
+      await fs.symlink(
+        outsideSkillDir,
+        path.join(workshopSkillsDir, "outside-workshop-skill"),
+        "dir",
+      );
+      const warn = captureWarningLogger();
+
+      const entries = loadTestWorkspaceSkills(workspaceDir, { workshopSkillsDir });
+
+      expect(entries).toEqual([]);
+      expect(firstWarningLine(warn)).toContain("source=openclaw-workshop");
+      expect(firstWarningLine(warn)).toContain("reason=symlink-escape");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "allows configured skill symlink targets outside their source root",
     async () => {
       const workspaceDir = await createTempWorkspaceDir();

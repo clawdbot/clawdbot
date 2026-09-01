@@ -17,6 +17,7 @@ const skillsLogger = createSubsystemLogger("skills");
 
 type WorkspaceSkillBuildOptions = {
   config?: OpenClawConfig;
+  workshopSkillsDir?: string;
   managedSkillsDir?: string;
   bundledSkillsDir?: string;
   entries?: SkillEntry[];

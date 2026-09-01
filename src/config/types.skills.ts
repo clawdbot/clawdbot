@@ -63,8 +63,6 @@ export type SkillsWorkshopConfig = {
     /** Capture policy for durable conversation signals and substantial completed work. */
     mode?: SkillsWorkshopAutonomousMode;
   };
-  /** Allow Skill Workshop apply to write through trusted skill symlink targets. */
-  allowSymlinkTargetWrites?: boolean;
   /** Whether proposal lifecycle actions need explicit approval. */
   approvalPolicy?: "pending" | "auto";
   /** Maximum pending/quarantined proposals retained per workspace. */

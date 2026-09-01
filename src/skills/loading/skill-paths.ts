@@ -5,6 +5,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { resolveOsHomeDir } from "../../infra/home-dir.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { resolveConfigDir } from "../../utils.js";
+import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import type { Skill } from "./skill-contract.js";
 import { tryRealpath } from "./symlink-targets.js";
 
@@ -59,6 +60,7 @@ export function compactPromptSkills(skills: Skill[]): Skill[] {
 function resolvePreservedPromptSkillPathRoots(): string[] {
   const configDir = resolveConfigDir();
   const promptSkillDirs = [
+    resolveWorkshopSkillsDir(),
     path.resolve(configDir, "skills"),
     path.resolve(configDir, "plugin-skills"),
   ];

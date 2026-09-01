@@ -5,7 +5,7 @@ import { hasRunWorkspaceSkillUsage } from "../../skills/runtime/run-usage.js";
 import { stripProposalFrontmatterForSkill } from "../../skills/workshop/frontmatter.js";
 import { findUniqueSkillPatchSpan } from "../../skills/workshop/service.js";
 import type { SkillWorkshopPreparedPatch } from "../../skills/workshop/types.js";
-import { readWritableWorkspaceSkill } from "../../skills/workshop/workspace-skill-read.js";
+import { readWritableWorkshopSkill } from "../../skills/workshop/workspace-skill-read.js";
 import { readToolStringParam, ToolInputError, type AnyAgentTool } from "./common.js";
 
 type WritableSkillPatchTarget = Awaited<ReturnType<typeof readWritableWorkspaceSkill>>;
@@ -86,6 +86,7 @@ export async function executePrepareSkillPatch(params: {
   workspaceDir: string;
   config?: OpenClawConfig;
   agentId?: string;
+  env?: NodeJS.ProcessEnv;
   toolParams: Record<string, unknown>;
   preparedSkillPatches: Map<string, SkillWorkshopPreparedPatch>;
   proposalMutationBudgetRemaining?: number;
@@ -97,13 +98,12 @@ export async function executePrepareSkillPatch(params: {
   ) {
     throw new ToolInputError("this Skill Workshop session has reached its proposal mutation limit");
   }
-  const skill = await readWritableWorkspaceSkill(
-    params.workspaceDir,
+  const skill = await readWritableWorkshopSkill(
     readToolStringParam(params.toolParams, "skill_name", {
       required: true,
       label: "skill_name",
     }),
-    { config: params.config, agentId: params.agentId },
+    params.env,
   );
   if (params.preparedSkillPatches.has(skill.skillKey)) {
     throw new ToolInputError(

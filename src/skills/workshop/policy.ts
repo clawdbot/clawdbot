@@ -1,4 +1,4 @@
-// Workshop policy helpers validate generated skill drafts against workspace policy.
+// Workshop policy helpers validate generated skill drafts against Workshop policy.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -44,15 +44,15 @@ function lifecycleApprovalText(action: SkillWorkshopLifecycleAction): {
 } {
   if (action === "apply") {
     return {
-      title: "Apply workspace skill proposal",
-      description: "Apply a pending workspace skill proposal into live workspace skills.",
+      title: "Apply Skill Workshop proposal",
+      description: "Apply a pending proposal inside the global Skill Workshop directory.",
       severity: "warning",
     };
   }
   if (action === "reject") {
     return {
-      title: "Reject workspace skill proposal",
-      description: "Reject a pending workspace skill proposal.",
+      title: "Reject Skill Workshop proposal",
+      description: "Reject a pending Skill Workshop proposal.",
       severity: "info",
     };
   }
@@ -60,13 +60,13 @@ function lifecycleApprovalText(action: SkillWorkshopLifecycleAction): {
     return {
       title: "Restore previous skill collection",
       description:
-        "Replace current workspace skills with the previous collection backup. Later skill changes may be removed.",
+        "Replace current Workshop-generated skills with the previous collection backup. Later Workshop changes may be removed.",
       severity: "warning",
     };
   }
   return {
-    title: "Quarantine workspace skill proposal",
-    description: "Quarantine a pending workspace skill proposal.",
+    title: "Quarantine Skill Workshop proposal",
+    description: "Quarantine a pending Skill Workshop proposal.",
     severity: "info",
   };
 }
@@ -158,7 +158,7 @@ function lifecycleApprovalTimeoutReason(params: {
   if (params.action === "restore_collection") {
     return [
       "The Skill Workshop approval request expired without a decision.",
-      "This restore call left workspace skills unchanged.",
+      "This restore call left Workshop-generated skills unchanged.",
       "Review the current skills, then request the restore again if it is still wanted.",
       "Do not retry this tool call in a loop.",
     ].join(" ");

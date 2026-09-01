@@ -6,7 +6,6 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import { applyAutonomousSkillProposal } from "../../skills/workshop/autonomous-apply.js";
 import {
   AUTONOMOUS_SKILL_MAX_CHARS,
   type SkillCollectionReconcileContext,
@@ -35,7 +34,7 @@ import type {
   SkillWorkshopProposalReviewCompletion,
   SkillWorkshopProposalRevisionConstraint,
 } from "../../skills/workshop/types.js";
-import { readWritableWorkspaceSkill } from "../../skills/workshop/workspace-skill-read.js";
+import { readWritableWorkshopSkill } from "../../skills/workshop/workspace-skill-read.js";
 import {
   asToolParamsRecord,
   readToolStringParam,
@@ -248,10 +247,9 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         ) {
           throw new ToolInputError("this Skill Workshop session cannot read live skills");
         }
-        const skill = await readWritableWorkspaceSkill(
-          options.workspaceDir,
+        const skill = await readWritableWorkshopSkill(
           readToolStringParam(params, "skill_name", { required: true, label: "skill_name" }),
-          { config: options.config, agentId: options.agentId },
+          options.env,
         );
         if (
           options.collectionReconcile &&
@@ -310,6 +308,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           workspaceDir: options.workspaceDir,
           config: options.config,
           agentId: options.agentId,
+          env: options.env,
           toolParams: params,
           preparedSkillPatches,
           proposalMutationBudgetRemaining: options.proposalMutationBudget?.remaining,
@@ -340,7 +339,6 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           proposals: (
             await listSkillProposals({
               agentId: options.agentId,
-              workspaceDir: options.workspaceDir,
               env: options.env,
             })
           ).proposals,
@@ -484,10 +482,9 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       if (requiresRead) {
         // Full rewrites require a complete model read. A targeted patch may instead
         // redeem one exact span prepared from the authoritative full skill.
-        const target = await readWritableWorkspaceSkill(
-          options.workspaceDir,
+        const target = await readWritableWorkshopSkill(
           readToolStringParam(params, "skill_name", { required: true, label: "skill_name" }),
-          { config: options.config, agentId: options.agentId },
+          options.env,
         );
         const readHash = readSkillHashes.get(target.skillKey);
         const contentHash = sha256Hex(target.content);
@@ -688,26 +685,19 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         }
 
         if (foregroundRepair && workshopConfig.autonomous.mode === "auto") {
-          const autonomous = await applyAutonomousSkillProposal({
+          const applied = await applySkillProposal({
             workspaceDir: options.workspaceDir,
             agentId: options.agentId,
             config: options.config,
             env: options.env,
             eventActor: skillWorkshopAgentEventActor(options.agentId),
-            proposal,
+            proposalId: proposal.record.id,
+            expectedRevisionHash: proposal.revisionHash,
             reason: "Foreground repair of a used skill",
           });
-          if (autonomous.status === "pending") {
-            return proposalResult(
-              { ...proposal, record: autonomous.record },
-              {
-                contentText: `Skill ${autonomous.record.target.skillName} is user-authored; proposal ${autonomous.record.id} awaits operator review.`,
-              },
-            );
-          }
-          return actionResult(autonomous.record, {
-            contentText: `Repaired used skill ${autonomous.record.target.skillName} through proposal ${autonomous.record.id}.`,
-            targetSkillFile: autonomous.targetSkillFile,
+          return actionResult(applied.record, {
+            contentText: `Repaired used skill ${applied.record.target.skillName} through proposal ${applied.record.id}.`,
+            targetSkillFile: applied.targetSkillFile,
           });
         }
         return proposalResult(proposal, { contentText });

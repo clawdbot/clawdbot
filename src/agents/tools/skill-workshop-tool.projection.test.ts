@@ -1,5 +1,7 @@
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { writeWorkspaceSkills } from "../../skills/test-support/e2e-test-helpers.js";
+import { writeSkill } from "../../skills/test-support/e2e-test-helpers.js";
+import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -99,13 +101,12 @@ describe("skill_workshop model projection", () => {
     "handles a 21,000-character collection skill on a $modelContextWindowTokens-token model",
     async ({ modelContextWindowTokens, contentIncluded }) => {
       const workspaceDir = await tempDirs.make("openclaw-skill-collection-context-read-");
-      await writeWorkspaceSkills(workspaceDir, [
-        {
-          name: "large",
-          description: "Large procedure",
-          body: `MODEL_VISIBLE_SKILL_BODY\n${"x".repeat(21_000)}`,
-        },
-      ]);
+      await writeSkill({
+        dir: path.join(resolveWorkshopSkillsDir(testState.env), "large"),
+        name: "large",
+        description: "Large procedure",
+        body: `MODEL_VISIBLE_SKILL_BODY\n${"x".repeat(21_000)}`,
+      });
       const tool = createConfiguredSkillWorkshopTool({
         workspaceDir,
         config: {},

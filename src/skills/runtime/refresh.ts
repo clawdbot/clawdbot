@@ -20,6 +20,7 @@ import {
   resolveAllowedSkillSymlinkTargetRealPaths,
   tryRealpath,
 } from "../loading/symlink-targets.js";
+import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import {
   bumpSkillsSnapshotVersion,
   clearSkillsSnapshotVersionForWorkspace,
@@ -123,6 +124,7 @@ function resolveWatchTargets(
   if (executionSkillsDir) {
     baseRoots.push({ path: executionSkillsDir, source: "openclaw-workspace" });
   }
+  baseRoots.push({ path: resolveWorkshopSkillsDir(), source: "openclaw-workshop" });
   baseRoots.push({ path: path.join(CONFIG_DIR, "skills"), source: "openclaw-managed" });
   if (isDefaultStateDir()) {
     baseRoots.push({

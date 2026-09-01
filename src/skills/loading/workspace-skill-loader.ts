@@ -27,6 +27,7 @@ import type {
   SkillEntry,
   SkillSnapshot,
 } from "../types.js";
+import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { resolveBundledAllowlist, shouldIncludeSkill } from "./config.js";
 import { resolveSkillInvocationPolicy, resolveSkillKey } from "./frontmatter.js";
@@ -76,6 +77,7 @@ type WorkspaceSkillRoots = {
 
 type WorkspaceSkillLoadOptions = {
   config?: OpenClawConfig;
+  workshopSkillsDir?: string;
   managedSkillsDir?: string;
   bundledSkillsDir?: string;
   pluginSkillsDir?: string;
@@ -327,6 +329,7 @@ function loadSkillEntries(
   opts?: {
     config?: OpenClawConfig;
     agentId?: string;
+    workshopSkillsDir?: string;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
     pluginSkillsDir?: string;
@@ -354,6 +357,7 @@ function loadSkillEntries(
     workspaceSkillsDir,
     workspaceOnly,
     custodianAgentId,
+    opts?.workshopSkillsDir,
     opts?.managedSkillsDir,
     opts?.bundledSkillsDir,
     opts?.pluginSkillsDir,
@@ -387,6 +391,7 @@ function loadSkillEntries(
         }),
     });
   const managedSkillsDir = opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
+  const workshopSkillsDir = opts?.workshopSkillsDir ?? resolveWorkshopSkillsDir();
   const bundledSkillsDir = workspaceOnly
     ? undefined
     : (opts?.bundledSkillsDir ?? resolveBundledSkillsDir());
@@ -435,6 +440,9 @@ function loadSkillEntries(
   const managedSkills = workspaceOnly
     ? []
     : loadSkills({ dir: managedSkillsDir, source: "openclaw-managed" });
+  const workshopSkills = workspaceOnly
+    ? []
+    : loadSkills({ dir: workshopSkillsDir, source: "openclaw-workshop" });
   const personalAgentsSkillsDir = osHomeDir
     ? path.resolve(osHomeDir, ".agents", "skills")
     : path.resolve(".agents", "skills");
@@ -467,6 +475,9 @@ function loadSkillEntries(
       left.skill.source.localeCompare(right.skill.source, "en"),
   );
   for (const record of bundledTierSkills) {
+    mergeRecord(record);
+  }
+  for (const record of workshopSkills) {
     mergeRecord(record);
   }
   for (const record of managedSkills) {
@@ -539,6 +550,7 @@ export function resolveWorkspaceSkillPromptEntries(
   workspaceDir: string,
   opts?: {
     config?: OpenClawConfig;
+    workshopSkillsDir?: string;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
     entries?: SkillEntry[];
@@ -633,6 +645,7 @@ export function loadVisibleSkills(
   workspaceDir: string,
   opts?: {
     config?: OpenClawConfig;
+    workshopSkillsDir?: string;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
     librarySelections?: SkillSnapshot["librarySelections"];

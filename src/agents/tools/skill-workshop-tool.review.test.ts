@@ -4,10 +4,8 @@ import { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { consumeRunSkillUsage, recordRunSkillUsage } from "../../skills/runtime/run-usage.js";
-import { writeWorkspaceSkills } from "../../skills/test-support/e2e-test-helpers.js";
 import { inspectSkillProposal } from "../../skills/workshop/service.js";
-import { readSkillProposalRecord } from "../../skills/workshop/store.js";
+import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import type { SkillWorkshopProposalMutationBudget } from "../../skills/workshop/types.js";
 import {
   createOpenClawTestState,
@@ -55,61 +53,6 @@ async function seedLiveSkill(
 }
 
 describe("skill_workshop review mode", () => {
-  it("keeps an autonomous foreground repair pending for a user-authored skill", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-user-repair-");
-    const runId = "user-authored-repair";
-    const skillName = "operator-runbook";
-    const skillFile = path.join(workspaceDir, "skills", skillName, "SKILL.md");
-    await writeWorkspaceSkills(workspaceDir, [
-      {
-        name: skillName,
-        description: "Run an operator-owned procedure",
-        body: `# Operator Runbook\n\n${"Detailed operator step.\n".repeat(200)}Check the old prerequisite.\n`,
-      },
-    ]);
-    const tool = createSkillWorkshopTool({
-      workspaceDir,
-      config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
-      env: testState.env,
-      agentId: "main",
-      origin: { agentId: "main", runId },
-      modelContextWindowTokens: 8_192,
-    });
-    const read = await tool.execute("user-repair-read", {
-      action: "read",
-      skill_name: skillName,
-    });
-    expect(read.details).toMatchObject({ contentIncluded: false });
-    await tool.execute("user-repair-prepare", {
-      action: "prepare_patch",
-      skill_name: skillName,
-      old_string: "Check the old prerequisite.",
-    });
-    recordRunSkillUsage({
-      runId,
-      name: skillName,
-      source: "workspace",
-      activation: "read",
-      skillFile,
-    });
-
-    const result = await tool.execute("user-repair-patch", {
-      action: "patch",
-      skill_name: skillName,
-      old_string: "Check the old prerequisite.",
-      new_string: "Check the current prerequisite.",
-    });
-
-    expect(result.details).toMatchObject({ status: "pending", kind: "update" });
-    expect((result.content[0] as { text: string }).text).toContain("user-authored; proposal");
-    const record = await readSkillProposalRecord((result.details as { id: string }).id, {
-      env: testState.env,
-    });
-    expect(record?.statusReason).toBe("user-authored skill; awaiting operator review");
-    await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("old prerequisite");
-    consumeRunSkillUsage(runId);
-  });
-
   it("restricts internal review runs to one pending proposal mutation", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-review-");
     const proposalMutationBudget: SkillWorkshopProposalMutationBudget = { remaining: 1 };
@@ -206,42 +149,6 @@ describe("skill_workshop review mode", () => {
     expect(proposalMutationBudget.remaining).toBe(0);
   });
 
-  it("keeps a user-authored update pending when detached review tries to apply it", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-review-apply-");
-    const skillName = "operator-runbook";
-    const skillFile = path.join(workspaceDir, "skills", skillName, "SKILL.md");
-    await writeWorkspaceSkills(workspaceDir, [
-      {
-        name: skillName,
-        description: "Run an operator-owned procedure",
-        body: "# Operator Runbook\n\nCheck the old prerequisite.\n",
-      },
-    ]);
-    const reviewTool = createSkillWorkshopTool({
-      workspaceDir,
-      env: testState.env,
-      proposalOnly: true,
-      updateProposals: true,
-      proposalMutationBudget: { remaining: 1 },
-    });
-    await reviewTool.execute("review-read", { action: "read", skill_name: skillName });
-    const patched = await reviewTool.execute("review-patch", {
-      action: "patch",
-      skill_name: skillName,
-      old_string: "Check the old prerequisite.",
-      new_string: "Check the current prerequisite.",
-    });
-    const proposalId = (patched.details as { id: string }).id;
-
-    await expect(
-      reviewTool.execute("review-apply", { action: "apply", proposal_id: proposalId }),
-    ).rejects.toThrow("review allows only");
-
-    const record = await readSkillProposalRecord(proposalId, { env: testState.env });
-    expect(record?.status).toBe("pending");
-    await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("old prerequisite");
-  });
-
   it("composes patch proposals by replacing the quoted span of the live body", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-review-extend-");
     await seedLiveSkill(
@@ -332,7 +239,11 @@ describe("skill_workshop review mode", () => {
       proposalMutationBudget,
     });
     await reviewTool.execute("review-read", { action: "read", skill_name: "weather-planner" });
-    const liveSkillFile = path.join(workspaceDir, "skills", "weather-planner", "SKILL.md");
+    const liveSkillFile = path.join(
+      resolveWorkshopSkillsDir(testState.env),
+      "weather-planner",
+      "SKILL.md",
+    );
     await fs.writeFile(
       liveSkillFile,
       (await fs.readFile(liveSkillFile, "utf8")).replace(
@@ -360,7 +271,11 @@ describe("skill_workshop review mode", () => {
       "# Weather Planner\n\nCheck weather before outdoor recommendations.\n",
     );
 
-    const liveSkillFile = path.join(workspaceDir, "skills", "weather-planner", "SKILL.md");
+    const liveSkillFile = path.join(
+      resolveWorkshopSkillsDir(testState.env),
+      "weather-planner",
+      "SKILL.md",
+    );
     const operatorEditedSkill = (await fs.readFile(liveSkillFile, "utf8")).replace(
       "Check weather before outdoor recommendations.",
       "Operator-edited steps during proposal creation.",
@@ -535,9 +450,7 @@ describe("skill_workshop review mode", () => {
       new_string: newString,
     });
     expect(patched.details).toMatchObject({ status: "pending", kind: "update" });
-    const inspected = await inspectSkillProposal((patched.details as { id: string }).id, {
-      workspaceDir,
-    });
+    const inspected = await inspectSkillProposal((patched.details as { id: string }).id, {});
     expect(inspected?.content).toContain(newString);
     expect(inspected?.content).not.toContain(oldString);
     await expect(
@@ -593,7 +506,11 @@ describe("skill_workshop review mode", () => {
       skill_name: "big-skill",
       old_string: oldString,
     });
-    const liveSkillFile = path.join(workspaceDir, "skills", "big-skill", "SKILL.md");
+    const liveSkillFile = path.join(
+      resolveWorkshopSkillsDir(testState.env),
+      "big-skill",
+      "SKILL.md",
+    );
     await fs.appendFile(liveSkillFile, "\nOperator edit after preparation.\n");
     await expect(
       reviewTool.execute("stale-prepared-patch", {

@@ -29,7 +29,6 @@ describe("skill_workshop collection history", () => {
 
     const createTime = Date.UTC(2026, 7, 18, 12, 34, 56);
     recordSkillCollectionReviewHistory(
-      workspaceDir,
       createTime,
       {
         backupId: "backup-42",
@@ -72,7 +71,6 @@ describe("skill_workshop collection history", () => {
       );
     for (let review = 0; review < 20; review += 1) {
       recordSkillCollectionReviewHistory(
-        workspaceDir,
         review,
         {
           backupId: `backup-${review}`,

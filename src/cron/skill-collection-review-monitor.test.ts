@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSkillCollectionReviewMonitorSpecs } from "./skill-collection-review-monitor.js";
 
 describe("resolveSkillCollectionReviewMonitorSpecs", () => {
-  it("creates one stable seven-day job per canonical workspace", () => {
+  it("creates one stable seven-day job regardless of agent count", () => {
     const cfg = {
       agents: {
         list: [
@@ -20,10 +20,9 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
       schedulerSeed: "test-seed",
     });
 
-    expect(specs.map(({ agentId }) => agentId)).toEqual(["main", "solo"]);
+    expect(specs.map(({ agentId }) => agentId)).toEqual(["main"]);
     expect(specs.map(({ input }) => input.declarationKey)).toEqual([
       "skill-collection-review:main",
-      "skill-collection-review:solo",
     ]);
     expect(specs[0]?.input).toMatchObject({
       name: "skill-collection-review-main",

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { listSkillProposalEvents } from "../../skills/workshop/service.js";
+import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import { readSkillProposalRecord } from "../../skills/workshop/store.js";
 import {
   createOpenClawTestState,
@@ -90,13 +91,14 @@ describe("skill_workshop terminal lifecycle", () => {
         ).resolves.toMatchObject({ status: expectedStatus });
         expect(
           listSkillProposalEvents({
-            workspaceDir,
             proposalId: details.id,
             env: testState.env,
           }).events.at(-1)?.type,
         ).toBe(expectedStatus);
         await expect(
-          fs.access(path.join(workspaceDir, "skills", `${action}-${damage}`, "SKILL.md")),
+          fs.access(
+            path.join(resolveWorkshopSkillsDir(testState.env), `${action}-${damage}`, "SKILL.md"),
+          ),
         ).rejects.toThrow();
       }
     }

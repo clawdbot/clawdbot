@@ -11,7 +11,7 @@ import { logWarn } from "../../logger.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
 import {
-  assertInsideWorkspace,
+  assertInsideSkillsRoot,
   assertWorkspaceSkillSupportPathSetIsFileOnly,
   MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES,
   normalizeWorkspaceSkillSupportPath,
@@ -26,6 +26,7 @@ import {
 import { hashSkillProposalContent } from "./proposal-hash.js";
 import { reconcileInterruptedSkillProposalApply } from "./reconcile-transition.js";
 import { hashSkillProposalRevision } from "./revision-hash.js";
+import { resolveWorkshopSkillsDir } from "./skills-root.js";
 import {
   assertProposalId,
   MAX_PROPOSAL_SUPPORT_FILES,
@@ -77,7 +78,6 @@ export { withSkillProposalTargetLock };
 
 type SkillProposalLookupScope = {
   agentId?: string;
-  workspaceDir?: string;
 };
 
 type SkillProposalReadOptions = {
@@ -143,7 +143,10 @@ export function prepareSkillProposalSupportFiles(
   return files;
 }
 
-export function resolveSkillProposalTarget(params: { workspaceDir: string; skillName: string }): {
+export function resolveSkillProposalTarget(params: {
+  skillName: string;
+  env?: NodeJS.ProcessEnv;
+}): {
   skillKey: string;
   skillDir: string;
   skillFile: string;
@@ -152,27 +155,18 @@ export function resolveSkillProposalTarget(params: { workspaceDir: string; skill
   if (!skillKey) {
     throw new Error("Skill name must contain at least one letter or number.");
   }
-  const skillDir = path.resolve(params.workspaceDir, "skills", skillKey);
+  const skillsRoot = resolveWorkshopSkillsDir(params.env);
+  const skillDir = path.resolve(skillsRoot, skillKey);
   const skillFile = path.join(skillDir, "SKILL.md");
-  assertInsideWorkspace(params.workspaceDir, skillDir, "skill directory");
-  assertInsideWorkspace(params.workspaceDir, skillFile, "skill file");
+  assertInsideSkillsRoot(skillsRoot, skillDir, "skill directory");
+  assertInsideSkillsRoot(skillsRoot, skillFile, "skill file");
   return { skillKey, skillDir, skillFile };
 }
 
 function isStoredProposalVisible(row: SkillProposalRow, scope: SkillProposalLookupScope): boolean {
-  if (!scope.agentId) {
-    return scope.workspaceDir
-      ? path.resolve(row.workspace_dir) === path.resolve(scope.workspaceDir)
-      : true;
-  }
-  if (row.owner_agent_id === scope.agentId) {
-    return true;
-  }
-  return (
-    row.owner_agent_id === null &&
-    scope.workspaceDir !== undefined &&
-    path.resolve(row.workspace_dir) === path.resolve(scope.workspaceDir)
-  );
+  // Proposals all target the one Workshop directory, so an unowned row is
+  // visible everywhere; only agent ownership narrows the view.
+  return !scope.agentId || row.owner_agent_id === scope.agentId || row.owner_agent_id === null;
 }
 
 export class SkillProposalDraftMissingError extends Error {
@@ -197,7 +191,7 @@ export async function readSkillProposal(
   if (readOptions.reconcile === false) {
     return await readSkillProposalBundle(stored.record, options);
   }
-  if (await reconcileInterruptedApply(proposalId, options, readOptions.config)) {
+  if (await reconcileInterruptedApply(proposalId, options)) {
     stored = readStoredProposal(proposalId, options);
     if (!stored || !isStoredProposalVisible(stored.row, scope)) {
       return null;
@@ -226,7 +220,7 @@ export async function readSkillProposalRecord(
     return null;
   }
   if (readOptions.reconcile !== false) {
-    await reconcileInterruptedApply(proposalId, options, readOptions.config);
+    await reconcileInterruptedApply(proposalId, options);
   }
   stored = readStoredProposal(proposalId, options);
   return stored && isStoredProposalVisible(stored.row, scope) ? stored.record : null;
@@ -236,7 +230,6 @@ export async function writeSkillProposal(params: {
   record: SkillProposalRecord;
   content: string;
   supportFiles?: readonly PreparedSkillProposalSupportFile[];
-  workspaceDir: string;
   ownerAgentId?: string;
   maxPending: number;
   event: NewSkillProposalEvent;
@@ -266,7 +259,6 @@ export async function writeSkillProposal(params: {
           kysely
             .selectFrom("skill_workshop_proposals")
             .select((eb) => eb.fn.countAll<number>().as("count"))
-            .where("workspace_dir", "=", path.resolve(params.workspaceDir))
             .where("status", "in", ["pending", "quarantined"]),
         );
         if ((count?.count ?? 0) >= params.maxPending) {
@@ -275,7 +267,6 @@ export async function writeSkillProposal(params: {
         insertProposal(db, {
           record: params.record,
           ownerAgentId: params.ownerAgentId ?? params.record.origin?.agentId ?? null,
-          workspaceDir: params.workspaceDir,
         });
         return appendSkillProposalEvent(db, params.event);
       },
@@ -400,20 +391,8 @@ function listStoredProposals(
   let query = kysely.selectFrom("skill_workshop_proposals").selectAll();
   if (scope.agentId) {
     query = query.where((eb) =>
-      eb.or([
-        eb("owner_agent_id", "=", scope.agentId!),
-        ...(scope.workspaceDir
-          ? [
-              eb.and([
-                eb("owner_agent_id", "is", null),
-                eb("workspace_dir", "=", path.resolve(scope.workspaceDir)),
-              ]),
-            ]
-          : []),
-      ]),
+      eb.or([eb("owner_agent_id", "=", scope.agentId!), eb("owner_agent_id", "is", null)]),
     );
-  } else if (scope.workspaceDir) {
-    query = query.where("workspace_dir", "=", path.resolve(scope.workspaceDir));
   }
   return executeSqliteQuerySync(
     database.db,
@@ -434,8 +413,8 @@ export async function readSkillProposalManifest(
       .filter(({ record }) => record.status === "pending")
       .map(({ record }) => reconcileInterruptedApply(record.id, options)),
   );
-  const proposals = listStoredProposals(options, scope).map(({ record, row }) =>
-    manifestEntryFromRecord(record, row.workspace_dir, scope.workspaceDir),
+  const proposals = listStoredProposals(options, scope).map(({ record }) =>
+    manifestEntryFromRecord(record),
   );
   return {
     schema: SKILL_WORKSHOP_MANIFEST_SCHEMA,
@@ -447,7 +426,6 @@ export async function readSkillProposalManifest(
 async function reconcileInterruptedApply(
   proposalId: string,
   options: SkillWorkshopStoreOptions,
-  config?: OpenClawConfig,
 ): Promise<boolean> {
   const stored = readStoredProposal(proposalId, options);
   if (!stored || stored.record.status !== "pending") {
@@ -473,8 +451,6 @@ async function reconcileInterruptedApply(
     record: stored.record,
     expectedRecordJson: stored.row.record_json,
     draftContent,
-    workspaceDir: stored.row.workspace_dir,
-    ...(config ? { config } : {}),
     store: options,
   });
 }
@@ -534,7 +510,6 @@ export function importLegacySkillProposal(params: {
   record: SkillProposalRecord;
   rollback?: SkillProposalRollback;
   ownerAgentId?: string;
-  workspaceDir: string;
   store?: SkillWorkshopStoreOptions;
 }): "imported" | "already-imported" {
   assertProposalId(params.record.id);
@@ -562,7 +537,6 @@ export function importLegacySkillProposal(params: {
         insertProposal(db, {
           record: params.record,
           ownerAgentId: params.ownerAgentId ?? params.record.origin?.agentId ?? null,
-          workspaceDir: params.workspaceDir,
         });
       }
       if (params.rollback) {
@@ -591,14 +565,7 @@ export function importLegacySkillProposal(params: {
   );
 }
 
-function manifestEntryFromRecord(
-  record: SkillProposalRecord,
-  boundWorkspaceDir: string,
-  currentWorkspaceDir?: string,
-): SkillProposalManifestEntry {
-  const workspaceMismatch =
-    currentWorkspaceDir !== undefined &&
-    path.resolve(boundWorkspaceDir) !== path.resolve(currentWorkspaceDir);
+function manifestEntryFromRecord(record: SkillProposalRecord): SkillProposalManifestEntry {
   return {
     id: record.id,
     kind: record.kind,
@@ -610,6 +577,5 @@ function manifestEntryFromRecord(
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
     scanState: record.scan.state,
-    ...(workspaceMismatch ? { workspaceMismatch: true } : {}),
   };
 }

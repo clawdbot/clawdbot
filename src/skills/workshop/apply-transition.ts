@@ -7,7 +7,7 @@ import {
 } from "../lifecycle/skill-change-hook.js";
 import {
   applyWorkspaceSkillMutation,
-  assertInsideWorkspace,
+  assertInsideSkillsRoot,
   isWorkspaceSkillMutationApplied,
   isWorkspaceSkillMutationRestored,
   prepareWorkspaceSkillMutation,
@@ -15,16 +15,14 @@ import {
   restoreWorkspaceSkillMutation,
   type PreparedWorkspaceSkillMutation,
 } from "../lifecycle/workspace-skill-write.js";
-import { resolveAllowedSkillSymlinkTargetRealPaths } from "../loading/symlink-targets.js";
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
-import { resolveSkillWorkshopConfig } from "./config.js";
 import { readProposalFrontmatter, stripProposalFrontmatterForSkill } from "./frontmatter.js";
-import { isWorkshopOwnedSkillDir } from "./ownership.js";
 import { createSkillProposalEvent, dispatchSkillProposalChanged } from "./plugin-hooks.js";
 import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 import { hashSkillProposalContent } from "./proposal-hash.js";
 import { scanProposalBundle } from "./proposal-scan.js";
 import { hashSkillProposalRevision } from "./revision-hash.js";
+import { resolveWorkshopSkillsDir } from "./skills-root.js";
 import type { NewSkillProposalEvent } from "./store-sqlite-event.js";
 import { readStoredProposal } from "./store-sqlite-record.js";
 import { clearSkillProposalRollback, writeSkillProposalRollback } from "./store-sqlite-rollback.js";
@@ -78,7 +76,6 @@ export type SkillProposalApplyTransitionDependencies = {
   isCreateTargetConflict: (error: unknown) => boolean;
   readRequiredProposal: (
     proposalId: string,
-    workspaceDir?: string,
     env?: NodeJS.ProcessEnv,
     agentId?: string,
     readOptions?: {
@@ -121,7 +118,6 @@ export async function applySkillProposalTransition(
   };
   const initial = await dependencies.readRequiredProposal(
     input.proposalId,
-    input.workspaceDir,
     input.env,
     input.agentId,
     recoveryReadOptions,
@@ -152,7 +148,6 @@ export async function applySkillProposalTransition(
         async () => {
           const current = await dependencies.readRequiredProposal(
             input.proposalId,
-            input.workspaceDir,
             input.env,
             input.agentId,
             lockedReadOptions,
@@ -189,12 +184,10 @@ export async function applySkillProposalTransition(
   }
 
   const application = withSkillProposalCommitLock(
-    input.workspaceDir,
     evaluated.record,
     async () => {
       const read = await dependencies.readRequiredProposal(
         input.proposalId,
-        input.workspaceDir,
         input.env,
         input.agentId,
         lockedReadOptions,
@@ -216,31 +209,9 @@ export async function applySkillProposalTransition(
         await quarantineSkillProposalAfterScan({ input, record, scan });
       }
 
-      assertInsideWorkspace(input.workspaceDir, record.target.skillFile, "skill file");
-      assertInsideWorkspace(input.workspaceDir, record.target.skillDir, "skill directory");
-      // Agents rewrite only Workshop-authored skills; operators (gateway, CLI) approve the rest.
-      // Rechecked under the commit lock so a claim released after the autonomous pre-check
-      // cannot let an agent write a user-authored skill.
-      const operatorActor =
-        input.eventActor?.type === "gateway" || input.eventActor?.type === "system";
-      if (
-        record.kind === "update" &&
-        !operatorActor &&
-        !isWorkshopOwnedSkillDir(
-          input.workspaceDir,
-          record.target.skillDir,
-          storeOptions(input.env),
-        )
-      ) {
-        throw new Error(`Skill Workshop does not own this skill path: ${record.target.skillKey}`);
-      }
-      const workshopConfig = resolveSkillWorkshopConfig(input.config);
-      const symlinkPolicy = {
-        allowWrites: workshopConfig.allowSymlinkTargetWrites,
-        allowedTargetRealPaths: workshopConfig.allowSymlinkTargetWrites
-          ? resolveAllowedSkillSymlinkTargetRealPaths(input.config)
-          : [],
-      };
+      const skillsRoot = resolveWorkshopSkillsDir(input.env);
+      assertInsideSkillsRoot(skillsRoot, record.target.skillFile, "skill file");
+      assertInsideSkillsRoot(skillsRoot, record.target.skillDir, "skill directory");
       if (record.evaluation?.id !== evaluated.evaluation.id) {
         throw new Error("Skill proposal evaluation changed before apply; retry the operation.");
       }
@@ -257,13 +228,12 @@ export async function applySkillProposalTransition(
       }
 
       const mutation = await prepareWorkspaceSkillMutation({
-        workspaceDir: input.workspaceDir,
+        skillsRoot,
         skillDir: record.target.skillDir,
         skillFile: record.target.skillFile,
         content: stripProposalFrontmatterForSkill(content),
         supportFiles,
         mode: record.kind,
-        symlinkPolicy,
       });
       await assertApplyTargetUnchanged(record, mutation, input);
 

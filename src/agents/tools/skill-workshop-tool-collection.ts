@@ -81,7 +81,7 @@ export const skillCollectionPlanSchema = Type.Optional(
     {
       maxItems: MAX_RECONCILED_SKILLS,
       description:
-        "Only the skills to change; unlisted skills stay. write requires description and complete SKILL.md content; drop requires a reason. Skills not created by Skill Workshop are read-only.",
+        "Only Workshop-generated skills to change; unlisted skills stay. write requires description and complete SKILL.md content; drop requires a reason.",
     },
   ),
 );
@@ -110,8 +110,6 @@ export async function executeSkillCollectionReconcile(params: {
       readSkillTreeHashes: params.context?.readSkillTreeHashes ?? new Map(),
       config: params.config,
       agentId: params.agentId,
-      agentIds: params.context?.agentIds,
-      approvedSkillNamesByAgent: params.context?.approvedSkillNamesByAgent,
       env: params.env,
       ...(params.context?.assertCurrent ? { assertCurrent: params.context.assertCurrent } : {}),
     });
@@ -147,10 +145,7 @@ export function executeSkillCollectionHistory(
   },
   maxChars: number,
 ) {
-  const outcomes = listSkillCollectionReviewOutcomes(
-    params.workspaceDir,
-    params.env ? { env: params.env } : {},
-  );
+  const outcomes = listSkillCollectionReviewOutcomes(params.env ? { env: params.env } : {});
   const reviews = [];
   let text = "Recent collection reviews, newest first:";
   let truncated = false;

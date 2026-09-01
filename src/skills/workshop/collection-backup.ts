@@ -8,25 +8,21 @@ import type {
   SkillCollectionPlanEntry,
   WritableSkillCollectionEntry,
 } from "./collection-contracts.js";
-import {
-  canonicalSkillCollectionWorkspace,
-  resolveSkillCollectionBackupRoot,
-} from "./collection-paths.js";
+import { resolveSkillCollectionBackupRoot } from "./collection-paths.js";
 import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 
-const BACKUP_SCHEMA = "openclaw.skill-collection-backup.v1";
+const BACKUP_SCHEMA = "openclaw.skill-collection-backup.v2";
 export type CollectionBackupManifest = {
   schema: typeof BACKUP_SCHEMA;
   id: string;
   createdAt: string;
-  workspaceDir: string;
   skillDirs: string[];
   resultSkillDirs: string[];
   resultSkillHashes: Record<string, string>;
 };
 
 export async function createCollectionBackup(params: {
-  workspaceDir: string;
+  skillsRoot: string;
   current: readonly WritableSkillCollectionEntry[];
   plan: readonly SkillCollectionPlanEntry[];
   env?: NodeJS.ProcessEnv;
@@ -36,7 +32,7 @@ export async function createCollectionBackup(params: {
   backupRoot: string;
   manifest: CollectionBackupManifest;
 }> {
-  const backupRoot = resolveSkillCollectionBackupRoot(params.workspaceDir, params.env);
+  const backupRoot = resolveSkillCollectionBackupRoot(params.env);
   const id = `${new Date().toISOString().replaceAll(":", "-")}-${randomUUID().slice(0, 8)}`;
   const backupDir = path.join(backupRoot, `.pending-${id}`);
   const committedBackupDir = path.join(backupRoot, id);
@@ -47,7 +43,7 @@ export async function createCollectionBackup(params: {
     ...new Set(
       params.plan.flatMap((entry) => {
         const existing = currentByName.get(entry.name);
-        return existing ? [path.relative(params.workspaceDir, existing.baseDir)] : [];
+        return existing ? [path.relative(params.skillsRoot, existing.baseDir)] : [];
       }),
     ),
   ].toSorted();
@@ -55,24 +51,23 @@ export async function createCollectionBackup(params: {
     schema: BACKUP_SCHEMA,
     id,
     createdAt: new Date().toISOString(),
-    workspaceDir: params.workspaceDir,
     skillDirs,
     resultSkillDirs: params.plan
       .filter((entry) => entry.action === "write")
       .map((entry) => {
         const existing = currentByName.get(entry.name);
         return path.relative(
-          params.workspaceDir,
-          existing?.baseDir ?? path.join(params.workspaceDir, "skills", entry.name),
+          params.skillsRoot,
+          existing?.baseDir ?? path.join(params.skillsRoot, entry.name),
         );
       }),
     resultSkillHashes: {},
   };
-  await fs.mkdir(path.join(backupDir, "workspace"), { recursive: true });
+  await fs.mkdir(path.join(backupDir, "skills"), { recursive: true });
   for (const relativeDir of skillDirs) {
     await fs.cp(
-      path.join(params.workspaceDir, relativeDir),
-      path.join(backupDir, "workspace", relativeDir),
+      path.join(params.skillsRoot, relativeDir),
+      path.join(backupDir, "skills", relativeDir),
       {
         recursive: true,
         errorOnExist: true,
@@ -86,12 +81,12 @@ export async function createCollectionBackup(params: {
 }
 
 export async function commitCollectionBackup(
-  workspaceDir: string,
+  skillsRoot: string,
   backup: Awaited<ReturnType<typeof createCollectionBackup>>,
 ): Promise<void> {
   for (const relativeDir of backup.manifest.resultSkillDirs) {
     backup.manifest.resultSkillHashes[relativeDir] = await readSkillProposalTargetTreeSha256(
-      path.join(workspaceDir, relativeDir),
+      path.join(skillsRoot, relativeDir),
     );
   }
   await fs.writeFile(
@@ -118,24 +113,17 @@ export async function discardPendingCollectionBackup(
 export async function readCollectionBackupManifest(params: {
   backupDir: string;
   backupId: string;
-  workspaceDir: string;
 }): Promise<CollectionBackupManifest> {
   const record = asNullableRecord(
     JSON.parse(await fs.readFile(path.join(params.backupDir, "manifest.json"), "utf8")),
   );
-  const skillDirs = readBackupSkillDirs(record?.skillDirs, "skillDirs", params.workspaceDir);
-  const resultSkillDirs = readBackupSkillDirs(
-    record?.resultSkillDirs,
-    "resultSkillDirs",
-    params.workspaceDir,
-  );
+  const skillDirs = readBackupSkillDirs(record?.skillDirs, "skillDirs");
+  const resultSkillDirs = readBackupSkillDirs(record?.resultSkillDirs, "resultSkillDirs");
   const resultSkillHashes = asNullableRecord(record?.resultSkillHashes);
   if (
     record?.schema !== BACKUP_SCHEMA ||
     record.id !== params.backupId ||
     typeof record.createdAt !== "string" ||
-    typeof record.workspaceDir !== "string" ||
-    canonicalSkillCollectionWorkspace(record.workspaceDir) !== params.workspaceDir ||
     !resultSkillHashes ||
     Object.keys(resultSkillHashes).some((relativeDir) => !resultSkillDirs.includes(relativeDir))
   ) {
@@ -150,7 +138,7 @@ export async function readCollectionBackupManifest(params: {
     parsedResultSkillHashes[relativeDir] = hash;
   }
   for (const relativeDir of skillDirs) {
-    if (!(await pathExists(path.join(params.backupDir, "workspace", relativeDir)))) {
+    if (!(await pathExists(path.join(params.backupDir, "skills", relativeDir)))) {
       throw new Error(`Skill collection backup is incomplete: ${relativeDir}`);
     }
   }
@@ -158,36 +146,25 @@ export async function readCollectionBackupManifest(params: {
     schema: BACKUP_SCHEMA,
     id: params.backupId,
     createdAt: record.createdAt,
-    workspaceDir: params.workspaceDir,
     skillDirs,
     resultSkillDirs,
     resultSkillHashes: parsedResultSkillHashes,
   };
 }
 
-function readBackupSkillDirs(value: unknown, label: string, workspaceDir: string): string[] {
+/** Manifest entries are skill directory names directly under the Workshop skills root. */
+function readBackupSkillDirs(value: unknown, label: string): string[] {
   if (
     !Array.isArray(value) ||
     !value.every((entry): entry is string => typeof entry === "string")
   ) {
     throw new Error(`Invalid skill collection backup ${label}.`);
   }
-  const skillRoots = [
-    path.join(workspaceDir, "skills"),
-    path.join(workspaceDir, ".agents", "skills"),
-  ];
   for (const relativeDir of value) {
-    const absoluteDir = path.resolve(workspaceDir, relativeDir);
-    const insideWritableRoot = skillRoots.some((rootDir) => {
-      const relativeToRoot = path.relative(rootDir, absoluteDir);
-      return (
-        relativeToRoot &&
-        !path.isAbsolute(relativeToRoot) &&
-        !relativeToRoot.startsWith(`..${path.sep}`)
+    if (relativeDir !== path.basename(relativeDir) || relativeDir === ".." || !relativeDir) {
+      throw new Error(
+        `Skill collection backup path is outside the Skill Workshop directory: ${relativeDir}`,
       );
-    });
-    if (!insideWritableRoot) {
-      throw new Error(`Skill collection backup path is outside the workspace: ${relativeDir}`);
     }
   }
   return [...new Set(value)];

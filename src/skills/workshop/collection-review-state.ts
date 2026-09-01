@@ -23,7 +23,10 @@ import {
 } from "./store-sqlite-schema.js";
 
 const REVIEW_CLAIM_MS = 11 * 60_000;
-// Bound per-workspace history so unattended weekly maintenance cannot grow state forever.
+// The Workshop owns one global skill collection, so its review lease, status entry, and
+// history all live under this single key. Experience reviews stay per workspace.
+const COLLECTION_REVIEW_KEY = "workshop";
+// Bound history so unattended weekly maintenance cannot grow state forever.
 const SKILL_COLLECTION_REVIEW_RETENTION_COUNT = 90;
 const SKILL_COLLECTION_REVIEW_HISTORY_LIMIT = 20;
 type CollectionReviewDatabase = Pick<OpenClawStateDatabase, "skill_workshop_collection_reviews">;
@@ -61,14 +64,13 @@ function workspaceKey(workspaceDir: string): string {
 }
 
 export async function withSkillCollectionReviewClaim<T>(
-  workspaceDir: string,
   run: () => Promise<T>,
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<T> {
   return await withOpenClawStateLease(
     {
       scope: "skill-collection-review",
-      key: workspaceKey(workspaceDir),
+      key: COLLECTION_REVIEW_KEY,
       database: { scope: "shared", options },
       leaseMs: REVIEW_CLAIM_MS,
       waitMs: 0,
@@ -101,7 +103,6 @@ export function readSkillReviewOutcomes(options: OpenClawStateDatabaseOptions = 
 }
 
 export function recordSkillCollectionReviewStatus(
-  workspaceDir: string,
   review: { attemptedAtMs: number; succeededAtMs?: number; error?: unknown },
   options: OpenClawStateDatabaseOptions = {},
 ): void {
@@ -115,9 +116,9 @@ export function recordSkillCollectionReviewStatus(
           attemptedAtMs: review.attemptedAtMs,
           ...(review.succeededAtMs !== undefined ? { succeededAtMs: review.succeededAtMs } : {}),
         };
-  recordWorkspaceReview(
+  recordReviewEntry(
     "collectionReviews",
-    workspaceDir,
+    COLLECTION_REVIEW_KEY,
     status,
     {
       lastAttemptAtMs: status.attemptedAtMs,
@@ -133,12 +134,12 @@ export function recordSkillExperienceReviewOutcome(
   review: SkillExperienceReviewStatus,
   options: OpenClawStateDatabaseOptions = {},
 ): void {
-  recordWorkspaceReview("experienceReviews", workspaceDir, review, {}, options);
+  recordReviewEntry("experienceReviews", workspaceKey(workspaceDir), review, {}, options);
 }
 
-function recordWorkspaceReview(
+function recordReviewEntry(
   field: "collectionReviews" | "experienceReviews",
-  workspaceDir: string,
+  entryKey: string,
   review: SkillCollectionReviewStatus | SkillExperienceReviewStatus,
   columns: Partial<Omit<SkillCuratorState, "lastResult">>,
   options: OpenClawStateDatabaseOptions,
@@ -157,7 +158,7 @@ function recordWorkspaceReview(
           ...state,
           [field]: {
             ...asNullableRecord(state[field]),
-            [workspaceKey(workspaceDir)]: review,
+            [entryKey]: review,
           },
         },
       };
@@ -192,7 +193,6 @@ function parseStoredDrops(value: string): SkillCollectionReconcileResult["droppe
 }
 
 export function listSkillCollectionReviewOutcomes(
-  workspaceDir: string,
   options: SkillWorkshopStoreOptions = {},
 ): SkillCollectionReviewOutcome[] {
   ensureSkillWorkshopSchema(options);
@@ -203,7 +203,6 @@ export function listSkillCollectionReviewOutcomes(
     kysely
       .selectFrom("skill_workshop_collection_reviews")
       .select(["backup_id", "create_time", "kept_names_json", "written_names_json", "dropped_json"])
-      .where("workspace_dir", "=", path.resolve(workspaceDir))
       .orderBy("create_time", "desc")
       .orderBy("review_id", "desc")
       .limit(SKILL_COLLECTION_REVIEW_HISTORY_LIMIT),
@@ -217,7 +216,6 @@ export function listSkillCollectionReviewOutcomes(
 }
 
 export function recordSkillCollectionReviewHistory(
-  workspaceDir: string,
   nowMs: number,
   result: SkillCollectionReconcileResult,
   options: SkillWorkshopStoreOptions = {},
@@ -225,12 +223,10 @@ export function recordSkillCollectionReviewHistory(
   ensureSkillWorkshopSchema(options);
   runOpenClawStateWriteTransaction(({ db }) => {
     const kysely = getNodeSqliteKysely<CollectionReviewDatabase>(db);
-    const resolvedWorkspaceDir = path.resolve(workspaceDir);
     executeSqliteQuerySync(
       db,
       kysely.insertInto("skill_workshop_collection_reviews").values({
         review_id: randomUUID(),
-        workspace_dir: resolvedWorkspaceDir,
         backup_id: result.backupId,
         create_time: nowMs,
         kept_names_json: JSON.stringify(result.kept),
@@ -241,7 +237,6 @@ export function recordSkillCollectionReviewHistory(
     const retainedReviewIds = kysely
       .selectFrom("skill_workshop_collection_reviews")
       .select("review_id")
-      .where("workspace_dir", "=", resolvedWorkspaceDir)
       .orderBy("create_time", "desc")
       .orderBy("review_id", "desc")
       .limit(SKILL_COLLECTION_REVIEW_RETENTION_COUNT);
@@ -249,7 +244,6 @@ export function recordSkillCollectionReviewHistory(
       db,
       kysely
         .deleteFrom("skill_workshop_collection_reviews")
-        .where("workspace_dir", "=", resolvedWorkspaceDir)
         .where("review_id", "not in", retainedReviewIds),
     );
   }, databaseOptions(options));

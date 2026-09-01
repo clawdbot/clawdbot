@@ -5,8 +5,6 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, test, vi } from "vitest";
 import { waitForFile } from "../../test/helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { runWithCanonicalSkillWorkspace } from "../agents/skill-workshop-workspace-context.js";
-import { createConfiguredSkillWorkshopTool } from "../agents/tools/skill-workshop-tool-factory.js";
 import { requireGit } from "../agents/worktrees/git.js";
 import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
@@ -27,7 +25,6 @@ import { ProjectCloneError } from "../projects/project-clone-runtime.js";
 import { registerProjectRegistry } from "../projects/project-registry.js";
 import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { inspectSkillProposal } from "../skills/workshop/service.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
@@ -932,28 +929,6 @@ test("sessions.create with an empty message preserves its owned checkout above t
         throw new Error("expected migrated project worktree session");
       }
       expect(canonicalWorkspaceDir).toBe(projectRoot);
-      const proposal = await runWithCanonicalSkillWorkspace(canonicalWorkspaceDir, async () => {
-        const tool = createConfiguredSkillWorkshopTool({
-          workspaceDir: spawnedCwd,
-          config: getRuntimeConfig(),
-          agentId: "main",
-          sessionKey,
-        });
-        return await tool.execute("legacy-project-proposal", {
-          action: "create",
-          name: "legacy-project-learning",
-          description: "Preserve learning from a resumed project worktree.",
-          proposal_content: "# Legacy Project Learning\n\nPersist this in the project workspace.\n",
-        });
-      });
-      const proposalDetails = proposal.details as { id: string };
-      const inspected = await inspectSkillProposal(proposalDetails.id, {
-        agentId: "main",
-        workspaceDir: projectRoot,
-      });
-      expect(inspected?.record.target.skillFile).toBe(
-        path.join(projectRoot, "skills", "legacy-project-learning", "SKILL.md"),
-      );
     } finally {
       createSpy.mockRestore();
       await settleWorkspaceRuns(context, storePath, key, true);
