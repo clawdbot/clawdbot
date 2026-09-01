@@ -1188,9 +1188,7 @@ print_npm_failure_diagnostics() {
     if [[ -n "${LAST_NPM_INSTALL_CMD}" ]]; then
         echo "  Command: ${LAST_NPM_INSTALL_CMD}"
     fi
-    # No "Installer log:" path here: the log is registered in TMPFILES and the EXIT
-    # trap deletes it before the user regains the shell, so the path never resolves.
-    # The tail below and the conditional "npm debug log:" line carry the diagnostics.
+    # EXIT cleanup removes this capture; expose its contents and npm-owned log instead.
 
     error_code="$(extract_npm_error_code "$log")"
     if [[ -n "$error_code" ]]; then
