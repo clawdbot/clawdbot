@@ -30,6 +30,7 @@ import { resolveAgentRuntimeConfig } from "../agent-runtime-config.js";
 import {
   listAgentIds,
   resolveAgentDir,
+  resolveAgentRunCwd,
   resolveSessionAgentId,
   resolveAgentWorkspaceDir,
 } from "../agent-scope.js";
@@ -268,7 +269,9 @@ export async function prepareAgentCommandExecution(
     normalizedSpawned.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const workspaceDir = resolveUserPath(workspaceDirRaw);
   const cwd =
-    normalizeOptionalString(opts.cwd) ?? normalizeOptionalString(sessionEntryRaw?.spawnedCwd);
+    normalizeOptionalString(opts.cwd) ??
+    normalizeOptionalString(sessionEntryRaw?.spawnedCwd) ??
+    resolveAgentRunCwd(cfg, sessionAgentId);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const pluginsEnabled = cfg.plugins?.enabled !== false;
   const preparedMetadataSnapshot = runtimeContext?.pluginGeneration.pluginMetadataSnapshot;
