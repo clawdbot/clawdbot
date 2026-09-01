@@ -6,6 +6,7 @@ import type {
   CliBackendLiveSessionHandle,
   CliBackendPreparedExecution,
 } from "openclaw/plugin-sdk/cli-backend";
+import { formatErrorMessageForDisplay } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClaudeAgentSdkSecretInput } from "./agent-sdk-process.js";
 import { executeClaudeAgentSdk } from "./agent-sdk.runtime.js";
@@ -20,6 +21,7 @@ const PROTOCOL_CHILD = `
   const credential = process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR
     ? readFileSync(3, "utf8") : "";
   const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+  let delayedDiagnostic = "";
   createInterface({ input: process.stdin }).on("line", (line) => {
     const message = JSON.parse(line);
     if (message.type === "control_request") {
@@ -28,13 +30,20 @@ const PROTOCOL_CHILD = `
       } });
     } else if (message.type === "user") {
       const text = message.message.content;
+      if (delayedDiagnostic) {
+        writeSync(2, delayedDiagnostic);
+        delayedDiagnostic = "";
+      }
       if (text === "fail silently") process.exit(1);
-      if (text === "fail noisily") {
+      if (text === "fail noisily" || text === "exit without result") {
         writeSync(2, "PermissionError: current turn failed " + credential + "\\n");
         writeSync(2, "process environment: " + process.env.OPENCLAW_MCP_TOKEN + "\\n");
-        process.exit(1);
+        process.exit(text === "exit without result" ? 0 : 1);
       }
       if (text === "success with stderr") writeSync(2, "previous turn diagnostic\\n");
+      if (text === "success with delayed stderr") {
+        delayedDiagnostic = "previous turn diagnostic " + credential + "\\n";
+      }
       send({ type: "result", subtype: "success", is_error: false, result: "ok",
         session_id: "synthetic-session", duration_ms: 1, duration_api_ms: 1,
         num_turns: 1, total_cost_usd: 0, usage: {}, modelUsage: {}, permission_denials: [],
@@ -86,6 +95,25 @@ async function collect(
   return events;
 }
 
+function attachLiveSession(context: CliBackendExecuteContext) {
+  let current: CliBackendLiveSessionHandle | undefined;
+  context.liveSession = {
+    fingerprint: "synthetic-process-policy",
+    current: () => current,
+    register: (handle) => {
+      current = handle;
+      sessions.add(handle);
+    },
+    activate: () => {},
+    remove: (handle) => {
+      if (current === handle) {
+        current = undefined;
+      }
+    },
+  };
+  return () => current;
+}
+
 describe("Claude subprocess diagnostics through the real Agent SDK", () => {
   it("drains pipe-sized stderr and reports a bounded redacted fatal diagnostic", async () => {
     const secret = "sk-ant-api03-synthetic-diagnostic-credential-123456789";
@@ -99,12 +127,13 @@ describe("Claude subprocess diagnostics through the real Agent SDK", () => {
     `);
     const error = await collect(context).catch((failure: unknown) => failure);
     expect(error).toBeInstanceOf(Error);
-    expect(String(error)).toContain("exited with code 1");
-    expect(String(error)).toContain("PermissionError: [Errno 1]");
-    expect(String(error)).toContain("'/bin/ps' 🦞");
-    expect(String(error)).not.toContain(secret);
-    expect(String(error)).not.toContain("discarded noise");
-    expect(String(error).length).toBeLessThan(2_200);
+    expect((error as Error).message).toBe("Claude Code process exited with code 1");
+    expect(formatErrorMessageForDisplay(error)).toContain("exited with code 1");
+    expect(formatErrorMessageForDisplay(error)).toContain("PermissionError: [Errno 1]");
+    expect(formatErrorMessageForDisplay(error)).toContain("'/bin/ps' 🦞");
+    expect(formatErrorMessageForDisplay(error)).not.toContain(secret);
+    expect(formatErrorMessageForDisplay(error)).not.toContain("discarded noise");
+    expect(formatErrorMessageForDisplay(error).length).toBeLessThan(2_200);
   });
 
   it("preserves a silent child's exit error without inventing stderr", async () => {
@@ -135,15 +164,15 @@ describe("Claude subprocess diagnostics through the real Agent SDK", () => {
       },
     });
     const error = await running.catch((failure: unknown) => failure);
-    expect(String(error)).toContain("PermissionError: denied resource 3");
-    expect(String(error)).toContain("[REDACTED]");
+    expect(formatErrorMessageForDisplay(error)).toContain("PermissionError: denied resource 3");
+    expect(formatErrorMessageForDisplay(error)).toContain("[REDACTED]");
     for (const privateText of [
       credential,
       grant,
       "native stdout must stay private",
       context.prompt,
     ]) {
-      expect(String(error)).not.toContain(privateText);
+      expect(formatErrorMessageForDisplay(error)).not.toContain(privateText);
     }
     expect(buffers.length).toBeGreaterThan(0);
     expect(buffers.every((bytes) => bytes.every((byte) => byte === 0))).toBe(true);
@@ -160,7 +189,8 @@ describe("Claude subprocess diagnostics through the real Agent SDK", () => {
       process.exit(1);
     `);
     try {
-      await expect(collect(context)).rejects.toThrow("PermissionError: parent exited");
+      const error = await collect(context).catch((failure: unknown) => failure);
+      expect(formatErrorMessageForDisplay(error)).toContain("PermissionError: parent exited");
       const pid = Number(await readFile(path.join(context.cwd, "descendant.pid"), "utf8"));
       expect(() => process.kill(pid, 0)).not.toThrow();
     } finally {
@@ -179,9 +209,30 @@ describe("Claude subprocess diagnostics through the real Agent SDK", () => {
     expect(stderr).not.toHaveBeenCalled();
   });
 
-  it.each(["fail silently", "fail noisily", "close idle"])(
-    "isolates a managed-auth warm turn after credential cleanup: %s",
-    async (prompt) => {
+  it("keeps diagnostics isolated between live processes", async () => {
+    const warm = await contextForChild(PROTOCOL_CHILD);
+    attachLiveSession(warm);
+    await collect({ ...warm, prompt: "success with stderr" });
+    const other = await contextForChild("process.exit(1);");
+    attachLiveSession(other);
+    await expect(collect(other)).rejects.toThrow(/^Claude Code process exited with code 1$/);
+    const error = await collect({ ...warm, prompt: "fail silently" }).catch(
+      (failure: unknown) => failure,
+    );
+    expect(formatErrorMessageForDisplay(error)).toContain(
+      "stderr (process-wide; may include earlier turns): previous turn diagnostic",
+    );
+  });
+
+  it.each([
+    { firstPrompt: "success with stderr", prompt: "fail silently" },
+    { firstPrompt: "success with stderr", prompt: "fail noisily" },
+    { firstPrompt: "success with stderr", prompt: "close idle" },
+    { firstPrompt: "success with delayed stderr", prompt: "fail silently" },
+    { firstPrompt: "success with stderr", prompt: "exit without result" },
+  ])(
+    "retains process diagnostics after credential cleanup: $firstPrompt then $prompt",
+    async ({ firstPrompt, prompt }) => {
       const context = await contextForChild(PROTOCOL_CHILD);
       const credential = "opaque-warm-credential-fixture";
       const processGrant = "opaque-first-process-grant-fixture";
@@ -207,21 +258,7 @@ describe("Claude subprocess diagnostics through the real Agent SDK", () => {
           cleanup: prepared.cleanup,
         };
       };
-      let current: CliBackendLiveSessionHandle | undefined;
-      context.liveSession = {
-        fingerprint: "synthetic-process-policy",
-        current: () => current,
-        register: (handle) => {
-          current = handle;
-          sessions.add(handle);
-        },
-        activate: () => {},
-        remove: (handle) => {
-          if (current === handle) {
-            current = undefined;
-          }
-        },
-      };
+      const current = attachLiveSession(context);
       const stderr = vi.spyOn(process.stderr, "write");
       const first = await prepare();
       const buffers: Buffer[] = [];
@@ -236,7 +273,7 @@ describe("Claude subprocess diagnostics through the real Agent SDK", () => {
           {
             ...context,
             env: { ...context.env, ...first.env, OPENCLAW_MCP_TOKEN: processGrant },
-            prompt: "success with stderr",
+            prompt: firstPrompt,
           },
           undefined,
           first.execute,
@@ -244,9 +281,9 @@ describe("Claude subprocess diagnostics through the real Agent SDK", () => {
       ).resolves.toContainEqual(expect.objectContaining({ result: "ok" }));
       await first.cleanup();
       expect(() => first.secretInput.createData()).toThrow("no longer available");
-      expect(current?.isIdle()).toBe(true);
+      expect(current()?.isIdle()).toBe(true);
       if (prompt === "close idle") {
-        const closing = current;
+        const closing = current();
         closing?.close("idle");
         await closing?.waitForExit();
       } else {
@@ -262,13 +299,20 @@ describe("Claude subprocess diagnostics through the real Agent SDK", () => {
           second.execute,
         ).catch((failure: unknown) => failure);
         await second.cleanup();
-        expect(String(error)).toContain("exited with code 1");
-        expect(String(error)).not.toContain("previous turn diagnostic");
-        expect(String(error)).not.toContain(credential);
-        expect(String(error)).not.toContain(processGrant);
-        expect(String(error).includes("PermissionError: current turn failed")).toBe(
-          prompt === "fail noisily",
+        expect(formatErrorMessageForDisplay(error)).toContain(
+          prompt === "exit without result"
+            ? "live session exited unexpectedly"
+            : "exited with code 1",
         );
+        expect(formatErrorMessageForDisplay(error)).toContain(
+          "stderr (process-wide; may include earlier turns):",
+        );
+        expect(formatErrorMessageForDisplay(error)).toContain("previous turn diagnostic");
+        expect(formatErrorMessageForDisplay(error)).not.toContain(credential);
+        expect(formatErrorMessageForDisplay(error)).not.toContain(processGrant);
+        expect(
+          formatErrorMessageForDisplay(error).includes("PermissionError: current turn failed"),
+        ).toBe(prompt === "fail noisily" || prompt === "exit without result");
       }
       expect(buffers.length).toBeGreaterThan(0);
       expect(buffers.every((bytes) => bytes.every((byte) => byte === 0))).toBe(true);

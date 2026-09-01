@@ -55,6 +55,17 @@ Provider and channel execution paths must use the active runtime config snapshot
 
 ## Reusable runtime utilities
 
+Use `attachErrorDiagnostic(error, text)` from `openclaw/plugin-sdk/error-runtime`
+to attach supplemental operator diagnostics to a thrown error without changing
+its identity, message, or failure classification. Mask opaque credentials first;
+the helper also redacts recognized secrets and retains at most 2,048 characters.
+`formatErrorMessageForDisplay(error)` includes the nearest attached diagnostic
+through nested causes and aggregates. Use it only at terminal display boundaries,
+never for retry or authentication decisions. Agent lifecycle errors and terminal
+CLI logs render these diagnostics automatically; successful runs remain quiet.
+Native RPC error messages retain their original text; `agent.wait` renders the
+supplemental diagnostic at its terminal result boundary.
+
 Channel plugins must admit authenticated agent turns through their injected
 `api.runtime.agent.runCommandFromIngress(options, runtime)` capability. The host
 accepts owner authority only from the exact active, trusted plugin registered for

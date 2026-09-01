@@ -498,14 +498,10 @@ async function consumeClaudeAgentSdkSession(
 ): Promise<void> {
   try {
     for await (const message of query) {
-      if (message.type === "result") {
-        await session.process?.settleStderr();
-      }
       acceptClaudeAgentSdkMessage(session, { ...message });
     }
     if (!session.closed) {
-      const error = new Error("Claude Agent SDK live session exited unexpectedly.");
-      session.handle.close("abort", error);
+      throw new Error("Claude Agent SDK live session exited unexpectedly.");
     }
   } catch (error) {
     if (!session.closed) {

@@ -1,4 +1,5 @@
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { formatErrorMessageForDisplay } from "../../infra/error-diagnostics.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentRunTerminalDeliverySnapshot } from "../agent-run-terminal-delivery.js";
@@ -18,7 +19,7 @@ import type { AgentAttemptResult } from "./runtime-loaders.js";
 const log = createSubsystemLogger("agents/agent-command");
 
 const formatLifecycleError = (error: unknown): string =>
-  renderFailoverCodeUserCopy(getFailoverErrorCode(error)) ?? formatErrorMessage(error);
+  formatErrorMessageForDisplay(error, renderFailoverCodeUserCopy(getFailoverErrorCode(error)));
 
 function resolveTerminalLogLevel(
   outcome: AgentRunTerminalOutcome,

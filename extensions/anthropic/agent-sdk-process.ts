@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { setImmediate as settleIo } from "node:timers/promises";
 import type { SpawnOptions, SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
 import type { CliBackendExecuteContext } from "openclaw/plugin-sdk/cli-backend";
+import { attachErrorDiagnostic } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveFieldValue, redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import {
   killProcessTree,
@@ -51,7 +51,7 @@ function spawnClaudeAgentSdkProcess(
   return child;
 }
 
-/** Owns one process's stderr, retaining diagnostics only for its active admitted turn. */
+/** Owns one process's stderr; the SDK does not tag stderr with turn identities. */
 export function createClaudeAgentSdkProcessOwner(
   currentContext: () => CliBackendExecuteContext | undefined,
   secretInput?: ClaudeAgentSdkSecretInput,
@@ -61,10 +61,9 @@ export function createClaudeAgentSdkProcessOwner(
   let environment: SpawnOptions["env"] = {};
   let child: ChildProcessWithoutNullStreams | undefined;
   let drained: Promise<void> | undefined;
-  let owner: CliBackendExecuteContext | undefined;
+  let disposed = false;
   let tail = "";
   let dropPartialLine = false;
-  let atLineBoundary = true;
   const observeStderr = (process: ChildProcessWithoutNullStreams) => {
     child = process;
     drained = new Promise<void>((resolve) => {
@@ -74,15 +73,7 @@ export function createClaudeAgentSdkProcessOwner(
     process.stderr.on("error", () => {}); // A failed diagnostic pipe must not crash the Gateway.
     process.stderr.on("data", (chunk: string) => {
       let text = chunk;
-      const context = currentContext();
-      if (context !== owner) {
-        owner = context;
-        tail = "";
-        // Never attach the suffix of an idle/previous turn's credential line to a new turn.
-        dropPartialLine = !atLineBoundary;
-      }
-      atLineBoundary = text.endsWith("\n");
-      if (!owner) {
+      if (disposed) {
         return;
       }
       if (dropPartialLine) {
@@ -105,20 +96,18 @@ export function createClaudeAgentSdkProcessOwner(
   };
   return {
     [Symbol.dispose]() {
+      disposed = true;
       credential?.fill(0);
       environment = {};
       tail = "";
-      owner = undefined;
     },
-    // stdout/stderr are independent pipes. Drain this poll cycle before releasing a warm turn.
-    settleStderr: () => settleIo(),
     spawn: (options: SpawnOptions) => {
       environment = options.env;
       return spawnClaudeAgentSdkProcess(options, secretInput, observeStderr);
     },
     async withDiagnostics(error: unknown): Promise<unknown> {
       const context = currentContext();
-      if (!context || context.abortSignal?.aborted) {
+      if (disposed || !context || context.abortSignal?.aborted) {
         return error;
       }
       // Custom SDK spawners report exit before stderr EOF. Descendants may keep the pipe open.
@@ -135,7 +124,7 @@ export function createClaudeAgentSdkProcessOwner(
           clearTimeout(timer);
         }
       }
-      if (owner !== context || currentContext() !== context || context.abortSignal?.aborted) {
+      if (disposed || currentContext() !== context || context.abortSignal?.aborted) {
         return error;
       }
       let diagnostic = tail;
@@ -164,12 +153,14 @@ export function createClaudeAgentSdkProcessOwner(
         redactSensitiveText(diagnostic, { mode: "tools" }),
         -STDERR_PREVIEW_CHARS,
       ).trim();
-      return diagnostic
-        ? new Error(
-            `${error instanceof Error ? error.message : String(error)}\nstderr: ${diagnostic}`,
-            { cause: error },
-          )
-        : error;
+      if (diagnostic && error instanceof Error) {
+        // Independent pipes cannot attribute warm stderr to a turn or classify its failure.
+        attachErrorDiagnostic(
+          error,
+          `stderr (process-wide; may include earlier turns): ${diagnostic}`,
+        );
+      }
+      return error;
     },
   };
 }
