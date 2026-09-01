@@ -35,10 +35,6 @@ const stubs = new Map<string, string>([
   [sourceUrl("../commands/doctor.ts"), doctorSource],
   [sourceUrl("../config/config.ts"), snapshotSource],
   [
-    sourceUrl("../infra/update-check.ts"),
-    "export const resolveUpdateInstallKind = async () => { throw new Error('Unexpected install check'); };",
-  ],
-  [
     sourceUrl("../plugins/installed-plugin-index-records.ts"),
     "export const loadInstalledPluginIndexInstallRecords = async () => ({});",
   ],

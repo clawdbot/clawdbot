@@ -467,10 +467,10 @@ describe("update status localization", () => {
       status: "error",
       reason: "build-failed",
       installKind: "git",
-      installedVersion: null,
-      installedSha: "before",
-      targetVersion: null,
-      targetSha: "after",
+      beforeVersion: null,
+      beforeSha: "before",
+      afterVersion: null,
+      afterSha: "after",
       failure: { step: "build", detail: "Type check failed" },
     });
   });

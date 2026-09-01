@@ -16,10 +16,10 @@ export type RecordedUpdateAttempt = {
   status: string;
   reason: string;
   installKind: string | null;
-  installedVersion: string | null;
-  installedSha: string | null;
-  targetVersion: string | null;
-  targetSha: string | null;
+  beforeVersion: string | null;
+  beforeSha: string | null;
+  afterVersion: string | null;
+  afterSha: string | null;
   failure: UpdateFailureCause | null;
 };
 
@@ -157,10 +157,10 @@ function readRecordedUpdateAttempt(
     status: sentinel.status,
     reason: stats?.reason?.trim() || "unexpected-error",
     installKind: stats?.mode?.trim() || null,
-    installedVersion: stats?.before?.version?.trim() || null,
-    installedSha: stats?.before?.sha?.trim() || null,
-    targetVersion: stats?.after?.version?.trim() || null,
-    targetSha: stats?.after?.sha?.trim() || null,
+    beforeVersion: stats?.before?.version?.trim() || null,
+    beforeSha: stats?.before?.sha?.trim() || null,
+    afterVersion: stats?.after?.version?.trim() || null,
+    afterSha: stats?.after?.sha?.trim() || null,
     failure: readUpdateFailureCause(sentinel),
   };
 }

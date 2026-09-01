@@ -16,7 +16,7 @@ const suite = createControlUiE2eSuite({
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 suite.define(() => {
-  it("locks update policy while an automatic apply runs and reports its terminal failure", async () => {
+  it("locks update policy while an automatic apply runs and shows readable recovery guidance", async () => {
     const artifactDir = captureProof
       ? createControlUiE2eArtifactDir("updates-automatic-lifecycle")
       : null;
@@ -56,6 +56,7 @@ suite.define(() => {
         expect((await page.goto(`${suite.server.baseUrl}settings/updates`))?.status()).toBe(200);
         await gateway.waitForRequest("update.status");
         const policy = page.getByRole("switch", { name: "Automatic updates" });
+        const checks = page.getByRole("switch", { name: "Check for updates" });
         await policy.waitFor();
         await expect.poll(() => policy.isDisabled()).toBe(false);
 
@@ -84,6 +85,7 @@ suite.define(() => {
         }
         expect(await status.textContent()).toContain("Applying update");
         expect(await policy.isDisabled()).toBe(true);
+        expect(await checks.isDisabled()).toBe(true);
         expect(await page.locator("wa-radio-group").getAttribute("disabled")).not.toBeNull();
         expect(
           await page.getByRole("button", { name: "Updating…", exact: true }).isDisabled(),
@@ -92,28 +94,50 @@ suite.define(() => {
         await gateway.setMethodResponse("update.status", {
           sentinel: {
             kind: "update",
-            status: "error",
+            status: "skipped",
             ts: now,
-            stats: { mode: "npm", reason: "global-install-failed" },
+            stats: { mode: "npm", reason: "managed-service-handoff-unavailable" },
           },
           schedule,
         });
         await gateway.emitGatewayEvent("update.available", { schedule });
-        await status.filter({ hasText: "global-install-failed" }).waitFor();
+        await status.filter({ hasText: "Stop the foreground Gateway" }).waitFor();
         expect(await policy.isDisabled()).toBe(false);
+        expect(await checks.isDisabled()).toBe(false);
         expect(await gateway.getRequests("update.run")).toHaveLength(0);
+        await status.scrollIntoViewIfNeeded();
         if (artifactDir) {
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
-            path: path.join(artifactDir, "02-automatic-failure.png"),
+            path: path.join(artifactDir, "02-automatic-recovery.png"),
           });
         }
+        const geometry = await status.evaluate((element) => {
+          const row = element.closest(".settings-row");
+          const title = row?.querySelector(".settings-row__title");
+          if (!row || !title) {
+            throw new Error("Missing update status row or title");
+          }
+          const bounds = element.getBoundingClientRect();
+          const rowBounds = row.getBoundingClientRect();
+          const titleBounds = title.getBoundingClientRect();
+          return {
+            insideRow: bounds.left >= rowBounds.left && bounds.right <= rowBounds.right,
+            overlapsTitle:
+              bounds.left < titleBounds.right &&
+              bounds.right > titleBounds.left &&
+              bounds.top < titleBounds.bottom &&
+              bounds.bottom > titleBounds.top,
+            overflows: element.scrollWidth > element.clientWidth,
+          };
+        });
+        expect(geometry).toEqual({ insideRow: true, overlapsTitle: false, overflows: false });
       },
     );
   });
 
-  it("renders live campaign status without requesting config.schema", async () => {
+  it("resumes disabled update checks through autosave and renders the live campaign", async () => {
     if (captureProof) {
       await mkdir(path.join(suite.artifactDir, "updates-settings"), { recursive: true });
     }
@@ -133,7 +157,9 @@ suite.define(() => {
           : {}),
       },
       async ({ page }) => {
-        const config = { update: { auto: { enabled: true }, channel: "stable" } };
+        const config = {
+          update: { auto: { enabled: true }, channel: "stable", checkOnStart: false },
+        };
         const gateway = await installMockGateway(page, {
           featureMethods: ["config.get", "config.set", "config.apply", "update.run"],
           methodResponses: {
@@ -158,6 +184,37 @@ suite.define(() => {
         await gateway.waitForRequest("config.get");
         expect(await gateway.getRequests("config.schema")).toHaveLength(0);
 
+        const content = page.locator("#control-ui-main");
+        await content.getByText("Updates", { exact: true }).waitFor();
+        const checks = content.getByRole("switch", { name: "Check for updates", exact: true });
+        const automatic = content.getByRole("switch", { name: "Automatic updates", exact: true });
+        await expect.poll(() => automatic.isChecked()).toBe(true);
+        if (captureProof) {
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(
+              suite.artifactDir,
+              "updates-settings",
+              "00-updates-checks-disabled.png",
+            ),
+          });
+        }
+        expect(await checks.isChecked()).toBe(false);
+        expect(await automatic.isDisabled()).toBe(true);
+        await content
+          .locator(".settings-row__title")
+          .filter({ hasText: /^Check for updates$/ })
+          .click();
+        const checksSaved = await gateway.waitForRequest("config.set");
+        const checksRaw = (checksSaved.params as { raw?: unknown }).raw;
+        expect(typeof checksRaw).toBe("string");
+        expect(JSON.parse(String(checksRaw))).toMatchObject({
+          update: { checkOnStart: true, channel: "stable", auto: { enabled: true } },
+        });
+        await expect.poll(() => automatic.isDisabled()).toBe(false);
+        expect(await automatic.isChecked()).toBe(true);
+
         await gateway.emitGatewayEvent("update.available", {
           updateAvailable: {
             currentVersion: "2026.8.1",
@@ -180,8 +237,6 @@ suite.define(() => {
           },
         });
 
-        const content = page.locator("#control-ui-main");
-        await content.getByText("Updates", { exact: true }).waitFor();
         const timer = content.locator("[role='timer']");
         await expect.poll(() => timer.textContent()).toContain("Updating in 0:");
         const firstCountdown = await timer.textContent();
@@ -200,8 +255,15 @@ suite.define(() => {
           });
         }
 
+        const writesBeforeChannelChange = (await gateway.getRequests("config.set")).length;
         await content.getByRole("radio", { name: "Beta", exact: true }).click();
-        const configSet = await gateway.waitForRequest("config.set");
+        await expect
+          .poll(async () => (await gateway.getRequests("config.set")).length)
+          .toBe(writesBeforeChannelChange + 1);
+        const configSet = (await gateway.getRequests("config.set")).at(-1);
+        if (!configSet) {
+          throw new Error("Missing channel config write");
+        }
         const raw = (configSet.params as { raw?: unknown }).raw;
         expect(typeof raw).toBe("string");
         expect(JSON.parse(String(raw))).toMatchObject({ update: { channel: "beta" } });
@@ -247,6 +309,9 @@ suite.define(() => {
         );
         expect(await page.locator("wa-radio-group").getAttribute("disabled")).not.toBeNull();
         expect(await page.getByRole("switch", { name: "Automatic updates" }).isDisabled()).toBe(
+          true,
+        );
+        expect(await page.getByRole("switch", { name: "Check for updates" }).isDisabled()).toBe(
           true,
         );
         expect(await page.getByRole("button", { name: "Update now" }).isDisabled()).toBe(true);

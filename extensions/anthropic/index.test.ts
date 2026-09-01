@@ -12,7 +12,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 // Anthropic tests cover index plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 const { probeClaudeCliAuthStatusMock } = vi.hoisted(() => ({
   probeClaudeCliAuthStatusMock: vi.fn(),
@@ -79,6 +79,7 @@ type Claude5ContractCase = {
   checksMedia?: boolean;
   restoresMissingCost?: boolean;
   checksCliPolicy?: boolean;
+  pricingAtMs?: number;
 };
 
 const ANTHROPIC_SETUP_TOKEN = `sk-ant-oat01-${"a".repeat(80)}`;
@@ -702,10 +703,11 @@ describe("anthropic provider replay hooks", () => {
       checksCliPolicy: true,
     },
     {
-      name: "resolves Claude Sonnet 5 with its exact API contract",
+      name: "resolves Claude Sonnet 5 with its introductory API pricing",
       modelId: "claude-sonnet-5",
       cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
       thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      pricingAtMs: Date.UTC(2026, 8, 1) - 1,
     },
   ];
 
@@ -718,7 +720,12 @@ describe("anthropic provider replay hooks", () => {
       checksMedia,
       restoresMissingCost,
       checksCliPolicy,
+      pricingAtMs,
     }) => {
+      if (pricingAtMs !== undefined) {
+        const clock = vi.spyOn(Date, "now").mockReturnValue(pricingAtMs);
+        onTestFinished(() => clock.mockRestore());
+      }
       const provider = await registerSingleProviderPlugin(anthropicPlugin);
       const resolved = provider.resolveDynamicModel?.({
         provider: "anthropic",

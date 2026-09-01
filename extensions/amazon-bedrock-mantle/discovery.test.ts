@@ -726,7 +726,8 @@ describe("bedrock mantle discovery", () => {
   // Implicit provider resolution
   // ---------------------------------------------------------------------------
 
-  it("resolves implicit provider when bearer token is set", async () => {
+  it("resolves implicit provider with introductory pricing when bearer token is set", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 8, 1) - 1);
     const mockFetch = vi.fn().mockResolvedValue(
       modelDiscoveryResponse({
         data: [{ id: "anthropic.claude-sonnet-4-6", object: "model" }],
