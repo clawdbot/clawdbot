@@ -33,6 +33,10 @@ function fixture(
     unsupported?: boolean;
     refreshError?: Error;
     refreshedRuntime?: v2.InstalledApp[];
+    accountType?: "chatgpt" | "apiKey";
+    appsFeature?: boolean;
+    missingMetadata?: boolean;
+    detailPolicy?: Partial<v2.PluginSummary>;
     catalog?: { marketplace: string; kind: string };
   } = {},
 ) {
@@ -51,6 +55,8 @@ function fixture(
     name: "Notes",
     installed: true,
     enabled: true,
+    availability: "AVAILABLE",
+    installPolicy: "AVAILABLE",
     ...(options.catalog ? { remotePluginId: "plugins~Plugin_test_notes" } : {}),
     ...(options.blocked ? { availability: "DISABLED_BY_ADMIN" } : {}),
   };
@@ -75,7 +81,17 @@ function fixture(
     switch (method) {
       case "account/read":
         response = {
-          account: { type: "chatgpt", email: "operator@example.test", planType: "team" },
+          account: {
+            type: options.accountType ?? "chatgpt",
+            email: "operator@example.test",
+            planType: "team",
+          },
+        };
+        break;
+      case "experimentalFeature/list":
+        response = {
+          data: [{ name: "apps", enabled: options.appsFeature ?? true }],
+          nextCursor: null,
         };
         break;
       case "plugin/installed":
@@ -101,7 +117,9 @@ function fixture(
         break;
       }
       case "plugin/read":
-        response = { plugin: { summary, apps, mcpServers: [] } };
+        response = {
+          plugin: { summary: { ...summary, ...options.detailPolicy }, apps, mcpServers: [] },
+        };
         break;
       case "app/installed":
         if ((params as CodexAppsInstalledParams).forceRefresh && options.refreshError) {
@@ -123,10 +141,12 @@ function fixture(
         break;
       case "app/read":
         response = {
-          apps: apps.map((app) =>
-            Object.assign({}, app, { pluginDisplayNames: ["Notes"], toolSummaries: null }),
-          ),
-          missingAppIds: [],
+          apps: options.missingMetadata
+            ? []
+            : apps.map((app) =>
+                Object.assign({}, app, { pluginDisplayNames: ["Notes"], toolSummaries: null }),
+              ),
+          missingAppIds: options.missingMetadata ? apps.map((app) => app.id) : [],
         };
         break;
       default:
@@ -161,6 +181,60 @@ function fixture(
 }
 
 describe("Codex plugin status command", () => {
+  it.each([
+    { options: { accountType: "apiKey" as const }, reason: "ChatGPT sign-in" },
+    { options: { appsFeature: false }, reason: "disabled in this Codex runtime" },
+    { options: { failMethod: "experimentalFeature/list" }, reason: "unknown" },
+    { options: { missingMetadata: true }, reason: "unknown" },
+    { options: { blocked: true }, reason: "marketplace" },
+    {
+      options: {
+        detailPolicy: { availability: "DISABLED_BY_ADMIN", installPolicy: "NOT_AVAILABLE" },
+      },
+      reason: "marketplace",
+    },
+  ])("does not turn an app URL into setup permission: $reason", async ({ options, reason }) => {
+    const test = fixture(options);
+    const result = await handleCodexPluginsSubcommand(
+      ctx,
+      ["status", "notes"],
+      test.io,
+      test.runtime,
+    );
+    expect(result.text).toContain(reason);
+    expect(result.text).not.toContain("https://chatgpt.com/apps/app-0");
+    expect(test.io.mutate).not.toHaveBeenCalled();
+    expect(test.runtime.install).not.toHaveBeenCalled();
+  });
+
+  it("keeps hosted management separate from local permission and callable tools", async () => {
+    const test = fixture({ disabled: true, runtime: [] });
+    const result = await handleCodexPluginsSubcommand(
+      ctx,
+      ["status", "notes"],
+      test.io,
+      test.runtime,
+    );
+    expect(result.text).toContain("disabled for new conversations");
+    expect(result.text).toContain("https://chatgpt.com/apps/app-0");
+    expect(result.text).toContain("Connection: unknown");
+    expect(test.io.mutate).not.toHaveBeenCalled();
+  });
+
+  it("does not send a plugin without hosted apps through ChatGPT setup", async () => {
+    const test = fixture({ appCount: 0 });
+    const result = await handleCodexPluginsSubcommand(
+      ctx,
+      ["status", "notes"],
+      test.io,
+      test.runtime,
+    );
+    expect(result.text).toContain("No hosted apps declared");
+    expect(result.text).not.toContain("Connection:");
+    expect(result.text).not.toContain("in your browser");
+    expect(result.text).not.toContain("https://chatgpt.com");
+  });
+
   it.each([
     { marketplace: "workspace-directory", kind: "workspace-directory" },
     { marketplace: "workspace-shared-with-me-team", kind: "shared-with-me" },
@@ -216,6 +290,7 @@ describe("Codex plugin status command", () => {
       "account/read",
       "plugin/installed",
       "plugin/read",
+      "experimentalFeature/list",
       "app/installed",
       "app/read",
     ]);
@@ -298,7 +373,7 @@ describe("Codex plugin status command", () => {
       test.runtime,
     );
     expect(first.text).toContain("page 1/2");
-    expect(first.text).not.toContain("Set up / manage App 5");
+    expect(first.text).not.toContain("Open App 5 in ChatGPT");
     expect(first.presentation?.blocks).toContainEqual({
       type: "buttons",
       buttons: [
@@ -308,7 +383,7 @@ describe("Codex plugin status command", () => {
         },
       ],
     });
-    expect(next.text).toContain("Set up / manage App 6");
+    expect(next.text).toContain("Open App 6 in ChatGPT");
     expect(next.text).not.toContain("Private app");
     expect(first.text).not.toContain("another-agent-app");
   });

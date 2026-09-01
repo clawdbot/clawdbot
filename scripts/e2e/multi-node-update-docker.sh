@@ -7,6 +7,7 @@
 #
 # 1. The update stays on node-A's package root and service runtime.
 # 2. The gateway restarts from the preserved entrypoint and becomes healthy.
+# 3. JSON and unattended TTY updates both complete without creating a shell profile.
 #
 # Usage:
 #   ./scripts/e2e/multi-node-update-docker.sh
@@ -122,142 +123,14 @@ ls -la "$PACKAGE_ROOT_A/package.json" 2>/dev/null || echo "WARNING: package.json
 echo ""
 echo "── Step 3: Install the systemd service (gateway) using node-A ──"
 
-# Create a systemctl shim since we are in Docker (no real systemd).
-SHIM_DIR="/usr/local/bin"
+# Reuse the service fixture that models manager-loaded definitions and restarts.
 GATEWAY_UNIT_PATH="/root/.config/systemd/user/openclaw-gateway.service"
-SYSTEMCTL_LOG="$ARTIFACTS/systemctl-shim.log"
 GATEWAY_DAEMON_LOG="$ARTIFACTS/gateway-daemon.log"
-GATEWAY_PID_FILE="$ARTIFACTS/gateway.pid"
-: >"$SYSTEMCTL_LOG"
-
-cat >"$SHIM_DIR/systemctl" <<SHIMEOF
-#!/usr/bin/env bash
-set -euo pipefail
-printf "%s %s\n" "\$(date -u +%H:%M:%S)" "\$*" >>"$SYSTEMCTL_LOG"
-
-filtered=()
-for ((i = 1; i <= \$#; i++)); do
-  arg="\${!i}"
-  case "\$arg" in
-    --user|--quiet|--no-page|--now|--value) ;;
-    --property)
-      i=\$((i + 1))
-      ;;
-    --property=*) ;;
-    *) filtered+=("\$arg") ;;
-  esac
-done
-command="\${filtered[0]:-status}"
-
-is_running() {
-  [ -s "$GATEWAY_PID_FILE" ] || return 1
-  local pid
-  pid="\$(cat "$GATEWAY_PID_FILE" 2>/dev/null || true)"
-  [ -n "\$pid" ] || return 1
-  kill -0 "\$pid" >/dev/null 2>&1
-}
-
-stop_gateway() {
-  [ -s "$GATEWAY_PID_FILE" ] || return 0
-  local pid
-  pid="\$(cat "$GATEWAY_PID_FILE" 2>/dev/null || true)"
-  if [[ "\$pid" =~ ^[0-9]+$ ]] && [ "\$pid" -gt 1 ] && kill -0 "\$pid" >/dev/null 2>&1; then
-    kill "\$pid" >/dev/null 2>&1 || true
-    for _ in \$(seq 1 100); do
-      kill -0 "\$pid" >/dev/null 2>&1 || break
-      sleep 0.1
-    done
-    kill -9 "\$pid" >/dev/null 2>&1 || true
-  fi
-  rm -f "$GATEWAY_PID_FILE"
-}
-
-load_unit_environment() {
-  local unit="\$1"
-  while IFS= read -r line; do
-    case "\$line" in
-      EnvironmentFile=*)
-        local spec="\${line#EnvironmentFile=}"
-        for token in \$spec; do
-          local file="\${token#-}"
-          [ -f "\$file" ] || continue
-          set -a
-          # shellcheck disable=SC1090
-          . "\$file"
-          set +a
-        done
-        ;;
-      Environment=*)
-        local assignment="\${line#Environment=}"
-        assignment="\${assignment#\"}"
-        assignment="\${assignment%\"}"
-        export "\$assignment"
-        ;;
-    esac
-  done <"\$unit"
-}
-
-start_gateway() {
-  local unit="$GATEWAY_UNIT_PATH"
-  local exec_start
-  if [ ! -f "\$unit" ]; then
-    echo "systemctl shim: unit not found: \$unit" >&2
-    return 1
-  fi
-  exec_start="\$(sed -n "s/^ExecStart=//p" "\$unit" | tail -n 1)"
-  if [ -z "\$exec_start" ]; then
-    echo "systemctl shim: no ExecStart in \$unit" >&2
-    return 1
-  fi
-  (
-    load_unit_environment "\$unit"
-    export OPENCLAW_NO_RESPAWN=1
-    echo "systemctl shim: starting: \$exec_start"
-    nohup bash -lc "exec \$exec_start" >>"$GATEWAY_DAEMON_LOG" 2>&1 &
-    printf "%s\n" "\$!" >"$GATEWAY_PID_FILE"
-  )
-}
-
-case "\$command" in
-  daemon-reload)
-    echo "daemon-reload (shim: no-op)"
-    ;;
-  enable)
-    echo "enable (shim: no-op)"
-    ;;
-  is-enabled)
-    echo "enabled"
-    ;;
-  restart|start)
-    stop_gateway
-    start_gateway
-    ;;
-  stop)
-    stop_gateway
-    ;;
-  is-active)
-    if is_running; then
-      echo "active"
-    else
-      echo "inactive"
-      exit 3
-    fi
-    ;;
-  show)
-    if is_running; then
-      printf "ActiveState=active\nSubState=running\nMainPID=%s\nExecMainStatus=0\nExecMainCode=0\n" "\$(cat "$GATEWAY_PID_FILE")"
-    else
-      printf "ActiveState=inactive\nSubState=dead\nMainPID=0\nExecMainStatus=0\nExecMainCode=0\n"
-    fi
-    ;;
-  *)
-    echo "systemctl shim: unsupported command: \$*" >&2
-    exit 1
-    ;;
-esac
-SHIMEOF
-chmod +x "$SHIM_DIR/systemctl"
-echo "systemctl shim installed."
+export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG="$ARTIFACTS/systemctl-shim.log"
+export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG="$GATEWAY_DAEMON_LOG"
+export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE="$ARTIFACTS/gateway.pid"
+source scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh
+install_update_restart_systemctl_shim
 
 # Now install the gateway service using node-A.
 echo "Installing gateway service..."
@@ -294,8 +167,8 @@ echo ""
 echo "── Step 4: Inspect what node path was baked into the service ──"
 
 if [ -f "$GATEWAY_UNIT_PATH" ]; then
-  echo "Service unit contents:"
-  cat "$GATEWAY_UNIT_PATH" | tee "$ARTIFACTS/unit-before-update.txt"
+  echo "Service command before update:"
+  grep "^ExecStart=" "$GATEWAY_UNIT_PATH" | tee "$ARTIFACTS/command-before-update.txt"
   echo ""
   EXEC_START_BEFORE="$(grep "^ExecStart=" "$GATEWAY_UNIT_PATH" | head -1)"
   BAKED_NODE_BEFORE="$(echo "$EXEC_START_BEFORE" | sed "s/^ExecStart=//" | awk "{print \$1}")"
@@ -326,34 +199,64 @@ echo "which openclaw: $(command -v openclaw)"
 echo "process.execPath will be: $(node -e "console.log(process.execPath)")"
 
 echo ""
-echo "── Step 6: Run openclaw update (this is the bug) ──"
+for OUTPUT_MODE in json tty; do
+echo "── Step 6: Run openclaw update ($OUTPUT_MODE) ──"
 
 UPDATE_FAILED=0
 GATEWAY_START_FAILED=0
 GATEWAY_HEALTH_FAILED=0
 
-# Run the update WITH restart so that the update flow re-runs
-# `gateway install --force` and bakes the current process.execPath
-# (now node-B) into the service unit. This is where the split happens.
-echo "Running openclaw update --yes --json..."
+# Both updates must preserve node-A even though the invoking runtime is node-B.
 UPDATE_EXIT=0
-openclaw update --yes --json \
-  --tag /tmp/openclaw-current.tgz \
-  >"$ARTIFACTS/update.json" 2>"$ARTIFACTS/update.err" || UPDATE_EXIT=$?
+UPDATE_LOG="$ARTIFACTS/update.$OUTPUT_MODE.log"
+if [ "$OUTPUT_MODE" = json ]; then
+  openclaw update --yes --json \
+    --tag /tmp/openclaw-current.tgz \
+    >"$ARTIFACTS/update.json" 2>"$UPDATE_LOG" || UPDATE_EXIT=$?
+  node --input-type=module - "$ARTIFACTS/update.json" "$PACKAGE_ROOT_A" <<"NODE"
+import assert from "node:assert/strict";
+import fs from "node:fs";
+const result = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+assert.equal(result.status, "ok");
+assert.equal(result.root, process.argv[3]);
+NODE
+else
+  TTY_PROFILE_DIR="$(mktemp -d /tmp/openclaw-update-tty-profile.XXXXXX)"
+  # Python is part of the bare image. Keep a real terminal open without sending
+  # consent input; a stray prompt must time out and fail, never accept a default.
+  SHELL=/bin/zsh ZDOTDIR="$TTY_PROFILE_DIR" python3 - >"$UPDATE_LOG" 2>&1 <<"PYTHON" || UPDATE_EXIT=$?
+import os
+import pty
+
+wait_status = pty.spawn([
+    "timeout", "--kill-after=10s", "120s", "bash", "-c",
+    "test -t 0 && test -t 1 && exec \"$@\"", "openclaw-tty",
+    "openclaw", "update", "--yes", "--tag", "/tmp/openclaw-current.tgz",
+], stdin_read=lambda _: b"")
+exit_code = os.waitstatus_to_exitcode(wait_status)
+raise SystemExit(exit_code if exit_code >= 0 else 128 - exit_code)
+PYTHON
+  if [ -e "$TTY_PROFILE_DIR/.zshrc" ]; then
+    echo "FAIL: unattended TTY update created an optional shell profile"
+    exit 1
+  fi
+  rmdir "$TTY_PROFILE_DIR"
+  if [ "$UPDATE_EXIT" -eq 0 ]; then
+    echo "OK: TTY update --yes completed without input or shell profile changes"
+  fi
+fi
 
 echo ""
 echo "Update exit code: $UPDATE_EXIT"
-echo "Update stderr (if any):"
-cat "$ARTIFACTS/update.err" 2>/dev/null | tail -10 || true
 if [ "$UPDATE_EXIT" -ne 0 ]; then
   UPDATE_FAILED=1
+  openclaw_e2e_print_log "$UPDATE_LOG"
 fi
 
 # Keep inspecting after a non-zero update so the log shows whether the unit was
 # rewritten, but fail immediately if update never reached the service refresh.
-if [ "$UPDATE_EXIT" -ne 0 ] && ! grep -q "gateway" "$ARTIFACTS/update.err" 2>/dev/null; then
+if [ "$UPDATE_EXIT" -ne 0 ] && ! grep -q "gateway" "$UPDATE_LOG" 2>/dev/null; then
   echo "FAIL: openclaw update failed before reaching the package install step"
-  cat "$ARTIFACTS/update.err" 2>/dev/null || true
   exit 1
 fi
 
@@ -361,8 +264,8 @@ echo ""
 echo "── Step 7: Inspect the service unit AFTER update ──"
 
 if [ -f "$GATEWAY_UNIT_PATH" ]; then
-  echo "Service unit contents after update:"
-  cat "$GATEWAY_UNIT_PATH" | tee "$ARTIFACTS/unit-after-update.txt"
+  echo "Service command after $OUTPUT_MODE update:"
+  grep "^ExecStart=" "$GATEWAY_UNIT_PATH" | tee "$ARTIFACTS/command-after-$OUTPUT_MODE.txt"
   echo ""
   EXEC_START_AFTER="$(grep "^ExecStart=" "$GATEWAY_UNIT_PATH" | head -1)"
   BAKED_NODE_AFTER="$(echo "$EXEC_START_AFTER" | sed "s/^ExecStart=//" | awk "{print \$1}")"
@@ -404,33 +307,33 @@ else
 fi
 
 # Check 3: Does the entrypoint in the unit file actually exist?
-if [ -f "$GATEWAY_UNIT_PATH" ]; then
-  EXEC_START_AFTER="$(grep "^ExecStart=" "$GATEWAY_UNIT_PATH" | head -1 | sed "s/^ExecStart=//")"
-  ENTRYPOINT_PATH="$(echo "$EXEC_START_AFTER" | awk "{print \$2}")"
-  if [ -n "$ENTRYPOINT_PATH" ] && [ ! -f "$ENTRYPOINT_PATH" ]; then
-    echo "BUG: Entrypoint in service unit does not exist: $ENTRYPOINT_PATH"
-  elif [ -n "$ENTRYPOINT_PATH" ]; then
-    echo "OK: Entrypoint exists: $ENTRYPOINT_PATH"
-  fi
+ENTRYPOINT_FAILED=0
+if ENTRYPOINT_PATH="$(node scripts/e2e/lib/doctor-install-switch/assert-exec-start.mjs entrypoint-exists "$GATEWAY_UNIT_PATH")"; then
+  echo "OK: Entrypoint exists: $ENTRYPOINT_PATH"
+else
+  ENTRYPOINT_FAILED=1
 fi
 
 # Check 4: Were there any warnings about split install in the update output?
-if [ -f "$ARTIFACTS/update.err" ]; then
-  if grep -qi "Shell OpenClaw root differs" "$ARTIFACTS/update.err" 2>/dev/null; then
+if [ -f "$UPDATE_LOG" ]; then
+  if grep -qi "Shell OpenClaw root differs" "$UPDATE_LOG" 2>/dev/null; then
     echo "OK: Update warned about split root"
   fi
-  if grep -qi "Managed gateway service Node" "$ARTIFACTS/update.err" 2>/dev/null; then
+  if grep -qi "Managed gateway service Node" "$UPDATE_LOG" 2>/dev/null; then
     echo "OK: Update showed the managed service Node path"
   fi
 fi
 
-# Check 5: Try to start the gateway and see if it works.
+# Check 5: The update itself must leave the service running and healthy.
 echo ""
-echo "── Step 9: Try starting the gateway with the post-update unit ──"
+echo "── Step 9: Verify the gateway after $OUTPUT_MODE update ──"
 
 GATEWAY_START_FAILED=0
 if [ -f "$GATEWAY_UNIT_PATH" ]; then
-  systemctl restart 2>&1 || true
+  if ! systemctl --user is-active --quiet openclaw-gateway.service; then
+    echo "FAIL: update did not leave the managed gateway running"
+    exit 1
+  fi
   if PORT=18789 node <<NODE
 const url = "http://127.0.0.1:" + process.env.PORT + "/healthz";
 const deadline = Date.now() + 30000;
@@ -463,9 +366,8 @@ NODE
     echo "BUG: Gateway healthz probe failed with the post-update unit"
     GATEWAY_START_FAILED=1
     GATEWAY_HEALTH_FAILED=1
-    cat "$GATEWAY_DAEMON_LOG" 2>/dev/null | tail -20 || true
+    openclaw_e2e_print_log "$GATEWAY_DAEMON_LOG"
   fi
-  systemctl stop 2>&1 || true
 fi
 
 echo ""
@@ -483,11 +385,8 @@ fi
 if [ -f "$NPM_PREFIX_B/lib/node_modules/openclaw/package.json" ]; then
   EXIT_CODE=1
 fi
-if [ -f "$GATEWAY_UNIT_PATH" ]; then
-  ENTRYPOINT_PATH_CHECK="$(grep "^ExecStart=" "$GATEWAY_UNIT_PATH" | head -1 | sed "s/^ExecStart=//" | awk "{print \$2}")" || true
-  if [ -n "$ENTRYPOINT_PATH_CHECK" ] && [ ! -f "$ENTRYPOINT_PATH_CHECK" ]; then
-    EXIT_CODE=1
-  fi
+if [ "$ENTRYPOINT_FAILED" -ne 0 ]; then
+  EXIT_CODE=1
 fi
 if [ "$UPDATE_FAILED" -ne 0 ]; then
   EXIT_CODE=1
@@ -498,7 +397,11 @@ fi
 if [ "$GATEWAY_HEALTH_FAILED" -ne 0 ]; then
   EXIT_CODE=1
 fi
-exit $EXIT_CODE
+if [ "$EXIT_CODE" -ne 0 ]; then
+  exit "$EXIT_CODE"
+fi
+done
+systemctl --user stop openclaw-gateway.service
 ' || CONTAINER_EXIT=$?
 
 echo ""

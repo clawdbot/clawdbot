@@ -1,18 +1,8 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { createHostChannelInboundEventContextBuilder } from "../channels/inbound-event/host-context-builder.js";
 import { registerChannelIngressHostOwner } from "../channels/message-access/ingress-host-owner.js";
 import { createChannelIngressDrain } from "../channels/message/ingress-drain.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
-import {
-  parseSqliteSessionFileMarker,
-  sqliteSessionFileMarkerMatchesTarget,
-} from "../config/sessions/legacy-sqlite-marker.js";
-import { resolveSessionEntryAccessTarget } from "../config/sessions/session-accessor.js";
-import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createPluginBlobStore,
   type OpenBlobStoreOptions,
@@ -25,16 +15,7 @@ import {
   type PluginStateKeyedStore,
   type PluginStateSyncKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
-import {
-  classifySessionKeyShape,
-  isUnscopedSessionKeySentinel,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../routing/session-key.js";
-import {
-  isAgentHarnessSessionKey,
-  isAgentHarnessSessionKeyOwnedBy,
-} from "../sessions/agent-harness-session-key.js";
+import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import {
   activatePluginRecordLifecycleEpoch,
   isPluginRecordLifecycleEpochActive,
@@ -52,42 +33,8 @@ import {
 } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
-const PLUGIN_GATEWAY_SESSION_MUTATION_METHODS = new Set([
-  "agent",
-  "chat.abort",
-  "chat.inject",
-  "chat.send",
-  "message.action",
-  "plugins.sessionAction",
-  "send",
-  "sessions.abort",
-  "sessions.compact",
-  "sessions.compaction.branch",
-  "sessions.compaction.restore",
-  "sessions.branches.switch",
-  "sessions.rewind",
-  "sessions.fork",
-  "sessions.create",
-  "sessions.delete",
-  "sessions.patchMany",
-  "sessions.patch",
-  "sessions.pluginPatch",
-  "sessions.reset",
-  "sessions.send",
-  "sessions.steer",
-  "wake",
-]);
-
-const PLUGIN_GATEWAY_GLOBAL_SESSION_MUTATION_METHODS = new Set([
-  "sessions.cleanup",
-  "sessions.groups.delete",
-  "sessions.groups.rename",
-]);
-
 export function createPluginRuntimeResolver(state: PluginRegistryState) {
   const { registry, registryParams } = state;
-  // SAFETY: Logical session resolution only reads the immutable runtime config snapshot.
-  const currentSessionConfig = () => registryParams.runtime.config.current() as OpenClawConfig;
   const pluginRuntimeById = new Map<string, PluginRuntime>();
   const pluginRuntimeRecordById = new Map<string, PluginRecord>();
   const activePluginRuntimeRecords = new WeakSet<PluginRecord>();
@@ -213,463 +160,11 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
     if (cached) {
       return cached;
     }
-    const resolveHarnessRegistration = (harnessId: unknown) => {
-      const normalizedHarnessId = normalizeOptionalAgentRuntimeId(harnessId);
-      return normalizedHarnessId
-        ? registry.agentHarnesses.find(
-            (entry) => normalizeOptionalAgentRuntimeId(entry.harness.id) === normalizedHarnessId,
-          )
-        : undefined;
-    };
-    const resolveHarnessRegistrationForSessionKey = (sessionKey: string) =>
-      registry.agentHarnesses.find((entry) => {
-        const rawHarnessId = normalizeOptionalString(entry.harness.id)?.toLowerCase();
-        return (
-          rawHarnessId === normalizeOptionalAgentRuntimeId(rawHarnessId) &&
-          isAgentHarnessSessionKeyOwnedBy(sessionKey, rawHarnessId)
-        );
-      });
-    const assertOwnedHarness = (harnessId: unknown, action: string): string => {
-      const normalizedHarnessId = normalizeOptionalAgentRuntimeId(harnessId);
-      if (!normalizedHarnessId) {
-        throw new Error(
-          `Plugin "${pluginId}" must provide a registered agent harness id to ${action}.`,
-        );
-      }
-      const registration = resolveHarnessRegistration(normalizedHarnessId);
-      if (!registration) {
-        throw new Error(
-          `Plugin "${pluginId}" must register agent harness "${normalizedHarnessId}" before it can ${action}.`,
-        );
-      }
-      if (registration.pluginId !== pluginId) {
-        throw new Error(
-          `Agent harness "${normalizedHarnessId}" is owned by plugin "${registration.pluginId}", not "${pluginId}".`,
-        );
-      }
-      return normalizedHarnessId;
-    };
-    const assertReservedSessionKeyOwned = (sessionKey: unknown, action: string): void => {
-      const normalizedSessionKey = normalizeOptionalString(sessionKey);
-      if (!normalizedSessionKey || !isAgentHarnessSessionKey(normalizedSessionKey)) {
-        return;
-      }
-      const registration = resolveHarnessRegistrationForSessionKey(normalizedSessionKey);
-      if (!registration) {
-        throw new Error(
-          `Plugin "${pluginId}" cannot ${action} reserved agent harness session "${normalizedSessionKey}" because its harness is not registered.`,
-        );
-      }
-      if (registration.pluginId !== pluginId) {
-        throw new Error(
-          `Plugin "${pluginId}" cannot ${action} reserved agent harness session "${normalizedSessionKey}" owned by plugin "${registration.pluginId}".`,
-        );
-      }
-    };
-    const resolveLockedSessionHarnessRegistration = (
-      sessionKey: string,
-      entry: SessionEntry,
-      action: string,
-    ) => {
-      if (entry.modelSelectionLocked !== true) {
-        return undefined;
-      }
-      const harnessId = normalizeOptionalAgentRuntimeId(entry.agentHarnessId);
-      if (!harnessId) {
-        const pluginOwnerId = normalizeOptionalString(entry.pluginOwnerId);
-        if (pluginOwnerId) {
-          return { ownerPluginId: pluginOwnerId };
-        }
-        throw new Error(
-          `Plugin "${pluginId}" must provide a registered agent harness id to ${action} locked sessions.`,
-        );
-      }
-      const registration = resolveHarnessRegistration(harnessId);
-      if (!registration) {
-        throw new Error(
-          `Plugin "${pluginId}" must register agent harness "${harnessId}" before it can ${action} locked sessions.`,
-        );
-      }
-      if (
-        isAgentHarnessSessionKey(sessionKey) &&
-        !isAgentHarnessSessionKeyOwnedBy(sessionKey, harnessId)
-      ) {
-        throw new Error(
-          `Locked session "${sessionKey}" belongs to agent harness "${harnessId}", which does not match its reserved session key.`,
-        );
-      }
-      return { ownerPluginId: registration.pluginId, harnessId, registration };
-    };
-    const assertLockedSessionEntryOwned = (
-      sessionKey: string,
-      entry: SessionEntry,
-      action: string,
-    ): void => {
-      const resolved = resolveLockedSessionHarnessRegistration(sessionKey, entry, action);
-      if (!resolved) {
-        return;
-      }
-      if (resolved.ownerPluginId !== pluginId) {
-        throw new Error(
-          `Locked session "${sessionKey}" is owned by plugin "${resolved.ownerPluginId}", not "${pluginId}".`,
-        );
-      }
-    };
-    const assertSessionEntryOwned = (params: {
-      action: string;
-      entry?: SessionEntry;
-      sessionKey: string;
-    }): void => {
-      if (params.entry) {
-        // Before harness locking shipped, plugins could create ordinary sessions
-        // whose user-chosen key happened to start with `harness:`.
-        assertLockedSessionEntryOwned(params.sessionKey, params.entry, params.action);
-        return;
-      }
-      assertReservedSessionKeyOwned(params.sessionKey, params.action);
-    };
-    const resolveStoredSessionOwnershipTarget = (params: {
-      agentId?: string;
-      env?: NodeJS.ProcessEnv;
-      sessionKey: string;
-      storePath?: string;
-    }): { entry?: SessionEntry; sessionKey: string } => {
-      if (
-        classifySessionKeyShape(params.sessionKey) === "legacy_or_alias" &&
-        !isUnscopedSessionKeySentinel(params.sessionKey) &&
-        params.agentId === undefined &&
-        params.storePath === undefined
-      ) {
-        // Logical keys need their configured agent before SQLite ownership admission.
-        const target = resolveSessionEntryAccessTarget({
-          cfg: currentSessionConfig(),
-          sessionKey: params.sessionKey,
-          ...(params.env !== undefined ? { env: params.env } : {}),
-        });
-        return { entry: target.entry, sessionKey: target.canonicalKey };
-      }
-      return {
-        entry: registryParams.runtime.agent.session.getSessionEntry({
-          sessionKey: params.sessionKey,
-          readConsistency: "latest",
-          ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
-          ...(params.env !== undefined ? { env: params.env } : {}),
-          ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
-        }),
-        sessionKey: params.sessionKey,
-      };
-    };
-    const assertStoredSessionEntryOwned = (params: {
-      action: string;
-      agentId?: string;
-      env?: NodeJS.ProcessEnv;
-      sessionKey: string;
-      storePath?: string;
-    }): SessionEntry | undefined => {
-      const target = resolveStoredSessionOwnershipTarget(params);
-      assertSessionEntryOwned({ action: params.action, ...target });
-      return target.entry;
-    };
-    const resolveStoredSessionExecutionOwner = (params: {
-      action: string;
-      agentId?: string;
-      sessionKey: string;
-      storePath?: string;
-    }): string | undefined => {
-      const target = resolveStoredSessionOwnershipTarget(params);
-      const { entry, sessionKey } = target;
-      const locked = entry
-        ? resolveLockedSessionHarnessRegistration(sessionKey, entry, params.action)
-        : undefined;
-      if (!entry || !locked || locked.ownerPluginId === pluginId) {
-        assertSessionEntryOwned({ action: params.action, ...target });
-        return undefined;
-      }
-      const registration = "registration" in locked ? locked.registration : undefined;
-      if (!registration) {
-        throw new Error(
-          `Locked session "${sessionKey}" is owned by plugin "${locked.ownerPluginId}", not "${pluginId}".`,
-        );
-      }
-      if (!registration.harness.delegatedExecutionPluginIds?.includes(pluginId)) {
-        assertLockedSessionEntryOwned(sessionKey, entry, params.action);
-      }
-      return locked.ownerPluginId;
-    };
-    const assertSessionIdentitiesOwned = (params: {
-      action: string;
-      agentId?: unknown;
-      sessionFiles?: unknown[];
-      sessionIds?: unknown[];
-      sessionKeys?: unknown[];
-      storePath?: unknown;
-    }): void => {
-      const agentId = normalizeOptionalString(params.agentId);
-      const storePath = normalizeOptionalString(params.storePath);
-      const sessionKeys = new Set<string>();
-      for (const value of params.sessionKeys ?? []) {
-        const sessionKey = normalizeOptionalString(value);
-        if (sessionKey) {
-          sessionKeys.add(sessionKey);
-        }
-      }
-      for (const sessionKey of sessionKeys) {
-        assertStoredSessionEntryOwned({
-          action: params.action,
-          sessionKey,
-          ...(agentId ? { agentId } : {}),
-          ...(storePath ? { storePath } : {}),
-        });
-      }
-
-      const sessionIds = new Set<string>();
-      for (const value of params.sessionIds ?? []) {
-        const sessionId = normalizeOptionalString(value);
-        if (sessionId) {
-          sessionIds.add(sessionId);
-        }
-      }
-      const sessionFiles = new Set<string>();
-      for (const value of params.sessionFiles ?? []) {
-        const sessionFile = normalizeOptionalString(value);
-        if (sessionFile) {
-          sessionFiles.add(sessionFile);
-        }
-      }
-      if (sessionIds.size === 0 && sessionFiles.size === 0) {
-        return;
-      }
-      const entries = registryParams.runtime.agent.session.listSessionEntries({
-        ...(agentId ? { agentId } : {}),
-        ...(storePath ? { storePath } : {}),
-        readOnly: true,
-      });
-      for (const { sessionKey, entry } of entries) {
-        if (sessionIds.has(entry.sessionId)) {
-          assertSessionEntryOwned({ action: params.action, entry, sessionKey });
-        }
-      }
-      for (const sessionFile of sessionFiles) {
-        const sessionKeyMatches = entries.filter(({ sessionKey }) => sessionKey === sessionFile);
-        if (sessionKeyMatches.length > 0) {
-          for (const match of sessionKeyMatches) {
-            assertSessionEntryOwned({
-              action: params.action,
-              entry: match.entry,
-              sessionKey: match.sessionKey,
-            });
-          }
-          const matchedSessionIds = new Set(
-            sessionKeyMatches
-              .map(({ entry }) => normalizeOptionalString(entry.sessionId))
-              .filter((sessionId): sessionId is string => Boolean(sessionId)),
-          );
-          for (const match of entries) {
-            const matchSessionId = normalizeOptionalString(match.entry.sessionId);
-            if (matchSessionId && matchedSessionIds.has(matchSessionId)) {
-              assertSessionEntryOwned({
-                action: params.action,
-                entry: match.entry,
-                sessionKey: match.sessionKey,
-              });
-            }
-          }
-          continue;
-        }
-        const marker = parseSqliteSessionFileMarker(sessionFile);
-        if (!marker) {
-          throw new Error("Plugin session ownership checks require a SQLite transcript marker.");
-        }
-        const markerEntries = registryParams.runtime.agent.session.listSessionEntries({
-          agentId: marker.agentId,
-          storePath: marker.storePath,
-          readOnly: true,
-        });
-        const matches = markerEntries.filter(({ entry }) => entry.sessionId === marker.sessionId);
-        if (matches.length === 0) {
-          throw new Error(`Plugin session ownership target not found: ${marker.sessionId}`);
-        }
-        for (const match of matches) {
-          assertSessionEntryOwned({
-            action: params.action,
-            entry: match.entry,
-            sessionKey: match.sessionKey,
-          });
-        }
-      }
-    };
-    const resolveRunSessionExecutionOwner = (
-      params: Parameters<PluginRuntime["agent"]["runEmbeddedAgent"]>[0],
-    ): string | undefined => {
-      const target = params.sessionTarget;
-      const targetSessionKey = normalizeOptionalString(target?.sessionKey);
-      const directSessionKey = normalizeOptionalString(params.sessionKey);
-      if (targetSessionKey && directSessionKey && targetSessionKey !== directSessionKey) {
-        throw new Error("Delegated agent execution requires one exact session key.");
-      }
-      const sessionKey = targetSessionKey ?? directSessionKey;
-      const storePath = normalizeOptionalString(target?.storePath);
-      const agentId = normalizeOptionalString(target?.agentId ?? params.agentId);
-      const sessionKeyAgentId = parseAgentSessionKey(sessionKey)?.agentId;
-      const normalizedAgentId = agentId ? normalizeAgentId(agentId) : undefined;
-      if (sessionKeyAgentId && normalizedAgentId && normalizedAgentId !== sessionKeyAgentId) {
-        throw new Error(
-          `Plugin session ownership agent "${normalizedAgentId}" does not match session key agent "${sessionKeyAgentId}".`,
-        );
-      }
-      const ownershipAgentId = sessionKeyAgentId ?? normalizedAgentId;
-      // Embedded runs accept one exact key. Carry its resolved store into the
-      // keyless ID/file scan so incognito ownership stays in the process-held DB.
-      const ownershipStorePath =
-        sessionKey && sessionKeyAgentId
-          ? resolveSessionStorePathForScope({
-              agentId: sessionKeyAgentId,
-              sessionKey,
-              ...(storePath ? { storePath } : {}),
-            })
-          : storePath;
-      const entry = sessionKey
-        ? registryParams.runtime.agent.session.getSessionEntry({
-            sessionKey,
-            readConsistency: "latest",
-            ...(agentId ? { agentId } : {}),
-            ...(storePath ? { storePath } : {}),
-          })
-        : undefined;
-      const targetSessionId = normalizeOptionalString(target?.sessionId);
-      const targetAgentId = normalizeOptionalString(target?.agentId);
-      const directSessionId = normalizeOptionalString(params.sessionId);
-      const directAgentId = normalizeOptionalString(params.agentId);
-      const sessionFile = normalizeOptionalString(params.sessionFile);
-      if (target) {
-        const legacySessionIdentityMatches =
-          Boolean(sessionFile) &&
-          Boolean(agentId) &&
-          Boolean(storePath) &&
-          Boolean(entry?.sessionId) &&
-          sqliteSessionFileMarkerMatchesTarget(sessionFile, {
-            agentId: agentId!,
-            sessionId: entry!.sessionId,
-            storePath: storePath!,
-          });
-        const targetIdentityMatches =
-          targetSessionKey === sessionKey &&
-          Boolean(storePath) &&
-          Boolean(entry) &&
-          targetSessionId === entry?.sessionId &&
-          directSessionId === entry?.sessionId &&
-          targetAgentId === directAgentId &&
-          (!sessionFile || sessionFile === sessionKey || legacySessionIdentityMatches);
-        if (!targetIdentityMatches) {
-          throw new Error(
-            `Plugin "${pluginId}" may execute a persisted session only with its exact session target identity.`,
-          );
-        }
-      }
-      const locked =
-        sessionKey && entry
-          ? resolveLockedSessionHarnessRegistration(sessionKey, entry, "run")
-          : undefined;
-      const ownerPluginId = locked?.ownerPluginId;
-      if (locked && entry && sessionKey && ownerPluginId !== pluginId) {
-        const registration = "registration" in locked ? locked.registration : undefined;
-        if (!registration) {
-          throw new Error(
-            `Locked session "${sessionKey}" is owned by plugin "${locked.ownerPluginId}", not "${pluginId}".`,
-          );
-        }
-        if (!registration.harness.delegatedExecutionPluginIds?.includes(pluginId)) {
-          assertLockedSessionEntryOwned(sessionKey, entry, "run");
-        }
-        const requestedHarnessId = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
-        const requestedRuntimeOverride = normalizeOptionalAgentRuntimeId(
-          params.agentHarnessRuntimeOverride,
-        );
-        const identityMatches =
-          Boolean(target) &&
-          targetSessionId === entry.sessionId &&
-          directSessionId === entry.sessionId;
-        const harnessMatches =
-          params.modelSelectionLocked === true &&
-          requestedHarnessId === locked.harnessId &&
-          requestedRuntimeOverride === locked.harnessId;
-        if (!identityMatches || !harnessMatches) {
-          throw new Error(
-            `Plugin "${pluginId}" may execute locked session "${sessionKey}" only with its exact persisted identity and harness.`,
-          );
-        }
-        return ownerPluginId;
-      }
-      assertSessionIdentitiesOwned({
-        action: "run",
-        agentId: ownershipAgentId,
-        sessionFiles: [params.sessionFile],
-        sessionIds: [target?.sessionId ?? params.sessionId],
-        sessionKeys: [target?.sessionKey ?? params.sessionKey],
-        storePath: ownershipStorePath,
-      });
-      return undefined;
-    };
-    const assertGatewaySessionRequestOwned = (
-      method: string,
-      params: Record<string, unknown> | undefined,
-    ): void => {
-      if (PLUGIN_GATEWAY_GLOBAL_SESSION_MUTATION_METHODS.has(method)) {
-        throw new Error(`Plugin "${pluginId}" cannot request global session mutation "${method}".`);
-      }
-      if (!PLUGIN_GATEWAY_SESSION_MUTATION_METHODS.has(method)) {
-        return;
-      }
-      const request = params ?? {};
-      if (method === "sessions.patchMany" && Array.isArray(request.targets)) {
-        for (const target of request.targets) {
-          if (!isRecord(target)) {
-            continue;
-          }
-          assertSessionIdentitiesOwned({
-            action: `request gateway method "${method}" for`,
-            agentId: target.agentId,
-            sessionKeys: [target.key],
-          });
-        }
-        return;
-      }
-      const sessionKeys = [request.sessionKey, request.key, request.parentSessionKey];
-      const sessionIds = [request.sessionId];
-      assertSessionIdentitiesOwned({
-        action: `request gateway method "${method}" for`,
-        agentId: request.agentId,
-        sessionIds,
-        sessionKeys,
-      });
-      if (
-        method === "sessions.abort" &&
-        !sessionKeys.some((value) => normalizeOptionalString(value)) &&
-        !sessionIds.some((value) => normalizeOptionalString(value))
-      ) {
-        throw new Error(
-          `Plugin "${pluginId}" must provide a session key when requesting gateway method "${method}".`,
-        );
-      }
-    };
-    const assertStoreEntryOwned = (params: {
-      action: string;
-      before?: SessionEntry;
-      entry: SessionEntry;
-      sessionKey: string;
-    }): void => {
-      if (params.entry.modelSelectionLocked === true) {
-        assertLockedSessionEntryOwned(params.sessionKey, params.entry, params.action);
-        return;
-      }
-      if (params.before?.modelSelectionLocked === true) {
-        assertLockedSessionEntryOwned(params.sessionKey, params.before, params.action);
-        return;
-      }
-      if (isAgentHarnessSessionKey(params.sessionKey) && !params.before) {
-        assertReservedSessionKeyOwned(params.sessionKey, params.action);
-      }
-    };
+    // Cache checks, not config or row facts; actions resolve ownership after the import settles.
+    const loadSessionOwnership = createLazyRuntimeSurface(
+      () => import("./registry-runtime-session-ownership.js"),
+      (module) => module.createPluginSessionOwnership(state, pluginId),
+    );
     let scopedAgentRuntime: PluginRuntime["agent"] | undefined;
     const assertTrustedPluginRuntime = (
       methodName:
@@ -812,11 +307,13 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           const gateway = getRuntimeProperty();
           return {
             isAvailable: () => runWithPluginScope(() => gateway.isAvailable()),
-            request: async (method, params, options) =>
-              await runWithPluginScope(async () => {
+            request: async (method, params, options) => {
+              const { assertGatewaySessionRequestOwned } = await loadSessionOwnership();
+              return await runWithPluginScope(async () => {
                 assertGatewaySessionRequestOwned(method, params);
                 return await gateway.request(method, params, options);
-              }),
+              });
+            },
           } satisfies PluginRuntime["gateway"];
         }
         if (prop === "hooks") {
@@ -849,8 +346,10 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             resolveStorePath: session.resolveStorePath,
             getSessionEntry: session.getSessionEntry,
             listSessionEntries: session.listSessionEntries,
-            createSessionEntry: async (params) =>
-              await runWithPluginScope(async () => {
+            createSessionEntry: async (params) => {
+              const { assertOwnedHarness, assertReservedSessionKeyOwned } =
+                await loadSessionOwnership();
+              return await runWithPluginScope(async () => {
                 const runtimeOwnerCount = [
                   "agentHarnessId" in params.initialEntry,
                   "cliBackendId" in params.initialEntry,
@@ -898,9 +397,12 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                   ...params,
                   initialEntry: { ...cliInitial, pluginOwnerId: pluginId },
                 });
-              }),
-            patchSessionEntry: async (params) =>
-              await runWithPluginScope(async () => {
+              });
+            },
+            patchSessionEntry: async (params) => {
+              const { assertStoredSessionEntryOwned, assertStoreEntryOwned } =
+                await loadSessionOwnership();
+              return await runWithPluginScope(async () => {
                 assertStoredSessionEntryOwned({
                   action: "patch",
                   sessionKey: params.sessionKey,
@@ -927,9 +429,12 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                     return patch;
                   },
                 });
-              }),
-            upsertSessionEntry: async (params) =>
-              await runWithPluginScope(async () => {
+              });
+            },
+            upsertSessionEntry: async (params) => {
+              const { assertStoredSessionEntryOwned, assertStoreEntryOwned } =
+                await loadSessionOwnership();
+              return await runWithPluginScope(async () => {
                 const before = assertStoredSessionEntryOwned({
                   action: "upsert",
                   sessionKey: params.sessionKey,
@@ -944,9 +449,11 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                   sessionKey: params.sessionKey,
                 });
                 await session.upsertSessionEntry(params);
-              }),
-            runWithWorkAdmission: async (params, run) =>
-              await runWithPluginScope(async () => {
+              });
+            },
+            runWithWorkAdmission: async (params, run) => {
+              const { resolveStoredSessionExecutionOwner } = await loadSessionOwnership();
+              return await runWithPluginScope(async () => {
                 const resolveCurrentExecutionOwner = () =>
                   resolveStoredSessionExecutionOwner({
                     action: "admit work on",
@@ -969,9 +476,12 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                   // callback must not inherit the owner's plugin identity.
                   return await runWithPluginScope(() => run(signal));
                 });
-              }),
-            updateSessionStoreEntry: async (params) =>
-              await runWithPluginScope(async () => {
+              });
+            },
+            updateSessionStoreEntry: async (params) => {
+              const { assertStoredSessionEntryOwned, assertStoreEntryOwned } =
+                await loadSessionOwnership();
+              return await runWithPluginScope(async () => {
                 assertStoredSessionEntryOwned({
                   action: "update",
                   sessionKey: params.sessionKey,
@@ -993,10 +503,12 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                     return patch;
                   },
                 });
-              }),
+              });
+            },
           } satisfies PluginRuntime["agent"]["session"];
           const runEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] = async (params) => {
             const runParams = { ...params, skillWorkshopCollectionReconcile: undefined };
+            const { resolveRunSessionExecutionOwner } = await loadSessionOwnership();
             return await runWithPluginScope(async () => {
               const ownerPluginId = resolveRunSessionExecutionOwner(runParams);
               if (ownerPluginId) {
@@ -1069,23 +581,27 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         }
         const subagent = getRuntimeProperty();
         return {
-          run: async (params) =>
-            await withPluginRuntimePluginIdScope(pluginId, async () => {
+          run: async (params) => {
+            const { assertSessionIdentitiesOwned } = await loadSessionOwnership();
+            return await withPluginRuntimePluginIdScope(pluginId, async () => {
               assertSessionIdentitiesOwned({
                 action: "run",
                 sessionKeys: [params.sessionKey],
               });
               return await subagent.run(params);
-            }),
+            });
+          },
           waitForRun: (params) =>
             withPluginRuntimePluginIdScope(pluginId, () => subagent.waitForRun(params)),
           getSessionMessages: (params) =>
             withPluginRuntimePluginIdScope(pluginId, () => subagent.getSessionMessages(params)),
-          deleteSession: async (params) =>
-            await withPluginRuntimePluginIdScope(pluginId, async () => {
+          deleteSession: async (params) => {
+            const { assertStoredSessionEntryOwned } = await loadSessionOwnership();
+            return await withPluginRuntimePluginIdScope(pluginId, async () => {
               assertStoredSessionEntryOwned({ action: "delete", sessionKey: params.sessionKey });
               await subagent.deleteSession(params);
-            }),
+            });
+          },
         } satisfies PluginRuntime["subagent"];
       },
     });
@@ -1117,4 +633,3 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
 }
 
 export type PluginRuntimeResolver = ReturnType<typeof createPluginRuntimeResolver>;
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

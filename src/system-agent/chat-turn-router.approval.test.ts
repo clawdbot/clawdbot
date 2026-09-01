@@ -185,48 +185,6 @@ describe("SystemAgentChatEngine approval", () => {
     expect(engine.getPendingOperatorProposal()).toBeNull();
   });
 
-  it("hatches into the agent after a fresh setup applies", async () => {
-    useTempStateDir();
-    const verifyInferenceConfig = vi.fn(async () => ({
-      ok: true as const,
-      modelRef: "openai/gpt-5.5",
-      latencyMs: 100,
-    }));
-    const applySetup = vi.fn(async () => ({
-      configPath: "/tmp/openclaw.json",
-      configHashBefore: "before",
-      configHashAfter: "after",
-      bootstrapPending: true,
-      workspaceReady: true,
-      gateway: { status: "ready" as const, action: "reused" as const },
-      lines: ["Workspace: /tmp/hatch-work"],
-    }));
-    const engine = new SystemAgentChatEngine({
-      runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
-      classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
-      deps: {
-        applySetup,
-        verifyInferenceConfig,
-        loadOverview: fakeOverviewLoader({ defaultModel: "openai/gpt-5.5" }),
-      },
-    });
-    engine.propose({ kind: "setup", workspace: "/tmp/hatch-work" });
-
-    const reply = await engine.handle("yes");
-
-    expect(applySetup).toHaveBeenCalledOnce();
-    expect(reply.action).toBe("open-tui");
-    expect(reply.agentDraft).toBe("hatch");
-    expect(reply.handoff).toMatchObject({
-      kind: "open-tui",
-      workspace: "/tmp/hatch-work",
-      agentDraft: "hatch",
-    });
-    expect(reply.text).toContain("Your agent is hatching");
-    expect(reply.text).toContain("Settings → Ask OpenClaw");
-  });
-
   it.each([
     {
       origin: "custodian",

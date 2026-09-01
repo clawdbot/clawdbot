@@ -1,6 +1,7 @@
 // Session utility performance tests protect resolver cache scaling for large
 // session lists with repeated provider/model tuples.
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, test, expect, vi } from "vitest";
 import {
@@ -22,7 +23,8 @@ import * as titleReader from "./session-transcript-title-reader.js";
 import { resolveEstimatedSessionCostUsd } from "./session-utils-core.js";
 import { resolveGatewaySessionThinkingProjectionInternal } from "./session-utils-model.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
-import { listSessionsFromStore, listSessionsFromStoreAsync } from "./session-utils.js";
+import * as rowProjection from "./session-utils-row.js";
+import { listSessionsFromStoreAsync } from "./session-utils.js";
 
 /**
  * Regression smoke for the per-list rowContext resolver cache. The bug we are
@@ -35,8 +37,66 @@ import { listSessionsFromStore, listSessionsFromStoreAsync } from "./session-uti
  * CI runners cannot give a stable wall-time signal, and call-count regressions
  * are the actual scaling failure mode we care about.
  */
-describe("listSessionsFromStore resolver cache", () => {
-  test("collapses request-local resolver work to O(unique provider/model tuples)", () => {
+describe("session list resolver cache", () => {
+  test.each([
+    { rowWorkMs: 0, shouldYield: false },
+    { rowWorkMs: 20, shouldYield: true },
+  ])(
+    "yields for row work rather than row count ($rowWorkMs ms)",
+    async ({ rowWorkMs, shouldYield }) => {
+      await withStateDirEnv("openclaw-list-work-budget-", async ({ stateDir }) => {
+        resetPluginRuntimeStateForTest();
+        setActivePluginRegistry(createEmptyPluginRegistry());
+        const cfg: OpenClawConfig = {};
+        resetConfigRuntimeState();
+        setRuntimeConfigSnapshot(cfg);
+        const store = Object.fromEntries(
+          Array.from({ length: 32 }, (_, index) => [
+            `agent:main:budget-${index}`,
+            { sessionId: `budget-${index}`, updatedAt: index + 1 },
+          ]),
+        );
+        let workMs = 0;
+        const buildRow = rowProjection.buildGatewaySessionRow;
+        const clock = vi.spyOn(performance, "now").mockImplementation(() => workMs);
+        const rows = vi
+          .spyOn(rowProjection, "buildGatewaySessionRow")
+          .mockImplementation((params) => {
+            const row = buildRow(params);
+            workMs += rowWorkMs;
+            return row;
+          });
+        let controlRan = false;
+        const controlCallback = new Promise<void>((resolve) => {
+          setImmediate(() => {
+            controlRan = true;
+            resolve();
+          });
+        });
+        try {
+          const result = await listSessionsFromStoreAsync({
+            cfg,
+            storePath: path.join(stateDir, "sessions.json"),
+            store,
+            opts: {},
+          });
+          expect(result.sessions.map((row) => row.key)).toEqual(Object.keys(store).toReversed());
+          expect(controlRan).toBe(shouldYield);
+        } finally {
+          rows.mockRestore();
+          clock.mockRestore();
+          await controlCallback;
+        }
+      });
+    },
+  );
+
+  test.each([
+    { name: "legacy flat estimate", recorded: undefined, tiered: false, expected: 0.00015 },
+    { name: "recorded per-call total", recorded: 0.25, tiered: true, expected: 0.25 },
+    { name: "recorded zero", recorded: 0, tiered: true, expected: 0 },
+    { name: "unknown tiered total", recorded: undefined, tiered: true, expected: undefined },
+  ])("bounds resolver work and preserves $name", ({ recorded, tiered, expected }) => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -63,6 +123,19 @@ describe("listSessionsFromStore resolver cache", () => {
       output: 1,
       cacheRead: 0,
       cacheWrite: 0,
+      ...(tiered
+        ? {
+            tieredPricing: [
+              {
+                input: 2,
+                output: 2,
+                cacheRead: 0,
+                cacheWrite: 0,
+                range: [0, Infinity] as [number, number],
+              },
+            ],
+          }
+        : {}),
     });
     try {
       for (let index = 0; index < rowCount; index += 1) {
@@ -78,6 +151,7 @@ describe("listSessionsFromStore resolver cache", () => {
           model: tuple.model,
           inputTokens: 100,
           outputTokens: 50,
+          estimatedCostUsd: recorded,
           acp: {
             backend: "acpx",
             agent: "codex",
@@ -98,20 +172,23 @@ describe("listSessionsFromStore resolver cache", () => {
             rowContext,
           }).thinkingOptions,
         ).toEqual(["Off"]);
-        expect(
-          resolveEstimatedSessionCostUsd({
-            cfg,
-            provider: tuple.modelProvider,
-            model: tuple.model,
-            entry,
-            rowContext,
-          }),
-        ).toBeDefined();
+        const resolvedCost = resolveEstimatedSessionCostUsd({
+          cfg,
+          provider: tuple.modelProvider,
+          model: tuple.model,
+          entry,
+          rowContext,
+        });
+        if (expected !== undefined) {
+          expect(resolvedCost).toBeCloseTo(expected, 10);
+        } else {
+          expect(resolvedCost).toBeUndefined();
+        }
       }
 
-      // Both caches key on the five unique tuples, not all 30 rows.
+      // Recorded prices bypass lookup; legacy fallback still scales by model, not row.
       expect(thinkingSpy).toHaveBeenCalledTimes(tuples.length);
-      expect(costSpy).toHaveBeenCalledTimes(tuples.length);
+      expect(costSpy).toHaveBeenCalledTimes(recorded !== undefined ? 0 : tuples.length);
     } finally {
       thinkingSpy.mockRestore();
       costSpy.mockRestore();
@@ -227,7 +304,7 @@ describe("listSessionsFromStore resolver cache", () => {
         expect(acpSelects).toBe(3);
 
         acpSelects = 0;
-        const result = listSessionsFromStore({
+        const result = await listSessionsFromStoreAsync({
           cfg,
           storePath: path.join(stateDir, "agents", "default", "sessions", "sessions.json"),
           store: {
@@ -235,7 +312,6 @@ describe("listSessionsFromStore resolver cache", () => {
             [missingKey]: missingEntry,
             [markerKey]: markerEntry,
           },
-          lightweightListRows: true,
           opts: { limit: 3 },
         });
         expect(result.sessions).toHaveLength(3);
@@ -276,7 +352,10 @@ describe("listSessionsFromStore resolver cache", () => {
           sessionId,
           updatedAt: 1_000 - index,
           ...(ownerId && index >= scenario.count - scenario.owned
-            ? { createdVia: "operator", createdActor: { type: "human", id: ownerId } }
+            ? {
+                createdVia: "operator",
+                createdActor: { type: "human", source: "profile", id: ownerId },
+              }
             : {}),
         };
         store[sessionKey] = entry;
@@ -295,7 +374,6 @@ describe("listSessionsFromStore resolver cache", () => {
           cfg,
           storePath,
           store,
-          lightweightListRows: true,
           ownerFirstActorId: ownerId,
           opts: { includeDerivedTitles: true, includeLastMessage: true, limit: scenario.limit },
         });
@@ -318,7 +396,6 @@ describe("listSessionsFromStore resolver cache", () => {
           cfg,
           storePath,
           store,
-          lightweightListRows: true,
           ownerFirstActorId: ownerId,
           opts: { includeDerivedTitles: false, includeLastMessage: false, limit: scenario.limit },
         });

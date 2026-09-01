@@ -16,14 +16,7 @@ export type CommandScope = "text" | "native" | "both";
  */
 export type CommandTier = "essential" | "standard" | "power";
 
-export type CommandCategory =
-  | "session"
-  | "options"
-  | "status"
-  | "management"
-  | "media"
-  | "tools"
-  | "docks";
+export type CommandCategory = "session" | "options" | "status" | "management" | "media" | "tools";
 
 /** Primitive command argument kinds supported by native command surfaces. */
 type CommandArgType = "string" | "number" | "boolean";
@@ -81,6 +74,8 @@ export type ChatCommandDefinition = {
   category?: CommandCategory;
   /** Progressive disclosure tier. Defaults to "standard" when omitted. */
   tier?: CommandTier;
+  /** Handler is safe to resolve while another run owns the session execution slot. */
+  activeRunSafe?: true;
 };
 
 /** Provider-facing native command registration shape. */

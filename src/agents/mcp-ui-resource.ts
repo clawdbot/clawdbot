@@ -4,11 +4,16 @@ import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/recor
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { createLazyRuntimeMethod } from "../shared/lazy-runtime.js";
 import { getSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
-import { completeDeferredSessionMcpRuntimeRetirement } from "./agent-bundle-mcp-runtime.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { clearMcpAppModelContextForView } from "./mcp-app-model-context.js";
 import { type McpAppCsp, normalizeMcpAppCsp } from "./mcp-app-sandbox.js";
+
+const completeDeferredSessionMcpRuntimeRetirement = createLazyRuntimeMethod(
+  () => import("./agent-bundle-mcp-manager-api.js"),
+  (runtime) => runtime.completeDeferredSessionMcpRuntimeRetirement,
+);
 
 const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 const MCP_APP_RESOURCE_MAX_BYTES = 2 * 1024 * 1024;

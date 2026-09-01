@@ -2,6 +2,7 @@
 
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import "../components/macos-titlebar-controls.runtime.ts";
 import "../components/sidebar-update-card.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import "./app-host.ts";
@@ -19,7 +20,7 @@ type ShellNavigationState = {
   handleNativeHistoryState: (event: Event) => void;
   nativeHistoryState: { canGoBack: boolean; canGoForward: boolean };
   onboarding: boolean;
-  updated: () => void;
+  updated: (changedProperties: Map<string, unknown>) => void;
 };
 
 type ShellSettingsEscapeState = ShellKeyboardState & {
@@ -456,10 +457,10 @@ describe("OpenClaw native shell", () => {
       } as unknown as ApplicationContext,
     };
 
-    shell.updated();
-    shell.updated();
+    shell.updated(new Map());
+    shell.updated(new Map());
     snapshot.navCollapsed = true;
-    shell.updated();
+    shell.updated(new Map());
 
     expect(postMessage.mock.calls).toEqual([
       [{ type: "nav-state", collapsed: false, width: 280 }],

@@ -24,7 +24,7 @@ vi.mock("./doctor-session-sqlite.js", () => ({
   runDoctorSessionSqlite,
 }));
 
-vi.mock("../infra/state-migrations.doctor.js", () => ({
+vi.mock("../infra/state-migrations.plugin-doctor.js", () => ({
   runPostSessionPluginDoctorStateRepairs,
 }));
 
@@ -35,6 +35,10 @@ vi.mock("./doctor-session-incognito-key-repair.js", () => ({
 vi.mock("./doctor-session-delivery-state.js", () => ({
   repairCanonicalSessionDeliveryStates,
   repairCanonicalSessionResolvedSkills,
+}));
+
+vi.mock("./doctor-session-exec-policy.js", () => ({
+  repairLegacySessionExecPolicy: vi.fn(),
 }));
 
 vi.mock("./doctor-session-canonical-keys.js", () => ({
@@ -54,54 +58,17 @@ vi.mock("./doctor-sqlite-maintenance-lock.js", async (importOriginal) => {
 });
 
 import { GatewayLockError } from "../infra/gateway-lock.js";
-import { shortenHomePath } from "../utils.js";
 import {
   detectSessionTranscriptHealthIssues,
   noteSessionTranscriptHealth,
   sessionTranscriptIssueToHealthFinding,
   sessionTranscriptIssueToRepairEffect,
 } from "./doctor-session-transcripts.js";
+import { repairTranscriptFixture } from "./doctor-session-transcripts.test-support.js";
 import { DoctorSqliteMaintenanceLockUnavailableError } from "./doctor-sqlite-maintenance-lock.js";
 
-async function repairBrokenSessionTranscriptFile(params: {
-  filePath: string;
-  shouldRepair: boolean;
-}) {
-  const [issue] = await detectSessionTranscriptHealthIssues({
-    sessionDirs: [path.dirname(params.filePath)],
-  });
-  if (!issue) {
-    return {
-      filePath: params.filePath,
-      broken: false,
-      repaired: false,
-      originalEntries: 0,
-      activeEntries: 0,
-      legacyOpenAICodexEntries: 0,
-    };
-  }
-  if (!params.shouldRepair) {
-    return issue;
-  }
-
-  const noteCount = note.mock.calls.length;
-  await noteSessionTranscriptHealth({
-    sessionDirs: [path.dirname(params.filePath)],
-    shouldRepair: true,
-  });
-  const backupPrefix = `${path.basename(params.filePath)}.pre-doctor-`;
-  const backupName = (await fs.readdir(path.dirname(params.filePath))).find(
-    (entry) => entry.startsWith(backupPrefix) && entry.endsWith(".bak"),
-  );
-  return {
-    ...issue,
-    repaired: note.mock.calls
-      .slice(noteCount)
-      .some(([message]) =>
-        String(message).includes(`${shortenHomePath(params.filePath)} repaired entries=`),
-      ),
-    ...(backupName ? { backupPath: path.join(path.dirname(params.filePath), backupName) } : {}),
-  };
+function repairBrokenSessionTranscriptFile(params: Parameters<typeof repairTranscriptFixture>[0]) {
+  return repairTranscriptFixture(params, () => note.mock.calls);
 }
 
 function countNonEmptyLines(value: string): number {
@@ -537,6 +504,54 @@ describe("doctor session transcript repair", () => {
       expect.stringContaining("Archived 2 legacy transcript artifact(s)."),
       "Session SQLite",
     );
+  });
+
+  it("hands a large untouched original to public Doctor SQLite import without a raw repair copy", async () => {
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const transcriptPath = path.join(sessionsDir, "large.jsonl");
+    await fs.writeFile(transcriptPath, '{"type":"session","id":"large","version":3}\n');
+    const payload = "x".repeat(64 * 1024);
+    for (let index = 0; index < 128; index += 1) {
+      await fs.appendFile(
+        transcriptPath,
+        `${JSON.stringify({
+          type: "message",
+          id: `event-${index}`,
+          parentId: index ? `event-${index - 1}` : null,
+          message: { role: "assistant", provider: "openai-codex", content: payload },
+        })}\n`,
+      );
+    }
+    const originalSize = (await fs.stat(transcriptPath)).size;
+    let filesAtImport: string[] = [];
+    let sizeAtImport = 0;
+    runDoctorSessionSqlite.mockImplementationOnce(async () => {
+      filesAtImport = await fs.readdir(sessionsDir);
+      sizeAtImport = (await fs.stat(transcriptPath)).size;
+      return { totals: { legacyEntries: 0, unreferencedJsonlFiles: 0, issues: 0 } };
+    });
+    const readFile = vi.spyOn(fs, "readFile");
+    try {
+      await noteSessionTranscriptHealth({
+        cfg: {},
+        env: { ...process.env, OPENCLAW_STATE_DIR: root },
+        sessionDirs: [sessionsDir],
+        sessionSqlite: true,
+        shouldRepair: true,
+      });
+      expect({
+        filesAtImport,
+        sizeAtImport,
+        fullRawRead: readFile.mock.calls.some(([file]) => file === transcriptPath),
+      }).toEqual({
+        filesAtImport: ["large.jsonl"],
+        sizeAtImport: originalSize,
+        fullRawRead: false,
+      });
+    } finally {
+      readFile.mockRestore();
+    }
   });
 
   it("explains how to shrink SQLite files after removing persisted runtime skills", async () => {

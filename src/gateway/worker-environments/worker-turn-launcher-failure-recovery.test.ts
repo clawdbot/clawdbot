@@ -7,6 +7,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { recoverStuckDiagnosticSession } from "../../logging/diagnostic-stuck-session-recovery.runtime.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
@@ -14,7 +15,6 @@ import { STALE_WORKER_BUILD_REASON, StaleWorkerBuildError } from "./admission.js
 import type { WorkerDispatchEnvironmentService } from "./placement-dispatch-failure.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { placementTurnOwner } from "./placement-record.js";
-import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import {
   WorkerRunnerCapacityError,
   WorkerRunnerUnavailableError,
@@ -31,6 +31,7 @@ import {
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   credential,
+  measureLaunchTurn,
   hasLoneSurrogate,
   openSessionManager,
   placements,
@@ -47,6 +48,59 @@ import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation
 describe("worker turn launcher failure recovery", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
+
+  it("reports execution failure as primary when remote workspace recovery also fails", async () => {
+    seedActivePlacement("remote-exec");
+    const executionError = new Error("Codex node execution requires one-time approval");
+    const environments: WorkerTurnEnvironmentService = {
+      ...unusedEnvironments(),
+      get: vi.fn(() => attachedEnvironment()),
+      startTunnel: vi.fn(async () => ({
+        environmentId: ENVIRONMENT_ID,
+        ownerEpoch: OWNER_EPOCH,
+        runWorkspaceCommand: vi.fn(),
+        syncWorkspace: vi.fn(),
+        quiesceWorkspace: vi.fn(async () => ({
+          assertActive: vi.fn(async () => {}),
+          resume: vi.fn(async () => {}),
+        })),
+        reconcileWorkspace: vi.fn(async () => {
+          throw new Error("gateway returned 400");
+        }),
+        stop: vi.fn(async () => {}),
+      })),
+    };
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments,
+      placements,
+      reconcileActivePlacement: vi.fn(async () => {}),
+    });
+
+    const failure = await provider
+      .executeTurn(
+        {
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          runId: "run-execution-and-workspace-failed",
+        },
+        turn("run-execution-and-workspace-failed"),
+        async () => {
+          throw executionError;
+        },
+      )
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+    expect(formatErrorMessage(failure)).toBe(
+      "Codex node execution requires one-time approval\n\n" +
+        "Workspace recovery also failed: gateway returned 400. " +
+        "Remote changes may not have been applied locally. Resolve the workspace error, then retry.",
+    );
+    expect(placements.listPendingWorkspaceResults()).toHaveLength(0);
+  });
 
   it("terminalizes a journal-settled dead worker without waiting for blocked teardown", async () => {
     seedActivePlacement();
@@ -72,6 +126,7 @@ describe("worker turn launcher failure recovery", () => {
         syncWorkspace: vi.fn(),
         reconcileWorkspace: vi.fn(),
         stop: vi.fn(),
+        measureLaunchTurn,
         launchTurn: async (request) => {
           request.onDispatchReady?.();
           launchStarted.resolve();
@@ -124,11 +179,11 @@ describe("worker turn launcher failure recovery", () => {
       });
     try {
       await launchStarted.promise;
-      await expect(recover()).resolves.toMatchObject({ status: "skipped", action: "keep_lane" });
+      await expect(recover()).resolves.toMatchObject({ status: "skipped", action: "observe_only" });
       finishLaunch.resolve();
       await teardownStarted.promise;
       expect(placements.get(SESSION_ID)).toMatchObject({ state: "draining", turnClaim: null });
-      await expect(recover()).resolves.toMatchObject({ status: "skipped", action: "keep_lane" });
+      await expect(recover()).resolves.toMatchObject({ status: "skipped", action: "observe_only" });
       clock.mockReturnValue(1_030_000);
       await expect(recover()).resolves.toMatchObject({
         status: "failed",
@@ -388,6 +443,7 @@ describe("worker turn launcher failure recovery", () => {
       runActivationBarrier: async ({ activate }) => activate(),
       runMoveBarrier: async ({ begin }) => begin(),
       resolveMoveDestination: async () => undefined,
+      runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
       runReclaimBarrier: async ({ begin, reclaim }) => await reclaim(root, begin()),
       runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
       workspaceOperations,
@@ -508,6 +564,7 @@ describe("worker turn launcher failure recovery", () => {
         ownerEpoch: OWNER_EPOCH,
         quiesceWorkspace: vi.fn(),
         runWorkspaceCommand: vi.fn(),
+        measureLaunchTurn,
         launchTurn,
         syncWorkspace: vi.fn(),
         reconcileWorkspace: vi.fn(),
@@ -646,26 +703,9 @@ describe("worker turn launcher failure recovery", () => {
     },
   ])("keeps the placement active after $name", async ({ error, dispatched, expectedMessage }) => {
     seedActivePlacement();
-    const teardownStates: string[] = [];
-    const observedPlacements: WorkerSessionPlacementStore = {
-      ...placements,
-      startReconcile: (input) => {
-        teardownStates.push(`reconcile-before:${placements.get(SESSION_ID)?.state ?? "missing"}`);
-        const reconciling = placements.startReconcile(input);
-        teardownStates.push(`reconcile-after:${reconciling.state}`);
-        expect(reconciling.turnClaim).toBeNull();
-        return reconciling;
-      },
-    };
-    const stopTunnel = vi.fn(async () => {
-      const placement = placements.get(SESSION_ID);
-      teardownStates.push(`stop:${placement?.state ?? "missing"}`);
-      expect(placement).toMatchObject({ state: "draining", turnClaim: null });
-    });
-    const destroy = vi.fn(async () => {
-      teardownStates.push(`destroy:${placements.get(SESSION_ID)?.state ?? "missing"}`);
-      return attachedEnvironment();
-    });
+    const startReconcile = vi.spyOn(placements, "startReconcile");
+    const stopTunnel = vi.fn(async () => {});
+    const destroy = vi.fn(async () => attachedEnvironment());
     const acknowledgeCredentialDelivery = vi.fn(() => true);
     const environments: WorkerTurnEnvironmentService = {
       get: vi.fn(() => attachedEnvironment()),
@@ -679,6 +719,7 @@ describe("worker turn launcher failure recovery", () => {
           resume: vi.fn(async () => {}),
         })),
         runWorkspaceCommand: vi.fn(),
+        measureLaunchTurn,
         launchTurn: vi.fn(async (request) => {
           if (dispatched) {
             request.onDispatchReady?.();
@@ -704,7 +745,7 @@ describe("worker turn launcher failure recovery", () => {
     };
     const provider = createWorkerSessionTurnPlacementProvider({
       environments,
-      placements: observedPlacements,
+      placements,
     });
     const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
 
@@ -725,7 +766,7 @@ describe("worker turn launcher failure recovery", () => {
     expect(acknowledgeCredentialDelivery).toHaveBeenCalledTimes(dispatched ? 1 : 0);
     expect(stopTunnel).not.toHaveBeenCalled();
     expect(destroy).not.toHaveBeenCalled();
-    expect(teardownStates).toEqual([]);
+    expect(startReconcile).not.toHaveBeenCalled();
   });
 
   it("preserves the admission diagnosis with bounded redacted process failure details", async () => {
@@ -748,6 +789,7 @@ describe("worker turn launcher failure recovery", () => {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
         runWorkspaceCommand: vi.fn(),
+        measureLaunchTurn,
         launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
           request.onDispatchReady?.();
           return {

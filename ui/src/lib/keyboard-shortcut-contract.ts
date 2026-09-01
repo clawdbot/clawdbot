@@ -6,6 +6,7 @@ type KeyboardShortcutKey =
   | "b"
   | "d"
   | "f"
+  | "h"
   | "/"
   | "+"
   | "-"
@@ -36,6 +37,7 @@ export const KEYBOARD_SHORTCUT_COMBOS = {
   newline: { modifiers: ["shift"], key: "Enter" },
   transcriptSearch: { modifiers: ["mod"], key: "f" },
   terminalPanel: { modifiers: ["ctrl"], key: "Backquote" },
+  homePanel: { modifiers: ["mod", "shift"], key: "h" },
   workspaceFiles: { modifiers: ["mod", "shift"], key: "b" },
   approveAlways: { modifiers: ["mod", "shift"], key: "Enter" },
   denyApproval: { modifiers: ["mod"], key: "d" },

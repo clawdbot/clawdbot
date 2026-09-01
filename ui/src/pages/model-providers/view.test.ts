@@ -31,6 +31,7 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     refreshing: false,
     error: null,
     providerUsageFailed: false,
+    supplementalLoading: false,
     updatedAt: 1,
     costDays: 30,
     credentialAgentLabel: "Writer",
@@ -208,15 +209,10 @@ describe("renderModelProviders", () => {
     expect(text(thinkingRow)).toContain("Default: Model policy");
     expect(text(fastRow)).toContain("Default: Model policy");
 
-    thinkingRow.querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')?.click();
-    fastRow.querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')?.click();
-    expect(onThinkingReset).toHaveBeenCalledOnce();
-    expect(onFastModeReset).toHaveBeenCalledOnce();
-
     selectSegment(thinkingRow.querySelector<SegmentedGroup>("wa-radio-group")!, "");
     selectSegment(fastRow.querySelector<SegmentedGroup>("wa-radio-group")!, "");
-    expect(onThinkingReset).toHaveBeenCalledTimes(2);
-    expect(onFastModeReset).toHaveBeenCalledTimes(2);
+    expect(onThinkingReset).toHaveBeenCalledOnce();
+    expect(onFastModeReset).toHaveBeenCalledOnce();
 
     render(
       renderModelProviders(
@@ -247,34 +243,6 @@ describe("renderModelProviders", () => {
     ).toBe(true);
     expect(text(inheritedThinking)).toContain("Using default: Model policy");
     expect(text(inheritedFast)).toContain("Using default: Model policy");
-    expect(
-      inheritedBehavior.querySelectorAll('button[aria-label="Reset to default"]'),
-    ).toHaveLength(0);
-  });
-
-  it("keeps invalid explicit model behavior values resettable", () => {
-    const onThinkingReset = vi.fn();
-    const onFastModeReset = vi.fn();
-    const container = mount(
-      props({
-        thinkingLevel: undefined,
-        thinkingOverridden: true,
-        fastMode: undefined,
-        fastModeOverridden: true,
-        onThinkingReset,
-        onFastModeReset,
-      }),
-    );
-    const behavior = container.querySelector("#settings-model-behavior")!;
-    const thinking = settingsRow(behavior, "Thinking");
-    const fast = settingsRow(behavior, "Fast mode");
-
-    expect(text(thinking)).toContain("Default: Model policy");
-    expect(text(fast)).toContain("Default: Model policy");
-    thinking.querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')?.click();
-    fast.querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')?.click();
-    expect(onThinkingReset).toHaveBeenCalledOnce();
-    expect(onFastModeReset).toHaveBeenCalledOnce();
   });
 
   it("restores controlled model behavior when a reset is rejected", () => {

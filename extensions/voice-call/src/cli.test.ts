@@ -6,7 +6,7 @@ import { Command } from "commander";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 const callGatewayFromCliMock = vi.hoisted(() => vi.fn());
-const findCallMatchesInStoreMock = vi.hoisted(() => vi.fn());
+const findCallInStoreMock = vi.hoisted(() => vi.fn());
 const loadActiveCallsFromStoreMock = vi.hoisted(() => vi.fn());
 const tailscaleMocks = vi.hoisted(() => ({
   cleanup: vi.fn(),
@@ -32,7 +32,7 @@ vi.mock("../api.js", async (importOriginal) => ({
 }));
 vi.mock("./manager/store.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./manager/store.js")>()),
-  findCallMatchesInStore: findCallMatchesInStoreMock,
+  findCallInStore: findCallInStoreMock,
   loadActiveCallsFromStore: loadActiveCallsFromStoreMock,
 }));
 vi.mock("./webhook/tailscale.js", async (importOriginal) => ({
@@ -84,7 +84,7 @@ function gatewayCredentialsError(message: string): Error {
 describe("voice-call CLI status fallback", () => {
   afterEach(() => {
     callGatewayFromCliMock.mockReset();
-    findCallMatchesInStoreMock.mockReset();
+    findCallInStoreMock.mockReset();
     loadActiveCallsFromStoreMock.mockReset();
     tailscaleMocks.cleanup.mockReset();
     tailscaleMocks.getSelfInfo.mockReset();
@@ -121,7 +121,7 @@ describe("voice-call CLI status fallback", () => {
     args?: string[];
   }): Promise<unknown> {
     callGatewayFromCliMock.mockRejectedValue(params.error ?? gatewayTransportError());
-    findCallMatchesInStoreMock.mockResolvedValue({ byCallId: params.persisted });
+    findCallInStoreMock.mockReturnValue(params.persisted);
     const ensureRuntime = vi.fn(async () => {
       throw new Error("status fallback must not initialize the telephony runtime");
     });

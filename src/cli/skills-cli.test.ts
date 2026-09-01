@@ -422,76 +422,117 @@ describe("skills-cli", () => {
       expect(output).not.toContain("commands/cron may still use it");
     });
 
-    it("summarizes a mixed bad skill pack in JSON", () => {
-      const output = formatSkillsCheck(
-        {
-          ...createMockReport([
-            createMockSkill({ name: "ready", eligible: true }),
-            createMockSkill({
-              name: "prompt-hidden",
-              eligible: true,
-              platformIncompatible: false,
-              modelVisible: false,
-              commandVisible: true,
-            }),
-            createMockSkill({
-              name: "slash-hidden",
-              eligible: true,
-              platformIncompatible: false,
-              modelVisible: true,
-              userInvocable: false,
-              commandVisible: false,
-            }),
-            createMockSkill({
-              name: "agent-filtered",
-              eligible: true,
-              platformIncompatible: false,
-              blockedByAgentFilter: true,
-            }),
-            createMockSkill({
-              name: "missing-bin",
-              eligible: false,
-              platformIncompatible: false,
-              missing: { bins: ["missing-tool"], anyBins: [], env: [], config: [], os: [] },
-            }),
-            createMockSkill({ name: "disabled", eligible: false, disabled: true }),
-            createMockSkill({
-              name: "blocked-bundled",
-              eligible: false,
-              platformIncompatible: false,
-              blockedByAllowlist: true,
-            }),
-          ]),
-          agentId: "specialist",
-          agentSkillFilter: ["ready", "prompt-hidden", "slash-hidden", "missing-bin"],
-        },
-        { json: true },
-      );
+    it("accounts for readiness independently of agent exclusion in a mixed skill pack", () => {
+      const report = {
+        ...createMockReport([
+          createMockSkill({ name: "ready", eligible: true }),
+          createMockSkill({
+            name: "prompt-hidden",
+            eligible: true,
+            platformIncompatible: false,
+            modelVisible: false,
+            commandVisible: true,
+          }),
+          createMockSkill({
+            name: "slash-hidden",
+            eligible: true,
+            platformIncompatible: false,
+            modelVisible: true,
+            userInvocable: false,
+            commandVisible: false,
+          }),
+          createMockSkill({
+            name: "agent-filtered",
+            eligible: true,
+            platformIncompatible: false,
+            blockedByAgentFilter: true,
+          }),
+          createMockSkill({
+            name: "excluded-missing",
+            eligible: false,
+            blockedByAgentFilter: true,
+            missing: { bins: ["missing-tool"], anyBins: [], env: [], config: [], os: [] },
+          }),
+          createMockSkill({
+            name: "missing-bin",
+            eligible: false,
+            platformIncompatible: false,
+            missing: { bins: ["missing-tool"], anyBins: [], env: [], config: [], os: [] },
+          }),
+          createMockSkill({
+            name: "disabled",
+            eligible: false,
+            disabled: true,
+            blockedByAllowlist: true,
+            blockedByAgentFilter: true,
+            missing: { bins: ["missing-tool"], anyBins: [], env: [], config: [], os: [] },
+          }),
+          createMockSkill({
+            name: "blocked-bundled",
+            eligible: false,
+            platformIncompatible: false,
+            blockedByAllowlist: true,
+            blockedByAgentFilter: true,
+            missing: { bins: ["missing-tool"], anyBins: [], env: [], config: [], os: [] },
+          }),
+        ]),
+        agentId: "specialist",
+        agentSkillFilter: ["ready", "prompt-hidden", "slash-hidden", "missing-bin"],
+      };
+      const output = formatSkillsCheck(report, { json: true });
 
       const parsed = JSON.parse(output) as {
         summary: Record<string, number>;
+        eligible: string[];
+        disabled: string[];
+        blocked: string[];
         modelVisible: string[];
         commandVisible: string[];
         agentFiltered: string[];
         notInjected: Array<{ name: string; reason: string }>;
         missingRequirements: Array<{ name: string }>;
       };
-      expect(parsed.summary.total).toBe(7);
+      const readinessNames = [
+        ...parsed.eligible,
+        ...parsed.disabled,
+        ...parsed.blocked,
+        ...parsed.missingRequirements.map((entry) => entry.name),
+      ];
+      expect(readinessNames.toSorted()).toEqual(
+        report.skills.map((skill) => skill.name).toSorted(),
+      );
+      expect(readinessNames.length).toBe(parsed.summary.total);
+      expect(parsed.summary.total).toBe(8);
       expect(parsed.summary.eligible).toBe(4);
       expect(parsed.summary.modelVisible).toBe(2);
       expect(parsed.summary.commandVisible).toBe(2);
       expect(parsed.summary.disabled).toBe(1);
       expect(parsed.summary.blocked).toBe(1);
-      expect(parsed.summary.agentFiltered).toBe(1);
+      expect(parsed.summary.agentFiltered).toBe(4);
       expect(parsed.summary.notInjected).toBe(1);
-      expect(parsed.summary.missingRequirements).toBe(1);
+      expect(parsed.summary.missingRequirements).toBe(2);
       expect(parsed.modelVisible).toEqual(["ready", "slash-hidden"]);
       expect(parsed.commandVisible).toEqual(["ready", "prompt-hidden"]);
-      expect(parsed.agentFiltered).toEqual(["agent-filtered"]);
+      expect(parsed.agentFiltered).toEqual([
+        "agent-filtered",
+        "excluded-missing",
+        "disabled",
+        "blocked-bundled",
+      ]);
+      expect(parsed.disabled).toEqual(["disabled"]);
+      expect(parsed.blocked).toEqual(["blocked-bundled"]);
       expect(parsed.notInjected).toEqual([
         { name: "prompt-hidden", reason: "disable-model-invocation" },
       ]);
-      expect(parsed.missingRequirements.map((entry) => entry.name)).toEqual(["missing-bin"]);
+      expect(parsed.missingRequirements.map((entry) => entry.name)).toEqual([
+        "excluded-missing",
+        "missing-bin",
+      ]);
+      const human = formatSkillsCheck(report, {});
+      expect(human).toContain("excluded-missing (bins: missing-tool)");
+      for (const name of parsed.agentFiltered) {
+        expect(human).toContain(`${name} (loaded, but this agent is not allowed to see/use it)`);
+      }
     });
   });
 

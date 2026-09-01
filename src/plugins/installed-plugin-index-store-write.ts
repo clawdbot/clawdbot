@@ -12,6 +12,8 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveUserPath } from "../infra/home-dir.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
+import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
+import { isBundledProviderCompatPlugin } from "./bundled-provider-compat.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { isGatewayPluginMetadataSnapshotActive } from "./current-plugin-metadata-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
@@ -303,10 +305,24 @@ function refreshPersistedPolicyState(
   persisted: InstalledPluginIndex,
   params: RefreshInstalledPluginIndexParams,
 ): InstalledPluginIndex {
-  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
+  const activationConfig = withBundledPluginEnablementCompat({
+    config: params.config,
+    env: params.env,
+    pluginIds: persisted.plugins
+      .filter((plugin) =>
+        isBundledProviderCompatPlugin({
+          origin: plugin.origin,
+          providers: plugin.contributions?.providers,
+          contracts: plugin.contributions?.contracts,
+        }),
+      )
+      .map((plugin) => plugin.pluginId),
+    activation: "defaults",
+  });
+  const normalizedConfig = normalizePluginsConfig(activationConfig?.plugins);
   return {
     ...persisted,
-    policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
+    policyHash: resolveInstalledPluginIndexPolicyHash(params.config, params.env),
     generatedAtMs: (params.now?.() ?? new Date()).getTime(),
     refreshReason: params.reason,
     plugins: persisted.plugins.map((plugin) => ({
@@ -315,7 +331,7 @@ function refreshPersistedPolicyState(
         id: plugin.pluginId,
         origin: plugin.origin,
         config: normalizedConfig,
-        rootConfig: params.config,
+        rootConfig: activationConfig,
         enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
       }).enabled,
     })),

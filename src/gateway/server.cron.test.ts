@@ -568,7 +568,7 @@ describe("gateway server cron", () => {
           updatedAt: 2,
           createdAt: 1,
           createdVia: "operator",
-          createdActor: { type: "human", id: "profile-ada", label: "Ada" },
+          createdActor: { type: "human", source: "profile", id: "profile-ada", label: "Ada" },
         },
         [unattributedSessionKey]: {
           sessionId: "session-unattributed",
@@ -608,7 +608,7 @@ describe("gateway server cron", () => {
       expect(unattributed.ok, JSON.stringify(unattributed.error ?? null)).toBe(true);
       const jobs = (await loadCronStore(cronState.storePath)).jobs;
       expect(jobs.find((job) => job.name === "attributed")).toMatchObject({
-        createdActor: { type: "human", id: "profile-ada" },
+        createdActor: { type: "human", source: "profile", id: "profile-ada" },
       });
       expect(jobs.find((job) => job.name === "unattributed")).not.toHaveProperty("createdActor");
     } finally {

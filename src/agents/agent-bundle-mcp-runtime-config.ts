@@ -79,6 +79,7 @@ function filterMcpServers<T>(
 export function loadSessionMcpConfig(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
+  loaded?: LoadedMcpConfig;
   logDiagnostics?: boolean;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   includeServerNames?: ReadonlySet<string>;
@@ -92,12 +93,14 @@ export function loadSessionMcpConfig(params: {
   loaded: LoadedMcpConfig;
   fingerprint: string;
 } {
-  const loaded = loadEmbeddedAgentMcpConfig({
-    workspaceDir: params.workspaceDir,
-    cfg: params.cfg,
-    manifestRegistry: params.manifestRegistry,
-    toolOverrides: params.toolOverrides,
-  });
+  const loaded =
+    params.loaded ??
+    loadEmbeddedAgentMcpConfig({
+      workspaceDir: params.workspaceDir,
+      cfg: params.cfg,
+      manifestRegistry: params.manifestRegistry,
+      toolOverrides: params.toolOverrides,
+    });
   if (params.logDiagnostics !== false) {
     for (const diagnostic of loaded.diagnostics) {
       logWarn(`bundle-mcp: ${diagnostic.pluginId}: ${diagnostic.message}`);

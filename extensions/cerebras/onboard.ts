@@ -10,11 +10,12 @@ export const CEREBRAS_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(
 
 export const { applyConfig: applyCerebrasConfig } = createModelCatalogPresetAppliers<[]>({
   primaryModelRef: CEREBRAS_DEFAULT_MODEL_REF,
-  resolveParams: () => ({
+  resolveParams: (cfg) => ({
     providerId: "cerebras",
     api: "openai-completions",
     baseUrl: CEREBRAS_BASE_URL,
-    catalogModels: buildCerebrasCatalogModels(),
+    // Replace mode skips discovery; merge mode must not persist generated pricing as authored pins.
+    catalogModels: cfg.models?.mode === "replace" ? buildCerebrasCatalogModels() : [],
     aliases: [{ modelRef: CEREBRAS_DEFAULT_MODEL_REF, alias: "Cerebras Gemma 4 31B" }],
   }),
 });

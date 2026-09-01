@@ -514,6 +514,73 @@ describe("chunkMarkdownText", () => {
         expectFenceParseOccursOnce(`\`\`\`txt\n${"line\n".repeat(600)}\`\`\``, 80);
       },
     },
+    {
+      name: "keeps chunks within the limit when a fence opening line exceeds it",
+      run: () => {
+        const payload = `token.${"A".repeat(4200)}`;
+        const chunks = chunkMarkdownText(`\`\`\`${payload}\n\`\`\``, 4000);
+        expect(chunks.length).toBeLessThanOrEqual(3);
+        for (const chunk of chunks) {
+          expect(chunk.length).toBeLessThanOrEqual(4000);
+        }
+        expect(chunks.join("").replaceAll("`", "").replaceAll("\n", "")).toBe(payload);
+        expectFencesBalanced(chunks.slice(1));
+      },
+    },
+    {
+      name: "reopens an oversized fence opening line with the bare marker",
+      run: () => {
+        const chunks = chunkMarkdownText(`\`\`\`${"A".repeat(4200)}\n\`\`\``, 2000);
+        expect(chunks.length).toBeLessThanOrEqual(4);
+        expect(requireChunk(chunks, 1).startsWith("```\n")).toBe(true);
+        for (const chunk of chunks) {
+          expect(chunk.length).toBeLessThanOrEqual(2000);
+        }
+        expectFencesBalanced(chunks.slice(1));
+      },
+    },
+    {
+      name: "keeps the full opening line when it fits the reopen budget",
+      run: () => {
+        const openLine = `\`\`\`language-${"A".repeat(1_488)}`;
+        const chunks = chunkMarkdownText(`${openLine}\n${"x".repeat(1_200)}\n\`\`\``, 2_000);
+        expect(chunks.length).toBeGreaterThan(1);
+        for (const chunk of chunks.slice(1)) {
+          expect(chunk.startsWith(`${openLine}\n`)).toBe(true);
+        }
+        expect(chunks.every((chunk) => chunk.length <= 2_000)).toBe(true);
+        expectFencesBalanced(chunks);
+      },
+    },
+    {
+      name: "keeps the hard limit when synthetic fence balancing cannot fit",
+      run: () => {
+        const text = `\`\`\`\n${"x".repeat(20)}\n\`\`\``;
+        for (const limit of [5, 6, 8]) {
+          const chunks = chunkMarkdownText(text, limit);
+          expect(
+            chunks.every((chunk) => chunk.length <= limit),
+            `limit ${limit}`,
+          ).toBe(true);
+          expect(chunks.length, `limit ${limit}`).toBeLessThanOrEqual(
+            Math.ceil(text.length / limit),
+          );
+          expect(chunks.join(""), `limit ${limit}`).toBe(text);
+        }
+      },
+    },
+    {
+      name: "does not emit a header-only fence at the reopen budget boundary",
+      run: () => {
+        const limit = 20;
+        const openLine = `\`\`\`${"x".repeat(limit - 8)}`;
+        const text = `${openLine}\nbody-content-long\n\`\`\``;
+        const chunks = chunkMarkdownText(text, limit);
+
+        expect(chunks.every((chunk) => chunk.length <= limit)).toBe(true);
+        expectNoEmptyFencedChunks(text, limit);
+      },
+    },
   ] as const)("$name", ({ run }) => {
     expectChunkSpecialCase(run);
   });

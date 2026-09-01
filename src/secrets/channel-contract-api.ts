@@ -11,7 +11,7 @@ import { pluginCacheExistsSync } from "../plugins/plugin-cache-files.js";
 import { getPluginCacheRoot } from "../plugins/plugin-cache.js";
 import { getCachedPluginModuleLoader } from "../plugins/plugin-module-loader-cache.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
-import { loadBundledPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
+import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "../plugins/public-surface-loader.js";
 import { loadOfficialExternalChannelSecretContractApi } from "./official-external-channel-secret-contract.js";
 import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
@@ -31,26 +31,6 @@ const RUNNING_FROM_BUILT_ARTIFACT =
   CURRENT_MODULE_PATH.includes(`${path.sep}dist${path.sep}`) ||
   CURRENT_MODULE_PATH.includes(`${path.sep}dist-runtime${path.sep}`);
 
-function loadBundledChannelPublicArtifact(
-  channelId: string,
-  artifactBasename: string,
-): BundledChannelContractApi | undefined {
-  try {
-    return loadBundledPluginPublicArtifactModuleSync<BundledChannelContractApi>({
-      dirName: channelId,
-      artifactBasename,
-    });
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      error.message.startsWith("Unable to resolve bundled plugin public surface ")
-    ) {
-      return undefined;
-    }
-    throw error;
-  }
-}
-
 type BundledChannelSecretContractApi = Pick<
   BundledChannelContractApi,
   "collectRuntimeConfigAssignments" | "secretTargetRegistryEntries"
@@ -60,7 +40,12 @@ type BundledChannelSecretContractApi = Pick<
 function loadBundledChannelSecretContractApi(
   channelId: string,
 ): BundledChannelSecretContractApi | undefined {
-  return loadBundledChannelPublicArtifact(channelId, "secret-contract-api.js");
+  return (
+    loadBundledPluginPublicArtifactModuleFromCandidatesSync<BundledChannelSecretContractApi>({
+      dirName: channelId,
+      artifactCandidates: ["secret-contract-api.js"],
+    }) ?? undefined
+  );
 }
 
 function orderedContractApiExtensions(): readonly string[] {
@@ -109,6 +94,7 @@ function loadPluginContractModule(modulePath: string, rootDir: string): BundledC
 function loadExternalChannelSecretContractFromRecord(
   record: PluginManifestRecord,
   env: NodeJS.ProcessEnv = process.env,
+  throwOnLoadError = false,
 ): BundledChannelSecretContractApi | undefined {
   const contractPath = resolvePluginContractApiPath(record.rootDir);
   if (!contractPath) {
@@ -130,15 +116,18 @@ function loadExternalChannelSecretContractFromRecord(
       rejectHardlinks,
       skipLexicalRootCheck: true,
     });
-    if (!opened.ok) {
-      artifacts.set(boundary, null);
-      return undefined;
+    if (opened.ok) {
+      fs.closeSync(opened.fd);
+      validated = { modulePath: opened.path, boundaryRoot: record.rootDir };
+    } else {
+      validated = null;
     }
-    fs.closeSync(opened.fd);
-    validated = { modulePath: opened.path, boundaryRoot: record.rootDir };
     artifacts.set(boundary, validated);
   }
   if (!validated) {
+    if (throwOnLoadError) {
+      throw new Error(`Unable to open channel secret contract for ${record.id}`);
+    }
     return undefined;
   }
   try {
@@ -147,6 +136,9 @@ function loadExternalChannelSecretContractFromRecord(
       return mod;
     }
   } catch (error) {
+    if (throwOnLoadError) {
+      throw error;
+    }
     if (process.env.OPENCLAW_DEBUG_CHANNEL_CONTRACT_API === "1") {
       const detail = error instanceof Error ? error.message : String(error);
       console.warn(
@@ -237,9 +229,14 @@ export function loadChannelSecretContractApi(params: {
 /** Loads a channel secret contract directly from a manifest record. */
 export function loadChannelSecretContractApiForRecord(
   record: PluginManifestRecord,
+  options?: { throwOnLoadError?: boolean },
 ): BundledChannelSecretContractApi | undefined {
   if (record.origin === "bundled") {
     return loadBundledChannelSecretContractApi(record.id);
   }
-  return loadExternalChannelSecretContractFromRecord(record);
+  return loadExternalChannelSecretContractFromRecord(
+    record,
+    process.env,
+    options?.throwOnLoadError,
+  );
 }

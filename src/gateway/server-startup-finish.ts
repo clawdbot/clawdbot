@@ -220,6 +220,7 @@ export async function finishGatewayStartup(params: {
     });
   };
   const { createGatewayServerActiveWorkInspectors } = await import("./server-active-work.js");
+  const activeWorkInspectors = createGatewayServerActiveWorkInspectors(gatewayRequestContext);
   const postAttachHandles = await startupTrace.measure("runtime.post-attach", () =>
     loadGatewayStartupPostAttachModule().then(({ startGatewayPostAttachRuntime }) =>
       startGatewayPostAttachRuntime({
@@ -324,7 +325,7 @@ export async function finishGatewayStartup(params: {
         startupTrace,
         sidecarStartup,
         waitForPostReadyWork: params.waitForPostReadyWork,
-        activeWorkInspectors: createGatewayServerActiveWorkInspectors(gatewayRequestContext),
+        activeWorkInspectors,
         providerAuthPrewarm: {
           getConfig: getRuntimeConfig,
         },
@@ -444,7 +445,7 @@ export async function finishGatewayStartup(params: {
         if (lifecycle.closePreludeStarted) {
           return null;
         }
-        return earlyRuntime.startMaintenance();
+        return earlyRuntime.startMaintenance(activeWorkInspectors);
       },
       applyMaintenance: async (maintenance) => {
         if (lifecycle.closePreludeStarted) {

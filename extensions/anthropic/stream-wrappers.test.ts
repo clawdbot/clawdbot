@@ -2,6 +2,7 @@ import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 // Anthropic tests cover stream wrappers plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { resolveProviderEndpoint } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createAnthropicBetaHeadersWrapper,
@@ -24,6 +25,7 @@ beforeAll(() => {
     ...initialTransportHost,
     resolveProviderRequestCapabilities: (input) => ({
       ...initialTransportHost.resolveProviderRequestCapabilities(input),
+      endpointClass: resolveProviderEndpoint(input.baseUrl).endpointClass,
       allowsAnthropicServiceTier: input.provider === "anthropic",
     }),
   });

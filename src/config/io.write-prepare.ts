@@ -23,6 +23,7 @@ import {
   hasUnresolvedConfigPath,
   hasUnresolvedConfigPathInSubtree,
 } from "./resolution-facts.js";
+import { projectSourceOntoRuntimeShape } from "./runtime-source-projection.js";
 import type { OpenClawConfig } from "./types.js";
 
 const AGENT_ROSTER_PATHS = [
@@ -49,22 +50,6 @@ function assertUniqueNormalizedLegacyRosterIds(value: readonly unknown[]): void 
     }
     normalizedIds.add(agentId);
   }
-}
-
-export function projectSourceOntoRuntimeShape(source: unknown, runtime: unknown): unknown {
-  if (!isRecord(source) || !isRecord(runtime)) {
-    return structuredClone(source);
-  }
-
-  const next: Record<string, unknown> = {};
-  for (const [key, sourceValue] of Object.entries(source)) {
-    if (!(key in runtime)) {
-      next[key] = structuredClone(sourceValue);
-      continue;
-    }
-    next[key] = projectSourceOntoRuntimeShape(sourceValue, runtime[key]);
-  }
-  return next;
 }
 
 function hasOwnValidIncludeDirective(value: unknown): value is Record<string, unknown> {

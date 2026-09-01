@@ -23,7 +23,7 @@ working.
 - `plugins.entries.codex.enabled` is `true`.
 - `plugins.entries.codex.config.codexPlugins.enabled` is `true`.
 - Codex app-server reports `0.149.0` or newer. The official plugin ships
-  `@openai/codex` `0.150.1`; newer custom, remote, and macOS desktop-owned
+  `@openai/codex` `0.151.0`; newer custom, remote, and macOS desktop-owned
   binaries continue with a compatibility warning and normal runtime validation.
 - The target Codex app-server can see the expected marketplace, plugin, and
   app inventory.
@@ -154,14 +154,16 @@ plugin identity, detail identity, or app-readiness evidence. If a connector
 requires additional sign-in, complete that authorization before expecting the
 plugin's tools to become available.
 
-When installation returns apps that still need sign-in, OpenClaw provides
-**Set up / manage** links to the app pages returned by Codex. Sign in with the
-same ChatGPT account and workspace used by the Codex harness. Opening a link
-does not verify the connection or make its tools callable in the current
-conversation. If the browser shows a directory instead of the app, or no safe
-link is available, run `/apps` in Codex CLI and select the app there. Responses
-show up to five app links and explicitly report additional apps to review in
-Codex CLI.
+Installing the plugin bundle and configuring OpenClaw app access do not confirm
+hosted app connections. When installation returns apps that still need sign-in,
+OpenClaw provides **Open &lt;app&gt; in ChatGPT** links to the app pages returned by
+Codex. Sign in with the same ChatGPT account and workspace used by the Codex
+harness. Opening a link does not verify the connection or make its tools callable
+in the current conversation. If the browser shows a directory instead of the app,
+or no safe link is available, run `/apps` in Codex CLI and select the app there.
+Responses show up to five app links and explicitly report additional apps to
+review in Codex CLI. These links are for hosted ChatGPT apps; native MCP server
+setup remains separate.
 
 After completing sign-in, choose **Finished connecting / recheck** or run:
 
@@ -235,18 +237,30 @@ command but cannot install, enable, or add a marketplace.
 
 `status <configured-plugin> [page]` requires an owner or `operator.admin`. It
 shows bundle installation, marketplace restrictions, Codex enablement, and
-OpenClaw authorization separately. App results include setup/manage links and
-at most five apps per page. The selected agent, auth profile, conversation
-workspace, and account email/plan are shown when available. ChatGPT workspace
-identity remains unknown when Codex does not report it; confirm the browser
-uses the same account and workspace before connecting an app.
+shared OpenClaw app access separately. The OpenClaw setting controls app access
+for new conversations; it does not install or enable the Codex bundle.
+
+App results show at most five apps per page. A ChatGPT app-page link requires
+confirmed hosted-app runtime support, an available plugin under its catalog
+policy, and matching authorized metadata from `app/read`. A plugin's app
+declaration or setup URL alone does not establish that access. OpenClaw app
+access can be disabled while an eligible ChatGPT page remains available;
+opening that page does not enable OpenClaw app access. Plugins without hosted
+apps receive no ChatGPT connection or setup guidance. Status does not assess
+their skills or native MCP server readiness.
+
+The selected agent, auth profile, conversation workspace, and account email/plan
+are shown when available. ChatGPT workspace identity remains unknown when
+Codex does not report it; use the same account and workspace in the browser
+when opening an eligible hosted app page.
 
 Status reads existing Codex snapshots without forcing a hosted-tool refresh,
 changing configuration, or replacing a conversation. Only a read against the
 bound thread can report that an app is callable in that thread's runtime
-snapshot. An absent snapshot is unknown, not proof that an app is disconnected.
-Snapshot freshness and live connection status remain unknown; installation and
-metadata alone do not prove a successful tool call.
+snapshot. An absent snapshot is unknown; it does not prove that an app is
+disconnected or needs a new connection. Snapshot freshness and live connection
+status remain unknown; installation and metadata alone do not prove a successful
+tool call.
 
 `recheck <configured-plugin>` requires the same owner or `operator.admin`
 authority. It invalidates the selected runtime's app cache, requests a hosted

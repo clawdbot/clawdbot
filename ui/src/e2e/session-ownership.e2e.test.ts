@@ -1,8 +1,8 @@
-import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { afterEach, expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import { openNewSessionPlusMenu, replaceGatewayClient } from "./new-session-page.test-support.ts";
 import {
@@ -13,8 +13,6 @@ import {
   captureUiProofEnabled,
   openSidebarSortMenu,
   routeAvatarFixtures,
-  sessionOwnerProofArtifactDir,
-  uiProofArtifactDir,
 } from "./session-ownership-visuals.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -171,7 +169,7 @@ suite.define(() => {
       methodResponses: { "sessions.list": collaborativeSessionsList() },
     });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:collaboration"));
     const collaborativeRow = currentPage.locator('[data-session-key="agent:main:collaboration"]');
     const overflowRow = currentPage.locator('[data-session-key="agent:main:release-planning"]');
     const singleOwnerRow = currentPage.locator('[data-session-key="agent:main:single-owner"]');
@@ -253,30 +251,27 @@ suite.define(() => {
           .session-owner-stack__front { width: 20px; height: 20px; }
         `,
       });
-      await captureSessionOwnerProof(currentPage, "00-before-light.png");
+      await captureSessionOwnerProof(suite, currentPage, "00-before-light.png");
       await currentPage.evaluate(() =>
         document.documentElement.setAttribute("data-theme-mode", "dark"),
       );
-      await captureSessionOwnerProof(currentPage, "01-before-dark.png");
+      await captureSessionOwnerProof(suite, currentPage, "01-before-dark.png");
       await legacyStyles.evaluate((style) => style.parentNode?.removeChild(style));
-      await captureSessionOwnerProof(currentPage, "02-after-dark.png");
+      await captureSessionOwnerProof(suite, currentPage, "02-after-dark.png");
       await currentPage.evaluate(() =>
         document.documentElement.setAttribute("data-theme-mode", "light"),
       );
-      await captureSessionOwnerProof(currentPage, "03-after-light.png");
+      await captureSessionOwnerProof(suite, currentPage, "03-after-light.png");
     }
   });
 
   it("derives People controls and owner filtering from current session owners", async () => {
-    if (captureUiProofEnabled) {
-      await mkdir(sessionOwnerProofArtifactDir, { recursive: true });
-    }
     const context = await suite.browser.newContext({
       viewport: { height: 800, width: 1200 },
       ...(captureUiProofEnabled
         ? {
             recordVideo: {
-              dir: sessionOwnerProofArtifactDir,
+              dir: path.join(suite.artifactDir, "session-owner-stack"),
               size: { height: 800, width: 1200 },
             },
           }
@@ -304,7 +299,7 @@ suite.define(() => {
       methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-bob"], true) },
     });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
     await currentPage.locator('[data-session-key="agent:main:ada"] a').click();
@@ -312,7 +307,7 @@ suite.define(() => {
     await expect.poll(() => currentPage.locator("openclaw-session-owner-chip").count()).toBe(3);
 
     const ownerMenu = await openSidebarSortMenu(currentPage);
-    await captureUiProof(currentPage, "00-people-controls-from-session-owners.png");
+    await captureUiProof(suite, currentPage, "00-people-controls-from-session-owners.png");
     await expectBrowser(ownerMenu.locator('[value="grouping:person"]')).toBeVisible();
     await expectBrowser(ownerMenu.locator('[value="sort:people"]')).toBeVisible();
     const ownerRows = ownerMenu.locator('wa-dropdown-item[value^="owner:"]:not([value="owner:"])');
@@ -321,7 +316,7 @@ suite.define(() => {
     await expectBrowser(ownerRows.first()).toContainText("Patrick (You)");
     await expectBrowser(ownerRows.locator("openclaw-session-owner-chip img")).toHaveCount(3);
     const firstOwnerCenterDelta = await avatarLabelCenterDelta(ownerRows.first());
-    await captureUiProof(currentPage, "00-people-sort-available.png");
+    await captureUiProof(suite, currentPage, "00-people-sort-available.png");
     expect(firstOwnerCenterDelta).toBeLessThanOrEqual(0.5);
     await selectMenuValue(ownerMenu, "grouping:person");
     await expectBrowser(
@@ -345,7 +340,7 @@ suite.define(() => {
       "aria-checked",
       "true",
     );
-    await captureUiProof(currentPage, "01-people-sort-selected.png");
+    await captureUiProof(suite, currentPage, "01-people-sort-selected.png");
     const expectOwnerFilter = async (after: number) => {
       // The chat title survives a sidebar refresh; wait for the filtered row itself.
       await expectBrowser(
@@ -373,7 +368,7 @@ suite.define(() => {
     await peopleMenu.locator('[value="owner:profile-ada"]').waitFor();
     await selectMenuValue(peopleMenu, "owner:profile-ada");
     await expectOwnerFilter(beforeSelection);
-    await captureSessionOwnerProof(currentPage, "04-owner-filter-selected.png");
+    await captureSessionOwnerProof(suite, currentPage, "04-owner-filter-selected.png");
 
     const initialConnections = (await gateway.getRequests("connect")).length;
     const beforeReconnect = (await gateway.getRequests("sessions.list")).length;
@@ -396,19 +391,20 @@ suite.define(() => {
       "aria-checked",
       "true",
     );
-    await captureSessionOwnerPageProof(currentPage, "05-owner-filter-restored-after-reload.png");
+    await captureSessionOwnerPageProof(
+      suite,
+      currentPage,
+      "05-owner-filter-restored-after-reload.png",
+    );
   });
 
   it("keeps unrelated active sessions out of the involving-me filter", async () => {
-    if (captureUiProofEnabled) {
-      await mkdir(sessionOwnerProofArtifactDir, { recursive: true });
-    }
     const context = await suite.browser.newContext({
       viewport: { height: 800, width: 1200 },
       ...(captureUiProofEnabled
         ? {
             recordVideo: {
-              dir: sessionOwnerProofArtifactDir,
+              dir: path.join(suite.artifactDir, "session-owner-stack"),
               size: { height: 800, width: 1200 },
             },
           }
@@ -425,7 +421,7 @@ suite.define(() => {
       methodResponses: { "sessions.list": allSessions },
     });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
     await gateway.setMethodResponse("sessions.list", {
       ...allSessions,
@@ -445,7 +441,7 @@ suite.define(() => {
         ),
       )
       .toBe(true);
-    await captureSessionOwnerProof(currentPage, "02-involving-me-before-active-event.png");
+    await captureSessionOwnerProof(suite, currentPage, "02-involving-me-before-active-event.png");
 
     await gateway.emitGatewayEvent("session.message", {
       sessionKey: "agent:main:bob",
@@ -469,7 +465,7 @@ suite.define(() => {
       "aria-checked",
       "true",
     );
-    await captureSessionOwnerProof(currentPage, "03-involving-me-after-active-event.png");
+    await captureSessionOwnerProof(suite, currentPage, "03-involving-me-after-active-event.png");
   });
 
   it("renders zero ownership chrome for a single owner", async () => {
@@ -482,13 +478,13 @@ suite.define(() => {
       methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-ada"]) },
     });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
     await currentPage.locator('[data-session-key="agent:main:ada"] a').click();
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
     const ownerMenu = await openSidebarSortMenu(currentPage);
-    await captureUiProof(currentPage, "00-people-sort-hidden.png");
+    await captureUiProof(suite, currentPage, "00-people-sort-hidden.png");
     expect(
       await ownerMenu.locator(".sidebar-session-sort-menu__title", { hasText: "People" }).count(),
     ).toBe(0);
@@ -507,7 +503,7 @@ suite.define(() => {
       methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-ada"]) },
     });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
 
@@ -535,13 +531,15 @@ suite.define(() => {
   });
 
   it("keeps own drafts subtle and fades admin-visible drafts from other people", async () => {
-    if (captureUiProofEnabled) {
-      await mkdir(uiProofArtifactDir, { recursive: true });
-    }
     const context = await suite.browser.newContext({
       viewport: { height: 800, width: 1200 },
       ...(captureUiProofEnabled
-        ? { recordVideo: { dir: uiProofArtifactDir, size: { height: 800, width: 1200 } } }
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "drafts-ux"),
+              size: { height: 800, width: 1200 },
+            },
+          }
         : {}),
     });
     const currentPage = await context.newPage();
@@ -552,7 +550,7 @@ suite.define(() => {
       methodResponses: { "sessions.list": draftSessionsList() },
     });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     const ownDraft = currentPage.locator('[data-session-key="agent:main:ada"]');
     const otherDraft = currentPage.locator('[data-session-key="agent:main:bob"]');
     await ownDraft.waitFor();
@@ -564,21 +562,23 @@ suite.define(() => {
       .poll(() => otherDraft.getAttribute("class"))
       .toContain("session-row-host--draft-other");
     expect(await currentPage.locator(".session-row-draft-indicator").count()).toBe(2);
-    await captureUiProof(currentPage, "01-sidebar-draft-treatment.png");
+    await captureUiProof(suite, currentPage, "01-sidebar-draft-treatment.png");
     await currentPage.evaluate(() =>
       document.documentElement.setAttribute("data-theme-mode", "dark"),
     );
-    await captureUiProof(currentPage, "01-sidebar-draft-treatment-dark.png");
+    await captureUiProof(suite, currentPage, "01-sidebar-draft-treatment-dark.png");
   });
 
   it("creates a draft atomically from the multi-person new-session flow", async () => {
-    if (captureUiProofEnabled) {
-      await mkdir(uiProofArtifactDir, { recursive: true });
-    }
     const context = await suite.browser.newContext({
       viewport: { height: 800, width: 1200 },
       ...(captureUiProofEnabled
-        ? { recordVideo: { dir: uiProofArtifactDir, size: { height: 800, width: 1200 } } }
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "drafts-ux"),
+              size: { height: 800, width: 1200 },
+            },
+          }
         : {}),
     });
     const currentPage = await context.newPage();
@@ -598,11 +598,11 @@ suite.define(() => {
     const draftToggle = currentPage.getByRole("switch", { name: "Draft", exact: true });
     await currentPage.locator(".new-session-page__composer .agent-chat__composer-footer").hover();
     await draftToggle.waitFor();
-    await captureUiProof(currentPage, "02-create-draft-available.png");
+    await captureUiProof(suite, currentPage, "02-create-draft-available.png");
     await draftToggle.check();
     await expectBrowser(draftToggle).toBeChecked();
     await currentPage.locator(".new-session-page__message").fill("work privately first");
-    await captureUiProof(currentPage, "03-create-draft-selected.png");
+    await captureUiProof(suite, currentPage, "03-create-draft-selected.png");
     await currentPage.getByRole("button", { name: "Start session" }).click();
 
     const create = await gateway.waitForRequest("sessions.create");
@@ -614,13 +614,15 @@ suite.define(() => {
   });
 
   it("publishes a draft through the header sharing menu", async () => {
-    if (captureUiProofEnabled) {
-      await mkdir(uiProofArtifactDir, { recursive: true });
-    }
     const context = await suite.browser.newContext({
       viewport: { height: 800, width: 1200 },
       ...(captureUiProofEnabled
-        ? { recordVideo: { dir: uiProofArtifactDir, size: { height: 800, width: 1200 } } }
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "drafts-ux"),
+              size: { height: 800, width: 1200 },
+            },
+          }
         : {}),
     });
     const currentPage = await context.newPage();
@@ -660,12 +662,12 @@ suite.define(() => {
       },
     });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
     await currentPage.getByLabel("Session sharing").click();
     const publish = currentPage.getByText("Publish draft", { exact: true });
     await publish.waitFor();
-    await captureUiProof(currentPage, "04-publish-draft-action.png");
+    await captureUiProof(suite, currentPage, "04-publish-draft-action.png");
     await publish.click();
 
     const request = await gateway.waitForRequest("session.visibility.set");
@@ -696,7 +698,7 @@ suite.define(() => {
       methodResponses: { "sessions.list": sessions },
     });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
     await currentPage.getByRole("button", { name: "Session sharing" }).click();
     const dropdown = currentPage.locator(".chat-pane__sharing-menu");
@@ -753,7 +755,7 @@ suite.define(() => {
       },
     });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
     await currentPage.getByLabel("Session sharing").click();
     await gateway.waitForRequest("session.members.listEvidence");
@@ -869,7 +871,7 @@ suite.define(() => {
       },
     });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
     await currentPage.locator(".chat-pane__sharing-trigger").click();
     await gateway.waitForRequest("session.members.listEvidence");

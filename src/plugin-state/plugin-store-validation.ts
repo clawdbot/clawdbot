@@ -12,6 +12,52 @@ type PluginStoreValidationErrors = {
   limit(message: string): Error;
 };
 
+type PluginStoreOptionSignature = Record<string, string | number | undefined>;
+
+type PluginStoreOptionPolicy<T extends PluginStoreOptionSignature> = {
+  resolveOverflowPolicy(value: unknown): "evict-oldest" | "reject-new";
+  assertConsistent(pluginId: string, namespace: string, signature: T): void;
+  clear(): void;
+};
+
+export function createPluginStoreOptionPolicy<T extends PluginStoreOptionSignature>(params: {
+  label: string;
+  invalid(message: string): Error;
+}): PluginStoreOptionPolicy<T> {
+  const signatures = new Map<string, T>();
+
+  return {
+    resolveOverflowPolicy(value) {
+      if (value === undefined || value === "evict-oldest") {
+        return "evict-oldest";
+      }
+      if (value === "reject-new") {
+        return value;
+      }
+      throw params.invalid(`${params.label} overflowPolicy must be evict-oldest or reject-new`);
+    },
+    assertConsistent(pluginId, namespace, signature) {
+      const key = `${pluginId}\0${namespace}`;
+      const existing = signatures.get(key);
+      if (!existing) {
+        signatures.set(key, signature);
+        return;
+      }
+      const compatible =
+        Object.entries(existing).every(([name, value]) => signature[name] === value) &&
+        Object.entries(signature).every(([name, value]) => existing[name] === value);
+      if (!compatible) {
+        throw params.invalid(
+          `${params.label} namespace ${namespace} for ${pluginId} was reopened with incompatible options`,
+        );
+      }
+    },
+    clear() {
+      signatures.clear();
+    },
+  };
+}
+
 function assertMaxUtf8Bytes(params: {
   label: string;
   value: string;

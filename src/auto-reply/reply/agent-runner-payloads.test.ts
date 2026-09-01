@@ -458,9 +458,27 @@ describe("buildReplyPayloads media filter integration", () => {
   });
 
   it("drops only invalid media when reply media normalization fails", async () => {
-    const normalizeMediaPaths = async (payload: { mediaUrl?: string }) => {
+    const normalizeMediaPaths = async (payload: ReplyPayload) => {
       if (payload.mediaUrl === "./bad.png") {
-        throw new Error("Path escapes sandbox root");
+        return setReplyPayloadMetadata(
+          {
+            ...payload,
+            text: "keep text\n⚠️ bad.png: Delivery failed. Try sending this file again.",
+            mediaUrl: undefined,
+            mediaUrls: undefined,
+            audioAsVoice: false,
+          },
+          {
+            assistantMediaFailures: [
+              {
+                code: "delivery-failed",
+                kind: "image",
+                label: "bad.png",
+                mimeType: "image/png",
+              },
+            ],
+          },
+        );
       }
       return payload;
     };
@@ -475,7 +493,7 @@ describe("buildReplyPayloads media filter integration", () => {
 
     expect(replyPayloads).toHaveLength(2);
     expectFields(replyPayloads[0], {
-      text: "keep text\n⚠️ Media failed. Try sending a smaller supported file or a different format.",
+      text: "keep text\n⚠️ bad.png: Delivery failed. Try sending this file again.",
       mediaUrl: undefined,
       mediaUrls: undefined,
       audioAsVoice: false,
@@ -1187,9 +1205,12 @@ describe("buildReplyPayloads media filter integration", () => {
   });
 
   it("suppresses warning text when silent media payloads fail normalization", async () => {
-    const normalizeMediaPaths = async () => {
-      throw new Error("file not found");
-    };
+    const normalizeMediaPaths = async (payload: ReplyPayload) => ({
+      ...payload,
+      text: "⚠️ missing.png: File not found. Check the path and try again.",
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+    });
 
     const { replyPayloads } = await buildTestReplyPayloads({
       payloads: [{ text: "NO_REPLY\nMEDIA: ./missing.png" }],
@@ -1199,10 +1220,14 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
-  it("surfaces a warning when non-silent media payloads fail normalization", async () => {
-    const normalizeMediaPaths = async () => {
-      throw new Error("file not found");
-    };
+  it("surfaces a named receipt when non-silent media payloads fail normalization", async () => {
+    const normalizeMediaPaths = async (payload: ReplyPayload) => ({
+      ...payload,
+      text: "⚠️ missing.png: File not found. Check the path and try again.",
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+      audioAsVoice: false,
+    });
 
     const { replyPayloads } = await buildTestReplyPayloads({
       payloads: [{ text: "MEDIA: ./missing.png" }],
@@ -1211,7 +1236,7 @@ describe("buildReplyPayloads media filter integration", () => {
 
     expect(replyPayloads).toHaveLength(1);
     expectFields(replyPayloads[0], {
-      text: "⚠️ Media failed. Try sending a smaller supported file or a different format.",
+      text: "⚠️ missing.png: File not found. Check the path and try again.",
       mediaUrl: undefined,
       mediaUrls: undefined,
       audioAsVoice: false,

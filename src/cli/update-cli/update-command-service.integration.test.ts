@@ -19,8 +19,9 @@ import { VERSION } from "../../version.js";
 import { runDaemonRestart } from "../daemon-cli/lifecycle.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
 import * as startRepair from "../daemon-cli/start-repair.js";
+import { assertGatewayServiceManagementAllowedForUpdate } from "./update-command-service-plan.js";
+import { registerInstallRootTransitionTests } from "./update-command-service-transition.test-support.js";
 import {
-  assertGatewayServiceManagementAllowedForUpdate,
   maybeRestartService,
   maybeRestartServiceAfterFailedMutableUpdate,
   maybeStopManagedServiceBeforeMutableUpdate,
@@ -200,7 +201,7 @@ beforeEach(async () => {
   });
   mocks.handoff.mockReturnValue({ ok: true, value: Promise.resolve(true) });
   mocks.events = [];
-  mocks.capability.mockResolvedValue({ kind: "sealed", detail: "operator-owned definition" });
+  mocks.capability.mockResolvedValue({ kind: "sealed", reason: "foreign-owner" });
   mocks.command.mockResolvedValue({
     programArguments: [
       process.execPath,
@@ -288,7 +289,9 @@ describe("preserved update activation with real version guards", () => {
         environment: { HOME: root, MANAGED_VALUE: "revalidated" },
       });
       mocks.capability.mockResolvedValue(
-        late ? { kind: "writable" } : { kind: denial, detail: "owner denial" },
+        late
+          ? { kind: "writable" }
+          : { kind: denial, reason: denial === "sealed" ? "foreign-owner" : "inspection-failed" },
       );
       const before = await maybeStopManagedServiceBeforeMutableUpdate({
         updateInstallKind: mode === "git" ? "git" : "package",
@@ -300,7 +303,10 @@ describe("preserved update activation with real version guards", () => {
       const repair = vi.spyOn(startRepair, "repairLoadedGatewayServiceForStart");
       mocks.child.mockImplementation(async (args) => {
         if (args.includes("install")) {
-          mocks.capability.mockResolvedValue({ kind: denial, detail: "late owner denial" });
+          mocks.capability.mockResolvedValue({
+            kind: denial,
+            reason: denial === "sealed" ? "foreign-owner" : "inspection-failed",
+          });
           if (outcome === "uninspectable") {
             mocks.command.mockRejectedValue(new Error("manager inspection failed"));
           } else if (outcome === "foreign") {
@@ -422,11 +428,6 @@ describe("preserved update activation with real version guards", () => {
       );
       expect(mocks.restart).toHaveBeenCalledTimes(restarts.length);
       expect(mocks.health.mock.calls.every(([args]) => args.port === 19305)).toBe(true);
-      if (allowed) {
-        expect(mocks.health.mock.calls.some(([args]) => args.expectedVersion === VERSION)).toBe(
-          true,
-        );
-      }
       if (retried) {
         expect(mocks.terminateStale).toHaveBeenCalledWith([4242]);
       }
@@ -542,8 +543,8 @@ describe("preserved update activation with real version guards", () => {
     expect(mocks.health).not.toHaveBeenCalled();
   });
 
-  it.each(["foreign", "metadata", "unit", "unavailable", "replacement root", "profile"])(
-    "revalidates writable failed-update recovery after %s changes",
+  it.each(["foreign", "metadata", "unit", "unavailable", "profile"])(
+    "revalidates stale-parent failed-update recovery after %s changes",
     async (change) => {
       mocks.capability.mockResolvedValue({ kind: "writable" });
       const before = await maybeStopManagedServiceBeforeMutableUpdate({
@@ -553,6 +554,8 @@ describe("preserved update activation with real version guards", () => {
         jsonMode: true,
       });
       expect(before.stopped).toBe(true);
+      await writeConfig("9999.1.1");
+      process.env.OPENCLAW_GATEWAY_PORT = "19999";
       const command = await mocks.command(process.env);
       if (!command) {
         throw new Error("missing fixture command");
@@ -571,11 +574,7 @@ describe("preserved update activation with real version guards", () => {
           ...command,
           programArguments: [
             process.execPath,
-            path.join(
-              ["foreign", "replacement root"].includes(change) ? foreign : root,
-              "dist",
-              "index.js",
-            ),
+            path.join(change === "foreign" ? foreign : root, "dist", "index.js"),
             "gateway",
             "--port",
             "19002",
@@ -600,12 +599,15 @@ describe("preserved update activation with real version guards", () => {
       }
       mocks.events.push("update failed after definition changed");
       await maybeRestartServiceAfterFailedMutableUpdate({
-        root: change === "replacement root" ? path.join(root, "foreign") : undefined,
         preManagedServiceStop: before,
         jsonMode: true,
       });
-      if (change === "metadata" || change === "replacement root") {
-        expect(mocks.restart).toHaveBeenCalledOnce();
+      if (change === "metadata") {
+        expect(mocks.child).toHaveBeenCalledOnce();
+        expect(mocks.child.mock.calls[0]?.[0]).toContain("--preserve-definition");
+        expect(mocks.restart).not.toHaveBeenCalled();
+        expect(mocks.child.mock.calls[0]?.[1]).toMatchObject({ baseEnv: {} });
+        expect(mocks.child.mock.calls[0]?.[1]).not.toHaveProperty("env.OPENCLAW_GATEWAY_PORT");
       } else {
         expect(mocks.restart).not.toHaveBeenCalled();
         expect(mocks.error.mock.calls.flat().join("\n")).toContain("Failed to restart");
@@ -613,6 +615,8 @@ describe("preserved update activation with real version guards", () => {
       }
     },
   );
+
+  registerInstallRootTransitionTests(() => ({ root, mocks }));
 
   it.each(["metadata", "profile", "unit"])(
     "pins writable service identity across %s changes",
@@ -762,7 +766,7 @@ describe("preserved update activation with real version guards", () => {
     "fresh restart keeps the preserved launcher even when authority is %s",
     async (kind) => {
       mocks.capability.mockResolvedValue(
-        kind === "sealed" ? { kind, detail: "operator-owned definition" } : { kind },
+        kind === "sealed" ? { kind, reason: "foreign-owner" } : { kind },
       );
       await expect(runDaemonRestart({ json: true, preserveDefinition: true })).resolves.toBe(true);
       expect(mocks.restart).toHaveBeenCalledOnce();

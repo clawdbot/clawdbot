@@ -47,12 +47,6 @@ wa-radio-group.settings-segmented::part(form-control-label) {
   clip: rect(0, 0, 0, 0);
 }
 
-wa-radio-group.settings-segmented::part(radios) {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px;
-}
-
 .settings-segmented__btn {
   font-size: var(--control-ui-text-sm);
   font-weight: 550;

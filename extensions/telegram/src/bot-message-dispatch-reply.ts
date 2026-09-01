@@ -162,6 +162,7 @@ async function flushBufferedFinalAnswer(turn: Turn, currentPayloadVisible = fals
       controls.payload.text ?? "",
       controls.buttons,
       settlement?.onPlatformSendDispatch,
+      settlement?.assertPlatformSendAuthorized,
       settlement?.bindPendingFinalDelivery,
     );
     if (settlement) {
@@ -307,6 +308,7 @@ export async function deliverReply(
       turn.bufferedFinalSettlement = {
         visibleReplySent: blockDelivered,
         onPlatformSendDispatch: info.onPlatformSendDispatch,
+        assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
         bindPendingFinalDelivery: info.bindPendingFinalDelivery,
         resolve: resolveFinalization,
         reject: rejectFinalization,
@@ -417,6 +419,7 @@ export async function deliverReply(
             segment.update.text,
             telegramButtons,
             info.onPlatformSendDispatch,
+            info.assertPlatformSendAuthorized,
             info.bindPendingFinalDelivery,
           )
         : await turn.deliverLaneText({
@@ -428,6 +431,7 @@ export async function deliverReply(
             ...(isAskUserPayload ? { finalizePreview: true } : {}),
             allowStream: !isDurableProgressCommentary,
             onPlatformSendDispatch: info.onPlatformSendDispatch,
+            assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
             bindPendingFinalDelivery: info.bindPendingFinalDelivery,
           });
     const finalizedPreview =
@@ -484,6 +488,7 @@ export async function deliverReply(
       delivered = await sendPayload(turn, payloadWithoutReasoning, {
         durable: info.kind === "final",
         onPlatformSendDispatch: info.onPlatformSendDispatch,
+        assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
         bindPendingFinalDelivery: info.bindPendingFinalDelivery,
       });
     }
@@ -506,6 +511,7 @@ export async function deliverReply(
   const delivered = await sendPayload(turn, effectivePayload, {
     durable: info.kind === "final",
     onPlatformSendDispatch: info.onPlatformSendDispatch,
+    assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
     bindPendingFinalDelivery: info.bindPendingFinalDelivery,
   });
   if (info.kind === "final" && delivered) {

@@ -15,6 +15,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { TranscriptNotContinuableError } from "./errors.js";
 import { uuidv7 } from "./harness/session/uuid.js";
 import {
+  copyInternalToolResultState,
   getInternalToolExecutionPreparer,
   getInternalSyncSteeringGetter,
   type InternalToolExecutionPreparation,
@@ -232,13 +233,27 @@ async function runAgentLoopCore(
   streamFn?: StreamFn,
   runtime?: AgentCoreStreamRuntimeDeps,
 ): Promise<AgentMessage[]> {
-  const newMessages = [...prompts];
-  const currentContext = { ...context, messages: [...context.messages, ...prompts] };
+  const newMessages: AgentMessage[] = [];
+  const currentContext = { ...context, messages: [...context.messages] };
   await emit({ type: "agent_start" });
   await emit({ type: "turn_start" });
   for (const prompt of prompts) {
+    if (config.consumeQueuedMessageCancellation?.(prompt)) {
+      continue;
+    }
     await emit({ type: "message_start", message: prompt });
+    if (config.consumeQueuedMessageCancellation?.(prompt)) {
+      continue;
+    }
     await emit({ type: "message_end", message: prompt });
+    currentContext.messages.push(prompt);
+    newMessages.push(prompt);
+  }
+  if (prompts.length > 0 && newMessages.length === 0) {
+    // A drained queue batch can be cancelled while turn_start listeners settle.
+    // Close without a provider call so cancelled input cannot become an empty continuation.
+    await emit({ type: "agent_end", messages: [] });
+    return [];
   }
   await runLoop(currentContext, newMessages, config, signal, emit, streamFn, runtime);
   return newMessages;
@@ -347,15 +362,28 @@ async function runLoop(
       // Process pending messages (inject before next assistant response)
       if (pendingMessages.length > 0) {
         const messagesToInject = pendingMessages;
+        let injectedMessage = false;
         pendingMessages = [];
         for (const message of messagesToInject) {
+          if (config.consumeQueuedMessageCancellation?.(message)) {
+            continue;
+          }
+          await emit({ type: "message_start", message });
+          if (config.consumeQueuedMessageCancellation?.(message)) {
+            continue;
+          }
           if (message.role === "user") {
             turnTainted = false;
           }
-          await emit({ type: "message_start", message });
           await emit({ type: "message_end", message });
           currentContext.messages.push(message);
           newMessages.push(message);
+          injectedMessage = true;
+        }
+        if (!injectedMessage && !hasMoreToolCalls) {
+          // The entire drained batch was cancelled before transcript commit.
+          // Re-evaluate the loop instead of issuing an empty provider continuation.
+          continue;
         }
       }
 
@@ -1572,12 +1600,12 @@ async function finalizeExecutedToolCall(
         batch.signal,
       );
       if (afterResult) {
-        result = {
+        result = copyInternalToolResultState(result, {
           ...result,
           content: afterResult.content ?? result.content,
           details: afterResult.details ?? result.details,
           terminate: afterResult.terminate ?? result.terminate,
-        };
+        });
         isError = afterResult.isError ?? isError;
       }
     } catch (error) {
@@ -1631,12 +1659,12 @@ async function finalizeToolCallOutcome(
     }
     return {
       ...finalized,
-      result: {
+      result: copyInternalToolResultState(finalized.result, {
         ...finalized.result,
         content: afterResult.content ?? finalized.result.content,
         details: afterResult.details ?? finalized.result.details,
         terminate: afterResult.terminate ?? finalized.result.terminate,
-      },
+      }),
       isError: afterResult.isError ?? finalized.isError,
     };
   } catch (error) {
@@ -1790,17 +1818,20 @@ async function emitToolExecutionEnd(
 }
 
 function createToolResultMessage(finalized: FinalizedToolCallOutcome): ToolResultMessage {
-  return withToolResultContentSource(
-    {
-      role: "toolResult",
-      toolCallId: finalized.toolCall.id,
-      toolName: finalized.toolCall.name,
-      content: finalized.result.content ?? [],
-      details: finalized.result.details,
-      isError: finalized.isError,
-      timestamp: Date.now(),
-    },
-    finalized.resultContentSource,
+  return copyInternalToolResultState(
+    finalized.result,
+    withToolResultContentSource(
+      {
+        role: "toolResult",
+        toolCallId: finalized.toolCall.id,
+        toolName: finalized.toolCall.name,
+        content: finalized.result.content ?? [],
+        details: finalized.result.details,
+        isError: finalized.isError,
+        timestamp: Date.now(),
+      },
+      finalized.resultContentSource,
+    ),
   );
 }
 

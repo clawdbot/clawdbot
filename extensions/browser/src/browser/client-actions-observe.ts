@@ -7,7 +7,11 @@
 import type { BrowserActionPathResult } from "./client-actions-types.js";
 import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
 import { fetchBrowserJson } from "./client-fetch.js";
-import type { BrowserConsoleMessage, BrowserNetworkRequest } from "./pw-session.js";
+import type {
+  BrowserConsoleMessage,
+  BrowserNetworkRequest,
+  BrowserPageError,
+} from "./pw-session.js";
 
 function buildQuerySuffix(params: Array<[string, string | boolean | undefined]>): string {
   const query = new URLSearchParams();
@@ -60,6 +64,27 @@ export async function browserRequests(
     ["profile", opts.profile],
   ]);
   return await fetchBrowserJson(withBaseUrl(baseUrl, `/requests${suffix}`), {
+    timeoutMs: 20000,
+    signal: opts.signal,
+  });
+}
+
+/** Read the collected page error log for a tab. */
+export async function browserErrors(
+  baseUrl: string | undefined,
+  opts: {
+    clear?: boolean;
+    targetId?: string;
+    profile?: string;
+    signal?: AbortSignal;
+  } = {},
+): Promise<{ ok: true; errors: BrowserPageError[]; targetId: string; url?: string }> {
+  const suffix = buildQuerySuffix([
+    ["clear", opts.clear],
+    ["targetId", opts.targetId],
+    ["profile", opts.profile],
+  ]);
+  return await fetchBrowserJson(withBaseUrl(baseUrl, `/errors${suffix}`), {
     timeoutMs: 20000,
     signal: opts.signal,
   });

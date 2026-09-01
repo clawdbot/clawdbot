@@ -378,20 +378,27 @@ describe("generic plugin-owned live session registry", () => {
 
   it("admits only local plugin-owned structured execution to reusable sessions", () => {
     const eligible = buildPreparedCliRunContext({ backend: { liveSession: "claude-stdio" } });
-    eligible.preparedBackend.execute = async function* () {
-      yield { type: "result" };
+    eligible.executionTarget = {
+      kind: "plugin",
+      async *execute() {
+        yield { type: "result" };
+      },
     };
 
     expect(acceptsCliLiveSession(eligible)).toBe(true);
 
     const node = buildPreparedCliRunContext({
       backend: { liveSession: "claude-stdio" },
-      sessionEntry: { sessionId: "node-session", updatedAt: 1, execHost: "node" },
+      sessionEntry: {
+        sessionId: "node-session",
+        updatedAt: 1,
+        execHost: "node",
+        execNode: "node-test",
+      },
     });
-    node.preparedBackend.execute = eligible.preparedBackend.execute;
     expect(acceptsCliLiveSession(node)).toBe(false);
 
-    delete eligible.preparedBackend.execute;
+    eligible.executionTarget = { kind: "process" };
     expect(acceptsCliLiveSession(eligible)).toBe(false);
   });
 });

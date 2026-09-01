@@ -1121,6 +1121,27 @@ describe("Discord native plugin command dispatch", () => {
     expect(interaction.deleteReply).not.toHaveBeenCalled();
   });
 
+  it("settles an accepted active-run steer without an empty warning", async () => {
+    const cfg = createConfig();
+    const interaction = createInteraction();
+    runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue({
+      counts: { final: 0, block: 0, tool: 0 },
+      queuedFinal: false,
+      deferredToActiveRun: "steer",
+    } as never);
+    const command = await createNativeCommand(cfg, {
+      name: "steer",
+      description: "Steer an active run.",
+      acceptsArgs: true,
+    });
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(interaction.followUp).not.toHaveBeenCalled();
+    expect(interaction.reply).not.toHaveBeenCalled();
+    expect(interaction.deleteReply).toHaveBeenCalledTimes(1);
+  });
+
   it("warns when the inbound turn is dropped before dispatch", async () => {
     const cfg = createConfig();
     const interaction = createInteraction();

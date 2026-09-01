@@ -1,6 +1,8 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import { resolveSandboxToolPolicyForAgent } from "../../agents/sandbox/tool-policy.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
+import { withSessionPlacementComputer } from "../../agents/session-placement-computer.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
@@ -8,6 +10,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import type { PreparedWorkerComputer } from "./computer-transport.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
@@ -16,6 +19,7 @@ import type {
 import type { WorkerEnvironmentService } from "./service.js";
 import { WorkerTunnelOwnerDisconnectedError, type WorkerTunnelHandle } from "./tunnel-contract.js";
 import { latestDurableWorkspaceConflict, waitForTurnOperation } from "./worker-turn-admission.js";
+import { prepareWorkerTurnAttachments } from "./worker-turn-attachments.js";
 import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 import {
   formatWorkspaceConflictSummary,
@@ -36,7 +40,8 @@ import {
 
 type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "active" }>;
 type OwnedWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "active" | "draining" }>;
-type RemoteExecEnvironmentService = Pick<WorkerEnvironmentService, "get" | "startTunnel">;
+type RemoteExecEnvironmentService = Pick<WorkerEnvironmentService, "get" | "startTunnel"> &
+  Partial<Pick<WorkerEnvironmentService, "prepareComputer">>;
 
 export class WorkerWorkspaceReconciliationError extends Error {
   override name = "WorkerWorkspaceReconciliationError";
@@ -54,6 +59,25 @@ function workspaceError(error: unknown): string {
     .replace(/\s+/gu, " ")
     .trim();
   return truncateUtf16Safe(message || "cloud worker turn failed", 1_024);
+}
+
+function remoteExecWorkspaceFailure(executionError: unknown, reconciliationError: unknown): Error {
+  const executionMessage = formatErrorMessage(executionError);
+  const reconciliationDetail =
+    reconciliationError instanceof WorkerWorkspaceReconciliationError &&
+    reconciliationError.cause !== undefined
+      ? reconciliationError.cause
+      : reconciliationError;
+  const reconciliationFailure = new WorkerWorkspaceReconciliationError(
+    workspaceError(reconciliationDetail),
+    { cause: reconciliationDetail },
+  );
+  return new Error(
+    `${executionMessage}\n\nWorkspace recovery also failed: ${reconciliationFailure.message}. ` +
+      "Remote changes may not have been applied locally. Resolve the workspace error, then retry.",
+    // Keep the typed reconciliation failure discoverable so model fallback cannot replay the turn.
+    { cause: reconciliationFailure },
+  );
 }
 
 function workspaceJournal(params: {
@@ -315,12 +339,37 @@ export async function executeRemoteExecTurn(params: {
     timeoutMs: params.turn.timeoutMs,
   });
   const transcriptTarget = resolveWorkerTurnTranscriptTarget(params.turn);
+  const attachmentNote = await prepareWorkerTurnAttachments({
+    turn: params.turn,
+    tunnel,
+    remoteWorkspaceDir: params.placement.remoteWorkspaceDir,
+    assertCurrent: () => {
+      if (!params.placements.validateTurnClaim(params.turnClaim)) {
+        throw new Error("Cloud attachment transfer lost its turn claim");
+      }
+    },
+  });
   params.placements.markWorkspaceResultPending(params.turnClaim);
   params.onHandoff();
   let result: EmbeddedAgentRunResult | undefined;
   let executionError: unknown;
   let executionActive = true;
+  const originalPrompt = params.turn.prompt;
+  const originalTranscriptPrompt = params.turn.transcriptPrompt;
+  let computer: PreparedWorkerComputer | undefined;
   try {
+    computer = await params.environments.prepareComputer?.(params.turnClaim);
+    const sandboxToolPolicy = resolveSandboxToolPolicyForAgent(
+      params.turn.config,
+      params.placement.agentId,
+      {
+        containedToolNames: computer ? ["computer"] : [],
+      },
+    );
+    if (attachmentNote) {
+      params.turn.transcriptPrompt ??= originalPrompt;
+      params.turn.prompt = `${originalPrompt}\n\n${attachmentNote}`;
+    }
     result = await withPluginRuntimeGatewayRequestScope(
       {
         isWebchatConnect: () => false,
@@ -359,12 +408,29 @@ export async function executeRemoteExecTurn(params: {
           }
         },
       },
-      params.runLocal,
+      () =>
+        withSessionPlacementComputer(
+          {
+            runId: params.turnClaim.runId,
+            agentId: params.placement.agentId,
+            isActive: () => executionActive,
+            sandboxToolPolicy: computer ? sandboxToolPolicy : undefined,
+            bind: (run) => (computer ? computer.bind(run) : null),
+          },
+          params.runLocal,
+        ),
     );
   } catch (error) {
     executionError = error;
   } finally {
     executionActive = false;
+    params.turn.prompt = originalPrompt;
+    params.turn.transcriptPrompt = originalTranscriptPrompt;
+    try {
+      await computer?.close("turn-complete");
+    } catch (error) {
+      executionError ??= error;
+    }
   }
   const workspaceConflict = await reconcileWorkspaceAfterTurn({
     placement: params.placement,
@@ -400,8 +466,7 @@ export async function executeRemoteExecTurn(params: {
       });
     }
     if (executionError) {
-      // Preserve the terminal execution failure while retaining the independent workspace loss.
-      throw new Error(formatErrorMessage(executionError), { cause: reconciliationError });
+      throw remoteExecWorkspaceFailure(executionError, reconciliationError);
     }
     throw reconciliationError;
   });

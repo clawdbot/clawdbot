@@ -153,12 +153,9 @@ export async function repairLoadedGatewayServiceForStart(
   // Repair can persist a generated token; check definition authority before planning it.
   const capability = await params.service
     .readDefinitionMutationCapability?.({ env: process.env, environment: params.state.env })
-    .catch(() => ({ kind: "unknown" as const, detail: "" }));
-  if (capability && capability.kind !== "writable") {
-    assertServiceDefinitionWritable({
-      kind: capability.kind,
-      detail: "Service definition cannot be safely modified.",
-    });
+    .catch(() => ({ kind: "unknown", reason: "inspection-failed" }) as const);
+  if (capability) {
+    assertServiceDefinitionWritable(capability);
   }
   if (
     hasGatewayServiceLauncherOverride(params.state.command) ||

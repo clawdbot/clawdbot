@@ -56,8 +56,15 @@ function canAdvancePreparedModelRuntimeConfigInPlace(plan: GatewayReloadPlan): b
 export function startManagedGatewayConfigReloader(
   params: ManagedGatewayConfigReloaderParams,
 ): ManagedGatewayConfigReloaderHandle {
+  let stopped = false;
   if (params.minimalTestGateway) {
-    return { stop: async () => {}, notifyPluginMetadataChanged: () => {} };
+    return {
+      stop: async () => {
+        stopped = true;
+      },
+      notifyPluginMetadataChanged: () => {},
+      isConfigReloadSettled: () => !stopped,
+    };
   }
 
   const prepareRuntimeCandidate = (
@@ -80,7 +87,6 @@ export function startManagedGatewayConfigReloader(
   const restartRecoveryAvailable =
     params.restartRecoveryAvailable !== false && params.requestRecoveryRestart !== undefined;
 
-  let stopped = false;
   const tryPrepareRuntimeSecrets = async (
     config: OpenClawConfig,
     transactionOwnership: GatewayConfigReloadTransactionOwnership,
@@ -134,6 +140,7 @@ export function startManagedGatewayConfigReloader(
     acceptRestartConfig,
     beginGatewayRestartLifecycle,
     hasOutstandingGatewayRestart,
+    hasConfigCandidatePending,
     pauseGatewayRestartForConfigCandidate,
     publishAppliedConfigHash,
     publishAcceptedRestartTarget,
@@ -326,13 +333,12 @@ export function startManagedGatewayConfigReloader(
     }
   };
 
-  const { onEffectiveConfigUnchanged, onHotReload, onNoopConfigCommit } =
-    createManagedReloadSecretHandlers({
-      params,
-      prepareRuntimeCandidate,
-      tryPrepareRuntimeSecrets,
-      applyHotReload,
-    });
+  const { onEffectiveConfigUnchanged, onHotReload } = createManagedReloadSecretHandlers({
+    params,
+    prepareRuntimeCandidate,
+    tryPrepareRuntimeSecrets,
+    applyHotReload,
+  });
 
   let lastCommittedRuntimeConfig: OpenClawConfig | undefined;
   const configReloader = startGatewayConfigReloader({
@@ -373,7 +379,7 @@ export function startManagedGatewayConfigReloader(
       ? { prepareConfigCandidate: params.prepareConfigCandidate }
       : {}),
     initialInternalWriteHash: params.initialInternalWriteHash,
-    runTransaction: runWithGatewayIndependentRootWorkAdmission,
+    runTransaction: (run) => runWithGatewayIndependentRootWorkAdmission(run, "reload:config"),
     readSnapshot: params.readSnapshot,
     promoteSnapshot: async (snapshot, _reason) => await params.promoteSnapshot(snapshot),
     subscribeToWrites: params.subscribeToWrites,
@@ -495,8 +501,8 @@ export function startManagedGatewayConfigReloader(
       // Cleared per transaction so a rebuild can never inherit a config committed
       // by an earlier one when this commit does not reach markRuntimeCommitted.
       lastCommittedRuntimeConfig = undefined;
-      await onNoopConfigCommit(plan, nextConfig, ownership, sourceConfig);
-      if (!canAdvancePreparedModelRuntimeConfigInPlace(plan)) {
+      const applicationStatus = await onHotReload(plan, nextConfig, ownership, sourceConfig);
+      if (isNoopGatewayReloadPlan(plan) && !canAdvancePreparedModelRuntimeConfigInPlace(plan)) {
         // Rebuild against the committed runtime config, not the source-derived
         // candidate. `secrets.providers.*` resolves to a different object, and
         // stamping the rebuilt owner with the pre-resolution identity makes every
@@ -509,6 +515,7 @@ export function startManagedGatewayConfigReloader(
           ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
         });
       }
+      return applicationStatus;
     },
     onHotReload,
     onRestart: runManagedRestart,
@@ -530,5 +537,8 @@ export function startManagedGatewayConfigReloader(
     },
     hotReloadStatus: configReloader.hotReloadStatus,
     notifyPluginMetadataChanged: configReloader.notifyPluginMetadataChanged,
+    // Equal config revisions can still owe a plugin/runtime restart.
+    isConfigReloadSettled: () =>
+      !stopped && !hasConfigCandidatePending() && !hasOutstandingGatewayRestart(),
   };
 }

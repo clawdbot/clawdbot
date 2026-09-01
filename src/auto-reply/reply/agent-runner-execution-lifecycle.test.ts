@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
+import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import {
   clearActiveEmbeddedRun,
   isEmbeddedAgentRunActive,
@@ -37,13 +39,28 @@ import type {
 import {
   createReplyOperation,
   hasReplyOperationExecutionStarted,
+  replyRunRegistry,
   type ReplyOperation,
 } from "./reply-run-registry.js";
 
 const state = setupAgentRunnerExecutionTestState();
+const compactionTarget = {
+  agentId: "main",
+  sessionId: "session",
+  sessionKey: "agent:main:main",
+  storePath: "/tmp/compaction-accounting.sqlite",
+  lifecycleRevision: "generation-1",
+  activeWriterRunId: "run-compaction",
+};
 
 describe("executeAgentTurn: run lifecycle and ownership", () => {
-  it("releases a deferred owner when restart escapes candidate execution", async () => {
+  it("releases a deferred owner and retains private compaction facts when restart escapes", async () => {
+    const fact: CompactionAccountingFact = {
+      kind: "durable",
+      count: 1,
+      currentContextSnapshot: { tokens: 40 },
+      target: { ...compactionTarget, sessionId: "accepted-successor" },
+    };
     const sessionId = "session";
     const sessionKey = "agent:main:main";
     const handle: EmbeddedAgentQueueHandle = {
@@ -59,6 +76,8 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
         complete: async () => clearActiveEmbeddedRun(sessionId, handle, sessionKey),
         discard: () => clearActiveEmbeddedRun(sessionId, handle, sessionKey),
       });
+      expect(params.onCompactionAccounting).toEqual(expect.any(Function));
+      params.onCompactionAccounting?.(fact);
       throw createAgentRunRestartAbortError();
     });
 
@@ -66,8 +85,28 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       const { executeAgentTurn } = await import("./agent-runner-execution.js");
       const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
 
-      expect(result.outcome).toEqual({ kind: "aborted", reason: "restart" });
+      expect(result.outcome).toEqual({
+        kind: "aborted",
+        reason: "restart",
+        compaction: { count: 1, durable: [fact] },
+      });
       expect(isEmbeddedAgentRunActive(sessionId)).toBe(false);
+      const { emitAgentEvent } = await import("../../infra/agent-events.js");
+      const terminals = vi
+        .mocked(emitAgentEvent)
+        .mock.calls.map(([event]) => event)
+        .filter(
+          (event) =>
+            event.runId === result.runId &&
+            event.stream === "lifecycle" &&
+            (event.data.phase === "end" || event.data.phase === "error"),
+        );
+      expect(terminals).toHaveLength(1);
+      expect(terminals[0]?.data).toMatchObject({
+        phase: "end",
+        aborted: true,
+        stopReason: "restart",
+      });
     } finally {
       clearActiveEmbeddedRun(sessionId, handle, sessionKey);
     }
@@ -349,19 +388,10 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     const { replyOperation, freezeAbortMock } = createMockReplyOperation();
     const abortController = new AbortController();
     let operationResult: ReplyOperation["result"] = null;
-    let releaseFallback: () => void = () => undefined;
-    let markCandidateSettled: () => void = () => undefined;
-    const candidateSettled = new Promise<void>((resolve) => {
-      markCandidateSettled = resolve;
-    });
-    const fallbackRelease = new Promise<void>((resolve) => {
-      releaseFallback = resolve;
-    });
-    let releaseToolTask: () => void = () => undefined;
-    const pendingToolTask = new Promise<void>((resolve) => {
-      releaseToolTask = resolve;
-    });
-    const pendingToolTasks = new Set([pendingToolTask]);
+    const candidateSettled = createDeferred();
+    const fallbackRelease = createDeferred();
+    const pendingToolTask = createDeferred();
+    const pendingToolTasks = new Set([pendingToolTask.promise]);
     Object.defineProperty(replyOperation, "abortSignal", {
       configurable: true,
       get: () => abortController.signal,
@@ -381,8 +411,8 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       const result = await params.run("anthropic", "claude", initialFallbackAttemptOptions(params));
-      markCandidateSettled();
-      await fallbackRelease;
+      candidateSettled.resolve();
+      await fallbackRelease.promise;
       return {
         result,
         provider: "anthropic",
@@ -397,19 +427,19 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       replyOperation,
       pendingToolTasks,
     });
-    await candidateSettled;
+    await candidateSettled.promise;
     expect(replyOperation.abortByUser()).toBe(true);
     let settled = false;
     void pending.then(() => {
       settled = true;
     });
-    releaseFallback();
+    fallbackRelease.resolve();
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
     expect(settled).toBe(false);
     expect(freezeAbortMock).not.toHaveBeenCalled();
-    releaseToolTask();
+    pendingToolTask.resolve();
 
     await expect(pending).resolves.toEqual({
       kind: "final",
@@ -418,113 +448,190 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     expect(freezeAbortMock).toHaveBeenCalledTimes(1);
   });
 
-  it("suppresses a settled fallback result after an upstream abort", async () => {
-    const upstreamAbort = new AbortController();
-    const replyOperation = createReplyOperation({
-      sessionKey: "agent:main:upstream-settled-fallback",
-      sessionId: "upstream-settled-fallback",
-      resetTriggered: false,
-      upstreamAbortSignal: upstreamAbort.signal,
-    });
-    replyOperation.setPhase("running");
-    let releaseFallback: () => void = () => undefined;
-    let markCandidateSettled: () => void = () => undefined;
-    const candidateSettled = new Promise<void>((resolve) => {
-      markCandidateSettled = resolve;
-    });
-    const fallbackRelease = new Promise<void>((resolve) => {
-      releaseFallback = resolve;
-    });
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "late reply" }],
-      meta: {},
-    });
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const result = await params.run("anthropic", "claude", initialFallbackAttemptOptions(params));
-      markCandidateSettled();
-      await fallbackRelease;
-      return {
-        result,
-        provider: "anthropic",
-        model: "claude",
-        attempts: [],
-      };
-    });
-
-    try {
-      const executeAgentTurn = await getExecuteAgentTurnForTest();
-      const pending = executeAgentTurn({
-        ...createMinimalRunAgentTurnParams(),
-        replyOperation,
+  it.each([
+    { reason: "user", compactions: 0 },
+    { reason: "restart", compactions: 0 },
+    { reason: "user", compactions: 1 },
+    { reason: "restart", compactions: 1 },
+  ] as const)(
+    "preserves $compactions completed compactions without a reply after $reason abort",
+    async ({ reason, compactions }) => {
+      const upstreamAbort = new AbortController();
+      const replyOperation = createReplyOperation({
+        sessionKey: "agent:main:upstream-settled-fallback",
+        sessionId: "session",
+        resetTriggered: false,
+        upstreamAbortSignal: upstreamAbort.signal,
       });
-      await candidateSettled;
-      upstreamAbort.abort(new Error("caller cancelled"));
-      expect(replyOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
-      expect(replyOperation.abortSignal.aborted).toBe(true);
-      releaseFallback();
-
-      await expect(pending).resolves.toEqual({
-        kind: "final",
-        payload: { text: SILENT_REPLY_TOKEN },
-      });
-    } finally {
-      replyOperation.complete();
-    }
-  });
-
-  it("preserves restart reply classification after an upstream abort settles fallback", async () => {
-    const upstreamAbort = new AbortController();
-    const replyOperation = createReplyOperation({
-      sessionKey: "agent:main:upstream-settled-restart",
-      sessionId: "upstream-settled-restart",
-      resetTriggered: false,
-      upstreamAbortSignal: upstreamAbort.signal,
-    });
-    replyOperation.setPhase("running");
-    let releaseFallback: () => void = () => undefined;
-    let markCandidateSettled: () => void = () => undefined;
-    const candidateSettled = new Promise<void>((resolve) => {
-      markCandidateSettled = resolve;
-    });
-    const fallbackRelease = new Promise<void>((resolve) => {
-      releaseFallback = resolve;
-    });
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "late reply" }],
-      meta: {},
-    });
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const result = await params.run("anthropic", "claude", initialFallbackAttemptOptions(params));
-      markCandidateSettled();
-      await fallbackRelease;
-      return {
-        result,
-        provider: "anthropic",
-        model: "claude",
-        attempts: [],
-      };
-    });
-
-    try {
-      const executeAgentTurn = await getExecuteAgentTurnForTest();
-      const pending = executeAgentTurn({
-        ...createMinimalRunAgentTurnParams(),
-        replyOperation,
-      });
-      await candidateSettled;
-      upstreamAbort.abort(createAgentRunRestartAbortError());
-      releaseFallback();
-
-      await expect(pending).resolves.toEqual({
-        kind: "final",
-        payload: {
-          text: SILENT_REPLY_TOKEN,
+      replyOperation.setPhase("running");
+      const candidateSettled = createDeferred();
+      const fallbackRelease = createDeferred();
+      state.runEmbeddedAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "late reply" }],
+        meta: {
+          agentMeta: {
+            sessionId: "session",
+            provider: "anthropic",
+            model: "claude",
+            compactionCount: compactions,
+            ...(compactions > 0 ? { compactionTokensAfter: 40 } : {}),
+          },
         },
       });
-    } finally {
-      replyOperation.complete();
-    }
-  });
+      state.runWithModelFallbackMock.mockImplementationOnce(
+        async (params: FallbackRunnerParams) => {
+          const result = await params.run(
+            "anthropic",
+            "claude",
+            initialFallbackAttemptOptions(params),
+          );
+          candidateSettled.resolve();
+          await fallbackRelease.promise;
+          return { result, provider: "anthropic", model: "claude", attempts: [] };
+        },
+      );
+
+      try {
+        const { executeAgentTurn } = await import("./agent-runner-execution.js");
+        const params = createMinimalRunAgentTurnParams({ replyOperation });
+        params.followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+        const pending = executeAgentTurn(params);
+        await candidateSettled.promise;
+        upstreamAbort.abort(
+          reason === "restart" ? createAgentRunRestartAbortError() : new Error("caller cancelled"),
+        );
+        const expectedAbortResult = {
+          kind: "aborted",
+          code: reason === "restart" ? "aborted_for_restart" : "aborted_by_user",
+        };
+        expect(replyOperation.abortSignal.aborted).toBe(true);
+        expect(replyOperation.result).toEqual(expectedAbortResult);
+        expect(replyRunRegistry.get(replyOperation.key)).toBe(replyOperation);
+        fallbackRelease.resolve();
+
+        expect((await pending).outcome).toEqual({
+          kind: "aborted",
+          reason,
+          ...(compactions > 0 ? { compaction: { count: compactions, durable: [] } } : {}),
+        });
+        expect(replyOperation.result).toEqual(expectedAbortResult);
+        expect(replyRunRegistry.get(replyOperation.key)).toBe(replyOperation);
+        expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+        expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledWith(
+          expect.objectContaining({ outcome: "mute", runStatus: "aborted" }),
+        );
+      } finally {
+        fallbackRelease.resolve();
+        replyOperation.complete();
+      }
+      expect(replyRunRegistry.get(replyOperation.key)).toBeUndefined();
+    },
+  );
+
+  it.each([
+    { name: "same-owner model", owner: "same", currentContextSnapshot: { tokens: 120 } },
+    { name: "same-owner zero", owner: "same", currentContextSnapshot: { tokens: 0 } },
+    { name: "same-owner unknown", owner: "same", currentContextSnapshot: { tokens: undefined } },
+    { name: "same-owner custody-only", owner: "same", currentContextSnapshot: undefined },
+    { name: "unrelated writer", owner: "different", currentContextSnapshot: { tokens: 999 } },
+    { name: "opaque candidate", owner: "opaque", currentContextSnapshot: undefined },
+  ] as const)(
+    "aggregates fallback counts without borrowing $name context",
+    async ({ owner, currentContextSnapshot }) => {
+      const first: CompactionAccountingFact = {
+        kind: "durable",
+        count: 1,
+        currentContextSnapshot: { tokens: 80 },
+        target: compactionTarget,
+      };
+      const successor: CompactionAccountingFact = {
+        kind: "durable",
+        count: 3,
+        currentContextSnapshot: { tokens: 40 },
+        target: { ...compactionTarget, sessionId: "successor" },
+      };
+      const otherWriter: CompactionAccountingFact = {
+        kind: "durable",
+        count: 1,
+        currentContextSnapshot: { tokens: 20 },
+        target: { ...compactionTarget, sessionId: "successor", activeWriterRunId: "other-writer" },
+      };
+      const latest: CompactionAccountingFact = {
+        kind: "durable",
+        count: 1,
+        currentContextSnapshot: { tokens: 10 },
+        target: { ...compactionTarget, sessionId: "latest-successor" },
+      };
+      const modelOnly: CompactionAccountingFact | undefined =
+        owner === "opaque"
+          ? undefined
+          : {
+              kind: "durable",
+              count: 0,
+              ...(currentContextSnapshot ? { currentContextSnapshot } : {}),
+              target: {
+                ...latest.target,
+                activeWriterRunId:
+                  owner === "different" ? "unrelated-writer" : compactionTarget.activeWriterRunId,
+              },
+            };
+      const facts = [first, undefined, successor, otherWriter, latest, undefined, modelOnly];
+      for (const [index, fact] of facts.entries()) {
+        state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+          if (fact) {
+            expect(params.onCompactionAccounting).toEqual(expect.any(Function));
+            params.onCompactionAccounting?.(fact);
+          }
+          return {
+            payloads: [{ text: "done" }],
+            meta: {
+              agentMeta: {
+                compactionCount: fact ? 99 : index === 1 ? 2 : 0,
+                lastCallUsage: { input: 777 },
+                sessionId: "untrusted-model-id",
+              },
+            },
+          };
+        });
+      }
+      state.runWithModelFallbackMock.mockImplementationOnce(
+        async (params: FallbackRunnerParams) => {
+          let result = await params.run(
+            "anthropic",
+            "primary",
+            initialFallbackAttemptOptions(params),
+          );
+          for (let index = 1; index < facts.length; index += 1) {
+            result = await params.run(
+              "anthropic",
+              `fallback-${index}`,
+              fallbackAttemptOptions(params, "unknown"),
+            );
+          }
+          return { result, provider: "anthropic", model: "fallback-6", attempts: [] };
+        },
+      );
+
+      const { executeAgentTurn } = await import("./agent-runner-execution.js");
+      const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
+
+      expect(result.outcome).toMatchObject({ kind: "settled", autoCompactionCount: 8 });
+      expect(result.outcome.compaction).toEqual({
+        count: 8,
+        durable: [
+          { ...otherWriter, currentContextSnapshot: { tokens: undefined } },
+          {
+            ...latest,
+            count: 5,
+            currentContextSnapshot:
+              owner === "same" && currentContextSnapshot
+                ? currentContextSnapshot
+                : { tokens: undefined },
+          },
+        ],
+      });
+    },
+  );
 
   it("passes the hydrated run account to embedded execution", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({

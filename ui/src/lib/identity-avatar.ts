@@ -1,4 +1,3 @@
-import type { SessionParticipantIdentity } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import {
   buildControlUiResourcePath,
   parseControlUiResourcePath,
@@ -15,10 +14,7 @@ import { readAvatarGatewayContext } from "./identity-avatar-context.ts";
 // NOTE: this is sender-controlled metadata. It must never carry the trusted
 // gateway origin — that comes only from the app connection via
 // setAvatarGatewayOrigin().
-export type IdentityAvatarInput = SenderIdentity & {
-  profileAvatarUrl?: string;
-  identity?: SessionParticipantIdentity;
-};
+export type IdentityAvatarInput = SenderIdentity;
 
 const ORIGIN_PROBE = "https://origin-probe.invalid";
 
@@ -90,10 +86,6 @@ export function resolveIdentityHue(input: IdentityAvatarInput): number {
  * Resolve a Gateway user/agent avatar, else deterministic initials. Remote
  * sources (including Gravatar) remain Gateway-owned, never browser fetches.
  */
-// Unqualified per-message senders keep their existing display contract pending
-// the separate transcript-provenance repair; typed participants never infer it.
-const PROFILE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
-
 export function resolveAvatar(input: IdentityAvatarInput): ResolvedIdentityAvatar {
   const identity = input.identity;
   if (identity && identity.type !== "profile" && identity.type !== "agent") {
@@ -119,9 +111,11 @@ export function resolveAvatar(input: IdentityAvatarInput): ResolvedIdentityAvata
     }
   }
 
-  const id = identity?.id ?? input.id?.trim();
-  if (id && (identity?.type === "profile" || (!identity && PROFILE_ID_RE.test(id)))) {
-    const trusted = resolveTrustedAvatarUrl(buildControlUiUserAvatarPath(id), gatewayOrigin);
+  if (identity?.type === "profile") {
+    const trusted = resolveTrustedAvatarUrl(
+      buildControlUiUserAvatarPath(identity.id),
+      gatewayOrigin,
+    );
     if (trusted) {
       return { kind: "profile", url: trusted };
     }

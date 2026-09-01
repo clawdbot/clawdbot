@@ -140,6 +140,23 @@ function toolsEffectiveResult() {
 }
 
 describe("AgentsListResultSchema", () => {
+  it.each([undefined, "read-only", "guarded", "workspace", "full"])(
+    "accepts optional configured permission label %s but rejects non-session modes",
+    (defaultPermissionMode) => {
+      const result = {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "main", ...(defaultPermissionMode ? { defaultPermissionMode } : {}) }],
+      };
+      expectAccepted(AgentsListResultSchema, result);
+      expectRejected(AgentsListResultSchema, {
+        ...result,
+        agents: [{ id: "main", defaultPermissionMode: "allowlist" }],
+      });
+    },
+  );
+
   it("accepts resolved per-agent thinking metadata", () => {
     const result = {
       defaultId: "main",

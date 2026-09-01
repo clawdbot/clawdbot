@@ -1,6 +1,5 @@
 // Shared Zod leaves for bundled channel messaging configuration.
 import { z, type ZodRawShape, type ZodTypeAny } from "zod";
-import { ChannelMentionPatternsSchemas } from "../channels/plugins/config-schema.js";
 import { NativeExecApprovalEnableModeSchema } from "./zod-schema.approvals.js";
 import { ChannelBotLoopProtectionSchema } from "./zod-schema.channels-config.js";
 import {
@@ -16,6 +15,7 @@ import {
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
+  MentionPatternsPolicySchema,
   ReplyToModeSchema,
   TextChunkModeSchema,
 } from "./zod-schema.core.js";
@@ -53,7 +53,7 @@ export const ChannelPreviewStreamingConfigSchema = z
 const CommonCapabilitiesSchema = z.array(z.string()).optional();
 const CommonIdListSchema = z.array(z.union([z.string(), z.number()])).optional();
 const CommonDefaultToSchema = z.string().optional();
-const CommonMentionPatternsSchema = ChannelMentionPatternsSchemas.canonical.optional();
+const CommonMentionPatternsSchema = MentionPatternsPolicySchema.optional();
 const CommonStreamingSchema = ChannelDeliveryStreamingConfigSchema.optional();
 const CommonMediaMaxMbSchema = z.number().positive().optional();
 const CommonReplyToModeSchema = ReplyToModeSchema.optional();

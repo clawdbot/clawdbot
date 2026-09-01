@@ -1,14 +1,21 @@
 // Augments plugin npm package manifests with generated runtime/package metadata.
 import { spawnSync } from "node:child_process";
 import type { SpawnSyncOptions } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import JSON5 from "json5";
+import { parse as parseYaml } from "yaml";
 import {
   generateNpmPackageLock,
   packageJsonForNpmLock,
+  packageRuntimeDependencyField,
   readNpmLockOverrides,
+  parsePnpmPackageKey,
+  type NpmLocalPackageArtifact,
 } from "../generate-npm-package-lock.mts";
 import { resolveNpmRunner } from "../npm-runner.mts";
 import type { NpmRunnerParams } from "../npm-runner.mts";
@@ -17,6 +24,7 @@ import {
   resolvePluginNpmRuntimeBuildPlan,
 } from "./plugin-npm-runtime-build.mts";
 import type { PluginNpmRuntimeBuildPlan, PluginPackageJson } from "./plugin-npm-runtime-build.mts";
+import { pnpmLockfileDocuments } from "./pnpm-lockfile-documents.mjs";
 import { isRecord } from "./record-shared.mjs";
 
 const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA_PATH =
@@ -25,6 +33,7 @@ const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA_PATH =
 type JsonRecord = Record<string, unknown>;
 type PluginPackageParams = Parameters<typeof resolvePluginNpmRuntimeBuildPlan>[0] & {
   bundleDependencies?: unknown;
+  patchedDependencies?: WorkspacePatchedDependency[];
 };
 type GeneratedChannelConfig = {
   description?: string;
@@ -36,7 +45,7 @@ type GeneratedChannelConfigs = Record<string, GeneratedChannelConfig>;
 type PluginPackageContext = Pick<
   PluginNpmRuntimeBuildPlan,
   "packageDir" | "packageJson" | "pluginDir"
->;
+> & { patchedDependencies?: WorkspacePatchedDependency[] };
 type SpawnResult = Pick<ReturnType<typeof spawnSync>, "error" | "status">;
 type PluginSpawnOptions = SpawnSyncOptions;
 type PluginNpmCommandParams = Omit<NpmRunnerParams, "npmArgs">;
@@ -220,13 +229,11 @@ function listPackageRuntimeDependencyNames(packageJson: PluginPackageJson) {
 }
 
 function listConfiguredBundledDependencyNames(packageJson: PluginPackageJson) {
-  if (Array.isArray(packageJson.bundledDependencies)) {
-    return packageJson.bundledDependencies.filter((name) => typeof name === "string");
+  const configured = packageJson.bundleDependencies ?? packageJson.bundledDependencies;
+  if (Array.isArray(configured)) {
+    return configured.filter((name) => typeof name === "string");
   }
-  if (Array.isArray(packageJson.bundleDependencies)) {
-    return packageJson.bundleDependencies.filter((name) => typeof name === "string");
-  }
-  if (packageJson.bundleDependencies === true) {
+  if (configured === true) {
     return listPackageRuntimeDependencyNames(packageJson);
   }
   return [];
@@ -250,7 +257,7 @@ export function resolvePluginNpmCommand(
   });
 }
 
-function spawnNpmSync(args: string[], options: SpawnSyncOptions = {}): SpawnResult {
+function spawnNpmSync(args: string[], options: SpawnSyncOptions = {}) {
   const invocation = resolvePluginNpmCommand(args, { env: options.env ?? process.env });
   return spawnSync(invocation.command, invocation.args, {
     ...options,
@@ -504,15 +511,211 @@ function installMissingOptionalBundledDependencies(params: PluginPackageContext)
   }
 }
 
+type WorkspacePatchedDependency = { name: string; version: string; packageDir: string };
+
+function readYamlRecord(file: string, lockfile = false) {
+  const source = fs.readFileSync(file, "utf8");
+  const value: unknown = parseYaml(lockfile ? pnpmLockfileDocuments(source).dependencies : source);
+  return isRecord(value) ? value : {};
+}
+
+function collectWorkspacePatchedDependencies(
+  repoRoot: string,
+  packageDir: string,
+  packageJson: PluginPackageJson,
+) {
+  const workspacePath = path.join(repoRoot, "pnpm-workspace.yaml");
+  if (!fs.existsSync(workspacePath)) {
+    return [];
+  }
+  const declared = readYamlRecord(workspacePath).patchedDependencies;
+  if (!isRecord(declared)) {
+    return [];
+  }
+  const names = new Set(listPackageRuntimeDependencyNames(packageJson));
+  // check-package-patches owns the allowlist and permits only exact-version selectors.
+  let selected = Object.entries(declared).flatMap(([selector, patchPath]) => {
+    const parsed = parsePnpmPackageKey(selector);
+    return parsed && names.has(parsed.name) ? [{ ...parsed, selector, patchPath }] : [];
+  });
+  if (selected.length === 0) {
+    return [];
+  }
+  const lock = readYamlRecord(path.join(repoRoot, "pnpm-lock.yaml"), true);
+  const importerKey = path.relative(repoRoot, packageDir).replaceAll(path.sep, "/");
+  const importer = isRecord(lock.importers) ? lock.importers[importerKey] : undefined;
+  selected = selected.filter(({ name, version }) => {
+    const field = packageRuntimeDependencyField(packageJson, name);
+    const resolved =
+      isRecord(importer) && isRecord(importer[field]) ? importer[field][name] : undefined;
+    if (
+      !isRecord(resolved) ||
+      typeof resolved.version !== "string" ||
+      resolved.specifier !== packageJson[field]?.[name]
+    ) {
+      throw new Error(
+        `patched runtime dependency is missing from the frozen pnpm importer: ${name}`,
+      );
+    }
+    return resolved.version.split("(")[0] === version;
+  });
+  if (selected.length === 0) {
+    return [];
+  }
+  const modules = readYamlRecord(path.join(repoRoot, "node_modules", ".modules.yaml"));
+  const virtualStoreDir = modules.virtualStoreDir ?? ".pnpm";
+  if (typeof virtualStoreDir !== "string") {
+    throw new Error("frozen pnpm install has an invalid virtualStoreDir");
+  }
+  const installedLock = readYamlRecord(
+    path.resolve(repoRoot, "node_modules", virtualStoreDir, "lock.yaml"),
+    true,
+  );
+  const installedImporter = isRecord(installedLock.importers)
+    ? installedLock.importers[importerKey]
+    : undefined;
+  const require = createRequire(path.join(packageDir, "package.json"));
+  // A root declaration alone does not prove the installed bytes were patched.
+  // Bind the patch hash, importer and actual hoisted package before packing it.
+  return selected.map(({ name, version, selector, patchPath }) => {
+    const patchHash =
+      typeof patchPath === "string"
+        ? createHash("sha256")
+            .update(fs.readFileSync(path.resolve(repoRoot, patchPath)))
+            .digest("hex")
+        : "";
+    const field = packageRuntimeDependencyField(packageJson, name);
+    const resolved =
+      isRecord(importer) && isRecord(importer[field]) ? importer[field][name] : undefined;
+    const installed =
+      isRecord(installedImporter) && isRecord(installedImporter[field])
+        ? installedImporter[field][name]
+        : undefined;
+    if (
+      !patchHash ||
+      !isRecord(lock.patchedDependencies) ||
+      lock.patchedDependencies[selector] !== patchHash ||
+      !isRecord(installedLock.patchedDependencies) ||
+      installedLock.patchedDependencies[selector] !== patchHash ||
+      !isRecord(resolved) ||
+      typeof resolved.version !== "string" ||
+      !resolved.version.startsWith(`${version}(`) ||
+      !resolved.version.includes(`(patch_hash=${patchHash})`) ||
+      !isRecord(installed) ||
+      installed.version !== resolved.version ||
+      installed.specifier !== resolved.specifier
+    ) {
+      throw new Error(
+        `patched runtime dependency requires a matching frozen pnpm install: ${selector}`,
+      );
+    }
+    const candidate = require.resolve
+      .paths(name)
+      ?.map((dir) => path.join(dir, name))
+      .find((dir) => fs.existsSync(path.join(dir, "package.json")));
+    const locations = isRecord(modules.hoistedLocations)
+      ? modules.hoistedLocations[`${name}@${resolved.version}`]
+      : undefined;
+    if (
+      !candidate ||
+      modules.nodeLinker !== "hoisted" ||
+      !Array.isArray(locations) ||
+      !locations.some(
+        (location) =>
+          typeof location === "string" &&
+          fs.realpathSync(path.resolve(repoRoot, location)) === fs.realpathSync(candidate),
+      )
+    ) {
+      throw new Error(`patched runtime dependency is not the frozen pnpm package: ${selector}`);
+    }
+    const installedPackage = readJsonFile(path.join(candidate, "package.json"));
+    if (installedPackage.name !== name || installedPackage.version !== version) {
+      throw new Error(`patched runtime dependency identity mismatch: ${selector}`);
+    }
+    return { name, version, packageDir: fs.realpathSync(candidate) };
+  });
+}
+
+function packPatchedDependencies(packageDir: string, dependencies: WorkspacePatchedDependency[]) {
+  if (dependencies.length === 0) {
+    return { artifacts: [], cleanup: () => {} };
+  }
+  const outputDir = fs.mkdtempSync(path.join(packageDir, ".openclaw-patched-dependencies-"));
+  const cleanup = () => fs.rmSync(outputDir, { recursive: true, force: true });
+  try {
+    const artifacts: NpmLocalPackageArtifact[] = dependencies.map(
+      ({ name, version, packageDir: source }) => {
+        const result = spawnNpmSync(
+          [
+            "pack",
+            source,
+            "--json",
+            "--ignore-scripts",
+            "--workspaces=false",
+            "--pack-destination",
+            outputDir,
+          ],
+          {
+            cwd: packageDir,
+            env: process.env,
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "inherit"],
+          },
+        );
+        if (result.error) {
+          throw result.error;
+        }
+        if (result.status !== 0) {
+          throw new Error(`packing patched runtime dependency failed: ${name}@${version}`);
+        }
+        const output = JSON.parse(String(result.stdout));
+        const entries = Array.isArray(output) ? output : Object.values(output);
+        const packed = entries.length === 1 ? entries[0] : undefined;
+        if (
+          !packed ||
+          packed.name !== name ||
+          packed.version !== version ||
+          typeof packed.filename !== "string" ||
+          path.basename(packed.filename) !== packed.filename
+        ) {
+          throw new Error(`packed runtime dependency identity mismatch: ${name}@${version}`);
+        }
+        const tarball = path.join(outputDir, packed.filename);
+        const integrity = `sha512-${createHash("sha512").update(fs.readFileSync(tarball)).digest("base64")}`;
+        if (packed.integrity !== integrity) {
+          throw new Error(`packed runtime dependency integrity mismatch: ${name}@${version}`);
+        }
+        return {
+          name,
+          version,
+          spec: `file:./${path.relative(packageDir, tarball).replaceAll(path.sep, "/")}`,
+          integrity,
+        };
+      },
+    );
+    return { artifacts, cleanup };
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
+}
+
 function packageOptsOutOfBundledRuntimeDependencies(packageJson: PluginPackageJson | undefined) {
   return packageJson?.openclaw?.release?.bundleRuntimeDependencies === false;
 }
 
-function shouldBundleDependencies(value: unknown, packageJson: PluginPackageJson | undefined) {
+function shouldBundleDependencies(
+  value: unknown,
+  packageJson: PluginPackageJson | undefined,
+  patchedDependencies: WorkspacePatchedDependency[] = [],
+) {
   if (packageOptsOutOfBundledRuntimeDependencies(packageJson)) {
+    if (patchedDependencies.length > 0) {
+      throw new Error("patched runtime dependencies conflict with bundleRuntimeDependencies=false");
+    }
     return false;
   }
-  return value === true || value === "1" || value === "true";
+  return patchedDependencies.length > 0 || value === true || value === "1" || value === "true";
 }
 
 function installPackageLocalBundledDependencies(params: PluginPackageContext) {
@@ -521,7 +724,7 @@ function installPackageLocalBundledDependencies(params: PluginPackageContext) {
     !hasPackageRuntimeDependencies(packageJson) ||
     listConfiguredBundledDependencyNames(packageJson).length === 0
   ) {
-    return () => {};
+    return;
   }
 
   const packageLockPath = path.join(params.packageDir, "package-lock.json");
@@ -546,7 +749,12 @@ function installPackageLocalBundledDependencies(params: PluginPackageContext) {
   };
   delete installPackageJsonBase.peerDependencies;
   delete installPackageJsonBase.peerDependenciesMeta;
-  const installPackageJson = packageJsonForNpmLock(installPackageJsonBase, readNpmLockOverrides());
+  const patched = packPatchedDependencies(params.packageDir, params.patchedDependencies ?? []);
+  const installPackageJson = packageJsonForNpmLock(
+    installPackageJsonBase,
+    readNpmLockOverrides(),
+    patched.artifacts,
+  );
   const installPackageJsonText = `${JSON.stringify(installPackageJson, null, 2)}\n`;
   if (installPackageJsonText !== packedPackageJsonText) {
     // npm validates peer edges against the package lock during ci even when peers are omitted.
@@ -558,7 +766,7 @@ function installPackageLocalBundledDependencies(params: PluginPackageContext) {
       packageLockPath,
       generatePluginNpmPackageLockWithRetry(
         params.packageDir,
-        { installStrategy: "shallow" },
+        { installStrategy: "shallow", localPackageArtifacts: patched.artifacts },
         { pluginDir: params.pluginDir },
       ),
       "utf8",
@@ -595,13 +803,17 @@ function installPackageLocalBundledDependencies(params: PluginPackageContext) {
       );
     }
     installMissingOptionalBundledDependencies(params);
+    for (const { name, version } of params.patchedDependencies ?? []) {
+      const installed = readInstalledPackageJson(params.packageDir, name)?.packageJson;
+      if (installed?.name !== name || installed.version !== version) {
+        throw new Error(`patched runtime dependency was not installed: ${name}@${version}`);
+      }
+    }
   } finally {
     fs.writeFileSync(packageJsonPath, packedPackageJsonText, "utf8");
     fs.rmSync(packageLockPath, { force: true });
+    patched.cleanup();
   }
-  return () => {
-    fs.rmSync(nodeModulesPath, { recursive: true, force: true });
-  };
 }
 
 /**
@@ -654,8 +866,21 @@ export function resolveAugmentedPluginNpmPackageJson(params: PluginPackageParams
         : {}),
     },
   };
-  if (shouldBundleDependencies(params.bundleDependencies, plan.packageJson)) {
-    packageJson.bundledDependencies = listPackageRuntimeDependencyNames(packageJson);
+  if (
+    shouldBundleDependencies(
+      params.bundleDependencies,
+      plan.packageJson,
+      params.patchedDependencies,
+    )
+  ) {
+    packageJson.bundledDependencies = [
+      ...new Set([
+        ...listConfiguredBundledDependencyNames(packageJson),
+        ...(shouldBundleDependencies(params.bundleDependencies, plan.packageJson)
+          ? listPackageRuntimeDependencyNames(packageJson)
+          : (params.patchedDependencies ?? []).map(({ name }) => name)),
+      ]),
+    ].toSorted((left, right) => left.localeCompare(right));
     delete packageJson.bundleDependencies;
     delete packageJson.devDependencies;
   }
@@ -667,7 +892,11 @@ export function resolveAugmentedPluginNpmPackageJson(params: PluginPackageParams
     changed,
     packageJson,
     pluginDir: plan.pluginDir,
-    bundleDependencies: shouldBundleDependencies(params.bundleDependencies, plan.packageJson),
+    bundleDependencies: shouldBundleDependencies(
+      params.bundleDependencies,
+      plan.packageJson,
+      params.patchedDependencies,
+    ),
     reason: changed ? "package-local-runtime" : "unchanged",
   };
 }
@@ -822,12 +1051,51 @@ export function withAugmentedPluginNpmManifestForPackage<T>(
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
   const packageJsonPath = resolvePackageJsonPath(packageDir);
+  const packageJson = fs.existsSync(packageJsonPath) ? readJsonFile(packageJsonPath) : undefined;
+  const patchedDependencies = packageJson
+    ? collectWorkspacePatchedDependencies(repoRoot, packageDir, packageJson)
+    : [];
+  const resolvedParams = { ...params, patchedDependencies };
+  if (
+    !packageJson ||
+    !shouldBundleDependencies(params.bundleDependencies, packageJson, patchedDependencies) ||
+    !hasPackageRuntimeDependencies(packageJson)
+  ) {
+    return withPluginNpmManifestOverlay(resolvedParams, callback);
+  }
+
+  // pnpm owns the source install. npm bundling needs a separate tree so its
+  // production-only install and cleanup cannot replace source versions or links.
+  const stagingRoot = fs.mkdtempSync(path.join(tmpdir(), "openclaw-plugin-npm-pack-"));
+  const stagedPackageDir = path.join(stagingRoot, path.basename(packageDir));
+  try {
+    fs.cpSync(packageDir, stagedPackageDir, {
+      recursive: true,
+      filter: (source) => path.basename(source) !== "node_modules",
+    });
+    return withPluginNpmManifestOverlay(
+      { ...resolvedParams, repoRoot, packageDir: stagedPackageDir },
+      callback,
+    );
+  } finally {
+    fs.rmSync(stagingRoot, { recursive: true, force: true });
+  }
+}
+
+function withPluginNpmManifestOverlay<T>(
+  params: PluginPackageParams,
+  callback: (context: ManifestOverlayContext) => T,
+): T {
+  const repoRoot = path.resolve(params.repoRoot ?? ".");
+  const packageDir = resolvePackageDir(repoRoot, params.packageDir);
+  const packageJsonPath = resolvePackageJsonPath(packageDir);
   const packageJsonForBundlePolicy = fs.existsSync(packageJsonPath)
     ? readJsonFile(packageJsonPath)
     : undefined;
   const bundleDependencies = shouldBundleDependencies(
     params.bundleDependencies,
     packageJsonForBundlePolicy,
+    params.patchedDependencies,
   );
   const resolvedManifest = resolveAugmentedPluginNpmManifest({
     repoRoot,
@@ -836,21 +1104,9 @@ export function withAugmentedPluginNpmManifestForPackage<T>(
   const resolvedPackageJson = resolveAugmentedPluginNpmPackageJson({
     repoRoot,
     packageDir,
-    bundleDependencies,
+    bundleDependencies: params.bundleDependencies,
+    patchedDependencies: params.patchedDependencies,
   });
-
-  if (
-    (!resolvedManifest.changed || !resolvedManifest.manifest) &&
-    (!resolvedPackageJson.changed || !resolvedPackageJson.packageJson)
-  ) {
-    return callback({
-      ...resolvedManifest,
-      packageDir,
-      repoRoot,
-      applied: false,
-      packageJsonApplied: false,
-    });
-  }
 
   const originalManifest =
     resolvedManifest.changed && resolvedManifest.manifest
@@ -872,13 +1128,13 @@ export function withAugmentedPluginNpmManifestForPackage<T>(
     );
     writeJsonFile(resolvedPackageJson.packageJsonPath, resolvedPackageJson.packageJson);
   }
-  let cleanupBundledDependencies = () => {};
   try {
     if (bundleDependencies && resolvedPackageJson.packageJson) {
-      cleanupBundledDependencies = installPackageLocalBundledDependencies({
+      installPackageLocalBundledDependencies({
         packageDir,
         packageJson: resolvedPackageJson.packageJson,
         pluginDir: resolvedPackageJson.pluginDir ?? path.basename(packageDir),
+        patchedDependencies: params.patchedDependencies,
       });
     }
     return callback({
@@ -889,7 +1145,6 @@ export function withAugmentedPluginNpmManifestForPackage<T>(
       packageJsonApplied: resolvedPackageJson.changed && Boolean(resolvedPackageJson.packageJson),
     });
   } finally {
-    cleanupBundledDependencies();
     if (originalManifest !== undefined) {
       fs.writeFileSync(resolvedManifest.manifestPath, originalManifest, "utf8");
     }
@@ -954,7 +1209,29 @@ function main(argv: string[] = process.argv.slice(2)) {
       bundleDependencies: process.env.OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES,
     },
     ({ packageDir: cwd }) => {
-      const result = spawnCommandSync(command, args, {
+      const commandArgs = [...args];
+      if (command === "npm" && args[0] === "pack" && cwd !== path.resolve(packageDir)) {
+        // Pack output outlives the temporary dependency tree. Preserve npm's
+        // source-relative destination, including its default current directory.
+        const destinationIndex = args.findLastIndex(
+          (arg) => arg === "--pack-destination" || arg.startsWith("--pack-destination="),
+        );
+        const destinationArg = args[destinationIndex];
+        if (destinationArg === undefined) {
+          commandArgs.push("--pack-destination", path.resolve(packageDir));
+        } else if (destinationArg === "--pack-destination") {
+          const destination = args[destinationIndex + 1];
+          if (destination && !destination.startsWith("-")) {
+            commandArgs[destinationIndex + 1] = path.resolve(packageDir, destination);
+          }
+        } else {
+          commandArgs[destinationIndex] = `--pack-destination=${path.resolve(
+            packageDir,
+            destinationArg.slice("--pack-destination=".length),
+          )}`;
+        }
+      }
+      const result = spawnCommandSync(command, commandArgs, {
         cwd,
         env: process.env,
         stdio: "inherit",

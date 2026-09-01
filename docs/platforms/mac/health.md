@@ -39,6 +39,9 @@ windows; transient transport flags alone do not mark a channel degraded.
 Reported failures such as a stale socket or unavailable inbound processing
 still take precedence over a ready-looking connection.
 
+A missing HTTP status does not by itself mean a timeout; the app preserves
+the Gateway's reported probe error.
+
 ## How health refresh works
 
 The app calls the Gateway's `health` RPC over its existing WebSocket

@@ -228,7 +228,7 @@ export function createHooksHandler(
       error: vi.fn(),
     } as unknown as ReturnType<typeof createSubsystemLogger>,
     getClientIpConfig: options.getClientIpConfig,
-    dispatchWakeHook: options.dispatchWakeHook ?? (() => {}),
+    dispatchWakeHook: options.dispatchWakeHook ?? (() => ({ eventOutcome: "queued" })),
     dispatchAgentHook: options.dispatchAgentHook ?? (() => ({ ok: true, runId: "run-1" })),
   });
 }

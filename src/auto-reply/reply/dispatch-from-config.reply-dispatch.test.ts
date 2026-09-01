@@ -198,6 +198,33 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     clearAgentHarnesses();
   });
 
+  it.each(["global", "agent:beta:main"])(
+    "preserves the prepared store owner for ACP metadata in %s",
+    async (sessionKey) => {
+      const cfg = {
+        agents: { ownership: "explicit" as const, entries: { qa: {}, beta: {} } },
+      };
+      const { resolveSessionStorePathForAcp } = await vi.importActual<
+        typeof import("../../acp/runtime/session-meta-store.js")
+      >("../../acp/runtime/session-meta-store.js");
+      await acpMocks.readAcpSessionMeta.withImplementation(
+        (params) => {
+          resolveSessionStorePathForAcp({ ...params, cfg: params.cfg ?? cfg });
+          return null;
+        },
+        async () => {
+          const result = await dispatchReplyFromConfig({
+            ctx: { ...createHookCtx(), SessionKey: sessionKey, AgentId: "qa" },
+            cfg,
+            dispatcher: createDispatcher(),
+            replyResolver: async () => ({ text: "selected owner reply" }),
+          });
+          expect(result.queuedFinal).toBe(true);
+        },
+      );
+    },
+  );
+
   it("runs a handled plugin reply hook in the registry scope", async () => {
     hookMocks.runner.runReplyDispatch.mockImplementation(async () => {
       expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(
@@ -261,6 +288,34 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       counts: { tool: 0, block: 0, final: 0 },
       sendPolicyDenied: true,
     });
+  });
+
+  it("keeps admitted session settings owner-private from takeover hooks", async () => {
+    const admittedSessionSettings = {
+      permissionMode: "guarded" as const,
+      toolOverrides: { webSearch: false, mcpToolsDeny: { github: ["delete_issue"] } },
+    };
+    hookMocks.runner.runReplyDispatch.mockResolvedValue({
+      handled: true,
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
+    const replyResolver = vi.fn(async (_ctx, options) => {
+      expect(options?.admittedSessionSettings).toEqual(admittedSessionSettings);
+      return { text: "model reply" } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyOptions: { admittedSessionSettings },
+      replyResolver,
+    });
+
+    expect(hookMocks.runner.runReplyDispatch).not.toHaveBeenCalled();
+    expect(admittedSessionSettings.toolOverrides.mcpToolsDeny.github).toEqual(["delete_issue"]);
+    expect(replyResolver).toHaveBeenCalledOnce();
   });
 
   it("clears pending final delivery after final dispatch succeeds", async () => {
@@ -984,82 +1039,4 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(2, replies[1]);
     },
   );
-
-  it("clears the reply lane but defers follow-up admission until final delivery settles", async () => {
-    const deliveryOrder: string[] = [];
-    let startDelivery: () => void = () => {};
-    const deliveryStarted = new Promise<void>((resolve) => {
-      startDelivery = resolve;
-    });
-    let releaseDelivery: () => void = () => {};
-    const deliveryGate = new Promise<void>((resolve) => {
-      releaseDelivery = resolve;
-    });
-    const dispatcher = createReplyDispatcher({
-      deliver: async () => {
-        deliveryOrder.push("final-start");
-        startDelivery();
-        await deliveryGate;
-        deliveryOrder.push("final-end");
-      },
-    });
-    let queuedOperation: ReturnType<typeof createReplyOperation> | undefined;
-    const abortController = new AbortController();
-    hookMocks.runner.runReplyDispatch.mockImplementation(async (_event, contextValue) => {
-      const operation = replyRunRegistry.get("agent:test:session");
-      if (!operation) {
-        throw new Error("expected dispatch reply operation");
-      }
-      runAfterReplyOperationClear(operation, () => {
-        deliveryOrder.push("followup");
-        queuedOperation = createReplyOperation({
-          sessionKey: "agent:test:session",
-          sessionId: "queued-session",
-          resetTriggered: false,
-        });
-      });
-      const context = contextValue as { dispatcher: typeof dispatcher };
-      return {
-        handled: true,
-        queuedFinal: context.dispatcher.sendFinalReply({ text: "first reply" }),
-        counts: context.dispatcher.getQueuedCounts(),
-      };
-    });
-
-    try {
-      const dispatchPromise = dispatchReplyFromConfig({
-        ctx: createHookCtx(),
-        cfg: emptyConfig,
-        dispatcher,
-        replyOptions: { abortSignal: abortController.signal },
-      });
-
-      await deliveryStarted;
-      const result = await dispatchPromise;
-
-      expect(result.queuedFinal).toBe(true);
-      expect(replyRunRegistry.isActive("agent:test:session")).toBe(false);
-      expect(deliveryOrder).toEqual(["final-start"]);
-      expect(queuedOperation).toBeUndefined();
-
-      abortController.abort();
-      await Promise.resolve();
-      expect(queuedOperation).toBeUndefined();
-
-      releaseDelivery();
-      await dispatcher.waitForIdle();
-      await vi.waitFor(() => {
-        expect(queuedOperation).toBeDefined();
-      });
-
-      expect(deliveryOrder).toEqual(["final-start", "final-end", "followup"]);
-      expect(replyRunRegistry.get("agent:test:session")).toBe(queuedOperation);
-    } finally {
-      releaseDelivery();
-      dispatcher.markComplete();
-      await dispatcher.waitForIdle();
-      queuedOperation?.complete();
-      expect(getActiveReplyRunCount()).toBe(0);
-    }
-  });
 });

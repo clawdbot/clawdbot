@@ -160,6 +160,8 @@ describe("chat pane session menu boundary", () => {
     { action: { kind: "toggle-pin" }, patch: { pinned: true } },
     { action: { kind: "toggle-unread" }, patch: { unread: true } },
     { action: { kind: "set-icon", icon: "🦞" }, patch: { icon: "🦞" } },
+    { action: { kind: "set-color", color: "red" }, patch: { color: "red" } },
+    { action: { kind: "reset-appearance" }, patch: { icon: null, color: null } },
     { action: { kind: "move-to-group", category: "Projects" }, patch: { category: "Projects" } },
   ] as const)(
     "keeps the original header identity for $action.kind after replacement",

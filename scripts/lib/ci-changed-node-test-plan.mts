@@ -18,6 +18,7 @@ import {
 import {
   listExtensionTestFilesForRoots,
   resolveExtensionTestConfig,
+  resolveExtensionTestJobFileLimit,
   shouldSplitExtensionTestProcesses,
   splitExtensionTestJobTargets,
 } from "./extension-test-plan.mts";
@@ -30,6 +31,7 @@ import {
 type ChangedNodeTestShard = {
   checkName: string;
   configs: string[];
+  env?: Record<string, string>;
   includePatterns?: string[];
   planConcurrency?: number;
   pretestBuildMode?: VitestPretestBuildMode;
@@ -62,6 +64,7 @@ const DOCKER_SEED_LANES_BY_PATH: Readonly<Record<string, readonly DockerSeedLane
   "scripts/e2e/cron-mcp-cleanup-seed.ts": ["cron-mcp-cleanup"],
   "scripts/e2e/docker-openai-seed.ts": MCP_DOCKER_SEED_LANES,
   "scripts/e2e/lib/mcp-code-mode-probe-server.ts": ["mcp-code-mode-gateway"],
+  "scripts/e2e/lib/mcp-code-mode/scenario.sh": ["mcp-code-mode-gateway"],
   "scripts/e2e/lib/update-channel-switch/assertions.mjs": ["update-channel-switch"],
   "scripts/e2e/mcp-channels-seed.ts": ["mcp-channels"],
   "scripts/e2e/mcp-code-mode-gateway-seed.ts": ["mcp-code-mode-gateway"],
@@ -105,20 +108,27 @@ function isTestOnlyPath(changedPath: string) {
 
 // Inputs `build:ci-artifacts` consumes: runtime/plugin/package sources plus
 // the build pipeline itself (mirrors the build-all cache key in ci.yml).
-// Paths outside this set — repo scripts, workflows, qa scenarios, docs mixes —
-// cannot change dist or bundled plugin asset bytes.
+// Built-artifact test inputs below also require this lane even though they do
+// not change the bytes under test.
 const BUILD_INPUT_RE =
   /^(?:src|extensions|packages)\/|^(?:openclaw\.mjs|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)$|^tsconfig[^/]*\.json$|^scripts\/(?:build-[^/]+|runtime-postbuild\.mts|write-plugin-sdk-entry-dts\.ts)$|^scripts\/lib\/(?:copy-assets\.ts|plugin-sdk-entries\.mts)$/u;
+const BUILT_ARTIFACT_TEST_INPUTS = new Set([
+  "extensions/browser/chrome-extension/relay-key.test-support.ts",
+  "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts",
+  "extensions/browser/src/browser/extension-install.test-support.ts",
+]);
 
 /**
  * True when a changed path can influence built dist/packaging bytes: a
- * non-test build-input source or the build pipeline itself. Diffs entirely
- * outside that set (tests, repo scripts, workflows, qa scenarios) let the
+ * non-test build-input source, build pipeline, or built-artifact test input.
+ * Diffs entirely outside that set (ordinary tests, repo scripts, workflows) let the
  * manifest skip the build-artifacts lane.
  */
 export function hasBuildArtifactAffectingChange(changedPaths: string[]) {
   return changedPaths.some(
-    (changedPath) => BUILD_INPUT_RE.test(changedPath) && !isTestOnlyPath(changedPath),
+    (changedPath) =>
+      BUILT_ARTIFACT_TEST_INPUTS.has(changedPath) ||
+      (BUILD_INPUT_RE.test(changedPath) && !isTestOnlyPath(changedPath)),
   );
 }
 
@@ -355,22 +365,46 @@ function createChangedExtensionConfigShards(extensionRoots: string[]) {
     const config = resolveExtensionTestConfig(root);
     rootsByConfig.set(config, [...(rootsByConfig.get(config) ?? []), root]);
   }
-  const plans: Array<{ config: string; includePatterns?: string[]; roots: string[] }> = [
-    ...rootsByConfig,
-  ].flatMap(([config, roots]) => {
-    const testFiles = shouldSplitExtensionTestProcesses(config)
-      ? listExtensionTestFilesForRoots(roots)
+  const plans: Array<{
+    config: string;
+    env?: Record<string, string>;
+    includePatterns?: string[];
+  }> = [...rootsByConfig].flatMap(([config, roots]) => {
+    const splitProcesses = shouldSplitExtensionTestProcesses(config);
+    const testFiles = resolveExtensionTestJobFileLimit(config)
+      ? listExtensionTestFilesForRoots(splitProcesses ? roots : ["extensions"]).filter(
+          (file) =>
+            splitProcesses ||
+            resolveExtensionTestConfig(file.split("/").slice(0, 2).join("/")) === config,
+        )
       : [];
     const chunks = testFiles.length > 0 ? splitExtensionTestJobTargets(config, testFiles) : [roots];
     return chunks.length > 1
-      ? chunks.map((includePatterns) => ({ config, includePatterns, roots }))
-      : [{ config, roots }];
+      ? chunks.map((includePatterns, index) =>
+          Object.assign(
+            { config },
+            splitProcesses
+              ? { includePatterns }
+              : {
+                  // Counts size jobs only. Vitest owns the complete config inventory,
+                  // including unrelated plugin roots, excludes and untracked tests.
+                  env: {
+                    OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify([
+                      `--shard=${index + 1}/${chunks.length}`,
+                    ]),
+                  },
+                },
+          ),
+        )
+      : [{ config }];
   });
-  return plans.map(({ config, includePatterns, roots }, index) => {
+  return plans.map(({ config, env, includePatterns }, index) => {
     const suffix = plans.length === 1 ? "" : `-${index + 1}`;
     const shard: ChangedNodeTestShard = {
       checkName: `checks-node-changed-extensions-config${suffix}`,
       configs: [config],
+      // No plans overlap in this row, so CI can scale the single process's worker budget.
+      planConcurrency: 1,
       requiresDist: false,
       runner: DEFAULT_NODE_TEST_RUNNER,
       shardName: `changed-extensions-config${suffix}`,
@@ -384,8 +418,8 @@ function createChangedExtensionConfigShards(extensionRoots: string[]) {
     if (includePatterns) {
       shard.includePatterns = includePatterns;
     }
-    if (roots.some((root) => SERIAL_CHANGED_TARGET_RE.test(`${root}/`))) {
-      shard.planConcurrency = 1;
+    if (env) {
+      shard.env = env;
     }
     return shard;
   });

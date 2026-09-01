@@ -302,12 +302,12 @@ describe("windows output encoding", () => {
   );
 
   it.each(["utf-8", "gbk"] as const)(
-    "decodes complete UTF-16 BOM output buffers with a %s console encoding",
+    "decodes complete UTF-16 BOM output and file buffers with a %s fallback encoding",
     (windowsEncoding) => {
       for (const [, raw] of UTF16_OUTPUT_CASES) {
-        expect(decodeWindowsOutputBuffer({ buffer: raw, platform: "win32", windowsEncoding })).toBe(
-          "hi\n",
-        );
+        for (const decode of [decodeWindowsOutputBuffer, decodeWindowsTextFileBuffer]) {
+          expect(decode({ buffer: raw, platform: "win32", windowsEncoding })).toBe("hi\n");
+        }
       }
     },
   );

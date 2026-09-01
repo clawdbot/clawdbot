@@ -17,10 +17,8 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import {
-  recordAcceptedSessionParticipantInput,
-  prepareChannelParticipantObservation,
-} from "../../sessions/session-participant-input.js";
+import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
+import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
 import {
   buildPersistedUserTurnMessage,
   type UserTurnInput,
@@ -244,7 +242,7 @@ describe("prepareChatSendUserTurn", () => {
 
       expect(prepared.ctx.SessionCreation).toEqual({
         via: "operator",
-        actor: { type: "human", id: profile.id },
+        actor: { type: "human", source: "profile", id: profile.id },
         sandbox: "required",
       });
     });

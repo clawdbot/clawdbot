@@ -4,10 +4,24 @@ import Foundation
 
 enum ExecApprovalsSocketTestSupport {
     static func makeRoot() throws -> URL {
-        let root = URL(fileURLWithPath: "/tmp/ocst-\(UUID().uuidString.prefix(12))", isDirectory: true)
-        try FileManager().createDirectory(
-            at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-        return root.resolvingSymlinksInPath()
+        let base = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
+        let template = base.appendingPathComponent("XXXXXX", isDirectory: true).path
+        // CuaDriverHostCoordinator.createSocketDirectory adds this 39-byte suffix.
+        // Reserve its full sun_path budget before mkdtemp creates any fixture state.
+        let longestSocketPath = template + "/OpenClaw/cua/0000000000000000/cua.sock"
+        guard longestSocketPath.utf8.count < MemoryLayout.size(ofValue: sockaddr_un().sun_path) else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(ENAMETOOLONG), userInfo: [
+                NSLocalizedDescriptionKey:
+                    "Native socket fixtures need a shorter per-user temporary directory in the disposable runner.",
+            ])
+        }
+        var bytes = Array(template.utf8CString)
+        return try bytes.withUnsafeMutableBufferPointer { buffer in
+            guard let created = mkdtemp(buffer.baseAddress!) else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            return URL(fileURLWithPath: String(cString: created), isDirectory: true).resolvingSymlinksInPath()
+        }
     }
 
     static func makeServer(

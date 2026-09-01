@@ -15,7 +15,6 @@ import {
   validateConfigSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { readAgentRosterProperty } from "../../agents/agent-scope-config.js";
-import { resolveModelIdNormalizationPolicies } from "../../config/io.context.js";
 import {
   createConfigIO,
   parseConfigJson5,
@@ -23,7 +22,6 @@ import {
   readConfigFileSnapshotForWrite,
   resolveConfigSnapshotHash,
 } from "../../config/io.js";
-import { projectSourceOntoRuntimeShape } from "../../config/io.write-prepare.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import {
   applyMergePatch,
@@ -35,6 +33,7 @@ import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
 import { normalizeConfigPatchReplacePaths } from "../../config/patch-replace-paths.js";
 import { redactConfigObject, restoreRedactedValues } from "../../config/redact-snapshot.js";
 import { loadGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
+import { projectSourceOntoRuntimeShape } from "../../config/runtime-source-projection.js";
 import { lookupConfigSchema, type ConfigSchemaResponse } from "../../config/schema.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -698,7 +697,9 @@ async function respondWithConfigRestartWrite(params: {
       const message =
         outcome === "applied-restart-required"
           ? `${params.mode} persisted and updated the active Gateway, but a recovery restart is required; wait for the Gateway to restart, then run config.get to confirm the active revision`
-          : `${params.mode} persisted but was not applied to the active Gateway (${outcome}); run config.get, then use config.apply to reapply the saved config or restart the Gateway`;
+          : outcome === "restart-pending"
+            ? `${params.mode} persisted and was accepted for restart; wait for the Gateway to restart, then run config.get to confirm the active revision`
+            : `${params.mode} persisted but was not applied to the active Gateway (${outcome}); run config.get, then use config.apply to reapply the saved config or restart the Gateway`;
       params.respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
       params.writeResult.queueFollowUp();
       return;
@@ -929,7 +930,7 @@ export const configHandlers: GatewayRequestHandlers = {
       "config.set",
       snapshot,
       respond,
-      resolveModelIdNormalizationPolicies(writeOptions.basePluginMetadataSnapshot),
+      writeOptions.basePluginMetadataSnapshot?.owners.modelIdNormalizationPolicies,
     );
     if (!parsed) {
       return;
@@ -993,9 +994,8 @@ export const configHandlers: GatewayRequestHandlers = {
       return;
     }
     const { snapshot, writeOptions } = writeSnapshot;
-    const modelIdNormalizationPolicies = resolveModelIdNormalizationPolicies(
-      writeOptions.basePluginMetadataSnapshot,
-    );
+    const modelIdNormalizationPolicies =
+      writeOptions.basePluginMetadataSnapshot?.owners.modelIdNormalizationPolicies;
     if (!snapshot.valid) {
       respond(
         false,
@@ -1063,11 +1063,18 @@ export const configHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)));
       return;
     }
-    const merged = applyMergePatch(snapshot.config, normalizedPatch, {
+    // Merge authored rows first; merging runtime rows would persist catalog defaults
+    // from untouched siblings whenever an ID-keyed array changes.
+    const sourceConfig = normalizeSubmittedConfigModelRefs(
+      snapshot.sourceConfig,
+      modelIdNormalizationPolicies,
+    );
+    const mergedSource = applyMergePatch(sourceConfig, normalizedPatch, {
       // Arrays with stable ids behave like maps for partial control-plane edits.
       mergeObjectArraysById: true,
       replaceArrayPaths: replacePaths,
     });
+    const merged = applyMergePatch(snapshot.config, createMergePatch(sourceConfig, mergedSource));
     const schemaPatch = loadSchemaWithPlugins();
     const restoredMerge = restoreRedactedValues(merged, snapshot.config, schemaPatch.uiHints);
     if (!restoredMerge.ok) {
@@ -1210,7 +1217,7 @@ export const configHandlers: GatewayRequestHandlers = {
       "config.apply",
       snapshot,
       respond,
-      resolveModelIdNormalizationPolicies(writeOptions.basePluginMetadataSnapshot),
+      writeOptions.basePluginMetadataSnapshot?.owners.modelIdNormalizationPolicies,
     );
     if (!parsed) {
       return;

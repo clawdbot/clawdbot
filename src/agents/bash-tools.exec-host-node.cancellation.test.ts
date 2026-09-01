@@ -152,7 +152,11 @@ describe("node-host dispatch cancellation", () => {
     const policy = createPolicy(scenario.security, scenario.ask);
     nodePolicy = { security: scenario.security, ask: scenario.ask };
     const checkpoint = createDeferred<NodeApprovalPolicy>();
-    resolvePolicy.mockResolvedValueOnce(policy).mockReturnValueOnce(checkpoint.promise);
+    const policyEntered = createDeferred();
+    resolvePolicy.mockResolvedValueOnce(policy).mockImplementationOnce(() => {
+      policyEntered.resolve();
+      return checkpoint.promise;
+    });
     const reviewer = vi.fn<ExecAutoReviewer>(async () => ({
       decision: "allow-once",
       risk: "low",
@@ -171,7 +175,8 @@ describe("node-host dispatch cancellation", () => {
     // Observe early fixture failures immediately and drain blocked work before restoring spies.
     const drained = result.catch(() => undefined);
     try {
-      await vi.waitFor(() => expect(resolvePolicy).toHaveBeenCalledTimes(2));
+      await Promise.race([policyEntered.promise, result]);
+      expect(resolvePolicy).toHaveBeenCalledTimes(2);
       controller.abort(reason);
       checkpoint.resolve(policy);
 

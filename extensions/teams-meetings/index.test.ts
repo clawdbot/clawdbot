@@ -2,8 +2,9 @@ import { ErrorCodes } from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import type { TranscriptSourceProvider } from "openclaw/plugin-sdk/transcripts";
-import { assert, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
+import { TEAMS_MEETINGS_CLI_METADATA } from "./src/cli-output-mode.js";
 
 const MEETING_URL =
   "https://teams.microsoft.com/l/meetup-join/19%3ameeting_owned%40thread.v2/0?context=%7b%7d";
@@ -160,35 +161,8 @@ describe("Microsoft Teams meetings plugin surface", () => {
       ].toSorted(),
     );
     expect(tools.map((tool) => tool.name)).toEqual(["teams_meetings"]);
-    expect(cli).toEqual([
-      {
-        commands: ["teamsmeetings"],
-        descriptors: [
-          {
-            name: "teamsmeetings",
-            description: "Join and manage Microsoft Teams meeting guests",
-            hasSubcommands: true,
-            machineOutput: expect.any(Function),
-          },
-        ],
-      },
-    ]);
-    const descriptor = cli[0]?.descriptors?.[0];
-    assert(
-      descriptor && "machineOutput" in descriptor && typeof descriptor.machineOutput === "function",
-    );
-    for (const [args, expected] of [
-      [[], false],
-      [["status"], true],
-      [["--log-level", "debug", "future-action"], true],
-    ] as const) {
-      expect(
-        descriptor.machineOutput({
-          argv: ["node", "openclaw", "teamsmeetings", ...args],
-          stdoutIsTTY: false,
-        }),
-      ).toBe(expected);
-    }
+    expect(cli).toEqual([expect.objectContaining({ commands: ["teamsmeetings"] })]);
+    expect(cli[0]?.descriptors?.[0]).toBe(TEAMS_MEETINGS_CLI_METADATA.descriptor);
     expect(nodeCommands).toEqual([
       expect.objectContaining({ command: "teamsmeetings.chrome", cap: "teams-meetings" }),
     ]);

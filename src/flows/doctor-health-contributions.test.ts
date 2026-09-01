@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DoctorPrompter } from "../commands/doctor-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { LEGACY_SECRETREF_ENV_MARKER_PREFIX } from "../config/types.secrets.js";
+import { fetchNpmPackageTargetStatus } from "../infra/update-check-package-target.js";
 import { migrateLegacySecretRefEnvMarkers } from "../secrets/legacy-secretref-env-marker.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -37,7 +38,18 @@ const mocks = vi.hoisted(() => ({
   maybeRunConfiguredPluginInstallReleaseStep: vi.fn(),
   registerBundledHealthChecks: vi.fn(),
   runDoctorHealthRepairs: vi.fn(),
-  maybeMigrateAuthProfileJsonStoresToSqlite: vi.fn().mockResolvedValue(undefined),
+  maybeMigrateAuthProfileJsonStoresToSqlite: vi.fn().mockResolvedValue({
+    detected: [],
+    changes: [],
+    configOwnerMigrationApplied: false,
+    warnings: [],
+  }),
+  collectOpenAICodexAuthProfileStoreIdMap: vi.fn(() => new Map<string, string>()),
+  maybeRepairOpenAICodexAuthConfig: vi.fn((cfg: unknown) => ({
+    config: cfg,
+    changes: [],
+    warnings: [],
+  })),
   maybeMigrateLegacyPluginModelCatalogs: vi.fn().mockResolvedValue({
     detected: 0,
     migrated: 0,
@@ -96,6 +108,7 @@ const mocks = vi.hoisted(() => ({
   noteChromeMcpBrowserReadiness: vi.fn(),
   detectLegacyStateMigrations: vi.fn(),
   runLegacyStateMigrations: vi.fn(),
+  repairObsoleteGeneratedExecApprovals: vi.fn(() => 0),
   collectLegacyPluginManifestContractMigrations: vi.fn(() => [] as unknown[]),
   legacyPluginManifestContractMigrationToHealthFinding: vi.fn(
     (migration: { pluginId: string }) => ({
@@ -269,7 +282,9 @@ vi.mock("../commands/doctor-gateway-services.js", () => ({
 }));
 
 vi.mock("../commands/doctor-auth-flat-profiles.js", () => ({
+  collectOpenAICodexAuthProfileStoreIdMap: mocks.collectOpenAICodexAuthProfileStoreIdMap,
   maybeMigrateAuthProfileJsonStoresToSqlite: mocks.maybeMigrateAuthProfileJsonStoresToSqlite,
+  maybeRepairOpenAICodexAuthConfig: mocks.maybeRepairOpenAICodexAuthConfig,
 }));
 
 vi.mock("../commands/doctor-plugin-model-catalog.js", () => ({
@@ -321,9 +336,13 @@ vi.mock("../commands/doctor-auth-legacy-oauth.js", () => ({
   maybeRepairLegacyOAuthProfileIds: mocks.maybeRepairLegacyOAuthProfileIds,
 }));
 
-vi.mock("../commands/doctor-state-migrations.js", () => ({
+vi.mock("../infra/state-migrations.doctor.js", () => ({
   detectLegacyStateMigrations: mocks.detectLegacyStateMigrations,
   runLegacyStateMigrations: mocks.runLegacyStateMigrations,
+}));
+
+vi.mock("../infra/exec-approvals-generated-migration.js", () => ({
+  repairObsoleteGeneratedExecApprovals: mocks.repairObsoleteGeneratedExecApprovals,
 }));
 
 vi.mock("../commands/doctor-plugin-manifests.js", () => ({
@@ -476,6 +495,10 @@ vi.mock("../config/config.js", () => ({
   CONFIG_PATH: "/tmp/fake-openclaw.json",
   replaceConfigFile: mocks.replaceConfigFile,
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+}));
+
+vi.mock("../infra/update-check-package-target.js", () => ({
+  fetchNpmPackageTargetStatus: vi.fn(),
 }));
 
 vi.mock("../cli/daemon-cli/status.gather.js", () => ({
@@ -661,7 +684,18 @@ describe("doctor health contributions", () => {
     mocks.maybeRunConfiguredPluginInstallReleaseStep.mockReset();
     mocks.registerBundledHealthChecks.mockReset();
     mocks.runDoctorHealthRepairs.mockReset();
-    mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockClear().mockResolvedValue(undefined);
+    mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockClear().mockResolvedValue({
+      detected: [],
+      changes: [],
+      configOwnerMigrationApplied: false,
+      warnings: [],
+    });
+    mocks.collectOpenAICodexAuthProfileStoreIdMap.mockReset().mockReturnValue(new Map());
+    mocks.maybeRepairOpenAICodexAuthConfig.mockReset().mockImplementation((cfg: unknown) => ({
+      config: cfg,
+      changes: [],
+      warnings: [],
+    }));
     mocks.maybeMigrateLegacyPluginModelCatalogs.mockClear().mockResolvedValue({
       detected: 0,
       migrated: 0,
@@ -733,6 +767,7 @@ describe("doctor health contributions", () => {
       .mockReset()
       .mockResolvedValue({ preview: [], warnings: [], notices: [] });
     mocks.runLegacyStateMigrations.mockReset().mockResolvedValue({ changes: [], warnings: [] });
+    mocks.repairObsoleteGeneratedExecApprovals.mockReset().mockReturnValue(0);
     mocks.detectLegacyClawdBrowserProfileResidue.mockReset().mockReturnValue(null);
     mocks.maybeArchiveLegacyClawdBrowserProfileResidue.mockReset().mockResolvedValue({
       changes: [],
@@ -783,6 +818,7 @@ describe("doctor health contributions", () => {
     mocks.checkGatewayHealth.mockReset();
     mocks.probeGatewayMemoryStatus.mockReset();
     mocks.gatherDaemonStatus.mockReset().mockResolvedValue({});
+    vi.mocked(fetchNpmPackageTargetStatus).mockReset();
     mocks.noteWorkspaceStatus.mockReset();
     mocks.resolveGatewayService
       .mockReset()
@@ -1103,7 +1139,18 @@ describe("doctor health contributions", () => {
       },
       sourceConfigValid: false,
       shouldRepair: true,
+      options: { nonInteractive: true, repair: true },
       env: {},
+    });
+    const pendingWarnings = [
+      "Deferred legacy agent/session migration: select an agent owner",
+      "Second pending owner needs operator input",
+      ...Array.from({ length: 20 }, (_, index) => `Test owner ${index + 1} is blocked`),
+    ];
+    mocks.detectLegacyStateMigrations.mockResolvedValue({
+      preview: [],
+      warnings: pendingWarnings,
+      notices: [],
     });
     mocks.replaceConfigFile.mockRejectedValueOnce(
       Object.assign(
@@ -1149,6 +1196,16 @@ describe("doctor health contributions", () => {
       expect.stringContaining("agents.defaults.heartbeat.every"),
       "Doctor warnings",
     );
+    const deferredPanels = mocks.note.mock.calls.filter(
+      ([, title]) => title === "Legacy state deferred",
+    );
+    expect(deferredPanels).toHaveLength(1);
+    expect(deferredPanels[0]?.[0]).toContain(pendingWarnings[0]);
+    expect(deferredPanels[0]?.[0]).toContain(pendingWarnings[1]);
+    expect(deferredPanels[0]?.[0]).toContain("2 additional pending entries were omitted");
+    expect(deferredPanels[0]?.[0]).toContain("No listed legacy source was removed.");
+    expect(deferredPanels[0]?.[0]).toContain('rerun "openclaw doctor --fix"');
+    expect(mocks.runLegacyStateMigrations).not.toHaveBeenCalled();
 
     // A later write pass must not retry the identical candidate or duplicate the warning.
     mocks.note.mockClear();
@@ -1238,7 +1295,13 @@ describe("doctor health contributions", () => {
       cfgForPersistence: structuredClone(cfg),
       configResult: { cfg, shouldWriteConfig: true },
       shouldRepair: true,
+      options: { repair: true },
       env: {},
+    });
+    mocks.detectLegacyStateMigrations.mockResolvedValue({
+      preview: ["- Workspace setup and attestations: legacy files → shared SQLite state"],
+      warnings: [],
+      notices: [],
     });
     mocks.replaceConfigFile.mockRejectedValueOnce(
       Object.assign(
@@ -1267,6 +1330,31 @@ describe("doctor health contributions", () => {
       expect.stringContaining("preserving any retained legacy owner"),
       "Doctor warnings",
     );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Resolve the Gateway or cron-store condition above"),
+      "Legacy state deferred",
+    );
+    expect(mocks.note).not.toHaveBeenCalledWith(
+      expect.stringContaining("Fix the config errors above"),
+      "Legacy state deferred",
+    );
+    expect(mocks.runLegacyStateMigrations).not.toHaveBeenCalled();
+  });
+
+  it("defers gateway probes while Doctor owns offline maintenance", async () => {
+    const contribution = requireDoctorContribution(DOCTOR_GATEWAY_HEALTH_ID);
+    const ctx = createDoctorContext({
+      cfg: {},
+      configResult: { cfg: {} },
+      cfgForPersistence: {},
+      env: {},
+    });
+    ctx.gatewayMaintenanceActive = true;
+    await contribution.run(ctx);
+    expect(mocks.checkGatewayHealth).not.toHaveBeenCalled();
+    expect(mocks.probeGatewayMemoryStatus).not.toHaveBeenCalled();
+    expect(ctx.gatewayHealthSkipped).toBe(true);
+    expect(ctx.gatewayMemoryProbe).toEqual({ checked: false, ready: false, skipped: true });
   });
 
   it("skips read-scope gateway probes when gateway health only proved reachability", async () => {
@@ -1531,7 +1619,7 @@ describe("doctor health contributions", () => {
     });
   });
 
-  it("passes daemon-context plugin drift into the workspace status note", async () => {
+  it("resolves pinned drift targets for ordinary Doctor before rendering its note", async () => {
     const contribution = requireDoctorContribution("doctor:workspace-status");
     const pluginVersionDrift = {
       gatewayVersion: "2026.6.1",
@@ -1541,6 +1629,7 @@ describe("doctor health contributions", () => {
           installedVersion: "2026.5.30-beta.1",
           gatewayVersion: "2026.6.1",
           source: "npm",
+          spec: "@openclaw/codex@2026.5.30-beta.1",
         },
       ],
     };
@@ -1550,6 +1639,12 @@ describe("doctor health contributions", () => {
     });
     const cfg = { plugins: { entries: { codex: { enabled: true } } } };
 
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
+      target: "2026.6.1",
+      version: null,
+      nodeEngine: null,
+      error: "HTTP 404",
+    });
     await contribution.run(
       createDoctorHealthFlowContext({
         cfg,
@@ -1567,7 +1662,23 @@ describe("doctor health contributions", () => {
       deep: false,
       allowExecSecretRefs: false,
     });
-    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, { pluginVersionDrift });
+    expect(fetchNpmPackageTargetStatus).toHaveBeenCalledWith({
+      packageName: "@openclaw/codex",
+      target: "2026.6.1",
+    });
+    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
+      pluginVersionDrift: {
+        ...pluginVersionDrift,
+        drifts: [
+          expect.objectContaining({
+            targetResolution: expect.objectContaining({
+              status: "unresolved",
+              error: expect.stringContaining("HTTP 404"),
+            }),
+          }),
+        ],
+      },
+    });
   });
 
   it("omits daemon-context plugin drift when gateway version used the fallback", async () => {
@@ -2173,6 +2284,30 @@ describe("doctor health contributions", () => {
     });
   });
 
+  it("renews exec approvals when an unrelated legacy migration is declined", async () => {
+    const contribution = requireDoctorContribution("doctor:legacy-state");
+    mocks.detectLegacyStateMigrations.mockResolvedValue({
+      preview: ["legacy sessions"],
+      warnings: [],
+      notices: [],
+    });
+    mocks.repairObsoleteGeneratedExecApprovals.mockReturnValue(1);
+    const ctx = createDoctorContext({
+      shouldRepair: true,
+      options: { repair: true },
+      prompter: buildDoctorPrompter(false),
+    });
+
+    await contribution.run(ctx);
+
+    expect(mocks.runLegacyStateMigrations).not.toHaveBeenCalled();
+    expect(mocks.repairObsoleteGeneratedExecApprovals).toHaveBeenCalledOnce();
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("removed 1 older generated approval"),
+      "Doctor changes",
+    );
+  });
+
   it("prints legacy state migration notices during manual doctor runs", async () => {
     const contribution = requireDoctorContribution("doctor:legacy-state");
     const detected = { preview: ["legacy sessions"], warnings: [], notices: [] };
@@ -2244,6 +2379,8 @@ describe("doctor health contributions", () => {
     expect(mocks.maybeMigrateAuthProfileJsonStoresToSqlite).toHaveBeenCalledWith({
       cfg: ctx.cfg,
       prompter: ctx.prompter,
+      openAICodexAuthProfileIdMap:
+        mocks.collectOpenAICodexAuthProfileStoreIdMap.mock.results[0]?.value,
     });
     expect(mocks.maybeRepairLegacyOAuthSidecarProfiles.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mock.invocationCallOrder[0]!,

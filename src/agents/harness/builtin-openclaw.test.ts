@@ -63,6 +63,7 @@ describe("createOpenClawAgentHarness", () => {
   });
 
   it("enforces a tool-free settled-turn finalization", async () => {
+    const prepareAssistantTranscriptMessage = vi.fn();
     const attempt = {
       prompt: "finalize",
       disableTools: false,
@@ -72,6 +73,7 @@ describe("createOpenClawAgentHarness", () => {
       internalEvents: [{ type: "ambient-event" }],
       trigger: "heartbeat",
       onPartialReply: vi.fn(),
+      prepareAssistantTranscriptMessage,
     } as never;
     const harness = createOpenClawAgentHarness();
 
@@ -86,6 +88,7 @@ describe("createOpenClawAgentHarness", () => {
         suppressNextUserMessagePersistence: true,
         initialReplayState: { replayInvalid: false, hadPotentialSideEffects: false },
         operation: "settled-tool-finalization",
+        prepareAssistantTranscriptMessage,
       }),
     );
     const finalizationAttempt = runEmbeddedAttempt.mock.calls[0]?.[0] as Record<string, unknown>;

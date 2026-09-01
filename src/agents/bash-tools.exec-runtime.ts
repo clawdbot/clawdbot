@@ -268,7 +268,8 @@ export function resolveExecTarget(params: {
   }
   // Session isolation outranks every agent, session, and request-scoped host preference.
   const configuredTarget = sandboxRequired ? "auto" : (params.configuredTarget ?? "auto");
-  const requestedTarget = params.requestedTarget ?? null;
+  const requestedTarget =
+    params.requestedTarget === "auto" ? null : (params.requestedTarget ?? null);
   if (sandboxRequired && (requestedTarget === "gateway" || requestedTarget === "node")) {
     throw registerTrustedToolNoStartError(
       new Error(

@@ -10,6 +10,9 @@ import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import { buildAssistantMediaUrl } from "../../app/assistant-media.ts";
 import { t } from "../../i18n/index.ts";
+import type { BrowserRoute } from "./browser-target.ts";
+
+export type BrowserRequestClient = Pick<GatewayBrowserClient, "request">;
 
 const BROWSER_REQUEST_METHOD = "browser.request";
 const BROWSER_SCREENSHOT_FETCH_TIMEOUT_MS = 30_000;
@@ -25,6 +28,7 @@ export type BrowserPanelTab = {
   targetId: string;
   title: string;
   url: string;
+  urlUnavailableReason?: "navigation_blocked" | "navigation_check_failed";
 };
 
 type BrowserTabsSnapshot = {
@@ -65,7 +69,34 @@ type BrowserRequestEnvelope = {
   timeoutMs?: number;
 };
 
-function browserRequest<T>(client: GatewayBrowserClient, envelope: BrowserRequestEnvelope) {
+/** Bind every browser operation to one route and one live panel scope. */
+export function bindBrowserRequestClient(
+  client: BrowserRequestClient,
+  route?: BrowserRoute,
+  current: () => boolean = () => true,
+): BrowserRequestClient {
+  return {
+    async request<T>(method: string, params?: unknown): Promise<T> {
+      if (!current()) {
+        throw new DOMException("Browser request scope ended", "AbortError");
+      }
+      const envelope = asRecord(params);
+      return await client.request<T>(
+        method,
+        route
+          ? {
+              ...envelope,
+              target: route.target,
+              ...(route.target === "node" ? { node: route.node } : {}),
+              query: { ...asRecord(envelope?.query), profile: route.profile },
+            }
+          : params,
+      );
+    },
+  };
+}
+
+function browserRequest<T>(client: BrowserRequestClient, envelope: BrowserRequestEnvelope) {
   return client.request<T>(BROWSER_REQUEST_METHOD, envelope);
 }
 
@@ -85,10 +116,14 @@ function normalizeTab(value: unknown): BrowserPanelTab | null {
     targetId,
     title: stringOrEmpty(record?.title),
     url: stringOrEmpty(record?.url),
+    ...(record?.urlUnavailableReason === "navigation_blocked" ||
+    record?.urlUnavailableReason === "navigation_check_failed"
+      ? { urlUnavailableReason: record.urlUnavailableReason }
+      : {}),
   };
 }
 
-export async function listBrowserTabs(client: GatewayBrowserClient): Promise<BrowserTabsSnapshot> {
+export async function listBrowserTabs(client: BrowserRequestClient): Promise<BrowserTabsSnapshot> {
   const result = asRecord(await browserRequest(client, { method: "GET", path: "/tabs" }));
   const tabs = Array.isArray(result?.tabs)
     ? result.tabs.flatMap((tab) => normalizeTab(tab) ?? [])
@@ -96,12 +131,12 @@ export async function listBrowserTabs(client: GatewayBrowserClient): Promise<Bro
   return { running: result?.running === true, tabs };
 }
 
-export async function startBrowser(client: GatewayBrowserClient): Promise<void> {
+export async function startBrowser(client: BrowserRequestClient): Promise<void> {
   await browserRequest(client, { method: "POST", path: "/start", body: {} });
 }
 
 export async function openBrowserTab(
-  client: GatewayBrowserClient,
+  client: BrowserRequestClient,
   url: string,
 ): Promise<BrowserPanelTab | null> {
   return normalizeTab(
@@ -109,11 +144,11 @@ export async function openBrowserTab(
   );
 }
 
-export async function focusBrowserTab(client: GatewayBrowserClient, targetId: string) {
+export async function focusBrowserTab(client: BrowserRequestClient, targetId: string) {
   await browserRequest(client, { method: "POST", path: "/tabs/focus", body: { targetId } });
 }
 
-export async function closeBrowserTab(client: GatewayBrowserClient, targetId: string) {
+export async function closeBrowserTab(client: BrowserRequestClient, targetId: string) {
   await browserRequest(client, {
     method: "DELETE",
     path: `/tabs/${encodeURIComponent(targetId)}`,
@@ -121,7 +156,7 @@ export async function closeBrowserTab(client: GatewayBrowserClient, targetId: st
 }
 
 export async function navigateBrowser(
-  client: GatewayBrowserClient,
+  client: BrowserRequestClient,
   params: { url: string; targetId?: string },
 ): Promise<{ targetId: string; url: string }> {
   const result = asRecord(
@@ -134,7 +169,7 @@ export async function navigateBrowser(
 }
 
 export async function captureBrowserScreenshot(
-  client: GatewayBrowserClient,
+  client: BrowserRequestClient,
   targetId: string,
 ): Promise<BrowserScreenshotCapture> {
   const result = asRecord(
@@ -156,7 +191,7 @@ export async function captureBrowserScreenshot(
 }
 
 export async function clickBrowserCoords(
-  client: GatewayBrowserClient,
+  client: BrowserRequestClient,
   params: { targetId: string; x: number; y: number; doubleClick?: boolean },
 ) {
   await browserRequest(client, {
@@ -173,7 +208,7 @@ export async function clickBrowserCoords(
 }
 
 export async function pressBrowserKey(
-  client: GatewayBrowserClient,
+  client: BrowserRequestClient,
   params: { targetId: string; key: string },
 ) {
   await browserRequest(client, {
@@ -184,7 +219,7 @@ export async function pressBrowserKey(
 }
 
 export async function resizeBrowserViewport(
-  client: GatewayBrowserClient,
+  client: BrowserRequestClient,
   params: { targetId: string; width: number; height: number },
 ) {
   await browserRequest(client, {
@@ -200,7 +235,7 @@ export async function resizeBrowserViewport(
 }
 
 async function evaluateInBrowser<T>(
-  client: GatewayBrowserClient,
+  client: BrowserRequestClient,
   params: { targetId: string; fn: string },
 ): Promise<T | null> {
   const result = asRecord(
@@ -211,6 +246,12 @@ async function evaluateInBrowser<T>(
     }),
   );
   return (result?.result as T | undefined) ?? null;
+}
+
+export function isBrowserNavigationBlockedError(error: unknown): boolean {
+  return (
+    error instanceof GatewayRequestError && asRecord(error.details)?.reason === "navigation_blocked"
+  );
 }
 
 /** True when the failure is the config-gated `browser.evaluateEnabled=false` rejection. */
@@ -227,7 +268,7 @@ export function isBrowserEvaluateDisabledError(err: unknown): boolean {
 }
 
 export async function scrollBrowserBy(
-  client: GatewayBrowserClient,
+  client: BrowserRequestClient,
   params: { targetId: string; deltaX: number; deltaY: number },
 ) {
   const dx = Math.round(params.deltaX);
@@ -239,7 +280,7 @@ export async function scrollBrowserBy(
 }
 
 export async function goBrowserHistory(
-  client: GatewayBrowserClient,
+  client: BrowserRequestClient,
   params: { targetId: string; delta: -1 | 1 },
 ) {
   await evaluateInBrowser(client, {
@@ -249,7 +290,7 @@ export async function goBrowserHistory(
 }
 
 export async function readBrowserPageMetrics(
-  client: GatewayBrowserClient,
+  client: BrowserRequestClient,
   targetId: string,
 ): Promise<BrowserPageMetrics | null> {
   const result = asRecord(
@@ -272,7 +313,7 @@ export async function readBrowserPageMetrics(
 }
 
 export async function inspectBrowserElementAt(
-  client: GatewayBrowserClient,
+  client: BrowserRequestClient,
   params: { targetId: string; x: number; y: number },
 ): Promise<BrowserInspectedNode | null> {
   const x = Math.max(0, Math.round(params.x));

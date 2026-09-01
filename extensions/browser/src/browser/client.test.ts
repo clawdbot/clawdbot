@@ -7,6 +7,7 @@ import {
   browserArmFileChooser,
   browserConsoleMessages,
   browserRequests,
+  browserErrors,
   browserPageText,
   browserEmulateSetting,
   browserNavigate,
@@ -142,7 +143,15 @@ describe("browser client", () => {
       body: { targetId: "t1", name: "iPhone 15" },
       profile,
     });
-    expect(calls).toHaveLength(3);
+    await browserErrors(baseUrl, { targetId: "tab & one", clear: false, profile });
+    expect(calls).toHaveLength(4);
+    const errorsUrl = new URL(calls[3]!.url);
+    expect(errorsUrl.pathname).toBe("/errors");
+    expect(Object.fromEntries(errorsUrl.searchParams)).toEqual({
+      targetId: "tab & one",
+      clear: "false",
+      profile,
+    });
     const requestUrl = new URL(calls[0]!.url);
     expect(requestUrl.pathname).toBe("/requests");
     expect(Object.fromEntries(requestUrl.searchParams)).toEqual({

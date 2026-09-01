@@ -180,36 +180,18 @@ async function prepareGatewayEntrypoint(cwd: string): Promise<string[]> {
     return builtEntrypoint;
   }
 
-  const stdout = createBoundedStringLog();
-  const stderr = createBoundedStringLog();
-  const child = spawn("node", ["scripts/run-node.mjs", "--help"], {
+  // Share command ownership so successful preparation cannot retain its deadline.
+  const completed = await runCommand({
+    args: ["node", "scripts/run-node.mjs", "--help"],
     cwd,
     env: { ...process.env, VITEST: "1" },
-    stdio: ["ignore", "pipe", "pipe"],
-    detached: shouldUseOpenClawTestProcessGroup(),
+    timeoutMs: GATEWAY_ENTRYPOINT_PREPARE_TIMEOUT_MS,
   });
-  child.stdout?.setEncoding("utf8");
-  child.stderr?.setEncoding("utf8");
-  child.stdout?.on("data", (d) => appendLogChunk(stdout, d));
-  child.stderr?.on("data", (d) => appendLogChunk(stderr, d));
-
-  const completed = await Promise.race([
-    new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-      child.once("error", reject);
-      child.once("exit", (code, signal) => resolve({ code, signal }));
-    }),
-    sleep(GATEWAY_ENTRYPOINT_PREPARE_TIMEOUT_MS).then(() => null),
-  ]);
-
-  if (completed === null) {
-    signalOpenClawTestProcess(child, "SIGKILL");
-    throw new Error(`timeout preparing gateway entrypoint\n${formatLogs(stdout, stderr)}`);
-  }
   if (completed.code !== 0) {
     throw new Error(
       `failed preparing gateway entrypoint (code=${String(completed.code)} signal=${String(
         completed.signal,
-      )})\n${formatLogs(stdout, stderr)}`,
+      )})\n${formatLogs([completed.stdout], [completed.stderr])}`,
     );
   }
 
@@ -456,19 +438,25 @@ export async function createOpenClawTestInstance(
     applyEnv: false,
     env: options.env,
   });
-  await state.writeConfig(
-    mergeConfig(
-      {
-        gateway: {
-          port,
-          auth: { mode: "token", token: gatewayToken },
-          controlUi: { enabled: false },
+  try {
+    await state.writeConfig(
+      mergeConfig(
+        {
+          gateway: {
+            port,
+            auth: { mode: "token", token: gatewayToken },
+            controlUi: { enabled: false },
+          },
+          hooks: { enabled: true, token: hookToken, path: "/hooks" },
         },
-        hooks: { enabled: true, token: hookToken, path: "/hooks" },
-      },
-      options.config,
-    ),
-  );
+        options.config,
+      ),
+    );
+  } catch (error) {
+    // Config staging can fail before the instance exposes its cleanup handle.
+    await state.cleanup();
+    throw error;
+  }
 
   const stdout = createBoundedStringLog();
   const stderr = createBoundedStringLog();
@@ -674,13 +662,14 @@ async function runCommand(params: {
   child.stdout?.on("data", (d) => appendLogChunk(stdout, d));
   child.stderr?.on("data", (d) => appendLogChunk(stderr, d));
 
+  const deadline = new AbortController();
   const completed = await Promise.race([
     new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
       child.once("error", reject);
       child.once("exit", (code, signal) => resolve({ code, signal }));
     }),
-    sleep(params.timeoutMs).then(() => null),
-  ]);
+    sleep(params.timeoutMs, deadline.signal).then(() => null),
+  ]).finally(() => deadline.abort());
   if (completed === null) {
     signalOpenClawTestProcess(child, "SIGKILL");
     await waitForGatewayClose(child, GATEWAY_STOP_TIMEOUT_MS);
@@ -720,7 +709,6 @@ export const testing = {
   appendLogChunk,
   createBoundedStringLog,
   formatLogs,
-  hasChildExited,
   isGatewayMigrationConvergenceRefusal,
   signalOpenClawTestProcess,
   stopGatewayProcess,

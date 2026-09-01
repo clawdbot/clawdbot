@@ -2,10 +2,6 @@ import { bucketRelativeTimeMs, type RelativeTimeUnit } from "@openclaw/normaliza
 // Control UI module implements format behavior.
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import {
-  formatDurationCompact as formatDurationCompactCore,
-  formatDurationHuman as formatDurationHumanCore,
-} from "../../../src/infra/format-time/format-duration.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { formatUiError } from "./format-error.ts";
 
@@ -99,9 +95,8 @@ export function formatRelativeTimestamp(
 }
 
 export function formatDurationCompact(ms?: number | null): string | undefined {
-  const coreValue = formatDurationCompactCore(ms, { spaced: true });
-  if (!coreValue || ms == null || !Number.isFinite(ms) || ms <= 0) {
-    return coreValue;
+  if (ms == null || !Number.isFinite(ms) || ms <= 0) {
+    return undefined;
   }
   const roundedMs = Math.round(ms);
   if (roundedMs < 1000) {
@@ -139,9 +134,8 @@ export function formatDurationCompact(ms?: number | null): string | undefined {
 }
 
 export function formatDurationHuman(ms?: number | null, fallback = t("common.na")): string {
-  const coreValue = formatDurationHumanCore(ms, fallback);
   if (ms == null || !Number.isFinite(ms) || ms < 0) {
-    return coreValue;
+    return fallback;
   }
   if (ms < 1000) {
     return formatUnit(Math.round(ms), "millisecond");
