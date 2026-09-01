@@ -229,10 +229,10 @@ struct GatewayDiscoverySelectionSupportTests {
         }
     }
 
-    @Test func `different discovery route atomically clears config credentials and fences ambient auth`() async {
+    @Test func `different discovery route atomically clears config credentials and fences ambient auth`() async throws {
         let configPath = TestIsolation.tempConfigPath()
         defer { try? FileManager.default.removeItem(atPath: configPath) }
-        await TestIsolation.withIsolatedState(
+        try await TestIsolation.withIsolatedState(
             env: [
                 "OPENCLAW_CONFIG_PATH": configPath,
                 "OPENCLAW_GATEWAY_TOKEN": "ambient-token",
@@ -443,15 +443,16 @@ struct GatewayDiscoverySelectionSupportTests {
                     state: state,
                     beforeConfigRead: {})
                 #expect(source.deviceAuthGatewayID == nil)
-                #expect(try await self.connectNodeAuth(source: source)?["token"] == nil)
+                let blockedNodeAuth = try await self.connectNodeAuth(source: source)
+                #expect(blockedNodeAuth?["token"] == nil)
 
                 GatewayDiscoveryPreferences.setPreferredStableID(nil)
                 source = await GatewayEndpointStore._testLiveSourceSnapshot(
                     state: state,
                     beforeConfigRead: {})
                 #expect(source.deviceAuthGatewayID == routeBinding)
-                #expect(try await self.connectNodeAuth(source: source)?["token"] as? String ==
-                    "gateway-a-node-token")
+                let allowedNodeAuth = try await self.connectNodeAuth(source: source)
+                #expect(allowedNodeAuth?["token"] as? String == "gateway-a-node-token")
             }
         }
     }
@@ -608,8 +609,7 @@ struct GatewayDiscoverySelectionSupportTests {
                 #expect(source.token == nil)
                 #expect(source.password == nil)
                 #expect(source.deviceAuthGatewayID == nil)
-                #expect(try await self.connectAuth(source: source) == nil)
-                #expect(try await self.connectNodeAuth(source: source) == nil)
+                try await self.requireNoAuth(source)
             }
         }
     }
@@ -667,8 +667,7 @@ struct GatewayDiscoverySelectionSupportTests {
                 #expect(source.token == nil)
                 #expect(source.password == nil)
                 #expect(source.deviceAuthGatewayID == nil)
-                #expect(try await self.connectAuth(source: source) == nil)
-                #expect(try await self.connectNodeAuth(source: source) == nil)
+                try await self.requireNoAuth(source)
             }
         }
     }
@@ -717,8 +716,7 @@ struct GatewayDiscoverySelectionSupportTests {
             #expect(source.token == nil)
             #expect(source.password == nil)
             #expect(source.deviceAuthGatewayID == nil)
-            #expect(try await self.connectAuth(source: source) == nil)
-            #expect(try await self.connectNodeAuth(source: source) == nil)
+            try await self.requireNoAuth(source)
 
             source = await GatewayEndpointStore._testLiveSourceSnapshot(
                 state: state,
@@ -727,8 +725,7 @@ struct GatewayDiscoverySelectionSupportTests {
             #expect(source.token == nil)
             #expect(source.password == nil)
             #expect(source.deviceAuthGatewayID == nil)
-            #expect(try await self.connectAuth(source: source) == nil)
-            #expect(try await self.connectNodeAuth(source: source) == nil)
+            try await self.requireNoAuth(source)
             #expect(GatewayDiscoveryPreferences.preferredStableID() == "gateway-a")
         }
     }
@@ -787,8 +784,7 @@ struct GatewayDiscoverySelectionSupportTests {
                     state: state,
                     beforeConfigRead: {})
                 #expect(source.deviceAuthGatewayID == nil)
-                #expect(try await self.connectAuth(source: source) == nil)
-                #expect(try await self.connectNodeAuth(source: source) == nil)
+                try await self.requireNoAuth(source)
 
                 #expect(OpenClawConfigFile.saveDict([
                     "gateway": [
@@ -806,10 +802,14 @@ struct GatewayDiscoverySelectionSupportTests {
                     state: state,
                     beforeConfigRead: {})
                 #expect(source.deviceAuthGatewayID == newRouteBinding)
-                #expect(try await self.connectAuth(source: source)?["token"] as? String ==
-                    "gateway-b-operator-token")
-                #expect(try await self.connectNodeAuth(source: source)?["token"] as? String ==
-                    "gateway-b-node-token")
+                try self.requireOnlyAuth(
+                    try await self.connectAuth(source: source),
+                    key: "token",
+                    value: "gateway-b-operator-token")
+                try self.requireOnlyAuth(
+                    try await self.connectNodeAuth(source: source),
+                    key: "token",
+                    value: "gateway-b-node-token")
             }
         }
     }
@@ -950,8 +950,7 @@ struct GatewayDiscoverySelectionSupportTests {
                 beforeConfigRead: {})
             #expect(source.token == nil)
             #expect(source.password == nil)
-            #expect(try await self.connectAuth(source: source) == nil)
-            #expect(try await self.connectNodeAuth(source: source) == nil)
+            try await self.requireNoAuth(source)
         }
     }
 
@@ -1041,8 +1040,7 @@ struct GatewayDiscoverySelectionSupportTests {
                 routeBindingKey: self.routeBindingKey,
                 beforeConfigRead: {})
             #expect(source.token == nil)
-            #expect(try await self.connectAuth(source: source) == nil)
-            #expect(try await self.connectNodeAuth(source: source) == nil)
+            try await self.requireNoAuth(source)
         }
     }
 
@@ -1203,5 +1201,12 @@ struct GatewayDiscoverySelectionSupportTests {
         let auth = try #require(auth)
         #expect(auth.count == 1)
         #expect(auth[key] as? String == value)
+    }
+
+    private func requireNoAuth(_ source: GatewayEndpointStore.SourceSnapshot) async throws {
+        let operatorAuth = try await self.connectAuth(source: source)
+        let nodeAuth = try await self.connectNodeAuth(source: source)
+        #expect(operatorAuth == nil)
+        #expect(nodeAuth == nil)
     }
 }
