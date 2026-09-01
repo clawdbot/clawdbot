@@ -1,6 +1,14 @@
 import Foundation
 import OpenClawKit
 
+enum WatchMessagingInboundEvent {
+    case reply(WatchQuickReplyEvent)
+    case execApprovalResolve(WatchExecApprovalResolveEvent)
+    case execApprovalSnapshotRequest(WatchExecApprovalSnapshotRequestEvent)
+    case appSnapshotRequest(WatchAppSnapshotRequestEvent)
+    case appCommand(WatchAppCommandEvent)
+}
+
 enum WatchMessagingPayloadCodec {
     private static let durableSnapshotTypes = [
         OpenClawWatchPayloadType.appSnapshot.rawValue,
@@ -306,6 +314,31 @@ enum WatchMessagingPayloadCodec {
     private static func truncatedCompletedChatReplyText(_ text: String) -> String {
         guard text.count > self.completedChatReplyTextLimit else { return text }
         return "\(text.prefix(self.completedChatReplyTextLimit - 3))..."
+    }
+
+    static func parseInboundPayload(
+        _ payload: [String: Any],
+        transport: String) -> WatchMessagingInboundEvent?
+    {
+        switch payload["type"] as? String {
+        case OpenClawWatchPayloadType.reply.rawValue:
+            self.parseQuickReplyPayload(payload, transport: transport)
+                .map(WatchMessagingInboundEvent.reply)
+        case OpenClawWatchPayloadType.execApprovalResolve.rawValue:
+            self.parseExecApprovalResolvePayload(payload, transport: transport)
+                .map(WatchMessagingInboundEvent.execApprovalResolve)
+        case OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue:
+            self.parseExecApprovalSnapshotRequestPayload(payload, transport: transport)
+                .map(WatchMessagingInboundEvent.execApprovalSnapshotRequest)
+        case OpenClawWatchPayloadType.appSnapshotRequest.rawValue:
+            self.parseAppSnapshotRequestPayload(payload, transport: transport)
+                .map(WatchMessagingInboundEvent.appSnapshotRequest)
+        case OpenClawWatchPayloadType.appCommand.rawValue:
+            self.parseAppCommandPayload(payload, transport: transport)
+                .map(WatchMessagingInboundEvent.appCommand)
+        default:
+            nil
+        }
     }
 
     static func parseQuickReplyPayload(
