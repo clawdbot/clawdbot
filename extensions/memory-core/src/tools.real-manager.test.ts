@@ -143,7 +143,9 @@ describe("memory_search real manager", () => {
 
     const manager = await fixture.getFreshManager(cfg);
     await manager.sync({ reason: "test", force: true });
-    expect(manager.status().sourceCounts).toEqual([{ source: "sessions", files: 5, chunks: 4 }]);
+    expect(manager.status().sourceCounts).toEqual([
+      { source: "sessions", files: 5, chunks: 4, chunkBytes: 200 },
+    ]);
 
     const ranked = await manager.search("alpha", {
       maxResults: 4,

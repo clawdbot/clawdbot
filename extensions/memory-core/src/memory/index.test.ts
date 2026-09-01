@@ -109,6 +109,7 @@ describe("memory index", () => {
           source: "memory",
           files: status.files,
           chunks: status.chunks,
+          chunkBytes: 52,
         },
       ]);
     } finally {
