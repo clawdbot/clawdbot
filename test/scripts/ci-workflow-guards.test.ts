@@ -8819,7 +8819,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     },
   );
 
-  it.each([
+  it.each<{ label: string } & Omit<Parameters<typeof runCiManifestFixture>[0], "bundledPlanner">>([
     { label: "stable target", packageVersion: "2026.9.1" },
     { label: "alpha target", packageVersion: "2026.9.1-alpha.1" },
     { label: "PR event", eventName: "pull_request" as const },

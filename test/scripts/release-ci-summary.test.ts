@@ -13,6 +13,7 @@ import {
   composeReleaseAttemptJobs,
   MAX_RELEASE_ARTIFACT_BYTES,
   releaseCompositeJobsSha256,
+  type ReleaseExecutionPlan,
 } from "../../scripts/full-release-validation-policy.mjs";
 import {
   artifactDownloadArgs,
@@ -918,7 +919,7 @@ function trustedMainNpmBetaFixture() {
     ...fixture.client,
     getJobLog: vi.fn((jobId: number) => `${originalLog(jobId)}\nCI_RELEASE_SCOPE: npm-beta`),
     getRunAttemptJobs: vi.fn(() => jobs),
-    loadExecutionPlan: vi.fn(() => executionPlan),
+    loadExecutionPlan: vi.fn<() => ReleaseExecutionPlan | undefined>(() => executionPlan),
   };
   return { ...fixture, client, executionPlan };
 }
