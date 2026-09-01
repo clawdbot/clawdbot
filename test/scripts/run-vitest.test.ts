@@ -613,6 +613,27 @@ describe("scripts/run-vitest", () => {
     ]);
   });
 
+  it.each([
+    [
+      ["ui/src/components/markdown-mermaid.runtime.browser.test.ts"],
+      "test/vitest/vitest.ui-browser.config.ts",
+    ],
+    [["ui/src/components/form-controls.browser.test.ts"], "test/vitest/vitest.ui.config.ts"],
+    [
+      [
+        "ui/src/components/markdown-mermaid.runtime.browser.test.ts",
+        "ui/src/components/form-controls.browser.test.ts",
+      ],
+      null,
+    ],
+    [["ui/src/**/*.browser.test.ts"], null],
+    [["ui/src/components", "ui/src/pages/chat/chat-message-markdown.browser.test.ts"], null],
+  ])("preserves browser ownership for implicit targets %j", (targets, config) => {
+    expect(resolveImplicitVitestArgs(["run", ...targets])).toEqual(
+      config ? ["run", "--config", config, ...targets] : ["run", ...targets],
+    );
+  });
+
   it("allows opting back into Maglev explicitly", () => {
     expect(
       resolveVitestNodeArgs({

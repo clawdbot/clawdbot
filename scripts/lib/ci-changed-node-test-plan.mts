@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { isUiBrowserTestFile } from "../../test/vitest/vitest.ui-paths.mjs";
 import { detectChangedLanes } from "../changed-lanes.mts";
 import {
   buildVitestRunPlans,
@@ -545,10 +546,14 @@ export function createChangedNodeTestShards(
   // suite scans the checked-out tree and never consumes the built dist.
   const shards = [
     ...createChangedExtensionConfigShardsForPaths(livePaths, cwd),
-    ...createChangedTargetShards(targets, {
-      checkName: "checks-node-changed",
-      shardName: "changed",
-    }),
+    // Native browser files run in checks-ui, including precise changed-file plans.
+    ...createChangedTargetShards(
+      targets.filter((target) => !isUiBrowserTestFile(target)),
+      {
+        checkName: "checks-node-changed",
+        shardName: "changed",
+      },
+    ),
     ...(hasBuildArtifactAffectingChange(changedPaths) ? [] : [createBoundaryShard()]),
   ];
   return shards.length > 0 ? shards : null;

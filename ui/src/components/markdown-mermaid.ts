@@ -160,7 +160,7 @@ class OpenClawMermaid extends OpenClawLitElement {
       padding: 36px 16px 16px;
       overflow: auto;
       max-height: 480px;
-      font: 12px/1.6 var(--font-mono, monospace);
+      font: 12px/1.6 var(--mono);
       tab-size: 2;
     }
     .status {

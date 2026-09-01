@@ -9,7 +9,7 @@ import {
   embeddedAgentVitestProjectOwners,
 } from "../test/vitest/vitest.agents-paths.mjs";
 import { toolingIsolatedTestFiles } from "../test/vitest/vitest.tooling-isolated-paths.mjs";
-import { isUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
+import { isUiBrowserTestFile, isUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
 import { boundaryTestFiles } from "../test/vitest/vitest.unit-paths.mjs";
 import { parsePermissiveBooleanToken } from "./lib/arg-utils.mts";
 import { resolveExtensionTestConfig } from "./lib/extension-test-plan.mts";
@@ -76,6 +76,7 @@ export const DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS = 2_400_000;
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS";
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
+const UI_BROWSER_VITEST_CONFIG = "test/vitest/vitest.ui-browser.config.ts";
 const TOOLING_DOCKER_VITEST_CONFIG = "test/vitest/vitest.tooling-docker.config.ts";
 const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const GATEWAY_CORE_VITEST_CONFIG = "test/vitest/vitest.gateway-core.config.ts";
@@ -985,6 +986,9 @@ export function resolveImplicitVitestArgs(argv: string[], cwd = process.cwd()): 
     resolved.splice(separatorIndex < 0 ? resolved.length : separatorIndex, 0, "--isolate");
     return resolved;
   }
+  if (collectExplicitDirectoryTargetArgs(argv, cwd).length > 0) {
+    return argv;
+  }
   const testTargets = argv
     .filter((arg) => !arg.startsWith("-") && arg.endsWith(".test.ts"))
     .map((arg) => toRepoRelativeArg(arg, cwd));
@@ -994,7 +998,17 @@ export function resolveImplicitVitestArgs(argv: string[], cwd = process.cwd()): 
   if (testTargets.length > 0 && testTargets.every(isToolingTestTarget)) {
     return withImplicitVitestConfig(argv, TOOLING_VITEST_CONFIG);
   }
-  if (testTargets.length > 0 && testTargets.every(isUiTestTarget)) {
+  // Glob selectors can span both browser owners; the root project matrix partitions them.
+  if (testTargets.some((target) => /[*?[\]{}]|[@+!]\(/u.test(target))) {
+    return argv;
+  }
+  if (testTargets.length > 0 && testTargets.every(isUiBrowserTestFile)) {
+    return withImplicitVitestConfig(argv, UI_BROWSER_VITEST_CONFIG);
+  }
+  if (
+    testTargets.length > 0 &&
+    testTargets.every((target) => isUiTestTarget(target) && !isUiBrowserTestFile(target))
+  ) {
     return withImplicitVitestConfig(argv, UI_VITEST_CONFIG);
   }
   return argv;

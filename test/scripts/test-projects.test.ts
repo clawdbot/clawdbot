@@ -554,7 +554,9 @@ describe("scripts/test-projects changed-target routing", () => {
     ]) {
       const plan = resolveChangedTestTargetPlan([file]);
       expect(plan.mode).toBe("targets");
-      if (plan.mode !== "targets") throw new Error(`Missing recovery test owner: ${file}`);
+      if (plan.mode !== "targets") {
+        throw new Error(`Missing recovery test owner: ${file}`);
+      }
       expect(plan.targets).toContain("test/scripts/upgrade-survivor-recovery-cleanup.test.ts");
     }
   });
@@ -904,7 +906,9 @@ describe("scripts/test-projects changed-target routing", () => {
       (cwd) => {
         const targets = resolveChangedTestTargetPlan([changedPath], { cwd }).targets;
 
-        for (const exactTarget of exactTargets) expect(targets).toContain(exactTarget);
+        for (const exactTarget of exactTargets) {
+          expect(targets).toContain(exactTarget);
+        }
         expect(targets).toContain("test/scripts/direct-workflow-reference.test.ts");
         expect(targets).toContain("test/scripts/ci-workflow-guards.test.ts");
       },
@@ -3047,14 +3051,16 @@ describe("scripts/test-projects changed-target routing", () => {
       "ui/src/test-helpers/lit-warnings.setup.ts",
     ]);
 
-    expect(plans).toEqual([
-      {
-        config: "test/vitest/vitest.ui.config.ts",
-        forwardedArgs: [],
-        includePatterns: null,
-        watchMode: false,
-      },
-    ]);
+    expect(plans[0]).toEqual({
+      config: "test/vitest/vitest.ui.config.ts",
+      forwardedArgs: [],
+      includePatterns: null,
+      watchMode: false,
+    });
+    expect(plans[1]?.config).toBe("test/vitest/vitest.ui-browser.config.ts");
+    expect(plans[1]?.includePatterns).toContain(
+      "ui/src/components/markdown-mermaid.runtime.browser.test.ts",
+    );
   });
 
   it("keeps mixed Control UI root and source changes in the UI lane", () => {
@@ -3067,6 +3073,7 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(plans.map((plan) => plan.config)).toEqual([
       "test/vitest/vitest.ui.config.ts",
       "test/vitest/vitest.ui-isolated.config.ts",
+      "test/vitest/vitest.ui-browser.config.ts",
     ]);
   });
 
@@ -3095,20 +3102,71 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
-  it("adds the isolated project for broad ui targets", () => {
+  it("adds the isolated and Chromium projects for broad ui targets", () => {
     const plans = buildVitestRunPlans(["ui/src"]);
 
     expect(plans.map((plan) => plan.config)).toEqual([
       "test/vitest/vitest.ui.config.ts",
       "test/vitest/vitest.ui-isolated.config.ts",
+      "test/vitest/vitest.ui-browser.config.ts",
     ]);
     expect(plans[1]?.includePatterns).toContain("ui/src/pages/workboard/view.test.ts");
+    expect(plans[2]?.includePatterns).toContain(
+      "ui/src/components/markdown-mermaid.runtime.browser.test.ts",
+    );
+  });
+
+  it.each([
+    [
+      "ui/src/components/markdown-mermaid.runtime.browser.test.ts",
+      "test/vitest/vitest.ui-browser.config.ts",
+    ],
+    ["ui/src/components/form-controls.browser.test.ts", "test/vitest/vitest.ui.config.ts"],
+  ])("routes the browser test %s to its execution owner", (file, config) => {
+    expectSingleVitestRunPlan(buildVitestRunPlans([file]), { config, includePatterns: [file] });
+  });
+
+  it.each([
+    ["ui/src/**/*.browser.test.ts"],
+    [
+      "ui/src/components/*.browser.test.ts",
+      "ui/src/pages/chat",
+      "ui/src/styles/cursor-policy.browser.test.ts",
+    ],
+  ])("retains both browser owners for mixed selectors %j", (...targets) => {
+    const plans = buildVitestRunPlans(targets);
+    const native = plans.find((plan) => plan.config === "test/vitest/vitest.ui-browser.config.ts");
+    const node = plans.find((plan) => plan.config === "test/vitest/vitest.ui.config.ts");
+    expect(native?.includePatterns).toContain(
+      "ui/src/components/markdown-mermaid.runtime.browser.test.ts",
+    );
+    expect(
+      node?.includePatterns === null ||
+        node?.includePatterns?.includes("ui/src/components/form-controls.browser.test.ts"),
+    ).toBe(true);
+    expect(node?.includePatterns ?? []).not.toContain(
+      "ui/src/components/markdown-mermaid.runtime.browser.test.ts",
+    );
+    expect(native?.includePatterns).not.toContain(
+      "ui/src/components/form-controls.browser.test.ts",
+    );
+    if (targets.length === 1) {
+      expect(plans.flatMap((plan) => plan.includePatterns ?? []).toSorted()).toEqual(
+        fs.globSync(targets[0]!).toSorted(),
+      );
+    }
   });
 
   it("rejects broad ui watch targets that cross shared and isolated projects", () => {
     expect(() => buildVitestRunPlans(["--watch", "ui/src"])).toThrow(
       "watch mode with mixed test suites is not supported",
     );
+  });
+
+  it("rejects UI glob watch before freezing the current matching files", () => {
+    expect(() =>
+      buildVitestRunPlans(["--watch", "ui/src/components/markdown-*.browser.test.ts"]),
+    ).toThrow("use a literal test path, directory, or dedicated UI suite");
   });
 
   it("keeps explicit non-renderer ui test targets scoped", () => {
