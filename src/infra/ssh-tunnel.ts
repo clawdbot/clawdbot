@@ -124,7 +124,7 @@ async function canConnectLocal(port: number): Promise<boolean> {
   });
 }
 
-export async function waitForLocalListener(port: number, timeoutMs: number): Promise<void> {
+async function waitForLocalListener(port: number, timeoutMs: number): Promise<void> {
   // Use performance.now() (monotonic clock) instead of Date.now() (wall clock)
   // so NTP corrections, VM pause/resume, or manual time changes cannot shorten
   // or extend the polling budget.

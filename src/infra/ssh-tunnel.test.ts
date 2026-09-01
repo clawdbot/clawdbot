@@ -25,7 +25,7 @@ vi.mock("./ssh-client.js", () => ({
 
 import { getFreePort } from "../test-utils/ports.js";
 import { PortInUseError } from "./ports.js";
-import { parseSshTarget, startSshPortForward, waitForLocalListener } from "./ssh-tunnel.js";
+import { parseSshTarget, startSshPortForward } from "./ssh-tunnel.js";
 
 describe("parseSshTarget", () => {
   it("parses user@host:port targets", () => {
@@ -119,6 +119,30 @@ describe("startSshPortForward", () => {
       openServers.push(server);
       server.listen(localPort, "127.0.0.1");
 
+      const child = new EventEmitter() as EventEmitter & {
+        killed: boolean;
+        pid: number;
+        stderr: EventEmitter & { setEncoding: (enc: string) => void };
+        kill: (signal?: string) => boolean;
+      };
+      child.killed = false;
+      child.pid = 4242;
+      const stderr = new EventEmitter() as EventEmitter & { setEncoding: (enc: string) => void };
+      stderr.setEncoding = () => {};
+      child.stderr = stderr;
+      child.kill = (signal?: string) => {
+        child.killed = true;
+        queueMicrotask(() => child.emit("exit", 0, signal ?? null));
+        return true;
+      };
+      return child;
+    });
+  }
+
+  // Fake ssh child that never opens a listener and never exits on its own.
+  // Use this to drive waitForLocalListener to its budget boundary.
+  function spawnFakeSshStalled() {
+    mocks.spawn.mockImplementation(() => {
       const child = new EventEmitter() as EventEmitter & {
         killed: boolean;
         pid: number;
@@ -253,39 +277,65 @@ describe("startSshPortForward", () => {
     expect(kill).toHaveBeenCalledWith("SIGTERM");
   });
 
-  it("uses a monotonic deadline and is not shortened by wall-clock backward skew", async () => {
-    const netConnectMock = vi.spyOn(net, "connect").mockImplementation(() => {
-      const socket = new EventEmitter() as net.Socket & {
-        connect: () => void;
-        removeAllListeners: () => void;
-        destroy: () => void;
-        setTimeout: (ms: number, cb?: () => void) => void;
-      };
-      socket.connect = vi.fn();
-      socket.removeAllListeners = vi.fn();
-      socket.destroy = vi.fn();
-      socket.setTimeout = vi.fn();
-      queueMicrotask(() => socket.emit("error", new Error("refused")));
-      return socket;
-    });
-
-    const baseTime = 1_000_000;
+  it("times out through tunnel startup despite forward wall-clock skew", async () => {
+    // The pre-fix loop computed its budget with Date.now(). A forward step
+    // made the elapsed time immediately exceed the budget, so it rejected
+    // before the real timeout had elapsed. The monotonic deadline ignores
+    // wall-clock steps and still consumes the full budget.
+    spawnFakeSshStalled();
+    const localPort = await getFreePort();
+    const realDateNow = Date.now;
     let callCount = 0;
-    const performanceNowMock = vi.spyOn(performance, "now").mockImplementation(() => {
-      callCount++;
-      // Simulate wall-clock backward skew / stall for the first half of the
-      // budget, then jump to the deadline. A monotonic-clock deadline still
-      // consumes the full timeout instead of exiting early.
-      return callCount <= 5 ? baseTime : baseTime + 250;
+    const startTime = 1_000_000;
+    Date.now = () => {
+      callCount += 1;
+      return callCount <= 1 ? startTime : startTime + 10_000;
+    };
+    const started = performance.now();
+    try {
+      await expect(
+        startSshPortForward({
+          target: "me@example.com:2222",
+          localPortPreferred: localPort,
+          remotePort: 18789,
+          timeoutMs: 250,
+        }),
+      ).rejects.toThrow("ssh tunnel did not start listening");
+      expect(performance.now() - started).toBeGreaterThanOrEqual(200);
+    } finally {
+      Date.now = realDateNow;
+    }
+  });
+
+  it("times out through tunnel startup despite backward wall-clock skew", async () => {
+    // The pre-fix loop computed its budget with Date.now(). A backward step
+    // made elapsed time negative forever, so the loop would poll indefinitely
+    // instead of rejecting. The monotonic deadline still expires.
+    spawnFakeSshStalled();
+    const localPort = await getFreePort();
+    const realDateNow = Date.now;
+    const startTime = 1_000_000;
+    Date.now = () => startTime - 10_000;
+
+    const promise = startSshPortForward({
+      target: "me@example.com:2222",
+      localPortPreferred: localPort,
+      remotePort: 18789,
+      timeoutMs: 250,
     });
+    const child = mocks.spawn.mock.results[0]?.value as EventEmitter | undefined;
+    // If the implementation still relied on Date.now(), the promise would hang.
+    // Release the race after a bounded window so the test fails instead of
+    // blocking the suite.
+    const safety = setTimeout(() => {
+      (child as { kill?: (signal?: string) => boolean } | undefined)?.kill?.("SIGTERM");
+    }, 1000);
 
     try {
-      const promise = waitForLocalListener(12345, 250);
       await expect(promise).rejects.toThrow("ssh tunnel did not start listening");
-      expect(callCount).toBeGreaterThan(5);
     } finally {
-      netConnectMock.mockRestore();
-      performanceNowMock.mockRestore();
+      clearTimeout(safety);
+      Date.now = realDateNow;
     }
   });
 
