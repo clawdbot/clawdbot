@@ -1336,7 +1336,11 @@ function runProtocolSinceFixture(checkout: string, baseSha: string) {
   );
 }
 
-function runGuardCheckFixture(options: { frozenTarget: boolean; scripts: string[] }): {
+function runCheckShardFixture(options: {
+  frozenTarget: boolean;
+  scripts: string[];
+  task?: "guards" | "test-types";
+}): {
   calls: string[];
   output: string;
   status: number | null;
@@ -1345,6 +1349,10 @@ function runGuardCheckFixture(options: { frozenTarget: boolean; scripts: string[
   const fakeBin = path.join(root, "bin");
   const callsPath = path.join(root, "pnpm-calls.txt");
   mkdirSync(fakeBin);
+  if (options.task === "test-types") {
+    mkdirSync(path.join(root, "scripts"));
+    writeFileSync(path.join(root, "scripts/run-tsgo-core-test-shards.mts"), "// --stripe\n");
+  }
   writeFileSync(
     path.join(root, "package.json"),
     `${JSON.stringify({
@@ -1354,6 +1362,7 @@ function runGuardCheckFixture(options: { frozenTarget: boolean; scripts: string[
   writeExecutable(path.join(fakeBin, "pnpm"), [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
+    'if [ "$*" = "run --silent" ]; then exit 1; fi',
     'printf "%s\\n" "$*" >> "$PNPM_CALLS"',
   ]);
   const checkShardRun = readCiWorkflow().jobs["check-shard"].steps.find(
@@ -1367,10 +1376,11 @@ function runGuardCheckFixture(options: { frozenTarget: boolean; scripts: string[
       FROZEN_TARGET: options.frozenTarget ? "true" : "false",
       FORMAT_CHECK: "false",
       HISTORICAL_TARGET: options.frozenTarget ? "true" : "false",
+      HOSTED_RUNNER_STRIPES: "true",
       PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
       PNPM_CALLS: callsPath,
       PR_BASE_SHA: "",
-      TASK: "guards",
+      TASK: options.task ?? "guards",
     },
   });
   return {
@@ -7965,7 +7975,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 
   it("runs temp path guardrails in the hosted guard shard", () => {
     const requiredScripts = ["check:doctor-deprecation-registry", "check:coercion-helpers"];
-    const current = runGuardCheckFixture({
+    const current = runCheckShardFixture({
       frozenTarget: false,
       scripts: [...requiredScripts, "check:temp-path-guardrails"],
     });
@@ -7975,7 +7985,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       current.calls.indexOf("dup:check"),
     );
 
-    const frozenMissing = runGuardCheckFixture({
+    const frozenMissing = runCheckShardFixture({
       frozenTarget: true,
       scripts: requiredScripts,
     });
@@ -7986,7 +7996,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "[skip] frozen target predates the temp path guardrails",
     );
 
-    const currentMissing = runGuardCheckFixture({
+    const currentMissing = runCheckShardFixture({
       frozenTarget: false,
       scripts: requiredScripts,
     });
@@ -8006,6 +8016,46 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       preflightGuards.indexOf("pnpm dup:check"),
     );
   });
+
+  it.each([
+    {
+      scripts: ["tsgo:scripts", "tsgo:test:root"],
+      frozenTarget: false,
+      status: 0,
+      calls: ["tsgo:extensions:test", "tsgo:scripts", "tsgo:test:root"],
+    },
+    {
+      scripts: ["tsgo:scripts"],
+      frozenTarget: false,
+      status: 1,
+      calls: ["tsgo:extensions:test", "tsgo:scripts"],
+    },
+    {
+      scripts: [],
+      frozenTarget: false,
+      status: 1,
+      calls: ["tsgo:extensions:test"],
+    },
+    {
+      scripts: [],
+      frozenTarget: true,
+      status: 0,
+      calls: ["tsgo:extensions:test"],
+    },
+    {
+      scripts: ["tsgo:test:root"],
+      frozenTarget: true,
+      status: 0,
+      calls: ["tsgo:extensions:test", "tsgo:test:root"],
+    },
+  ])(
+    "runs declared typechecks for scripts=$scripts frozen=$frozenTarget",
+    ({ scripts, frozenTarget, status, calls }) => {
+      const result = runCheckShardFixture({ scripts, frozenTarget, task: "test-types" });
+      expect(result.status, result.output).toBe(status);
+      expect(result.calls).toEqual(calls);
+    },
+  );
 
   it("rejects ambiguous zero-before main pushes and preserves concrete bases", () => {
     const zeroSha = "0".repeat(40);

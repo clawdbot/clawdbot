@@ -3451,14 +3451,14 @@ jobs:
                   root_covered=true
                 fi
               fi
-              if pnpm run --silent 2>/dev/null | grep -q '^  tsgo:scripts$'; then
+              if has_package_script "tsgo:scripts"; then
                 pnpm tsgo:scripts
               elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
                 echo "Current CI targets must provide the tsgo:scripts package script." >&2
                 exit 1
               fi
               if [ "$root_covered" != "true" ]; then
-                if pnpm run --silent 2>/dev/null | grep -q '^  tsgo:test:root$'; then
+                if has_package_script "tsgo:test:root"; then
                   pnpm tsgo:test:root
                 elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
                   echo "Current CI targets must provide the tsgo:test:root package script." >&2
