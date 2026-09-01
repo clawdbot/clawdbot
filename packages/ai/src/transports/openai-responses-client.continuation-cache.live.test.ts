@@ -21,6 +21,17 @@ const OPENAI_KEY = process.env.OPENAI_API_KEY ?? "";
 const describeLive = LIVE && OPENAI_KEY ? describe : describe.skip;
 const LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_RESPONSES_MODEL || "gpt-5.6-luna";
 const LIVE_TIMEOUT_MS = 120_000;
+// Real wall-clock gap the second test waits between turns, comfortably past
+// the *former* 5-minute idle TTL this PR replaces -- a live run that only
+// sends turn 2 immediately (like the first test above) can't tell "the cache
+// survived because the new 90-minute TTL actually matters" apart from "the
+// cache would have survived under the old 5-minute TTL too" (ClawSweeper P2
+// on #134550: "does not show the proposed post-five-minute... improvement").
+// Real setTimeout, not fake timers: this exercises the real in-memory idle
+// eviction timer against real elapsed time, which fake timers can't stand in
+// for over a genuine network round trip.
+const PAST_FORMER_TTL_DELAY_MS = 6 * 60 * 1000;
+const DELAYED_TIMEOUT_MS = PAST_FORMER_TTL_DELAY_MS + LIVE_TIMEOUT_MS;
 
 class GlobalFetchRequestCapture {
   readonly requests: Array<Record<string, unknown>> = [];
@@ -87,6 +98,82 @@ async function run(context: Context, sessionId: string): Promise<AssistantMessag
   return stream.result();
 }
 
+/** Runs the shared secret-recall two-turn proof, waiting `gapMs` of real
+ * wall-clock time between the turns. A correct answer on turn 2 is only
+ * possible if the real API resolved server-side state through
+ * previous_response_id, not because the model got lucky on a self-contained
+ * prompt -- and a captured trimmed input with no second copy of the secret
+ * confirms the request genuinely omitted the full history, not just some
+ * other, less telling field. */
+async function runSecretRecallProof(
+  sessionId: string,
+  secretCode: string,
+  gapMs: number,
+): Promise<{ requests: Array<Record<string, unknown>> }> {
+  const capture = new GlobalFetchRequestCapture();
+  capture.install();
+  try {
+    const firstUser = userMessage(
+      `This is an automated test. Remember this secret code: ${secretCode}. ` +
+        "Do not reply with the code yet -- just reply with exactly: ack",
+      1,
+    );
+    const first = await run({ messages: [firstUser], tools: [] }, sessionId);
+    expect(first.stopReason).toBe("stop");
+
+    if (gapMs > 0) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, gapMs);
+      });
+    }
+
+    const second = await run(
+      {
+        messages: [
+          firstUser,
+          first,
+          userMessage("What was the secret code I gave you? Reply with exactly that code.", 2),
+        ],
+        tools: [],
+      },
+      sessionId,
+    );
+    expect(second.stopReason).toBe("stop");
+    const secondText = second.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .join("");
+    expect(secondText).toContain(secretCode);
+
+    // Exactly two requests reached the real API -- a rejected
+    // previous_response_id (the recovery path is a silent full-history
+    // resend) would show up as a third.
+    expect(capture.requests).toHaveLength(2);
+    expect(capture.requests[0]).not.toHaveProperty("previous_response_id");
+    expect(capture.requests[1]).toHaveProperty("previous_response_id");
+    expect(typeof capture.requests[1]?.previous_response_id).toBe("string");
+    expect(
+      (capture.requests[1]?.previous_response_id as string | undefined)?.length,
+    ).toBeGreaterThan(0);
+    expect(capture.requests[1]?.input).toEqual([
+      {
+        type: "message",
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: "What was the secret code I gave you? Reply with exactly that code.",
+          },
+        ],
+      },
+    ]);
+    expect(JSON.stringify(capture.requests[1])).not.toContain(secretCode);
+    return { requests: capture.requests };
+  } finally {
+    capture.restore();
+  }
+}
+
 describeLive(
   "HTTP continuation default TTL and capacity/byte-budget cache (real native api.openai.com)",
   () => {
@@ -97,75 +184,21 @@ describeLive(
     it(
       "still reuses previous_response_id and trims input on turn 2 with the new cache code in place",
       async () => {
-        const capture = new GlobalFetchRequestCapture();
-        capture.install();
-        try {
-          const sessionId = "live-continuation-cache-default";
-          // Same secret-recall shape as the established live-continuation
-          // proof: a correct answer on turn 2 is only possible if the real
-          // API resolved server-side state through previous_response_id,
-          // not because the model got lucky on a self-contained prompt.
-          const secretCode = "GRANITE-COMET-4471";
-          const firstUser = userMessage(
-            `This is an automated test. Remember this secret code: ${secretCode}. ` +
-              "Do not reply with the code yet -- just reply with exactly: ack",
-            1,
-          );
-          const first = await run({ messages: [firstUser], tools: [] }, sessionId);
-          expect(first.stopReason).toBe("stop");
-
-          const second = await run(
-            {
-              messages: [
-                firstUser,
-                first,
-                userMessage(
-                  "What was the secret code I gave you? Reply with exactly that code.",
-                  2,
-                ),
-              ],
-              tools: [],
-            },
-            sessionId,
-          );
-          expect(second.stopReason).toBe("stop");
-          const secondText = second.content
-            .filter((block) => block.type === "text")
-            .map((block) => block.text)
-            .join("");
-          expect(secondText).toContain(secretCode);
-
-          // Exactly two requests reached the real API -- a rejected
-          // previous_response_id (the recovery path is a silent
-          // full-history resend) would show up as a third.
-          expect(capture.requests).toHaveLength(2);
-          expect(capture.requests[0]).not.toHaveProperty("previous_response_id");
-          expect(capture.requests[1]).toHaveProperty("previous_response_id");
-          expect(typeof capture.requests[1]?.previous_response_id).toBe("string");
-          expect(
-            (capture.requests[1]?.previous_response_id as string | undefined)?.length,
-          ).toBeGreaterThan(0);
-          expect(capture.requests[1]?.input).toEqual([
-            {
-              type: "message",
-              role: "user",
-              content: [
-                {
-                  type: "input_text",
-                  text: "What was the secret code I gave you? Reply with exactly that code.",
-                },
-              ],
-            },
-          ]);
-          // The secret never leaves the process a second time -- confirms
-          // the trimmed request genuinely omitted it, not just some other,
-          // less telling field.
-          expect(JSON.stringify(capture.requests[1])).not.toContain(secretCode);
-        } finally {
-          capture.restore();
-        }
+        await runSecretRecallProof("live-continuation-cache-default", "GRANITE-COMET-4471", 0);
       },
       LIVE_TIMEOUT_MS,
+    );
+
+    it(
+      "survives a real gap past the former 5-minute idle TTL, proving the new 90-minute default actually matters",
+      async () => {
+        await runSecretRecallProof(
+          "live-continuation-cache-past-former-ttl",
+          "OBSIDIAN-FALCON-8823",
+          PAST_FORMER_TTL_DELAY_MS,
+        );
+      },
+      DELAYED_TIMEOUT_MS,
     );
   },
 );
