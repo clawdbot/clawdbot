@@ -90,16 +90,12 @@ export function listSkillLibrary(
             .orderBy("skill_id"),
         ).rows.flatMap((row) => {
           const entry = projectSkillLibraryEntry(db, row, authority);
-          if (!entry) {
-            return [];
-          }
           if (
-            params.scope === "mine" &&
-            (!presentation.profileId || entry.ownerProfileId !== presentation.profileId)
+            !entry ||
+            (params.scope === "mine" &&
+              (!presentation.profileId || entry.ownerProfileId !== presentation.profileId)) ||
+            (params.scope === "team" && !entry.shared && entry.ownerProfileId !== null)
           ) {
-            return [];
-          }
-          if (params.scope === "team" && !entry.shared && entry.ownerProfileId !== null) {
             return [];
           }
           return [entry];
@@ -398,16 +394,14 @@ export function mutateSkillLibrary(
       } = {};
       switch (params.action) {
         case "share":
-          changes.shared = 1;
-          break;
         case "unshare":
-          if (current.ownerProfileId === null) {
+          if (params.action === "unshare" && current.ownerProfileId === null) {
             throw new SkillLibraryError(
               "FORBIDDEN",
               "Team-owned skills cannot become personal through unshare.",
             );
           }
-          changes.shared = 0;
+          changes.shared = Number(params.action === "share");
           break;
         case "transfer":
           if (!resolveSkillLibraryActor(db, authority).admin) {
@@ -421,10 +415,8 @@ export function mutateSkillLibrary(
           changes.shared = 1;
           break;
         case "enable":
-          changes.enabled = 1;
-          break;
         case "disable":
-          changes.enabled = 0;
+          changes.enabled = Number(params.action === "enable");
           break;
         case "remove":
           changes.removed = 1;

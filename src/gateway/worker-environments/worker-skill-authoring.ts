@@ -46,18 +46,7 @@ export async function invokeWorkerSkillAuthoring(
     throw new Error("This turn reached its Workshop operation limit. Continue in a fresh turn.");
   }
   const result =
-    previous?.result ??
-    registration.tool.execute(request.toolCallId, {
-      action: request.action,
-      skill_id: request.skillId,
-      expected_revision: request.expectedRevision,
-      revision: request.revision,
-      name: request.slug,
-      proposal_content: request.content,
-      artifact_path: request.artifactPath,
-      files: request.files,
-      delete_files: request.deleteFiles,
-    });
+    previous?.result ?? registration.tool.execute(request.toolCallId, request.arguments);
   registration.calls.set(request.toolCallId, { digest, result });
   const value = await result;
   registration.assertCurrent();

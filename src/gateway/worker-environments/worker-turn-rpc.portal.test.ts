@@ -19,8 +19,7 @@ describe("worker portal RPC authority", () => {
     await expect(
       workerService.executeSessionTool(identity, "portal", {
         toolCallId: "wrong-family",
-        action: "read",
-        artifactPath: "scripts/helper.sh",
+        arguments: { action: "read", artifact_path: "scripts/helper.sh" },
       }),
     ).resolves.toEqual({ ok: false, closeReason: "invalid-frame" });
     expect(executeSessionTool).not.toHaveBeenCalled();

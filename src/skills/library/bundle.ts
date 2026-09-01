@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 import {
   SKILL_LIBRARY_MAX_BUNDLE_BYTES,
@@ -18,15 +18,9 @@ import { SkillLibraryError } from "./errors.js";
 export const SKILL_LIBRARY_MAX_PATH_COMPONENTS = 16;
 export const SKILL_LIBRARY_MAX_TREE_ENTRIES = SKILL_LIBRARY_MAX_FILES * 2;
 
-type SkillLibraryManifestFile = {
-  path: string;
-  sha256: string;
-  sizeBytes: number;
-  executable: boolean;
-};
 type PreparedSkillBundle = {
   revision: string;
-  files: Array<SkillLibraryManifestFile & { bytes: Buffer }>;
+  files: Array<Static<typeof manifestSchema>[number] & { bytes: Buffer }>;
 };
 export type PreparedSkillLibraryBundle = PreparedSkillBundle & { description: string };
 const portableCompare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);

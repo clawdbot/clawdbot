@@ -1,69 +1,22 @@
-import { Type, type Static } from "typebox";
+import { Type } from "typebox";
 import { Value } from "typebox/value";
-import { SkillLibraryFileSchema } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
+import { SkillLibraryWorkshopSchema } from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
 import { decodeSkillLibraryFile, validateSkillLibraryPath } from "../../skills/library/bundle.js";
-import { stringEnum } from "../schema/typebox.js";
 import { ToolInputError, type AnyAgentTool } from "./common.js";
 import { textResult } from "./tool-results.js";
 
-export const SkillLibraryWorkshopSchema = Type.Object(
-  {
-    action: stringEnum([
-      "list",
-      "read",
-      "create",
-      "update",
-      "share",
-      "unshare",
-      "transfer",
-      "activate",
-      "remove",
-      "rollback",
-    ] as const),
-    target: Type.Optional(Type.Literal("personal")),
-    skill_id: Type.Optional(Type.String({ maxLength: 36 })),
-    expected_revision: Type.Optional(Type.String({ pattern: "^[a-f0-9]{64}$" })),
-    revision: Type.Optional(Type.String({ pattern: "^[a-f0-9]{64}$" })),
-    name: Type.Optional(
-      Type.String({
-        maxLength: 63,
-        description:
-          "Human-facing slug, not the generated command name. Omit on update to preserve it.",
-      }),
-    ),
-    proposal_content: Type.Optional(Type.String({ maxLength: 32768 })),
-    artifact_path: Type.Optional(
-      Type.String({
-        maxLength: 512,
-        description:
-          "Read one whole UTF-8 artifact; defaults to SKILL.md. Binary or oversized files require the UI or CLI.",
-      }),
-    ),
-    files: Type.Optional(
-      Type.Array(
-        Type.Object(
-          { ...SkillLibraryFileSchema.properties, content: Type.String({ maxLength: 32768 }) },
-          { additionalProperties: false },
-        ),
-        {
-          maxItems: 32,
-          description:
-            "Named support-file upserts. Other files and omitted executable flags are preserved.",
-        },
-      ),
-    ),
-    delete_files: Type.Optional(
-      Type.Array(Type.String({ maxLength: 512 }), {
-        maxItems: 32,
-        description: "Exact supporting paths to remove intentionally; never SKILL.md.",
-      }),
-    ),
-  },
-  { additionalProperties: false },
-);
-
-export type SkillLibraryWorkshopParams = Static<typeof SkillLibraryWorkshopSchema>;
+export function createLibrarySkillWorkshopDescriptor(
+  multipleProfiles: boolean,
+  workspace?: AnyAgentTool,
+): Pick<AnyAgentTool, "name" | "label" | "displaySummary" | "description"> {
+  return {
+    name: "skill_workshop",
+    label: "Skill Workshop",
+    displaySummary: "Author reusable skills",
+    description: `${workspace ? `${workspace.description} For personal library operations set target=personal. ` : "Author skills in the requesting person's personal library. "}Personal create/update publishes a revision only when the user requests the change; personal drafts are unsupported. Describe unsolicited improvements without publishing. Read before updating; name is the slug, not the command identity. Read artifact_path for a whole text support file. On update omit name/proposal_content to preserve them; files upserts named support files, delete_files removes explicit paths. Unmentioned files and omitted executable flags are preserved. Binary or oversized reads require My skills or the CLI. Ownership is bound by the Gateway. Publication affects new sessions; activate explicitly for the next turn in this session. Sharing or transfer requires explicit user intent and current permissions.${multipleProfiles ? " This shared Gateway has personal and team libraries; sharing preserves authorship and ownership, while transfer makes a skill team managed." : ""}`,
+  };
+}
 
 export function createLibrarySkillWorkshopTool(
   capability: SkillLibraryAuthoringCapability,
@@ -76,10 +29,7 @@ export function createLibrarySkillWorkshopTool(
       )
     : SkillLibraryWorkshopSchema;
   return {
-    name: "skill_workshop",
-    label: "Skill Workshop",
-    displaySummary: "Author reusable skills",
-    description: `${workspace ? `${workspace.description} For personal library operations set target=personal. ` : "Author skills in the requesting person's personal library. "}Personal create/update publishes a revision only when the user requests the change; personal drafts are unsupported. Describe unsolicited improvements without publishing. Read before updating; name is the slug, not the command identity. Read artifact_path for a whole text support file. On update omit name/proposal_content to preserve them; files upserts named support files, delete_files removes explicit paths. Unmentioned files and omitted executable flags are preserved. Binary or oversized reads require My skills or the CLI. Ownership is bound by the Gateway. Publication affects new sessions; activate explicitly for the next turn in this session. Sharing or transfer requires explicit user intent and current permissions.${capability.multipleProfiles ? " This shared Gateway has personal and team libraries; sharing preserves authorship and ownership, while transfer makes a skill team managed." : ""}`,
+    ...createLibrarySkillWorkshopDescriptor(capability.multipleProfiles, workspace),
     parameters: workspace ? Type.Union([workspace.parameters, schema]) : schema,
     execute: async (id, raw) => {
       if (workspace && (!raw || typeof raw !== "object" || !("target" in raw))) {

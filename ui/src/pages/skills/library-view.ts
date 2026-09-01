@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
+import type { SkillsLibraryMutateParams } from "../../../../packages/gateway-protocol/src/index.ts";
 import {
   renderSettingsEmpty,
   renderSettingsSection,
@@ -188,6 +189,15 @@ function renderLibraryEditor(library: SkillLibraryController) {
     library.changed();
   };
   const mutationLocked = disabled || draft.dirty;
+  const mutationButton = (action: SkillsLibraryMutateParams["action"], locked = mutationLocked) =>
+    html`<button
+      type="button"
+      class=${action === "remove" ? "btn danger" : "btn"}
+      ?disabled=${locked}
+      @click=${() => void library.mutate(action)}
+    >
+      ${t(`skillLibrary.${action}`)}
+    </button>`;
   return html` <openclaw-modal-dialog
     label=${draft.entry?.slug ?? t("skillLibrary.create")}
     style="--openclaw-modal-width: 960px;"
@@ -412,23 +422,9 @@ function renderLibraryEditor(library: SkillLibraryController) {
                 </button>`}
           ${library.canEdit && draft.entry
             ? html`
-                <button
-                  type="button"
-                  class="btn"
-                  ?disabled=${mutationLocked}
-                  @click=${() => void library.mutate(draft.entry!.enabled ? "disable" : "enable")}
-                >
-                  ${t(draft.entry.enabled ? "skillLibrary.disable" : "skillLibrary.enable")}
-                </button>
+                ${mutationButton(draft.entry.enabled ? "disable" : "enable")}
                 ${draft.entry.ownerProfileId
-                  ? html`<button
-                      type="button"
-                      class="btn"
-                      ?disabled=${mutationLocked}
-                      @click=${() => void library.mutate(draft.entry!.shared ? "unshare" : "share")}
-                    >
-                      ${t(draft.entry.shared ? "skillLibrary.unshare" : "skillLibrary.share")}
-                    </button>`
+                  ? mutationButton(draft.entry.shared ? "unshare" : "share")
                   : nothing}
               `
             : nothing}
@@ -463,14 +459,7 @@ function renderLibraryEditor(library: SkillLibraryController) {
                         </option>`,
                     )}
                 </select></label
-              ><button
-                type="button"
-                class="btn"
-                ?disabled=${mutationLocked || !draft.rollbackRevision}
-                @click=${() => void library.mutate("rollback")}
-              >
-                ${t("skillLibrary.rollback")}
-              </button>
+              >${mutationButton("rollback", mutationLocked || !draft.rollbackRevision)}
             </div>`
           : nothing}
         ${library.canEdit && draft.entry
@@ -479,23 +468,9 @@ function renderLibraryEditor(library: SkillLibraryController) {
               style="border-top: 1px solid var(--border); padding-top: var(--space-4);"
             >
               ${library.canTransfer && draft.entry.ownerProfileId
-                ? html`<button
-                    type="button"
-                    class="btn"
-                    ?disabled=${mutationLocked}
-                    @click=${() => void library.mutate("transfer")}
-                  >
-                    ${t("skillLibrary.transfer")}
-                  </button>`
+                ? mutationButton("transfer")
                 : nothing}
-              <button
-                type="button"
-                class="btn danger"
-                ?disabled=${mutationLocked}
-                @click=${() => void library.mutate("remove")}
-              >
-                ${t("skillLibrary.remove")}
-              </button>
+              ${mutationButton("remove")}
             </div>`
           : nothing}
       </div>
@@ -562,28 +537,16 @@ function renderLibraryImport(library: SkillLibraryController) {
             }}
         /></label>
         ${!library.importSource
-          ? html`<label class="field"
-                ><span>${t("skillLibrary.chooseFiles")}</span
+          ? [false, true].map(
+              (directory) => html`<label class="field"
+                ><span
+                  >${t(directory ? "skillLibrary.chooseFolder" : "skillLibrary.chooseFiles")}</span
                 ><input
                   type="file"
                   style="min-width: 0;"
+                  ?webkitdirectory=${directory}
                   multiple
-                  name="library-import-files"
-                  ?disabled=${library.busy}
-                  @change=${(event: Event) => {
-                    library.importSelection = Array.from(
-                      libraryEventControl(event, HTMLInputElement).files ?? [],
-                    );
-                    library.changed();
-                  }} /></label
-              ><label class="field"
-                ><span>${t("skillLibrary.chooseFolder")}</span
-                ><input
-                  type="file"
-                  style="min-width: 0;"
-                  webkitdirectory
-                  multiple
-                  name="library-import-directory"
+                  name=${directory ? "library-import-directory" : "library-import-files"}
                   ?disabled=${library.busy}
                   @change=${(event: Event) => {
                     library.importSelection = Array.from(
@@ -591,7 +554,8 @@ function renderLibraryImport(library: SkillLibraryController) {
                     );
                     library.changed();
                   }}
-              /></label>`
+              /></label>`,
+            )
           : nothing}
         ${library.error
           ? html`<div class="callout danger" role="alert">${library.error}</div>`

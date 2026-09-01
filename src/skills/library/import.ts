@@ -47,10 +47,7 @@ async function publishDirectory(
 ) {
   const files = await readSkillLibraryTree(directory);
   prepareSkillLibraryBundle(files);
-  const markdown = files.find((file) => file.path === "SKILL.md");
-  if (!markdown) {
-    throw new SkillLibraryError("INVALID_BUNDLE", "Imported bundle must contain SKILL.md.");
-  }
+  const markdown = files.find((file) => file.path === "SKILL.md")!;
   return saveSkillLibrary(
     authority,
     {
@@ -102,31 +99,6 @@ export async function uploadSkillLibrary(
   }
   requireSkillLibraryProfile(openOpenClawStateDatabase(options).db, authority);
   ensureSkillLibrarySchema(options);
-  const readOwned = () => {
-    const db = openOpenClawStateDatabase(options).db;
-    const actor = requireSkillLibraryProfile(db, authority);
-    if (params.action === "begin") {
-      throw new SkillLibraryError("INVALID_BUNDLE", "Upload has not begun.");
-    }
-    const upload = executeSqliteQuerySync(
-      db,
-      skillLibraryDb(db)
-        .selectFrom("skill_library_uploads")
-        .selectAll()
-        .where("upload_id", "=", params.uploadId),
-    ).rows[0];
-    if (
-      !upload ||
-      upload.expires_at <= Date.now() ||
-      selectResolvedUserProfileById(db, upload.owner_profile_id)?.id !== actor
-    ) {
-      throw new SkillLibraryError(
-        "NOT_FOUND",
-        "Upload not found for your profile, or expired. Start a new import.",
-      );
-    }
-    return upload;
-  };
   if (params.action === "begin") {
     return runOpenClawStateWriteTransaction(({ db }) => {
       const actor = requireSkillLibraryProfile(db, authority);
@@ -164,6 +136,28 @@ export async function uploadSkillLibrary(
       return { uploadId, offset: 0, maxChunkBytes: MAX_CHUNK_BYTES };
     }, options);
   }
+  const readOwned = () => {
+    const db = openOpenClawStateDatabase(options).db;
+    const actor = requireSkillLibraryProfile(db, authority);
+    const upload = executeSqliteQuerySync(
+      db,
+      skillLibraryDb(db)
+        .selectFrom("skill_library_uploads")
+        .selectAll()
+        .where("upload_id", "=", params.uploadId),
+    ).rows[0];
+    if (
+      !upload ||
+      upload.expires_at <= Date.now() ||
+      selectResolvedUserProfileById(db, upload.owner_profile_id)?.id !== actor
+    ) {
+      throw new SkillLibraryError(
+        "NOT_FOUND",
+        "Upload not found for your profile, or expired. Start a new import.",
+      );
+    }
+    return upload;
+  };
   if (params.action === "chunk") {
     const bytes = Buffer.from(params.data, "base64");
     if (

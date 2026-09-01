@@ -7,14 +7,14 @@ import { NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES } from "../../worker/node-workspa
 import type { WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
 
 const CHUNK_BYTES = Math.floor(NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES / 4) * 3;
-// The receiving process chooses its own temporary root. Exact inode checks fence every later write.
+// The receiving process owns its temporary root; lossless IDs also fence large Windows file indexes.
 const RESOURCE_SCRIPT = String.raw`
 const fs=require('node:fs'), path=require('node:path'), os=require('node:os'), crypto=require('node:crypto');
 const [op,root,rootId,name,offsetText,sizeText,hash,executable]=process.argv.slice(1);
 const identity=s=>String(s.dev)+':'+String(s.ino);
-function enter(p,id){const s=fs.lstatSync(p);if(!s.isDirectory()||s.isSymbolicLink()||(id&&identity(s)!==id))throw Error('resource directory changed');process.chdir(p);if(identity(fs.statSync('.'))!==identity(s))throw Error('resource directory changed');}
+function enter(p,id){const s=fs.lstatSync(p,{bigint:true});if(!s.isDirectory()||s.isSymbolicLink()||(id&&identity(s)!==id))throw Error('resource directory changed');process.chdir(p);if(identity(fs.statSync('.',{bigint:true}))!==identity(s))throw Error('resource directory changed');}
 try {
- if(op==='init'){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'openclaw-skill-resources-'));fs.chmodSync(dir,0o700);process.stdout.write(JSON.stringify({root:dir,identity:identity(fs.lstatSync(dir))}));}
+ if(op==='init'){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'openclaw-skill-resources-'));fs.chmodSync(dir,0o700);process.stdout.write(JSON.stringify({root:dir,identity:identity(fs.lstatSync(dir,{bigint:true}))}));}
  else {
   enter(root,rootId);
   if(op==='cleanup'){fs.rmSync(root,{recursive:true});}

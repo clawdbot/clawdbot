@@ -2,7 +2,6 @@ import { Option, type Command } from "commander";
 import type {
   SkillsLibraryActivateResult,
   SkillsLibraryListResult,
-  SkillsLibraryMutateParams,
   SkillsLibraryReadResult,
   SkillsLibraryReceipt,
 } from "../../packages/gateway-protocol/src/index.js";
@@ -79,18 +78,6 @@ export function registerSkillsLibraryCli(skills: Command): void {
         defaultRuntime.writeStdout(format(result));
       }
     });
-  const mutate = (command: Command, params: SkillsLibraryMutateParams) =>
-    execute(
-      command,
-      (opts) =>
-        callGatewayFromCliWithTransport<SkillsLibraryReceipt>(
-          "skills.library.mutate",
-          opts,
-          params,
-        ),
-      receiptText,
-    );
-
   leaf("list", "List your own and visible shared skills")
     .addOption(
       new Option("--scope <scope>", "Library scope")
@@ -301,12 +288,17 @@ export function registerSkillsLibraryCli(skills: Command): void {
     }
     command.action(
       (skillId: string, opts: LibraryOptions & { expectedRevision: string }, cmd: Command) =>
-        mutate(cmd, {
-          skillId,
-          action,
-          expectedRevision: opts.expectedRevision,
-          ...(opts.revision ? { revision: opts.revision } : {}),
-        }),
+        execute(
+          cmd,
+          (rpc) =>
+            callGatewayFromCliWithTransport<SkillsLibraryReceipt>("skills.library.mutate", rpc, {
+              skillId,
+              action,
+              expectedRevision: opts.expectedRevision,
+              ...(opts.revision ? { revision: opts.revision } : {}),
+            }),
+          receiptText,
+        ),
     );
   }
   for (const action of ["attach", "detach", "refresh"] as const) {
@@ -314,11 +306,10 @@ export function registerSkillsLibraryCli(skills: Command): void {
       action,
       `${action.charAt(0).toUpperCase()}${action.slice(1)} managed selections explicitly for the next session turn`,
     ).requiredOption("--session <key>", "Exact target session key");
-    if (action !== "refresh") {
-      command.requiredOption("--skill-id <id>", "Stable library skill ID");
-    }
     if (action === "refresh") {
       command.option("--skill-id <id>", "Refresh only this selected skill; omit to refresh all");
+    } else {
+      command.requiredOption("--skill-id <id>", "Stable library skill ID");
     }
     if (action === "attach") {
       command.option("--revision <hash>", "Retained revision to select");

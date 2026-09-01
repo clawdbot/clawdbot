@@ -59,6 +59,54 @@ async function createSource() {
 }
 
 describe("remote-exec skill resources", () => {
+  it("rejects remote directory identities that collide when rounded to numbers", async () => {
+    const { snapshot } = await createSource();
+    let initializedRoot: string | undefined;
+    try {
+      await expect(
+        transferSkillResources({
+          snapshot,
+          assertCurrent: () => {},
+          tunnel: {
+            runWorkspaceCommand: async (command) => {
+              // Model adjacent Windows file indexes while retaining the real filesystem flow.
+              const identityShim = `{
+                const fs = require('node:fs');
+                for (const method of ['lstatSync', 'statSync']) {
+                  const original = fs[method];
+                  fs[method] = (...args) => {
+                    const stat = original(...args);
+                    const ino = 9007199254740992n + (process.argv[1] === 'init' ? 0n : 1n);
+                    stat.ino = typeof stat.ino === 'bigint' ? ino : Number(ino);
+                    return stat;
+                  };
+                }
+              }`;
+              const result = await tunnel.runWorkspaceCommand({
+                ...command,
+                argv: [
+                  ...command.argv.slice(0, 2),
+                  identityShim + command.argv[2],
+                  ...command.argv.slice(3),
+                ],
+              });
+              if (command.argv[3] === "init") {
+                initializedRoot = JSON.parse(result.stdout).root;
+              }
+              return result;
+            },
+          },
+        }),
+      ).rejects.toThrow("Skill resource transfer failed");
+      expect(initializedRoot).toBeDefined();
+      await expect(fs.readdir(initializedRoot!)).resolves.toEqual([]);
+    } finally {
+      if (initializedRoot) {
+        await fs.rm(initializedRoot, { recursive: true, force: true });
+      }
+    }
+  });
+
   it.each(["complete", "cancelled", "retired"] as const)(
     "preserves complete resources outside the project and cleans up only its current owner (%s)",
     async (outcome) => {
