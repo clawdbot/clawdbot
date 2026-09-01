@@ -32,7 +32,11 @@ import type {
   SubagentCompletionRequest,
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
-import { hasSubagentRunEnded, isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
+import {
+  hasDispatchedDeleteCleanup,
+  hasSubagentRunEnded,
+  isStaleUnendedSubagentRun,
+} from "./subagent-run-liveness.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import {
   loadSubagentSessionEntry,
@@ -524,7 +528,10 @@ export function createSubagentRegistrySweeper(params: {
         params.clearPendingLifecycleError(runId);
         const suppressSessionEffects = shouldSuppressSubagentRecoverySessionEffects(entry);
         let sessionOwnershipChanged = false;
-        if (!suppressSessionEffects) {
+        // A dispatch stamp means this run already handed its original child
+        // to sessions.delete. Expiry only retires the listing row; freezing
+        // the live same-key identity would delete a successor.
+        if (!suppressSessionEffects && !hasDispatchedDeleteCleanup(entry)) {
           const sessionIdentity = freezeSessionIdentity(entry.childSessionKey, storeCache);
           if (!sessionIdentity) {
             sessionOwnershipChanged = true;

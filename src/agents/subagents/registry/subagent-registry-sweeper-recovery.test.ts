@@ -644,6 +644,37 @@ describe("subagent registry recovery scheduling", () => {
     expect(runs.has(entry.runId)).toBe(false);
   });
 
+  it("does not delete a live successor when a dispatched delete row expires", async () => {
+    const runtime = { current: {} as GatewayRecoveryRuntime };
+    const { entry, runs, callGateway, notifyContextEngineSubagentEnded, sweeper } =
+      createHarness(runtime);
+    const now = Date.now();
+    entry.cleanup = "delete";
+    entry.archiveAtMs = now - 1;
+    entry.deleteCleanupDispatchedAt = now - 10_000;
+    entry.deleteCleanupTarget = {
+      sessionId: "original-session",
+      lifecycleRevision: "original-revision",
+    };
+    entry.cleanupCompletedAt = now - 5_000;
+    entry.execution = {
+      status: "terminal",
+      startedAt: now - 60_000,
+      endedAt: now - 55_000,
+      outcome: { status: "ok" },
+    };
+    killSessionEntry.current = {
+      sessionId: "successor-session",
+      lifecycleRevision: "successor-revision",
+      updatedAt: now,
+    };
+
+    await sweeper.sweepOnce();
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(runs.has(entry.runId)).toBe(false);
+  });
+
   it("retires an archived stale owner when guarded deletion sees a successor", async () => {
     const runtime = { current: {} as GatewayRecoveryRuntime };
     const { entry, runs, callGateway, notifyContextEngineSubagentEnded, sweeper } =
