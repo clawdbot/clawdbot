@@ -454,6 +454,8 @@ describe("Codex app-server main thread cleanup", () => {
     const sessionFile = path.join(tempDir, "incognito-session.jsonl");
     const workspaceDir = path.join(tempDir, "incognito-workspace");
     const sessionKey = "agent:main:dashboard:incognito-live-thread";
+    // Dashboard incognito sessions keep an authoritative row in process-held SQLite.
+    await seedRunSessionOwnerForTest("session-1", sessionKey);
     const harness = createClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir, sessionKey), {
@@ -480,8 +482,7 @@ describe("Codex app-server main thread cleanup", () => {
 
     const result = await run;
     expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
-    const physicalIdentity = sessionBindingIdentity({ agentId: "main", sessionId: "session-1" });
-    await expect(testCodexAppServerBindingStore.read(physicalIdentity)).resolves.toMatchObject({
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
       threadId: "thread-1",
       clientId: harness.client.getInstanceId(),
     });
@@ -489,7 +490,7 @@ describe("Codex app-server main thread cleanup", () => {
     const requestStart = harness.writes.length;
     const retirement = retireCodexAppServerSessionGeneration({
       bindingStore: testCodexAppServerBindingStore,
-      identity: physicalIdentity,
+      identity: sessionBindingIdentity({ agentId: "main", sessionId: "session-1", sessionKey }),
       mode: "retire",
     });
     const unsubscribe = await waitForHarnessRequest(harness, "thread/unsubscribe", requestStart);
@@ -511,6 +512,7 @@ describe("Codex app-server main thread cleanup", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const sessionKey = "agent:main:dashboard:incognito-failed-turn";
+    await seedRunSessionOwnerForTest("session-1", sessionKey);
     const requests: Array<{ method: string; params: unknown }> = [];
     const request = vi.fn(async (method: string, params?: unknown) => {
       requests.push({ method, params });
@@ -549,11 +551,7 @@ describe("Codex app-server main thread cleanup", () => {
       { threadId: "thread-1" },
       { timeoutMs: 5_000 },
     );
-    await expect(
-      testCodexAppServerBindingStore.read(
-        sessionBindingIdentity({ agentId: "main", sessionId: "session-1" }),
-      ),
-    ).resolves.toBeUndefined();
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
   });
 
   it.each([
@@ -671,6 +669,7 @@ describe("Codex app-server main thread cleanup", () => {
       const sessionFile = path.join(tempDir, "cancelled-session.jsonl");
       const workspaceDir = path.join(tempDir, "cancelled-workspace");
       const sessionKey = "agent:main:dashboard:incognito-cancelled-turn";
+      await seedRunSessionOwnerForTest("session-1", sessionKey);
       const harness = createClientHarness();
       const abort = new AbortController();
       const close = vi.spyOn(harness.client, "close");
@@ -818,6 +817,7 @@ describe("Codex app-server main thread cleanup", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const sessionKey = "agent:main:dashboard:incognito-failed-unsubscribe";
+    await seedRunSessionOwnerForTest("session-1", sessionKey);
     const contaminated = createClientHarness();
     const replacement = createClientHarness();
     const startClient = vi
@@ -860,11 +860,7 @@ describe("Codex app-server main thread cleanup", () => {
     expect(turnStartError).toBeInstanceOf(Error);
     expect(turnStartError).toMatchObject({ message: "turn start exploded" });
     expect(contaminated.stdinDestroyed).toBe(false);
-    await expect(
-      testCodexAppServerBindingStore.read(
-        sessionBindingIdentity({ agentId: "main", sessionId: "session-1" }),
-      ),
-    ).resolves.toBeUndefined();
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
 
     const replacementRun = runCodexAppServerAttempt(
       createParams(sessionFile, workspaceDir, sessionKey),

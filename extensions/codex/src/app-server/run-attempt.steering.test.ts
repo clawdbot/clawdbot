@@ -25,10 +25,7 @@ import {
   threadStartResult,
   turnStartResult,
 } from "./run-attempt-test-harness.js";
-import {
-  readCodexAppServerBinding,
-  testCodexAppServerBindingStore,
-} from "./session-binding.test-helpers.js";
+import { readCodexAppServerBinding } from "./session-binding.test-helpers.js";
 
 const activeRunRegistrationMocks = vi.hoisted(() => ({
   cancelPendingAgentQuestionForSession: vi.fn(),
@@ -154,9 +151,8 @@ describe("runCodexAppServerAttempt steering", () => {
       const params = createSteeringParams();
       if (incognito) {
         params.sessionKey = `agent:main:dashboard:incognito-${params.sessionId}`;
-      } else {
-        await seedRunSessionOwnerForTest(params.sessionId, params.sessionKey!);
       }
+      await seedRunSessionOwnerForTest(params.sessionId, params.sessionKey!);
       const onAttemptAbort = vi.fn();
       params.onAttemptAbort = onAttemptAbort;
       const onAgentEvent = vi.fn();
@@ -250,14 +246,7 @@ describe("runCodexAppServerAttempt steering", () => {
           method: "turn/interrupt",
           params: { threadId: "thread-1", turnId: "turn-1" },
         });
-        const binding = incognito
-          ? await testCodexAppServerBindingStore.read({
-              kind: "session",
-              agentId: "main",
-              sessionId: params.sessionId,
-            })
-          : await readCodexAppServerBinding(params.sessionFile);
-        expect(binding).toMatchObject({
+        expect(await readCodexAppServerBinding(params.sessionFile)).toMatchObject({
           threadId: "thread-1",
         });
         if (incognito) {
