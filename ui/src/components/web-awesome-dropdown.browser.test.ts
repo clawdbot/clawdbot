@@ -334,13 +334,16 @@ describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
   it("settles repeated public submenu requests through the same visibility lifecycle", async () => {
     const f = await fixture();
     await open(f);
-    let openings = 0;
-    f.parent.addEventListener("submenu-opening", () => openings++);
+    const openingStates: (string | null)[] = [];
+    f.parent.addEventListener("submenu-opening", () => {
+      openingStates.push(f.parent.getAttribute("aria-expanded"));
+    });
     let completed = 0;
     const requests = [f.parent.openSubmenu(), f.parent.openSubmenu()];
     void Promise.all(requests).then(() => completed++);
     await expect.poll(() => completed).toBe(1);
-    expect(openings).toBe(1);
+    // Embedded controls recognize a fresh opening from its pre-expansion state.
+    expect(openingStates).toEqual(["false"]);
     expect(f.parent.submenuElement.hidden).toBe(false);
     expect(document.activeElement).toBe(f.nested);
     void Promise.all([f.parent.closeSubmenu(), f.parent.closeSubmenu()]).then(() => completed++);

@@ -1,5 +1,5 @@
 diff --git a/dist/chunks/chunk.JZGJWX35.js b/dist/chunks/chunk.JZGJWX35.js
-index 593bac0b7708fc0e908f9f8de650e45f8b3610ec..5f5c117348f587881c9c442a06cdae8cf6e3e7fd 100644
+index 593bac0b7708fc0e908f9f8de650e45f8b3610ec..88a02b047b464273e155d7f4c831efc18384bb39 100644
 --- a/dist/chunks/chunk.JZGJWX35.js
 +++ b/dist/chunks/chunk.JZGJWX35.js
 @@ -29,6 +29,7 @@ var WaDropdownItem = class extends WebAwesomeElement {
@@ -49,7 +49,7 @@ index 593bac0b7708fc0e908f9f8de650e45f8b3610ec..5f5c117348f587881c9c442a06cdae8c
      }
    }
    /** Update the has-submenu custom state */
-@@ -140,22 +145,48 @@ var WaDropdownItem = class extends WebAwesomeElement {
+@@ -140,22 +145,49 @@ var WaDropdownItem = class extends WebAwesomeElement {
    }
    /** Opens the submenu. */
    async openSubmenu() {
@@ -77,7 +77,6 @@ index 593bac0b7708fc0e908f9f8de650e45f8b3610ec..5f5c117348f587881c9c442a06cdae8c
 +    const open = this.submenuOpen;
 +    const generation = ++this.submenuGeneration;
 +    const isCurrent = () => generation === this.submenuGeneration && this.isConnected && this.submenuOpen === open;
-+    this.setAttribute("aria-expanded", String(open));
 +    // Retire the previous class before joining its cleanup. A stale close must never
 +    // hide a reopened native popover, and repeated public requests share this promise.
 +    submenu.classList.remove("show", "hide");
@@ -87,6 +86,8 @@ index 593bac0b7708fc0e908f9f8de650e45f8b3610ec..5f5c117348f587881c9c442a06cdae8c
 +      submenu.hidden = false;
 +      submenu.setAttribute("data-visible", "");
 +    }
++    // Opening observers initialize embedded controls before the expanded state changes.
++    this.setAttribute("aria-expanded", String(open));
 +    await previousAnimation;
 +    await this.updateComplete;
 +    if (!isCurrent()) return;
@@ -112,7 +113,7 @@ index 593bac0b7708fc0e908f9f8de650e45f8b3610ec..5f5c117348f587881c9c442a06cdae8c
    }
    /** Notifies the parent dropdown that this item is opening its submenu */
    notifyParentOfOpening() {
-@@ -177,18 +208,11 @@ var WaDropdownItem = class extends WebAwesomeElement {
+@@ -177,18 +209,11 @@ var WaDropdownItem = class extends WebAwesomeElement {
    }
    /** Closes the submenu. */
    async closeSubmenu() {
@@ -843,7 +844,7 @@ index 20d309f89017ef7d1857f3b1c88216a88354fefd..ea0b8ee34255009d9d9e86605dbdc059
  function parseDuration(duration) {
    duration = duration.toString().toLowerCase();
 diff --git a/dist-cdn/chunks/chunk.W2C46OQX.js b/dist-cdn/chunks/chunk.W2C46OQX.js
-index da164574ce537b386894e751d6e9727cc9249d08..a7e2836f90d6aa15931bbdc30db79b8a141e752d 100644
+index da164574ce537b386894e751d6e9727cc9249d08..fb180692bc81c4b0efb8c8fd86f6fc121a7e3acd 100644
 --- a/dist-cdn/chunks/chunk.W2C46OQX.js
 +++ b/dist-cdn/chunks/chunk.W2C46OQX.js
 @@ -36,6 +36,7 @@ var WaDropdownItem = class extends WebAwesomeElement {
@@ -893,7 +894,7 @@ index da164574ce537b386894e751d6e9727cc9249d08..a7e2836f90d6aa15931bbdc30db79b8a
      }
    }
    /** Update the has-submenu custom state */
-@@ -147,22 +152,48 @@ var WaDropdownItem = class extends WebAwesomeElement {
+@@ -147,22 +152,49 @@ var WaDropdownItem = class extends WebAwesomeElement {
    }
    /** Opens the submenu. */
    async openSubmenu() {
@@ -921,7 +922,6 @@ index da164574ce537b386894e751d6e9727cc9249d08..a7e2836f90d6aa15931bbdc30db79b8a
 +    const open = this.submenuOpen;
 +    const generation = ++this.submenuGeneration;
 +    const isCurrent = () => generation === this.submenuGeneration && this.isConnected && this.submenuOpen === open;
-+    this.setAttribute("aria-expanded", String(open));
 +    // Retire the previous class before joining its cleanup. A stale close must never
 +    // hide a reopened native popover, and repeated public requests share this promise.
 +    submenu.classList.remove("show", "hide");
@@ -931,6 +931,8 @@ index da164574ce537b386894e751d6e9727cc9249d08..a7e2836f90d6aa15931bbdc30db79b8a
 +      submenu.hidden = false;
 +      submenu.setAttribute("data-visible", "");
 +    }
++    // Opening observers initialize embedded controls before the expanded state changes.
++    this.setAttribute("aria-expanded", String(open));
 +    await previousAnimation;
 +    await this.updateComplete;
 +    if (!isCurrent()) return;
@@ -956,7 +958,7 @@ index da164574ce537b386894e751d6e9727cc9249d08..a7e2836f90d6aa15931bbdc30db79b8a
    }
    /** Notifies the parent dropdown that this item is opening its submenu */
    notifyParentOfOpening() {
-@@ -184,18 +215,11 @@ var WaDropdownItem = class extends WebAwesomeElement {
+@@ -184,18 +216,11 @@ var WaDropdownItem = class extends WebAwesomeElement {
    }
    /** Closes the submenu. */
    async closeSubmenu() {
