@@ -454,11 +454,14 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     const transcriptMirrorSessionBinding = resolvePreparedTranscriptBinding(
       transcriptMirrorSessionKey,
     );
+    // Host-owned command replies are channel-visible terminal content too. Capture
+    // them at this successful same-surface delivery boundary so Control UI history
+    // reflects what the channel actually delivered without widening agent mirrors.
+    const shouldCaptureChannelFinalTranscript =
+      state.normalizedCurrentSurface === "slack" || payloadMetadata?.commandReply === true;
     const transcriptMirror =
       sourceReplyTranscriptMirror ??
-      (state.normalizedCurrentSurface === "slack" &&
-      hasVisibleFinalContent &&
-      transcriptMirrorSessionKey
+      (shouldCaptureChannelFinalTranscript && hasVisibleFinalContent && transcriptMirrorSessionKey
         ? transcriptMirrorForDeliveredPayload(
             {
               sessionKey: transcriptMirrorSessionKey,
