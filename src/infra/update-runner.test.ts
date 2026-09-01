@@ -1061,35 +1061,17 @@ describe("runGatewayUpdate", () => {
   it("preserves tag-excluded mirror mappings during branch refresh", async () => {
     const { sourceRoot, localRoot, baseSha, releaseSha, releaseTag } =
       await createRecreatedReleaseTagFixture();
+    await runRealGit(localRoot, "checkout", "--detach", baseSha);
     await runRealGit(localRoot, "config", "--add", "remote.origin.fetch", "refs/*:refs/*");
+    await runRealGit(localRoot, "config", "--add", "remote.origin.fetch", "^refs/tags/*");
     await runRealGit(sourceRoot, "notes", "--ref=ops", "add", "-m", "remote note", releaseSha);
     const steps: UpdateStepResult[] = [];
     const realRunner = createRealGitUpdateRunner();
-    const runCommand = async (argv: string[], options?: { cwd?: string; timeoutMs?: number }) => {
-      if (argv[3] === "config" && argv.at(-1) === "^remote\\..*\\.fetch$") {
-        // Git 2.27 accepts this value in config but rejects negative refspecs when fetching;
-        // synthesize the supported-config report while keeping the real fetch path exercised.
-        return toCommandResult({
-          stdout:
-            "remote.origin.fetch +refs/heads/*:refs/remotes/origin/*\n" +
-            "remote.origin.fetch refs/*:refs/*\n" +
-            "remote.origin.fetch ^refs/tags/*\n",
-        });
-      }
-      if (argv[3] === "fetch" && argv.includes("refs/*:refs/*")) {
-        // Expand the tag-excluded mirror mapping into equivalent non-tag namespaces for Git 2.27;
-        // the planner's original command remains recorded in `steps` for assertion below.
-        const safeArgv = argv.filter((arg) => arg !== "refs/*:refs/*");
-        safeArgv.push("+refs/heads/*:refs/remotes/origin/*", "+refs/notes/*:refs/notes/*");
-        return await realRunner(safeArgv, options);
-      }
-      return await realRunner(argv, options);
-    };
 
     const result = await prepareStableGitFetch({
       gitRoot: localRoot,
       timeoutMs: 5000,
-      runCommand,
+      runCommand: realRunner,
       steps,
       fetchAllArgv: [
         "git",
@@ -1103,19 +1085,40 @@ describe("runGatewayUpdate", () => {
       ],
     });
 
-    expect(result).toMatchObject({ remotes: ["origin", "skipped"] });
-    await expect(runRealGit(localRoot, "rev-parse", "refs/remotes/origin/main")).resolves.toBe(
-      releaseSha,
-    );
-    await expect(runRealGit(localRoot, "rev-parse", "refs/notes/ops")).resolves.toBeTruthy();
+    const gitVersion = await runRealGit(localRoot, "--version");
+    const versionMatch = /^git version (\d+)\.(\d+)/u.exec(gitVersion);
+    // Git 2.29 added negative fetch-refspec support; older versions reject this config before
+    // contacting the remote, which is the safe failure mode asserted below.
+    const supportsNegativeRefspec =
+      versionMatch !== null &&
+      (Number(versionMatch[1]) > 2 ||
+        (Number(versionMatch[1]) === 2 && Number(versionMatch[2]) >= 29));
+
+    if (supportsNegativeRefspec) {
+      expect(result).toMatchObject({ remotes: ["origin", "skipped"] });
+      await expect(runRealGit(localRoot, "rev-parse", "refs/remotes/origin/main")).resolves.toBe(
+        releaseSha,
+      );
+      await expect(runRealGit(localRoot, "rev-parse", "refs/notes/ops")).resolves.toBeTruthy();
+      expect(steps).toContainEqual(
+        expect.objectContaining({
+          name: "git fetch origin",
+          command: `git -C ${localRoot} fetch --prune --no-prune-tags --no-tags --refmap= -- origin +refs/heads/*:refs/remotes/origin/* refs/*:refs/* ^refs/tags/*`,
+          exitCode: 0,
+        }),
+      );
+    } else {
+      expect(result).toMatchObject({ reason: "fetch-failed" });
+      expect(steps).toContainEqual(
+        expect.objectContaining({
+          name: "git remote",
+          command: `git -C ${localRoot} remote`,
+          exitCode: 128,
+          stderrTail: expect.stringContaining("invalid refspec"),
+        }),
+      );
+    }
     await expect(runRealGit(localRoot, "rev-parse", `${releaseTag}^{}`)).resolves.toBe(baseSha);
-    expect(steps).toContainEqual(
-      expect.objectContaining({
-        name: "git fetch origin",
-        command: expect.stringContaining("refs/*:refs/*"),
-        exitCode: 0,
-      }),
-    );
   });
 
   async function runWithCommand(

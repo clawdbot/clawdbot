@@ -52,12 +52,11 @@ function isTagFetchRefspec(refspec: string): boolean {
   return isBroadRefspecMapping(source, destination);
 }
 
-function isFullTagNamespaceExclusion(refspec: string): boolean {
-  const normalized = refspec.trim();
-  return normalized === "^refs/tags" || normalized === "^refs/tags/*";
+function isNegativeFetchRefspec(refspec: string): boolean {
+  return refspec.trim().startsWith("^");
 }
 
-function isBroadTagFetchRefspec(refspec: string): boolean {
+function isBroadFetchRefspec(refspec: string): boolean {
   const withoutForce = refspec.trim().replace(/^\+/u, "");
   const [source = "", destination = ""] = withoutForce.split(":", 2).map((ref) => ref.trim());
   return isBroadRefspecMapping(source, destination);
@@ -147,22 +146,21 @@ export async function prepareStableGitFetch(params: {
       continue;
     }
     const configuredRefspecs = fetchConfig.get(remote);
-    const preserveBroadMappings = configuredRefspecs?.some(isFullTagNamespaceExclusion) ?? false;
+    // --refmap= ignores remote.*.fetch, so carry configured exclusions into argv explicitly.
+    // Git versions without negative-refspec support reject this before any ref mutation.
+    const negativeRefspecs = configuredRefspecs?.filter(isNegativeFetchRefspec) ?? [];
     const branchRefspecs = configuredRefspecs
       ? [
           ...new Set(
             configuredRefspecs.flatMap((refspec) => {
-              const normalized = refspec.trim();
-              if (normalized.startsWith("^")) {
-                // Keep exclusions out of explicit argv: supported Git versions apply configured
-                // negatives while older Git rejects the syntax. The positive mapping remains in
-                // argv so every configured non-tag destination is refreshed without CLI syntax.
-                return [];
-              }
-              if (!isTagFetchRefspec(refspec)) {
+              if (
+                !isNegativeFetchRefspec(refspec) &&
+                (!isTagFetchRefspec(refspec) ||
+                  (negativeRefspecs.length > 0 && isBroadFetchRefspec(refspec)))
+              ) {
                 return [refspec];
               }
-              return preserveBroadMappings && isBroadTagFetchRefspec(refspec) ? [refspec] : [];
+              return [];
             }),
           ),
         ]
@@ -181,7 +179,7 @@ export async function prepareStableGitFetch(params: {
       ...(configuredRefspecs ? ["--refmap="] : []),
       "--",
       remote,
-      ...(configuredRefspecs ? (branchRefspecs ?? []) : []),
+      ...(configuredRefspecs ? [...(branchRefspecs ?? []), ...negativeRefspecs] : []),
     ];
     const fetchStep = await executeStep(`git fetch ${remote}`, fetchArgv);
     if (fetchStep.exitCode !== 0) {
