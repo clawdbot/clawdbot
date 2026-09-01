@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { formatCliCommand } from "../cli/command-format.js";
 import { resolveGatewayWindowsTaskName } from "../daemon/constants.js";
 import { resolveLaunchAgentLabel } from "../daemon/launchd-label.js";
 import { resolveLaunchAgentPlistPath } from "../daemon/launchd-service-files.js";
@@ -1195,14 +1196,16 @@ function resolveManagedServiceCliArgv(
   return ["openclaw", ...args];
 }
 
-export function formatManagedServiceUpdateCommand(params?: {
-  timeoutMs?: number;
-  channel?: UpdateChannel;
-  tag?: string;
-}): string {
-  return resolveUpdateCliArgv(params ?? {})
-    .toSpliced(3, 1)
-    .join(" ");
+export function formatManagedServiceUpdateCommand(
+  params?: { timeoutMs?: number; channel?: UpdateChannel; tag?: string },
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return formatCliCommand(
+    resolveUpdateCliArgv(params ?? {})
+      .toSpliced(3, 1)
+      .join(" "),
+    env,
+  );
 }
 
 type GatewayServiceRecovery =
@@ -1321,11 +1324,10 @@ async function spawnManagedServiceUpdateHandoff(
     execPath: params.execPath ?? process.execPath,
     argv1: params.argv1 ?? process.argv[1],
   });
-  const commandLabel = formatManagedServiceUpdateCommand({
-    timeoutMs: params.timeoutMs,
-    channel: params.channel,
-    tag: params.tag,
-  });
+  const commandLabel = formatManagedServiceUpdateCommand(
+    { timeoutMs: params.timeoutMs, channel: params.channel, tag: params.tag },
+    params.env,
+  );
   const metaFile: ControlPlaneUpdateSentinelMetaFile = {
     version: 1,
     meta: { ...params.meta, root: rootIdentity },
@@ -1696,7 +1698,7 @@ export async function cancelManagedServiceUpdateHandoff(
 export function buildManagedServiceHandoffUnavailableMessage(command: string): string {
   return [
     "OpenClaw updates cannot safely run inside the live gateway process without a managed-service handoff.",
-    `Run \`${command}\` from a shell outside the gateway service, or restart/update from the host UI.`,
+    `Stop the foreground Gateway, run \`${command}\` from a shell, then launch the Gateway again. For a managed deployment, use its host's stop, update, and restart workflow.`,
   ].join("\n");
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

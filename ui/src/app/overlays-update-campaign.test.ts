@@ -637,6 +637,61 @@ describe("application update campaign overlays", () => {
     overlays.dispose();
   });
 
+  it.each([
+    { boundary: "applying", reply: "success" },
+    { boundary: "applying", reply: "error" },
+    { boundary: "revoked", reply: "success" },
+    { boundary: "revoked", reply: "error" },
+  ])("does not publish a stale hold $reply after $boundary", async ({ boundary, reply }) => {
+    const holdReply = deferred();
+    const request = vi.fn<RequestFn>((method) =>
+      method === "update.hold" ? holdReply.promise : Promise.resolve({}),
+    );
+    const harness = createAutomaticUpdateHarness(request);
+    const overlays = createApplicationOverlays(harness.gateway);
+    const holding = overlays.holdUpdate();
+    try {
+      if (boundary === "applying") {
+        harness.emitEvent("update.available", {
+          schedule: {
+            ...AUTO_UPDATE_SCHEDULE,
+            campaign: { ...AUTO_UPDATE_SCHEDULE.campaign, state: "applying", updatedAtMs: 61_000 },
+          },
+        });
+      } else {
+        harness.update({
+          hello: {
+            auth: { role: "operator", scopes: ["operator.read"] },
+            snapshot: { updateSchedule: AUTO_UPDATE_SCHEDULE },
+          } as ApplicationGatewaySnapshot["hello"],
+        });
+      }
+      if (reply === "success") {
+        holdReply.resolve({
+          ok: true,
+          schedule: {
+            ...AUTO_UPDATE_SCHEDULE,
+            campaign: { ...AUTO_UPDATE_SCHEDULE.campaign, holdUntilMs: 3_601_000 },
+          },
+        });
+      } else {
+        holdReply.reject(new Error("retired hold response"));
+      }
+      await expect(holding).resolves.toBe(boundary === "applying" && reply === "success");
+
+      expect(overlays.snapshot.updateRunning).toBe(boundary === "applying");
+      expect(overlays.snapshot.updateSchedule?.campaign?.state).toBe(
+        boundary === "applying" ? "applying" : "countdown",
+      );
+      expect(overlays.snapshot.heldUpdateCampaignId).toBeNull();
+      expect(overlays.snapshot.updateStatusBanner).toBeNull();
+    } finally {
+      holdReply.resolve({});
+      await holding;
+      overlays.dispose();
+    }
+  });
+
   it("adopts an authoritative held schedule when update.hold returns false", async () => {
     const request = vi.fn<RequestFn>(async () => ({
       ok: false,

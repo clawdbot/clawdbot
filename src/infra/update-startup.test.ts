@@ -191,6 +191,7 @@ describe("update-startup", () => {
       layout: "state-only",
       prefix: "openclaw-update-check-suite-",
       env: {
+        OPENCLAW_PROFILE: undefined,
         OPENCLAW_NO_AUTO_UPDATE: undefined,
         OPENCLAW_SUPERVISOR_MODE: undefined,
         OPENCLAW_SERVICE_KIND: undefined,
@@ -2172,6 +2173,7 @@ describe("update-startup", () => {
   });
 
   it("keeps a foreground Gateway serving when automatic update has no restart owner", async () => {
+    process.env.OPENCLAW_PROFILE = "work";
     mockPackageInstallStatus();
     mockNpmChannelTag("beta", "2.0.0-beta.1");
     await runAutoUpdateCheckWithDefaults({ cfg: createBetaAutoUpdateConfig() });
@@ -2184,7 +2186,9 @@ describe("update-startup", () => {
     expect((await readRestartSentinel())?.payload).toMatchObject({
       kind: "update",
       status: "skipped",
-      message: expect.stringContaining("shell"),
+      message: expect.stringMatching(
+        /Stop the foreground Gateway.*`openclaw --profile work update --yes --channel beta --tag 2\.0\.0-beta\.1 --timeout 2700`.*then launch the Gateway again/s,
+      ),
       stats: { reason: "managed-service-handoff-unavailable" },
     });
   });

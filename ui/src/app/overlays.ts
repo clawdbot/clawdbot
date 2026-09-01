@@ -1,11 +1,8 @@
-import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
-import type { UpdateHoldResult } from "../api/types.ts";
-import { controlUiBuildDiffersFrom } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import {
   closeDevicePairSetup as closeDevicePairSetupState,
@@ -40,32 +37,9 @@ import {
 } from "./overlays-access.ts";
 import type { ApplicationOverlays, ApplicationOverlaySnapshot } from "./overlays-types.ts";
 import {
-  classifyUpdateRunResponse,
-  createUpdateCampaignStatusPoller,
-  createUpdateStatusRefresher,
-  createUpdateVerificationController,
-  projectUpdateStatusResponse,
-  resolveExpectedUpdateSha,
-  resolveUnknownUpdateOutcomeBanner,
-  resolveUpdateStatusBanner,
-  UPDATE_HANDOFF_TIMEOUT_MS,
-  type ApplicationStatusBanner,
-  type PendingUpdateReconciliation,
-  type UpdateRestartStatusResponse,
-  type UpdateRunResponse,
-} from "./update-overlay-helpers.ts";
-import { readUpdateScheduleValue } from "./update-schedule-dto.ts";
-import {
-  projectConnectedUpdateSnapshot,
-  projectUpdateAvailableEvent,
-  resolveHeldUpdateCampaignId,
-} from "./update-schedule-projection.ts";
-import {
-  announceRecordedUpdateSuccess,
-  announceVerifiedUpdateInstall,
-  readUpdateNotice,
-  writeUpdateNotice,
-} from "./update-success-notice.ts";
+  createApplicationUpdateOverlays,
+  type ApplicationUpdateOverlayHooks,
+} from "./overlays-updates.ts";
 
 function isGatewayEvent(value: unknown): value is GatewayEventFrame {
   return Boolean(value && typeof value === "object" && "event" in value);
@@ -73,23 +47,11 @@ function isGatewayEvent(value: unknown): value is GatewayEventFrame {
 
 export function createApplicationOverlays(
   gateway: ApplicationGateway,
-  hooks: {
-    /** Barrier awaited after update-running is published and before update.run
-     * is issued, so in-flight config writes cannot overlap the install. */
-    drainConfigWrites?: () => Promise<void>;
-  } = {},
+  hooks: ApplicationUpdateOverlayHooks = {},
 ): ApplicationOverlays {
+  const updates = createApplicationUpdateOverlays(gateway, publish, hooks);
   let snapshot: ApplicationOverlaySnapshot = {
-    updateAvailable: null,
-    updateSchedule: null,
-    heldUpdateCampaignId: null,
-    updateRunning: false,
-    updateStatusRefreshing: false,
-    updateCampaignStatusHydrated: true,
-    updateReconciliationPending: false,
-    updateStatusBanner: null,
-    recordedUpdateAttempt: null,
-    controlUiRefreshRequired: false,
+    ...updates.snapshot,
     approvalQueue: [],
     approvalBusy: false,
     approvalCanGrant: false,
@@ -101,22 +63,11 @@ export function createApplicationOverlays(
   const listeners = new Set<(next: ApplicationOverlaySnapshot) => void>();
   let disposed = false;
   let activeClient = gateway.snapshot.client;
-  let activeHello = gateway.snapshot.hello;
   let connectedSource: NonNullable<typeof activeClient> | null = null; // Retries start a new source epoch.
   let connectedEpoch = 0;
   let operatorAccess = readGatewayOperatorAccess(gateway.snapshot);
   let approvalAccessGeneration = 0;
   let approvalGrantGeneration = 0;
-  let updateGatewayScope = gatewayCredentialScope(gateway.connection.gatewayUrl);
-  const savedUpdate = readUpdateNotice(updateGatewayScope);
-  let pendingUpdate: PendingUpdateReconciliation | null =
-    savedUpdate && savedUpdate.kind !== "verified" ? savedUpdate : null;
-  let pendingUpdateProfileId = savedUpdate?.profileId ?? null;
-  let pendingUpdateTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  let updateRequestRunning = false;
-  let updateStatusRevision = 0;
-  let updateRunGeneration = 0;
-  let updateHoldInFlight = false;
   let approvalDecision: {
     client: NonNullable<typeof activeClient>;
     epoch: number;
@@ -140,11 +91,7 @@ export function createApplicationOverlays(
   function publish() {
     snapshot = {
       ...snapshot,
-      updateRunning:
-        updateRequestRunning || snapshot.updateSchedule?.campaign?.state === "applying",
-      // The update RPC can finish before its restart handoff. Keep consumers
-      // locked until the replacement Gateway reports the authoritative result.
-      updateReconciliationPending: pendingUpdate !== null,
+      ...updates.snapshot,
       approvalQueue: promptState.execApprovalQueue,
       approvalBusy: promptState.execApprovalBusy,
       approvalCanGrant: readGatewayOperatorAccess(gateway.snapshot).canGrantApprovals,
@@ -187,130 +134,8 @@ export function createApplicationOverlays(
     publish,
   });
 
-  const publishUpdateBanner = (updateStatusBanner: ApplicationStatusBanner | null) => {
-    snapshot = { ...snapshot, updateStatusBanner };
-    publish();
-  };
-  const publishRecordedUpdateAttempt = (
-    recordedUpdateAttempt: ApplicationOverlaySnapshot["recordedUpdateAttempt"],
-  ) => {
-    snapshot = { ...snapshot, recordedUpdateAttempt };
-    publish();
-  };
-  const noticeScope = () => ({
-    gateway: updateGatewayScope,
-    profileId: gateway.snapshot.selfUser?.id ?? null,
-  });
-  const clearPendingUpdateTimer = () => {
-    if (pendingUpdateTimer !== null) {
-      globalThis.clearTimeout(pendingUpdateTimer);
-      pendingUpdateTimer = null;
-    }
-  };
-  const setPendingUpdate = (pending: PendingUpdateReconciliation | null) => {
-    pendingUpdate = pending;
-    clearPendingUpdateTimer();
-    writeUpdateNotice(
-      pending
-        ? { ...pending, gateway: updateGatewayScope, profileId: pendingUpdateProfileId }
-        : null,
-    );
-    if (pending) {
-      // This budget belongs to admission, not reconnect. A failed-closed
-      // Gateway may never return to run the verification loop below.
-      pendingUpdateTimer = globalThis.setTimeout(
-        () => {
-          if (disposed || pendingUpdate !== pending) {
-            return;
-          }
-          updateRunGeneration += 1;
-          updateVerification.cancel();
-          updateRequestRunning = false;
-          setPendingUpdate(null);
-          publishUpdateBanner(resolveUnknownUpdateOutcomeBanner());
-        },
-        Math.max(0, pending.deadlineAtMs - Date.now()),
-      );
-    }
-  };
-  const updateVerification = createUpdateVerificationController({
-    getPending: () => pendingUpdate,
-    clearPending: () => {
-      setPendingUpdate(null);
-    },
-    isCurrent: (client, epoch) => epoch === connectedEpoch && isCurrentClient(client),
-    getHello: () => gateway.snapshot.hello,
-    publish,
-    publishBanner: publishUpdateBanner,
-    publishRecordedAttempt: publishRecordedUpdateAttempt,
-    publishRecordedFailure: ({ attempt, banner }) => {
-      // Both facts terminate the same reconciliation. Publishing either first
-      // exposes a false success or a failure without its recorded cause.
-      snapshot = { ...snapshot, recordedUpdateAttempt: attempt, updateStatusBanner: banner };
-      publish();
-    },
-    onVerifiedInstall: (identity) => announceVerifiedUpdateInstall(identity, noticeScope()),
-  });
-  const applyUpdateStatusResponse = (response: UpdateRestartStatusResponse) => {
-    // The admitted attempt has its own identity-aware verifier. A page refresh
-    // must not race it with an unrelated retained sentinel.
-    if (pendingUpdate) {
-      return;
-    }
-    snapshot = {
-      ...snapshot,
-      ...projectUpdateStatusResponse(response, {
-        updateStatusBanner: snapshot.updateStatusBanner,
-        recordedUpdateAttempt: snapshot.recordedUpdateAttempt,
-        heldUpdateCampaignId: snapshot.heldUpdateCampaignId,
-      }),
-      updateCampaignStatusHydrated: true,
-    };
-    publish();
-  };
-  const refreshUpdateStatus = createUpdateStatusRefresher({
-    getClient: () => activeClient,
-    getEpoch: () => connectedEpoch,
-    getRevision: () => updateStatusRevision,
-    canRefresh: () => !disposed && operatorAccess.canAdmin,
-    isCurrent: (client, epoch) => epoch === connectedEpoch && isCurrentClient(client),
-    onRefreshing: (updateStatusRefreshing) => {
-      snapshot = { ...snapshot, updateStatusRefreshing };
-      publish();
-    },
-    onStatus: applyUpdateStatusResponse,
-    onError: (error) => {
-      publishUpdateBanner({
-        tone: "danger",
-        text: t("updates.error", { error: formatUiError(error) }),
-      });
-    },
-  });
-  const updateCampaignPoller = createUpdateCampaignStatusPoller({
-    canPoll: () =>
-      Boolean(activeClient && isCurrentClient(activeClient) && snapshot.updateSchedule?.campaign) &&
-      operatorAccess.canAdmin,
-    refresh: () => refreshUpdateStatus("background"),
-  });
-
   const synchronizeGateway = (next: ApplicationGateway["snapshot"]) => {
-    const nextGatewayScope = gatewayCredentialScope(gateway.connection.gatewayUrl);
-    if (nextGatewayScope !== updateGatewayScope) {
-      updateRunGeneration += 1;
-      updateStatusRevision += 1;
-      updateVerification.cancel();
-      setPendingUpdate(null);
-      updateRequestRunning = false;
-      updateGatewayScope = nextGatewayScope;
-      snapshot = {
-        ...snapshot,
-        updateStatusBanner: null,
-        recordedUpdateAttempt: null,
-        heldUpdateCampaignId: null,
-      };
-    }
     const previousClient = activeClient;
-    const helloChanged = activeHello !== next.hello;
     const connected = next.phase === "connected";
     const nextConnectedSource = connected ? next.client : null;
     const connectedSourceChanged = connectedSource !== nextConnectedSource;
@@ -340,20 +165,6 @@ export function createApplicationOverlays(
       // authorities must also close a pairing-only operator's retained modal.
       closeDevicePairSetupState(devicePairSetupState);
       pairingPendingCount.invalidate({ clear: true });
-      if (accessTransition.adminRevoked) {
-        updateRunGeneration += 1;
-        updateStatusRevision += 1;
-        updateVerification.cancel();
-        const updateStatusBanner = pendingUpdate ? resolveUnknownUpdateOutcomeBanner() : null;
-        setPendingUpdate(null);
-        updateRequestRunning = false;
-        snapshot = {
-          ...snapshot,
-          updateStatusRefreshing: false,
-          updateStatusBanner,
-          recordedUpdateAttempt: null,
-        };
-      }
     }
     if (accessTransition.pairingChanged) {
       pairingPendingCount.invalidate({
@@ -361,16 +172,10 @@ export function createApplicationOverlays(
       });
     }
     activeClient = next.client;
-    activeHello = next.hello;
     connectedSource = nextConnectedSource;
     promptState.client = next.client;
     devicePairSetupState.client = next.client;
     devicePairSetupState.connected = connected;
-    if (connectedSourceChanged) {
-      updateRunGeneration += 1;
-      updateStatusRevision += 1;
-      updateVerification.cancel();
-    }
     if (previousClient !== next.client || !connected) {
       approvalDecision = null;
       pairingPendingCount.invalidate({ clear: true });
@@ -384,58 +189,17 @@ export function createApplicationOverlays(
       clearExecApprovalTimers(promptState);
     }
     if (!connected || !next.client) {
-      updateRequestRunning = false;
       promptState.execApprovalQueue = [];
       promptState.execApprovalBusy = false;
       promptState.execApprovalErrors.clear();
-      snapshot = {
-        ...snapshot,
-        updateAvailable: null,
-        updateSchedule: null,
-        updateStatusRefreshing: false,
-        updateCampaignStatusHydrated: true,
-      };
-      updateCampaignPoller.stop();
-      if (next.phase === "reload-required") {
-        snapshot = { ...snapshot, controlUiRefreshRequired: true };
-      } else if (!next.client) {
+      if (next.phase !== "reload-required" && !next.client) {
         connectedEpoch = 0;
-        snapshot = { ...snapshot, controlUiRefreshRequired: false };
-      } else if (next.hello) {
-        snapshot = { ...snapshot, controlUiRefreshRequired: true };
       }
       clearExecApprovalTimers(promptState);
-      publish();
+      updates.synchronizeGateway(next);
       return;
     }
-    if (
-      pendingUpdate &&
-      (!operatorAccess.canAdmin || pendingUpdateProfileId !== (next.selfUser?.id ?? null))
-    ) {
-      updateRunGeneration += 1;
-      updateStatusRevision += 1;
-      updateVerification.cancel();
-      setPendingUpdate(null);
-      snapshot = { ...snapshot, updateStatusBanner: resolveUnknownUpdateOutcomeBanner() };
-    }
-    const serverBuildIdentity = {
-      version: next.hello?.server?.version,
-      buildId: next.hello?.server?.buildId,
-      controlUiBuildSource: next.hello?.server?.controlUiBuildSource,
-    };
-    const exactBuildIdentityAvailable = Boolean(serverBuildIdentity.buildId?.trim());
-    snapshot = {
-      ...snapshot,
-      ...(connectedSourceChanged || helloChanged
-        ? projectConnectedUpdateSnapshot(snapshot, next.hello)
-        : {}),
-      controlUiRefreshRequired: connectedSourceChanged
-        ? (exactBuildIdentityAvailable || connectedEpoch > 0) &&
-          controlUiBuildDiffersFrom(serverBuildIdentity)
-        : snapshot.controlUiRefreshRequired,
-    };
-    publish();
-    updateCampaignPoller.sync();
+    updates.synchronizeGateway(next);
     if (
       accessTransition.pairingChanged &&
       devicePairSetupState.devicePairSetupOpen &&
@@ -445,16 +209,8 @@ export function createApplicationOverlays(
     }
     if (connectedSourceChanged) {
       connectedEpoch += 1;
-      announceRecordedUpdateSuccess(operatorAccess.canAdmin ? noticeScope() : null);
       if (operatorAccess.canReviewApprovals) {
         void refreshApprovals(next.client, connectedEpoch, approvalAccessGeneration);
-      }
-      if (pendingUpdate && operatorAccess.canAdmin) {
-        void updateVerification.verify(next.client, connectedEpoch);
-      } else if (operatorAccess.canAdmin && !snapshot.updateSchedule?.campaign) {
-        // A new bundle has no in-memory campaign history. Hydrate the Gateway's
-        // retained result so an automatic update failure survives that reload.
-        void refreshUpdateStatus("background");
       }
     } else if (accessTransition.reviewChanged && operatorAccess.canReviewApprovals) {
       void refreshApprovals(next.client, connectedEpoch, approvalAccessGeneration);
@@ -485,29 +241,9 @@ export function createApplicationOverlays(
       return;
     }
     if (event.event === GATEWAY_EVENT_UPDATE_AVAILABLE) {
-      const payload = event.payload as GatewayUpdateAvailableEventPayload | undefined;
-      const previousCampaign = snapshot.updateSchedule?.campaign;
-      updateStatusRevision += 1;
-      snapshot = {
-        ...snapshot,
-        ...projectUpdateAvailableEvent(snapshot, payload),
-      };
-      publish();
-      updateCampaignPoller.sync();
-      if (
-        previousCampaign?.state === "applying" &&
-        snapshot.updateSchedule?.campaign?.state !== "applying" &&
-        activeClient &&
-        operatorAccess.canAdmin
-      ) {
-        // Completion can arrive between polls. The producer records its outcome
-        // before removing the campaign, so removal still needs one final read.
-        if (pendingUpdate) {
-          void updateVerification.verify(activeClient, connectedEpoch);
-        } else {
-          void refreshUpdateStatus("completion");
-        }
-      }
+      updates.handleUpdateAvailable(
+        event.payload as GatewayUpdateAvailableEventPayload | undefined,
+      );
       return;
     }
     if (
@@ -528,9 +264,6 @@ export function createApplicationOverlays(
       publish();
     }
   });
-  if (pendingUpdate) {
-    setPendingUpdate(pendingUpdate);
-  }
   synchronizeGateway(gateway.snapshot);
 
   return {
@@ -541,157 +274,9 @@ export function createApplicationOverlays(
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    refreshUpdateStatus,
-    async runUpdate() {
-      const client = gateway.snapshot.client;
-      if (
-        !client ||
-        gateway.snapshot.phase !== "connected" ||
-        disposed ||
-        snapshot.updateRunning ||
-        pendingUpdate !== null ||
-        !readGatewayOperatorAccess(gateway.snapshot).canAdmin
-      ) {
-        return;
-      }
-      const generation = ++updateRunGeneration;
-      updateStatusRevision += 1;
-      updateRequestRunning = true;
-      snapshot = {
-        ...snapshot,
-        updateStatusBanner: null,
-        recordedUpdateAttempt: null,
-      };
-      publish();
-      let admittedPending: PendingUpdateReconciliation | null = null;
-      try {
-        // updateRunning above suspends NEW config writes (bootstrap syncs it
-        // into the runtime-config capability); this barrier drains writes
-        // already in flight so none can commit or restart mid-install.
-        await hooks.drainConfigWrites?.();
-        if (
-          disposed ||
-          generation !== updateRunGeneration ||
-          snapshot.updateSchedule?.campaign?.state === "applying" ||
-          !readGatewayOperatorAccess(gateway.snapshot).canAdmin
-        ) {
-          return;
-        }
-        pendingUpdateProfileId = gateway.snapshot.selfUser?.id ?? null;
-        admittedPending = {
-          kind: "ambiguous",
-          expectedVersion: snapshot.updateAvailable?.latestVersion?.trim() || null,
-          expectedSha: resolveExpectedUpdateSha(snapshot.updateSchedule, snapshot.updateAvailable),
-          handoffId: null,
-          deadlineAtMs: Date.now() + UPDATE_HANDOFF_TIMEOUT_MS,
-        };
-        setPendingUpdate(admittedPending);
-        publish();
-        const response = await client.request<UpdateRunResponse>("update.run", {});
-        if (
-          disposed ||
-          generation !== updateRunGeneration ||
-          pendingUpdate !== admittedPending ||
-          activeClient !== client ||
-          gateway.snapshot.client !== client
-        ) {
-          return;
-        }
-        const accepted = classifyUpdateRunResponse(response, admittedPending);
-        if (accepted) {
-          setPendingUpdate(accepted.pending);
-          if (accepted.banner) {
-            snapshot = { ...snapshot, updateStatusBanner: accepted.banner };
-          }
-          return;
-        }
-        setPendingUpdate(null);
-        snapshot = {
-          ...snapshot,
-          updateStatusBanner: resolveUpdateStatusBanner({
-            status: response.result?.status ?? "error",
-            reason: response.result?.reason,
-          }),
-        };
-      } catch (error) {
-        if (
-          disposed ||
-          generation !== updateRunGeneration ||
-          pendingUpdate !== admittedPending ||
-          activeClient !== client ||
-          gateway.snapshot.client !== client
-        ) {
-          return;
-        }
-        setPendingUpdate(null);
-        snapshot = {
-          ...snapshot,
-          updateStatusBanner: {
-            tone: "danger",
-            text: t("updates.error", {
-              error: formatUiError(error),
-            }),
-          },
-        };
-      } finally {
-        if (
-          !disposed &&
-          generation === updateRunGeneration &&
-          activeClient === client &&
-          gateway.snapshot.client === client
-        ) {
-          updateRequestRunning = false;
-          publish();
-        }
-      }
-    },
-    async holdUpdate() {
-      const client = gateway.snapshot.client;
-      const campaign = snapshot.updateSchedule?.campaign;
-      const busy = updateHoldInFlight || snapshot.updateRunning || pendingUpdate !== null;
-      if (
-        !client ||
-        gateway.snapshot.phase !== "connected" ||
-        disposed ||
-        busy ||
-        !campaign ||
-        campaign.state === "applying" ||
-        snapshot.heldUpdateCampaignId === campaign.id ||
-        !readGatewayOperatorAccess(gateway.snapshot).canAdmin
-      ) {
-        return false;
-      }
-      updateHoldInFlight = true;
-      try {
-        const response = await client.request<UpdateHoldResult>("update.hold", {});
-        if (disposed || gateway.snapshot.client !== client) {
-          return false;
-        }
-        const updateSchedule = response.schedule && readUpdateScheduleValue(response.schedule);
-        if (updateSchedule !== undefined || response.ok) {
-          snapshot = {
-            ...snapshot,
-            ...(updateSchedule !== undefined ? { updateSchedule } : {}),
-            heldUpdateCampaignId: response.ok
-              ? campaign.id
-              : resolveHeldUpdateCampaignId(
-                  updateSchedule ?? snapshot.updateSchedule,
-                  snapshot.heldUpdateCampaignId,
-                ),
-          };
-          publish();
-        }
-        return response.ok;
-      } catch (error) {
-        if (!disposed && gateway.snapshot.client === client) {
-          const message = formatUiError(error);
-          publishUpdateBanner({ tone: "danger", text: t("updates.error", { error: message }) });
-        }
-        return false;
-      } finally {
-        updateHoldInFlight = false;
-      }
-    },
+    refreshUpdateStatus: updates.refreshUpdateStatus,
+    runUpdate: updates.runUpdate,
+    holdUpdate: updates.holdUpdate,
     async decideApproval(decision, approvalId, projectedApproval) {
       const active = approvalId
         ? (promptState.execApprovalQueue.find((entry) => entry.id === approvalId) ??
@@ -798,11 +383,8 @@ export function createApplicationOverlays(
     dispose() {
       disposed = true;
       approvalDecision = null;
-      updateRunGeneration += 1;
-      clearPendingUpdateTimer();
+      updates.dispose();
       pairingPendingCount.invalidate();
-      updateVerification.cancel();
-      updateCampaignPoller.stop();
       closeDevicePairSetupState(devicePairSetupState);
       stopGateway();
       stopEvents();
