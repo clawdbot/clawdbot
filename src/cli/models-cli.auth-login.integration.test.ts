@@ -53,14 +53,14 @@ vi.mock("../plugins/providers.runtime.js", () => ({
 }));
 
 function makeStdinInteractive(): () => void {
-  const stdin = process.stdin as Omit<NodeJS.ReadStream, "isTTY"> & { isTTY?: boolean };
+  const stdin = process.stdin;
   const descriptor = Object.getOwnPropertyDescriptor(stdin, "isTTY");
   Object.defineProperty(stdin, "isTTY", { configurable: true, get: () => true });
   return () => {
     if (descriptor) {
       Object.defineProperty(stdin, "isTTY", descriptor);
     } else {
-      delete stdin.isTTY;
+      Reflect.deleteProperty(stdin, "isTTY");
     }
   };
 }
