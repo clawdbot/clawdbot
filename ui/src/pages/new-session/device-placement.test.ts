@@ -172,7 +172,7 @@ describe("device placement projection", () => {
       },
       environment: { invocableCommands: ["camera.snap"] },
       selectable: false,
-      reason: /declare|command/i,
+      reason: /does not declare/i,
     },
   ])("$name", ({ requirement, environment, selectable, reason }) => {
     const [device] = projectDevicePlacements([node(environment)], requirement);
