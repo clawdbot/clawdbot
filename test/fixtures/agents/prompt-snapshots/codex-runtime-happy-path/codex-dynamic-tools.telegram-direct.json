@@ -251,11 +251,11 @@
           "type": "string"
         },
         "thinking": {
-          "description": "Thinking override; unavailable with visible=true.",
+          "description": "Thinking override; supported with visible=true for subagents.",
           "type": "string"
         },
         "visible": {
-          "description": "Durable visible session: coding/multi-step/keepable results; works without UI; subagent only. Default run mode and empty attachment fields are accepted; no thread/thinking/lightContext or attachment staging.",
+          "description": "Durable visible session: coding/multi-step/keepable results; works without UI; subagent only. Default run mode and empty attachment fields are accepted; no thread/lightContext or attachment staging.",
           "type": "boolean"
         },
         "worktree": {
