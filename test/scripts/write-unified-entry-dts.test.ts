@@ -19,6 +19,13 @@ describe("write-unified-entry-dts", () => {
     );
     expect(Object.values(declarations).every((entries) => entries.length > 0)).toBe(true);
     expect(production).toHaveLength(Object.values(declarations).flat().length);
+    write("extensions/fixture-a/runtime-only.js", 'export const runtimeOnly = "runtime";');
+    write("extensions/fixture-a/typed-runtime.js", 'export const typedRuntime = "typed";');
+    write("extensions/fixture-a/typed-runtime.d.ts", 'export declare const typedRuntime: "typed";');
+    fs.appendFileSync(
+      path.join(root, "extensions/fixture-a/index.ts"),
+      '\nexport { typedRuntime } from "./typed-runtime.js";\n',
+    );
     const preserved = {
       "dist/control-ui/retained.d.ts": "Vite-owned declaration",
       "dist/releases/Previous.app/Contents/Resources/core.d.ts": "signed app declaration",
@@ -37,6 +44,12 @@ describe("write-unified-entry-dts", () => {
     for (const entry of production) {
       expect(fs.statSync(path.join(root, `dist/${entry}.d.ts`)).size, entry).toBeGreaterThan(0);
     }
+    for (const name of ["runtime-only", "typed-runtime"]) {
+      expect(
+        fs.statSync(path.join(root, `dist/extensions/fixture-a/${name}.js`)).size,
+      ).toBeGreaterThan(0);
+      expect(fs.existsSync(path.join(root, `dist/extensions/fixture-a/${name}.d.ts`))).toBe(false);
+    }
     expect(fs.existsSync(path.join(root, "dist/obsolete.d.ts"))).toBe(false);
     expect(fs.existsSync(path.join(root, "dist/extensions/removed/api.d.ts"))).toBe(false);
     for (const [file, bytes] of Object.entries(preserved)) {
@@ -45,7 +58,11 @@ describe("write-unified-entry-dts", () => {
     const cache = path.join(root, ".artifacts/build-all-cache/tsdown-unified");
     const record = readArtifactRecord(path.join(cache, "stamp.json"));
     expect(record?.inputs).toEqual(
-      expect.arrayContaining(["src/shared.ts", ...declarationInputs.map(({ file }) => file)]),
+      expect.arrayContaining([
+        "src/shared.ts",
+        "extensions/fixture-a/typed-runtime.d.ts",
+        ...declarationInputs.map(({ file }) => file),
+      ]),
     );
     expect(record?.inputs).not.toContain("test/unrelated.test.ts");
     expect(record?.inputs).not.toContain("ui/unrelated.ts");

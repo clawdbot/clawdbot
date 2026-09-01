@@ -599,7 +599,7 @@ describe("tsdown config", () => {
     }
   });
 
-  it("assigns every unified entry to exactly one bounded declaration graph", () => {
+  it("assigns every TypeScript runtime entry to exactly one bounded declaration graph", () => {
     const unifiedRuntimeConfig = configs.find(
       (entry) => entry.name === TSDOWN_UNIFIED_CONFIG_GROUP,
     );
@@ -619,7 +619,15 @@ describe("tsdown config", () => {
       return dts.entry;
     });
 
-    expect(declarationSources.toSorted()).toEqual(runtimeSources.toSorted());
+    expect(runtimeSources).toEqual(
+      expect.arrayContaining([
+        "extensions/vault/vault-secret-id.js",
+        "extensions/vault/vault-secret-ref-resolver.js",
+      ]),
+    );
+    expect(declarationSources.toSorted()).toEqual(
+      runtimeSources.filter((source) => /\.[cm]?tsx?$/u.test(source)).toSorted(),
+    );
     expect(new Set(declarationSources).size).toBe(declarationSources.length);
   });
 

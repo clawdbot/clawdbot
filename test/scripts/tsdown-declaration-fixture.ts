@@ -185,11 +185,14 @@ export function createFixture(groups: readonly string[] = TSDOWN_PLUGIN_SDK_DTS_
     configEntries.set(key, entries);
   }
   const { production, qa } = entries;
+  const selectedSources = new Set(
+    Object.values(qa.selected).map((source) => source.replaceAll(path.sep, "/")),
+  );
   // Rolldown resolves the complete canonical entry graph even for declaration-only groups.
-  // Empty unselected sources are fixture inputs, never replacement compiler output.
+  // Only unselected inputs need placeholders; selected sources receive their final contracts below.
   for (const source of new Set(qa.inputs)) {
     const relative = path.relative(root, path.resolve(root, source)).replaceAll(path.sep, "/");
-    if (!runtimeEntryOwners.has(relative)) {
+    if (!runtimeEntryOwners.has(relative) && !selectedSources.has(relative)) {
       write(source, "export {};\n");
     }
   }
@@ -227,8 +230,20 @@ export function createFixture(groups: readonly string[] = TSDOWN_PLUGIN_SDK_DTS_
   write(".github/workflows/unrelated.yml", "name: unrelated before\n");
   write("src/schema.d.ts", 'declare module "*.sql" { const text: string; export default text; }');
   write("src/schema.sql", "CREATE TABLE fixture (value TEXT NOT NULL);");
-  for (const source of Object.values(qa.selected)) {
-    if (runtimeEntryOwners.has(source.replaceAll(path.sep, "/"))) {
+  for (const source of selectedSources) {
+    if (runtimeEntryOwners.has(source)) {
+      continue;
+    }
+    if (groups === TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS && source === "src/plugin-sdk/core.ts") {
+      write(
+        source,
+        [
+          '/// <reference path="../schema.d.ts" />',
+          'import schema from "../schema.sql";',
+          'export { Shared } from "@openclaw/llm-core";',
+          "export function getSchema(): string { return schema; }",
+        ].join("\n"),
+      );
       continue;
     }
     write(
@@ -244,17 +259,6 @@ export function createFixture(groups: readonly string[] = TSDOWN_PLUGIN_SDK_DTS_
           );
           return `export type { ${name} } from "${specifier}";`;
         }),
-      ].join("\n"),
-    );
-  }
-  if (groups === TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS) {
-    write(
-      "src/plugin-sdk/core.ts",
-      [
-        '/// <reference path="../schema.d.ts" />',
-        'import schema from "../schema.sql";',
-        'export { Shared } from "@openclaw/llm-core";',
-        "export function getSchema(): string { return schema; }",
       ].join("\n"),
     );
   }
