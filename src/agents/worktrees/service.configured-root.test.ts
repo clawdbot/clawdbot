@@ -134,4 +134,45 @@ describe("configured managed worktree root", () => {
     await service.remove({ id: record.id, reason: "symlink-root" });
     expect((await service.restore({ id: record.id })).path).toBe(record.path);
   });
+
+  it.each(["nested", "deep", "symlink"])(
+    "preserves %s custom-root contents during GC, including after a root change",
+    async (kind) => {
+      const nestedRoot = path.join(
+        stateDir,
+        "worktrees",
+        "custom",
+        ...(kind === "deep" ? ["deeper"] : []),
+      );
+      await fs.mkdir(nestedRoot, { recursive: true });
+      worktreeRoot = nestedRoot;
+      if (kind === "symlink") {
+        worktreeRoot = path.join(root, "linked-nested-root");
+        await fs.symlink(
+          nestedRoot,
+          worktreeRoot,
+          process.platform === "win32" ? "junction" : "dir",
+        );
+      }
+      const unrelated = path.join(nestedRoot, "unregistered", "keep.txt");
+      await fs.mkdir(path.dirname(unrelated));
+      await fs.writeFile(unrelated, "unrelated data\n");
+      expect((await service.gc()).orphansDeleted).toBe(0);
+      expect(await fs.readFile(unrelated, "utf8")).toBe("unrelated data\n");
+
+      const record = await service.create({ repoRoot: repo, name: "nested", baseRef: "HEAD" });
+      await fs.writeFile(path.join(record.path, "README.md"), "unsnapshotted edit\n");
+      for (const nextRoot of [worktreeRoot, path.join(root, "next-root")]) {
+        worktreeRoot = nextRoot;
+        expect((await service.gc()).orphansDeleted).toBe(0);
+        expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe(
+          "unsnapshotted edit\n",
+        );
+        expect(await fs.readFile(unrelated, "utf8")).toBe("unrelated data\n");
+        expect(
+          (await service.list()).find((entry) => entry.id === record.id)?.removedAt,
+        ).toBeUndefined();
+      }
+    },
+  );
 });

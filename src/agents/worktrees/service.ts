@@ -7,6 +7,7 @@ import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { isMissingPathError, formatErrorMessage } from "../../infra/errors.js";
 import { root as fsRoot } from "../../infra/fs-safe.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   createStagedInputPathMatcher,
@@ -295,9 +296,13 @@ async function canonicalPathKey(target: string): Promise<string> {
 async function shouldPreserveOrphanCandidate(
   target: string,
   managedPaths: ReadonlySet<string>,
+  customRoots: ReadonlySet<string>,
 ): Promise<boolean> {
   const targetKey = await canonicalPathKey(target);
-  if (managedPaths.has(targetKey)) {
+  if (
+    managedPaths.has(targetKey) ||
+    [...customRoots].some((root) => isPathInside(root, targetKey) || isPathInside(targetKey, root))
+  ) {
     return true;
   }
   // Any top-level .git entry marks uncertain user work; broken indirection only
@@ -1734,6 +1739,31 @@ export class ManagedWorktreeService {
     // root can contain unrelated directories; its cleanup is registry-bound above.
     const worktreesRoot = path.join(resolveStateDir(this.env), "worktrees");
     const fingerprints = await fs.readdir(worktreesRoot, { withFileTypes: true }).catch(() => []);
+    if (fingerprints.length === 0) {
+      return 0;
+    }
+    const defaultRoot = await canonicalPathKey(worktreesRoot);
+    const customRoots = new Set<string>();
+    // Retain roots from recorded paths after configuration changes. Canonical
+    // overlap protects nested roots and symlink aliases before recursive deletion.
+    for (const root of [
+      this.getConfig?.().worktreeRoot,
+      ...records.map((record) => path.dirname(path.dirname(record.path))),
+    ]) {
+      if (!root) {
+        continue;
+      }
+      try {
+        const canonical = await canonicalPathKey(root);
+        if (canonical !== defaultRoot) {
+          customRoots.add(canonical);
+        }
+      } catch (error) {
+        if (!isMissingPathError(error)) {
+          throw error;
+        }
+      }
+    }
     let deleted = 0;
     for (const fingerprint of fingerprints) {
       if (!fingerprint.isDirectory()) {
@@ -1742,7 +1772,7 @@ export class ManagedWorktreeService {
       const fingerprintPath = path.join(worktreesRoot, fingerprint.name);
       // A root entry can be a checkout, not a fingerprint container; descending
       // before applying the same preservation rule would expose its contents to deletion.
-      if (await shouldPreserveOrphanCandidate(fingerprintPath, managedPaths)) {
+      if (await shouldPreserveOrphanCandidate(fingerprintPath, managedPaths, customRoots)) {
         continue;
       }
       const names = await fs.readdir(fingerprintPath, { withFileTypes: true }).catch(() => []);
@@ -1751,7 +1781,7 @@ export class ManagedWorktreeService {
           continue;
         }
         const candidate = path.join(fingerprintPath, name.name);
-        if (await shouldPreserveOrphanCandidate(candidate, managedPaths)) {
+        if (await shouldPreserveOrphanCandidate(candidate, managedPaths, customRoots)) {
           continue;
         }
         await fs.rm(candidate, { recursive: true, force: true });
