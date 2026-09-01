@@ -8,7 +8,6 @@ import {
   type IngressDrainTestPayload as Payload,
   withTempState,
 } from "./ingress-drain.test-helpers.js";
-import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "./ingress-retry-policy.js";
 
 type ChannelIngressDispatchLifecycle = Parameters<
   Parameters<typeof createChannelIngressDrain>[0]["dispatchClaimedEvent"]
@@ -82,46 +81,6 @@ describe("channel ingress drain debounce failures", () => {
       expect(await queue.enqueue("debounced-retry", { text: "retry me" })).toMatchObject({
         kind: "completed",
       });
-      drain.dispose();
-    });
-  });
-
-  it("dead-letters a persistent session-start conflict and drains the next same-lane event", async () => {
-    await withTempState(async (stateDir) => {
-      let clock = 10_000;
-      const queue = createTestIngressQueue(stateDir, { now: () => clock });
-      await queue.enqueue("poison", { text: "poison" }, { laneKey: "shared", receivedAt: clock });
-      await queue.enqueue("after", { text: "after" }, { laneKey: "shared", receivedAt: clock + 1 });
-      const processed: string[] = [];
-      const sessionError = new Error(
-        'Session "agent:main:telegram:direct:1" changed while starting work. Retry.',
-      );
-      const drain = createChannelIngressDrain<Payload>({
-        queue,
-        now: () => clock,
-        retryPolicy: { baseMs: 0, maxMs: 0 },
-        dispatchClaimedEvent: async (event, lifecycle) => {
-          if (event.id === "poison") {
-            throw sessionError;
-          }
-          await lifecycle.onAdopted();
-          processed.push(event.id);
-        },
-      });
-
-      for (let attempt = 0; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
-        expect(await drain.drainOnce()).toEqual({ started: 1 });
-        await drain.waitForIdle();
-        clock += 1;
-      }
-      expect(await queue.listFailed?.({ limit: "all" })).toMatchObject([
-        { id: "poison", reason: "session-start-conflict-retry-limit" },
-      ]);
-
-      expect(await drain.drainOnce()).toEqual({ started: 1 });
-      await drain.waitForIdle();
-      expect(processed).toEqual(["after"]);
-      expect(await queue.listPending({ limit: "all" })).toEqual([]);
       drain.dispose();
     });
   });

@@ -3,7 +3,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE } from "../../config/sessions/lifecycle.js";
+import {
+  isSessionWorkStartInvalidatedError,
+  SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE,
+} from "../../config/sessions/lifecycle.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   deleteSessionEntryLifecycle,
@@ -190,7 +193,7 @@ describe("reply turn admission", () => {
     releaseMutation.resolve();
     await mutation;
 
-    await expect(admission).rejects.toThrow(/deleted while starting work/i);
+    await expect(admission).rejects.toSatisfy(isSessionWorkStartInvalidatedError);
   });
 
   it("uses the persisted session id when reset commits before admission", async () => {
@@ -260,7 +263,7 @@ describe("reply turn admission", () => {
     releaseMutation.resolve();
     await mutation;
 
-    await expect(admission).rejects.toThrow(/changed while starting work/i);
+    await expect(admission).rejects.toSatisfy(isSessionWorkStartInvalidatedError);
   });
 
   it("drops queued work when reset cleanup cancels admission", async () => {

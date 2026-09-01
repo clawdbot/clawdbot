@@ -9,12 +9,6 @@ export const DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS = 8;
 export const DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_INGRESS_RETRY_BASE_MS = 1_000;
 export const DEFAULT_INGRESS_RETRY_MAX_MS = 3 * 60_000;
-/**
- * Session-start invalidation is an optimistic-concurrency retry, not a transport outage.
- * If it remains identical through the normal attempt budget, keeping the lane blocked for
- * the generic 24-hour age gate cannot make the stale event healthier.
- */
-const SESSION_WORK_START_INVALIDATED_ERROR_CODE = "SESSION_WORK_START_INVALIDATED";
 
 export type IngressRetryPolicyConfig = {
   maxAttempts?: number;
@@ -47,18 +41,6 @@ type IngressFailureDisposition =
       attempt: number;
       message: string;
     };
-
-function isSessionStartConflictFailure(error: unknown, message: string): boolean {
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    error.code === SESSION_WORK_START_INVALIDATED_ERROR_CODE
-  ) {
-    return true;
-  }
-  return /^Session ".+" (?:changed|was deleted) while starting work\. Retry\.$/u.test(message);
-}
 
 function resolveConfig(config?: IngressRetryPolicyConfig) {
   return {
@@ -116,7 +98,6 @@ export function resolveIngressFailureDisposition(params: {
   now?: number;
 }): IngressFailureDisposition {
   const now = params.now ?? Date.now();
-  const { maxAttempts } = resolveConfig(params.config);
   const attempt = resolveIngressAttemptNumber(params.event);
   const message = params.formatError(params.err);
   const nonRetryable = params.resolveNonRetryableFailure?.(params.err) ?? null;
@@ -125,14 +106,6 @@ export function resolveIngressFailureDisposition(params: {
       kind: "fail",
       reason: nonRetryable.reason,
       message: nonRetryable.message,
-      attempt,
-    };
-  }
-  if (attempt >= maxAttempts && isSessionStartConflictFailure(params.err, message)) {
-    return {
-      kind: "fail",
-      reason: "session-start-conflict-retry-limit",
-      message,
       attempt,
     };
   }
