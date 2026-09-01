@@ -9,6 +9,7 @@ import {
   resolveMessagePresentationButtonAction,
   resolveMessagePresentationOptionAction,
   type MessagePresentation,
+  type MessagePresentationBlock,
   type MessagePresentationButton,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -117,6 +118,11 @@ export const lineMessageActions: ChannelMessageActionAdapter = {
   prepareSendPayload: ({ payload }) => payload,
 };
 
+// LINE caps quick replies per message, not per select block, and rejects the
+// whole request at one item over. Core budgets each block against this same
+// number, so several blocks can still add up past it.
+const LINE_QUICK_REPLY_LIMIT = 13;
+
 export const LINE_PRESENTATION_CAPABILITIES = {
   supported: true,
   buttons: true,
@@ -124,7 +130,7 @@ export const LINE_PRESENTATION_CAPABILITIES = {
   context: true,
   limits: {
     actions: { maxActions: 4, maxActionsPerRow: 1, maxRows: 4, maxLabelLength: 40 },
-    selects: { maxOptions: 13, maxLabelLength: 20, maxValueBytes: 300 },
+    selects: { maxOptions: LINE_QUICK_REPLY_LIMIT, maxLabelLength: 20, maxValueBytes: 300 },
     text: { markdownDialect: "plain" },
   },
 } satisfies NonNullable<ChannelOutboundAdapter["presentationCapabilities"]>;
@@ -173,7 +179,7 @@ export function renderLinePresentation(
   }
 
   const lineData = isRecord(payload.channelData?.line) ? payload.channelData.line : {};
-  const text = presentation.blocks
+  const cardBody = presentation.blocks
     .flatMap((block) => (block.type === "text" || block.type === "context" ? [block.text] : []))
     .join("\n");
   const title = presentation.title || "Choose an option";
@@ -183,7 +189,7 @@ export function renderLinePresentation(
           altText: title,
           contents: createActionCard(
             title,
-            text || "Choose an option.",
+            cardBody || "Choose an option.",
             buttons.map((button, index) => ({
               label: button.label,
               action: buttonActions[index]!,
@@ -191,11 +197,47 @@ export function renderLinePresentation(
           ),
         }
       : undefined;
+  // Quick replies ride on the reply's own text message, so a select-only
+  // presentation renders no card and has nowhere native to keep its words.
+  // Everything LINE did not draw joins that text or it reaches nobody.
+  let drawn = 0;
+  const carriedBlocks = presentation.blocks.flatMap<MessagePresentationBlock>((block) => {
+    if (block.type !== "select") {
+      // A card already shows the title and the text blocks; only selects are left.
+      return flexMessage ? [] : [block];
+    }
+    // LINE fills one shared quick-reply row, so each select draws from what the
+    // blocks before it left. Keeping the block carries its own prompt with its
+    // own leftovers instead of pooling every select under one generic heading.
+    const spill = block.options.slice(Math.max(0, LINE_QUICK_REPLY_LIMIT - drawn));
+    drawn += block.options.length - spill.length;
+    if (spill.length > 0) {
+      return [{ ...block, options: spill }];
+    }
+    // Every option became a chip. The fallback renderer drops a select with no
+    // options, so the prompt that explains those chips needs its own block.
+    return block.placeholder ? [{ type: "context", text: block.placeholder }] : [];
+  });
+  const undrawn = flexMessage
+    ? { blocks: carriedBlocks }
+    : { ...presentation, blocks: carriedBlocks };
+  // Ask the renderer rather than predicting it: anything it adds to the reply
+  // text is content LINE would otherwise drop, whichever field it came from.
+  const rendered = renderMessagePresentationFallbackText({
+    text: payload.text,
+    presentation: undrawn,
+  });
+  const carriedText = rendered === (payload.text ?? "") ? undefined : rendered;
   return {
     ...payload,
+    ...(carriedText ? { text: carriedText } : {}),
     channelData: {
       ...payload.channelData,
-      line: { ...lineData, ...(flexMessage ? { flexMessage } : {}), quickReplyItems },
+      line: {
+        ...lineData,
+        ...(flexMessage ? { flexMessage } : {}),
+        quickReplyItems: quickReplyItems.slice(0, LINE_QUICK_REPLY_LIMIT),
+      },
     },
   };
 }
@@ -223,9 +265,9 @@ export function prepareLineReplyPayload(payload: ReplyPayload): ReplyPayload {
     }),
   );
   if (rendered) {
-    // Only a Flex body replaces the fallback prose. A select-only presentation
-    // renders quick replies without one, so dropping the text there would send
-    // bare option labels and lose the question they answer.
+    // Only a Flex body replaces the fallback prose. Without a card the renderer
+    // rebuilds the words it could not draw, and the author's own fallback text
+    // is the better rendering of the same facts, so it wins.
     const renderedLine = isRecord(rendered.channelData?.line) ? rendered.channelData.line : {};
     return usesFallbackText && renderedLine.flexMessage === undefined
       ? { ...rendered, text: rest.text }
@@ -321,7 +363,7 @@ export function renderLineCard(card: LineRichCard): { altText: string; contents:
 
 export function createLineQuickReply(items: LineQuickReplyItem[]): messagingApi.QuickReply {
   return {
-    items: items.slice(0, 13).map((item) => ({
+    items: items.slice(0, LINE_QUICK_REPLY_LIMIT).map((item) => ({
       type: "action",
       action:
         item.action.type === "command"
