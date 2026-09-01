@@ -195,8 +195,17 @@ export function findMatrixSpoilerDelimiterOffsets(markdown: string): number[] {
 export function hasMatrixSpoilerMetadataCollision(markdown: string): boolean {
   const projected = projectMatrixMarkdown(markdown);
   const ordinary = new Set(findMatrixSpoilerDelimiterOffsets(projected));
-  const tables = findMatrixTableSourceRanges(projected);
-  const codeRegions = findCodeRegions(projected);
+  const underlineTags = [...tokenizeHtmlTags(projected)].filter(
+    (tag) => (tag.name === "u" || tag.name === "ins") && !isMarkdownEscaped(projected, tag.start),
+  );
+  // Matrix consumes underline tags before parsing inline code, so backticks
+  // inside their attributes cannot make a literal code region.
+  const literalRanges = [
+    ...findMatrixTableSourceRanges(projected),
+    ...findCodeRegions(projected).filter(
+      (code) => !underlineTags.some((tag) => code.start > tag.start && code.start < tag.end),
+    ),
+  ];
   for (let index = 0; index < projected.length - 1; index += 1) {
     if (projected[index] !== "|" || projected[index + 1] !== "|") {
       continue;
@@ -204,15 +213,7 @@ export function hasMatrixSpoilerMetadataCollision(markdown: string): boolean {
     if (ordinary.has(index) || isMarkdownEscaped(projected, index)) {
       continue;
     }
-    if (tables.some((range) => index >= range.start && index < range.end)) {
-      continue;
-    }
-    // A `||` inside a code span/block is a literal (e.g. `rg foo || true`),
-    // not a spoiler attempt the finder failed to pair — exclude it so the
-    // collision check does not collapse the body to "[Spoiler]". Link metadata
-    // and tag attributes stay fail-closed: a `||` there may be a spoiler the
-    // parser cannot safely resolve, so it must still trigger the redaction.
-    if (isInsideCode(index, codeRegions)) {
+    if (literalRanges.some((range) => index >= range.start && index < range.end)) {
       continue;
     }
     return true;

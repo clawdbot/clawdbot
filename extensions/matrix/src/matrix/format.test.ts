@@ -40,6 +40,65 @@ const MATRIX_FORMAT_GOLDENS = [
 ] as const;
 
 describe("Matrix formatting migration goldens", () => {
+  it.each([
+    {
+      name: "inline",
+      markdown: "Run `rg foo || true`.",
+      body: "Run `rg foo || true`.",
+      html: "<p>Run <code>rg foo || true</code>.</p>",
+    },
+    {
+      name: "fenced",
+      markdown: "```sh\nrg foo || true\n```",
+      body: "```sh\nrg foo || true\n```",
+      html: '<pre><code class="language-sh">rg foo || true\n</code></pre>',
+    },
+    {
+      name: "indented",
+      markdown: "    rg foo || true",
+      body: "    rg foo || true",
+      html: "<pre><code>rg foo || true\n</code></pre>",
+    },
+    {
+      name: "mixed",
+      markdown: "Run `rg foo || true` then ||secret||.",
+      body: "Run rg foo || true then [Spoiler].",
+      html: "<p>Run <code>rg foo || true</code> then <span data-mx-spoiler>secret</span>.</p>",
+    },
+    {
+      name: "underline-looking tag inside code",
+      markdown: '`<u title="||secret||">`',
+      body: '`<u title="||secret||">`',
+      html: "<p><code>&lt;u title=&quot;||secret||&quot;&gt;</code></p>",
+    },
+    {
+      name: "code inside escaped tag text",
+      markdown: '\\<u title="`||literal||`">label',
+      body: '\\<u title="`||literal||`">label',
+      html: "<p>&lt;u title=&quot;<code>||literal||</code>&quot;&gt;label</p>",
+    },
+    {
+      name: "code inside underline content",
+      markdown: "<u>`||literal||`</u>",
+      body: "<u>`||literal||`</u>",
+      html: "<p><u><code>||literal||</code></u></p>",
+    },
+  ])("preserves literal code pipes in $name text and HTML", async ({ markdown, body, html }) => {
+    expect(markdownToMatrixBody(markdown)).toBe(body);
+    expect(markdownToMatrixHtml(markdown)).toBe(html);
+    const rendered = await renderMarkdownToMatrixHtmlWithMentions({
+      markdown,
+      client: createMentionClient(),
+    });
+    expect(rendered.html).toBe(html);
+    expect(rendered.mentions).toEqual({});
+  });
+
+  it.each(["u", "ins"])("keeps code-looking pipes inside %s attributes fail closed", (tag) => {
+    const markdown = `<${tag} title="\`||secret||\`">label</${tag}>`;
+    expect(markdownToMatrixBody(markdown)).toBe("[Spoiler]");
+    expect(markdownToMatrixHtml(markdown)).toBe("<p>[Spoiler]</p>");
+  });
   for (const golden of MATRIX_FORMAT_GOLDENS) {
     it(`${golden.name}: emits the authorized before-to-after payload`, () => {
       expect(markdownToMatrixHtml(golden.markdown)).toBe(golden.html);
@@ -190,34 +249,6 @@ describe("Matrix formatting migration goldens", () => {
     expect(() => markdownToMatrixHtml(`${privateUse} ||secret||`)).toThrow(
       "exhausted its private marker pool",
     );
-  });
-
-  it("keeps the body when || appears inside inline code (#128429)", () => {
-    // A `||` inside a code span is not a spoiler delimiter — the delimiter
-    // finder already excludes code regions. The collision predicate must
-    // apply the same exclusion, or the whole body collapses to "[Spoiler]".
-    const markdown = "Ran `rg foo || true` and found nothing.";
-    const body = markdownToMatrixBody(markdown);
-    expect(body).toContain("rg foo");
-    expect(body).toContain("|| true");
-    expect(body).not.toBe("[Spoiler]");
-  });
-
-  it("keeps the body when || appears inside a fenced code block (#128429)", () => {
-    const markdown = "Result:\n\n```\nrg foo || true\n```\n";
-    const body = markdownToMatrixBody(markdown);
-    expect(body).toContain("rg foo");
-    expect(body).not.toBe("[Spoiler]");
-  });
-
-  it("renders a real spoiler alongside || inside inline code (#128429)", () => {
-    // A genuine spoiler in the same message still redacts while the code-span
-    // `||` is preserved — the exclusion is per-range, not message-wide.
-    const markdown = "Ran `rg foo || true` and ||secret|| found nothing.";
-    const body = markdownToMatrixBody(markdown);
-    expect(body).toContain("rg foo");
-    expect(body).toContain("|| true");
-    expect(body).not.toContain("secret");
   });
 });
 
