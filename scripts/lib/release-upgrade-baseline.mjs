@@ -3,19 +3,10 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { compareReleaseVersions, parseReleaseVersion } from "./release-version.mjs";
 
-function normalizeStringifiedOptionalString(value) {
-  if (typeof value === "string") {
-    const normalized = value.trim();
-    return normalized || undefined;
-  }
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    return String(value);
-  }
-  return undefined;
-}
-
 function parseVersion(version) {
-  return parseReleaseVersion(normalizeStringifiedOptionalString(version) ?? "") ?? undefined;
+  return typeof version === "string"
+    ? (parseReleaseVersion(version.trim()) ?? undefined)
+    : undefined;
 }
 
 function compareOpenClawVersions(leftVersion, rightVersion) {
@@ -30,8 +21,9 @@ function normalizePublishedVersions(publishedVersions) {
   return [
     ...new Set(
       publishedVersions
-        .map((version) => normalizeStringifiedOptionalString(version))
-        .filter((version) => version !== undefined),
+        .filter((version) => typeof version === "string")
+        .map((version) => version.trim())
+        .filter(Boolean),
     ),
   ]
     .filter((version) => parseVersion(version)?.channel === "stable")
@@ -39,7 +31,7 @@ function normalizePublishedVersions(publishedVersions) {
 }
 
 function normalizeTargetContextRef(value) {
-  const raw = normalizeStringifiedOptionalString(value) ?? "";
+  const raw = typeof value === "string" ? value.trim() : "";
   return raw.replace(/^refs\/heads\//u, "");
 }
 
@@ -86,14 +78,12 @@ export function resolveFrozenExtendedStableUpgradeBaseline(
     candidate.patch < 33
   ) {
     throw new Error(
-      `candidate ${normalizeStringifiedOptionalString(candidateVersion) ?? ""} is incompatible with frozen extended-stable context ${targetContextRef}`,
+      `candidate ${typeof candidateVersion === "string" ? candidateVersion.trim() : ""} is incompatible with frozen extended-stable context ${targetContextRef}`,
     );
   }
 
   const published = normalizePublishedVersions(publishedVersions);
-  const requestedBaseline = parseVersion(
-    normalizeStringifiedOptionalString(context.previousVersion) ?? "",
-  );
+  const requestedBaseline = parseVersion(context.previousVersion);
   if (context.previousVersion !== undefined && !requestedBaseline) {
     throw new Error("previous_version must be a final published extended-stable predecessor");
   }
@@ -123,7 +113,7 @@ export function resolveFrozenExtendedStableUpgradeBaseline(
 export function resolveDefaultReleaseUpgradeBaseline(candidateVersion, publishedVersions) {
   const candidate = parseVersion(candidateVersion);
   if (!candidate) {
-    const candidateText = normalizeStringifiedOptionalString(candidateVersion) ?? "";
+    const candidateText = typeof candidateVersion === "string" ? candidateVersion.trim() : "";
     throw new Error(`invalid candidate OpenClaw version: ${candidateText}`);
   }
 
