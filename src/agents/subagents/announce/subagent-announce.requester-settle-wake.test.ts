@@ -39,11 +39,11 @@ vi.mock("../registry/subagent-registry-read.js", () => registryRuntimeMock);
 
 const { laneRuntimeMock } = vi.hoisted(() => ({
   laneRuntimeMock: {
-    getCommandLaneActiveTaskIds: vi.fn((_lane: string): number[] => []),
+    isEmbeddedAgentRunActive: vi.fn((_sessionId: string): boolean => false),
   },
 }));
 
-vi.mock("../../../process/command-queue.js", () => laneRuntimeMock);
+vi.mock("../../embedded-agent.js", () => laneRuntimeMock);
 
 vi.mock("./subagent-announce.runtime.js", () => ({
   callGateway: vi.fn(async () => ({})),
@@ -180,7 +180,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     deliverSpy.mockClear();
     transitionBatchSpy.mockClear();
     completeBatchSpy.mockClear();
-    laneRuntimeMock.getCommandLaneActiveTaskIds.mockReset().mockReturnValue([]);
+    laneRuntimeMock.isEmbeddedAgentRunActive.mockReset().mockReturnValue(false);
     sessionStore = { [REQUESTER]: { sessionId: "sess-main" } };
     registryRuntimeMock.hasDescendantRunAwaitingSettle.mockReset().mockReturnValue(false);
     registryRuntimeMock.listSubagentRunsForRequester.mockReset().mockReturnValue([]);
@@ -694,8 +694,13 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     try {
-      // First attempt dispatches while an older lane task (7) is active.
-      laneRuntimeMock.getCommandLaneActiveTaskIds.mockReturnValue([7]);
+      // The first attempt dispatches while the requester session is idle.
+      laneRuntimeMock.isEmbeddedAgentRunActive.mockReturnValueOnce(false);
+      // The retry window opens, but the timed-out attempt's ghost run still
+      // keeps the requester session active, so the retry defers.
+      laneRuntimeMock.isEmbeddedAgentRunActive.mockReturnValueOnce(true);
+      // Once the ghost drains, the retry dispatches with a fresh suffix.
+      laneRuntimeMock.isEmbeddedAgentRunActive.mockReturnValueOnce(false);
       expect(
         await maybeWakeRequesterAfterAllChildrenSettled(
           wakeParams({ settledEntry: makeSettledChild({ runId: "run-y" }) }),
@@ -703,8 +708,6 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       ).toBe(false);
       expect(deliverSpy).toHaveBeenCalledTimes(1);
 
-      // The retry window opens, but the timed-out attempt's ghost still
-      // occupies the lane, so the retry defers without dispatching.
       await vi.advanceTimersByTimeAsync(30_000);
       expect(
         await maybeWakeRequesterAfterAllChildrenSettled(
@@ -716,8 +719,6 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       expect(deferredTransition?.deferralCount).toBe(1);
       expect(deferredTransition?.nextAttemptAt).toBeGreaterThan(30_000);
 
-      // Once the ghost drains, the retry dispatches with a fresh suffix.
-      laneRuntimeMock.getCommandLaneActiveTaskIds.mockReturnValue([]);
       await vi.advanceTimersByTimeAsync(30_000);
       expect(
         await maybeWakeRequesterAfterAllChildrenSettled(
@@ -732,21 +733,24 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     }
   });
 
-  it("dispatches a first attempt even when the requester lane is busy", async () => {
-    // The lane guard only blocks retries behind a prior timed-out attempt;
-    // an ordinary busy lane must not delay the wake's first dispatch.
+  it("defers a first attempt while the requester session runs an active turn", async () => {
+    // Dispatching behind an active run is what wedges the lane in the first
+    // place: the wake defers until the requester session has no active run,
+    // whether or not a prior wake attempt created it.
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
       makeSettledChild({ runId: "run-first" }),
       makeSettledChild({ runId: "run-second" }),
     ]);
-    laneRuntimeMock.getCommandLaneActiveTaskIds.mockReturnValue([42]);
+    laneRuntimeMock.isEmbeddedAgentRunActive.mockReturnValueOnce(true);
 
     expect(
       await maybeWakeRequesterAfterAllChildrenSettled(
         wakeParams({ settledEntry: makeSettledChild({ runId: "run-second" }) }),
       ),
-    ).toBe(true);
-    expect(deliverSpy).toHaveBeenCalledTimes(1);
+    ).toBe(false);
+    expect(deliverSpy).not.toHaveBeenCalled();
+    const deferred = transitionBatchSpy.mock.calls.at(-1)?.[1];
+    expect(deferred?.deferralCount).toBe(1);
   });
 
   it("retains a yielded wake after a silent final and retries its visible reply", async () => {
