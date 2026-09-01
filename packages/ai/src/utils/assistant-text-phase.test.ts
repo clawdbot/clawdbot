@@ -27,6 +27,22 @@ describe("assistant text phase tags", () => {
     expect(content[2]?.textSignature).toBe("provider-signature");
   });
 
+  it("assigns monotonic commentary ids across separate tagging passes", () => {
+    const firstMessage = [{ type: "text", text: "Checking inventory." }];
+    const secondMessage = [{ type: "text", text: "Still working." }];
+    const commentarySequence = { next: 0 };
+
+    tagPendingCommentaryText(firstMessage, { commentarySequence });
+    tagPendingCommentaryText(secondMessage, { commentarySequence });
+
+    expect(JSON.parse(String(firstMessage[0]?.textSignature))).toMatchObject({
+      id: "commentary-0",
+    });
+    expect(JSON.parse(String(secondMessage[0]?.textSignature))).toMatchObject({
+      id: "commentary-1",
+    });
+  });
+
   it("rolls back only unchanged signatures created by this turn", () => {
     const generated: TestTextBlock = { type: "text", text: "generated" };
     const replaced: TestTextBlock = { type: "text", text: "replaced" };

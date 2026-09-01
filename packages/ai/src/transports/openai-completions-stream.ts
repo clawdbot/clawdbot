@@ -138,6 +138,7 @@ export async function processCompletionsStream(
   // Preview schedules are per active tool call; WeakMap keys die with the block.
   const toolArgumentPreviewSchedules = new WeakMap<ToolCallBlock, ToolArgumentPreviewSchedule>();
   const provisionalCommentaryTags = directMode ? options.provisionalCommentaryTags : new Map();
+  const commentarySequence = { next: 0 };
   const contentBlockIndices = new WeakMap<TextBlock | ThinkingBlock, number>();
   const toolCallBlockIndices = new WeakMap<ToolCallBlock, number>();
   let explicitVisibleTextBlocks: Set<TextBlock> | undefined;
@@ -308,7 +309,7 @@ export async function processCompletionsStream(
     }
     rememberPendingCommentaryTags(
       provisionalCommentaryTags,
-      tagPendingCommentaryText(output.content),
+      tagPendingCommentaryText(output.content, { commentarySequence }),
     );
     const block: ToolCallBlock = {
       type: "toolCall",
@@ -563,7 +564,7 @@ export async function processCompletionsStream(
         flushReasoningTagTextPartitioner();
         rememberPendingCommentaryTags(
           provisionalCommentaryTags,
-          tagPendingCommentaryText(output.content),
+          tagPendingCommentaryText(output.content, { commentarySequence }),
         );
         for (const toolCall of toolCallDeltas) {
           const streamIndex = typeof toolCall.index === "number" ? toolCall.index : undefined;
@@ -691,16 +692,17 @@ export async function processCompletionsStream(
       output.content,
       confirmedInterruptedTextBlock,
       explicitVisibleTextBlocks,
+      { commentarySequence },
     );
   }
   if (output.stopReason !== "toolUse") {
     clearPendingCommentaryText(provisionalCommentaryTags);
   }
   if (output.stopReason === "error" || output.stopReason === "aborted") {
-    tagUnresolvedTextAsCommentary(output);
+    tagUnresolvedTextAsCommentary(output, { commentarySequence });
   }
   if (output.stopReason === "toolUse") {
-    tagPendingCommentaryText(output.content);
+    tagPendingCommentaryText(output.content, { commentarySequence });
   }
 }
 

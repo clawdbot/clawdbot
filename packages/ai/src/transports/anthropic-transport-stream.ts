@@ -1203,6 +1203,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         }
         const blocks = output.content;
         const blockIndexes = new Map<number, number>();
+        const commentarySequence = { next: 0 };
         // Preview schedules are per active tool call; WeakMap keys die with the block.
         const toolArgumentPreviewSchedules = new WeakMap<
           Extract<TransportContentBlock, { type: "toolCall" }>,
@@ -1504,7 +1505,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               continue;
             }
             if (contentBlock?.type === "tool_use") {
-              tagPendingCommentaryText(output.content);
+              tagPendingCommentaryText(output.content, { commentarySequence });
               flushPendingTextEnds();
               const block: TransportContentBlock = {
                 type: "toolCall",
@@ -1726,7 +1727,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               output.stopReason === "toolUse" ||
               output.content.some((block) => block.type === "toolCall")
             ) {
-              tagPendingCommentaryText(output.content);
+              tagPendingCommentaryText(output.content, { commentarySequence });
             }
             flushPendingTextEnds();
           }
@@ -1769,7 +1770,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           output.stopReason === "toolUse" ||
           output.content.some((block) => block.type === "toolCall")
         ) {
-          tagPendingCommentaryText(output.content);
+          tagPendingCommentaryText(output.content, { commentarySequence });
         }
         flushPendingTextEnds();
         finalizeTransportStream({ stream, output });
