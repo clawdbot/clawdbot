@@ -1,5 +1,9 @@
 /** Owns side-effect-sensitive retry and silent-reply recovery policy. */
 import { isReplayUnsafeAssistantError } from "../../../llm/utils/retry.js";
+import {
+  isInterSessionInputProvenance,
+  type InputProvenance,
+} from "../../../sessions/input-provenance.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { hasOnlyAssistantReasoningContent } from "../../replay-turn-classification.js";
 import { TOOL_FAILURE_INSTRUCTION } from "../../tool-outcome-instructions.js";
@@ -110,6 +114,7 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   allowEmptyAssistantReplyAsSilent?: boolean;
   onlyExplicitSilentReply?: boolean;
   terminalReplyExpectation?: "required" | "optional";
+  inputProvenance?: InputProvenance;
   payloadCount: number;
   aborted: boolean;
   timedOut: boolean;
@@ -119,9 +124,10 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   // owed (e.g. cron without a delivery route). Silence after side-effecting
   // tools is intentional there; retry is replay-unsafe, so erroring would mark
   // successful tool-only runs as failures.
-  const terminalReplyOptional = params.terminalReplyExpectation === "optional";
+  const interSessionInput = isInterSessionInputProvenance(params.inputProvenance);
+  const terminalReplyOptional = params.terminalReplyExpectation === "optional" || interSessionInput;
   if (
-    !params.allowEmptyAssistantReplyAsSilent ||
+    (!params.allowEmptyAssistantReplyAsSilent && !interSessionInput) ||
     shouldSkipNonVisibleTurnRetry({ ...params, tolerateSideEffects: terminalReplyOptional })
   ) {
     return false;
