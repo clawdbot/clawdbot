@@ -344,6 +344,7 @@ export async function modelsStatusCommand(
     runtime,
     skipPluginValidation: opts.probe !== true,
   });
+  const sourceConfig = getRuntimeConfigSourceSnapshot() ?? undefined;
   const explicitAgentId = opts.agent?.trim();
   const { agentId: workspaceAgentId, agentDir } = resolveModelsTargetAgent(cfg, opts.agent, {
     agentDirOverride: explicitAgentId ? undefined : resolveEnvAgentDirOverride(),
@@ -833,8 +834,6 @@ export async function modelsStatusCommand(
     const applied = getShellEnvAppliedKeys();
     const shellFallbackEnabled =
       shouldEnableShellEnvFallback(process.env) || cfg.env?.shellEnv?.enabled === true;
-    const sourceConfig = getRuntimeConfigSourceSnapshot() ?? undefined;
-
     const providerAuth = Array.from(
       new Set([
         ...providers,

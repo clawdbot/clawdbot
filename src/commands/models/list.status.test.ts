@@ -146,6 +146,7 @@ const mocks = vi.hoisted(() => {
     createConfigIO: vi.fn().mockReturnValue({
       configPath: "/tmp/openclaw-dev/openclaw.json",
     }),
+    getRuntimeConfigSourceSnapshot: vi.fn().mockReturnValue(null),
     loadConfig: vi.fn().mockReturnValue({
       agents: {
         defaults: {
@@ -272,6 +273,10 @@ vi.mock("../../infra/shell-env.js", () => ({
 vi.mock("../../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/config.js")>()),
   createConfigIO: mocks.createConfigIO,
+}));
+vi.mock("../../config/runtime-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/runtime-snapshot.js")>()),
+  getRuntimeConfigSourceSnapshot: mocks.getRuntimeConfigSourceSnapshot,
 }));
 vi.mock("./load-config.js", () => ({
   loadModelsConfig: vi.fn(async (...args: unknown[]) => {
@@ -717,6 +722,81 @@ describe("modelsStatusCommand auth overview", () => {
         mocks.loadModelCatalog.mockImplementation(originalLoadModelCatalog);
       } else {
         mocks.loadModelCatalog.mockResolvedValue([]);
+      }
+    }
+  });
+
+  it("keeps the source config captured before catalog loading changes the runtime snapshot", async () => {
+    const originalConfig = mocks.loadConfig.getMockImplementation();
+    const originalCatalog = mocks.loadModelCatalog.getMockImplementation();
+    const originalProfiles = { ...mocks.store.profiles };
+    const originalCustomKey = mocks.getCustomProviderApiKey.getMockImplementation();
+    const originalUsableKey = mocks.resolveUsableCustomProviderApiKey.getMockImplementation();
+    const sourceConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.6", fallbacks: [] } } },
+      models: {
+        providers: {
+          openai: {
+            apiKey: "${CUSTOM_PROVIDER_KEY}",
+            baseUrl: "https://models.example/v1",
+            models: [],
+          },
+        },
+      },
+    };
+    mocks.loadConfig.mockReturnValue({
+      ...sourceConfig,
+      models: {
+        providers: {
+          openai: {
+            ...sourceConfig.models.providers.openai,
+            apiKey: "current-provider-key",
+          },
+        },
+      },
+    });
+    mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(sourceConfig);
+    mocks.store.profiles = {
+      "openai:models-json": {
+        type: "api_key",
+        provider: "openai",
+        key: "stale-provider-key",
+      },
+    };
+    mocks.getCustomProviderApiKey.mockReturnValue("CUSTOM_PROVIDER_KEY");
+    mocks.resolveUsableCustomProviderApiKey.mockReturnValue({
+      apiKey: "current-provider-key",
+      source: "env: CUSTOM_PROVIDER_KEY",
+    });
+    mocks.loadModelCatalog.mockImplementation(async () => {
+      mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(null);
+      return [];
+    });
+
+    try {
+      const statusRuntime = createRuntime();
+      await modelsStatusCommand({ json: true }, statusRuntime as never);
+
+      expect(
+        requireRecord(
+          requireProvider(parseFirstJsonLog(statusRuntime).auth.providers, "openai").effective,
+          "openai effective auth",
+        ).kind,
+      ).toBe("env");
+    } finally {
+      mocks.store.profiles = originalProfiles;
+      mocks.getRuntimeConfigSourceSnapshot.mockReset().mockReturnValue(null);
+      if (originalConfig) {
+        mocks.loadConfig.mockImplementation(originalConfig);
+      }
+      if (originalCatalog) {
+        mocks.loadModelCatalog.mockImplementation(originalCatalog);
+      }
+      if (originalCustomKey) {
+        mocks.getCustomProviderApiKey.mockImplementation(originalCustomKey);
+      }
+      if (originalUsableKey) {
+        mocks.resolveUsableCustomProviderApiKey.mockImplementation(originalUsableKey);
       }
     }
   });
