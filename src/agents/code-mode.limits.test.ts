@@ -403,7 +403,7 @@ describe("Code Mode runtime and output limits", () => {
       codeModeFailureCode(new Error("interrupted", { cause: new Error("worker stopped") })),
     ).toBe("timeout");
     expect(
-      testing.normalizeCodeModeWorkerResult({
+      testing.normalizeCodeModeTimeoutResult({
         status: "failed",
         code: "timeout",
         error: "interrupted",
@@ -417,7 +417,7 @@ describe("Code Mode runtime and output limits", () => {
     });
 
     expect(
-      testing.normalizeCodeModeWorkerResult({
+      testing.normalizeCodeModeTimeoutResult({
         status: "failed",
         code: "internal_error",
         error: "interrupted",
@@ -491,7 +491,7 @@ describe("Code Mode runtime and output limits", () => {
     expect(result).toMatchObject({
       status: "failed",
       code: "runtime_unavailable",
-      error: "code mode worker exited with code 0 before returning a result",
+      error: expect.stringContaining("worker exited with code 0"),
     });
   });
 

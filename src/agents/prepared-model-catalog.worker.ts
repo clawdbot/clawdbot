@@ -6,6 +6,7 @@ import {
   restoreConfigResolutionFacts,
 } from "../config/resolution-facts.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { serveWorkerTasks } from "../infra/worker-task-pool.js";
 import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
@@ -143,7 +144,6 @@ export async function runPreparedModelCatalogWorkerRequest(
       });
       return {
         status: "ok",
-        requestId: request.requestId,
         kind: "auth-refresh",
         generationFingerprint: value.generationFingerprint,
         authStore,
@@ -221,7 +221,6 @@ export async function runPreparedModelCatalogWorkerRequest(
     );
     return {
       status: "ok",
-      requestId: request.requestId,
       kind: "catalog",
       generationFingerprint: value.generationFingerprint,
       snapshot: facts.modelCatalog,
@@ -231,21 +230,19 @@ export async function runPreparedModelCatalogWorkerRequest(
   } catch (error) {
     return {
       status: "failed",
-      requestId: request.requestId,
       error: error instanceof Error ? error.message : String(error),
     };
   }
 }
 
 if (parentPort) {
-  const send: (message: PreparedModelWorkerResult) => void =
-    parentPort.postMessage.bind(parentPort);
   const value = workerData as PreparedModelCatalogWorkerInput;
-  const preparedGeneration = prepareWorkerGeneration(value);
-  let queue = Promise.resolve();
-  parentPort.on("message", (request: PreparedModelWorkerRequest) => {
-    queue = queue.then(async () => {
-      send(await runPreparedModelCatalogWorkerRequest(value, request, preparedGeneration));
-    });
-  });
+  let preparedGeneration: ReturnType<typeof prepareWorkerGeneration> | undefined;
+  serveWorkerTasks((request: PreparedModelWorkerRequest) =>
+    runPreparedModelCatalogWorkerRequest(
+      value,
+      request,
+      (preparedGeneration ??= prepareWorkerGeneration(value)),
+    ),
+  );
 }

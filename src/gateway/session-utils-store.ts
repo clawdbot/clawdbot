@@ -29,6 +29,7 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
+import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import type { SessionEntryListScope } from "../config/sessions/session-accessor.js";
 import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -150,19 +151,22 @@ function loadSessionEntryWithMode(
   const target = resolveGatewaySessionStoreTargetWithStore({
     cfg,
     key,
+    exactRead: true,
+    readOnly,
     projection: opts?.projection,
     ...(opts?.clone === false ? { clone: false } : {}),
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
-    ...(readOnly
-      ? {
-          exactRead: true,
-          readOnly: true,
-          ...(opts?.includeStoreChildEntries ? { includeStoreChildEntries: true } : {}),
-        }
-      : {}),
+    ...(opts?.includeStoreChildEntries ? { includeStoreChildEntries: true } : {}),
   });
   const storePath = target.storePath;
   const store = target.store;
+  if (!readOnly) {
+    for (const storeKey of target.storeKeys) {
+      if (isInternalSessionEffectsKey(storeKey)) {
+        delete store[storeKey];
+      }
+    }
+  }
   const canonicalMatch = resolveCanonicalSessionStoreMatchFromStoreKeys(store, target.storeKeys);
   const legacyKey = canonicalMatch?.key !== target.canonicalKey ? canonicalMatch?.key : undefined;
   const entry =
