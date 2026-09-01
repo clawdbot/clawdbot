@@ -57,7 +57,6 @@ import {
   resolveUsageHookProviderPluginContracts,
 } from "./providers.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
-import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import { resolveRuntimeTextTransforms } from "./text-transforms.runtime.js";
 import type {
   ProviderAuthDoctorHintContext,
@@ -668,26 +667,27 @@ export async function resolveProviderUsageSnapshotWithPlugin(params: {
   if (!harness) {
     const workspaceDir =
       params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState() ?? process.cwd();
-    const { loadAgentRuntimePluginRegistryHandle } = await import("../agents/runtime-plugins.js");
+    const { withAgentPluginRegistry } = await import("../agents/runtime-plugins.js");
     const { ensureSelectedAgentHarnessPlugin } =
       await import("../agents/harness/runtime-plugin.js");
-    const pluginRegistry = loadAgentRuntimePluginRegistryHandle({
-      config: params.config,
-      workspaceDir,
+    return await withAgentPluginRegistry({
+      config: params.config ?? {},
+      ...(params.env ? { env: params.env } : {}),
       selections: [{ provider: params.context.provider, modelId: "", runtime: params.provider }],
-    });
-    return await withPluginRuntimeRegistryScope(pluginRegistry, async () => {
-      await ensureSelectedAgentHarnessPlugin({
-        provider: params.context.provider,
-        modelId: "",
-        config: params.config,
-        agentHarnessId: params.provider,
-        workspaceDir,
-        pluginRegistry,
-      });
-      return await getRegisteredAgentHarness(params.provider)?.harness.fetchUsageSnapshot?.(
-        params.context,
-      );
+      workspaceDir,
+      run: async (pluginRegistry) => {
+        await ensureSelectedAgentHarnessPlugin({
+          provider: params.context.provider,
+          modelId: "",
+          config: params.config,
+          agentHarnessId: params.provider,
+          workspaceDir,
+          pluginRegistry,
+        });
+        return await getRegisteredAgentHarness(params.provider)?.harness.fetchUsageSnapshot?.(
+          params.context,
+        );
+      },
     });
   }
   return await harness?.fetchUsageSnapshot?.(params.context);

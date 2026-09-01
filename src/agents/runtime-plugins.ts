@@ -20,6 +20,8 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
+import { resolvePluginRuntimeLoadContext } from "../plugins/runtime/load-context.resolve.js";
 import { adoptRuntimeWidgetPresenterRegistrations } from "../plugins/widget-presenters.js";
 import { resolveUserPath } from "../utils.js";
 import {
@@ -144,24 +146,32 @@ export function loadAgentRuntimePluginRegistryHandle(
 /** Binds a scoped plugin generation when a direct host has no Gateway owner. */
 export async function withAgentPluginRegistry<T>(params: {
   config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  selections?: readonly AgentHarnessPluginSelection[];
   workspaceDir: string;
-  run: () => Promise<T>;
+  run: (pluginRegistry: PluginRegistry) => Promise<T>;
 }): Promise<T> {
-  if (getPluginRuntimeGatewayRequestScope()?.pluginRegistry) {
-    return await params.run();
+  const requestPluginRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  if (requestPluginRegistry && params.selections === undefined) {
+    return await params.run(requestPluginRegistry);
   }
+  const env = params.env ?? process.env;
   const metadataSnapshot =
     params.config.plugins?.enabled !== false
       ? loadPluginMetadataSnapshot({
           config: params.config,
-          env: process.env,
+          env,
           workspaceDir: params.workspaceDir,
         })
       : undefined;
   const pluginRegistry = loadAgentRuntimePluginRegistryHandle({
-    basePluginIds: [],
+    basePluginIds: requestPluginRegistry
+      ? listRuntimePluginIdsFromRegistry(requestPluginRegistry)
+      : [],
     config: params.config,
+    env,
     ...(metadataSnapshot ? { metadataSnapshot } : {}),
+    ...(params.selections ? { selections: params.selections } : {}),
     workspaceDir: params.workspaceDir,
   });
   const activeRegistry = getActivePluginRegistry();
@@ -174,11 +184,25 @@ export async function withAgentPluginRegistry<T>(params: {
           activeRegistry,
           applyPluginAutoEnable({
             config: params.config,
-            env: process.env,
+            env,
             discovery: metadataSnapshot.discovery,
             manifestRegistry: metadataSnapshot.manifestRegistry,
           }).config,
         )
       : pluginRegistry;
-  return await withPluginRuntimeRegistryScope(scopedRegistry, params.run);
+  // Direct hosts own this prepared registry, so turn guards read its exact policy generation.
+  // Disabled plugins carry empty manifest facts instead of reopening discovery for diagnostics.
+  setPluginRuntimeLoadContext(
+    scopedRegistry,
+    resolvePluginRuntimeLoadContext({
+      config: params.config,
+      activationSourceConfig: params.config,
+      env,
+      workspaceDir: params.workspaceDir,
+      ...(metadataSnapshot
+        ? { metadataSnapshot }
+        : { manifestRegistry: { plugins: [], diagnostics: [] } }),
+    }),
+  );
+  return await withPluginRuntimeRegistryScope(scopedRegistry, () => params.run(scopedRegistry));
 }
