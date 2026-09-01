@@ -672,6 +672,13 @@ export async function handleSendChat(
       setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
       return;
     }
+    if (admittedDurably && typeof window !== "undefined") {
+      // The outbox now owns the prompt across reloads. Return control before
+      // delivery work so the browser can accept the operator's next input.
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 0);
+      });
+    }
     const sendResult = await deliverChatQueueItem(host, queued, {
       previousDraft: cleared.previousDraft,
       previousAttachments: cleared.previousAttachments,
