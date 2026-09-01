@@ -2,12 +2,12 @@ import {
   observeAgentRunApprovalWait,
   type AgentRunApprovalWait,
 } from "./agent-run-approval-wait.js";
-import { awaitCodeModeDeadline } from "./code-mode-deadline.js";
 import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
 import {
   createCodeModeCatalogProjection,
   type CodeModeCatalogProjection,
 } from "./code-mode-catalog.js";
+import { awaitCodeModeDeadline } from "./code-mode-deadline.js";
 import { CodeModeOutputState } from "./code-mode-json.js";
 import {
   createCodeModeNamespaceRuntime,
@@ -26,6 +26,7 @@ import {
   type CodeModeWorkerResult,
   type SettledBridgeRequest,
 } from "./code-mode-runtime.js";
+import { prepareSource } from "./code-mode-source.js";
 import {
   activeRuns,
   cancelPendingBridgeStates,
@@ -52,7 +53,6 @@ import {
   type CodeModeRunOwner,
 } from "./code-mode-state.js";
 import { runCodeModeWorker } from "./code-mode-worker.js";
-import { prepareSource } from "./code-mode-source.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
 import type { ToolResultBudget } from "./tool-result-limits.js";

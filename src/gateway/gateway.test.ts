@@ -770,7 +770,7 @@ describe("gateway e2e", () => {
               call_id: "call_code_mode_clock",
               name: "exec",
               arguments: JSON.stringify({
-                code: 'return await code_mode_clock_approval({});',
+                code: "return await code_mode_clock_approval({});",
               }),
               status: "completed",
             };

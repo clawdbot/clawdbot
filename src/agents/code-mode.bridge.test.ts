@@ -464,7 +464,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
   ])(
     "drains a detached audit started $label before an awaited nested call",
     async ({ auditCode }) => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
       const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
       const events: string[] = [];
       let auditCompleted = false;
@@ -663,7 +663,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
   it.each(["race", "any"] as const)(
     "preserves the Promise.%s winner while draining the slower nested tool",
     async (combinator) => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
       const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
       const events: string[] = [];
       const slowStarted = createDeferred();
