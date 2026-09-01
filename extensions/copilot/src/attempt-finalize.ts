@@ -15,6 +15,7 @@ import type {
 } from "./attempt-types.js";
 import { attachEventBridge } from "./event-bridge.js";
 export async function completeCopilotAttempt(params: {
+  acceptedSessionSpawns: NonNullable<AgentHarnessAttemptResult["acceptedSessionSpawns"]>;
   aborted: boolean;
   attemptStartedAt: number;
   bridge: ReturnType<typeof attachEventBridge> | undefined;
@@ -47,6 +48,7 @@ export async function completeCopilotAttempt(params: {
   yieldAcknowledgment?: string;
 }): Promise<AgentHarnessAttemptResult> {
   const {
+    acceptedSessionSpawns,
     aborted,
     attemptStartedAt,
     bridge,
@@ -93,6 +95,7 @@ export async function completeCopilotAttempt(params: {
           currentRunUserKey,
         ));
   const result = createResult(input, {
+    acceptedSessionSpawns,
     aborted,
     assistantTexts,
     codeModeEngaged,
