@@ -335,6 +335,7 @@ describe("run-oxlint", () => {
     ["--tsconfig", "config/tsconfig/oxlint.core.json", "src/index.ts"],
     ["--tsconfig=config/tsconfig/oxlint.core.json", "src/index.ts"],
     ["--tsconfig", "config/tsconfig/oxlint.scripts.json", "scripts/check-changed.mts"],
+    ["--tsconfig", "test/tsconfig/tsconfig.test.root.json", "test/scripts/changed-lanes.test.ts"],
   ])("skips extension artifacts for an exact source-backed config: %s", (...args) => {
     expect(shouldPrepareExtensionPackageBoundaryArtifacts(args)).toBe(false);
   });

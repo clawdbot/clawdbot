@@ -1145,6 +1145,7 @@ Local changed-lane logic lives in `scripts/changed-lanes.mjs` and is executed by
 
 - core production changes run core prod and core test typecheck plus core lint/guards;
 - core test-only changes run only core test typecheck plus core lint;
+- root TypeScript tests and support files run root test typecheck plus targeted type-aware lint within `test/tsconfig/tsconfig.test.root.json`; the discoverable `test/tsconfig.json` inherits that source-only program. It includes `.ts`, `.tsx`, `.d.mts`, and `.d.cts`, not ordinary `.mts`/`.cts`; fixtures and built-artifact Docker clients stay outside targeted root lint;
 - extension production changes run extension prod and extension test typecheck plus extension lint;
 - extension test-only changes run extension test typecheck plus extension lint;
 - bundled channel manifests, package metadata, config schemas, UI hints, and generator owners also run the bundled channel config metadata drift check;
