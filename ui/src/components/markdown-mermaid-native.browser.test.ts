@@ -100,13 +100,19 @@ describe("native Mermaid document", () => {
     async (boundary) => {
       const source = "flowchart LR\nA[Waiting] --> B[Ready]";
       if (boundary === "engine load") {
-        const setter = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, "srcdoc")!.set!;
-        vi.spyOn(HTMLIFrameElement.prototype, "srcdoc", "set").mockImplementation(function () {
-          setter.call(this, "<!doctype html><html></html>");
-        });
+        const descriptor = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, "srcdoc")!;
+        vi.spyOn(HTMLIFrameElement.prototype, "srcdoc", "set").mockImplementation(
+          function (this: HTMLIFrameElement) {
+            descriptor.set!.call(this, "<!doctype html><html></html>");
+          },
+        );
       } else if (boundary === "engine render") {
+        // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves each port's receiver.
         const postMessage = MessagePort.prototype.postMessage;
-        vi.spyOn(MessagePort.prototype, "postMessage").mockImplementation(function (...args) {
+        vi.spyOn(MessagePort.prototype, "postMessage").mockImplementation(function (
+          this: MessagePort,
+          ...args
+        ) {
           if (asRecord(args[0]).source !== source) {
             Reflect.apply(postMessage, this, args);
           }
