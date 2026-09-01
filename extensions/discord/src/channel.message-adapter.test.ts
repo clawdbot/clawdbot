@@ -8,8 +8,11 @@ import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   createDiscordOutboundHoisted,
   installDiscordOutboundModuleSpies,
+  mockDiscordBoundThreadManager,
   resetDiscordOutboundMocks,
 } from "./outbound-adapter.test-harness.js";
+import { sendMessageDiscord } from "./send.outbound.js";
+import { makeDiscordRest, requestBody } from "./send.test-harness.js";
 
 const hoisted = createDiscordOutboundHoisted();
 await installDiscordOutboundModuleSpies(hoisted);
@@ -74,6 +77,38 @@ function requirePollSender(
 describe("discord channel message adapter", () => {
   beforeEach(() => {
     resetDiscordOutboundMocks(hoisted);
+  });
+
+  it("delivers explicit replies through Discord's native message endpoint on bound threads", async () => {
+    mockDiscordBoundThreadManager(hoisted);
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValue({ id: "thread-1", type: 0 });
+    postMock.mockResolvedValue({ id: "native-reply-1", channel_id: "thread-1" });
+    const cfg = { channels: { discord: { token: "fixture-token" } } };
+
+    const result = await requireTextSender(requireDiscordMessageAdapter())({
+      cfg,
+      to: "channel:parent-1",
+      text: "native reply",
+      accountId: "default",
+      threadId: "thread-1",
+      replyToId: "parent-message-1",
+      replyToIdSource: "explicit",
+      replyToMode: "off",
+      deps: {
+        discord: async (...[to, text, options]: Parameters<typeof sendMessageDiscord>) =>
+          await sendMessageDiscord(to, text, { ...options, cfg, rest, token: "fixture-token" }),
+      },
+    });
+
+    expect(hoisted.sendWebhookMessageDiscordMock).not.toHaveBeenCalled();
+    expect(postMock).toHaveBeenCalledOnce();
+    expect(requestBody(postMock)).toMatchObject({
+      content: "native reply",
+      message_reference: { message_id: "parent-message-1", fail_if_not_exists: false },
+    });
+    expect(result.receipt.replyToId).toBe("parent-message-1");
+    expect(result.receipt.parts[0]?.replyToId).toBe("parent-message-1");
   });
 
   it("backs declared durable-final capabilities with outbound send proofs", async () => {

@@ -192,7 +192,7 @@ describe("discordOutbound", () => {
     },
   );
 
-  it("uses webhook persona delivery for bound thread text replies", async () => {
+  it("uses webhook persona delivery for bound thread messages without native replies", async () => {
     mockDiscordBoundThreadManager(hoisted);
     const cfg = {
       channels: {
@@ -208,7 +208,6 @@ describe("discordOutbound", () => {
       text: "hello from persona",
       accountId: "default",
       threadId: "thread-1",
-      replyToId: "reply-1",
       identity: {
         name: "Codex",
         avatarUrl: "https://example.com/avatar.png",
@@ -227,7 +226,6 @@ describe("discordOutbound", () => {
     expect(options.webhookToken).toBe("tok-1");
     expect(options.accountId).toBe("default");
     expect(options.threadId).toBe("thread-1");
-    expect(options.replyTo).toBe("reply-1");
     expect(options.username).toBe("Codex");
     expect(options.avatarUrl).toBe("https://example.com/avatar.png");
     expect(options.cfg).toBe(cfg);
@@ -238,6 +236,53 @@ describe("discordOutbound", () => {
       target: { kind: "channel", id: "thread-1" },
     });
   });
+
+  it("keeps webhook persona delivery when an implicit off-mode reply was suppressed", async () => {
+    mockDiscordBoundThreadManager(hoisted);
+
+    await discordOutbound.sendText?.({
+      cfg: {},
+      to: "channel:parent-1",
+      text: "hello from persona",
+      accountId: "default",
+      threadId: "thread-1",
+      replyToIdSource: "implicit",
+      replyToMode: "off",
+    });
+
+    expect(hoisted.sendWebhookMessageDiscordMock).toHaveBeenCalledOnce();
+    expect(hoisted.sendMessageDiscordMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "explicit default-off", replyToIdSource: "explicit", replyToMode: "off", scope: "all" },
+    { name: "implicit first", replyToIdSource: "implicit", replyToMode: "first", scope: "first" },
+    { name: "source-omitted", replyToIdSource: undefined, replyToMode: undefined, scope: "all" },
+  ] as const)(
+    "preserves $name native replies in webhook-bound threads",
+    async ({ replyToIdSource, replyToMode, scope }) => {
+      mockDiscordBoundThreadManager(hoisted);
+
+      const result = await discordOutbound.sendText?.({
+        cfg: {},
+        to: "channel:parent-1",
+        text: "native reply",
+        accountId: "default",
+        threadId: "thread-1",
+        replyToId: "reply-1",
+        replyToIdSource,
+        replyToMode,
+      });
+
+      expect(hoisted.sendWebhookMessageDiscordMock).not.toHaveBeenCalled();
+      expectDiscordThreadBotSend({
+        hoisted,
+        text: "native reply",
+        result,
+        options: { reply: { messageId: "reply-1", scope } },
+      });
+    },
+  );
 
   it("keeps webhook persona usernames on a UTF-16 boundary", async () => {
     mockDiscordBoundThreadManager(hoisted);

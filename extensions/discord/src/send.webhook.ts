@@ -36,7 +36,6 @@ type DiscordWebhookSendOpts = {
   webhookToken: string;
   accountId?: string;
   threadId?: string | number;
-  replyTo?: string;
   username?: string;
   avatarUrl?: string;
   wait?: boolean;
@@ -117,8 +116,6 @@ export async function sendWebhookMessageDiscord(
     throw new Error("Discord webhook id/token are required");
   }
 
-  const replyTo = normalizeOptionalString(opts.replyTo) ?? "";
-  const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
   const { account, proxyFetch } = resolveDiscordClientAccountContext({
     cfg: opts.cfg,
     accountId: opts.accountId,
@@ -168,7 +165,6 @@ export async function sendWebhookMessageDiscord(
             username: normalizeOptionalString(opts.username),
             avatar_url: normalizeOptionalString(opts.avatarUrl),
             ...(flags ? { flags } : {}),
-            ...(messageReference ? { message_reference: messageReference } : {}),
           }),
           signal: deadline.signal,
         });
@@ -210,7 +206,6 @@ export async function sendWebhookMessageDiscord(
       fallbackChannelId: opts.threadId ? String(opts.threadId) : "",
       kind: "text",
       ...(opts.threadId != null ? { threadId: opts.threadId } : {}),
-      ...(replyTo ? { replyToId: replyTo } : {}),
     });
     const resultConversationId = result.channelId.trim();
     if (result.messageId !== "unknown" && resultConversationId) {
