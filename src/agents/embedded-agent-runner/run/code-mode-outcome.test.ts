@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { registerRepairableCodeModeFailure } from "../../code-mode-repair-provenance.js";
 import type { Agent } from "../../runtime/index.js";
+import { readToolResultDetails } from "../../tool-result-error.js";
 import { installCodeModeOutcomeHook } from "./code-mode-outcome.js";
 
 type AfterToolOutcomeContext = Parameters<NonNullable<Agent["afterToolOutcome"]>>[0];
@@ -8,7 +9,7 @@ type AfterToolOutcomeContext = Parameters<NonNullable<Agent["afterToolOutcome"]>
 function createOutcome(
   options: {
     bridgeStarted?: boolean;
-    noToolStarted?: boolean;
+    repairableFailure?: boolean;
     toolName?: "exec" | "wait";
     terminal?: boolean;
   } = {},
@@ -18,7 +19,7 @@ function createOutcome(
     error: "execution failed",
     bridgeDispatchStarted: options.bridgeStarted ?? false,
   };
-  if (options.noToolStarted) {
+  if (options.repairableFailure) {
     registerRepairableCodeModeFailure(details);
   }
   const toolCall = {
@@ -61,17 +62,38 @@ describe("Code Mode outcome safety", () => {
     expect(onReconciliationCandidate).not.toHaveBeenCalled();
   });
 
-  it("continues only when host provenance proves a bridge target never started", async () => {
-    const { agent, onReconciliationCandidate } = createAgent();
+  it.each(["exec", "wait"] as const)(
+    "accepts exact host proof once for %s, never copied or serialized proof",
+    async (toolName) => {
+      const outcome = createOutcome({ toolName, bridgeStarted: true, repairableFailure: true });
+      const details = readToolResultDetails(outcome.result);
+      for (const copied of [
+        { ...details },
+        structuredClone(details),
+        // oxlint-disable-next-line unicorn/prefer-structured-clone -- Exercise serialized tool results separately from in-memory clones.
+        JSON.parse(JSON.stringify(details)),
+      ]) {
+        const { agent } = createAgent();
+        await expect(
+          agent.afterToolOutcome?.({
+            ...outcome,
+            result: { ...outcome.result, details: copied },
+          }),
+        ).resolves.toMatchObject({ isError: true, terminate: true });
+      }
 
-    const result = await agent.afterToolOutcome?.(
-      createOutcome({ bridgeStarted: true, noToolStarted: true }),
-    );
-
-    expect(result).toMatchObject({ isError: true });
-    expect(result).not.toHaveProperty("terminate");
-    expect(onReconciliationCandidate).not.toHaveBeenCalled();
-  });
+      const { agent, onReconciliationCandidate } = createAgent();
+      const result = await agent.afterToolOutcome?.(outcome);
+      expect(result).toMatchObject({ isError: true });
+      expect.soft(result).not.toHaveProperty("terminate");
+      expect(onReconciliationCandidate).not.toHaveBeenCalled();
+      // The real consumer used the proof above; never mint it again for the replay.
+      await expect(createAgent().agent.afterToolOutcome?.(outcome)).resolves.toMatchObject({
+        isError: true,
+        terminate: true,
+      });
+    },
+  );
 
   it("sends uncertain bridge side effects to read-only reconciliation", async () => {
     const { agent, onReconciliationCandidate } = createAgent();
@@ -82,14 +104,44 @@ describe("Code Mode outcome safety", () => {
     expect(onReconciliationCandidate).toHaveBeenCalledOnce();
   });
 
-  it("cannot grant reconciliation from a wait failure", async () => {
+  it.each([
+    { bridgeStarted: true, executionStarted: true },
+    { bridgeStarted: false, executionStarted: false },
+    { bridgeStarted: undefined, executionStarted: false },
+  ])("keeps unproven wait failures closed: %j", async ({ bridgeStarted, executionStarted }) => {
     const { agent, onReconciliationCandidate } = createAgent();
+    const outcome = createOutcome({ toolName: "wait" });
+    outcome.result.details = {
+      status: "failed",
+      ...(bridgeStarted === undefined ? {} : { bridgeDispatchStarted: bridgeStarted }),
+    };
+    outcome.executionStarted = executionStarted;
 
-    await expect(
-      agent.afterToolOutcome?.(createOutcome({ toolName: "wait", bridgeStarted: true })),
-    ).resolves.toMatchObject({ isError: true, terminate: true });
+    await expect(agent.afterToolOutcome?.(outcome)).resolves.toMatchObject({
+      isError: true,
+      terminate: true,
+    });
     expect(onReconciliationCandidate).not.toHaveBeenCalled();
   });
+
+  it.each(["exec", "wait"] as const)(
+    "does not trust permission-change strings from a failed %s",
+    async (toolName) => {
+      const { agent } = createAgent();
+      const outcome = createOutcome({ toolName, bridgeStarted: true });
+      outcome.result.details = {
+        status: "failed",
+        code: "aborted",
+        error: "Permission change",
+        permissionChanged: true,
+        bridgeDispatchStarted: true,
+      };
+      await expect(agent.afterToolOutcome?.(outcome)).resolves.toMatchObject({
+        isError: true,
+        terminate: true,
+      });
+    },
+  );
 
   it("preserves original dispatch evidence when another hook rewrites the result", async () => {
     const { agent, onReconciliationCandidate } = createAgent(async () => ({
@@ -112,7 +164,14 @@ describe("Code Mode outcome safety", () => {
   it("keeps explicit terminal outcomes and hook failures closed", async () => {
     const terminalAgent = createAgent(async () => ({ terminate: false }));
     await expect(
-      terminalAgent.agent.afterToolOutcome?.(createOutcome({ terminal: true })),
+      terminalAgent.agent.afterToolOutcome?.(
+        createOutcome({
+          toolName: "wait",
+          terminal: true,
+          bridgeStarted: true,
+          repairableFailure: true,
+        }),
+      ),
     ).resolves.toMatchObject({ terminate: true });
 
     const brokenHook = createAgent(async () => {

@@ -28,7 +28,7 @@ export const EscalationReason = {
 } as const;
 export type EscalationReason = (typeof EscalationReason)[keyof typeof EscalationReason];
 
-// These numeric values are part of the pinned 0.20.0 SDK contract. Keeping
+// These numeric values are part of the pinned 0.21.0 SDK contract. Keeping
 // them local avoids loading the native library while OpenClaw is only
 // registering the bundled plugin.
 export const ClickButton = {
@@ -49,6 +49,7 @@ export type ScrollDirection = (typeof ScrollDirection)[keyof typeof ScrollDirect
 export interface CuaDriverSession {
   readonly generation: string;
   isAvailable(): boolean;
+  prepareAvailability?(): Promise<void>;
   resetAvailabilityCache(): void;
   callTool(
     name: string,
@@ -370,6 +371,13 @@ class LazyCuaDriverSession implements CuaDriverSession {
 
   isAvailable(): boolean {
     return this.resolveRuntime()?.isAvailable() ?? false;
+  }
+
+  async prepareAvailability(): Promise<void> {
+    this.resolveRuntime();
+    // Loading failure remains an unavailable capability with its original
+    // diagnostic; an optional driver must not prevent the node from starting.
+    await this.loadPromise?.catch(() => {});
   }
 
   resetAvailabilityCache(): void {

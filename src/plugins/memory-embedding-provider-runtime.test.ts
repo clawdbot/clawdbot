@@ -5,10 +5,7 @@ import {
   registerEmbeddingProvider,
   type EmbeddingProviderAdapter,
 } from "./embedding-providers.js";
-import {
-  adaptMemoryEmbeddingProviderAdapter,
-  type MemoryEmbeddingProviderAdapter,
-} from "./memory-embedding-providers.js";
+import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 
 const mocks = vi.hoisted(() => ({
   resolvePluginCapabilityProviders: vi.fn<
@@ -156,7 +153,7 @@ describe("memory embedding provider runtime resolution", () => {
     expect(mocks.resolvePluginCapabilityProviders).toHaveBeenCalledTimes(1);
   });
 
-  it("adapts generic providers for memory queries, batches, and identity", async () => {
+  it("returns generic provider, runtime, and identity objects unchanged", async () => {
     const close = vi.fn();
     const embed = vi.fn(async () => [1, 2]);
     const embedBatch = vi.fn(async (inputs: unknown[]) => inputs.map(() => [3, 4]));
@@ -193,71 +190,33 @@ describe("memory embedding provider runtime resolution", () => {
     expect(runtimeModule.listMemoryEmbeddingProviders().map((entry) => entry.id)).toContain(
       "generic",
     );
-    const options = { config: {}, model: "generic-model", outputDimensionality: 7 };
+    const options = { config: {}, model: "generic-model", dimensions: 7 };
     expect(adapter?.resolveIndexIdentity?.(options)).toEqual({
       model: "generic-model",
       cacheKeyData: { dimensions: 7 },
     });
 
     const result = await adapter?.create(options);
-    expect(create).toHaveBeenCalledWith({ ...options, dimensions: 7 });
+    expect(create).toHaveBeenCalledWith(options);
     expect(result?.runtime).toBe(runtime);
-    expect(result?.provider?.maxInputTokens).toBe(2048);
-    await result?.provider?.embedQuery("query", { signal: undefined });
-    await result?.provider?.embedBatch(["document"]);
-    await result?.provider?.embedBatchInputs?.([{ text: "structured" }]);
-    expect(embed).toHaveBeenCalledWith("query", { signal: undefined, inputType: "query" });
-    expect(embedBatch).toHaveBeenNthCalledWith(1, ["document"], { inputType: "document" });
-    expect(embedBatch).toHaveBeenNthCalledWith(2, [{ text: "structured" }], {
-      inputType: "document",
-    });
-    expect(Reflect.get(result?.provider ?? {}, runtimeFactsKey)).toBe(runtimeFacts);
-    await result?.provider?.close?.();
-    expect(close).toHaveBeenCalledOnce();
+    expect(result?.provider).toBe(provider);
+    expect(Reflect.get(provider, runtimeFactsKey)).toBe(runtimeFacts);
   });
 
-  it("preserves memory policy and batching after generic registration", async () => {
-    const embedQuery = vi.fn(async () => [1, 2]);
-    const embedBatch = vi.fn(async (texts: string[]) => texts.map(() => [3, 4]));
-    const acquireLocalService = vi.fn();
-    const create = vi.fn(async (options: unknown) => {
-      expect(options).toMatchObject({ acquireLocalService });
-      return {
-        provider: {
-          id: "migrated-memory",
-          model: "migrated-model",
-          embedQuery,
-          embedBatch,
-        },
-        runtime: {
-          id: "migrated-memory",
-          sourceWideBatchEmbed: true,
-        },
-      };
-    });
+  it("preserves private memory metadata through generic registration", () => {
     const memoryAdapter = {
       id: "migrated-memory",
       autoSelectPriority: 20,
       allowExplicitWhenConfiguredAuto: true,
-      create,
+      supportsMultimodalEmbeddings: ({ model }: { model: string }) => model === "multimodal",
+      shouldContinueAutoSelection: () => true,
+      create: async () => ({ provider: null }),
     } satisfies MemoryEmbeddingProviderAdapter;
-    registerEmbeddingProvider(adaptMemoryEmbeddingProviderAdapter(memoryAdapter));
+    registerEmbeddingProvider(memoryAdapter);
 
     const adapter = runtimeModule.getMemoryEmbeddingProvider("migrated-memory");
-    expect(adapter).toMatchObject({
-      id: "migrated-memory",
-      autoSelectPriority: 20,
-      allowExplicitWhenConfiguredAuto: true,
-    });
-    const result = await adapter?.create({
-      config: {},
-      model: "migrated-model",
-      acquireLocalService,
-    } as never);
-    await expect(result?.provider?.embedQuery("query")).resolves.toEqual([1, 2]);
-    await expect(result?.provider?.embedBatch(["document"])).resolves.toEqual([[3, 4]]);
-    expect(result?.runtime?.sourceWideBatchEmbed).toBe(true);
-    expect(embedQuery).toHaveBeenCalledWith("query", { inputType: "query" });
-    expect(embedBatch).toHaveBeenCalledWith(["document"], { inputType: "document" });
+    expect(adapter).toBe(memoryAdapter);
+    expect(adapter?.supportsMultimodalEmbeddings?.({ model: "multimodal" })).toBe(true);
+    expect(adapter?.shouldContinueAutoSelection?.(new Error("setup"))).toBe(true);
   });
 });

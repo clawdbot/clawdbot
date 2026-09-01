@@ -28,7 +28,11 @@ import {
   withCdpSocket,
 } from "./cdp.helpers.js";
 import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
-import { finalizeRoleSnapshot, type RoleSnapshotIdentityMode } from "./pw-role-snapshot.js";
+import {
+  finalizeRoleSnapshot,
+  findRoleSnapshotLineRef,
+  type RoleSnapshotIdentityMode,
+} from "./pw-role-snapshot.js";
 import {
   appendRoleSnapshotDepthTruncationMarker,
   ROLE_SNAPSHOT_MAX_DEPTH,
@@ -99,15 +103,19 @@ export async function captureScreenshot(opts: {
   format?: "png" | "jpeg";
   quality?: number; // jpeg only (0..100)
   timeoutMs?: number;
+  /** Effective launch mode recorded on the owned Chrome process, when known. */
+  headless?: boolean;
 }): Promise<Buffer> {
   return await withCdpSocket(
     opts.wsUrl,
     async (send) => {
       await send("Page.enable");
 
-      // Background surface captures can stall until CDP times out; activate to force a frame.
-      // Ignore protocol rejection so browsers that already capture correctly still proceed.
-      await send("Page.bringToFront").catch(() => {});
+      // Headless background tabs need activation to produce a frame. Preserve
+      // focus only when the launched process is authoritatively known headed.
+      if (opts.headless !== false) {
+        await send("Page.bringToFront").catch(() => {});
+      }
 
       // For full-page captures, temporarily expand the viewport to the content
       // size so the entire page is within the viewport bounds.  We save the
@@ -245,7 +253,7 @@ export async function createTargetViaCdp(opts: {
       version = await fetchJson<{ webSocketDebuggerUrl?: string }>(
         appendCdpPath(discoveryUrl, "/json/version"),
         opts.timeouts?.httpTimeoutMs,
-        undefined,
+        { signal: opts.signal },
         cdpControlPolicy,
       );
     } catch (err) {
@@ -292,15 +300,22 @@ export async function createTargetViaCdp(opts: {
           if (!targetId) {
             throw new Error("CDP Target.createTarget returned no targetId");
           }
-          opts.signal?.throwIfAborted();
-          const finalUrl = await prepareCdpTargetSession(
-            send,
-            targetId,
-            opts.waitForNavigationResult ? opts.url : undefined,
-            opts.signal,
-          );
-          opts.signal?.throwIfAborted();
-          return finalUrl ? { targetId, finalUrl } : { targetId };
+          try {
+            opts.signal?.throwIfAborted();
+            const finalUrl = await prepareCdpTargetSession(
+              send,
+              targetId,
+              opts.waitForNavigationResult ? opts.url : undefined,
+              opts.signal,
+            );
+            opts.signal?.throwIfAborted();
+            return finalUrl ? { targetId, finalUrl } : { targetId };
+          } catch (error) {
+            // The caller cannot compensate until it receives this id. Keep cleanup
+            // on the creating socket, independent of cancellation, before releasing it.
+            await send("Target.closeTarget", { targetId }).catch(() => {});
+            throw error;
+          }
         },
         {
           commandTimeoutMs: opts.timeouts?.httpTimeoutMs ?? 5000,
@@ -392,8 +407,7 @@ export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnaps
     }
     const { id, depth } = popped;
     const n = byId.get(id);
-    // Every id pushed onto the stack came from `children.filter(c => byId.has(c))`,
-    // so byId.get(id) is always defined here. Dead defensive guard.
+    // Child admission below only pushes ids present in this map.
     /* c8 ignore next 3 */
     if (!n) {
       continue;
@@ -413,13 +427,10 @@ export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnaps
       depth,
     });
 
-    const children = (n.childIds ?? []).filter((c) => byId.has(c));
+    const children = n.childIds ?? [];
     for (let i = children.length - 1; i >= 0; i--) {
       const child = children[i];
-      // `children` is a string[] from an array filter over RawAXNode.childIds,
-      // so `child` is always a defined string here. Dead defensive guard.
-      /* c8 ignore next 3 */
-      if (child) {
+      if (child && byId.has(child)) {
         stack.push({ id: child, depth: depth + 1 });
       }
     }
@@ -535,8 +546,10 @@ function buildRoleTree(nodes: RawAXNode[]): { tree: RoleTreeNode[]; roots: numbe
     if (!current) {
       break;
     }
-    expectDefined(tree[current.index], "CDP traversal node index").depth = current.depth;
-    for (const child of (tree[current.index]?.children ?? []).toReversed()) {
+    const node = expectDefined(tree[current.index], "CDP traversal node index");
+    node.depth = current.depth;
+    for (let i = node.children.length - 1; i >= 0; i--) {
+      const child = expectDefined(node.children[i], "CDP traversal child index");
       stack.push({ index: child, depth: current.depth + 1 });
     }
   }
@@ -568,14 +581,6 @@ function cursorSuffix(info?: CursorInteractiveInfo): string {
   return parts.length ? ` [${parts.join(", ")}]` : "";
 }
 
-function escapeRoleSnapshotValue(value: string): string {
-  return value
-    .replaceAll("\\", "\\\\")
-    .replaceAll('"', '\\"')
-    .replaceAll("\r", "\\r")
-    .replaceAll("\n", "\\n");
-}
-
 function renderRoleTree(
   tree: RoleTreeNode[],
   index: number,
@@ -598,10 +603,10 @@ function renderRoleTree(
   }
   if (shouldIncludeRoleNode(node, options)) {
     const indent = "  ".repeat(effectiveDepth);
-    const name = node.name ? ` "${escapeRoleSnapshotValue(node.name)}"` : "";
+    const name = node.name ? ` ${JSON.stringify(node.name)}` : "";
     const ref = node.ref ? ` [ref=${node.ref}]` : "";
     const nth = node.nth !== undefined && node.nth > 0 ? ` [nth=${node.nth}]` : "";
-    const value = node.value ? ` value="${escapeRoleSnapshotValue(node.value)}"` : "";
+    const value = node.value ? ` value=${JSON.stringify(node.value)}` : "";
     const url = node.url ? ` [url=${node.url}]` : "";
     output.push(
       `${indent}- ${node.role}${name}${ref}${nth}${value}${url}${cursorSuffix(node.cursorInfo)}`,
@@ -726,11 +731,12 @@ async function resolveLinkUrls(
   sessionId?: string,
 ): Promise<Map<number, string>> {
   const out = new Map<number, string>();
+  const linkRefs = Object.values(refs).filter(
+    (ref): ref is CdpRoleRef & { backendDOMNodeId: number } =>
+      ref.role === "link" && Boolean(ref.backendDOMNodeId),
+  );
   await Promise.all(
-    Object.values(refs).map(async (ref) => {
-      if (ref.role !== "link" || !ref.backendDOMNodeId) {
-        return;
-      }
+    linkRefs.map(async (ref) => {
       const resolved = (await send(
         "DOM.resolveNode",
         { backendNodeId: ref.backendDOMNodeId },
@@ -764,11 +770,12 @@ async function resolveIframeFrameIds(
   sessionId?: string,
 ): Promise<Map<number, string>> {
   const out = new Map<number, string>();
+  const iframeNodes = tree.filter(
+    (node): node is RoleTreeNode & { backendDOMNodeId: number } =>
+      node.role.toLowerCase() === "iframe" && Boolean(node.backendDOMNodeId),
+  );
   await Promise.all(
-    tree.map(async (node) => {
-      if (node.role.toLowerCase() !== "iframe" || !node.backendDOMNodeId) {
-        return;
-      }
+    iframeNodes.map(async (node) => {
       const described = (await send(
         "DOM.describeNode",
         { backendNodeId: node.backendDOMNodeId, depth: 1 },
@@ -816,8 +823,6 @@ async function buildCdpRoleSnapshot(params: {
   }
 
   const counts = new Map<string, number>();
-  const refsByKey = new Map<string, string[]>();
-  const nodesByRef = new Map<string, RoleTreeNode>();
   const refs: Record<string, CdpRoleRef> = {};
   for (const node of tree) {
     const role = node.role.toLowerCase();
@@ -836,32 +841,17 @@ async function buildCdpRoleSnapshot(params: {
     params.nextRef.value += 1;
     node.ref = ref;
     node.nth = nth;
-    const refsForKey = refsByKey.get(key);
-    if (refsForKey) {
-      refsForKey.push(ref);
-    } else {
-      refsByKey.set(key, [ref]);
-    }
-    nodesByRef.set(ref, node);
     refs[ref] = {
       role,
       ...(node.name ? { name: node.name } : {}),
-      ...(nth > 0 ? { nth } : {}),
+      nth,
       ...(node.backendDOMNodeId ? { backendDOMNodeId: node.backendDOMNodeId } : {}),
       ...(params.frameId ? { frameId: params.frameId } : {}),
     };
   }
-  for (const refList of refsByKey.values()) {
-    if (refList.length > 1) {
-      continue;
-    }
-    const ref = refList[0];
-    if (ref) {
-      delete refs[ref]?.nth;
-      const node = nodesByRef.get(ref);
-      if (node) {
-        delete node.nth;
-      }
+  for (const node of tree) {
+    if (node.ref && counts.get(`${node.role.toLowerCase()}:${node.name}`) === 1) {
+      delete refs[node.ref]?.nth;
     }
   }
 
@@ -893,8 +883,7 @@ async function buildCdpRoleSnapshot(params: {
   if (params.recurseIframes) {
     const iframeNodes = tree.filter((node) => node.ref && node.frameId);
     for (const iframe of iframeNodes) {
-      const marker = `[ref=${iframe.ref}]`;
-      const lineIndex = lines.findIndex((line) => line.includes(marker));
+      const lineIndex = lines.findIndex((line) => findRoleSnapshotLineRef(line) === iframe.ref);
       if (lineIndex < 0 || !iframe.frameId) {
         continue;
       }
@@ -928,6 +917,7 @@ export async function snapshotRoleViaCdp(opts: {
   lookup?: typeof dnsLookupCb;
   options?: CdpRoleSnapshotOptions;
   urls?: boolean;
+  recurseIframes?: boolean;
   timeoutMs?: number;
   maxChars?: number;
   delta?: { mode: RoleSnapshotIdentityMode; previousKeys?: ReadonlySet<string> };
@@ -946,7 +936,7 @@ export async function snapshotRoleViaCdp(opts: {
         send,
         options: opts.options ?? {},
         urls: opts.urls,
-        recurseIframes: true,
+        recurseIframes: opts.recurseIframes ?? true,
         nextRef: { value: 1 },
       });
       const renderedSnapshot =

@@ -13,14 +13,34 @@ import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { AgentBinding } from "../config/types.agents.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
+import { validateConfigObjectWithPlugins } from "../config/validation.js";
+import { writeJsonAtomic } from "../infra/json-files.js";
 import { writeConfigMachineState } from "../state/config-machine-state.js";
 import { buildTestConfigSnapshot } from "./test-helpers.config-snapshots.js";
 import { testConfigRoot, testIsNixMode, testState } from "./test-helpers.runtime-state.js";
 
 type GatewayConfigModule = typeof import("../config/config.js");
+type GatewayConfigRuntime = Pick<
+  typeof import("../config/io.js"),
+  "resetConfigRuntimeState" | "getRuntimeConfigSnapshot" | "setRuntimeConfigSnapshot"
+>;
+type GatewayConfigOverrides = Pick<
+  GatewayConfigModule,
+  | "CONFIG_PATH"
+  | "STATE_DIR"
+  | "isNixMode"
+  | "applyConfigOverrides"
+  | "getRuntimeConfig"
+  | "parseConfigJson5"
+  | "validateConfigObject"
+  | "readConfigFileSnapshot"
+  | "readConfigFileSnapshotWithPluginMetadata"
+  | "readConfigFileSnapshotForWrite"
+  | "writeConfigFile"
+>;
 
-/** Wraps the real config module with gateway-test runtime overrides. */
-export function createGatewayConfigModuleMock(actual: GatewayConfigModule): GatewayConfigModule {
+/** Creates gateway-test overrides without importing the facade that re-exports mocked IO. */
+export function createGatewayConfigOverrides(actual: GatewayConfigRuntime): GatewayConfigOverrides {
   const resolveConfigPath = () => path.join(testConfigRoot.value, "openclaw.json");
 
   const composeTestConfig = (baseConfig: Record<string, unknown>) => {
@@ -217,9 +237,7 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
 
   const writeConfigFile = vi.fn(async (cfg: Record<string, unknown>) => {
     const configPath = resolveConfigPath();
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    const raw = JSON.stringify(cfg, null, 2).trimEnd().concat("\n");
-    await fs.writeFile(configPath, raw, "utf-8");
+    await writeJsonAtomic(configPath, cfg, { durable: false, trailingNewline: true });
     actual.resetConfigRuntimeState();
     return {
       persistedHash: "test-config-hash",
@@ -237,7 +255,7 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
   const readConfigFileSnapshotWithPluginMetadata =
     async (): Promise<ReadConfigFileSnapshotWithPluginMetadataResult> => {
       const snapshot = await readConfigFileSnapshot();
-      const validation = actual.validateConfigObjectWithPlugins(snapshot.config, {
+      const validation = validateConfigObjectWithPlugins(snapshot.config, {
         env: process.env,
         pluginValidation: "skip",
       });
@@ -279,7 +297,6 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
   };
 
   return {
-    ...actual,
     get CONFIG_PATH() {
       return resolveConfigPath();
     },

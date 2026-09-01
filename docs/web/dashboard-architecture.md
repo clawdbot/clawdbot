@@ -1,25 +1,22 @@
 ---
-summary: "Session dashboards: architecture and implementation plan (technical design, pre-GA)"
+summary: "Session dashboard architecture: widget hosting, capabilities, board storage, and protocol"
 read_when:
-  - Implementing or reviewing the session dashboard (boards) feature
+  - Maintaining or reviewing session dashboards and their security boundaries
   - Changing widget hosting, the widget bridge, or board storage
 title: "Dashboard Architecture"
+doc-schema-version: 1
 ---
 
-<Note>
-Technical design document for the session dashboard feature, written before and
-during implementation. It is the source of truth for the build-out. When the
-feature ships, `/web/dashboard` becomes the user-facing page and this page stays
-as the architecture reference.
-</Note>
+Session dashboards are the persistent widget face of a session. This reference
+covers their ownership, sandbox and capability boundaries, storage, and Gateway
+protocol. For the operator workflow, see [Session Dashboards](/web/dashboards);
+for the widget authoring API, see [Show widget](/tools/show-widget).
 
 ## Vision
 
-Working with an agent today is a text stream. The dashboard makes it a
-workbench: the agent renders live, interactive widgets; the user pins them onto
-a persistent surface; chat docks to the side (or hides) and the main content is
-the board. You go from "talking to the agent" to "operating a control panel the
-agent built for you" without ever leaving the session.
+A dashboard turns the session into a workbench: the agent renders interactive
+widgets, the user pins them onto a persistent board, and chat docks beside the
+board or hides. The board and conversation remain part of the same session.
 
 Principles:
 
@@ -98,8 +95,9 @@ Widget HTML/JS is authored by the agent (typically via `show_widget`), wrapped
 in the standard document shell (CSP meta, size reporter, bridge bootstrap) and
 rendered in `<iframe sandbox="allow-scripts">` (never `allow-same-origin`).
 
-- **Inline (transcript) widgets** keep the current canvas-document pipeline:
-  written under the state dir, served by the gateway, pruned per scope, no
+- **Inline (transcript) widgets** use managed Canvas document artifacts under
+  `<stateDir>/canvas/documents`, served by the Gateway and pruned per scope.
+  These artifacts are separate from SQLite board storage and need no capability
   approval (they are capless by construction — prompt sends are user-confirmed).
 - **Board widgets** are session state: bytes live in the owning agent's SQLite
   DB (`board_widgets`), served by a core gateway route
@@ -109,10 +107,11 @@ rendered in `<iframe sandbox="allow-scripts">` (never `allow-same-origin`).
 - **Update in place:** re-emitting a widget with the same `name` replaces the
   bytes, bumps `revision`, broadcasts `board.changed`, and live views reload
   that iframe only.
-- **Byte freezing:** granted capabilities bind to the sha256 of the widget
-  bytes. Changing bytes keeps `data`/`net`/`actions` grants only if the new
-  revision declares a subset of the granted manifest; a widened manifest
-  re-prompts the operator.
+- **Byte freezing:** HTML and registered-source grants bind to the SHA-256
+  digest of the approved content. Preserving a grant requires the same content
+  scope, a matching approved digest, and a declaration that does not widen.
+  Changed bytes require a new decision under the session's approval policy,
+  even when the declaration stays the same or shrinks.
 
 ### Widgets host content; MCP apps are one content kind
 
@@ -147,7 +146,7 @@ CSP, theme bridge, size reporter, and private-port host bridge used by HTML
 widgets. v0.8 and v0.9 use separate renderer bundles because their Lit custom
 elements share tag names but their processors and action contracts differ.
 
-Shared infrastructure underneath (this is where the simplification lands):
+Shared hosting infrastructure:
 
 - **One sandbox host.** `html` widgets render through the same hardened
   pipeline MCP apps shipped with (double-iframe on the dedicated sandbox
@@ -156,8 +155,9 @@ Shared infrastructure underneath (this is where the simplification lands):
   the natural case.
 - **One authorization model.** A widget's reach is a granted allowlist,
   whatever its kind: for `html` widgets, host tools; for `mcp-app` widgets,
-  the server's app-visible tools (via the existing `allowedAppToolNames`
-  mechanism, made durable per widget instead of per-minting-run).
+  the server's app-visible tools and same-server resources (via the existing
+  live App-interaction authority, made durable per widget instead of
+  per-minting-run).
 - **Host tools for `html` widgets** (exposed over the widget bridge, checked
   against the grant):
   - `openclaw.prompt.send` — tier 2; routed through the visible composer,
@@ -170,13 +170,16 @@ Shared infrastructure underneath (this is where the simplification lands):
 - **`net` = CSP.** Network reach uses the already-shipped per-widget CSP
   declaration (`connect-src` origins) — the self-updating weather widget
   fetches its API directly from the sandbox, no gateway involvement.
-- **Grants.** A widget declaring nothing renders immediately (sandboxed,
-  `default-src 'none'`, prompt sends individually confirmed) — same trust as
-  today's inline chat widgets. Declared tools/origins put the widget in
-  `pending` on the board: a placeholder card lists them human-readably with
-  one-tap **Allow**/**Reject**. Grants are per widget name; for `html` widgets
-  they are byte-frozen (sha256), and changed bytes keep the grant only if the
-  declaration shrank. Wrapper-authored board widgets forward user-clicked
+- **Grants.** HTML and registered widgets declaring nothing render immediately
+  (sandboxed, `default-src 'none'`, prompt sends individually confirmed).
+  Declared capabilities and interactive MCP Apps follow an explicit
+  [session permission mode](/gateway/permission-modes): **Full access** grants;
+  **Workspace** uses an AI reviewer and rejects anything it does not allow;
+  **Guarded** shows **Allow**/**Reject**; **Read only** rejects. Without an
+  explicit session mode, the equivalent configured exec approval policy applies.
+  Grants are per widget name and content scope. HTML and registered-source
+  updates preserve a grant only while the approved digest matches and the
+  declaration does not widen. Wrapper-authored board widgets forward user-clicked
   `http`/`https` new-tab links to the Control UI host; this ordinary navigation
   needs no grant and never grants iframe popup permissions.
 - **Authoring shim.** The document wrapper injects `window.openclaw.prompt`,
@@ -205,37 +208,33 @@ remain per-widget and byte-and-revision-bound.
 The sandbox CSP emits the proposed `webrtc 'block'` directive, but
 [Chromium's current CSP directive set](https://chromium.googlesource.com/chromium/src/+/main/services/network/public/mojom/content_security_policy.mojom#95)
 does not implement it. Scriptable widgets can therefore use WebRTC data
-channels for egress in current Chromium. The same residual already ships for
-inline chat widgets and the MCP Apps host on `main`.
+channels for egress without CSP enforcement of that directive. This residual
+also applies to inline chat widgets and the MCP Apps host.
 
 **Accepted tradeoff:** OpenClaw does not gate scriptable widgets on this
 residual. Widget content gains access to sensitive OpenClaw data only through
-an operator-granted, byte-frozen `data:read` capability, and the sandbox
-Permissions Policy blocks camera and microphone access. A DOM API guard is
-best-effort defense-in-depth, not a security boundary, and belongs in
-follow-up hardening.
+policy-granted, byte-frozen data bindings, and the sandbox Permissions Policy
+blocks camera and microphone access.
+
+Board widgets already enable a DOM API guard before widget code runs. It removes
+same-realm WebRTC constructors and blocks common ways to create descendant
+browsing contexts with fresh constructors. This reduces exposure but remains
+best-effort defense-in-depth, not an isolation or authorization boundary; it
+does not eliminate the accepted residual. The guard is implemented in
+`src/agents/sandbox-host.ts` and enabled by `src/gateway/board-sandbox.ts`.
 
 ### Transcript display: one widget card
 
-Inline display unifies on the widget primitive. When a tool result carries UI —
-`show_widget` output or an MCP tool result with an app resource — the system
-materializes an **ephemeral, auto-named widget** (session-scoped, pruned) and
-the transcript renders a single widget card that dispatches on content kind.
-MCP app auto-display stays exactly as the spec expects (zero extra model work);
-it just _is_ a widget underneath. This deletes the parallel `mcpApp`
-special-cases in chat rendering (surface gating, separate dedup), gives every
-inline UI the same pin affordance, and makes the widget registry the primary
-re-open path (transcript-scan reconstruction stays as fallback for never-pinned
-history). The read-only ticketed standalone host overlaps with boards as a
-persistent re-open surface — consolidation candidate to evaluate in T6, not
-assumed.
+Inline HTML and MCP App previews share a widget-card renderer that dispatches
+on content kind. Eligible previews expose the same **Pin to dashboard**
+affordance. Generated widget names let the card recognize an existing pin and
+avoid offering a duplicate. The renderer and pin paths live in
+`ui/src/pages/chat/components/widget-card.ts`.
 
-Composition: v1 is grid adjacency (agent chrome widget next to an app widget on
-one tab). v2 adds **host-managed app slots** — agent widget HTML declares a
-slot region and the host composites the real app view as a sibling sandbox.
-The app never renders inside the agent's iframe: nesting would break bridge
-identity and enable overlay/clickjack of granted app UI, so the slot is a
-layout contract, not an embed.
+Widgets compose through grid adjacency: an agent-authored widget and an MCP App
+can occupy neighboring cells on one tab. Each keeps its own sandbox and bridge
+identity. An MCP App must not render inside an agent-authored iframe, where
+nesting would compromise bridge identity and allow overlays over granted app UI.
 
 ### Server-sourced widgets (pinned MCP apps)
 
@@ -248,10 +247,9 @@ on staleness). Chat inline MCP app views get the same **Pin to dashboard**
 affordance as agent widgets. Re-opened views are read-only today by design;
 pinned apps that should stay interactive get a durable grant over the server's
 app-visible tools (explicit allowlist shown to the operator on pin), decoupled
-from the minting run. Ungranted pins stay read-only — still useful for display
-dashboards. v1 pins to the originating session's board; cross-session pinning
-needs a lease broker and waits. Coordinate with open PR #109807 (`ui/message`
-composer routing, theme/size propagation).
+from the minting run. Ungranted pins can render their fetched App HTML but
+cannot call tools or access the same-server resource bridge. Pins belong to the
+originating session's board; cross-session pinning is not supported.
 
 ### WorkBoard integration
 
@@ -271,41 +269,18 @@ order. Agent vocabulary:
 
 ## Data model (per-agent DB)
 
-New tables in `agents/<agentId>/agent/openclaw-agent.sqlite`
-(**requires an agent-DB schema-version bump — operator sign-off required
-before this lands**):
+Board state lives in `agents/<agentId>/agent/openclaw-agent.sqlite`:
 
-```sql
-CREATE TABLE board_tabs (
-  session_key TEXT NOT NULL,
-  tab_id      TEXT NOT NULL,           -- slug
-  title       TEXT NOT NULL,
-  position    INTEGER NOT NULL,
-  chat_dock   TEXT NOT NULL DEFAULT 'right',  -- left|right|bottom|hidden
-  created_by  TEXT NOT NULL,           -- 'user' | 'agent'
-  PRIMARY KEY (session_key, tab_id)
-) STRICT;
+- `board_tabs` stores tab identity, ordering, chat dock, and board revision.
+- `board_widgets` stores widget identity, placement, content or descriptors,
+  capability declarations, approved digests, and grant state.
 
-CREATE TABLE board_widgets (
-  session_key  TEXT NOT NULL,
-  name         TEXT NOT NULL,          -- stable widget name
-  tab_id       TEXT NOT NULL,
-  title        TEXT,
-  html         BLOB NOT NULL,          -- wrapped document source
-  sha256       TEXT NOT NULL,
-  revision     INTEGER NOT NULL,
-  size_w       INTEGER NOT NULL,
-  size_h       INTEGER NOT NULL,
-  position     INTEGER NOT NULL,       -- order within tab (auto-compact input)
-  manifest     TEXT NOT NULL DEFAULT '{}',  -- capability manifest JSON
-  grant_state  TEXT NOT NULL DEFAULT 'none', -- none|pending|granted|rejected
-  granted_sha  TEXT,                   -- byte-frozen grant
-  created_by   TEXT NOT NULL,
-  created_at   INTEGER NOT NULL,
-  updated_at   INTEGER NOT NULL,
-  PRIMARY KEY (session_key, name)
-) STRICT;
-```
+The canonical table definitions, constraints, and indexes are in
+`src/state/openclaw-agent-schema.sql`. The board schema ensure/repair path is
+`src/state/openclaw-agent-board-schema.ts`; runtime reads and writes are owned by
+`src/boards/sqlite-board-store.ts`. See [Database schemas](/reference/database-schemas)
+for schema versions, migration and downgrade rules, and the review checkpoint for
+material storage changes. Do not use a copied SQL sketch as the schema contract.
 
 Board existence = any rows for the `sessionKey`. Deleting a session deletes its
 board rows. `/new`/`/reset` does not touch them.
@@ -365,35 +340,20 @@ false`, never in a stable release (first appeared in 2026.7.2 betas). No
   migration; a doctor rule removes stale `<stateDir>/workspaces/` if present.
   Harvested ideas: pure grid math, bridge security model (port bootstrap,
   binding gating, rate limits), byte-frozen approval.
-- **Widget hosting moves from `extensions/canvas` to core.** The canvas doc
-  store, document wrapper, HTTP serving, and the `show_widget` tool become core
-  (`src/canvas/`); the plugin keeps the macOS node-panel presenter and the A2UI
+- **Core owns widget hosting.** The canvas doc store, document wrapper, HTTP
+  serving, and the `show_widget` tool live in core (`src/canvas/`); the Canvas
+  plugin owns the macOS node-panel presenter and the A2UI
   dashboard content kind. The `pluginSurfaceUrls["canvas"]` advertisement and
   `/__openclaw__/canvas` paths are shipped native-client contracts and stay
   stable. Discord Activities register a contextual presenter behind core's
   canonical `show_widget` tool.
 
-## Non-goals (this program)
+## Current boundaries
 
-- Multi-user board sharing/ACLs (future; will arrive via session sharing).
-- Native macOS/iOS board rendering (they get it wherever they embed the
-  Control UI; the inline-widget path is unchanged).
-- Builtin data widgets (sessions/usage/cron cards) — the capability bridge plus
-  agent-authored widgets cover v1; a builtin kind registry can come later.
-
-## Implementation plan
-
-Independent worktrees, Codex-built, review+land sequentially. Land-then-fix.
-
-| #   | Branch                               | Scope                                                                                                                                                                              | Depends on                       |
-| --- | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
-| T1  | `claude/dashboard-remove-workspaces` | Delete workspaces plugin + UI + docs + i18n keys; doctor cleanup rule                                                                                                              | —                                |
-| T2  | `claude/dashboard-canvas-core`       | Promote widget hosting + `show_widget` to core; Canvas plugin keeps the node-panel presenter and A2UI dashboard kind; zero behavior change                                         | —                                |
-| T3  | `claude/dashboard-domain`            | Agent-DB tables (schema bump), `board.*` RPCs + events, `dashboard` tool, `show_widget` pin/name/manifest args, tier-1 notices, reset-keeps-board                                  | T2                               |
-| T4  | `claude/dashboard-ui`                | Board face + tab strip + fluid auto-compact grid + chat dock (left/right/bottom/hidden) + transcript pin affordance + sidebar board face + reset confirm                           | T3 (mock-first via dev fixtures) |
-| T5  | `claude/dashboard-capabilities`      | Grant store/UI + byte freezing; move `html` widgets onto the shared sandbox host; host tools (`openclaw.prompt.send/state.emit/data.read/cron.trigger`); `net` CSP; authoring shim | T3, T4                           |
-| T7  | `claude/dashboard-mcp-apps`          | `mcp-app` content kind: pin affordance on inline app views, descriptor storage, lease re-mint/refresh, durable server-tool grants (reuses shipped MCP Apps host)                   | T3, T4                           |
-| T6  | polish                               | Live E2E on a scratch gateway (real keys), screenshots, fixes, user-focused `/web/dashboard` rewrite, enable-by-default review                                                     | all                              |
-
-Validation per repo rules: focused vitest locally, full gates on
-Crabbox/Testbox, `$autoreview` before every land, live proof for T6.
+- Boards do not introduce a separate sharing or ACL model. Session visibility
+  and membership use the existing session-sharing surface; widget capability
+  grants remain separate from membership.
+- Native macOS/iOS board rendering is through the embedded Control UI; the
+  inline-widget path is unchanged.
+- Enabled plugins extend content kinds, data bindings, and action verbs through
+  the existing registries.

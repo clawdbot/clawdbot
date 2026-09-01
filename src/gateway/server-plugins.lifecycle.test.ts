@@ -5,6 +5,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
@@ -102,6 +104,7 @@ async function writeInstanceBindingProbePlugin(): Promise<{ bundledRoot: string 
     path.join(pluginDir, "openclaw.plugin.json"),
     `${JSON.stringify({
       id: "instance-binding-probe",
+      name: "Startup plugin",
       activation: { onStartup: true },
       configSchema: { type: "object", additionalProperties: false, properties: {} },
     })}\n`,
@@ -172,7 +175,7 @@ async function prepareInstanceBindingTest(options?: {
     "instance-binding-probe",
   );
   await fs.writeFile(configPath, `${JSON.stringify(config)}\n`);
-  return { coordinator };
+  return { coordinator, bundledRoot: plugin.bundledRoot };
 }
 
 describe("gateway plugin instance bindings", () => {
@@ -203,6 +206,19 @@ describe("gateway plugin instance bindings", () => {
       });
       started.push(first);
       await first.startupSettled;
+      const sharedMetadata = getGatewayPluginMetadataSnapshot();
+      expect(sharedMetadata).toBeDefined();
+
+      await expect(
+        startTestGatewayServer(await getFreePort(), {
+          bind: "loopback",
+          host: "0.0.0.0",
+          auth: { mode: "none" },
+          controlUiEnabled: false,
+          sidecarStartup: "defer",
+        }),
+      ).rejects.toThrow("gateway bind=loopback resolved to non-loopback host");
+      expect(getGatewayPluginMetadataSnapshot()).toBe(sharedMetadata);
       const firstRegistrationCount = coordinator.runtimes.length;
       expect(firstRegistrationCount).toBeGreaterThan(0);
       const { runtime: firstRuntime } = await requireBoundRuntime(
@@ -217,6 +233,7 @@ describe("gateway plugin instance bindings", () => {
       });
       started.push(second);
       await second.startupSettled;
+      expect(getGatewayPluginMetadataSnapshot()).toBe(sharedMetadata);
       expect(coordinator.runtimes.length).toBeGreaterThan(firstRegistrationCount);
       const { runtime: secondRuntime } = await requireBoundRuntime(
         coordinator.runtimes.slice(firstRegistrationCount),
@@ -237,6 +254,8 @@ describe("gateway plugin instance bindings", () => {
 
       await second.close({ reason: "close last-started Gateway first" });
       started.pop();
+      clearPluginMetadataLifecycleCaches();
+      expect(getGatewayPluginMetadataSnapshot()).toBe(sharedMetadata);
       await expect(requestInstanceBindingProbe(secondRuntime)).rejects.toThrow(
         "In-process gateway dispatch requires a gateway request scope or instance binding",
       );
@@ -244,14 +263,17 @@ describe("gateway plugin instance bindings", () => {
       await expect(
         firstRuntime.subagent.getSessionMessages({ sessionKey: "agent:main:main", limit: 1 }),
       ).resolves.toEqual({ messages: [] });
+      await first.close({ reason: "close final Gateway metadata owner" });
+      started.pop();
+      expect(getGatewayPluginMetadataSnapshot()).toBeUndefined();
     },
   );
 
   it(
-    "keeps a hot-reloaded plugin runtime bound to the same real Gateway",
+    "keeps startup metadata through hot reload and discovers manifest changes after Gateway restart",
     { timeout: 600_000 },
     async () => {
-      const { coordinator } = await prepareInstanceBindingTest();
+      const { coordinator, bundledRoot } = await prepareInstanceBindingTest();
 
       const port = await getFreePort();
       const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
@@ -263,6 +285,13 @@ describe("gateway plugin instance bindings", () => {
       });
       started.push(server);
       await server.startupSettled;
+      const startupMetadata = getGatewayPluginMetadataSnapshot();
+      expect(startupMetadata?.byPluginId.get("instance-binding-probe")?.name).toBe(
+        "Startup plugin",
+      );
+      const manifestPath = path.join(bundledRoot, "instance-binding-probe", "openclaw.plugin.json");
+      const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+      await fs.writeFile(manifestPath, JSON.stringify({ ...manifest, name: "Changed plugin" }));
       const initialRegistrationCount = coordinator.runtimes.length;
       expect(initialRegistrationCount).toBeGreaterThan(0);
       const { runtime: initialRuntime } = await requireBoundRuntime(
@@ -301,6 +330,10 @@ describe("gateway plugin instance bindings", () => {
       expect(reloadedProbe.registryId).not.toBe(initialProbe.registryId);
       expect(reloadedProbe.sessionsId).toBe(initialProbe.sessionsId);
       expect(reloadedProbe.placementId).toBe(initialProbe.placementId);
+      expect(getGatewayPluginMetadataSnapshot()).toBe(startupMetadata);
+      expect(
+        getGatewayPluginMetadataSnapshot()?.byPluginId.get("instance-binding-probe")?.name,
+      ).toBe("Startup plugin");
       expect(hotReloadRecovery).not.toHaveBeenCalled();
       await expect(requestInstanceBindingProbe(initialRuntime)).rejects.toThrow(
         "In-process gateway dispatch requires a gateway request scope or instance binding",
@@ -311,6 +344,21 @@ describe("gateway plugin instance bindings", () => {
           limit: 1,
         }),
       ).resolves.toEqual({ messages: [] });
+
+      socket.close();
+      sockets.splice(sockets.indexOf(socket), 1);
+      await server.close({ reason: "plugin metadata restart" });
+      started.splice(started.indexOf(server), 1);
+      const restarted = await startTestGatewayServer(port, {
+        auth: { mode: "none" },
+        controlUiEnabled: false,
+        sidecarStartup: "start",
+      });
+      started.push(restarted);
+      await restarted.startupSettled;
+      expect(
+        getGatewayPluginMetadataSnapshot()?.byPluginId.get("instance-binding-probe")?.name,
+      ).toBe("Changed plugin");
     },
   );
 

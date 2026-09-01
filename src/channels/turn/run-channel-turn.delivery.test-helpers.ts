@@ -1,4 +1,5 @@
 import { expect, vi } from "vitest";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import { createReplyDispatchSettledCounts } from "../../auto-reply/reply/reply-dispatch-outcome.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
@@ -10,6 +11,38 @@ import type {
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { RecordInboundSession } from "../session.types.js";
 import type { ChannelTurnResult } from "./types.js";
+
+export type DurableSendRequest = {
+  accountId?: string;
+  channel?: string;
+  durability?: string;
+  payloads?: ReplyPayload[];
+  replyToMode?: string;
+  session?: {
+    key?: string;
+    agentId?: string;
+    requesterAccountId?: string;
+    requesterSenderId?: string;
+    conversationType?: string;
+  };
+  threadId?: string | number | null;
+  to?: string;
+};
+
+export type DurableSupportRequest = {
+  channel?: string;
+  requirements?: Record<string, boolean>;
+};
+
+export type DeliveryResult = {
+  messageIds?: string[];
+  receipt?: { platformMessageIds?: string[] };
+  visibleReplySent?: boolean;
+};
+
+export function deliveryResult(value: unknown): DeliveryResult {
+  return value as DeliveryResult;
+}
 
 export function createCtx(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
   return {

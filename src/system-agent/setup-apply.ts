@@ -1,6 +1,7 @@
 // Applies OpenClaw's conversational setup: config, workspace files, gateway.
 import { isDeepStrictEqual } from "node:util";
 import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope-config.js";
+import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import { resolveSystemAgentOnboardingTarget as resolveSystemTarget } from "../commands/onboard-agent-target.js";
 import type { FirstOnboardingAgent } from "../commands/onboard-agent.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
@@ -36,7 +37,7 @@ import { applySystemAgentModelSelection } from "./setup-model-selection.js";
 /**
  * The whole first-run setup as one approved operation: the user says "yes" in
  * the conversation and this applies model + workspace + quickstart gateway
- * defaults, seeds workspace bootstrap files, and (on the CLI surface) installs
+ * defaults, seeds workspace bootstrap files, and (on the CLI surface) optionally installs
  * and starts the gateway service. No interactive prompts may occur here —
  * everything uses quickstart defaults, so the conversation stays the only UI.
  */
@@ -72,6 +73,7 @@ export type SystemAgentSetupApplyParams = {
   assertCommitPreconditions?: (sourceConfig: OpenClawConfig) => void;
   /** Resume an interrupted local installation without restarting a running Gateway. */
   resume?: boolean;
+  installDaemon?: boolean;
   surface: "cli" | "gateway";
   runtime: RuntimeEnv;
 };
@@ -180,6 +182,16 @@ export async function applySystemAgentSetup(
   let snapshotConfig = requireValidSystemAgentSetupSnapshot(snapshot);
   const configHashBefore = resolveConfigSnapshotHash(snapshot);
   const startedWithoutAuthoredRoster = !hasResolvedRosterBeforeMigrations(snapshot);
+  const onboardingSourceConfig =
+    snapshot.sourceConfigBeforeMigrations ?? snapshotConfig.sourceConfig;
+  const initialWorkspaceConflict = resolveOnboardingWorkspaceConflict(
+    onboardingSourceConfig,
+    workspace,
+  );
+  const setupWorkspace =
+    initialWorkspaceConflict && !params.allowWorkspaceChange
+      ? initialWorkspaceConflict.currentWorkspaceDir
+      : workspace;
   let verifiedRoute = params.expectedInferenceRoute;
   let guardedExpectedAgentId = expectedAgentId;
   let guardedExpectedAgentDir = expectedAgentDir;
@@ -258,13 +270,11 @@ export async function applySystemAgentSetup(
   let expectedWriteHash = expectedConfigHash;
   if (startedWithoutAuthoredRoster) {
     const { ensureOnboardingAgent } = await import("../commands/onboard-agent.js");
-    const onboardingSourceConfig =
-      snapshot.sourceConfigBeforeMigrations ?? snapshotConfig.sourceConfig;
     const created = await commit(
       async () =>
         await ensureOnboardingAgent({
           config: onboardingSourceConfig,
-          workspace,
+          workspace: setupWorkspace,
           baseConfig: onboardingSourceConfig,
           firstAgent: params.firstAgent ?? { name: "main" },
           expectedConfigHash: configHashBefore ?? null,
@@ -310,15 +320,8 @@ export async function applySystemAgentSetup(
     hasAuthoredRosterEntries: boolean,
   ) => {
     const roster = listAgentEntries(currentBaseConfig);
-    // Load-time injection and migration may decorate the synthesized main entry.
-    // Authored roster provenance, never the resulting entry shape, establishes a fleet.
-    const isBootstrapRoster = !hasAuthoredRosterEntries;
-    const workspaceConflict = isBootstrapRoster
-      ? undefined
-      : resolveOnboardingWorkspaceConflict(currentBaseConfig, workspace);
     const currentHasRoster = hasAuthoredRosterEntries && roster.length > 0;
-    const allowWorkspaceWrite =
-      params.allowWorkspaceChange || (!workspaceConflict && !currentHasRoster);
+    const allowWorkspaceWrite = params.allowWorkspaceChange || !currentHasRoster;
     let setupBaseConfig = currentBaseConfig;
     if (enablePluginId) {
       const enabled = enablePluginInConfig(setupBaseConfig, enablePluginId);
@@ -340,8 +343,7 @@ export async function applySystemAgentSetup(
         },
       };
     }
-    const preserveWorkspace =
-      (currentHasRoster || Boolean(workspaceConflict)) && !params.allowWorkspaceChange;
+    const preserveWorkspace = currentHasRoster && !params.allowWorkspaceChange;
     if (preserveWorkspace) {
       const defaults = { ...setupBaseConfig.agents?.defaults };
       const currentDefaults = currentBaseConfig.agents?.defaults;
@@ -356,7 +358,7 @@ export async function applySystemAgentSetup(
       };
     }
 
-    let candidate = applyLocalSetupWorkspaceConfig(setupBaseConfig, workspace, {
+    let candidate = applyLocalSetupWorkspaceConfig(setupBaseConfig, setupWorkspace, {
       allowWorkspaceChange: allowWorkspaceWrite,
       preserveWorkspace,
     });
@@ -437,7 +439,7 @@ export async function applySystemAgentSetup(
             assertCommitPreconditions(currentSnapshot.sourceConfig);
             if (
               resolveUserPath(resolveSystemTarget(finalizedConfig).workspaceDir) !==
-              resolveUserPath(workspace)
+              resolveUserPath(setupWorkspace)
             ) {
               throw new Error(
                 "Another onboarding run owns a different workspace. Retry onboarding with its approved workspace.",
@@ -571,15 +573,14 @@ export async function applySystemAgentSetup(
 
   let gateway: GatewayServiceSetupOutcome = { status: "ready", action: "reused" };
   if (surface === "cli") {
-    // The gateway daemon runs outside this process; install/start it so
-    // channels and apps have a live gateway. Inside the gateway process
-    // (macOS app chat) the app owns the service lifecycle.
+    // CLI setup owns service installation unless its caller will host the
+    // foreground Gateway. App chat leaves the lifecycle with its host.
     await runCommittedFollowUp(
       async () => {
         const { ensureGatewayServiceForOnboarding } = await import("../wizard/setup.finalize.js");
         const serviceSetup = await ensureGatewayServiceForOnboarding({
           flow: "quickstart",
-          opts: {},
+          opts: { installDaemon: params.installDaemon },
           nextConfig,
           settings,
           prompter,
@@ -611,7 +612,9 @@ export async function applySystemAgentSetup(
                     env: process.env,
                   })
                 : undefined,
-            deadlineMs: 15_000,
+            ...(gateway.action === "reused"
+              ? { deadlineMs: 15_000 }
+              : resolveGatewayStartupTiming()),
           });
           if (probe.ok) {
             lines.push(`Gateway: running at ${probeLinks.wsUrl}`);
@@ -622,6 +625,8 @@ export async function applySystemAgentSetup(
           }
         } else if (gateway.reason === "external") {
           lines.push(`Gateway: ${formatExternalSupervisorActionRequired("start the gateway")}`);
+        } else if (params.installDaemon === false) {
+          lines.push("Gateway: will run in the foreground.");
         } else {
           lines.push(
             "Gateway: service install skipped — say `start gateway` when you want it running.",

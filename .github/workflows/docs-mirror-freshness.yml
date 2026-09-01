@@ -1,0 +1,36 @@
+name: Docs Mirror Freshness
+
+# Freshness alarm for the docs publish pipeline: docs-sync-publish.yml mirrors
+# docs into openclaw/docs, but a broken sync leaves the mirror silently stale.
+# This check fails (notifying the workflow actor) when the mirror trails a
+# docs-touching main commit by more than the grace window, after dispatching
+# one recovery sync.
+
+on:
+  schedule:
+    - cron: "17,47 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # Needed to dispatch a docs-sync-publish.yml recovery run when stale.
+  actions: write
+
+jobs:
+  check-mirror-freshness:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.x"
+
+      - name: Check docs mirror freshness
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/docs-mirror-freshness.mjs

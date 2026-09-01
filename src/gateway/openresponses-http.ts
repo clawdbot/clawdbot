@@ -14,12 +14,13 @@ import { isClientToolNameConflictError } from "../agents/agent-tool-definition-a
 import type { ImageContent } from "../agents/command/types.js";
 import type { ClientToolDefinition } from "../agents/embedded-agent-runner/run/params.js";
 import { toOpenAiResponsesUsage } from "../agents/usage.js";
+import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { agentCommandFromGatewayIngress } from "../commands/agent.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
-import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
+import { emitAgentEvent, onAgentEventForRun } from "../infra/agent-events.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { logWarn } from "../logger.js";
 import { renderFileContextBlock } from "../media/file-context.js";
@@ -47,6 +48,8 @@ import {
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
+  parseGatewayJsonRequest,
+  sendInvalidRequest,
   sendJson,
   sendMissingScopeForbidden,
   setSseHeaders,
@@ -80,7 +83,7 @@ import {
   type Usage,
 } from "./open-responses.schema.js";
 import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
-import { isFailedOpenAiAgentRun, resolveOpenAiCompatError } from "./openai-compat-errors.js";
+import { resolveOpenAiCompatError } from "./openai-compat-errors.js";
 import {
   isToolChoiceConstraintSatisfied,
   resolveUnsatisfiedToolChoiceMessage,
@@ -378,6 +381,7 @@ function resolveStopReasonAndPendingToolCalls(meta: unknown): {
 
 function createResponseResource(params: {
   id: string;
+  createdAt: number;
   model: string;
   status: ResponseResource["status"];
   output: OutputItem[];
@@ -387,7 +391,7 @@ function createResponseResource(params: {
   return {
     id: params.id,
     object: "response",
-    created_at: Math.floor(Date.now() / 1000),
+    created_at: params.createdAt,
     status: params.status,
     model: params.model,
     output: params.output,
@@ -473,18 +477,10 @@ export async function handleOpenResponsesHttpRequest(
     return true;
   }
   const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, handled.requestAuth);
-  // Validate request body with Zod
-  const parseResult = CreateResponseBodySchema.safeParse(handled.body);
-  if (!parseResult.success) {
-    const issue = parseResult.error.issues[0];
-    const message = issue ? `${issue.path.join(".")}: ${issue.message}` : "Invalid request body";
-    sendJson(res, 400, {
-      error: { message, type: "invalid_request_error" },
-    });
+  const payload = parseGatewayJsonRequest(res, handled.body, CreateResponseBodySchema);
+  if (!payload) {
     return true;
   }
-
-  const payload: CreateResponseBody = parseResult.data;
   const stream = Boolean(payload.stream);
   const model = payload.model;
   const user = payload.user;
@@ -497,9 +493,7 @@ export async function handleOpenResponsesHttpRequest(
       isInvalidGatewayModelError(err) ||
       isUnknownGatewayAgentError(err)
     ) {
-      sendJson(res, 400, {
-        error: { message: err.message, type: "invalid_request_error" },
-      });
+      sendInvalidRequest(res, err.message);
       return true;
     }
     throw err;
@@ -523,9 +517,7 @@ export async function handleOpenResponsesHttpRequest(
     model,
   });
   if (modelError) {
-    sendJson(res, 400, {
-      error: { message: modelError, type: "invalid_request_error" },
-    });
+    sendInvalidRequest(res, modelError);
     return true;
   }
 
@@ -619,9 +611,7 @@ export async function handleOpenResponsesHttpRequest(
     }
   } catch (err) {
     logWarn(`openresponses: request parsing failed: ${String(err)}`);
-    sendJson(res, 400, {
-      error: { message: "invalid request", type: "invalid_request_error" },
-    });
+    sendInvalidRequest(res, "invalid request");
     return true;
   }
 
@@ -639,9 +629,7 @@ export async function handleOpenResponsesHttpRequest(
     toolChoiceConstraint = toolChoiceResult.constraint;
   } catch (err) {
     logWarn(`openresponses: tool configuration failed: ${String(err)}`);
-    sendJson(res, 400, {
-      error: { message: "invalid tool configuration", type: "invalid_request_error" },
-    });
+    sendInvalidRequest(res, "invalid tool configuration");
     return true;
   }
   let resolved: ReturnType<typeof resolveGatewayRequestContext>;
@@ -661,9 +649,7 @@ export async function handleOpenResponsesHttpRequest(
       isInvalidGatewayModelError(err) ||
       isGatewaySessionKeyOverrideError(err)
     ) {
-      sendJson(res, 400, {
-        error: { message: err.message, type: "invalid_request_error" },
-      });
+      sendInvalidRequest(res, err.message);
       return true;
     }
     throw err;
@@ -707,16 +693,24 @@ export async function handleOpenResponsesHttpRequest(
     .join("\n\n");
 
   if (!prompt.message) {
-    sendJson(res, 400, {
-      error: {
-        message: "Missing user message in `input`.",
-        type: "invalid_request_error",
-      },
-    });
+    sendInvalidRequest(res, "Missing user message in `input`.");
     return true;
   }
 
   const responseId = `resp_${randomUUID()}`;
+  const responseIdentity = { id: responseId, createdAt: Math.floor(Date.now() / 1000) };
+  const createFailedResponse = (
+    error: { code: string; message: string },
+    usage?: Usage,
+  ): ResponseResource =>
+    createResponseResource({
+      ...responseIdentity,
+      model,
+      status: "failed",
+      output: [],
+      error,
+      usage,
+    });
   const rememberResponseSession = () =>
     storeResponseSession(responseId, sessionKey, responseSessionScope);
   const outputItemId = `msg_${randomUUID()}`;
@@ -760,7 +754,7 @@ export async function handleOpenResponsesHttpRequest(
       }
 
       const meta = (result as { meta?: { error?: unknown; stopReason?: unknown } } | null)?.meta;
-      if (isFailedOpenAiAgentRun(result)) {
+      if (readAgentRunTerminalOutcome(result) === "failed") {
         throw new Error("agent run failed");
       }
       const assistantText = resolveResponsePayloadText(result);
@@ -774,17 +768,13 @@ export async function handleOpenResponsesHttpRequest(
         toolChoiceConstraint &&
         !isToolChoiceConstraintSatisfied({ constraint: toolChoiceConstraint, pendingToolCalls })
       ) {
-        const failed = createResponseResource({
-          id: responseId,
-          model,
-          status: "failed",
-          output: [],
-          error: {
+        const failed = createFailedResponse(
+          {
             code: "api_error",
             message: resolveUnsatisfiedToolChoiceMessage(toolChoiceConstraint),
           },
           usage,
-        });
+        );
         rememberResponseSession();
         sendJson(res, 502, failed);
         return true;
@@ -819,7 +809,7 @@ export async function handleOpenResponsesHttpRequest(
         }
 
         const response = createResponseResource({
-          id: responseId,
+          ...responseIdentity,
           model,
           status: "completed",
           output,
@@ -831,7 +821,7 @@ export async function handleOpenResponsesHttpRequest(
       }
 
       const response = createResponseResource({
-        id: responseId,
+        ...responseIdentity,
         model,
         status: "completed",
         output: [
@@ -853,41 +843,25 @@ export async function handleOpenResponsesHttpRequest(
       }
       logWarn(`openresponses: non-stream response failed: ${String(err)}`);
       if (isClientToolNameConflictError(err)) {
-        const response = createResponseResource({
-          id: responseId,
-          model,
-          status: "failed",
-          output: [],
-          error: { code: "invalid_request_error", message: "invalid tool configuration" },
+        const response = createFailedResponse({
+          code: "invalid_request_error",
+          message: "invalid tool configuration",
         });
         sendJson(res, 400, response);
         return true;
       }
-      const response = createResponseResource({
-        id: responseId,
-        model,
-        status: "failed",
-        output: [],
-        error: { code: "api_error", message: "internal error" },
-      });
       const mapped = resolveOpenAiCompatError(err);
       if (mapped) {
-        const mappedResponse = createResponseResource({
-          id: responseId,
-          model,
-          status: "failed",
-          output: [],
-          error: {
-            code: mapped.error.type,
-            message: mapped.error.message,
-          },
+        const mappedResponse = createFailedResponse({
+          code: mapped.error.type,
+          message: mapped.error.message,
         });
         rememberResponseSession();
         sendJson(res, mapped.status, mappedResponse);
         return true;
       }
       rememberResponseSession();
-      sendJson(res, 500, response);
+      sendJson(res, 500, createFailedResponse({ code: "api_error", message: "internal error" }));
     } finally {
       stopWatchingDisconnect();
     }
@@ -974,7 +948,7 @@ export async function handleOpenResponsesHttpRequest(
       });
 
       const finalResponse = createResponseResource({
-        id: responseId,
+        ...responseIdentity,
         model,
         status: finalizeRequested.status,
         output: [completedItem],
@@ -1033,23 +1007,19 @@ export async function handleOpenResponsesHttpRequest(
     }
     rememberResponseSession();
     finalizeFailedResponse(
-      createResponseResource({
-        id: responseId,
-        model,
-        status: "failed",
-        output: [],
-        error: {
+      createFailedResponse(
+        {
           code: "server_error",
           message: "Assistant output cannot be represented as an append-only response stream.",
         },
         usage,
-      }),
+      ),
     );
   };
 
   // Send initial events
   const initialResponse = createResponseResource({
-    id: responseId,
+    ...responseIdentity,
     model,
     status: "in_progress",
     output: [],
@@ -1058,7 +1028,7 @@ export async function handleOpenResponsesHttpRequest(
   writeSseEvent(res, { type: "response.created", response: initialResponse });
   writeSseEvent(res, { type: "response.in_progress", response: initialResponse });
 
-  // Add output item
+  // Start empty because content_part.added owns appending content index 0.
   const outputItem = createAssistantOutputItem({
     id: outputItemId,
     text: "",
@@ -1068,7 +1038,7 @@ export async function handleOpenResponsesHttpRequest(
   writeSseEvent(res, {
     type: "response.output_item.added",
     output_index: 0,
-    item: outputItem,
+    item: { ...outputItem, content: [] },
   });
 
   // Add content part
@@ -1080,7 +1050,7 @@ export async function handleOpenResponsesHttpRequest(
     part: { type: "output_text", text: "" },
   });
 
-  unsubscribe = onAgentEvent((evt) => {
+  unsubscribe = onAgentEventForRun(responseId, (evt) => {
     if (evt.runId !== responseId) {
       return;
     }
@@ -1213,18 +1183,14 @@ export async function handleOpenResponsesHttpRequest(
         return;
       }
 
-      if (isFailedOpenAiAgentRun(result)) {
+      if (readAgentRunTerminalOutcome(result) === "failed") {
         terminalLifecyclePhase = "error";
         rememberResponseSession();
         finalizeFailedResponse(
-          createResponseResource({
-            id: responseId,
-            model,
-            status: "failed",
-            output: [],
-            error: { code: "api_error", message: "internal error" },
-            usage: extractUsageFromResult(result),
-          }),
+          createFailedResponse(
+            { code: "api_error", message: "internal error" },
+            extractUsageFromResult(result),
+          ),
         );
         return;
       }
@@ -1251,24 +1217,15 @@ export async function handleOpenResponsesHttpRequest(
         toolChoiceConstraint &&
         !isToolChoiceConstraintSatisfied({ constraint: toolChoiceConstraint, pendingToolCalls })
       ) {
-        const failed = createResponseResource({
-          id: responseId,
-          model,
-          status: "failed",
-          output: [],
-          error: {
+        const failed = createFailedResponse(
+          {
             code: "api_error",
             message: resolveUnsatisfiedToolChoiceMessage(toolChoiceConstraint),
           },
-          usage: finalUsage ?? createEmptyUsage(),
-        });
-        closed = true;
-        stopWatchingDisconnect();
-        unsubscribe();
+          finalUsage ?? createEmptyUsage(),
+        );
         rememberResponseSession();
-        writeSseEvent(res, { type: "response.failed", response: failed });
-        writeDone(res);
-        res.end();
+        finalizeFailedResponse(failed);
         return;
       }
 
@@ -1358,7 +1315,7 @@ export async function handleOpenResponsesHttpRequest(
         }
 
         const completedResponse = createResponseResource({
-          id: responseId,
+          ...responseIdentity,
           model,
           status: "completed",
           output: [completedItem, ...functionCallItems],
@@ -1404,46 +1361,31 @@ export async function handleOpenResponsesHttpRequest(
 
       finalUsage = finalUsage ?? createEmptyUsage();
       if (isClientToolNameConflictError(err)) {
-        const errorResponse = createResponseResource({
-          id: responseId,
-          model,
-          status: "failed",
-          output: [],
-          error: { code: "invalid_request_error", message: "invalid tool configuration" },
-          usage: finalUsage,
-        });
-
-        finalizeFailedResponse(errorResponse);
+        finalizeFailedResponse(
+          createFailedResponse(
+            { code: "invalid_request_error", message: "invalid tool configuration" },
+            finalUsage,
+          ),
+        );
         return;
       }
-      const errorResponse = createResponseResource({
-        id: responseId,
-        model,
-        status: "failed",
-        output: [],
-        error: { code: "api_error", message: "internal error" },
-        usage: finalUsage,
-      });
-
       const mapped = resolveOpenAiCompatError(err);
       if (mapped) {
-        const mappedResponse = createResponseResource({
-          id: responseId,
-          model,
-          status: "failed",
-          output: [],
-          error: {
+        const mappedResponse = createFailedResponse(
+          {
             code: mapped.error.type,
             message: mapped.error.message,
           },
-          usage: finalUsage,
-        });
+          finalUsage,
+        );
         rememberResponseSession();
         finalizeFailedResponse(mappedResponse);
         return;
       }
       rememberResponseSession();
-      finalizeFailedResponse(errorResponse);
+      finalizeFailedResponse(
+        createFailedResponse({ code: "api_error", message: "internal error" }, finalUsage),
+      );
     } finally {
       releaseAgentRootWork?.();
       // Existing provider terminals must not be replaced or emitted twice.

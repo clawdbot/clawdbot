@@ -3,6 +3,9 @@ import type { messagingApi } from "@line/bot-sdk";
 import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import {
+  adaptMessagePresentationForChannel,
+  normalizeMessagePresentation,
+  renderMessagePresentationFallbackText,
   resolveMessagePresentationButtonAction,
   resolveMessagePresentationOptionAction,
   type MessagePresentation,
@@ -16,15 +19,14 @@ import {
 import { Type } from "typebox";
 import { hasLineCredentials } from "./account-helpers.js";
 import { resolveLineAccount } from "./accounts.js";
-import { messageAction, postbackAction, uriAction, type Action } from "./actions.js";
+import { messageAction, postbackAction, type Action } from "./actions.js";
+import { createActionCard } from "./flex-templates/basic-cards.js";
 import {
-  createActionCard,
-  createAgendaCard,
   createAppleTvRemoteCard,
   createDeviceControlCard,
-  createEventCard,
   createMediaPlayerCard,
-} from "./flex-templates.js";
+} from "./flex-templates/media-control-cards.js";
+import { createAgendaCard, createEventCard } from "./flex-templates/schedule-cards.js";
 import type { LineQuickReplyItem, LineRichCard } from "./types.js";
 
 const nonempty = () => Type.String({ minLength: 1 });
@@ -129,17 +131,18 @@ export const LINE_PRESENTATION_CAPABILITIES = {
 
 function toLineAction(button: MessagePresentationButton): Action | undefined {
   const normalized = resolveMessagePresentationButtonAction(button);
+  const { label } = button;
   if (normalized?.type === "command") {
-    return messageAction(button.label, normalized.command);
+    return { type: "message", label, text: normalized.command };
   }
   if (normalized?.type === "callback") {
-    return postbackAction(button.label, normalized.value, button.label);
+    return { type: "postback", label, data: normalized.value, displayText: label };
   }
   if (normalized?.type === "url") {
-    return uriAction(button.label, normalized.url);
+    return { type: "uri", label, uri: normalized.url };
   }
   if (normalized?.type === "web-app" && normalized.url) {
-    return uriAction(button.label, normalized.url);
+    return { type: "uri", label, uri: normalized.url };
   }
   return undefined;
 }
@@ -194,6 +197,46 @@ export function renderLinePresentation(
       ...payload.channelData,
       line: { ...lineData, ...(flexMessage ? { flexMessage } : {}), quickReplyItems },
     },
+  };
+}
+
+/**
+ * Resolve a reply's portable presentation into LINE-native controls.
+ *
+ * Core runs the presentation renderer inside the outbound send pipeline only, so
+ * replies the plugin delivers itself reach delivery with the controls still
+ * portable. Preparing them here keeps both LINE delivery paths on one rendering.
+ */
+export function prepareLineReplyPayload(payload: ReplyPayload): ReplyPayload {
+  const presentation = normalizeMessagePresentation(payload.presentation);
+  if (!presentation) {
+    return payload;
+  }
+  const { presentation: _presentation, presentationTextMode, ...rest } = payload;
+  // "fallback" text already renders these controls as prose; native ones replace it.
+  const usesFallbackText = presentationTextMode === "fallback";
+  const rendered = renderLinePresentation(
+    usesFallbackText ? { ...rest, text: undefined } : rest,
+    adaptMessagePresentationForChannel({
+      presentation,
+      capabilities: LINE_PRESENTATION_CAPABILITIES,
+    }),
+  );
+  if (rendered) {
+    // Only a Flex body replaces the fallback prose. A select-only presentation
+    // renders quick replies without one, so dropping the text there would send
+    // bare option labels and lose the question they answer.
+    const renderedLine = isRecord(rendered.channelData?.line) ? rendered.channelData.line : {};
+    return usesFallbackText && renderedLine.flexMessage === undefined
+      ? { ...rendered, text: rest.text }
+      : rendered;
+  }
+  // LINE renders these controls natively or not at all; keep their labels visible.
+  return {
+    ...rest,
+    text: usesFallbackText
+      ? (rest.text ?? renderMessagePresentationFallbackText({ presentation }))
+      : renderMessagePresentationFallbackText({ text: rest.text, presentation }),
   };
 }
 

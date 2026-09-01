@@ -6,13 +6,17 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startQaGatewayChild, startQaMockOpenAiServer } from "../../../../extensions/qa-lab/api.js";
+import {
+  createQaGatewayChild,
+  startQaMockOpenAiServer,
+} from "../../../../extensions/qa-lab/api.js";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import {
   approvePairing,
@@ -36,12 +40,13 @@ const COMMAND = "codex.exec-server.stdio.v1";
 const MODEL = "mock-openai/gpt-5.6-luna";
 const SESSION_KEY = "agent:qa:codex-node-exec-server-proof";
 const SUCCESS_MARKER = "CODEX_NODE_EXEC_SUCCESS_PROOF";
+const REPEAT_MARKER = "CODEX_NODE_EXEC_REPEAT_PROOF";
 const DISCONNECT_MARKER = "CODEX_NODE_EXEC_DISCONNECT_PROOF";
 const RECOVERY_MARKER = "CODEX_NODE_EXEC_FRESH_ATTEMPT_PROOF";
 const REQUEST_TIMEOUT_MS = 120_000;
 const WAIT_OPTIONS = { timeout: 60_000, interval: 100 };
 
-type ProofScenario = "success" | "disconnect" | "recovery";
+type ProofScenario = "success" | "repeat" | "disconnect" | "recovery";
 type PendingPluginApproval = {
   id: string;
   request?: { pluginId?: string; allowedDecisions?: string[]; title?: string };
@@ -96,6 +101,9 @@ function readProofScenario(body: Record<string, unknown>): ProofScenario | undef
     if (userText.includes(RECOVERY_MARKER)) {
       return "recovery";
     }
+    if (userText.includes(REPEAT_MARKER)) {
+      return "repeat";
+    }
     if (userText.includes(DISCONNECT_MARKER)) {
       return "disconnect";
     }
@@ -111,6 +119,12 @@ function proofShellCommand(params: {
   baseUrl: string;
   nodeHome: string;
 }): string {
+  const evidenceFile =
+    params.scenario === "recovery"
+      ? "codex-node-recovery.json"
+      : params.scenario === "repeat"
+        ? "codex-node-repeat.json"
+        : "codex-node-proof.json";
   const script =
     params.scenario === "disconnect"
       ? [
@@ -133,7 +147,7 @@ function proofShellCommand(params: {
           `privateHome:process.env.HOME!==${JSON.stringify(params.nodeHome)},`,
           'privateCodexHome:Boolean(process.env.CODEX_HOME&&process.env.CODEX_HOME.startsWith(process.env.HOME+"/")),',
           "http:await response.text(),pid:process.pid};",
-          `fs.writeFileSync(${JSON.stringify(params.scenario === "recovery" ? "codex-node-recovery.json" : "codex-node-proof.json")},JSON.stringify(evidence));`,
+          `fs.writeFileSync(${JSON.stringify(evidenceFile)},JSON.stringify(evidence));`,
           `console.log(${JSON.stringify(params.scenario === "recovery" ? "CODEX_NODE_FRESH_ATTEMPT_OK" : "CODEX_NODE_PROCESS_OK")});`,
           "}).catch(error=>{console.error(error.message);process.exitCode=1});",
         ].join("");
@@ -307,7 +321,7 @@ async function connectApprovalReviewer(gateway: GatewayHandle): Promise<GatewayC
 
 async function resolveNextApproval(
   reviewer: GatewayClient,
-  decision: "allow-once" | "deny",
+  decision: "allow-once" | "allow-always" | "deny",
   context: { gateway: GatewayHandle; runId: string },
 ): Promise<PendingPluginApproval> {
   let pending: PendingPluginApproval;
@@ -353,10 +367,13 @@ async function resolveNextApproval(
       { cause: error },
     );
   }
-  expect(pending.request).toMatchObject({
+  expect(
+    pending.request,
+    `unexpected Codex approval request: ${JSON.stringify(pending.request)}`,
+  ).toMatchObject({
     pluginId: "codex",
-    title: "Run Codex execution on paired device",
-    allowedDecisions: ["allow-once", "deny"],
+    title: "Run Codex on this node placement",
+    allowedDecisions: ["allow-once", "allow-always", "deny"],
   });
   await reviewer.request("plugin.approval.resolve", { id: pending.id, decision });
   return pending;
@@ -432,15 +449,16 @@ describe("Codex paired-device exec-server carrier", () => {
 
       let provider: ProofProvider | undefined;
       let published: PublishedWireWorkspace | undefined;
+      const gatewayOwner = createQaGatewayChild();
       let gateway: GatewayHandle | undefined;
       let requester: GatewayClient | undefined;
       let reviewer: GatewayClient | undefined;
       let node: CapturedChild | undefined;
 
-      try {
+      const runProof = async () => {
         provider = await startProofProvider(nodeHome);
         published = await createPublishedWireWorkspace(path.join(root, "workspace"));
-        gateway = await startQaGatewayChild({
+        gateway = await gatewayOwner.start({
           repoRoot: process.cwd(),
           command: {
             executablePath: process.execPath,
@@ -651,7 +669,7 @@ describe("Codex paired-device exec-server carrier", () => {
         ).rejects.toThrow();
 
         const allowed = await startTurn(requester, SUCCESS_MARKER);
-        await resolveNextApproval(reviewer, "allow-once", { gateway, runId: allowed.runId });
+        await resolveNextApproval(reviewer, "allow-always", { gateway, runId: allowed.runId });
         await expectSuccessfulTurn({ reviewer, gateway, node, provider, runId: allowed.runId });
         expect(provider.visibleTools).toContain("exec_command");
         expect(provider.httpHits).toBe(1);
@@ -679,8 +697,23 @@ describe("Codex paired-device exec-server carrier", () => {
         const children = await nodeChildCommands(nodePid!);
         expect(children.filter((command) => /(?:^|\s)worker(?:\s|$)/u.test(command))).toEqual([]);
 
+        const repeated = await startTurn(requester, REPEAT_MARKER);
+        await expectSuccessfulTurn({ reviewer, gateway, node, provider, runId: repeated.runId });
+        await vi.waitFor(async () => {
+          expect(
+            await readRemoteEvidence<Record<string, unknown>>(
+              path.join(localWorkspace!, "codex-node-repeat.json"),
+            ),
+          ).toMatchObject(expectedEvidence);
+        }, WAIT_OPTIONS);
+        expect(
+          (await reviewer.request<PendingPluginApproval[]>("plugin.approval.list", {})).filter(
+            (approval) => approval.request?.pluginId === "codex",
+          ),
+        ).toEqual([]);
+        expect(provider.httpHits).toBe(2);
+
         const interrupted = await startTurn(requester, DISCONNECT_MARKER);
-        await resolveNextApproval(reviewer, "allow-once", { gateway, runId: interrupted.runId });
         let interruptedProcess: number;
         try {
           interruptedProcess = await vi.waitFor(
@@ -728,7 +761,7 @@ describe("Codex paired-device exec-server carrier", () => {
         expect(interruptedOutcome).toMatchObject({ status: "error" });
         if (
           typeof interruptedOutcome.error !== "string" ||
-          !/paired.*device disconnected.*fresh attempt/iu.test(interruptedOutcome.error)
+          !/execution node disconnected.*fresh attempt/iu.test(interruptedOutcome.error)
         ) {
           throw new Error(
             `Codex node disconnect omitted actionable guidance: ${JSON.stringify({
@@ -743,7 +776,7 @@ describe("Codex paired-device exec-server carrier", () => {
           );
         }
         expect(interruptedOutcome.error).toEqual(
-          expect.stringMatching(/paired.*device disconnected.*fresh attempt/iu),
+          expect.stringMatching(/execution node disconnected.*fresh attempt/iu),
         );
         await vi.waitFor(
           () => expect(processIsAlive(interruptedProcess)).toBe(false),
@@ -772,6 +805,48 @@ describe("Codex paired-device exec-server carrier", () => {
           });
           expect(reconnected?.commands).toContain(COMMAND);
         }, WAIT_OPTIONS);
+        const reconnectPlacement = (await gateway.call("sessions.describe", {
+          key: SESSION_KEY,
+        })) as {
+          session?: {
+            placement?: {
+              generation?: number;
+              environmentId?: string;
+              activeOwnerEpoch?: number;
+            };
+          };
+        };
+        const moveSource = reconnectPlacement.session?.placement;
+        expect(moveSource).toMatchObject({
+          generation: expect.any(Number),
+          environmentId: expect.any(String),
+          activeOwnerEpoch: expect.any(Number),
+        });
+        if (
+          typeof moveSource?.generation !== "number" ||
+          typeof moveSource.environmentId !== "string" ||
+          typeof moveSource.activeOwnerEpoch !== "number"
+        ) {
+          throw new Error("reconnected Codex placement omitted exact move-source facts");
+        }
+        await gateway.call(
+          "sessions.move",
+          {
+            key: SESSION_KEY,
+            expected: {
+              generation: moveSource.generation,
+              environmentId: moveSource.environmentId,
+              ownerEpoch: moveSource.activeOwnerEpoch,
+            },
+            target: { kind: "gateway" },
+          },
+          { timeoutMs: REQUEST_TIMEOUT_MS },
+        );
+        await gateway.call(
+          "sessions.dispatch",
+          { key: SESSION_KEY, deviceId: nodeId },
+          { timeoutMs: REQUEST_TIMEOUT_MS },
+        );
         const recovered = await startTurn(requester, RECOVERY_MARKER);
         expect(recovered.runId).not.toBe(interrupted.runId);
         await resolveNextApproval(reviewer, "allow-once", { gateway, runId: recovered.runId });
@@ -788,7 +863,7 @@ describe("Codex paired-device exec-server carrier", () => {
             ),
           ).toMatchObject({ pid: interruptedProcess });
         }, WAIT_OPTIONS);
-        expect(provider.httpHits).toBe(2);
+        expect(provider.httpHits).toBe(3);
         console.info(
           JSON.stringify({
             proof: "codex-paired-device-remote-exec",
@@ -796,6 +871,7 @@ describe("Codex paired-device exec-server carrier", () => {
             nodeId,
             deniedRunId: denied.runId,
             allowedRunId: allowed.runId,
+            repeatedRunId: repeated.runId,
             interruptedRunId: interrupted.runId,
             recoveredRunId: recovered.runId,
             inferenceProvider: "deterministic mock",
@@ -808,17 +884,19 @@ describe("Codex paired-device exec-server carrier", () => {
             workspaceReconciled: true,
             disconnectTerminal: true,
             freshReconnect: true,
+            placementMoveInvalidatedStandingGrant: true,
             workerChildLaunched: false,
           }),
         );
-      } finally {
+      };
+      await runQaGatewayFixture(runProof, async () => {
         const connectionCleanup = await Promise.allSettled([
           stopChild(node),
           requester?.stopAndWait({ timeoutMs: 5_000 }) ?? Promise.resolve(),
           reviewer?.stopAndWait({ timeoutMs: 5_000 }) ?? Promise.resolve(),
         ]);
         const resourceCleanup = await Promise.allSettled([
-          gateway?.stop() ?? Promise.resolve(),
+          stopQaGatewayFixture(gatewayOwner),
           published ? closeWireServer(published.server) : Promise.resolve(),
           provider?.stop() ?? Promise.resolve(),
         ]);
@@ -828,7 +906,7 @@ describe("Codex paired-device exec-server carrier", () => {
         if (failures.length) {
           throw new AggregateError(failures, "Codex paired-node proof cleanup failed");
         }
-      }
+      });
     },
   );
 });

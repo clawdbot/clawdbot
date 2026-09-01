@@ -1,225 +1,66 @@
 # Bundled Hooks
 
-This directory contains hooks that ship with OpenClaw. These hooks are automatically discovered and can be enabled/disabled via CLI or configuration.
+These internal hooks ship with OpenClaw. They subscribe to colon-separated events
+such as `command:new`; they are not typed plugin hooks or HTTP webhooks.
 
-## Available Hooks
+For setup, custom hook authoring, event payloads, discovery precedence, and
+troubleshooting, use the canonical [Hooks guide](https://docs.openclaw.ai/automation/hooks).
+For command flags and Gateway targeting, see the
+[hooks CLI reference](https://docs.openclaw.ai/cli/hooks).
 
-### 💾 session-memory
+## Available hooks
 
-Automatically saves session context to memory when you issue `/new` or `/reset`.
+| Hook                                                   | Events                                               | Effect                                                                                                                       |
+| ------------------------------------------------------ | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| [boot-md](boot-md/HOOK.md)                             | `gateway:startup`                                    | Runs `BOOT.md` once per distinct configured agent workspace during startup.                                                  |
+| [bootstrap-extra-files](bootstrap-extra-files/HOOK.md) | `agent:bootstrap`                                    | Appends recognized workspace bootstrap files from configured glob/path patterns; writes no files.                            |
+| [command-logger](command-logger/HOOK.md)               | `command`                                            | Appends command metadata as JSON lines to `<state-dir>/logs/commands.log`.                                                   |
+| [compaction-notifier](compaction-notifier/HOOK.md)     | `session:compact:before`, `session:compact:after`    | Adds chat notices when compaction starts and finishes.                                                                       |
+| [session-memory](session-memory/HOOK.md)               | `command:new`, `command:reset`, `session:auto-reset` | Saves recent conversation excerpts in `<workspace>/memory/`; timestamp filenames by default, optional model-generated slugs. |
 
-**Events**: `command:new`, `command:reset`
-**What it does**: Creates a dated memory file with LLM-generated slug based on conversation content.
-**Output**: `<workspace>/memory/YYYY-MM-DD-slug.md` (defaults to `~/.openclaw/workspace`)
+The default state directory is `~/.openclaw`. Agent workspaces can differ; see
+[Agent workspace](https://docs.openclaw.ai/concepts/agent-workspace).
 
-**Enable**:
+## Enable and verify
+
+Discovery and eligibility do not prove that a running Gateway has loaded a hook.
+Enable the hook in the config used by that Gateway, then reload its handlers by
+restarting the Gateway:
 
 ```bash
-openclaw hooks enable session-memory
+openclaw hooks info command-logger
 ```
-
-### 📎 bootstrap-extra-files
-
-Injects extra bootstrap files (for example monorepo `AGENTS.md`) during prompt assembly.
-
-**Events**: `agent:bootstrap`
-**What it does**: Expands configured workspace glob/path patterns and appends matching bootstrap files to injected context.
-**Output**: No files written; context is modified in-memory only.
-
-**Enable**:
-
-```bash
-openclaw hooks enable bootstrap-extra-files
-```
-
-### 📝 command-logger
-
-Logs emitted command events to a centralized audit file. Current core actions are `/new`, `/reset`, and `/stop`.
-
-**Events**: `command` (all emitted command actions)
-**What it does**: Appends JSONL entries to command log file.
-**Output**: `~/.openclaw/logs/commands.log`
-
-**Enable**:
 
 ```bash
 openclaw hooks enable command-logger
 ```
 
-### 🚀 boot-md
-
-Runs `BOOT.md` whenever the gateway starts (after channels start).
-
-**Events**: `gateway:startup`
-**What it does**: Executes BOOT.md instructions via the agent runner.
-**Output**: Whatever the instructions request (for example, outbound messages).
-
-**Enable**:
+For an installed Gateway service:
 
 ```bash
-openclaw hooks enable boot-md
+openclaw gateway restart
 ```
 
-## Hook Structure
+For a foreground development Gateway, stop and restart the process you own. Do
+not kill unrelated Gateway processes. Send `/new` or `/reset` in a test
+conversation, then check `<state-dir>/logs/commands.log` for that command.
 
-Each hook is a directory containing:
+With multiple agents, use `--agent <id>` to select the discovery workspace. The
+persisted hook entry is global, not an agent-specific enablement setting.
 
-- **HOOK.md**: Metadata and documentation in YAML frontmatter + Markdown
-- **handler.ts**: The hook handler function (default export)
+## Source layout
 
-Example structure:
+Each bundled hook has a `HOOK.md` descriptor and a `handler.ts` default export.
+`metadata.openclaw.events` declares subscriptions. Custom hooks can also use
+`handler.js`, `index.ts`, or `index.js`; see the
+[authoring guide](https://docs.openclaw.ai/automation/hooks#writing-hooks) for a
+complete example without repository-private imports.
 
-```
-session-memory/
-├── HOOK.md          # Metadata + docs
-└── handler.ts       # Handler implementation
-```
+Keep descriptors, handlers, and the public guide aligned when changing a
+contract. Do not duplicate the event catalog or config reference in this README.
 
-## HOOK.md Format
-
-```yaml
----
-name: my-hook
-description: "Short description"
-homepage: https://docs.openclaw.ai/automation/hooks#my-hook
-metadata:
-  { "openclaw": { "emoji": "🔗", "events": ["command:new"], "requires": { "bins": ["node"] } } }
----
-# Hook Title
-
-Documentation goes here...
-```
-
-### Metadata Fields
-
-- **emoji**: Display emoji for CLI
-- **events**: Array of events to listen for (e.g., `["command:new", "session:start"]`)
-- **requires**: Optional requirements
-  - **bins**: Required binaries on PATH
-  - **anyBins**: At least one of these binaries must be present
-  - **env**: Required environment variables
-  - **config**: Required config paths (e.g., `["workspace.dir"]`)
-  - **os**: Required platforms (e.g., `["darwin", "linux"]`)
-- **install**: Installation methods (for bundled hooks: `[{"id":"bundled","kind":"bundled"}]`)
-
-## Creating Custom Hooks
-
-To create your own hooks, place them in:
-
-- **Workspace hooks**: `<workspace>/hooks/` (highest precedence)
-- **Managed hooks**: `~/.openclaw/hooks/` (shared across workspaces)
-
-Custom hooks follow the same structure as bundled hooks.
-
-## Managing Hooks
-
-List all hooks:
-
-```bash
-openclaw hooks list
-```
-
-Show hook details:
-
-```bash
-openclaw hooks info session-memory
-```
-
-Check hook status:
-
-```bash
-openclaw hooks check
-```
-
-Enable/disable:
-
-```bash
-openclaw hooks enable session-memory
-openclaw hooks disable command-logger
-```
-
-## Configuration
-
-Hooks can be configured in `~/.openclaw/openclaw.json`:
-
-```json
-{
-  "hooks": {
-    "internal": {
-      "enabled": true,
-      "entries": {
-        "session-memory": {
-          "enabled": true
-        },
-        "command-logger": {
-          "enabled": false
-        }
-      }
-    }
-  }
-}
-```
-
-## Event Types
-
-Currently supported events:
-
-- **command**: All command events
-- **command:new**: `/new` command specifically
-- **command:reset**: `/reset` command
-- **command:stop**: `/stop` command
-- **agent:bootstrap**: Before workspace bootstrap files are injected
-- **gateway:startup**: Gateway startup (after channels start)
-- **session:compact:before**: Pre-compaction snapshot before the embedded runner rewrites session context
-- **session:compact:after**: Post-compaction snapshot after the runner replaces session context
-- **message:received**: Inbound channel message accepted for dispatch
-- **message:sent**: Outbound channel message delivered (canonical payload only)
-
-## Handler API
-
-Hook handlers receive an `InternalHookEvent` object:
-
-```typescript
-interface InternalHookEvent {
-  type: "command" | "session" | "agent" | "gateway" | "message";
-  action: string; // e.g., 'new', 'reset', 'stop', 'compact:before', 'received', 'sent'
-  sessionKey: string;
-  context: Record<string, unknown>;
-  timestamp: Date;
-  messages: string[]; // Push messages here to send to user
-}
-```
-
-Example handler:
-
-```typescript
-import type { HookHandler } from "../../src/hooks/hooks.js";
-
-const myHandler: HookHandler = async (event) => {
-  if (event.type !== "command" || event.action !== "new") {
-    return;
-  }
-
-  // Your logic here
-  console.log("New command triggered!");
-
-  // Optionally send message to user
-  event.messages.push("✨ Hook executed!");
-};
-
-export default myHandler;
-```
-
-## Testing
-
-Test your hooks by:
-
-1. Place hook in workspace hooks directory
-2. Restart gateway: `pkill -9 -f 'openclaw.*gateway' && pnpm openclaw gateway`
-3. Enable the hook: `openclaw hooks enable my-hook`
-4. Trigger the event (e.g., send `/new` command)
-5. Check gateway logs for hook execution
-
-## Documentation
-
-Full documentation: https://docs.openclaw.ai/automation/hooks
+Internal handlers run as trusted code in the Gateway process, not in the agent
+sandbox. Keep work bounded, handle sensitive message content carefully, and use
+[typed plugin hooks and services](https://docs.openclaw.ai/plugins/hooks) for
+policy decisions or long-lived resources. Pushing to `event.messages` produces a
+reply only on the replyable event paths documented in the Hooks guide.

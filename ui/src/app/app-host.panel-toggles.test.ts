@@ -1,7 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { TERMINAL_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
+import {
+  HOME_PANEL_TOGGLE_EVENT,
+  TERMINAL_PANEL_TOGGLE_EVENT,
+} from "../components/panel-toggle-contract.ts";
 import { takeSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import {
@@ -66,6 +69,48 @@ afterEach(() => {
 });
 
 describe("OpenClaw shell panel toggles", () => {
+  it("opens the Home dock from its keyboard chord only when the gateway allows it", () => {
+    const shell = configureTerminalShell(createLazyElementSpec("assistant panel"));
+    const gateway = (
+      shell.runtime.context as unknown as {
+        gateway: {
+          connection?: { gatewayUrl: string };
+          snapshot: { hello: { auth: object; features: { methods: string[] } } };
+        };
+      }
+    ).gateway;
+    gateway.connection = { gatewayUrl: "ws://127.0.0.1:1" };
+    const homeToggle = vi.fn();
+    window.addEventListener(HOME_PANEL_TOGGLE_EVENT, homeToggle);
+    const chord = () =>
+      new KeyboardEvent("keydown", {
+        key: "h",
+        code: "KeyH",
+        metaKey: true,
+        shiftKey: true,
+        cancelable: true,
+      });
+    try {
+      const owner = chromeOwner(shell);
+      const denied = chord();
+      owner.handleDocumentKeydown(denied);
+      expect(homeToggle).not.toHaveBeenCalled();
+      expect(denied.defaultPrevented).toBe(false);
+
+      gateway.snapshot.hello.features.methods = ["chat.history", "chat.send"];
+      gateway.snapshot.hello.auth = {
+        role: "operator",
+        scopes: ["operator.read", "operator.write"],
+      };
+      const allowed = chord();
+      owner.handleDocumentKeydown(allowed);
+      expect(homeToggle).toHaveBeenCalledOnce();
+      expect(allowed.defaultPrevented).toBe(true);
+    } finally {
+      window.removeEventListener(HOME_PANEL_TOGGLE_EVENT, homeToggle);
+    }
+  });
+
   it("buffers panel toggle events until the active chat pane mounts", () => {
     const terminalElement = createLazyElementSpec("session terminal panel");
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellPanelToggleState;

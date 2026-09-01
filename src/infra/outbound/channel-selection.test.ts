@@ -95,6 +95,7 @@ function makePlugin(params: {
   id: string;
   accountIds?: string[];
   resolveAccount?: (accountId: string) => unknown;
+  inspectAccount?: (accountId: string) => unknown;
   isEnabled?: (account: unknown) => boolean;
   isConfigured?: (account: unknown) => boolean | Promise<boolean>;
 }) {
@@ -104,6 +105,12 @@ function makePlugin(params: {
       listAccountIds: () => params.accountIds ?? ["default"],
       resolveAccount: (_cfg: unknown, accountId: string) =>
         params.resolveAccount ? params.resolveAccount(accountId) : {},
+      ...(params.inspectAccount
+        ? {
+            inspectAccount: (_cfg: unknown, accountId: string) =>
+              params.inspectAccount?.(accountId),
+          }
+        : {}),
       ...(params.isEnabled ? { isEnabled: params.isEnabled } : {}),
       ...(params.isConfigured ? { isConfigured: params.isConfigured } : {}),
     },
@@ -321,6 +328,161 @@ describe("resolveMessageChannelSelection", () => {
     const selection = await expectResolvedSelection({ cfg: {} as never });
 
     expect(selection.plugin).toBe(plugin);
+  });
+
+  it.each([
+    {
+      name: "trusts inspected configured state without materializing credentials",
+      accountResolution: "read_only" as const,
+      accountIds: ["default"],
+      inspect: async () => ({ enabled: true, configured: true }),
+      resolve: () => {
+        throw new Error("unresolved SecretRef");
+      },
+      configured: (): boolean => false,
+      expected: true,
+      inspectCalls: ["default"],
+      resolveCalls: 0,
+    },
+    {
+      name: "defaults omitted inspection enablement without calling runtime hooks",
+      accountResolution: "read_only" as const,
+      accountIds: ["default"],
+      inspect: () => ({ configured: true }),
+      resolve: () => {
+        throw new Error("strict resolution must not run");
+      },
+      enabled: () => {
+        throw new Error("runtime enablement must not receive inspection metadata");
+      },
+      configured: (): boolean => true,
+      expected: true,
+      inspectCalls: ["default"],
+      resolveCalls: 0,
+    },
+    {
+      name: "keeps omitted inspection configuration unknown without calling runtime hooks",
+      accountResolution: "read_only" as const,
+      accountIds: ["default"],
+      inspect: () => ({ enabled: true }),
+      resolve: () => {
+        throw new Error("strict resolution must not run");
+      },
+      configured: (): boolean => true,
+      expected: false,
+      inspectCalls: ["default"],
+      resolveCalls: 0,
+    },
+    {
+      name: "keeps strict selection on runtime account callbacks",
+      accountResolution: undefined,
+      accountIds: ["default"],
+      inspect: () => ({ enabled: true, configured: true }),
+      resolve: () => ({ enabled: true }),
+      configured: () => false,
+      expected: false,
+      inspectCalls: [],
+      resolveCalls: 1,
+    },
+    {
+      name: "excludes inspected disabled and unconfigured accounts",
+      accountResolution: "read_only" as const,
+      accountIds: ["disabled", "missing"],
+      inspect: (accountId: string) =>
+        accountId === "disabled"
+          ? { enabled: false, configured: true }
+          : { enabled: true, configured: false },
+      resolve: () => {
+        throw new Error("strict resolution must not run");
+      },
+      configured: () => {
+        throw new Error("strict configured check must not run");
+      },
+      expected: false,
+      inspectCalls: ["disabled", "missing"],
+      resolveCalls: 0,
+    },
+    {
+      name: "finds an inspected secondary account after a disabled default",
+      accountResolution: "read_only" as const,
+      accountIds: ["default", "secondary"],
+      inspect: (accountId: string) => ({
+        enabled: accountId === "secondary",
+        configured: true,
+      }),
+      resolve: () => {
+        throw new Error("strict resolution must not run");
+      },
+      configured: () => {
+        throw new Error("strict configured check must not run");
+      },
+      expected: true,
+      inspectCalls: ["default", "secondary"],
+      resolveCalls: 0,
+    },
+    {
+      name: "contains read-only inspector failures to their account",
+      accountResolution: "read_only" as const,
+      accountIds: ["default"],
+      inspect: () => {
+        throw new Error("inspection failed");
+      },
+      resolve: () => {
+        throw new Error("strict resolution must not run");
+      },
+      configured: () => true,
+      expected: false,
+      inspectCalls: ["default"],
+      resolveCalls: 0,
+    },
+    {
+      name: "retains strict callback fallback for plugins without an inspector",
+      accountResolution: "read_only" as const,
+      accountIds: ["default"],
+      inspect: undefined,
+      resolve: () => ({ enabled: true, configured: false }),
+      configured: () => true,
+      expected: true,
+      inspectCalls: [],
+      resolveCalls: 1,
+    },
+  ])("$name", async (scenario) => {
+    const inspectAccount = scenario.inspect ? vi.fn(scenario.inspect) : undefined;
+    const resolveAccount = vi.fn(scenario.resolve);
+    const isConfigured = vi.fn(scenario.configured);
+    const plugin = makePlugin({
+      id: "delta",
+      accountIds: scenario.accountIds,
+      inspectAccount,
+      resolveAccount,
+      isEnabled:
+        scenario.enabled ?? ((account) => (account as { enabled?: boolean }).enabled !== false),
+      isConfigured,
+    });
+    mocks.listChannelPlugins.mockReturnValue([plugin]);
+    const params = {
+      cfg: {} as never,
+      ...(scenario.accountResolution ? { accountResolution: scenario.accountResolution } : {}),
+    };
+
+    if (scenario.expected) {
+      await expect(expectResolvedSelection(params)).resolves.toMatchObject({
+        channel: "delta",
+        configured: ["delta"],
+        source: "single-configured",
+      });
+    } else {
+      await expect(expectResolvedSelection(params)).rejects.toThrow(
+        "Channel is required (no configured channels detected).",
+      );
+    }
+    expect(inspectAccount?.mock.calls.map(([accountId]) => accountId) ?? []).toEqual(
+      scenario.inspectCalls,
+    );
+    expect(resolveAccount).toHaveBeenCalledTimes(scenario.resolveCalls);
+    if (scenario.accountResolution === "read_only" && scenario.inspect) {
+      expect(isConfigured).not.toHaveBeenCalled();
+    }
   });
 
   it("allows bootstrap while checking explicit and fallback channels", async () => {

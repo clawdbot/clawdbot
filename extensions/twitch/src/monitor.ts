@@ -7,16 +7,17 @@
 
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { createChannelInboundEnvelopeBuilder } from "openclaw/plugin-sdk/channel-inbound";
-import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { checkTwitchAccessControl } from "./access-control.js";
 import { getOrCreateClientManager } from "./client-manager-registry.js";
 import { getTwitchRuntime } from "./runtime.js";
+import { sendMessageTwitchInternal } from "./send.js";
 import { createTwitchIngress } from "./twitch-ingress.js";
 import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
-import { stripMarkdownForTwitch } from "./utils/markdown.js";
 
 type TwitchRuntimeEnv = {
   log?: (message: string) => void;
@@ -26,6 +27,7 @@ type TwitchRuntimeEnv = {
 type TwitchMonitorOptions = {
   account: TwitchAccountConfig;
   accountId: string;
+  channelRuntime: ReturnType<typeof getTwitchRuntime>["channel"];
   config: unknown; // OpenClawConfig
   runtime: TwitchRuntimeEnv;
   abortSignal: AbortSignal;
@@ -36,7 +38,6 @@ type TwitchMonitorResult = {
   stop: () => Promise<void>;
 };
 
-type TwitchCoreRuntime = ReturnType<typeof getTwitchRuntime>;
 type TwitchIngressLifecycle = Parameters<Parameters<typeof createTwitchIngress>[0]["deliver"]>[1];
 
 /**
@@ -48,14 +49,22 @@ async function processTwitchMessage(params: {
   accountId: string;
   config: unknown;
   runtime: TwitchRuntimeEnv;
-  core: TwitchCoreRuntime;
+  channelRuntime: TwitchMonitorOptions["channelRuntime"];
   turnAdoptionLifecycle: TwitchIngressLifecycle;
   statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 }): Promise<void> {
-  const { message, account, accountId, config, runtime, core, turnAdoptionLifecycle, statusSink } =
-    params;
+  const {
+    message,
+    account,
+    accountId,
+    config,
+    runtime,
+    channelRuntime,
+    turnAdoptionLifecycle,
+    statusSink,
+  } = params;
   const cfg = config as OpenClawConfig;
-  const route = core.channel.routing.resolveAgentRoute({
+  const route = channelRuntime.routing.resolveAgentRoute({
     cfg,
     channel: "twitch",
     accountId,
@@ -67,6 +76,7 @@ async function processTwitchMessage(params: {
   const exactAccess = await checkTwitchAccessControl({
     message,
     account,
+    accountId,
     botUsername: normalizeLowercaseStringOrEmpty(account.username),
     contextBinding: {
       agentId: route.agentId,
@@ -79,7 +89,7 @@ async function processTwitchMessage(params: {
     return;
   }
 
-  await core.channel.inbound.run({
+  await channelRuntime.inbound.run({
     channel: "twitch",
     accountId,
     raw: message,
@@ -102,7 +112,7 @@ async function processTwitchMessage(params: {
           timestamp: input.timestamp,
           body: input.rawText,
         });
-        const ctxPayload = core.channel.inbound.buildContext({
+        const ctxPayload = channelRuntime.inbound.buildContext({
           channelIngress: exactAccess.channelIngress,
           channel: "twitch",
           accountId,
@@ -135,11 +145,6 @@ async function processTwitchMessage(params: {
             commandBody: input.textForCommands,
           },
         });
-        const tableMode = core.channel.text.resolveMarkdownTableMode({
-          cfg,
-          channel: "twitch",
-          accountId,
-        });
         return {
           cfg,
           channel: "twitch",
@@ -157,7 +162,6 @@ async function processTwitchMessage(params: {
                 account,
                 accountId,
                 config,
-                tableMode,
                 runtime,
               });
             },
@@ -191,7 +195,6 @@ async function deliverTwitchReply(params: {
   account: TwitchAccountConfig;
   accountId: string;
   config: unknown;
-  tableMode: MarkdownTableMode;
   runtime: TwitchRuntimeEnv;
 }): Promise<{ visibleReplySent: boolean }> {
   const { payload, channel, account, accountId, config, runtime } = params;
@@ -204,23 +207,17 @@ async function deliverTwitchReply(params: {
       debug: (msg) => runtime.log?.(msg),
     });
 
-    if (!payload.text) {
+    const result = await sendMessageTwitchInternal({
+      channel,
+      text: [payload.text, ...resolveOutboundMediaUrls(payload)].filter(Boolean).join(" "),
+      cfg: config as OpenClawConfig,
+      account,
+      accountId,
+      clientManager,
+    });
+    if (result.outcome === "not_sent") {
       runtime.error?.(`No text to send in reply payload`);
       return { visibleReplySent: false };
-    }
-    const textToSend = stripMarkdownForTwitch(payload.text);
-    if (!textToSend) {
-      return { visibleReplySent: false };
-    }
-    const result = await clientManager.sendMessage(
-      account,
-      channel,
-      textToSend,
-      config as Parameters<typeof clientManager.sendMessage>[3],
-      accountId,
-    );
-    if (!result.ok) {
-      throw new Error(result.error ?? "Send failed");
     }
     return { visibleReplySent: true };
   } catch (err) {
@@ -237,7 +234,7 @@ async function deliverTwitchReply(params: {
 export async function monitorTwitchProvider(
   options: TwitchMonitorOptions,
 ): Promise<TwitchMonitorResult> {
-  const { account, accountId, config, runtime, abortSignal, statusSink } = options;
+  const { account, accountId, channelRuntime, config, runtime, abortSignal, statusSink } = options;
 
   const core = getTwitchRuntime();
   let stopped = false;
@@ -283,6 +280,7 @@ export async function monitorTwitchProvider(
       const access = await checkTwitchAccessControl({
         message,
         account,
+        accountId,
         botUsername,
       });
 
@@ -298,7 +296,7 @@ export async function monitorTwitchProvider(
         accountId,
         config,
         runtime,
-        core,
+        channelRuntime,
         turnAdoptionLifecycle,
         statusSink,
       });

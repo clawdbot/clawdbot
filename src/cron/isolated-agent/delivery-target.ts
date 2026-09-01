@@ -16,6 +16,7 @@ import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-sessi
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { resolveCronStoredDeliveryContext } from "../delivery-context.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 
@@ -38,6 +39,18 @@ export type DeliveryTargetResolution =
       mode: "explicit" | "implicit";
       error: Error;
     };
+
+/**
+ * Returns whether a delivery resolution names an external channel route.
+ * Registration is intentionally irrelevant: an unavailable plugin route still
+ * owes delivery. Only webchat/Control UI and an absent route are satisfied by
+ * the durable session commit alone.
+ */
+export function resolvedDeliveryTargetsExternalChannel(
+  resolution: DeliveryTargetResolution,
+): boolean {
+  return resolution.channel !== undefined && resolution.channel !== INTERNAL_MESSAGE_CHANNEL;
+}
 
 const targetsRuntimeLoader = createLazyImportLoader(
   () => import("../../infra/outbound/targets.runtime.js"),

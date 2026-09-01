@@ -5,10 +5,10 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 ### Current App Surface
 
 - [x] New 4-step onboarding flow
-- [x] Connect tab with `Setup Code` + `Manual` modes
+- [x] Gateway setup through QR/setup codes or manual connection fields
 - [x] Encrypted persistence for gateway setup/auth state
 - [x] Chat UI restyled
-- [x] Settings UI restyled and de-duplicated (gateway controls moved to Connect)
+- [x] Settings UI with gateway connection controls under **Gateway**
 - [x] QR code scanning in onboarding
 - [x] Performance improvements
 - [x] Streaming support in chat UI
@@ -17,8 +17,8 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - [x] Push notifications for gateway/chat status updates
 - [x] Security hardening (biometric lock, token handling, safer defaults)
 - [x] Authenticated background presence beacons
-- [x] Voice tab full functionality
-- [x] Foreground on-device Voice Wake with Gateway-synced wake words
+- [x] Chat composer dictation, voice-note recording, and continuous Talk
+- [x] Foreground on-device Voice Wake with Gateway-synced wake words, configured in **Settings → Voice**
 - [x] Skill Workshop settings can filter proposals, inspect proposal content, and apply/reject/quarantine drafts through Gateway RPCs
 - [x] Skills settings can search installed skills, enable or disable them, and install Gateway-verified ClawHub releases
 - [x] Per-app language selection for translated resources follows Android system settings and persistence
@@ -28,6 +28,10 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 ## Open in Android Studio
 
 - Open the folder `apps/android`.
+
+## Session colors
+
+Long-press a row on the Sessions screen and choose **Color**, then select a swatch or **Default** to clear it. The eight colors are red, blue, green, yellow, purple, orange, pink, and cyan. Colored sessions show a narrow leading stripe in the sidebar and Sessions screen, plus a dot beside the open chat title. Unset colors add no indicator. Colors sync through the Gateway and remain visible in the local session cache while offline.
 
 ## Wear OS companion
 
@@ -162,7 +166,7 @@ cd apps/android
 ./gradlew :app:lintPlayDebug :app:lintThirdPartyDebug :wear:lintDebug :wear-shared:lintDebug
 ```
 
-`gradlew` auto-detects the Android SDK at `~/Library/Android/sdk` (macOS default) if `ANDROID_SDK_ROOT` / `ANDROID_HOME` are unset.
+Set `ANDROID_HOME` to your installed Android SDK, or set `sdk.dir` in the local `apps/android/local.properties` file. For Homebrew's command-line tools, the SDK may be at `/opt/homebrew/share/android-commandlinetools`.
 
 ## Macrobenchmark (Startup + Frame Timing)
 
@@ -233,7 +237,7 @@ Terminal B (USB tunnel):
 adb reverse tcp:18789 tcp:18789
 ```
 
-Then in app **Connect → Manual**:
+Then in app **Settings → Gateway → Manual Gateway**:
 
 - Host: `127.0.0.1`
 - Port: `18789`
@@ -257,8 +261,8 @@ pnpm openclaw gateway --port 18789 --verbose
 
 2) In the Android app:
 
-- Open the **Connect** tab.
-- Use **Setup Code** or **Manual** mode to connect.
+- Open **Settings → Gateway**.
+- Scan a QR code, paste a **Setup code**, or use the **Manual Gateway** fields to connect.
 
 3) Approve pairing (on the gateway machine):
 

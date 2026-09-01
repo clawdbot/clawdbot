@@ -299,6 +299,7 @@ export async function startGatewayWithClient(params: {
       port,
       client,
       server: {
+        startupSettled: startedServer.startupSettled,
         close: async (...args: Parameters<typeof startedServer.close>) => {
           try {
             await startedServer.close(...args);

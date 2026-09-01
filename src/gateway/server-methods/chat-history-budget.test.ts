@@ -35,11 +35,12 @@ describe("replaceOversizedChatHistoryMessages", () => {
   });
 
   it("replaces an oversized message and preserves its cursor metadata", () => {
+    const transcriptPosition = { source: "snapshot", rawSeq: 9 };
     const last = {
       role: "assistant",
       timestamp: 1,
       content: [{ type: "text", text: "y".repeat(4000) }],
-      __openclaw: { id: "abc", seq: 7, turnBoundary: true },
+      __openclaw: { id: "abc", seq: 7, turnBoundary: true, transcriptPosition },
     };
     const result = replaceOversizedChatHistoryMessages({
       messages: [last],
@@ -51,6 +52,7 @@ describe("replaceOversizedChatHistoryMessages", () => {
       (result.messages[0] as { __openclaw?: { turnBoundary?: boolean } })["__openclaw"]
         ?.turnBoundary,
     ).toBe(true);
+    expect(result.messages[0]).toMatchObject({ __openclaw: { transcriptPosition } });
     // The placeholder is a new object, not the oversized original.
     expect(result.messages[0]).not.toBe(last);
   });

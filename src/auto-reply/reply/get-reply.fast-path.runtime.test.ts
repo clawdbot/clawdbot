@@ -1,6 +1,8 @@
 // Tests runtime-loaded fast-path command behavior for get-reply.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   createReplyRuntimeMocks,
   createTempHomeHarness,
@@ -47,6 +49,7 @@ describe("getReplyFromConfig fast-path runtime", () => {
   beforeEach(async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     resetReplyRuntimeMocks(agentMocks);
+    setActivePluginRegistry(createTestRegistry([]));
   });
 
   afterEach(() => {

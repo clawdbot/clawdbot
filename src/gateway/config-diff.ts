@@ -41,7 +41,10 @@ function projectGatewayReloadBoundaries(config: OpenClawConfig) {
     mcp: { apps: config.mcp?.apps },
     agents: {
       ownership: config.agents?.ownership,
-      defaults: { sessionStore: config.agents?.defaults?.sessionStore },
+      defaults: {
+        mediaMaxMb: config.agents?.defaults?.mediaMaxMb,
+        sessionStore: config.agents?.defaults?.sessionStore,
+      },
       entries: config.agents?.entries,
     },
     session: {

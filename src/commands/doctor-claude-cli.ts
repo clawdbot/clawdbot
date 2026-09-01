@@ -1,5 +1,7 @@
 /** Doctor health note for Claude CLI binary, auth, and workspace/project directories. */
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   resolvePrimaryStringValue,
@@ -11,16 +13,7 @@ import {
   resolveAgentWorkspaceDir,
   tryResolveDefaultAgentId,
 } from "../agents/agent-scope-config.js";
-import { CLAUDE_CLI_PROFILE_ID } from "../agents/auth-profiles/constants.js";
-import { resolveAuthStorePathForDisplay } from "../agents/auth-profiles/paths.js";
-import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
-import type {
-  AuthProfileStore,
-  OAuthCredential,
-  TokenCredential,
-} from "../agents/auth-profiles/types.js";
 import { resolveCliBackendConfig } from "../agents/cli-backends.js";
-import { readClaudeCliCredentialsCached } from "../agents/cli-credentials.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude-cli-project-dir.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -29,17 +22,29 @@ import { shortenHomePath } from "../utils.js";
 
 const CLAUDE_CLI_PROVIDER = "claude-cli";
 
-type ClaudeCliReadableCredential =
-  | Pick<OAuthCredential, "type" | "expires">
-  | Pick<TokenCredential, "type" | "expires">
-  | { type: "api_key_helper" };
-
 type ClaudeCliDirHealth = "present" | "missing" | "not_directory" | "unreadable" | "readonly";
 
+function isClaudeCliAuthenticated(commandPath: string, env: NodeJS.ProcessEnv): boolean {
+  const result = spawnSync(commandPath, ["auth", "status", "--json"], {
+    encoding: "utf8",
+    env,
+    maxBuffer: 64 * 1024,
+    timeout: 3_000,
+    windowsHide: true,
+  });
+  if (result.error || result.status !== 0) {
+    return false;
+  }
+  try {
+    const parsed: unknown = JSON.parse(result.stdout);
+    return isRecord(parsed) && parsed.loggedIn === true;
+  } catch {
+    return false;
+  }
+}
+
 function usesClaudeCliModelSelection(cfg: OpenClawConfig): boolean {
-  const primary = resolvePrimaryStringValue(
-    cfg.agents?.defaults?.model as string | { primary?: string; fallbacks?: string[] } | undefined,
-  );
+  const primary = resolvePrimaryStringValue(cfg.agents?.defaults?.model);
   if (normalizeOptionalLowercaseString(primary)?.startsWith(`${CLAUDE_CLI_PROVIDER}/`)) {
     return true;
   }
@@ -70,32 +75,12 @@ function probeDirectoryHealth(dirPath: string): ClaudeCliDirHealth {
   return "present";
 }
 
-function formatWorkspaceProblemLine(
-  workspaceDir: string,
+function formatDirectoryProblemLine(
+  dirPath: string,
   health: ClaudeCliDirHealth,
-  agentId?: string,
+  label: string,
 ): string | null {
-  const label = agentId ? `Agent ${agentId} workspace` : "Workspace";
-  const display = shortenHomePath(workspaceDir);
-  if (health === "present" || health === "missing") {
-    return null;
-  }
-  if (health === "not_directory") {
-    return `- ${label}: ${display} exists but is not a directory.`;
-  }
-  if (health === "unreadable") {
-    return `- ${label}: ${display} is not readable by this user.`;
-  }
-  return `- ${label}: ${display} is not writable by this user.`;
-}
-
-function formatProjectDirProblemLine(
-  projectDir: string,
-  health: ClaudeCliDirHealth,
-  agentId?: string,
-): string | null {
-  const label = agentId ? `Agent ${agentId} Claude project dir` : "Claude project dir";
-  const display = shortenHomePath(projectDir);
+  const display = shortenHomePath(dirPath);
   if (health === "present" || health === "missing") {
     return null;
   }
@@ -170,8 +155,7 @@ function resolveClaudeCliWorkspaceTargets(params: {
 /**
  * Emits Claude CLI health diagnostics for every agent currently routed through the CLI backend.
  *
- * The optional deps let tests inject auth stores, PATH resolution, and workspace roots without
- * touching the user's real Claude credentials or filesystem.
+ * The optional deps let tests inject the CLI status probe, PATH resolution, and workspace roots.
  */
 export function noteClaudeCliHealth(
   cfg: OpenClawConfig,
@@ -179,8 +163,7 @@ export function noteClaudeCliHealth(
     noteFn?: typeof note;
     env?: NodeJS.ProcessEnv;
     homeDir?: string;
-    store?: AuthProfileStore;
-    readClaudeCliCredentials?: () => ClaudeCliReadableCredential | null;
+    isAuthenticated?: (commandPath: string, env: NodeJS.ProcessEnv) => boolean;
     resolveCommandPath?: (command: string, env?: NodeJS.ProcessEnv) => string | undefined;
     workspaceDir?: string;
   },
@@ -196,11 +179,6 @@ export function noteClaudeCliHealth(
     return;
   }
 
-  const store = deps?.store ?? ensureAuthProfileStore(undefined, { allowKeychainPrompt: false });
-  const readClaudeCliCredentials =
-    deps?.readClaudeCliCredentials ??
-    (() => readClaudeCliCredentialsCached({ allowKeychainPrompt: false }));
-  const credential = readClaudeCliCredentials();
   const backend = resolveCliBackendConfig(CLAUDE_CLI_PROVIDER, cfg);
   const command = backend?.config.command ?? "claude";
   const resolveCommandPath =
@@ -208,8 +186,13 @@ export function noteClaudeCliHealth(
     ((rawCommand: string, nextEnv?: NodeJS.ProcessEnv) =>
       resolveExecutablePath(rawCommand, { env: nextEnv }));
   const commandPath = resolveCommandPath(command, env);
-  const authStorePath = resolveAuthStorePathForDisplay();
-  const storedProfile = store.profiles[CLAUDE_CLI_PROFILE_ID];
+  const authEnv = { ...env };
+  for (const envName of backend?.config.clearEnv ?? []) {
+    delete authEnv[envName];
+  }
+  const authenticated = commandPath
+    ? (deps?.isAuthenticated ?? isClaudeCliAuthenticated)(commandPath, authEnv)
+    : false;
   const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const showAgentLabels =
     workspaceTargets.length > 1 ||
@@ -225,39 +208,17 @@ export function noteClaudeCliHealth(
     );
   }
 
-  if (!credential) {
-    lines.push("- Headless Claude auth: unavailable without interactive prompting.");
-    fixHints.push(
-      `- Fix: run ${formatCliCommand("claude auth login")}, then ${formatCliCommand(
-        "openclaw models auth login --provider anthropic --method cli --set-default",
-      )}.`,
-    );
-  }
-
-  if (!storedProfile && credential?.type !== "api_key_helper") {
-    lines.push(`- OpenClaw auth profile: missing (${CLAUDE_CLI_PROFILE_ID}) in ${authStorePath}.`);
-    fixHints.push(
-      `- Fix: run ${formatCliCommand(
-        "openclaw models auth login --provider anthropic --method cli --set-default",
-      )}.`,
-    );
-  } else if (storedProfile && storedProfile.provider !== CLAUDE_CLI_PROVIDER) {
-    lines.push(
-      `- OpenClaw auth profile: ${CLAUDE_CLI_PROFILE_ID} is wired to provider "${storedProfile.provider}" instead of "${CLAUDE_CLI_PROVIDER}".`,
-    );
-    fixHints.push(
-      `- Fix: rerun ${formatCliCommand(
-        "openclaw models auth login --provider anthropic --method cli --set-default",
-      )} to rewrite the profile cleanly.`,
-    );
+  if (commandPath && !authenticated) {
+    lines.push("- Claude auth: not logged in.");
+    fixHints.push(`- Fix: run ${formatCliCommand("claude auth login")}.`);
   }
 
   for (const target of workspaceTargets) {
     const agentLabel = showAgentLabels ? target.agentId : undefined;
-    const workspaceProblem = formatWorkspaceProblemLine(
+    const workspaceProblem = formatDirectoryProblemLine(
       target.workspaceDir,
       target.workspaceHealth,
-      agentLabel,
+      agentLabel ? `Agent ${agentLabel} workspace` : "Workspace",
     );
     if (workspaceProblem) {
       lines.push(workspaceProblem);
@@ -274,10 +235,10 @@ export function noteClaudeCliHealth(
       );
     }
 
-    const projectDirProblem = formatProjectDirProblemLine(
+    const projectDirProblem = formatDirectoryProblemLine(
       target.projectDir,
       target.projectDirHealth,
-      agentLabel,
+      agentLabel ? `Agent ${agentLabel} Claude project dir` : "Claude project dir",
     );
     if (projectDirProblem) {
       lines.push(projectDirProblem);

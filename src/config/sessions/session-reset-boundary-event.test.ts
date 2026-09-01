@@ -18,7 +18,36 @@ function message(params: {
 }
 
 describe("reset boundary planning", () => {
-  it("selects repeated reset tails from the current logical window", async () => {
+  it.each(["new", "reset"] as const)(
+    "cuts prior conversation context for explicit %s boundaries",
+    async (reason) => {
+      const user = message({
+        id: "prior-user",
+        parentId: null,
+        role: "user",
+        content: "discarded",
+        second: 1,
+      });
+      const assistant = message({
+        id: "prior-assistant",
+        parentId: user.id,
+        role: "assistant",
+        content: "discarded answer",
+        second: 2,
+      });
+
+      const event = buildSessionResetBoundaryEvent({
+        context: "clear",
+        events: [user, assistant],
+        reason,
+      });
+
+      expect(event).toMatchObject({ parentId: assistant.id, reason });
+      expect(event).not.toHaveProperty("firstKeptEntryId");
+    },
+  );
+
+  it("retains repeated reset tails for automatic recovery", async () => {
     const oldUser = message({
       id: "old-user",
       parentId: null,
@@ -58,12 +87,14 @@ describe("reset boundary planning", () => {
 
     expect(
       buildSessionResetBoundaryEvent({
+        context: "preserve-tail",
         events: [oldUser, oldAssistant, keptUser, keptAssistant, firstReset],
         reason: "reset",
       }),
     ).toMatchObject({
       parentId: firstReset.id,
       firstKeptEntryId: keptUser.id,
+      reason: "reset",
     });
   });
 
@@ -101,12 +132,14 @@ describe("reset boundary planning", () => {
 
     expect(
       buildSessionResetBoundaryEvent({
+        context: "preserve-tail",
         events: [discarded, keptUser, keptAssistant, compaction],
-        reason: "new",
+        reason: "daily",
       }),
     ).toMatchObject({
       parentId: compaction.id,
       firstKeptEntryId: keptUser.id,
+      reason: "daily",
     });
   });
 });

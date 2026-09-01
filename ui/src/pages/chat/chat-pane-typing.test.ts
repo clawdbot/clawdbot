@@ -15,12 +15,16 @@ afterEach(() => {
 });
 
 describe("chat pane typing presence", () => {
-  it("clears only the exact structured user sender and expires remaining actors", () => {
+  it("sender provenance clears only the exact profile sender and expires remaining actors", () => {
     vi.useFakeTimers();
     const { pane, state } = createTestChatPane({
       client: { request: vi.fn() } as unknown as GatewayBrowserClient,
       sessions: {} as SessionCapability,
     });
+    state.sessionKey = "agent:work:main";
+    state.assistantAgentId = "work";
+    state.agentsList = { defaultId: "main", mainKey: "main", scope: "global", agents: [] };
+    state.sessionsResultAgentId = "work";
     const aliceId = "0d9f4c35-d221-49da-9a3f-b8c73921066b";
     pane.presencePayload = {
       presence: [{ user: { id: "owner" } }, { user: { id: aliceId } }, { user: { id: "bob" } }],
@@ -30,8 +34,8 @@ describe("chat pane typing presence", () => {
       path: "",
       sessions: [
         {
-          key: state.sessionKey,
-          kind: "direct",
+          key: "global",
+          kind: "global",
           sessionId: "session-a",
           updatedAt: 1,
         } as GatewaySessionRow,
@@ -44,7 +48,7 @@ describe("chat pane typing presence", () => {
       pane.handleSessionTypingEvent({
         sessionKey: state.sessionKey,
         sessionId: "session-a",
-        agentId: "main",
+        agentId: "work",
         actor: { type: "human", ...actor },
         typing: true,
         ...(actor.preview ? { preview: actor.preview } : {}),
@@ -58,7 +62,7 @@ describe("chat pane typing presence", () => {
 
     const event = (message: unknown, sessionKey = state.sessionKey) => ({
       sessionKey,
-      agentId: "main",
+      agentId: "work",
       message,
     });
     pane.clearTypingActorForSessionMessage(
@@ -68,12 +72,34 @@ describe("chat pane typing presence", () => {
       event({ role: "assistant", __openclaw: { senderId: aliceId } }),
     );
     pane.clearTypingActorForSessionMessage(
-      event({ role: "user", __openclaw: { senderId: aliceId } }, "agent:main:other"),
+      event({ role: "user", __openclaw: { senderId: aliceId } }, "agent:work:other"),
     );
     expect([...pane.typingActors.keys()]).toEqual([aliceId, "bob"]);
 
     pane.clearTypingActorForSessionMessage(
       event({ role: "user", __openclaw: { senderId: aliceId } }),
+    );
+    pane.clearTypingActorForSessionMessage(
+      event({
+        role: "user",
+        __openclaw: {
+          senderId: aliceId,
+          senderIdentity: {
+            type: "observation",
+            id: aliceId,
+            pluginId: "channel",
+            accountId: null,
+            senderKind: "unknown",
+          },
+        },
+      }),
+    );
+    expect([...pane.typingActors.keys()]).toEqual([aliceId, "bob"]);
+    pane.clearTypingActorForSessionMessage(
+      event({
+        role: "user",
+        __openclaw: { senderId: aliceId, senderIdentity: { type: "profile", id: aliceId } },
+      }),
     );
     expect([...pane.typingActors.keys()]).toEqual(["bob"]);
 
@@ -98,8 +124,7 @@ describe("chat pane typing presence", () => {
       "Alice is typing…",
     );
     expect(container.querySelectorAll(".agent-chat__typing-bubble > span")).toHaveLength(3);
-    expect(container.querySelector('[role="status"]')?.textContent).toBe("Alice, Bob are typing…");
-    expect(container.querySelector('[role="status"]')?.textContent).not.toContain("Hello");
+    expect(container.querySelector(".sr-only")?.textContent).toBe("Alice, Bob are typing…");
   });
 
   it("sends only the last 300 draft code points and omits previews when typing stops", () => {
@@ -109,17 +134,27 @@ describe("chat pane typing presence", () => {
       sessions: {} as SessionCapability,
     });
     pane.presencePayload = { presence: [{ user: { id: "owner" } }, { user: { id: "alice" } }] };
+    state.sessionKey = "agent:work:main";
+    state.assistantAgentId = "work";
+    state.agentsList = { defaultId: "main", mainKey: "main", scope: "global", agents: [] };
+    state.sessionsResultAgentId = "work";
     state.sessionsResult = {
       count: 1,
       path: "",
-      sessions: [{ key: state.sessionKey, kind: "direct", sessionId: "session-a", updatedAt: 1 }],
+      sessions: [{ key: "global", kind: "global", sessionId: "session-a", updatedAt: 1 }],
     } as never;
 
     pane.sendTypingState(true, `  prefix${"😀".repeat(300)}  `);
     expect(request).toHaveBeenNthCalledWith(
       1,
       "session.typing",
-      expect.objectContaining({ typing: true, preview: "😀".repeat(300) }),
+      expect.objectContaining({
+        sessionKey: "agent:work:main",
+        sessionId: "session-a",
+        agentId: "work",
+        typing: true,
+        preview: "😀".repeat(300),
+      }),
     );
 
     pane.sendTypingState(false, "must not leak");

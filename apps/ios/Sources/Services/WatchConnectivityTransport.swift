@@ -4,32 +4,7 @@ import OSLog
 
 private struct WatchConnectivityTransportCallbacks {
     var statusUpdateHandler: (@Sendable (WatchMessagingStatus) -> Void)?
-    var replyHandler: (@Sendable (WatchQuickReplyEvent) -> Void)?
-    var execApprovalResolveHandler: (@Sendable (WatchExecApprovalResolveEvent) -> Void)?
-    var execApprovalSnapshotRequestHandler: (@Sendable (WatchExecApprovalSnapshotRequestEvent) -> Void)?
-    var appSnapshotRequestHandler: (@Sendable (WatchAppSnapshotRequestEvent) -> Void)?
-    var appCommandHandler: (@Sendable (WatchAppCommandEvent) -> Void)?
-}
-
-private func sendReachableWatchMessage(_ payload: [String: Any], with session: WCSession) async throws {
-    // WatchConnectivity replies arrive on its own queue. Keep this continuation explicitly
-    // nonisolated so Swift 6 does not inherit a caller actor (for example MainActor) into the
-    // Objective-C callback boundary and trap on the reply callback executor check.
-    try await withCheckedThrowingContinuation(isolation: nil) { (continuation: CheckedContinuation<Void, Error>) in
-        session.sendMessage(
-            payload,
-            replyHandler: { reply in
-                do {
-                    try requireAcceptedWatchMessageReply(reply)
-                    continuation.resume(returning: ())
-                } catch {
-                    continuation.resume(throwing: error)
-                }
-            },
-            errorHandler: { error in
-                continuation.resume(throwing: error)
-            })
-    }
+    var inboundEventHandler: (@Sendable (WatchMessagingInboundEvent) -> Void)?
 }
 
 final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
@@ -78,26 +53,8 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
         self.updateCallbacks { $0.statusUpdateHandler = handler }
     }
 
-    func setReplyHandler(_ handler: (@Sendable (WatchQuickReplyEvent) -> Void)?) {
-        self.updateCallbacks { $0.replyHandler = handler }
-    }
-
-    func setExecApprovalResolveHandler(_ handler: (@Sendable (WatchExecApprovalResolveEvent) -> Void)?) {
-        self.updateCallbacks { $0.execApprovalResolveHandler = handler }
-    }
-
-    func setExecApprovalSnapshotRequestHandler(
-        _ handler: (@Sendable (WatchExecApprovalSnapshotRequestEvent) -> Void)?)
-    {
-        self.updateCallbacks { $0.execApprovalSnapshotRequestHandler = handler }
-    }
-
-    func setAppSnapshotRequestHandler(_ handler: (@Sendable (WatchAppSnapshotRequestEvent) -> Void)?) {
-        self.updateCallbacks { $0.appSnapshotRequestHandler = handler }
-    }
-
-    func setAppCommandHandler(_ handler: (@Sendable (WatchAppCommandEvent) -> Void)?) {
-        self.updateCallbacks { $0.appCommandHandler = handler }
+    func setInboundEventHandler(_ handler: (@Sendable (WatchMessagingInboundEvent) -> Void)?) {
+        self.updateCallbacks { $0.inboundEventHandler = handler }
     }
 
     func activate() {
@@ -219,44 +176,8 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
         }
     }
 
-    private func emitReply(_ event: WatchQuickReplyEvent) {
-        guard let handler = self.callbacksSnapshot().replyHandler else {
-            return
-        }
-        Task { @MainActor in
-            handler(event)
-        }
-    }
-
-    private func emitExecApprovalResolve(_ event: WatchExecApprovalResolveEvent) {
-        guard let handler = self.callbacksSnapshot().execApprovalResolveHandler else {
-            return
-        }
-        Task { @MainActor in
-            handler(event)
-        }
-    }
-
-    private func emitExecApprovalSnapshotRequest(_ event: WatchExecApprovalSnapshotRequestEvent) {
-        guard let handler = self.callbacksSnapshot().execApprovalSnapshotRequestHandler else {
-            return
-        }
-        Task { @MainActor in
-            handler(event)
-        }
-    }
-
-    private func emitAppSnapshotRequest(_ event: WatchAppSnapshotRequestEvent) {
-        guard let handler = self.callbacksSnapshot().appSnapshotRequestHandler else {
-            return
-        }
-        Task { @MainActor in
-            handler(event)
-        }
-    }
-
-    private func emitAppCommand(_ event: WatchAppCommandEvent) {
-        guard let handler = self.callbacksSnapshot().appCommandHandler else {
+    private func emitInboundEvent(_ event: WatchMessagingInboundEvent) {
+        guard let handler = self.callbacksSnapshot().inboundEventHandler else {
             return
         }
         Task { @MainActor in
@@ -333,36 +254,11 @@ extension WatchConnectivityTransport: WCSessionDelegate {
     func session(_: WCSession, didReceiveMessage message: [String: Any]) {
         let type = (message["type"] as? String) ?? "unknown"
         GatewayDiagnostics.log("watch messaging: didReceiveMessage type=\(type)")
-        if let event = WatchMessagingPayloadCodec.parseQuickReplyPayload(message, transport: "sendMessage") {
-            self.emitReply(event)
-            return
-        }
-        if let event = WatchMessagingPayloadCodec.parseExecApprovalResolvePayload(
+        if let event = WatchMessagingPayloadCodec.parseInboundPayload(
             message,
             transport: "sendMessage")
         {
-            self.emitExecApprovalResolve(event)
-            return
-        }
-        if let event = WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload(
-            message,
-            transport: "sendMessage")
-        {
-            self.emitExecApprovalSnapshotRequest(event)
-            return
-        }
-        if let event = WatchMessagingPayloadCodec.parseAppSnapshotRequestPayload(
-            message,
-            transport: "sendMessage")
-        {
-            self.emitAppSnapshotRequest(event)
-            return
-        }
-        if let event = WatchMessagingPayloadCodec.parseAppCommandPayload(
-            message,
-            transport: "sendMessage")
-        {
-            self.emitAppCommand(event)
+            self.emitInboundEvent(event)
         }
     }
 
@@ -373,82 +269,25 @@ extension WatchConnectivityTransport: WCSessionDelegate {
     {
         let type = (message["type"] as? String) ?? "unknown"
         GatewayDiagnostics.log("watch messaging: didReceiveMessageWithReply type=\(type)")
-        if let event = WatchMessagingPayloadCodec.parseQuickReplyPayload(message, transport: "sendMessage") {
-            replyHandler(["ok": true])
-            self.emitReply(event)
-            return
-        }
-        if let event = WatchMessagingPayloadCodec.parseExecApprovalResolvePayload(
+        guard let event = WatchMessagingPayloadCodec.parseInboundPayload(
             message,
             transport: "sendMessage")
-        {
-            replyHandler(["ok": true])
-            self.emitExecApprovalResolve(event)
+        else {
+            replyHandler(["ok": false, "error": "unsupported_payload"])
             return
         }
-        if let event = WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload(
-            message,
-            transport: "sendMessage")
-        {
-            replyHandler(["ok": true])
-            self.emitExecApprovalSnapshotRequest(event)
-            return
-        }
-        if let event = WatchMessagingPayloadCodec.parseAppSnapshotRequestPayload(
-            message,
-            transport: "sendMessage")
-        {
-            replyHandler(["ok": true])
-            self.emitAppSnapshotRequest(event)
-            return
-        }
-        if let event = WatchMessagingPayloadCodec.parseAppCommandPayload(
-            message,
-            transport: "sendMessage")
-        {
-            replyHandler(["ok": true])
-            self.emitAppCommand(event)
-            return
-        }
-        replyHandler(["ok": false, "error": "unsupported_payload"])
+        replyHandler(["ok": true])
+        self.emitInboundEvent(event)
     }
 
     func session(_: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
         let type = (userInfo["type"] as? String) ?? "unknown"
         GatewayDiagnostics.log("watch messaging: didReceiveUserInfo type=\(type)")
-        if let event = WatchMessagingPayloadCodec.parseQuickReplyPayload(
+        if let event = WatchMessagingPayloadCodec.parseInboundPayload(
             userInfo,
             transport: "transferUserInfo")
         {
-            self.emitReply(event)
-            return
-        }
-        if let event = WatchMessagingPayloadCodec.parseExecApprovalResolvePayload(
-            userInfo,
-            transport: "transferUserInfo")
-        {
-            self.emitExecApprovalResolve(event)
-            return
-        }
-        if let event = WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload(
-            userInfo,
-            transport: "transferUserInfo")
-        {
-            self.emitExecApprovalSnapshotRequest(event)
-            return
-        }
-        if let event = WatchMessagingPayloadCodec.parseAppSnapshotRequestPayload(
-            userInfo,
-            transport: "transferUserInfo")
-        {
-            self.emitAppSnapshotRequest(event)
-            return
-        }
-        if let event = WatchMessagingPayloadCodec.parseAppCommandPayload(
-            userInfo,
-            transport: "transferUserInfo")
-        {
-            self.emitAppCommand(event)
+            self.emitInboundEvent(event)
         }
     }
 

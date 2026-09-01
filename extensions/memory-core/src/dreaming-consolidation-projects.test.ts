@@ -118,7 +118,9 @@ describe("memory consolidation project groups", () => {
     expect(promptedGroups).toEqual([[null], ["github.com/acme/alpha"], ["github.com/acme/beta"]]);
     expect(
       subagent.run.mock.calls.every(
-        ([options]) => (options as { disableTools?: boolean }).disableTools === true,
+        ([options]) =>
+          (options as { disableTools?: boolean; promptMode?: string }).disableTools === true &&
+          (options as { promptMode?: string }).promptMode === "minimal",
       ),
     ).toBe(true);
 

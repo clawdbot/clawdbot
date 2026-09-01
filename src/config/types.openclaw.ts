@@ -149,12 +149,6 @@ export type OpenClawConfig = {
   ui?: {
     /** Accent color for OpenClaw UI chrome (hex). */
     seamColor?: string;
-    assistant?: {
-      /** Assistant display name for UI surfaces. */
-      name?: string;
-      /** Assistant avatar (emoji, short text, or image URL/data URI). */
-      avatar?: string;
-    };
     /**
      * Operator display preferences. Canonical config home so agents can
      * change them through the approval gate and clients stay in sync; the
@@ -162,7 +156,19 @@ export type OpenClawConfig = {
      */
     prefs?: {
       /** Control UI theme. */
-      theme?: "claw" | "knot" | "dash" | "custom";
+      theme?:
+        | "claw"
+        | "knot"
+        | "dash"
+        | "absolutely"
+        | "tide"
+        | "beacon"
+        | "phosphor"
+        | "crt"
+        | "manuscript"
+        | "rose"
+        | "miami"
+        | "custom";
       /** Light/dark preference. */
       themeMode?: "light" | "dark" | "system";
       /** User-selected Control UI accent color (#RRGGBB). */
@@ -197,6 +203,8 @@ export type OpenClawConfig = {
   nodeHost?: NodeHostConfig;
   /** Agent definitions, defaults, bindings, and runtime policy. */
   agents?: AgentsConfig;
+  /** Global root for new managed worktrees. Defaults to <state-dir>/worktrees; accepts ~. */
+  worktreeRoot?: string;
   /** Tool exposure, policy, web/media tools, exec, and code-mode settings. */
   tools?: ToolsConfig;
   /** Legacy/direct agent bindings used by runtime resolution. */

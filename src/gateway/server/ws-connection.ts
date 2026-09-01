@@ -34,7 +34,9 @@ import {
   GATEWAY_STALE_INSTALL_CLOSE_REASON,
 } from "../stale-install.js";
 import { cleanupTalkConnection } from "../talk-session-registry.js";
+import { startWebSocketKeepalive } from "../websocket-keepalive.js";
 import { formatForLog, logWs } from "../ws-log.js";
+import { refreshClientPresence } from "./client-presence.js";
 import { getHealthVersion, incrementPresenceVersion } from "./health-state.js";
 import type { PreauthConnectionBudget } from "./preauth-connection-budget.js";
 import { broadcastPresenceSnapshot } from "./presence-events.js";
@@ -287,9 +289,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
     };
 
-    let pingTimer: ReturnType<typeof setInterval> | undefined;
+    let stopKeepalive: (() => void) | undefined;
     let cleanupWorkerConnection: (() => void) | undefined;
-    let awaitingPong = false;
     let retainClientUntilNodeDrain = false;
     const handshakeTimeoutMs = resolvePreauthHandshakeTimeoutMs({
       configuredTimeoutMs: params.preauthHandshakeTimeoutMs,
@@ -319,7 +320,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
       closed = true;
       clearTimeout(handshakeTimer);
-      clearInterval(pingTimer);
+      stopKeepalive?.();
       cleanupWorkerConnection?.();
       releasePreauthBudget();
       try {
@@ -358,6 +359,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
           limitBytes: MAX_BUFFERED_BYTES,
         });
         close(1008, connectionKind === "worker" ? "slow-consumer" : "slow consumer");
+        socket.terminate();
         return { kind: "unavailable" } as const;
       }
       let encoded: string;
@@ -388,14 +390,14 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
 
     socket.once("error", (err) => {
       if (isWsPayloadLimitError(err)) {
-        const workerPayload = connectionKind === "worker";
         logRejectedLargePayload({
           surface: client ? "gateway.ws.frame" : "gateway.ws.preauth",
-          limitBytes: workerPayload
-            ? WORKER_PROTOCOL_MAX_PAYLOAD_BYTES
-            : client
-              ? MAX_PAYLOAD_BYTES
-              : MAX_PREAUTH_PAYLOAD_BYTES,
+          limitBytes:
+            connectionKind === "worker"
+              ? WORKER_PROTOCOL_MAX_PAYLOAD_BYTES
+              : client
+                ? MAX_PAYLOAD_BYTES
+                : MAX_PREAUTH_PAYLOAD_BYTES,
           reason: client ? "ws_frame_limit" : "preauth_frame_limit",
         });
       }
@@ -408,7 +410,6 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     });
 
     socket.on("pong", () => {
-      awaitingPong = false;
       if (client?.presenceKey) {
         touchPresence(client.presenceKey);
       }
@@ -455,10 +456,9 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         ...closeMeta,
       };
       if (!client) {
-        const isExpectedStartupRetryClose = closeCause === GATEWAY_STARTUP_PENDING_CLOSE_CAUSE;
         const logFn =
           isNoisySwiftPmHelperClose(requestUserAgent, remoteAddr) ||
-          isExpectedStartupRetryClose ||
+          closeCause === GATEWAY_STARTUP_PENDING_CLOSE_CAUSE ||
           isExpectedLocalAppStartupAbort(code)
             ? logWsControl.debug
             : logWsControl.warn;
@@ -512,12 +512,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         context.terminalSessions?.handleDisconnect(connId);
         let currentDisconnectedNodeId: string | null = null;
         let disconnectedNodeHistory:
-          | {
-              nodeId: string;
-              connectedAtMs: number;
-              disconnectedAtMs: number;
-              pairingGeneration: string;
-            }
+          | Parameters<typeof recordPairedNodeDisconnection>[0]
           | undefined;
         if (client?.connect?.role === "node") {
           const nodeId = client.connect.device?.id ?? client.connect.client.id;
@@ -527,7 +522,10 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
               nodeId: nodeSession.nodeId,
               connectedAtMs: nodeSession.connectedAtMs,
               disconnectedAtMs: Date.now(),
-              pairingGeneration: nodeSession.pairingGeneration,
+              expectedPairingGeneration: {
+                nodeId: nodeSession.nodeId,
+                key: nodeSession.pairingGeneration,
+              },
             };
           }
           // Retire I/O now, but retain revocation until admitted lifecycle work drains.
@@ -543,30 +541,12 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
               }
             }
             currentDisconnectedNodeId = context.nodeRegistry.unregister(connId);
-            if (
-              disconnectedNodeHistory &&
-              currentDisconnectedNodeId === disconnectedNodeHistory.nodeId
-            ) {
-              try {
-                await recordPairedNodeDisconnection({
-                  nodeId: disconnectedNodeHistory.nodeId,
-                  connectedAtMs: disconnectedNodeHistory.connectedAtMs,
-                  disconnectedAtMs: disconnectedNodeHistory.disconnectedAtMs,
-                  expectedPairingGeneration: {
-                    nodeId: disconnectedNodeHistory.nodeId,
-                    key: disconnectedNodeHistory.pairingGeneration,
-                  },
-                });
-              } catch (error) {
-                logGateway.warn(
-                  `failed to record node disconnect for ${disconnectedNodeHistory.nodeId}: ${formatForLog(error)}`,
-                );
-              }
-            }
           } finally {
             retainClientUntilNodeDrain = false;
           }
         }
+        // Retire node-owned projections before history persistence yields; a reconnect
+        // may own this node id by the time the write finishes.
         if (
           client?.presenceKey &&
           (client.connect.role !== "node" || currentDisconnectedNodeId !== null)
@@ -581,6 +561,18 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
           removeRemoteNodeInfo(currentDisconnectedNodeId);
           context.nodeUnsubscribeAll(currentDisconnectedNodeId);
           clearNodeWakeState(currentDisconnectedNodeId);
+        }
+        if (
+          disconnectedNodeHistory &&
+          currentDisconnectedNodeId === disconnectedNodeHistory.nodeId
+        ) {
+          try {
+            await recordPairedNodeDisconnection(disconnectedNodeHistory);
+          } catch (error) {
+            logGateway.warn(
+              `failed to record node disconnect for ${disconnectedNodeHistory.nodeId}: ${formatForLog(error)}`,
+            );
+          }
         }
       }
       logWs("out", "close", {
@@ -626,23 +618,19 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       releasePreauthBudget();
       client = next;
       clients.add(next);
-      pingTimer = setInterval(() => {
-        // A half-open TCP connection can remain OPEN indefinitely. Terminate
-        // after one missed pong so the normal close handler releases node state.
-        if (awaitingPong) {
-          setCloseCause("heartbeat-timeout");
-          try {
-            socket.terminate();
-          } catch {
-            close();
-          }
-          return;
-        }
-        awaitingPong = true;
+      if (next.presenceKey && next.authenticatedUserId && next.connect.role !== "node") {
+        next.personPresence = { onlineSince: Date.now() };
+        refreshClientPresence(clients, next);
+      }
+      stopKeepalive = startWebSocketKeepalive(socket, () => {
+        // A half-open control connection must release its node and worker owners.
+        setCloseCause("heartbeat-timeout");
         try {
-          socket.ping();
-        } catch {}
-      }, 25_000);
+          socket.terminate();
+        } catch {
+          close();
+        }
+      });
       return true;
     };
 

@@ -43,7 +43,11 @@ function configure(page: ChatPage) {
   const context = {
     sessions: { state: { result: null }, subscribe: () => () => undefined, patch: vi.fn() },
     agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
-    gateway: { snapshot: { hello: null }, subscribe: () => () => undefined },
+    gateway: {
+      snapshot: { hello: null },
+      setSessionKey: vi.fn(),
+      subscribe: () => () => undefined,
+    },
     navigate: vi.fn(),
     replace: vi.fn(),
     agentSelection: { state: { selectedId: "main" }, set: vi.fn() },

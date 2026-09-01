@@ -12,7 +12,7 @@ Manage paired nodes (devices) and invoke node capabilities.
 
 Related: [Nodes overview](/nodes) - [Active computer presence](/nodes/presence) - [Camera nodes](/nodes/camera) - [Image nodes](/nodes/images)
 
-Common options on every subcommand: `--url <url>`, `--token <token>`, `--timeout <ms>` (default `10000`), `--json`.
+Common options on every subcommand: `--url <url>`, `--token <token>`, `--timeout <ms>` (default varies by command), `--json`.
 
 ## Status
 
@@ -36,9 +36,9 @@ openclaw nodes remove --node <id|name|ip>
 openclaw nodes rename --node <id|name|ip> --name <displayName>
 ```
 
-These commands drive the gateway-owned `node.pair.*` store, separate from device pairing (`openclaw devices approve`) that gates the node's WS `connect` handshake. See [Nodes](/nodes) for how the two relate.
+These commands manage the node's approved command/capability surface on its paired-device record. Device pairing (`openclaw devices approve`) gates the node's WebSocket `connect` handshake. See [Nodes](/nodes) for how the two relate.
 
-- `remove` revokes the node's paired-role entry. For a device-backed node this revokes the `node` role in the device pairing store and disconnects its node-role sessions: a mixed-role device keeps its row and only loses the `node` role, a node-only device row is deleted. It also clears any matching legacy gateway-owned node pairing record.
+- `remove` revokes the device's `node` role and clears its approved and pending command/capability surfaces. It disconnects the device's node-role sessions. A mixed-role device keeps its record and other roles; a node-only device record is deleted.
 - `pending` only needs `operator.pairing` scope.
 - `gateway.nodes.pairing.autoApproveCidrs` can skip the pending step for explicitly trusted, first-time `role: node` device pairing. Off by default; does not approve role upgrades.
 - `gateway.nodes.pairing.sshVerify` (on by default) auto-approves first-time `role: node` device pairing when the gateway can verify the device key over SSH to the node host; the first capability surface is approved in the same step. See [Node pairing](/gateway/pairing#ssh-verified-device-auto-approval-default).
@@ -60,6 +60,7 @@ Flags:
 - `--command <command>` (required): e.g. `device.info`.
 - `--params <json>`: JSON object string (default `{}`).
 - `--invoke-timeout <ms>`: node invoke timeout (default `15000`).
+- `--timeout <ms>`: Gateway transport timeout (default `30000`).
 - `--idempotency-key <key>`: optional idempotency key.
 
 `system.run` and `system.run.prepare` are blocked here; use the `exec` tool with `host=node` for shell execution instead. `system.which` is allowed through `invoke`.

@@ -1,7 +1,18 @@
 import fs from "node:fs/promises";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { NODE_WORKER_WORKSPACE_RETAIN_COMMAND } from "../../../../src/infra/node-commands.js";
+import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import {
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../../../../src/infra/kysely-sync.js";
+import {
+  NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
+  NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
+} from "../../../../src/infra/node-commands.js";
+import { withOpenClawStateDatabaseReadOnly } from "../../../../src/state/openclaw-state-db-readonly.js";
+import type { DB as StateDatabase } from "../../../../src/state/openclaw-state-db.generated.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import { PROOF_TIMEOUT_MS } from "./cloud-worker-midturn-loss-fixture.js";
 import { startPairedNodeWorkerLifecycleProvider } from "./paired-node-worker-lifecycle-provider.js";
@@ -29,6 +40,7 @@ type Placement = {
   activeOwnerEpoch?: number;
   environmentId?: string;
   generation?: number;
+  recoveryError?: string;
   state?: string;
   workerBundleHash?: string;
 };
@@ -36,7 +48,7 @@ type EnvironmentRead = {
   id: string;
   type: string;
   workerBundle?: WireNodeRead["workerBundle"];
-  worker?: { state?: string };
+  worker?: { state?: string; attachedSessionIds?: string[]; tunnelStatus?: string };
 };
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -177,13 +189,17 @@ describe("paired node worker lifecycle wire", () => {
       const root = tempDirs.make("openclaw-paired-node-worker-lifecycle-");
       const provider = await startPairedNodeWorkerLifecycleProvider([HOLD_A, HOLD_B]);
       const published = await createPublishedWireWorkspace(root);
+      const gatewayOwner = createQaGatewayChild();
       let gateway: WireGateway | undefined;
       let operator: GatewayClient | undefined;
       let workerNode: PairedNodeWorkerHost | undefined;
       let testFailure: { error: unknown } | undefined;
       let cleanupFailures: unknown[];
       try {
-        gateway = await startPairedNodeWorkerGateway({ providerBaseUrl: provider.baseUrl });
+        gateway = await startPairedNodeWorkerGateway({
+          owner: gatewayOwner,
+          providerBaseUrl: provider.baseUrl,
+        });
         operator = await connectWireClient({ gateway, role: "operator", identity: null });
         workerNode = await createPairedNodeWorkerHost({
           gateway,
@@ -241,6 +257,17 @@ describe("paired node worker lifecycle wire", () => {
         )) as { placement?: Placement };
         expect(movedLocal.placement).toMatchObject({ state: "local" });
         expect(await describePlacement(gateway, retainedKey)).toMatchObject({ state: "local" });
+        await workerNode.waitForInvokes();
+        expect(
+          workerNode.frames
+            .filter((frame) => frame.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND)
+            .map((frame) => JSON.parse(frame.paramsJSON!)),
+        ).toContainEqual(
+          expect.objectContaining({
+            environmentId: sourcePlacement.environmentId,
+            ownerEpoch: sourcePlacement.activeOwnerEpoch,
+          }),
+        );
         await expectSuccessfulTurn({ operator, key: retainedKey, marker: "WIRE-MOVED-LOCAL" });
         await dispatchNodeSession({ gateway, key: retainedKey, nodeId });
         await expectSuccessfulTurn({ operator, key: retainedKey, marker: "WIRE-MOVED-BACK" });
@@ -270,6 +297,14 @@ describe("paired node worker lifecycle wire", () => {
         // An offline runner fails before handoff, leaves the active placement retryable, and
         // does not terminalize the independent local session.
         await workerNode.disconnect();
+        // Client socket closure precedes the Gateway's lifecycle-dispatch drain.
+        // Admit the offline turn only after the server has retired this connection.
+        const offlineOperator = operator;
+        await vi.waitFor(
+          async () =>
+            expect(await readNode(offlineOperator, nodeId)).toMatchObject({ connected: false }),
+          { timeout: 30_000, interval: 100 },
+        );
         const offlineRunId = await startTurn({
           operator,
           key: repairedKey,
@@ -347,10 +382,22 @@ describe("paired node worker lifecycle wire", () => {
         provider.release(HOLD_B);
         await expect(waitForTurn(operator, holdBRunId)).resolves.toMatchObject({ status: "ok" });
 
-        // Node-role removal waits for environment and placement cleanup before returning,
-        // invalidates the old connection, and leaves local execution available.
+        // Revocation fences placement before responding but cannot prove remote extinction.
+        // Keep the exact attachment pending cleanup rather than invent a terminal environment.
         const removalKey = await createSession({ operator, published, suffix: "role-removal" });
         const removalPlacement = await dispatchNodeSession({ gateway, key: removalKey, nodeId });
+        const removalEnvironment = (await readEnvironments(operator)).find(
+          (entry) => entry.id === removalPlacement.environmentId,
+        );
+        const attachedSessionIds = removalEnvironment?.worker?.attachedSessionIds;
+        if (
+          !removalPlacement.environmentId ||
+          typeof removalPlacement.activeOwnerEpoch !== "number" ||
+          attachedSessionIds?.length !== 1
+        ) {
+          throw new Error("role-removal placement did not expose exact ownership");
+        }
+        const removalEnvironmentId = removalPlacement.environmentId;
         expect(workerNode.client).toBeTruthy();
         await expect(operator.request("node.pair.remove", { nodeId })).resolves.toMatchObject({
           nodeId,
@@ -358,8 +405,51 @@ describe("paired node worker lifecycle wire", () => {
         const removedEnvironment = (await readEnvironments(operator)).find(
           (entry) => entry.id === removalPlacement.environmentId,
         );
-        expect(["destroyed", "failed", "orphaned"]).toContain(removedEnvironment?.worker?.state);
-        expect(await describePlacement(gateway, removalKey)).toMatchObject({ state: "failed" });
+        expect(removedEnvironment?.worker).toMatchObject({
+          state: "attached",
+          attachedSessionIds,
+          tunnelStatus: "stopped",
+        });
+        withOpenClawStateDatabaseReadOnly(
+          ({ db }) => {
+            const query = getNodeSqliteKysely<StateDatabase>(db);
+            expect(
+              executeSqliteQueryTakeFirstSync(
+                db,
+                query
+                  .selectFrom("worker_environments")
+                  .select([
+                    "owner_epoch",
+                    "attached_session_ids_json",
+                    "destroy_requested_at_ms",
+                    "teardown_terminal_state",
+                    "last_error",
+                  ])
+                  .where("environment_id", "=", removalEnvironmentId),
+              ),
+            ).toMatchObject({
+              owner_epoch: removalPlacement.activeOwnerEpoch,
+              attached_session_ids_json: JSON.stringify(attachedSessionIds),
+              destroy_requested_at_ms: expect.any(Number),
+              teardown_terminal_state: "failed",
+              last_error: "Worker provider no longer recognizes the lease",
+            });
+            expect(
+              executeSqliteQueryTakeFirstSync(
+                db,
+                query
+                  .selectFrom("worker_environment_credentials")
+                  .select("environment_id")
+                  .where("environment_id", "=", removalEnvironmentId),
+              ),
+            ).toBeUndefined();
+          },
+          { env: gateway.runtimeEnv },
+        );
+        expect(await describePlacement(gateway, removalKey)).toMatchObject({
+          state: "failed",
+          recoveryError: expect.stringContaining("not connected"),
+        });
         await expect(workerNode.publishInventory()).rejects.toBeTruthy();
         await vi.waitFor(
           async () => {
@@ -378,7 +468,7 @@ describe("paired node worker lifecycle wire", () => {
         const cleanup = await Promise.allSettled([
           workerNode?.stop() ?? Promise.resolve(),
           operator?.stopAndWait({ timeoutMs: 2_000 }) ?? Promise.resolve(),
-          gateway?.stop() ?? Promise.resolve(),
+          stopQaGatewayFixture(gatewayOwner),
           provider.stop(),
           closeWireServer(published.server),
         ]);

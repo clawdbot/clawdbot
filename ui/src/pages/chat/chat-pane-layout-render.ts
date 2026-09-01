@@ -1,10 +1,12 @@
 import { html, nothing } from "lit";
-import type {
-  ProgressCard,
-  SessionObserverDigest,
-} from "../../../../packages/gateway-protocol/src/index.js";
+import "./chat-outbox-recovery.ts";
+import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
+import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
+import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
+import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
+import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import {
   availableSidebarSlots,
@@ -12,10 +14,12 @@ import {
   sidebarPanelDefinitions,
   sidebarPanelTemplates,
 } from "./chat-pane-embedded-panels.ts";
+import { resolveChatPaneDesktopTarget } from "./chat-pane-placement.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { renderSidebarRegion, sidebarRegionCallbacks } from "./chat-pane-sidebar-layout.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { renderChat, type ChatProps } from "./chat-view.ts";
+import { publishChatWorkContext } from "./chat-work-context.ts";
 import { renderBackgroundTasksRail } from "./components/chat-background-tasks-render.ts";
 import type { BackgroundTasksProps } from "./components/chat-background-tasks.types.ts";
 import { detailSlotOpen, renderChatDetailSlot } from "./components/chat-detail-slot.ts";
@@ -37,8 +41,6 @@ type ChatPaneLayoutRenderParams = {
   currentAgentId: string;
   board: ResolvedBoardView;
   sidebarLayout: SidebarLayout;
-  progressCardInRail: boolean;
-  onDismissProgressCard?: (card: ProgressCard) => void;
   sessionWorkspace: SessionWorkspaceProps;
   backgroundTasks: BackgroundTasksProps;
   chatProps: ChatProps;
@@ -59,8 +61,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       currentAgentId,
       board,
       sidebarLayout,
-      progressCardInRail,
-      onDismissProgressCard,
       sessionWorkspace,
       backgroundTasks,
       chatProps,
@@ -72,25 +72,70 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       openPanelSlot,
       closePanelSlot,
     } = params;
-    const header = this.renderPaneHeader(
-      sessionWorkspace,
-      backgroundTasks,
-      selectedSession,
-      catalog,
-      agentWorkspace,
-      workspaceGit,
-      sidebarLayout,
-    );
+    if (this.inputRegion === "page") {
+      const file =
+        state.sidebarContent?.kind === "file" && sidebarLayout.open && detailSlotOpen(sidebarLayout)
+          ? state.sidebarContent
+          : undefined;
+      const workspace = resolveSessionWorkspace({
+        session: selectedSession,
+        agentWorkspace,
+        worktreePath: selectedSession?.worktree
+          ? this.headerWorktreePaths.get(selectedSession.worktree.id)?.path
+          : undefined,
+      });
+      publishChatWorkContext(
+        this.context,
+        this,
+        this.presented && this.selected
+          ? {
+              sessionKey: state.sessionKey,
+              sessionId: state.currentSessionId ?? undefined,
+              agentId: currentAgentId,
+              workspace: file?.root ?? workspace.root ?? undefined,
+              file: file?.path,
+            }
+          : undefined,
+      );
+    }
+    const header = this.compact
+      ? nothing
+      : this.renderPaneHeader(
+          sessionWorkspace,
+          backgroundTasks,
+          selectedSession,
+          catalog,
+          agentWorkspace,
+          workspaceGit,
+          sidebarLayout,
+        );
+    const recovery = html`<openclaw-chat-outbox-recovery
+      .host=${state}
+      .identity=${JSON.stringify([
+        state.settings.gatewayUrl,
+        state.connected && state.client?.recoveryScopeReady ? state.client.recoveryScope : null,
+        storedChatOutboxScopeKey(resolveUiConversationIdentity(state, state.sessionKey)),
+      ])}
+      @outbox-restored=${() => {
+        this.chatState.restoreComposer();
+        state.requestUpdate?.();
+      }}
+    ></openclaw-chat-outbox-recovery>`;
     const chat = renderChat({
       ...chatProps,
-      header: board.face === "dashboard" ? nothing : header,
+      browserTabPreviewsActive: this.active && this.presented,
+      historyState: catalog ? undefined : state,
+      header: !this.compact && board.face === "dashboard" ? nothing : html`${header}${recovery}`,
     });
     // Keep this root stable across board face changes so the guarded board runtime
     // remains connected while Chat is active.
     const primary = html`<div class="chat-pane-primary-column">
-      ${board.face === "dashboard" ? header : nothing}${this.renderBoardPrimary(board, chat)}
+      ${!this.compact && board.face === "dashboard" ? html`${header}${recovery}` : nothing}
+      ${this.compact ? chat : this.renderBoardPrimary(board, chat)}
     </div>`;
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
+    const discussionState = this.sessionDiscussionStates.get(state.sessionKey.trim());
+    const discussionAvailable = discussionState === "available" || discussionState === "open";
     const desktopAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot);
     const companionThread = this.sessionCompanionThreads.view(state.sessionKey, currentAgentId);
     const browserPresented =
@@ -103,10 +148,15 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       themeMode: this.context.theme.resolvedMode,
       agentId: currentAgentId,
       browserPresented,
+      browserRefreshOnPresentation: !this.pendingPanelToggleRequests.has("browser"),
+      preferredBrowserTab: [
+        ...latestBrowserTabCards(chatProps.messages, chatProps.toolMessages).values(),
+      ].at(-1),
       desktopPresented,
       desktopRefreshOnPresentation,
       desktopAvailable,
-      hasBoard: board.hasBoard,
+      desktopSource: resolveChatPaneDesktopTarget(selectedSession),
+      hasBoard: !this.compact && board.hasBoard,
       chat,
       workspace: renderSessionWorkspaceRail(sessionWorkspace, { embedded: true }),
       tasks: renderBackgroundTasksRail(backgroundTasks, { embedded: true }),
@@ -125,8 +175,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       startedAt: selectedSession?.startedAt ?? state.chatStreamStartedAt ?? undefined,
       lastReadAt: selectedSession?.lastReadAt,
       pullRequests: this.sessionPullRequests,
-      progressCard: progressCardInRail ? this.progressCard.card : null,
-      onDismissProgressCard,
       companion: companionThread,
       onCompanionSubmit: (question) => void this.submitSessionCompanionQuestion(question),
       onCompanionDraftChange: (draft) =>
@@ -136,6 +184,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       pendingQuestion: companionThread.pendingQuestion,
       onClearCompanion: () => void this.clearSessionCompanion(),
       discussion,
+      discussionAvailable,
       discussionOpenUrl: discussion?.openUrl ?? null,
       discussionSourceGeneration: this.connectionGeneration,
     });
@@ -147,6 +196,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       availableSlots,
       callbacks: sidebarRegionCallbacks({
         state,
+        layout: sidebarLayout,
         closePanelSlot,
         openPanelSlot,
         hideBoard: () => this.handleBoardDockChange("hidden"),

@@ -3,12 +3,16 @@ name: Vercel Container Registry Publish
 on:
   workflow_call:
     inputs:
+      advisory:
+        description: Keep automated release mirroring non-blocking
+        required: true
+        type: boolean
       version:
         description: Docker release version without the v prefix
         required: true
         type: string
-      source_refs:
-        description: Newline-delimited alias=immutable-ref entries verified by the caller
+      source_digests:
+        description: Newline-delimited alias=sha256:<64 lowercase hex> entries
         required: true
         type: string
       include_browser:
@@ -18,6 +22,20 @@ on:
     secrets:
       VERCEL_TOKEN:
         required: true
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Docker release version without the v prefix
+        required: true
+        type: string
+      source_digests:
+        description: Newline-delimited alias=sha256:<64 lowercase hex> entries
+        required: true
+        type: string
+      include_browser:
+        description: Whether the tagged Docker release includes browser images
+        required: true
+        type: boolean
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -30,12 +48,40 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate_recovery:
+    if: ${{ !inputs.advisory }}
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - name: Require a main-branch recovery dispatch
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]]; then
+            echo "::error::Vercel registry recovery must be dispatched from main; got ${WORKFLOW_REF}." >&2
+            exit 1
+          fi
+
+  approve_recovery:
+    needs: validate_recovery
+    if: ${{ !inputs.advisory }}
+    runs-on: ubuntu-24.04
+    environment: docker-release
+    permissions: {}
+    steps:
+      - name: Approve Vercel registry recovery
+        env:
+          VERSION: ${{ inputs.version }}
+        run: echo "Approved Vercel Container Registry mirror recovery for ${VERSION}"
+
   publish:
+    needs: [validate_recovery, approve_recovery]
+    if: ${{ always() && (inputs.advisory || (needs.validate_recovery.result == 'success' && needs.approve_recovery.result == 'success')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    # VCR is a best-effort mirror. Failed steps remain visible, but the primary
-    # Docker publication and GitHub release finalization must continue.
-    continue-on-error: true
+    # Release mirroring is advisory; approved recovery must fail visibly.
+    continue-on-error: ${{ inputs.advisory == true }}
     permissions:
       contents: read
     steps:
@@ -46,7 +92,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: Setup trusted Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -101,7 +147,8 @@ jobs:
         id: copy_images
         env:
           INCLUDE_BROWSER: ${{ inputs.include_browser }}
-          SOURCE_REFS: ${{ inputs.source_refs }}
+          SOURCE_DIGESTS: ${{ inputs.source_digests }}
+          SOURCE_IMAGE: ghcr.io/${{ github.repository }}
           TARGET_IMAGE: ${{ vars.VERCEL_VCR_IMAGE }}
           VERSION: ${{ inputs.version }}
         run: |
@@ -111,10 +158,10 @@ jobs:
             browser_args+=(--include-browser)
           fi
           source_ref_args=()
-          while IFS= read -r source_ref; do
-            [[ -z "${source_ref}" ]] && continue
-            source_ref_args+=(--source-ref "${source_ref}")
-          done <<< "${SOURCE_REFS}"
+          while IFS='=' read -r alias digest; do
+            [[ -z "${alias}" ]] && continue
+            source_ref_args+=(--source-ref "${alias}=${SOURCE_IMAGE}@${digest}")
+          done <<< "${SOURCE_DIGESTS}"
           node scripts/vercel-container-registry-publish.mjs \
             --version "${VERSION}" \
             "${source_ref_args[@]}" \
@@ -126,8 +173,8 @@ jobs:
       - name: Run custom-image Sandbox smoke
         id: sandbox_smoke
         env:
+          SANDBOX_CLI: ${{ steps.vercel_cli.outputs.sandbox_cli }}
           VERCEL_AUTH_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_CLI: ${{ steps.vercel_cli.outputs.cli }}
           VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
           VERCEL_SCOPE: ${{ vars.VERCEL_SCOPE }}
           VERCEL_VCR_IMAGE: ${{ vars.VERCEL_VCR_IMAGE }}
@@ -140,7 +187,7 @@ jobs:
           while true; do
             set +e
             output="$(
-              "${VERCEL_CLI}" sandbox run \
+              "${SANDBOX_CLI}" run \
                 --silent \
                 --rm \
                 --non-persistent \
@@ -198,6 +245,7 @@ jobs:
       - name: Summarize Vercel publication
         if: ${{ always() }}
         env:
+          ADVISORY: ${{ inputs.advisory }}
           COPY_OUTCOME: ${{ steps.copy_images.outcome }}
           INCLUDE_BROWSER: ${{ inputs.include_browser }}
           PROMOTE_OUTCOME: ${{ steps.promote_aliases.outcome }}
@@ -211,8 +259,11 @@ jobs:
           fi
           status="passed"
           if [[ "${COPY_OUTCOME}" != "success" || "${SMOKE_OUTCOME}" != "success" || "${PROMOTE_OUTCOME}" != "success" ]]; then
-            status="failed (non-blocking)"
-            echo "::warning::VCR mirror failed; Docker publication and GitHub release finalization are unaffected."
+            status="failed"
+            if [[ "${ADVISORY}" == "true" ]]; then
+              status="failed (non-blocking)"
+              echo "::warning::VCR mirror failed; Docker publication and GitHub release finalization are unaffected."
+            fi
           fi
           {
             echo "## Vercel Container Registry"

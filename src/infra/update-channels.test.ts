@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import {
   channelToNpmTag,
-  formatUpdateChannelLabel,
   isBetaTag,
   isStableTag,
   normalizeUpdateChannel,
@@ -85,9 +84,17 @@ describe("resolveEffectiveUpdateChannel", () => {
       expected: { channel: "beta", source: "config" },
     },
     {
-      name: "uses installed beta version over stale stable config",
+      name: "keeps configured stable after a one-off beta package update",
       params: {
         configChannel: "stable" as const,
+        currentVersion: "2026.5.2-beta.1",
+        installKind: "package" as const,
+      },
+      expected: { channel: "stable", source: "config" },
+    },
+    {
+      name: "uses installed beta version without a configured channel",
+      params: {
         currentVersion: "2026.5.2-beta.1",
         installKind: "package" as const,
       },
@@ -140,62 +147,50 @@ describe("resolveEffectiveUpdateChannel", () => {
   });
 });
 
-describe("formatUpdateChannelLabel", () => {
+describe("resolveUpdateChannelDisplay labels", () => {
   it.each([
     {
       name: "formats config labels",
-      params: { channel: "beta", source: "config" as const },
+      params: { configChannel: "beta", installKind: "package" },
       expected: "beta (config)",
     },
     {
       name: "formats git tag labels with tag",
       params: {
-        channel: "stable",
-        source: "git-tag" as const,
+        installKind: "git",
         gitTag: "v2026.2.24",
       },
       expected: "stable (v2026.2.24)",
     },
     {
-      name: "formats git tag labels without tag",
-      params: { channel: "stable", source: "git-tag" as const },
-      expected: "stable (tag)",
-    },
-    {
       name: "formats git branch labels with branch",
       params: {
-        channel: "dev",
-        source: "git-branch" as const,
+        installKind: "git",
         gitBranch: "feature/test",
       },
       expected: "dev (feature/test)",
     },
     {
-      name: "formats git branch labels without branch",
-      params: { channel: "dev", source: "git-branch" as const },
-      expected: "dev (branch)",
-    },
-    {
       name: "formats installed-version labels",
-      params: { channel: "beta", source: "installed-version" as const },
+      params: { currentVersion: "2026.5.2-beta.1", installKind: "package" },
       expected: "beta (installed version)",
     },
     {
       name: "formats default labels",
-      params: { channel: "stable", source: "default" as const },
+      params: { installKind: "package" },
       expected: "stable (default)",
     },
   ] satisfies Array<{
     name: string;
-    params: Parameters<typeof formatUpdateChannelLabel>[0];
+    params: Parameters<typeof resolveUpdateChannelDisplay>[0];
     expected: string;
   }>)("$name", ({ params, expected }) => {
-    expect(formatUpdateChannelLabel(params)).toBe(expected);
+    expect(resolveUpdateChannelDisplay(params).label).toBe(expected);
   });
 });
 
 describe("resolveUpdateChannelDisplay", () => {
-  it("labels stale stable config on a beta install from the installed version", () => {
+  it("shows the configured stable channel after a one-off beta package update", () => {
     expect(
       resolveUpdateChannelDisplay({
         configChannel: "stable",
@@ -203,9 +198,9 @@ describe("resolveUpdateChannelDisplay", () => {
         installKind: "package",
       }),
     ).toEqual({
-      channel: "beta",
-      source: "installed-version",
-      label: "beta (installed version)",
+      channel: "stable",
+      source: "config",
+      label: "stable (config)",
     });
   });
 

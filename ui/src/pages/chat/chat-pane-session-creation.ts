@@ -11,7 +11,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../lib/sessions/session-key.ts";
 import { cloneChatAttachmentsForIndependentOwner } from "./attachment-payload-store.ts";
-import { clearChatHistory } from "./chat-history.ts";
+import { clearChatHistory } from "./chat-history-actions.ts";
 import { createChatModelSetupBanner } from "./chat-model-setup.ts";
 import { ChatPaneRetainedPresentation } from "./chat-pane-retained-presentation.ts";
 import {
@@ -26,8 +26,6 @@ import { canCreateChatSession } from "./chat-state-route.ts";
 /** Creates or resets a conversation while guarding its asynchronous ownership. */
 export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentation {
   protected recoveringSession = false;
-
-  protected abstract confirmConversationReset(): Promise<boolean>;
 
   protected sessionDisabledBanner(params: {
     catalogDisabledReason: string | null | undefined;
@@ -48,6 +46,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       return {
         kind: "composer-replacement" as const,
         text: t("chat.archivedSessionDisabled"),
+        icon: "archive" as const,
         actionLabel: t("common.unarchive"),
         disabledReason: !params.selectedSessionId
           ? "Session lifecycle action requires a durable session identity."
@@ -282,6 +281,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     preparePaneSessionHandoff(this.context, this.paneId, nextSessionKey, {
       attachments: cloneChatAttachmentsForIndependentOwner(state.chatAttachments),
       draft: state.chatMessage,
+      ...(state.chatGoalDraftMode ? { goalMode: state.chatGoalDraftMode } : {}),
     });
     return true;
   };

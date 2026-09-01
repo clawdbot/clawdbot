@@ -1,23 +1,3 @@
-// Regression: costUsageCache (usage.ts:65) has no production delete/prune/evict
-// path. The TTL at L310 is read-only — on a miss after expiry, set() overwrites
-// the same key but never removes stale keys. resolveDateRange derives cacheKey
-// from the current calendar day so cacheKey rolls at every UTC 00:00, and additional
-// axes (days, startDate, endDate, utcOffset) multiply cardinality.
-//
-// The same file has three sibling caches that implement MAX + FIFO eviction
-// (resolvedSessionKeyByRunId, TRANSCRIPT_SESSION_KEY_CACHE,
-// sessionTitleFieldsCache); costUsageCache alone lacked the pattern.
-//
-// Production trigger: MenuSessionsInjector polls usage.cost every ~45s with
-// no params, exercising parseDateRange's default branch on every UTC day
-// rollover. The Control UI adds more key variance via explicit startDate /
-// endDate / utcTimeZone combinations.
-//
-// CAL-003 compliance: no mock of internal branches. Growth is driven through
-// the testApi.loadCostUsageSummaryCached seam (same entry point usage.test.ts
-// already exercises) with distinct (startMs, endMs) pairs. Only the external
-// loadCostUsageSummaryFromCache dependency is stubbed.
-
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 

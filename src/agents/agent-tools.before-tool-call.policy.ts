@@ -5,6 +5,7 @@
  * trusted policies, approvals, normal hooks, and final owner approval must
  * remain in this sequence.
  */
+import type { ToolLoopWarning } from "@openclaw/agent-core";
 import { freezeDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { getGlobalHookRunnerRegistry } from "../plugins/hook-runner-global-state.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -57,6 +58,14 @@ import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js"
 const BEFORE_TOOL_CALL_HOOK_FAILURE_REASON =
   "Tool call blocked because before_tool_call hook failed";
 
+/** Keep receipt routing private without widening observable hook outcomes. */
+function markPrivateDecision(
+  outcome: HookOutcome,
+  marker: "genericDecision" | "ownerDecision",
+): void {
+  Object.defineProperty(outcome, marker, { value: true });
+}
+
 export function getBeforeToolCallPolicyDiagnosticState(): BeforeToolCallPolicyDiagnosticState {
   const policyRegistry = getGlobalHookRunnerRegistry() ?? undefined;
   return {
@@ -100,6 +109,13 @@ export async function runBeforeToolCallHook(args: {
 }): Promise<HookOutcome> {
   const toolName = normalizeToolPolicyName(args.toolName || "tool");
   const params = args.params;
+  let loopWarning: ToolLoopWarning | undefined;
+  const withLoopWarning = (outcome: HookOutcome): HookOutcome => {
+    if (!outcome.blocked && loopWarning) {
+      outcome.loopWarning = loopWarning;
+    }
+    return outcome;
+  };
   let releaseArgumentChurnPolicyWait: (() => void) | undefined;
 
   try {
@@ -133,15 +149,18 @@ export async function runBeforeToolCallHook(args: {
           { toolName, params, toolCallId: args.toolCallId },
           args.ctx,
         );
-        if (intervention) {
-          return {
+        if (intervention?.kind === "critical-tool-loop") {
+          const outcome: HookOutcome = {
             blocked: true,
             kind: "veto",
             deniedReason: "tool-loop",
             reason: intervention.reason,
             params,
           };
+          markPrivateDecision(outcome, "genericDecision");
+          return outcome;
         }
+        loopWarning = intervention;
       }
     }
 
@@ -175,18 +194,19 @@ export async function runBeforeToolCallHook(args: {
       };
     }
     if (!initialCorePolicyResult && !shouldRunTrustedPolicies && !hasBeforeToolCallHooks) {
-      return { blocked: false, params };
+      return withLoopWarning({ blocked: false, params });
     }
     const deriveOptions =
       args.ctx?.cwd || args.ctx?.sandbox
         ? {
             ...(args.ctx.cwd ? { cwd: args.ctx.cwd } : {}),
             ...(args.ctx.sandbox ? { sandbox: args.ctx.sandbox } : {}),
+            ...(args.signal ? { signal: args.signal } : {}),
           }
         : undefined;
-    const derivedToolParams = deriveToolParams(toolName, normalizedParams, deriveOptions);
-    const deriveToolEventParams = (candidateParams: Record<string, unknown>) => {
-      const derived = deriveToolParams(toolName, candidateParams, deriveOptions);
+    const derivedToolParams = await deriveToolParams(toolName, normalizedParams, deriveOptions);
+    const deriveToolEventParams = async (candidateParams: Record<string, unknown>) => {
+      const derived = await deriveToolParams(toolName, candidateParams, deriveOptions);
       return derived.derivedPaths ? { derivedPaths: derived.derivedPaths } : {};
     };
     const toolIdentity = {
@@ -253,13 +273,15 @@ export async function runBeforeToolCallHook(args: {
         )
       : undefined;
     if (trustedPolicyResult?.block) {
-      return {
+      const outcome: HookOutcome = {
         blocked: true,
         kind: "veto",
         deniedReason: "plugin-before-tool-call",
         reason: trustedPolicyResult.blockReason || "Tool call blocked by trusted plugin policy",
         params,
       };
+      markPrivateDecision(outcome, "genericDecision");
+      return outcome;
     }
     let trustedApprovalParams: unknown;
     let trustedApprovalResolution: PluginApprovalResolution | undefined;
@@ -278,7 +300,7 @@ export async function runBeforeToolCallHook(args: {
           return approvalOutcome;
         }
         if (approvalOutcome.deferredApproval) {
-          return approvalOutcome;
+          return withLoopWarning(approvalOutcome);
         }
         trustedApprovalParams = approvalOutcome.params;
         trustedApprovalResolution = approvalOutcome.approvalResolution;
@@ -293,7 +315,7 @@ export async function runBeforeToolCallHook(args: {
     const policyAdjustedToolContext = buildToolContext(policyAdjustedToolIdentity);
     const policyAdjustedDerivedToolParams =
       trustedPolicyResult?.params && isPlainObject(policyAdjustedParams)
-        ? deriveToolParams(toolName, policyAdjustedParams, deriveOptions)
+        ? await deriveToolParams(toolName, policyAdjustedParams, deriveOptions)
         : derivedToolParams;
     if (!hasBeforeToolCallHooks) {
       const finalApprovalOutcome = await resolveSkillWorkshopApprovalForFinalParams({
@@ -305,24 +327,29 @@ export async function runBeforeToolCallHook(args: {
         signal: args.signal,
       });
       if (finalApprovalOutcome) {
-        return finalApprovalOutcome;
+        return withLoopWarning(finalApprovalOutcome);
       }
       const allowed: HookOutcome = {
         blocked: false as const,
         params: policyAdjustedParams,
       };
       if (trustedApprovalResolution) {
+        markPrivateDecision(allowed, "ownerDecision");
         allowed.approvalResolution = trustedApprovalResolution;
       }
-      return allowed;
+      return withLoopWarning(allowed);
     }
     const hookEventParams = isPlainObject(policyAdjustedParams) ? policyAdjustedParams : {};
     const callerIdentity = getGatewayToolCallerIdentity();
+    let ownerDecisionMarked = false;
     const receipt =
       callerIdentity?.executionIdentityToken && callerIdentity.receiptAuthority
         ? {
             token: callerIdentity.executionIdentityToken,
             assertAuthority: callerIdentity.receiptAuthority,
+            markOwnerDecision: () => {
+              ownerDecisionMarked = true;
+            },
           }
         : undefined;
     const hookResult = await hookRunner.runBeforeToolCall(
@@ -367,7 +394,7 @@ export async function runBeforeToolCallHook(args: {
           return approvalOutcome;
         }
         if (approvalOutcome.deferredApproval) {
-          return approvalOutcome;
+          return withLoopWarning(approvalOutcome);
         }
         finalParams = approvalOutcome.params;
         finalApprovalResolution = approvalOutcome.approvalResolution ?? finalApprovalResolution;
@@ -391,16 +418,19 @@ export async function runBeforeToolCallHook(args: {
       signal: args.signal,
     });
     if (finalApprovalOutcome) {
-      return finalApprovalOutcome;
+      return withLoopWarning(finalApprovalOutcome);
     }
     const allowed: HookOutcome = {
       blocked: false as const,
       params: finalParams,
     };
+    if (ownerDecisionMarked || finalApprovalResolution) {
+      markPrivateDecision(allowed, "ownerDecision");
+    }
     if (finalApprovalResolution) {
       allowed.approvalResolution = finalApprovalResolution;
     }
-    return allowed;
+    return withLoopWarning(allowed);
   } catch (err) {
     const toolCallId = args.toolCallId ? ` toolCallId=${args.toolCallId}` : "";
     const cause = unwrapErrorCause(err);

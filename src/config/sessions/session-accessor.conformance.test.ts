@@ -7,6 +7,7 @@ import {
   writePersistedAuthProfileStateRaw,
 } from "../../agents/auth-profiles/sqlite.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -15,6 +16,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
@@ -1339,7 +1341,7 @@ describe("sqlite session normalization", () => {
       delivery: normalizeSessionDeliveryState({ context: { channel: "telegram" } }),
       chatType: "group",
       createdVia: "channel",
-      createdActor: { type: "human", id: "telegram-sender" },
+      createdActor: { type: "human", source: "channel", id: "telegram-sender" },
       createdAt: 1_782_973_390_000,
       displayName: "telegram:g-bucephalus-+-topics",
       forkSource: { sessionKey: "agent:main:main", sessionId: "root-session" },
@@ -1383,7 +1385,7 @@ describe("sqlite session normalization", () => {
       expect.objectContaining({
         sessionId: newSessionId,
         createdVia: "channel",
-        createdActor: { type: "human", id: "telegram-sender" },
+        createdActor: { type: "human", source: "channel", id: "telegram-sender" },
         createdAt: 1_782_973_390_000,
         forkSource: { sessionKey: "agent:main:main", sessionId: "root-session" },
         previousSessionId: oldSessionId,
@@ -1658,6 +1660,65 @@ describe("sqlite session normalization", () => {
         storePath: paths.sqlitePath,
       }).map((summary) => summary.sessionKey),
     ).toEqual(["agent:main:newer", "agent:main:newest"]);
+  });
+
+  it("commits unrelated channel sessions without invoking stored channel plugin resolvers", async () => {
+    vi.mocked(getRuntimeConfig).mockReturnValue({
+      session: { maintenance: { mode: "enforce", pruneAfter: "1d", maxEntries: 2 } },
+    });
+    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
+    const scopeFor = (sessionKey: string) => ({
+      agentId: "main",
+      env,
+      sessionKey,
+      storePath: paths.sqlitePath,
+    });
+    const storedKey = "agent:main:broken:group:room:thread:reply";
+    const storedEntry = {
+      sessionId: "stored-channel-session",
+      updatedAt: Date.now() - 2 * 24 * 60 * 60 * 1000,
+    };
+    await patchSessionEntryCore(scopeFor(storedKey), () => storedEntry, {
+      fallbackEntry: storedEntry,
+      replaceEntry: true,
+      skipMaintenance: true,
+    });
+
+    const resolveSessionConversation = vi.fn(() => {
+      throw new Error("channel resolver must not run inside a SQLite write");
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "broken",
+          source: "test",
+          plugin: {
+            id: "broken",
+            meta: { label: "Broken" },
+            messaging: { resolveSessionConversation },
+          },
+        },
+      ]),
+    );
+
+    try {
+      for (const channel of ["telegram", "discord"]) {
+        const sessionKey = `agent:main:${channel}:direct:user`;
+        const entry = { sessionId: `${channel}-session`, updatedAt: Date.now() };
+        await expect(
+          patchSessionEntryCore(scopeFor(sessionKey), () => entry, {
+            fallbackEntry: entry,
+            replaceEntry: true,
+          }),
+        ).resolves.toMatchObject(entry);
+        expect(loadSessionEntry(scopeFor(sessionKey))).toMatchObject(entry);
+      }
+
+      expect(loadSessionEntry(scopeFor(storedKey))).toMatchObject(storedEntry);
+      expect(resolveSessionConversation).not.toHaveBeenCalled();
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
   });
 
   it("persists automatic dashboard archiving before stale-entry pruning", async () => {
@@ -2370,6 +2431,11 @@ describe("sqlite session normalization", () => {
       sessionId: "source-session",
       updatedAt: 10,
       compactionCheckpoints: [checkpoint],
+      transcriptByteCompactionLatch: {
+        activeBytes: 60_000,
+        sessionId: "source-session",
+        maxBytes: 50_000,
+      },
     };
     await upsertSessionEntryCore(sourceEntryScope, sourceEntry);
 
@@ -2411,6 +2477,7 @@ describe("sqlite session normalization", () => {
     );
     expect((result.entry as InternalSessionEntry).lifecycleRunId).toBeUndefined();
     expect((result.entry as InternalSessionEntry).lastRunId).toBeUndefined();
+    expect((result.entry as InternalSessionEntry).transcriptByteCompactionLatch).toBeUndefined();
     await expect(loadTranscriptEvents(branchScope)).resolves.toEqual([
       expect.objectContaining({ type: "session", id: result.entry.sessionId }),
       expect.objectContaining({ id: "pre-msg", type: "message" }),
@@ -2542,6 +2609,11 @@ describe("sqlite session normalization", () => {
       sessionId: "current-session",
       updatedAt: 10,
       compactionCheckpoints: [checkpoint],
+      transcriptByteCompactionLatch: {
+        activeBytes: 60_000,
+        sessionId: "current-session",
+        maxBytes: 50_000,
+      },
     });
 
     const result = await restoreCompactionCheckpointSession({
@@ -2570,6 +2642,7 @@ describe("sqlite session normalization", () => {
         totalTokensVersion: 1,
       }),
     );
+    expect((result.entry as InternalSessionEntry).transcriptByteCompactionLatch).toBeUndefined();
     await expect(loadTranscriptEvents(restoredScope)).resolves.toEqual([
       expect.objectContaining({ type: "session", id: result.entry.sessionId }),
       expect.objectContaining({ id: "pre-msg", type: "message" }),

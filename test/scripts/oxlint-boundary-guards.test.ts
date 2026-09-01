@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 const FIXTURES = "test/fixtures/oxlint-boundary-guards";
 const cases = [
@@ -25,27 +25,42 @@ const cases = [
   },
 ];
 
-function runGuard(target: string) {
-  return spawnSync(
-    process.execPath,
-    [
-      "scripts/run-oxlint.mjs",
-      "--openclaw-focused-config",
-      "--config",
-      "config/oxlint/boundary-guards.json",
-      target,
-    ],
-    { encoding: "utf8" },
-  );
-}
-
 describe("oxlint boundary guards", () => {
+  let diagnostics: Array<{ filename: string; code: string; severity: string }>;
+
+  beforeAll(() => {
+    const violation = spawnSync(
+      process.execPath,
+      [
+        "scripts/run-oxlint.mjs",
+        "--openclaw-focused-config",
+        "--config",
+        "config/oxlint/boundary-guards.json",
+        "--format",
+        "json",
+        ...cases.map((testCase) => testCase.violation),
+      ],
+      { encoding: "utf8" },
+    );
+    expect(violation.error).toBeUndefined();
+    expect(violation.status, violation.stderr).toBe(1);
+    const report = JSON.parse(violation.stdout) as {
+      diagnostics: typeof diagnostics;
+      number_of_files: number;
+    };
+    expect(report.number_of_files).toBe(cases.length);
+    diagnostics = report.diagnostics;
+  });
+
   it.each(cases)("reports expected violations for $rule", (testCase) => {
-    const violation = runGuard(testCase.violation);
-    const output = `${violation.stdout}${violation.stderr}`;
-    expect(violation.status).toBe(1);
-    expect(output.split(`${testCase.rule.replace("/", "(")})`)).toHaveLength(
-      testCase.violations + 1,
+    // A fixture can trigger sibling rules; match both its file and its owning rule.
+    const matching = diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.filename.replaceAll("\\", "/") === testCase.violation &&
+        diagnostic.code === `${testCase.rule.replace("/", "(")})`,
+    );
+    expect(matching.map((diagnostic) => diagnostic.severity)).toEqual(
+      Array(testCase.violations).fill("error"),
     );
   });
 });

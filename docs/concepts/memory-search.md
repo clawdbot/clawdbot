@@ -145,8 +145,9 @@ Two deterministic ranking passes are enabled by default for hybrid search.
 
 Old notes gradually lose ranking weight so recent information surfaces first.
 With the default 30-day half-life, a note from last month scores at 50% of its
-original weight. `MEMORY.md` and other non-dated files under `memory/` are
-evergreen and never decayed; only dated `memory/YYYY-MM-DD.md` files decay.
+original weight. `MEMORY.md`, `USER.md`, and undated files under `memory/`
+remain evergreen. Dated `YYYY-MM-DD.md` and `YYYY-MM-DD-<slug>.md` files decay
+at any depth, including session-memory notes and nested dreaming reports.
 
 ### MMR (diversity)
 
@@ -182,13 +183,14 @@ Optionally index session transcripts so `memory_search` can recall earlier
 conversations. This is opt-in: set `experimental.sessionMemory: true` and add
 `"sessions"` to `sources` (default `sources` is `["memory"]`).
 
-Session hits obey `tools.sessions.visibility`: the default `"tree"` exposes the
-current session and sessions it spawned. When the caller is the canonical main
-session, `tree` covers every same-agent session. With `session.dmScope: "main"`,
-a multi-user DM setup shares that main session and its recall scope. Use a
-per-peer `dmScope` for DM isolation, or set visibility to `"self"` for strict
-current-session recall. Non-main callers still need `"agent"` visibility for
-unrelated same-agent sessions.
+Session hits obey `tools.sessions.visibility`: the default `"agent"` exposes
+same-agent sessions to unsandboxed callers, including non-main sessions. This
+can include other users sharing that agent. A per-peer `session.dmScope`
+separates DM context but does not restrict transcript access through session
+tools. Choose explicit `"tree"` for current plus spawned scope (with an
+agent-wide exception for main), `"self"` for strict current-session recall, or
+separate agents for separate trust boundaries. Sandbox spawned-only clamps and
+incognito exclusions still apply.
 
 ## Troubleshooting
 

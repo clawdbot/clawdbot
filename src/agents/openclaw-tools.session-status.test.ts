@@ -11,6 +11,7 @@ import {
   type InternalHookEvent,
 } from "../hooks/internal-hooks.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
@@ -30,7 +31,7 @@ const resolveQueueSettingsMock = vi.hoisted(() =>
 );
 const listTasksForRelatedSessionKeyForOwnerMock = vi.hoisted(() =>
   vi.fn(
-    (_: { relatedSessionKey: string; callerOwnerKey: string }) =>
+    (_params: { relatedSessionKey: string; callerOwnerKey: string }) =>
       [] as Array<Record<string, unknown>>,
   ),
 );
@@ -51,10 +52,10 @@ const listSessionStateEventsSinceMock = vi.hoisted(() =>
     historyGap: false,
   })),
 );
-const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
+const emptyPluginMetadataSnapshot = {
   configFingerprint: "session-status-test-empty-plugin-metadata",
-  plugins: [],
-}));
+  ...createPluginMetadataSnapshotFixture(),
+};
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 const createMockConfig = () => ({
@@ -205,7 +206,12 @@ function createConfigModuleMock() {
 function createModelCatalogModuleMock() {
   return {
     loadProviderScopedThinkingCatalog: async () => [],
-    loadPreparedModelCatalog: async () => [
+    // A run's captured config goes stale after any Gateway config republish; the exact
+    // loader then throws, and session_status must read the published owner instead.
+    loadPreparedModelCatalog: async () => {
+      throw new Error("prepared model catalog owner config was replaced during the read (/tmp)");
+    },
+    loadPublishedPreparedModelCatalog: async () => [
       {
         provider: "anthropic",
         id: "claude-sonnet-4-6",
@@ -269,6 +275,7 @@ function createCommandsStatusRuntimeModuleMock() {
       statusChannel: string;
       provider?: string;
       model: string;
+      thinkingCatalog?: Array<{ provider: string; id: string; contextWindow?: number }>;
       workspaceDir?: string;
       primaryModelLabelOverride?: string;
       includeTranscriptUsage?: boolean;
@@ -309,6 +316,7 @@ function createCommandsStatusRuntimeModuleMock() {
         },
         sessionEntry: params.sessionEntry,
         modelAuth,
+        thinkingCatalog: params.thinkingCatalog,
         includeTranscriptUsage: params.includeTranscriptUsage,
         workspaceDir: params.workspaceDir,
       });
@@ -325,7 +333,8 @@ vi.mock("../agents/prepared-model-catalog.js", createModelCatalogModuleMock);
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: () => undefined,
 }));
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
 vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
@@ -617,40 +626,60 @@ describe("session_status tool", () => {
     expect(details.statusText).not.toContain("OAuth/token status");
     expect(tool.outputSchema).toBeDefined();
     expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
-    expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      '{ changedModel: boolean; ok: true; sessionKey: string; stateVersion: number; statusText: string; active?: { accountId?: string; channel?: string; threadId?: string | number; to?: string }; deliveryContext?: { accountId?: string; channel?: string; threadId?: string | number; to?: string }; model?: string; modelOverride?: string | null; modelProvider?: string; origin?: { accountId?: string; provider?: string; threadId?: string | number }; stateChanges?: { earliestAvailableSequence: number; events: Array<{ actorType: "human" | "agent" | "system"; kind: string; occurredAt: number; sequence: number; summary: string; actorId?: string; payload?: { channel?: string; outcome?: "error" | "timeout" | "cancelled"; turns?: number }; runId?: string }>; historyGap: boolean; truncated: boolean } }',
-    );
-  });
-
-  it("uses the persisted fixed-store owner for a bare current session", async () => {
-    resetSessionStore({
-      global: {
-        sessionId: "ops-global",
-        updatedAt: 10,
-      },
+    expect(mockCallArg(buildStatusMessageMock)).toMatchObject({
+      thinkingCatalog: expect.arrayContaining([
+        expect.objectContaining({
+          provider: "openai",
+          id: "gpt-5.4",
+          contextWindow: 400_000,
+        }),
+      ]),
     });
-    mockConfig = {
-      session: { mainKey: "main", scope: "global", store: "/tmp/shared-sessions.sqlite" },
-      agents: {
-        ownership: "explicit",
-        defaults: {
-          model: { primary: "openai/gpt-5.4" },
-          models: {},
-          sessionStore: { agentId: "ops" },
-        },
-        entries: { ops: {}, research: {} },
-      },
-      tools: { agentToAgent: { enabled: false } },
-    };
-
-    const result = await createSessionStatusTool({
-      agentSessionKey: "global",
-      config: mockConfig as never,
-    }).execute("owned-global", {});
-
-    expect(result.details).toMatchObject({ ok: true, sessionKey: "global" });
-    expect(getSessionStateVersionMock).toHaveBeenCalledWith("global", "ops");
+    // The full contract exceeds the compact hint budget; never promote a truncated shape.
+    expect(compactToolOutputHint(tool.outputSchema)).toBeUndefined();
   });
+
+  it.each([false, true])(
+    "reports the fixed-store owner for a bare current session (reset: %s)",
+    async (reset) => {
+      resetSessionStore({
+        global: {
+          sessionId: "ops-global",
+          updatedAt: 10,
+          providerOverride: "anthropic",
+          modelOverride: "claude-sonnet-4-6",
+        },
+      });
+      mockConfig = {
+        session: { mainKey: "main", scope: "global", store: "/tmp/shared-sessions.sqlite" },
+        agents: {
+          ownership: "explicit",
+          defaults: {
+            model: { primary: "openai/gpt-5.4" },
+            models: {},
+            sessionStore: { agentId: "ops" },
+          },
+          entries: { ops: {}, research: {} },
+        },
+        tools: { agentToAgent: { enabled: false } },
+      };
+
+      const tool = createSessionStatusTool({
+        agentSessionKey: "global",
+        config: mockConfig as never,
+      });
+      const result = await tool.execute("owned-global", reset ? { model: "default" } : {});
+
+      expect(result.details).toMatchObject({
+        ok: true,
+        sessionKey: "global",
+        agentId: "ops",
+        changedModel: reset,
+      });
+      expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+      expect(getSessionStateVersionMock).toHaveBeenCalledWith("global", "ops");
+    },
+  );
 
   it("does not treat another agent's fixed-store bare key as self", async () => {
     resetSessionStore({
@@ -1005,7 +1034,7 @@ describe("session_status tool", () => {
     expect(sessionEntry.thinkingLevel).toBe("high");
   });
 
-  it("resolves sessionKey=current to runSessionKey under default tree visibility (#76708)", async () => {
+  it("resolves sessionKey=current to runSessionKey under explicit tree visibility (#76708)", async () => {
     resetSessionStore({
       "agent:main:telegram:default:direct:1234": {
         sessionId: "s-tg-direct",
@@ -1019,8 +1048,10 @@ describe("session_status tool", () => {
       },
     });
 
-    // Default visibility is "tree". The tool is constructed with the Telegram
-    // sandbox key as agentSessionKey but the live run session key as runSessionKey.
+    mockConfig = { ...mockConfig, tools: { sessions: { visibility: "tree" } } };
+
+    // Explicit tree visibility protects the semantic-current alias. The tool uses
+    // the Telegram key as agentSessionKey and the live run key as runSessionKey.
     // semantic-current must be treated as self for visibility purposes.
     const tool = createSessionStatusTool({
       agentSessionKey: "agent:main:telegram:default:direct:1234",
@@ -1238,6 +1269,8 @@ describe("session_status tool", () => {
         status: "running",
       },
     });
+
+    mockConfig = { ...mockConfig, tools: { sessions: { visibility: "tree" } } };
 
     // Same setup but with an explicit key — should NOT bypass visibility.
     const tool = createSessionStatusTool({
@@ -1737,27 +1770,27 @@ describe("session_status tool", () => {
     expect(text).not.toContain("finished long ago");
   });
 
-  it("shows recent failure context in session_status output when no task is active", async () => {
+  it("shows blocked completion outcomes in session_status output", async () => {
     const text = await renderTaskStatus(
       [
         {
-          taskId: "task-failed",
+          taskId: "task-blocked",
           runtime: "cron",
           requesterSessionKey: "agent:main:main",
-          task: "failing task",
-          status: "failed",
-          deliveryStatus: "pending",
+          task: "blocked task",
+          status: "succeeded",
+          terminalOutcome: "blocked",
           notifyPolicy: "done_only",
           createdAt: Date.now() - 5_000,
-          error: "permission denied",
+          terminalSummary: "Additional input required.",
         },
       ],
-      "tc-failed",
+      "tc-blocked",
     );
 
-    expect(text).toContain("📌 Tasks: 1 recent failure");
-    expect(text).toContain("failing task");
-    expect(text).toContain("permission denied");
+    expect(text).toContain("📌 Tasks: 1 recent failure · blocked");
+    expect(text).toContain("blocked task");
+    expect(text).toContain("Additional input required.");
   });
 
   it("truncates long task titles and details in session_status output", async () => {

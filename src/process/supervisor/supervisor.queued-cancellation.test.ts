@@ -43,20 +43,15 @@ function createSpawnInput(params: {
   mode?: "child" | "pty";
   replaceExistingScope?: boolean;
 }): SpawnInput {
-  const common = {
+  return {
     runId: params.runId,
     sessionId: "queued-cancellation",
     backendId: "test",
     scopeKey: params.scopeKey,
     replaceExistingScope: params.replaceExistingScope,
+    mode: params.mode ?? "child",
+    argv: [process.execPath, "-e", "process.stdout.write('should-not-run')"],
   };
-  return params.mode === "pty"
-    ? { ...common, mode: "pty", ptyCommand: "printf should-not-run" }
-    : {
-        ...common,
-        mode: "child",
-        argv: [process.execPath, "-e", "process.stdout.write('should-not-run')"],
-      };
 }
 
 describe("process supervisor queued cancellation", () => {

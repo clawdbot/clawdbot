@@ -356,6 +356,46 @@ describe("node.pending handlers", () => {
     expect(call?.[2]).toBeUndefined();
   });
 
+  it("does not enqueue work when pairing invalidates during the generation check", async () => {
+    const lifecycleController = new AbortController();
+    mocks.captureNodeWakeLifecycle.mockReturnValue(lifecycleController.signal);
+    mocks.isNodePairingGenerationCurrent.mockImplementation(async () => {
+      lifecycleController.abort();
+      return true;
+    });
+    mocks.enqueueNodePendingWork.mockReturnValue({
+      revision: 5,
+      deduped: false,
+      item: {
+        id: "pending-stale-generation",
+        type: "location.request",
+        priority: "default",
+        createdAtMs: 100,
+        expiresAtMs: null,
+      },
+    });
+    const respond = vi.fn();
+
+    await expectDefined(
+      nodePendingWorkHandlers["node.pending.enqueue"],
+      'nodePendingWorkHandlers["node.pending.enqueue"] test invariant',
+    )({
+      params: { nodeId: "node-stale-generation", type: "location.request", wake: false },
+      respond: respond as never,
+      client: null,
+      context: makeContext() as never,
+      req: { type: "req", id: "req-node-stale-generation", method: "node.pending.enqueue" },
+      isWebchatConnect: () => false,
+    });
+
+    expect(mocks.enqueueNodePendingWork).not.toHaveBeenCalled();
+    expect(respondCall(respond)).toMatchObject([
+      false,
+      undefined,
+      { details: { code: "PAIRING_CHANGED" } },
+    ]);
+  });
+
   it("returns unavailable when pairing removal invalidates an enqueued item", async () => {
     const lifecycleController = new AbortController();
     const wakeLifecycle = lifecycleController.signal;

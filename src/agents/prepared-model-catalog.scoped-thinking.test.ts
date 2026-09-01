@@ -1,7 +1,7 @@
-// Boundary proof for the turn-path thinking fallback: manifest first, then a provider-scoped
-// static catalog, then scoped live discovery only for runtime-only models (e.g. Ollama).
+// Turn-path thinking reuses published facts before manifest/scoped discovery fallback.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime.errors.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 
@@ -102,9 +102,42 @@ describe("loadProviderScopedThinkingCatalog", () => {
     });
 
     expect(catalog[0]?.compat?.supportedReasoningEfforts).toContain("ultra");
+    expect(manifestCatalogMock).not.toHaveBeenCalled();
     expect(scopedStaticMock).not.toHaveBeenCalled();
     expect(scopedLiveMock).not.toHaveBeenCalled();
   });
+
+  it.each(["thinking", "input"] as const)(
+    "reuses completed owner catalogs for runtime-only %s capabilities",
+    async (capability) => {
+      const entry: ModelCatalogEntry = {
+        ...ollamaEntry,
+        api: "ollama",
+        baseUrl: "https://ollama.invalid",
+        input: ["text", "image"],
+      };
+      const completed: ModelCatalogSnapshot = { entries: [entry], routeVariants: [entry] };
+      publishedSnapshotMock.mockImplementation((input: unknown) => ({
+        config: (input as { config: unknown }).config,
+        modelCatalog: { entries: [], routeVariants: [] },
+        readFullModelCatalog: () => completed,
+      }));
+      const { loadProviderScopedThinkingCatalog } = await import("./prepared-model-catalog.js");
+      const catalog = await loadProviderScopedThinkingCatalog({
+        config: {},
+        provider: entry.provider,
+        model: entry.id,
+        ...(capability === "input"
+          ? { requiredInputRoute: { api: entry.api, baseUrl: entry.baseUrl } }
+          : {}),
+      });
+
+      expect(catalog).toEqual([expect.objectContaining(entry)]);
+      expect(manifestCatalogMock).not.toHaveBeenCalled();
+      expect(scopedStaticMock).not.toHaveBeenCalled();
+      expect(scopedLiveMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("resolves manifest-backed models without any scoped catalog build", async () => {
     manifestCatalogMock.mockReturnValue([
@@ -144,6 +177,7 @@ describe("loadProviderScopedThinkingCatalog", () => {
 
   it("falls back to the scoped catalog while a published owner has the replaced config", async () => {
     preparedSnapshotMock.mockResolvedValue({
+      catalogOwner: undefined,
       agentDir: "/tmp/model-catalog-test",
       activeProjectKeys: [],
       config: { skills: { entries: { marker: { enabled: false } } } },
@@ -191,5 +225,56 @@ describe("loadProviderScopedThinkingCatalog", () => {
     expect(scopedLiveMock).toHaveBeenCalledTimes(1);
     expect(scopedLiveMock).toHaveBeenCalledWith(expect.anything(), ["ollama"]);
     expect(scopedStaticMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      name: "prepared vision",
+      input: ["text", "image"],
+      expected: ["text", "image"],
+      source: "published",
+    },
+    { name: "prepared text-only", input: ["text"], expected: ["text"], source: "published" },
+    { name: "reasoning-only published row", expected: ["text", "image"], source: "manifest" },
+    {
+      name: "different prepared and manifest route",
+      input: ["text", "image"],
+      expected: ["text"],
+      source: "scoped",
+      customRoute: true,
+    },
+  ])("resolves input independently of reasoning: $name", async (testCase) => {
+    const base = {
+      provider: "acme",
+      id: "selected",
+      name: "Selected",
+      reasoning: true,
+      api: "openai-responses" as const,
+      baseUrl: "https://provider.invalid/v1",
+    };
+    const requiredInputRoute = {
+      api: base.api,
+      baseUrl: testCase.customRoute ? "https://custom.invalid/v1" : base.baseUrl,
+    };
+    publishedSnapshotMock.mockImplementation((input: unknown) => ({
+      config: (input as { config: unknown }).config,
+      modelCatalog: { entries: [{ ...base, input: testCase.input }], routeVariants: [] },
+    }));
+    manifestCatalogMock.mockReturnValue([{ ...base, input: ["text", "image"] }]);
+    scopedStaticMock.mockResolvedValue({
+      entries: [{ ...base, ...requiredInputRoute, input: ["text"] }],
+      routeVariants: [],
+    });
+    const { loadProviderScopedThinkingCatalog } = await import("./prepared-model-catalog.js");
+    const catalog = await loadProviderScopedThinkingCatalog({
+      config: {},
+      provider: "acme",
+      model: "selected",
+      requiredInputRoute,
+    });
+    expect(catalog.find((entry) => entry.id === "selected")?.input).toEqual(testCase.expected);
+    expect(manifestCatalogMock).toHaveBeenCalledTimes(testCase.source === "published" ? 0 : 1);
+    expect(scopedStaticMock).toHaveBeenCalledTimes(testCase.source === "scoped" ? 1 : 0);
+    expect(scopedLiveMock).not.toHaveBeenCalled();
   });
 });

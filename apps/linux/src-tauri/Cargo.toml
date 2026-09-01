@@ -41,6 +41,7 @@ tauri-plugin-process = "2.3.1"
 tauri-plugin-single-instance = { version = "2.4.3", features = ["deep-link"] }
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-window-state = "2.4.1"
+tauri-utils = { version = "2.9.3", features = ["config-json5"] }
 tokio = { version = "1.53.1", features = ["macros", "sync", "time"] }
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"] }
 uuid = { version = "1.24.1", features = ["v4"] }

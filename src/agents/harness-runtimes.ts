@@ -38,7 +38,7 @@ function parseConfiguredModelRef(
   return parseModelCatalogRef(value) ?? undefined;
 }
 
-function resolveConfiguredModelHarnessRuntime(params: {
+export function resolveConfiguredModelHarnessRuntime(params: {
   config: OpenClawConfig;
   includeImplicitRuntimePreferences: boolean;
   modelRef: string;

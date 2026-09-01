@@ -72,8 +72,16 @@ vi.mock("./app-server/shared-client.js", () => ({
   }),
   withLeasedCodexAppServerClientStartSelectionRetry: async (params: {
     lease: { client?: unknown };
-    run: (client: unknown) => Promise<unknown>;
-  }) => await params.run(params.lease.client),
+    options?: { timeoutMs?: number };
+    run: (
+      client: unknown,
+      requestOptions: () => { timeoutMs: number; assertCurrent: () => void },
+    ) => Promise<unknown>;
+  }) =>
+    await params.run(params.lease.client, () => ({
+      timeoutMs: params.options?.timeoutMs ?? 60_000,
+      assertCurrent: () => undefined,
+    })),
 }));
 
 describe("codex conversation controls", () => {
@@ -123,7 +131,7 @@ describe("codex conversation controls", () => {
     );
     await expect(
       setCodexConversationPermissionsImpl({ session, mode: "default", config: {} }),
-    ).resolves.toBe("Codex permissions set to default.");
+    ).resolves.toBe("Codex permissions set to guarded.");
 
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-1");
@@ -168,7 +176,7 @@ describe("codex conversation controls", () => {
     },
   );
 
-  it("refuses to persist a permission mode without its canonical session root", async () => {
+  it("persists a permission mode on a rootless session", async () => {
     const session = {
       agentId: "main",
       sessionId: "session-without-root",
@@ -184,10 +192,10 @@ describe("codex conversation controls", () => {
 
     await expect(
       setCodexConversationPermissionsImpl({ session, mode: "default", config: {} }),
-    ).rejects.toThrow("requires a recorded session root");
+    ).resolves.toBe("Codex permissions set to guarded.");
     expect(
       getSessionEntry({ agentId: session.agentId, sessionKey: session.sessionKey, storePath }),
-    ).not.toHaveProperty("permissionMode");
+    ).toMatchObject({ permissionMode: "guarded" });
   });
 
   it("routes supervised stop and steer requests through the native user-home connection", async () => {
@@ -420,7 +428,7 @@ describe("codex conversation controls", () => {
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
-  it("persists ordinary model selection on SessionEntry without overwriting native ownership", async () => {
+  it("persists direct-session model selection without overwriting the active native binding", async () => {
     const sessionKey = "agent:main:model-session";
     const sessionId = "session-model-authority";
     const identity = { kind: "session" as const, agentId: "main", sessionId, sessionKey };
@@ -468,7 +476,7 @@ describe("codex conversation controls", () => {
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
-  it("drops an incompatible pinned auth profile when selecting another provider", async () => {
+  it("clears incompatible direct-session auth when the selected provider changes", async () => {
     const sessionKey = "agent:main:model-provider-switch";
     const sessionId = "session-provider-switch";
     const identity = { kind: "session" as const, agentId: "main", sessionId, sessionKey };
@@ -502,6 +510,11 @@ describe("codex conversation controls", () => {
       }),
     ).resolves.toBe("Codex model set to gpt-5.5.");
 
+    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+      threadId: "thread-provider-switch",
+      model: "local-model",
+      modelProvider: "lmstudio",
+    });
     expect(getSessionEntry({ storePath, sessionKey })).toMatchObject({
       providerOverride: "openai",
       modelOverride: "gpt-5.5",

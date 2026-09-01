@@ -130,7 +130,8 @@ const loadPluginMetadataSnapshot = vi.hoisted(() =>
   })),
 );
 
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: (params?: {
     allowScopedSnapshot?: boolean;
     requireDefaultDiscoveryContext?: boolean;
@@ -165,6 +166,7 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot,
 }));
 
+import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   resolveProviderEndpoint,
@@ -289,18 +291,30 @@ describe("provider attribution", () => {
     expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
-  it("scans plugin metadata once when falling back without a lifecycle snapshot", () => {
+  it("resolves fallback provider facts in each operation's metadata generation", () => {
     providerMetadataState.pluginIdScoped = true;
     providerMetadataState.snapshot = undefined;
-
-    for (let index = 0; index < 10; index += 1) {
-      resolveProviderRequestPolicy({ provider: "fallback-provider" });
+    try {
+      for (const family of ["before-refresh", "after-refresh"]) {
+        loadPluginMetadataSnapshot.mockReturnValue({
+          owners: {
+            providerEndpoints: [],
+            providerRequests: new Map([["fallback-provider", { family }]]),
+          },
+        });
+        expect(
+          withPluginCache(
+            createPluginCache(),
+            () =>
+              resolveProviderRequestPolicy({ provider: "fallback-provider" }).knownProviderFamily,
+          ),
+        ).toBe(family);
+      }
+    } finally {
+      loadPluginMetadataSnapshot.mockReturnValue({
+        owners: { providerEndpoints: [], providerRequests: new Map() },
+      });
     }
-    expect(loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
-
-    clearPluginMetadataLifecycleCaches();
-    resolveProviderRequestPolicy({ provider: "fallback-provider" });
-    expect(loadPluginMetadataSnapshot).toHaveBeenCalledTimes(2);
   });
 
   it("uses explicitly prepared provider facts without reading process metadata", () => {
@@ -315,6 +329,7 @@ describe("provider attribution", () => {
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
       providerEndpoints: [
         {
           endpointClass: "anthropic-public" as const,

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { listRawChannelPluginCatalogEntries } from "../../../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -12,7 +13,10 @@ import {
   resolveDefaultPluginExtensionsDir,
   resolvePluginInstallDir,
 } from "../../../plugins/install-paths.js";
-import { loadInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
+import {
+  loadInstalledPluginIndexInstallRecords,
+  removePluginInstallRecordFromRecords,
+} from "../../../plugins/installed-plugin-index-records.js";
 import { loadInstalledPluginIndex } from "../../../plugins/installed-plugin-index.js";
 import { readLegacyNpmPluginDeclaration } from "../../../plugins/legacy-npm-declaration.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
@@ -23,6 +27,7 @@ import {
   resolveOfficialExternalPluginInstall,
   resolveOfficialExternalPluginLabel,
 } from "../../../plugins/official-external-plugin-catalog.js";
+import { safeRealpathSync } from "../../../plugins/path-safety.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { resolveUserPath } from "../../../utils.js";
@@ -36,6 +41,7 @@ import {
   collectConfiguredPluginIds,
   collectEffectiveConfiguredChannelOwnerPluginIds,
 } from "./missing-configured-plugin-install.ids.js";
+import { isInstalledRecordMissingOnDisk } from "./missing-configured-plugin-install.records.js";
 
 export type DownloadableInstallCandidate = {
   pluginId: string;
@@ -52,6 +58,15 @@ export type BundledPluginPackageDescriptor = {
   name?: string;
   packageName?: string;
 };
+
+function resolvePluginPathIdentity(
+  value: string,
+  env: NodeJS.ProcessEnv,
+  realpathCache: Map<string, string>,
+): string {
+  const resolved = path.resolve(resolveUserPath(value, env));
+  return safeRealpathSync(resolved, realpathCache) ?? resolved;
+}
 
 /** Keep doctor diagnostics and actual package repair on the same discovery snapshot. */
 export async function resolveConfiguredPluginInstallContext(params: {
@@ -122,12 +137,65 @@ export async function resolveConfiguredPluginInstallContext(params: {
       blockedPluginIds: params.blockedPluginIds,
     }).keys(),
   );
+  const realpathCache = new Map<string, string>();
+  const configuredLoadPathIdentities = new Set(
+    snapshot.discovery?.candidates
+      .filter((candidate) => candidate.configSelected)
+      .flatMap((candidate) => [candidate.rootDir, candidate.source])
+      .map((value) => resolvePluginPathIdentity(value, params.env, realpathCache)),
+  );
+  const configuredLoadPathPluginsById = new Map<string, string>();
+  for (const plugin of snapshot.plugins) {
+    if (
+      plugin.origin === "config" ||
+      [plugin.rootDir, plugin.source].some((value) =>
+        configuredLoadPathIdentities.has(
+          resolvePluginPathIdentity(value, params.env, realpathCache),
+        ),
+      )
+    ) {
+      configuredLoadPathPluginsById.set(plugin.id, plugin.rootDir);
+    }
+  }
+  const stalePathInstallPluginIds = new Set<string>();
+  for (const [pluginId, record] of Object.entries(records)) {
+    if (installedPluginIdsWithRepairablePackages.has(pluginId)) {
+      continue;
+    }
+    const configPluginRoot = configuredLoadPathPluginsById.get(pluginId);
+    const recordedPaths = [record.installPath, record.sourcePath].filter((value): value is string =>
+      Boolean(value?.trim()),
+    );
+    if (!configPluginRoot || record.source !== "path" || recordedPaths.length === 0) {
+      continue;
+    }
+    const configRootIdentity = resolvePluginPathIdentity(
+      configPluginRoot,
+      params.env,
+      realpathCache,
+    );
+    if (
+      isInstalledRecordMissingOnDisk(record, params.env) &&
+      recordedPaths.every(
+        (value) =>
+          resolvePluginPathIdentity(value, params.env, realpathCache) !== configRootIdentity,
+      )
+    ) {
+      stalePathInstallPluginIds.add(pluginId);
+    }
+  }
+  let effectiveRecords = records;
+  for (const pluginId of stalePathInstallPluginIds) {
+    effectiveRecords = removePluginInstallRecordFromRecords(effectiveRecords, pluginId);
+  }
   return {
     knownIds,
     configuredChannelOwnerPluginIds,
     bundledPluginsById,
     configuredPluginIdsWithStaleDescriptors,
-    records,
+    stalePathInstallPluginIds,
+    records: effectiveRecords,
+    persistedRecords: records,
     updateChannel,
     installedPluginIdsWithRepairablePackageDiagnostics,
     installedPluginIdsWithStaleVersionBoundRuntimePackages,

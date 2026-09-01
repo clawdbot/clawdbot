@@ -8,8 +8,7 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { resolveGatewayErrorDetailCode } from "../api/gateway.ts";
 
-/** Identifies an expired process-local wizard session without parsing public copy. */
-export function isWizardNotFoundError(err: unknown): boolean {
+function hasGatewayErrorDetail(err: unknown, expectedCode: string, detailCode: string): boolean {
   const error = asRecord(err);
   if (!error) {
     return false;
@@ -20,9 +19,23 @@ export function isWizardNotFoundError(err: unknown): boolean {
       : typeof error.code === "string"
         ? error.code
         : null;
-  return (
-    code === ErrorCodes.INVALID_REQUEST &&
-    asRecord(error.details)?.code === GatewayErrorDetailCodes.WIZARD_NOT_FOUND
+  return code === expectedCode && asRecord(error.details)?.code === detailCode;
+}
+
+/** Identifies an expired process-local wizard session without parsing public copy. */
+export function isWizardNotFoundError(err: unknown): boolean {
+  return hasGatewayErrorDetail(
+    err,
+    ErrorCodes.INVALID_REQUEST,
+    GatewayErrorDetailCodes.WIZARD_NOT_FOUND,
+  );
+}
+
+export function isSetupAdmissionBusyError(err: unknown): boolean {
+  return hasGatewayErrorDetail(
+    err,
+    ErrorCodes.UNAVAILABLE,
+    GatewayErrorDetailCodes.SETUP_ADMISSION_BUSY,
   );
 }
 

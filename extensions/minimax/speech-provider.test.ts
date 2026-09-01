@@ -18,10 +18,10 @@ vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
 import { buildMinimaxSpeechProvider } from "./speech-provider.js";
 
 function clearMinimaxAuthEnv() {
-  delete process.env.MINIMAX_API_KEY;
-  delete process.env.MINIMAX_OAUTH_TOKEN;
-  delete process.env.MINIMAX_CODE_PLAN_KEY;
-  delete process.env.MINIMAX_CODING_API_KEY;
+  vi.stubEnv("MINIMAX_API_KEY", undefined);
+  vi.stubEnv("MINIMAX_OAUTH_TOKEN", undefined);
+  vi.stubEnv("MINIMAX_CODE_PLAN_KEY", undefined);
+  vi.stubEnv("MINIMAX_CODING_API_KEY", undefined);
 }
 
 function minimaxPortalStore(): AuthProfileStore {
@@ -93,7 +93,6 @@ describe("buildMinimaxSpeechProvider", () => {
   });
 
   describe("isConfigured", () => {
-    const savedEnv = { ...process.env };
     let tempStateDir: string;
     let tempAgentDir: string;
     let tokenPlanEnvConfigured = false;
@@ -119,15 +118,15 @@ describe("buildMinimaxSpeechProvider", () => {
       tempStateDir = await mkdtemp(path.join(tmpdir(), "openclaw-minimax-tts-auth-"));
       tempAgentDir = path.join(tempStateDir, "agents", "main", "agent");
       await mkdir(tempAgentDir, { recursive: true });
-      process.env.OPENCLAW_STATE_DIR = tempStateDir;
-      process.env.OPENCLAW_AGENT_DIR = tempAgentDir;
+      vi.stubEnv("OPENCLAW_STATE_DIR", tempStateDir);
+      vi.stubEnv("OPENCLAW_AGENT_DIR", tempAgentDir);
       clearMinimaxAuthEnv();
       clearRuntimeAuthProfileStoreSnapshots();
     });
 
     afterEach(async () => {
       clearRuntimeAuthProfileStoreSnapshots();
-      process.env = { ...savedEnv };
+      vi.unstubAllEnvs();
       await rm(tempStateDir, { recursive: true, force: true });
     });
 
@@ -163,16 +162,14 @@ describe("buildMinimaxSpeechProvider", () => {
   });
 
   describe("resolveConfig", () => {
-    const savedEnv = { ...process.env };
-
     afterEach(() => {
-      process.env = { ...savedEnv };
+      vi.unstubAllEnvs();
     });
 
     it("returns defaults when rawConfig is empty", () => {
-      delete process.env.MINIMAX_API_HOST;
-      delete process.env.MINIMAX_TTS_MODEL;
-      delete process.env.MINIMAX_TTS_VOICE_ID;
+      vi.stubEnv("MINIMAX_API_HOST", undefined);
+      vi.stubEnv("MINIMAX_TTS_MODEL", undefined);
+      vi.stubEnv("MINIMAX_TTS_VOICE_ID", undefined);
       const config = resolveProviderConfig({ rawConfig: {}, cfg: {} as never, timeoutMs: 30000 });
       expect(config.baseUrl).toBe("https://api.minimax.io");
       expect(config.model).toBe("speech-2.8-hd");
@@ -205,9 +202,9 @@ describe("buildMinimaxSpeechProvider", () => {
     });
 
     it("keeps trusted MINIMAX_API_HOST fallback for TTS baseUrl", () => {
-      process.env.MINIMAX_API_HOST = "https://api.minimax.io/anthropic";
-      process.env.MINIMAX_TTS_MODEL = "speech-01-turbo";
-      process.env.MINIMAX_TTS_VOICE_ID = "Chinese (Mandarin)_Gentle_Boy";
+      vi.stubEnv("MINIMAX_API_HOST", "https://api.minimax.io/anthropic");
+      vi.stubEnv("MINIMAX_TTS_MODEL", "speech-01-turbo");
+      vi.stubEnv("MINIMAX_TTS_VOICE_ID", "Chinese (Mandarin)_Gentle_Boy");
       const config = resolveProviderConfig({ rawConfig: {}, cfg: {} as never, timeoutMs: 30000 });
       expect(config.baseUrl).toBe("https://api.minimax.io");
       expect(config.model).toBe("speech-01-turbo");
@@ -215,7 +212,7 @@ describe("buildMinimaxSpeechProvider", () => {
     });
 
     it("derives the TTS host from minimax-portal OAuth config", () => {
-      delete process.env.MINIMAX_API_HOST;
+      vi.stubEnv("MINIMAX_API_HOST", undefined);
       const config = resolveProviderConfig({
         rawConfig: {},
         cfg: {
@@ -355,7 +352,6 @@ describe("buildMinimaxSpeechProvider", () => {
 
   describe("synthesize", () => {
     const savedFetch = globalThis.fetch;
-    const savedEnv = { ...process.env };
     let tempStateDir: string;
     let tempAgentDir: string;
 
@@ -363,11 +359,8 @@ describe("buildMinimaxSpeechProvider", () => {
       tempStateDir = await mkdtemp(path.join(tmpdir(), "openclaw-minimax-tts-synth-"));
       tempAgentDir = path.join(tempStateDir, "agents", "main", "agent");
       await mkdir(tempAgentDir, { recursive: true });
-      process.env = {
-        ...savedEnv,
-        OPENCLAW_AGENT_DIR: tempAgentDir,
-        OPENCLAW_STATE_DIR: tempStateDir,
-      };
+      vi.stubEnv("OPENCLAW_AGENT_DIR", tempAgentDir);
+      vi.stubEnv("OPENCLAW_STATE_DIR", tempStateDir);
       clearMinimaxAuthEnv();
       clearRuntimeAuthProfileStoreSnapshots();
       vi.stubGlobal("fetch", vi.fn());
@@ -376,7 +369,7 @@ describe("buildMinimaxSpeechProvider", () => {
 
     afterEach(async () => {
       globalThis.fetch = savedFetch;
-      process.env = { ...savedEnv };
+      vi.unstubAllEnvs();
       clearRuntimeAuthProfileStoreSnapshots();
       vi.restoreAllMocks();
       await rm(tempStateDir, { recursive: true, force: true });

@@ -1,4 +1,5 @@
 // Input file helpers normalize inline, fetched, and local media inputs.
+import { MIMEType } from "node:util";
 import {
   classifyAttachmentBytes,
   type AttachmentClassification,
@@ -7,10 +8,7 @@ import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-
 import { parseMediaContentLength } from "@openclaw/media-core/content-length";
 import { detectMime, normalizeMimeType } from "@openclaw/media-core/mime";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readResponseWithLimit } from "../infra/http-body.js";
@@ -166,12 +164,13 @@ function parseContentType(value: string | undefined): {
   if (!value) {
     return {};
   }
-  const parts = value.split(";").map((part) => part.trim());
-  const mimeType = normalizeMimeType(parts[0]);
-  const charset = parts
-    .map((part) => normalizeOptionalString(part.match(/^charset=(.+)$/i)?.[1]))
-    .find((part) => part && part.length > 0);
-  return { mimeType, charset };
+  const mimeType = normalizeMimeType(value);
+  try {
+    return { mimeType, charset: new MIMEType(value).params.get("charset") ?? undefined };
+  } catch {
+    // Invalid metadata still goes through byte classification and MIME allowlists.
+    return { mimeType };
+  }
 }
 
 /** Converts configured MIME lists into a normalized allowlist, using fallback defaults when empty. */
@@ -387,7 +386,6 @@ export async function extractFileContentFromSource(params: {
   source: InputFileSource;
   limits: InputFileLimits;
   config?: OpenClawConfig;
-  classification?: AttachmentClassification;
 }): Promise<InputFileExtractResult> {
   const { source, limits } = params;
   const filename = source.filename || "file";
@@ -427,6 +425,28 @@ export async function extractFileContentFromSource(params: {
     buffer = result.buffer;
   }
 
+  return await extractFileContentFromBuffer({
+    buffer,
+    filename,
+    mimeType,
+    charset,
+    limits,
+    config: params.config,
+  });
+}
+
+/** Extracts owned bytes after shared size and MIME checks; no source encoding is required. */
+export async function extractFileContentFromBuffer(params: {
+  buffer: Buffer;
+  filename?: string;
+  mimeType?: string;
+  charset?: string;
+  limits: InputFileLimits;
+  config?: OpenClawConfig;
+  classification?: AttachmentClassification;
+}): Promise<InputFileExtractResult> {
+  const { buffer, limits } = params;
+  const filename = params.filename || "file";
   if (buffer.byteLength > limits.maxBytes) {
     throw new Error(`File too large: ${buffer.byteLength} bytes (limit: ${limits.maxBytes} bytes)`);
   }
@@ -434,9 +454,10 @@ export async function extractFileContentFromSource(params: {
   // Direct input_file callers declare their content type; the filename is
   // display metadata and must not override an explicitly allowlisted MIME.
   const classification =
-    params.classification ?? (await classifyAttachmentBytes({ buffer, declaredMime: mimeType }));
-  mimeType = classification.mime;
-  charset = classification.charset ?? charset;
+    params.classification ??
+    (await classifyAttachmentBytes({ buffer, declaredMime: params.mimeType }));
+  const mimeType = classification.mime;
+  const charset = classification.charset ?? params.charset;
 
   if (!mimeType) {
     throw new Error("input_file missing media type");

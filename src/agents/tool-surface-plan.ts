@@ -20,17 +20,26 @@ type AgentToolSurfacePlanParams = {
   sessionKey?: string;
   forceDirectMessageTool: boolean;
   model?: { compat?: unknown };
+  modelProvider?: string;
+  modelId?: string;
+  codeModeOverride?: boolean | "auto";
   toolsEnabled: boolean;
   disableTools?: boolean;
   isRawModelRun: boolean;
-  skillWorkshopProposalOnly?: boolean;
   toolsAllow?: readonly string[];
   forceCodeModeControls?: boolean;
   forceDirectTools?: boolean;
 };
 
 export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) {
-  const codeModeConfig = resolveCodeModeConfig(params.config, params.agentId);
+  const codeModeConfig = resolveCodeModeConfig(
+    params.config,
+    params.agentId,
+    params.modelProvider && params.modelId
+      ? { provider: params.modelProvider, modelId: params.modelId }
+      : undefined,
+  );
+  codeModeConfig.enabled = params.codeModeOverride ?? codeModeConfig.enabled;
   const toolSearchRuntimeConfig = resolveAgentToolSearchRuntimeConfig({
     config: params.config,
     agentId: params.agentId,
@@ -43,9 +52,6 @@ export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) 
     getActiveAgentRingZeroTools().length === 0 &&
     params.disableTools !== true &&
     !params.isRawModelRun &&
-    // Proposal-only workshop runs are deliberately narrow single-tool runs;
-    // code-mode indirection and tool-search catalogs are pure overhead.
-    params.skillWorkshopProposalOnly !== true &&
     params.toolsAllow?.length !== 0 &&
     // Completion-private replies must never expose catalog controls that can
     // invoke tools beyond their single directly visible message capability.
@@ -83,7 +89,6 @@ type ApplyAgentToolSurfaceCatalogParams = Omit<CodeModeCatalogParams, "directToo
   codeModeControlsEnabled: boolean;
   toolSearchConfig: ToolSearchConfig;
   forceDirectMessageTool: boolean;
-  forceCodeModeControls?: boolean;
 };
 
 export function applyAgentToolSurfaceCatalog({
@@ -91,7 +96,6 @@ export function applyAgentToolSurfaceCatalog({
   toolSearchConfig,
   toolSearchRuntimeConfig,
   forceDirectMessageTool,
-  forceCodeModeControls,
   ...catalogParams
 }: ApplyAgentToolSurfaceCatalogParams) {
   // When the message tool is the only reply path it must stay directly visible
@@ -102,7 +106,6 @@ export function applyAgentToolSurfaceCatalog({
       ...catalogParams,
       config: catalogParams.config,
       directToolNames,
-      forceEnabled: forceCodeModeControls,
     });
   }
   const applyCatalog =

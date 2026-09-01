@@ -42,6 +42,7 @@ import "../web-awesome.ts";
 const loadMcpAppView = () => import("../mcp-app-view-registration.ts");
 
 export type BoardWidgetCellCallbacks = {
+  appViewGeneration: () => number;
   grant: (name: string, decision: BoardGrantDecision) => Promise<void>;
   movePointerDown: (widget: BoardWidget, event: PointerEvent) => void;
   resizePointerDown: (widget: BoardWidget, event: PointerEvent) => void;
@@ -423,7 +424,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     return html`
       <section
         class=${`board-widget ${this.dragging ? "board-widget--dragging" : ""} ${presentation ? `board-widget--${presentation}` : ""}`}
-        style=${`${toCssPlacement(rect)}${exactHeightStyle}`}
+        style=${`${toCssPlacement(rect)} --board-widget-rows: ${rect.h}; --board-widget-order: ${this.positionInSet};${exactHeightStyle}`}
         role="listitem"
         tabindex=${this.focusTabIndex}
         aria-posinset=${this.positionInSet}

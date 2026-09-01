@@ -26,8 +26,9 @@ type InlineDirectiveParseOptions = {
 const AUDIO_TAG_RE = /\[\[\s*audio_as_voice\s*\]\]/gi;
 const REPLY_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*([^\]\n]+))\s*\]\]/gi;
 const INLINE_DIRECTIVE_TAG_WITH_PADDING_RE =
-  /\s*(?:\[\[\s*audio_as_voice\s*\]\]|\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\])\s*/gi;
+  /(?:\s*(?:\[\[\s*audio_as_voice\s*\]\]|\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\])\s*|^[\t ]*\[\[\s*(?:reply_to_current(?:[\t ]*\](?!\])|(?=[\t ]+\S)|[\t ]*$)|reply_to\s*:\s*(?:[^\]\r\n]*\](?!\])|[\t ]*$))[\t ]*)/giu;
 const MAX_REPLY_DIRECTIVE_ID_LENGTH = 256;
+const UNSAFE_REPLY_DIRECTIVE_CHARS_RE = /[\p{Cc}[\]]/gu;
 const NO_INLINE_DIRECTIVES = {
   audioAsVoice: false,
   replyToCurrent: false,
@@ -118,45 +119,30 @@ export function stripInlineDirectiveTagsForDisplay(text: string): StripInlineDir
   };
 }
 
-function stripUnsafeReplyDirectiveChars(value: string): string {
-  const chars: string[] = [];
-  for (const ch of value) {
-    const code = ch.charCodeAt(0);
-    if (
-      (code >= 0 && code <= 31) ||
-      code === 127 ||
-      (code >= 0x80 && code <= 0x9f) ||
-      ch === "[" ||
-      ch === "]"
-    ) {
-      continue;
-    }
-    chars.push(ch);
-  }
-  return chars.join("");
-}
-
 export function sanitizeReplyDirectiveId(rawReplyToId?: string): string | undefined {
   const trimmed = rawReplyToId?.trim();
   if (!trimmed) {
     return undefined;
   }
-  const sanitized = stripUnsafeReplyDirectiveChars(trimmed).trim();
+  const sanitized = trimmed.replace(UNSAFE_REPLY_DIRECTIVE_CHARS_RE, "").trim();
   if (!sanitized) {
     return undefined;
   }
-  const chars = Array.from(sanitized);
-  if (chars.length > MAX_REPLY_DIRECTIVE_ID_LENGTH) {
-    return chars.slice(0, MAX_REPLY_DIRECTIVE_ID_LENGTH).join("");
-  }
-  return sanitized;
+  // UTF-16 length is an upper bound on the number of code points.
+  return sanitized.length <= MAX_REPLY_DIRECTIVE_ID_LENGTH
+    ? sanitized
+    : Array.from(sanitized).slice(0, MAX_REPLY_DIRECTIVE_ID_LENGTH).join("");
 }
 
 export function stripInlineDirectiveTagsForDelivery(text: string): StripInlineDirectiveTagsResult {
   if (!text) {
     return { text, changed: false };
   }
-  const stripped = replaceOutsideCodeRegions(text, INLINE_DIRECTIVE_TAG_WITH_PADDING_RE, () => " ");
+  // Only malformed prefixes at the absolute message start are control text; keep
+  // the regex non-multiline while code-region scanning preserves literal examples.
+  const stripped = replaceOutsideCodeRegions(text, INLINE_DIRECTIVE_TAG_WITH_PADDING_RE, (match) =>
+    match.includes("]]") ? " " : "",
+  );
   const changed = stripped !== text;
   return {
     text: changed ? stripped.trim() : text,

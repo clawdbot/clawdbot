@@ -93,4 +93,20 @@ describe("SessionCatalogLiveState", () => {
     expect(result?.materialChange).toBe(false);
     expect(live.sawChange).toBe(false);
   });
+
+  it.each([
+    ["mode-less client", { deviceId: "legacy-client" }, false],
+    ["browser with a node role", { deviceId: "browser", mode: "webchat", roles: ["node"] }, false],
+    [
+      "operator with a node role",
+      { deviceId: "operator", mode: "operator", roles: ["node"] },
+      false,
+    ],
+    ["node with an operator role", { deviceId: "node", mode: "node", roles: ["operator"] }, true],
+    ["legacy node role", { deviceId: "legacy-node", roles: ["node"] }, true],
+  ] as const)("classifies %s presence for catalog refreshes", (_name, entry, expected) => {
+    const live = new SessionCatalogLiveState();
+
+    expect(live.observePresence({ presence: [entry] })).toBe(expected);
+  });
 });

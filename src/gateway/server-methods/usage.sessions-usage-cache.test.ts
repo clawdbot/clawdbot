@@ -93,6 +93,8 @@ describe("sessions.usage result cache", () => {
     vi.clearAllMocks();
     testApi.sessionsUsageCache.clear();
     mocks.loadCombinedSessionStoreForGatewayCore.mockReturnValue({
+      agentIdBySessionKey: new Map(),
+      durableTargets: [],
       storePath: "(multiple)",
       store: {},
     });
@@ -127,6 +129,47 @@ describe("sessions.usage result cache", () => {
     expect(JSON.stringify(repeated)).toBe(JSON.stringify(first));
     expect(mocks.discoverAllSessions).toHaveBeenCalledTimes(1);
     expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps context availability in lightweight rows without caching away requested details", async () => {
+    const contextWeight = {
+      source: "run",
+      generatedAt: 1,
+      systemPrompt: { chars: 100, projectContextChars: 40, nonProjectContextChars: 60 },
+      injectedWorkspaceFiles: [],
+      skills: { promptChars: 0, entries: [] },
+      tools: { listChars: 0, schemaChars: 0, entries: [] },
+    };
+    mocks.loadCombinedSessionStoreForGatewayCore.mockReturnValue({
+      agentIdBySessionKey: new Map([["agent:main:main", "main"]]),
+      durableTargets: [],
+      storePath: "(multiple)",
+      store: {
+        "agent:main:main": {
+          sessionId: "session-main",
+          updatedAt: 100,
+          systemPromptReport: contextWeight,
+        },
+      },
+    });
+    const lean = await runSessionsUsage({ ...baseParams, agentScope: "all" });
+    expect(lean).toMatchObject({
+      sessions: [
+        { agentId: "main", hasContextWeight: true },
+        { agentId: "opus", hasContextWeight: false },
+      ],
+    });
+    expect(JSON.stringify(lean)).not.toContain('"contextWeight":');
+
+    const detailed = await runSessionsUsage({
+      ...baseParams,
+      agentScope: "all",
+      includeContextWeight: true,
+    });
+    expect(detailed).toMatchObject({
+      sessions: [{ contextWeight }, { contextWeight: null }],
+    });
+    expect(await runSessionsUsage({ ...baseParams, agentScope: "all" })).toEqual(lean);
   });
 
   it("does not share entries across result-shaping query parameters", async () => {
@@ -187,18 +230,23 @@ describe("sessions.usage result cache", () => {
         },
       };
       mocks.loadCombinedSessionStoreForGatewayCore.mockReturnValue({
+        agentIdBySessionKey: new Map([
+          ["agent:main:first", "main"],
+          ["agent:main:second", "main"],
+        ]),
+        durableTargets: [],
         storePath: "(multiple)",
         store: {
           "agent:main:first": {
             sessionId: "session-first",
             updatedAt: 200,
-            createdActor: { type: "human", id: firstProfile.id },
+            createdActor: { type: "human", source: "profile", id: firstProfile.id },
             visibility: "shared",
           },
           "agent:main:second": {
             sessionId: "session-second",
             updatedAt: 100,
-            createdActor: { type: "human", id: secondProfile.id },
+            createdActor: { type: "human", source: "profile", id: secondProfile.id },
             visibility: "shared",
           },
         },

@@ -27,6 +27,7 @@ type MemoryManagerParams = {
 
 let workspaceDir = "/workspace";
 let statusDirty = false;
+let lastSyncError: string | undefined;
 let customStatus: Record<string, unknown> | undefined;
 let sourceCounts: Array<{ source: MemorySource; files: number; chunks: number }> = [
   { source: "memory", files: 1, chunks: 1 },
@@ -56,6 +57,7 @@ const stubManager = {
     files: 1,
     chunks: 1,
     dirty: statusDirty,
+    lastSyncError,
     workspaceDir,
     dbPath: "/workspace/.memory/index.sqlite",
     provider: "builtin",
@@ -95,6 +97,10 @@ export function setMemoryStatusDirty(next: boolean): void {
   statusDirty = next;
 }
 
+export function setMemoryLastSyncError(next: string | undefined): void {
+  lastSyncError = next;
+}
+
 export function setMemorySourceCounts(
   next: Array<{ source: MemorySource; files: number; chunks: number }>,
 ): void {
@@ -131,6 +137,7 @@ export function resetMemoryToolMockState(overrides?: {
 }): void {
   workspaceDir = "/workspace";
   statusDirty = false;
+  lastSyncError = undefined;
   customStatus = undefined;
   sourceCounts = [{ source: "memory", files: 1, chunks: 1 }];
   getManagerImpl = undefined;

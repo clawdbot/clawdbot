@@ -8,9 +8,11 @@ export function assertNoCmdLineBreak(value: string, field: string): void {
   }
 }
 
-function escapeCmdSetAssignmentComponent(value: string): string {
-  // Escape expansion-sensitive characters before wrapping in set "KEY=VALUE".
-  return value.replace(/\^/g, "^^").replace(/%/g, "%%").replace(/!/g, "^!").replace(/"/g, '^"');
+function escapeCmdSetAssignmentComponent(value: string, delayedExpansion: boolean): string {
+  // Keep the service-script encoding/readback contract by default. A launcher
+  // that disables delayed expansion must not insert literal carets into paths.
+  const escaped = delayedExpansion ? value.replace(/\^/g, "^^").replace(/!/g, "^!") : value;
+  return escaped.replace(/%/g, "%%").replace(/"/g, '^"');
 }
 
 function unescapeCmdSetAssignmentComponent(value: string): string {
@@ -60,10 +62,14 @@ export function parseCmdSetAssignment(line: string): CmdSetAssignment | null {
   };
 }
 
-export function renderCmdSetAssignment(key: string, value: string): string {
+export function renderCmdSetAssignment(
+  key: string,
+  value: string,
+  options: { delayedExpansion?: boolean } = {},
+): string {
   assertNoCmdLineBreak(key, "Environment variable name");
   assertNoCmdLineBreak(value, "Environment variable value");
-  const escapedKey = escapeCmdSetAssignmentComponent(key);
-  const escapedValue = escapeCmdSetAssignmentComponent(value);
+  const escapedKey = escapeCmdSetAssignmentComponent(key, options.delayedExpansion !== false);
+  const escapedValue = escapeCmdSetAssignmentComponent(value, options.delayedExpansion !== false);
   return `set "${escapedKey}=${escapedValue}"`;
 }

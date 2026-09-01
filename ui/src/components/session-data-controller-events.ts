@@ -1,37 +1,46 @@
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { readPresenceEntries, type PresencePayload } from "../app/user-profile.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
-import type { SessionCapability, SessionListSnapshot } from "../lib/sessions/index.ts";
+import type {
+  SessionCapability,
+  SessionListOptions,
+  SessionListSnapshot,
+} from "../lib/sessions/index.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
-import {
-  SIDEBAR_AGENT_SESSION_LIST_LIMIT,
-  type SidebarSessionStatusFilter,
+import type {
+  SidebarSessionOwnerFilter,
+  SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 
 type SidebarSessionListOwner = {
   readonly context: ApplicationContext<RouteId> | undefined;
-  readonly sessionCreatedOrder: Map<string, number>;
   sessionResultsByAgent: Record<string, NonNullable<SessionListSnapshot["result"]>>;
   sessionsResult: SessionListSnapshot["result"];
   sessionsAgentId: SessionListSnapshot["agentId"];
   sessionsLoading: boolean;
   sessionMutationError: string | null;
   expandedAgentId(): string;
+  sessionListQuery(agentId: string): SessionListOptions;
   requestSessionDataUpdate(): void;
 };
 
-function pruneSidebarSessionOrder(
+const sidebarSessionErrorOwners = new WeakMap<SidebarSessionListOwner, "list" | "action">();
+
+export function publishSidebarSessionError(
   owner: SidebarSessionListOwner,
-  retainedResults: readonly NonNullable<SessionListSnapshot["result"]>[],
+  error: string | null,
+  source: "list" | "action",
 ): void {
-  const visibleKeys = new Set(
-    retainedResults.flatMap((result) => result.sessions.map((row) => row.key).filter(Boolean)),
-  );
-  for (const key of owner.sessionCreatedOrder.keys()) {
-    if (!visibleKeys.has(key)) {
-      owner.sessionCreatedOrder.delete(key);
-    }
+  if (source === "list" && sidebarSessionErrorOwners.get(owner) === "action") {
+    return;
+  }
+  owner.sessionMutationError = error;
+  if (error === null) {
+    sidebarSessionErrorOwners.delete(owner);
+  } else {
+    sidebarSessionErrorOwners.set(owner, source);
   }
 }
 
@@ -49,11 +58,6 @@ function pruneSidebarAgentSessionCaches(
     owner.sessionsResult = null;
     owner.sessionsAgentId = null;
   }
-  const retainedResults = Object.values(owner.sessionResultsByAgent);
-  if (owner.sessionsResult) {
-    retainedResults.push(owner.sessionsResult);
-  }
-  pruneSidebarSessionOrder(owner, retainedResults);
 }
 
 export function subscribeSidebarAgentSessionCaches(
@@ -78,11 +82,24 @@ export function subscribeSidebarAgentSessionCaches(
   });
 }
 
-function filteredSidebarSessionQuery(agentId: string, archivedFilter: SidebarSessionStatusFilter) {
+type SidebarSessionQueryOwner = {
+  sidebarSessionOwnerFilter(): SidebarSessionOwnerFilter;
+  sidebarSessionStatusFilter(): SidebarSessionStatusFilter;
+};
+
+export function hasSidebarListFilter(owner: SidebarSessionQueryOwner): boolean {
+  const { ownerId, involvingMe } = owner.sidebarSessionOwnerFilter();
+  return owner.sidebarSessionStatusFilter() !== "active" || Boolean(ownerId || involvingMe);
+}
+
+export function sidebarSessionListQuery(owner: SidebarSessionQueryOwner, agentId: string) {
+  const { ownerId, involvingMe } = owner.sidebarSessionOwnerFilter();
   return {
+    ownerId: involvingMe ? undefined : ownerId || undefined,
+    involvingMe: involvingMe || undefined,
     agentId,
-    archivedFilter,
-    limit: SIDEBAR_AGENT_SESSION_LIST_LIMIT,
+    archivedFilter: owner.sidebarSessionStatusFilter(),
+    limit: SIDEBAR_SESSION_ROSTER_LIMIT,
     includeDerivedTitles: true,
     includeLastMessage: true,
   } as const;
@@ -94,33 +111,17 @@ export function publishSidebarSessionList(
 ): void {
   owner.sessionsResult = snapshot.result;
   owner.sessionsAgentId = snapshot.agentId;
-  const sessions = snapshot.result?.sessions ?? [];
   if (snapshot.result && snapshot.agentId) {
     owner.sessionResultsByAgent[normalizeAgentId(snapshot.agentId)] = snapshot.result;
-  }
-  const retainedResults = snapshot.result
-    ? [snapshot.result, ...Object.values(owner.sessionResultsByAgent)]
-    : Object.values(owner.sessionResultsByAgent);
-  pruneSidebarSessionOrder(owner, retainedResults);
-  let nextCreatedOrder = 0;
-  for (const order of owner.sessionCreatedOrder.values()) {
-    nextCreatedOrder = Math.max(nextCreatedOrder, order + 1);
-  }
-  for (const row of sessions) {
-    if (row.key && !owner.sessionCreatedOrder.has(row.key)) {
-      owner.sessionCreatedOrder.set(row.key, nextCreatedOrder++);
-    }
   }
 }
 
 export function subscribeFilteredSidebarSessions(
   owner: SidebarSessionListOwner,
   sessions: SessionCapability,
-  agentId: string,
-  archivedFilter: Exclude<SidebarSessionStatusFilter, "active">,
+  scope: SessionListOptions,
   isCurrent: () => boolean,
 ): () => void {
-  const scope = filteredSidebarSessionQuery(agentId, archivedFilter);
   const apply = (snapshot: SessionListSnapshot) => {
     if (!isCurrent()) {
       return;
@@ -131,20 +132,20 @@ export function subscribeFilteredSidebarSessions(
     }
     publishSidebarSessionList(owner, snapshot);
     owner.sessionsLoading = snapshot.loading;
-    if (snapshot.error) {
-      owner.sessionMutationError = snapshot.error;
-    }
+    publishSidebarSessionError(owner, snapshot.error, "list");
     owner.requestSessionDataUpdate();
   };
   const unsubscribe = sessions.subscribeList(scope, apply);
   apply(sessions.listSnapshot(scope));
-  return unsubscribe;
+  return () => {
+    unsubscribe();
+    publishSidebarSessionError(owner, null, "list");
+  };
 }
 
 export function refreshSidebarSessionList(
   owner: SidebarSessionListOwner,
   agentId: string | null,
-  archivedFilter: SidebarSessionStatusFilter,
   append = false,
 ): Promise<void> {
   const result = owner.sessionsResult;
@@ -162,7 +163,7 @@ export function refreshSidebarSessionList(
     return Promise.resolve();
   }
   return owner.context.sessions.refreshList({
-    ...filteredSidebarSessionQuery(agentId, archivedFilter),
+    ...owner.sessionListQuery(agentId),
     ...(append && typeof offset === "number" ? { offset, append: true } : {}),
     force: true,
   });

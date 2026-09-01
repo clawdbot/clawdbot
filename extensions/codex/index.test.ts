@@ -154,12 +154,20 @@ describe("codex plugin", () => {
       }),
     );
 
-    expect(registerService).toHaveBeenCalledOnce();
-    expect(mockCallArg(registerService)).toMatchObject({
-      id: "codex-app-server-connection-health",
-      start: expect.any(Function),
-      stop: expect.any(Function),
-    });
+    expect(registerService).toHaveBeenCalledTimes(3);
+    expect(registerService.mock.calls.map(([service]) => service)).toContainEqual(
+      expect.objectContaining({
+        id: "codex-app-server-process-reaper",
+        start: expect.any(Function),
+      }),
+    );
+    expect(registerService.mock.calls.map(([service]) => service)).toContainEqual(
+      expect.objectContaining({
+        id: "codex-app-server-connection-health",
+        start: expect.any(Function),
+        stop: expect.any(Function),
+      }),
+    );
   });
 
   it("does not start remote connection monitoring for local Codex transports", () => {
@@ -178,7 +186,16 @@ describe("codex plugin", () => {
         }),
       );
 
-      expect(registerService).not.toHaveBeenCalled();
+      expect(registerService).toHaveBeenCalledTimes(2);
+      expect(mockCallArg(registerService)).toMatchObject({
+        id: "codex-desktop-generation",
+        start: expect.any(Function),
+        stop: expect.any(Function),
+      });
+      expect(mockCallArg(registerService, 1)).toMatchObject({
+        id: "codex-app-server-process-reaper",
+        start: expect.any(Function),
+      });
     }
   });
 

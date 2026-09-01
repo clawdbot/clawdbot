@@ -8,7 +8,6 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
-import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
@@ -41,6 +40,7 @@ import { type FollowupRun, type QueueSettings, scheduleFollowupDrain } from "./q
 import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
 import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import { type ReplyOperation, runAfterReplyOperationClear } from "./reply-run-registry.js";
+import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import type { TypingController } from "./typing.js";
 export const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
@@ -144,18 +144,15 @@ export function resolveReplyRunDeliveryContext(params: {
   ) {
     return undefined;
   }
-  const threadId =
-    normalizeOptionalString(params.sessionCtx.MessageThreadId) ??
-    normalizeOptionalString(params.sessionCtx.TransportThreadId) ??
-    normalizeOptionalString(
-      parseSessionThreadInfoFast(params.sessionCtx.SessionKey ?? params.sessionKey).threadId,
-    );
   return normalizeDeliveryContext({
     ...resolveEffectiveReplyRoute({
       ctx: params.sessionCtx,
       entry: params.sessionEntry,
     }),
-    threadId,
+    threadId: resolveRoutedDeliveryThreadId({
+      ctx: params.sessionCtx,
+      sessionKey: params.sessionCtx.SessionKey ?? params.sessionKey,
+    }),
   });
 }
 
@@ -289,8 +286,7 @@ export async function handleReplyAgentRunError(
   error: unknown,
   context: {
     cfg: OpenClawConfig;
-    blockReplyPipeline: BlockReplyPipeline | null;
-    didDeliverVisiblePartialReply: () => boolean;
+    resolveVisibleReplyDelivery: () => Promise<boolean>;
     isHeartbeat: boolean;
     isRestartRecoveryArmed: () => boolean;
     replyOperation: ReplyOperation;
@@ -301,8 +297,7 @@ export async function handleReplyAgentRunError(
 ): Promise<ReplyPayload | undefined> {
   const {
     cfg,
-    blockReplyPipeline,
-    didDeliverVisiblePartialReply,
+    resolveVisibleReplyDelivery,
     isHeartbeat,
     isRestartRecoveryArmed,
     replyOperation,
@@ -359,19 +354,8 @@ export async function handleReplyAgentRunError(
     replyOperation.fail("run_failed", error);
     return returnWithQueuedFollowupDrain(knownFailurePayload);
   }
-  if (blockReplyPipeline) {
-    try {
-      await blockReplyPipeline.flush({ force: true });
-    } catch (flushError) {
-      logVerbose(
-        `failed to flush streamed reply blocks before surfacing run failure: ${String(flushError)}`,
-      );
-    }
-  }
-  const didDeliverVisibleReply =
-    (blockReplyPipeline?.didStreamTerminalReply?.() === true && !blockReplyPipeline.isAborted()) ||
-    didDeliverVisiblePartialReply();
-  if (!isHeartbeat && didDeliverVisibleReply && !replyOperation.abortSignal.aborted) {
+  const visibleReplyDelivered = await resolveVisibleReplyDelivery();
+  if (!isHeartbeat && visibleReplyDelivered && !replyOperation.abortSignal.aborted) {
     replyOperation.fail("run_failed", error);
     return returnWithQueuedFollowupDrain(
       buildTerminalAgentRunFailureReplyPayload({

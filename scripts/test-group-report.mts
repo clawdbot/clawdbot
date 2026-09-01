@@ -6,6 +6,14 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import pMap from "p-map";
+import {
+  booleanFlag,
+  parseFlagArgs,
+  requireOptionArgument,
+  stringFlag,
+  stringListFlag,
+  type FlagSpec,
+} from "./lib/arg-utils.mts";
 import { coerceErrorMessage } from "./lib/error-format.mts";
 import {
   inspectManagedProcessGroup,
@@ -132,17 +140,50 @@ function usage() {
   ].join("\n");
 }
 
-function readRequiredValue(argv: string[], index: number, flag: string) {
-  const value = argv[index + 1];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`${flag} requires a value`);
-  }
-  return value;
+type PositiveIntArgKey =
+  | "concurrency"
+  | "killGraceMs"
+  | "limit"
+  | "maxTestMs"
+  | "timeoutMs"
+  | "topFiles";
+
+const splitStringFlagOptions = { allowInline: false, rejectShortOptions: true } as const;
+
+function positiveIntFlag(flag: string, key: PositiveIntArgKey): FlagSpec<TestGroupReportArgs> {
+  return {
+    consume(argv, index) {
+      if (argv[index] !== flag) {
+        return null;
+      }
+      const value = parsePositiveInt(requireOptionArgument(argv, index, flag), flag);
+      return {
+        flag,
+        nextIndex: index + 1,
+        apply(args) {
+          args[key] = value;
+        },
+      };
+    },
+  };
 }
 
-function readPositiveIntValue(argv: string[], index: number, flag: string) {
-  return parsePositiveInt(readRequiredValue(argv, index, flag), flag);
-}
+const compareFlag: FlagSpec<TestGroupReportArgs> = {
+  consume(argv, index) {
+    if (argv[index] !== "--compare") {
+      return null;
+    }
+    const before = requireOptionArgument(argv, index, "--compare");
+    const after = requireOptionArgument(argv, index + 1, "--compare");
+    return {
+      flag: "--compare",
+      nextIndex: index + 2,
+      apply(args) {
+        args.compare = { before, after };
+      },
+    };
+  },
+};
 
 /**
  * Parses report, compare, and Vitest-run options for grouped test reports.
@@ -165,122 +206,36 @@ export function parseTestGroupReportArgs(argv: string[]) {
     topFiles: 25,
     vitestArgs: [],
   };
-  const seenSingleValueFlags = new Set<string>();
-  const setSingleValueFlag = (flag: string, apply: () => void) => {
-    if (seenSingleValueFlags.has(flag)) {
-      throw new Error(`${flag} was provided more than once`);
-    }
-    seenSingleValueFlags.add(flag);
-    apply();
-  };
+  const separatorIndex = argv.indexOf("--");
+  const cliArgs = separatorIndex === -1 ? argv : argv.slice(0, separatorIndex);
+  args.vitestArgs = separatorIndex === -1 ? [] : argv.slice(separatorIndex + 1);
 
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--") {
-      args.vitestArgs = argv.slice(index + 1);
-      break;
-    }
-    if (arg === "--help") {
-      args.help = true;
-      continue;
-    }
-    if (arg === "--allow-failures") {
-      args.allowFailures = true;
-      continue;
-    }
-    if (arg === "--full-suite") {
-      args.fullSuite = true;
-      continue;
-    }
-    if (arg === "--no-rss") {
-      args.rss = false;
-      continue;
-    }
-    if (arg === "--config") {
-      args.configs.push(readRequiredValue(argv, index, "--config"));
-      index += 1;
-      continue;
-    }
-    if (arg === "--compare") {
-      const before = readRequiredValue(argv, index, "--compare");
-      const after = readRequiredValue(argv, index + 1, "--compare");
-      setSingleValueFlag(arg, () => {
-        args.compare = { before, after };
-      });
-      index += 2;
-      continue;
-    }
-    if (arg === "--report") {
-      args.reports.push(readRequiredValue(argv, index, "--report"));
-      index += 1;
-      continue;
-    }
-    if (arg === "--group-by") {
-      const value = readRequiredValue(argv, index, "--group-by");
-      setSingleValueFlag(arg, () => {
-        args.groupBy = value;
-      });
-      index += 1;
-      continue;
-    }
-    if (arg === "--output") {
-      const value = readRequiredValue(argv, index, "--output");
-      setSingleValueFlag(arg, () => {
-        args.output = value;
-      });
-      index += 1;
-      continue;
-    }
-    if (arg === "--limit") {
-      const value = readPositiveIntValue(argv, index, "--limit");
-      setSingleValueFlag(arg, () => {
-        args.limit = value;
-      });
-      index += 1;
-      continue;
-    }
-    if (arg === "--max-test-ms") {
-      const value = readPositiveIntValue(argv, index, "--max-test-ms");
-      setSingleValueFlag(arg, () => {
-        args.maxTestMs = value;
-      });
-      index += 1;
-      continue;
-    }
-    if (arg === "--timeout-ms") {
-      const value = readPositiveIntValue(argv, index, "--timeout-ms");
-      setSingleValueFlag(arg, () => {
-        args.timeoutMs = value;
-      });
-      index += 1;
-      continue;
-    }
-    if (arg === "--kill-grace-ms") {
-      const value = readPositiveIntValue(argv, index, "--kill-grace-ms");
-      setSingleValueFlag(arg, () => {
-        args.killGraceMs = value;
-      });
-      index += 1;
-      continue;
-    }
-    if (arg === "--concurrency") {
-      const value = readPositiveIntValue(argv, index, "--concurrency");
-      setSingleValueFlag(arg, () => {
-        args.concurrency = value;
-      });
-      index += 1;
-      continue;
-    }
-    if (arg === "--top-files") {
-      const value = readPositiveIntValue(argv, index, "--top-files");
-      setSingleValueFlag(arg, () => {
-        args.topFiles = value;
-      });
-      index += 1;
-      continue;
-    }
-    throw new Error(`Unknown option: ${arg}`);
-  }
+  parseFlagArgs(
+    cliArgs,
+    args,
+    [
+      booleanFlag("--help", "help", true, { repeatable: true }),
+      booleanFlag("--allow-failures", "allowFailures", true, { repeatable: true }),
+      booleanFlag("--full-suite", "fullSuite", true, { repeatable: true }),
+      booleanFlag("--no-rss", "rss", false, { repeatable: true }),
+      stringListFlag("--config", "configs", splitStringFlagOptions),
+      compareFlag,
+      stringListFlag("--report", "reports", splitStringFlagOptions),
+      stringFlag("--group-by", "groupBy", splitStringFlagOptions),
+      stringFlag("--output", "output", splitStringFlagOptions),
+      positiveIntFlag("--limit", "limit"),
+      positiveIntFlag("--max-test-ms", "maxTestMs"),
+      positiveIntFlag("--timeout-ms", "timeoutMs"),
+      positiveIntFlag("--kill-grace-ms", "killGraceMs"),
+      positiveIntFlag("--concurrency", "concurrency"),
+      positiveIntFlag("--top-files", "topFiles"),
+    ],
+    {
+      onUnhandledArg(arg) {
+        throw new Error(`Unknown option: ${arg}`);
+      },
+    },
+  );
 
   if (!["area", "folder", "top"].includes(args.groupBy)) {
     throw new Error(`Unsupported --group-by value: ${args.groupBy}`);

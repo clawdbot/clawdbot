@@ -8,6 +8,7 @@ import {
   readClawHubStringField,
   readRequiredClawHubBooleanField,
   readRequiredClawHubStringArrayField,
+  readRequiredClawHubStringField,
   requestClawHub,
   resolveClawHubAuthToken,
   type ClawHubFetch,
@@ -123,6 +124,8 @@ export type ClawHubPackageSecurityResponse = {
     id?: string | null;
     version?: string | null;
   } | null;
+  overview: string;
+  securityAuditUrl: string;
   trust: ClawHubPackageSecurityTrust;
 };
 export type ClawHubPackageClawPackSummary = {
@@ -319,7 +322,15 @@ function parseClawHubPackageSecurityResponse(value: unknown): ClawHubPackageSecu
   if (moderationState !== undefined) {
     parsedTrust.moderationState = moderationState;
   }
-  const result: ClawHubPackageSecurityResponse = { trust: parsedTrust };
+  const result: ClawHubPackageSecurityResponse = {
+    overview: readRequiredClawHubStringField(value, "overview", "security response"),
+    securityAuditUrl: readRequiredClawHubStringField(
+      value,
+      "securityAuditUrl",
+      "security response",
+    ),
+    trust: parsedTrust,
+  };
   const parsedPackage = parseOptionalSecurityPackage(value.package);
   const parsedRelease = parseOptionalSecurityRelease(value.release);
   if (parsedPackage !== undefined) {

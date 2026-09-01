@@ -175,6 +175,11 @@ author credit; create a replacement only when the source branch is uneditable
 or unsafe to update, and close the source only after the replacement exists.
 Red CI is normal work: inspect, fix or reject, recheck green.
 
+Never squash a contributor-owned PR after maintainers replace its ancestry.
+Create a maintainer-owned replacement PR, link the original, and credit
+contributors with their public GitHub noreply address. Merge and rebase are not
+policy escapes.
+
 ## Broken main
 
 A red `main` — exact-head CI failures reproducing on unrelated PRs — is sweep

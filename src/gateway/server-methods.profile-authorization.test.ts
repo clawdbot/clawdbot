@@ -119,6 +119,7 @@ describe("Gateway pending-profile authorization", () => {
       "artifacts.list",
       "board.event",
       "chat.history",
+      "chat.metadata",
       "controlUi.sessionPreview",
       "exec.approval.resolve",
       "mcp.app.view",
@@ -129,14 +130,32 @@ describe("Gateway pending-profile authorization", () => {
       "secrets.store.set",
       "send",
       "sessions.list",
+      "skills.library.list",
+      "skills.library.read",
+      "skills.library.save",
+      "skills.library.mutate",
+      "skills.library.activate",
+      "skills.library.import",
+      "skills.library.upload",
       "taskSuggestions.list",
       "tasks.list",
+      "users.github.status",
+      "users.github.authorize.start",
+      "users.github.authorize.poll",
+      "users.github.authorize.cancel",
+      "users.github.disconnect",
     ];
     for (const method of methods) {
       const client = createPendingProfileClient();
       client.authenticatedGitHubIdentitySync = vi.fn().mockRejectedValue(new Error("offline"));
       const handler = vi.fn<GatewayRequestHandler>();
-      const respond = await dispatchPendingProfileMethod({ client, handler, method });
+      const respond = await dispatchPendingProfileMethod({
+        client,
+        handler,
+        method,
+        requestParams:
+          method === "skills.library.activate" ? { sessionKey: "agent:main:main" } : undefined,
+      });
       expect(handler, method).not.toHaveBeenCalled();
       expect(respond, method).toHaveBeenCalledWith(
         false,

@@ -17,6 +17,7 @@ export function registerCopilotActiveRun(params: {
   abortActiveSession: () => void;
   bridge: ReturnType<typeof attachEventBridge> | undefined;
   canAcceptSteering: () => boolean;
+  startedAtMs?: number;
   input: AttemptParamsLike;
   isAborted: () => boolean;
   isSettled: () => boolean;
@@ -75,7 +76,10 @@ export function registerCopilotActiveRun(params: {
       if (!params.canAcceptSteering()) {
         throw new Error("Copilot steering is unavailable before initial user validation");
       }
-      messageId = await params.session.send({ prompt: text });
+      messageId = await params.transcriptJournal.sendSdkUser(
+        () => params.session.send({ prompt: text }),
+        options?.userTurnTranscriptRecorder,
+      );
       reportAcceptance(true);
     } catch (error) {
       reportAcceptance(false);
@@ -102,6 +106,7 @@ export function registerCopilotActiveRun(params: {
   const activeRunHandle = {
     kind: "embedded" as const,
     runId: params.input.runId,
+    startedAtMs: params.startedAtMs,
     toolAuthorityFingerprint: params.input.toolAuthorityFingerprint,
     claimPendingUserInputAnswer,
     cancelPendingUserInput,

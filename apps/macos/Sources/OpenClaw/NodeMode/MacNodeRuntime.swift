@@ -232,7 +232,9 @@ actor MacNodeRuntime {
                  MacNodeClaudeSessionCatalogContract.readCommand:
                 return try await self.handleClaudeSessionInvoke(req)
             default:
-                if let nodeHostWorker, await nodeHostWorker.supports(command) {
+                // Private supervisor controls are not public pairing capabilities.
+                // The shared dispatcher owns their validation and local hosting consent.
+                if let nodeHostWorker {
                     return await nodeHostWorker.invoke(req)
                 }
                 return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: unknown command")
@@ -305,7 +307,15 @@ actor MacNodeRuntime {
     }
 
     private func handleCodexThreadInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        guard self.codexThreadCatalogEnabled() else {
+        // Freeze native ownership before awaiting worker support so one invocation cannot switch owners.
+        let nativeCatalogEnabled = self.codexThreadCatalogEnabled()
+        if !nativeCatalogEnabled,
+           let nodeHostWorker,
+           await nodeHostWorker.supports(req.command)
+        {
+            return await nodeHostWorker.invoke(req)
+        }
+        guard nativeCatalogEnabled else {
             return Self.errorResponse(
                 req,
                 code: .unavailable,

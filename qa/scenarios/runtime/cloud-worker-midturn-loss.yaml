@@ -7,14 +7,14 @@ scenario:
   coverage:
     secondary:
       - gateway.session-apis-sessions-list
-  objective: Prove a static-SSH worker can disappear during a streamed turn without losing or duplicating its already committed transcript prefix, silently hanging the turn, or breaking redispatch context; prove that real worker disk-space projections are evicted after reclaim.
+  objective: Prove a paired-node worker can disappear during a streamed turn without losing or duplicating its already committed transcript prefix, silently hanging the turn, or breaking redispatch context; prove that real worker disk-space projections are evicted after reclaim.
   successCriteria:
-    - A managed-worktree qa-channel session dispatches to a real static-SSH worker through an isolated Gateway.
+    - A managed-worktree qa-channel session dispatches to a real paired-node worker through an isolated Gateway.
     - The mock model persists two assistant/tool-result checkpoints, then pauses during a fifth streamed message.
-    - Killing the proof-owned SSH and worker process tree leaves exactly the four completed checkpoint messages in Gateway history.
+    - Killing the proof-owned worker process leaves exactly the four completed checkpoint messages in Gateway history before its paired node disconnects.
     - The volatile streamed message is absent from durable history while the turn emits a visible chat error and the placement records a bounded terminal reason.
-    - Restarting the static-SSH host and redispatching the same session produces one successful recovery turn whose inference context contains each checkpoint exactly once.
-    - The real static-SSH worker runs the disk-space probe and exposes its projection through `sessions.list`.
+    - Reconnecting the same paired node and redispatching the session produces one successful recovery turn whose inference context contains each checkpoint exactly once.
+    - The real paired-node worker runs the disk-space probe and exposes its projection through `sessions.list`.
     - Reclaiming the worker causes a later `sessions.list` read to return the reclaimed placement without a stale disk-space projection.
   docsRefs:
     - docs/gateway/cloud-workers.md
@@ -30,7 +30,7 @@ scenario:
   execution:
     kind: script
     path: test/e2e/qa-lab/runtime/cloud-worker-midturn-loss-proof.ts
-    summary: Dispatches a managed-worktree qa-channel session to a proof-owned static-SSH worker, kills its process tree during a streamed message, and verifies the durable cutoff, visible failure, and redispatch context.
+    summary: Dispatches a managed-worktree qa-channel session to a proof-owned paired-node worker, kills its process and disconnects its node during a streamed message, and verifies the durable cutoff, visible failure, and redispatch context.
     timeoutMs: 900000
     args:
       - --artifact-base

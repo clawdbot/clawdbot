@@ -2,12 +2,12 @@ import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { formatZonedTimestamp } from "openclaw/plugin-sdk/time-runtime";
 import { resolveMatrixRoomKeyBackupIssue } from "./matrix/backup-health.js";
 import { resolveMatrixAuthContext } from "./matrix/client.js";
 import { setMatrixSdkConsoleLogging, setMatrixSdkLogMode } from "./matrix/client/logging.js";
 import type { MatrixOwnDeviceVerificationStatus, MatrixRoomKeyBackupStatus } from "./matrix/sdk.js";
 import type { MatrixVerificationSummary } from "./matrix/sdk/verification-manager.js";
-import { formatZonedTimestamp } from "./runtime-api.js";
 import { getMatrixRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
@@ -313,6 +313,7 @@ type MatrixCliBackupStatus = MatrixRoomKeyBackupStatus;
 
 export type MatrixCliVerificationStatus = MatrixOwnDeviceVerificationStatus & {
   pendingVerifications: number;
+  recoveryKey?: string | null;
   recoveryKeyAccepted?: boolean;
   backupUsable?: boolean;
   deviceOwnerVerified?: boolean;
@@ -605,6 +606,13 @@ export function printVerificationStatus(
   if (backupIssue.message) {
     console.log(`Backup issue: ${backupIssue.message}`);
   }
+  console.log(`Recovery key stored: ${status.recoveryKeyStored ? "yes" : "no"}`);
+  // Only JSON output may expose the explicitly requested raw key.
+  if (status.recoveryKey) {
+    console.log(
+      "Recovery key: available (re-run with --json to include the raw key value in output)",
+    );
+  }
   if (verbose) {
     console.log("Diagnostics:");
     printVerificationIdentity(status);
@@ -613,11 +621,8 @@ export function printVerificationStatus(
     }
     printVerificationTrustDiagnostics(status);
     printVerificationBackupStatus(status);
-    console.log(`Recovery key stored: ${status.recoveryKeyStored ? "yes" : "no"}`);
     printTimestamp("Recovery key created at", status.recoveryKeyCreatedAt);
     console.log(`Pending verifications: ${status.pendingVerifications}`);
-  } else {
-    console.log(`Recovery key stored: ${status.recoveryKeyStored ? "yes" : "no"}`);
   }
   printVerificationGuidance(status, accountId);
 }

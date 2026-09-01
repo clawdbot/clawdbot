@@ -98,10 +98,11 @@ async function runNonInteractiveSetupExclusive(opts: OnboardOptions, runtime: Ru
   if (snapshot.exists && !snapshot.valid) {
     // Avoid rewriting an invalid config snapshot; doctor owns recovery so setup
     // does not erase malformed user state.
-    runtime.error(
+    rejectOnboardingOption(
+      opts,
+      runtime,
       `Config invalid. Run \`${formatCliCommand("openclaw doctor")}\` to repair it, then re-run setup.`,
     );
-    runtime.exit(1);
     return;
   }
 
@@ -132,7 +133,13 @@ async function runNonInteractiveSetupExclusive(opts: OnboardOptions, runtime: Ru
     return;
   }
 
-  await runNonInteractiveLocalSetup({ opts, runtime, baseConfig, baseHash: snapshot.hash });
+  await runNonInteractiveLocalSetup({
+    opts,
+    runtime,
+    baseConfig,
+    sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations ?? {},
+    baseHash: snapshot.hash,
+  });
 }
 
 /** Runs non-interactive onboarding in local, remote, or migration-import mode. */

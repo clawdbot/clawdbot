@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { isChannelConfigMetadataKey } from "./config-metadata.js";
 import {
@@ -11,17 +11,21 @@ import {
   listPotentialConfiguredChannelPresenceSignals,
   listPotentialConfiguredChannelIds,
 } from "./config-presence.js";
+import * as persistedAuthState from "./plugins/persisted-auth-state.js";
 
 const tempDirs: string[] = [];
 
-const matrixPresenceOptions = {
-  channelIds: ["matrix"],
-  persistedAuthStateProbe: {
-    listChannelIds: () => ["matrix"],
-    hasState: ({ channelId, env }: { channelId: string; env?: NodeJS.ProcessEnv }) =>
+const matrixPresenceOptions = { channelIds: ["matrix"] };
+
+beforeEach(() => {
+  vi.spyOn(persistedAuthState, "listBundledChannelIdsWithPersistedAuthState").mockReturnValue([
+    "matrix",
+  ]);
+  vi.spyOn(persistedAuthState, "hasBundledChannelPersistedAuthState").mockImplementation(
+    ({ channelId, env }) =>
       channelId === "matrix" && Boolean(env?.OPENCLAW_STATE_DIR?.includes("persisted-matrix")),
-  },
-};
+  );
+});
 
 function makeTempStateDir() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-config-presence-"));
@@ -42,6 +46,7 @@ function expectPotentialConfiguredChannelCase(params: {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (dir) {
@@ -154,12 +159,7 @@ describe("config presence", () => {
       cfg: {},
       env,
       expectedIds: ["matrix"],
-      options: {
-        persistedAuthStateProbe: {
-          listChannelIds: () => ["matrix"],
-          hasState: () => true,
-        },
-      },
+      options: {},
     });
   });
 });

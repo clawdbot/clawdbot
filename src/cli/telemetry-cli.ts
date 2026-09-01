@@ -10,6 +10,7 @@ import { runCommandWithRuntime } from "./cli-utils.js";
 
 const TELEMETRY_REASON_LABELS = {
   enabled: "enabled in configuration",
+  "automated-environment": "disabled in an automated environment (CI is set)",
   "do-not-track": "disabled by DO_NOT_TRACK",
   "config-disabled": "disabled in configuration",
   "never-asked": "consent has not been requested",
@@ -19,27 +20,27 @@ const TELEMETRY_REASON_LABELS = {
 async function showTelemetry(options: { json?: boolean }): Promise<void> {
   const config = getRuntimeConfig({ skipPluginValidation: true });
   const telemetry = resolveTelemetryStatus(config);
-  const userAgent = buildTelemetryUserAgent("gateway");
-  const requestSent = telemetry.reason !== "update-disabled";
-  const payload = telemetry.enabled
-    ? buildTelemetryPayload(config, { surface: "gateway" })
-    : undefined;
+  const request =
+    telemetry.reason === "update-disabled" || telemetry.reason === "automated-environment"
+      ? null
+      : {
+          method: telemetry.enabled ? "POST" : "GET",
+          userAgent: buildTelemetryUserAgent("gateway"),
+          ...(telemetry.enabled
+            ? { payload: buildTelemetryPayload(config, { surface: "gateway" }) }
+            : {}),
+        };
 
   if (options.json) {
-    defaultRuntime.log(
-      JSON.stringify({
+    defaultRuntime.writeJson(
+      {
         featureStatsEnabled: telemetry.enabled,
         reason: telemetry.reason,
         endpoint: telemetry.endpoint,
         lastPingAt: telemetry.lastPingAt ? new Date(telemetry.lastPingAt).toISOString() : null,
-        request: requestSent
-          ? {
-              method: telemetry.enabled ? "POST" : "GET",
-              userAgent,
-              ...(payload ? { payload } : {}),
-            }
-          : null,
-      }),
+        request,
+      },
+      0,
     );
     return;
   }
@@ -50,15 +51,15 @@ async function showTelemetry(options: { json?: boolean }): Promise<void> {
   defaultRuntime.log(
     `Last ping: ${telemetry.lastPingAt ? new Date(telemetry.lastPingAt).toISOString() : "never"}`,
   );
-  if (telemetry.reason === "update-disabled") {
-    defaultRuntime.log("Request: none (update checks are disabled)");
+  if (!request) {
+    defaultRuntime.log(`Request: none (${TELEMETRY_REASON_LABELS[telemetry.reason]})`);
     return;
   }
-  defaultRuntime.log(`Request: ${telemetry.enabled ? "POST" : "GET"} ${telemetry.endpoint}`);
-  defaultRuntime.log(`User-Agent: ${userAgent}`);
-  if (payload) {
+  defaultRuntime.log(`Request: ${request.method} ${telemetry.endpoint}`);
+  defaultRuntime.log(`User-Agent: ${request.userAgent}`);
+  if (request.payload) {
     defaultRuntime.log("Payload:");
-    defaultRuntime.log(JSON.stringify(payload));
+    defaultRuntime.log(JSON.stringify(request.payload));
   }
 }
 

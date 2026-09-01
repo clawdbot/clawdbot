@@ -42,15 +42,17 @@ System prompt is built from OpenClaw's base prompt, skills prompt, bootstrap con
 
 ## Hooks
 
-OpenClaw has two hook systems:
+OpenClaw has two in-process hook systems:
 
-- **Internal hooks** (Gateway hooks): event-driven scripts for commands and lifecycle events.
-- **Plugin hooks**: extension points inside the agent/tool lifecycle and gateway pipeline.
+- **Internal hooks**: `HOOK.md` scripts for command and lifecycle events such as `command:new`.
+- **Plugin hooks**: typed `api.on(...)` handlers inside the agent/tool lifecycle and Gateway pipeline, such as `before_tool_call`.
+
+[HTTP webhooks](/automation/cron-jobs#webhooks) are separate: they accept external requests that trigger work, rather than subscribing to agent-loop events.
 
 ### Internal hooks (Gateway hooks)
 
 - **`agent:bootstrap`**: runs while building bootstrap files before the system prompt is finalized. Use it to add or remove bootstrap context files.
-- **Command hooks**: `/new`, `/reset`, `/stop`, and other command events (see the Hooks doc).
+- **Command hooks**: core emits `command:new`, `command:reset`, and `command:stop`. Other command names do not automatically become hook events.
 
 See [Hooks](/automation/hooks) for setup and examples.
 
@@ -64,7 +66,7 @@ These run inside the agent loop or gateway pipeline:
 | `before_prompt_build`                                   | After session load (with `messages`), to inject `prependContext`, `systemPrompt`, `prependSystemContext`, or `appendSystemContext`, or, on supported runtimes with a turn-scoped submitted tool surface, narrow it with `toolsAllow`. An empty `toolsAllow` submits no optional tools; omitted leaves the host-resolved surface unchanged. Unsupported runtimes reject restrictive values instead of ignoring them. |
 | `before_agent_reply`                                    | After inline actions, before the LLM call. Lets a plugin claim the turn and return a synthetic reply or silence it entirely.                                                                                                                                                                                                                                                                                        |
 | `agent_end`                                             | After completion, with the final message list and run metadata.                                                                                                                                                                                                                                                                                                                                                     |
-| `before_compaction` / `after_compaction`                | Observe or annotate compaction cycles.                                                                                                                                                                                                                                                                                                                                                                              |
+| `before_compaction` / `after_compaction`                | Observe compaction cycles; these hooks do not rewrite or veto compaction.                                                                                                                                                                                                                                                                                                                                           |
 | `before_tool_call` / `after_tool_call`                  | Intercept tool params/results.                                                                                                                                                                                                                                                                                                                                                                                      |
 | `before_install`                                        | After operator install policy runs, on staged skill/plugin install material, when plugin hooks are loaded in the current process.                                                                                                                                                                                                                                                                                   |
 | `tool_result_persist`                                   | Synchronously transforms tool results before they are written to an OpenClaw-owned session transcript.                                                                                                                                                                                                                                                                                                              |
@@ -103,6 +105,8 @@ Final payloads are assembled from assistant text (plus optional reasoning), inli
 - Messaging tool duplicates are removed from the final payload list.
 - If no renderable payloads remain and a tool errored, a fallback tool error reply is emitted unless a messaging tool already sent a user-visible reply.
 
+Prompt-segment diagnostics attribute attachment/context blocks and generated inbound metadata separately from user text. A prompt containing only those blocks does not need trailing user text for reply processing to complete.
+
 ## Compaction and retries
 
 Auto-compaction emits `compaction` stream events and can trigger a retry. On retry, in-memory buffers and tool summaries reset to avoid duplicate output. See [Compaction](/concepts/compaction).
@@ -121,6 +125,8 @@ or raw errors out of the transcript/runtime path.
 ## Chat channel handling
 
 Assistant deltas buffer into chat `delta` messages. A chat `final` is emitted on **lifecycle end/error**.
+
+Run-duration metadata belongs to the current run, including when preparation fails before the model starts. In Control UI completed-work rollups, independent sends have separate elapsed-time boundaries: a failed turn and the idle time before the next send are not part of that next turn's work. Steering remains associated with its target run rather than being treated as an independent retry.
 
 ## Timeouts
 

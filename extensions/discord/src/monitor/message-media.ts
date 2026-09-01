@@ -2,6 +2,7 @@
 import { StickerFormatType, type APIAttachment, type APIStickerItem } from "discord-api-types/v10";
 import {
   formatMediaPlaceholderText,
+  type ChannelInboundMediaInput,
   type MediaPlaceholderTextFact,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { getFileExtension, normalizeMimeType } from "openclaw/plugin-sdk/media-mime";
@@ -36,7 +37,10 @@ const AUDIO_ATTACHMENT_EXTENSIONS = new Set([
 
 const DISCORD_STICKER_ASSET_BASE_URL = "https://media.discordapp.net/stickers";
 
-export type DiscordMediaInfo = Pick<MediaPlaceholderTextFact, "contentType" | "kind" | "path">;
+export type DiscordMediaInfo = Pick<
+  ChannelInboundMediaInput,
+  "contentType" | "fileName" | "kind" | "path"
+>;
 
 type DiscordMediaResolveOptions = {
   fetchImpl?: FetchLike;
@@ -350,6 +354,7 @@ async function appendResolvedMediaFromAttachments(params: {
       });
       params.out.push({
         path: saved.path,
+        fileName: attachment.filename,
         ...classification,
       });
     } catch (err) {
@@ -455,6 +460,7 @@ async function appendResolvedMediaFromStickers(params: {
         params.out.push({
           path: saved.path,
           contentType: saved.contentType,
+          fileName: candidate.fileName,
           kind: "sticker",
         });
         lastError = null;

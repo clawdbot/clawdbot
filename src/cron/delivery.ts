@@ -89,40 +89,6 @@ async function resolveCronAnnounceDelivery(params: {
   };
 }
 
-async function deliverCronAnnouncePayload(params: {
-  deps: CliDeps;
-  cfg: OpenClawConfig;
-  delivery: {
-    resolvedTarget: SuccessfulDeliveryTarget;
-    session: ReturnType<typeof buildOutboundSessionContext>;
-    identity: ReturnType<typeof resolveAgentOutboundIdentity>;
-  };
-  payload: ReplyPayload;
-  abortSignal: AbortSignal;
-  onDeliveryAttempt?: (reachedRecipient: boolean) => void;
-}): Promise<CronAnnounceDeliveryOutcome> {
-  // Cron delivery is durable and non-best-effort for primary announces; partial
-  // channel failure must surface as a cron run failure.
-  const send = await sendDurableMessageBatchCore({
-    cfg: params.cfg,
-    channel: params.delivery.resolvedTarget.channel,
-    to: params.delivery.resolvedTarget.to,
-    accountId: params.delivery.resolvedTarget.accountId,
-    threadId: params.delivery.resolvedTarget.threadId,
-    payloads: [params.payload],
-    session: params.delivery.session,
-    identity: params.delivery.identity,
-    bestEffort: false,
-    deps: createOutboundSendDeps(params.deps),
-    signal: params.abortSignal,
-  });
-  params.onDeliveryAttempt?.(durableMessageBatchMayHaveReachedRecipient(send));
-  if (send.status === "failed" || send.status === "partial_failed") {
-    throw send.error;
-  }
-  return send;
-}
-
 /** Sends a cron announce payload and throws if target resolution or delivery fails. */
 export async function sendCronAnnouncePayloadStrict(params: {
   deps: CliDeps;
@@ -141,12 +107,34 @@ export async function sendCronAnnouncePayloadStrict(params: {
   // Resolution can settle after its caller's deadline; never start plugin
   // delivery once the Gateway has released ownership of the timed-out work.
   params.abortSignal.throwIfAborted();
-  return await deliverCronAnnouncePayload({
-    deps: params.deps,
+
+  // Cron delivery is durable and non-best-effort for primary announces; partial
+  // channel failure must surface as a cron run failure.
+  let recipientReached = false;
+  const send = await sendDurableMessageBatchCore({
     cfg: params.cfg,
-    delivery,
-    payload: params.payload,
-    abortSignal: params.abortSignal,
-    onDeliveryAttempt: params.onDeliveryAttempt,
+    channel: delivery.resolvedTarget.channel,
+    to: delivery.resolvedTarget.to,
+    accountId: delivery.resolvedTarget.accountId,
+    threadId: delivery.resolvedTarget.threadId,
+    payloads: [params.payload],
+    session: delivery.session,
+    identity: delivery.identity,
+    bestEffort: false,
+    deps: createOutboundSendDeps(params.deps),
+    signal: params.abortSignal,
+    onDeliveryResult: () => {
+      if (!recipientReached) {
+        recipientReached = true;
+        params.onDeliveryAttempt?.(true);
+      }
+    },
   });
+  if (!recipientReached) {
+    params.onDeliveryAttempt?.(durableMessageBatchMayHaveReachedRecipient(send));
+  }
+  if (send.status === "failed" || send.status === "partial_failed") {
+    throw send.error;
+  }
+  return send;
 }

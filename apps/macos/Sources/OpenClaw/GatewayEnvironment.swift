@@ -196,6 +196,15 @@ enum GatewayEnvironment {
                 gatewayBin: gatewayBin,
                 projectRoot: projectRoot,
                 searchPaths: searchPaths)
+            if let gatewayBin, installedRaw == nil {
+                let message = "OpenClaw Gateway at \(gatewayBin) could not be verified; reinstall or repair it."
+                return GatewayEnvironmentStatus(
+                    kind: .error(message),
+                    nodeVersion: runtime.version.description,
+                    gatewayVersion: nil,
+                    requiredGateway: expectedString,
+                    message: message)
+            }
             let installed = Semver.parse(installedRaw)
 
             if let expected, let installedRaw, installed != nil,
@@ -253,10 +262,8 @@ enum GatewayEnvironment {
         projectRoot: URL,
         searchPaths: [String]) async -> String?
     {
-        if let gatewayBin,
-           let version = await self.readGatewayVersion(binary: gatewayBin, searchPaths: searchPaths)
-        {
-            return version
+        if let gatewayBin {
+            return await self.readGatewayVersion(binary: gatewayBin, searchPaths: searchPaths)
         }
         return self.readLocalGatewayVersion(projectRoot: projectRoot)
     }
@@ -269,6 +276,7 @@ enum GatewayEnvironment {
                 arguments: ["--version"],
                 environment: ["PATH": searchPaths.joined(separator: ":")],
                 timeout: CommandResolver.versionProbeTimeout)
+            guard result.terminationStatus == 0 else { return nil }
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
             if elapsedMs > 500 {
                 self.logger.warning(

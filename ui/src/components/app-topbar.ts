@@ -1,4 +1,4 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html } from "lit";
 import { property } from "lit/decorators.js";
 import type { ControlUiEnvironment } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
@@ -13,13 +13,13 @@ import "./tooltip.ts";
 class AppTopbar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) navDrawerOpen = false;
   @property({ attribute: false }) resourceBasePath = "";
-  @property({ attribute: false }) trailingActions: TemplateResult | typeof nothing = nothing;
   @property({ attribute: false }) environment: ControlUiEnvironment | null = null;
   @property({ attribute: false }) onToggleDrawer!: (trigger: HTMLElement) => void;
   @property({ attribute: false }) onOpenPalette!: () => void;
 
   override render() {
     const drawerLabel = this.navDrawerOpen ? t("nav.collapse") : t("nav.expand");
+    // The brand row asks the Mac host to drag the window, replacing its native drag strip.
     return html`
       <header class="topbar">
         <div class="topnav-shell">
@@ -35,8 +35,6 @@ class AppTopbar extends OpenClawLightDomContentsElement {
               <span class="nav-collapse-toggle__icon" aria-hidden="true">${icons.menu}</span>
             </button>
           </openclaw-tooltip>
-          <!-- The Mac app used to float a native drag strip over this brand
-               row; the web now asks the host to move the window itself. -->
           <div class="topnav-shell__content" @mousedown=${beginNativeWindowDrag}>
             <div class="topbar-brand" aria-label="OpenClaw">
               <img
@@ -51,7 +49,6 @@ class AppTopbar extends OpenClawLightDomContentsElement {
             </div>
           </div>
           <div class="topnav-shell__actions">
-            ${this.trailingActions}
             <openclaw-tooltip .content=${t("chat.commandPaletteTitle")}>
               <button
                 class="topbar-search"

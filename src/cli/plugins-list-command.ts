@@ -77,11 +77,17 @@ export async function runPluginsListCommand(
     theme,
   } = await loadHumanListModules();
 
-  const workspaceScopeDiagnostic = report.diagnostics.find(
-    (diagnostic) => diagnostic.code === "workspace-scope-omitted",
+  const diagnostics = [...report.diagnostics, ...report.registryDiagnostics].filter(
+    (diagnostic) =>
+      diagnostic.level !== "info" &&
+      (diagnostic.level !== "error" ||
+        !list.some((plugin) => plugin.status === "error" && plugin.error === diagnostic.message)),
   );
-  if (workspaceScopeDiagnostic) {
-    runtime.log(theme.warn(`Warning: ${workspaceScopeDiagnostic.message}`));
+  for (const { level, message } of diagnostics) {
+    const format = level === "error" ? theme.error : theme.warn;
+    runtime.log(format(`${level === "error" ? "Error" : "Warning"}: ${message}`));
+  }
+  if (diagnostics.length > 0) {
     runtime.log("");
   }
 
@@ -163,7 +169,7 @@ export async function runPluginsListCommand(
 
   const lines: string[] = [];
   for (const plugin of list) {
-    lines.push(formatPluginLine(plugin, true));
+    lines.push(formatPluginLine(plugin));
     lines.push("");
   }
   runtime.log(lines.join("\n").trim());

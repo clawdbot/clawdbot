@@ -1,3 +1,4 @@
+import type { RetiredAuthProfileCleanupPlan } from "../commands/doctor-auth-legacy-oauth.js";
 import type { probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -23,6 +24,8 @@ type DoctorConfigResult = {
   preservedLegacyRootKeys?: readonly string[];
   shouldRepairCronCodexModelRefsAfterConfigWrite?: boolean;
   retiredPhoneControlStateCleanupPending?: boolean;
+  /** Store cleanup deferred until the repaired config reaches disk. */
+  retiredAuthProfileCleanupPlans?: readonly RetiredAuthProfileCleanupPlan[];
   blockedCodexModelIdentities?: readonly string[];
   /** Ephemeral doctor-only auth rename plan; never part of persisted config. */
   openAICodexAuthProfileIdMap?: ReadonlyMap<string, string>;
@@ -48,6 +51,8 @@ export type DoctorHealthFlowContext = {
   /** Whether the selected state directory already existed before doctor startup work. */
   stateDirExistedAtStart?: boolean;
   env?: NodeJS.ProcessEnv;
+  /** State migration owns service activation until final readiness passes. */
+  gatewayMaintenanceActive?: boolean;
   gatewayDetails?: ReturnType<typeof buildGatewayConnectionDetails>;
   healthOk?: boolean;
   gatewayHealthAuthenticated?: boolean;

@@ -115,7 +115,7 @@ function resolveConfiguredDbPath(
     return configured;
   }
   if (configured.startsWith("~")) {
-    return path.resolve(configured.replace(/^~(?=$|[\\/])/, resolveHome(env)));
+    return path.resolve(configured.replace(/^~(?=$|[\\/])/, () => resolveHome(env)));
   }
   // Plugin runtime api.resolvePath() anchors relative paths at this same root.
   return path.resolve(pluginRoot, configured);

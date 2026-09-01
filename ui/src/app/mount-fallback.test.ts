@@ -44,7 +44,7 @@ function installStartupPaintShell(window: TestWindow, html: string): void {
 
   const startupScript = Array.from(
     parsed.querySelectorAll<HTMLScriptElement>("script:not([src])"),
-  ).find((script) => script.textContent?.includes("var THEMES = { claw: 1, knot: 1, dash: 1 }"));
+  ).find((script) => script.textContent?.includes("var THEMES = {"));
   if (!startupScript?.textContent) {
     throw new Error("Expected inline startup theme script in index.html");
   }
@@ -96,6 +96,38 @@ describe("Control UI mount fallback", () => {
     ["claw dark", { theme: "claw", themeMode: "dark" }, "dark", "rgb(14, 16, 21)"],
     ["OpenKnot dark", { theme: "knot", themeMode: "dark" }, "openknot", "rgb(8, 8, 8)"],
     ["Dash light", { theme: "dash", themeMode: "light" }, "dash-light", "rgb(247, 242, 236)"],
+    [
+      "Absolutely dark",
+      { theme: "absolutely", themeMode: "dark" },
+      "absolutely",
+      "rgb(28, 28, 26)",
+    ],
+    [
+      "Absolutely light",
+      { theme: "absolutely", themeMode: "light" },
+      "absolutely-light",
+      "rgb(250, 249, 245)",
+    ],
+    ["Tide dark", { theme: "tide", themeMode: "dark" }, "tide", "rgb(16, 21, 27)"],
+    ["Beacon dark", { theme: "beacon", themeMode: "dark" }, "beacon", "rgb(0, 0, 0)"],
+    ["Beacon light", { theme: "beacon", themeMode: "light" }, "beacon-light", "rgb(255, 255, 255)"],
+    ["Phosphor dark", { theme: "phosphor", themeMode: "dark" }, "phosphor", "rgb(10, 15, 10)"],
+    ["CRT dark", { theme: "crt", themeMode: "dark" }, "crt", "rgb(9, 10, 9)"],
+    ["CRT light", { theme: "crt", themeMode: "light" }, "crt-light", "rgb(245, 245, 244)"],
+    [
+      "Manuscript light",
+      { theme: "manuscript", themeMode: "light" },
+      "manuscript-light",
+      "rgb(246, 241, 228)",
+    ],
+    [
+      "Manuscript dark",
+      { theme: "manuscript", themeMode: "dark" },
+      "manuscript",
+      "rgb(33, 30, 24)",
+    ],
+    ["Ros\u00e9 dark", { theme: "rose", themeMode: "dark" }, "rose", "rgb(25, 23, 36)"],
+    ["Miami dark", { theme: "miami", themeMode: "dark" }, "miami", "rgb(20, 15, 30)"],
   ])(
     "paints %s before the app stylesheet loads",
     async (_name, settings, expectedTheme, expectedBackground) => {

@@ -363,22 +363,32 @@ export async function executeSystemAgentOperation(
         run: async (ctx) => {
           const runPluginUninstall =
             ctx.deps?.runPluginUninstall ??
-            (async (pluginId: string, pluginRuntime: RuntimeEnv) => {
+            (async (
+              pluginId: string,
+              pluginRuntime: RuntimeEnv,
+              options?: { beforePersistentApply?: () => void },
+            ) => {
               const { runPluginUninstallCommand } =
                 await import("../cli/plugins-uninstall-command.js");
-              await runPluginUninstallCommand(pluginId, {}, pluginRuntime);
+              await runPluginUninstallCommand(pluginId, options, pluginRuntime);
             });
-          await ctx.commit(async () => {
-            // A concurrent config write can retarget the default route between
-            // the pre-approval check and this commit; re-verify at the last
-            // moment so the destructive removal never hits the active route.
-            if (await isPluginBackingDefaultInferenceRoute(operation.pluginId)) {
-              throw new Error(
-                `Uninstall aborted: ${operation.pluginId} now backs the active inference route. Removing it has to happen with OpenClaw stopped: run \`openclaw plugins uninstall ${operation.pluginId}\` on the machine running it.`,
-              );
-            }
-            await runPluginUninstall(operation.pluginId, createNoExitRuntime(ctx.runtime));
-          });
+          // A concurrent config write can retarget the default route between
+          // the pre-approval check and this commit; re-verify before the
+          // command's asynchronous preparation starts.
+          if (await isPluginBackingDefaultInferenceRoute(operation.pluginId)) {
+            throw new Error(
+              `Uninstall aborted: ${operation.pluginId} now backs the active inference route. Removing it has to happen with OpenClaw stopped: run \`openclaw plugins uninstall ${operation.pluginId}\` on the machine running it.`,
+            );
+          }
+          await ctx.commit(() =>
+            runPluginUninstall(
+              operation.pluginId,
+              createNoExitRuntime(ctx.runtime),
+              ctx.assertPersistentApply
+                ? { beforePersistentApply: ctx.assertPersistentApply }
+                : undefined,
+            ),
+          );
           return {
             summary: `Uninstalled plugin ${operation.pluginId}`,
             details: { pluginId: operation.pluginId },

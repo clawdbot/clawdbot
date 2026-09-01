@@ -115,6 +115,6 @@
   },
   "dependencies": {
     "libphonenumber-js": "1.13.11",
-    "typebox": "1.3.14"
+    "typebox": "1.3.17"
   }
 }

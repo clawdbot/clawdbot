@@ -1,13 +1,12 @@
 /**
  * Estimates prompt pressure and decides pre-prompt compaction routing.
  */
+import { resolveCompactionReplayPressure } from "@openclaw/ai/transports";
+import type { Model } from "@openclaw/llm-core";
 import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionContextBudgetStatus } from "../../../config/sessions.js";
-import {
-  MIN_PROMPT_BUDGET_RATIO,
-  MIN_PROMPT_BUDGET_TOKENS,
-} from "../../agent-compaction-constants.js";
+import { resolveEffectiveCompactionReserveTokens } from "../../agent-compaction-constants.js";
 import { SAFETY_MARGIN } from "../../compaction.js";
 import type { AgentMessage, BashExecutionMessage } from "../../runtime/index.js";
 import {
@@ -32,8 +31,7 @@ const MESSAGE_BOUNDARY_OVERHEAD_TOKENS = 12;
 const CONTENT_BLOCK_OVERHEAD_TOKENS = 6;
 const TRUNCATION_ROUTE_BUFFER_TOKENS = 512;
 
-/** Pre-prompt routing decision plus the budget facts used to explain it in logs and session state. */
-export type PreemptiveCompactionDecision = {
+type CompactionPressureDecision = {
   route: PreemptiveCompactionRoute;
   shouldCompact: boolean;
   estimatedPromptTokens: number;
@@ -42,6 +40,18 @@ export type PreemptiveCompactionDecision = {
   overflowTokens: number;
   toolResultReducibleChars: number;
   effectiveReserveTokens: number;
+};
+
+/** Diagnostic maximum plus the independently selected outgoing checkpoint's budget. */
+export type PreemptiveCompactionDecision = CompactionPressureDecision & {
+  compactionReplay?: CompactionPressureDecision;
+};
+
+export type CompactionReplayPressureContext = {
+  model: Model;
+  sessionId?: string;
+  authProfileId?: string;
+  enabled?: boolean;
 };
 
 /** Token pressure reported by the rendered provider-boundary prompt when available. */
@@ -233,7 +243,9 @@ function estimateRenderedPromptTokens(params: { systemPrompt?: string; prompt: s
 
 type TranscriptBoundaryTokenPressure = {
   estimatedPromptTokens: number;
-  source: "provider_context_usage" | "transcript_estimate";
+  source: "provider_context_usage" | "transcript_estimate" | "provider_compaction_estimate";
+  messages: AgentMessage[];
+  hasCompactionReplay: boolean;
 };
 
 function isProviderContextUsageBarrier(message: AgentMessage): boolean {
@@ -273,21 +285,34 @@ function estimateTranscriptBoundaryTokenPressure(params: {
   messages: AgentMessage[];
   systemPrompt?: string;
   prompt: string;
+  replay?: CompactionReplayPressureContext;
 }): TranscriptBoundaryTokenPressure {
-  const boundary = resolveProviderContextBoundary(params.messages);
+  const replay = params.replay
+    ? resolveCompactionReplayPressure(params.messages, params.replay.model, params.replay, {
+        text: estimateStringTokenPressure,
+        image: () => IMAGE_BLOCK_TOKENS,
+        json: estimateJsonPayloadTokenPressure,
+      })
+    : undefined;
+  const messages = replay?.messages ?? params.messages;
+  const boundary = resolveProviderContextBoundary(messages);
   // The provider total owns transcript items through its assistant record. It has
   // no system-prompt provenance, so the current rendered prompt stays local too.
-  const messagesForPressure = boundary
-    ? params.messages.slice(boundary.index + 1)
-    : params.messages;
+  const messagesForPressure = boundary ? messages.slice(boundary.index + 1) : messages;
   const locallyEstimatedTokens = messagesForPressure.reduce(
     (sum, message) => sum + estimateMessageTokenPressure(message),
-    estimateRenderedPromptTokens(params),
+    estimateRenderedPromptTokens(params) + (boundary ? 0 : (replay?.prefixTokens ?? 0)),
   );
   return {
     estimatedPromptTokens:
       (boundary?.totalTokens ?? 0) + Math.ceil(locallyEstimatedTokens * SAFETY_MARGIN),
-    source: boundary ? "provider_context_usage" : "transcript_estimate",
+    source: boundary
+      ? "provider_context_usage"
+      : replay
+        ? "provider_compaction_estimate"
+        : "transcript_estimate",
+    messages,
+    hasCompactionReplay: Boolean(replay),
   };
 }
 
@@ -295,6 +320,7 @@ export function estimateLlmBoundaryTokenPressure(params: {
   messages: AgentMessage[];
   systemPrompt?: string;
   prompt: string;
+  replay?: CompactionReplayPressureContext;
 }): number {
   return estimateTranscriptBoundaryTokenPressure(params).estimatedPromptTokens;
 }
@@ -337,51 +363,77 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   reserveTokens: number;
   toolResultMaxChars?: number;
   llmBoundaryTokenPressure?: LlmBoundaryTokenPressure;
+  replay?: CompactionReplayPressureContext;
 }): PreemptiveCompactionDecision {
-  let messagesForPressure = params.messages;
   const llmBoundaryTokenPressure = normalizeLlmBoundaryTokenPressure(
     params.llmBoundaryTokenPressure,
   );
-  const transcriptTokenPressure = llmBoundaryTokenPressure
+  const transcriptTokenPressure =
+    llmBoundaryTokenPressure && !params.replay
+      ? undefined
+      : estimateTranscriptBoundaryTokenPressure({
+          messages: params.messages,
+          systemPrompt: params.systemPrompt,
+          prompt: params.prompt,
+          replay: params.replay,
+        });
+  // The selected provider window owns its covered prefix, including when a
+  // context engine supplied an estimate of the raw transcript instead.
+  const boundaryPressure = transcriptTokenPressure?.hasCompactionReplay
     ? undefined
-    : estimateTranscriptBoundaryTokenPressure({
-        messages: params.messages,
-        systemPrompt: params.systemPrompt,
-        prompt: params.prompt,
-      });
-  let estimatedPromptTokens =
-    llmBoundaryTokenPressure?.estimatedPromptTokens ??
-    transcriptTokenPressure?.estimatedPromptTokens ??
-    0;
-  let pressureSource =
-    llmBoundaryTokenPressure?.source ?? transcriptTokenPressure?.source ?? "transcript_estimate";
+    : llmBoundaryTokenPressure;
+  const outgoingDecision = resolveCompactionPressureDecision(
+    {
+      messages: transcriptTokenPressure?.messages ?? params.messages,
+      estimatedPromptTokens:
+        boundaryPressure?.estimatedPromptTokens ??
+        transcriptTokenPressure?.estimatedPromptTokens ??
+        0,
+      source: boundaryPressure?.source ?? transcriptTokenPressure?.source ?? "transcript_estimate",
+    },
+    params,
+  );
+  let diagnosticDecision = outgoingDecision;
   if (params.unwindowedMessages && params.unwindowedMessages !== params.messages) {
     const unwindowedTokenPressure = estimateTranscriptBoundaryTokenPressure({
       messages: params.unwindowedMessages,
       systemPrompt: params.systemPrompt,
       prompt: params.prompt,
     });
-    if (unwindowedTokenPressure.estimatedPromptTokens > estimatedPromptTokens) {
-      estimatedPromptTokens = unwindowedTokenPressure.estimatedPromptTokens;
-      messagesForPressure = params.unwindowedMessages;
-      pressureSource = `unwindowed_${unwindowedTokenPressure.source}`;
+    // Unwindowed history is diagnostic: neither its checkpoints nor its larger
+    // raw estimate may authorize recovery of a different outgoing window.
+    if (unwindowedTokenPressure.estimatedPromptTokens > outgoingDecision.estimatedPromptTokens) {
+      diagnosticDecision = resolveCompactionPressureDecision(
+        {
+          ...unwindowedTokenPressure,
+          source: `unwindowed_${unwindowedTokenPressure.source}`,
+        },
+        params,
+      );
     }
   }
+  return {
+    ...diagnosticDecision,
+    ...(transcriptTokenPressure?.hasCompactionReplay ? { compactionReplay: outgoingDecision } : {}),
+  };
+}
+
+function resolveCompactionPressureDecision(
+  pressure: Pick<TranscriptBoundaryTokenPressure, "messages" | "estimatedPromptTokens"> & {
+    source: string;
+  },
+  params: { contextTokenBudget: number; reserveTokens: number; toolResultMaxChars?: number },
+): CompactionPressureDecision {
+  const { estimatedPromptTokens } = pressure;
   const contextTokenBudget = Math.max(1, Math.floor(params.contextTokenBudget));
-  const requestedReserveTokens = Math.max(0, Math.floor(params.reserveTokens));
-  const minPromptBudget = Math.min(
-    MIN_PROMPT_BUDGET_TOKENS,
-    Math.max(1, Math.floor(contextTokenBudget * MIN_PROMPT_BUDGET_RATIO)),
-  );
-  // Keep a minimum prompt budget even when reserveTokens asks for most of the context window.
-  const effectiveReserveTokens = Math.min(
-    requestedReserveTokens,
-    Math.max(0, contextTokenBudget - minPromptBudget),
-  );
+  const effectiveReserveTokens = resolveEffectiveCompactionReserveTokens({
+    contextTokenBudget,
+    reserveTokens: params.reserveTokens,
+  });
   const promptBudgetBeforeReserve = Math.max(1, contextTokenBudget - effectiveReserveTokens);
   const overflowTokens = Math.max(0, estimatedPromptTokens - promptBudgetBeforeReserve);
   const toolResultPotential = estimateToolResultReductionPotential({
-    messages: messagesForPressure,
+    messages: pressure.messages,
     contextWindowTokens: params.contextTokenBudget,
     maxCharsOverride: params.toolResultMaxChars,
   });
@@ -408,7 +460,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
     route,
     shouldCompact: route === "compact_only" || route === "compact_then_truncate",
     estimatedPromptTokens,
-    pressureSource,
+    pressureSource: pressure.source,
     promptBudgetBeforeReserve,
     overflowTokens,
     toolResultReducibleChars,

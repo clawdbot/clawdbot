@@ -310,6 +310,7 @@ fun ShellScreen(
               onOpenSessions = { nav.openDetailTab(Tab.Sessions) },
               onOpenDashboard = nav::openSessionDashboard,
               onOpenGatewaySettings = { nav.openSettingsRoute(SettingsRoute.Gateway) },
+              onOpenProvidersModels = { nav.openDetailTab(Tab.ProvidersModels) },
             )
           Tab.Voice ->
             VoiceShellScreen(
@@ -2160,7 +2161,7 @@ internal fun gatewaySummary(
   isConnected: Boolean,
   gatewayConnectionProblem: GatewayConnectionProblem? = null,
 ): String {
-  if (isConnected) return nativeString("Online and ready")
+  if (isConnected) return if (statusText == "Connected (node offline)") gatewayStatusForDisplay(statusText) else nativeString("Online and ready")
   val status = statusText.trim().lowercase()
   return when {
     status.contains("connecting") || status.contains("reconnecting") -> nativeString("Connecting...")
