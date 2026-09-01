@@ -9,6 +9,10 @@ import * as plugins from "./plugins.js";
 export const PluginLifecycleProtocolSchemas = {
   CapabilityConsentErrorDetails: plugins.CapabilityConsentErrorDetailsSchema,
   HooksStatusParams: hooks.HooksStatusParamsSchema,
+  PluginApprovalExternalPrepareParams: pluginApprovals.PluginApprovalExternalPrepareParamsSchema,
+  PluginApprovalExternalPrepareResult: pluginApprovals.PluginApprovalExternalPrepareResultSchema,
+  PluginApprovalExternalStartParams: pluginApprovals.PluginApprovalExternalStartParamsSchema,
+  PluginApprovalExternalStartResult: pluginApprovals.PluginApprovalExternalStartResultSchema,
   PluginApprovalRequestParams: pluginApprovals.PluginApprovalRequestParamsSchema,
   PluginApprovalResolveParams: pluginApprovals.PluginApprovalResolveParamsSchema,
   PluginCatalogClawHubInstall: plugins.PluginCatalogClawHubInstallSchema,
