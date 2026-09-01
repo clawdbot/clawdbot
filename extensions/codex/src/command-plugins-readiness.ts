@@ -8,7 +8,10 @@ import {
   findCodexMarketplacePluginSummary,
   pluginReadParams,
 } from "./app-server/plugin-inventory.js";
-import type { CodexAppsReadResponse } from "./app-server/protocol-control-plane.js";
+import type {
+  CodexAppsReadResponse,
+  CodexExperimentalFeatureListResponse,
+} from "./app-server/protocol-control-plane.js";
 import { isJsonObject, type CodexAppServerRequestResult, type v2 } from "./app-server/protocol.js";
 import { CodexAppServerRpcError } from "./app-server/rpc-error.js";
 import { formatCodexAccountLine, formatCodexDisplayText } from "./command-formatters.js";
@@ -28,6 +31,13 @@ type Evidence<T> =
   | { status: "known"; value: T }
   | { status: "unavailable"; reason: "unsupported" | "request_failed" };
 
+type CodexHostedAppsSupport =
+  | "supported"
+  | "sign_in_required"
+  | "disabled"
+  | "unsupported"
+  | "unknown";
+
 export type CodexPluginReadiness = {
   configKey: string;
   commandId: string;
@@ -41,8 +51,99 @@ export type CodexPluginReadiness = {
   runtime: Evidence<v2.AppsInstalledResponse>;
   metadata: Evidence<CodexAppsReadResponse>;
   account: Evidence<CodexAppServerRequestResult<"account/read">>;
+  hostedSupport: CodexHostedAppsSupport;
   diagnostic?: string;
 };
+
+/** Runtime support is not account-wide permission to browse, connect or invoke apps. */
+async function readCodexHostedAppsSupport(
+  context: CodexPluginCommandContext,
+  account: CodexPluginReadiness["account"],
+): Promise<CodexHostedAppsSupport> {
+  if (account.status !== "known") {
+    return "unknown";
+  }
+  if (!isJsonObject(account.value.account) || account.value.account.type !== "chatgpt") {
+    return "sign_in_required";
+  }
+  const features = await readEvidence(async () => {
+    let cursor: string | undefined;
+    const visited = new Set<string>();
+    do {
+      const response = await context.request<CodexExperimentalFeatureListResponse>(
+        "experimentalFeature/list",
+        {
+          ...(context.threadId ? { threadId: context.threadId } : {}),
+          ...(cursor ? { cursor } : {}),
+          limit: 100,
+        },
+      );
+      const apps = response.data.find((feature) => feature.name === "apps");
+      if (apps) {
+        return apps.enabled;
+      }
+      cursor = response.nextCursor ?? undefined;
+      if (cursor && visited.has(cursor)) {
+        return undefined;
+      }
+      if (cursor) {
+        visited.add(cursor);
+      }
+    } while (cursor);
+    return undefined;
+  });
+  if (features.status !== "known") {
+    return features.reason === "unsupported" ? "unsupported" : "unknown";
+  }
+  return features.value === undefined ? "unknown" : features.value ? "supported" : "disabled";
+}
+
+function describeCodexHostedAppsSupport(support: CodexHostedAppsSupport): string {
+  switch (support) {
+    case "supported":
+      return "Hosted apps: supported by this runtime; account connections and action permissions are checked separately.";
+    case "sign_in_required":
+      return "Hosted apps require ChatGPT sign-in. Check /codex account; local Codex plugins remain available.";
+    case "disabled":
+      return "Hosted apps are disabled in this Codex runtime. Check its effective apps feature configuration.";
+    case "unsupported":
+      return "Hosted app support is unknown: this Codex version cannot report the required feature state. Update to OpenClaw's supported Codex version.";
+    default:
+      return "Hosted app support is unknown. Check /codex account and retry this command.";
+  }
+}
+
+function pluginCatalogState(
+  summary: v2.PluginSummary | undefined,
+): "available" | "blocked" | "unknown" {
+  if (!summary) {
+    return "unknown";
+  }
+  if (summary.availability === "DISABLED_BY_ADMIN" || summary.installPolicy === "NOT_AVAILABLE") {
+    return "blocked";
+  }
+  return summary.availability === "AVAILABLE" &&
+    (summary.installPolicy === "AVAILABLE" || summary.installPolicy === "INSTALLED_BY_DEFAULT")
+    ? "available"
+    : "unknown";
+}
+
+export function codexPluginAppPageLinks(readiness: CodexPluginReadiness): v2.AppSummary[] {
+  if (
+    readiness.hostedSupport !== "supported" ||
+    pluginCatalogState(readiness.summary) !== "available" ||
+    readiness.metadata.status !== "known"
+  ) {
+    return [];
+  }
+  const metadata = new Map(readiness.metadata.value.apps.map((app) => [app.id, app]));
+  // app/read omits unknown or unauthorized IDs. plugin/read can manufacture a URL
+  // without metadata, so its URL must not substitute for this authorization evidence.
+  return (readiness.detail?.apps ?? []).flatMap((app) => {
+    const authorized = metadata.get(app.id);
+    return authorized ? [{ ...app, name: authorized.name, installUrl: authorized.installUrl }] : [];
+  });
+}
 
 /** Reads existing snapshots only. Neither metadata nor installation proves a live connection. */
 export async function readCodexPluginReadiness(params: {
@@ -74,6 +175,7 @@ export async function readCodexPluginReadiness(params: {
         refreshToken: false,
       }),
     ),
+    hostedSupport: "unknown",
   };
   const installed = await readEvidence(() =>
     context.request<v2.PluginInstalledResponse>("plugin/installed", {
@@ -156,8 +258,12 @@ export async function readCodexPluginReadiness(params: {
     return result;
   }
   result.detail = detail.value.plugin;
+  // Installed inventory may be cached. Use the validated detail response's newer
+  // policy so a restriction cannot be hidden behind an earlier AVAILABLE record.
+  result.summary = detail.value.plugin.summary;
   const appIds = Array.from(new Set(result.detail.apps.map((app) => app.id))).toSorted();
   if (appIds.length > 0) {
+    result.hostedSupport = await readCodexHostedAppsSupport(context, result.account);
     // app/read's documented 100-id limit applies independently of presentation pages.
     const [runtime, metadata] = await Promise.all([
       readEvidence(() =>
@@ -194,25 +300,37 @@ export function formatCodexPluginReadiness(
   page = 1,
 ): PluginCommandResult {
   const summary = readiness.summary;
-  const available = summary
-    ? summary.availability !== "DISABLED_BY_ADMIN" && summary.installPolicy !== "NOT_AVAILABLE"
-    : undefined;
+  const catalog = pluginCatalogState(summary);
+  const hasApps = Boolean(readiness.detail?.apps.length);
   const lines = [
     `Plugin: ${display(readiness.commandId)}`,
     `Agent: ${display(readiness.agentId)} · Profile: ${display(readiness.profileId ?? "native Codex account (profile unknown)")}`,
     `Conversation workspace: ${display(readiness.workspaceDir)}`,
     formatBoundAccount(readiness.account),
-    "ChatGPT workspace: unknown. Confirm the same workspace in your browser; /codex account shows account details.",
-    `Catalog: ${available === undefined ? "unknown" : available ? "available" : "blocked by marketplace policy"}`,
+    `Catalog: ${catalog === "blocked" ? "blocked by marketplace policy" : catalog}`,
     `Bundle: ${summary ? (summary.installed ? "installed" : "not installed") : "unknown"}`,
     `Codex plugin: ${summary ? (summary.enabled ? "enabled" : "disabled") : "unknown"}`,
-    `OpenClaw: explicitly authorized; ${readiness.openClawEnabled ? "enabled" : "disabled for new conversations"}`,
-    "Connection: unknown. Codex does not report live account-link status in these reads.",
+    `OpenClaw app access: ${readiness.openClawEnabled ? "enabled for new conversations" : "disabled for new conversations"} (shared Codex plugin configuration).`,
+    ...(hasApps
+      ? [
+          describeCodexHostedAppsSupport(readiness.hostedSupport),
+          "Connection: unknown. Codex does not report live account-link status in these reads.",
+        ]
+      : []),
   ];
-  if (!readiness.openClawEnabled) {
+  if (catalog === "blocked") {
+    lines.push(
+      summary?.disabledReason === "plan_not_eligible"
+        ? "Next: this ChatGPT plan is not eligible for the plugin. Check its plan requirements."
+        : summary?.disabledReason === "required_app_unavailable"
+          ? "Next: a required hosted app is unavailable. Check access with the app or workspace owner."
+          : summary?.disabledReason === "disabled_by_admin" ||
+              summary?.availability === "DISABLED_BY_ADMIN"
+            ? "Next: ask the marketplace administrator to restore access."
+            : "Next: check the plugin's marketplace requirements; its policy does not permit installation.",
+    );
+  } else if (!readiness.openClawEnabled) {
     lines.push(`Next: /codex plugins enable ${readiness.commandId}, then /new or /reset.`);
-  } else if (available === false) {
-    lines.push("Next: ask the marketplace administrator to restore access.");
   } else if (summary && (!summary.installed || !summary.enabled)) {
     lines.push(`Next: /codex plugins install ${readiness.commandId}, then /new or /reset.`);
   }
@@ -266,16 +384,11 @@ export function formatCodexPluginReadiness(
             ].join("\n"),
     });
     if (visible.length > 0) {
-      const metadataById = new Map(
-        readiness.metadata.status === "known"
-          ? readiness.metadata.value.apps.map((app) => [app.id, app])
-          : [],
-      );
-      const links = visible.map((app) => ({
-        id: app.id,
-        name: app.name,
-        installUrl: metadataById.get(app.id)?.installUrl ?? app.installUrl,
-      }));
+      const authorized = new Map(codexPluginAppPageLinks(readiness).map((app) => [app.id, app]));
+      const links = visible.flatMap((app) => {
+        const link = authorized.get(app.id);
+        return link ? [link] : [];
+      });
       blocks.push(
         ...buildCodexPluginAppLinks(
           links,
@@ -286,9 +399,15 @@ export function formatCodexPluginReadiness(
             : {},
         ),
       );
+      if (links.length < visible.length) {
+        blocks.push({
+          type: "text",
+          text: "Some app-page permissions are unknown or unavailable. A declared app or setup URL does not establish access. Retry this status command after checking the reported restriction.",
+        });
+      }
       blocks.push({
         type: "text",
-        text: "Snapshot freshness is unknown; this read does not refresh hosted tools or verify a live call. After connecting, recheck in Codex and use /new or /reset. Existing conversations keep their admitted app policy.",
+        text: "Snapshot freshness is unknown; this read does not refresh hosted tools or verify a live call. Browser setup does not change OpenClaw app access. Use /new or /reset after setup or local permission changes; existing conversations keep their admitted app policy.",
       });
     }
   }
@@ -330,10 +449,10 @@ function formatBoundAccount(evidence: CodexPluginReadiness["account"]): string {
   if (isJsonObject(account) && account.type === "chatgpt") {
     const email = typeof account.email === "string" ? account.email : "email unknown";
     const plan = typeof account.planType === "string" ? account.planType : "plan unknown";
-    return `ChatGPT account: ${formatCodexAccountLine(email.slice(0, 120))} (${display(plan)}). Use this account in the browser.`;
+    return `ChatGPT account: ${formatCodexAccountLine(email.slice(0, 120))} (${display(plan)}).`;
   }
   if (isJsonObject(account) && typeof account.type === "string") {
     return `Account type: ${display(account.type)}; ChatGPT account identity is not available.`;
   }
-  return "ChatGPT account: unknown. Check /codex account before connecting in your browser.";
+  return "Codex account: unknown. Check /codex account.";
 }

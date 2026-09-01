@@ -16,11 +16,11 @@ export function buildCodexPluginAppLinks(
       return url
         ? {
             type: "buttons",
-            buttons: [{ label: `Set up / manage ${name}`, action: { type: "url", url } }],
+            buttons: [{ label: `Open ${name} in ChatGPT`, action: { type: "url", url } }],
           }
         : {
             type: "text",
-            text: `${name}: setup/manage link unavailable. In Codex CLI, run /apps and select this app to continue.`,
+            text: `${name}: ChatGPT setup/manage link unavailable. In Codex CLI, run /apps and select this app to continue.`,
           };
     });
   const remaining = apps.length - CODEX_PLUGIN_APP_LINK_PAGE_SIZE;

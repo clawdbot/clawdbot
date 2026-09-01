@@ -24,6 +24,7 @@ import {
 } from "./command-plugin-config.js";
 import {
   formatCodexPluginReadiness,
+  codexPluginAppPageLinks,
   readCodexPluginReadiness,
 } from "./command-plugins-readiness.js";
 import type { CodexPluginCommandContext } from "./command-plugins-runtime.js";
@@ -475,6 +476,27 @@ async function installCodexPlugin(
 
   const appsNeedingAuth = result?.appsNeedingAuth ?? [];
   if (appsNeedingAuth.length > 0) {
+    let appLinks: v2.AppSummary[] = [];
+    if (runtime.withContext) {
+      try {
+        appLinks = await runtime.withContext(async (context) => {
+          const configured = resolveConfiguredPluginKey(context.current.plugins ?? {}, requestedId);
+          if (configured.status !== "matched") {
+            return [];
+          }
+          const readiness = await readCodexPluginReadiness({
+            context,
+            current: context.current,
+            configKey: configured.configKey,
+          });
+          const pendingIds = new Set(appsNeedingAuth.map((app) => app.id));
+          return codexPluginAppPageLinks(readiness).filter((app) => pendingIds.has(app.id));
+        });
+      } catch {
+        // Installation already completed. A changed account or unavailable status
+        // must not undo local intent or present setup links from the old scope.
+      }
+    }
     const authRequirement =
       appsNeedingAuth.length === 1
         ? "1 app still requires"
@@ -485,9 +507,17 @@ async function installCodexPlugin(
       blocks: [
         {
           type: "text",
-          text: `${formatCodexDisplayText(requestedId)} was installed and authorized, but ${authRequirement} connector authentication. Complete sign-in before using those apps.`,
+          text: `${formatCodexDisplayText(requestedId)} bundle was installed in Codex. OpenClaw app access is configured. ${authRequirement} connector authentication in ChatGPT. Installation does not confirm app connections or current-conversation readiness.`,
         },
-        ...buildCodexPluginAppLinks(appsNeedingAuth),
+        ...buildCodexPluginAppLinks(appLinks),
+        ...(appLinks.length < appsNeedingAuth.length
+          ? [
+              {
+                type: "text" as const,
+                text: `Some app setup permissions could not be confirmed. Run /codex plugins status ${requestedId} to check the current account and restrictions.`,
+              },
+            ]
+          : []),
         { type: "context", text: `${refreshWarning.trim()} ${POLICY_REFRESH_HINT}`.trim() },
       ],
     };
@@ -499,10 +529,10 @@ async function installCodexPlugin(
   }
 
   const status = alreadyInstalled
-    ? "was already installed in Codex and is now authorized"
-    : "was installed and authorized";
+    ? "bundle was already installed in Codex"
+    : "bundle was installed in Codex";
   return {
-    text: `${formatCodexDisplayText(requestedId)} ${status}.${refreshWarning} ${POLICY_REFRESH_HINT}`,
+    text: `${formatCodexDisplayText(requestedId)} ${status}. OpenClaw app access is configured.${refreshWarning} ${POLICY_REFRESH_HINT}`,
   };
 }
 
