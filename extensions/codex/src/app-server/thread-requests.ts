@@ -508,7 +508,12 @@ function buildRestrictedToolConfigPatch(
   );
   return {
     ...CODEX_RING_ZERO_THREAD_CONFIG,
-    ...(scheduledAppAuthorityActive ? { "features.apps": true } : {}),
+    ...(scheduledAppAuthorityActive
+      ? {
+          "features.apps": true,
+          "orchestrator.mcp.enabled": true,
+        }
+      : {}),
     ...(Object.keys(mcpServers).length > 0 ? { mcp_servers: mcpServers } : {}),
   };
 }

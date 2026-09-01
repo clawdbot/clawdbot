@@ -509,18 +509,38 @@ describe("Codex ring-zero thread config", () => {
       calendar: { enabled: true },
     };
 
-    const start = buildThreadStartParams(params, {
-      appServer: createAppServerOptions() as never,
+    const appServer = createAppServerOptions() as never;
+    const options = {
+      appServer,
       cwd: "/repo",
       dynamicTools: [],
       hostSystemAgentActive: false,
       nativeCodeModeEnabled: false,
-      config: { apps },
+      config: {
+        apps,
+        mcp_servers: {
+          inherited: { command: "inherited-mcp" },
+        },
+      },
+    };
+    const start = buildThreadStartParams(params, options);
+    const resume = buildThreadResumeParams(params, {
+      ...options,
+      threadId: "thread-1",
     });
 
-    expect(start.config?.["features.apps"]).toBe(true);
-    expect(start.config?.apps).toEqual(apps);
-    expect(start.config?.["features.multi_agent"]).toBe(false);
+    for (const request of [start, resume]) {
+      expect(request.config?.["features.apps"]).toBe(true);
+      expect(request.config?.["orchestrator.mcp.enabled"]).toBe(true);
+      expect(request.config?.apps).toEqual(apps);
+      expect(request.config?.mcp_servers).toEqual({
+        inherited: {
+          command: "inherited-mcp",
+          enabled: false,
+        },
+      });
+      expect(request.config?.["features.multi_agent"]).toBe(false);
+    }
   });
 });
 
