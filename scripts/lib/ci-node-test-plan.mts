@@ -33,6 +33,7 @@ import {
   type VitestPretestBuildMode as NodeTestPretestBuildMode,
 } from "./vitest-build-prerequisites.mts";
 import {
+  VITEST_PRETEST_BUILD_SECONDS,
   estimateVitestTestFileSeconds as stripeFileWeight,
   estimateVitestToolingFileSeconds as toolingFileWeight,
 } from "./vitest-shard-metadata.mts";
@@ -196,12 +197,6 @@ const COMPACT_GITHUB_LARGE_NODE_TEST_JOB_SECONDS = 90;
 const COMPACT_GITHUB_SMALL_NODE_TEST_JOB_SECONDS = 95;
 const COMPACT_GITHUB_GROUP_SECONDS_SCALE = 1.6;
 const COMPACT_HYBRID_GROUP_SECONDS_SCALE = 0.87;
-// Separate build steps in runs 33364762120/33364935118: runtime median 100s;
-// private-QA 104s. Test-group measurements exclude this once-per-job prerequisite.
-const COMPACT_PRETEST_BUILD_SECONDS: Record<NodeTestPretestBuildMode, number> = {
-  runtime: 100,
-  "private-qa": 104,
-};
 // Split groups above this hosted prediction before packing. Hybrid reuses the
 // hosted-derived splits so retries cannot reunite an oversized hosted group.
 const COMPACT_GITHUB_MAX_PREDICTED_SECONDS = 150;
@@ -1576,7 +1571,7 @@ function createToolingSplitShards(): NodeTestSplitShard[] {
     const mode = mergeVitestPretestBuildModes(batch.map((file) => buildModes.get(file)));
     return (
       batch.reduce((sum, file) => sum + toolingFileWeight(file), 0) +
-      (mode ? COMPACT_PRETEST_BUILD_SECONDS[mode] : 0)
+      (mode ? VITEST_PRETEST_BUILD_SECONDS[mode] : 0)
     );
   };
   return [
@@ -2354,7 +2349,7 @@ function createCompactNodeTestShardBundles(
     estimateCompactStripeSeconds(group, options.runnerBackend);
   const estimateBinSeconds = (groups: NodeTestShardGroup[]) => {
     const mode = mergeVitestPretestBuildModes(groups.map((group) => group.pretestBuildMode));
-    const buildSeconds = mode ? COMPACT_PRETEST_BUILD_SECONDS[mode] : 0;
+    const buildSeconds = mode ? VITEST_PRETEST_BUILD_SECONDS[mode] : 0;
     return (
       groups.reduce((seconds, group) => seconds + estimateStripeSeconds(group), 0) +
       Math.round(

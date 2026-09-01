@@ -370,6 +370,102 @@ describe("collectLegacyCronStoreHealthFindings", () => {
 });
 
 describe("maybeRepairLegacyCronStore", () => {
+  it("refuses a stale definition rewrite after a concurrent prompt-window commit", async () => {
+    const storePath = await makeTempStorePath();
+    const jobA = createCurrentCronJob({ id: "job-a", notify: true });
+    const jobC = createCurrentCronJob({ id: "job-c" });
+    await writeCurrentCronStore(storePath, [jobA]);
+    const prompter = {
+      confirm: vi.fn(async () => {
+        await writeCurrentCronStore(storePath, [jobA, jobC]);
+        return true;
+      }),
+    };
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter,
+    });
+
+    expect(prompter.confirm).toHaveBeenCalledTimes(1);
+    expect((await readPersistedJobs(storePath)).map((job) => job.id)).toEqual(["job-a", "job-c"]);
+    expectNoteContaining("changed while doctor was waiting", "Doctor warnings");
+  });
+
+  it("preserves prompt-window runtime state and authority while repairing config", async () => {
+    const storePath = await makeTempStorePath();
+    const staleAuthority = {
+      version: 1,
+      runtimeId: "codex",
+      namespace: "codex.apps",
+      payload: { apps: [{ id: "calendar" }] },
+    };
+    const freshAuthority = {
+      ...staleAuthority,
+      payload: { apps: [{ id: "mail" }] },
+    };
+    const toolJob = createCurrentCronJob({
+      id: "runtime-job",
+      notify: true,
+      owner: {
+        agentId: "main",
+        sessionKey: "agent:main:discord:group:ops",
+        accountId: "work",
+      },
+      payload: {
+        kind: "agentTurn",
+        message: "scheduled continuation",
+        toolsAllow: ["read", "cron"],
+        toolsAllowIsDefault: true,
+      },
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
+        ownerSessionKey: "agent:main:discord:group:ops",
+        ownerAccountId: "work",
+      },
+      toolsAllowProvenance: { version: 1, source: "final-executable-surface" },
+      runtimeAuthority: staleAuthority,
+    });
+    await writeCurrentCronStore(storePath, [toolJob]);
+    const runAtMs = Date.parse("2026-09-01T12:00:00.000Z");
+    const prompter = {
+      confirm: vi.fn(async () => {
+        const current = requirePersistedJob(await readPersistedJobs(storePath), 0);
+        current.updatedAtMs = runAtMs;
+        current.state = {
+          queuedAtMs: runAtMs,
+          runningAtMs: runAtMs,
+          lastRunAtMs: runAtMs,
+          lastRunStatus: "ok",
+          consecutiveErrors: 0,
+        };
+        current.runtimeAuthority = freshAuthority;
+        await writeCurrentCronStore(storePath, [current]);
+        return true;
+      }),
+    };
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter,
+    });
+
+    const repaired = requirePersistedJob(await readPersistedJobs(storePath), 0);
+    expect(repaired.notify).toBeUndefined();
+    expect(repaired.state).toMatchObject({
+      queuedAtMs: runAtMs,
+      runningAtMs: runAtMs,
+      lastRunAtMs: runAtMs,
+      lastRunStatus: "ok",
+    });
+    expect(repaired.updatedAtMs).toBe(runAtMs);
+    expect(repaired.runtimeAuthority).toEqual(freshAuthority);
+    expect(prompter.confirm).toHaveBeenCalledTimes(1);
+  });
+
   it("detects, repairs, reloads, and idempotently migrates the stable documented SQLite trigger script", async () => {
     const storePath = await makeTempStorePath();
     const stableScript =

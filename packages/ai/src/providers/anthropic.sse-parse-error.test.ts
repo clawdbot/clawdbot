@@ -80,7 +80,6 @@ async function streamAnthropicSseFrames(
   try {
     const result = await streamAnthropic(makeModel(`http://127.0.0.1:${address.port}`), context, {
       apiKey: "test-api-key",
-      maxRetries: 0,
     }).result();
     return { stopReason: result.stopReason, errorMessage: result.errorMessage };
   } finally {
@@ -161,7 +160,6 @@ describe("Anthropic malformed SSE frames", () => {
     const stream = streamAnthropic({ ...makeModel(baseUrl), provider }, context, {
       apiKey: "test-api-key",
       client,
-      maxRetries: 0,
     });
     const eventTypes: string[] = [];
     for await (const event of stream) {

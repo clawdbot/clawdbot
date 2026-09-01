@@ -63,6 +63,7 @@ import { resolveRequestedChatAgentId, validateChatSelectedAgent } from "./chat-o
 import { readChatPendingInputs } from "./chat-pending-inputs.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
+import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
 import { readSessionPlacementFields } from "./session-placement-read-projection.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -169,6 +170,7 @@ async function handleChatMetadataRequest({
 async function handleChatHistoryRequest({
   params,
   respond,
+  client,
   context,
   method,
 }: GatewayRequestHandlerOptions & {
@@ -498,11 +500,18 @@ async function handleChatHistoryRequest({
   // Cursor responses publish sessionInfo only; the default-model projection is unused.
   const defaults =
     cursor === undefined
-      ? getSessionDefaults(cfg, defaultModelCatalog, {
-          agentId: sessionAgentId,
-          allowPluginNormalization: false,
-          providerPolicySource: "active",
-        })
+      ? {
+          ...getSessionDefaults(cfg, defaultModelCatalog, {
+            agentId: sessionAgentId,
+            allowPluginNormalization: false,
+            providerPolicySource: "active",
+          }),
+          modelSelectionTarget: resolveGatewayModelSelectionPolicy({
+            agentId: sessionAgentId,
+            callerScopes: client?.connect?.scopes ?? [],
+            cfg,
+          }).target,
+        }
       : undefined;
   // Unprepared catalog facts are unknown, not an Off default or a smaller profile.
   // Omission lets clients retain richer same-identity metadata; authored defaults still apply.

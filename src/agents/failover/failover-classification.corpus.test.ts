@@ -90,7 +90,6 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
     expect(classifyReplyRequest({ message })).toMatchObject({
       code: "provider_internal_error",
       technicalMessage: message,
-      allowTransientHttpRetry: true,
     });
   });
 

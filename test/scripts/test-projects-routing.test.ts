@@ -93,6 +93,11 @@ describe("test-projects args", () => {
       config: "test/vitest/vitest.tooling.config.ts",
     },
     {
+      title: "keeps native artifact fixtures in the serial tooling owner",
+      target: "test/scripts/mac-elevation-artifact.test.ts",
+      config: "test/vitest/vitest.tooling.config.ts",
+    },
+    {
       title: "routes config baseline integration tests to the contracts config",
       target: "src/config/doc-baseline.integration.test.ts",
       config: "test/vitest/vitest.tooling.config.ts",

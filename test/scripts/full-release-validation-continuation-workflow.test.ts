@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
@@ -71,6 +71,26 @@ describe("full release metadata checkouts", () => {
         ]),
       ).toBe("");
       if (job === "evidence_reuse") {
+        const setup = step(job, "Setup Node.js");
+        const steps = workflow.jobs[job]!.steps;
+        expect(steps.indexOf(setup)).toBeLessThan(
+          steps.indexOf(step(job, "Find reusable validation evidence")),
+        );
+        expect(setup.env).toMatchObject({ REQUESTED_NODE_VERSION: "24.x" });
+        execFileSync("bash", ["-c", String(setup.run)], {
+          cwd: root,
+          encoding: "utf8",
+          timeout: 10_000,
+          env: {
+            ...process.env,
+            ...(setup.env as Record<string, string>),
+            // Keep this sparse-file proof offline on every supported test runtime.
+            REQUESTED_NODE_VERSION: process.versions.node,
+            PATH: `${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ""}`,
+            NODE_OPTIONS: "",
+            GITHUB_PATH: join(root, "github-path"),
+          },
+        });
         expect(
           runNode(
             [join(root, "workflow/scripts/release-preflight.mjs"), "--macos-versions-only"],

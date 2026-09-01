@@ -34,9 +34,11 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
     await state?.cleanup();
   });
 
-  it("throws FailoverError for replay-safe harness-owned prompt timeouts when model fallbacks are configured", async () => {
+  it("throws FailoverError for persistent replay-safe prompt timeouts after transient retries", async () => {
+    // The transient retry owner replays the same model first; a timeout that
+    // persists past the retry budget hands off to the configured fallback.
     mockedClassifyFailoverReason.mockReturnValue("timeout");
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+    mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({
         assistantTexts: [],
         terminal: {
@@ -66,7 +68,8 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
 
     await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
     await expect(promise).rejects.toThrow("LLM request timed out.");
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    // Initial attempt plus the full same-model transient retry budget.
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(4);
   });
 
   it("finalizes a settled write after an idle timeout without replaying the prompt", async () => {

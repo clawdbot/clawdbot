@@ -269,8 +269,10 @@ export function buildSessionContext(
   }
 
   const path: SessionEntry[] = [];
+  const seen = new Set<string>();
   let current: SessionEntry | undefined = leaf;
-  while (current) {
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id);
     path.push(current);
     current = current.parentId ? byId.get(current.parentId) : undefined;
   }

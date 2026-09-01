@@ -143,6 +143,9 @@ async function runConfiguredSystemAgentText(params: {
   } catch (error) {
     throw new SystemAgentInferenceUnavailableError("planner", [error]);
   }
+  // Provider transport options can select a different runtime. Plugin-owned
+  // inference keeps its verified runtime and uses the JSON prompt/parser contract.
+  const responseFormat = expectedAgentHarnessRuntimeArtifact ? undefined : params.responseFormat;
   const tempDir = await (params.deps?.createTempDir ?? createTempPlannerDir)();
   let text: string | undefined;
   let preparedRunAdmission: ReturnType<typeof prepareSystemAgentRunAdmission> | undefined;
@@ -180,7 +183,7 @@ async function runConfiguredSystemAgentText(params: {
       messageProvider: "openclaw",
       disableTools: true,
       disableTrajectory: true,
-      ...(params.responseFormat ? { streamParams: { responseFormat: params.responseFormat } } : {}),
+      ...(responseFormat ? { streamParams: { responseFormat } } : {}),
       ...(route.authProfileId ? { authProfileId: route.authProfileId } : {}),
     };
     const result =

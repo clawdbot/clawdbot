@@ -161,6 +161,8 @@ const rootEntries = [
   "src/commands/status.ts!",
   "src/cli/daemon-cli.ts!",
   "src/agents/code-mode.worker.ts!",
+  // The local exec bootstrap launches credential resolution by computed subprocess URL.
+  "src/agents/github-exec-launcher.ts!",
   // Worker-thread and script entrypoints import contracts that production Knip cannot trace.
   "src/agents/compaction-planning.worker.ts!",
   "scripts/print-cli-backend-live-metadata.ts!",

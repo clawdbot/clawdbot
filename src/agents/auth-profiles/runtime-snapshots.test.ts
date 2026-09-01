@@ -106,7 +106,9 @@ describe("runtime auth profile snapshots", () => {
         runtimeOwnerId: "codex",
       });
 
-      expect(listener).toHaveBeenCalledWith({ affectsInheritedStores: true });
+      expect(listener).toHaveBeenCalledWith({
+        affectsInheritedStores: true,
+      });
     } finally {
       unregister();
       clearRuntimeAuthProfileStoreSnapshots();
@@ -203,10 +205,12 @@ describe("runtime auth profile snapshots", () => {
       expect(listener).toHaveBeenNthCalledWith(1, {
         agentDir,
         affectsInheritedStores: false,
+        profileSetChanged: true,
       });
       expect(listener).toHaveBeenNthCalledWith(2, {
         agentDir,
         affectsInheritedStores: false,
+        profileSetChanged: true,
       });
     } finally {
       unregister();
@@ -234,6 +238,7 @@ describe("runtime auth profile snapshots", () => {
       expect(listener).toHaveBeenCalledOnce();
       expect(listener).toHaveBeenCalledWith({
         affectsInheritedStores: true,
+        profileSetChanged: false,
       });
     } finally {
       unregister();
@@ -264,7 +269,10 @@ describe("runtime auth profile snapshots", () => {
       ]);
 
       expect(listener).toHaveBeenCalledOnce();
-      expect(listener).toHaveBeenCalledWith({ affectsInheritedStores: true });
+      expect(listener).toHaveBeenCalledWith({
+        affectsInheritedStores: true,
+        profileSetChanged: false,
+      });
     } finally {
       unregister();
       clearRuntimeAuthProfileStoreSnapshots();
@@ -285,10 +293,12 @@ describe("runtime auth profile snapshots", () => {
       expect(listener).toHaveBeenNthCalledWith(1, {
         agentDir,
         affectsInheritedStores: false,
+        profileSetChanged: false,
       });
       expect(listener).toHaveBeenNthCalledWith(2, {
         agentDir,
         affectsInheritedStores: false,
+        profileSetChanged: false,
       });
     } finally {
       unregister();

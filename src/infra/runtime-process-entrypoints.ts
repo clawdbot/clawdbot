@@ -2,6 +2,11 @@
 const currentModuleUrl = import.meta.url;
 
 export const runtimeProcessEntrypoints = {
+  githubExec: {
+    currentModuleUrl,
+    sourceWorkerName: "../agents/github-exec-launcher",
+    distWorkerPath: "agents/github-exec-launcher.js",
+  },
   sqliteReadOnly: {
     currentModuleUrl,
     sourceWorkerName: "sqlite-readonly-location.worker",

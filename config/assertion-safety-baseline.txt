@@ -179,7 +179,7 @@ extensions/codex/src/app-server/config-reviewer.ts	2
 extensions/codex/src/app-server/config-utils.ts	1
 extensions/codex/src/app-server/context-engine-projection.ts	4
 extensions/codex/src/app-server/dynamic-tool-build.ts	1
-extensions/codex/src/app-server/dynamic-tools.ts	6
+extensions/codex/src/app-server/dynamic-tools.ts	5
 extensions/codex/src/app-server/effective-mcp-catalog.ts	1
 extensions/codex/src/app-server/elicitation-bridge.ts	1
 extensions/codex/src/app-server/event-projector-reasoning.ts	1
@@ -222,7 +222,6 @@ extensions/codex/src/app-server/sandbox-exec-server/processes.ts	1
 extensions/codex/src/app-server/sandbox-guard.ts	2
 extensions/codex/src/app-server/scheduled-app-authority.ts	5
 extensions/codex/src/app-server/session-binding.ts	4
-extensions/codex/src/app-server/settled-turn-context.ts	2
 extensions/codex/src/app-server/shared-client.ts	4
 extensions/codex/src/app-server/side-question.ts	8
 extensions/codex/src/app-server/startup-binding.ts	2
@@ -1667,7 +1666,6 @@ src/agents/auth-profiles/policy.ts	1
 src/agents/auth-profiles/portability.ts	1
 src/agents/auth-profiles/profiles.ts	1
 src/agents/auth-profiles/repair.ts	1
-src/agents/auth-profiles/runtime-snapshots.ts	1
 src/agents/auth-profiles/source-check.ts	1
 src/agents/auth-profiles/sqlite.ts	2
 src/agents/auth-profiles/state.ts	5
@@ -4036,7 +4034,6 @@ ui/src/pages/chat/components/chat-message-timestamp.ts	4
 ui/src/pages/chat/components/chat-model-picker-options.ts	2
 ui/src/pages/chat/components/chat-model-picker.ts	7
 ui/src/pages/chat/components/chat-pane-header.ts	2
-ui/src/pages/chat/components/chat-question-card.ts	1
 ui/src/pages/chat/components/chat-selection-popup.ts	1
 ui/src/pages/chat/components/chat-session-rail.ts	4
 ui/src/pages/chat/components/chat-session-sharing.ts	1

@@ -132,7 +132,7 @@ const ANDROID_VERSION_SYNC_PATHS = new Set([
   "apps/android/version.json",
 ]);
 const MACOS_APP_CI_PATH_RE =
-  /^(?:apps\/(?:macos|macos-mlx-tts|shared|swabble)\/|Swabble\/|src\/(?:shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$)/u;
+  /^(?:apps\/(?:macos\/(?!Tests\/.+\.swift$)|(?:macos-mlx-tts|shared|swabble)\/)|Swabble\/|src\/(?:shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$)/u;
 let corepackPnpmShimDir: string | undefined;
 let corepackPnpmShimCleanupRegistered = false;
 let cachedGeneratedExtensionAssetPaths: Set<string> | undefined;
@@ -163,6 +163,7 @@ function hasAndroidVersionSyncPath(paths: string[]) {
 
 function hasMacosAppCiPath(paths: string[]) {
   // Native-source policy stays local; script and test owners share the CI selector.
+  // Swift test-target sources do not feed the packaged app; native CI still covers them.
   return paths.some((changedPath) => {
     const normalized = normalizeChangedPath(changedPath);
     return MACOS_APP_CI_PATH_RE.test(normalized) || isMacosToolingPath(normalized);
