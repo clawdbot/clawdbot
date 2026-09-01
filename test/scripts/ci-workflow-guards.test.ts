@@ -7816,8 +7816,8 @@ server.listen(0, "127.0.0.1", () => {
         /swift (?:build|package)|periphery scan/u.test(step.run ?? ""),
       );
 
-      expect(setupIndex, `${workflowPath}: dependency setup`).toBeGreaterThanOrEqual(0);
-      expect(steps[setupIndex].with?.["install-deps"]).not.toBe("false");
+      const setupStep = expectDefined(steps[setupIndex], `${workflowPath}: dependency setup`);
+      expect(setupStep.with?.["install-deps"]).not.toBe("false");
       expect(prepareIndex, `${workflowPath}: resource preparation`).toBeGreaterThan(setupIndex);
       expect(graphIndex, `${workflowPath}: SwiftPM graph`).toBeGreaterThan(prepareIndex);
     }
