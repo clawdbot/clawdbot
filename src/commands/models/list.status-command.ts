@@ -71,7 +71,6 @@ import {
 } from "../../config/model-input.js";
 import { parseModelPolicyWildcardRef } from "../../config/model-policy-ref.js";
 import { resolveMergedModelProviderConfig } from "../../config/model-provider-config.js";
-import { getRuntimeConfigSourceSnapshot } from "../../config/runtime-snapshot.js";
 import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infra/shell-env.js";
 import type { ProviderModelRouteCandidate } from "../../plugin-sdk/provider-model-types.js";
 import {
@@ -344,7 +343,6 @@ export async function modelsStatusCommand(
     runtime,
     skipPluginValidation: opts.probe !== true,
   });
-  const sourceConfig = getRuntimeConfigSourceSnapshot() ?? undefined;
   const explicitAgentId = opts.agent?.trim();
   const { agentId: workspaceAgentId, agentDir } = resolveModelsTargetAgent(cfg, opts.agent, {
     agentDirOverride: explicitAgentId ? undefined : resolveEnvAgentDirOverride(),
@@ -847,7 +845,6 @@ export async function modelsStatusCommand(
         resolveProviderAuthOverview({
           provider,
           cfg,
-          sourceConfig,
           store,
           modelsPath,
           agentDir,

@@ -337,7 +337,7 @@ describe("resolveConfigEnvVars", () => {
 
   describe("graceful missing env var handling (onMissing)", () => {
     it("keeps authored SecretRef provenance distinct across dotted plugin and header keys", () => {
-      const pendingEnvSecretRefs = new Map<string, string>();
+      const authoredEnvSecretRefs = new Map<string, string>();
       const config = resolveConfigEnvVars(
         {
           plugins: {
@@ -362,23 +362,25 @@ describe("resolveConfigEnvVars", () => {
               },
             },
           },
+          resolved: "${RESOLVED_SECRET}",
         },
-        {},
+        { RESOLVED_SECRET: "resolved-value" },
         {
-          onPendingEnvSecretRef: (id, configPath) => pendingEnvSecretRefs.set(configPath, id),
+          onAuthoredEnvSecretRef: (id, configPath) => authoredEnvSecretRefs.set(configPath, id),
         },
       );
-      setConfigResolutionFacts(config, createConfigResolutionFacts([], pendingEnvSecretRefs));
+      setConfigResolutionFacts(config, createConfigResolutionFacts([], authoredEnvSecretRefs));
 
-      expect([...pendingEnvSecretRefs]).toEqual([
+      expect([...authoredEnvSecretRefs]).toEqual([
         ['plugins.entries["foo.config.bar"].config.token', "ATTACKER"],
         ["plugins.entries.foo.config.bar.config.token", "VICTIM"],
         ['plugins.entries.foo.config.headers["X.Trace"]', "DOTTED_HEADER"],
         ["plugins.entries.foo.config.headers.X.Trace", "NESTED_HEADER"],
         ["models.providers.alpha:beta.apiKey", "CORE_PROVIDER"],
         ["models.providers.alpha:beta.headers.X.Trace", "CORE_HEADER"],
+        ["resolved", "RESOLVED_SECRET"],
       ]);
-      for (const [configPath, id] of pendingEnvSecretRefs) {
+      for (const [configPath, id] of authoredEnvSecretRefs) {
         expect(getAuthoredConfigSecretRef(config, configPath), configPath).toEqual({
           source: "env",
           provider: "default",

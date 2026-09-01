@@ -78,7 +78,6 @@ function resolveProfileSourceAgentDir(params: {
 export function resolveProviderAuthOverview(params: {
   provider: string;
   cfg: OpenClawConfig;
-  sourceConfig?: OpenClawConfig;
   store: AuthProfileStore;
   modelsPath: string;
   agentDir?: string;
@@ -159,10 +158,9 @@ export function resolveProviderAuthOverview(params: {
     authEvidenceMap: params.authEvidenceMap,
     skipSetupProviderFallback: hasPrecomputedCandidates || hasPrecomputedEvidence,
   });
-  const authConfig = params.sourceConfig ?? cfg;
-  const customKey = getCustomProviderApiKey(authConfig, provider);
-  const usableCustomKey = resolveUsableCustomProviderApiKey({ cfg: authConfig, provider });
-  const providerApiKeyRef = resolveProviderConfigSecretInput(authConfig, provider).ref;
+  const customKey = getCustomProviderApiKey(cfg, provider);
+  const usableCustomKey = resolveUsableCustomProviderApiKey({ cfg, provider });
+  const providerApiKeyRef = resolveProviderConfigSecretInput(cfg, provider).ref;
 
   const effective: ProviderAuthOverview["effective"] = (() => {
     if (providerApiKeyRef) {

@@ -2,6 +2,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NON_ENV_SECRETREF_MARKER } from "../../agents/model-auth-markers.js";
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
+import {
+  createConfigResolutionFacts,
+  setConfigResolutionFacts,
+} from "../../config/resolution-facts.js";
 import { withEnv } from "../../test-utils/env.js";
 import {
   formatProviderAuthProfileCounts,
@@ -202,31 +206,28 @@ describe("resolveProviderAuthOverview", () => {
   });
 
   it("reports an explicit provider env SecretRef ahead of stored profiles", () => {
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            apiKey: "current-provider-key",
+            baseUrl: "https://models.example/v1",
+            models: [],
+          },
+        },
+      },
+    };
+    setConfigResolutionFacts(
+      cfg,
+      createConfigResolutionFacts(
+        [],
+        new Map([["models.providers.custom.apiKey", "CUSTOM_PROVIDER_KEY"]]),
+      ),
+    );
     const overview = withEnv({ CUSTOM_PROVIDER_KEY: "current-provider-key" }, () =>
       resolveProviderAuthOverview({
         provider: "custom",
-        cfg: {
-          models: {
-            providers: {
-              custom: {
-                apiKey: "current-provider-key",
-                baseUrl: "https://models.example/v1",
-                models: [],
-              },
-            },
-          },
-        } as never,
-        sourceConfig: {
-          models: {
-            providers: {
-              custom: {
-                apiKey: "${CUSTOM_PROVIDER_KEY}",
-                baseUrl: "https://models.example/v1",
-                models: [],
-              },
-            },
-          },
-        } as never,
+        cfg: cfg as never,
         store: {
           version: 1,
           profiles: {

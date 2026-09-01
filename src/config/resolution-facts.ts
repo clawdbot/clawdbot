@@ -12,16 +12,16 @@ const authoredSecretRefsByFacts = new WeakMap<
 
 export function createConfigResolutionFacts(
   warnings: readonly EnvSubstitutionWarning[],
-  pendingEnvSecretRefs: ReadonlyMap<string, string> = new Map(),
+  authoredEnvSecretRefs: ReadonlyMap<string, string> = new Map(),
   envProvider: string | undefined = DEFAULT_SECRET_PROVIDER_ALIAS,
 ): ReadonlySet<string> {
   const facts = new Set(warnings.map(({ configPath }) => configPath));
-  if (pendingEnvSecretRefs.size > 0) {
+  if (authoredEnvSecretRefs.size > 0) {
     const provider = envProvider?.trim() || DEFAULT_SECRET_PROVIDER_ALIAS;
     authoredSecretRefsByFacts.set(
       facts,
       new Map(
-        [...pendingEnvSecretRefs].map(([path, id]) => [
+        [...authoredEnvSecretRefs].map(([path, id]) => [
           path,
           { source: "env", provider, id } satisfies SecretRef,
         ]),

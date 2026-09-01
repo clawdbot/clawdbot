@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(),
   getRuntimeConfigSourceSnapshot: vi.fn(),
-  readSourceConfigBestEffort: vi.fn(),
   setRuntimeConfigSnapshot: vi.fn(),
   resolveCommandSecretRefsViaGateway: vi.fn(),
   getModelsCommandSecretTargetIds: vi.fn(),
@@ -13,7 +12,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
   getRuntimeConfigSourceSnapshot: mocks.getRuntimeConfigSourceSnapshot,
-  readSourceConfigBestEffort: mocks.readSourceConfigBestEffort,
   setRuntimeConfigSnapshot: mocks.setRuntimeConfigSnapshot,
 }));
 
@@ -99,11 +97,9 @@ describe("models load-config", () => {
     expect(mocks.getRuntimeConfig).toHaveBeenCalledWith({ skipPluginValidation: true });
   });
 
-  it("reads authored config when no source snapshot is pinned", async () => {
-    const sourceConfig = { models: { providers: { openai: { apiKey: "${OPENAI_API_KEY}" } } } };
+  it("does not reread config when no source snapshot is pinned", async () => {
     mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
     mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(null);
-    mocks.readSourceConfigBestEffort.mockResolvedValue(sourceConfig);
     mocks.getModelsCommandSecretTargetIds.mockReturnValue(targetIds);
     mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
       resolvedConfig,
@@ -112,7 +108,7 @@ describe("models load-config", () => {
 
     const result = await loadModelsConfigWithSource({ commandName: "models list" });
 
-    expect(result.sourceConfig).toBe(sourceConfig);
-    expect(mocks.setRuntimeConfigSnapshot).toHaveBeenCalledWith(resolvedConfig, sourceConfig);
+    expect(result.sourceConfig).toBe(runtimeConfig);
+    expect(mocks.setRuntimeConfigSnapshot).toHaveBeenCalledWith(resolvedConfig, runtimeConfig);
   });
 });
