@@ -2134,15 +2134,23 @@ describe("memory-core doctor dreaming migration", () => {
     await expect(fs.access(legacyPath)).resolves.toBeUndefined();
     await expect(fs.access(alternateRetryPath)).resolves.toBeUndefined();
 
-    const retryEntriesBefore = (await fs.readdir(path.join(stateDir, "memory")))
-      .filter((entry) => entry.startsWith("main.retry-"))
-      .toSorted();
+    // Excludes .reindex-lock.sqlite: the legacy-orphan sweep now runs against
+    // every processed legacy path, including retry-marked ones, and (like
+    // every other reindex-lock use in this codebase) leaves its
+    // coordination lock file on disk after release() -- a real, harmless
+    // side effect of a working sweep, not something this archival-
+    // completeness assertion is about.
+    const listRetryEntries = async () =>
+      (await fs.readdir(path.join(stateDir, "memory")))
+        .filter(
+          (entry) => entry.startsWith("main.retry-") && !entry.endsWith(".reindex-lock.sqlite"),
+        )
+        .toSorted();
+    const retryEntriesBefore = await listRetryEntries();
     const secondRun = await legacyMemoryIndexMigration().migrateLegacyState(
       migrationParams(repairedConfig),
     );
-    const retryEntriesAfter = (await fs.readdir(path.join(stateDir, "memory")))
-      .filter((entry) => entry.startsWith("main.retry-"))
-      .toSorted();
+    const retryEntriesAfter = await listRetryEntries();
     expect(secondRun.changes).not.toEqual(
       expect.arrayContaining([
         expect.stringContaining("Copied Memory Core legacy memory index sidecar retry path"),
