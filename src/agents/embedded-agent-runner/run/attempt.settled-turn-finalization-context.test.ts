@@ -68,14 +68,12 @@ describe("settled post-tool turn finalization context", () => {
     expect(result.assistantTexts.every((text) => !text.trim())).toBe(true);
     // Without this context the provider-failure branch of incomplete-turn
     // recovery fails closed and the whole completed turn is discarded.
-    expect(result.settledTurnFinalizationContext).toBeDefined();
-    expect(result.settledTurnFinalizationContext?.source).toBe("openclaw-transcript");
-    expect(
-      result.settledTurnFinalizationContext?.messages.some(
-        (message) => message.role === "toolResult",
-      ),
-    ).toBe(true);
-    expect(Object.isFrozen(result.settledTurnFinalizationContext?.messages)).toBe(true);
+    const context = result.settledTurnFinalizationContext;
+    if (context?.source !== "openclaw-transcript") {
+      throw new Error("Expected the built-in settled transcript context");
+    }
+    expect(context.messages.some((message) => message.role === "toolResult")).toBe(true);
+    expect(Object.isFrozen(context.messages)).toBe(true);
   });
 
   it("omits the context when the turn settled no tool result", async () => {

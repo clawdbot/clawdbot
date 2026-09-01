@@ -4,6 +4,8 @@ import { writeSyntheticAuthDiscoveryFixture } from "./test-helpers/prepared-mode
 
 export const PROVIDER_ID = "worker-catalog-fixture";
 export const HARNESS_ID = "worker-catalog-fixture-harness";
+export const DISCOVERED_HARNESS_ID = `${PROVIDER_ID}-discovered-harness`;
+export const MISSING_AUTH_HARNESS_ID = `${PROVIDER_ID}-missing-auth-harness`;
 const UNRELATED_SYNTHETIC_AUTH_ID = `${PROVIDER_ID}-unrelated-harness`;
 export const SHARED_AUTH_PROVIDER_ID = `${PROVIDER_ID}-shared-auth`;
 export const PLUGIN_ID = "worker-catalog-fixture";
@@ -27,6 +29,7 @@ export function writeFixturePlugin(params: {
   const pluginDir = path.join(params.root, "plugin");
   fs.mkdirSync(pluginDir, { recursive: true });
   const pluginFile = path.join(pluginDir, "index.cjs");
+  const syntheticAuthProbePath = path.join(params.root, "synthetic-auth-probes.txt");
   writeSyntheticAuthDiscoveryFixture({
     root: params.root,
     pluginDir,
@@ -50,8 +53,32 @@ module.exports = {
         name: "Account scoped model",
         api: "openai-completions",
         baseUrl: "https://worker-catalog.invalid/v1",
+      }, {
+        provider: ${JSON.stringify(DISCOVERED_HARNESS_ID)},
+        id: "discovered-native-model",
+        name: "Discovered native model",
+      }, {
+        provider: ${JSON.stringify(MISSING_AUTH_HARNESS_ID)},
+        id: "missing-auth-native-model",
+        name: "Missing auth native model",
       }],
     });
+    for (const [id, authenticated] of [
+      [${JSON.stringify(DISCOVERED_HARNESS_ID)}, true],
+      [${JSON.stringify(MISSING_AUTH_HARNESS_ID)}, false],
+    ]) {
+      api.registerProvider({
+        id,
+        label: id,
+        auth: [],
+        resolveSyntheticAuth() {
+          fs.appendFileSync(${JSON.stringify(syntheticAuthProbePath)}, id + "\\n");
+          return authenticated
+            ? { apiKey: "discovered-native-login-not-real", source: "fixture native login", mode: "oauth" }
+            : undefined;
+        },
+      });
+    }
     api.registerProvider({
       id: ${JSON.stringify(PROVIDER_ID)},
       label: "Worker catalog fixture",
@@ -109,10 +136,12 @@ module.exports = {
         const barrier = marker + ".hold";
         if (fs.existsSync(barrier)) {
           await new Promise((resolve) => {
-            const watcher = fs.watch(require("node:path").dirname(barrier), () => {
-              if (!fs.existsSync(barrier)) { watcher.close(); resolve(); }
-            });
-            if (!fs.existsSync(barrier)) { watcher.close(); resolve(); }
+            // Darwin's directory watch can start after removal; observe file state instead.
+            const check = () => {
+              if (!fs.existsSync(barrier)) { fs.unwatchFile(barrier, check); resolve(); }
+            };
+            fs.watchFile(barrier, { interval: 10 }, check);
+            check();
           });
         }
         const until = Date.now() + ${params.spinMs};
@@ -138,9 +167,19 @@ module.exports = {
     path.join(pluginDir, "openclaw.plugin.json"),
     JSON.stringify({
       id: PLUGIN_ID,
-      providers: [PROVIDER_ID],
-      cliBackends: [HARNESS_ID, UNRELATED_SYNTHETIC_AUTH_ID],
-      syntheticAuthRefs: [HARNESS_ID, UNRELATED_SYNTHETIC_AUTH_ID],
+      providers: [PROVIDER_ID, DISCOVERED_HARNESS_ID, MISSING_AUTH_HARNESS_ID],
+      cliBackends: [
+        HARNESS_ID,
+        DISCOVERED_HARNESS_ID,
+        MISSING_AUTH_HARNESS_ID,
+        UNRELATED_SYNTHETIC_AUTH_ID,
+      ],
+      syntheticAuthRefs: [
+        HARNESS_ID,
+        DISCOVERED_HARNESS_ID,
+        MISSING_AUTH_HARNESS_ID,
+        UNRELATED_SYNTHETIC_AUTH_ID,
+      ],
       providerCatalogEntry: "./provider-discovery.cjs",
       configSchema: { type: "object", additionalProperties: false, properties: {} },
       contracts: { externalAuthProviders: [PROVIDER_ID] },

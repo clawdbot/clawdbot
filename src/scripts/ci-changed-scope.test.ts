@@ -398,75 +398,52 @@ describe("detectChangedScope", () => {
     });
   });
 
-  it("runs macOS CI for macOS packaging scripts with Darwin-only tests", () => {
-    for (const changedPath of [
-      "scripts/codesign-mac-app.sh",
-      "scripts/create-dmg.sh",
-      "scripts/lib/plistbuddy.sh",
-      "scripts/lib/swift-toolchain.sh",
-      "scripts/notarize-mac-artifact.sh",
-      "scripts/package-mac-app.sh",
-      "scripts/package-mac-dist.sh",
-    ]) {
-      expect(detectChangedScope([changedPath])).toEqual({
-        runNode: true,
-        runMacos: true,
-        runMacosNode: true,
-        runIosBuild: false,
-        runAndroid: false,
-        runWindows: false,
-        runSkillsPython: false,
-        runChangedSmoke: false,
-        runControlUiI18n: false,
-        runUiTests: false,
-      });
-    }
-  });
-
   it.each([
-    ".github/actions/git-owner/action.yml",
-    ".github/actions/git-owner/owner.py",
-    ".github/actions/ensure-base-commit/action.yml",
-    ".github/actions/ensure-base-commit/policy.py",
-    "scripts/generate-ci-git-owner.mts",
-    "test/scripts/ci-checkout.test-support.ts",
-    "test/scripts/ci-git-owner.test.ts",
-    "test/scripts/ci-git-owner.test-support.ts",
-    "test/scripts/ci-linux-git.test.ts",
-    "test/scripts/ci-platform-checkout.test.ts",
-    "test/scripts/fixtures/ci-platform-checkout.mjs",
-  ])("routes Git-owner native proof for %s without selecting app builds", (changedPath) => {
-    expect(detectChangedScope([changedPath])).toMatchObject({
+    "scripts/codesign-mac-app.sh",
+    "scripts/create-dmg.sh",
+    "scripts/lib/plistbuddy.sh",
+    "scripts/lib/swift-toolchain.sh",
+    "scripts/notarize-mac-artifact.sh",
+    "scripts/package-mac-app.sh",
+    "scripts/package-mac-dist.sh",
+    "scripts/stage-mac-node-worker.sh",
+    "scripts/restart-mac.sh",
+    "scripts/lib/mac-app-bundle.sh",
+    "test/scripts/restart-mac.test.ts",
+    "scripts/materialize-mac-node-worker.py",
+    "scripts/swift-build-cache-metadata.py",
+    "test/scripts/swift-build-cache-metadata.test.ts",
+    "scripts/lib/mac-native-inventory.py",
+    "scripts/lib/mac-bundle-mutation.py",
+    "scripts/verify-mac-node-worker.mjs",
+    "scripts/verify-mac-node-worker-fs.mjs",
+    "scripts/lib/mac-node-worker-proof-state.mjs",
+    "scripts/lib/mac-worker-portability.mjs",
+    "test/helpers/mac-native.ts",
+    "test/helpers/mac-signing.ts",
+    "test/scripts/codesign-mac-app.test.ts",
+    "test/scripts/create-dmg.test.ts",
+    "test/scripts/notarize-mac-artifact.test.ts",
+    "test/scripts/package-mac-app.test.ts",
+    "test/scripts/package-mac-dist.test.ts",
+    "test/scripts/mac-elevation-artifact.test-support.ts",
+    "test/scripts/mac-native-fixtures.test-support.ts",
+    "test/scripts/mac-node-worker-materialization.test-support.ts",
+    "test/scripts/mac-node-worker.test.ts",
+    "test/scripts/verify-mac-node-worker-fs.test.ts",
+  ])("runs macOS CI for packaging owner %s", (changedPath) => {
+    expect(detectChangedScope([changedPath])).toEqual({
       runNode: true,
+      runMacos: true,
       runMacosNode: true,
-      runWindows: true,
-      runMacos: false,
       runIosBuild: false,
       runAndroid: false,
+      runWindows: false,
+      runSkillsPython: false,
+      runChangedSmoke: false,
+      runControlUiI18n: false,
+      runUiTests: false,
     });
-  });
-
-  it("runs macOS CI for Darwin-only mac packaging owner tests", () => {
-    for (const changedPath of [
-      "test/scripts/codesign-mac-app.test.ts",
-      "test/scripts/create-dmg.test.ts",
-      "test/scripts/notarize-mac-artifact.test.ts",
-      "test/scripts/package-mac-app.test.ts",
-      "test/scripts/package-mac-dist.test.ts",
-    ]) {
-      expect(detectChangedScope([changedPath])).toEqual({
-        runNode: true,
-        runMacos: true,
-        runMacosNode: true,
-        runIosBuild: false,
-        runAndroid: false,
-        runWindows: false,
-        runSkillsPython: false,
-        runChangedSmoke: false,
-        runControlUiI18n: false,
-        runUiTests: false,
-      });
-    }
   });
 
   it.each<[string, boolean, boolean]>([
@@ -963,7 +940,15 @@ describe("detectChangedScope", () => {
     expect(parseGitHubOutput(fs.readFileSync(outputPath, "utf8")).changed_paths_json).toBe("null");
   });
 
-  it("loads from a zero-install tree and keeps empty diffs as no-op scope", () => {
+  it.each([
+    ["empty diff without a manifest", "", "missing", false],
+    ["declared native test", "src/process/exec.windows.integration.test.ts", "valid", false],
+    ["Mac fixture helper", "test/scripts/mac-script-fixture.test-support.ts", "valid", false],
+    ["unrelated process test", "src/process/exec.test.ts", "valid", false],
+    ["missing manifest", "src/process/exec.test.ts", "missing", true],
+    ["invalid manifest", "src/process/exec.test.ts", "invalid", true],
+    ["empty native inventory", "src/process/exec.test.ts", "empty", true],
+  ])("runs zero-install scope detection for %s", (_label, changedPath, manifest, failSafe) => {
     const repoDir = fs.realpathSync(
       fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ci-scope-empty-")),
     );
@@ -976,6 +961,7 @@ describe("detectChangedScope", () => {
     execFileSync("git", ["config", "user.name", "CI"], { cwd: repoDir });
     for (const sourcePath of [
       "scripts/ci-changed-scope.mjs",
+      "scripts/lib/arg-utils.runtime.mjs",
       "scripts/lib/changed-path-facts.mjs",
       "scripts/lib/direct-run.mjs",
       "scripts/lib/merge-head-diff-base.mjs",
@@ -986,8 +972,23 @@ describe("detectChangedScope", () => {
     execFileSync("git", ["add", "README.md"], { cwd: repoDir });
     execFileSync("git", ["commit", "-m", "test"], { cwd: repoDir });
 
+    if (manifest !== "missing") {
+      const contents =
+        manifest === "valid"
+          ? fs.readFileSync("package.json", "utf8")
+          : manifest === "invalid"
+            ? "{"
+            : JSON.stringify({ scripts: { "test:windows:ci:1": "" } });
+      writeRepoFile(repoDir, "package.json", contents);
+    }
+    if (changedPath) {
+      writeRepoFile(repoDir, changedPath, "export {};\n");
+      git(repoDir, ["add", changedPath]);
+      git(repoDir, ["commit", "-m", "changed test"]);
+    }
+    const base = changedPath ? "HEAD^" : "HEAD";
     expect(fs.existsSync(path.join(repoDir, "node_modules"))).toBe(false);
-    execFileSync(process.execPath, [scriptPath, "--base", "HEAD", "--head", "HEAD"], {
+    execFileSync(process.execPath, [scriptPath, "--base", base, "--head", "HEAD"], {
       cwd: repoDir,
       env: { ...process.env, GITHUB_OUTPUT: outputPath },
     });
@@ -998,10 +999,18 @@ describe("detectChangedScope", () => {
         " ",
       ),
     );
-    expect(output.changed_paths_json).toBe("[]");
+    expect(output.changed_paths_json).toBe(
+      failSafe ? "null" : JSON.stringify(changedPath ? [changedPath] : []),
+    );
     for (const [key, value] of Object.entries(output)) {
       if (key !== "changed_paths_json") {
-        expect(value, key).toBe("false");
+        const selected =
+          (failSafe && !key.startsWith("run_node_fast")) ||
+          (key === "run_node" && Boolean(changedPath)) ||
+          (key === "run_macos_node" &&
+            changedPath === "test/scripts/mac-script-fixture.test-support.ts") ||
+          (key === "run_windows" && changedPath === "src/process/exec.windows.integration.test.ts");
+        expect(value, key).toBe(String(selected));
       }
     }
   });

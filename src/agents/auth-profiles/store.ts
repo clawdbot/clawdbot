@@ -395,15 +395,12 @@ function resolveRuntimeAuthProfileStore(
     ? resolveAgentAuthPath(options.inheritedAuthDir)
     : resolveSharedAuthPath();
   const requestedKey = agentDir ? resolveAgentAuthPath(agentDir) : resolveSharedAuthPath();
-  const mainStore = getRuntimeAuthProfileStoreSnapshotCore(options?.inheritedAuthDir);
-  const requestedStore = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
+  const mainStore = getRuntimeAuthProfileStoreSnapshotAtDatabasePath(mainKey);
 
   if (!agentDir || requestedKey === mainKey) {
-    if (!mainStore) {
-      return null;
-    }
-    return mainStore;
+    return mainStore ?? null;
   }
+  const requestedStore = getRuntimeAuthProfileStoreSnapshotAtDatabasePath(requestedKey);
 
   if (mainStore && requestedStore) {
     return mergeAuthProfileStores(mainStore, requestedStore, {

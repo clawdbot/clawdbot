@@ -69,6 +69,7 @@ import {
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import {
   buildBootstrapBudgetState,
+  buildBootstrapInjectionStats,
   buildBootstrapPromptWarningNotice,
   buildBootstrapTruncationReportMeta,
 } from "../bootstrap-budget.js";
@@ -91,6 +92,7 @@ import {
 } from "../command/attempt-execution.helpers.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { resolveContextTokensForModel } from "../context.js";
+import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import {
   resolvePromptBuildHookResult,
@@ -117,6 +119,7 @@ import { recordAdmittedModelRoutingDecision } from "../model-routing-decision.js
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
+import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
 import { expandToolGroups, normalizeToolPolicyName } from "../tool-policy.js";
@@ -279,6 +282,7 @@ async function resolveCliSkillsPrompt(params: {
 }): Promise<string> {
   const sandboxWorkspace = await ensureSandboxWorkspaceForSession({
     config: params.config,
+    agentId: params.agentId,
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
   });
@@ -620,8 +624,8 @@ export async function prepareCliRunContext(
     authStore = loadScopedAuthStore({ profileId: effectiveAuthProfileId });
     authCredential = authStore.profiles[effectiveAuthProfileId];
   } else if (
-    backendResolved.authEpochMode === "profile-only" ||
-    (backendResolved.prepareExecution && backendResolved.autoSelectAuthProfile !== false)
+    backendResolved.autoSelectAuthProfile !== false &&
+    (backendResolved.authEpochMode === "profile-only" || backendResolved.prepareExecution)
   ) {
     authStore = loadScopedAuthStore();
     effectiveAuthProfileId =
@@ -786,7 +790,7 @@ export async function prepareCliRunContext(
     }
     try {
       return await resolvePromptBuildHookResult({
-        config: params.config ?? getRuntimeConfig(),
+        config: runConfig,
         prompt: params.prompt,
         messages: await loadOpenClawHistoryMessages(),
         hookCtx: promptBuildHookContext,
@@ -942,6 +946,10 @@ export async function prepareCliRunContext(
   const bootstrapFilesForInjectionStats = includeBootstrapInSystemContext
     ? bootstrapFiles
     : bootstrapFiles.filter((file) => file.name !== DEFAULT_BOOTSTRAP_FILENAME);
+  const bootstrapInjectionStats = buildBootstrapInjectionStats({
+    bootstrapFiles: bootstrapFilesForInjectionStats,
+    injectedFiles: contextFiles,
+  });
   const {
     bootstrapAnalysis,
     bootstrapMaxChars,
@@ -951,8 +959,7 @@ export async function prepareCliRunContext(
   } = buildBootstrapBudgetState({
     config: params.config,
     agentId: sessionAgentId,
-    bootstrapFiles: bootstrapFilesForInjectionStats,
-    injectedFiles: contextFiles,
+    files: bootstrapInjectionStats,
     seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
     previousSignature: params.bootstrapPromptWarningSignature,
   });
@@ -987,7 +994,13 @@ export async function prepareCliRunContext(
     );
   }
   const mcpDeliveryCaptureEnabled = bundleMcpEnabled && Boolean(mcpLoopbackRuntime);
-  const runtimeConfig = params.config ?? getRuntimeConfig();
+  const policySessionKey = params.runtimePolicySessionKey ?? params.sessionKey;
+  // The policy key owns scoped identity; direct CLI requesters fill unscoped keys only.
+  const policyAgentId = resolveSessionAgentIds({
+    sessionKey: policySessionKey,
+    config: runConfig,
+    fallbackAgentId: params.runtimePolicySessionKey ? params.agentId : sessionAgentId,
+  }).sessionAgentId;
   const shouldMaterializeRuntimePolicy =
     runtimeToolsAllowPolicy !== undefined &&
     !nodeClaudePlacement &&
@@ -998,9 +1011,10 @@ export async function prepareCliRunContext(
     mcpLoopbackRuntime || shouldMaterializeRuntimePolicy
       ? buildCliMcpGrantContext({
           run: params,
-          config: runtimeConfig,
+          config: runConfig,
           requireExplicitMessageTarget,
           agentId: sessionAgentId,
+          runtimePolicyAgentId: params.runtimePolicySessionKey ? policyAgentId : undefined,
           modelProvider,
           modelId,
         })
@@ -1027,7 +1041,7 @@ export async function prepareCliRunContext(
   const projectedToolsBeforePromptBuild =
     (bundleMcpEnabled || shouldMaterializeRuntimePolicy) && mcpProjectionContext
       ? resolveProjectedTools({
-          cfg: runtimeConfig,
+          cfg: runConfig,
           ...mcpProjectionContext,
           ...(mcpToolAuth ? { authProfileStore: mcpToolAuth.store } : {}),
           ...(mcpToolAuth?.agentDir ? { authProfileStoreAgentDir: mcpToolAuth.agentDir } : {}),
@@ -1250,6 +1264,48 @@ export async function prepareCliRunContext(
     const loopbackServerConfig = mcpLoopbackRuntime
       ? prepareDeps.createMcpLoopbackServerConfig(mcpLoopbackRuntime.port)
       : undefined;
+    const sandboxStatus = resolveSandboxRuntimeStatus({
+      cfg: runConfig,
+      sessionKey: policySessionKey,
+      agentId: policyAgentId,
+    });
+    const nativeMcpCapabilityProfile = resolveConversationCapabilityProfile({
+      config: runConfig,
+      sessionKey: policySessionKey,
+      runSessionKey:
+        params.sessionKey && params.sessionKey !== policySessionKey ? params.sessionKey : undefined,
+      sessionId: params.sessionId,
+      runId: params.runId,
+      agentId: policyAgentId,
+      agentDir,
+      agentAccountId: params.agentAccountId,
+      messageProvider: params.messageProvider ?? params.messageChannel,
+      messageChannel: params.messageChannel,
+      chatType: runtimeChatType,
+      currentChannelId: params.currentChannelId,
+      currentThreadTs: params.currentThreadTs,
+      currentMessageId: params.currentMessageId,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      spawnedBy: params.spawnedBy,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+      senderIsOwner: params.senderIsOwner,
+      modelProvider,
+      modelId,
+      modelContextWindowTokens: contextWindowInfo.tokens,
+      workspaceDir,
+      cwd,
+      skillsSnapshot: params.skillsSnapshot,
+      sandboxToolPolicy: sandboxStatus.sandboxed ? sandboxStatus.toolPolicy : undefined,
+      runtimeToolAllowlist: runtimeToolsAllowPolicy,
+      inheritRuntimeToolAllowlist: true,
+      inputProvenance: params.inputProvenance,
+      scheduledToolPolicy: params.scheduledToolPolicy,
+    });
     const preparedBackend = await prepareCliBundleMcpConfig({
       enabled: bundleMcpEnabled || systemAgentMcpConfig !== undefined,
       mode: backendResolved.bundleMcpMode,
@@ -1274,6 +1330,18 @@ export async function prepareCliRunContext(
             }
           : undefined,
       warn: (message) => cliBackendLog.warn(message),
+      ...(!systemAgentMcpConfig && !restrictedLoopbackToolsAllow
+        ? {
+            nativeMcpPolicy: {
+              sessionId: params.sessionId,
+              ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+              capabilityProfile: nativeMcpCapabilityProfile,
+              ...(runtimeToolsAllowPolicy !== undefined
+                ? { runtimeToolsAllow: runtimeToolsAllowPolicy }
+                : {}),
+            },
+          }
+        : {}),
     });
     const cleanupPreparedBackend =
       preparedBackend.cleanup || cleanupMcpClientGrant
@@ -1381,7 +1449,7 @@ export async function prepareCliRunContext(
     const authBindingFingerprint = params.onSuccessfulAuthBinding
       ? resolveCliAuthBindingFingerprint({
           provider: params.provider,
-          config: params.config ?? getRuntimeConfig(),
+          config: runConfig,
           agentDir,
           ...(effectiveAuthProfileId ? { authProfileId: effectiveAuthProfileId } : {}),
           ...(resolvedProfileAuth ? { resolvedAuth: resolvedProfileAuth } : {}),
@@ -1774,8 +1842,7 @@ export async function prepareCliRunContext(
       }),
       sandbox: { mode: "off", sandboxed: false },
       systemPrompt,
-      bootstrapFiles: bootstrapFilesForInjectionStats,
-      injectedFiles: contextFiles,
+      injectedWorkspaceFiles: bootstrapInjectionStats,
       skillsPrompt: systemPromptSkillsPrompt,
       tools: promptTools,
       currentTurn: {
@@ -1786,11 +1853,10 @@ export async function prepareCliRunContext(
           .join("\n\n").length,
       },
     });
-    const contextEngineConfig = params.config ?? getRuntimeConfig();
     if (skipsTurnPreparation) {
       const preparedParams = await admitPreparedParams({
         ...params,
-        config: contextEngineConfig,
+        config: runConfig,
         prompt: preparedPrompt,
         transcriptPrompt: finalizedTranscriptPrompt,
         ...(requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
@@ -1828,7 +1894,7 @@ export async function prepareCliRunContext(
         executionTarget,
         reusableCliSession,
         hadSessionFile: false,
-        contextEngineConfig,
+        contextEngineConfig: runConfig,
         modelId,
         normalizedModel,
         contextWindowInfo,
@@ -1848,14 +1914,9 @@ export async function prepareCliRunContext(
       };
     }
     ensureContextEnginesInitialized();
-    const { sessionAgentId: contextEngineSessionAgentId } = resolveSessionAgentIds({
-      sessionKey: params.sessionKey,
-      config: contextEngineConfig,
-      agentId: sessionAgentId,
-    });
     // Context remains session-owned. Trusted helper runs may borrow a different
     // agentDir only for model/auth execution.
-    const contextEngineAgentDir = resolveAgentDir(contextEngineConfig, contextEngineSessionAgentId);
+    const contextEngineAgentDir = resolveAgentDir(runConfig, sessionAgentId);
     const contextEngineHostSupport = buildGenericCliContextEngineHostSupport({
       backendId: backendResolved.id,
       capabilities: backendResolved.contextEngineHostCapabilities,
@@ -1877,7 +1938,7 @@ export async function prepareCliRunContext(
       });
       resolvedContextEngine = params.contextEngineLogicalTurnLease.begin().engine;
     } else {
-      resolvedContextEngine = await resolveContextEngine(contextEngineConfig, {
+      resolvedContextEngine = await resolveContextEngine(runConfig, {
         agentDir: contextEngineAgentDir,
         workspaceDir,
       });
@@ -1897,7 +1958,7 @@ export async function prepareCliRunContext(
     const contextEngineTurnPrompt = params.transcriptPrompt ?? params.prompt;
     const preparedParams = await admitPreparedParams({
       ...params,
-      config: contextEngineConfig,
+      config: runConfig,
       prompt: preparedPrompt,
       transcriptPrompt: finalizedTranscriptPrompt,
       ...(requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
@@ -1933,7 +1994,7 @@ export async function prepareCliRunContext(
         ? { requiredClaudeLiveSessionGeneration: managedClaudeLiveSessionGeneration }
         : {}),
       hadSessionFile,
-      contextEngineConfig,
+      contextEngineConfig: runConfig,
       contextEngine,
       contextEngineTurnPrompt,
       ...(promptContext ? { promptContext, promptForHooks } : {}),

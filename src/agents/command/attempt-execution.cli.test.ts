@@ -2356,6 +2356,7 @@ describe("CLI attempt execution", () => {
 
       await persistAcpDispatchTranscript({
         cfg: { session: { store: storePath } },
+        agentId: "main",
         sessionKey,
         expectedSessionId: sessionEntry.sessionId,
         promptText: "Prepare the report",

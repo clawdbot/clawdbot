@@ -205,6 +205,7 @@ export type GatewayClientCloseInfo = {
 };
 
 export { GatewayClientRequestError } from "./request-error.js";
+export { isGatewayProtocolResponseError } from "./protocol-request.js";
 
 export class GatewayClientRequestTimeoutError extends GatewayProtocolRequestTimeoutError {
   constructor(params: { method: string; timeoutMs: number; requestSent: boolean }) {

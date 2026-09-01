@@ -1,38 +1,19 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions.js";
-import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { resolveAuthorizedBoardViewTicketClaims } from "./board-view-ticket.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import {
+  listSessionGroups,
+  normalizeGroupNames,
+  resolveSessionGroupMutationTargetsByName,
+} from "./session-groups.js";
+import type { SessionMutationTarget } from "./session-mutation-authorization-error.js";
 import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
+import { resolveUnifiedTalkSessionTarget } from "./talk-session-registry.js";
 
-export function resolveSessionGroupMutationTargetsByName(
-  cfg: OpenClawConfig,
-): Map<string, SessionMutationTarget[]> {
-  const targetsByName = new Map<string, SessionMutationTarget[]>();
-  for (const storeTarget of resolveAllAgentSessionStoreTargetsSync(cfg)) {
-    for (const { sessionKey, entry } of listSessionEntriesReadOnly({
-      agentId: storeTarget.agentId,
-      storePath: storeTarget.storePath,
-    })) {
-      const groupName = normalizeOptionalString(entry.category);
-      if (!groupName) {
-        continue;
-      }
-      const targets = targetsByName.get(groupName) ?? [];
-      targets.push({ sessionKey, agentId: storeTarget.agentId });
-      targetsByName.set(groupName, targets);
-    }
-  }
-  return targetsByName;
-}
-
-export type SessionMutationTarget = {
-  sessionKey: string;
-  agentId?: string;
-};
+export type { SessionMutationTarget } from "./session-mutation-authorization-error.js";
 
 type SessionMutationTargetField = "key" | "parentSessionKey" | "sessionKey";
 
@@ -243,6 +224,28 @@ function resolveSessionGroupMutationTargets(params: {
     : undefined;
 }
 
+function resolveSessionGroupsPutMutationTargets(
+  getCfg: () => OpenClawConfig,
+  requestParams: unknown,
+): SessionMutationTarget[] | undefined {
+  const names =
+    requestParams && typeof requestParams === "object" && "names" in requestParams
+      ? requestParams.names
+      : undefined;
+  if (!Array.isArray(names)) {
+    return undefined;
+  }
+  const requested = new Set(normalizeGroupNames(names.filter((name) => typeof name === "string")));
+  const dropped = listSessionGroups()
+    .map((group) => group.name)
+    .filter((name) => !requested.has(name));
+  if (dropped.length === 0) {
+    return [];
+  }
+  const byName = resolveSessionGroupMutationTargetsByName(getCfg());
+  return dropped.flatMap((name) => byName.get(name) ?? []);
+}
+
 function resolveApprovalSessionTarget(
   method: string,
   params: unknown,
@@ -271,6 +274,47 @@ function resolveApprovalSessionTarget(
         ...(agentId ? { agentId } : {}),
       }
     : undefined;
+}
+
+/** Realtime creates authorize their effective default; transcription stays sessionless. */
+export function resolveTalkSessionTargetInput(
+  method: string,
+  params: unknown,
+  connId?: string,
+):
+  | { kind: "request"; sessionKey?: string }
+  | ({ kind: "relay" } & NonNullable<ReturnType<typeof resolveUnifiedTalkSessionTarget>>)
+  | undefined {
+  if (method === "talk.session.steer") {
+    const sessionId = readSessionSharingStringParam(params, "sessionId");
+    const retained = sessionId ? resolveUnifiedTalkSessionTarget(sessionId, connId) : undefined;
+    return retained ? { kind: "relay", ...retained } : undefined;
+  }
+  // Only these handlers consume the prepared target; legacy tool calls route through chat.send.
+  if (
+    method !== "talk.client.create" &&
+    method !== "talk.session.create" &&
+    method !== "talk.client.transcript" &&
+    method !== "talk.client.close" &&
+    method !== "talk.client.steer"
+  ) {
+    return undefined;
+  }
+  const sessionKey = readSessionSharingStringParam(params, "sessionKey");
+  if (sessionKey) {
+    return { kind: "request", sessionKey };
+  }
+  if (method === "talk.client.create") {
+    return { kind: "request" };
+  }
+  if (
+    method === "talk.session.create" &&
+    (readSessionSharingStringParam(params, "mode") ?? "realtime") === "realtime" &&
+    readSessionSharingStringParam(params, "transport") !== "managed-room"
+  ) {
+    return { kind: "request" };
+  }
+  return undefined;
 }
 
 export function resolveSessionMutationTargets(params: {
@@ -303,6 +347,9 @@ export function resolveSessionMutationTargets(params: {
       getCfg: params.getCfg,
       requestParams: params.requestParams,
     });
+  }
+  if (params.method === "sessions.groups.put") {
+    return resolveSessionGroupsPutMutationTargets(params.getCfg, params.requestParams);
   }
   if (isApprovalSessionTargetMethod(params.method)) {
     const target = resolveApprovalSessionTarget(

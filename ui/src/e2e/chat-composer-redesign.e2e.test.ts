@@ -1,5 +1,6 @@
 // Control UI E2E tests cover the redesigned chat composer.
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -25,7 +26,10 @@ suite.define(() => {
   ] as const)(
     "keeps $reason model availability honest in the composer and picker",
     async ({ reason, blocked, message }) => {
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = artifactRoot
+        ? createControlUiE2eArtifactDir("chat-composer-redesign", artifactRoot)
+        : undefined;
       await suite.withPage(
         {
           viewport: { width: 1280, height: 900 },
@@ -90,6 +94,38 @@ suite.define(() => {
       );
     },
   );
+  it("keeps the loading model picker beside the microphone", async () => {
+    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("chat-composer-redesign", artifactRoot)
+      : undefined;
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["chat.startup"],
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+
+      const composer = page.locator(".agent-chat__input");
+      const model = composer.locator('[data-chat-model-select="true"]');
+      const voice = page.getByRole("button", { name: "Start voice input" });
+      await expect.poll(() => model.getAttribute("aria-busy")).toBe("true");
+      await expect.poll(() => voice.isVisible()).toBe(true);
+      if (artifactDir) {
+        await composer.screenshot({
+          animations: "disabled",
+          path: `${artifactDir}/loading-model-picker-spacing.png`,
+        });
+      }
+
+      const measureGap = async () => {
+        const [modelBox, voiceBox] = await Promise.all([model.boundingBox(), voice.boundingBox()]);
+        return modelBox && voiceBox ? voiceBox.x - (modelBox.x + modelBox.width) : null;
+      };
+      await expect.poll(measureGap).toBeGreaterThanOrEqual(0);
+      await expect.poll(measureGap).toBeLessThanOrEqual(16);
+    });
+  });
 
   it("keeps offline status in one bounded composer row", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
@@ -189,7 +225,10 @@ suite.define(() => {
   });
 
   it("keeps the model in the bottom bar, session settings in the header, and holds send beside the microphone in every input state", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("chat-composer-redesign", artifactRoot)
+      : undefined;
     const pageOptions = {
       viewport: { width: 1920, height: 1080 },
       ...(artifactDir
@@ -260,7 +299,7 @@ suite.define(() => {
                 contextTokens: 200_000,
                 displayName: "Main",
                 hasActiveRun: false,
-                key: "main",
+                key: "agent:main:main",
                 kind: "direct",
                 label: "Main",
                 model: "gpt-5.5",
@@ -641,7 +680,7 @@ suite.define(() => {
           timestamp: Date.now(),
         },
         runId,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         state: "delta",
       });
       // The working row stays attached with elapsed/token telemetry throughout streaming.
@@ -703,7 +742,7 @@ suite.define(() => {
       const abortRequest = await gateway.waitForRequest("chat.abort");
       expect(abortRequest.params).toMatchObject({
         runId,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
       await expect.poll(() => stop.count()).toBe(0);
 

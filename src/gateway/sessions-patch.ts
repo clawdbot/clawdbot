@@ -1,9 +1,6 @@
 // Session patch applier for gateway session metadata and model/runtime overrides.
 import { randomUUID } from "node:crypto";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   type ErrorShape,
@@ -31,10 +28,7 @@ import {
   normalizeUsageDisplay,
   resolveSupportedThinkingLevel,
 } from "../auto-reply/thinking.js";
-import type {
-  InternalSessionEntry as SessionEntry,
-  SessionToolOverrides,
-} from "../config/sessions.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import {
   buildSessionCreationStamp,
   type SessionCreatedVia,
@@ -75,6 +69,7 @@ import {
   isAgentSessionModelPatchOrigin,
   snapshotAgentModelFallback,
 } from "./session-model-patch-origin.js";
+import { normalizeSessionToolOverrides } from "./session-tool-overrides.js";
 import { applySessionContextWindowPatch } from "./sessions-patch-context-window.js";
 import { applySessionsPatchDisplayMetadata } from "./sessions-patch-display-metadata.js";
 import { applySessionsPatchSubagentPolicy } from "./sessions-patch-subagent-policy.js";
@@ -117,52 +112,6 @@ export function resolveSessionPatchModelSelection(params: {
   };
 }
 
-function normalizeExecSecurity(raw: string): "deny" | "allowlist" | "full" | undefined {
-  const normalized = normalizeOptionalLowercaseString(raw);
-  return normalized === "deny" || normalized === "allowlist" || normalized === "full"
-    ? normalized
-    : undefined;
-}
-
-function normalizeExecAsk(raw: string): "off" | "on-miss" | "always" | undefined {
-  const normalized = normalizeOptionalLowercaseString(raw);
-  return normalized === "off" || normalized === "on-miss" || normalized === "always"
-    ? normalized
-    : undefined;
-}
-
-function normalizeSessionToolOverrides(
-  raw: SessionToolOverrides,
-): SessionToolOverrides | undefined {
-  const normalizeBooleanMap = (value: Record<string, boolean> | undefined) => {
-    const entries = Object.entries(value ?? {}).toSorted(([left], [right]) =>
-      left.localeCompare(right),
-    );
-    return entries.length > 0 ? Object.fromEntries(entries) : undefined;
-  };
-  const mcpToolsDeny = Object.fromEntries(
-    Object.entries(raw.mcpToolsDeny ?? {})
-      .map(
-        ([serverName, toolNames]) =>
-          [
-            serverName,
-            [...new Set(toolNames)].toSorted((left, right) => left.localeCompare(right)),
-          ] as const,
-      )
-      .filter(([, toolNames]) => toolNames.length > 0)
-      .toSorted(([left], [right]) => left.localeCompare(right)),
-  );
-  const mcpServers = normalizeBooleanMap(raw.mcpServers);
-  const skills = normalizeBooleanMap(raw.skills);
-  const normalized: SessionToolOverrides = {
-    ...(mcpServers ? { mcpServers } : {}),
-    ...(Object.keys(mcpToolsDeny).length > 0 ? { mcpToolsDeny } : {}),
-    ...(skills ? { skills } : {}),
-    ...(raw.webSearch === false ? { webSearch: false } : {}),
-  };
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
-}
-
 /** Project a validated gateway session patch for one session entry. */
 export async function projectSessionsPatchEntry(params: {
   cfg: OpenClawConfig;
@@ -181,6 +130,11 @@ export async function projectSessionsPatchEntry(params: {
   authorizedAgentHarnessId?: string;
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
   const { cfg, storeKey, patch, creation } = params;
+  if ("execSecurity" in patch || "execAsk" in patch) {
+    return invalid(
+      "execSecurity/execAsk are retired; set permissionMode (read-only|guarded|workspace|full) instead, or use /exec for this run only.",
+    );
+  }
   const authorizedHarnessCreation =
     params.existingEntry === undefined &&
     isAgentHarnessSessionKeyOwnedBy(storeKey, params.authorizedAgentHarnessId);
@@ -477,32 +431,6 @@ export async function projectSessionsPatchEntry(params: {
         return invalid('invalid execHost (use "auto"|"sandbox"|"gateway"|"node")');
       }
       next.execHost = normalized;
-    }
-  }
-
-  if ("execSecurity" in patch) {
-    const raw = patch.execSecurity;
-    if (raw === null) {
-      delete next.execSecurity;
-    } else if (raw !== undefined) {
-      const normalized = normalizeExecSecurity(raw);
-      if (!normalized) {
-        return invalid('invalid execSecurity (use "deny"|"allowlist"|"full")');
-      }
-      next.execSecurity = normalized;
-    }
-  }
-
-  if ("execAsk" in patch) {
-    const raw = patch.execAsk;
-    if (raw === null) {
-      delete next.execAsk;
-    } else if (raw !== undefined) {
-      const normalized = normalizeExecAsk(raw);
-      if (!normalized) {
-        return invalid('invalid execAsk (use "off"|"on-miss"|"always")');
-      }
-      next.execAsk = normalized;
     }
   }
 

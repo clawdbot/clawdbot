@@ -3,8 +3,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  createEffectiveEnableStateResolver,
-  createPluginEnableStateResolver,
   resolveMemorySlotDecisionShared,
   resolvePluginActivationDecisionShared,
   toPluginActivationState,
@@ -223,10 +221,17 @@ export function resolvePluginActivationState(params: {
   );
 }
 
-export const resolveEnableState = createPluginEnableStateResolver<
-  NormalizedPluginsConfig,
-  PluginOrigin
->(resolvePluginActivationState);
+function toEnableStateResult(state: PluginActivationState): { enabled: boolean; reason?: string } {
+  return state.enabled ? { enabled: true } : { enabled: false, reason: state.reason };
+}
+
+export const resolveEnableState = (
+  id: string,
+  origin: PluginOrigin,
+  config: NormalizedPluginsConfig,
+  enabledByDefault?: boolean,
+): { enabled: boolean; reason?: string } =>
+  toEnableStateResult(resolvePluginActivationState({ id, origin, config, enabledByDefault }));
 
 type EffectiveActivationParams = {
   id: string;
@@ -237,10 +242,10 @@ type EffectiveActivationParams = {
   activationSource?: PluginActivationConfigSource;
 };
 
-export const resolveEffectiveEnableState =
-  createEffectiveEnableStateResolver<EffectiveActivationParams>(
-    resolveEffectivePluginActivationState,
-  );
+export const resolveEffectiveEnableState = (
+  params: EffectiveActivationParams,
+): { enabled: boolean; reason?: string } =>
+  toEnableStateResult(resolveEffectivePluginActivationState(params));
 
 export function resolveEffectivePluginActivationState(params: {
   id: EffectiveActivationParams["id"];

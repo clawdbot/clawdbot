@@ -162,6 +162,7 @@ export type SessionCapability = {
     listener: (snapshot: SessionListSnapshot) => void,
   ) => () => void;
   refreshList: (options?: SessionRefreshOptions) => Promise<void>;
+  /** Admits history through the deletion fence, even when outside the shared roster. */
   reconcile: (
     row: GatewaySessionRow | undefined,
     defaults?: SessionsListResult["defaults"],

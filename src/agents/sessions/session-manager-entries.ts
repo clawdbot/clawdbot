@@ -76,7 +76,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
             : undefined;
         if (adoptedMessageId !== persistenceResult.adoptedMessageId) {
           throw new Error(
-            `Session transcript parent entry was not persisted: ${canonicalEntry.id}`,
+            `Session transcript keyed user is outside the current turn: ${persistenceResult.adoptedMessageId}`,
           );
         }
         this.pendingDeliberateAppend = false;
@@ -127,7 +127,13 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     }
     let parent = this.appendParentId ? this.byId.get(this.appendParentId) : undefined;
     let remainingAncestors = this.byId.size;
-    while (parent && remainingAncestors-- > 0 && isSessionContextMetadataEntry(parent)) {
+    // Compaction rewrites context without consuming the current user turn.
+    // Stop at message and reset boundaries so old keyed turns stay closed.
+    while (
+      parent &&
+      remainingAncestors-- > 0 &&
+      (isSessionContextMetadataEntry(parent) || parent.type === "compaction")
+    ) {
       parent = parent.parentId ? this.byId.get(parent.parentId) : undefined;
     }
     if (
@@ -158,8 +164,6 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     if (options?.idempotencyLookup !== "caller-checked") {
       const currentUserId = this.resolveCurrentKeyedUserId(message);
       if (currentUserId) {
-        // Session setup may insert context-free metadata after the ingress-persisted user.
-        // Keep that metadata as the append parent while adopting the canonical user once.
         const anchor = this.persistenceTarget
           ? readActiveTranscriptEntryAnchor({
               ...this.persistenceTarget,

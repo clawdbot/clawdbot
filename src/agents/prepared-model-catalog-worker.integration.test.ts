@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
@@ -11,15 +10,11 @@ import {
   loadPreparedGatewayModelCatalogSnapshot,
 } from "../gateway/server-model-catalog.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { unregisterResolvedAgentDir } from "./agent-dir-registry.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope-config.js";
 import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "./auth-profiles/constants.js";
 import { getRuntimeExternalCliProfileIds } from "./auth-profiles/runtime-external-profile-references.js";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  replaceRuntimeAuthProfileStoreSnapshots,
-} from "./auth-profiles/runtime-snapshots.js";
+import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store.js";
 import {
   encodePluginModelCatalogRelativePath,
@@ -32,8 +27,10 @@ import {
   createPreparedModelCatalogWorkerInput,
 } from "./prepared-model-catalog-worker.js";
 import {
+  DISCOVERED_HARNESS_ID,
   PROVIDER_ID,
   HARNESS_ID,
+  MISSING_AUTH_HARNESS_ID,
   SHARED_AUTH_PROVIDER_ID,
   PLUGIN_ID,
   PROFILE_ID,
@@ -61,18 +58,14 @@ import {
   getPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
-import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
-import { markPluginMetadataSnapshotProvided } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
+import {
+  markPluginMetadataSnapshotProvided,
+  usePreparedCatalogWorkerFixtures,
+} from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-  afterEach(() => {
-    resetPreparedModelRuntimeSnapshotsForTest();
-    clearRuntimeAuthProfileStoreSnapshots();
-    closeOpenClawAgentDatabasesForTest();
-    cleanup();
-  });
-});
+const { makeTempDir, retireAfterTest, waitForWorkers, waitForMarker } =
+  usePreparedCatalogWorkerFixtures();
 
 function createJwtWithExp(exp: number, marker?: string): string {
   const payload = Buffer.from(JSON.stringify({ exp, ...(marker ? { marker } : {}) })).toString(
@@ -105,7 +98,7 @@ function createCatalogFixture(
     hydrateExternalCliProviderIds?: readonly string[];
   },
 ) {
-  const root = tempDirs.make("openclaw-model-catalog-worker-");
+  const root = makeTempDir("openclaw-model-catalog-worker-");
   const stateDir = path.join(root, "state");
   const agentDir = path.join(stateDir, "agents", "main", "agent");
   const workspaceDir = path.join(root, "workspace");
@@ -211,6 +204,11 @@ async function createStaticSnapshot(
     env,
   };
   let current = true;
+  const isCurrent = () => current;
+  const supersede = () => {
+    current = false;
+  };
+  retireAfterTest(supersede);
   const loadedMetadataSnapshot = options?.metadataWorkspace
     ? loadPluginMetadataSnapshot({
         config:
@@ -231,7 +229,7 @@ async function createStaticSnapshot(
     {
       input,
       catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
-      isGenerationCurrent: () => current,
+      isGenerationCurrent: isCurrent,
     },
     new Map(),
     30_000,
@@ -242,7 +240,8 @@ async function createStaticSnapshot(
     ...fixture,
     pluginMetadataSnapshot: build.pluginGeneration.pluginMetadataSnapshot,
     snapshot: build.snapshot,
-    supersede: () => (current = false),
+    isCurrent,
+    supersede,
   };
 }
 
@@ -255,19 +254,15 @@ async function createReadyWorkerFixture(spinMs: number) {
   return fixture;
 }
 
-async function waitForMarker(marker: string): Promise<void> {
-  await expect.poll(() => fs.existsSync(marker), { timeout: 30_000 }).toBe(true);
-}
-
 describe("prepared model catalog worker boundary", () => {
   beforeEach(() => {
-    vi.stubEnv("CODEX_HOME", tempDirs.make("openclaw-worker-empty-codex-"));
+    vi.stubEnv("CODEX_HOME", makeTempDir("openclaw-worker-empty-codex-"));
   });
 
   it("preserves prepared catalog ownership across ambient environment changes", async () => {
-    const homeA = tempDirs.make("openclaw-catalog-owner-home-a-");
-    const homeB = tempDirs.make("openclaw-catalog-owner-home-b-");
-    const codexHome = tempDirs.make("openclaw-catalog-owner-empty-codex-");
+    const homeA = makeTempDir("openclaw-catalog-owner-home-a-");
+    const homeB = makeTempDir("openclaw-catalog-owner-home-b-");
+    const codexHome = makeTempDir("openclaw-catalog-owner-empty-codex-");
     vi.stubEnv("HOME", homeA);
     vi.stubEnv("OPENCLAW_HOME", homeA);
     vi.stubEnv("CODEX_HOME", codexHome);
@@ -288,6 +283,10 @@ describe("prepared model catalog worker boundary", () => {
       env: fixture.env,
     };
     let current = true;
+    const supersede = () => {
+      current = false;
+    };
+    retireAfterTest(supersede);
     const build = startSerializedSnapshotBuild(
       {
         input,
@@ -324,15 +323,12 @@ describe("prepared model catalog worker boundary", () => {
       expect(resolveAgentWorkspaceDir(config, "main")).not.toBe(workspaceDir);
       await expect(project()).resolves.toMatchObject(expectedOwner);
     } finally {
-      current = false;
+      supersede();
       await build.completion;
       if (snapshot) {
         // Requesting after retirement also closes the fixture worker immediately.
         await Promise.allSettled([loadPreparedModelRuntimeAuth(snapshot, { providerIds: [] })]);
       }
-      resetPreparedModelRuntimeSnapshotsForTest();
-      clearRuntimeAuthProfileStoreSnapshots();
-      closeOpenClawAgentDatabasesForTest();
       unregisterResolvedAgentDir({ agentId: "main", agentDir, env: fixture.env });
       if (driftedAgentDir) {
         unregisterResolvedAgentDir({ agentId: "main", agentDir: driftedAgentDir });
@@ -489,7 +485,7 @@ describe("prepared model catalog worker boundary", () => {
     );
   });
 
-  it("preserves exact configured native auth across a full catalog refresh", async () => {
+  it("pairs full catalog native routes with exact-generation auth", async () => {
     const fixture = await createStaticSnapshot(
       0,
       {},
@@ -501,8 +497,9 @@ describe("prepared model catalog worker boundary", () => {
     const syntheticAuthProbePath = path.join(fixture.root, "synthetic-auth-probes.txt");
 
     expect(fixture.snapshot.authModes[HARNESS_ID]).toBe("api_key");
+    expect(fixture.snapshot.authModes[DISCOVERED_HARNESS_ID]).toBeUndefined();
+    expect(fixture.snapshot.authModes[MISSING_AUTH_HARNESS_ID]).toBeUndefined();
     expect(fixture.snapshot.authModes[PROVIDER_ID]).toBeUndefined();
-    fs.rmSync(fixture.externalAuthPath);
     fs.writeFileSync(syntheticAuthProbePath, "", "utf8");
     await loadPreparedModelRuntimeAuth(fixture.snapshot, { providerIds: [] });
     fs.writeFileSync(syntheticAuthProbePath, "", "utf8");
@@ -512,9 +509,13 @@ describe("prepared model catalog worker boundary", () => {
 
     expect(fs.readFileSync(syntheticAuthProbePath, "utf8").trim().split("\n")).toEqual([
       HARNESS_ID,
+      DISCOVERED_HARNESS_ID,
+      MISSING_AUTH_HARNESS_ID,
     ]);
     expect(fullAuth?.authModes[HARNESS_ID]).toBe("api_key");
-    expect(fullAuth?.authModes[PROVIDER_ID]).toBeUndefined();
+    expect(fullAuth?.authModes[DISCOVERED_HARNESS_ID]).toBe("api_key");
+    expect(fullAuth?.authModes[MISSING_AUTH_HARNESS_ID]).toBeUndefined();
+    expect(fullAuth?.authModes[PROVIDER_ID]).toBe("oauth");
   });
 
   it("refreshes durable auth before provider hooks decide catalog membership", async () => {
@@ -762,7 +763,7 @@ describe("prepared model catalog worker boundary", () => {
     // A developer's ambient OpenAI key would count as usable openai auth and
     // mark the route available before the staged Codex login exists.
     vi.stubEnv("OPENAI_API_KEY", undefined);
-    const codexHome = tempDirs.make("openclaw-models-list-codex-");
+    const codexHome = makeTempDir("openclaw-models-list-codex-");
     const fixture = await createStaticSnapshot(0, { CODEX_HOME: codexHome });
     const route = {
       provider: "openai",
@@ -860,7 +861,7 @@ describe("prepared model catalog worker boundary", () => {
   });
 
   it("refreshes and removes a Codex login that existed in the prepared generation", async () => {
-    const codexHome = tempDirs.make("openclaw-prepared-codex-");
+    const codexHome = makeTempDir("openclaw-prepared-codex-");
     writeCodexAuth(codexHome, "startup");
     const previousCodexHome = process.env.CODEX_HOME;
     process.env.CODEX_HOME = codexHome;
@@ -905,7 +906,10 @@ describe("prepared model catalog worker boundary", () => {
   });
 
   it("shares in-flight discovery, caches completion, and explicitly refreshes prepared facts", async () => {
-    const fixture = await createReadyWorkerFixture(750);
+    const fixture = await createReadyWorkerFixture(0);
+    const barrier = `${fixture.marker}.hold`;
+    // Keep discovery pending for both callers without relying on parent-thread scheduling.
+    fs.writeFileSync(barrier, "", "utf8");
     let settled = false;
     const first = fixture.snapshot.loadFullModelCatalog?.().finally(() => {
       settled = true;
@@ -917,6 +921,7 @@ describe("prepared model catalog worker boundary", () => {
       await waitForMarker(fixture.marker);
 
       expect(settled).toBe(false);
+      fs.rmSync(barrier);
       const [catalog, sharedCatalog] = await completion;
       expect(sharedCatalog).toBe(catalog);
       expect(catalog?.entries).toContainEqual(
@@ -939,6 +944,7 @@ describe("prepared model catalog worker boundary", () => {
       expect(fs.readFileSync(fixture.marker, "utf8")).toBe("start\ndone\nstart\ndone\n");
     } finally {
       fixture.supersede();
+      fs.rmSync(barrier, { force: true });
       await Promise.allSettled([completion]);
     }
   });
@@ -952,9 +958,7 @@ describe("prepared model catalog worker boundary", () => {
       fixture.supersede();
 
       await expect(catalog).rejects.toThrow("superseded");
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 100);
-      });
+      await waitForWorkers();
       expect(fs.readFileSync(fixture.marker, "utf8")).toBe("start\n");
     } finally {
       fixture.supersede();
@@ -1003,7 +1007,7 @@ describe("prepared model catalog worker boundary", () => {
 
     const catalog = await createPreparedModelCatalogWorker({
       input,
-      isCurrent: () => true,
+      isCurrent: fixture.isCurrent,
     }).loadCatalog();
 
     expect(catalog.entries).toContainEqual(

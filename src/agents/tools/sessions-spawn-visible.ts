@@ -45,10 +45,10 @@ export const VISIBLE_SESSIONS_SPAWN_SCHEMA = {
         "Durable visible session: coding/multi-step/keepable results; works without UI; subagent only. Default run mode and empty attachment fields are accepted; no thread/thinking/lightContext or attachment staging.",
     }),
   ),
-  category: Type.Optional(
+  group: Type.Optional(
     Type.String({
       description:
-        "Sidebar category for a visible session. Omit or pass an empty string to leave it ungrouped.",
+        "Custom sidebar group for a visible session; a new name creates the group. Omit or pass an empty string to leave it ungrouped.",
     }),
   ),
   worktree: Type.Optional(Type.Boolean({ description: "Visible session worktree" })),
@@ -113,10 +113,10 @@ export async function maybeSpawnVisibleSession(params: {
   const worktree = params.raw.worktree === true;
   const worktreeName = readToolStringParam(params.raw, "worktreeName");
   const worktreeBaseRef = readToolStringParam(params.raw, "worktreeBaseRef");
-  const category = readToolStringParam(params.raw, "category");
+  const group = readToolStringParam(params.raw, "group");
   if (params.raw.visible !== true) {
     const visibleOnlyParams = [
-      ["category", category],
+      ["group", group],
       ["worktree", worktree],
       ["worktreeName", worktreeName],
       ["worktreeBaseRef", worktreeBaseRef],
@@ -250,7 +250,11 @@ export async function maybeSpawnVisibleSession(params: {
     cfg,
     runTimeoutSeconds: params.runTimeoutSeconds,
   });
-  const requesterRuntime = resolveSandboxRuntimeStatus({ cfg, sessionKey: requesterKey });
+  const requesterRuntime = resolveSandboxRuntimeStatus({
+    cfg,
+    sessionKey: requesterKey,
+    agentId: requesterAgentId,
+  });
   const childRuntime = resolveSandboxRuntimeStatus({
     cfg,
     sessionKey: `agent:${targetAgentId}:dashboard:pending`,
@@ -328,7 +332,8 @@ export async function maybeSpawnVisibleSession(params: {
       response = await createGatewayCall("sessions.create", {
         agentId: targetAgentId,
         ...(params.label ? { label: params.label } : {}),
-        ...(category ? { category } : {}),
+        // sessions.create persists the group under the legacy wire field `category`.
+        ...(group ? { category: group } : {}),
         model: resolvedModel,
         task: params.task,
         parentSessionKey: requesterKey,
@@ -408,7 +413,7 @@ export async function maybeSpawnVisibleSession(params: {
         task: params.task,
         taskName: params.taskName,
         agentId: targetAgentId,
-        requesterAgentId: params.options?.requesterAgentIdOverride,
+        requesterAgentId,
         cleanup: "keep",
         label: params.label || undefined,
         runTimeoutSeconds,

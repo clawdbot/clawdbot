@@ -1,3 +1,4 @@
+import { sql } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -17,6 +18,13 @@ import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionStatusDatabase = Pick<OpenClawAgentKyselyDatabase, "session_nodes">;
+
+// Metadata readers do not own prompt snapshots. Strip those bytes before JS allocation;
+// malformed or SQLite-overdepth JSON still reaches the existing parser unchanged.
+export const sessionEntryMetadataJson =
+  /* kysely-allow-raw: preserve raw-row parsing while omitting unused prompt payloads. */ sql<string>`CASE WHEN json_valid(entry_json)
+  THEN json_remove(entry_json, '$.skillsSnapshot', '$.systemPromptReport')
+  ELSE entry_json END`.as("entry_json");
 
 export function normalizeStatus(value: unknown): SessionEntryStatus | null {
   return value === "running" ||

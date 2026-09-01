@@ -1,0 +1,54 @@
+name: Plugin ClawHub Postpublish
+
+on:
+  workflow_run: # zizmor: ignore[dangerous-triggers] read-only verifier; authenticates exact successful parent/child attempts and immutable receipt/artifact tuples; never executes downloaded content
+    workflows: [OpenClaw Release Publish]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: plugin-clawhub-postpublish-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  verify:
+    if: >-
+      github.repository == 'openclaw/openclaw' &&
+      github.event.workflow_run.repository.full_name == 'openclaw/openclaw' &&
+      github.event.workflow_run.event == 'workflow_dispatch' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout trusted verification tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+
+      - name: Verify terminal publication and canonical registry bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERIFIER_SHA: ${{ github.workflow_sha }}
+        run: node scripts/clawhub-postpublish.mjs
+
+      - name: Retain publication verification evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: clawhub-postpublish-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
+          path: ${{ runner.temp }}/clawhub-postpublish/evidence.json
+          if-no-files-found: warn
+          retention-days: 30

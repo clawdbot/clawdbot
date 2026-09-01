@@ -28,6 +28,7 @@ export function preparePluginUpdateCapabilityConsent(params: {
   packagePluginIds?: readonly string[];
   expectedIntegrity?: string;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  beforePersistentEffect?: () => void | Promise<void>;
 }): {
   onBeforePluginArtifactCommit: PluginInstallArtifactConsentHandler;
   acceptInstallRecord: <T extends PluginInstallRecord>(record: T) => T;
@@ -125,6 +126,9 @@ export function preparePluginUpdateCapabilityConsent(params: {
           widened,
         });
         const acknowledgment = await params.onCapabilityConsent?.(review);
+        if (acknowledgment) {
+          await params.beforePersistentEffect?.();
+        }
         // The prompt can yield while staged files change; bind approval to the final artifact.
         const finalDeclared = resolvePluginArtifactDeclaredSurface(
           stagedArtifactDir,
@@ -152,6 +156,19 @@ export function preparePluginUpdateCapabilityConsent(params: {
       }
       if (!hasWidening && priorAcceptanceCurrent && priorIntegrity) {
         acceptedSurface = declared;
+      }
+      // Reused acceptance still publishes a package. Keep the same commit
+      // guard, and reject staged-byte drift across its await.
+      await params.beforePersistentEffect?.();
+      const finalDeclared = resolvePluginArtifactDeclaredSurface(
+        stagedArtifactDir,
+        process.env,
+        artifactContext,
+      );
+      if (computeDeclaredSurfaceHash(finalDeclared) !== computeDeclaredSurfaceHash(declared)) {
+        throw new ManagedPluginLifecycleError(
+          `Plugin "${params.pluginId}" changed during its update commit; retry the update.`,
+        );
       }
     },
     acceptInstallRecord: (record) => {

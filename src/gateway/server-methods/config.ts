@@ -15,7 +15,6 @@ import {
   validateConfigSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { readAgentRosterProperty } from "../../agents/agent-scope-config.js";
-import { resolveModelIdNormalizationPolicies } from "../../config/io.context.js";
 import {
   createConfigIO,
   parseConfigJson5,
@@ -698,7 +697,9 @@ async function respondWithConfigRestartWrite(params: {
       const message =
         outcome === "applied-restart-required"
           ? `${params.mode} persisted and updated the active Gateway, but a recovery restart is required; wait for the Gateway to restart, then run config.get to confirm the active revision`
-          : `${params.mode} persisted but was not applied to the active Gateway (${outcome}); run config.get, then use config.apply to reapply the saved config or restart the Gateway`;
+          : outcome === "restart-pending"
+            ? `${params.mode} persisted and was accepted for restart; wait for the Gateway to restart, then run config.get to confirm the active revision`
+            : `${params.mode} persisted but was not applied to the active Gateway (${outcome}); run config.get, then use config.apply to reapply the saved config or restart the Gateway`;
       params.respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
       params.writeResult.queueFollowUp();
       return;
@@ -929,7 +930,7 @@ export const configHandlers: GatewayRequestHandlers = {
       "config.set",
       snapshot,
       respond,
-      resolveModelIdNormalizationPolicies(writeOptions.basePluginMetadataSnapshot),
+      writeOptions.basePluginMetadataSnapshot?.owners.modelIdNormalizationPolicies,
     );
     if (!parsed) {
       return;
@@ -993,9 +994,8 @@ export const configHandlers: GatewayRequestHandlers = {
       return;
     }
     const { snapshot, writeOptions } = writeSnapshot;
-    const modelIdNormalizationPolicies = resolveModelIdNormalizationPolicies(
-      writeOptions.basePluginMetadataSnapshot,
-    );
+    const modelIdNormalizationPolicies =
+      writeOptions.basePluginMetadataSnapshot?.owners.modelIdNormalizationPolicies;
     if (!snapshot.valid) {
       respond(
         false,
@@ -1217,7 +1217,7 @@ export const configHandlers: GatewayRequestHandlers = {
       "config.apply",
       snapshot,
       respond,
-      resolveModelIdNormalizationPolicies(writeOptions.basePluginMetadataSnapshot),
+      writeOptions.basePluginMetadataSnapshot?.owners.modelIdNormalizationPolicies,
     );
     if (!parsed) {
       return;

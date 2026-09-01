@@ -1,5 +1,6 @@
 /** CLI entrypoint for non-mutating doctor lint health checks. */
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { createConfigIO, readConfigFileSnapshot } from "../config/config.js";
@@ -57,6 +58,10 @@ type DoctorLintExecution = {
   findings: readonly HealthFinding[];
   writeOutput: () => void;
 };
+
+type DoctorLintPrivateStateRunner = <T>(run: () => Promise<T>) => Promise<T>;
+
+const RUNTIME_TOOL_SCHEMA_CHECK_ID = "core/doctor/runtime-tool-schemas";
 
 class DoctorLintStateSnapshotError extends Error {
   constructor(cause: unknown) {
@@ -220,7 +225,13 @@ async function executeDoctorLint(
   const extensionChecks = onlyRegisteredExtensionChecks
     ? registeredExtensionChecks
     : listExtensionHealthChecksForDoctor(coreChecks);
-  const coreCtx = { ...ctx, deep: opts.deep === true };
+  const runWithPrivateStateSnapshot: DoctorLintPrivateStateRunner = async (run) =>
+    await stateView.runWithPluginStateSnapshot(async () => await run());
+  const coreCtx = {
+    ...ctx,
+    deep: opts.deep === true,
+    runWithPrivateStateSnapshot,
+  };
 
   const runOpts: DoctorLintRunOptions = {
     checks: [...coreChecks.map((check) => withCoreLintContext(check, coreCtx)), ...extensionChecks],
@@ -269,28 +280,43 @@ async function withReadOnlyPluginStateSnapshot<T>(
   run: (pluginMetadataEnv: NodeJS.ProcessEnv) => Promise<T>,
 ): Promise<T> {
   const sourceDatabasePath = resolveOpenClawStateSqlitePath(sourceEnv);
-  if (!fs.existsSync(sourceDatabasePath)) {
-    return await run(sourceEnv);
-  }
-  let prepared: ReturnType<typeof prepareSqliteReadOnlyLocationSync>;
+  let cleanup: () => boolean;
+  let privateRoot: string;
+  let prepared: ReturnType<typeof prepareSqliteReadOnlyLocationSync> | undefined;
   try {
-    prepared = prepareSqliteReadOnlyLocationSync(sourceDatabasePath);
+    if (fs.existsSync(sourceDatabasePath)) {
+      prepared = prepareSqliteReadOnlyLocationSync(sourceDatabasePath);
+      privateRoot = path.dirname(prepared.location);
+      cleanup = prepared.cleanup;
+    } else {
+      privateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-lint-state-"));
+      cleanup = () => {
+        try {
+          fs.rmSync(privateRoot, { force: true, recursive: true });
+          return true;
+        } catch {
+          return false;
+        }
+      };
+    }
   } catch (error) {
     throw new DoctorLintStateSnapshotError(error);
   }
   let outcome: { ok: true; value: T } | { ok: false; error: unknown };
   let runStarted = false;
   try {
-    const privateStateDir = path.join(path.dirname(prepared.location), "openclaw-state");
+    const privateStateDir = path.join(privateRoot, "openclaw-state");
     const privateDatabasePath = resolveOpenClawStateSqlitePath({
       ...sourceEnv,
       OPENCLAW_STATE_DIR: privateStateDir,
     });
     fs.mkdirSync(path.dirname(privateDatabasePath), { recursive: true, mode: 0o700 });
-    for (const suffix of ["", "-journal", "-shm", "-wal"]) {
-      const sourcePath = `${prepared.location}${suffix}`;
-      if (fs.existsSync(sourcePath)) {
-        fs.renameSync(sourcePath, `${privateDatabasePath}${suffix}`);
+    if (prepared) {
+      for (const suffix of ["", "-journal", "-shm", "-wal"]) {
+        const sourcePath = `${prepared.location}${suffix}`;
+        if (fs.existsSync(sourcePath)) {
+          fs.renameSync(sourcePath, `${privateDatabasePath}${suffix}`);
+        }
       }
     }
     const sourceConfigPath = resolveConfigPath(sourceEnv, resolveStateDir(sourceEnv));
@@ -300,20 +326,41 @@ async function withReadOnlyPluginStateSnapshot<T>(
       OPENCLAW_STATE_DIR: privateStateDir,
     };
     const installRoots = resolvePluginInstallRoots(sourceEnv);
+    const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     outcome = {
       ok: true,
-      value: await withPluginInstallRoots(
-        { ...installRoots, stateDir: privateStateDir },
-        async () => {
-          runStarted = true;
-          return await run(privateEnv);
-        },
-      ),
+      value: await (async () => {
+        // OAuth and auth-profile owners still read process.env. Redirect the serialized
+        // lint phase so refresh and challenge writes stay inside this private snapshot.
+        process.env.OPENCLAW_CONFIG_PATH = sourceConfigPath;
+        process.env.OPENCLAW_STATE_DIR = privateStateDir;
+        try {
+          return await withPluginInstallRoots(
+            { ...installRoots, stateDir: privateStateDir },
+            async () => {
+              runStarted = true;
+              return await run(privateEnv);
+            },
+          );
+        } finally {
+          if (previousConfigPath === undefined) {
+            delete process.env.OPENCLAW_CONFIG_PATH;
+          } else {
+            process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+          }
+          if (previousStateDir === undefined) {
+            delete process.env.OPENCLAW_STATE_DIR;
+          } else {
+            process.env.OPENCLAW_STATE_DIR = previousStateDir;
+          }
+        }
+      })(),
     };
   } catch (error) {
     outcome = { ok: false, error };
   }
-  if (!prepared.cleanup()) {
+  if (!cleanup()) {
     throw new DoctorLintStateSnapshotError(
       new Error("Temporary doctor lint state snapshot cleanup did not complete."),
     );
@@ -364,12 +411,18 @@ function createStateSnapshotFailureExecution(
 
 function withCoreLintContext(
   check: HealthCheck,
-  ctx: HealthCheckContext & { readonly deep?: boolean },
+  ctx: HealthCheckContext & {
+    readonly deep?: boolean;
+    readonly runWithPrivateStateSnapshot: DoctorLintPrivateStateRunner;
+  },
 ): HealthCheck {
   return {
     ...check,
     detect(_ctx, scope) {
-      return check.detect(ctx, scope);
+      const detect = async () => await check.detect(ctx, scope);
+      return check.id === RUNTIME_TOOL_SCHEMA_CHECK_ID
+        ? ctx.runWithPrivateStateSnapshot(detect)
+        : detect();
     },
   };
 }

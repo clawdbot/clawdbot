@@ -81,7 +81,7 @@ export async function markBackendDomRefsOnPage(opts: {
 
   const refs = opts.refs.filter(
     (entry) =>
-      /^ax\d+$/.test(entry.ref) &&
+      /^(?:e|ax)\d+$/.test(entry.ref) &&
       Number.isFinite(entry.backendDOMNodeId) &&
       Math.floor(entry.backendDOMNodeId) > 0,
   );

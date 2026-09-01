@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { markPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.full-catalog.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import {
   type PreparedGatewayModelCatalogSnapshot,
   registerGatewayModelCatalogPrivateAccess,
@@ -12,11 +13,7 @@ import {
 } from "./models-list-result.js";
 import type { GatewayRequestContext } from "./types.js";
 
-const metadataSnapshot = {
-  index: { plugins: [] },
-  manifestRegistry: { plugins: [] },
-  plugins: [],
-} as never;
+const metadataSnapshot = createPluginMetadataSnapshotFixture();
 const emptyAuthStore = { version: 1, profiles: {} } as const;
 
 describe("models.list provider catalog outcomes", () => {

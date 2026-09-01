@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { access, cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUNDLED_PLUGIN_ROOT_DIR } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
@@ -298,35 +298,75 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain('OPENCLAW_EXTENSIONS="$(cat /tmp/openclaw-selected-plugin-dirs)"');
   });
 
-  it("copies root package lifecycle scripts before pnpm install", async () => {
-    const [dockerfile, packageJsonText] = await Promise.all([
-      readFile(dockerfilePath, "utf8"),
-      readFile(join(repoRoot, "package.json"), "utf8"),
-    ]);
-    const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
-    const packageJson = JSON.parse(packageJsonText) as {
-      scripts?: Record<string, string>;
-    };
-    const installLifecycleScripts = ["preinstall", "install", "postinstall", "prepare"] as const;
-
-    for (const lifecycleScript of installLifecycleScripts) {
-      const command = packageJson.scripts?.[lifecycleScript];
-      const scriptPath = command?.match(/\bnode\s+(scripts\/[^\s]+)/)?.[1];
-      if (!scriptPath) {
-        continue;
+  it.each(["Dockerfile", "scripts/docker/cleanup-smoke/Dockerfile"])(
+    "runs root lifecycle scripts from %s dependency inputs",
+    async (dockerfileName) => {
+      const dockerfile = collapseDockerContinuations(
+        await readFile(join(repoRoot, dockerfileName), "utf8"),
+      );
+      const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
+      expect(installIndex).toBeGreaterThan(-1);
+      const fixture = await mkdtemp(join(tmpdir(), "openclaw-docker-lifecycle-"));
+      try {
+        // Stage the actual local COPY inputs, not a separately maintained import list.
+        // Workspace manifests do not contribute executable root lifecycle modules.
+        for (const [, sources, destination] of dockerfile
+          .slice(0, installIndex)
+          .matchAll(/^COPY ([^\n]+) (\.\/\S*)$/gm)) {
+          if (!sources || !destination) {
+            throw new Error("Expected local COPY sources and destination");
+          }
+          if (sources.startsWith("--")) {
+            continue;
+          }
+          for (const input of sources.split(/\s+/)) {
+            if (input !== "package.json" && !input.endsWith(".mjs")) {
+              continue;
+            }
+            const target = join(
+              fixture,
+              destination.endsWith("/") ? join(destination, basename(input)) : destination,
+            );
+            await mkdir(dirname(target), { recursive: true });
+            await cp(join(repoRoot, input), target);
+          }
+        }
+        const packageJson = JSON.parse(await readFile(join(fixture, "package.json"), "utf8")) as {
+          scripts: Record<string, string>;
+        };
+        const home = join(fixture, "home");
+        await mkdir(home);
+        for (const lifecycle of ["preinstall", "install", "postinstall", "prepare"]) {
+          const command = packageJson.scripts[lifecycle];
+          if (!command) {
+            continue;
+          }
+          const scriptPath = command.match(/^node (scripts\/[^\s]+)$/)?.[1];
+          if (!scriptPath) {
+            throw new Error(`Unsupported root lifecycle command: ${command}`);
+          }
+          expect
+            .soft(
+              () =>
+                execFileSync(process.execPath, [scriptPath], {
+                  cwd: fixture,
+                  env: {
+                    HOME: home,
+                    USERPROFILE: home,
+                    PATH: process.env.PATH,
+                    npm_config_user_agent: "pnpm/12",
+                  },
+                  stdio: "pipe",
+                }),
+              lifecycle,
+            )
+            .not.toThrow();
+        }
+      } finally {
+        await rm(fixture, { recursive: true, force: true });
       }
-
-      const copyIndex = dockerfile.indexOf(scriptPath);
-      expect(
-        copyIndex,
-        `${lifecycleScript} must copy ${scriptPath} before pnpm install`,
-      ).toBeGreaterThan(-1);
-      expect(
-        copyIndex,
-        `${lifecycleScript} must copy ${scriptPath} before pnpm install`,
-      ).toBeLessThan(installIndex);
-    }
-  });
+    },
+  );
 
   it("does not let pnpm resync the full source workspace during Docker build scripts", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
@@ -546,11 +586,18 @@ describe("Dockerfile", () => {
     expect(workflow).not.toContain("OPENCLAW_EXTENSIONS=diagnostics-otel\n");
   });
 
-  it("uses one source commit and timestamp for every official Docker artifact", async () => {
-    const workflow = await readFile(dockerReleaseWorkflowPath, "utf8");
+  it("uses one release identity for every official Docker artifact", async () => {
+    const [rawDockerfile, workflow] = await Promise.all([
+      readFile(dockerfilePath, "utf8"),
+      readFile(dockerReleaseWorkflowPath, "utf8"),
+    ]);
+    const dockerfile = collapseDockerContinuations(rawDockerfile);
 
     expect(workflow).toContain("resolve_build_provenance:");
     expect(workflow).toContain("built_at: ${{ steps.build_provenance.outputs.built_at }}");
+    expect(workflow).toContain(
+      "release_version: ${{ needs.resolve_release_policy.outputs.version }}",
+    );
     expect(workflow).toContain("source_sha: ${{ steps.build_provenance.outputs.source_sha }}");
     expect(workflow.match(/date -u \+%Y-%m-%dT%H:%M:%SZ/gu)).toHaveLength(1);
     expect(
@@ -569,6 +616,30 @@ describe("Dockerfile", () => {
         "OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve_build_provenance.outputs.built_at }}",
       ).length - 1,
     ).toBe(4);
+    expect(
+      workflow.split(
+        "OPENCLAW_DOCKER_BUILD_VERSION=${{ needs.resolve_build_provenance.outputs.release_version }}",
+      ).length - 1,
+    ).toBe(4);
+
+    const stampIndex = dockerfile.indexOf('pnpm pkg set "version=$OPENCLAW_DOCKER_BUILD_VERSION"');
+    const buildIndex = dockerfile.indexOf("pnpm build:docker");
+    const productionDepsIndex = dockerfile.indexOf("COPY --from=production-deps /app/ ./");
+    const restoreVersionIndex = dockerfile.indexOf(
+      "COPY --from=build /app/package.json ./package.json",
+    );
+    expect(stampIndex).toBeGreaterThan(dockerfile.indexOf("COPY . ."));
+    expect(stampIndex).toBeLessThan(buildIndex);
+    expect(restoreVersionIndex).toBeGreaterThan(productionDepsIndex);
+    expect(dockerfile).toContain(
+      'test "$(node -p "require(\\"/app/package.json\\").version")" = "$OPENCLAW_DOCKER_BUILD_VERSION"',
+    );
+    expect(dockerfile).toContain(
+      'test "$(node -p "require(\\"/app/dist/build-info.json\\").version")" = "$OPENCLAW_DOCKER_BUILD_VERSION"',
+    );
+    expect(dockerfile).toContain(
+      'test "$(node /app/openclaw.mjs --version | cut -d \' \' -f 2)" = "$OPENCLAW_DOCKER_BUILD_VERSION"',
+    );
   });
 
   it("publishes official Docker browser images with baked Chromium", async () => {

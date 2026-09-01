@@ -21,6 +21,9 @@ type PortConnections = Awaited<
   ReturnType<typeof import("../../infra/ports-inspect.js").inspectPortConnections>
 >;
 
+const readFile = fs.readFile.bind(fs);
+let readFileSpy: ReturnType<typeof vi.spyOn>;
+
 const callGatewayStatusProbe = vi.fn<
   (opts?: unknown) => Promise<{
     ok: boolean;
@@ -38,10 +41,9 @@ const callGatewayStatusProbe = vi.fn<
 const isDefaultInstallIdentity = vi.fn((_env?: NodeJS.ProcessEnv) => true);
 const isGatewayExternallySupervised = vi.fn((_env?: NodeJS.ProcessEnv) => false);
 const resolveGatewayProbeAuthSafeWithSecretInputsCalls = vi.fn<(opts?: unknown) => void>();
-const loadGatewayTlsRuntime = vi.fn(async (_cfg?: unknown) => ({
-  enabled: true,
-  required: true,
-  fingerprintSha256: "sha256:11:22:33:44",
+const inspectGatewayTlsCertificate = vi.fn(async (_cfg?: unknown) => ({
+  ok: true as const,
+  value: { cert: "public-certificate", fingerprintSha256: "sha256:11:22:33:44" },
 }));
 const findExtraGatewayServices = vi.fn(async (_env?: unknown, _opts?: unknown) => []);
 const findStaleOpenClawUpdateLaunchdJobs = vi.fn<
@@ -100,6 +102,13 @@ const loadInstalledPluginIndexInstallRecords = vi.fn<
     filePath?: string;
   }) => Promise<Record<string, unknown>>
 >(async (_params?) => ({}));
+const fetchNpmPackageTargetStatus = vi.fn(
+  async (params: { packageName?: string; target: string }) => ({
+    target: params.target,
+    version: params.target,
+    nodeEngine: null,
+  }),
+);
 const readGatewayRestartHandoffSync = vi.fn<
   (_env?: NodeJS.ProcessEnv) => GatewayRestartHandoff | null
 >(() => null);
@@ -180,6 +189,19 @@ let cliLoadedConfig: Record<string, unknown> = {
 };
 
 vi.mock("../../config/config.js", () => ({
+  getRuntimeConfig: () => cliLoadedConfig,
+  loadConfig: () => cliLoadedConfig,
+}));
+
+vi.mock("../../config/paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/paths.js")>()),
+  isDefaultInstallIdentity: (env?: NodeJS.ProcessEnv) => isDefaultInstallIdentity(env),
+  resolveConfigPath: (env: NodeJS.ProcessEnv, stateDir: string) => resolveConfigPath(env, stateDir),
+  resolveGatewayPort: (cfg?: unknown, env?: unknown) => resolveGatewayPort(cfg, env),
+  resolveStateDir: (env: NodeJS.ProcessEnv) => resolveStateDir(env),
+}));
+
+vi.mock("../../config/io.runtime.js", () => ({
   createConfigIO: ({
     configPath,
     observe,
@@ -212,16 +234,6 @@ vi.mock("../../config/config.js", () => ({
       },
     };
   },
-  getRuntimeConfig: () => cliLoadedConfig,
-  loadConfig: () => cliLoadedConfig,
-  resolveConfigPath: (env: NodeJS.ProcessEnv, stateDir: string) => resolveConfigPath(env, stateDir),
-  resolveGatewayPort: (cfg?: unknown, env?: unknown) => resolveGatewayPort(cfg, env),
-  resolveStateDir: (env: NodeJS.ProcessEnv) => resolveStateDir(env),
-}));
-
-vi.mock("../../config/paths.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../config/paths.js")>()),
-  isDefaultInstallIdentity: (env?: NodeJS.ProcessEnv) => isDefaultInstallIdentity(env),
 }));
 
 vi.mock("../../daemon/diagnostics.js", () => ({
@@ -307,11 +319,17 @@ vi.mock("../../infra/tailnet.js", () => ({
 }));
 
 vi.mock("../../infra/tls/gateway.js", () => ({
-  loadGatewayTlsRuntime: (cfg: unknown) => loadGatewayTlsRuntime(cfg),
+  inspectGatewayTlsCertificate: (cfg: unknown) => inspectGatewayTlsCertificate(cfg),
 }));
 
 vi.mock("../../infra/windows-gateway-firewall-diagnostics.js", () => ({
   inspectWindowsGatewayFirewall: (opts: unknown) => inspectWindowsGatewayFirewall(opts),
+}));
+
+vi.mock("../../infra/update-check-package-target.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-check-package-target.js")>()),
+  fetchNpmPackageTargetStatus: (params: { packageName?: string; target: string }) =>
+    fetchNpmPackageTargetStatus(params),
 }));
 
 vi.mock("./probe.js", () => ({
@@ -342,10 +360,49 @@ function gatherStatus(overrides: Partial<Parameters<typeof gatherDaemonStatus>[0
   return gatherDaemonStatus({ rpc: {}, probe: true, deep: false, ...overrides });
 }
 
+async function withStatusConfig<T>(
+  rawConfig: string | undefined,
+  run: (configPath: string) => Promise<T>,
+  includeServiceEnv = false,
+): Promise<T> {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-status-config-"));
+  const configPath = path.join(tmp, "openclaw.json");
+  if (rawConfig !== undefined) {
+    await fs.writeFile(configPath, rawConfig);
+  }
+  setTestEnvValue("OPENCLAW_STATE_DIR", tmp);
+  setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+  serviceReadCommand.mockResolvedValueOnce({
+    programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+    ...(includeServiceEnv
+      ? {
+          environment: {
+            OPENCLAW_STATE_DIR: tmp,
+            OPENCLAW_CONFIG_PATH: configPath,
+          },
+        }
+      : {}),
+  });
+  try {
+    return await run(configPath);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+}
+
 describe("gatherDaemonStatus", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
+    readFileSpy = vi.spyOn(fs, "readFile").mockImplementation(async (filePath, options) => {
+      if (
+        filePath === "/tmp/openclaw-cli/openclaw.json" ||
+        filePath === "/tmp/openclaw-daemon/openclaw.json"
+      ) {
+        throw Object.assign(new Error("test config requires full IO"), { code: "EACCES" });
+      }
+      return await readFile(filePath, options);
+    });
     envSnapshot = captureEnv([
       "OPENCLAW_STATE_DIR",
       "OPENCLAW_CONFIG_PATH",
@@ -380,7 +437,13 @@ describe("gatherDaemonStatus", () => {
     findStaleOpenClawUpdateLaunchdJobs.mockResolvedValue([]);
     loadInstalledPluginIndexInstallRecords.mockClear();
     loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
-    loadGatewayTlsRuntime.mockClear();
+    fetchNpmPackageTargetStatus.mockClear();
+    fetchNpmPackageTargetStatus.mockImplementation(async (params) => ({
+      target: params.target,
+      version: params.target,
+      nodeEngine: null,
+    }));
+    inspectGatewayTlsCertificate.mockClear();
     inspectGatewayRestart.mockClear();
     inspectPortUsage.mockReset();
     inspectPortUsage.mockImplementation(async (port: number) => ({
@@ -438,6 +501,7 @@ describe("gatherDaemonStatus", () => {
   });
 
   afterEach(() => {
+    readFileSpy.mockRestore();
     envSnapshot.restore();
   });
 
@@ -465,7 +529,7 @@ describe("gatherDaemonStatus", () => {
   it("uses wss probe URL and forwards TLS fingerprint when daemon TLS is enabled", async () => {
     const status = await gatherStatus();
 
-    expect(loadGatewayTlsRuntime).toHaveBeenCalledTimes(1);
+    expect(inspectGatewayTlsCertificate).toHaveBeenCalledTimes(1);
     const probeInput = callArg(callGatewayStatusProbe) as {
       url?: string;
       tlsFingerprint?: string;
@@ -705,7 +769,7 @@ describe("gatherDaemonStatus", () => {
 
     const status = await gatherStatus({ rpc: { url: rawUrl } });
 
-    expect(loadGatewayTlsRuntime).not.toHaveBeenCalled();
+    expect(inspectGatewayTlsCertificate).not.toHaveBeenCalled();
     const probeInput = callArg(callGatewayStatusProbe) as {
       url?: string;
       tlsFingerprint?: string;
@@ -1076,10 +1140,7 @@ describe("gatherDaemonStatus", () => {
   });
 
   it("uses the fast config path for plain same-file status reads", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-status-config-"));
-    const configPath = path.join(tmp, "openclaw.json");
-    await fs.writeFile(
-      configPath,
+    await withStatusConfig(
       JSON.stringify({
         gateway: {
           bind: "custom",
@@ -1087,73 +1148,120 @@ describe("gatherDaemonStatus", () => {
           controlUi: { enabled: true },
         },
       }),
-    );
-    setTestEnvValue("OPENCLAW_STATE_DIR", tmp);
-    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
-    serviceReadCommand.mockResolvedValueOnce({
-      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
-      environment: {
-        OPENCLAW_STATE_DIR: tmp,
-        OPENCLAW_CONFIG_PATH: configPath,
+      async (configPath) => {
+        const status = await gatherStatus({ probe: false });
+
+        expect(createConfigIOCalls).not.toHaveBeenCalled();
+        expect(readConfigFileSnapshotCalls).not.toHaveBeenCalled();
+        expect(loadConfigCalls).not.toHaveBeenCalled();
+        expect(status.config?.cli.path).toBe(configPath);
+        expect(status.config?.cli.exists).toBe(true);
+        expect(status.config?.cli.valid).toBe(true);
+        expect(status.config?.cli.controlUi).toEqual({ enabled: true });
+        expect(status.config?.daemon).toBe(status.config?.cli);
+        expect(status.gateway?.bindMode).toBe("custom");
+        expect(status.gateway?.customBindHost).toBe("10.0.0.5");
       },
+      true,
+    );
+  });
+
+  it("uses the fast config path when the config file is missing", async () => {
+    await withStatusConfig(
+      undefined,
+      async (configPath) => {
+        const status = await gatherStatus({ probe: false });
+
+        expect(createConfigIOCalls).not.toHaveBeenCalled();
+        expect(status.config?.cli).toEqual({
+          path: configPath,
+          exists: false,
+          valid: true,
+        });
+        expect(status.config?.daemon).toBe(status.config?.cli);
+        expect(status.gateway).toMatchObject({
+          bindMode: "loopback",
+          port: 19001,
+        });
+      },
+      true,
+    );
+  });
+
+  it("keeps malformed JSON5 on the fast invalid-summary path", async () => {
+    await withStatusConfig(
+      "{ gateway:",
+      async (configPath) => {
+        const status = await gatherStatus({ probe: false });
+
+        expect(createConfigIOCalls).not.toHaveBeenCalled();
+        expect(status.config?.cli).toMatchObject({
+          path: configPath,
+          exists: true,
+          valid: false,
+        });
+        expect(status.config?.cli.issues?.[0]?.message).toContain("JSON5 parse failed");
+        expect(status.config?.daemon).toBe(status.config?.cli);
+      },
+      true,
+    );
+  });
+
+  it.each([
+    ["include", JSON.stringify({ $include: "./base.json" })],
+    ["substitution", JSON.stringify({ gateway: { auth: { token: "${STATUS_TOKEN}" } } })],
+    ["root env", JSON.stringify({ env: { STATUS_TOKEN: "value" } })],
+  ])("uses full config IO for %s config", async (_name, rawConfig) => {
+    await withStatusConfig(rawConfig, async (configPath) => {
+      await gatherStatus({ probe: false });
+
+      expect(createConfigIOCalls).toHaveBeenCalledOnce();
+      expect(createConfigIOCalls).toHaveBeenCalledWith(configPath, "skip", false);
+      expect(readConfigFileSnapshotCalls).toHaveBeenCalledWith(configPath);
     });
+  });
 
-    try {
-      const status = await gatherStatus({ probe: false });
+  it("uses full config IO after a non-missing read failure", async () => {
+    await withStatusConfig("{}", async (configPath) => {
+      readFileSpy.mockRejectedValueOnce(
+        Object.assign(new Error("permission denied"), { code: "EACCES" }),
+      );
+      await gatherStatus({ probe: false });
 
-      expect(readConfigFileSnapshotCalls).not.toHaveBeenCalled();
-      expect(loadConfigCalls).not.toHaveBeenCalled();
-      expect(status.config?.cli.path).toBe(configPath);
-      expect(status.config?.cli.exists).toBe(true);
-      expect(status.config?.cli.valid).toBe(true);
-      expect(status.config?.cli.controlUi).toEqual({ enabled: true });
-      expect(status.config?.daemon).toBe(status.config?.cli);
-      expect(status.gateway?.bindMode).toBe("custom");
-      expect(status.gateway?.customBindHost).toBe("10.0.0.5");
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
+      expect(createConfigIOCalls).toHaveBeenCalledOnce();
+      expect(createConfigIOCalls).toHaveBeenCalledWith(configPath, "skip", false);
+    });
   });
 
   it("uses full plugin-aware config validation for deep status", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-status-config-"));
-    const configPath = path.join(tmp, "openclaw.json");
-    await fs.writeFile(
-      configPath,
+    await withStatusConfig(
       JSON.stringify({
         gateway: {
           bind: "loopback",
         },
       }),
+      async (configPath) => {
+        cliLoadedConfig = {
+          gateway: {
+            bind: "loopback",
+          },
+        };
+        cliConfigWarnings = [
+          {
+            path: "plugins.entries.test-bad-plugin",
+            message:
+              "plugin test-bad-plugin: channel plugin manifest declares test-bad-plugin without channelConfigs metadata",
+          },
+        ];
+
+        const status = await gatherStatus({ probe: false, deep: true });
+
+        expect(createConfigIOCalls).toHaveBeenCalledWith(configPath, "full", false);
+        expect(readConfigFileSnapshotCalls).toHaveBeenCalledWith(configPath);
+        expect(status.config?.cli.warnings).toEqual(cliConfigWarnings);
+        expect(status.config?.daemon).toBe(status.config?.cli);
+      },
     );
-    setTestEnvValue("OPENCLAW_STATE_DIR", tmp);
-    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
-    cliLoadedConfig = {
-      gateway: {
-        bind: "loopback",
-      },
-    };
-    cliConfigWarnings = [
-      {
-        path: "plugins.entries.test-bad-plugin",
-        message:
-          "plugin test-bad-plugin: channel plugin manifest declares test-bad-plugin without channelConfigs metadata",
-      },
-    ];
-    serviceReadCommand.mockResolvedValueOnce({
-      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
-    });
-
-    try {
-      const status = await gatherStatus({ probe: false, deep: true });
-
-      expect(createConfigIOCalls).toHaveBeenCalledWith(configPath, "full", false);
-      expect(readConfigFileSnapshotCalls).toHaveBeenCalledWith(configPath);
-      expect(status.config?.cli.warnings).toEqual(cliConfigWarnings);
-      expect(status.config?.daemon).toBe(status.config?.cli);
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
   });
 
   it("resolves daemon gateway auth password SecretRef values before probing", async () => {
@@ -1440,7 +1548,7 @@ describe("gatherDaemonStatus", () => {
   it("skips TLS runtime loading when probe is disabled", async () => {
     const status = await gatherStatus({ probe: false });
 
-    expect(loadGatewayTlsRuntime).not.toHaveBeenCalled();
+    expect(inspectGatewayTlsCertificate).not.toHaveBeenCalled();
     expect(callGatewayStatusProbe).not.toHaveBeenCalled();
     expect(status.rpc).toBeUndefined();
   });
@@ -1588,6 +1696,37 @@ describe("gatherDaemonStatus", () => {
     expect(status.pluginVersionDrift?.gatewayVersion).toBe("2026.5.4");
     expect(status.pluginVersionDrift?.drifts.map((d) => d.pluginId)).toEqual(["whatsapp"]);
   });
+
+  it.each([false, true])(
+    "collects local drift without registry lookups (deep=%s)",
+    async (deep) => {
+      callGatewayStatusProbe.mockResolvedValueOnce({
+        ok: true,
+        url: "ws://127.0.0.1:19001",
+        error: null,
+        server: { version: "2026.7.1-2", connId: "c1" },
+      } as never);
+      loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce({
+        brave: {
+          source: "npm",
+          spec: "@openclaw/brave-plugin@2026.7.1-beta.2",
+          resolvedName: "@openclaw/brave-plugin",
+          resolvedVersion: "2026.7.1-beta.2",
+        },
+      } as never);
+      fetchNpmPackageTargetStatus.mockResolvedValueOnce({
+        target: "2026.7.1",
+        version: "2026.7.1",
+        nodeEngine: null,
+      });
+
+      const status = await gatherStatus({ deep });
+
+      expect(fetchNpmPackageTargetStatus).not.toHaveBeenCalled();
+      expect(status.pluginVersionDrift?.drifts[0]?.pluginId).toBe("brave");
+      expect(status.pluginVersionDrift?.drifts[0]?.targetResolution).toBeUndefined();
+    },
+  );
 
   it("reads install records from the merged daemon service environment, not the CLI process env", async () => {
     await gatherStatus({ deep: true });

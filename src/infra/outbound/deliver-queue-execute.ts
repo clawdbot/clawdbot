@@ -1,5 +1,6 @@
 // Owns queued delivery execution, custody transitions, and terminal cleanup.
 import type { AuditMessageFailureStage } from "../../audit/audit-event-types.js";
+import { assertSessionWriterDeliveryAuthorized } from "../../auto-reply/reply/session-writer-delivery-authority.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
@@ -22,6 +23,7 @@ import {
   areOutboundPayloadsIntentionallySuppressed,
   OutboundDeliveryError,
   PlatformMessageNotDispatchedError,
+  isOutboundDeliveryAdmissionClosedError,
   type OutboundDeliveryResult,
   type OutboundPayloadDeliveryOutcome,
 } from "./deliver-types.js";
@@ -229,8 +231,22 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     },
     onDirectAdapterHandoff: async () => {
       params.abortSignal?.throwIfAborted();
+      assertSessionWriterDeliveryAuthorized(
+        params.deliveryCompletion?.kind === "pending-final"
+          ? params.deliveryCompletion.sessionWriterDeliveryAuthority
+          : undefined,
+      );
       await params.onPlatformSendDispatch?.();
       params.abortSignal?.throwIfAborted();
+    },
+    assertDirectAdapterHandoff: () => {
+      params.assertDirectAdapterHandoff?.();
+      params.abortSignal?.throwIfAborted();
+      assertSessionWriterDeliveryAuthorized(
+        params.deliveryCompletion?.kind === "pending-final"
+          ? params.deliveryCompletion.sessionWriterDeliveryAuthority
+          : undefined,
+      );
     },
     onPlatformSendDispatch: async () => {
       params.abortSignal?.throwIfAborted();
@@ -266,6 +282,11 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
         }
       }
       params.abortSignal?.throwIfAborted();
+      assertSessionWriterDeliveryAuthorized(
+        params.deliveryCompletion?.kind === "pending-final"
+          ? params.deliveryCompletion.sessionWriterDeliveryAuthority
+          : undefined,
+      );
       await params.onPlatformSendDispatch?.();
       params.abortSignal?.throwIfAborted();
       if (platformSendSourceIndex !== undefined) {
@@ -491,6 +512,9 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     return results;
   } catch (err) {
     throwIfProducerLeaseLost();
+    if (isOutboundDeliveryAdmissionClosedError(err)) {
+      throw err;
+    }
     if (err instanceof OutboundDeliveryError && err.results.length > 0) {
       deliveredResults = err.results;
     }

@@ -13,9 +13,13 @@ For Docker, Podman, and Kubernetes image replacements, see
 gateway runs startup-safe upgrade work before readiness and exits if mounted
 state needs manual repair.
 
+Before a significant update, [create a verified backup](#before-updating-create-a-verified-backup).
+Automatic config copies and migration recovery originals are not a full-state
+backup.
+
 ## Recommended: `openclaw update`
 
-Detects your install type (npm, pnpm, Bun, or git), fetches the latest version, runs `openclaw doctor`, and restarts the gateway.
+Detects your install type (npm, pnpm, Bun, or git), fetches the latest version, runs `openclaw doctor`, and restarts a managed Gateway service.
 
 ```bash
 openclaw update
@@ -38,6 +42,12 @@ openclaw update --dry-run   # preview without applying
 when the beta tag is missing or its version is older than the latest stable
 release. Use `--tag beta` for a one-off package update pinned to the raw npm
 beta dist-tag instead.
+
+A saved `update.channel` remains the channel for future updates, automatic
+checks, and update status. For example, a one-off beta package on a saved stable
+channel keeps checking stable afterward. Use `--channel beta` to subscribe to
+beta updates. Plugins still follow the installed core version where required
+for compatibility.
 
 `--channel extended-stable` is package-only, and installation remains
 foreground-only. OpenClaw reads the public npm `extended-stable` selector,
@@ -69,15 +79,54 @@ not a self-contained package artifact. Use `openclaw update --channel dev` to
 switch to the supported checkout and build flow. Other explicit package specs
 keep their package-manager behavior.
 
+After a beta core update, eligible official npm plugins follow the exact installed
+beta version, including one-off `--tag` updates from a stable installation.
 For managed plugins, a missing beta release is a warning, not a failure: the
 core update can still succeed while a plugin falls back to its recorded
 default/latest release.
 
 See [Release channels](/install/development-channels) for channel semantics.
 
+## Retire update recovery data
+
+Once you have verified the update and your conversations, preview retained
+migration originals:
+
+```bash
+openclaw update cleanup --dry-run
+```
+
+Use the same profile and state/config overrides as the update, and check the
+state directory printed in the report. The metadata-only preview can run while
+the Gateway is active. To apply, stop that Gateway yourself, wait for other
+SQLite maintenance to finish, then run `openclaw update cleanup`. Cleanup never
+stops or restarts the Gateway. Confirmation defaults to **No**; automation must
+explicitly pass `--yes`, including when using `--json`.
+
+Cleanup permanently gives up rollback to eligible originals, including repaired
+branches and old provider metadata. Current SQLite history, operator backups,
+and protected or unknown artifacts remain. It is not a substitute for a
+[pre-update backup](#before-updating-create-a-verified-backup). See
+[Update cleanup](/cli/update#update-cleanup) for eligibility, JSON output, and
+resuming interrupted deletion.
+
 ## Switch between npm and git installs
 
 Installer-driven switches verify the replacement before the working owner is retired. Source wrappers are published atomically; same-path npm shim transitions use an identity-checked backup that is restored on failure, so a failed candidate leaves the previous command runnable. The `openclaw update` command prints its final success result only after post-core convergence and requested restart health checks succeed.
+
+If a CLI update fails after installing a usable replacement, recovery uses the
+newly installed CLI to restart the Gateway it stopped, preserving the managed
+service definition. A rejected staged candidate leaves the original package intact,
+and recovery restarts that usable installation. A failed staged swap can also
+recover when the updater verifies that the original package and every changed
+launcher were restored. Incomplete rollback keeps the Gateway stopped and retains
+available backups for repair. After the live package has been modified, a blocking
+lifecycle, verification, or Doctor failure also leaves the Gateway stopped because
+the replacement is not known to be runnable. Repair the reported failure, rerun
+`openclaw update`, and check `openclaw gateway status --deep`.
+If an older target does not support preserving the service definition, automatic
+recovery stops and reports the error; inspect the service before restarting it
+manually.
 
 Use channels to change the install type. The updater keeps your state, config,
 credentials, and workspace in `~/.openclaw`; it only changes which OpenClaw
@@ -323,6 +372,10 @@ Off by default. Enable it in `~/.openclaw/openclaw.json`:
 
 You can also choose the update channel and enable automatic updates from
 **Settings → Updates** (`/settings/updates`) in the Control UI.
+**Check for updates** controls the existing `update.checkOnStart` setting.
+When it is off, **Automatic updates** is disabled but keeps your saved preference;
+turning checks back on resumes discovery and any enabled automatic-update policy.
+This does not change your separate feature-statistics preference.
 Recorded failures on that page include typed **Check status** and **Retry
 update** actions when the connected Gateway supports them. See [Update
 troubleshooting](/install/update-troubleshooting) for reason codes, guided
@@ -332,6 +385,13 @@ shows whether the checkout is current, ahead, diverged, unavailable, or a
 specific number of commits behind. It also shows exact and relative build,
 verified install, and last-commit times. Existing checkouts show an unknown
 install time until their next verified successful update.
+
+Automatic installation requires a managed Gateway service that can hand off
+the update and restart safely. A Gateway running directly in a terminal can
+still show update hints, but it does not automatically replace its running
+installation. Stop that Gateway, run `openclaw update`, and launch it again
+afterward, or [install a managed service](/cli/gateway#manage-the-gateway-service) for
+unattended updates.
 
 | Channel           | Behavior                                                                                                                                                            |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -358,8 +418,7 @@ fixed target and does not move if upstream `main` advances during the countdown.
 
 Every failed apply ends the campaign so the UI does not remain on
 **Updating…**. Failures after a managed-service handoff starts are also recorded
-in the restart sentinel and surface after the Gateway returns; direct
-unsupervised failures remain in the running Gateway's logs.
+in the restart sentinel and surface after the Gateway returns.
 
 `update.checkOnStart: false` disables all automatic update checks, feature
 statistics, and update notices, even when `update.auto.enabled` is `true`.
@@ -368,6 +427,9 @@ External-supervisor mode disables automatic applies; startup update hints can
 still run unless `update.checkOnStart` is also disabled. See
 [Usage telemetry and update checks](/gateway/telemetry) for the information
 sent by the daily check and optional anonymous feature statistics.
+
+Disabling checks also cancels unfinished discovery and its campaign; a late
+response from the previous settings cannot start an update afterward.
 
 The gateway also logs an update hint on startup (disable with
 `update.checkOnStart: false`). Stored extended-stable selections use this
@@ -471,7 +533,16 @@ omitted files.
 
 For a byte-for-byte recovery point that includes volatile artifacts omitted by
 the portable archive, stop the Gateway and use a filesystem, volume, or VM
-snapshot provided by your platform.
+snapshot provided by your platform. This matters for older file-backed installs:
+the portable archive omits matching JSONL transcripts and logs even when they
+are no longer being written.
+
+When migrating large legacy histories, leave room for the original files, a
+temporary SQLite spool, and the destination database/WAL simultaneously. SQLite
+can be larger than the original JSONL; streaming import does not imply a fixed
+RAM requirement or migration time. Check free space on both the system temporary
+volume and the state volume. See [Session SQLite migration](/cli/doctor#session-sqlite-migration)
+for staging and memory details.
 
 ### Roll back a package install
 
@@ -490,6 +561,13 @@ metadata, restarts the Gateway, and verifies the running version. If the stored
 channel is `extended-stable`, use
 `--channel stable --tag <known-good-version>` because exact one-off tags cannot
 be combined with the `extended-stable` selector.
+
+Downgrade finalization runs in the installed target when it supports the update
+handoff. After successful validation, current targets save the configuration with
+their own version, including when a one-off `--tag` leaves the channel unchanged.
+This allows later Gateway restarts without an older-binary override. Older targets
+that lack this finalization behavior can still refuse service activation because
+the configuration records a newer writer; follow the reported recovery guidance.
 
 Package updates stage and verify the candidate before activation. If the
 filesystem swap or command-shim replacement fails, OpenClaw restores the old

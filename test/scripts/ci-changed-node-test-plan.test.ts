@@ -105,11 +105,11 @@ describe("CI changed Node test plan", () => {
     const hostTest = "src/agents/prepared-model-runtime.copilot.integration.test.ts";
     const shards = createChangedNodeTestShards([changedPath]);
     expect(shards).not.toBeNull();
-    expect(shards).toHaveLength(2);
+    expect(shards).toHaveLength(createChangedExtensionFallbackShards([changedPath]).length + 1);
     expect(shards?.flatMap((shard) => shard.targets ?? [])).toEqual([hostTest]);
-    expect(shards?.flatMap((shard) => shard.configs)).toEqual([
-      "test/vitest/vitest.extensions.config.ts",
-    ]);
+    expect(new Set(shards?.flatMap((shard) => shard.configs))).toEqual(
+      new Set(["test/vitest/vitest.extensions.config.ts"]),
+    );
     expect(buildVitestRunPlans([hostTest])).toEqual([
       {
         config: "test/vitest/vitest.agents-core.config.ts",
@@ -432,6 +432,16 @@ describe("CI changed Node test plan", () => {
     );
   });
 
+  it("declares one-config extension jobs serial for the CI worker budget", () => {
+    const shards = createChangedExtensionFallbackShards([
+      "scripts/lib/ci-changed-node-test-plan.mts",
+    ]);
+
+    expect(shards.length).toBeGreaterThan(1);
+    expect(shards.every((shard) => shard.configs.length === 1 && !shard.targets)).toBe(true);
+    expect(shards.every((shard) => shard.planConcurrency === 1)).toBe(true);
+  });
+
   it("covers every extension config when the extension inventory changes", () => {
     expectAllExtensionConfigs(
       createChangedExtensionFallbackShards(["scripts/lib/changed-extensions.mts"]),
@@ -452,6 +462,7 @@ describe("CI changed Node test plan", () => {
       {
         checkName: "checks-node-changed-extensions-config",
         configs: ["test/vitest/vitest.extension-discord.config.ts"],
+        planConcurrency: 1,
         requiresDist: false,
         runner: "blacksmith-8vcpu-ubuntu-2404",
         shardName: "changed-extensions-config",
@@ -531,6 +542,29 @@ describe("CI changed Node test plan", () => {
     expect(targets.length).toBeGreaterThan(10);
     expect(new Set(targets).size).toBe(targets.length);
     expect(shards).toHaveLength(Math.ceil(targets.length / 10));
+  });
+
+  it("partitions the whole catch-all config for direct and core-driven plugin changes", () => {
+    const config = "test/vitest/vitest.extensions.config.ts";
+    const direct = createChangedExtensionFallbackShards(["extensions/copilot/index.ts"]);
+    const broad = createChangedExtensionFallbackShards([
+      "scripts/lib/ci-changed-node-test-plan.mts",
+    ]).filter((shard) => shard.configs.includes(config));
+
+    expect(direct.length).toBeGreaterThan(1);
+    expect(direct.every((shard) => shard.configs.length === 1 && shard.configs[0] === config)).toBe(
+      true,
+    );
+    expect(direct.every((shard) => !shard.includePatterns && !shard.targets)).toBe(true);
+    const shardArgs = (shards: typeof direct) => shards.map((shard) => shard.env);
+    expect(shardArgs(direct)).toEqual(
+      direct.map((_, index) => ({
+        OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify([
+          `--shard=${index + 1}/${direct.length}`,
+        ]),
+      })),
+    );
+    expect(shardArgs(broad)).toEqual(shardArgs(direct));
   });
 
   it("preserves Matrix process bounds in mixed package fallbacks", () => {
@@ -613,6 +647,7 @@ describe("CI changed Node test plan", () => {
 
   it("fails safe when a targeted config needs special shard setup", () => {
     expect(createChangedNodeTestShards(["scripts/docs-i18n/main.go"])).toBeNull();
+    expect(createChangedNodeTestShards(["test/scripts/docs-i18n.test.ts"])).toBeNull();
     expect(createChangedNodeTestShards(["src/tui/tui-pty-harness.e2e.test.ts"])).toBeNull();
   });
 

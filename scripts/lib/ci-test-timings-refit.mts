@@ -29,21 +29,27 @@ function seconds(value: string, unit: string): number {
 }
 
 function readUiLog(text: string, samples: Samples, overhead: number[]) {
-  let fileCount = 0;
+  const files = new Map<string, number>();
   for (const line of text.split("\n")) {
-    const file = /ui-e2e\s+(\S+\.e2e\.test\.ts)\s+\((\d+) tests?\)\s+([\d.]+)(m?s)/u.exec(line);
+    const file =
+      /^\s*(?:\d{4}-\d\d-\d\dT[\d:.]+Z\s+)?✓\s+(?:\|ui-e2e\||ui-e2e)\s+(\S+\.e2e\.test\.ts)\s+\((\d+) tests?(?: \| \d+ (?:skipped|todo))*\)\s+([\d.]+)(m?s)(?:\s|$)/u.exec(
+        line,
+      );
     if (file) {
-      recordSample(samples, file[1]!, seconds(file[3]!, file[4]!));
-      fileCount += 1;
+      files.set(file[1]!, seconds(file[3]!, file[4]!));
     }
     const summary = /\bDuration\s+([\d.]+)(m?s)\s+\([^)]*\btests\s+([\d.]+)(m?s)/u.exec(line);
-    if (summary && fileCount > 0) {
+    if (summary && files.size > 0) {
+      // Commit complete native file times, including suite hooks, once per invocation.
+      for (const [name, duration] of files) {
+        recordSample(samples, name, duration);
+      }
       const value =
-        (seconds(summary[1]!, summary[2]!) - seconds(summary[3]!, summary[4]!)) / fileCount;
+        (seconds(summary[1]!, summary[2]!) - seconds(summary[3]!, summary[4]!)) / files.size;
       if (Number.isFinite(value)) {
         overhead.push(value);
       }
-      fileCount = 0;
+      files.clear();
     }
   }
 }

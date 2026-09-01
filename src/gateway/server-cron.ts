@@ -71,6 +71,7 @@ import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing
 import { runHeartbeatOnce } from "../infra/heartbeat-runner-run.js";
 import {
   requestHeartbeat,
+  requestHeartbeatAndWait,
   requestHeartbeatRetry,
   type HeartbeatWakeRequest,
 } from "../infra/heartbeat-wake.js";
@@ -573,6 +574,8 @@ export function buildGatewayCronService(params: {
           agentId?: string;
           sessionKey?: string;
           heartbeat?: HeartbeatWakeRequest["heartbeat"];
+          scheduledEveryMs?: number;
+          tasks?: HeartbeatWakeRequest["tasks"];
         }
       | undefined,
     direct = false,
@@ -595,6 +598,10 @@ export function buildGatewayCronService(params: {
         heartbeat: direct
           ? resolveCronHeartbeatOverride({ runtimeConfig, agentId, heartbeat: opts?.heartbeat })
           : sanitizeCronHeartbeatOverride(opts?.heartbeat),
+        ...(opts?.scheduledEveryMs !== undefined
+          ? { scheduledEveryMs: opts.scheduledEveryMs }
+          : {}),
+        ...(opts?.tasks?.length ? { tasks: opts.tasks } : {}),
       },
     };
   };
@@ -627,7 +634,7 @@ export function buildGatewayCronService(params: {
     // Keep the whole plugin callback visible until its user-state effects settle.
     void runWithGatewayIndependentRootWorkAdmission(async () => {
       await hookRunner.runCronChanged(evt, hookCtx);
-    }).catch((err: unknown) => {
+    }, "cron:changed-hook").catch((err: unknown) => {
       cronLogger.warn(
         { err: formatErrorMessage(err), jobId: evt.jobId },
         "cron_changed hook failed",
@@ -883,19 +890,14 @@ export function buildGatewayCronService(params: {
       : {}),
     requestHeartbeat: (opts, retry) => {
       const { wake } = resolveCronHeartbeatWake(opts);
-      const request = {
-        ...wake,
-        ...(opts?.scheduledEveryMs !== undefined
-          ? { scheduledEveryMs: opts.scheduledEveryMs }
-          : {}),
-        ...(opts.tasks?.length ? { tasks: opts.tasks } : {}),
-      };
       if (retry) {
-        requestHeartbeatRetry(request, retry);
+        requestHeartbeatRetry(wake, retry);
       } else {
-        requestHeartbeat(request);
+        requestHeartbeat(wake);
       }
     },
+    requestHeartbeatAndWait: (opts, lifecycle) =>
+      requestHeartbeatAndWait(resolveCronHeartbeatWake(opts).wake, lifecycle),
     runHeartbeatOnce: async (opts) => {
       const { runtimeConfig, wake } = resolveCronHeartbeatWake(opts, true);
       return await runHeartbeatOnce({
@@ -1235,7 +1237,10 @@ export function buildGatewayCronService(params: {
           // preconditioned terminal write without admitting unrelated work.
           await persistCompletion();
         } else {
-          await runWithGatewayIndependentRootWorkAdmission(persistCompletion);
+          await runWithGatewayIndependentRootWorkAdmission(
+            persistCompletion,
+            "cron:persist-completion",
+          );
         }
         return () => {
           releaseCompletionToken();
@@ -1247,10 +1252,12 @@ export function buildGatewayCronService(params: {
       }
     },
     fireOnExit: async (job, exit) => {
-      await runWithGatewayIndependentRootWorkAdmission(async () =>
-        fireOnExitJob(job, exit, {
-          run: (jobId, payload) => cron.run(jobId, "force", payload ? { payload } : undefined),
-        }),
+      await runWithGatewayIndependentRootWorkAdmission(
+        async () =>
+          fireOnExitJob(job, exit, {
+            run: (jobId, payload) => cron.run(jobId, "force", payload ? { payload } : undefined),
+          }),
+        "cron:exit-hook",
       );
     },
     updateWatcherState: async (job, patch) =>
@@ -1272,7 +1279,7 @@ export function buildGatewayCronService(params: {
           // Stale watcher identity is a no-op, not an error to surface.
           return undefined;
         }
-      }),
+      }, "cron:watcher-state"),
     logger: cronLogger,
   } satisfies CronExitWatcherHandlers;
   exitWatchersRef.current = createCronExitWatchers(exitWatcherHandlers);
@@ -1294,19 +1301,21 @@ export function buildGatewayCronService(params: {
       });
     },
     fireBatch: (job, batch, streamScheduleKey, streamSourceIdentity) =>
-      runWithGatewayIndependentRootWorkAdmission(async () =>
-        fireStreamJob(job, {
-          run: async (jobId, onDisposition) => {
-            const result = await cron.run(jobId, "force", {
-              evaluateTrigger: true,
-              streamBatch: batch,
-              streamScheduleKey,
-              streamSourceIdentity,
-              onTriggerDisposition: onDisposition,
-            });
-            return { ...result, enabled: cron.getJob(jobId)?.enabled };
-          },
-        }),
+      runWithGatewayIndependentRootWorkAdmission(
+        async () =>
+          fireStreamJob(job, {
+            run: async (jobId, onDisposition) => {
+              const result = await cron.run(jobId, "force", {
+                evaluateTrigger: true,
+                streamBatch: batch,
+                streamScheduleKey,
+                streamSourceIdentity,
+                onTriggerDisposition: onDisposition,
+              });
+              return { ...result, enabled: cron.getJob(jobId)?.enabled };
+            },
+          }),
+        "cron:stream-batch",
       ),
     logger: cronLogger,
   });

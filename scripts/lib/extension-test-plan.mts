@@ -114,6 +114,9 @@ const EXTENSION_TEST_PROCESS_FILE_LIMITS = new Map<string, number>([
   ],
 ]);
 const EXTENSION_TEST_JOB_FILE_LIMITS = new Map<string, number>([
+  // The 468-file catch-all took 528–829s on two detected CPUs. Six jobs leave
+  // room for checkout/setup without changing its non-isolated worker lifecycle.
+  ["test/vitest/vitest.extensions.config.ts", 90],
   // Bound Telegram CI jobs so isolate recycling stays inside one job instead
   // of minting one runner per test file. Ten files keeps the worst job near
   // 3 minutes (observed 2026-08: ~45s runner setup + ~7-24s per file) while
@@ -269,7 +272,7 @@ function splitTargetsByFileLimit(targets: string[], maxFilesPerChunk: number) {
   return chunks;
 }
 
-function resolveExtensionTestJobFileLimit(config: string) {
+export function resolveExtensionTestJobFileLimit(config: string) {
   return (
     EXTENSION_TEST_JOB_FILE_LIMITS.get(config) ?? EXTENSION_TEST_PROCESS_FILE_LIMITS.get(config)
   );

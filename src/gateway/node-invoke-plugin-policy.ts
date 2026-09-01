@@ -20,9 +20,10 @@ import type {
   OpenClawPluginNodeInvokePolicyResult,
   OpenClawPluginNodeInvokeTransportResult,
 } from "../plugins/types.js";
+import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
 import { invokeNodeWithReadinessRetry } from "./node-invoke-readiness.js";
-import type { NodeSession } from "./node-registry.js";
+import type { NodeInvokeResult, NodeSession } from "./node-registry.js";
 import { runApprovalRequestDeliveries } from "./server-methods/approval-request-delivery.js";
 import {
   bindApprovalRequesterMetadata,
@@ -118,6 +119,8 @@ function createApprovalRuntime(params: {
   client: GatewayClient | null;
   pluginId: string;
   turnSource: Parameters<typeof resolveNodeInvokeTurnSourceFields>[0];
+  callerIdentity?: AgentRuntimeIdentity;
+  isCurrent: () => boolean;
 }): OpenClawPluginNodeInvokePolicyContext["approvals"] | undefined {
   const manager = params.context.pluginApprovalManager;
   if (!manager) {
@@ -127,15 +130,12 @@ function createApprovalRuntime(params: {
     async request(input) {
       const timeoutMs = resolvePluginApprovalTimeoutMs(input.timeoutMs);
       const turnSource = resolveNodeInvokeTurnSourceFields(params.turnSource);
-      const callerIdentity = params.client?.internal?.agentRuntimeIdentity;
+      const callerIdentity = params.callerIdentity;
       const invocationSessionKey =
         params.client?.internal?.pluginRuntimeOwnerId === params.pluginId
           ? params.client.internal.nodeInvokeApprovalSessionKey
           : undefined;
-      if (
-        callerIdentity &&
-        params.context.validateAgentRuntimeApprovalAuthority?.(callerIdentity) !== true
-      ) {
+      if (!params.isCurrent()) {
         throw new Error("agent runtime approval authority is no longer active");
       }
       const request: PluginApprovalRequestPayload = {
@@ -236,6 +236,9 @@ function createApprovalRuntime(params: {
         afterDecisionErrorLabel: "plugin approvals: iOS push node policy expire failed",
       });
       let decision = manager.projectDecisionIfActive(record.id, await decisionPromise);
+      if (!params.isCurrent()) {
+        return { id: record.id, decision: null };
+      }
       // This return hands execution authority to the plugin policy. Claim a
       // one-shot decision here so observation or retry cannot replay it.
       if (
@@ -249,6 +252,20 @@ function createApprovalRuntime(params: {
     },
   };
 }
+
+/** Host-owned dispatch binding; private endpoints supply a separately probed capability declaration. */
+export type PluginNodeInvokePrivateTransport = {
+  commands?: readonly string[];
+  isCurrent: () => boolean;
+  invoke: (params: {
+    params: unknown;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+    idempotencyKey?: string;
+    isDispatchAuthorized: () => boolean;
+    onDispatchReady: (invokeId: string) => void;
+  }) => Promise<NodeInvokeResult>;
+};
 
 /** Applies the registered plugin policy for a node.invoke command, if one exists. */
 export async function applyPluginNodeInvokePolicy(params: {
@@ -272,9 +289,13 @@ export async function applyPluginNodeInvokePolicy(params: {
   idempotencyKey?: string;
   isInvocationCurrent?: () => boolean | Promise<boolean>;
   isApprovalAuthorityActive?: () => boolean;
+  privateTransport?: PluginNodeInvokePrivateTransport;
+  /** Internal callers carry an admitted run without inventing a client connection. */
+  agentRuntimeIdentity?: AgentRuntimeIdentity;
 }): Promise<OpenClawPluginNodeInvokePolicyResult | null> {
   const registry = getActivePluginGatewayNodePolicyRegistry();
-  const callerIdentity = params.client?.internal?.agentRuntimeIdentity;
+  const callerIdentity =
+    params.agentRuntimeIdentity ?? params.client?.internal?.agentRuntimeIdentity;
   const token = callerIdentity?.executionIdentity;
   const isCallerRuntimeAuthorityActive = () =>
     !callerIdentity ||
@@ -313,10 +334,8 @@ export async function applyPluginNodeInvokePolicy(params: {
       ]),
     });
   };
-  // Route metadata is authority-bearing: only a signed agent-runtime caller may nominate it.
-  const trustedTurnSource = params.client?.internal?.agentRuntimeIdentity
-    ? params.turnSource
-    : undefined;
+  // Route metadata comes only from an authenticated or host-bound agent runtime.
+  const trustedTurnSource = callerIdentity ? params.turnSource : undefined;
   const entry = registry?.nodeInvokePolicies?.find((candidate) =>
     candidate.policy.commands.includes(params.command),
   );
@@ -400,10 +419,7 @@ export async function applyPluginNodeInvokePolicy(params: {
       return result;
     };
     sessionAuthority?.assertCurrent();
-    if (
-      callerIdentity &&
-      params.context.validateAgentRuntimeApprovalAuthority?.(callerIdentity) !== true
-    ) {
+    if (!isCallerRuntimeAuthorityActive()) {
       return deny("node_runtime_authority_closed", {
         ok: false,
         code: "APPROVAL_AUTHORITY_CLOSED",
@@ -439,15 +455,21 @@ export async function applyPluginNodeInvokePolicy(params: {
         message: "node pairing changed before dispatch",
       });
     }
-    const resolveCommandAuthorization = () =>
-      isNodeCommandAllowed({
+    // A private owner supplies only its probed capability declaration. The
+    // public node advertisement remains untouched, and config denies still win.
+    const resolveCommandAuthorization = () => {
+      const declaredCommands = params.privateTransport?.commands
+        ? [...params.privateTransport.commands]
+        : currentNode.commands;
+      return isNodeCommandAllowed({
         command: params.command,
-        declaredCommands: currentNode.commands,
+        declaredCommands,
         allowlist: resolveNodeCommandAllowlist(params.context.getRuntimeConfig(), {
           ...currentNode,
-          approvedCommands: currentNode.commands,
+          approvedCommands: declaredCommands,
         }),
       });
+    };
     const allowed = resolveCommandAuthorization();
     if (!allowed.ok) {
       return deny("node_command_revoked", {
@@ -475,6 +497,13 @@ export async function applyPluginNodeInvokePolicy(params: {
     // Pairing and policy checks above may await. Revalidate the exact runtime
     // capability at the final transport handoff so closure wins that race.
     sessionAuthority?.assertCurrent();
+    if (params.privateTransport?.isCurrent() === false) {
+      return deny("node_private_owner_closed", {
+        ok: false,
+        code: "PRIVATE_OWNER_CLOSED",
+        message: "private node invocation owner closed before dispatch",
+      });
+    }
     if (!isPluginCurrent()) {
       return deny("node_plugin_replaced", {
         ok: false,
@@ -482,10 +511,7 @@ export async function applyPluginNodeInvokePolicy(params: {
         message: "node plugin policy changed before dispatch",
       });
     }
-    if (
-      callerIdentity &&
-      params.context.validateAgentRuntimeApprovalAuthority?.(callerIdentity) !== true
-    ) {
+    if (!isCallerRuntimeAuthorityActive()) {
       return deny("node_runtime_authority_closed", {
         ok: false,
         code: "APPROVAL_AUTHORITY_CLOSED",
@@ -508,7 +534,7 @@ export async function applyPluginNodeInvokePolicy(params: {
         "Gateway node pairing, capability, and plugin policy gates allowed transport dispatch.",
     });
     nodeGateDecisionRecorded = true;
-    const res = await invokeNodeWithReadinessRetry(params.context.nodeRegistry, {
+    const request = {
       nodeId: params.nodeSession.nodeId,
       expectedConnId: params.nodeSession.connId,
       ...(params.nodeSession.pairingGeneration
@@ -540,21 +566,24 @@ export async function applyPluginNodeInvokePolicy(params: {
         }
         return (
           isPluginCurrent() &&
+          params.privateTransport?.isCurrent() !== false &&
           (params.nodeInvokeStream?.isRuntimeCurrent() ?? true) &&
-          (!callerIdentity ||
-            params.context.validateAgentRuntimeApprovalAuthority?.(callerIdentity) === true) &&
+          isCallerRuntimeAuthorityActive() &&
           params.isApprovalAuthorityActive?.() !== false &&
           resolveCommandAuthorization().ok
         );
       },
-      onDispatchReady: (invokeId) => {
+      onDispatchReady: (invokeId: string) => {
         // Only the registry knows that the transport send succeeded. Preserve
         // pre-send failures as retry-safe while making later failures ambiguous.
         nodeCommandDispatched = true;
         params.onNodeCommandDispatched?.();
         params.nodeInvokeStream?.onDispatchReady(invokeId);
       },
-    });
+    };
+    const res = params.privateTransport
+      ? await params.privateTransport.invoke(request)
+      : await invokeNodeWithReadinessRetry(params.context.nodeRegistry, request);
     if (!res.ok) {
       if (nodeCommandDispatched) {
         recordNodeDecision({
@@ -662,8 +691,14 @@ export async function applyPluginNodeInvokePolicy(params: {
       approvals: createApprovalRuntime({
         context: params.context,
         client: params.client,
+        callerIdentity,
         pluginId: entry.pluginId,
         turnSource: trustedTurnSource,
+        isCurrent: () =>
+          isPluginCurrent() &&
+          isCallerRuntimeAuthorityActive() &&
+          params.privateTransport?.isCurrent() !== false &&
+          params.isApprovalAuthorityActive?.() !== false,
       }),
       invokeNode,
       ...(ownedInvocation

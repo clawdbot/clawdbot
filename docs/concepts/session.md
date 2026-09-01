@@ -28,6 +28,11 @@ DM channels, with group activity and background work flowing into it — see
 | Cron jobs       | Fresh session per run         |
 | Webhooks        | Isolated per hook             |
 
+With `session.scope: "global"`, the selected agent still owns its session.
+The shared key `global` does not merge different agents' conversations:
+commands, skills, replies, and background task notifications retain the
+agent selected by the route or explicit request.
+
 ## DM isolation
 
 By default, all DMs share one session for continuity, which is fine for
@@ -61,13 +66,6 @@ If the same person contacts you from multiple channels, use
 `session.identityLinks` to map their identities to one canonical peer id so
 they share a session.
 </Tip>
-
-### Dock linked channels
-
-Dock commands move the current direct-chat session's reply route to another
-linked channel without starting a new session. See
-[Channel docking](/concepts/channel-docking) for examples, config, and
-troubleshooting.
 
 Verify your setup with `openclaw security audit`.
 

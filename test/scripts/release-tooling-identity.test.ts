@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  validateNpmPreflightProducer,
+  verifyReleasePreflightToolingIdentity,
+} from "../../scripts/npm-preflight-tooling-identity.mjs";
+import {
   resolveReleaseToolingIdentity,
   validateReleasePublishParentRun,
   validateReleaseToolingIdentity,
@@ -402,5 +406,122 @@ describe("release tooling identity", () => {
         },
       }),
     ).toThrow();
+  });
+});
+
+describe("historical npm preflight tooling", () => {
+  const producer = {
+    repository: "openclaw/openclaw",
+    workflowRef: `openclaw/openclaw/.github/workflows/openclaw-npm-release.yml@${FULL_REF}`,
+    workflowSha: SHA,
+    runId: RUN_ID,
+    runAttempt: "1",
+  };
+  const expectedProducer = {
+    repository: producer.repository,
+    workflowFullRef: FULL_REF,
+    workflowSha: SHA,
+    runId: RUN_ID,
+    runAttempt: "1",
+  };
+
+  it("distinguishes immutable original ref evidence from legacy unknown provenance", () => {
+    expect(
+      validateNpmPreflightProducer({ ...expectedProducer, manifest: { version: 2, producer } }),
+    ).toEqual({ originalWorkflowRef: producer.workflowRef, provenance: "immutable-manifest" });
+    expect(validateNpmPreflightProducer({ ...expectedProducer, manifest: { version: 1 } })).toEqual(
+      { originalWorkflowRef: null, provenance: "legacy-unrecorded" },
+    );
+  });
+
+  it.each([
+    { version: 2 },
+    { version: 1, producer },
+    { version: "2", producer },
+    {
+      version: 2,
+      producer: {
+        ...producer,
+        workflowRef: producer.workflowRef.replace("refs/tags/", "refs/heads/"),
+      },
+    },
+    { version: 2, producer: { ...producer, workflowSha: OTHER_SHA } },
+    { version: 2, producer: { ...producer, runId: PARENT_RUN_ID } },
+    { version: 2, producer: { ...producer, runAttempt: "2" } },
+    { version: 2, producer: { ...producer, repository: "other/repo" } },
+    { version: 2, producer: { ...producer, extra: true } },
+  ])("rejects incomplete or mismatched immutable producer evidence %j", (manifest) => {
+    expect(() => validateNpmPreflightProducer({ ...expectedProducer, manifest })).toThrow();
+  });
+
+  function proof(overrides: Record<string, unknown> = {}) {
+    const responses: Record<string, unknown> = {
+      [`git/ref/tags/${REF}`]: { ref: FULL_REF, object: { sha: SHA, type: "commit" } },
+      [`git/matching-refs/heads/${REF}`]: [],
+      [`compare/${SHA}...main`]: { status: "ahead" },
+      [`compare/${SHA}...${OTHER_SHA}`]: { status: "ahead" },
+      ...overrides,
+    };
+    const runGh = vi.fn((args: string[]) => {
+      const route = args[1]?.replace("repos/openclaw/openclaw/", "");
+      if (!route || !(route in responses)) throw new Error("unavailable provenance");
+      return JSON.stringify(responses[route]);
+    });
+    return { ...protectedIdentity(), publisherSha: OTHER_SHA, runGh };
+  }
+
+  it("accepts an unchanged historical producer under a distinct descendant publisher", () => {
+    const options = proof();
+    expect(verifyReleasePreflightToolingIdentity(options)).toMatchObject({
+      ref: REF,
+      sha: SHA,
+      route: "protected-tag",
+    });
+    expect(options.runGh.mock.calls.map(([args]) => args[1])).toEqual([
+      `repos/openclaw/openclaw/git/ref/tags/${REF}`,
+      `repos/openclaw/openclaw/git/matching-refs/heads/${REF}`,
+      `repos/openclaw/openclaw/compare/${SHA}...main`,
+      `repos/openclaw/openclaw/compare/${SHA}...${OTHER_SHA}`,
+    ]);
+  });
+
+  it.each([
+    ["missing tag", `git/ref/tags/${REF}`, null],
+    [
+      "moved tag",
+      `git/ref/tags/${REF}`,
+      { ref: FULL_REF, object: { sha: OTHER_SHA, type: "commit" } },
+    ],
+    ["annotated tag", `git/ref/tags/${REF}`, { ref: FULL_REF, object: { sha: SHA, type: "tag" } }],
+    ["ambiguous branch", `git/matching-refs/heads/${REF}`, [{ ref: `refs/heads/${REF}` }]],
+    ["malformed branches", `git/matching-refs/heads/${REF}`, {}],
+    ["malformed branch entry", `git/matching-refs/heads/${REF}`, [{}]],
+    ["producer outside main", `compare/${SHA}...main`, { status: "diverged" }],
+    ["producer newer than publisher", `compare/${SHA}...${OTHER_SHA}`, { status: "behind" }],
+    ["unrelated publisher", `compare/${SHA}...${OTHER_SHA}`, { status: "diverged" }],
+    ["missing ancestry", `compare/${SHA}...${OTHER_SHA}`, {}],
+  ])("rejects %s", (_name, route, response) => {
+    expect(() =>
+      verifyReleasePreflightToolingIdentity(proof({ [String(route)]: response })),
+    ).toThrow();
+  });
+
+  it("fails closed when provenance cannot be read", () => {
+    expect(() =>
+      verifyReleasePreflightToolingIdentity({
+        ...proof(),
+        runGh: () => {
+          throw new Error("HTTP 503");
+        },
+      }),
+    ).toThrow("HTTP 503");
+  });
+
+  it.each([
+    { publisherSha: "invalid" },
+    { workflowFullRef: `refs/heads/${REF}` },
+    { workflowSha: OTHER_SHA },
+  ])("rejects invalid producer or publisher identity %j", (override) => {
+    expect(() => verifyReleasePreflightToolingIdentity({ ...proof(), ...override })).toThrow();
   });
 });

@@ -337,13 +337,19 @@ class ChatControllerCommandControlsTest {
           scope = this,
           json = json,
           requestGateway = { method, _ ->
+            check(method != "sessions.patch") { "archive must use its captured request lease" }
             if (method == "sessions.list") """{"sessions":[]}""" else "{}"
           },
-          requestGatewayWithTimeout = { method, paramsJson, timeoutMs ->
-            assertEquals("sessions.patch", method)
-            archiveParams = paramsJson
-            archiveTimeoutMs = timeoutMs
-            "{}"
+          cacheScope = { ChatCacheScope("gateway-a", 1) },
+          captureRequestLease = { capturedScope ->
+            assertEquals(ChatCacheScope("gateway-a", 1), capturedScope)
+            GatewaySession.RequestLease(endpointStableId = "gateway-a") { method, paramsJson, timeoutMs, withEnqueue ->
+              withEnqueue {}
+              assertEquals("sessions.patch", method)
+              archiveParams = paramsJson
+              archiveTimeoutMs = timeoutMs
+              "{}"
+            }
           },
         )
 
@@ -603,6 +609,7 @@ class ChatControllerCommandControlsTest {
     runTest {
       val (controller, requests) =
         chatControllerTestSetup {
+          respond("chat.history", """{"sessionId":"session-side","messages":[]}""")
           respond("sessions.list", """{"sessions":[{"key":"agent:main:side","sessionId":"session-side"}]}""")
           respond("sessions.delete", """{"deleted":true}""")
         }

@@ -173,6 +173,7 @@ describe("restart health", () => {
       close: null,
       connectLatencyMs: 12,
       error: "missing scope: operator.read",
+      gatewayReached: true,
       auth: { capability: "connected_no_operator_scope" },
       server: { version: "2026.4.24", connId: "new" },
     });

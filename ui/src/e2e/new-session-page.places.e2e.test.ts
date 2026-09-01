@@ -1,3 +1,4 @@
+import path from "node:path";
 import { expect, it } from "vitest";
 import {
   PICKED,
@@ -9,18 +10,13 @@ import {
   createNewSessionPageE2eSuite,
   createdSessionListResult,
   installMockGateway,
-  newSessionComposerProofArtifactDir,
   pollLocatorText,
-  prepareNewSessionComposerUiProof,
-  prepareProjectUiProof,
-  projectProofArtifactDir,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
   it("keeps the pre-submit draft on the composer and creates exactly one session", async () => {
-    await prepareNewSessionComposerUiProof();
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -28,7 +24,7 @@ suite.define(() => {
       ...(captureUiProofEnabled
         ? {
             recordVideo: {
-              dir: newSessionComposerProofArtifactDir,
+              dir: path.join(suite.artifactDir, "new-session-slash-menu"),
               size: { height: 900, width: 1280 },
             },
           }
@@ -65,7 +61,7 @@ suite.define(() => {
       const slashMenu = page.locator("#chat-new-session-slash-menu-listbox");
       await pollLocatorText(slashMenu).toContain("/status");
       expect(await slashMenu.textContent()).not.toContain("/clear");
-      await captureNewSessionComposerUiProof(page, "slash-menu-open.png");
+      await captureNewSessionComposerUiProof(suite, page, "slash-menu-open.png");
       if (captureUiProofEnabled) {
         await page.waitForTimeout(750);
       }
@@ -110,7 +106,6 @@ suite.define(() => {
   });
 
   it("drafts a session with a browsed folder and creates it on first message", async () => {
-    await prepareProjectUiProof();
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -118,7 +113,7 @@ suite.define(() => {
       ...(captureUiProofEnabled
         ? {
             recordVideo: {
-              dir: projectProofArtifactDir,
+              dir: path.join(suite.artifactDir, "project-registry"),
               size: { height: 900, width: 1280 },
             },
           }
@@ -289,7 +284,7 @@ suite.define(() => {
       expect(triggersBox?.width).toBeCloseTo(composerBox?.width ?? 0, 0);
       expect(composerBox?.width).toBeCloseTo(48 * 16, 0);
       expect(await page.locator(".new-session-page__message").getAttribute("rows")).toBe("1");
-      await captureProjectUiProof(page, "new-session-control-layout.png");
+      await captureProjectUiProof(suite, page, "new-session-control-layout.png");
 
       await page.setViewportSize({ width: 393, height: 852 });
       const mobileModelSettings = page.locator(
@@ -328,7 +323,7 @@ suite.define(() => {
       expect(mobileModelSettingsBox.x + mobileModelSettingsBox.width).toBeLessThanOrEqual(
         mobileFooterBox.x + mobileFooterBox.width,
       );
-      await captureProjectUiProof(page, "mobile-new-session-idle.png");
+      await captureProjectUiProof(suite, page, "mobile-new-session-idle.png");
       await mobilePermission.click();
       await page.locator('[data-chat-permission-option="workspace"]').click();
       await expect
@@ -338,11 +333,11 @@ suite.define(() => {
       await expect
         .poll(() => page.locator(".chat-controls__permission-option").first().isVisible())
         .toBe(true);
-      await captureProjectUiProof(page, "mobile-new-session-permissions-open.png");
+      await captureProjectUiProof(suite, page, "mobile-new-session-permissions-open.png");
       await page.keyboard.press("Escape");
       await mobileModelSettings.click();
       await expect.poll(() => page.locator(".chat-controls__model-menu").isVisible()).toBe(true);
-      await captureProjectUiProof(page, "mobile-new-session-model-open.png");
+      await captureProjectUiProof(suite, page, "mobile-new-session-model-open.png");
       expect(
         await page
           .locator(".chat-controls__model-menu")
@@ -352,14 +347,14 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       await page.locator('[data-chat-thinking-select="true"]').click();
       await expect.poll(() => page.locator(".chat-controls__effort-menu").isVisible()).toBe(true);
-      await captureProjectUiProof(page, "mobile-new-session-effort-open.png");
+      await captureProjectUiProof(suite, page, "mobile-new-session-effort-open.png");
       await page.keyboard.press("Escape");
       await page.setViewportSize({ width: 1280, height: 900 });
 
       const agentPicker = page.locator(".new-session-page__select--agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
       await pollLocatorText(agentPicker.locator(".agent-select__menu-title")).toBe("Agents");
-      await captureProjectUiProof(page, "new-session-agent-menu-label.png");
+      await captureProjectUiProof(suite, page, "new-session-agent-menu-label.png");
       await page.keyboard.press("Escape");
 
       const whereSelect = page.locator("wa-popover.new-session-page__where-popover");
@@ -368,7 +363,7 @@ suite.define(() => {
       await pollLocatorText(whereSelect.locator(".new-session-page__menu-title").first()).toBe(
         "Environments",
       );
-      await captureProjectUiProof(page, "new-session-environment-menu-label.png");
+      await captureProjectUiProof(suite, page, "new-session-environment-menu-label.png");
       await page.keyboard.press("Escape");
 
       const projectSelect = page.locator("wa-popover.new-session-page__project-popover");
@@ -384,7 +379,7 @@ suite.define(() => {
       await pollLocatorText(projectSelect.locator(".new-session-page__menu-title").first()).toBe(
         "Projects",
       );
-      await captureProjectUiProof(page, "new-session-project-menu-label.png");
+      await captureProjectUiProof(suite, page, "new-session-project-menu-label.png");
       await projectSelect.getByRole("button", { name: "Browse folders" }).click();
       await page.locator(".new-session-page__browser-entry", { hasText: "packages" }).click();
       await expect
@@ -408,7 +403,7 @@ suite.define(() => {
       await pollLocatorText(detailSelect.locator(".new-session-page__menu-title").first()).toBe(
         "Branches",
       );
-      await captureProjectUiProof(page, "new-session-branch-menu-label.png");
+      await captureProjectUiProof(suite, page, "new-session-branch-menu-label.png");
       const worktreeItem = detailSelect.getByRole("button", { name: "Worktree" });
       await expect.poll(() => worktreeItem.getAttribute("aria-pressed")).toBe("false");
       expect(await worktreeItem.isEnabled()).toBe(true);
@@ -455,14 +450,13 @@ suite.define(() => {
   });
 
   it("selects a registered project and submits its id at write scope", async () => {
-    await prepareProjectUiProof();
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       ...(captureUiProofEnabled
         ? {
             recordVideo: {
-              dir: projectProofArtifactDir,
+              dir: path.join(suite.artifactDir, "project-registry"),
               size: { height: 900, width: 1280 },
             },
             viewport: { height: 900, width: 1280 },
@@ -533,7 +527,7 @@ suite.define(() => {
         .locator("wa-popover.new-session-page__detail-popover")
         .getByRole("button", { name: "Worktree" })
         .click();
-      await captureProjectUiProof(page, "project-selected.png");
+      await captureProjectUiProof(suite, page, "project-selected.png");
       await page.keyboard.press("Escape");
       await page.locator(".new-session-page__message").fill("inspect the project");
       await page.getByRole("button", { name: "Start session" }).click();

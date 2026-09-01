@@ -1,5 +1,6 @@
 // Reconcile invocation projections before grouping so summaries and expanded
 // cards consume the same calls, regardless of history/live delivery order.
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -68,7 +69,7 @@ function readProjections(item: MessageItem, index: number): Projection[] {
   // Resolve no-id fallback once through the card owner. Keep anonymous pairs
   // in the source while identified siblings still join the invocation registry.
   if (blocks.some((block) => !resolveToolBlockId(asRecord(block)!, message!))) {
-    const pending = [...extractToolCardsCached(message, item.key)];
+    const pending = [...extractToolCardsCached(message)];
     content = content.flatMap((block) => {
       if (!isToolBlock(block)) {
         return [block];
@@ -99,7 +100,7 @@ function readProjections(item: MessageItem, index: number): Projection[] {
   }
   const standalone = blocks.length === 0;
   if (standalone) {
-    const [card] = extractToolCardsCached(message, item.key);
+    const [card] = extractToolCardsCached(message);
     if (!card?.callId) {
       return [];
     }
@@ -124,7 +125,10 @@ function readProjections(item: MessageItem, index: number): Projection[] {
       source,
       id,
       call,
-      runId: normalizeOptionalString(raw.runId) ?? normalizeOptionalString(message.runId),
+      runId:
+        normalizeOptionalString(raw.runId) ??
+        readSessionMessageIdentity(message)?.runId ??
+        normalizeOptionalString(message.runId),
       name:
         normalizeOptionalString(raw.name) ??
         normalizeOptionalString(message.toolName) ??

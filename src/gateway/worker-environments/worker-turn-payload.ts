@@ -32,6 +32,7 @@ import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/di
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import {
   windowWorkerReplayMessages,
+  fitWorkerReplayImages,
   type WorkerReplayMessageWindowUnavailable,
 } from "../../worker/replay-message-window.js";
 import {
@@ -47,10 +48,7 @@ import {
 } from "../agent-runtime-identity-token.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
-import {
-  bindWorkerTurnAdmissionContinuation,
-  bindWorkerTurnExecutionIdentity,
-} from "./placement-turn-claim-events.js";
+import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
 
 type WorkerInitialMessagePlan =
   | { kind: "complete"; messages: WorkerTranscriptMessage[] }
@@ -118,21 +116,15 @@ export async function prepareWorkerAgentRuntimeIdentity(
   }
   assertActive();
   const runtimeIdentity = buildWorkerAgentRuntimeIdentity({ ...params, admittedRunContext });
-  // Worker session RPC carries no raw identity token. Bind provenance to the exact
-  // host claim before launch so child lineage cannot become bearer authority.
-  if (runtimeIdentity.executionIdentityToken) {
-    bindWorkerTurnExecutionIdentity(
-      params.placements,
-      params.turnClaim,
-      runtimeIdentity.executionIdentityToken,
-      admittedRunContext.operationalRunInstance,
-      { agentId: params.agentId, sessionKey: params.sessionKey },
-    );
-  }
-  bindWorkerTurnAdmissionContinuation(
+  // Stop closes the operational run before its placement claim finishes draining.
+  // Worker tools must retain both owners even when audit collection is disabled.
+  bindWorkerTurnOwner(
     params.placements,
     params.turnClaim,
+    runtimeIdentity.executionIdentityToken,
     admittedRunContext.operationalRunInstance,
+    { agentId: params.agentId, sessionKey: params.sessionKey },
+    assertActive,
     params.turn.prepareAssistantTranscriptMessage,
   );
   return {
@@ -178,7 +170,7 @@ export function windowInitialMessages(messages: AgentMessage[]): WorkerInitialMe
 type WorkerLaunchFit =
   | { kind: "launch"; plan: WorkerLaunchPlan }
   | {
-      kind: "local-fallback";
+      kind: "provider-replay-unavailable";
       reason: "provider-replay-launch-payload-limit";
       bytes: number;
       limitBytes: number;
@@ -218,7 +210,8 @@ function fitLaunchDescriptor(
   messages: WorkerTranscriptMessage[],
   measure: (plan: WorkerLaunchPlan) => number,
 ): WorkerLaunchFit {
-  let initialMessages = messages;
+  let initialMessages =
+    fitWorkerReplayImages(messages, (candidate) => measure(build(candidate))) ?? messages;
   while (true) {
     const plan = build(initialMessages);
     const bytes = measure(plan);
@@ -230,7 +223,7 @@ function fitLaunchDescriptor(
     );
     if (replayIndex === 0) {
       return {
-        kind: "local-fallback",
+        kind: "provider-replay-unavailable",
         reason: "provider-replay-launch-payload-limit",
         bytes,
         limitBytes: WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
@@ -324,9 +317,7 @@ export function buildWorkerTurnResult(params: {
         sessionFile: params.sessionFile,
         provider: reportedModelRef.provider,
         model: reportedModelRef.model,
-        usage: usageMeta.usage,
-        lastCallUsage: usageMeta.lastCallUsage,
-        promptTokens: usageMeta.promptTokens,
+        ...usageMeta,
       },
       stopReason: params.terminal.stopReason,
       finalAssistantVisibleText: resolveFinalAssistantVisibleText(params.terminal),

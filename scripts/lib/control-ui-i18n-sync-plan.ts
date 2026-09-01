@@ -65,14 +65,6 @@ export function flattenTranslations(
   return out;
 }
 
-export function shouldReuseExistingTranslation(options: {
-  allowTranslate: boolean;
-  force: boolean;
-  isFallback: boolean;
-}): boolean {
-  return !options.isFallback || (!options.allowTranslate && !options.force);
-}
-
 export function resolveLocaleMetaProvenance(options: {
   didTranslate: boolean;
   model: string;
@@ -129,11 +121,7 @@ export function createControlUiLocaleSyncPlan(input: {
     const cachedByText = translationMemoryByTextHash.get(textHash);
     const existing = input.existingFlat.get(key);
     const shouldRefreshFallback = previousFallbackKeys.has(key);
-    const shouldReuse = shouldReuseExistingTranslation({
-      allowTranslate: input.allowTranslate,
-      force: input.force,
-      isFallback: shouldRefreshFallback,
-    });
+    const shouldReuse = !shouldRefreshFallback || (!input.allowTranslate && !input.force);
 
     if (cached && shouldReuse) {
       nextFlat.set(key, cached.translated);

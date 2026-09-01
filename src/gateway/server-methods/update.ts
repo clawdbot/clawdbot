@@ -232,7 +232,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       | { status: "unavailable"; command: string; message: string }
       | null = null;
     let managedHandoffRestart: ReturnType<typeof scheduleGatewaySigusr1Restart> | null = null;
-    let ownsManagedServiceHandoff = true;
+    let ownsUpdateOutcome = false;
     let adoptedCampaignId: string | undefined;
     const sentinelMeta: UpdateRestartSentinelMeta = {
       ...(sessionKey ? { sessionKey } : {}),
@@ -286,6 +286,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       } else if (adoption?.status === "applying") {
         targetFailureReason = "update-campaign-applying";
       }
+      ownsUpdateOutcome = targetFailureReason === undefined;
       const adoptedCampaign = adoption?.status === "adopted" ? adoption : undefined;
       adoptedCampaignId = adoptedCampaign?.campaignId;
       const adoptedDevTarget =
@@ -413,7 +414,7 @@ export const updateHandlers: GatewayRequestHandlers = {
               handoffId,
               supervisor,
             });
-            ownsManagedServiceHandoff = started.status === "started";
+            ownsUpdateOutcome = started.status === "started";
             sentinelMeta.handoffId = started.handoffId ?? handoffId;
             // The owner pairs helper creation with parent exit before any
             // persistence can fail. Joiners leave both to the active owner.
@@ -453,11 +454,11 @@ export const updateHandlers: GatewayRequestHandlers = {
               status: "skipped",
               mode: installSurface.mode,
               root: installRoot,
-              reason: ownsManagedServiceHandoff
+              reason: ownsUpdateOutcome
                 ? CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON
                 : MANAGED_HANDOFF_ALREADY_RUNNING_REASON,
               ...(beforeVersion ? { before: { version: beforeVersion } } : {}),
-              steps: ownsManagedServiceHandoff
+              steps: ownsUpdateOutcome
                 ? [
                     {
                       name: "managed-service update handoff",
@@ -557,9 +558,30 @@ export const updateHandlers: GatewayRequestHandlers = {
 
     result = normalizeControlPlaneUpdateResult(result);
 
-    // A failed RPC owns the adopted campaign until it explicitly releases it;
-    // only a started handoff may leave "applying" for the successor process.
+    const payload: RestartSentinelPayload = buildUpdateRestartSentinelPayload({
+      result,
+      meta: sentinelMeta,
+    });
+
+    // Rejected requests and retired campaigns cannot replace another update's outcome.
+    if (ownsUpdateOutcome && adoptedCampaignId !== undefined) {
+      ownsUpdateOutcome = gatewayUpdateCampaign.getState()?.id === adoptedCampaignId;
+    }
+    let sentinelPersisted = false;
+    if (ownsUpdateOutcome) {
+      try {
+        await writeRestartSentinel(payload);
+        sentinelPersisted = true;
+        recordLatestUpdateRestartSentinel(payload);
+      } catch {
+        // Best effort: the response still reports the update outcome.
+      }
+    }
+
+    // Publish the outcome before the terminal campaign event prompts clients to
+    // read it. Recheck ownership after persistence may have yielded to a replacement.
     if (
+      ownsUpdateOutcome &&
       result.status !== "ok" &&
       handoff?.status !== "started" &&
       adoptedCampaignId !== undefined &&
@@ -569,22 +591,6 @@ export const updateHandlers: GatewayRequestHandlers = {
       context?.logGateway?.info("update.run failed; adopted campaign cleared", {
         campaignId: adoptedCampaignId,
       });
-    }
-
-    const payload: RestartSentinelPayload = buildUpdateRestartSentinelPayload({
-      result,
-      meta: sentinelMeta,
-    });
-
-    let sentinelPersisted = false;
-    if (ownsManagedServiceHandoff) {
-      try {
-        await writeRestartSentinel(payload);
-        sentinelPersisted = true;
-        recordLatestUpdateRestartSentinel(payload);
-      } catch {
-        // Best effort: the response still reports the update outcome.
-      }
     }
 
     // Only restart the gateway when the update actually succeeded.

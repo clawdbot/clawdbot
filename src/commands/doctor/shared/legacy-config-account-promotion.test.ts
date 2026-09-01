@@ -1,13 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { widenOfficialExternalChannelSecretSchema } from "../../../config/official-external-channel-secret-schema.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { clearPluginMetadataLifecycleCaches } from "../../../plugins/plugin-metadata-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "../../../plugins/runtime.js";
+import { validateJsonSchemaValue } from "../../../plugins/schema-validator.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
+import { normalizeCompatibilityConfigValues } from "./legacy-config-core-migrate.js";
 import { seedMissingDefaultAccountsFromSingleAccountBase } from "./legacy-config-core-normalizers.js";
 
 let state: OpenClawTestState | undefined;
@@ -100,3 +103,87 @@ it.each([
     expect(cfg).toEqual(before);
   },
 );
+
+it.each([
+  { state: "installed", enabled: true },
+  { state: "disabled", enabled: false },
+  { state: "cold", enabled: undefined },
+])("preserves the official QQBot root through $state discovery", async ({ enabled }) => {
+  state = await createOpenClawTestState({ label: "doctor-qqbot-promotion", applyEnv: true });
+  const bundledDir = state.path("empty-bundled");
+  await fs.mkdir(bundledDir, { recursive: true });
+  vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledDir);
+  vi.stubEnv("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
+
+  if (enabled !== undefined) {
+    const pluginDir = state.statePath("extensions", "openclaw-qqbot");
+    await fs.mkdir(pluginDir, { recursive: true });
+    await fs.writeFile(
+      path.join(pluginDir, "index.js"),
+      "throw new Error('Doctor must not execute the QQBot plugin runtime');\n",
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@tencent-connect/openclaw-qqbot",
+        version: "2.0.3",
+        type: "module",
+        openclaw: {
+          extensions: ["./index.js"],
+          plugin: { id: "openclaw-qqbot" },
+          channel: { id: "qqbot" },
+        },
+      }),
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "openclaw-qqbot",
+        configSchema: { type: "object" },
+        channels: ["qqbot"],
+        channelConfigs: { qqbot: { schema: { type: "object", additionalProperties: true } } },
+      }),
+    );
+  }
+
+  const cfg: OpenClawConfig = {
+    ...(enabled === undefined
+      ? {}
+      : {
+          plugins: {
+            allow: ["openclaw-qqbot"],
+            entries: { "openclaw-qqbot": { enabled } },
+          },
+        }),
+    channels: {
+      qqbot: {
+        allowFrom: ["ROOT-OWNER"],
+        accounts: {
+          ops: { appId: "ops-app", clientSecret: "ops-secret", allowFrom: ["OPS-OWNER"] },
+          qa: { appId: "qa-app", clientSecret: "qa-secret", allowFrom: ["QA-OWNER"] },
+        },
+      },
+    },
+  };
+  const schema = widenOfficialExternalChannelSecretSchema({
+    channelId: "qqbot",
+    schema: { type: "object", additionalProperties: true },
+  });
+  const before = structuredClone(cfg);
+  const first = normalizeCompatibilityConfigValues(cfg);
+  clearPluginMetadataLifecycleCaches();
+  resetPluginRuntimeStateForTest();
+  const second = normalizeCompatibilityConfigValues(first.config);
+
+  expect(
+    validateJsonSchemaValue({
+      cacheKey: `qqbot-promotion-${String(enabled)}`,
+      schema: schema ?? {},
+      value: cfg.channels?.qqbot,
+    }).ok,
+  ).toBe(true);
+  expect(first.config).toEqual(before);
+  expect(first.changes).toEqual([]);
+  expect(second.config).toEqual(first.config);
+  expect(second.changes).toEqual([]);
+});

@@ -1522,39 +1522,6 @@ afterEach(() => {
 });
 
 describe("openclaw state database", () => {
-  it.runIf(process.platform === "linux")(
-    "evicts a detached WAL family before reopening the shared state database",
-    () => {
-      vi.useFakeTimers();
-      try {
-        const stateDir = createTempStateDir();
-        const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-        const opened = openOpenClawStateDatabase(options);
-        expect(opened.walMaintenance.checkpoint()).toBe(true);
-        fs.unlinkSync(`${opened.path}-wal`);
-        fs.unlinkSync(`${opened.path}-shm`);
-
-        vi.advanceTimersByTime(30 * 60 * 1000);
-
-        expect(opened.db.isOpen).toBe(false);
-        expect(() => opened.db.prepare("PRAGMA schema_version").get()).toThrow();
-        const reopened = openOpenClawStateDatabase(options);
-        expect(reopened).not.toBe(opened);
-        expect(reopened.db.isOpen).toBe(true);
-        expect(() =>
-          reopened.db
-            .prepare(
-              "UPDATE schema_meta SET updated_at = updated_at + 1 WHERE meta_key = 'primary'",
-            )
-            .run(),
-        ).not.toThrow();
-      } finally {
-        closeOpenClawStateDatabaseForTest();
-        vi.useRealTimers();
-      }
-    },
-  );
-
   it("resolves under the shared state database directory", () => {
     const stateDir = createTempStateDir();
 

@@ -1434,6 +1434,8 @@ class NodeRuntime private constructor(
           operatorConnected = true
           operatorStatusText = "Connected"
         }
+        // Bootstrap can connect the node before operator access is ready.
+        refreshNodesDevices()
         // Method and scope snapshots are synchronous above; refresh only after both so
         // this route cannot inherit readiness from the connection it replaced.
         systemAgentChatController.refresh(startIfNeeded = false)
@@ -1810,11 +1812,10 @@ class NodeRuntime private constructor(
         }
         notificationOutbox.onConnected()
         publishNodePresenceAliveBeacon(NodePresenceAliveBeacon.Trigger.Connect)
+        refreshNodesDevices()
         val endpoint = connectedEndpoint
         val auth = activeGatewayAuth
-        if (operatorConnected) {
-          scope.launch { refreshNodesDevicesFromGateway() }
-        } else if (endpoint != null && auth != null) {
+        if (!operatorConnected && endpoint != null && auth != null) {
           maybeStartOperatorSessionAfterNodeConnect(endpoint, auth)
         }
       },
@@ -1830,9 +1831,7 @@ class NodeRuntime private constructor(
         updateStatus {
           nodeConnectionProblem = gatewayConnectionProblem(error, pauseReconnect)
         }
-        if (operatorConnected && nodeConnectFailureNeedsApprovalRefresh(error)) {
-          scope.launch { refreshNodesDevicesFromGateway() }
-        }
+        if (nodeConnectFailureNeedsApprovalRefresh(error)) refreshNodesDevices()
       },
       onEvent = ::handleNodeGatewayEvent,
       onInvoke = { req ->
@@ -4272,7 +4271,7 @@ class NodeRuntime private constructor(
         operatorStatusText = "Connecting…"
         operatorConnectionProblem = null
       }
-      connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint), reconnect = true)
+      connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint))
     }
   }
 
@@ -4280,7 +4279,7 @@ class NodeRuntime private constructor(
     launchGatewayLifecycle {
       if (preferredGatewayReconnectSuppressed) return@launchGatewayLifecycle
       val endpoint = connectedEndpoint ?: return@launchGatewayLifecycle
-      connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint), reconnect = true)
+      connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint))
     }
   }
 
@@ -4302,10 +4301,11 @@ class NodeRuntime private constructor(
     }
   }
 
+  // connect() already replaces each role's socket. A later reconnect() can
+  // retire a replacement that published hello while the other role was starting.
   private fun connectWithAuth(
     endpoint: GatewayEndpoint,
     auth: GatewayConnectAuth,
-    reconnect: Boolean = false,
     beforeConnect: () -> Unit = {},
   ): Boolean =
     runGatewayConnectOperation {
@@ -4354,12 +4354,6 @@ class NodeRuntime private constructor(
         nodeConnectOptions,
         tls,
       )
-      if (reconnect && operatorAuth != null) {
-        operatorSession.reconnect()
-      }
-      if (reconnect) {
-        nodeSession.reconnect()
-      }
     }
 
   // Auth reset waits for claimed connection starts before disconnecting. Session calls stay outside

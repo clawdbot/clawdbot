@@ -5,6 +5,8 @@ import { normalizeAgentRunTerminalDeliverySnapshot } from "../agent-run-terminal
 import type { AgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
 import { normalizeAgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
 import type { EmbeddedAgentRunEntryTerminal } from "../embedded-agent-runner/run-entry.js";
+import { getFailoverErrorCode } from "../failover/error.js";
+import { renderFailoverCodeUserCopy } from "../failover/user-copy.js";
 import {
   AGENT_RUN_SUPERSEDED_STOP_REASON,
   resolveAgentRunAbortLifecycleFields,
@@ -14,6 +16,9 @@ import type { AgentAttemptLifecycleState } from "./attempt-callbacks.js";
 import type { AgentAttemptResult } from "./runtime-loaders.js";
 
 const log = createSubsystemLogger("agents/agent-command");
+
+const formatLifecycleError = (error: unknown): string =>
+  renderFailoverCodeUserCopy(getFailoverErrorCode(error)) ?? formatErrorMessage(error);
 
 function resolveTerminalLogLevel(
   outcome: AgentRunTerminalOutcome,
@@ -101,7 +106,7 @@ export function createAgentCommandLifecycle(params: {
   };
 
   return {
-    emitBasicError(error: string, extraData?: Record<string, unknown>) {
+    emitBasicError(error: unknown, extraData?: Record<string, unknown>) {
       if (params.state.lifecycleEnded) {
         return;
       }
@@ -114,7 +119,7 @@ export function createAgentCommandLifecycle(params: {
           phase: "error",
           startedAt: params.startedAt,
           endedAt: Date.now(),
-          error: formatErrorMessage(error),
+          error: formatLifecycleError(error),
           ...extraData,
         },
       });
@@ -174,7 +179,7 @@ export function createAgentCommandLifecycle(params: {
           phase: "error",
           startedAt: params.startedAt,
           endedAt: Date.now(),
-          error: formatErrorMessage(error),
+          error: formatLifecycleError(error),
           ...(terminalDelivery ? { terminalDelivery } : {}),
           ...resolveAgentRunErrorLifecycleFields(error, params.abortSignal),
         },

@@ -602,6 +602,7 @@ export function runAgentAttempt(params: {
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
   onContextEngineTurnCandidate?: (facts: ContextEngineTurnAttemptFacts) => void;
   onLifecycleGenerationChanged?: (lifecycleGeneration: string) => void;
+  onCompactionAccounting?: RunEmbeddedAgentInternalParams["onCompactionAccounting"];
   onSuccessfulAuthProfile?: (selection: {
     authProfileId?: string;
     authProfileIdSource?: "auto" | "user";
@@ -1332,6 +1333,7 @@ export function runAgentAttempt(params: {
     contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
     onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
     onUserMessagePersisted: params.onUserMessagePersisted,
+    onCompactionAccounting: params.onCompactionAccounting,
     onSuccessfulAuthProfile: params.onSuccessfulAuthProfile
       ? (successfulProfileId) =>
           params.onSuccessfulAuthProfile?.({

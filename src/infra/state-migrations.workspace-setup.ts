@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { TextDecoder } from "node:util";
 import { root, type Root } from "@openclaw/fs-safe";
-import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
 import {
   LEGACY_WORKSPACE_ATTESTATION_DIRNAME,
   LEGACY_WORKSPACE_ATTESTATION_HEADER,
@@ -14,14 +13,15 @@ import {
   WORKSPACE_DOCTOR_CLAIM_SUFFIX,
   resolveLegacyWorkspaceSourcePaths,
 } from "../agents/workspace-legacy-state.js";
+import { listWorkspaceStateDirs } from "../agents/workspace-state-dirs.js";
 import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import { resolveLegacyStateDirs } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "./errors.js";
+import { pathMayExistSync } from "./path-existence.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {
   LegacyMigrationSourceClaim,
-  legacyMigrationPathMayExist as pathMayExist,
   legacyMigrationSourceOrClaimMayExist as sourceOrClaimMayExist,
   legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
 } from "./state-migrations.source-snapshot.js";
@@ -31,7 +31,6 @@ import {
   readReceipt,
   type MigrationReceipt,
 } from "./state-migrations.workspace-setup-receipts.js";
-import { listSandboxWorkspaceDirs } from "./state-migrations.workspace-setup-sandbox.js";
 import {
   canonicalCoversParsedSource,
   importAndRecordReceipt,
@@ -285,7 +284,7 @@ function addLegacyWorkspaceSources(params: {
   }
   for (const [index, sourcePath] of paths.siblingAttestationPaths.entries()) {
     if (
-      !pathMayExist(`${sourcePath}${CLAIM_SUFFIX}`) &&
+      !pathMayExistSync(`${sourcePath}${CLAIM_SUFFIX}`) &&
       !siblingAttestationNeedsDoctor(sourcePath)
     ) {
       continue;
@@ -332,11 +331,7 @@ export function detectLegacyWorkspaceState(params: {
     }
   };
 
-  for (const workspaceDir of listAgentWorkspaceDirs(params.cfg)) {
-    addLegacyWorkspaceSources({ workspaceDir, env, homedir, add });
-  }
-
-  for (const workspaceDir of listSandboxWorkspaceDirs({
+  for (const workspaceDir of listWorkspaceStateDirs({
     cfg: params.cfg,
     env,
     homedir,
@@ -355,6 +350,13 @@ export function detectLegacyWorkspaceState(params: {
       left.sourcePath.localeCompare(right.sourcePath),
   );
   return { sources, hasLegacy: sources.length > 0 };
+}
+
+function formatLegacyWorkspaceReadWarning(
+  source: LegacyWorkspaceStateSource,
+  error: unknown,
+): string {
+  return `Failed reading legacy workspace state at ${source.sourcePath}: ${formatErrorMessage(error)}`;
 }
 
 function assertConfiguredWorkspaceIdentity(source: LegacyWorkspaceStateSource): void {
@@ -467,7 +469,7 @@ async function migrateOneSource(params: {
   } catch (error) {
     return {
       changes: [],
-      warnings: [`Failed reading legacy workspace state: ${formatErrorMessage(error)}`],
+      warnings: [formatLegacyWorkspaceReadWarning(params.source, error)],
     };
   }
   const receipt = readReceipt(params.source, params.env);
@@ -479,7 +481,7 @@ async function migrateOneSource(params: {
   } catch (error) {
     return {
       changes: [],
-      warnings: [`Failed reading legacy workspace state: ${formatErrorMessage(error)}`],
+      warnings: [formatLegacyWorkspaceReadWarning(params.source, error)],
     };
   }
   // One artifact after verified removal is a new generation, including a source
@@ -507,15 +509,26 @@ async function migrateOneSource(params: {
   }
 
   let snapshot: SourceSnapshot;
-  let parsed: ParsedSource;
+  let parsed: ParsedSource | undefined;
+  let discardEmptyAttestation: boolean;
   let claimedByThisRun = false;
   try {
     snapshot = await sourceClaim.read(!hasSource);
-    parsed = parseSource(params.source, snapshot);
+    // Empty reserved hashed markers have no importable state. The runtime gate is
+    // presence-only, so leaving them in place blocks agent turns forever.
+    // Nonempty, linked, sibling, and unreadable sources stay fail-closed.
+    discardEmptyAttestation =
+      params.source.kind === "attestation" &&
+      path.basename(path.dirname(params.source.sourcePath)) ===
+        LEGACY_WORKSPACE_ATTESTATION_DIRNAME &&
+      snapshot.size === 0;
+    if (!discardEmptyAttestation) {
+      parsed = parseSource(params.source, snapshot);
+    }
   } catch (error) {
     return {
       changes: [],
-      warnings: [`Failed reading legacy workspace state: ${formatErrorMessage(error)}`],
+      warnings: [formatLegacyWorkspaceReadWarning(params.source, error)],
     };
   }
 
@@ -535,30 +548,37 @@ async function migrateOneSource(params: {
       return {
         changes: [],
         warnings: [
-          `Failed migrating legacy workspace state: ${formatErrorMessage(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
+          `Failed ${discardEmptyAttestation ? `discarding empty reserved workspace attestation at ${params.source.sourcePath}` : "migrating legacy workspace state"}: ${formatErrorMessage(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
         ],
       };
     }
   }
 
-  let result: ReturnType<typeof importAndRecordReceipt>;
-  try {
-    assertConfiguredWorkspaceIdentity(params.source);
-    result = importAndRecordReceipt({
-      source: params.source,
-      snapshot,
-      parsed,
-      env: params.env,
-      replaceRemovedReceipt: receipt?.removedSource === true,
-    });
-  } catch (error) {
-    const restoreError = claimedByThisRun ? await sourceClaim.restore() : null;
-    return {
-      changes: [],
-      warnings: [
-        `Failed migrating legacy workspace state: ${formatErrorMessage(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
-      ],
-    };
+  let imported:
+    | { parsed: ParsedSource; receipt: ReturnType<typeof importAndRecordReceipt> }
+    | undefined;
+  if (parsed) {
+    try {
+      assertConfiguredWorkspaceIdentity(params.source);
+      imported = {
+        parsed,
+        receipt: importAndRecordReceipt({
+          source: params.source,
+          snapshot,
+          parsed,
+          env: params.env,
+          replaceRemovedReceipt: receipt?.removedSource === true,
+        }),
+      };
+    } catch (error) {
+      const restoreError = claimedByThisRun ? await sourceClaim.restore() : null;
+      return {
+        changes: [],
+        warnings: [
+          `Failed migrating legacy workspace state: ${formatErrorMessage(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
+        ],
+      };
+    }
   }
 
   try {
@@ -569,9 +589,21 @@ async function migrateOneSource(params: {
     if (!snapshotsMatch(snapshot, unchanged)) {
       throw new Error("legacy workspace claim changed after import");
     }
+    assertConfiguredWorkspaceIdentity(params.source);
     await sourceClaim.remove({ removeSource: params.removeSource, skipSourceCheck: true });
-    markLegacyMigrationSourceRemoved(result.sourceKey, params.env);
+    if (imported) {
+      markLegacyMigrationSourceRemoved(imported.receipt.sourceKey, params.env);
+    }
   } catch (error) {
+    if (discardEmptyAttestation) {
+      const restoreError = claimedByThisRun ? await sourceClaim.restore() : null;
+      return {
+        changes: [],
+        warnings: [
+          `Failed discarding empty reserved workspace attestation at ${params.source.sourcePath}: ${formatErrorMessage(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
+        ],
+      };
+    }
     return {
       changes: [],
       warnings: [
@@ -580,10 +612,19 @@ async function migrateOneSource(params: {
     };
   }
 
-  const label = parsed.kind === "setup" ? "workspace setup state" : "workspace attestation";
+  if (!imported) {
+    return {
+      changes: [`Discarded empty reserved workspace attestation at ${params.source.sourcePath}.`],
+      warnings: [],
+    };
+  }
+  const label =
+    imported.parsed.kind === "setup" ? "workspace setup state" : "workspace attestation";
   return {
     changes: [
-      result.imported ? `Migrated ${label} to SQLite.` : `Verified canonical SQLite ${label}.`,
+      imported.receipt.imported
+        ? `Migrated ${label} to SQLite.`
+        : `Verified canonical SQLite ${label}.`,
     ],
     warnings: [],
     notices: ["Removed retired workspace state after verified SQLite import."],

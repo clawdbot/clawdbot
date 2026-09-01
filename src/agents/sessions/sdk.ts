@@ -43,13 +43,7 @@ import { DefaultResourceLoader, type ResourceLoader } from "./resource-loader.js
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 import { isInstallTelemetryEnabled } from "./telemetry.js";
-import {
-  createCodingTools,
-  createEditTool,
-  createReadTool,
-  createWriteTool,
-  type ToolName,
-} from "./tools/index.js";
+import type { ToolName } from "./tools/index.js";
 
 export interface CreateAgentSessionOptions {
   /** Working directory for project-local discovery. Default: process.cwd() */
@@ -127,8 +121,6 @@ export type {
   ExtensionFactory,
   ToolDefinition,
 } from "./extensions/index.js";
-
-export { createCodingTools, createReadTool, createEditTool, createWriteTool };
 
 // Helper Functions
 

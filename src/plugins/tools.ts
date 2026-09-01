@@ -5,14 +5,12 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../agents/glob-pattern.js";
-import type { McpCodexToolAnnotations } from "../agents/mcp-codex-tool-approval.js";
 import {
   DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
   normalizeToolPolicyName,
 } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { normalizeConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
-import type { McpCodexToolApprovalMode } from "../config/types.mcp.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   getLoadedRuntimePluginRegistry,
@@ -52,35 +50,8 @@ import {
   writeCachedPluginToolDescriptors,
 } from "./tool-descriptor-cache.js";
 import { isPluginToolAllowed } from "./tool-grant-allowlist.js";
+import { copyPluginToolMeta, setPluginToolMeta } from "./tool-metadata.js";
 import type { OpenClawPluginToolContext } from "./types.js";
-
-/** MCP bridge metadata attached to plugin tools surfaced through agent tool lists. */
-export type PluginToolMcpMeta = {
-  serverName: string;
-  safeServerName: string;
-  toolName: string;
-  operation: "tool" | "resources_list" | "resources_read" | "prompts_list" | "prompts_get";
-  deniedBySession?: true;
-  codexApproval?: {
-    mode: McpCodexToolApprovalMode;
-    annotations?: McpCodexToolAnnotations;
-  };
-  node?: {
-    id: string;
-    displayName?: string;
-  };
-};
-
-/** Runtime metadata used to trace an agent tool back to its owning plugin registration. */
-type PluginToolMeta = {
-  pluginId: string;
-  kind?: PluginManifestRecord["kind"];
-  optional: boolean;
-  replaySafe?: boolean;
-  sideEffecting?: boolean;
-  trustedLocalMedia?: boolean;
-  mcp?: PluginToolMcpMeta;
-};
 
 type PluginToolFactoryTimingResult = "array" | "error" | "null" | "single";
 
@@ -101,28 +72,9 @@ const PLUGIN_TOOL_FACTORY_WARN_TOTAL_MS = 5_000;
 const PLUGIN_TOOL_FACTORY_WARN_FACTORY_MS = 1_000;
 const PLUGIN_TOOL_FACTORY_SUMMARY_LIMIT = 20;
 
-const pluginToolMeta = new WeakMap<AnyAgentTool, PluginToolMeta>();
 const scopedPluginTools = new WeakMap<AnyAgentTool, Map<string, AnyAgentTool>>();
 const pluginRegistryScopeIds = new WeakMap<PluginRegistry, number>();
 let nextPluginRegistryScopeId = 1;
-
-/** Attaches plugin ownership metadata to a concrete agent tool instance. */
-export function setPluginToolMeta(tool: AnyAgentTool, meta: PluginToolMeta): void {
-  pluginToolMeta.set(tool, meta);
-}
-
-/** Reads plugin ownership metadata for a concrete agent tool instance. */
-export function getPluginToolMeta(tool: AnyAgentTool): PluginToolMeta | undefined {
-  return pluginToolMeta.get(tool);
-}
-
-/** Copies plugin ownership metadata when wrappers replace a tool object. */
-export function copyPluginToolMeta(source: AnyAgentTool, target: AnyAgentTool): void {
-  const meta = pluginToolMeta.get(source);
-  if (meta) {
-    pluginToolMeta.set(target, meta);
-  }
-}
 
 function pluginToolScopeKey(
   entry: PluginToolRegistration,
@@ -290,22 +242,6 @@ function blocksHostRestrictedConversationReadRegistration(params: {
       ctx: params.ctx,
     })
   );
-}
-
-/**
- * Builds a collision-proof key for plugin-owned tool metadata lookups.
- */
-export function buildPluginToolMetadataKey(pluginId: string, toolName: string): string {
-  return JSON.stringify([pluginId, toolName]);
-}
-
-/** Binds a side-effect declaration to the concrete plugin tool that owns it. */
-export function getPluginToolSideEffectOwnerKey(tool: AnyAgentTool): string | undefined {
-  const meta = getPluginToolMeta(tool);
-  const toolName = normalizeToolPolicyName(tool.name);
-  return meta?.sideEffecting && toolName
-    ? buildPluginToolMetadataKey(meta.pluginId, toolName)
-    : undefined;
 }
 
 function normalizeAllowlist(list?: string[]) {
@@ -646,15 +582,6 @@ function listManifestToolNamesForAllowlist(params: {
   return uniqueStrings([...defaultToolNames, ...matchedToolNames]);
 }
 
-function listManifestToolNamesForAvailability(params: {
-  plugin: PluginManifestRecord;
-  toolNames: readonly string[];
-  pluginId: string;
-  allowlist: Set<string>;
-}): string[] {
-  return listManifestToolNamesForAllowlist(params);
-}
-
 function isManifestToolNameAvailable(params: {
   plugin: PluginManifestRecord;
   toolName: string;
@@ -716,13 +643,8 @@ function resolvePluginToolRuntimePluginIds(params: {
         snapshot,
         plugin,
         config: params.config,
+        normalizedConfig: normalizedPlugins,
       })
-    ) {
-      continue;
-    }
-    if (
-      normalizedPlugins.entries[plugin.id]?.enabled === false ||
-      normalizedPlugins.deny.includes(plugin.id)
     ) {
       continue;
     }
@@ -730,7 +652,7 @@ function resolvePluginToolRuntimePluginIds(params: {
       continue;
     }
     const toolNames = plugin.contracts?.tools ?? [];
-    const selectedToolNames = listManifestToolNamesForAvailability({
+    const selectedToolNames = listManifestToolNamesForAllowlist({
       toolNames,
       plugin,
       pluginId: plugin.id,
@@ -943,6 +865,7 @@ function resolveCachedPluginTools(params: {
   const tools: AnyAgentTool[] = [];
   const handledPluginIds = new Set<string>();
   const onlyPluginIdSet = new Set(params.onlyPluginIds);
+  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
   for (const plugin of params.snapshot.plugins) {
     if (!onlyPluginIdSet.has(plugin.id)) {
       continue;
@@ -955,12 +878,13 @@ function resolveCachedPluginTools(params: {
         snapshot: params.snapshot,
         plugin,
         config: params.config,
+        normalizedConfig,
       })
     ) {
       continue;
     }
     const contractToolNames = plugin.contracts?.tools ?? [];
-    const allowedToolNames = listManifestToolNamesForAvailability({
+    const allowedToolNames = listManifestToolNamesForAllowlist({
       plugin,
       toolNames: contractToolNames,
       pluginId: plugin.id,
@@ -1168,8 +1092,7 @@ function resolvePluginToolLoadState(params: {
         env,
         workspaceDir: params.context.workspaceDir,
       });
-  const normalized = normalizePluginsConfig(context.config.plugins);
-  if (!normalized.enabled) {
+  if (context.config.plugins?.enabled === false) {
     return undefined;
   }
 
@@ -1553,7 +1476,7 @@ export function resolvePluginTools(params: {
         manifestPlugin,
         toolName: tool.name,
       });
-      pluginToolMeta.set(tool, {
+      setPluginToolMeta(tool, {
         pluginId: entry.pluginId,
         ...(manifestPlugin?.kind ? { kind: manifestPlugin.kind } : {}),
         optional,
@@ -1590,7 +1513,7 @@ export function resolvePluginTools(params: {
     if (!manifestPlugin) {
       continue;
     }
-    const availableToolNames = listManifestToolNamesForAvailability({
+    const availableToolNames = listManifestToolNamesForAllowlist({
       plugin: manifestPlugin,
       toolNames: manifestPlugin.contracts?.tools ?? [],
       pluginId,

@@ -9,6 +9,7 @@ import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 import type {
   QaSuiteResolvedRunContext,
   QaSuiteRunner,
+  QaSuiteScenarioResult,
   QaSuiteScenarioRunner,
 } from "./suite-types.js";
 
@@ -125,16 +126,26 @@ describe("isolated QA suite transport cleanup", () => {
   it("records a rejected dispatched worker and leaves the fail-fast tail unstarted", async () => {
     const lab = createCleanupTestLab();
     const context = createCleanupTestContext();
+    context.progressEnabled = true;
     context.selectedScenarios.push(makeQaSuiteTestScenario("never-started"));
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const runChild = vi
       .fn<QaSuiteRunner>()
       .mockRejectedValueOnce(new Error("isolated worker gateway failed"));
 
-    const result = await runQaFlowSuiteIsolated(
-      { failFast: true, lab, startLab: async () => lab },
-      context,
-      runChild,
-    );
+    let result: Awaited<ReturnType<typeof runQaFlowSuiteIsolated>>;
+    try {
+      result = await runQaFlowSuiteIsolated(
+        { failFast: true, lab, startLab: async () => lab },
+        context,
+        runChild,
+      );
+      expect(stderrWrite.mock.calls.flat().join("")).toContain(
+        "scenario fail (1/2): leased-channel-scenario — isolated scenario worker: isolated worker gateway failed",
+      );
+    } finally {
+      stderrWrite.mockRestore();
+    }
 
     expect(runChild).toHaveBeenCalledOnce();
     expect(result.startedScenarioIds).toEqual(["leased-channel-scenario"]);
@@ -351,52 +362,110 @@ describe("isolated QA suite transport cleanup", () => {
     });
   });
 
-  it("prints one generic completion after a real nested standard run and parent cleanup", async () => {
-    const parentLab = createCleanupTestLab();
-    const childLab = createCleanupTestLab();
-    const startLab = vi
-      .fn<() => Promise<QaLabServerHandle>>()
-      .mockResolvedValueOnce(parentLab)
-      .mockResolvedValueOnce(childLab);
-    const context = createCleanupTestContext();
-    context.channelDriver = undefined;
-    context.progressEnabled = true;
-    const runScenario = vi
-      .fn<QaSuiteScenarioRunner>()
-      .mockResolvedValue({ name: "leased-channel-scenario", status: "pass", steps: [] });
-    const runChild: QaSuiteRunner = async (childParams) => {
-      if (!childParams) {
-        throw new Error("expected nested standard run params");
+  it.each(["pass", "skip", "failed step", "failure details"] as const)(
+    "prints bounded failure progress before artifacts for a nested standard %s result",
+    async (outcome) => {
+      const parentLab = createCleanupTestLab();
+      const childLab = createCleanupTestLab();
+      const startLab = vi
+        .fn<() => Promise<QaLabServerHandle>>()
+        .mockResolvedValueOnce(parentLab)
+        .mockResolvedValueOnce(childLab);
+      const context = createCleanupTestContext();
+      context.channelDriver = undefined;
+      context.progressEnabled = true;
+      const scenario = context.selectedScenarios[0]!;
+      if (scenario.execution.kind === "flow") {
+        scenario.execution.retryCount = 0;
       }
-      return await runQaFlowSuiteStandard(
-        childParams,
-        {
-          ...context,
-          startedAt: new Date("2026-08-04T00:00:01.000Z"),
-          outputDir: childParams.outputDir ?? "/qa-output/scenarios/leased-channel-scenario",
-          concurrency: 1,
-        },
-        runScenario,
-      );
-    };
-    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      const scenarioStatus = outcome === "pass" || outcome === "skip" ? outcome : "fail";
+      const secret = "synthetic-secret-".repeat(60);
+      const details = `verification refused\napiKey="${secret}"\r::error::fixture\n${"🦞".repeat(400)}`;
+      const scenarioResult = {
+        name: "leased-channel-scenario",
+        status: scenarioStatus,
+        details: outcome === "failed step" ? "unrelated scenario metadata" : details,
+        steps:
+          outcome === "failed step"
+            ? [{ name: "Verify\nrequest", status: "fail" as const, details }]
+            : [],
+      } satisfies QaSuiteScenarioResult;
+      const runScenario = vi.fn<QaSuiteScenarioRunner>().mockResolvedValue(scenarioResult);
+      const runChild: QaSuiteRunner = async (childParams) => {
+        if (!childParams) {
+          throw new Error("expected nested standard run params");
+        }
+        return await runQaFlowSuiteStandard(
+          childParams,
+          {
+            ...context,
+            startedAt: new Date("2026-08-04T00:00:01.000Z"),
+            outputDir: childParams.outputDir ?? "/qa-output/scenarios/leased-channel-scenario",
+            concurrency: 1,
+          },
+          runScenario,
+        );
+      };
+      const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      const assertScenarioProgress = (expectedCount: number) => {
+        const lines = stderrWrite.mock.calls
+          .flat()
+          .join("")
+          .split("\n")
+          .filter((line) => line.startsWith(`[qa-suite] scenario ${scenarioStatus} (`));
+        expect(lines).toHaveLength(expectedCount);
+        for (const line of lines) {
+          const prefix = `[qa-suite] scenario ${scenarioStatus} (1/1): leased-channel-scenario`;
+          if (scenarioStatus !== "fail") {
+            expect(line).toBe(prefix);
+            continue;
+          }
+          expect(line).toContain(
+            outcome === "failed step"
+              ? "Verify request: verification refused"
+              : "verification refused",
+          );
+          expect(line).toContain("apiKey=<redacted>");
+          expect(line).toContain(": :error::fixture");
+          expect(line).not.toContain("synthetic-secret");
+          expect(line).not.toContain("unrelated scenario metadata");
+          expect(line).not.toMatch(/[\r\n]/u);
+          expect(line.slice(prefix.length)).toMatch(/^ — /u);
+          expect(line.slice(prefix.length + " — ".length).length).toBeLessThanOrEqual(512);
+          expect(line.endsWith("…")).toBe(true);
+          expect(Buffer.from(line).toString("utf8")).toBe(line);
+        }
+      };
+      mocks.writeQaSuiteArtifacts.mockImplementationOnce(async () => {
+        assertScenarioProgress(1);
+        return {
+          evidence: undefined,
+          evidencePath: "/qa-output/qa-evidence.json",
+          report: "",
+          reportPath: "/qa-output/qa-suite-report.md",
+          summaryPath: "/qa-output/qa-suite-summary.json",
+        };
+      });
 
-    try {
-      await runQaFlowSuiteIsolated({ startLab }, context, runChild);
+      try {
+        const result = await runQaFlowSuiteIsolated({ startLab }, context, runChild);
+        assertScenarioProgress(2);
+        expect(result.scenarios).toEqual([scenarioResult]);
 
-      const completionLines = stderrWrite.mock.calls
-        .flat()
-        .join("")
-        .split("\n")
-        .filter((line) => line.startsWith("[qa-suite] run complete"));
-      expect(completionLines).toEqual(["[qa-suite] run complete"]);
-      expect(runScenario).toHaveBeenCalledOnce();
-      expect(childLab.stop).toHaveBeenCalledOnce();
-      expect(parentLab.stop).toHaveBeenCalledOnce();
-    } finally {
-      stderrWrite.mockRestore();
-    }
-  });
+        const completionLines = stderrWrite.mock.calls
+          .flat()
+          .join("")
+          .split("\n")
+          .filter((line) => line.startsWith("[qa-suite] run complete"));
+        expect(completionLines).toEqual(["[qa-suite] run complete"]);
+        expect(runScenario).toHaveBeenCalledOnce();
+        expect(childLab.stop).toHaveBeenCalledOnce();
+        expect(parentLab.stop).toHaveBeenCalledOnce();
+      } finally {
+        stderrWrite.mockRestore();
+      }
+    },
+  );
 
   it.each(["cleanup", "cleanupAfterGatewayStop"] as const)(
     "retries a failed parent %s phase before disposing its owned lab",

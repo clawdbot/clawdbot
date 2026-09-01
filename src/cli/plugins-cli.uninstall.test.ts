@@ -756,19 +756,34 @@ describe("plugins cli uninstall", () => {
       plugins: [],
       diagnostics: [],
     });
-    primeUninstallPlan(nextConfig, { actions: { channelConfig: true } });
+    const actualUninstall =
+      await vi.importActual<typeof import("../plugins/uninstall.js")>("../plugins/uninstall.js");
+    planPluginUninstallMock.mockImplementation((params) =>
+      actualUninstall.planPluginUninstall(
+        params as Parameters<typeof actualUninstall.planPluginUninstall>[0],
+      ),
+    );
+    const installedIndexModule = await import("../plugins/installed-plugin-index.js");
+    const indexSpy = vi
+      .spyOn(installedIndexModule, "loadInstalledPluginIndex")
+      .mockReturnValue(
+        createTestInstalledPluginIndex({ policyHash: "orphan-channel", installRecords }),
+      );
+    try {
+      await runPluginsCommand(["plugins", "uninstall", "alpha", "--force", "--keep-files"]);
 
-    await runPluginsCommand(["plugins", "uninstall", "alpha", "--force", "--keep-files"]);
-
-    expectLatestUninstallPlanParams({
-      pluginId: "alpha",
-      channelIds: undefined,
-      deleteFiles: false,
-    });
-    expectInstallRecordsWrittenWithLease({}, nextConfig);
-    expect(configWriteMock).toHaveBeenCalledWith(nextConfig);
-    expectRuntimeLogIncludes("channel config (channels.alpha)");
-    expect(pluginsCliRuntimeLogs.at(-2)).toContain('Uninstalled plugin "alpha"');
+      expectLatestUninstallPlanParams({
+        pluginId: "alpha",
+        channelIds: undefined,
+        deleteFiles: false,
+      });
+      expectInstallRecordsWrittenWithLease({}, nextConfig);
+      expect(configWriteMock).toHaveBeenCalledWith(nextConfig);
+      expectRuntimeLogIncludes("channel config (channels.alpha)");
+      expect(pluginsCliRuntimeLogs.at(-2)).toContain('Uninstalled plugin "alpha"');
+    } finally {
+      indexSpy.mockRestore();
+    }
   });
 
   it("exits when uninstall target is not managed by plugin install records", async () => {

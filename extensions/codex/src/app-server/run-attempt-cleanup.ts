@@ -80,7 +80,9 @@ export async function cleanupCodexAttempt(
     }
     await runCleanupStep("codex-trajectory-flush", () => trajectoryRecorder?.flush());
     const retainLiveIncognitoThread =
-      terminalState.turnSucceeded && isIncognitoSessionKey(params.sessionKey);
+      (terminalState.turnSucceeded ||
+        (state.permissionChangeRestart === "confirmed" && !params.abortSignal?.aborted)) &&
+      isIncognitoSessionKey(params.sessionKey);
     // Native-preserved and supervision threads have separate ownership and can
     // never enter the ordinary persistent warm-thread cache.
     const retainedPersistentThread =

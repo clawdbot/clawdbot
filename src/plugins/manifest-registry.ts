@@ -428,6 +428,7 @@ function buildRecord(params: {
     id: pluginId,
     backupResources: params.manifest.backupResources,
     doctorContract: params.manifest.doctorContract,
+    doctorHealthChecks: params.manifest.doctorHealthChecks,
     sessionRouteStateOwners: params.manifest.sessionRouteStateOwners,
     name: normalizeOptionalString(params.manifest.name) ?? params.candidate.packageName,
     description:

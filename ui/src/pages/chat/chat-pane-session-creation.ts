@@ -11,7 +11,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../lib/sessions/session-key.ts";
 import { cloneChatAttachmentsForIndependentOwner } from "./attachment-payload-store.ts";
-import { clearChatHistory } from "./chat-history.ts";
+import { clearChatHistory } from "./chat-history-actions.ts";
 import { createChatModelSetupBanner } from "./chat-model-setup.ts";
 import { ChatPaneRetainedPresentation } from "./chat-pane-retained-presentation.ts";
 import {
@@ -26,8 +26,6 @@ import { canCreateChatSession } from "./chat-state-route.ts";
 /** Creates or resets a conversation while guarding its asynchronous ownership. */
 export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentation {
   protected recoveringSession = false;
-
-  protected abstract confirmConversationReset(): Promise<boolean>;
 
   protected sessionDisabledBanner(params: {
     catalogDisabledReason: string | null | undefined;

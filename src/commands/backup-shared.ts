@@ -15,6 +15,14 @@ import {
   type ActivatedPluginBackupInventory,
 } from "../plugins/manifest-backup-resources.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { loadSingleSkillDirectory } from "../skills/loading/local-loader.js";
+import {
+  discoverSkillCandidates,
+  isSymlinkPath,
+  resolveSkillDiscoveryLimits,
+  type ResolvedSkillDiscoveryLimits,
+} from "../skills/loading/skill-root-discovery.js";
+import { tryRealpath } from "../skills/loading/symlink-targets.js";
 import { recordBackupRunOutcome } from "../state/backup-run-records.js";
 import { pathExists, resolveUserPath, shortenHomePath } from "../utils.js";
 import {
@@ -55,7 +63,7 @@ export function resolveRequiredBackupPath(
   return resolveUserPath(trimmed);
 }
 
-type BackupAssetKind = "state" | "config" | "credentials" | "workspace" | "agent";
+type BackupAssetKind = "state" | "config" | "credentials" | "workspace" | "agent" | "managed skill";
 type BackupSkipReason = "covered" | "missing" | "regenerable" | "unresolved";
 
 export type BackupAsset = {
@@ -102,6 +110,8 @@ function backupAssetPriority(kind: BackupAssetKind): number {
       return 3;
     case "agent":
       return 4;
+    case "managed skill":
+      return 5;
   }
   throw new Error("Unsupported backup asset kind");
 }
@@ -170,6 +180,7 @@ async function resolveBackupPlanFromPaths(params: {
   onlyConfig?: boolean;
   configInsideState?: boolean;
   oauthInsideState?: boolean;
+  skillDiscoveryLimits?: ResolvedSkillDiscoveryLimits;
   nowMs?: number;
 }): Promise<BackupPlan> {
   const includeWorkspace = params.includeWorkspace ?? true;
@@ -262,6 +273,18 @@ async function resolveBackupPlanFromPaths(params: {
       });
     }),
   );
+  for (const sourcePath of resolveManagedSkillSymlinkTargetCandidates({
+    stateDir,
+    ownerRoots: candidates.map((candidate) => candidate.canonicalPath),
+    limits: params.skillDiscoveryLimits ?? resolveSkillDiscoveryLimits(),
+  })) {
+    candidates.push({
+      kind: "managed skill",
+      sourcePath,
+      canonicalPath: sourcePath,
+      exists: true,
+    });
+  }
 
   const uniqueCandidates: BackupAssetCandidate[] = [];
   const seenCanonicalPaths = new Set<string>();
@@ -375,6 +398,68 @@ function compareCandidates(left: BackupAssetCandidate, right: BackupAssetCandida
     return priorityDelta;
   }
   return left.canonicalPath.localeCompare(right.canonicalPath);
+}
+
+// Managed skill roots support operator-created directory links outside the root.
+// The archive guard requires each such target to be a declared asset.
+function resolveManagedSkillSymlinkTargetCandidates(params: {
+  stateDir: string;
+  ownerRoots: readonly string[];
+  limits: ResolvedSkillDiscoveryLimits;
+}): string[] {
+  const managedSkillsDir = path.join(params.stateDir, "skills");
+  const targets = new Set<string>();
+  const discovered = discoverSkillCandidates({
+    dir: managedSkillsDir,
+    source: "openclaw-managed",
+    limits: params.limits,
+    allowedSymlinkTargetRealPaths: [],
+  });
+  for (const candidate of discovered.candidates) {
+    if (
+      !loadSingleSkillDirectory({
+        skillDir: candidate.skillDir,
+        source: "openclaw-managed",
+        rootRealPath: candidate.skillDirRealPath,
+        maxBytes: params.limits.maxSkillFileBytes,
+      })
+    ) {
+      continue;
+    }
+
+    const relativeSkillDir = path.relative(managedSkillsDir, candidate.skillDir);
+    if (
+      path.isAbsolute(relativeSkillDir) ||
+      relativeSkillDir === ".." ||
+      relativeSkillDir.startsWith(`..${path.sep}`)
+    ) {
+      continue;
+    }
+    // The archive preserves every lexical link component, so each external
+    // ancestor target needs its own asset before the accepted skill can restore.
+    const components = [managedSkillsDir];
+    for (const segment of relativeSkillDir.split(path.sep).filter(Boolean)) {
+      components.push(path.join(components.at(-1) ?? managedSkillsDir, segment));
+    }
+    for (const component of components) {
+      if (!isSymlinkPath(component)) {
+        continue;
+      }
+      const targetPath = tryRealpath(component);
+      // A broader target must not swallow another owner root during dedupe.
+      // An inner target is already covered and needs no separate asset.
+      if (
+        !targetPath ||
+        params.ownerRoots.some(
+          (ownerRoot) => isPathWithin(targetPath, ownerRoot) || isPathWithin(ownerRoot, targetPath),
+        )
+      ) {
+        continue;
+      }
+      targets.add(targetPath);
+    }
+  }
+  return [...targets];
 }
 
 async function canonicalizeExistingPath(targetPath: string): Promise<string> {
@@ -491,6 +576,7 @@ export async function resolveBackupPlanFromDisk(
     onlyConfig,
     configInsideState: cleanupPlan.configInsideState,
     oauthInsideState: cleanupPlan.oauthInsideState,
+    skillDiscoveryLimits: resolveSkillDiscoveryLimits(discoverySnapshot.config),
     nowMs: params.nowMs,
   });
 }

@@ -7,6 +7,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as parseYaml } from "yaml";
+import { requireOptionArgument } from "./lib/arg-utils.mts";
 import { pnpmLockfileDocuments } from "./lib/pnpm-lockfile-documents.mjs";
 import { collectRootDependencyOwnershipAudit } from "./root-dependency-ownership-audit.mts";
 
@@ -475,14 +476,6 @@ function printTextReport(report: DependencyOwnershipReport) {
   process.stdout.write(renderDependencyOwnershipSurfaceMarkdownReport(report));
 }
 
-function readArtifactPath(argv: string[], index: number, optionName: string) {
-  const value = argv[index + 1];
-  if (value === undefined || value === "" || value.startsWith("-")) {
-    throw new Error(`${optionName} requires a value`);
-  }
-  return value;
-}
-
 export function parseArgs(argv: string[]): ParseOptions {
   const options: ParseOptions = {
     asJson: false,
@@ -521,7 +514,7 @@ export function parseArgs(argv: string[]): ParseOptions {
       continue;
     }
     if (arg === "--markdown") {
-      setOnce(arg, "markdownPath", readArtifactPath(argv, index, arg));
+      setOnce(arg, "markdownPath", requireOptionArgument(argv, index, arg));
       index += 1;
       continue;
     }

@@ -32,18 +32,8 @@ export const readConfigFileSnapshot = async () => ({ valid: true, config, source
 export const assertConfigWriteAllowedInCurrentMode = () => {};
 `;
 const stubs = new Map<string, string>([
-  [
-    sourceUrl("./update-cli/update-command.ts"),
-    `export { updateFinalizeCommand } from ${JSON.stringify(sourceUrl("./update-cli/update-command-finalize.ts"))}; export const updateCommand = async () => { throw new Error('Unexpected core update'); };`,
-  ],
-  [sourceUrl("./update-cli/status.ts"), "export const updateStatusCommand = async () => {};"],
-  [sourceUrl("./update-cli/wizard.ts"), "export const updateWizardCommand = async () => {};"],
   [sourceUrl("../commands/doctor.ts"), doctorSource],
   [sourceUrl("../config/config.ts"), snapshotSource],
-  [
-    sourceUrl("../infra/update-check.ts"),
-    "export const checkUpdateStatus = async () => { throw new Error('Unexpected registry check'); };",
-  ],
   [
     sourceUrl("../plugins/installed-plugin-index-records.ts"),
     "export const loadInstalledPluginIndexInstallRecords = async () => ({});",
@@ -66,18 +56,18 @@ const stubs = new Map<string, string>([
   ],
   [
     sourceUrl("./update-cli/update-command-config.ts"),
-    "export const createUpdateConfigSnapshot = async () => {}; export const readPostCorePreUpdateSourceConfig = async () => undefined; export const persistRequestedUpdateChannel = async ({configSnapshot}) => configSnapshot; export const restoreDroppedPreUpdateChannels = snapshot => ({snapshot, changed: false});",
+    "export const createUpdateConfigSnapshot = async () => {}; export const readPostCorePreUpdateSourceConfig = async () => undefined; export const persistRequestedUpdateChannel = async ({configSnapshot}) => configSnapshot; export const persistValidatedDowngradeConfig = async () => {}; export const restoreDroppedPreUpdateChannels = snapshot => ({snapshot, changed: false});",
   ],
   [
     sourceUrl("./update-cli/update-command-plugins.ts"),
     `export const updatePluginsAfterCoreUpdate = async ({opts}) => { if (opts.restart !== false) throw new Error('Unexpected restart'); return {status: ${JSON.stringify(scenario === "plugin-error" ? "error" : "ok")}, changed: false}; };`,
   ],
   [
-    sourceUrl("./update-cli/update-command-post-core.ts"),
+    sourceUrl("./update-cli/update-command-result.ts"),
     "export const reportPreMutationUpdateFailure = async () => { throw new Error('Unexpected channel'); };",
   ],
   [
-    sourceUrl("./update-cli/update-command-service.ts"),
+    sourceUrl("./update-cli/update-command-service-env.ts"),
     "export const stripGatewayServiceMarkerEnv = env => ({...env}); export const disableUpdatedPackageCompileCacheEnv = env => ({...env});",
   ],
   [

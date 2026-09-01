@@ -3,16 +3,8 @@ import {
   resolveSessionTranscriptDatabasePath,
   type TranscriptTurnBoundary,
 } from "../../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  supportsContextEngineDurableTurnAdvancement,
-  type ContextEngineHostSupport,
-} from "../../context-engine/host-compat.js";
-import type {
-  ContextEngineRuntimeContext,
-  ContextEngineRuntimeSettings,
-  ContextEngineSessionTarget,
-} from "../../context-engine/types.js";
+import { supportsContextEngineDurableTurnAdvancement } from "../../context-engine/host-compat.js";
+import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
@@ -35,23 +27,9 @@ export type ContextEngineTurnAttemptFacts = {
   sessionIdUsed: string;
   sessionKey?: string;
   sessionTarget?: ContextEngineSessionTarget;
-  sessionFile: string;
   promptError: boolean;
   aborted: boolean;
   yieldAborted: boolean;
-  tokenBudget?: number;
-  runtimeContext?: ContextEngineRuntimeContext;
-  runtimeSettings?: ContextEngineRuntimeSettings;
-  contextEngineHostSupport?: ContextEngineHostSupport;
-  harnessId?: string | null;
-  runtimeId?: string | null;
-  providerId?: string | null;
-  requestedModelId?: string | null;
-  modelId?: string | null;
-  maxOutputTokens?: number | null;
-  fallbackReason?: string | null;
-  degradedReason?: string | null;
-  config?: OpenClawConfig;
   isHeartbeat?: boolean;
 };
 

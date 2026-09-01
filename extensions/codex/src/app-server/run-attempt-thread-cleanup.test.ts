@@ -1,6 +1,7 @@
 // Codex tests cover run attempt thread cleanup plugin behavior.
 import path from "node:path";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { CodexAppServerClient } from "./client.js";
@@ -188,7 +189,11 @@ describe("Codex app-server main thread cleanup", () => {
       b: path.join(tempDir, "session-b.jsonl"),
     };
     const harness = createClientHarness();
-    vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+    const clientStarted = createDeferred<void>();
+    vi.spyOn(CodexAppServerClient, "start").mockImplementation(async () => {
+      clientStarted.resolve();
+      return harness.client;
+    });
 
     for (const [index, label] of (["a", "b", "a", "b"] as const).entries()) {
       const sessionKey = `agent:main:session-${label}`;
@@ -204,6 +209,7 @@ describe("Codex app-server main thread cleanup", () => {
         bindingStore: testCodexAppServerBindingStore,
       });
       if (index === 0) {
+        await clientStarted.promise;
         const initialize = await waitForHarnessRequest(harness, "initialize", requestStart);
         harness.send({
           id: initialize.id,

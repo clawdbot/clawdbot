@@ -1,11 +1,11 @@
 import { expect, it } from "vitest";
 import { SIDEBAR_SESSION_NAV_COLLAPSE_QUERY } from "../app-session-route-paths.ts";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   captureUiProof,
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
-  sessionRow,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
 
@@ -87,7 +87,7 @@ suite.define(() => {
       // The general chat surface is the app's main view; collapsing it here
       // would be a default-path regression, so this is the guard for it.
       await expect.poll(() => sidebar.isVisible()).toBe(true);
-      await captureUiProof(page, "per-tab-01-chat-root-sidebar-visible.png");
+      await captureUiProof(suite, page, "per-tab-01-chat-root-sidebar-visible.png");
     } finally {
       await context.close();
     }
@@ -142,12 +142,12 @@ suite.define(() => {
       expect(new URL(page.url()).searchParams.has(SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name)).toBe(
         false,
       );
-      await captureUiProof(page, "per-tab-02-session-tab-collapsed.png");
+      await captureUiProof(suite, page, "per-tab-02-session-tab-collapsed.png");
 
       await page.keyboard.press("Meta+B");
       await sidebar.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => sidebar.isVisible()).toBe(true);
-      await captureUiProof(page, "per-tab-03-session-tab-after-cmd-b.png");
+      await captureUiProof(suite, page, "per-tab-03-session-tab-after-cmd-b.png");
 
       await page.reload();
       await composer.waitFor({ state: "visible", timeout: 10_000 });
@@ -194,7 +194,7 @@ suite.define(() => {
         hostId: "gateway:local",
         threadId: "thread-sidebar-collapse",
       });
-      await captureUiProof(catalogTab, "per-tab-04-catalog-session-tab-collapsed.png");
+      await captureUiProof(suite, catalogTab, "per-tab-04-catalog-session-tab-collapsed.png");
     } finally {
       await context.close();
     }

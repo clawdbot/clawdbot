@@ -1089,7 +1089,8 @@ ${channelPluginSource({
       filename: "next-turn-policy.cjs",
       body: `module.exports = { id: "next-turn-policy", register(api) {
     void api.session.workflow.enqueueNextTurnInjection({
-      sessionKey: "agent:main:main",
+      sessionKey: "global",
+      agentId: "work",
       text: "blocked context",
     });
   } };`,

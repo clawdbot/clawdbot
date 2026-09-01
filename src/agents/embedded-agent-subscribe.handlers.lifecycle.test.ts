@@ -71,6 +71,8 @@ function createContext(
       pendingCompactionRetry: 0,
       pendingToolMediaUrls: [],
       pendingToolMediaTrustByUrl: new Map(),
+      toolAutoDeliveryMediaUrls: new Set(),
+      messagingToolSentMediaUrls: [],
       pendingToolAudioAsVoice: false,
       deferredBlockReplies: [],
       replayState: { replayInvalid: false, hadPotentialSideEffects: false },
@@ -279,7 +281,10 @@ describe("handleAgentEnd", () => {
     await handleAgentEnd(ctx);
 
     const meta = firstWarnMeta(ctx);
-    expect(meta.error).toBe("LLM request failed.");
+    const expectedError =
+      "⚠️ LLM request failed (provider internal error). " +
+      "This is usually temporary — try again shortly.";
+    expect(meta.error).toBe(expectedError);
     const userFacingLifecycleText = JSON.stringify(onAgentEvent.mock.calls);
     expect(userFacingLifecycleText).not.toContain("SECRET_CANARY_69737");
     expect(userFacingLifecycleText).not.toContain("LLM error server_error");
@@ -287,7 +292,7 @@ describe("handleAgentEnd", () => {
       stream: "lifecycle",
       data: {
         phase: "error",
-        error: "LLM request failed.",
+        error: expectedError,
       },
     });
   });

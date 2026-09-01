@@ -1,13 +1,14 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { generateSecureToken } from "../infra/secure-random.js";
-import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
+import { generateSecureHex } from "../infra/secure-random.js";
+import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tool-metadata.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   rewrapToolWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+import { getBeforeToolCallDiagnosticOptions } from "./before-tool-call-metadata.js";
 import { isCoreCodingSurfaceToolName } from "./core-tool-factory-descriptors.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { compactToolInputHint, compactToolOutputHint } from "./tool-schema-hints.js";
@@ -108,6 +109,13 @@ function rebindCatalogExecutors(
     : undefined;
 }
 
+// Counter scopes ride inside model-visible telemetry and persisted tool results.
+// Lowercase hex can never form a credential-shaped substring (hf_/sk-/ghp_/…),
+// so tool-payload redaction leaves persisted results embedding the scope intact.
+function generateCounterScope(): string {
+  return generateSecureHex(12);
+}
+
 function restoreToolSearchCatalog(params: {
   catalogRef: ToolSearchCatalogRef;
   entries: ToolSearchCatalogEntry[];
@@ -115,7 +123,7 @@ function restoreToolSearchCatalog(params: {
 }): void {
   const next = {
     entries: params.entries,
-    counterScope: generateSecureToken(12),
+    counterScope: generateCounterScope(),
     searchCount: 0,
     describeCount: 0,
     callCount: 0,
@@ -197,9 +205,10 @@ export function prepareToolSearchCatalogExecutionTool(
   if (!isToolWrappedWithBeforeToolCallHook(tool)) {
     return wrapToolWithBeforeToolCallHook(tool, undefined, wrapperOptions);
   }
-  return wrapperOptions
-    ? rewrapToolWithBeforeToolCallHook(tool, undefined, wrapperOptions)
-    : entry.tool;
+  if (!wrapperOptions || getBeforeToolCallDiagnosticOptions(tool)?.protectNetworkErrors === false) {
+    return entry.tool;
+  }
+  return rewrapToolWithBeforeToolCallHook(tool, undefined, wrapperOptions);
 }
 
 function toCatalogEntry(
@@ -297,7 +306,7 @@ function registerToolSearchCatalog(params: {
     entries: Array.from(byId.values()).toSorted((a, b) => a.id.localeCompare(b.id)),
     // Appended client tools extend the same counter lifetime. A replacement
     // gets a new scope so telemetry consumers never infer resets from values.
-    counterScope: prior?.counterScope ?? generateSecureToken(12),
+    counterScope: prior?.counterScope ?? generateCounterScope(),
     searchCount: prior?.searchCount ?? 0,
     describeCount: prior?.describeCount ?? 0,
     callCount: prior?.callCount ?? 0,

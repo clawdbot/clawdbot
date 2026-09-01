@@ -1,8 +1,10 @@
 // Gateway HTTP/WebSocket runtime state factory.
 // Builds one server runtime with lazy plugin route handlers.
 import type { IncomingMessage, Server as HttpServer, ServerResponse } from "node:http";
+import { createRequire } from "node:module";
+import path from "node:path";
 import type { Duplex } from "node:stream";
-import { WebSocketServer } from "ws";
+import type { WebSocketServer } from "ws";
 import { resolveSandboxHostPort } from "../agents/sandbox-host.js";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { resolveCanvasNodeCapability } from "../canvas/constants.js";
@@ -48,6 +50,14 @@ import type { ReadinessChecker, StartupChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import type { NodeWorkerBundleTransferHttpCallback } from "./worker-environments/node-worker-bundle-transfer-http.js";
 import type { NodeWorkspaceTransferHttpCallback } from "./worker-environments/node-workspace-transfer-http.js";
+import type { WorkerBootstrapArtifactTransferHttpCallback } from "./worker-environments/worker-bootstrap-artifact-transfer-http.js";
+
+// Gateway admission changes receiver frame limits after authentication. Load the
+// installed ws entry so Bun cannot substitute its receiver-less built-in adapter.
+const require = createRequire(import.meta.url);
+const { WebSocketServer: NpmWebSocketServer }: typeof import("ws") = require(
+  path.join(path.dirname(require.resolve("ws/package.json")), "index.js"),
+);
 
 type GatewayPluginRequestHandler = (
   req: IncomingMessage,
@@ -126,6 +136,7 @@ export async function createGatewayHttpTransport(params: {
   isTerminalEnabled: () => boolean;
   handleWatchNodeRequest?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   handleNodeWorkerBundleTransferRequest?: NodeWorkerBundleTransferHttpCallback;
+  handleWorkerBootstrapArtifactTransferRequest?: WorkerBootstrapArtifactTransferHttpCallback;
   handleNodeWorkspaceTransferRequest?: NodeWorkspaceTransferHttpCallback;
   workerIngressEnabled?: boolean;
   desktopSessionRegistry?: DesktopSessionRegistry;
@@ -292,9 +303,12 @@ export async function createGatewayHttpTransport(params: {
   // Create WebSocketServer first (with noServer: true) so we can attach upgrade handlers
   // before HTTP servers start listening. This prevents a race condition where connections
   // arrive before the upgrade handler is attached, which causes silent 1006 errors.
-  const wss = new WebSocketServer({
+  const wss = new NpmWebSocketServer({
     noServer: true,
     maxPayload: MAX_PREAUTH_PAYLOAD_BYTES,
+    // Yield between buffered frames so one RPC burst cannot monopolize the
+    // event loop before other connections and HTTP probes can run.
+    allowSynchronousEvents: false,
   });
   const preauthConnectionBudget = createPreauthConnectionBudget();
 
@@ -333,6 +347,8 @@ export async function createGatewayHttpTransport(params: {
       rateLimiter: params.rateLimiter,
       joinRateLimiter: params.joinRateLimiter,
       handleNodeWorkerBundleTransferRequest: params.handleNodeWorkerBundleTransferRequest,
+      handleWorkerBootstrapArtifactTransferRequest:
+        params.handleWorkerBootstrapArtifactTransferRequest,
       handleNodeWorkspaceTransferRequest: params.handleNodeWorkspaceTransferRequest,
       getReadiness: params.getReadiness,
       getStartup: params.getStartup,
