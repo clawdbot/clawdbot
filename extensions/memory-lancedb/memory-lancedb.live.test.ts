@@ -7,15 +7,7 @@ const HAS_OPENAI_KEY = Boolean(process.env.OPENAI_API_KEY);
 const liveEnabled = HAS_OPENAI_KEY && process.env.OPENCLAW_LIVE_TEST === "1";
 const describeLive = liveEnabled ? describe : describe.skip;
 
-/** Counts real POST requests to the OpenAI embeddings endpoint, without
- * disturbing them -- the mocked-harness coverage for this same scenario
- * (index.test.ts, "re-embeds an already-captured surviving message once its
- * cursor fingerprint is evicted from history") spies on the embeddings
- * client directly; that proves this module's own selection logic but not
- * that a real configured plugin, real OpenAI embeddings endpoint, and real
- * LanceDB storage agree on the same call count (ClawSweeper P1 on #131329:
- * "supplied before/after runs call it through a harness with mocked
- * embedding and LanceDB clients"). */
+// Count embedding HTTP requests without replacing the real client or database.
 class OpenAIEmbeddingCallCounter {
   count = 0;
   private readonly realFetch = globalThis.fetch;
@@ -159,10 +151,11 @@ describeLive("memory plugin live tests", () => {
     expect(recallAfterForget.details?.count).toBe(0);
   }, 60000); // 60s timeout for live API calls
 
-  test("does not re-embed a surviving auto-capture message after real compaction", async () => {
+  test("skips retained user messages with real embeddings and LanceDB", async () => {
     const { default: memoryPlugin } = await import("./index.js");
 
     const registeredHooks: Record<string, ((...args: unknown[]) => unknown)[]> = {};
+    const services: Array<{ stop?: () => Promise<void> }> = [];
     const logs: string[] = [];
     const mockApi = {
       id: "memory-lancedb",
@@ -184,7 +177,7 @@ describeLive("memory plugin live tests", () => {
       },
       registerTool: () => {},
       registerCli: () => {},
-      registerService: () => {},
+      registerService: (service: { stop?: () => Promise<void> }) => services.push(service),
       on: (hookName: string, handler: (...args: unknown[]) => unknown) => {
         (registeredHooks[hookName] ??= []).push(handler);
       },
@@ -199,7 +192,6 @@ describeLive("memory plugin live tests", () => {
     counter.install();
     try {
       const sessionKey = "live-auto-capture-compaction";
-      // Turn 1: two capturable facts.
       await agentEnd?.(
         {
           success: true,
@@ -212,10 +204,7 @@ describeLive("memory plugin live tests", () => {
       );
       expect(counter.count).toBe(2);
 
-      // Turn 2 simulates a real compaction: the cursor's tracked message
-      // ("...Fish...") is gone, but the earlier "...Helix..." message it
-      // already captured survives verbatim, ahead of one genuinely new
-      // fact ("...Zed...").
+      // Model a compacted transcript retaining one already processed message.
       await agentEnd?.(
         {
           success: true,
@@ -227,13 +216,12 @@ describeLive("memory plugin live tests", () => {
         { agentId: "main", sessionKey },
       );
 
-      // Real proof of the fix: exactly one more embeddings request fired
-      // (for "...Zed..."), not two -- the surviving "...Helix..." message
-      // was recognized via its retained fingerprint and never resubmitted
-      // to the real embedding endpoint.
       expect(counter.count).toBe(3);
     } finally {
       counter.restore();
+      for (const service of services) {
+        await service.stop?.();
+      }
     }
   }, 60000);
 });
