@@ -5,6 +5,7 @@ import {
   errorShape,
   type SessionCatalog,
   type SessionCatalogLocator,
+  type SessionCatalogShareRoute,
   type SessionsCatalogArchiveParams,
   type SessionsCatalogContinueParams,
   type SessionsCatalogListParams,
@@ -16,7 +17,6 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
-import type { PluginRegistry } from "../../plugins/registry-types.js";
 import type {
   SessionCatalogCreateTarget,
   SessionCatalogProvider,
@@ -26,6 +26,8 @@ import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { recordSessionStateEvent } from "../../sessions/session-state-events.js";
 import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
 import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
+import { projectSessionParticipant } from "../session-identity-projection.js";
+import type { SessionActorProfileIdentity } from "../session-utils-contracts.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { authorizeSessionCatalogThread } from "./session-catalog-authorization.js";
 import {
@@ -36,7 +38,8 @@ import {
   allowProcessHomeFallback,
   createSessionCatalogRequestNodeSnapshot,
   listSessionCatalogProvider,
-  resolveSessionCatalogRegistry,
+  catalogRegistrationSnapshot,
+  type CatalogRegistrationSnapshot,
 } from "./session-catalog-provider-access.js";
 import { catalogStartHandler } from "./session-catalog-terminal-start.js";
 import {
@@ -73,51 +76,10 @@ function catalogError(error: unknown): { code: string; message: string } {
   };
 }
 
-type CatalogRegistrationSnapshot = {
-  registry: PluginRegistry | null;
-  source: PluginRegistry["sessionCatalogs"] | undefined;
-  registrations: PluginRegistry["sessionCatalogs"];
-  providers: SessionCatalogProvider[];
-};
-
-let cachedCatalogRegistrations: CatalogRegistrationSnapshot | undefined;
-
-function catalogRegistrationSnapshot(): CatalogRegistrationSnapshot {
-  const registry = resolveSessionCatalogRegistry();
-  const source = registry?.sessionCatalogs;
-  if (
-    cachedCatalogRegistrations?.registry === registry &&
-    cachedCatalogRegistrations.source === source
-  ) {
-    return cachedCatalogRegistrations;
-  }
-  const sortedRegistrations = (source ?? []).toSorted((left, right) =>
-    left.provider.id.localeCompare(right.provider.id),
-  );
-  // Plugin registration arrays are process-stable until the active registry seam changes. Hoisting
-  // this sort avoids rebuilding identical order every poll; registry/list identity invalidates it.
-  // A stale snapshot would route requests to retired plugin instances, so callers share this owner.
-  cachedCatalogRegistrations = {
-    registry,
-    source,
-    registrations: sortedRegistrations,
-    providers: sortedRegistrations.map((entry) => entry.provider),
-  };
-  return cachedCatalogRegistrations;
-}
-
-function providers(): SessionCatalogProvider[] {
-  return catalogRegistrationSnapshot().providers;
-}
-
 export function resolveSessionCatalogProvider(
   catalogId: string,
 ): SessionCatalogProvider | undefined {
-  return providers().find((candidate) => candidate.id === catalogId);
-}
-
-function registrations() {
-  return catalogRegistrationSnapshot().registrations;
+  return catalogRegistrationSnapshot().providers.find((candidate) => candidate.id === catalogId);
 }
 
 type SessionCatalogCreateTargetResolution =
@@ -209,7 +171,9 @@ export function resolveRegisteredCatalogCreateTarget(
   agentId: string,
   config: OpenClawConfig,
 ): SessionCatalogCreateTargetResolution {
-  const registration = registrations().find((entry) => entry.provider.id === catalogId);
+  const registration = catalogRegistrationSnapshot().registrations.find(
+    (entry) => entry.provider.id === catalogId,
+  );
   if (!registration) {
     return {
       ok: false,
@@ -316,7 +280,9 @@ async function authorizeCatalogRequest(params: {
 }
 
 function registrationOrRespond(catalogId: string, respond: RespondFn) {
-  const registration = registrations().find((candidate) => candidate.provider.id === catalogId);
+  const registration = catalogRegistrationSnapshot().registrations.find(
+    (candidate) => candidate.provider.id === catalogId,
+  );
   if (!registration) {
     respond(
       false,
@@ -329,6 +295,7 @@ function registrationOrRespond(catalogId: string, respond: RespondFn) {
 
 function catalogResult(
   provider: SessionCatalogProvider,
+  shareRoute: SessionCatalogShareRoute | undefined,
   hosts: SessionCatalog["hosts"],
   error?: SessionCatalog["error"],
   createSession?: NonNullable<SessionCatalog["capabilities"]["createSession"]>,
@@ -342,6 +309,7 @@ function catalogResult(
       ...(provider.openTerminal ? { openTerminal: true } : {}),
       ...(createSession ? { createSession } : {}),
     },
+    ...(shareRoute ? { shareRoute } : {}),
     hosts,
   };
   if (error) {
@@ -479,6 +447,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       const listNodes = createSessionCatalogRequestNodeSnapshot();
       const catalogList = await Promise.all(
         selected.map(async (provider): Promise<SessionCatalog> => {
+          const shareRoute = catalogRegistrations.shareRoutes.get(provider);
           const createTarget = resolveProviderCreateTarget(provider, resolvedAgent.agentId, config);
           const createSession = createTarget.ok
             ? {
@@ -488,7 +457,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
             : undefined;
           const onHost = (host: SessionCatalog["hosts"][number]) => {
             requestEntries.captureHostInstances(host, instances);
-            const catalog = catalogResult(provider, [host], undefined, createSession);
+            const catalog = catalogResult(provider, shareRoute, [host], undefined, createSession);
             // Progressive frames are an optimization. The final RPC response remains
             // authoritative when a slow client drops an intermediate host update.
             for (const publish of progressSubscribers.values()) {
@@ -510,9 +479,9 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
             for (const host of hosts) {
               requestEntries.captureHostInstances(host, instances);
             }
-            return catalogResult(provider, hosts, undefined, createSession);
+            return catalogResult(provider, shareRoute, hosts, undefined, createSession);
           } catch (error) {
-            return catalogResult(provider, [], catalogError(error), createSession);
+            return catalogResult(provider, shareRoute, [], catalogError(error), createSession);
           }
         }),
       );
@@ -568,14 +537,22 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
         return;
       }
       const { catalogId: _catalogId, ...providerRequest } = request;
-      respond(
-        true,
-        await provider.read({
-          ...providerRequest,
-          agentId: authorization.agentId,
-          allowProcessHomeFallback: authorization.allowProcessHomeFallback,
-        }),
-      );
+      const page = await provider.read({
+        ...providerRequest,
+        agentId: authorization.agentId,
+        allowProcessHomeFallback: authorization.allowProcessHomeFallback,
+      });
+      const profiles = new Map<string, SessionActorProfileIdentity | undefined>();
+      respond(true, {
+        ...page,
+        items: page.items.map((item) =>
+          item.sender?.identity.type === "profile"
+            ? Object.assign({}, item, {
+                sender: projectSessionParticipant(item.sender.identity, profiles),
+              })
+            : item,
+        ),
+      });
     } catch (error) {
       const details = catalogError(error);
       respond(

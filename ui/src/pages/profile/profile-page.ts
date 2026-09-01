@@ -69,11 +69,7 @@ export class ProfilePage extends OpenClawLightDomElement {
   private canWrite = false;
   private heroAvatarAuthCandidates: string[] = [];
   private heroAvatarAuthReady = false;
-  private readonly heroAvatarLoader = new AuthenticatedAvatarRouteLoader(() => {
-    if (this.isConnected) {
-      this.requestUpdate();
-    }
-  });
+  private readonly heroAvatarLoader = new AuthenticatedAvatarRouteLoader(this);
   private identityRequestId = 0;
   private subscriptions: Array<() => void> = [];
 
@@ -93,7 +89,6 @@ export class ProfilePage extends OpenClawLightDomElement {
     }
     this.subscriptions = [];
     this.identityRequestId += 1;
-    this.heroAvatarLoader.reset();
     this.heroAvatarAuthCandidates = [];
     this.heroAvatarAuthReady = false;
     this.client = null;

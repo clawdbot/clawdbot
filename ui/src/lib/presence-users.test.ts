@@ -114,7 +114,13 @@ it.each([
       { user: { id: "same" }, watchedSessions: ["session"] },
     ],
   };
-  const viewers = projectPresenceViewers(payload, undefined, undefined, "session", identity);
+  const viewers = projectPresenceViewers(
+    payload,
+    undefined,
+    undefined,
+    "session",
+    identity ? [identity] : [],
+  );
   expect(viewers.map((user) => user.identity)).toEqual(
     identity?.type === "profile" ? [undefined] : [payload.presence[0]!.user.identity, undefined],
   );

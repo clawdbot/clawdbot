@@ -16,6 +16,7 @@ import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-de
 import { composeTranscriptDisplay } from "../../chat/transcript-display-position.js";
 import {
   isSessionTranscriptProjectionUnavailableError,
+  listSessionPendingInputReceipts,
   resolveTranscriptSessionKeyBySessionId,
 } from "../../config/sessions/session-accessor.js";
 import {
@@ -185,6 +186,7 @@ async function handleChatHistoryRequest({
     sessionId: requestedSessionId,
     maxChars,
     pendingBefore,
+    inputRunIds,
   } = params as {
     sessionKey: string;
     agentId?: string;
@@ -195,6 +197,7 @@ async function handleChatHistoryRequest({
     sessionId?: string;
     maxChars?: number;
     pendingBefore?: number;
+    inputRunIds?: string[];
   };
   if (offset !== undefined && messageId !== undefined) {
     respond(
@@ -231,13 +234,13 @@ async function handleChatHistoryRequest({
     respond(false, undefined, requestedAgent.error);
     return;
   }
-  const requestedAgentId = requestedAgent.agentId;
-  const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
   const { cfg, storePath, store, entry, canonicalKey } = measureDiagnosticsTimelineSpanSync(
     `gateway.${method}.session_entry`,
     () =>
       loadGatewaySessionEntryReadOnly(sessionKey, {
-        ...sessionLoadOptions,
+        agentId: requestedAgent.agentId,
+        // Exact reads own their nested JSON; history only projects that snapshot.
+        clone: false,
         includeStoreChildEntries: true,
       }),
     {
@@ -333,6 +336,20 @@ async function handleChatHistoryRequest({
           { before: pendingBefore, limit: max, maxChars: effectiveMaxChars },
         )
       : { items: [], total: 0 };
+  // Receipts belong to the currently selected physical session, never archived history.
+  const inputReceipts = inputRunIds
+    ? !messageId && sessionId && sessionId === entry?.sessionId
+      ? listSessionPendingInputReceipts(
+          { agentId: sessionAgentId, sessionKey: canonicalKey, sessionId, storePath },
+          { runIds: inputRunIds },
+        )
+      : []
+    : undefined;
+  const inputConsumptions = inputReceipts?.flatMap((receipt) =>
+    receipt.state === "consumed"
+      ? [{ runId: receipt.runId, consumedByEventId: receipt.consumedByEventId }]
+      : [],
+  );
   let historyPage: Awaited<ReturnType<typeof readChatHistoryPage>>;
   try {
     historyPage = cursor
@@ -478,17 +495,24 @@ async function handleChatHistoryRequest({
   if (Object.hasOwn(historyPage, "activeLeafEntryId")) {
     sessionInfo.activeLeafEntryId = historyPage.activeLeafEntryId ?? null;
   }
-  const defaults = getSessionDefaults(cfg, defaultModelCatalog, {
-    agentId: sessionAgentId,
-    allowPluginNormalization: false,
-    providerPolicySource: "active",
-  });
+  // Cursor responses publish sessionInfo only; the default-model projection is unused.
+  const defaults =
+    cursor === undefined
+      ? getSessionDefaults(cfg, defaultModelCatalog, {
+          agentId: sessionAgentId,
+          allowPluginNormalization: false,
+          providerPolicySource: "active",
+        })
+      : undefined;
   // Unprepared catalog facts are unknown, not an Off default or a smaller profile.
   // Omission lets clients retain richer same-identity metadata; authored defaults still apply.
   for (const [projection, catalog] of [
     [sessionInfo, sessionModelCatalog],
     [defaults, defaultModelCatalog],
   ] as const) {
+    if (!projection) {
+      continue;
+    }
     const provider = projection.modelProvider;
     const model = projection.model;
     const catalogEntry =
@@ -572,6 +596,7 @@ async function handleChatHistoryRequest({
       messages: delta.messages,
       deltaCursor: delta.deltaCursor,
       pendingInputs,
+      ...(inputReceipts ? { inputReceipts, inputConsumptions } : {}),
       sessionInfo,
       ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
       ...(startupMetadata ? { metadata: startupMetadata } : {}),
@@ -588,6 +613,7 @@ async function handleChatHistoryRequest({
     sessionId,
     messages: composeTranscriptDisplay(capped),
     pendingInputs,
+    ...(inputReceipts ? { inputReceipts, inputConsumptions } : {}),
     ...(historyPage.deltaCursor ? { deltaCursor: historyPage.deltaCursor } : {}),
     ...(historyPage.responseOffset !== undefined ? { offset: historyPage.responseOffset } : {}),
     ...(hasMore ? { nextOffset } : {}),

@@ -164,7 +164,7 @@ describe("chat pane placement", () => {
     expect(request).toHaveBeenCalledWith(
       "sessions.reclaim",
       { key: session.key, agentId: "main" },
-      { timeoutMs: 10 * 60_000 },
+      { timeoutMs: null },
     );
   });
 
@@ -207,7 +207,7 @@ describe("chat pane placement", () => {
       expect(request).toHaveBeenCalledWith(
         "sessions.reclaim",
         { key: session.key, agentId: "main" },
-        { timeoutMs: 10 * 60_000 },
+        { timeoutMs: null },
       );
       expect(pane.context.placementStartup.pause).toHaveBeenCalledExactlyOnceWith(
         session.key,

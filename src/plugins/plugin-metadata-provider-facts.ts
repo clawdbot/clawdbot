@@ -1,3 +1,5 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { collectManifestModelIdNormalizationPolicies } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -10,6 +12,8 @@ import type {
   PluginManifestProviderRequestProvider,
 } from "./manifest.js";
 import { listOfficialExternalProviderEndpointManifests } from "./official-external-provider-endpoints.js";
+import type { PluginProviderAuthAliasCandidate } from "./plugin-metadata-snapshot.types.js";
+import type { PluginOrigin } from "./plugin-origin.types.js";
 
 const PROVIDER_ENDPOINT_CLASSES = new Set(
   "anthropic-public cerebras-native chutes-native deepseek-native github-copilot-native groq-native meta-native mistral-public minimax-native moonshot-native modelstudio-native nvidia-native openai-public openai opencode-native azure-openai openrouter xai-native xiaomi-native zai-native google-generative-ai google-vertex".split(
@@ -69,6 +73,47 @@ function prepareProviderEndpoints(value: unknown): PluginManifestProviderEndpoin
     });
 }
 
+const PROVIDER_AUTH_ALIAS_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>> = {
+  config: 0,
+  bundled: 1,
+  global: 2,
+  workspace: 3,
+};
+
+/** Prepares package alias candidates without capturing current workspace trust. */
+export function buildPluginMetadataProviderAuthAliases(plugins: readonly PluginManifestRecord[]) {
+  const aliases = new Map<string, PluginProviderAuthAliasCandidate[]>();
+  let order = 0;
+  for (const plugin of plugins) {
+    const entries = [
+      ...Object.entries(plugin.providerAuthAliases ?? {}).toSorted(([left], [right]) =>
+        left.localeCompare(right),
+      ),
+      ...(plugin.providerAuthChoices ?? []).flatMap((choice) =>
+        (choice.deprecatedChoiceIds ?? []).map((alias) => [alias, choice.provider] as const),
+      ),
+    ];
+    for (const [rawAlias, rawTarget] of entries) {
+      const alias = normalizeProviderId(rawAlias);
+      const target = normalizeProviderId(rawTarget);
+      if (!alias || !target) {
+        continue;
+      }
+      const candidates = aliases.get(alias) ?? [];
+      candidates.push({ plugin, target, order: order++ });
+      aliases.set(alias, candidates);
+    }
+  }
+  for (const candidates of aliases.values()) {
+    candidates.sort(
+      (left, right) =>
+        (PROVIDER_AUTH_ALIAS_ORIGIN_PRIORITY[left.plugin.origin] ?? Number.MAX_SAFE_INTEGER) -
+        (PROVIDER_AUTH_ALIAS_ORIGIN_PRIORITY[right.plugin.origin] ?? Number.MAX_SAFE_INTEGER),
+    );
+  }
+  return aliases;
+}
+
 export function buildPluginMetadataProviderFacts(plugins: readonly PluginManifestRecord[]) {
   const providerEndpoints = plugins.flatMap((plugin) =>
     prepareProviderEndpoints(plugin.providerEndpoints),
@@ -105,5 +150,10 @@ export function buildPluginMetadataProviderFacts(plugins: readonly PluginManifes
   for (const manifest of listOfficialExternalProviderEndpointManifests()) {
     providerEndpoints.push(...prepareProviderEndpoints(manifest.providerEndpoints));
   }
-  return { providerEndpoints, providerRequests };
+  return {
+    providerEndpoints,
+    providerRequests,
+    modelIdNormalizationPolicies: collectManifestModelIdNormalizationPolicies(plugins),
+    providerAuthAliases: buildPluginMetadataProviderAuthAliases(plugins),
+  };
 }

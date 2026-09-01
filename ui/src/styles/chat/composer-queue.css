@@ -64,6 +64,10 @@
   line-height: 1.4;
 }
 
+.chat-queue__global-state[data-chat-queue-global-state="warn"] {
+  color: var(--warn);
+}
+
 .chat-queue__scroll[data-scrollable="true"] {
   height: calc(3.55 * var(--chat-queue-row-height));
   overflow-y: auto;

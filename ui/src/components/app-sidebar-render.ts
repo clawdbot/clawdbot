@@ -10,11 +10,16 @@ import {
 import { isRouteId, isSessionRouteId } from "../app-route-paths.ts";
 import { resolveControlUiAuthToken } from "../app/control-ui-auth.ts";
 import { isNativeWebChromeHost } from "../app/native-web-chrome.ts";
+import { isHomePanelAvailable } from "../app/panel-availability.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../lib/avatar.ts";
+import {
+  formatKeyboardShortcutCombo,
+  KEYBOARD_SHORTCUT_COMBOS,
+} from "../lib/keyboard-shortcut-contract.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import {
   isPresenceViewerIdle,
@@ -40,6 +45,7 @@ import type { SidebarWorkboardBoard } from "./app-sidebar-workboard.ts";
 import { icons } from "./icons.ts";
 import { redactLoginFailureError } from "./login-gate.ts";
 import { renderNewSessionLink } from "./new-session-link.ts";
+import { HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import {
   renderSessionAttentionIcon,
   renderSessionRunSpinner,
@@ -171,8 +177,11 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
     areUiSessionKeysEquivalent(host.getRouteSessionKey(), mainKey);
   const hasComposerDraft = host.hasSessionDraft(mainKey);
   const running = mainRow ? isSessionRunActive(mainRow) : false;
+  const queued = running && mainRow?.status === "queued";
   const unread = mainRow?.unread === true && !active;
-  const activeRunLabel = running ? t("sessionsView.activeRun") : "";
+  const activeRunLabel = running
+    ? t(queued ? "sessionsView.statusQueued" : "sessionsView.activeRun")
+    : "";
   const unreadLabel = unread ? t("sessionsView.unread") : "";
   const homeDescription =
     attentionLabel || (activeRunLabel && unreadLabel)
@@ -215,7 +224,7 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
       <span class="nav-item__text">${t("nav.home")}</span>
       ${running || outboxAttentionCount > 0 || hasComposerDraft
         ? html`<span class="nav-item__state sidebar-home-session-states">
-            ${running ? renderSessionRunSpinner() : nothing}
+            ${running ? renderSessionRunSpinner(true, queued) : nothing}
             ${renderSessionRowBadges({
               outboxAttentionCount,
               hasComposerDraft,
@@ -378,7 +387,22 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
             onRetry: () => host.onRetryConnect?.(),
           })
         : nothing}
-      <span class="sidebar-footer-actions">${renderAppSidebarAttention(host)}</span>
+      <span class="sidebar-footer-actions">
+        ${isHomePanelAvailable(host.sessionDataContext?.gateway)
+          ? html`<openclaw-tooltip
+              .content=${`${t("assistantPanel.toggle")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.homePanel)})`}
+              ><button
+                type="button"
+                class="sidebar-brand__icon sidebar-footer-bar__home"
+                aria-label=${t("assistantPanel.toggle")}
+                @click=${() => window.dispatchEvent(new CustomEvent(HOME_PANEL_TOGGLE_EVENT))}
+              >
+                ${icons.home}
+              </button></openclaw-tooltip
+            >`
+          : nothing}
+        ${renderAppSidebarAttention(host)}
+      </span>
     </div>
   `;
 }

@@ -1,6 +1,6 @@
 // Process supervisor tests cover lifecycle, restart, and termination behavior.
 import { performance } from "node:perf_hooks";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import {
@@ -28,9 +28,12 @@ vi.mock("./adapters/pty.js", () => ({
 let createProcessSupervisor: typeof import("./supervisor.js").createProcessSupervisor;
 
 describe("process supervisor", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     ({ createProcessSupervisor } = await import("./supervisor.js"));
+  });
+
+  beforeEach(() => {
     createChildAdapterMock.mockReset();
     createPtyAdapterMock.mockReset();
     vi.useRealTimers();

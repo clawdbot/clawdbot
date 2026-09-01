@@ -2,6 +2,7 @@ import {
   hasOutboundReplyContent,
   isFastModeAutoProgressPayload,
 } from "openclaw/plugin-sdk/reply-payload";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { isAskUserPromptPending } from "../../agents/tools/ask-user-tool.js";
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import { logVerbose } from "../../globals.js";
@@ -80,26 +81,32 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
   let pendingContinuation = false;
   let didDeliverVisiblePartialReply = false;
   const flushDeferredFinalText = async () => {
-    if (!deferFinalTtsText || params.replyOptions?.isHeartbeat === true) {
-      return false;
+    try {
+      if (!deferFinalTtsText || params.replyOptions?.isHeartbeat === true) {
+        return;
+      }
+      const deferredVisibleText = cleanBlockTtsDirectiveText
+        ? cleanDeferredFinalText(state.progressState.accumulatedBlockTtsText)
+        : state.progressState.accumulatedBlockText;
+      if (!deferredVisibleText.trim()) {
+        return;
+      }
+      const fallback = await sendFinalPayload(
+        { text: deferredVisibleText },
+        { abortSignal: isDispatchOperationAborted() ? false : undefined, skipTts: true },
+      );
+      if (!fallback.queuedFinal && fallback.routedFinalCount === 0) {
+        return;
+      }
+      didDeliverVisiblePartialReply = true;
+      state.progressState.accumulatedBlockText = "";
+      state.progressState.accumulatedBlockTtsText = "";
+    } catch (fallbackError) {
+      // Recovery must not replace the original resolver or cancellation outcome.
+      logVerbose(
+        `dispatch-from-config: deferred final text fallback failed: ${formatErrorMessage(fallbackError)}`,
+      );
     }
-    const deferredVisibleText = cleanBlockTtsDirectiveText
-      ? cleanDeferredFinalText(state.progressState.accumulatedBlockTtsText)
-      : state.progressState.accumulatedBlockText;
-    if (!deferredVisibleText.trim()) {
-      return false;
-    }
-    const fallback = await sendFinalPayload(
-      { text: deferredVisibleText },
-      { abortSignal: isDispatchOperationAborted() ? false : undefined, skipTts: true },
-    );
-    if (!fallback.queuedFinal && fallback.routedFinalCount === 0) {
-      return false;
-    }
-    didDeliverVisiblePartialReply = true;
-    state.progressState.accumulatedBlockText = "";
-    state.progressState.accumulatedBlockTtsText = "";
-    return true;
   };
   const replyResult = await runWithDispatchLifecycleAdmission(
     async () =>
@@ -591,24 +598,26 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
         trackDispatchLifecycleWork,
       ),
   ).catch(async (error: unknown) => {
-    try {
-      await flushDeferredFinalText();
-    } catch (fallbackError) {
-      logVerbose(
-        `dispatch-from-config: deferred final text fallback failed: ${formatErrorMessage(fallbackError)}`,
-      );
-    }
+    await flushDeferredFinalText();
     const failedAgentRun = getAgentRunTerminalOutcome() === "failed";
+    const adopted = state.turnAdoptionState?.adopted === true;
     if (
       params.replyOptions?.isHeartbeat === true ||
-      (!failedAgentRun && !didDeliverVisiblePartialReply) ||
+      (!failedAgentRun && !didDeliverVisiblePartialReply && !adopted) ||
       isDispatchOperationAborted()
     ) {
       throw error;
     }
     failDispatchReplyOperation(error, "failed");
     if (!didDeliverVisiblePartialReply) {
-      return undefined;
+      // Adoption retires ingress replay before the model starts. A progress ACK
+      // cannot settle a later failure; use normal final delivery and its policy.
+      return adopted &&
+        state.noVisibleReplyFallbackDirected &&
+        !state.suppressDelivery &&
+        !state.getObservedReplyDelivery()
+        ? { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT, isError: true }
+        : undefined;
     }
     return buildTerminalAgentRunFailureReplyPayload({
       visibleReplyDelivered: true,
@@ -617,13 +626,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     });
   });
   if (isDispatchOperationAborted()) {
-    try {
-      await flushDeferredFinalText();
-    } catch (fallbackError) {
-      logVerbose(
-        `dispatch-from-config: deferred final text fallback failed: ${formatErrorMessage(fallbackError)}`,
-      );
-    }
+    await flushDeferredFinalText();
   }
   const sessionMetadataChanges = takeCommandSessionMetadataChanges(ctx);
   notifySessionMetadataChanges(sessionMetadataChanges);

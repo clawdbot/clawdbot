@@ -94,6 +94,7 @@ export async function buildHermesPlan(ctx: MigrationProviderContext): Promise<Mi
       createHermesModelItem({
         model: modelRef,
         currentModel,
+        targetAgentId: ctx.targetAgentId,
         overwrite: ctx.overwrite,
       }),
     );

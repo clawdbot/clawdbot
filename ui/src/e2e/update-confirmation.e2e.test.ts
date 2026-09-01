@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -20,7 +21,10 @@ const UPDATE_RUN_RESPONSE = {
   restart: null,
   result: { after: { version: "2.0.0" }, status: "ok" },
 } as const;
-const PROOF_DIR = path.resolve(".artifacts/control-ui-e2e/update-confirmation");
+let PROOF_DIR: string;
+beforeEach(() => {
+  PROOF_DIR = createControlUiE2eArtifactDir("update-confirmation");
+});
 
 /** The dialog element lives in a shadow root; its visible copy is slotted light DOM. */
 function confirmationCopy(page: Page) {

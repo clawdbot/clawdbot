@@ -485,7 +485,7 @@ async function loadRestartSentinelStartupTask(params: {
               deps: params.deps,
               attempt: attempt + 1,
             });
-          }).catch((err: unknown) => {
+          }, "restart-sentinel:wake").catch((err: unknown) => {
             log.warn(`restart sentinel pending update retry failed: ${formatErrorMessage(err)}`);
           });
         }, CONTROL_PLANE_UPDATE_PENDING_RETRY_DELAY_MS);

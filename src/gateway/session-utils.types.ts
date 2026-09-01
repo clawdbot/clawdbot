@@ -81,6 +81,7 @@ export type GatewaySessionRow = {
   spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
   permissionMode?: SessionEntry["permissionMode"];
+  permissionModePending?: boolean;
   sessionRoot?: string;
   /** Managed worktree bound to this session (repo checkout + branch). */
   worktree?: SessionEntry["worktree"];

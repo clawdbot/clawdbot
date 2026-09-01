@@ -1,6 +1,7 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   createChatFlowE2eSuite,
   expectRequestCountStable,
@@ -31,10 +32,10 @@ suite.define(() => {
   ])(
     "settles a $name without repeatedly loading the reply preview",
     async ({ artifact, response }) => {
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-      if (artifactDir) {
-        await mkdir(artifactDir, { recursive: true });
-      }
+      const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = artifactRoot
+        ? createControlUiE2eArtifactDir("chat-reply-preview-recovery", artifactRoot)
+        : undefined;
       const context = await suite.newBrowserContext({
         locale: "en-US",
         ...(artifactDir
@@ -76,7 +77,6 @@ suite.define(() => {
           await page
             .locator(".chat-pane-cache__pane--active")
             .getByRole("alert")
-            .locator("summary")
             .getByText("The original message is unavailable.", { exact: true })
             .waitFor();
           await expectRequestCountStable(gateway, "chat.message.get", 1);

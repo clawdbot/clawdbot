@@ -22,7 +22,7 @@ import {
 } from "../lib/sessions/session-placement-submit.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { restoreChatApiAttachments } from "../pages/chat/attachment-api.ts";
-import { buildLocalUserMessage } from "../pages/chat/user-message-content.ts";
+import { buildInitialChatSubmission } from "../pages/chat/user-message-content.ts";
 import {
   capturePlacementStartupConnection,
   type ApplicationPlacementStartupRuntime,
@@ -152,21 +152,18 @@ export default function createApplicationPlacementStartupRuntime(
     recovery: SessionPlacementRecovery,
     result: Extract<SessionPlacementDraftAdvanceResult, { status: "started" }>,
   ) => {
-    const message = buildLocalUserMessage({
-      text: recovery.message,
-      attachments: entry.attachments,
-      createdAt: entry.createdAt,
-      runId: result.messageId,
-      sequence: result.messageSeq,
-    });
-    if (message) {
-      params.initialUserMessage.prepare({
-        sessionKey: entry.owner.sessionKey,
-        owner: entry.scope.client,
-        pendingRunId: result.messageId,
-        message,
-      });
-    }
+    params.chatSubmissions.retain(
+      buildInitialChatSubmission(
+        entry.owner.sessionKey,
+        {
+          text: recovery.message,
+          attachments: entry.attachments,
+          createdAt: entry.createdAt,
+        },
+        entry.scope.client,
+        result.messageId,
+      ),
+    );
   };
 
   const refreshAfterFailure = (entry: PlacementStartupEntry) => {
@@ -191,7 +188,6 @@ export default function createApplicationPlacementStartupRuntime(
     recovery: SessionPlacementRecovery,
     recovering: boolean,
   ) => {
-    let accepted = false;
     let currentRecovery = recovery;
     void advanceSessionPlacementDraft({
       client: entry.scope.client,
@@ -237,8 +233,8 @@ export default function createApplicationPlacementStartupRuntime(
           }
           return;
         }
+        // Retained custody already owns the visible input; a local handoff would duplicate it.
         if (result.status === "started") {
-          accepted = true;
           prepareAcceptedMessage(entry, currentRecovery, result);
         }
         retireEntry(entry);
@@ -248,11 +244,7 @@ export default function createApplicationPlacementStartupRuntime(
           pauseEntry(entry, currentRecovery, formatUiError(error));
         }
       })
-      .finally(() => {
-        if (!accepted) {
-          refreshAfterFailure(entry);
-        }
-      });
+      .finally(() => refreshAfterFailure(entry));
   };
 
   const start = (input: PlacementStartupInput) => {

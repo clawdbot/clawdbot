@@ -97,6 +97,13 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         return;
       case "message_end": {
         const message = evt.message as AgentMessage;
+        // Snapshot provider facts before transcript repair can synthesize $0.
+        // Queued accounting must not reread the mutated message's placeholder cost.
+        const usageForAccounting =
+          message?.role === "assistant" &&
+          !isSubscribeTranscriptOnlyOpenClawAssistantMessage(message)
+            ? normalizeUsage(message.usage)
+            : undefined;
         if (message?.role === "assistant") {
           preservePendingAssistantUsage(message, ctx.state.pendingAssistantUsage);
           if (!isSubscribeTranscriptOnlyOpenClawAssistantMessage(message)) {
@@ -111,6 +118,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
           }
         }
         void scheduleEvent(evt, () => {
+          ctx.recordAssistantUsage(usageForAccounting);
           return handleMessageEnd(ctx, evt as never);
         });
         return;

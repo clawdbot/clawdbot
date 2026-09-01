@@ -827,6 +827,37 @@ describe("pw-session guarded browser navigation route cleanup", () => {
     expect(getRouteHandler()).toBeNull();
   });
 
+  it("awaits remote ownership validation and rejects revocation before goto", async () => {
+    const { page, pageGoto, pageUnroute } = installBrowserMocks();
+    let entered!: () => void;
+    let release!: () => void;
+    const validating = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const validation = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const task = gotoPageWithNavigationGuard({
+      cdpUrl: "http://127.0.0.1:18792",
+      page,
+      url: "https://93.184.216.34/start",
+      timeoutMs: 1000,
+      targetId: "TARGET_1",
+      assertPageCurrent: async () => {
+        entered();
+        await validation;
+        throw new BrowserTabNotFoundError({ input: "TARGET_1" });
+      },
+    });
+    const rejected = expect(task).rejects.toBeInstanceOf(BrowserTabNotFoundError);
+    await validating;
+    expect(pageGoto).not.toHaveBeenCalled();
+    release();
+    await rejected;
+    expect(pageGoto).not.toHaveBeenCalled();
+    expect(pageUnroute).toHaveBeenCalled();
+  });
+
   it("surfaces navigation route cleanup failure while the page remains open", async () => {
     const { page, pageUnroute } = installBrowserMocks();
     Object.assign(page, { isClosed: () => false });

@@ -1,4 +1,5 @@
 import { getSafeSessionStorage } from "../../local-storage.ts";
+import { resolveUiConversationIdentity } from "../sessions/session-key.ts";
 import { compareChatQueueOrder } from "./chat-queue-order.ts";
 import type { ChatQueueItem } from "./chat-types.ts";
 import { outboxPayloadMatchesOwner } from "./outbox-payload-store.runtime.ts";
@@ -7,7 +8,6 @@ import {
   readProjectedOutboxStore,
   parseStoredChatOutboxScope,
   resolvePendingComposerSessions,
-  resolveStoredChatOutboxScope,
   storedChatOutboxScopeKey,
   storageTargetForGateway,
   subscribeStoredChatOutboxChanges,
@@ -16,7 +16,7 @@ import {
   type StoredChatOutboxScope,
 } from "./outbox-store.ts";
 
-export { resolveStoredChatOutboxScope, storedChatOutboxScopeKey, subscribeStoredChatOutboxChanges };
+export { subscribeStoredChatOutboxChanges };
 
 export type StoredChatOutbox = StoredChatOutboxScope & { queue: ChatQueueItem[] };
 
@@ -100,15 +100,21 @@ export function summarizeStoredChatOutboxes(state: ChatComposerScope) {
       idsByScope.set(scopeKey, ids);
     }
   }
-  const countsByScope = new Map<string, number>();
   const attentionCountsByScope = new Map<string, number>();
   let total = 0;
   for (const [scopeKey, ids] of idsByScope) {
-    countsByScope.set(scopeKey, ids.all.size);
     total += ids.all.size;
     if (ids.attention.size) {
       attentionCountsByScope.set(scopeKey, ids.attention.size);
     }
   }
-  return { countsByScope, attentionCountsByScope, draftScopes, total };
+  // Resolve sidebar queries with this render's state; stored destinations stay captured.
+  const sessionScopeKey = (sessionKey: string) =>
+    storedChatOutboxScopeKey(resolveUiConversationIdentity(state, sessionKey));
+  return {
+    total,
+    attentionCountForSession: (sessionKey: string) =>
+      attentionCountsByScope.get(sessionScopeKey(sessionKey)) ?? 0,
+    hasSessionDraft: (sessionKey: string) => draftScopes.has(sessionScopeKey(sessionKey)),
+  };
 }

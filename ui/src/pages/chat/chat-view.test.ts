@@ -39,6 +39,8 @@ import {
   registerChatAttachmentPayload as registerStoredChatAttachmentPayload,
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
+import { makeChatHost } from "./chat-host.test-support.ts";
+import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import * as chatProgress from "./chat-progress.ts";
 import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
 import * as chatThread from "./chat-thread.ts";
@@ -152,6 +154,7 @@ const buildChatItemsMock = vi.fn(
           kind: "group",
           key: "group:assistant:test",
           role: "assistant",
+          runId: (props.messages.at(-1) as { runId?: string } | undefined)?.runId,
           messages: props.messages.map((message, index) => ({
             key: `message:${index}`,
             message,
@@ -954,6 +957,35 @@ describe("inline approval card", () => {
 });
 
 describe("chat run error", () => {
+  it.each(["run", "request"])(
+    "does not offer redundant details for a short %s error",
+    async (source) => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+      const message = "Failed to open the plugin state database.";
+      for (const diagnostic of [
+        message,
+        ` \n ${message.replaceAll(" ", "  \t")} \n `,
+        `${message}\n${message}`,
+        `${message}\n  ${message.replaceAll(" ", "  \t")} \n `,
+      ]) {
+        const container = renderChatView(
+          source === "run" ? { runError: { summary: diagnostic } } : { error: diagnostic },
+        );
+        const alert = requireElement(container, ".chat-error", "chat error");
+        expect(alert.getAttribute("role")).toBe("alert");
+        expect(alert.querySelector("strong")?.textContent?.replace(/\s+/gu, " ").trim()).toBe(
+          message,
+        );
+        expect(alert.querySelector("details")).toBeNull();
+        expect(alert.textContent).not.toContain("Error details");
+        alert.querySelector<HTMLButtonElement>('[aria-label="Copy error"]')?.click();
+        await Promise.resolve();
+        expect(writeText).toHaveBeenLastCalledWith(diagnostic);
+      }
+    },
+  );
+
   it("keeps Check delivery reachable when exact history deduplicates the retained bubble", () => {
     vi.mocked(chatThread.buildCachedChatItems).mockRestore();
     vi.mocked(chatMessage.renderMessageGroup).mockRestore();
@@ -1044,11 +1076,50 @@ describe("chat run error", () => {
     },
   );
 
+  it.each([
+    ["run", "Error: gateway disconnected\n<img src=x onerror=alert(1)>\nFinal diagnostic line"],
+    ["request", "Error: gateway disconnected\n<img src=x onerror=alert(1)>\nFinal diagnostic line"],
+    ["run", `Request failed: ${"Long diagnostic text. ".repeat(20)}Final diagnostic line`],
+    ["request", `Request failed: ${"Long diagnostic text. ".repeat(20)}Final diagnostic line`],
+  ])("exposes the complete %s error as selectable text and a copy action", (source, diagnostic) => {
+    const container = renderChatView(
+      source === "run" ? { runError: { summary: diagnostic } } : { error: diagnostic },
+    );
+
+    const alert = requireElement(container, ".chat-error", "chat run error");
+    expect(alert.getAttribute("role")).toBe("alert");
+    const details = requireElement(alert, "details", "error disclosure");
+    expect(details.hasAttribute("open")).toBe(false);
+    const preview = requireElement(details, "strong", "error preview").textContent ?? "";
+    expect(preview).not.toContain("Final diagnostic line");
+    expect(preview.length).toBeLessThanOrEqual(120);
+    if (diagnostic.includes("\n")) {
+      expect(preview).toBe("Error: gateway disconnected");
+    } else {
+      expect(preview).toMatch(/^Request failed: .+…$/u);
+    }
+    const fullDiagnostic = requireElement(details, "pre", "full diagnostic");
+    expect(fullDiagnostic.textContent).toBe(diagnostic);
+    expect(fullDiagnostic.getAttribute("tabindex")).toBe("0");
+    expect(alert.querySelector("img")).toBeNull();
+    expect(alert.querySelector<HTMLButtonElement>('[aria-label="Copy error"]')).not.toBeNull();
+    expect(alert.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]') !== null).toBe(
+      source === "request",
+    );
+    expect(
+      alert.closest(source === "run" ? ".agent-chat__composer-overlay" : ".chat-topbar-notices"),
+    ).not.toBeNull();
+  });
+
   it.each(["run", "request"])(
-    "exposes the complete %s error as selectable text and a copy action",
-    (source) => {
+    "strips only the decorative prefix from a %s error display and copies the raw diagnostic",
+    async (source) => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
       const diagnostic =
-        "Error: gateway disconnected\n<img src=x onerror=alert(1)>\nFinal diagnostic line";
+        "⚠️ 🛠️ Error:  gateway disconnected near 🧭\n  indented\tdetail\n<img src=x onerror=alert(1)>\nFinal diagnostic line  ";
+      const renderedDiagnostic =
+        "  Error:  gateway disconnected near 🧭\n  indented\tdetail\n<img src=x onerror=alert(1)>\nFinal diagnostic line  ";
       const container = renderChatView(
         source === "run" ? { runError: { summary: diagnostic } } : { error: diagnostic },
       );
@@ -1057,9 +1128,14 @@ describe("chat run error", () => {
       expect(alert.getAttribute("role")).toBe("alert");
       const details = requireElement(alert, "details", "error disclosure");
       expect(details.hasAttribute("open")).toBe(false);
-      expect(requireElement(details, "pre", "full diagnostic").textContent).toBe(diagnostic);
+      expect(requireElement(details, "pre", "full diagnostic").textContent).toBe(
+        renderedDiagnostic,
+      );
+      expect(alert.textContent).not.toMatch(/[⚠🛠]/u);
+      expect(alert.textContent).toContain("🧭");
       expect(alert.querySelector("img")).toBeNull();
-      expect(alert.querySelector<HTMLButtonElement>('[aria-label="Copy error"]')).not.toBeNull();
+      alert.querySelector<HTMLButtonElement>('[aria-label="Copy error"]')?.click();
+      await waitForFast(() => expect(writeText).toHaveBeenCalledWith(diagnostic));
       expect(alert.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]') !== null).toBe(
         source === "request",
       );
@@ -1076,24 +1152,34 @@ describe("chat run error", () => {
     container.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]')?.click();
 
     expect(onDismissError).toHaveBeenCalledOnce();
+    expect(container.querySelector(".chat-error details")).toBeNull();
     expect(container.querySelector(".chat-error")?.closest(".chat-topbar-notices")).not.toBeNull();
   });
 
-  it.each([false, true])("keeps startup Retry owned by retryable=%s", (retryable) => {
+  it.each([false, true])("keeps startup Retry owned by retryable=%s", async (retryable) => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
     const onRetrySessionPlacementStartup = vi.fn();
     const container = renderChatView({
       placementStartup: {
         sessionKey: "agent:main:startup",
         phase: "failed",
         startedAt: 1,
-        error: "Provisioning failed\nFinal diagnostic line",
+        error: "⚠️ Provisioning failed\n  Final diagnostic line  ",
         retryable,
       },
       onRetrySessionPlacementStartup,
     });
     const alert = requireElement(container, ".chat-error", "startup error");
-    expect(requireElement(alert, "pre", "startup diagnostic").textContent).toContain(
-      "Provisioning failed\nFinal diagnostic line",
+    expect(requireElement(alert, "pre", "startup diagnostic").textContent).toBe(
+      "The session was created, but runner startup failed:  Provisioning failed\n  Final diagnostic line  ",
+    );
+    expect(alert.textContent).not.toContain("⚠");
+    alert.querySelector<HTMLButtonElement>('[aria-label="Copy error"]')?.click();
+    await waitForFast(() =>
+      expect(writeText).toHaveBeenCalledWith(
+        "The session was created, but runner startup failed: ⚠️ Provisioning failed\n  Final diagnostic line  ",
+      ),
     );
     alert.querySelector<HTMLElement>("summary")?.click();
     expect(onRetrySessionPlacementStartup).not.toHaveBeenCalled();
@@ -1468,6 +1554,31 @@ describe("chat history pagination", () => {
   });
 });
 
+describe("retained input navigation", () => {
+  it("does not show an inventory banner for a single retained message", () => {
+    const historyState = makeChatHost({
+      sessionKey: "agent:main:retained-input",
+      currentSessionId: "retained-input-session",
+    });
+    applyChatPendingInputs(historyState, {
+      total: 1,
+      items: [
+        {
+          id: "retained-input",
+          runId: "retained-run",
+          acceptedAt: 100,
+          state: "interrupted",
+          message: { role: "user", content: "Retained message", timestamp: 100 },
+        },
+      ],
+    });
+
+    const container = renderChatView({ historyState });
+
+    expect(container.querySelector(".chat-history-error--inline")).toBeNull();
+  });
+});
+
 describe("direct thread avatar mode", () => {
   function sessionsListWithKind(sessionKey: string, kind: "direct" | "group" | "global") {
     return {
@@ -1581,6 +1692,29 @@ describe("direct thread avatar mode", () => {
     {
       name: "treats explicit agent global keys as global even without a session row",
       cases: [avatarCase("agent:work:global", false)],
+    },
+    {
+      name: "keeps avatars when a forwarded cross-session message joins a direct thread",
+      cases: [
+        avatarCase("kind-direct", false, {
+          sessions: sessionsListWithKind("kind-direct", "direct"),
+          messages: [
+            { role: "user", content: "hi", timestamp: 1 },
+            {
+              role: "assistant",
+              content: "forwarded report",
+              timestamp: 2,
+              senderLabel: "Forwarded from scout",
+              senderSession: { sessionKey: "agent:scout:main", agentId: "scout" },
+              provenance: {
+                kind: "inter_session",
+                sourceSessionKey: "agent:scout:main",
+                sourceTool: "sessions_send",
+              },
+            },
+          ],
+        }),
+      ],
     },
   ])("$name", ({ cases }) => {
     for (const { props, direct } of cases) {
@@ -2892,7 +3026,9 @@ describe("chat loading skeleton", () => {
   it("routes live and completed status into the existing assistant turn", () => {
     renderChatView({
       canAbort: true,
-      messages: [{ role: "assistant", content: "Finished answer", timestamp: 1 }],
+      messages: [
+        { role: "assistant", content: "Finished answer", timestamp: 1, runId: "run-composed" },
+      ],
       stream: null,
     });
 
@@ -2905,11 +3041,14 @@ describe("chat loading skeleton", () => {
 
     renderMessageGroupMock.mockClear();
     vi.spyOn(chatProgress, "resolveTurnRecap").mockReturnValue({
+      runId: "run-composed",
       runtimeMs: 5_000,
       outputTokens: 42,
     });
     const container = renderChatView({
-      messages: [{ role: "assistant", content: "Finished answer", timestamp: 1 }],
+      messages: [
+        { role: "assistant", content: "Finished answer", timestamp: 1, runId: "run-composed" },
+      ],
     });
 
     expect(renderMessageGroupMock).toHaveBeenCalledTimes(1);
@@ -2949,6 +3088,7 @@ describe("chat loading skeleton", () => {
       },
     ]);
     vi.spyOn(chatProgress, "resolveTurnRecap").mockReturnValue({
+      runId: "run-composed",
       runtimeMs: 5_000,
       outputTokens: 42,
     });
@@ -3024,7 +3164,12 @@ describe("chat loading skeleton", () => {
     // Run usage arrives on its own patches, so the transcript items, the
     // shared render context, and this row's own identity all stay put while
     // the counter ticks.
-    const readingIndicator = { kind: "reading-indicator", key: "reading:test", startedAt: 1 };
+    const readingIndicator = {
+      kind: "reading-indicator",
+      key: "reading:test",
+      startedAt: 1,
+      runId: "usage-run",
+    };
     const reply = {
       kind: "group",
       key: "group:assistant:reply",
@@ -3039,7 +3184,11 @@ describe("chat loading skeleton", () => {
       isStreaming: false,
     };
     const renderWithUsage = (container: HTMLElement, runOutputTokens: number) => {
-      renderChatInto(container, { canAbort: true, runOutputTokens, stream: null });
+      renderChatInto(container, {
+        canAbort: true,
+        runUsageById: new Map([["usage-run", { outputTokens: runOutputTokens, seq: 1 }]]),
+        stream: null,
+      });
     };
 
     const streamGroupSpy = vi.fn(renderStreamGroupMock);
@@ -3128,9 +3277,19 @@ describe("chat loading skeleton", () => {
     const container = document.createElement("div");
     const streamPartsSpy = vi.spyOn(chatMessage, "renderStreamGroupParts");
 
-    renderChatInto(container, { canAbort: true, runId, runOutputTokens: 5_500, stream: null });
+    renderChatInto(container, {
+      canAbort: true,
+      runId,
+      runUsageById: new Map([[runId, { outputTokens: 5_500, seq: 1 }]]),
+      stream: null,
+    });
     streamPartsSpy.mockClear();
-    renderChatInto(container, { canAbort: true, runId, runOutputTokens: 7_200, stream: null });
+    renderChatInto(container, {
+      canAbort: true,
+      runId,
+      runUsageById: new Map([[runId, { outputTokens: 7_200, seq: 2 }]]),
+      stream: null,
+    });
 
     expect(streamPartsSpy.mock.calls.at(-1)?.[1].runOutputTokens).toBe(7_200);
   });
@@ -3200,6 +3359,7 @@ describe("chat loading skeleton", () => {
       },
     ] as ReturnType<typeof chatThread.buildCachedChatItems>);
     vi.spyOn(chatProgress, "resolveTurnRecap").mockReturnValue({
+      runId: "run-composed",
       runtimeMs: 5_000,
       outputTokens: 42,
     });
@@ -3213,16 +3373,18 @@ describe("chat loading skeleton", () => {
     expect(frameCall?.[0].messages).toHaveLength(1);
     expect(frameCall?.[1].frameContent).toBeDefined();
     expect(frameCall?.[1].turnRecap).toEqual({
+      runId,
       runtimeMs: 5_000,
       outputTokens: 42,
     });
     expect(container.querySelector(".chat-turn-recap")).toBeNull();
   });
 
-  it("releases the embedded recap when a later reply becomes the settled turn", () => {
+  it("does not move a watched recap onto a later unrelated run", () => {
     const firstReply = {
       kind: "group",
       key: "group:assistant:first",
+      runId: "run-composed",
       role: "assistant",
       messages: [
         {
@@ -3236,6 +3398,7 @@ describe("chat loading skeleton", () => {
     const secondReply = {
       ...firstReply,
       key: "group:assistant:second",
+      runId: "foreign-run",
       messages: [
         {
           key: "message:assistant:second",
@@ -3245,6 +3408,7 @@ describe("chat loading skeleton", () => {
       timestamp: 2,
     };
     vi.spyOn(chatProgress, "resolveTurnRecap").mockReturnValue({
+      runId: "run-composed",
       runtimeMs: 5_000,
       outputTokens: 42,
     });
@@ -3272,7 +3436,8 @@ describe("chat loading skeleton", () => {
     expect(
       renderMessageGroupMock.mock.calls.find(([group]) => group.key === secondReply.key)?.[1]
         .turnRecap,
-    ).toBeDefined();
+    ).toBeUndefined();
+    expect(container.querySelector(".chat-turn-recap")).toBeNull();
   });
 
   it("shows prompt-bar progress beside context usage while the current session send is awaiting acknowledgement", () => {
@@ -3736,6 +3901,90 @@ describe("chat voice controls", () => {
     dismiss!.click();
 
     expect(onDismissRealtimeTalkError).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("chat composer render invalidation", () => {
+  it("keeps steady ordinary edits and direction changes local", () => {
+    const container = document.createElement("div");
+    let draft = "a";
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    let props = createChatProps({
+      draft,
+      getDraft: () => draft,
+      onDraftChange,
+    });
+    const onRequestUpdate = vi.fn(() => {
+      props = { ...props, draft, getDraft: () => draft };
+      render(renderChat(props), container);
+    });
+    props = { ...props, onRequestUpdate };
+    render(renderChat(props), container);
+
+    const textarea = getComposerTextarea(container);
+    onRequestUpdate.mockClear();
+    vi.mocked(chatThread.buildCachedChatItems).mockClear();
+
+    textarea.value = "ab";
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+    textarea.value = "abc";
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+
+    expect(draft).toBe("abc");
+    expect(onRequestUpdate).not.toHaveBeenCalled();
+    expect(chatThread.buildCachedChatItems).not.toHaveBeenCalled();
+
+    textarea.value = "مرحبا";
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+
+    expect(onRequestUpdate).not.toHaveBeenCalled();
+    expect(chatThread.buildCachedChatItems).not.toHaveBeenCalled();
+    expect(textarea.dir).toBe("rtl");
+
+    render(renderChat(props), container);
+    expect(getComposerTextarea(container).dir).toBe("rtl");
+  });
+
+  it("invalidates when offline slash eligibility changes", () => {
+    const container = document.createElement("div");
+    let draft = "queue this offline";
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    let props = createChatProps({
+      connected: false,
+      draft,
+      getDraft: () => draft,
+      onDraftChange,
+    });
+    const onRequestUpdate = vi.fn(() => {
+      props = { ...props, draft, getDraft: () => draft };
+      render(renderChat(props), container);
+    });
+    props = { ...props, onRequestUpdate };
+    render(renderChat(props), container);
+
+    const sendButton = () =>
+      container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]');
+    expect(sendButton()?.disabled).toBe(false);
+    onRequestUpdate.mockClear();
+
+    let textarea = getComposerTextarea(container);
+    textarea.value = "/status";
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+
+    expect(onRequestUpdate).toHaveBeenCalled();
+    expect(sendButton()?.disabled).toBe(true);
+    onRequestUpdate.mockClear();
+
+    textarea = getComposerTextarea(container);
+    textarea.value = "queue this instead";
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+
+    expect(onRequestUpdate).toHaveBeenCalled();
+    expect(sendButton()?.disabled).toBe(false);
   });
 });
 
@@ -8911,11 +9160,12 @@ describe("right-click Reply", () => {
   });
 
   it("does not open Reply menu when onSetReply is absent", () => {
-    renderChatView({
+    const { bubble } = renderChatBubble({
       messages: [{ role: "user", content: "hello", timestamp: 1 }],
     });
 
     // Without onSetReply, the handler returns early and no menu is created
+    dispatchContextMenu(bubble);
     expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
   });
 

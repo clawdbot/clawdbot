@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   actionOpacity,
   captureUiProof,
@@ -8,7 +9,6 @@ import {
   createSessionManagementE2eSuite,
   installMockGateway,
   requireRecord,
-  sessionRow,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
 
@@ -51,7 +51,7 @@ suite.define(() => {
       const pin = row.getByRole("button", { name: "Unpin session" });
       const menu = row.getByRole("button", { name: "Open session menu" });
       await expect.poll(() => actionOpacity(pin)).toBe("1");
-      await captureUiProof(page, "sidebar-session-actions-centered.png");
+      await captureUiProof(suite, page, "sidebar-session-actions-centered.png");
 
       const [rowBounds, subtitleBounds, pinBounds, menuBounds] = await Promise.all([
         row.boundingBox(),
@@ -79,7 +79,7 @@ suite.define(() => {
           return title && details ? title.y + title.height - details.y : Number.POSITIVE_INFINITY;
         })
         .toBeLessThanOrEqual(0.5);
-      await captureUiProof(page, "sidebar-session-text-scale-140.png");
+      await captureUiProof(suite, page, "sidebar-session-text-scale-140.png");
     } finally {
       await context.close();
     }
@@ -352,9 +352,9 @@ suite.define(() => {
       const pullRequestIcon = pullRequestRow.locator("[data-pull-request-state='merged']");
       const unreadDot = pullRequestRow.locator(".session-unread-dot");
       const trailingState = pullRequestRow.locator(".session-row-state");
-      await captureUiProof(page, "sidebar-pr-before-hover.png");
+      await captureUiProof(suite, page, "sidebar-pr-before-hover.png");
       await pullRequestRow.hover();
-      await captureUiProof(page, "sidebar-pr-hover.png");
+      await captureUiProof(suite, page, "sidebar-pr-hover.png");
       await pullRequestIcon.waitFor({ state: "hidden" });
       await unreadDot.waitFor({ state: "hidden" });
       await trailingState.waitFor({ state: "hidden" });

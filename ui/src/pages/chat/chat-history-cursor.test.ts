@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
+import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
@@ -155,7 +156,13 @@ describe("chat history cursor revalidation", () => {
         sessionKey,
         sender: { id: "bob-profile", name: "Bob Proof" },
       };
-      expect(admitStoredChatComposerQueueItem(state, sessionKey, queued)).toBe(true);
+      expect(
+        admitStoredChatComposerQueueItem(
+          state,
+          captureChatOutboxAdmission(state, sessionKey, queued.agentId),
+          queued,
+        ),
+      ).toBe(true);
       state.chatQueue = [queued];
       const renderedBobMessages = () =>
         buildChatItems({
@@ -268,11 +275,7 @@ describe("chat history cursor revalidation", () => {
 
     await loadChatHistory(state);
 
-    const current = getChatSessionProjection(
-      state,
-      state.chatMessages,
-      readChatSessionProjectionScope(state),
-    );
+    const current = getChatSessionProjection(state, readChatSessionProjectionScope(state));
     expect(current.scope.activeLeafEntryId).toBe("next-leaf");
     expect(current.runs).toBe(projection.runs);
   });

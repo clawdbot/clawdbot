@@ -30,8 +30,8 @@ import {
 } from "./session-accessor.sqlite-display-position.js";
 import {
   readTranscriptProjectionGeneration,
+  readVisibleMessageMetadata,
   readVisibleMessageRange,
-  resolveVisibleMessagePositionRange,
   resolveVisibleMessagePositions,
 } from "./session-accessor.sqlite-reset-window.js";
 import { MAX_VISIBLE_MESSAGE_MAX_MESSAGES } from "./session-accessor.sqlite-visible-cursor.js";
@@ -217,36 +217,15 @@ function resolveRecentHistoryStart(
   const { boundedEnd, boundedStart, boundaries, messageEnd, messageStart } =
     resolveVisibleHistoryRange(history, start, endExclusive);
   // No result can include more than maxMessages events, so older metadata would
-  // only add SQLite bindings and synchronous work before the backward scan stops.
+  // only add synchronous work before the backward scan stops.
   const metadataStart = Math.max(messageStart, messageEnd - maxMessages);
-  const positions = resolveVisibleMessagePositionRange(projection, metadataStart, messageEnd);
-  const db = getActiveTranscriptKysely(projection.database);
   const messageBytes = new Map(
-    positions.length === 0
-      ? []
-      : executeSqliteQuerySync(
-          projection.database.db,
-          db
-            .selectFrom("session_transcript_active_events as active")
-            .innerJoin("transcript_events as event", (join) =>
-              join
-                .onRef("event.session_id", "=", "active.session_id")
-                .onRef("event.seq", "=", "active.event_seq"),
-            )
-            .select([
-              "active.message_position",
-              /* kysely-allow-raw: excluded history payloads must not be fetched or parsed. */
-              sql<number>`OCTET_LENGTH(event.event_json) + 1`.as("serialized_bytes"),
-            ])
-            .where("active.session_id", "=", projection.resolved.sessionId)
-            .where("active.message_position", "in", positions),
-        ).rows.flatMap((row) =>
-          row.message_position === null
-            ? []
-            : [[row.message_position, row.serialized_bytes] as const],
-        ),
+    readVisibleMessageMetadata(projection, metadataStart, messageEnd).map((row) => [
+      row.logicalPosition,
+      row.serialized_bytes,
+    ]),
   );
-  let messageIndex = positions.length - 1;
+  let messageIndex = messageEnd - 1;
   let selectedStart = boundedEnd;
   let selectedCount = 0;
   let bytes = 0;
@@ -259,10 +238,10 @@ function resolveRecentHistoryStart(
       break;
     }
     const boundary = boundaries.get(displayPosition);
-    const messagePosition = boundary ? undefined : positions[messageIndex--];
+    const logicalPosition = boundary ? undefined : messageIndex--;
     const serializedBytes =
       boundary?.serializedBytes ??
-      (messagePosition === undefined ? undefined : messageBytes.get(messagePosition));
+      (logicalPosition === undefined ? undefined : messageBytes.get(logicalPosition));
     if (serializedBytes === undefined) {
       continue;
     }

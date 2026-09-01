@@ -124,18 +124,13 @@ export function resolveEffectiveUpdateChannel(params: {
   installKind: "git" | "package" | "unknown";
   git?: { tag?: string | null; branch?: string | null };
 }): { channel: UpdateChannel; source: UpdateChannelSource } {
-  if (
-    params.currentVersion &&
-    isBetaTag(params.currentVersion) &&
-    params.configChannel !== "extended-stable" &&
-    params.configChannel !== "beta" &&
-    params.configChannel !== "dev"
-  ) {
-    return { channel: "beta", source: "installed-version" };
-  }
-
+  // A one-off package tag does not replace the operator's saved update policy.
   if (params.configChannel) {
     return { channel: params.configChannel, source: "config" };
+  }
+
+  if (params.currentVersion && isBetaTag(params.currentVersion)) {
+    return { channel: "beta", source: "installed-version" };
   }
 
   if (params.installKind === "package" && params.currentVersion) {
@@ -167,7 +162,7 @@ export function resolveEffectiveUpdateChannel(params: {
 }
 
 /** Formats an operator-facing channel label that includes the deciding source. */
-export function formatUpdateChannelLabel(params: {
+function formatUpdateChannelLabel(params: {
   channel: UpdateChannel;
   source: UpdateChannelSource;
   gitTag?: string | null;

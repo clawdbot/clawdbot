@@ -141,13 +141,7 @@ const SUPPRESSED_CONSOLE_PREFIXES = [
 const NODE_PROCESS_WARNING_PREFIX = `(${process.release.name}:${process.pid}) `;
 
 function shouldSuppressConsoleMessage(message: string): boolean {
-  if (SUPPRESSED_CONSOLE_PREFIXES.some((prefix) => message.startsWith(prefix))) {
-    return true;
-  }
-  if (isVerbose()) {
-    return false;
-  }
-  return false;
+  return SUPPRESSED_CONSOLE_PREFIXES.some((prefix) => message.startsWith(prefix));
 }
 
 function isEpipeError(err: unknown): boolean {

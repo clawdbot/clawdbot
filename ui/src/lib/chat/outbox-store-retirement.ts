@@ -1,9 +1,7 @@
 import { getSafeSessionStorage } from "../../local-storage.ts";
-import { normalizeStoredSession } from "./outbox-store-codec.ts";
 import {
   nextDraftRevision,
-  rememberedDraftAttempt,
-  rememberedDraftRevision,
+  readDraftRevisionState,
   rememberDraftAttempt,
   rememberDraftRevision,
 } from "./outbox-store-draft-state.ts";
@@ -71,11 +69,12 @@ export function retireStoredComposerDrafts(
       const storeSessionKey = storedChatOutboxScopeKey(scope);
       const session = store.sessions[storeSessionKey];
       const storedRevision = session?.draftRevision ?? 0;
-      const currentRevision = Math.max(
+      const currentRevision = readDraftRevisionState(
+        storage,
+        storageTarget.key,
+        storeSessionKey,
         storedRevision,
-        rememberedDraftRevision(storage, storageTarget.key, storeSessionKey),
-        rememberedDraftAttempt(storage, storageTarget.key, storeSessionKey),
-      );
+      ).latestAttempt;
       let minimumRevision = target.retireBeforeRevision;
       if (storedRevision < target.retireBeforeRevision) {
         minimumRevision = nextDraftRevision(Math.max(currentRevision, target.retireBeforeRevision));
@@ -103,7 +102,7 @@ export function retireStoredComposerDrafts(
     writeStoredOutboxStore(storage, storageTarget, store);
     const persisted = readStoredOutboxStore(storage, storageTarget);
     for (const { storeSessionKey, revision } of written) {
-      const session = normalizeStoredSession(persisted.sessions[storeSessionKey]);
+      const session = persisted.sessions[storeSessionKey];
       if (
         session?.draftRevision !== revision ||
         Boolean(session.draft) ||

@@ -695,6 +695,8 @@ export async function deliverReplies(params: {
   textMode?: "html";
   /** @internal Revalidate custody at the existing send-operation boundary. */
   onPlatformSendDispatch?: () => Promise<void>;
+  /** @internal Synchronously fence custody after revalidation and before Telegram I/O. */
+  assertPlatformSendAuthorized?: () => void;
 }): Promise<{
   delivered: boolean;
 }> {
@@ -848,6 +850,7 @@ export async function deliverReplies(params: {
       warn: (message) => params.runtime.log?.(message),
       beforeTextPage: params.onPlatformSendDispatch,
       beforeMedia: params.onPlatformSendDispatch,
+      assertPlatformSendAuthorized: params.assertPlatformSendAuthorized,
     });
 
     try {
@@ -863,6 +866,7 @@ export async function deliverReplies(params: {
       let deliveredMediaUrls: string[] = [];
       if (reactionEmoji && typeof targetId === "number") {
         await params.onPlatformSendDispatch?.();
+        params.assertPlatformSendAuthorized?.();
         const reactionResult = await reactMessageTelegram(params.chatId, targetId, reactionEmoji, {
           cfg: params.cfg ?? { channels: { telegram: { botToken: params.token } } },
           token: params.token,

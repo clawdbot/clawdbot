@@ -69,192 +69,195 @@ function normalizeTextAnswer(value: unknown): string | undefined {
   return undefined;
 }
 
-class WizardSessionPrompter implements WizardPrompter {
-  constructor(private session: WizardSession) {}
-
-  async intro(title: string): Promise<void> {
-    await this.prompt({
-      type: "note",
-      title,
-      message: "",
-      executor: "client",
-    });
+/** Own enumerable, closure-bound methods survive the runtime installer's note adapter. */
+function createWizardSessionPrompter(session: WizardSession): WizardPrompter {
+  async function prompt(step: Omit<WizardStep, "id">): Promise<unknown> {
+    return await session.awaitAnswer(createStep(step));
   }
 
-  async outro(message: string): Promise<void> {
-    await this.prompt({
-      type: "note",
-      title: "Done",
-      message,
-      executor: "client",
-    });
-  }
-
-  async note(message: string, title?: string): Promise<void> {
-    await this.prompt({
-      type: "note",
-      title,
-      message,
-      executor: "client",
-    });
-  }
-
-  async deviceCode(params: {
-    title: string;
-    code: string;
-    expiresInMinutes?: number;
-    message?: string;
-  }): Promise<void> {
-    const fallbackMessage = [
-      params.message ?? "Enter this one-time code on the provider's sign-in page.",
-      `Code: ${params.code}`,
-      ...(params.expiresInMinutes ? [`Code expires in ${params.expiresInMinutes} minutes.`] : []),
-      // Device-code phishing works by getting the victim to enter the attacker's
-      // code, so the warning has to cover received codes, not just shared ones.
-      // Unconditional: codes delivered over a chat channel are the risky case and
-      // carry no expiry hint. Matches the Codex CLI prompt.
-      DEVICE_CODE_PHISHING_WARNING,
-    ].join("\n");
-    await this.prompt({
-      type: "note",
-      title: params.title,
-      message: fallbackMessage,
-      deviceCode: {
-        code: params.code,
-        ...(params.expiresInMinutes ? { expiresInMinutes: params.expiresInMinutes } : {}),
-        ...(params.message ? { message: params.message } : {}),
-      },
-      executor: "client",
-    });
-  }
-
-  async plain(message: string): Promise<void> {
-    await this.prompt({
-      type: "note",
-      message,
-      format: "plain",
-      executor: "client",
-    });
-  }
-
-  async select<T>(params: {
-    message: string;
-    options: Array<{ value: T; label: string; hint?: string }>;
-    initialValue?: T;
-  }): Promise<T> {
-    const res = await this.prompt({
-      type: "select",
-      message: params.message,
-      options: params.options.map((opt) => ({
-        value: opt.value,
-        label: opt.label,
-        hint: opt.hint,
-      })),
-      initialValue: params.initialValue,
-      executor: "client",
-    });
-    return res as T;
-  }
-
-  async multiselect<T>(params: {
-    message: string;
-    options: Array<{ value: T; label: string; hint?: string }>;
-    initialValues?: T[];
-  }): Promise<T[]> {
-    const res = await this.prompt({
-      type: "multiselect",
-      message: params.message,
-      options: params.options.map((opt) => ({
-        value: opt.value,
-        label: opt.label,
-        hint: opt.hint,
-      })),
-      initialValue: params.initialValues,
-      executor: "client",
-    });
-    return (Array.isArray(res) ? res : []) as T[];
-  }
-
-  async text(params: {
-    message: string;
-    initialValue?: string;
-    placeholder?: string;
-    validate?: (value: string) => string | undefined;
-    sensitive?: boolean;
-  }): Promise<string> {
-    const res = await this.session.awaitAnswer(
-      this.createStep({
-        type: "text",
-        message: params.message,
-        initialValue: params.initialValue,
-        placeholder: params.placeholder,
-        sensitive: params.sensitive,
-        executor: "client",
-      }),
-      params.validate,
-    );
-    const value =
-      res === null || res === undefined
-        ? ""
-        : typeof res === "string"
-          ? res
-          : typeof res === "number" || typeof res === "boolean" || typeof res === "bigint"
-            ? String(res)
-            : "";
-    return value;
-  }
-
-  async confirm(params: Parameters<WizardPrompter["confirm"]>[0]): Promise<boolean> {
-    const res = await this.prompt({
-      type: "confirm",
-      message: params.message,
-      initialValue: params.initialValue,
-      executor: "client",
-    });
-    // Answers cross the wire as unknown values; truthy strings are not consent.
-    return res === true;
-  }
-
-  progress(label: string): WizardProgress {
-    let stopped = false;
-    this.session.pushProgress(label);
-    return {
-      update: (message) => {
-        if (!stopped) {
-          this.session.pushProgress(message);
-        }
-      },
-      stop: (message) => {
-        if (stopped) {
-          return;
-        }
-        stopped = true;
-        if (message) {
-          this.session.pushProgress(message);
-        }
-      },
-    };
-  }
-
-  async openUrl(url: string): Promise<void> {
-    this.session.queueExternalUrl(url);
-  }
-
-  private async prompt(step: Omit<WizardStep, "id">): Promise<unknown> {
-    return await this.session.awaitAnswer(this.createStep(step));
-  }
-
-  private createStep(step: Omit<WizardStep, "id">): WizardStep {
+  function createStep(step: Omit<WizardStep, "id">): WizardStep {
     // Each emitted step receives an id so remote clients can answer the exact
     // pending prompt and stale answers can be rejected. Explicit browser
     // destinations bind to the very next step regardless of its input type.
-    const externalUrl = this.session.consumeExternalUrl();
+    const externalUrl = session.consumeExternalUrl();
     return {
       ...step,
       ...(externalUrl ? { externalUrl } : {}),
       id: randomUUID(),
     };
   }
+  return {
+    cancel(message) {
+      throw new WizardCancelledError(message);
+    },
+    async intro(title: string): Promise<void> {
+      await prompt({
+        type: "note",
+        title,
+        message: "",
+        executor: "client",
+      });
+    },
+
+    async outro(message: string): Promise<void> {
+      await prompt({
+        type: "note",
+        title: "Done",
+        message,
+        executor: "client",
+      });
+    },
+
+    async note(message: string, title?: string): Promise<void> {
+      await prompt({
+        type: "note",
+        title,
+        message,
+        executor: "client",
+      });
+    },
+
+    async deviceCode(params: {
+      title: string;
+      code: string;
+      expiresInMinutes?: number;
+      message?: string;
+    }): Promise<void> {
+      const fallbackMessage = [
+        params.message ?? "Enter this one-time code on the provider's sign-in page.",
+        `Code: ${params.code}`,
+        ...(params.expiresInMinutes ? [`Code expires in ${params.expiresInMinutes} minutes.`] : []),
+        // Device-code phishing works by getting the victim to enter the attacker's
+        // code, so the warning has to cover received codes, not just shared ones.
+        // Unconditional: codes delivered over a chat channel are the risky case and
+        // carry no expiry hint. Matches the Codex CLI prompt.
+        DEVICE_CODE_PHISHING_WARNING,
+      ].join("\n");
+      await prompt({
+        type: "note",
+        title: params.title,
+        message: fallbackMessage,
+        deviceCode: {
+          code: params.code,
+          ...(params.expiresInMinutes ? { expiresInMinutes: params.expiresInMinutes } : {}),
+          ...(params.message ? { message: params.message } : {}),
+        },
+        executor: "client",
+      });
+    },
+
+    async plain(message: string): Promise<void> {
+      await prompt({
+        type: "note",
+        message,
+        format: "plain",
+        executor: "client",
+      });
+    },
+
+    async select<T>(params: {
+      message: string;
+      options: Array<{ value: T; label: string; hint?: string }>;
+      initialValue?: T;
+    }): Promise<T> {
+      const res = await prompt({
+        type: "select",
+        message: params.message,
+        options: params.options.map((opt) => ({
+          value: opt.value,
+          label: opt.label,
+          hint: opt.hint,
+        })),
+        initialValue: params.initialValue,
+        executor: "client",
+      });
+      return res as T;
+    },
+
+    async multiselect<T>(params: {
+      message: string;
+      options: Array<{ value: T; label: string; hint?: string }>;
+      initialValues?: T[];
+    }): Promise<T[]> {
+      const res = await prompt({
+        type: "multiselect",
+        message: params.message,
+        options: params.options.map((opt) => ({
+          value: opt.value,
+          label: opt.label,
+          hint: opt.hint,
+        })),
+        initialValue: params.initialValues,
+        executor: "client",
+      });
+      return (Array.isArray(res) ? res : []) as T[];
+    },
+
+    async text(params: {
+      message: string;
+      initialValue?: string;
+      placeholder?: string;
+      validate?: (value: string) => string | undefined;
+      sensitive?: boolean;
+    }): Promise<string> {
+      const res = await session.awaitAnswer(
+        createStep({
+          type: "text",
+          message: params.message,
+          initialValue: params.initialValue,
+          placeholder: params.placeholder,
+          sensitive: params.sensitive,
+          executor: "client",
+        }),
+        params.validate,
+      );
+      const value =
+        res === null || res === undefined
+          ? ""
+          : typeof res === "string"
+            ? res
+            : typeof res === "number" || typeof res === "boolean" || typeof res === "bigint"
+              ? String(res)
+              : "";
+      return value;
+    },
+
+    async confirm(params: Parameters<WizardPrompter["confirm"]>[0]): Promise<boolean> {
+      const res = await prompt({
+        type: "confirm",
+        message: params.message,
+        initialValue: params.initialValue,
+        executor: "client",
+      });
+      // Answers cross the wire as unknown values; truthy strings are not consent.
+      return res === true;
+    },
+
+    progress(label: string): WizardProgress {
+      let stopped = false;
+      session.pushProgress(label);
+      return {
+        update: (message) => {
+          if (!stopped) {
+            session.pushProgress(message);
+          }
+        },
+        stop: (message) => {
+          if (stopped) {
+            return;
+          }
+          stopped = true;
+          if (message) {
+            session.pushProgress(message);
+          }
+        },
+      };
+    },
+
+    async openUrl(url: string): Promise<void> {
+      session.queueExternalUrl(url);
+    },
+  };
 }
 
 export class WizardSession {
@@ -291,7 +294,7 @@ export class WizardSession {
     ) => Promise<void>,
     options?: { timeoutMs?: number },
   ) {
-    const prompter = new WizardSessionPrompter(this);
+    const prompter = createWizardSessionPrompter(this);
     if (options?.timeoutMs !== undefined) {
       this.expiryTimer = setTimeout(() => this.cancel(), options.timeoutMs);
       this.expiryTimer.unref?.();
@@ -407,6 +410,7 @@ export class WizardSession {
 
   /** The underlying mutation crossed its durable commit point and must finish. */
   lockCancellation() {
+    this.signal.throwIfAborted();
     this.cancellationLocked = true;
   }
 

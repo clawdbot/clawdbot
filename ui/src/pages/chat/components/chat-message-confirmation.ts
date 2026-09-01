@@ -260,6 +260,8 @@ function openConfirmedActionPopover(btn: HTMLElement, params: ConfirmedActionPar
     dismissPopover();
     params.action();
   });
+  // Keep this portaled dialog's clicks from dismissing its owning context menu.
+  popover.addEventListener("click", (event) => event.stopPropagation());
   popover.addEventListener("keydown", containKeyboardFocus);
   document.addEventListener("contextmenu", closeOnContextMenu, true);
   window.addEventListener("keydown", closeOnEscape, true);

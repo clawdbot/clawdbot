@@ -1,13 +1,20 @@
 // Resolves ACP command target sessions from user text and active state.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { AcpSessionTarget } from "../../../acp/control-plane/manager.types.js";
+import { resolveAcpSessionTarget } from "../../../acp/control-plane/manager.utils.js";
 import { callGateway } from "../../../gateway/call.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
+import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { SESSION_ID_RE } from "../../../sessions/session-id.js";
 import { resolveEffectiveResetTargetSessionKey } from "../acp-reset-target.js";
 import { resolveRequesterSessionKey } from "../commands-subagents/shared.js";
 import type { HandleCommandsParams } from "../commands-types.js";
 import { resolveAcpCommandBindingContext } from "./context.js";
 
-async function resolveSessionKeyByToken(token: string): Promise<string | null> {
+async function resolveSessionKeyByToken(
+  token: string,
+  commandParams: HandleCommandsParams,
+): Promise<AcpSessionTarget | null> {
   const trimmed = token.trim();
   if (!trimmed) {
     return null;
@@ -19,18 +26,25 @@ async function resolveSessionKeyByToken(token: string): Promise<string | null> {
   attempts.push({ label: trimmed });
 
   for (const params of attempts) {
-    try {
-      const resolved = await callGateway({
-        method: "sessions.resolve",
-        params,
-        timeoutMs: 8_000,
+    const resolved = await callGateway({
+      method: "sessions.resolve",
+      params: {
+        ...params,
+        allowMissing: true,
+        agentId: parseAgentSessionKey(trimmed)?.agentId ?? commandParams.agentId,
+      },
+      timeoutMs: 8_000,
+    });
+    const key = normalizeOptionalString(resolved?.key);
+    if (key) {
+      return resolveAcpSessionTarget({
+        cfg: commandParams.cfg,
+        sessionKey: key,
+        agentId: normalizeOptionalString(resolved?.agentId),
       });
-      const key = normalizeOptionalString(resolved?.key) ?? "";
-      if (key) {
-        return key;
-      }
-    } catch {
-      // Try next resolver strategy.
+    }
+    if (Array.isArray(resolved?.candidates) && resolved.candidates.length) {
+      throw new Error(`Ambiguous ACP session target: ${trimmed}. Use an agent-qualified key.`);
     }
   }
   return null;
@@ -56,12 +70,16 @@ export function resolveBoundAcpThreadSessionKey(params: HandleCommandsParams): s
 export async function resolveAcpTargetSessionKey(params: {
   commandParams: HandleCommandsParams;
   token?: string;
-}): Promise<{ ok: true; sessionKey: string } | { ok: false; error: string }> {
+}): Promise<({ ok: true } & AcpSessionTarget) | { ok: false; error: string }> {
   const token = normalizeOptionalString(params.token) ?? "";
   if (token) {
-    const resolved = await resolveSessionKeyByToken(token);
-    if (resolved) {
-      return { ok: true, sessionKey: resolved };
+    try {
+      const resolved = await resolveSessionKeyByToken(token, params.commandParams);
+      if (resolved) {
+        return { ok: true, ...resolved };
+      }
+    } catch (error) {
+      return { ok: false, error: formatErrorMessage(error) };
     }
     // Token was supplied but could not be resolved as a session key/id/label.
     // Fall through to thread-bound resolution so that callers that auto-fill
@@ -73,7 +91,14 @@ export async function resolveAcpTargetSessionKey(params: {
   if (threadBound) {
     return {
       ok: true,
-      sessionKey: threadBound,
+      ...resolveAcpSessionTarget({
+        cfg: params.commandParams.cfg,
+        sessionKey: threadBound,
+        agentId:
+          threadBound === params.commandParams.sessionKey
+            ? params.commandParams.agentId
+            : undefined,
+      }),
     };
   }
 
@@ -95,6 +120,10 @@ export async function resolveAcpTargetSessionKey(params: {
   }
   return {
     ok: true,
-    sessionKey: fallback,
+    ...resolveAcpSessionTarget({
+      cfg: params.commandParams.cfg,
+      sessionKey: fallback,
+      agentId: params.commandParams.agentId,
+    }),
   };
 }

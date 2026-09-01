@@ -163,6 +163,7 @@ const ownerRoutedUnitTestPatterns = [
   // subprocess harness moves into shared test support.
   "test/scripts/ci-git-owner.test.ts",
   "test/scripts/openclaw-performance-git-lifecycle.test.ts",
+  "test/scripts/plugin-release-git-lifecycle.test.ts",
   "test/scripts/release-workflow-git-lifecycle.test.ts",
   "test/scripts/ci-linux-git.test.ts",
   "test/scripts/ci-platform-checkout.test.ts",
@@ -607,7 +608,10 @@ export function getUnitFastTestFilesForIncludePatterns(includePatterns, options 
   return files;
 }
 
-export function getUnitFastTestFiles() {
+export function getUnitFastTestFiles(includePatterns) {
+  if (includePatterns) {
+    return getUnitFastTestFilesForIncludePatterns(includePatterns);
+  }
   if (cachedUnitFastTestFiles !== null) {
     return cachedUnitFastTestFiles;
   }
@@ -617,30 +621,38 @@ export function getUnitFastTestFiles() {
   return cachedUnitFastTestFiles;
 }
 
-export function getUnitFastTimerTestFiles() {
-  if (cachedUnitFastTimerTestFiles !== null) {
-    return cachedUnitFastTimerTestFiles;
-  }
-  cachedUnitFastTimerTestFiles = collectUnitFastTestFileAnalysis()
-    .filter((entry) => entry.unitFast && entry.reasons.includes("fake-timers"))
-    .map((entry) => entry.file);
-  return cachedUnitFastTimerTestFiles;
+function selectedUnitFastAnalysis(includePatterns) {
+  // Partial selections reuse scoped analysis without populating whole-lane membership caches.
+  return includePatterns
+    ? getUnitFastTestFilesForIncludePatterns(includePatterns).map((file) =>
+        analyzeUnitFastTestFile(process.cwd(), file),
+      )
+    : collectUnitFastTestFileAnalysis();
 }
 
-export function getUnitFastIsolatedTestFiles() {
-  if (cachedUnitFastIsolatedTestFiles !== null) {
+export function getUnitFastTimerTestFiles(includePatterns) {
+  if (!includePatterns && cachedUnitFastTimerTestFiles !== null) {
+    return cachedUnitFastTimerTestFiles;
+  }
+  const files = selectedUnitFastAnalysis(includePatterns)
+    .filter((entry) => entry.unitFast && entry.reasons.includes("fake-timers"))
+    .map((entry) => entry.file);
+  return includePatterns ? files : (cachedUnitFastTimerTestFiles = files);
+}
+
+export function getUnitFastIsolatedTestFiles(includePatterns) {
+  if (!includePatterns && cachedUnitFastIsolatedTestFiles !== null) {
     return cachedUnitFastIsolatedTestFiles;
   }
-  const timerTestFiles = new Set(getUnitFastTimerTestFiles());
-  cachedUnitFastIsolatedTestFiles = collectUnitFastTestFileAnalysis()
+  const files = selectedUnitFastAnalysis(includePatterns)
     .filter(
       (entry) =>
         entry.unitFast &&
-        !timerTestFiles.has(entry.file) &&
+        !entry.reasons.includes("fake-timers") &&
         (entry.forced || entry.reasons.includes("stateful-test-helper")),
     )
     .map((entry) => entry.file);
-  return cachedUnitFastIsolatedTestFiles;
+  return includePatterns ? files : (cachedUnitFastIsolatedTestFiles = files);
 }
 
 function getUnitFastTestFileSet() {

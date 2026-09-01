@@ -18,6 +18,7 @@ import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
+import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
@@ -40,6 +41,22 @@ function createHermeticEnv(rootDir: string): NodeJS.ProcessEnv {
     OPENCLAW_STATE_DIR: path.join(rootDir, "state"),
     OPENCLAW_VERSION: "2026.4.26",
     VITEST: "true",
+  };
+}
+
+function createCurrentMetadataSnapshot(
+  config: OpenClawConfig,
+  workspaceDir: string,
+): PluginMetadataSnapshot {
+  const snapshot = createPluginMetadataSnapshotFixture();
+  const policyHash = resolveInstalledPluginIndexPolicyHash(config);
+  snapshot.index.policyHash = policyHash;
+  return {
+    ...snapshot,
+    policyHash,
+    configFingerprint: "",
+    workspaceDir,
+    normalizePluginId: (pluginId) => pluginId,
   };
 }
 
@@ -272,49 +289,8 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     const env = createHermeticEnv(makeTempDir());
     const config = {};
     const workspaceDir = path.join(makeTempDir(), "workspace");
-    const policyHash = resolveInstalledPluginIndexPolicyHash(config);
-    const index: InstalledPluginIndex = {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash,
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: [],
-      diagnostics: [],
-    };
-    const snapshot: PluginMetadataSnapshot = {
-      policyHash,
-      configFingerprint: "",
-      workspaceDir,
-      index,
-      registryIndex: index,
-      registryDiagnostics: [],
-      manifestRegistry: { plugins: [], diagnostics: [] },
-      plugins: [],
-      diagnostics: [],
-      byPluginId: new Map(),
-      normalizePluginId: (pluginId: string) => pluginId,
-      owners: {
-        channels: new Map(),
-        channelConfigs: new Map(),
-        providers: new Map(),
-        modelCatalogProviders: new Map(),
-        cliBackends: new Map(),
-        setupProviders: new Map(),
-        commandAliases: new Map(),
-        contracts: new Map(),
-      },
-      metrics: {
-        registrySnapshotMs: 0,
-        manifestRegistryMs: 0,
-        ownerMapsMs: 0,
-        totalMs: 0,
-        indexPluginCount: 0,
-        manifestPluginCount: 0,
-      },
-    };
+    const snapshot = createCurrentMetadataSnapshot(config, workspaceDir);
+    const index = snapshot.index;
     setCurrentPluginMetadataSnapshot(snapshot, { config, env, workspaceDir });
 
     const result = loadPluginRegistrySnapshotWithMetadata({ config, env, workspaceDir });
@@ -360,25 +336,11 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     };
     const config = {};
     const workspaceDir = path.join(makeTempDir(), "workspace");
-    const policyHash = resolveInstalledPluginIndexPolicyHash(config);
-    const index: InstalledPluginIndex = {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash,
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: [],
-      diagnostics: [],
-    };
+    const snapshot = createCurrentMetadataSnapshot(config, workspaceDir);
+    const index = snapshot.index;
     setCurrentPluginMetadataSnapshot(
       {
-        policyHash,
-        configFingerprint: "",
-        workspaceDir,
-        index,
-        registryIndex: index,
+        ...snapshot,
         registrySource: "derived",
         registryDiagnostics: [
           {
@@ -387,29 +349,6 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
             message: "missing",
           },
         ],
-        manifestRegistry: { plugins: [], diagnostics: [] },
-        plugins: [],
-        diagnostics: [],
-        byPluginId: new Map(),
-        normalizePluginId: (pluginId: string) => pluginId,
-        owners: {
-          channels: new Map(),
-          channelConfigs: new Map(),
-          providers: new Map(),
-          modelCatalogProviders: new Map(),
-          cliBackends: new Map(),
-          setupProviders: new Map(),
-          commandAliases: new Map(),
-          contracts: new Map(),
-        },
-        metrics: {
-          registrySnapshotMs: 0,
-          manifestRegistryMs: 0,
-          ownerMapsMs: 0,
-          totalMs: 0,
-          indexPluginCount: 0,
-          manifestPluginCount: 0,
-        },
       },
       { config, env, workspaceDir },
     );
@@ -444,52 +383,11 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     };
     const config = {};
     const workspaceDir = path.join(tempRoot, "workspace");
-    const policyHash = resolveInstalledPluginIndexPolicyHash(config);
-    const currentIndex: InstalledPluginIndex = {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash,
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: [],
-      diagnostics: [],
-    };
-    setCurrentPluginMetadataSnapshot(
-      {
-        policyHash,
-        configFingerprint: "",
-        workspaceDir,
-        index: currentIndex,
-        registryIndex: currentIndex,
-        registryDiagnostics: [],
-        manifestRegistry: { plugins: [], diagnostics: [] },
-        plugins: [],
-        diagnostics: [],
-        byPluginId: new Map(),
-        normalizePluginId: (pluginId: string) => pluginId,
-        owners: {
-          channels: new Map(),
-          channelConfigs: new Map(),
-          providers: new Map(),
-          modelCatalogProviders: new Map(),
-          cliBackends: new Map(),
-          setupProviders: new Map(),
-          commandAliases: new Map(),
-          contracts: new Map(),
-        },
-        metrics: {
-          registrySnapshotMs: 0,
-          manifestRegistryMs: 0,
-          ownerMapsMs: 0,
-          totalMs: 0,
-          indexPluginCount: 0,
-          manifestPluginCount: 0,
-        },
-      },
-      { config, env, workspaceDir },
-    );
+    setCurrentPluginMetadataSnapshot(createCurrentMetadataSnapshot(config, workspaceDir), {
+      config,
+      env,
+      workspaceDir,
+    });
 
     const result = loadPluginRegistrySnapshotWithMetadata({
       config,

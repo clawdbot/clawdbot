@@ -6,7 +6,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { ChatItem } from "../../lib/chat/chat-types.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
-import { userTurnSendIdentity, type TurnInsertionBounds } from "./chat-thread-items.ts";
+import { userTurnRunId, type TurnInsertionBounds } from "./chat-thread-items.ts";
 import { chatItemStartsUserTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { readLiveTerminalRunId } from "./terminal-message-identity.ts";
 import { buildToolStreamIdentity, extractToolMessageRefs } from "./tool-stream-identity.ts";
@@ -77,12 +77,9 @@ export function findCurrentTurnBounds(items: ChatItem[]): TurnInsertionBounds | 
 }
 
 export function findRunTurnBounds(items: ChatItem[], runId: string): TurnInsertionBounds | null {
-  const sendIdentity = `send:${runId}`;
   const index = items.findIndex(
     (item) =>
-      item.kind === "message" &&
-      isUserChatItem(item) &&
-      userTurnSendIdentity(item.message) === sendIdentity,
+      item.kind === "message" && isUserChatItem(item) && userTurnRunId(item.message) === runId,
   );
   const item = items[index];
   if (index < 0 || !item) {

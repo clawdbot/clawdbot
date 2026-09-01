@@ -199,6 +199,27 @@ describe("cron view list pane", () => {
     expect(onSelectJob).not.toHaveBeenCalled();
   });
 
+  it("gives row actions job-specific accessible names", () => {
+    const jobs = [
+      createJob("job-a", { name: "Daily backup", enabled: true }),
+      createJob("job-b", { name: "Weekly report", enabled: false }),
+    ];
+    const container = renderView({ jobs, canManage: true });
+    const labels = jobs.map((job) => {
+      const row = getElement(container, `[data-test-id="cron-row-${job.id}"]`, HTMLDivElement);
+      return [
+        getElement(row, ".cron-row-run", HTMLButtonElement).getAttribute("aria-label"),
+        getElement(row, ".cron-job-menu__trigger", HTMLButtonElement).getAttribute("aria-label"),
+        getElement(row, "wa-switch", HTMLElement).textContent?.trim(),
+      ];
+    });
+
+    expect(labels).toEqual([
+      ["Run now: Daily backup", "More actions for Daily backup", "Pause: Daily backup"],
+      ["Run now: Weekly report", "More actions for Weekly report", "Resume: Weekly report"],
+    ]);
+  });
+
   it("opens the create panel from the New task button and suggestions", () => {
     const onOpenCreate = vi.fn();
     const container = renderView({ onOpenCreate });

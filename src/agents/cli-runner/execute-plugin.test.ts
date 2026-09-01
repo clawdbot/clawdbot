@@ -105,10 +105,10 @@ function runPlugin(
     env: { PATH: "/bin:/usr/bin", OPENCLAW_TEST_MARKER: "host-owned" },
     prompt: context.params.prompt,
     promptContext: context.promptContext,
-    useResume: options.useResume ?? false,
+    useResume: options.useResume ?? Boolean(options.requiredGeneration),
     sessionId: options.sessionId ?? "sdk-session",
     ...(options.forceNewSession ? { forceNewSession: true } : {}),
-    ...(options.liveSession
+    ...(options.liveSession || options.requiredGeneration
       ? {
           liveSession: {
             beginCapture: () => {},
@@ -403,6 +403,102 @@ describe("plugin-owned CLI execution host boundary", () => {
     expect(replacement.close).toHaveBeenCalledWith("restart");
   });
 
+  it.each([undefined, new Error("SDK stream closed after init")])(
+    "recovers an invalidated control-only resume %#",
+    async (streamError) => {
+      const { context } = await createExecution();
+      const session = registerOwnerSession(context, "required-generation");
+      const run = runPlugin(
+        context,
+        async function* () {
+          yield { type: "system", subtype: "init", session_id: "sdk-session" };
+          session.handle.close("abort");
+          if (streamError) {
+            throw streamError;
+          }
+        },
+        {
+          requiredGeneration: "required-generation",
+        },
+      );
+
+      await expect(run).rejects.toMatchObject({
+        reason: "session_expired",
+        code: "cli_live_session_missing",
+        cause: streamError ?? expect.any(Error),
+      });
+    },
+  );
+
+  it("does not replay an invalidated resume while native approval is pending", async () => {
+    const { context } = await createExecution({
+      config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
+      nativeTools: ["WebFetch"],
+    });
+    const session = registerOwnerSession(context, "required-generation");
+    const approval = createDeferred<{ id: string; decision: "deny" }>();
+    mockCallGatewayTool.mockReturnValueOnce(approval.promise);
+    const streamError = new Error("SDK stream failed during approval");
+    let pending: Promise<CliBackendToolPermissionResult> | undefined;
+
+    const run = runPlugin(
+      context,
+      async function* (execution) {
+        pending = requestNativeTool(execution, "WebFetch", { url: "https://example.com" });
+        await vi.waitFor(() => expect(mockCallGatewayTool).toHaveBeenCalledOnce());
+        yield { type: "system", subtype: "init", session_id: "sdk-session" };
+        session.handle.close("abort");
+        throw streamError;
+      },
+      {
+        requiredGeneration: "required-generation",
+      },
+    );
+
+    await expect(run).rejects.toBe(streamError);
+    approval.resolve({ id: "approval-pending", decision: "deny" });
+    await pending;
+  });
+
+  it("does not replay an invalidated resume while operator input is pending", async () => {
+    const { context } = await createExecution({ nativeTools: ["AskUserQuestion"] });
+    const session = registerOwnerSession(context, "required-generation");
+    const answer = createDeferred<{ status: "cancelled" }>();
+    mockCallGatewayTool.mockImplementation(async (method, _opts, rawParams) => {
+      const params = rawParams as { id: string };
+      if (method === "question.request") {
+        return { id: params.id };
+      }
+      if (method === "question.waitAnswer") {
+        return await answer.promise;
+      }
+      return { status: "cancelled" };
+    });
+    const streamError = new Error("SDK stream failed during operator input");
+    let pending: ReturnType<CliBackendExecuteContext["requestUserInput"]> | undefined;
+
+    const run = runPlugin(
+      context,
+      async function* (execution) {
+        pending = execution.requestUserInput({
+          toolName: "AskUserQuestion",
+          questions: [{ id: "choice", header: "Continue", question: "Continue?" }],
+        });
+        await vi.waitFor(() => expect(mockCallGatewayTool).toHaveBeenCalledTimes(2));
+        yield { type: "system", subtype: "init", session_id: "sdk-session" };
+        session.handle.close("abort");
+        throw streamError;
+      },
+      {
+        requiredGeneration: "required-generation",
+      },
+    );
+
+    await expect(run).rejects.toBe(streamError);
+    answer.resolve({ status: "cancelled" });
+    await pending;
+  });
+
   it("claims prepared resources only for the original process and cleans after its exit", async () => {
     const first = await createExecution({ runId: "plugin-prepared-resource-owner" });
     const cleanup = vi.fn(async () => {});
@@ -683,13 +779,14 @@ describe("plugin-owned CLI execution host boundary", () => {
         context,
         async function* () {
           yield terminal;
+          yield SUCCESS_RESULT;
           throw new Error("SDK stream closed after the provider error");
         },
         { consumeStdout: output.push.bind(output) },
       ),
     ).resolves.toMatchObject({ reason: "exit", exitCode: 0 });
 
-    expect(output.map((line) => JSON.parse(line))).toEqual([terminal]);
+    expect(output.map((line) => JSON.parse(line))).toEqual([terminal, SUCCESS_RESULT]);
   });
 
   it.each([

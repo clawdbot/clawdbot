@@ -190,6 +190,11 @@ plugins.
     Explicit `/export-session` paths replace existing files inside the
     workspace. Omit the path to generate a collision-safe filename.
 
+    HTML conversation cards omit messages marked hidden. The sidebar's **All**
+    filter includes these records with a **[hidden]** label for debugging.
+    Message counts describe the raw archive. The HTML file and its JSONL download
+    still contain hidden records; hiding a message does not redact the export.
+
     <Note>
       Control UI intercepts typed `/new` to create and switch to a fresh
       dashboard session, except when `session.dmScope: "main"` is configured
@@ -318,8 +323,9 @@ plugins.
 | `/dreaming [on\|off\|status\|help]`                                                 | Toggle memory dreaming (owner or Gateway admin). See [Dreaming](/concepts/dreaming)                                                                                                            |
 | `/pair [qr\|status\|pending\|approve\|cleanup\|notify]`                             | Manage device pairing. See [Pairing](/channels/pairing)                                                                                                                                        |
 | [`/voice`](/nodes/talk#choose-a-talk-voice-from-chat) `status\|list\|set <voiceId>` | Manage Talk voice config. Discord native name: `/talkvoice`                                                                                                                                    |
-| `/card ...`                                                                         | Send LINE rich card presets. See [LINE](/channels/line)                                                                                                                                        |
 | `/codex <action> ...`                                                               | Bind, steer, and inspect the Codex app-server harness (status, threads, resume, model, fast, permissions, compact, review, mcp, skills, and more). See [Codex harness](/plugins/codex-harness) |
+
+LINE-only: `/card ...` (rich card presets; see [LINE](/channels/line))
 
 QQBot-only: `/bot-ping`, `/bot-version`, `/bot-help`, `/bot-upgrade`, `/bot-logs`
 
@@ -539,8 +545,8 @@ Unlike a normal message:
 - Does **not** change future session context.
 - Is not written to transcript history.
 
-In the Control UI, `/btw` and `/side` open the session rail and ask its
-read-only companion instead of starting the detached BTW path. The TUI and
+In the Control UI, `/btw` and `/side` open Side chat instead of starting the
+detached BTW path. The TUI and
 external-channel behavior above is unchanged.
 
 See [BTW side questions](/tools/btw) for the full behavior.

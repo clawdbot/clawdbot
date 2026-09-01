@@ -2,10 +2,14 @@
  * Normalizes configured provider model rows for runtime/discovery use.
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { mergeModelCost } from "../config/model-cost.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
-import { createConfiguredProviderCatalogModelIdNormalizer } from "./model-ref-shared.js";
+import {
+  createConfiguredProviderCatalogModelIdNormalizer,
+  type ModelManifestNormalizationContext,
+} from "./model-ref-shared.js";
 import {
   normalizeProviderSpecificConfig,
   resolveProviderConfigApiKeyResolver,
@@ -27,9 +31,6 @@ type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 type ProviderModelConfig = NonNullable<
   NonNullable<ModelsConfig["providers"]>[string]["models"]
 >[number];
-type ProviderModelNormalizationOptions = {
-  manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
-};
 
 function getProviderModelId(model: ProviderModelConfig): string | undefined {
   return typeof model.id === "string" && model.id.trim() ? model.id : undefined;
@@ -61,24 +62,14 @@ function mergeNormalizedProviderModel(
   existing: ProviderModelConfig,
   incoming: ProviderModelConfig,
 ): ProviderModelConfig {
-  return {
-    ...incoming,
-    ...existing,
-    ...(existing.cost || incoming.cost
-      ? {
-          cost: {
-            ...incoming.cost,
-            ...existing.cost,
-          },
-        }
-      : undefined),
-  };
+  const cost = mergeModelCost(incoming.cost, existing.cost);
+  return { ...incoming, ...existing, ...(cost ? { cost } : {}) };
 }
 
 function normalizeProviderModelsForConfig(
   providerKey: string,
   provider: ProviderConfig,
-  options: ProviderModelNormalizationOptions = {},
+  options: ModelManifestNormalizationContext = {},
   completeCatalogCosts = false,
 ): ProviderConfig {
   if (!Array.isArray(provider.models) || provider.models.length === 0) {
@@ -128,7 +119,7 @@ function normalizeProviderModelsForConfig(
 
 export function normalizeProviderCatalogModelsForConfig(
   providers: ModelsConfig["providers"],
-  options: ProviderModelNormalizationOptions = {},
+  options: ModelManifestNormalizationContext = {},
 ): ModelsConfig["providers"] {
   if (!providers) {
     return providers;
@@ -154,7 +145,7 @@ export function normalizeProviders(params: {
   secretDefaults?: SecretDefaults;
   sourceConfigForSecrets?: OpenClawConfig;
   secretRefManagedProviders?: Set<string>;
-  manifestPlugins?: ProviderModelNormalizationOptions["manifestPlugins"];
+  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"];
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 }): ModelsConfig["providers"] {
   const { providers } = params;

@@ -851,8 +851,8 @@ function renderJobRow(job: CronJob, props: CronProps) {
                 type="button"
                 class="btn btn--sm btn--ghost cron-row-run"
                 data-test-id=${`cron-row-run-${job.id}`}
-                title=${t("cron.actions.runNow")}
-                aria-label=${t("cron.actions.runNow")}
+                title=${t("cron.actions.runNowJob", { name: job.name })}
+                aria-label=${t("cron.actions.runNowJob", { name: job.name })}
                 ?disabled=${props.busy}
                 @click=${() => props.onRun(job, "force")}
               >
@@ -1024,8 +1024,8 @@ function renderJobMenu(props: CronProps, job: CronJob) {
         slot="trigger"
         type="button"
         class="btn btn--sm btn--ghost cron-job-menu__trigger"
-        aria-label=${t("cron.actions.more")}
-        title=${t("cron.actions.more")}
+        aria-label=${t("cron.actions.moreJob", { name: job.name })}
+        title=${t("cron.actions.moreJob", { name: job.name })}
       >
         ${icon("moreHorizontal")}
       </button>
@@ -1181,7 +1181,9 @@ function renderEnabledSwitch(
   opts?: { compact?: boolean; testId?: string },
 ) {
   const stateLabel = job.enabled ? t("cron.detail.active") : t("cron.detail.paused");
-  const actionLabel = job.enabled ? t("cron.actions.pause") : t("cron.actions.resume");
+  const actionLabel = t(job.enabled ? "cron.actions.pauseJob" : "cron.actions.resumeJob", {
+    name: job.name,
+  });
   return html`
     <span
       class="cron-enabled-toggle"

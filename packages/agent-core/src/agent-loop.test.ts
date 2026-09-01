@@ -12,6 +12,8 @@ import {
   attachInternalToolBatchLifecycle,
   attachInternalToolExecutionPreparer,
   attachInternalToolResultAcknowledgement,
+  attachInternalToolResultProvenance,
+  getInternalToolResultProvenance,
   setInternalBeforeToolBatch,
   takeInternalToolBatchLifecycle,
 } from "./internal-hooks.js";
@@ -2599,12 +2601,16 @@ describe("agentLoop tool termination", () => {
     { name: "dropped", failAttachment: true, expectedAcknowledgements: 0 },
   ])("acknowledges an internal tool result only after it is $name", async (testCase) => {
     const acknowledge = vi.fn();
+    const provenance = { source: "test-tool-result-provenance" };
     const tool: AgentTool = {
       ...makeTool("commit_probe", []),
       execute: async () =>
-        attachInternalToolResultAcknowledgement(
-          { content: [{ type: "text", text: "committed" }], details: { phase: "execute" } },
-          acknowledge,
+        attachInternalToolResultProvenance(
+          attachInternalToolResultAcknowledgement(
+            { content: [{ type: "text", text: "committed" }], details: { phase: "execute" } },
+            acknowledge,
+          ),
+          provenance,
         ),
     };
     const streamFn = createTurnSequenceStream([
@@ -2620,11 +2626,18 @@ describe("agentLoop tool termination", () => {
         afterToolOutcome: async () => ({ details: { phase: "after-outcome" } }),
       },
       async (event) => {
+        if (event.type === "tool_execution_end") {
+          expect(event.result).toBeTypeOf("object");
+          if (typeof event.result === "object" && event.result !== null) {
+            expect(getInternalToolResultProvenance(event.result)).toBe(provenance);
+          }
+        }
         if (
           !testCase.failAttachment &&
           event.type === "message_end" &&
           event.message.role === "toolResult"
         ) {
+          expect(getInternalToolResultProvenance(event.message)).toBe(provenance);
           acknowledgeInternalToolResult(event.message);
         }
         if (

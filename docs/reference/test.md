@@ -172,6 +172,63 @@ existing temporary directories, Node or Vitest caches, or other global caches. S
 validators; it does not require `TSX_DISABLE_CACHE` in the invoking shell. Raw
 external `tsx` and `node --import tsx` invocations outside these launchers are unchanged.
 
+### Source tests and subprocess builds
+
+Non-watch runs through `pnpm test` or `scripts/run-vitest.mjs` keep Vitest tests
+and runtime parents on TypeScript. Importing a declared subprocess entrypoint
+compiles the fixed test entry set and its workspace dependencies into one fresh
+invocation directory under `.artifacts/vitest-workers/`.
+
+The nine declared application entries run as plain Node JavaScript without a
+TypeScript loader: SQLite read-only snapshots, database verification, Tailscale
+route ownership, the service relay, its POSIX and Windows anchors, the memory
+plugin's KNN child, and the session transcript archive and reconciliation workers.
+The same generation also compiles the fake-backend TUI
+fixture's four runtime roots together: the real TUI, embedded reply producer,
+reply metadata reader, and outbound normalizer. Shared chunks preserve their
+module and WeakMap identity. Generated TUI fixtures remain `.mts` files: Node
+launches them with `--import tsx` for their own syntax, while Bun handles that
+syntax natively without the Node loader. Only their runtime imports change.
+Package build entry paths and Vitest source parents stay unchanged. Other
+Worker-thread entries and arbitrary source CLI fixtures remain outside this declared set.
+
+Preparation is lazy across both projects and shards. Config imports, listing
+tests, and tiny tests that do not import these declarations do not load the
+subprocess compiler or compile workers. A shard that needs a declaration requests the
+outer runner's single build through its existing Node IPC channel during module
+collection, before fixture hooks and readiness deadlines. Every finite invocation
+that needs a declaration pays for this fixed entry set; preparation timing is
+reported separately from child execution. The runner starts one short-lived native
+Node or Bun compiler child and joins it before returning the verified manifest to
+borrowers. The compiler module graph lives in that child, not the long-lived runner
+or Vitest worker. No shard can select a different build graph or adopt another invocation's output. The outer
+runner retains the generation until child close and process-group cleanup
+finish, then verifies it before reporting success. Standalone Vitest and watch runs retain
+source execution: its public close hooks run concurrently with pool shutdown,
+so compilation and artifact deletion require the repository runner's ownership.
+A lost owner or failed build fails the run.
+Disposal cancels pending compilation and joins it and every borrower before
+removing the directory. An uncertain compiler or borrower join retains the
+generation and fails the run. Abnormal termination can also leave an unused
+directory; later runs never adopt it.
+
+Every preparation compiles current source; checkout `dist/` is neither an input
+nor a fallback. Build errors, missing artifacts, and changes to recorded build
+inputs fail the run. Compilation includes the native subprocess fixtures before
+they impose resource limits. Third-party dependencies remain external except for
+the always-bundled OpenClaw packages. Each generation carries all seven fs-safe
+native helpers in its own private tree, using the package runtime's loader-relative
+layout. The package itself shares one native tree between runtime entries and its
+sealed worker; it does not copy a second tree beside that worker. The helpers'
+original source hashes are pinned before copying and verified alongside compiler
+output; missing or altered assets fail verification. The default stays off, and
+the existing `off`/`auto`/`require` opt-ins retain their behavior.
+
+Watch mode deliberately keeps the existing live-source path, including tsx for
+Node subprocesses and native TypeScript handling for Bun. It creates no prepared generation, so a new child launch
+reads current source rather than reusing a compiled snapshot. Existing Vitest
+watch dependency tracking still determines when tests rerun.
+
 Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` summary; Vitest's own duration line stays the per-shard detail.
 
 | Command                                           | What it does                                                                                                                                                                                                                                                                                                                                          |
@@ -227,11 +284,17 @@ then drives obsolete declaration pruning. Missing or tampered outputs invalidate
 the owner. The content records live under
 `.artifacts/extension-package-boundary`, outside packaged build cleanup. A warm run validates the records without emitting declarations.
 
-Packaged declarations belong to the public/private tsdown SDK groups. Full and
-package builds emit them in the canonical build; `ciArtifacts` stages only those
-two groups and publishes after both succeed and their relative declaration closure
-is complete. Local preparation never overwrites packaged declarations or writes
-workspace forwarding bridges.
+Packaged SDK declarations belong to one staged owner shared by full, package, and
+`ciArtifacts` builds. It serializes the two canonical tsdown SDK groups on a miss
+and caches their complete staged generation. Each successful compiler supplies its
+source membership through a private staged receipt; missing receipts or inputs
+changed during compilation prevent publication. The shared input snapshot policy
+validates consumed bytes, inherited configuration, generator and manifest inputs,
+and resolution topology without starting a compiler on hits. Cache hits restore
+into fresh staging and pass the same entry and relative declaration closure checks
+before publication.
+Local preparation never overwrites packaged declarations or writes workspace
+forwarding bridges.
 
 Plugin SDK declaration preparation and `scripts/run-tsgo.mjs` require child work
 to finish before reporting success. On POSIX, each verifies its own managed
@@ -273,6 +336,40 @@ not sweep old directories or infer ownership from names, ages, or PIDs.
 - Selected `plugin-sdk` and `commands` test files route through dedicated light lanes that keep only `test/setup.ts`, leaving runtime-heavy cases on their existing lanes.
 - Base Vitest config defaults to `pool: "threads"` and `isolate: false`, with the shared non-isolated runner enabled across repo configs.
 - `pnpm test:channels` runs `vitest.channels.config.ts`.
+
+### Retained mocked Control UI proof
+
+Ordinary mocked browser screenshots, recordings, and reports use fresh directories
+for each test attempt or standalone capture invocation. The Node-only
+`createControlUiE2eArtifactDir(scope, parentDir?)` helper in
+`ui/src/test-helpers/control-ui-e2e-artifacts.ts` prints the actual allocated path.
+An explicit parent wins; otherwise it uses the trimmed existing
+`OPENCLAW_UI_E2E_ARTIFACT_DIR`, then the repository's `.artifacts/control-ui-e2e`
+parent. Existing feature-specific directory controls and script output arguments
+select parents, with unique children beneath them. Explicit screenshot filename
+controls preserve the basename and print the relocated path.
+
+Keep capture gates independent from allocation: `OPENCLAW_CAPTURE_UI_PROOF`,
+`OPENCLAW_UI_E2E_RECORD`, and output-presence gates retain their existing meanings.
+Allocate during scenario execution or `beforeEach`, and pass the same owner to
+shared capture helpers so screenshots, reports, and video stay together. Distinguish
+stage names within an attempt. Close the browser context before finalizing video.
+
+Successful and failed evidence is retained. Cleanup is manual: remove only exact
+directories that you own and have finished reviewing. Never recursively delete
+the shared parent before a replay. Disposable build/media fixtures and temporary
+raw video have their own cleanup. New captures cannot recover overwritten evidence;
+do not describe a replay as recovery of lost files.
+
+Timeout diagnostics allocate fresh children beneath the existing
+`OPENCLAW_UI_E2E_DIAGNOSTIC_DIR` or default timeout directory, keeping each PNG and
+JSON report together. Mantis allocates an invocation directory for setup logs,
+capture attempts, and its report; the builder preserves each attempt's relative
+paths and refuses to overwrite an existing report.
+
+Separate output owners remain: real-Gateway suites, `chat-outbox-*`, and
+`chat-attachment-read-lifecycle`. Do not assume those owners have the ordinary
+mocked proof retention guarantee.
 
 ## Gateway and E2E
 
@@ -327,7 +424,7 @@ Other behavior: the runner preflights Docker by default, cleans stale OpenClaw E
 | `pnpm test:docker:mcp-channels`                                                              | Seeded Gateway container plus a client container spawning `openclaw mcp serve`: routed conversation discovery, transcript reads, attachment metadata, live event queue behavior, outbound send routing, and Claude-style channel + permission notifications over the real stdio bridge (assertion reads raw stdio MCP frames directly).                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `pnpm test:docker:upgrade-survivor`                                                          | Installs the packed tarball over a dirty old-user fixture, runs package update plus non-interactive doctor without live provider/channel keys, starts a loopback Gateway, checks agents/channel config/plugin allowlists/workspace/session state/stale legacy plugin dependency state/startup/RPC status survive.                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `pnpm test:docker:published-upgrade-survivor`                                                | Installs `openclaw@latest` by default, seeds realistic existing-user files, configures via a baked `openclaw config set` recipe, updates to the packed tarball, runs non-interactive doctor, writes `.artifacts/upgrade-survivor/summary.json`, checks `/healthz`, `/readyz`, RPC status. Override with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC`, expand a matrix with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS`, or add scenario fixtures with `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS=reported-issues` (includes `configured-plugin-installs` and `stale-source-plugin-shadow`). Package Acceptance exposes these as `published_upgrade_survivor_baseline(s)` / `_scenarios` and resolves meta tokens like `last-stable-4` or `all-since-2026.4.23`. |
-| `pnpm test:docker:update-migration`                                                          | Published-upgrade survivor harness in the `plugin-deps-cleanup` scenario, starting at `openclaw@2026.4.23` by default. The `Update Migration` workflow expands this with `baselines=all-since-2026.4.23` to prove configured-plugin dependency cleanup outside Full Release CI.                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `pnpm test:docker:update-migration`                                                          | Published-upgrade survivor harness in the `plugin-deps-cleanup` scenario, starting at the latest stable release by default. The `Update Migration` workflow pins that baseline before fanout; pass `baselines=all-since-2026.4.23` for an explicit historical cleanup replay.                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `pnpm test:docker:plugins`                                                                   | Install/update smoke for local path, `file:`, npm registry packages with hoisted dependencies, git moving refs, ClawHub fixtures, marketplace updates, and Claude-bundle enable/inspect.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 
 ### Sandbox compatibility lanes

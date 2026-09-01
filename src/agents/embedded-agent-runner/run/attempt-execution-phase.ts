@@ -190,6 +190,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     : undefined;
   const preparedStream = prepareEmbeddedAttemptStream({
     attempt,
+    applyPermissionMode: input.lifecycle.applyPermissionMode,
     activeSession,
     runAbortController: input.runAbortController,
     abortRun,

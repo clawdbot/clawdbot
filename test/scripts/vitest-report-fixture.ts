@@ -1,8 +1,6 @@
-import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
-import { createPnpmRunnerSpawnSpec } from "../../scripts/pnpm-runner.mts";
 import { waitForFile } from "../helpers/process-wait.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
@@ -54,7 +52,6 @@ export function createVitestReportFixture(root: string, evidence = path.join(roo
   };
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH,
-    npm_execpath: process.env.npm_execpath,
     HOME: path.join(root, "home"),
     OPENCLAW_HOME: path.join(root, "home"),
     OPENCLAW_STATE_DIR: path.join(root, "state"),
@@ -92,64 +89,7 @@ export function createVitestReportFixture(root: string, evidence = path.join(roo
     mode: ReportFixtureMode,
     options: { nativeArgs?: string[]; entry?: "projects" | "batch-cli"; report?: boolean } = {},
   ) => {
-    // Bootstrap and native execution share the fixture's existing timeout budget.
     const deadline = performance.now() + 45000;
-    if (mode.startsWith("batch") && options.entry !== "batch-cli" && !env.npm_execpath) {
-      // Corepack needs the parent's prepared resources before HOME isolation. Ask
-      // pnpm for its executable; carry that fact, never the parent's writable cache.
-      const bootstrap = path.join(root, "pnpm-bootstrap");
-      write(
-        path.join(bootstrap, "package.json"),
-        JSON.stringify({
-          private: true,
-          scripts: { "pnpm-path": "node -p process.env.npm_execpath" },
-        }),
-      );
-      const spec = createPnpmRunnerSpawnSpec({
-        cwd: repoRoot,
-        env: { ...process.env, COREPACK_ENABLE_NETWORK: "0" },
-        // Preserve pnpm-workspace.yaml's no-reconciliation policy in the owned package.
-        pnpmArgs: [
-          "--dir",
-          bootstrap,
-          "--config.verify-deps-before-run=false",
-          "--silent",
-          "run",
-          "pnpm-path",
-        ],
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      const { child, completion } = spawnOwnedVitestProcess(spec);
-      let stdout = "",
-        stderr = "";
-      child.stdout!.on("data", (chunk) => {
-        stdout += chunk;
-      });
-      child.stderr!.on("data", (chunk) => {
-        stderr += chunk;
-      });
-      const timeout = setTimeout(
-        () => child.kill("SIGTERM"),
-        Math.max(0, deadline - performance.now()),
-      );
-      try {
-        const result = await completion;
-        write(
-          path.join(evidence, "bootstrap.json"),
-          JSON.stringify(
-            { command: [spec.command, ...spec.args], ...result, stdout, stderr, joined: true },
-            null,
-            2,
-          ),
-        );
-        assert.equal(result.code, 0, stderr);
-        assert.equal(result.signal, null, stderr);
-        env.npm_execpath = stdout.trim();
-        assert(path.isAbsolute(env.npm_execpath), "pnpm did not expose its executable path");
-      } finally {
-        clearTimeout(timeout);
-      }
-    }
     const output = path.join(evidence, "result.json");
     const ready = path.join(root, "ready");
     const done = path.join(root, "beta.done");

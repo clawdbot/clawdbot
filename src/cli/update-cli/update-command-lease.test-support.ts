@@ -59,6 +59,9 @@ export async function runUpdateLeaseChild(): Promise<void> {
     assert.equal(process.env.OPENCLAW_UPDATE_IN_PROGRESS, "1");
     assert.equal(process.env.OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR, "1");
     assert.equal(process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE, "1");
+    assert.equal(process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION, "0");
+    assert.equal(process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR, "0");
+    assert.equal(process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART, "1");
     if (scenario.hostVersion) {
       assert.equal(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION, scenario.hostVersion);
     }

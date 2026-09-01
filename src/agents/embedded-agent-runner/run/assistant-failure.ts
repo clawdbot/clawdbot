@@ -289,6 +289,7 @@ export async function handleEmbeddedAssistantFailure(input: {
     lastAssistant: input.attemptAssistant,
     config: input.runParams.config,
     sessionKey: input.runParams.sessionKey ?? input.runParams.sessionId,
+    agentId: input.runParams.agentId,
     authFailure,
     rateLimitFailure,
     billingFailure,
