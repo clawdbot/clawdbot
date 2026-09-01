@@ -291,6 +291,46 @@ describe("pw-session Playwright CDP transport", () => {
     });
   });
 
+  it("closes a root contextless target that has no session id", async () => {
+    const commands: object[] = [];
+    const closeWire = vi.fn();
+    const wire: import("playwright-core").ConnectOverCDPTransport = {
+      send: (message) => commands.push(message),
+      close: closeWire,
+    };
+    const browser = makeBrowser("A", "https://example.com");
+    connectOverCdpSpy.mockImplementationOnce((async (value: unknown) => {
+      const transport = value as import("playwright-core").ConnectOverCDPTransport;
+      const delivered: object[] = [];
+      let closed = false;
+      Object.assign(transport, {
+        onmessage: (message: object) => delivered.push(message),
+        onclose: () => {
+          closed = true;
+        },
+      });
+      wire.onmessage?.({
+        method: "Target.attachedToTarget",
+        params: {
+          targetInfo: { targetId: "sessionless-worker", type: "service_worker" },
+          waitingForDebugger: true,
+        },
+      });
+      expect(commands).toEqual([]);
+      expect(delivered).toEqual([]);
+      expect(closeWire).toHaveBeenCalledOnce();
+      expect(closed).toBe(false);
+      wire.onclose?.("cleanup acknowledged");
+      await vi.waitFor(() => expect(closed).toBe(true));
+      return browser.browser;
+    }) as never);
+    await connectOverCdpTransport("http://127.0.0.1:18799", {
+      timeout: 1000,
+      headers: {},
+      preparedTransport: wire,
+    });
+  });
+
   it("connects guarded Playwright CDP through the pinned WebSocket transport", async () => {
     const server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
     await new Promise<void>((resolve) => {
