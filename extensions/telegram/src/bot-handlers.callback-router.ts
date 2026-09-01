@@ -13,7 +13,11 @@ import {
   hasTelegramApprovalCallbackPrefix,
   parseTelegramApprovalCallbackData,
 } from "./approval-callback-data.js";
-import { resolveAgentDir, resolveDefaultModelForAgent } from "./bot-handlers.agent.runtime.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveDefaultModelForAgent,
+} from "./bot-handlers.agent.runtime.js";
 import {
   createTelegramCallbackMessageActions,
   handleTelegramQuestionCallback,
@@ -651,6 +655,7 @@ async function handleTelegramModelCallback(params: {
       applySessionModelSelection({
         cfg: runtimeCfg,
         agentId: sessionState.agentId,
+        workspaceDir: resolveAgentWorkspaceDir(runtimeCfg, sessionState.agentId),
         sessionKey: sessionState.sessionKey,
         storePath,
         sessionEntry,
