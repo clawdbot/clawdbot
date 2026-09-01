@@ -9,7 +9,7 @@ import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
 } from "../live-transports/shared/credential-lease.runtime.js";
-import { resolveSlackQaScenarioIds } from "../live-transports/slack/scenario-selection.js";
+import { resolveLiveTransportQaScenarioIds } from "../live-transports/shared/scenario-selection.js";
 import { isTruthyOptIn, trimToValue } from "../mantis-options.runtime.js";
 import { createPhaseTimer, type MantisPhaseTimings } from "../mantis-phase-timer.runtime.js";
 import {
@@ -199,7 +199,12 @@ function resolveScenarioIds(params: {
     }
     // Mirror the YAML catalog order used by the Slack runner so the watcher
     // and runner cannot block on different approval checkpoints.
-    return resolveSlackQaScenarioIds({ scenarioIds });
+    return resolveLiveTransportQaScenarioIds({
+      channelId: "slack",
+      providerMode: "live-frontier",
+      scenarioIds,
+      supportsModuleFlows: true,
+    });
   }
   return scenarioIds;
 }
