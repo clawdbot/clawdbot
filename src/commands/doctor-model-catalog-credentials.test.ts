@@ -341,4 +341,35 @@ describe("doctor model catalog credential migration", () => {
     }
     expect(profiles["example:default"]).toBeUndefined();
   });
+
+  it("keeps a same-string literal from a different provider when SecretRefs are provider-bound", async () => {
+    const state = createState();
+    const { agentDir } = state;
+    const cfg: OpenClawConfig = {
+      models: { providers: { example: provider("${CUSTOM_API_KEY}") } },
+    };
+    // A different provider uses the same string as a literal catalog credential.
+    fs.writeFileSync(
+      path.join(agentDir, "models.json"),
+      `${JSON.stringify({ providers: { other: provider("CUSTOM_API_KEY") } }, null, 2)}\n`,
+    );
+
+    const result = await maybeMigrateModelCatalogCredentials(migrationParams(state, cfg));
+
+    expect(result).toMatchObject({ detected: 1, migrated: 1, warnings: [] });
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = state.stateDir;
+    let profiles: Record<string, unknown>;
+    try {
+      profiles = loadPersistedAuthProfileStore(undefined)?.profiles ?? {};
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+    }
+    expect(profiles["example:default"]).toBeUndefined();
+    expect(profiles["other:default"]).toMatchObject({ key: "CUSTOM_API_KEY" });
+  });
 });

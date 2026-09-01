@@ -52,28 +52,31 @@ function credentialMatches(
   );
 }
 
-function collectAuthoredEnvApiKeyIds(providers: unknown): Set<string> {
+function collectAuthoredEnvApiKeyIds(providers: unknown): Map<string, Set<string>> {
+  const byProvider = new Map<string, Set<string>>();
   if (!isRecord(providers)) {
-    return new Set();
+    return byProvider;
   }
-  const ids = new Set<string>();
-  for (const entry of Object.values(providers)) {
+  for (const [provider, entry] of Object.entries(providers)) {
     if (!isRecord(entry) || typeof entry.apiKey !== "string") {
       continue;
     }
     const ref = parseEnvTemplateSecretRef(entry.apiKey);
     if (ref?.source === "env") {
+      const providerKey = normalizeProviderId(provider);
+      const ids = byProvider.get(providerKey) ?? new Set<string>();
       ids.add(ref.id);
+      byProvider.set(providerKey, ids);
     }
   }
-  return ids;
+  return byProvider;
 }
 
 function collectCredentials(
   providers: unknown,
   store: AuthProfileStore,
   blockedStores: readonly AuthProfileStore[] = [],
-  authoredEnvApiKeyIds: ReadonlySet<string> = new Set(),
+  authoredEnvApiKeyIds: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
 ): PlaintextCredential[] {
   if (!isRecord(providers)) {
     return [];
@@ -87,7 +90,7 @@ function collectCredentials(
     if (
       !key.trim() ||
       parseEnvTemplateSecretRef(key) !== null ||
-      authoredEnvApiKeyIds.has(key) ||
+      authoredEnvApiKeyIds.get(normalizeProviderId(provider))?.has(key) === true ||
       isNonSecretApiKeyMarker(key) ||
       store.profiles[key] !== undefined ||
       findMatchingProfileId(store, credential, blockedStores) !== undefined
