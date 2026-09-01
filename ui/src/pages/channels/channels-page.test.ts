@@ -213,7 +213,9 @@ describe("ChannelsPage lifecycle", () => {
     expect(request).toHaveBeenCalledWith("plugins.list", {}, expect.any(Object));
     expect(
       fetchMock.mock.calls
-        .map((call) => String(call[0]))
+        .map(([input]) =>
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+        )
         .filter((url) => url.includes("/__openclaw__/plugin-icon/")),
     ).toEqual(["/__openclaw__/plugin-icon/slack"]);
     source.runtimeConfig.dispose();

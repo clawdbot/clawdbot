@@ -262,17 +262,15 @@ class ChannelsPage extends OpenClawLightDomElement {
 
   private setShowAdvancedSettings(enabled: boolean) {
     patchSettings({ showAdvancedSettings: enabled });
-    // Republish so config pages see the pref without a reload; patchSettings only writes storage.
     this.context.theme.refresh();
   }
 
   private async saveChannelConfig() {
-    const context = this.context;
-    if (!context) {
+    if (!this.context) {
       return;
     }
-    if (await context.runtimeConfig.save()) {
-      await context.channels.refresh(true);
+    if (await this.context.runtimeConfig.save()) {
+      await this.context.channels.refresh(true);
     }
   }
 
