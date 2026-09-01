@@ -10,6 +10,7 @@ import {
   beginSessionWorkAdmission,
   cancelSessionWorkAdmissionHandoff,
 } from "../../sessions/session-lifecycle-admission.js";
+import { getMainSessionRecoveryRetryCount } from "./main-session-recovery-state.js";
 import { markStartupOrphanedMainSessionsForRecovery } from "./main-session-restart-recovery-marking.js";
 import {
   DEFAULT_RECOVERY_DELAY_MS,
@@ -228,7 +229,7 @@ export function scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease(param
         storePath: params.storePath,
         gatewayRuntime,
       });
-    });
+    }, "main-session:restart-recovery");
   void runRecoveryRetries({
     initialDelayMs: 0,
     maxRetries: params.maxRetries ?? MAX_RECOVERY_RETRIES,
@@ -248,8 +249,9 @@ export function scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease(param
       }
       if (
         finalAttempt &&
-        stillPending?.mainRestartRecovery?.chargedAttempts === MAX_RECOVERY_RETRIES &&
-        !stillPending.mainRestartRecovery.reservation
+        getMainSessionRecoveryRetryCount(stillPending?.mainRestartRecovery) ===
+          MAX_RECOVERY_RETRIES &&
+        !stillPending?.mainRestartRecovery?.reservation
       ) {
         // The last ambiguous dispatch consumed the final durable charge. One
         // exact observation tombstones exhaustion without dispatching again.
@@ -307,27 +309,29 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
         shouldContinue,
         gatewayRuntime: params.gatewayRuntime,
       });
-    });
+    }, "main-session:startup-recovery");
   };
   const reconcileExhaustedTargets = async (targets: Iterable<ExhaustedRestartRecoveryTarget>) => {
     const outcomes = await Promise.allSettled(
       [...targets].map((target) =>
-        runWithGatewayIndependentRootWorkAdmission(async () =>
-          recoverExpectedRestartRecovery({
-            cfg: params.getConfig(),
-            expectedTarget: {
-              canonicalSessionKey: target.canonicalSessionKey,
-              sessionId: target.sessionId,
+        runWithGatewayIndependentRootWorkAdmission(
+          async () =>
+            recoverExpectedRestartRecovery({
+              cfg: params.getConfig(),
+              expectedTarget: {
+                canonicalSessionKey: target.canonicalSessionKey,
+                sessionId: target.sessionId,
+                sessionKey: target.sessionKey,
+              },
+              lifecycleGeneration,
+              observationOnly: true,
               sessionKey: target.sessionKey,
-            },
-            lifecycleGeneration,
-            observationOnly: true,
-            sessionKey: target.sessionKey,
-            shouldContinue,
-            storePath: target.storePath,
-            stateDir: params.stateDir,
-            gatewayRuntime: params.gatewayRuntime,
-          }),
+              shouldContinue,
+              storePath: target.storePath,
+              stateDir: params.stateDir,
+              gatewayRuntime: params.gatewayRuntime,
+            }),
+          "main-session:target-recovery",
         ),
       ),
     );

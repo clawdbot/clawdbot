@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import OpenClawChatUI
 import SwiftUI
 
 @MainActor
@@ -48,12 +49,9 @@ final class StatusMenuSessions: NSObject {
     }
 
     func configureSessionItem(_ item: NSMenuItem, row: SessionRow) {
-        item.title = row.label
+        item.title = StatusMenuMetrics.fittedTitle(row.label)
         item.isEnabled = true
-        self.configureHostedView(
-            item,
-            rootView: AnyView(StatusSessionCard(row: row)),
-            width: StatusMenuRenderer.cardWidth)
+        StatusMenuRenderer.configureHostedView(item, rootView: StatusSessionCard(row: row), highlights: true)
 
         if let submenu = item.submenu {
             self.updateSessionSubmenu(submenu, row: row)
@@ -66,28 +64,12 @@ final class StatusMenuSessions: NSObject {
         item.title = String(localized: "Approval requested")
         item.isEnabled = true
         item.submenu = nil
-        self.configureHostedView(
-            item,
-            rootView: AnyView(StatusApprovalCard(request: request)),
-            width: StatusMenuRenderer.cardWidth)
+        StatusMenuRenderer.configureHostedView(item, rootView: StatusApprovalCard(request: request))
     }
 
     func cancelPreviewTasks() {
         self.previewTasks.forEach { $0.cancel() }
         self.previewTasks.removeAll()
-    }
-
-    private func configureHostedView(_ item: NSMenuItem, rootView: AnyView, width: CGFloat) {
-        if let hosting = item.view as? NSHostingView<AnyView> {
-            hosting.rootView = rootView
-            hosting.invalidateIntrinsicContentSize()
-            hosting.frame = NSRect(origin: .zero, size: NSSize(width: width, height: hosting.fittingSize.height))
-            return
-        }
-
-        let hosting = NSHostingView(rootView: rootView)
-        hosting.frame = NSRect(origin: .zero, size: NSSize(width: width, height: hosting.fittingSize.height))
-        item.view = hosting
     }
 
     private func prewarmPreviews(for rows: [SessionRow]) {
@@ -119,6 +101,7 @@ extension StatusMenuSessions {
     private func buildSessionSubmenu(for row: SessionRow) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
+        menu.delegate = StatusMenuHighlightDelegate.shared
         StatusMenuAppearance.pin(menu)
 
         menu.addItem(self.makePreviewItem(
@@ -154,6 +137,11 @@ extension StatusMenuSessions {
             action: #selector(self.patchVerbose(_:)))
         menu.addItem(verbose)
 
+        let color = NSMenuItem(title: String(localized: "Color"), action: nil, keyEquivalent: "")
+        color.identifier = NSUserInterfaceItemIdentifier("session.color")
+        color.submenu = self.buildColorMenu(for: row)
+        menu.addItem(color)
+
         self.updateDebugLogItem(in: menu, row: row)
 
         menu.addItem(NSMenuItem.separator())
@@ -188,7 +176,36 @@ extension StatusMenuSessions {
         self.updatePreferenceMenu(
             menu.items.first { $0.identifier?.rawValue == "session.verbose" }?.submenu,
             current: row.verboseLevel)
+        menu.items.first { $0.identifier?.rawValue == "session.color" }?.submenu = self.buildColorMenu(for: row)
         self.updateDebugLogItem(in: menu, row: row)
+    }
+
+    private func buildColorMenu(for row: SessionRow) -> NSMenu {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        menu.showsStateColumn = true
+        menu.delegate = StatusMenuHighlightDelegate.shared
+        StatusMenuAppearance.pin(menu)
+        let selected = OpenClawSessionColor(name: row.color)
+        let scheme: ColorScheme = menu.appearance?.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            ? .dark : .light
+        for color in [OpenClawSessionColor?.none] + OpenClawSessionColor.allCases.map(Optional.some) {
+            let item = self.makeActionItem(
+                title: color?.label ?? String(localized: "Default"),
+                action: #selector(patchColor(_:)),
+                payload: ["key": row.key, "value": color?.rawValue ?? ""])
+            item.state = selected == color ? .on : .off
+            if let color {
+                let tint = NSColor(color.tint(in: scheme))
+                item.image = NSImage(size: NSSize(width: 14, height: 14), flipped: false) { rect in
+                    tint.setFill()
+                    NSBezierPath(ovalIn: rect.insetBy(dx: 2, dy: 2)).fill()
+                    return true
+                }
+            }
+            menu.addItem(item)
+        }
+        return menu
     }
 
     private func updateDebugLogItem(in menu: NSMenu, row: SessionRow) {
@@ -251,6 +268,7 @@ extension StatusMenuSessions {
         let menu = NSMenu()
         menu.autoenablesItems = false
         menu.showsStateColumn = true
+        menu.delegate = StatusMenuHighlightDelegate.shared
         StatusMenuAppearance.pin(menu)
         let selected = levels.contains(current ?? "") ? current ?? "off" : "off"
 
@@ -292,6 +310,7 @@ extension StatusMenuSessions {
 
     private func buildPreviewSubmenu(sessionKey: String) -> NSMenu {
         let menu = NSMenu()
+        menu.delegate = StatusMenuHighlightDelegate.shared
         StatusMenuAppearance.pin(menu)
         menu.addItem(self.makePreviewItem(
             sessionKey: sessionKey,
@@ -303,29 +322,26 @@ extension StatusMenuSessions {
     private func makePreviewItem(sessionKey: String, title: String, maxLines: Int) -> NSMenuItem {
         let item = NSMenuItem()
         item.isEnabled = false
-        let width = StatusMenuRenderer.cardWidth
-        let initialView = AnyView(SessionMenuPreviewView(
-            width: width,
-            maxLines: maxLines,
-            title: title,
-            items: [],
-            status: .loading)
-            .environment(\.isEnabled, true))
-        self.configureHostedView(item, rootView: initialView, width: width)
+        StatusMenuRenderer.configureHostedView(
+            item,
+            rootView: SessionMenuPreviewView(
+                maxLines: maxLines,
+                title: title,
+                items: [],
+                status: .loading)
+                .environment(\.isEnabled, true))
 
-        self.previewTasks.append(Task { [weak self, weak item] in
+        self.previewTasks.append(Task { [weak item] in
             let snapshot = await SessionMenuPreviewLoader.load(sessionKey: sessionKey, maxItems: 10)
-            guard !Task.isCancelled, let self, let item else { return }
-            self.configureHostedView(
+            guard !Task.isCancelled, let item else { return }
+            StatusMenuRenderer.configureHostedView(
                 item,
-                rootView: AnyView(SessionMenuPreviewView(
-                    width: width,
+                rootView: SessionMenuPreviewView(
                     maxLines: maxLines,
                     title: title,
                     items: snapshot.items,
                     status: snapshot.status)
-                    .environment(\.isEnabled, true)),
-                width: width)
+                    .environment(\.isEnabled, true))
         })
 
         return item
@@ -341,6 +357,30 @@ extension StatusMenuSessions {
 }
 
 extension StatusMenuSessions {
+    @objc private func patchColor(_ sender: NSMenuItem) {
+        guard let payload = sender.representedObject as? [String: String],
+              let key = payload["key"],
+              let value = payload["value"]
+        else { return }
+        Task {
+            do {
+                let request = OpenClawChatGatewayRequests.patchSession(
+                    sessionKey: key,
+                    agentID: nil,
+                    label: nil,
+                    category: nil,
+                    color: .some(value.isEmpty ? nil : value),
+                    pinned: nil,
+                    archived: nil,
+                    unreadPatch: nil)
+                _ = try await ControlChannel.shared.request(request)
+                await self.refresh(force: true)
+            } catch {
+                SessionActions.presentError(title: String(localized: "Update color failed"), error: error)
+            }
+        }
+    }
+
     @objc private func patchThinking(_ sender: NSMenuItem) {
         guard let payload = sender.representedObject as? [String: String],
               let key = payload["key"],

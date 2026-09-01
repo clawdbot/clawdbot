@@ -293,6 +293,47 @@ describe("nodes camera_snap", () => {
     ).rejects.toThrow(/facing=both is not allowed when deviceId is set/i);
   });
 
+  it.each([
+    { name: "malformed image data", payload: { ...JPG_PAYLOAD, base64: "not-base64!" } },
+    { name: "an unsupported image format", payload: { ...JPG_PAYLOAD, format: "webp" } },
+  ])(
+    "does not publish the front camera when the back camera returns $name",
+    async ({ payload }) => {
+      let captures = 0;
+      setupNodeInvokeMock({
+        onInvoke: () => ({ payload: captures++ === 0 ? JPG_PAYLOAD : payload }),
+      });
+      const rename = vi.spyOn(fs, "rename");
+
+      try {
+        await expect(
+          executeNodes({ action: "camera_snap", node: NODE_ID, facing: "both" }),
+        ).rejects.toThrow(/invalid base64|unsupported camera\.snap format/i);
+        expect(rename).not.toHaveBeenCalled();
+      } finally {
+        const publishedPaths = rename.mock.calls.map(([, destination]) => String(destination));
+        rename.mockRestore();
+        await Promise.all(
+          publishedPaths.map(async (filePath) => fs.unlink(filePath).catch(() => {})),
+        );
+      }
+    },
+  );
+
+  it("does not activate the back camera after the front returns an unsupported format", async () => {
+    let captures = 0;
+    setupNodeInvokeMock({
+      onInvoke: () => ({
+        payload: captures++ === 0 ? { ...JPG_PAYLOAD, format: "webp" } : JPG_PAYLOAD,
+      }),
+    });
+
+    await expect(
+      executeNodes({ action: "camera_snap", node: NODE_ID, facing: "both" }),
+    ).rejects.toThrow(/unsupported camera\.snap format/i);
+    expect(captures).toBe(1);
+  });
+
   it("downloads camera_snap url payloads when node remoteIp is available", async () => {
     stubFetchTextResponse("url-image");
     setupNodeInvokeMock({

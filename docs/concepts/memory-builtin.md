@@ -23,6 +23,10 @@ started.
 - **CJK support** via trigram tokenization for Chinese, Japanese, and Korean.
 - **sqlite-vec acceleration** for in-database vector queries (optional).
 
+Native sqlite-vec queries run in a separate, read-only process so a slow query
+does not block the Gateway event loop. Cancelling a search terminates its query
+process; OpenClaw does not retry that native query on the Gateway thread.
+
 ## Getting started
 
 By default, the builtin engine uses OpenAI embeddings. If `OPENAI_API_KEY` or
@@ -96,7 +100,10 @@ only injects curated or promoted-trusted entries.
 Each indexed chunk also has SQLite-owned provenance: origin class (`owner`,
 `agent`, `untrusted`, or `system`), session kind, observation time, and an
 optional supersession key. This metadata is stored separately from Markdown
-so recalled prose cannot rewrite its own trust classification.
+so recalled prose cannot rewrite its own trust classification. Automatic
+session ingestion also records source-session origins for its staged entries,
+which support selective deletion after promotion. For coverage and limits, see
+[Memory provenance and deletion](/concepts/memory-provenance).
 
 - **Index location:** the owning agent database at
   `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
@@ -107,6 +114,21 @@ so recalled prose cannot rewrite its own trust classification.
 - **Auto-reindex:** the index rebuilds automatically when the embedding
   provider, model, chunking config, configured sources, or scope change.
 - **Reindex on demand:** `openclaw memory index --force`
+
+Full reindexes build a replacement in a temporary database and publish the
+memory tables atomically. Concurrent searches and status reads keep using the
+published index; a failed rebuild leaves that index intact. The embedding cache
+is bounded before publication, not after copying excess entries into the
+shared database.
+
+`openclaw memory status` reports stored chunk text and JSON embedding bytes
+for each source (`sourceCounts[].chunkBytes` in JSON). These are payload sizes,
+not total disk usage: embedding cache, FTS/vector tables, SQLite overhead, and
+WAL/free pages are excluded.
+
+After an upgrade, automatic project and trigger recall may need to repair
+legacy provenance. That repair runs in the background. Replies continue while
+automatic recall stays empty until the affected sources have been reclassified.
 
 <Info>
 You can also index Markdown files outside the workspace with

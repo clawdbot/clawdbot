@@ -24,6 +24,7 @@ export {
 export type {
   AcpRuntime,
   AcpRuntimeCapabilities,
+  AcpRuntimeConfigOptionResult,
   AcpRuntimeDoctorReport,
   AcpRuntimeEnsureInput,
   AcpRuntimeEvent,
@@ -103,6 +104,9 @@ export async function tryDispatchAcpReplyHook(
     shouldSendFullToolDetails: event.shouldSendFullToolDetails,
     bypassForCommand,
     onReplyStart: ctx.onReplyStart,
+    onAgentRunStart: ctx.onAgentRunStart,
+    userTurnTranscriptRecorder: ctx.userTurnTranscriptRecorder,
+    prepareAssistantTranscriptMessage: ctx.prepareAssistantTranscriptMessage,
     recordProcessed: ctx.recordProcessed,
     markIdle: ctx.markIdle,
   });

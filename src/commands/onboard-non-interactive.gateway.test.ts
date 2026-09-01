@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { setTestEnvValue, withEnv, withEnvAsync } from "../test-utils/env.js";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
   capturedReplaceConfigFileCalls,
   configWritePluginLeaseDepths,
@@ -20,7 +21,6 @@ import {
   gatewayOnboardConfigSnapshotMock as readConfigFileSnapshotMock,
   readLastGatewayErrorLineMock,
   readTestConfig,
-  resolveInstallDaemonGatewayHealthTiming,
   resolveTestConfigPath,
   runNonInteractiveSetup,
   gatewayOnboardRuntime as runtime,
@@ -368,10 +368,10 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       const workspace = path.join(stateDir, "openclaw");
       const warningRuntime = { ...runtime, error: vi.fn() };
       const passwordRef = { source: "env" as const, provider: "default", id: "GATEWAY_PASSWORD" };
-      const seededAgents = [
-        { id: "alpha", default: true, model: "anthropic/claude-3-5-sonnet" },
-        { id: "beta", model: "openai/gpt-4o" },
-      ];
+      const seededAgents = {
+        alpha: { model: "fixture/alpha" },
+        beta: { model: "fixture/beta" },
+      };
       const seededBindings = [
         {
           type: "route" as const,
@@ -391,7 +391,11 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         },
       ];
       testConfigStore.set(resolveTestConfigPath(), {
-        agents: { list: seededAgents, defaults: { workspace } },
+        agents: {
+          ownership: "explicit",
+          entries: seededAgents,
+          defaults: { workspace, systemAgent: { agentId: "alpha" } },
+        },
         bindings: seededBindings,
         gateway: {
           mode: "local",
@@ -416,7 +420,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       );
 
       const cfg = readTestConfig();
-      expect(cfg.agents?.list?.map((a) => a.id)).toEqual(["alpha", "beta"]);
+      expect(cfg.agents?.entries).toEqual(seededAgents);
       expect(cfg.agents?.defaults?.workspace).toBe(workspace);
       expect(cfg.bindings).toEqual(seededBindings);
       expect(warningRuntime.error).toHaveBeenCalledWith(
@@ -566,11 +570,11 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         url: `ws://127.0.0.1:${port}`,
         token,
       });
-      expect(cfg.hooks?.internal?.entries?.["session-memory"]).toEqual({ enabled: true });
+      expect(cfg.hooks).toBeUndefined();
     });
   }, 60_000);
 
-  it("preserves existing agents.list and bindings on remote onboard rerun (openclaw#84692)", async () => {
+  it("preserves existing agents and bindings on remote onboard rerun (openclaw#84692)", async () => {
     await withStateDir("state-remote-preserve-agents-", async (_stateDir) => {
       const port = getPseudoPort(30_000);
       const passwordRef = {
@@ -579,10 +583,10 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         id: "OPENCLAW_REMOTE_GATEWAY_PASSWORD",
       };
       const tokenRef = { source: "env" as const, provider: "default", id: "REMOTE_TOKEN" };
-      const seededAgents = [
-        { id: "alpha", model: "anthropic/claude-3-5-sonnet" },
-        { id: "beta", model: "openai/gpt-4o" },
-      ];
+      const seededAgents = {
+        alpha: { model: "fixture/alpha" },
+        beta: { model: "fixture/beta" },
+      };
       const seededBindings = [
         {
           type: "route" as const,
@@ -593,9 +597,16 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
           },
         },
       ];
+      const seededHooks = {
+        internal: {
+          enabled: false,
+          entries: { "session-memory": { enabled: false } },
+        },
+      };
       testConfigStore.set(resolveTestConfigPath(), {
-        agents: { list: seededAgents },
+        agents: { ownership: "explicit", entries: seededAgents },
         bindings: seededBindings,
+        hooks: seededHooks,
         gateway: {
           mode: "remote",
           remote: {
@@ -619,8 +630,9 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       );
 
       const cfg = readTestConfig();
-      expect(cfg.agents?.list?.map((a) => a.id)).toEqual(["alpha", "beta"]);
+      expect(cfg.agents?.entries).toEqual(seededAgents);
       expect(cfg.bindings).toEqual(seededBindings);
+      expect(cfg.hooks).toEqual(seededHooks);
       expect(cfg.gateway?.remote).toEqual({
         url: `ws://127.0.0.1:${port}`,
         token: tokenRef,
@@ -709,24 +721,37 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     });
   }, 60_000);
 
-  it("uses a longer health deadline when daemon install was requested", async () => {
-    await withStateDir("state-local-daemon-health-", async (stateDir) => {
-      const captured = createOnboardGatewayTimeoutCapture();
-      gatewayReachableState.mock = captured.mock;
+  it.each([
+    { platform: "linux", deadlineMs: 45_000, probeTimeoutMs: 10_000, healthTimeoutMs: 10_000 },
+    { platform: "win32", deadlineMs: 90_000, probeTimeoutMs: 15_000, healthTimeoutMs: 90_000 },
+  ] as const)(
+    "uses managed daemon health timing on $platform",
+    async ({ platform, deadlineMs, probeTimeoutMs, healthTimeoutMs }) => {
+      await withStateDir("state-local-daemon-health-", async (stateDir) => {
+        const captured = createOnboardGatewayTimeoutCapture();
+        gatewayReachableState.mock = captured.mock;
 
-      await runOnboardLocalDaemonSetup({ runSetup: runNonInteractiveSetup, stateDir, runtime });
+        await withMockedPlatform(platform, () =>
+          runOnboardLocalDaemonSetup({ runSetup: runNonInteractiveSetup, stateDir, runtime }),
+        );
 
-      const cfg = readTestConfig() as {
-        gateway?: { mode?: string; bind?: string };
-      };
+        const cfg = readTestConfig() as {
+          gateway?: { mode?: string; bind?: string };
+        };
 
-      expect(cfg?.gateway?.mode).toBe("local");
-      expect(cfg?.gateway?.bind).toBe("loopback");
-      expect(installGatewayDaemonNonInteractiveMock).toHaveBeenCalledTimes(1);
-      expect(captured.deadlineMs).toBe(45_000);
-      expect(captured.probeTimeoutMs).toBe(10_000);
-    });
-  }, 60_000);
+        expect(cfg?.gateway?.mode).toBe("local");
+        expect(cfg?.gateway?.bind).toBe("loopback");
+        expect(installGatewayDaemonNonInteractiveMock).toHaveBeenCalledTimes(1);
+        expect(captured.deadlineMs).toBe(deadlineMs);
+        expect(captured.probeTimeoutMs).toBe(probeTimeoutMs);
+        expect(healthCommandMock).toHaveBeenCalledWith(
+          expect.objectContaining({ timeoutMs: healthTimeoutMs }),
+          expect.anything(),
+        );
+      });
+    },
+    60_000,
+  );
 
   it("passes pinned gateway auth through non-interactive health checks", async () => {
     await withStateDir("state-local-daemon-health-auth-", async (stateDir) => {
@@ -759,14 +784,6 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(healthRuntime).toBe(runtime);
     });
   }, 60_000);
-
-  it("uses longer Windows health timings for daemon install probes", () => {
-    expect(resolveInstallDaemonGatewayHealthTiming("win32")).toEqual({
-      deadlineMs: 90_000,
-      probeTimeoutMs: 15_000,
-      healthCommandTimeoutMs: 90_000,
-    });
-  });
 
   it.each([false, true])(
     "emits a daemon-install failure when Linux user systemd is unavailable (skipHealth: %s)",

@@ -13,7 +13,7 @@ import {
   buildProviderReauthCommand,
   coerceToFailoverError,
   describeFailoverError,
-  findCliMaxTurnsError,
+  hasProviderRequestSizeCeiling,
   isFailoverError,
   isNonProviderRuntimeCoordinationError,
 } from "./failover-error.js";
@@ -400,7 +400,10 @@ async function runWithModelFallbackInternal<T>(
           profileIds,
         });
         const authMode =
-          decision.reason === "billing"
+          decision.reason === "billing" ||
+          decision.reason === "auth" ||
+          decision.reason === "auth_permanent" ||
+          decision.reason === "session_expired"
             ? resolveSubscriptionAuthModeForProfiles({ store: authStore, profileIds })
             : undefined;
 
@@ -527,11 +530,6 @@ async function runWithModelFallbackInternal<T>(
       return attemptRun.success;
     }
     const err = attemptRun.error;
-    // Max-turn termination can follow successful tool actions. Stop before
-    // candidate fallback so the user can verify effects before any replay.
-    if (findCliMaxTurnsError(err)) {
-      throw err;
-    }
     if (isAgentHarnessPreflightError(err)) {
       const failedHarnessId = resolveAgentHarnessPreflightOwner(err);
       if (!failedHarnessId) {
@@ -621,8 +619,11 @@ async function runWithModelFallbackInternal<T>(
     // compaction/retry logic, not by model fallback.  If one escapes as a
     // throw, rethrow it immediately rather than trying a different model
     // that may have a smaller context window and fail worse.
+    // A provider request-size ceiling is the exception: it belongs to the
+    // refusing provider's quota rather than to any model's context window, so a
+    // differently provisioned candidate is exactly what may still admit it.
     const errMessage = formatErrorMessage(err);
-    if (isLikelyContextOverflowError(errMessage)) {
+    if (isLikelyContextOverflowError(errMessage) && !hasProviderRequestSizeCeiling(err)) {
       throw err;
     }
     if (isMissingAgentHarnessError(err)) {

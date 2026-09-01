@@ -80,7 +80,7 @@ describe("memory index", () => {
     const vector = Reflect.get(manager, "vector") as VectorState;
     vector.available = true;
     vector.dims = 4;
-    Reflect.set(manager, "vectorReady", Promise.resolve(true));
+    Reflect.set(Reflect.get(manager, "database"), "vectorReady", Promise.resolve(true));
 
     await expect(
       Reflect.apply(Reflect.get(manager, "runInPlaceReindex"), manager, [
@@ -354,7 +354,7 @@ describe("memory index", () => {
     }
   });
 
-  it("reindexes legacy curated provenance before the first automatic candidate read", async () => {
+  it("withholds legacy curated candidates until background provenance repair succeeds", async () => {
     const projectKey = "github.com/openclaw/openclaw";
     await fs.writeFile(
       path.join(fixture.paths.workspace, "MEMORY.md"),
@@ -414,6 +414,13 @@ describe("memory index", () => {
         upgradedManager as unknown as { runSync: (params?: MemorySyncParams) => Promise<void> },
         "runSync",
       );
+      await expect(
+        Promise.all([
+          upgradedManager.listCuratedProjectCandidates({ activeProjectKeys: [projectKey] }),
+          upgradedManager.listTriggerCandidates({ activeProjectKeys: [projectKey] }),
+        ]),
+      ).resolves.toEqual([[], []]);
+      await upgradedManager.sync({ reason: "test-repair-complete" });
       const [projectCandidates, triggerCandidates] = await Promise.all([
         upgradedManager.listCuratedProjectCandidates({ activeProjectKeys: [projectKey] }),
         upgradedManager.listTriggerCandidates({ activeProjectKeys: [projectKey] }),
@@ -2225,6 +2232,17 @@ describe("memory index", () => {
     await manager.sync({ reason: "test" });
 
     expect(providerFixture.embedBatchInputCalls).toBeGreaterThan(0);
+    expect(
+      providerFixture.embeddedBatchInputs
+        .flat()
+        .flatMap((input) =>
+          typeof input === "string"
+            ? []
+            : (input.parts ?? []).flatMap((part) =>
+                part.type === "inline-data" ? [`${part.mimeType}:${part.data}`] : [],
+              ),
+        ),
+    ).toEqual(expect.arrayContaining(["image/png:cG5n", "audio/wav:d2F2"]));
 
     const db = Reflect.get(manager, "db") as DatabaseSync;
     const indexedMediaPaths = () =>
@@ -2280,6 +2298,38 @@ describe("memory index", () => {
     } finally {
       await diagnosticStatus.close?.();
     }
+  });
+
+  it("refreshes diagnostic byte totals after indexing without changing the serving manager", async () => {
+    const cfg = createCfg({ provider: "none" });
+    const serving = await getPersistentManager(cfg);
+    await serving.sync({ reason: "test", force: true });
+    const diagnostic = await getFreshManager(cfg, "cli", true);
+    try {
+      expect(diagnostic).not.toBe(serving);
+      const previousBytes = diagnostic.status().sourceCounts?.[0]?.chunkBytes;
+      expect(previousBytes).toBeGreaterThan(0);
+      await fs.writeFile(
+        path.join(fixture.paths.memory, "2026-01-12.md"),
+        "# Reindexed diagnostic\n\nFresh expedition notes 🦞 with a different stored payload size.\n",
+      );
+
+      await diagnostic.sync({ reason: "cli", force: true });
+
+      const db = Reflect.get(diagnostic, "db") as DatabaseSync;
+      const storedBytes = db
+        .prepare(
+          "SELECT SUM(length(CAST(text AS BLOB)) + length(CAST(embedding AS BLOB))) AS bytes FROM memory_index_chunks WHERE source = 'memory'",
+        )
+        .get()?.bytes;
+      const refreshedBytes = diagnostic.status().sourceCounts?.[0]?.chunkBytes;
+      expect(refreshedBytes).toBe(storedBytes);
+      expect(refreshedBytes).not.toBe(previousBytes);
+    } finally {
+      await diagnostic.close();
+    }
+    expect((await getMemorySearchManager({ cfg, agentId: "main" })).manager).toBe(serving);
+    expect(serving.status().sourceCounts?.[0]?.chunkBytes).toBeUndefined();
   });
 
   it("reports vector availability after probe", async () => {

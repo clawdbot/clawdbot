@@ -34,6 +34,8 @@ type LegacySource = {
   filePath: string;
 };
 
+const LEGACY_DREAMING_STATE_DIR = path.join("memory", ".dreams");
+
 async function readJsonFile(filePath: string): Promise<unknown> {
   return JSON.parse(await fs.readFile(filePath, "utf8"));
 }
@@ -51,7 +53,7 @@ async function collectLegacySources(
       { label: "phase signals", fileName: "phase-signals.json" },
     ];
     for (const candidate of candidates) {
-      const filePath = path.join(workspaceDir, "memory", ".dreams", candidate.fileName);
+      const filePath = path.join(workspaceDir, LEGACY_DREAMING_STATE_DIR, candidate.fileName);
       if (await legacyStateFileExists(filePath)) {
         sources.push({ workspaceDir, label: candidate.label, filePath });
       }

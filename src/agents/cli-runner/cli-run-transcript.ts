@@ -191,7 +191,11 @@ export async function persistCliAssistantTranscript(params: {
       storePath: runParams.storePath,
       idempotencyKey,
       config: runParams.config,
-      beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+      beforeMessageWrite: (write) =>
+        runAgentHarnessBeforeMessageWriteHook({
+          ...write,
+          prepareAssistantTranscriptMessage: runParams.prepareAssistantTranscriptMessage,
+        }),
       message: buildAssistantMessage({
         model: {
           api: "cli",
@@ -272,30 +276,30 @@ export async function persistCliRunBlock(
   }
 
   try {
-    const sessionKey = params.sessionKey?.trim() || params.sessionId;
-    const targetAgentId = params.sessionTarget?.agentId;
-    const targetStorePath = params.sessionTarget?.storePath;
-    const targetStoreOwner = resolvePersistedSessionStoreOwnerForTarget({
-      config: params.config ?? {},
-      sessionKey,
-      storePath: targetStorePath,
-    });
-    const explicitAlternateStoreAgentId =
-      targetAgentId &&
-      targetStorePath &&
-      !parseAgentSessionKey(sessionKey)?.agentId &&
-      targetStoreOwner.kind === "none"
-        ? targetAgentId
-        : undefined;
-    const agentId =
-      explicitAlternateStoreAgentId ??
-      resolveSessionAgentId({
-        agentId: targetAgentId ?? params.agentId,
-        config: params.config,
-        sessionKey,
-      });
     let sessionManager = params.sessionManager;
     if (!sessionManager) {
+      const sessionKey = params.sessionKey?.trim() || params.sessionId;
+      const targetAgentId = params.sessionTarget?.agentId;
+      const targetStorePath = params.sessionTarget?.storePath;
+      const targetStoreOwner = resolvePersistedSessionStoreOwnerForTarget({
+        config: params.config ?? {},
+        sessionKey,
+        storePath: targetStorePath,
+      });
+      const explicitAlternateStoreAgentId =
+        targetAgentId &&
+        targetStorePath &&
+        !parseAgentSessionKey(sessionKey)?.agentId &&
+        targetStoreOwner.kind === "none"
+          ? targetAgentId
+          : undefined;
+      const agentId =
+        explicitAlternateStoreAgentId ??
+        resolveSessionAgentId({
+          agentId: targetAgentId ?? params.agentId,
+          config: params.config,
+          sessionKey,
+        });
       const sessionTarget = params.sessionTarget ?? {
         agentId,
         sessionId: params.sessionId,
@@ -356,64 +360,6 @@ export async function finalizeCliContextEngineTurn(params: {
   }
 
   const { params: runParams } = context;
-  const prePromptMessages = params.historyMessages.filter(isAgentMessage);
-  const turnMessages: AgentMessage[] = [];
-  if (context.contextEngineTurnPrompt) {
-    turnMessages.push(buildCliContextEngineUserMessage(context.contextEngineTurnPrompt));
-  }
-  if (params.assistantText) {
-    turnMessages.push(
-      buildCliContextEngineAssistantMessage({
-        text: params.assistantText,
-        provider: runParams.provider,
-        model: context.modelId,
-        usage: params.output.usage,
-        stopReason: resolveCliAssistantStopReason(params.output),
-      }),
-    );
-  }
-
-  const contextEngineHostSupport = buildGenericCliContextEngineHostSupport({
-    backendId: context.backendResolved.id,
-  });
-  const finalizeTurn = async (transcript: {
-    messagesSnapshot: AgentMessage[];
-    prePromptMessageCount: number;
-    sessionManager?: SessionManager;
-    withSessionManagerRewriteLock: <T>(operation: () => Promise<T> | T) => Promise<T>;
-  }) => {
-    let deferredTurnMaintenance: Promise<void> | undefined;
-    const result = await finalizeHarnessContextEngineTurn({
-      contextEngine: context.contextEngine,
-      promptError: false,
-      aborted:
-        params.output.terminalInterruption !== undefined || runParams.abortSignal?.aborted === true,
-      yieldAborted: false,
-      sessionIdUsed: runParams.sessionId,
-      sessionKey: runParams.sessionKey,
-      sessionFile: runParams.sessionFile,
-      isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
-      messagesSnapshot: transcript.messagesSnapshot,
-      prePromptMessageCount: transcript.prePromptMessageCount,
-      sessionManager: transcript.sessionManager,
-      config: context.contextEngineConfig,
-      contextEngineHostSupport,
-      providerId: runParams.provider,
-      modelId: context.modelId,
-      runMaintenance: async (maintenanceParams) =>
-        await runHarnessContextEngineMaintenance({
-          ...maintenanceParams,
-          withSessionManagerRewriteLock: transcript.withSessionManagerRewriteLock,
-          onDeferredMaintenance: (promise) => {
-            deferredTurnMaintenance = promise;
-          },
-        }),
-      warn: (message) => log.warn(message),
-    });
-    if (result.postTurnFinalizationSucceeded && deferredTurnMaintenance) {
-      context.contextEngineDeferredTurnMaintenance = deferredTurnMaintenance;
-    }
-  };
   const admission = runParams.userTurnTranscriptRecorder?.getAdmissionReceipt();
   if (runParams.onContextEngineTurnCandidate) {
     if (admission && params.terminalAnchor) {
@@ -422,24 +368,59 @@ export async function finalizeCliContextEngineTurn(params: {
         sessionIdUsed: runParams.sessionId,
         sessionKey: runParams.sessionKey,
         sessionTarget: runParams.sessionTarget,
-        sessionFile: runParams.sessionFile,
         promptError: false,
         aborted:
           params.output.terminalInterruption !== undefined ||
           runParams.abortSignal?.aborted === true,
         yieldAborted: false,
-        contextEngineHostSupport,
-        providerId: runParams.provider,
-        modelId: context.modelId,
-        config: context.contextEngineConfig,
         isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
       });
     }
   } else {
-    await finalizeTurn({
+    const prePromptMessages = params.historyMessages.filter(isAgentMessage);
+    const turnMessages: AgentMessage[] = [];
+    if (context.contextEngineTurnPrompt) {
+      turnMessages.push(buildCliContextEngineUserMessage(context.contextEngineTurnPrompt));
+    }
+    if (params.assistantText) {
+      turnMessages.push(
+        buildCliContextEngineAssistantMessage({
+          text: params.assistantText,
+          provider: runParams.provider,
+          model: context.modelId,
+          usage: params.output.usage,
+          stopReason: resolveCliAssistantStopReason(params.output),
+        }),
+      );
+    }
+
+    const contextEngineHostSupport = buildGenericCliContextEngineHostSupport({
+      backendId: context.backendResolved.id,
+    });
+    await finalizeHarnessContextEngineTurn({
+      contextEngine: context.contextEngine,
+      promptError: false,
+      aborted:
+        params.output.terminalInterruption !== undefined || runParams.abortSignal?.aborted === true,
+      yieldAborted: false,
+      sessionIdUsed: runParams.sessionId,
+      sessionKey: runParams.sessionKey,
+      sessionTarget: runParams.sessionTarget,
+      sessionFile: runParams.sessionFile,
+      isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
       messagesSnapshot: [...prePromptMessages, ...turnMessages],
       prePromptMessageCount: prePromptMessages.length,
-      withSessionManagerRewriteLock: async (operation) => await operation(),
+      sessionManager: runParams.sessionManager,
+      config: context.contextEngineConfig,
+      contextEngineHostSupport,
+      providerId: runParams.provider,
+      modelId: context.modelId,
+      runMaintenance: async (maintenanceParams) =>
+        await runHarnessContextEngineMaintenance({
+          ...maintenanceParams,
+          withSessionManagerRewriteLock: async (operation) => await operation(),
+        }),
+      warn: (message) => log.warn(message),
     });
   }
 }

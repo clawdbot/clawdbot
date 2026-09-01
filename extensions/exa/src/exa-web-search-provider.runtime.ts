@@ -494,7 +494,8 @@ export async function executeExaWebSearchProviderTool(
     dateBefore,
     contents,
   });
-  const cached = readCachedSearchPayload(cacheKey);
+  const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
+  const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
     return cached;
   }
@@ -554,7 +555,7 @@ export async function executeExaWebSearchProviderTool(
     }),
   };
 
-  writeCachedSearchPayload(cacheKey, payload, resolveSearchCacheTtlMs(searchConfig));
+  writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
   return payload;
 }
 

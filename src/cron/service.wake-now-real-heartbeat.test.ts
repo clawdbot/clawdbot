@@ -3,6 +3,7 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentMainSessionKey } from "../config/sessions.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
@@ -157,8 +158,12 @@ async function runMainCronCase(mode: WakeNowRunMode, wakeMode: "now" | "next-hea
     expect(getReplySpy).toHaveBeenCalledTimes(1);
 
     const [ctx] = getReplySpy.mock.calls[0] ?? [];
-    const replyCtx = ctx as { Provider?: string; SessionKey?: string; Body?: string };
-    expect(replyCtx.Provider).toBe("cron-event");
+    const replyCtx = ctx as Pick<
+      MsgContext,
+      "InternalTurnSource" | "Provider" | "SessionKey" | "Body"
+    >;
+    expect(replyCtx.InternalTurnSource).toBe("cron");
+    expect(replyCtx.Provider).toBeUndefined();
     expect(replyCtx.SessionKey).toBe(expectedMainSessionKey);
     expect(replyCtx.Body).toContain("Reminder: Send the nightly report");
     expect(peekSystemEventEntries(expectedMainSessionKey)).toHaveLength(0);

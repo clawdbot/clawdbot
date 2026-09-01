@@ -1,7 +1,8 @@
 // Discord plugin module implements runtime behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import { readStringParam } from "openclaw/plugin-sdk/channel-actions";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDiscordActionGate } from "../accounts.js";
-import { readStringParam, type OpenClawConfig } from "../runtime-api.js";
 import { handleDiscordGuildAction } from "./runtime.guild.js";
 import { handleDiscordMessagingAction } from "./runtime.messaging.js";
 import type { DiscordMessagingActionOptions } from "./runtime.messaging.shared.js";

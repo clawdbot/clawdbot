@@ -1,8 +1,11 @@
+import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
-import { applyInputProvenanceToUserMessage, normalizeInputProvenance } from "./input-provenance.js";
+import type { MsgContext } from "../auto-reply/templating.js";
+import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
+import { normalizeInputProvenance } from "./input-provenance.js";
 import type {
   PersistedUserTurnMessage,
   UserTurnInput,
@@ -18,19 +21,25 @@ export function normalizePersistedSteerTargetRunId(value: unknown): string | und
   return normalized && normalized.length <= STEER_TARGET_RUN_ID_MAX_CHARS ? normalized : undefined;
 }
 
-function buildUserTurnSenderMeta(
-  sender: UserTurnInput["sender"],
-): Record<string, string> | undefined {
-  const senderId = normalizeOptionalString(sender?.id);
-  const senderName = normalizeOptionalString(sender?.name);
-  const senderUsername = normalizeOptionalString(sender?.username);
-  if (!senderId && !senderName && !senderUsername) {
-    return undefined;
-  }
+/** Channel source facts qualify an observation, never an authenticated Gateway profile. */
+export function buildChannelUserTurnSender(ctx: MsgContext): UserTurnInput["sender"] {
+  const id = normalizeOptionalString(ctx.SenderId);
   return {
-    ...(senderId ? { senderId } : {}),
-    ...(senderName ? { senderName } : {}),
-    ...(senderUsername ? { senderUsername } : {}),
+    id,
+    name: normalizeOptionalString(ctx.SenderName),
+    username: normalizeOptionalString(ctx.SenderUsername),
+    ...(id
+      ? {
+          identity: {
+            type: "observation",
+            id,
+            pluginId: normalizeOptionalString(ctx.Provider ?? ctx.Surface) ?? null,
+            accountId: normalizeOptionalString(ctx.AccountId) ?? null,
+            senderKind:
+              ctx.SenderIsBot === true ? "bot" : ctx.SenderIsBot === false ? "human" : "unknown",
+          },
+        }
+      : {}),
   };
 }
 
@@ -38,6 +47,13 @@ export function buildPersistedUserTurnMetadata(
   input: UserTurnInput,
   normalizedMedia: readonly unknown[],
 ): Record<string, unknown> {
+  const senderId = normalizeOptionalString(input.sender?.id);
+  const senderName = normalizeOptionalString(input.sender?.name);
+  const senderUsername = normalizeOptionalString(input.sender?.username);
+  const senderIdentity =
+    input.display !== false && (!input.provenance || input.provenance.kind === "external_user")
+      ? readTranscriptSenderIdentity(input.sender?.identity)
+      : undefined;
   const replyToId = normalizeOptionalString(input.replyToId);
   const replyPreviewText = normalizeOptionalString(input.replyToPreview?.text);
   const replyPreviewSender = normalizeOptionalString(input.replyToPreview?.senderLabel);
@@ -49,7 +65,10 @@ export function buildPersistedUserTurnMetadata(
           senderIsOwner:
             input.senderIsOwner && (!input.provenance || input.provenance.kind === "external_user"),
         }),
-    ...buildUserTurnSenderMeta(input.sender),
+    ...(senderId ? { senderId } : {}),
+    ...(senderName ? { senderName } : {}),
+    ...(senderUsername ? { senderUsername } : {}),
+    ...(senderIdentity && senderIdentity.id === senderId ? { senderIdentity } : {}),
     ...(replyToId ? { replyToId } : {}),
     ...(replyPreviewText
       ? {
@@ -83,10 +102,6 @@ export function buildPersistedUserTurnMetadata(
   };
 }
 
-type AgentMessageWithOpenClawMetadata = AgentMessage & {
-  __openclaw?: Record<string, unknown>;
-};
-
 export function rewritePersistedSteerTargetRunId(
   message: PersistedUserTurnMessage | undefined,
   targetRunId: string | null | undefined,
@@ -107,7 +122,10 @@ export function rewritePersistedSteerTargetRunId(
   return nextMessage;
 }
 
-/** Restores producer metadata that write hooks must not be able to forge or erase. */
+/**
+ * Runtime hooks may rewrite roles and redact display/transport fields. Restore only
+ * operational facts here; canonical admission preparation deliberately protects more.
+ */
 export function restorePreparedUserTurnOperationalMetaForRuntime(params: {
   runtimeMessage: AgentMessage;
   preparedMessage?: PersistedUserTurnMessage;
@@ -118,8 +136,21 @@ export function restorePreparedUserTurnOperationalMetaForRuntime(params: {
   const preparedMeta = params.preparedMessage["__openclaw"];
   const senderIsOwner = preparedMeta?.senderIsOwner;
   const steerTargetRunId = normalizePersistedSteerTargetRunId(preparedMeta?.steerTargetRunId);
-  const nextMessage: AgentMessageWithOpenClawMetadata = { ...params.runtimeMessage };
+  const nextMessage: AgentMessage & { display?: false; __openclaw?: Record<string, unknown> } = {
+    ...params.runtimeMessage,
+  };
+  const provenance = normalizeInputProvenance(Reflect.get(params.preparedMessage, "provenance"));
+  if (provenance) {
+    Object.assign(nextMessage, { provenance });
+  }
+  if (params.preparedMessage.display === false) {
+    nextMessage.display = false;
+  }
   const runtimeMeta = { ...nextMessage["__openclaw"] };
+  delete runtimeMeta.intent;
+  if (preparedMeta?.intent) {
+    runtimeMeta.intent = preparedMeta.intent;
+  }
   delete runtimeMeta.steerTargetRunId;
   if (steerTargetRunId) {
     runtimeMeta.steerTargetRunId = steerTargetRunId;
@@ -132,6 +163,33 @@ export function restorePreparedUserTurnOperationalMetaForRuntime(params: {
     nextMessage["__openclaw"] = runtimeMeta;
   }
   return nextMessage;
+}
+
+/** Snapshots producer evidence before hooks can replace or mutate the message. */
+export function applyTranscriptSenderIdentityToWrite(
+  message: AgentMessage,
+  write: () => AgentMessage | null | undefined,
+): AgentMessage | null | undefined {
+  const original = asOptionalRecord(Reflect.get(message, "__openclaw"));
+  const identity =
+    message.role === "user" ? readTranscriptSenderIdentity(original?.senderIdentity) : undefined;
+  const senderId = original?.senderId;
+  const next = write();
+  const metadata = next && asOptionalRecord(Reflect.get(next, "__openclaw"));
+  if (!metadata || !Object.hasOwn(metadata, "senderIdentity")) {
+    return next;
+  }
+  if (
+    next.role === "user" &&
+    identity &&
+    metadata.senderId === senderId &&
+    isDeepStrictEqual(readTranscriptSenderIdentity(metadata.senderIdentity), identity)
+  ) {
+    return next;
+  }
+  const redacted = { ...metadata };
+  delete redacted.senderIdentity;
+  return Object.assign({ ...next }, { __openclaw: redacted });
 }
 
 /** Applies before-message hooks while preserving user-turn transcript metadata. */
@@ -147,6 +205,9 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
     typeof originalIdempotencyKey === "string" ? originalIdempotencyKey : undefined;
   const provenance = normalizeInputProvenance(Reflect.get(message, "provenance"));
   const originalMeta = message["__openclaw"];
+  const display = message.display;
+  const intent =
+    originalMeta?.intent === undefined ? undefined : structuredClone(originalMeta.intent);
   const senderIsOwner = originalMeta?.senderIsOwner;
   const replyToId = normalizeOptionalString(originalMeta?.replyToId);
   const originalReplyPreview = asOptionalRecord(originalMeta?.replyToPreview);
@@ -170,21 +231,20 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   // place. Snapshot transport correlation before handing them that reference.
   const originalTransportRecord = asOptionalRecord(originalTransport);
   const transport = originalTransportRecord ? { ...originalTransportRecord } : undefined;
-  const nextMessage = params.beforeMessageWrite({
-    message,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-  });
+  const nextMessage = applyTranscriptSenderIdentityToWrite(message, () =>
+    params.beforeMessageWrite!({
+      message,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    }),
+  );
   if (nextMessage?.role !== "user") {
     return undefined;
   }
-  const preparedUserMessage = provenance
-    ? applyInputProvenanceToUserMessage(nextMessage, provenance)
-    : nextMessage;
-  if (preparedUserMessage.role !== "user") {
-    return undefined;
-  }
-  const nextUserMessage: PersistedUserTurnMessage = { ...preparedUserMessage };
+  const nextUserMessage: PersistedUserTurnMessage = {
+    ...nextMessage,
+    ...(provenance ? { provenance } : {}),
+  };
   const protectedMeta: Record<string, unknown> = {
     ...nextUserMessage["__openclaw"],
     ...(typeof senderIsOwner === "boolean" ? { senderIsOwner } : {}),
@@ -194,13 +254,18 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
     ...(lateMedia ? { lateMedia: true } : {}),
     ...(media === undefined ? {} : { media }),
     ...(mediaImageLayout === undefined ? {} : { mediaImageLayout }),
+    ...(intent === undefined ? {} : { intent }),
   };
+  if (intent === undefined) {
+    delete protectedMeta.intent;
+  }
   delete protectedMeta.steerTargetRunId;
   if (steerTargetRunId) {
     protectedMeta.steerTargetRunId = steerTargetRunId;
   }
   const protectedMessage: PersistedUserTurnMessage = {
     ...nextUserMessage,
+    ...(display === false ? { display: false } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
   };
   delete protectedMessage["__openclaw"];

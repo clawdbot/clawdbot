@@ -69,6 +69,7 @@ export type ShortTermStoreMeta = {
 export type ShortTermLockEntry = {
   owner: string;
   acquiredAt: number;
+  ownerStartTime?: number;
 };
 
 type PromotionComponents = {
@@ -159,6 +160,8 @@ export type RankShortTermPromotionOptions = {
 };
 
 export type ApplyShortTermPromotionsOptions = {
+  agentId?: string;
+  workspaceAgentIds?: readonly string[];
   workspaceDir: string;
   candidates: PromotionCandidate[];
   limit?: number;

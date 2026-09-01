@@ -1,7 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, vi } from "vitest";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import {
+  GatewayPayloadLimitError,
+  GatewayRequestError,
+  type GatewayBrowserClient,
+} from "../../api/gateway.ts";
 import {
   deleteSessionPlacementDraft,
   deleteRecoveredSessionPlacementDraft,
@@ -151,7 +155,6 @@ describe("session placement startup", () => {
       startSessionPlacementInitialTurn(clientWith(request), { ...params, attachments }, () => true),
     ).resolves.toMatchObject({
       status: "started",
-      messageSeq: 3,
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.describe", { key: params.key });
     expect(request).toHaveBeenNthCalledWith(
@@ -516,7 +519,7 @@ describe("session placement startup", () => {
     });
   });
 
-  it("redispatches terminal sending recovery with the same message identity", async () => {
+  it("does not redispatch a terminal placement during recovery", async () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce({ session: { placement: { state: "failed" } } })
@@ -533,21 +536,12 @@ describe("session placement startup", () => {
           ...params,
           messageId: "message-recovered",
           recovering: true,
-          retryTerminalPlacement: true,
         },
         () => true,
       ),
-    ).resolves.toEqual({ status: "started", messageId: "message-recovered" });
-    expect(request).toHaveBeenNthCalledWith(3, "sessions.dispatch", {
-      key: params.key,
-      agentId: params.agentId,
-      profileId: params.target.profileId,
-    });
-    expect(request).toHaveBeenNthCalledWith(
-      4,
-      "sessions.send",
-      expect.objectContaining({ idempotencyKey: "message-recovered" }),
-    );
+    ).resolves.toEqual({ status: "dispatch-rejected", error: "session placement became failed" });
+    expect(request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
+    expect(request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
   });
 
   it("reclaims the worker without sending when recovery cannot enter the sending phase", async () => {
@@ -561,12 +555,13 @@ describe("session placement startup", () => {
     await expect(
       startSessionPlacementInitialTurn(
         clientWith(request),
-        params,
+        { ...params, messageId: "message-retained" },
         () => true,
         () => false,
       ),
     ).resolves.toEqual({
       status: "send-not-started",
+      messageId: "message-retained",
       error: "placement recovery storage is unavailable",
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.reclaim", {
@@ -575,6 +570,50 @@ describe("session placement startup", () => {
     });
     expect(request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
   });
+
+  it.each([
+    { error: new GatewayPayloadLimitError(), status: "send-not-started", cleanupFails: false },
+    { error: new Error("gateway not connected"), status: "send-not-started", cleanupFails: true },
+    {
+      error: new GatewayRequestError({ code: "INVALID_REQUEST", message: "send rejected" }),
+      status: "send-definitive-rejected",
+      cleanupFails: true,
+    },
+  ])(
+    "preserves $status classification when cleanup fails=$cleanupFails",
+    async ({ error, status, cleanupFails }) => {
+      const request = vi.fn((method: string) => {
+        if (method === "sessions.dispatch") {
+          return Promise.resolve({ placement: { state: "active" } });
+        }
+        if (method === "sessions.send") {
+          return Promise.reject(error);
+        }
+        if (method === "sessions.reclaim") {
+          return cleanupFails
+            ? Promise.reject(new Error("cleanup unavailable"))
+            : Promise.resolve({ ok: true });
+        }
+        throw new Error(`unexpected method ${method}`);
+      });
+      await expect(
+        startSessionPlacementInitialTurn(
+          clientWith(request),
+          { ...params, messageId: "retained" },
+          () => true,
+        ),
+      ).resolves.toEqual({
+        status,
+        messageId: "retained",
+        error: error.message + (cleanupFails ? "; cleanup failed: cleanup unavailable" : ""),
+      });
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "sessions.dispatch",
+        "sessions.send",
+        "sessions.reclaim",
+      ]);
+    },
+  );
 
   it("reclaims a cancelled placement without an environment identity", async () => {
     const request = vi

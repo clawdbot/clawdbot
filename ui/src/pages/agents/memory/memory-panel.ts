@@ -11,10 +11,9 @@ import {
   showConfirmDialog,
   type ConfirmDialogOptions,
 } from "../../../components/confirm-dialog.ts";
-import { renderSettingsDefaultState } from "../../../components/settings-ui.ts";
+import { renderSettingsDefaultDescription } from "../../../components/settings-ui.ts";
 import { t } from "../../../i18n/index.ts";
 import { currentConfigObject } from "../../../lib/config/config-state-model.ts";
-import { formatUiError } from "../../../lib/format-error.ts";
 import { formatTimeMs } from "../../../lib/format.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
@@ -394,74 +393,6 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     }
   }
 
-  private async removeEnabledOverride(
-    scope: DreamingTaskScope,
-    runtimeConfig: ApplicationContext["runtimeConfig"],
-  ): Promise<boolean> {
-    const { pluginId } = resolveConfiguredDreaming(currentConfigObject(runtimeConfig.state));
-    this.dreaming.dreamingModeSaving = true;
-    try {
-      const saved = await runtimeConfig.patch({
-        raw: {
-          plugins: {
-            entries: {
-              [pluginId]: { config: { dreaming: { enabled: null } } },
-            },
-          },
-        },
-        note: "Dreaming settings reset to the plugin default.",
-        canDispatch: () =>
-          this.isTaskScopeCurrent(scope) &&
-          this.context.runtimeConfig === runtimeConfig &&
-          canCallDreamingMethod(scope.state, "config.patch", "operator.admin"),
-      });
-      return saved;
-    } catch (error) {
-      if (this.isTaskScopeCurrent(scope) && this.context.runtimeConfig === runtimeConfig) {
-        this.dreaming.dreamingStatusError = formatUiError(
-          error,
-          t("dreaming.actions.updateFailed"),
-        );
-      }
-      return false;
-    } finally {
-      if (this.isTaskScopeCurrent(scope)) {
-        this.dreaming.dreamingModeSaving = false;
-      }
-    }
-  }
-
-  private async resetEnabledOverride(configured: ReturnType<typeof resolveConfiguredDreaming>) {
-    if (
-      !configured.overridden ||
-      this.dreaming.dreamingModeSaving ||
-      this.toggleConfirmOpen ||
-      !canCallDreamingMethod(this.dreaming, "config.patch", "operator.admin")
-    ) {
-      return;
-    }
-    this.dreaming.dreamingStatusError = null;
-    const scope = this.captureTaskScope();
-    const runtimeConfig = this.context.runtimeConfig;
-    if (!scope) {
-      return;
-    }
-    const updated = await this.removeEnabledOverride(scope, runtimeConfig);
-    if (!this.isTaskScopeCurrent(scope) || this.context.runtimeConfig !== runtimeConfig) {
-      return;
-    }
-    if (!updated) {
-      this.dreaming.dreamingStatusError ??= t("dreaming.actions.updateFailed");
-      return;
-    }
-    await runtimeConfig.refresh();
-    if (!this.isTaskScopeCurrent(scope) || this.context.runtimeConfig !== runtimeConfig) {
-      return;
-    }
-    this.syncConfigSnapshot();
-    await this.runDreamingTask(loadDreamingStatus, scope);
-  }
-
   private async openWikiPage(lookup: string): Promise<WikiPagePreview | null> {
     const scope = this.captureTaskScope();
     const client = scope?.state.client;
@@ -505,12 +436,6 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     const dreamingOn = dreamingStatus?.enabled ?? configuredDreaming.enabled;
     const loading = dreaming.dreamingStatusLoading || dreaming.dreamingModeSaving;
     const canUpdateConfig = canCallDreamingMethod(dreaming, "config.patch", "operator.admin");
-    const defaultState = renderSettingsDefaultState({
-      value: t("common.enabled"),
-      overridden: configuredDreaming.overridden,
-      disabled: loading || !canUpdateConfig,
-      onReset: () => void this.resetEnabledOverride(configuredDreaming),
-    });
     const refreshLoading = dreaming.dreamingStatusLoading || dreaming.dreamDiaryLoading;
     const selectedAgentId = dreaming.selectedAgentId ?? "";
 
@@ -528,9 +453,11 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
             <span class="muted">
               ${configuredDreaming.engineOff
                 ? t("dreaming.header.engineOff")
-                : defaultState.description}
+                : renderSettingsDefaultDescription(
+                    t("common.enabled"),
+                    configuredDreaming.overridden,
+                  )}
             </span>
-            ${defaultState.action}
             <button
               class="dreams__phase-toggle ${dreamingOn ? "dreams__phase-toggle--on" : ""}"
               ?disabled=${!canUpdateConfig || loading || configuredDreaming.engineOff}

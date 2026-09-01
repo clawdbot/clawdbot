@@ -4,8 +4,9 @@ import { state } from "lit/decorators.js";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import {
-  renderDocsLink,
+  renderLearnMoreLink,
   renderSettingsPage,
+  renderSettingsPageHeader,
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsToggleRow,
@@ -171,20 +172,13 @@ class LabsPage extends OpenClawLightDomElement {
         },
         rows,
       ),
-      {
-        intro: html`${t("labsPage.intro")}
-        ${renderDocsLink(
-          "https://docs.openclaw.ai/concepts/experimental-features",
-          t("common.learnMore"),
-        )}`,
-      },
     );
     return html`
-      <section class="content-header">
-        <div>
-          <div class="page-title">${titleForRoute("labs")}</div>
-        </div>
-      </section>
+      ${renderSettingsPageHeader({
+        title: titleForRoute("labs"),
+        subtitle: html`${t("labsPage.intro")}
+        ${renderLearnMoreLink("https://docs.openclaw.ai/concepts/experimental-features")}`,
+      })}
       ${renderSettingsWorkspace(body)}
     `;
   }

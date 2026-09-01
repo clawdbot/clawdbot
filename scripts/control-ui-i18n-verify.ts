@@ -5,15 +5,13 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as ts from "typescript";
 import {
-  loadControlUiTranslationMemory,
-  loadControlUiLocaleCatalog,
   loadControlUiSourceCatalog,
+  loadControlUiTranslationMemory,
   materializeControlUiLocaleCatalog,
   readControlUiSourceCatalog,
 } from "./lib/control-ui-i18n-catalog.ts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
 import { syncControlUiRawCopyBaseline } from "./lib/control-ui-i18n-raw-copy.ts";
-import type { TranslationMap } from "./lib/control-ui-i18n-sync-plan.ts";
 import { collectSourceFileContents } from "./lib/source-file-scan-cache.mts";
 
 export type CatalogFallbackBaseline = {
@@ -23,11 +21,7 @@ export type CatalogFallbackBaseline = {
 };
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const LOCALES_DIR = path.join(ROOT, "ui", "src", "i18n", "locales");
 const I18N_ASSETS_DIR = path.join(ROOT, "ui", "src", "i18n", ".i18n");
-const SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en.ts");
-const ACTIVITY_SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en-activity.ts");
-const SESSION_PLACEMENT_SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en-session-placement.ts");
 const FALLBACK_BASELINE_PATH = path.join(I18N_ASSETS_DIR, "catalog-fallbacks.json");
 const FALLBACK_BASELINE_VERSION = 1;
 const CONTROL_UI_TEST_FILE_PATTERN = /\.(?:test|browser\.test|node\.test)\.tsx?$/u;
@@ -45,22 +39,6 @@ export function formatControlUiCatalogFallbackDriftError(): string {
     "control-ui catalog fallback baseline drift detected.",
     "Run `pnpm ui:i18n:sync` (included in `pnpm release:prep`) and commit the generated locale artifacts.",
   ].join("\n");
-}
-
-async function loadSourceLocaleMap(): Promise<TranslationMap> {
-  return await loadControlUiSourceCatalog(
-    SOURCE_LOCALE_PATH,
-    ACTIVITY_SOURCE_LOCALE_PATH,
-    SESSION_PLACEMENT_SOURCE_LOCALE_PATH,
-  );
-}
-
-async function readSourceLocaleRaw(): Promise<string> {
-  return await readControlUiSourceCatalog(
-    SOURCE_LOCALE_PATH,
-    ACTIVITY_SOURCE_LOCALE_PATH,
-    SESSION_PLACEMENT_SOURCE_LOCALE_PATH,
-  );
 }
 
 function extractPlaceholders(text: string): string[] {
@@ -212,8 +190,8 @@ async function buildCatalogFallbackBaseline(
     allowCatalogDrift?: boolean;
   } = {},
 ): Promise<CatalogFallbackBaseline> {
-  const sourceRaw = await readSourceLocaleRaw();
-  const sourceMap = await loadSourceLocaleMap();
+  const sourceRaw = await readControlUiSourceCatalog();
+  const sourceMap = loadControlUiSourceCatalog();
   const sourceFlat = flattenControlUiCatalog(sourceMap, "en");
   const localeFlats = new Map<string, Map<string, string>>();
   for (const entry of CONTROL_UI_LOCALE_ENTRIES) {
@@ -264,7 +242,7 @@ function printCatalogFallbackSummary(baseline: CatalogFallbackBaseline) {
 }
 
 async function verifyControlUiSourceCatalogShape() {
-  const sourceMap = await loadSourceLocaleMap();
+  const sourceMap = loadControlUiSourceCatalog();
   const sourceFlat = flattenControlUiCatalog(sourceMap, "en");
   const sourceFiles = (
     await collectSourceFileContents({
@@ -303,18 +281,18 @@ export async function syncControlUiCatalogFallbackBaseline(options: {
 }
 
 export async function verifyRuntimeLocaleConfig() {
-  const registryRaw = await readFile(
-    path.join(ROOT, "ui", "src", "i18n", "lib", "registry.ts"),
-    "utf8",
-  );
-  const typesRaw = await readFile(path.join(ROOT, "ui", "src", "i18n", "lib", "types.ts"), "utf8");
-  for (const entry of CONTROL_UI_LOCALE_ENTRIES) {
-    if (!registryRaw.includes(`"${entry.locale}"`) || !typesRaw.includes(`| "${entry.locale}"`)) {
-      throw new Error(`runtime locale config is missing ${entry.locale}`);
-    }
+  const registryPath = path.join(ROOT, "ui", "src", "i18n", "lib", "registry.ts");
+  const registry = (await import(pathToFileURL(registryPath).href)) as {
+    SUPPORTED_LOCALES: readonly string[];
+  };
+  const expectedLocales = ["en", ...CONTROL_UI_LOCALE_ENTRIES.map((entry) => entry.locale)];
+  if (!compareStringArrays(registry.SUPPORTED_LOCALES, expectedLocales)) {
+    throw new Error(
+      `runtime locale config is out of sync: expected ${expectedLocales.join(", ")}, got ${registry.SUPPORTED_LOCALES.join(", ")}`,
+    );
   }
 
-  const enMap = (await loadControlUiLocaleCatalog(SOURCE_LOCALE_PATH, "en")) ?? {};
+  const enMap = loadControlUiSourceCatalog();
   const languageMap = enMap.languages;
   const languageKeys =
     languageMap && typeof languageMap === "object"

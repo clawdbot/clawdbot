@@ -138,6 +138,32 @@ describe("file sidebar editor locality", () => {
     expect(panel.querySelector('[aria-label="Open in editor"]')).toBeNull();
     expect(panel.querySelector(".sidebar-file-view__editor")).toBeNull();
   });
+
+  it("overlays the file viewport while the editor module is pending", async () => {
+    const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: unknown;
+      ensureFileEditor: () => Promise<void>;
+      updateComplete: Promise<unknown>;
+    };
+    const pending = new Promise<void>(() => {});
+    vi.spyOn(panel, "ensureFileEditor").mockReturnValue(pending);
+    panel.content = {
+      kind: "file",
+      path: "src/example.ts",
+      name: "example.ts",
+      content: "const answer = 42;",
+    };
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    const viewport = panel.querySelector(".file-view");
+    const skeleton = viewport?.querySelector(
+      'openclaw-panel-loading-skeleton[data-panel-skeleton="review"]',
+    );
+    expect(panel.ensureFileEditor).toHaveBeenCalledOnce();
+    expect(viewport?.querySelector(".file-view__mount")).not.toBeNull();
+    expect(skeleton?.hasAttribute("overlay")).toBe(true);
+  });
 });
 
 describe("markdown sidebar", () => {

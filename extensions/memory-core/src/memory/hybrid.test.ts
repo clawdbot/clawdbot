@@ -816,6 +816,72 @@ describe("memory hybrid helpers", () => {
     expect(merged[0]?.textScore).toBeCloseTo(1);
   });
 
+  it("preserves LIKE-fallback lexical ordering in hybrid selection (keyword-only)", async () => {
+    // Two LIKE-fallback body hits: both textScore = 0 (no BM25), no vector
+    // match, exactPathSpecificity = 0. Their weighted contentScore collapses to
+    // 0 for both, so they would tie by path without the lexical tie-break.
+    // The manager carries a boost-derived lexical score as `rankingScore`; the
+    // hybrid consumer must use it as an unweighted tie-break so the
+    // lexically-stronger hit ranks first regardless of path alphabetical order.
+    // See ClawSweeper P2 finding on #120603 / #115001.
+    //
+    // path alphabetical order (memory/aaa.md < memory/zzz.md) is intentionally
+    // the REVERSE of lexical strength, so a path-ordered tie would put aaa
+    // first while the lexical tie-break must put zzz first.
+    const keyword = [
+      {
+        id: "aaa",
+        path: "memory/aaa.md",
+        startLine: 1,
+        endLine: 1,
+        source: "memory",
+        snippet: "weak substring overlap",
+        textScore: 0,
+        hasBodyMatch: true,
+        rankingScore: 0.2,
+        pathScore: 0,
+        exactPathSpecificity: 0 as const,
+      },
+      {
+        id: "zzz",
+        path: "memory/zzz.md",
+        startLine: 1,
+        endLine: 1,
+        source: "memory",
+        snippet: "strong substring overlap with the query terms",
+        textScore: 0,
+        hasBodyMatch: true,
+        rankingScore: 0.8,
+        pathScore: 0,
+        exactPathSpecificity: 0 as const,
+      },
+    ];
+    const merged = await mergeHybridResults({
+      vectorWeight: 0.7,
+      textWeight: 0.3,
+      vector: [],
+      keyword,
+    });
+
+    // Both hits tie at contentScore = 0 (no vector, LIKE carries no weighted
+    // text signal), proving the ordering below comes from the lexical tie-break
+    // and not from a restored weighted text score.
+    expect(merged.map((entry) => entry.score)).toEqual([0, 0]);
+    // The internal lexicalRank signal must not leak into the public result.
+    expect(merged.every((entry) => !("lexicalRank" in entry))).toBe(true);
+
+    const selected = selectHybridSearchResults({
+      merged,
+      keyword,
+      maxResults: 2,
+      minScore: 0,
+    });
+
+    // Lexical tie-break: zzz (rankingScore 0.8) before aaa (rankingScore 0.2),
+    // NOT path alphabetical (aaa before zzz).
+    expect(selected.map((entry) => entry.path)).toEqual(["memory/zzz.md", "memory/aaa.md"]);
+  });
+
   const vectorResult = (id: string, path: string, vectorScore: number) => ({
     id,
     path,

@@ -236,6 +236,21 @@ describe("memory dreaming host helpers", () => {
     ]);
   });
 
+  it("uses canonical roster identities when agent aliases share a workspace", () => {
+    const cfg = {
+      agents: {
+        list: [
+          { id: "Team Alpha", workspace: "/workspace/shared" },
+          { id: "team-alpha", workspace: "/workspace/shared" },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(resolveMemoryDreamingWorkspaces(cfg)).toEqual([
+      { workspaceDir: "/workspace/shared", agentIds: ["team-alpha"] },
+    ]);
+  });
+
   it("does not require a default owner when no primary workspace is supplied", () => {
     const cfg = {
       agents: {

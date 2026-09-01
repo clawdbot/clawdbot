@@ -1,7 +1,7 @@
 // Test-project planning helpers used by scripts/run-vitest.mts,
 // scripts/test-projects.mts, and focused tests. Exports are intentionally
 // granular so project selection stays testable without spawning Vitest.
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncOptionsWithStringEncoding } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -60,6 +60,7 @@ import {
 import { isVoiceCallExtensionRoot } from "../test/vitest/vitest.extension-voice-call-paths.mjs";
 import { isWhatsAppExtensionRoot } from "../test/vitest/vitest.extension-whatsapp-paths.mjs";
 import { isZaloExtensionRoot } from "../test/vitest/vitest.extension-zalo-paths.mjs";
+import { resolveVitestFsModuleCacheRoot } from "../test/vitest/vitest.performance-config.ts";
 import {
   isPluginSdkLightTarget,
   pluginSdkLightTestFiles,
@@ -74,6 +75,7 @@ import {
   isUiIsolatedTestFile,
   uiIsolatedTestFiles,
 } from "../test/vitest/vitest.ui-isolated-paths.mjs";
+import { isUiBrowserTestFile } from "../test/vitest/vitest.ui-paths.mjs";
 import {
   getUnitFastIsolatedTestFiles,
   getUnitFastTestFiles,
@@ -93,7 +95,9 @@ import {
 import { parsePermissiveBooleanToken } from "./lib/arg-utils.mts";
 import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
 import {
+  GIT_LS_FILES_MAX_BUFFER_BYTES,
   createExtensionTestProcessTargetChunks,
+  listTrackedTestPlanFiles,
   splitExtensionTestProcessTargets,
 } from "./lib/extension-test-plan.mts";
 import {
@@ -101,11 +105,18 @@ import {
   listGatewayServerTestTargets,
   splitTestTargetChunks as splitTargetChunks,
 } from "./lib/gateway-server-test-plan.mts";
+import { readTestSelectorSourceFacts } from "./lib/test-selector-source-facts.mts";
 import {
   isCiLikeEnv,
   resolveLocalFullSuiteProfile,
   type VitestHostInfo,
 } from "./lib/vitest-local-scheduling.mts";
+import {
+  estimateVitestTestFileSeconds,
+  estimateVitestToolingFileSeconds,
+  resolveShardTimingKey,
+  type VitestShardTimingSpec,
+} from "./lib/vitest-shard-metadata.mts";
 import {
   DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS,
   resolveDefaultVitestNoOutputTimeoutMs,
@@ -153,6 +164,12 @@ type ImportGraph = {
   reverseImports: Map<string, string[]>;
   reverseReexports: Map<string, string[]>;
   testFiles: Set<string>;
+};
+type ImportGraphEdges = {
+  file: string;
+  imports: Set<string>;
+  reexports: Set<string>;
+  references: Set<string>;
 };
 type UnmatchedExplicitTestTarget = {
   target: string;
@@ -348,8 +365,26 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   [EXTENSION_MSTEAMS_VITEST_CONFIG, 4],
 ]);
 
-function resolveConfigSortWeight(config: string, shardTimings: ReadonlyMap<string, number>) {
-  return shardTimings.get(config) ?? (FULL_SUITE_CONFIG_WEIGHT.get(config) ?? 0) * 1000;
+function resolveSpecSortWeight(
+  spec: VitestShardTimingSpec,
+  shardTimings: ReadonlyMap<string, number>,
+) {
+  const observed = shardTimings.get(resolveShardTimingKey(spec));
+  if (observed !== undefined) {
+    return observed;
+  }
+  // Exact selections use their file costs; a whole-config sample would price a
+  // single worker proof like all tooling. Globs keep the whole-config fallback.
+  const includes = spec.includePatterns;
+  const estimateFileSeconds =
+    spec.config === TOOLING_VITEST_CONFIG
+      ? estimateVitestToolingFileSeconds
+      : estimateVitestTestFileSeconds;
+  const seconds =
+    includes?.length && includes.every((file) => isTestFileTarget(file) && !isGlobTarget(file))
+      ? includes.reduce((total, file) => total + estimateFileSeconds(file), 0)
+      : (FULL_SUITE_CONFIG_WEIGHT.get(spec.config) ?? 0);
+  return seconds * 1000;
 }
 
 function interleaveSlowAndFastSpecs<T>(sortedSpecs: T[]) {
@@ -384,14 +419,13 @@ function isPathAtOrUnder(relative: string, root: string) {
 /**
  * Orders full-suite specs so expensive shards start first in parallel runs.
  */
-export function orderFullSuiteSpecsForParallelRun<T extends { config: string }>(
+export function orderFullSuiteSpecsForParallelRun<T extends VitestShardTimingSpec>(
   specs: T[],
   shardTimings = new Map<string, number>(),
 ): T[] {
   const sortedSpecs = specs.toSorted((a, b) => {
     const weightDelta =
-      resolveConfigSortWeight(b.config, shardTimings) -
-      resolveConfigSortWeight(a.config, shardTimings);
+      resolveSpecSortWeight(b, shardTimings) - resolveSpecSortWeight(a, shardTimings);
     if (weightDelta !== 0) {
       return weightDelta;
     }
@@ -422,6 +456,7 @@ const FULL_SUITE_UNIT_FAST_TEST_TARGET_CHUNK_SIZE = 70;
 const TUI_VITEST_CONFIG = "test/vitest/vitest.tui.config.ts";
 const TUI_PTY_VITEST_CONFIG = "test/vitest/vitest.tui-pty.config.ts";
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
+const UI_BROWSER_VITEST_CONFIG = "test/vitest/vitest.ui-browser.config.ts";
 const UI_E2E_VITEST_CONFIG = "test/vitest/vitest.ui-e2e.config.ts";
 const UI_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.ui-isolated.config.ts";
 const UTILS_VITEST_CONFIG = "test/vitest/vitest.utils.config.ts";
@@ -490,6 +525,7 @@ const VITEST_CONFIG_BY_KIND: Record<string, string> = {
   plugin: PLUGINS_VITEST_CONFIG,
   ui: UI_VITEST_CONFIG,
   uiIsolated: UI_ISOLATED_VITEST_CONFIG,
+  uiBrowser: UI_BROWSER_VITEST_CONFIG,
   uiE2e: UI_E2E_VITEST_CONFIG,
   unitSrc: UNIT_SRC_VITEST_CONFIG,
   unitSecurity: UNIT_SECURITY_VITEST_CONFIG,
@@ -536,6 +572,15 @@ const BROAD_CHANGED_FALLBACK_PATTERNS = [
   /^test\/helpers\//u,
 ];
 const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
+  [
+    "patches/vitest@4.1.11.patch",
+    [
+      "test/scripts/run-vitest-profile.test.ts",
+      "test/scripts/run-vitest-state-cleanup.test.ts",
+      "test/scripts/vitest-fork-shutdown.test.ts",
+    ],
+  ],
+  ["test/fixtures/vitest-fork-shutdown.mjs", ["test/scripts/vitest-fork-shutdown.test.ts"]],
   ...[
     "src/system-agent/setup-inference-persist.ts",
     "src/agents/embedded-agent-runner/run/attempt-dispatch-preparation.ts",
@@ -562,6 +607,14 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
     ],
   ],
   [
+    "extensions/slack/src/channel-actions.ts",
+    [
+      "extensions/slack/src/actions.reactions-limit.test.ts",
+      "extensions/slack/src/channel-actions-setup-status.contract.test.ts",
+      "extensions/slack/src/message-tools.test.ts",
+    ],
+  ],
+  [
     "src/gateway/worker-environments/worker-turn-launcher.ts",
     [
       "src/gateway/worker-environments/worker-turn-launcher.test.ts",
@@ -585,6 +638,8 @@ const GITHUB_YAML_PINNING_GUARD_TEST_TARGETS = ["test/scripts/ci-workflow-guards
 const GROUP_VISIBLE_REPLY_TEST_TARGETS = [
   "src/auto-reply/reply/dispatch-acp.test.ts",
   "src/auto-reply/reply/dispatch-from-config.test.ts",
+  "src/auto-reply/reply/dispatch-from-config.delivery.test.ts",
+  "src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts",
   "src/auto-reply/reply/followup-runner.test.ts",
   "src/auto-reply/reply/groups.test.ts",
   "extensions/discord/src/monitor/message-handler.process.test.ts",
@@ -769,10 +824,7 @@ const SOURCE_TEST_TARGETS = new Map([
   ["src/auto-reply/reply/source-reply-delivery-mode.ts", GROUP_VISIBLE_REPLY_TEST_TARGETS],
   [
     "src/auto-reply/reply/effective-reply-route.ts",
-    [
-      "src/auto-reply/reply/effective-reply-route.test.ts",
-      "src/auto-reply/reply/dispatch-from-config.test.ts",
-    ],
+    ["src/auto-reply/reply/effective-reply-route.test.ts", ...GROUP_VISIBLE_REPLY_TEST_TARGETS],
   ],
   ["src/auto-reply/reply/get-reply-run.ts", ["src/auto-reply/reply/followup-runner.test.ts"]],
   ["src/auto-reply/reply/groups.ts", GROUP_VISIBLE_REPLY_TEST_TARGETS],
@@ -813,10 +865,6 @@ const TOOLING_IMPORTABLE_FILE_EXTENSIONS = [
 const TOOLING_IMPORT_GRAPH_GREP_PATHS = TOOLING_IMPORT_GRAPH_ROOTS.flatMap((root) =>
   TOOLING_IMPORTABLE_FILE_EXTENSIONS.map((ext) => `:(glob)${root}/**/*${ext}`),
 );
-const IMPORT_SPECIFIER_PATTERN =
-  /\b(?:import|export)\s+(?:type\s+)?(?:[^'"]*?\s+from\s+)?["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)/gu;
-const REEXPORT_SPECIFIER_PATTERN =
-  /\bexport\s+(?:type\s+)?(?:\*\s+(?:as\s+\w+\s+)?from\s+|[^"']+?\s+from\s+)["']([^"']+)["']/gu;
 const BROAD_CHANGED_ENV_KEY = "OPENCLAW_TEST_CHANGED_BROAD";
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS";
@@ -854,6 +902,7 @@ const VITEST_CONFIG_TARGET_KIND_BY_PATH = new Map<string, string>(
   Object.entries(VITEST_CONFIG_BY_KIND).map(([kind, config]) => [config, kind]),
 );
 const RUNNABLE_VITEST_CONFIG_TARGETS = new Set([
+  "ui/vitest.config.ts",
   "vitest.config.ts",
   DEFAULT_VITEST_CONFIG,
   ...Object.values(VITEST_CONFIG_BY_KIND),
@@ -1138,6 +1187,7 @@ function listExplicitTestTargetFilesFromGit(cwd: string) {
     {
       cwd,
       encoding: "utf8",
+      maxBuffer: GIT_LS_FILES_MAX_BUFFER_BYTES,
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
@@ -1172,12 +1222,13 @@ function resolveExplicitTestPrefixTargets(targetArg: string, cwd: string) {
   }
   const directory = path.posix.dirname(relative);
   const prefix = `${relative}.`;
+  // Bound filesystem probes to matching tests, even with a cached repo-wide inventory.
   const targets = listExplicitTestTargetFilesForCwd(cwd).filter(
     (file) =>
-      fs.existsSync(path.join(cwd, file)) &&
       path.posix.dirname(file) === directory &&
       file.startsWith(prefix) &&
-      isTestFileTarget(file),
+      isTestFileTarget(file) &&
+      fs.existsSync(path.join(cwd, file)),
   );
   return targets.length > 0 ? targets.toSorted((left, right) => left.localeCompare(right)) : null;
 }
@@ -1229,6 +1280,13 @@ function expandExplicitSourceTestTargets(targetArgs: string[], cwd: string) {
   const forceFullImportGraph = sourceTargetCount > EXPLICIT_SOURCE_FULL_IMPORT_GRAPH_THRESHOLD;
   return targetArgs.flatMap((targetArg) => {
     const relative = toRepoRelativeTarget(targetArg, cwd);
+    if (isPathAtOrUnder(relative, "ui") && isGlobTarget(relative)) {
+      // Expand mixed browser globs before assigning files to their disjoint runners.
+      const targets = listExplicitTestTargetFilesForCwd(cwd).filter(
+        (file) => isTestFileTarget(file) && path.matchesGlob(file, relative),
+      );
+      return targets.length > 0 ? targets : [targetArg];
+    }
     const prefixTargets = resolveExplicitTestPrefixTargets(targetArg, cwd);
     if (prefixTargets) {
       return prefixTargets;
@@ -1346,6 +1404,11 @@ export function findUnmatchedExplicitTestTargets(args: string[], cwd = process.c
   const unmatched: UnmatchedExplicitTestTarget[] = [];
   for (const targetArg of targetArgs) {
     const relative = toRepoRelativeTarget(targetArg, cwd);
+    const absolute = path.resolve(cwd, targetArg);
+    // Existing exact tests need no inventory scan; lane assignment belongs to the run planner.
+    if (!isGlobTarget(relative) && isTestFileTarget(relative) && fs.existsSync(absolute)) {
+      continue;
+    }
     if (
       resolveVitestConfigTargetKind(relative) ||
       (isVitestConfigFileTarget(relative) && isExistingFileTarget(targetArg, cwd))
@@ -1366,7 +1429,6 @@ export function findUnmatchedExplicitTestTargets(args: string[], cwd = process.c
       continue;
     }
 
-    const absolute = path.resolve(cwd, targetArg);
     if (!fs.existsSync(absolute)) {
       if (resolveExplicitTestPrefixTargets(targetArg, cwd)) {
         continue;
@@ -1378,10 +1440,6 @@ export function findUnmatchedExplicitTestTargets(args: string[], cwd = process.c
           ? { includePattern: `${relative}{,.*}.{test,spec}.{js,jsx,ts,tsx,mjs,cjs,mts,cts}` }
           : {}),
       });
-      continue;
-    }
-
-    if (isTestFileTarget(relative)) {
       continue;
     }
 
@@ -1473,30 +1531,11 @@ function resolveImportSpecifier(
 let cachedImportGraph: ImportGraph | null = null;
 let cachedImportGraphCwd: string | null = null;
 const cachedImportGraphFiles = new Map<string, string[]>();
-const cachedImportGraphGrepMatches = new Map<string, string[] | null>();
-const cachedDirectImporters = new Map<string, string[] | null>();
+const cachedImportGraphGrepMatches = new Map<string, ImportGraphEdges[] | null>();
+const cachedImportGraphEdges = new Map<string, ImportGraphEdges>();
 
 function isImportableGraphFile(relative: string) {
   return IMPORTABLE_FILE_EXTENSIONS.some((ext) => relative.endsWith(ext));
-}
-
-function listImportGraphFilesFromGit(
-  cwd: string,
-  roots: readonly string[],
-  extensions: readonly string[],
-) {
-  const result = spawnSync("git", ["ls-files", "--", ...roots], {
-    cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  if (result.status !== 0) {
-    return null;
-  }
-  return result.stdout
-    .split("\n")
-    .map((line) => normalizePathPattern(line.trim()))
-    .filter((line) => line.length > 0 && extensions.some((ext) => line.endsWith(ext)));
 }
 
 function listImportGraphFilesForCwd(cwd: string, options: ImportGraphOptions = {}) {
@@ -1508,8 +1547,10 @@ function listImportGraphFilesForCwd(cwd: string, options: ImportGraphOptions = {
   const roots = tooling ? TOOLING_IMPORT_GRAPH_ROOTS : SOURCE_ROOTS_FOR_IMPORT_GRAPH;
   const extensions = tooling ? TOOLING_IMPORTABLE_FILE_EXTENSIONS : IMPORTABLE_FILE_EXTENSIONS;
   const files =
-    listImportGraphFilesFromGit(cwd, roots, extensions) ??
-    roots.flatMap((root) => listImportGraphFiles(cwd, root, [], extensions));
+    listTrackedTestPlanFiles(
+      cwd,
+      tooling ? TOOLING_IMPORT_GRAPH_GREP_PATHS : IMPORT_GRAPH_GREP_PATHS,
+    ) ?? roots.flatMap((root) => listImportGraphFiles(cwd, root, [], extensions));
   cachedImportGraphFiles.set(cacheKey, files);
   return files;
 }
@@ -1531,7 +1572,7 @@ function resolveImportGraphSearchTerms(
   extensions: readonly string[] = IMPORTABLE_FILE_EXTENSIONS,
 ) {
   const withoutExtension = stripImportableGraphExtension(relative, extensions);
-  const basename = path.posix.basename(stripImportableGraphExtension(relative, extensions));
+  const basename = path.posix.basename(withoutExtension);
   if (basename === "index" || basename.length < 3) {
     return [];
   }
@@ -1547,15 +1588,67 @@ function resolveImportGraphSearchTerms(
   return [...new Set(terms)];
 }
 
-function listImportGraphGrepMatches(cwd: string, term: string, options: ImportGraphOptions = {}) {
-  const tooling = options.tooling === true;
-  const cacheKey = `${cwd}\0${tooling ? "tooling" : "source"}\0${term}`;
-  if (cachedImportGraphGrepMatches.has(cacheKey)) {
-    return cachedImportGraphGrepMatches.get(cacheKey) ?? null;
-  }
+function readImportGraphEdges(
+  cwd: string,
+  files: string[],
+  fileSet: ReadonlySet<string>,
+  tooling = false,
+  terms: string[] = [],
+) {
+  const cacheKey = (file: string) => `${cwd}\0${tooling}\0${file}`;
+  const requests = files
+    .map((file) => ({ file, parseImports: !cachedImportGraphEdges.has(cacheKey(file)) }))
+    .filter(({ parseImports }) => parseImports || terms.length > 0);
+  const extensions = tooling ? TOOLING_IMPORTABLE_FILE_EXTENSIONS : IMPORTABLE_FILE_EXTENSIONS;
+  return readTestSelectorSourceFacts(cwd, requests, terms, GIT_LS_FILES_MAX_BUFFER_BYTES).map(
+    ({ file, imports, reexports, matches, references }) => {
+      const resolve = (specifiers: string[]) =>
+        new Set(
+          specifiers
+            .map((specifier) => resolveImportSpecifier(file, specifier, fileSet, extensions))
+            .filter((imported) => imported !== null),
+        );
+      const edges = cachedImportGraphEdges.get(cacheKey(file)) ?? {
+        file,
+        imports: resolve(imports),
+        reexports: resolve(reexports),
+        references: new Set<string>(),
+      };
+      for (const reference of references) {
+        edges.references.add(reference);
+      }
+      cachedImportGraphEdges.set(cacheKey(file), edges);
+      return { edges, matches };
+    },
+  );
+}
 
+function listImportGraphGrepMatches(
+  cwd: string,
+  terms: string[],
+  options: ImportGraphOptions = {},
+) {
+  const tooling = options.tooling === true;
+  const cacheKey = (term: string) => `${cwd}\0${tooling}\0${term}`;
+  const matches = new Map(
+    terms.map((term) => [term, cachedImportGraphGrepMatches.get(cacheKey(term)) ?? null]),
+  );
+  const missing = [...new Set(terms)].filter(
+    (term) => !cachedImportGraphGrepMatches.has(cacheKey(term)),
+  );
+  if (missing.length === 0) {
+    return matches;
+  }
   const roots = tooling ? TOOLING_IMPORT_GRAPH_ROOTS : SOURCE_ROOTS_FOR_IMPORT_GRAPH;
   const extensions = tooling ? TOOLING_IMPORTABLE_FILE_EXTENSIONS : IMPORTABLE_FILE_EXTENSIONS;
+  const spawnOptions: SpawnSyncOptionsWithStringEncoding = {
+    cwd,
+    encoding: "utf8",
+    // A frontier can exceed the platform argv limit; both search tools accept stdin patterns.
+    input: missing.join("\n"),
+    maxBuffer: GIT_LS_FILES_MAX_BUFFER_BYTES,
+    stdio: ["pipe", "pipe", "pipe"],
+  };
   let result = spawnSync(
     "rg",
     [
@@ -1570,15 +1663,12 @@ function listImportGraphGrepMatches(cwd: string, term: string, options: ImportGr
       "!**/dist/**",
       "--glob",
       "!**/vendor/**",
-      term,
+      "-f",
+      "-",
       "--",
       ...roots,
     ],
-    {
-      cwd,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    },
+    spawnOptions,
   );
   if (result.error || (result.status !== 0 && result.status !== 1)) {
     result = spawnSync(
@@ -1587,68 +1677,60 @@ function listImportGraphGrepMatches(cwd: string, term: string, options: ImportGr
         "grep",
         "-l",
         "--fixed-strings",
-        term,
+        "-f",
+        "-",
         "--",
         ...(tooling ? TOOLING_IMPORT_GRAPH_GREP_PATHS : IMPORT_GRAPH_GREP_PATHS),
       ],
-      {
-        cwd,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-      },
+      spawnOptions,
     );
   }
-  if (result.status === 1) {
-    cachedImportGraphGrepMatches.set(cacheKey, []);
-    return [];
+  for (const term of missing) {
+    matches.set(term, result.status === 0 || result.status === 1 ? [] : null);
   }
-  if (result.status !== 0) {
-    cachedImportGraphGrepMatches.set(cacheKey, null);
-    return null;
+  if (result.status === 0) {
+    const trackedFiles = new Set(listImportGraphFilesForCwd(cwd, { tooling }));
+    const candidates = result.stdout
+      .split("\n")
+      .map((line) => normalizePathPattern(line.trim()))
+      .filter((file) => trackedFiles.has(file))
+      .toSorted((left, right) => left.localeCompare(right));
+    // Per-term membership protects the broad cap and helper first-success rule.
+    // Cached edges need only term facts; full-graph acquisition reuses their parsing.
+    for (const { edges, matches: fileTerms } of readImportGraphEdges(
+      cwd,
+      candidates,
+      trackedFiles,
+      tooling,
+      missing,
+    )) {
+      for (const term of fileTerms) {
+        matches.get(term)?.push(edges);
+      }
+    }
   }
-  const trackedFiles = new Set(listImportGraphFilesForCwd(cwd, { tooling }));
-  const matches = result.stdout
-    .split("\n")
-    .map((line) => normalizePathPattern(line.trim()))
-    .filter(
-      (line) =>
-        line.length > 0 &&
-        trackedFiles.has(line) &&
-        (tooling
-          ? TOOLING_IMPORTABLE_FILE_EXTENSIONS.some((ext) => line.endsWith(ext))
-          : isImportableGraphFile(line)),
-    )
-    .toSorted((left, right) => left.localeCompare(right));
-  cachedImportGraphGrepMatches.set(cacheKey, matches);
+  for (const term of missing) {
+    cachedImportGraphGrepMatches.set(cacheKey(term), matches.get(term) ?? null);
+  }
   return matches;
 }
 
-function findDirectImportersWithGitGrep(
-  cwd: string,
+function findDirectImporters(
   importedFile: string,
-  fileSet: ReadonlySet<string>,
-  options: ImportGraphOptions = {},
+  matches: ReadonlyMap<string, ImportGraphEdges[] | null>,
+  extensions: readonly string[],
 ) {
-  const tooling = options.tooling === true;
-  const cacheKey = `${cwd}\0${tooling ? "tooling" : "source"}\0${importedFile}`;
   const isTestHelper = importedFile.startsWith("test/helpers/");
-  if (cachedDirectImporters.has(cacheKey)) {
-    return cachedDirectImporters.get(cacheKey) ?? null;
-  }
-
-  const extensions = tooling ? TOOLING_IMPORTABLE_FILE_EXTENSIONS : IMPORTABLE_FILE_EXTENSIONS;
   const terms = resolveImportGraphSearchTerms(importedFile, extensions);
   if (terms.length === 0) {
-    cachedDirectImporters.set(cacheKey, null);
     return null;
   }
 
   let skippedBroadTerm = false;
   const importers: string[] = [];
   for (const term of terms) {
-    const candidates = listImportGraphGrepMatches(cwd, term, { tooling });
+    const candidates = matches.get(term);
     if (!candidates) {
-      cachedDirectImporters.set(cacheKey, null);
       return null;
     }
     // Central test helpers intentionally fan out broadly; incomplete scans silently drop owning tests.
@@ -1656,36 +1738,16 @@ function findDirectImportersWithGitGrep(
       skippedBroadTerm = true;
       continue;
     }
-    for (const file of candidates) {
-      if (file === importedFile || !fileSet.has(file) || importers.includes(file)) {
-        continue;
-      }
-      let source;
-      try {
-        source = fs.readFileSync(path.join(cwd, file), "utf8");
-      } catch {
-        continue;
-      }
-      for (const match of source.matchAll(IMPORT_SPECIFIER_PATTERN)) {
-        const imported = resolveImportSpecifier(
-          file,
-          match[1] ?? match[2] ?? "",
-          fileSet,
-          extensions,
-        );
-        if (imported === importedFile) {
-          importers.push(file);
-          break;
-        }
+    for (const { file, imports } of candidates) {
+      if (file !== importedFile && !importers.includes(file) && imports.has(importedFile)) {
+        importers.push(file);
       }
     }
     if (isTestHelper && importers.length > 0 && term.includes("/")) {
       break;
     }
   }
-  const result = skippedBroadTerm && importers.length === 0 && !isTestHelper ? null : importers;
-  cachedDirectImporters.set(cacheKey, result);
-  return result;
+  return skippedBroadTerm && importers.length === 0 && !isTestHelper ? null : importers;
 }
 
 function resolveAffectedTestsFromTargetedImportScan(
@@ -1704,28 +1766,32 @@ function resolveAffectedTestsFromTargetedImportScan(
   const testFiles = new Set(
     files.filter((file) => isTestFileTarget(file) && !file.endsWith(".live.test.ts")),
   );
-  const queue = [normalized];
-  const seen = new Set(queue);
+  let frontier = [normalized];
+  const seen = new Set(frontier);
   const targets = [];
-
-  for (const current of queue) {
-    const importers = findDirectImportersWithGitGrep(cwd, current, fileSet, { tooling });
-    if (importers === null) {
-      return null;
+  const extensions = tooling ? TOOLING_IMPORTABLE_FILE_EXTENSIONS : IMPORTABLE_FILE_EXTENSIONS;
+  while (frontier.length > 0) {
+    const terms = frontier.flatMap((file) => resolveImportGraphSearchTerms(file, extensions));
+    const matches = listImportGraphGrepMatches(cwd, terms, { tooling });
+    const next = [];
+    for (const current of frontier) {
+      const importers = findDirectImporters(current, matches, extensions);
+      if (importers === null) {
+        return null;
+      }
+      for (const importer of importers) {
+        if (seen.has(importer)) {
+          continue;
+        }
+        seen.add(importer);
+        if (testFiles.has(importer)) {
+          targets.push(importer);
+        } else if (options.direct !== true) {
+          next.push(importer);
+        }
+      }
     }
-    for (const importer of importers) {
-      if (seen.has(importer)) {
-        continue;
-      }
-      seen.add(importer);
-      if (testFiles.has(importer)) {
-        targets.push(importer);
-        continue;
-      }
-      if (options.direct !== true) {
-        queue.push(importer);
-      }
-    }
+    frontier = next;
   }
 
   return [...new Set(targets)].toSorted((left, right) => left.localeCompare(right));
@@ -1744,30 +1810,21 @@ function getImportGraph(cwd: string) {
     files.filter((file) => isTestFileTarget(file) && !file.endsWith(".live.test.ts")),
   );
 
+  readImportGraphEdges(cwd, files, fileSet);
   for (const file of files) {
-    let source;
-    try {
-      source = fs.readFileSync(path.join(cwd, file), "utf8");
-    } catch {
+    const edges = cachedImportGraphEdges.get(`${cwd}\0false\0${file}`);
+    if (!edges) {
       continue;
     }
-    for (const match of source.matchAll(IMPORT_SPECIFIER_PATTERN)) {
-      const imported = resolveImportSpecifier(file, match[1] ?? match[2] ?? "", fileSet);
-      if (!imported) {
-        continue;
+    for (const [imports, reverse] of [
+      [edges.imports, reverseImports],
+      [edges.reexports, reverseReexports],
+    ] as const) {
+      for (const imported of imports) {
+        const importers = reverse.get(imported) ?? [];
+        importers.push(file);
+        reverse.set(imported, importers);
       }
-      const importers = reverseImports.get(imported) ?? [];
-      importers.push(file);
-      reverseImports.set(imported, importers);
-    }
-    for (const match of source.matchAll(REEXPORT_SPECIFIER_PATTERN)) {
-      const imported = resolveImportSpecifier(file, match[1] ?? "", fileSet);
-      if (!imported) {
-        continue;
-      }
-      const importers = reverseReexports.get(imported) ?? [];
-      importers.push(file);
-      reverseReexports.set(imported, importers);
     }
   }
 
@@ -1945,6 +2002,9 @@ function resolveToolingChangedTestTargets(changedPaths: string[], cwd = process.
       return null;
     }
     targets.push(...testTargets);
+    if (CHANNEL_PLUGIN_SHAPE_PARITY_WIRING_PATHS.has(changedPath)) {
+      targets.push(CHANNEL_PLUGIN_SHAPE_PARITY_TEST_TARGET);
+    }
   }
   return [...new Set(targets)];
 }
@@ -2065,6 +2125,7 @@ const changedScope = "src/scripts/ci-changed-scope.test.ts";
 const changedScopeTests = [
   "src/scripts/ci-changed-scope.contract-fixtures.test.ts",
   "src/scripts/ci-changed-scope.control-ui.test.ts",
+  "src/scripts/ci-changed-scope.git-owner.test.ts",
   "src/scripts/ci-changed-scope.native-i18n.test.ts",
   changedScope,
   "src/scripts/ci-changed-scope.windows.test.ts",
@@ -2091,17 +2152,26 @@ const pluginSdkEntryOwners = [
 // Keep only genuinely ambiguous paths explicit; conventional discovery owns
 // unambiguous scripts and direct imports without a second inventory.
 const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
-  [
-    ".github/workflows/mantis-telegram-live.yml",
-    ["mantis-telegram-desktop-proof-workflow", packageAcceptance, workflowGuards],
-  ],
+  [".github/workflows/ci.yml", ["ci-platform-checkout", "ci-linux-git", "ci-git-owner"]],
+  [".github/workflows/docs-sync-publish.yml", ["docs-sync-publish"]],
+  [".github/workflows/docs-agent.yml", ["docs-agent-workflow"]],
+  ["scripts/generate-ci-git-owner.mts", ["ci-git-owner"]],
   [
     ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml",
     [packageAcceptance, workflowGuards, "release-workflow-matrix-plan", installDocker],
   ],
   [
+    ".github/workflows/plugin-clawhub-release.yml",
+    [packageAcceptance, "plugin-release-git-lifecycle", workflowGuards],
+  ],
+  [
     ".github/workflows/plugin-npm-release.yml",
-    [packageAcceptance, "plugin-npm-extended-stable-workflow", workflowGuards],
+    [
+      packageAcceptance,
+      "plugin-npm-extended-stable-workflow",
+      "plugin-release-git-lifecycle",
+      workflowGuards,
+    ],
   ],
   [".github/workflows/qa-live-transports-convex.yml", [packageAcceptance, workflowGuards]],
   [".github/workflows/update-migration.yml", [packageAcceptance, workflowGuards]],
@@ -2157,10 +2227,20 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
       "src/channels/plugins/contracts/channel-import-guardrails.test.ts",
     ],
   ],
+  ["scripts/build-stamp.mts", ["src/infra/build-stamp.test.ts"]],
   ["scripts/run-vitest.mjs", ["run-vitest", "test-projects", "vitest-local-scheduling"]],
   ["scripts/run-vitest.mts", ["run-vitest", "test-projects", "vitest-local-scheduling"]],
-  ["scripts/run-oxlint-shards.mts", ["run-oxlint"]],
-  ["scripts/lib/failed-trailer.mts", ["run-oxlint", "run-tsgo", "run-vitest", "changed-lanes"]],
+  ["scripts/run-oxlint-shards.mts", ["run-oxlint", "lint-status"]],
+  ["scripts/run-oxlint.mts", ["run-oxlint", "lint-status"]],
+  ["scripts/run-oxlint.mjs", ["run-oxlint", "lint-status"]],
+  ["scripts/run-lint.mts", ["run-oxlint", "lint-status"]],
+  ["scripts/run-stylelint.mts", ["changed-lanes", "lint-status"]],
+  [
+    "scripts/lib/failed-trailer.mts",
+    ["run-oxlint", "run-tsgo", "run-vitest", "changed-lanes", "lint-status"],
+  ],
+  ["scripts/lib/managed-child-process.mts", ["managed-child-process", "lint-status"]],
+  ["scripts/lib/dist-artifact-ownership.mts", ["dist-artifact-ownership", "lint-status"]],
   ["scripts/docker-e2e-rerun.mts", ["docker-e2e-helper-cli"]],
   ["scripts/openclaw-postpack.mjs", [TOOLING_VITEST_CONFIG]],
   ["scripts/package-manifest.mjs", ["test/openclaw-prepack.test.ts"]],
@@ -2198,8 +2278,17 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
       packageAcceptance,
       "upgrade-survivor-probe-gateway",
       "upgrade-survivor-assertions",
+      "upgrade-survivor-recovery-cleanup",
       "openclaw-test-state",
     ],
+  ],
+  [
+    "scripts/e2e/lib/upgrade-survivor/run.sh",
+    ["upgrade-survivor-assertions", "upgrade-survivor-recovery-cleanup"],
+  ],
+  [
+    "scripts/e2e/lib/upgrade-survivor/recovery-cleanup-fixture.mjs",
+    ["upgrade-survivor-recovery-cleanup"],
   ],
   [
     "scripts/e2e/bundled-plugin-install-uninstall-docker.sh",
@@ -2236,7 +2325,23 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
 ]);
 
 const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
-  [/^scripts\/pr$/u, ["pr-merge", "pr-operation-lock", "pr-wrappers"]],
+  [
+    /^(?:git-hooks\/pre-commit|scripts\/pre-commit\/(?:guard-staged-content\.mjs|filter-staged-files\.mjs|format-staged\.sh|run-node-tool\.sh)|test\/git-hooks-pre-commit\.test-support\.ts)$/u,
+    ["test/git-hooks-pre-commit.test.ts", "test/git-hooks-pre-commit-boundaries.test.ts"],
+  ],
+  [/^scripts\/pr$/u, ["pr-merge", "pr-merge-outcome", "pr-operation-lock", "pr-wrappers"]],
+  [
+    /^scripts\/pr-lib\/crabbox-gate-contract\.mjs$/u,
+    ["pr-crabbox-gate-publisher", "pr-crabbox-merge-bypass"],
+  ],
+  [
+    /^scripts\/pr-lib\/crabbox-gate-plan\.mts$/u,
+    ["pr-crabbox-gate-plan", "pr-crabbox-gate-publisher", "pr-prepare-gates"],
+  ],
+  [
+    /^scripts\/pr-lib\/crabbox-merge-bypass\.sh$/u,
+    ["pr-crabbox-merge-bypass", "pr-merge", "pr-merge-outcome"],
+  ],
   [/^scripts\/lib\/windows-taskkill\.mjs$/u, ["managed-child-process", "run-with-env"]],
   [
     /^scripts\/lib\/config-boundary-guard\.mts$/u,
@@ -2271,7 +2376,23 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [
     /^\.github\/workflows\/full-release-validation\.yml$/u,
-    ["src/dockerfile.test.ts", packageAcceptance, pluginPrerelease],
+    [
+      "src/dockerfile.test.ts",
+      "full-release-validation-state",
+      "full-release-validation-at-sha",
+      "full-release-candidate-reuse",
+      "find-reusable-release-validation",
+      "openclaw-npm-extended-stable-full-validation-workflow",
+      "release-no-push-workflow",
+      "release-ci-summary",
+      packageAcceptance,
+      pluginPrerelease,
+      "check-workflows",
+    ],
+  ],
+  [
+    /^\.github\/workflows\/full-release-candidate\.yml$/u,
+    ["full-release-candidate-reuse", packageAcceptance, "check-workflows", workflowGuards],
   ],
   [
     /^\.github\/workflows\/openclaw-release-checks\.yml$/u,
@@ -2282,7 +2403,19 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     ["src/dockerfile.test.ts", "docker-channel-promote", "vercel-container-registry-publish"],
   ],
   [/^\.github\/workflows\/install-smoke\.yml$/u, ["install-smoke-no-push-workflow", installDocker]],
-  [/^\.github\/workflows\/openclaw-performance\.yml$/u, ["openclaw-performance-workflow"]],
+  [
+    /^\.github\/workflows\/openclaw-performance\.yml$/u,
+    ["openclaw-performance-workflow", "openclaw-performance-git-lifecycle"],
+  ],
+  [/^\.github\/workflows\/linux-app-release\.yml$/u, ["release-workflow-git-lifecycle"]],
+  [
+    /^\.github\/workflows\/macos-release\.yml$/u,
+    ["release-workflow-git-lifecycle", packageAcceptance],
+  ],
+  [
+    /^\.github\/workflows\/npm-placeholder-bootstrap\.yml$/u,
+    ["release-workflow-git-lifecycle", "npm-placeholder-publication"],
+  ],
   [/^\.github\/workflows\/plugin-prerelease\.yml$/u, [pluginPrerelease]],
   [/^\.github\/workflows\/tui-pty\.yml$/u, [packageAcceptance]],
   [
@@ -2327,21 +2460,26 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     [packageAcceptance, workflowGuards],
   ],
   [
-    /^\.github\/workflows\/mantis-telegram-desktop-proof\.yml$/u,
-    ["mantis-telegram-desktop-proof-workflow", packageAcceptance, workflowGuards],
-  ],
-  [
-    /^\.github\/workflows\/mantis-web-ui-chat-proof\.yml$/u,
+    /^\.github\/(?:workflows\/mantis-web-ui-chat-proof\.yml|actions\/mantis-validate-trusted-ref\/action\.yml)$/u,
     ["mantis-web-ui-chat-proof-workflow", packageAcceptance, workflowGuards],
   ],
   [/^\.github\/workflows\/android-release\.yml$/u, [packageAcceptance, workflowGuards]],
-  [/^\.github\/actions\/ensure-base-commit\/action\.yml$/u, [workflowGuards]],
+  [
+    /^\.github\/(?:actions\/(?:ensure-base-commit|git-owner|publish-generated-pr|mantis-validate-trusted-ref)\/|workflows\/(?:workflow-sanity|qa-profile-evidence|maturity-scorecard|docs-agent|docs-sync-publish|openclaw-performance|linux-app-release|macos-release|npm-placeholder-bootstrap|plugin-clawhub-release|plugin-npm-release|mantis-(?:discord-(?:smoke|status-reactions|thread-attachment)|slack-desktop-smoke|web-ui-chat-proof))\.yml$)/u,
+    [
+      "ci-git-owner",
+      "ci-linux-git",
+      "ci-platform-checkout",
+      "src/scripts/ci-changed-scope.git-owner.test.ts",
+    ],
+  ],
+  [/^\.github\/actions\/publish-generated-pr\//u, [workflowGuards]],
   [/^tsconfig\.scripts\.json$/u, ["changed-lanes", "test-projects"]],
   [/^scripts\/test-projects\.test-support\.mts$/u, ["test-projects"]],
   [/^scripts\/ci-changed-scope\.mjs$/u, [...changedScopeTests, "control-ui-i18n"]],
   [/^scripts\/check-changed\.(?:mjs|mts)$/u, ["changed-lanes"]],
   [/^scripts\/changed-lanes\.(?:mjs|mts)$/u, ["changed-lanes"]],
-  [/^scripts\/lib\/tsx-cli-shim\.mjs$/u, ["direct-run-entrypoints"]],
+  [/^scripts\/(?:lib\/tsx-cli-shim|tsx)\.mjs$/u, ["direct-run-entrypoints", "lint-status"]],
   [
     new RegExp(
       [
@@ -2359,7 +2497,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [/^scripts\/run-node\.(?:mjs|mts)$/u, [runNode]],
   [/^scripts\/ios-write-swift-filelist\.m[jt]s$/u, ["ios-run"]],
-  [/^scripts\/pr-lib\/merge\.sh$/u, ["pr-merge"]],
+  [/^scripts\/pr-lib\/merge(?:-outcome)?\.sh$/u, ["pr-merge", "pr-merge-outcome"]],
   [/^scripts\/plugin-clawhub-publish\.sh$/u, ["test/plugin-clawhub-release.test.ts"]],
   [/^scripts\/openclaw-npm-postpublish-verify\.ts$/u, [npmPostpublish]],
   [
@@ -2380,8 +2518,14 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     ["openclaw-cross-os-release-workflow"],
   ],
   [
-    /^scripts\/write-plugin-sdk-entry-dts\.ts$/u,
-    ["build-all", "prepare-extension-package-boundary-artifacts"],
+    /^scripts\/(?:write-plugin-sdk-entry-dts\.ts|lib\/local-check-runtime\.mts)$/u,
+    [
+      "test/scripts/write-plugin-sdk-entry-dts.test.ts",
+      "build-all",
+      "declaration-stage",
+      "tsdown-build",
+      "prepare-extension-package-boundary-artifacts",
+    ],
   ],
   [/^scripts\/pr-lib\/worktree\.sh$/u, ["test/vitest/vitest.tooling.config.ts"]],
   [/^scripts\/dev\/gateway-smoke\.ts$/u, ["test/e2e/qa-lab/runtime/gateway-smoke.e2e.test.ts"]],
@@ -2544,7 +2688,14 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     ],
   ],
   [/^scripts\/lib\/npm-pack-budget\.mts$/u, [releaseCheck, installDocker]],
-  [/^scripts\/lib\/actions-artifact-archive\.mjs$/u, ["plugin-publication-artifact"]],
+  [
+    /^scripts\/lib\/actions-artifact-archive\.mjs$/u,
+    ["full-release-candidate-reuse", "plugin-publication-artifact"],
+  ],
+  [
+    /^scripts\/(?:lib\/)?full-release-candidate-reuse\.(?:mjs|d\.mts)$/u,
+    ["full-release-candidate-reuse"],
+  ],
   [
     /^scripts\/lib\/static-extension-assets\.(?:mjs|mts)$/u,
     ["bundled-plugin-assets", "runtime-postbuild", runNode, "plugin-npm-runtime-build-args"],
@@ -2571,7 +2722,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     [dockerBuild, "docker-e2e-observability", dockerE2e, pluginPrerelease],
   ],
   [
-    /^scripts\/e2e\/mcp-code-mode-gateway-(?:live-)?docker\.sh$/u,
+    /^scripts\/e2e\/(?:mcp-code-mode-gateway-(?:live-)?docker|lib\/mcp-code-mode\/scenario)\.sh$/u,
     [
       dockerBuild,
       dockerE2e,
@@ -2901,11 +3052,15 @@ function resolveSemanticToolingTargets(changedPath: string) {
   );
 }
 
+function isGithubWorkflowOrActionYaml(changedPath: string) {
+  return (
+    /^\.github\/workflows\/[^/]+\.ya?ml$/u.test(changedPath) ||
+    /^\.github\/actions\/.+\.ya?ml$/u.test(changedPath)
+  );
+}
+
 function resolveGithubYamlGuardTargets(changedPath: string) {
-  if (/^\.github\/workflows\/[^/]+\.ya?ml$/u.test(changedPath)) {
-    return GITHUB_YAML_PINNING_GUARD_TEST_TARGETS;
-  }
-  if (/^\.github\/actions\/.+\.ya?ml$/u.test(changedPath)) {
+  if (isGithubWorkflowOrActionYaml(changedPath)) {
     return GITHUB_YAML_PINNING_GUARD_TEST_TARGETS;
   }
   return null;
@@ -2913,19 +3068,34 @@ function resolveGithubYamlGuardTargets(changedPath: string) {
 
 function resolveDirectToolingReferenceTests(changedPath: string, cwd: string) {
   const normalized = normalizePathPattern(changedPath);
-  return (listImportGraphGrepMatches(cwd, normalized, { tooling: true }) ?? []).filter(
-    (file) =>
-      file !== "test/scripts/test-projects.test.ts" &&
-      !file.endsWith(".live.test.ts") &&
-      isTestFileTarget(file) &&
-      fs
-        .readFileSync(path.join(cwd, file), "utf8")
-        .match(/[A-Za-z0-9_.@+/-]{4,}/gu)
-        ?.includes(normalized),
-  );
+  return (listImportGraphGrepMatches(cwd, [normalized], { tooling: true }).get(normalized) ?? [])
+    .filter(
+      ({ file, references }) =>
+        file !== "test/scripts/test-projects.test.ts" &&
+        !file.endsWith(".live.test.ts") &&
+        isTestFileTarget(file) &&
+        references.has(normalized),
+    )
+    .map(({ file }) => file);
 }
 
 function resolveToolingTestTargets(changedPath: string, cwd = process.cwd()) {
+  if (
+    /^test\/scripts\/(?:ci-(?:checkout|git-owner|linux-git|platform-checkout)\.test(?:-support)?\.ts|generated-publisher\.test-support\.ts|openclaw-performance-(?:workflow\.test(?:-support)?|git-lifecycle\.test)\.ts|plugin-release-git-lifecycle\.test\.ts|release-workflow-git-lifecycle\.test\.ts|fixtures\/(?:ci-platform-checkout\.mjs|ci-(?:checkout-auth|windows-process-census)\.py))$/u.test(
+      changedPath,
+    )
+  ) {
+    return resolveToolingTestOwnerTargets(
+      "ci-git-owner",
+      "ci-linux-git",
+      "ci-platform-checkout",
+      "openclaw-performance-workflow",
+      "openclaw-performance-git-lifecycle",
+      "plugin-release-git-lifecycle",
+      "release-workflow-git-lifecycle",
+      workflowGuards,
+    );
+  }
   if (changedPath.startsWith("test/scripts/") && isTestFileTarget(changedPath)) {
     return [changedPath];
   }
@@ -2938,13 +3108,16 @@ function resolveToolingTestTargets(changedPath: string, cwd = process.cwd()) {
     !changedPath.startsWith("scripts/") && changedPath.endsWith(".d.mts")
       ? changedPath.replace(/\.d\.mts$/u, ".mjs")
       : changedPath;
+  const githubYaml = isGithubWorkflowOrActionYaml(implementationPath);
   const exactOwners = EXACT_TOOLING_TARGETS.get(implementationPath);
-  if (exactOwners) {
+  if (exactOwners && !githubYaml) {
     return resolveToolingTestOwnerTargets(...exactOwners);
   }
+  const exactTargets = exactOwners ? resolveToolingTestOwnerTargets(...exactOwners) : [];
   const semanticTargets = resolveSemanticToolingTargets(implementationPath);
   const facts = getChangedPathFacts(changedPath);
   const hasToolingOwner =
+    exactTargets.length > 0 ||
     semanticTargets.length > 0 ||
     facts.surface === "rootTooling" ||
     changedPath === "Dockerfile" ||
@@ -2982,6 +3155,7 @@ function resolveToolingTestTargets(changedPath: string, cwd = process.cwd()) {
   const githubYamlGuardTargets = resolveGithubYamlGuardTargets(implementationPath);
   const conventionalTargets = resolveConventionalToolingTestTargets(implementationPath, cwd);
   const hasDirectOwner = Boolean(
+    exactTargets.length ||
     explicitTargets?.length ||
     githubYamlGuardTargets?.length ||
     semanticTargets.length ||
@@ -2997,10 +3171,11 @@ function resolveToolingTestTargets(changedPath: string, cwd = process.cwd()) {
       : [];
   const importGraphTargets = importGraphResult ?? [];
   const referenceTargets =
-    semanticTargets.length === 0 && (githubYamlGuardTargets || !hasDirectOwner)
+    githubYaml || (semanticTargets.length === 0 && !hasDirectOwner)
       ? resolveDirectToolingReferenceTests(implementationPath, cwd)
       : [];
   const targets = [
+    ...exactTargets,
     ...(explicitTargets ?? []),
     ...semanticTargets,
     ...(conventionalTargets ?? []),
@@ -3260,6 +3435,9 @@ function classifyTarget(arg: string, cwd: string) {
   }
   if (isUiIsolatedTestFile(relative)) {
     return "uiIsolated";
+  }
+  if (isUiBrowserTestFile(relative)) {
+    return "uiBrowser";
   }
   if (isPathAtOrUnder(relative, "ui")) {
     return "ui";
@@ -3622,6 +3800,16 @@ export function buildVitestRunPlans(
   const changedTargetArgs =
     targetArgs.length === 0 ? resolveChangedTargetArgs(args, cwd, listChangedPaths, options) : null;
   const requestedTargetArgs = changedTargetArgs ?? targetArgs;
+  if (
+    watchMode &&
+    requestedTargetArgs.some(
+      (target) => isPathAtOrUnder(toRepoRelativeTarget(target, cwd), "ui") && isGlobTarget(target),
+    )
+  ) {
+    throw new Error(
+      "watch mode with UI glob targets is not supported; use a literal test path, directory, or dedicated UI suite",
+    );
+  }
   const activeTargetArgs = expandBroadToolingScriptTargets(
     expandExplicitSourceTestTargets(requestedTargetArgs, cwd),
     cwd,
@@ -3719,6 +3907,25 @@ export function buildVitestRunPlans(
     groupedTargets.set("toolingIsolated", current);
   }
   const uiTargets = groupedTargets.get("ui") ?? [];
+  const broadUiTargets = uiTargets.filter(
+    (targetArg) => !isTestFileTarget(toRepoRelativeTarget(targetArg, cwd)),
+  );
+  if (broadUiTargets.length > 0) {
+    const browserTargets = listExplicitTestTargetFilesForCwd(cwd).filter(
+      (file) =>
+        isUiBrowserTestFile(file) &&
+        broadUiTargets.some(
+          (targetArg) =>
+            shouldUseWholeConfigTarget("ui", targetArg, cwd) ||
+            includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [file]),
+        ),
+    );
+    if (browserTargets.length > 0) {
+      groupedTargets.set("uiBrowser", [
+        ...new Set([...(groupedTargets.get("uiBrowser") ?? []), ...browserTargets]),
+      ]);
+    }
+  }
   const impliedUiIsolatedTargets = uiIsolatedTestFiles.filter((file) =>
     uiTargets.some((targetArg) =>
       includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [file]),
@@ -4067,8 +4274,7 @@ export function applyParallelVitestCachePaths<T extends VitestSpecShape>(
   const configuredCacheRoot = baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim() || undefined;
   // CI publishes a persistent cache root, not a writer-safe leaf. Every
   // concurrent Vitest process still needs its own live directory below it.
-  const cacheRoot =
-    configuredCacheRoot ?? path.join(cwd, "node_modules", ".experimental-vitest-cache");
+  const cacheRoot = configuredCacheRoot ?? resolveVitestFsModuleCacheRoot(cwd);
   return specs.map((spec, index) => {
     const specCachePath = spec.env?.[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
     if (specCachePath && specCachePath !== configuredCacheRoot) {

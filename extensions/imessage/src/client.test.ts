@@ -1,9 +1,8 @@
-// iMessage tests cover the RPC client child-process stream error handling.
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -48,6 +47,19 @@ function createMockChild(): MockChild {
   return child;
 }
 
+let IMessageRpcClient: typeof import("./client.js").IMessageRpcClient;
+let IMessageRpcRequestError: typeof import("./client.js").IMessageRpcRequestError;
+
+beforeAll(async () => {
+  vi.resetModules();
+  ({ IMessageRpcClient, IMessageRpcRequestError } = await import("./client.js"));
+});
+
+afterAll(() => {
+  vi.doUnmock("node:child_process");
+  vi.resetModules();
+});
+
 describe("IMessageRpcClient child stream error handling", () => {
   let child: MockChild;
   const tempDirs: string[] = [];
@@ -65,7 +77,6 @@ describe("IMessageRpcClient child stream error handling", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
-    vi.resetModules();
     await Promise.all(
       tempDirs.splice(0).map((dir) => fs.rm(dir, { force: true, recursive: true })),
     );
@@ -74,7 +85,6 @@ describe("IMessageRpcClient child stream error handling", () => {
   it.each(["stdout", "stderr", "stdin"] as const)(
     "catches a %s stream error and rejects in-flight requests instead of crashing",
     async (streamName) => {
-      const { IMessageRpcClient } = await import("./client.js");
       const client = new IMessageRpcClient({ cliPath: "imsg" });
       await client.start();
 
@@ -101,7 +111,6 @@ describe("IMessageRpcClient child stream error handling", () => {
     child.stdin.write = () => {
       throw writeError;
     };
-    const { IMessageRpcClient } = await import("./client.js");
     const client = new IMessageRpcClient({ cliPath: "imsg" });
     await client.start();
 
@@ -114,7 +123,6 @@ describe("IMessageRpcClient child stream error handling", () => {
   });
 
   it("preserves structured JSON-RPC error data for send callers", async () => {
-    const { IMessageRpcClient, IMessageRpcRequestError } = await import("./client.js");
     const client = new IMessageRpcClient({ cliPath: "imsg" });
     await client.start();
     const data = {
@@ -157,7 +165,6 @@ describe("IMessageRpcClient child stream error handling", () => {
 
   it("finishes graceful shutdown without scheduling escalation after synchronous close", async () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const { IMessageRpcClient } = await import("./client.js");
     const client = new IMessageRpcClient({ cliPath: "imsg" });
     await client.start();
     const endMock = vi.fn(() => {
@@ -175,7 +182,6 @@ describe("IMessageRpcClient child stream error handling", () => {
 
   it("escalates EOF to SIGTERM and SIGKILL, then waits for close", async () => {
     vi.useFakeTimers();
-    const { IMessageRpcClient } = await import("./client.js");
     const client = new IMessageRpcClient({ cliPath: "imsg" });
     await client.start();
     child.stdin.end = vi.fn();
@@ -203,7 +209,6 @@ describe("IMessageRpcClient child stream error handling", () => {
       stdio: ["pipe", "pipe", "pipe"],
     });
     spawnMock.mockReturnValueOnce(realChild);
-    const { IMessageRpcClient } = await import("./client.js");
     const client = new IMessageRpcClient({ cliPath: "imsg" });
     await client.start();
 
@@ -224,7 +229,6 @@ describe("IMessageRpcClient child stream error handling", () => {
   });
 
   it("promotes a complete Full Disk Access diagnostic", async () => {
-    const { IMessageRpcClient } = await import("./client.js");
     const runtimeError = vi.fn();
     const client = new IMessageRpcClient({
       cliPath: "imsg",
@@ -264,7 +268,6 @@ describe("IMessageRpcClient child stream error handling", () => {
       stdio: ["pipe", "pipe", "pipe"],
     });
     spawnMock.mockReturnValueOnce(realChild);
-    const { IMessageRpcClient } = await import("./client.js");
     const runtimeError = vi.fn();
     const client = new IMessageRpcClient({
       cliPath: "imsg",
@@ -291,7 +294,6 @@ describe("IMessageRpcClient child stream error handling", () => {
   });
 
   it("keeps unrelated unterminated stderr on the generic close error path", async () => {
-    const { IMessageRpcClient } = await import("./client.js");
     const runtimeError = vi.fn();
     const client = new IMessageRpcClient({
       cliPath: "imsg",
@@ -345,7 +347,6 @@ describe("IMessageRpcClient child stream error handling", () => {
     spawnMock.mockImplementationOnce((command, args, options) =>
       childProcess.spawn(command, args, options),
     );
-    const { IMessageRpcClient } = await import("./client.js");
     const client = new IMessageRpcClient({
       cliPath: "~/.openclaw/imsg remote",
       dbPath: "~/Library/Messages/chat.db",
@@ -374,7 +375,6 @@ describe("IMessageRpcClient child stream error handling", () => {
 
   it("keeps local dbPath home expansion", async () => {
     vi.stubEnv("HOME", "/Users/gateway");
-    const { IMessageRpcClient } = await import("./client.js");
     const client = new IMessageRpcClient({
       cliPath: "~/.openclaw/imsg-local",
       dbPath: "~/Library/Messages/chat.db",

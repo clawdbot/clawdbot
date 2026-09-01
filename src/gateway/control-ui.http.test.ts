@@ -1,5 +1,6 @@
 // Control UI HTTP tests cover static asset serving, bootstrap config, avatar and
 // assistant media routes, pairing helpers, and session-generation metadata.
+import { AsyncLocalStorage, createHook } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -76,14 +77,8 @@ vi.mock("../media/media-probe.js", () => ({
 }));
 vi.mock("../media/playback-transcode.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media/playback-transcode.js")>();
-  const testApi = (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.playbackTranscodeTestApi")
-  ] as {
-    PLAYBACK_TRANSCODE_POLICY: Record<"audio" | "video", unknown>;
-    resolvePlaybackMode(mimeType: string, policy: unknown): "native" | "transcode" | undefined;
-  };
-  resolvePlaybackModeForSourceMock.mockImplementation(async (params) =>
-    testApi.resolvePlaybackMode(params.mimeType, testApi.PLAYBACK_TRANSCODE_POLICY[params.kind]),
+  resolvePlaybackModeForSourceMock.mockImplementation(async ({ mimeType }) =>
+    mimeType === "audio/x-caf" ? "transcode" : "native",
   );
   return {
     ...actual,
@@ -124,7 +119,10 @@ afterEach(() => {
   resetPluginRuntimeStateForTest();
   probeMediaFileDescriptorMock.mockReset();
   probeMediaFileDescriptorMock.mockResolvedValue({});
-  resolvePlaybackModeForSourceMock.mockClear();
+  resolvePlaybackModeForSourceMock.mockReset();
+  resolvePlaybackModeForSourceMock.mockImplementation(async ({ mimeType }) =>
+    mimeType === "audio/x-caf" ? "transcode" : "native",
+  );
   resolvePlaybackTranscodeMock.mockReset();
   resolvePlaybackTranscodeMock.mockResolvedValue({ kind: "passthrough" });
 });
@@ -3233,6 +3231,60 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it.each(["/", "/settings", "/assets/actual.txt"])(
+    "serves a pinned small file in one asynchronous filesystem operation at %s",
+    async (url) => {
+      await withControlUiRoot({
+        fn: async (tmp) => {
+          await writeAssetFile(tmp, "actual.txt", "inside-ok\n");
+          const requestScope = new AsyncLocalStorage<boolean>();
+          let filesystemOperations = 0;
+          const hook = createHook({
+            init(_id, type) {
+              if (type === "FSREQCALLBACK" && requestScope.getStore()) {
+                filesystemOperations += 1;
+              }
+            },
+          }).enable();
+          try {
+            const { res, end, handled } = await requestScope.run(true, () =>
+              runControlUiRequest({ url, method: "GET", rootPath: tmp }),
+            );
+            expect(handled).toBe(true);
+            expect(res.statusCode).toBe(200);
+            expect(responseBody(end)).toContain(url.startsWith("/assets/") ? "inside-ok" : "<html");
+            // Safe open already captured stat; a second queued metadata read adds
+            // another event-loop wait before these bytes can reach the browser.
+            expect(filesystemOperations).toBe(1);
+          } finally {
+            hook.disable();
+          }
+        },
+      });
+    },
+  );
+
+  it("bounds a static response by the size captured with its pinned descriptor", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { filePath } = await writeAssetFile(tmp, "actual.txt", "original");
+        const fstat = fsSync.fstatSync;
+        vi.spyOn(fsSync, "fstatSync").mockImplementationOnce((fd) => {
+          const stat = fstat(fd);
+          fsSync.appendFileSync(filePath, "-appended-after-open");
+          return stat;
+        });
+        const { res, end } = await runControlUiRequest({
+          url: "/assets/actual.txt",
+          method: "GET",
+          rootPath: tmp,
+        });
+        expect(res.statusCode).toBe(200);
+        expect(responseBody(end)).toBe("original");
+      },
+    });
+  });
+
   it("serves static assets without synchronous file reads", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
@@ -3518,6 +3570,115 @@ describe("handleControlUiHttpRequest", () => {
         expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
         expect(setHeader).not.toHaveBeenCalledWith("Content-Encoding", expect.anything());
         expect(responseBody(end)).toBe(source);
+      },
+    });
+  });
+
+  it("serves theme fonts with the woff2 content type and a validator", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const fontsDir = path.join(tmp, "fonts");
+        await fs.mkdir(fontsDir, { recursive: true });
+        const fontPath = path.join(fontsDir, "lora-latin.woff2");
+        await fs.writeFile(fontPath, Buffer.from("wOF2-mock-bytes"));
+        const stat = await fs.stat(fontPath);
+
+        const { res, end, setHeader, handled } = await runControlUiRequest({
+          url: "/fonts/lora-latin.woff2",
+          method: "GET",
+          rootPath: tmp,
+          rootKind: "bundled",
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(setHeader).toHaveBeenCalledWith("Content-Type", "font/woff2");
+        expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
+        expect(setHeader).toHaveBeenCalledWith(
+          "Last-Modified",
+          new Date(stat.mtimeMs).toUTCString(),
+        );
+        expect(responseBody(end)).toBe("wOF2-mock-bytes");
+      },
+    });
+  });
+
+  it("answers conditional revalidation with 304 instead of a re-download", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const fontsDir = path.join(tmp, "fonts");
+        await fs.mkdir(fontsDir, { recursive: true });
+        const fontPath = path.join(fontsDir, "lora-latin.woff2");
+        await fs.writeFile(fontPath, Buffer.from("wOF2-mock-bytes"));
+        const stat = await fs.stat(fontPath);
+
+        const fresh = await runControlUiRequest({
+          url: "/fonts/lora-latin.woff2",
+          method: "GET",
+          rootPath: tmp,
+          rootKind: "bundled",
+          headers: { "if-modified-since": new Date(stat.mtimeMs).toUTCString() },
+        });
+        expect(fresh.res.statusCode).toBe(304);
+        expect(fresh.setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
+        expect(fresh.setHeader).toHaveBeenCalledWith(
+          "Last-Modified",
+          new Date(stat.mtimeMs).toUTCString(),
+        );
+        expect(firstEndCallLength(fresh.end)).toBe(0);
+
+        const stale = await runControlUiRequest({
+          url: "/fonts/lora-latin.woff2",
+          method: "GET",
+          rootPath: tmp,
+          rootKind: "bundled",
+          headers: { "if-modified-since": new Date(stat.mtimeMs - 5_000).toUTCString() },
+        });
+        expect(stale.res.statusCode).toBe(200);
+        expect(responseBody(stale.end)).toBe("wOF2-mock-bytes");
+      },
+    });
+  });
+
+  it("clamps future filesystem mtimes so validators cannot postdate the response", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const fontsDir = path.join(tmp, "fonts");
+        await fs.mkdir(fontsDir, { recursive: true });
+        const fontPath = path.join(fontsDir, "lora-latin.woff2");
+        await fs.writeFile(fontPath, Buffer.from("wOF2-mock-bytes"));
+        const future = new Date(Date.now() + 60 * 60 * 1000);
+        await fs.utimes(fontPath, future, future);
+
+        const { res, setHeader } = await runControlUiRequest({
+          url: "/fonts/lora-latin.woff2",
+          method: "GET",
+          rootPath: tmp,
+          rootKind: "bundled",
+        });
+
+        expect(res.statusCode).toBe(200);
+        const lastModified = setHeader.mock.calls.find(([name]) => name === "Last-Modified")?.[1];
+        expect(typeof lastModified).toBe("string");
+        const emitted = Date.parse(lastModified as string);
+        // A future validator would 304 later replacements; it must never
+        // postdate the response, only trail it by clock/floor slack.
+        expect(emitted).toBeLessThanOrEqual(Date.now());
+        expect(emitted).toBeLessThan(future.getTime());
+      },
+    });
+  });
+
+  it("returns 404 for missing font files instead of the SPA index", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, end, handled } = await runControlUiRequest({
+          url: "/fonts/missing.woff2",
+          method: "GET",
+          rootPath: tmp,
+          rootKind: "bundled",
+        });
+        expectNotFoundResponse({ handled, res, end });
       },
     });
   });

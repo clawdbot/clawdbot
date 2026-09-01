@@ -203,6 +203,7 @@ jobs:
       contents: read
     outputs:
       built_at: ${{ steps.build_provenance.outputs.built_at }}
+      release_version: ${{ needs.resolve_release_policy.outputs.version }}
       source_sha: ${{ steps.build_provenance.outputs.source_sha }}
     steps:
       - name: Checkout selected source
@@ -352,7 +353,7 @@ jobs:
           done
 
       - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -448,6 +449,7 @@ jobs:
           build-args: |
             GIT_COMMIT=${{ needs.resolve_build_provenance.outputs.source_sha }}
             OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve_build_provenance.outputs.built_at }}
+            OPENCLAW_DOCKER_BUILD_VERSION=${{ needs.resolve_build_provenance.outputs.release_version }}
             OPENCLAW_EXTENSIONS=diagnostics-otel,codex
           tags: ${{ steps.tags.outputs.value }}
           labels: ${{ steps.labels.outputs.value }}
@@ -470,6 +472,7 @@ jobs:
           build-args: |
             GIT_COMMIT=${{ needs.resolve_build_provenance.outputs.source_sha }}
             OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve_build_provenance.outputs.built_at }}
+            OPENCLAW_DOCKER_BUILD_VERSION=${{ needs.resolve_build_provenance.outputs.release_version }}
             OPENCLAW_EXTENSIONS=diagnostics-otel,codex
             OPENCLAW_INSTALL_BROWSER=1
           tags: ${{ steps.tags.outputs.browser }}
@@ -561,7 +564,7 @@ jobs:
 
       - *buildkit_prepull_step
       - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -657,6 +660,7 @@ jobs:
           build-args: |
             GIT_COMMIT=${{ needs.resolve_build_provenance.outputs.source_sha }}
             OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve_build_provenance.outputs.built_at }}
+            OPENCLAW_DOCKER_BUILD_VERSION=${{ needs.resolve_build_provenance.outputs.release_version }}
             OPENCLAW_EXTENSIONS=diagnostics-otel,codex
           tags: ${{ steps.tags.outputs.value }}
           labels: ${{ steps.labels.outputs.value }}
@@ -679,6 +683,7 @@ jobs:
           build-args: |
             GIT_COMMIT=${{ needs.resolve_build_provenance.outputs.source_sha }}
             OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve_build_provenance.outputs.built_at }}
+            OPENCLAW_DOCKER_BUILD_VERSION=${{ needs.resolve_build_provenance.outputs.release_version }}
             OPENCLAW_EXTENSIONS=diagnostics-otel,codex
             OPENCLAW_INSTALL_BROWSER=1
           tags: ${{ steps.tags.outputs.browser }}
@@ -913,7 +918,7 @@ jobs:
 
       - *buildkit_prepull_step
       - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0

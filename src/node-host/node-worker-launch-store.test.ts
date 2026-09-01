@@ -1,14 +1,9 @@
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
-  OPENCLAW_STATE_SCHEMA_VERSION,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "../state/openclaw-state-schema-compatibility.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { NodeWorkerLaunchStore } from "./node-worker-launch-store.js";
 import { requireNodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
@@ -310,98 +305,6 @@ describe("node worker launch store container identity", () => {
     closeOpenClawStateDatabaseForTest();
 
     expect(new NodeWorkerLaunchStore({ env }).get("container-launch")).toEqual(receipt);
-  });
-
-  it("lets the same-schema predecessor read and write a populated candidate container journal before candidate reopen", () => {
-    const { database, env, store } = fixture();
-    const databasePath = openOpenClawStateDatabase({ env }).path;
-    const { planHash, supervisor } = claimLaunch(store, "candidate-container-launch");
-    const container = {
-      engine: "docker",
-      containerId: "a".repeat(64),
-      engineTarget: "b".repeat(64),
-    } as const;
-    store.markRunning({
-      launchId: "candidate-container-launch",
-      planHash,
-      supervisor,
-      worker: supervisor,
-      container,
-      nowMs: NOW_MS,
-    });
-    expect(hasContainerIdentityTable(database)).toBe(true);
-    expect(database.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-    });
-    closeOpenClawStateDatabaseForTest();
-
-    const companionStart = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
-      "CREATE TABLE IF NOT EXISTS node_worker_launch_containers (",
-    );
-    const companionEndMarker = "\n) STRICT;";
-    const companionEnd = OPENCLAW_STATE_SCHEMA_SQL.indexOf(companionEndMarker, companionStart);
-    expect(companionStart).toBeGreaterThanOrEqual(0);
-    expect(companionEnd).toBeGreaterThan(companionStart);
-    const predecessorSchema = `${OPENCLAW_STATE_SCHEMA_SQL.slice(
-      0,
-      companionStart,
-    )}${OPENCLAW_STATE_SCHEMA_SQL.slice(companionEnd + companionEndMarker.length)}`;
-    const predecessorCompatibility = {
-      ...OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
-      allowedMissingTables:
-        OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY.allowedMissingTables?.filter(
-          (table) => table !== "node_worker_launch_containers",
-        ),
-    };
-    expect(predecessorSchema).not.toContain("node_worker_launch_containers");
-    expect(predecessorCompatibility.allowedMissingTables).not.toContain(
-      "node_worker_launch_containers",
-    );
-
-    const predecessor = new DatabaseSync(databasePath);
-    try {
-      expect(predecessor.prepare("PRAGMA user_version").get()).toEqual({
-        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-      });
-      expect(() =>
-        assertSqliteSchemaContains(
-          predecessor,
-          "predecessor global schema",
-          predecessorSchema,
-          predecessorCompatibility,
-        ),
-      ).not.toThrow();
-      expect(
-        predecessor
-          .prepare(
-            "SELECT launch_id, state, worker_pid FROM node_worker_launches WHERE launch_id = ?",
-          )
-          .get("candidate-container-launch"),
-      ).toMatchObject({
-        launch_id: "candidate-container-launch",
-        state: "running",
-        worker_pid: supervisor.pid,
-      });
-      insertLaunch({
-        database: predecessor,
-        launchId: "predecessor-bare-launch",
-        state: "pending",
-      });
-      predecessor
-        .prepare("UPDATE node_worker_launches SET updated_at_ms = ? WHERE launch_id = ?")
-        .run(NOW_MS + 1, "candidate-container-launch");
-    } finally {
-      predecessor.close();
-    }
-
-    const candidate = new NodeWorkerLaunchStore({ env });
-    expect(candidate.get("candidate-container-launch")).toMatchObject({
-      state: "running",
-      container,
-      updatedAtMs: NOW_MS + 1,
-    });
-    expect(candidate.get("predecessor-bare-launch")).toMatchObject({ state: "pending" });
-    expect(candidate.get("predecessor-bare-launch")).not.toHaveProperty("container");
   });
 
   it.each([

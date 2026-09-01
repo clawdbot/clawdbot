@@ -11,7 +11,10 @@ import {
   clearAuthProfileMigrationDiagnostics,
   markAuthProfileMigrationRequired,
 } from "../agents/auth-profiles/legacy-source-diagnostic.js";
-import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
+import {
+  getRuntimeAuthProfileStoreCredentialsRevision,
+  prepareRuntimeAuthProfileStoreSnapshots,
+} from "../agents/auth-profiles/runtime-snapshots.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   cloneConfigWithResolutionFacts,
@@ -219,7 +222,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     const snapshot = {
       sourceConfig,
       config: resolvedConfig,
-      authStores,
+      authStores: prepareRuntimeAuthProfileStoreSnapshots(authStores, runtimeEnv),
       authStoreCredentialsRevision,
       warnings: [],
       degradedOwners: migrationDegradedOwners,
@@ -336,7 +339,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   const snapshot = {
     sourceConfig,
     config: resolvedConfig,
-    authStores,
+    authStores: prepareRuntimeAuthProfileStoreSnapshots(authStores, runtimeEnv),
     authStoreCredentialsRevision,
     warnings: context.warnings,
     degradedOwners: [

@@ -33,6 +33,7 @@ const PLUGIN_DOC_ALIASES = new Map([
   ["duckduckgo", "/tools/duckduckgo-search"],
   ["exa", "/tools/exa-search"],
   ["firecrawl", "/tools/firecrawl"],
+  ["imap", "/automation/imap"],
   ["parallel", "/tools/parallel-search"],
   ["perplexity", "/tools/perplexity-search"],
   ["policy", "/cli/policy"],

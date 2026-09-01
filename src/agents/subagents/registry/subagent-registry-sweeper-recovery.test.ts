@@ -32,10 +32,12 @@ vi.mock("./subagent-registry-restart-recovery.js", async (importOriginal) => {
     recoverInterruptedSubagentRow: recoverRow,
   };
 });
-vi.mock("../../../infra/agent-events.js", () => ({
+vi.mock("../../../infra/agent-events.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../infra/agent-events.js")>()),
   isAgentEventLifecycleGenerationCurrent: () => true,
 }));
-vi.mock("../../../infra/agent-run-registry.js", () => ({
+vi.mock("../../../infra/agent-run-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../infra/agent-run-registry.js")>()),
   getAgentRunContext,
 }));
 vi.mock("../../internal-session-effects.js", () => ({

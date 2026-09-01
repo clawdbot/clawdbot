@@ -2,9 +2,15 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasExplicitCronDeliveryTarget, resolveCronDeliveryPlan } from "./delivery-plan.js";
-import { resolveDeliveryTarget } from "./isolated-agent/delivery-target.js";
+import {
+  resolveDeliveryTarget,
+  resolvedDeliveryTargetsExternalChannel,
+} from "./isolated-agent/delivery-target.js";
 import { resolveCronDeliverySessionKey } from "./session-target.js";
 import type { CronDeliveryPreview, CronJob } from "./types.js";
+
+type CronDeliveryPreviewJob = Pick<CronJob, "delivery" | "payload" | "sessionTarget"> &
+  Partial<Pick<CronJob, "agentId" | "sessionKey">>;
 
 function formatTarget(channel?: string, to?: string | null): string {
   if (!channel) {
@@ -36,10 +42,10 @@ function formatDeliveryDetail(params: {
 }
 
 /** Builds the user-visible cron delivery preview for one job without sending anything. */
-async function resolveCronDeliveryPreview(params: {
+export async function resolveCronDeliveryPreview(params: {
   cfg: OpenClawConfig;
   defaultAgentId?: string;
-  job: CronJob;
+  job: CronDeliveryPreviewJob;
 }): Promise<CronDeliveryPreview> {
   const plan = resolveCronDeliveryPlan(params.job);
   if (plan.mode === "none" && !hasExplicitCronDeliveryTarget(plan)) {
@@ -68,6 +74,18 @@ async function resolveCronDeliveryPreview(params: {
     { dryRun: true },
   );
   if (!resolved.ok) {
+    if (
+      params.job.sessionTarget === "current" &&
+      plan.mode === "announce" &&
+      !resolvedDeliveryTargetsExternalChannel(resolved)
+    ) {
+      // Mirrors runtime: a current-target completion with no external channel
+      // route commits durably to its own conversation instead of failing.
+      return {
+        label: "announce -> current session",
+        detail: "commits to this conversation (no external channel route)",
+      };
+    }
     // Preview mirrors runtime fail-closed behavior for "last" delivery so the
     // UI can show unresolved routes before the cron job actually runs.
     return {

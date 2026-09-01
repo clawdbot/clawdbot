@@ -2,7 +2,10 @@
  * Doctor contract hooks for Codex plugin config and state migrations.
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { codexOrphanedSessionBindingMigration } from "./src/migration/session-binding-orphans.js";
+import { stateMigrations as legacyStateMigrations } from "./src/migration/session-binding-sidecars.js";
 
 type LegacyConfigRule = {
   path: string[];
@@ -134,4 +137,7 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   };
 }
 
-export { stateMigrations } from "./src/migration/session-binding-sidecars.js";
+export const stateMigrations: PluginDoctorStateMigration[] = [
+  ...legacyStateMigrations,
+  codexOrphanedSessionBindingMigration,
+];

@@ -88,11 +88,11 @@ export function jsonError(res: BrowserResponse, status: number, message: string)
 
 /** Send a mapped browser-domain error while preserving validated metadata. */
 export function jsonBrowserError(res: BrowserResponse, error: BrowserErrorResponse) {
-  const body =
-    "reason" in error
-      ? { error: error.message, reason: error.reason, details: error.details }
-      : { error: error.message };
-  res.status(error.status).json(body);
+  res.status(error.status).json({
+    error: error.message,
+    ...("reason" in error ? { reason: error.reason } : {}),
+    ...("details" in error ? { details: error.details } : {}),
+  });
 }
 
 /** Coerce route values to strings while treating nullish values as empty. */

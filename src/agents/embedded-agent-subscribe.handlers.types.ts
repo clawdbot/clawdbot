@@ -59,6 +59,7 @@ type AssistantStreamData = {
   delta: string;
   replace?: true;
   mediaUrls?: string[];
+  managedMediaUrls?: string[];
   phase?: AssistantPhase;
   itemId?: string;
 };
@@ -178,6 +179,7 @@ export type EmbeddedAgentSubscribeState = {
   lastReasoningSent?: string;
   pendingAssistantUsage?: NormalizedUsage;
   assistantUsageCommitted: boolean;
+  retryUsage?: NormalizedUsage;
 
   compactionInFlight: boolean;
   lastCompactionTokensAfter?: number;
@@ -213,6 +215,8 @@ export type EmbeddedAgentSubscribeState = {
   pendingToolMediaAttachments?: ReplyMediaAttachment[];
   /** Per-URL local-media trust; keys are normalized pending media URLs. */
   pendingToolMediaTrustByUrl: Map<string, boolean>;
+  /** Exact media URLs whose owning built-in tool contract requires source delivery. */
+  toolAutoDeliveryMediaUrls: Set<string>;
   pendingToolAudioAsVoice: boolean;
   pendingToolMediaDeliveryFailed: boolean;
   hasToolMediaBlockReply: boolean;
@@ -374,6 +378,7 @@ type ToolHandlerState = Pick<
   | "pendingToolMediaUrls"
   | "pendingToolMediaAttachments"
   | "pendingToolMediaTrustByUrl"
+  | "toolAutoDeliveryMediaUrls"
   | "pendingToolAudioAsVoice"
   | "deterministicApprovalPromptPending"
   | "hadDeterministicSideEffect"

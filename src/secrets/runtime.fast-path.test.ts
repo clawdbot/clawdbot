@@ -134,7 +134,7 @@ describe("secrets runtime fast path", () => {
 
     expect(runtimePrepareImportMock).not.toHaveBeenCalled();
     expect(requireGatewayAuth(snapshot).token).toBe("plain-startup-token");
-    expect(snapshot.authStores).toEqual([
+    expect(snapshot.authStores.map(({ agentDir, store }) => ({ agentDir, store }))).toEqual([
       {
         agentDir: "/tmp/openclaw-agent-main",
         store: emptyAuthStore(),
@@ -245,7 +245,7 @@ describe("secrets runtime fast path", () => {
     const { resolveRuntimeWebTools } = await import("./runtime-web-tools.js");
     const { loadPluginMetadataSnapshot } = await import("../plugins/plugin-metadata-snapshot.js");
     const { setCurrentPluginMetadataSnapshot } =
-      await import("../plugins/current-plugin-metadata-snapshot.js");
+      await import("../plugins/current-plugin-metadata.test-support.js");
     const { listAgentWorkspaceDirs } = await import("../agents/workspace-dirs.js");
     const config = asConfig({
       ...explicitMainRoster(),
@@ -563,7 +563,12 @@ describe("secrets runtime fast path", () => {
       });
 
       expect(fastPath).not.toBeNull();
-      expect(fastPath!.snapshot.authStores).toEqual([{ agentDir, store: emptyAuthStore() }]);
+      expect(
+        fastPath!.snapshot.authStores.map(({ agentDir: storeAgentDir, store }) => ({
+          agentDir: storeAgentDir,
+          store,
+        })),
+      ).toEqual([{ agentDir, store: emptyAuthStore() }]);
       activateSecretsRuntimeSnapshotState({
         snapshot: fastPath!.snapshot,
         refreshContext: fastPath!.refreshContext,

@@ -1,10 +1,13 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import type { SessionPlacementDiskSpace } from "../../../../packages/gateway-protocol/src/schema/session-placement.ts";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
+import { renderCopyButton } from "../../components/copy-button.ts";
+import { formatWebUiIconErrorText } from "../../components/error-presentation.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
-import { renderPlacementStartupStatus } from "./components/chat-working-indicator.ts";
+import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
+import { clampText } from "../../lib/format.ts";
 import { renderWorkspaceConflictNotice } from "./components/chat-workspace-conflict.ts";
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
 
@@ -24,6 +27,7 @@ type ChatViewNoticesProps = ChatPlacementStartupNoticeProps & {
 };
 
 type ChatComposerNoticesProps = ChatPlacementStartupNoticeProps & {
+  messages: readonly unknown[];
   runError?: { summary: string } | null;
   onDismissWorkspaceConflict?: () => void;
   workspaceConflict?: WorkspaceResultConflict | null;
@@ -63,7 +67,19 @@ function renderDiskSpaceNotice(diskSpace: SessionPlacementDiskSpace | undefined)
   `;
 }
 
-function renderErrorNotice(error: string, onDismiss?: () => void) {
+function renderErrorNotice(
+  error: string,
+  action: TemplateResult | typeof nothing = nothing,
+  displayError = formatWebUiIconErrorText(error),
+) {
+  const lines = displayError
+    .trim()
+    .split(/\r?\n/u)
+    .map((line) => line.replace(/\s+/gu, " ").trim());
+  const [firstLine = ""] = lines;
+  const summary = clampText(firstLine);
+  const hasDetails = lines.some((line) => line !== "" && line !== summary);
+  // Plain summaries wrap fully; only expandable previews may clip at narrow widths.
   return html`
     <div
       class="chat-composer-neighbor-card chat-composer-neighbor-card--danger chat-error"
@@ -72,32 +88,44 @@ function renderErrorNotice(error: string, onDismiss?: () => void) {
       <span class="chat-composer-neighbor-card__icon" aria-hidden="true"
         >${icons.alertTriangle}</span
       >
-      <span class="chat-composer-neighbor-card__copy chat-error__content"
-        ><strong>${error}</strong></span
-      >
-      ${onDismiss
-        ? html`
-            <openclaw-tooltip .content=${t("chat.actions.dismissError")}>
-              <button
-                class="chat-error__dismiss"
-                type="button"
-                @click=${onDismiss}
-                aria-label=${t("chat.actions.dismissError")}
-              >
-                ${icons.x}
-              </button>
-            </openclaw-tooltip>
-          `
-        : nothing}
+      ${hasDetails
+        ? html`<details class="chat-error__content">
+            <summary class="chat-error__summary">
+              <strong>${summary}</strong>
+              <span>${t("chat.errorDetails")}</span>
+              <span class="chat-error__chevron" aria-hidden="true">${icons.chevronDown}</span>
+            </summary>
+            <pre class="chat-error__diagnostic" tabindex="0" aria-label=${t("chat.errorDetails")}>
+${displayError}</pre>
+            ${renderCopyButton(error, t("chat.copyError"))}
+          </details>`
+        : html`<span class="chat-error__content"
+            ><strong>${summary}</strong>${renderCopyButton(error, t("chat.copyError"))}</span
+          >`}
+      ${action}
     </div>
   `;
 }
 
 export function renderChatTopbarNotices(props: ChatViewNoticesProps) {
+  const dismiss = props.onDismissError
+    ? html`
+        <openclaw-tooltip .content=${t("chat.actions.dismissError")}>
+          <button
+            class="chat-error__dismiss"
+            type="button"
+            @click=${props.onDismissError}
+            aria-label=${t("chat.actions.dismissError")}
+          >
+            ${icons.x}
+          </button>
+        </openclaw-tooltip>
+      `
+    : nothing;
   return html`
     <div class="chat-topbar-notices">
       ${renderDiskSpaceNotice(props.diskSpace)}
-      ${props.error ? renderErrorNotice(props.error, props.onDismissError) : nothing}
+      ${props.error ? renderErrorNotice(props.error, dismiss) : nothing}
       ${props.focusMode && props.onToggleFocusMode
         ? html`
             <openclaw-tooltip .content=${t("chat.actions.exitFocusMode")}>
@@ -123,6 +151,42 @@ export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
       conflict: props.workspaceConflict ?? undefined,
       onDismiss: props.onDismissWorkspaceConflict,
     })}
-    ${renderPlacementStartupStatus(props.placementStartup, props.onRetrySessionPlacementStartup)}
+    ${renderPlacementStartupError(
+      props.placementStartup,
+      props.messages,
+      props.onRetrySessionPlacementStartup,
+    )}
   `;
+}
+
+function renderPlacementStartupError(
+  status: ApplicationPlacementStartupStatus | null | undefined,
+  messages: readonly unknown[],
+  onRetry?: () => void,
+) {
+  if (status?.phase !== "failed") {
+    return nothing;
+  }
+  const checking = status.action === "check-delivery";
+  const statusError = status.error ?? t("newSession.createFailed");
+  const error = checking
+    ? [t("chat.queue.checkDeliveryHelp"), status.error].filter(Boolean).join("\n\n")
+    : t("newSession.placementStartFailed", { error: statusError });
+  const displayStatusError = formatWebUiIconErrorText(statusError);
+  const displayError = checking
+    ? [t("chat.queue.checkDeliveryHelp"), status.error ? displayStatusError : undefined]
+        .filter(Boolean)
+        .join("\n\n")
+    : t("newSession.placementStartFailed", { error: displayStatusError });
+  // History can own the bubble before startup observes its receipt. Keep the
+  // banner action reachable when transcript deduplication hides the row.
+  const hasInlineTurn =
+    status.initialTurn && !findChatSubmissionMessage(messages, status.initialTurn.sendRunId, true);
+  const retry =
+    status.retryable && onRetry && !hasInlineTurn
+      ? html`<button class="btn btn--sm" type="button" @click=${onRetry}>
+          ${t(checking ? "chat.queue.checkDelivery" : "common.retry")}
+        </button>`
+      : nothing;
+  return renderErrorNotice(error, retry, displayError);
 }

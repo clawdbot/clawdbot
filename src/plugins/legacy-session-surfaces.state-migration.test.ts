@@ -2,10 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  autoMigrateLegacyState,
-  resetAutoMigrateLegacyStateForTest,
-} from "../infra/state-migrations.doctor.js";
+import { autoMigrateLegacyState } from "../infra/state-migrations.doctor.js";
 import { resetAutoMigrateLegacyStateDirForTest } from "../infra/state-migrations.state-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { writePersistedInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
@@ -21,7 +18,6 @@ const tempDirs: string[] = [];
 afterEach(() => {
   clearPluginRegistryLoadCache();
   clearPluginMetadataLifecycleCaches();
-  resetAutoMigrateLegacyStateForTest();
   resetAutoMigrateLegacyStateDirForTest();
   closeOpenClawStateDatabaseForTest();
   cleanupTrackedTempDirs(tempDirs);
@@ -205,7 +201,12 @@ describe("installed channel legacy session surfaces", () => {
       "utf8",
     );
 
-    const result = await autoMigrateLegacyState({ cfg: config, env, homedir: () => rootDir });
+    const result = await autoMigrateLegacyState({
+      cfg: config,
+      env,
+      homedir: () => rootDir,
+      doctorOnlyStateMigrations: true,
+    });
     const migrated = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, unknown>;
 
     expect(result.warnings).toEqual([]);
@@ -268,7 +269,12 @@ describe("installed channel legacy session surfaces", () => {
       "utf8",
     );
 
-    const result = await autoMigrateLegacyState({ cfg: config, env, homedir: () => rootDir });
+    const result = await autoMigrateLegacyState({
+      cfg: config,
+      env,
+      homedir: () => rootDir,
+      doctorOnlyStateMigrations: true,
+    });
     const migrated = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, unknown>;
 
     expect(result.warnings).toEqual([]);
@@ -338,7 +344,12 @@ export const legacySessionSurface = {
       "utf8",
     );
 
-    const result = await autoMigrateLegacyState({ cfg: config, env, homedir: () => rootDir });
+    const result = await autoMigrateLegacyState({
+      cfg: config,
+      env,
+      homedir: () => rootDir,
+      doctorOnlyStateMigrations: true,
+    });
     const preserved = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, unknown>;
 
     expect(result.warnings).toContainEqual(

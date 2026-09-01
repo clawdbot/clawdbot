@@ -6,11 +6,13 @@ import type {
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   capturePluginRegistration,
+  createRuntimeEnv,
+  createTestWizardPrompter,
   registerSingleProviderPlugin,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 // Anthropic tests cover index plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 const { probeClaudeCliAuthStatusMock } = vi.hoisted(() => ({
   probeClaudeCliAuthStatusMock: vi.fn(),
@@ -717,6 +719,9 @@ describe("anthropic provider replay hooks", () => {
       restoresMissingCost,
       checksCliPolicy,
     }) => {
+      // This table describes the promotional contract before the September pricing cutover.
+      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 7, 31));
+      onTestFinished(() => clock.mockRestore());
       const provider = await registerSingleProviderPlugin(anthropicPlugin);
       const resolved = provider.resolveDynamicModel?.({
         provider: "anthropic",
@@ -1297,6 +1302,56 @@ describe("anthropic provider replay hooks", () => {
     } as never);
 
     expect(normalized).toBeUndefined();
+  });
+
+  it("preserves API-key validation and interactive and non-interactive auth", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+    const method = provider.auth.find(({ id }) => id === "api-key");
+    if (!method?.validateNonInteractive || !method.runNonInteractive) {
+      throw new Error("expected complete Anthropic API-key auth");
+    }
+    const runtime = createRuntimeEnv();
+    const resolveApiKey = vi.fn(async () => ({ key: "test-token", source: "profile" as const }));
+    const context = {
+      authChoice: "apiKey",
+      config: {},
+      baseConfig: {},
+      opts: { anthropicApiKey: "test-token" },
+      runtime,
+      resolveApiKey,
+      toApiKeyCredential: vi.fn(() => null),
+    };
+    expect(await method.validateNonInteractive(context)).toBe(true);
+    expect(resolveApiKey).toHaveBeenCalledWith({
+      provider: "anthropic",
+      flagValue: "test-token",
+      flagName: "--anthropic-api-key",
+      envVar: "ANTHROPIC_API_KEY",
+    });
+    expect(await method.runNonInteractive(context)).toMatchObject({
+      auth: { profiles: { "anthropic:default": { provider: "anthropic", mode: "api_key" } } },
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-5" } } },
+    });
+    const result = await method.run({
+      config: {},
+      env: {},
+      opts: context.opts,
+      runtime,
+      prompter: createTestWizardPrompter(),
+      secretInputMode: "plaintext",
+      isRemote: false,
+      openUrl: vi.fn(),
+      oauth: { createVpsAwareHandlers: vi.fn() },
+    });
+    expect(result).toMatchObject({
+      defaultModel: "anthropic/claude-opus-5",
+      profiles: [
+        {
+          profileId: "anthropic:default",
+          credential: { type: "api_key", provider: "anthropic", key: "test-token" },
+        },
+      ],
+    });
   });
 
   it("stores setup-token expiry from a bounded duration", async () => {

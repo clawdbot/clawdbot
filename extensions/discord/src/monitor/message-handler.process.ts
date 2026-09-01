@@ -76,6 +76,7 @@ type DiscordProviderDeliveryInfo = {
   kind: ReplyDispatchKind;
   bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
   onPlatformSendDispatch: () => Promise<void>;
+  assertPlatformSendAuthorized: () => void;
 };
 
 export async function processDiscordMessage(
@@ -330,6 +331,7 @@ async function processDiscordMessageInner(
         kind: "block",
         bindPendingFinalDelivery: info.bindPendingFinalDelivery,
         onPlatformSendDispatch: info.onPlatformSendDispatch,
+        assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
       });
       if (result.visibleReplySent) {
         replyReference.markSent();
@@ -486,6 +488,7 @@ async function processDiscordMessageInner(
             kind: info.kind,
             bindPendingFinalDelivery: info.bindPendingFinalDelivery,
             onPlatformSendDispatch: info.onPlatformSendDispatch,
+            assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
           });
           return deliveryResult.visibleReplySent;
         },
@@ -536,6 +539,7 @@ async function processDiscordMessageInner(
       kind: info.kind,
       bindPendingFinalDelivery: info.bindPendingFinalDelivery,
       onPlatformSendDispatch: info.onPlatformSendDispatch,
+      assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
     });
     if (!result.visibleReplySent) {
       return result;
@@ -689,17 +693,23 @@ async function processDiscordMessageInner(
       return;
     }
     dispatchError = true;
-    const conflictCompleted = await completeDiscordSessionConflict(
+    const conflictOutcome = await completeDiscordSessionConflict(
       err,
+      sourceReplyDeliveryMode,
       (payload, info) =>
         deliverDiscordPayload(payload, {
           ...info,
           onPlatformSendDispatch: () => Promise.resolve(),
+          assertPlatformSendAuthorized: () => undefined,
         }),
       onDiscordDeliveryError,
     );
-    if (conflictCompleted) {
-      // The visible terminal notice owns this event, so replay can commit.
+    if (conflictOutcome) {
+      runtime.error(
+        `discord: reply session init conflict exhausted; terminal notice ${conflictOutcome} ` +
+          `(sourceReplyDeliveryMode=${sourceReplyDeliveryMode}, message=${message.id}, session=${persistedSessionKey})`,
+      );
+      // Both a delivered notice and recorded policy suppression consume the event.
       return;
     }
     throw err;

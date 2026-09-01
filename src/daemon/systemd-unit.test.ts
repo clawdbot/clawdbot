@@ -41,6 +41,27 @@ describe("systemd unit value round-trips", () => {
 });
 
 describe("buildSystemdUnit", () => {
+  it.each(["", "--max-old-space-size=24576"])(
+    "preserves explicit NODE_OPTIONS=%j while omitting other empty values",
+    (nodeOptions) => {
+      const programArguments = ["/usr/bin/node", "--max-old-space-size=16384", "gateway.js"];
+      const unit = buildSystemdUnit({
+        programArguments,
+        environment: { NODE_OPTIONS: nodeOptions, UNUSED: "", MISSING: undefined },
+      });
+      const lines = unit.split("\n");
+      expect(
+        lines
+          .filter((line) => line.startsWith("Environment="))
+          .flatMap((line) => parseSystemdEnvAssignments(line.slice("Environment=".length))),
+      ).toEqual([{ key: "NODE_OPTIONS", value: nodeOptions }]);
+      const execStart = lines.find((line) => line.startsWith("ExecStart="));
+      expect(parseSystemdExecStart(execStart?.slice("ExecStart=".length) ?? "")).toEqual(
+        programArguments,
+      );
+    },
+  );
+
   it("quotes arguments with whitespace", () => {
     const unit = buildSystemdUnit({
       description: "OpenClaw Gateway",

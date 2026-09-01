@@ -5,7 +5,7 @@
  */
 import path from "node:path";
 import { extractApplyPatchTargets } from "./apply-patch-targets.js";
-import { preserveAtPrefixedRelativePath } from "./path-policy.js";
+import { preserveAtPrefixedRelativePath, resolvePathFromInput } from "./path-policy.js";
 import { resolveSandboxInputPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
@@ -37,12 +37,35 @@ import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 export type ApplyPatchPathExtractionOptions = {
   /** Tool execution cwd. Defaults to process.cwd(), matching createApplyPatchTool. */
   cwd?: string;
+  /** Run cancellation propagated to remote path disambiguation. */
+  signal?: AbortSignal;
   /** Sandbox bridge used by apply_patch execution, when the tool runs in a sandbox. */
   sandbox?: {
     root: string;
     bridge: SandboxFsBridge;
   };
 };
+
+/** Resolve a patch input through the same literal-@ policy used by execution. */
+export async function resolveApplyPatchInputPath(
+  raw: string,
+  options: ApplyPatchPathExtractionOptions = {},
+): Promise<string> {
+  const cwd = options.cwd ?? options.sandbox?.root ?? process.cwd();
+  const preserved = await preserveAtPrefixedRelativePath(
+    raw,
+    cwd,
+    options.sandbox?.bridge,
+    options.signal,
+  );
+  if (!raw.startsWith("@") || preserved !== raw) {
+    return preserved;
+  }
+  const referenced = raw.slice(1);
+  return referenced === "~" || referenced.startsWith("~/") || referenced.startsWith("~\\")
+    ? resolvePathFromInput(raw, cwd)
+    : referenced;
+}
 
 function normalizePatchPath(
   raw: string,
@@ -102,6 +125,35 @@ export function extractApplyPatchTargetPaths(
   const seen = new Set<string>();
   for (const target of extractApplyPatchTargets(input)) {
     pushPath(paths, seen, target.path, options);
+  }
+  return paths;
+}
+
+/** Derive policy-visible paths using the asynchronous resolver used by execution. */
+export async function extractResolvedApplyPatchTargetPaths(
+  input: unknown,
+  options: ApplyPatchPathExtractionOptions = {},
+): Promise<string[]> {
+  const paths: string[] = [];
+  const seen = new Set<string>();
+  const cwd = options.cwd ?? options.sandbox?.root ?? process.cwd();
+  for (const target of extractApplyPatchTargets(input)) {
+    try {
+      const filePath = await resolveApplyPatchInputPath(target.path, options);
+      const resolved = options.sandbox?.bridge.resolvePath({ filePath, cwd });
+      const normalized = resolved?.hostPath
+        ? path.normalize(resolved.hostPath)
+        : resolved
+          ? path.posix.normalize(resolved.containerPath)
+          : path.normalize(resolveSandboxInputPath(filePath, cwd));
+      if (normalized && normalized !== "." && !seen.has(normalized)) {
+        seen.add(normalized);
+        paths.push(normalized);
+      }
+    } catch {
+      options.signal?.throwIfAborted();
+      // Derived paths are best-effort metadata; execution remains authoritative.
+    }
   }
   return paths;
 }

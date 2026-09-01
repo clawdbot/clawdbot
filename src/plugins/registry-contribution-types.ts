@@ -15,6 +15,7 @@ import type {
   EmbeddingProviderAdapter,
   EmbeddingProviderCallOptions,
   EmbeddingProviderCreateOptions,
+  EmbeddingProviderCreateResult,
   EmbeddingProviderIndexIdentity,
   EmbeddingProviderRuntime,
 } from "./embedding-provider-types.js";
@@ -81,57 +82,23 @@ export type MemoryEmbeddingProviderRuntime = EmbeddingProviderRuntime & {
 
 export type MemoryEmbeddingProviderIndexIdentity = EmbeddingProviderIndexIdentity;
 
-export type MemoryEmbeddingProvider = Pick<
-  EmbeddingProvider,
-  "id" | "model" | "maxInputTokens" | "close"
-> & {
-  embedQuery: (text: string, options?: MemoryEmbeddingProviderCallOptions) => Promise<number[]>;
-  embedBatch: (
-    texts: string[],
-    options?: MemoryEmbeddingProviderCallOptions,
-  ) => Promise<number[][]>;
-  embedBatchInputs?: (
-    inputs: EmbeddingInput[],
-    options?: MemoryEmbeddingProviderCallOptions,
-  ) => Promise<number[][]>;
-};
+export type MemoryEmbeddingProvider = EmbeddingProvider;
 
-export type MemoryEmbeddingProviderCreateOptions = Omit<
-  EmbeddingProviderCreateOptions,
-  "dimensions" | "local" | "taskType"
-> & {
+export type MemoryEmbeddingProviderCreateOptions = Omit<EmbeddingProviderCreateOptions, "local"> & {
   fallback?: string;
-  local?: {
-    modelPath?: string;
-    modelCacheDir?: string;
+  local?: NonNullable<EmbeddingProviderCreateOptions["local"]> & {
     contextSize?: number | "auto";
   };
-  outputDimensionality?: number;
-  taskType?:
-    | "RETRIEVAL_QUERY"
-    | "RETRIEVAL_DOCUMENT"
-    | "SEMANTIC_SIMILARITY"
-    | "CLASSIFICATION"
-    | "CLUSTERING"
-    | "QUESTION_ANSWERING"
-    | "FACT_VERIFICATION";
 };
 
-export type MemoryEmbeddingProviderCreateResult = {
-  provider: MemoryEmbeddingProvider | null;
+export type MemoryEmbeddingProviderCreateResult = Omit<EmbeddingProviderCreateResult, "runtime"> & {
   runtime?: MemoryEmbeddingProviderRuntime;
 };
 
-export type MemoryEmbeddingProviderAdapter = Omit<
-  EmbeddingProviderAdapter,
-  "create" | "resolveIndexIdentity"
-> & {
+export type MemoryEmbeddingProviderAdapter = Omit<EmbeddingProviderAdapter, "create"> & {
   autoSelectPriority?: number;
   allowExplicitWhenConfiguredAuto?: boolean;
   supportsMultimodalEmbeddings?: (params: { model: string }) => boolean;
-  resolveIndexIdentity?: (
-    options: MemoryEmbeddingProviderCreateOptions,
-  ) => MemoryEmbeddingProviderIndexIdentity;
   create: (
     options: MemoryEmbeddingProviderCreateOptions,
   ) => Promise<MemoryEmbeddingProviderCreateResult>;

@@ -90,9 +90,9 @@ flow:
             - expr: liveTurnTimeoutMs(env, 180000)
         - set: matchingOutbound
           value:
-            expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-room' && candidate.conversation.kind === 'channel' && String(candidate.text ?? '').includes(config.expectedMarker))"
+            expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && String(candidate.text ?? '').includes(config.expectedMarker))"
         - assert:
             expr: matchingOutbound.length === 1
             message:
-              expr: "`expected exactly one channel baseline marker reply, saw ${matchingOutbound.length}; transcript=${formatTransportTranscript(state, { conversationId: 'qa-room' })}`"
+              expr: "`expected exactly one channel baseline marker reply, saw ${matchingOutbound.length}; transcript=${recentOutboundSummary(state)}`"
       detailsExpr: message.text

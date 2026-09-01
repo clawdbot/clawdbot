@@ -1,5 +1,6 @@
 import { isRecord } from "../../utils.js";
-import { isToolAllowedByPolicyName } from "../tool-policy-match.js";
+import { readCronScheduledToolProjection } from "../exec-tool-target-pinning.js";
+import { createToolPolicyMatcher } from "../tool-policy-match.js";
 import {
   buildPluginToolGroups,
   expandPolicyWithPluginGroups,
@@ -11,6 +12,8 @@ import type { CronCreatorToolAllowlistEntry, CronToolsAllowCaptureRef } from "./
 type NormalizedCronCreatorTool = {
   name: string;
   pluginId?: string;
+  aliasName?: string;
+  execTarget?: { host: "gateway"; ask?: "always" };
 };
 
 type CronJobUpdatePatchPlan =
@@ -46,17 +49,48 @@ export function replaceWithEffectiveCronCreatorToolAllowlist<T extends { name: s
   toolMeta?: (tool: T) => { pluginId?: string } | undefined,
 ): void {
   target.length = 0;
-  const seen = new Set<string>();
+  // Host-created alias projections (for example a Codex gateway shell alias) are
+  // recorded under their canonical core tool name so scheduled runtimes rebuild
+  // the same capability. The alias name is kept for explicit-cap matching only.
+  const indexByName = new Map<string, number>();
   for (const tool of tools) {
-    const name = normalizeToolPolicyName(tool.name);
-    if (!name || seen.has(name)) {
+    const projection = readCronScheduledToolProjection(tool);
+    const name = normalizeToolPolicyName(projection ? projection.targetTool : tool.name);
+    if (!name) {
       continue;
     }
-    seen.add(name);
+    const aliasName = projection ? normalizeToolPolicyName(tool.name) : undefined;
+    const existingIndex = indexByName.get(name);
+    const existing = existingIndex === undefined ? undefined : target[existingIndex];
+    if (existing !== undefined) {
+      // Merge duplicate grants of one canonical tool: alias names stay matchable,
+      // and the restrict-only target survives only when every grantor pins it.
+      if (typeof existing === "string") {
+        continue;
+      }
+      if (aliasName && !existing.aliasName) {
+        existing.aliasName = aliasName;
+      }
+      if (existing.execTarget && !projection?.execTarget) {
+        delete existing.execTarget;
+      } else if (
+        existing.execTarget?.ask === "always" &&
+        projection?.execTarget?.ask !== "always"
+      ) {
+        delete existing.execTarget.ask;
+      }
+      continue;
+    }
     const meta = toolMeta?.(tool);
     const pluginId =
       typeof meta?.pluginId === "string" ? normalizeToolPolicyName(meta.pluginId) : undefined;
-    target.push(pluginId ? { name, pluginId } : { name });
+    indexByName.set(name, target.length);
+    target.push({
+      name,
+      ...(pluginId ? { pluginId } : {}),
+      ...(aliasName && aliasName !== name ? { aliasName } : {}),
+      ...(projection?.execTarget ? { execTarget: { ...projection.execTarget } } : {}),
+    });
   }
 }
 
@@ -100,9 +134,35 @@ function normalizeCronCreatorToolsAllow(
       typeof entry === "string" || typeof entry.pluginId !== "string"
         ? undefined
         : normalizeToolPolicyName(entry.pluginId);
-    normalized.push(pluginId ? { name, pluginId } : { name });
+    const aliasName =
+      typeof entry === "string" || typeof entry.aliasName !== "string"
+        ? undefined
+        : normalizeToolPolicyName(entry.aliasName);
+    const execTarget =
+      typeof entry !== "string" && entry.execTarget?.host === "gateway"
+        ? ({
+            host: "gateway" as const,
+            ...(entry.execTarget.ask === "always" ? { ask: "always" as const } : {}),
+          } as const)
+        : undefined;
+    normalized.push({
+      name,
+      ...(pluginId ? { pluginId } : {}),
+      ...(aliasName && aliasName !== name ? { aliasName } : {}),
+      ...(execTarget ? { execTarget } : {}),
+    });
   }
   return normalized;
+}
+
+/** Restrict-only exec target present only when the creator's exec grant is host-pinned. */
+export function resolveCronCreatorExecToolTarget(
+  entries: readonly CronCreatorToolAllowlistEntry[] | undefined,
+): { host: "gateway"; ask?: "always" } | undefined {
+  const execEntry = normalizeCronCreatorToolsAllow(entries ?? []).find(
+    (tool) => tool.name === "exec",
+  );
+  return execEntry?.execTarget ? { ...execEntry.execTarget } : undefined;
 }
 
 function hasCronTriggerScript(value: unknown): boolean {
@@ -142,7 +202,9 @@ function explicitFiniteToolsNeedResolution(
     return false;
   }
   const creatorNames = new Set(
-    normalizeCronCreatorToolsAllow(creatorToolAllowlist ?? []).map((tool) => tool.name),
+    normalizeCronCreatorToolsAllow(creatorToolAllowlist ?? []).flatMap((tool) =>
+      tool.aliasName ? [tool.name, tool.aliasName] : [tool.name],
+    ),
   );
   return normalizeCronToolsAllow(
     toolsAllow.filter((entry): entry is string => typeof entry === "string"),
@@ -203,14 +265,14 @@ function capCronJobToolsAllow(params: {
   const requestedToolsAllow = normalizeCronToolsAllow(
     requestedRaw.filter((entry): entry is string => typeof entry === "string"),
   );
-  if (requestedToolsAllow.length === 0) {
-    params.payload.toolsAllow = [];
-    delete params.payload.toolsAllowIsDefault;
-    return;
-  }
   if (requestedToolsAllow.includes("*")) {
     params.payload.toolsAllow = creatorToolNames;
     params.payload.toolsAllowIsDefault = true;
+    return;
+  }
+  if (requestedToolsAllow.length === 0 || creatorToolsAllow.length === 0) {
+    params.payload.toolsAllow = [];
+    delete params.payload.toolsAllowIsDefault;
     return;
   }
 
@@ -222,9 +284,14 @@ function capCronJobToolsAllow(params: {
     { allow: requestedToolsAllow },
     pluginGroups,
   );
-  params.payload.toolsAllow = creatorToolNames.filter((toolName) =>
-    isToolAllowedByPolicyName(toolName, requestedPolicy),
-  );
+  const matches = createToolPolicyMatcher(requestedPolicy);
+  // A creator tool matches under its canonical name or the runtime alias the
+  // creating surface presented; the persisted cap always holds canonical names.
+  params.payload.toolsAllow = creatorToolsAllow
+    .filter(
+      (tool) => matches(tool.name) || (tool.aliasName !== undefined && matches(tool.aliasName)),
+    )
+    .map((tool) => tool.name);
   delete params.payload.toolsAllowIsDefault;
 }
 

@@ -6,6 +6,7 @@ import {
   resolvePluginConfigContractsById,
 } from "../plugins/config-contracts.js";
 import { normalizePluginsConfig, resolveEnableState } from "../plugins/config-state.js";
+import type { PluginManifestSecretInputPath } from "../plugins/manifest-types.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { formatConcreteConfigPath } from "../shared/dot-path.js";
 import {
@@ -132,7 +133,7 @@ export function collectPluginConfigAssignments(params: {
 function collectConfiguredPluginSecretAssignments(params: {
   pluginId: string;
   pluginConfig: Record<string, unknown>;
-  secretPaths: ReadonlyArray<{ path: string; expected?: "string"; ownerKind?: "route" }>;
+  secretPaths: readonly PluginManifestSecretInputPath[];
   active: boolean;
   inactiveReason: string;
   defaults: SecretDefaults | undefined;
@@ -156,6 +157,9 @@ function collectConfiguredPluginSecretAssignments(params: {
         continue;
       }
       seenPaths.add(fullPath);
+      // Routes may retain an unchanged secret during a transient outage.
+      // Tool capabilities become unavailable so a stale API key cannot remain active.
+      const ownerContract = secretPath.ownerKind === "route" ? params.pluginConfig : undefined;
 
       // SecretInput allows both explicit objects and inline env-template refs
       // like `${MCP_API_KEY}`. Non-ref strings remain untouched because
@@ -175,7 +179,7 @@ function collectConfiguredPluginSecretAssignments(params: {
                 ownerId: fullPath,
                 requiredForGateway: false,
                 disposition: "isolate" as const,
-                contract: params.pluginConfig,
+                ...(ownerContract ? { contract: ownerContract } : {}),
               },
             }
           : {}),

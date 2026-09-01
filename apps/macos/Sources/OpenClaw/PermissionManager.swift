@@ -1,11 +1,11 @@
 import AppKit
 import ApplicationServices
 import AVFoundation
-import CoreGraphics
 import CoreLocation
 import Foundation
 import Observation
 import OpenClawIPC
+import PeekabooAutomationKit
 import Speech
 import UserNotifications
 
@@ -24,6 +24,8 @@ enum CapabilityAuthorizationStatus: Equatable, Sendable {
 }
 
 enum PermissionManager {
+    @MainActor static let screenRecordingPermissions = PermissionsService()
+
     /// UNUserNotificationCenter.current() aborts with NSInternalInconsistencyException
     /// ("bundleProxyForCurrentProcess is nil") in unbundled processes such as
     /// `swift build` dev binaries. Every notification-center call must check this
@@ -129,12 +131,12 @@ enum PermissionManager {
         return await MainActor.run { AXIsProcessTrusted() }
     }
 
+    @MainActor
     private static func ensureScreenRecording(interactive: Bool) async -> Bool {
-        let granted = ScreenRecordingProbe.isAuthorized()
-        if interactive, !granted {
-            await ScreenRecordingProbe.requestAuthorization()
+        if interactive, !self.screenRecordingPermissions.checkScreenRecordingPermission() {
+            self.screenRecordingPermissions.requestScreenRecordingPermission()
         }
-        return ScreenRecordingProbe.isAuthorized()
+        return await self.screenRecordingPermissions.checkScreenRecordingPermissionLive(forceProbe: interactive)
     }
 
     private static func ensureMicrophone(interactive: Bool) async -> Bool {
@@ -251,11 +253,10 @@ enum PermissionManager {
                 results[cap] = await MainActor.run { AXIsProcessTrusted() } ? .granted : .notGranted
 
             case .screenRecording:
-                if #available(macOS 10.15, *) {
-                    results[cap] = CGPreflightScreenCaptureAccess() ? .granted : .notGranted
-                } else {
-                    results[cap] = .granted
-                }
+                // CoreGraphics can retain a denial after a grant. Peekaboo retains confirmed grants
+                // and only unlocks live probes after an explicit permission request.
+                results[cap] = await self.screenRecordingPermissions.checkScreenRecordingPermissionLive()
+                    ? .granted : .notGranted
 
             case .microphone:
                 results[cap] = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
@@ -483,21 +484,5 @@ final class PermissionMonitor {
         self.lastCheck = Date()
 
         self.isChecking = false
-    }
-}
-
-enum ScreenRecordingProbe {
-    static func isAuthorized() -> Bool {
-        if #available(macOS 10.15, *) {
-            return CGPreflightScreenCaptureAccess()
-        }
-        return true
-    }
-
-    @MainActor
-    static func requestAuthorization() async {
-        if #available(macOS 10.15, *) {
-            _ = CGRequestScreenCaptureAccess()
-        }
     }
 }

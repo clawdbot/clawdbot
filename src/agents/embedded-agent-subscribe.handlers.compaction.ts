@@ -59,6 +59,10 @@ function runBestEffortCompactionHook(
   ctx: EmbeddedAgentSubscribeContext,
   phase: "before" | "after",
 ): void {
+  // Queued events still settle committed facts and waiters after close, not new plugin work.
+  if (ctx.state.unsubscribed || ctx.params.isTerminalAborted?.()) {
+    return;
+  }
   const hookRunner = getGlobalHookRunner();
   const hookName = phase === "before" ? "before_compaction" : "after_compaction";
   if (!hookRunner?.hasHooks(hookName)) {
@@ -122,12 +126,14 @@ export function handleCompactionEnd(
     ctx.incrementCompactionCount();
     ctx.noteCompactionTokensAfter(outcome.tokensAfter);
     const observedCompactionCount = ctx.getCompactionCount();
-    recordSessionCompacted({
-      sessionKey: ctx.params.sessionKey,
-      operationId: `${ctx.params.runId}:${observedCompactionCount}`,
-      agentId: ctx.params.agentId,
-      runId: ctx.params.runId,
-    });
+    if (ctx.params.sessionPersistence !== "detached") {
+      recordSessionCompacted({
+        sessionKey: ctx.params.sessionKey,
+        operationId: `${ctx.params.runId}:${observedCompactionCount}`,
+        agentId: ctx.params.agentId,
+        runId: ctx.params.runId,
+      });
+    }
     ctx.log.info(`embedded run ${kind} complete`, {
       event: "embedded_run_compaction_end",
       runId: ctx.params.runId,
@@ -137,18 +143,25 @@ export function handleCompactionEnd(
       compactionCount: observedCompactionCount,
       consoleMessage: `embedded run ${kind} complete: runId=${ctx.params.runId} reason=${reason} compactionCount=${observedCompactionCount} willRetry=${willRetry}`,
     });
-    void import("./embedded-agent-subscribe.handlers.compaction.runtime.js")
-      .then(({ default: reconcile }) =>
-        reconcile({
-          sessionKey: ctx.params.sessionKey,
-          agentId: ctx.params.agentId,
-          configStore: ctx.params.config?.session?.store,
-          observedCompactionCount,
-        }),
-      )
-      .catch((err: unknown) => {
-        ctx.log.warn(`late compaction count reconcile failed: ${String(err)}`);
-      });
+    // Caller-owned turns persist once after settlement; detached runs never write metadata.
+    // Keep the legacy floor for direct durable subscriptions without that handoff.
+    if (
+      ctx.params.compactionCountOwner !== "caller" &&
+      ctx.params.sessionPersistence !== "detached"
+    ) {
+      void import("./embedded-agent-subscribe.handlers.compaction.runtime.js")
+        .then(({ default: reconcile }) =>
+          reconcile({
+            sessionKey: ctx.params.sessionKey,
+            agentId: ctx.params.agentId,
+            configStore: ctx.params.config?.session?.store,
+            observedCompactionCount,
+          }),
+        )
+        .catch((err: unknown) => {
+          ctx.log.warn(`late compaction count reconcile failed: ${String(err)}`);
+        });
+    }
   }
   if (willRetry) {
     ctx.noteCompactionRetry();
@@ -213,7 +226,7 @@ export function handleCompactionEnd(
 
   // after_compaction runs only once the run will not retry, matching the visible
   // post-compaction session state plugin authors observe.
-  if (!willRetry) {
+  if (completed && !willRetry) {
     runBestEffortCompactionHook(ctx, "after");
   }
 }

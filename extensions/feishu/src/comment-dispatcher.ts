@@ -1,23 +1,16 @@
 // Feishu plugin module implements comment dispatcher behavior.
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
+import { createReplyPrefixContext } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import type { ClawdbotConfig, ReplyPayload, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import {
-  createReplyPrefixContext,
-  type ClawdbotConfig,
-  type ReplyPayload,
-  type RuntimeEnv,
-} from "./comment-dispatcher-runtime-api.js";
 import { createCommentTypingReactionLifecycle } from "./comment-reaction.js";
 import type { CommentFileType } from "./comment-target.js";
 import { deliverCommentThreadText } from "./drive.js";
 import { buildFeishuMediaFallbackText } from "./media-fallback.js";
-import {
-  buildFeishuCommentPresentationFallback,
-  resolveFeishuRichReply,
-} from "./presentation-card.js";
+import { buildFeishuPresentationFallback, resolveFeishuRichReply } from "./presentation-card.js";
 import {
   createFeishuPartialReplyDeliveryError,
   createFeishuReplyDeliveryResult,
@@ -87,7 +80,10 @@ export function createFeishuCommentReplyDispatcher(
       }
       const reply = resolveSendableOutboundReplyParts(payload);
       const { presentation } = resolveFeishuRichReply(payload);
-      let { text } = buildFeishuCommentPresentationFallback({ text: reply.text, presentation });
+      let { commentText: text } = buildFeishuPresentationFallback({
+        text: reply.text,
+        presentation,
+      });
       for (const mediaUrl of reply.mediaUrls) {
         text = await buildFeishuMediaFallbackText({ text, mediaUrl, mediaLinkStyle: "plain" });
       }

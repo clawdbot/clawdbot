@@ -528,10 +528,12 @@ internal fun chatComposerSendEnabled(
   shareStaging: Boolean,
   sendInFlight: Boolean = false,
   dictationActive: Boolean = false,
+  modelUnavailable: Boolean = false,
 ): Boolean =
   !shareStaging &&
     !sendInFlight &&
     !dictationActive &&
+    !modelUnavailable &&
     voiceNoteState !is VoiceNoteRecorderState.Recording &&
     voiceNoteState !is VoiceNoteRecorderState.Preparing &&
     pendingRunCount == 0 &&

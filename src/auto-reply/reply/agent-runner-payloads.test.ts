@@ -2,8 +2,13 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it } from "vitest";
+import { buildEmbeddedRunPayloads } from "../../agents/embedded-agent-runner/run/payloads.js";
 import type { ChannelThreadingAdapter } from "../../channels/plugins/types.public.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  sanitizeAssistantVisibleText,
+  stripAssistantInternalScaffolding,
+} from "../../shared/text/assistant-visible-text.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -16,6 +21,7 @@ import {
 import type { ReplyPayload } from "../types.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import { createBlockReplyContentKey, createBlockReplyPipeline } from "./block-reply-pipeline.js";
+import { normalizeReplyPayload } from "./normalize-reply.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 
 const baseParams = {
@@ -97,16 +103,20 @@ describe("buildReplyPayloads media filter integration", () => {
               resolveReplyTransport: ({
                 threadId,
                 replyToId,
+                replyToIsExplicit,
                 replyDelivery,
-              }: ResolveReplyTransportParams) => ({
-                replyToId:
-                  replyDelivery?.replyToMode === "off"
-                    ? threadId != null
-                      ? String(threadId)
-                      : undefined
-                    : (replyToId ?? (threadId != null ? String(threadId) : undefined)),
-                threadId: null,
-              }),
+              }: ResolveReplyTransportParams) => {
+                const allowedReply = replyDelivery?.replyToMode === "off" ? undefined : replyToId;
+                // Slack uses the known root for inherited replies, but explicit targets win.
+                const resolved =
+                  replyToIsExplicit === false
+                    ? (threadId ?? allowedReply)
+                    : (allowedReply ?? threadId);
+                return {
+                  replyToId: resolved == null ? undefined : String(resolved),
+                  threadId: null,
+                };
+              },
             },
           },
           source: "test",
@@ -123,16 +133,17 @@ describe("buildReplyPayloads media filter integration", () => {
                 replyDelivery,
               }: ResolveReplyTransportParams) => {
                 const ambientThreadId = threadId != null ? String(threadId) : undefined;
-                const resolvedThreadId =
-                  replyDelivery?.chatType === "direct"
-                    ? undefined
-                    : replyToIsExplicit
+                const isFlatDirect =
+                  replyDelivery?.chatType === "direct" && replyDelivery.replyToMode === "off";
+                const resolvedThreadId = isFlatDirect
+                  ? undefined
+                  : replyDelivery
+                    ? replyToIsExplicit
                       ? (replyToId ?? ambientThreadId)
-                      : replyDelivery
-                        ? (ambientThreadId ?? replyToId ?? undefined)
-                        : (replyToId ?? ambientThreadId);
+                      : (ambientThreadId ?? replyToId ?? undefined)
+                    : (ambientThreadId ?? replyToId);
                 return {
-                  replyToId: resolvedThreadId,
+                  replyToId: isFlatDirect ? null : resolvedThreadId,
                   threadId: resolvedThreadId ?? null,
                 };
               },
@@ -453,9 +464,27 @@ describe("buildReplyPayloads media filter integration", () => {
   });
 
   it("drops only invalid media when reply media normalization fails", async () => {
-    const normalizeMediaPaths = async (payload: { mediaUrl?: string }) => {
+    const normalizeMediaPaths = async (payload: ReplyPayload) => {
       if (payload.mediaUrl === "./bad.png") {
-        throw new Error("Path escapes sandbox root");
+        return setReplyPayloadMetadata(
+          {
+            ...payload,
+            text: "keep text\n⚠️ bad.png: Delivery failed. Try sending this file again.",
+            mediaUrl: undefined,
+            mediaUrls: undefined,
+            audioAsVoice: false,
+          },
+          {
+            assistantMediaFailures: [
+              {
+                code: "delivery-failed",
+                kind: "image",
+                label: "bad.png",
+                mimeType: "image/png",
+              },
+            ],
+          },
+        );
       }
       return payload;
     };
@@ -470,7 +499,7 @@ describe("buildReplyPayloads media filter integration", () => {
 
     expect(replyPayloads).toHaveLength(2);
     expectFields(replyPayloads[0], {
-      text: "keep text\n⚠️ Media failed. Try sending a smaller supported file or a different format.",
+      text: "keep text\n⚠️ bad.png: Delivery failed. Try sending this file again.",
       mediaUrl: undefined,
       mediaUrls: undefined,
       audioAsVoice: false,
@@ -740,6 +769,26 @@ describe("buildReplyPayloads media filter integration", () => {
       to: "user:U1",
       target: {},
       expected: [],
+    },
+    {
+      name: "dedupes an all-mode Mattermost DM reply against the same thread",
+      channel: "mattermost",
+      text: "same reply",
+      payload: { replyToId: "post-1", replyToTag: true },
+      params: { replyToMode: "all", originatingChatType: "direct" },
+      to: "user:U1",
+      target: { threadId: "post-1" },
+      expected: [],
+    },
+    {
+      name: "keeps an all-mode Mattermost DM reply when the tool sent it top-level",
+      channel: "mattermost",
+      text: "same reply",
+      payload: { replyToId: "post-1", replyToTag: true },
+      params: { replyToMode: "all", originatingChatType: "direct" },
+      to: "user:U1",
+      target: {},
+      expected: ["same reply"],
     },
     {
       name: "dedupes an implicit Mattermost send in the active thread",
@@ -1138,6 +1187,38 @@ describe("buildReplyPayloads media filter integration", () => {
     });
   });
 
+  it.each(["exec", "bash"])(
+    "delivers the real %s failure warning after a silent answer",
+    async (toolName) => {
+      const payloads = buildEmbeddedRunPayloads({
+        assistantTexts: ["NO_REPLY"],
+        lastAssistant: undefined,
+        lastToolError: { toolName, error: "Command not found" },
+        sessionKey: "agent:main:warning",
+      });
+      const { replyPayloads } = await buildTestReplyPayloads({ payloads });
+      const delivered = replyPayloads
+        .map((payload) => normalizeReplyPayload(payload))
+        .filter(Boolean);
+
+      expect(delivered).toEqual([
+        expect.objectContaining({
+          text: `⚠️ ${toolName === "exec" ? "Exec" : "Bash"} failed`,
+          isError: true,
+        }),
+      ]);
+      // Both channel text cleanup and Control UI display must retain the warning.
+      expect(sanitizeAssistantVisibleText(delivered[0]?.text ?? "")).toBe(delivered[0]?.text);
+      expect(stripAssistantInternalScaffolding(delivered[0]?.text ?? "")).toBe(delivered[0]?.text);
+      expect(
+        normalizeReplyPayload({
+          text: `⚠️ 🛠️ ${toolName === "exec" ? "Exec" : "Bash"} failed`,
+          isError: true,
+        }),
+      ).toBeNull();
+    },
+  );
+
   it("keeps voice media payloads during silent turns", async () => {
     const { replyPayloads } = await buildTestReplyPayloads({
       silentExpected: true,
@@ -1162,9 +1243,12 @@ describe("buildReplyPayloads media filter integration", () => {
   });
 
   it("suppresses warning text when silent media payloads fail normalization", async () => {
-    const normalizeMediaPaths = async () => {
-      throw new Error("file not found");
-    };
+    const normalizeMediaPaths = async (payload: ReplyPayload) => ({
+      ...payload,
+      text: "⚠️ missing.png: File not found. Check the path and try again.",
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+    });
 
     const { replyPayloads } = await buildTestReplyPayloads({
       payloads: [{ text: "NO_REPLY\nMEDIA: ./missing.png" }],
@@ -1174,10 +1258,14 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
-  it("surfaces a warning when non-silent media payloads fail normalization", async () => {
-    const normalizeMediaPaths = async () => {
-      throw new Error("file not found");
-    };
+  it("surfaces a named receipt when non-silent media payloads fail normalization", async () => {
+    const normalizeMediaPaths = async (payload: ReplyPayload) => ({
+      ...payload,
+      text: "⚠️ missing.png: File not found. Check the path and try again.",
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+      audioAsVoice: false,
+    });
 
     const { replyPayloads } = await buildTestReplyPayloads({
       payloads: [{ text: "MEDIA: ./missing.png" }],
@@ -1186,7 +1274,7 @@ describe("buildReplyPayloads media filter integration", () => {
 
     expect(replyPayloads).toHaveLength(1);
     expectFields(replyPayloads[0], {
-      text: "⚠️ Media failed. Try sending a smaller supported file or a different format.",
+      text: "⚠️ missing.png: File not found. Check the path and try again.",
       mediaUrl: undefined,
       mediaUrls: undefined,
       audioAsVoice: false,

@@ -1,0 +1,98 @@
+name: PR Crabbox Gate Publisher
+run-name: "PR Crabbox gate #${{ inputs.pr_number }} / ${{ inputs.head_sha }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Open same-repository pull request number
+        required: true
+        type: string
+      head_sha:
+        description: Exact lowercase 40-character pull request head SHA
+        required: true
+        type: string
+      base_sha:
+        description: Exact lowercase 40-character pull request base SHA
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: pr-crabbox-gate-${{ inputs.pr_number }}-${{ inputs.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Run AWS proof and publish gate
+    runs-on: ubuntu-24.04
+    environment: qa-live-shared
+    timeout-minutes: 270
+    permissions:
+      checks: write
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout trusted main publisher
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Install checksum-pinned Crabbox v0.46.0
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          asset=crabbox_0.46.0_linux_amd64.tar.gz
+          checksum=6a9341e810307356361dbed4c4b84be28a036b5cc291af1566d2ccd376570d90
+          install_dir="$RUNNER_TEMP/crabbox-v0.46.0"
+          mkdir -p "$install_dir"
+          gh release download v0.46.0 \
+            --repo openclaw/crabbox \
+            --pattern "$asset" \
+            --pattern checksums.txt \
+            --dir "$install_dir"
+          test "$(sha256sum "$install_dir/$asset" | awk '{print $1}')" = "$checksum"
+          awk -v checksum="$checksum" -v asset="$asset" \
+            '$1 == checksum && $2 == asset { found = 1 } END { exit !found }' \
+            "$install_dir/checksums.txt"
+          tar -xzf "$install_dir/$asset" -C "$install_dir"
+          test "$("$install_dir/crabbox" version | awk '{print $NF}')" = "0.46.0"
+          printf 'CRABBOX_BIN=%s\n' "$install_dir/crabbox" >> "$GITHUB_ENV"
+
+      - name: Create organization membership token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        continue-on-error: true
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-members: read
+
+      - name: Create fallback organization membership token
+        id: app-token-fallback
+        if: steps.app-token.outcome == 'failure'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        continue-on-error: true
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          permission-members: read
+
+      - name: Run immutable Crabbox proof and publish exact-head check
+        env:
+          CRABBOX_ACCESS_CLIENT_ID: ${{ secrets.CRABBOX_ACCESS_CLIENT_ID }}
+          CRABBOX_ACCESS_CLIENT_SECRET: ${{ secrets.CRABBOX_ACCESS_CLIENT_SECRET }}
+          CRABBOX_COORDINATOR: ${{ secrets.CRABBOX_COORDINATOR || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR }}
+          CRABBOX_COORDINATOR_TOKEN: ${{ secrets.CRABBOX_COORDINATOR_TOKEN || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          GH_APP_TOKEN: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+        run: node scripts/pr-crabbox-gate-publisher.mjs

@@ -8,11 +8,15 @@ import {
   RealtimeTalkMediaStreamMeter,
   RealtimeTalkPcmInputPump,
 } from "./realtime-talk-audio.ts";
-import { describeRealtimeTalkInputError, openRealtimeTalkInput } from "./realtime-talk-input.ts";
+import {
+  describeRealtimeTalkInputError,
+  RealtimeTalkInputController,
+} from "./realtime-talk-input.ts";
 import { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
 
 const HOLD_ARM_DELAY_MS = 150,
   HOLD_PROGRESS_MS = 350;
+const FINAL_TRANSCRIPT_MAX_WAIT_MS = 10_000;
 const DICTATION_ENCODING = "g711_ulaw";
 const DICTATION_SAMPLE_RATE_HZ = 8000;
 const MAX_PENDING_AUDIO_SAMPLES = DICTATION_SAMPLE_RATE_HZ * 10;
@@ -43,7 +47,7 @@ type DictationSessionResult = {
 type ComposerDictationSessionCallbacks = {
   onError: (message: string, preservesText: boolean) => void;
   onLevel: (level: number) => void;
-  onPartial: (text: string) => void;
+  onTranscriptChange: () => void;
   onReady: () => void;
 };
 
@@ -58,7 +62,7 @@ type ComposerDictationControllerOptions = {
   enabled: boolean;
   dictationAvailable?: boolean;
   realtimeTalkActive: boolean;
-  onCommit: (text: string) => void;
+  onCommit: (text: string, late?: true) => void;
   onError: (message: string, failure: ComposerDictationFailure) => void;
   onStateChange: () => void;
   onTap?: () => void;
@@ -108,7 +112,7 @@ export function insertComposerDictation(
 }
 
 class ComposerDictationSession {
-  private media: MediaStream | null = null;
+  private readonly input = new RealtimeTalkInputController((detail) => this.reportFailure(detail));
   private context: AudioContext | null = null;
   private readonly inputPump = new RealtimeTalkPcmInputPump();
   private inputMeter: RealtimeTalkMediaStreamMeter | null = null;
@@ -124,13 +128,13 @@ class ComposerDictationSession {
   private closePromise: Promise<void> | null = null;
   private stopped = false;
   private discarded = false;
-  private closed = false;
   private failed = false;
+  private gatewayDisconnected = false;
+  private settleLateFinalDrain: ((discard: boolean) => void) | null = null;
 
   constructor(
     private readonly client: GatewayBrowserClient,
     private readonly callbacks: ComposerDictationSessionCallbacks,
-    private readonly abortController = new AbortController(),
   ) {}
 
   start(): Promise<void> {
@@ -140,14 +144,10 @@ class ComposerDictationSession {
 
   private async startInternal(): Promise<void> {
     const inputDeviceId = loadSettings().realtimeTalkInputDeviceId?.trim() || undefined;
-    const media = await openRealtimeTalkInput(inputDeviceId, {
-      signal: this.abortController.signal,
-    });
+    const media = await this.input.open(inputDeviceId);
     if (this.stopped) {
-      media.getTracks().forEach((track) => track.stop());
       return;
     }
-    this.media = media;
     this.unsubscribe = this.client.addEventListener((frame) => this.handleEvent(frame));
     try {
       this.context = new AudioContext({ sampleRate: DICTATION_SAMPLE_RATE_HZ });
@@ -192,33 +192,46 @@ class ComposerDictationSession {
     return this.transcriptIncludingPartial();
   }
 
-  async finish(): Promise<void> {
+  async finish(drainFinalTranscript = false): Promise<string> {
+    const lateFinal =
+      drainFinalTranscript && !this.gatewayDisconnected ? this.waitForLateFinal() : null;
+    const cleanup = this.stopAndClose(true);
+    if (lateFinal) {
+      // The bounded final result must not inherit stalled create, append, or close RPCs.
+      void cleanup.catch(() => undefined);
+      return lateFinal;
+    }
+    return cleanup.then(() => this.transcriptIncludingPartial());
+  }
+
+  async cancel(): Promise<void> {
+    this.discarded = true;
+    await this.stopAndClose(false);
+  }
+
+  private async stopAndClose(reportStartFailure: boolean): Promise<void> {
     await this.stopCapture();
     await this.startPromise?.catch((error: unknown) => {
-      if (!isAbortError(error)) {
+      if (reportStartFailure && !isAbortError(error)) {
         this.reportFailure(messageFromError(error));
       }
     });
     await this.appendChain;
     await this.closeRemote();
-    this.cleanupEvents();
-  }
-
-  async cancel(): Promise<void> {
-    this.discarded = true;
-    await this.stopCapture();
-    await this.startPromise?.catch(() => undefined);
-    await this.appendChain;
-    await this.closeRemote();
-    this.cleanupEvents();
   }
 
   markGatewayDisconnected(): boolean {
+    this.gatewayDisconnected = true;
+    this.settleLateFinalDrain?.(false);
     return this.hasTranscript();
   }
 
+  cancelPendingFinal(): void {
+    this.settleLateFinalDrain?.(true);
+  }
+
   private appendAudio(samples: Float32Array): void {
-    if (this.closed) {
+    if (this.stopped) {
       return;
     }
     if (!this.sessionId) {
@@ -259,26 +272,30 @@ class ComposerDictationSession {
 
   private handleEvent(frame: GatewayEventFrame): void {
     const payload = eventPayload(frame);
-    if (!payload || payload.transcriptionSessionId !== this.transcriptionSessionId || this.closed) {
-      return;
-    }
-    if (payload.type === "partial" && typeof payload.text === "string") {
-      this.currentPartial = payload.text.trim();
-      this.callbacks.onPartial(this.currentPartial);
+    if (
+      !payload ||
+      payload.transcriptionSessionId !== this.transcriptionSessionId ||
+      this.stopped
+    ) {
       return;
     }
     if (payload.type === "transcript" && typeof payload.text === "string") {
       const text = payload.text.trim();
       if (payload.final !== true) {
         this.currentPartial = text;
-        this.callbacks.onPartial(text);
+        this.callbacks.onTranscriptChange();
         return;
       }
       if (text) {
         this.finalTranscripts.push(text);
         this.currentPartial = "";
       }
-      this.callbacks.onPartial("");
+      this.callbacks.onTranscriptChange();
+      return;
+    }
+    if (payload.type === "partial" && typeof payload.text === "string") {
+      this.currentPartial = payload.text.trim();
+      this.callbacks.onTranscriptChange();
       return;
     }
     if (payload.type === "error") {
@@ -316,20 +333,14 @@ class ComposerDictationSession {
       return;
     }
     this.stopped = true;
-    this.abortController.abort();
+    this.input.stop();
     this.inputPump.stop();
-    this.inputMeter?.stop();
-    this.inputMeter = null;
-    this.media?.getTracks().forEach((track) => track.stop());
-    this.media = null;
-    await this.context?.close();
-    this.context = null;
-  }
-
-  private cleanupEvents(): void {
-    this.closed = true;
     this.unsubscribe?.();
     this.unsubscribe = null;
+    this.inputMeter?.stop();
+    this.inputMeter = null;
+    await this.context?.close();
+    this.context = null;
   }
 
   private closeRemote(): Promise<void> {
@@ -342,13 +353,44 @@ class ComposerDictationSession {
       .catch(() => undefined);
     return this.closePromise;
   }
+
+  private waitForLateFinal(): Promise<string> {
+    return new Promise((resolve) => {
+      const transcripts: string[] = [];
+      let unsubscribe = () => {};
+      const finish = (text: string) => {
+        globalThis.clearTimeout(timer);
+        unsubscribe();
+        this.settleLateFinalDrain = null;
+        resolve(text);
+      };
+      const transcript = () => transcripts.join(" ").trim();
+      const timer = globalThis.setTimeout(() => finish(transcript()), FINAL_TRANSCRIPT_MAX_WAIT_MS);
+      unsubscribe = this.client.addEventListener((frame) => {
+        const payload = eventPayload(frame);
+        if (!payload || payload.transcriptionSessionId !== this.transcriptionSessionId) {
+          return;
+        }
+        if (
+          payload.type === "transcript" &&
+          payload.final === true &&
+          typeof payload.text === "string" &&
+          payload.text.trim()
+        ) {
+          transcripts.push(payload.text.trim());
+        } else if (payload.type === "error" || payload.type === "close") {
+          finish(transcript());
+        }
+      });
+      this.settleLateFinalDrain = (discard) => finish(discard ? "" : transcript());
+    });
+  }
 }
 
 export class ComposerDictationController {
   readonly inputLevel = new RealtimeTalkLevelSignal();
   private options: ComposerDictationControllerOptions;
   private phase: DictationPhase = "idle";
-  private partialTranscript = "";
   private pointerId: number | null = null;
   private pointerTarget: HTMLElement | null = null;
   private pointerBounds: DOMRect | null = null;
@@ -357,6 +399,7 @@ export class ComposerDictationController {
   private suppressClick = false;
   private suppressedPointerId: number | null = null;
   private suppressClickTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private pendingCommitSession: ComposerDictationSession | null = null;
   private disposed = false;
 
   constructor(options: ComposerDictationControllerOptions) {
@@ -383,8 +426,8 @@ export class ComposerDictationController {
     return this.phase !== "idle";
   }
 
-  get partial(): string {
-    return this.partialTranscript;
+  get transcript(): string {
+    return this.session?.transcriptSnapshot() ?? "";
   }
 
   // Returns the stop promise so the confirming control can remain tied to the
@@ -406,6 +449,9 @@ export class ComposerDictationController {
 
   update(options: ComposerDictationControllerOptions): void {
     this.options = options;
+    if (!options.connected) {
+      this.pendingCommitSession?.markGatewayDisconnected();
+    }
     if (this.phase === "stopping") {
       return;
     }
@@ -449,9 +495,6 @@ export class ComposerDictationController {
     document.addEventListener("pointercancel", this.handleDocumentPointerCancel);
     document.addEventListener("pointerup", this.handleSuppressedPointerRelease);
     document.addEventListener("pointercancel", this.handleSuppressedPointerRelease);
-    document.addEventListener("keydown", this.handleDocumentKeyDown);
-    document.addEventListener("visibilitychange", this.handleVisibilityChange);
-    window.addEventListener("blur", this.handleWindowBlur);
     return true;
   }
 
@@ -481,6 +524,7 @@ export class ComposerDictationController {
 
   dispose(): void {
     this.disposed = true;
+    this.retirePendingCommit();
     this.clearClickSuppression();
     void this.stop({ commit: false });
   }
@@ -506,7 +550,7 @@ export class ComposerDictationController {
     }
     if (this.phase === "pressing" || this.phase === "holding") {
       const cleanTap = this.phase === "pressing";
-      this.clearGesture();
+      this.clearPointerGesture();
       this.setPhase("idle");
       if (cleanTap) {
         this.options.onTap?.();
@@ -572,7 +616,7 @@ export class ComposerDictationController {
       return;
     }
     if (this.options.dictationAvailable === false) {
-      this.clearGesture();
+      this.clearPointerGesture();
       this.setPhase("idle");
       this.options.onDictationUnavailable?.();
       // The held pointer still owns a synthetic click. Its release expires this
@@ -588,20 +632,21 @@ export class ComposerDictationController {
         if (this.session !== session) {
           return;
         }
-        this.options.onError(message, { kind: "interrupted", preservesText });
-        void this.stop({ commit: true });
+        try {
+          this.options.onError(message, { kind: "interrupted", preservesText });
+        } finally {
+          void this.stop({ commit: true });
+        }
       },
       onLevel: (level) => this.inputLevel.set(level),
-      onPartial: (text) => {
-        this.partialTranscript = text;
-        this.options.onStateChange();
-      },
+      onTranscriptChange: () => this.options.onStateChange(),
       onReady: () => {
         if (this.session === session && this.phase === "connecting") {
           this.setPhase("recording");
         }
       },
     });
+    this.retirePendingCommit();
     this.session = session;
     try {
       await session.start();
@@ -619,7 +664,7 @@ export class ComposerDictationController {
       return Promise.resolve(false);
     }
     const wasActive = this.active;
-    this.clearGesture();
+    this.clearPointerGesture();
     const session = this.session;
     if (!session) {
       this.reset();
@@ -633,22 +678,46 @@ export class ComposerDictationController {
     if (committed) {
       this.options.onCommit(transcript);
     }
-    // UI ownership ends at the operator action. Provider close can be slow, but
-    // it must never retain the composer in a transient finalizing state.
-    const close = options.commit ? session.finish() : session.cancel();
-    void close.catch(() => undefined);
-    return Promise.resolve(committed);
+    if (!options.commit) {
+      void session.cancel().catch(() => undefined);
+      return Promise.resolve(false);
+    }
+    if (committed) {
+      void session.finish().catch(() => undefined);
+      return Promise.resolve(true);
+    }
+    // The composer unlocks immediately, while this exact stopped session keeps
+    // ownership of its bounded final accumulator until a new session supersedes it.
+    this.pendingCommitSession = session;
+    return session
+      .finish(true)
+      .then((lateTranscript) => {
+        const ownsPendingCommit = this.pendingCommitSession === session;
+        if (ownsPendingCommit) {
+          this.pendingCommitSession = null;
+        }
+        if (!ownsPendingCommit || !lateTranscript || !wasActive || this.disposed) {
+          return false;
+        }
+        this.options.onCommit(lateTranscript, true);
+        return true;
+      })
+      .catch(() => {
+        if (this.pendingCommitSession === session) {
+          this.pendingCommitSession = null;
+        }
+        return false;
+      });
   }
 
   private reset(): void {
-    this.partialTranscript = "";
     this.inputLevel.set(0);
     this.setPhase("idle");
   }
 
-  private clearGesture(): void {
-    this.clearPointerGesture();
-    this.clearLifecycleListeners();
+  private retirePendingCommit(): void {
+    this.pendingCommitSession?.cancelPendingFinal();
+    this.pendingCommitSession = null;
   }
 
   private clearPointerGesture(): void {
@@ -670,12 +739,6 @@ export class ComposerDictationController {
     document.removeEventListener("pointermove", this.handleDocumentPointerMove);
     document.removeEventListener("pointerup", this.handleDocumentPointerUp);
     document.removeEventListener("pointercancel", this.handleDocumentPointerCancel);
-  }
-
-  private clearLifecycleListeners(): void {
-    document.removeEventListener("keydown", this.handleDocumentKeyDown);
-    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
-    window.removeEventListener("blur", this.handleWindowBlur);
   }
 
   private expireClickSuppression(): void {
@@ -703,6 +766,15 @@ export class ComposerDictationController {
   private setPhase(phase: DictationPhase): void {
     if (this.phase === phase) {
       return;
+    }
+    if (this.phase === "idle") {
+      document.addEventListener("keydown", this.handleDocumentKeyDown);
+      document.addEventListener("visibilitychange", this.handleVisibilityChange);
+      window.addEventListener("blur", this.handleWindowBlur);
+    } else if (phase === "idle") {
+      document.removeEventListener("keydown", this.handleDocumentKeyDown);
+      document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+      window.removeEventListener("blur", this.handleWindowBlur);
     }
     this.phase = phase;
     this.options.onStateChange();

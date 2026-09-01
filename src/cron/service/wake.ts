@@ -20,7 +20,12 @@ export function enqueueCronSystemEvent(
 export function requestCronHeartbeat(
   state: CronServiceState,
   opts: Omit<HeartbeatWakeRequest, "source"> & { source?: HeartbeatWakeRequest["source"] },
+  retry?: Parameters<CronServiceState["deps"]["requestHeartbeat"]>[1],
 ) {
+  if (retry) {
+    state.deps.requestHeartbeat({ source: "cron", ...opts }, retry);
+    return;
+  }
   state.deps.requestHeartbeat({ source: "cron", ...opts });
 }
 

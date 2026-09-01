@@ -49,7 +49,12 @@ async function assertIdentityMenuContract(sidebar: Locator, menu: Locator) {
   ).toBe(false);
 }
 
-async function runAccountFooterProof(page: Page, sidebar: Locator, branch: "feature" | "main") {
+async function runAccountFooterProof(
+  suite: ReturnType<typeof createSidebarFooterProofSuite>,
+  page: Page,
+  sidebar: Locator,
+  branch: "feature" | "main",
+) {
   const footer = sidebar.locator(".sidebar-footer-bar");
   const identity = sidebar.locator(".sidebar-identity-card");
   await assertSingleAccountTarget(page, sidebar);
@@ -57,9 +62,13 @@ async function runAccountFooterProof(page: Page, sidebar: Locator, branch: "feat
   for (const theme of ["light", "dark"] as const) {
     await setSidebarProofTheme(page, theme);
     await page.mouse.move(0, 0);
-    await captureUnionProof(page, "sidebar-account-footer", `${branch}-${theme}-footer.png`, [
-      footer,
-    ]);
+    await captureUnionProof(
+      suite,
+      page,
+      "sidebar-account-footer",
+      `${branch}-${theme}-footer.png`,
+      [footer],
+    );
 
     await identity.focus();
     await page.keyboard.press("Enter");
@@ -86,19 +95,28 @@ async function runAccountFooterProof(page: Page, sidebar: Locator, branch: "feat
     await page.clock.runFor(600);
     await expect.poll(() => buildTooltip.getAttribute("open")).not.toBeNull();
     await page.clock.resume();
-    await captureUnionProof(page, "build-chip-hover-intent", `${branch}-${theme}-intent-open.png`, [
-      footer,
-      menuSurface,
-      buildTooltipCard,
-    ]);
+    await captureUnionProof(
+      suite,
+      page,
+      "build-chip-hover-intent",
+      `${branch}-${theme}-intent-open.png`,
+      [footer, menuSurface, buildTooltipCard],
+    );
     await page.mouse.move(0, 0);
     await buildTooltipCard.waitFor({ state: "hidden" });
-    await captureUnionProof(page, "sidebar-account-footer", `${branch}-${theme}-menu-default.png`, [
-      footer,
-      menuSurface,
-    ]);
+    await captureUnionProof(
+      suite,
+      page,
+      "sidebar-account-footer",
+      `${branch}-${theme}-menu-default.png`,
+      [footer, menuSurface],
+    );
 
     const settings = menu.locator('wa-dropdown-item[value="command:settings"]');
+    const settingsShortcut = settings.locator(".session-menu__shortcut");
+    expect(
+      await settingsShortcut.evaluate((element) => getComputedStyle(element).fontFamily),
+    ).toMatch(/^system-ui,/u);
     const settingsRestBackground = await settings.evaluate(
       (element) => getComputedStyle(element).backgroundColor,
     );
@@ -108,6 +126,7 @@ async function runAccountFooterProof(page: Page, sidebar: Locator, branch: "feat
       .poll(() => settings.evaluate((element) => getComputedStyle(element).backgroundColor))
       .not.toBe(settingsRestBackground);
     await captureUnionProof(
+      suite,
       page,
       "sidebar-account-footer",
       `${branch}-${theme}-menu-settings-hover.png`,
@@ -117,6 +136,7 @@ async function runAccountFooterProof(page: Page, sidebar: Locator, branch: "feat
     const usage = menu.locator('wa-dropdown-item[value="command:usage"]');
     await usage.focus();
     await captureUnionProof(
+      suite,
       page,
       "sidebar-account-footer",
       `${branch}-${theme}-menu-usage-focus.png`,
@@ -133,6 +153,7 @@ async function runAccountFooterProof(page: Page, sidebar: Locator, branch: "feat
     const submenu = help.locator('[part="submenu"]');
     await submenu.waitFor({ state: "visible" });
     await captureUnionProof(
+      suite,
       page,
       "sidebar-account-footer",
       `${branch}-${theme}-menu-help-submenu.png`,
@@ -174,7 +195,10 @@ suite.define(() => {
       await offline.waitFor({ state: "visible", timeout: 10_000 });
       expect(await offline.textContent()).toContain("Offline");
       expect(await offline.textContent()).toContain("Reconnecting…");
-      await captureUnionProof(page, "sidebar-account-footer", "feature-dark-offline.png", [footer]);
+      await expect.poll(() => page.title()).toContain("(Disconnected)");
+      await captureUnionProof(suite, page, "sidebar-account-footer", "feature-dark-offline.png", [
+        footer,
+      ]);
 
       const socketCount = await gateway.getSocketCount();
       await offline.click();
@@ -186,6 +210,7 @@ suite.define(() => {
       await expect
         .poll(() => footer.locator(".sidebar-footer-bar__status").count(), { timeout: 10_000 })
         .toBe(0);
+      await expect.poll(() => page.title()).not.toContain("Disconnected");
       await gateway.emitGatewayEvent("shutdown", {
         reason: "gateway restart",
         restartExpectedMs: 5_000,
@@ -193,9 +218,13 @@ suite.define(() => {
       const restarting = footer.locator(".sidebar-footer-bar__status--restarting");
       await restarting.waitFor({ state: "visible" });
       expect(await restarting.textContent()).toBe("Restarting…");
-      await captureUnionProof(page, "sidebar-account-footer", "feature-dark-restarting.png", [
-        footer,
-      ]);
+      await captureUnionProof(
+        suite,
+        page,
+        "sidebar-account-footer",
+        "feature-dark-restarting.png",
+        [footer],
+      );
     } finally {
       await suite.closeBrowserContext(opened.context);
     }
@@ -204,7 +233,7 @@ suite.define(() => {
   it("keeps the feature account target, identity menu, and visual states coherent", async () => {
     const opened = await openSidebarFooterProofPage(suite);
     try {
-      await runAccountFooterProof(opened.page, opened.sidebar, "feature");
+      await runAccountFooterProof(suite, opened.page, opened.sidebar, "feature");
     } finally {
       await suite.closeBrowserContext(opened.context);
     }

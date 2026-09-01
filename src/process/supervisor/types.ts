@@ -47,7 +47,7 @@ export type ManagedRun = {
   /** The root result may settle before its independently owned descendants exit. */
   waitForExtinction?: () => Promise<void>;
   cancel: (reason?: TerminationReason) => void;
-  /** Stop delivering output callbacks before owner teardown kills the child. */
+  /** Stop every decoded, raw, captured, and output-clock update for this run. */
   detachOutput?: () => void;
 };
 
@@ -104,6 +104,8 @@ type SpawnBaseInput = {
 type SpawnChildInput = SpawnBaseInput & {
   mode: "child";
   argv: string[];
+  /** Preserve a distinct invocation name while executing argv[0]. */
+  argv0?: string;
   /** Preserve a caller-prepared environment without environment-mutating spawn wrappers. */
   exactEnv?: true;
   windowsVerbatimArguments?: boolean;
@@ -116,7 +118,7 @@ type SpawnChildInput = SpawnBaseInput & {
 
 type SpawnPtyInput = SpawnBaseInput & {
   mode: "pty";
-  ptyCommand: string;
+  argv: string[];
 };
 
 type SpawnAnchoredShellInput = SpawnBaseInput & {

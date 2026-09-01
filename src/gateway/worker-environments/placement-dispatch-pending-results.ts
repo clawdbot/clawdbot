@@ -61,7 +61,7 @@ export type PlacementRecoveryDeps = {
     sessionKey: string;
     agentId: string;
   }) => Promise<WorkerWorkspaceResultConflict | undefined>;
-  recoverPlacementMoves?: () => Promise<Set<string>>;
+  recoverPlacementMoves?: (environmentId?: string) => Promise<Set<string>>;
   prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
   publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
 };
@@ -517,13 +517,16 @@ export async function recoverPendingWorkspaceResults(
     }
   }
   if (cleanupOrphans) {
-    const retainedCleanupRefs = new Set(
-      placements
-        .listPendingWorkspaceResults()
-        .flatMap((pending) =>
-          pending.stagedResultRef ? [cleanupWorkerWorkspaceResultRef(pending.stagedResultRef)] : [],
-        ),
-    );
+    const retainedRefs = () =>
+      new Set(
+        placements
+          .listPendingWorkspaceResults()
+          .flatMap((pending) =>
+            pending.stagedResultRef
+              ? [cleanupWorkerWorkspaceResultRef(pending.stagedResultRef)]
+              : [],
+          ),
+      );
     const cleanedWorkspaceRoots = new Set<string>();
     for (const placement of placements.list()) {
       try {
@@ -532,11 +535,11 @@ export async function recoverPendingWorkspaceResults(
           cleanedWorkspaceRoots.add(root);
           await deleteWorkerWorkspaceResultCleanupRefs({
             root,
-            retainedRefs: retainedCleanupRefs,
+            retainedRefs,
           });
         }
       } catch {
-        // Cleanup refs are independently retryable on the next startup sweep.
+        // Cleanup refs are independently retryable after the next restart.
       }
     }
   }

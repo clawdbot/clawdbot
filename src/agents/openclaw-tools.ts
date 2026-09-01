@@ -8,6 +8,7 @@ import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.
 import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
+import { bindAssembledAgentToolActionDescriptor } from "./agent-tool-metadata.js";
 import {
   type HookContext,
   isToolWrappedWithBeforeToolCallHook,
@@ -124,7 +125,11 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
   const runtimeWebTools = getActiveRuntimeWebToolsMetadataFromState();
   const sandbox =
     options?.sandboxRoot && options?.sandboxFsBridge
-      ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }
+      ? {
+          root: options.sandboxRoot,
+          bridge: options.sandboxFsBridge,
+          stagedMediaPaths: options.stagedMediaPaths,
+        }
       : undefined;
   const optionalMediaTools = resolveOptionalMediaToolFactoryPlan({
     config: availabilityConfig ?? resolvedConfig,
@@ -256,6 +261,8 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
         sameChannelThreadRequired: options?.sameChannelThreadRequired,
         sandboxRoot: options?.sandboxRoot,
         sandboxContainerWorkdir: options?.sandboxContainerWorkdir,
+        sandboxFsBridge: options?.sandboxFsBridge,
+        sandboxWorkspaceMediaReadAllowed: options?.sandboxWorkspaceMediaReadAllowed,
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
         sourceReplyOnly: options?.sourceReplyOnly,
@@ -329,10 +336,11 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
       : [
           nodesTool,
           createMobileUiTool({ idempotencyScope: options?.runId }),
-          ...(options?.modelHasVision === false
+          ...(options?.modelHasVision === false || options?.computerTransport === null
             ? []
             : [
                 createComputerTool({
+                  transport: options?.computerTransport,
                   config: options?.config,
                   modelHasVision: options?.modelHasVision,
                   // Run ids expire before later assistant runs can reuse a provider call id.
@@ -451,7 +459,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
       sessionAgentId,
       config: resolvedConfig,
     }),
-    ...(options?.sandboxed
+    ...(options?.sandboxed && !options.skillWorkshop?.libraryAuthoring
       ? []
       : [
           createConfiguredSkillWorkshopTool({
@@ -487,6 +495,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     })
       ? [
           createSecretsTool({
+            config: resolvedConfig,
             agentId: sessionAgentId,
             sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             runId: options?.runId,
@@ -615,6 +624,9 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
 
   allTools = filterToolsByClientCaps(allTools, options?.clientCaps);
   options?.recordToolPrepStage?.("openclaw-tools:client-capabilities");
+  for (const tool of allTools) {
+    bindAssembledAgentToolActionDescriptor(tool);
+  }
 
   const hookAgentId = options?.requesterAgentIdOverride ?? sessionAgentId;
   const wrapGatewayCallerIdentity = createGatewayToolCallerWrapper(

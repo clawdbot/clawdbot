@@ -52,6 +52,7 @@ function createManagedWorkspaceInvocation(cwd: string) {
     sessionKey: placement.sessionKey,
     sendNodeEvent: async () => undefined,
     acquireManagedWorkspace,
+    prepareExecAuthorization: () => () => {},
   } satisfies NonNullable<Parameters<OpenClawPluginNodeHostCommand["handle"]>[2]>;
   return { placement, context, acquireManagedWorkspace, release };
 }
@@ -137,13 +138,120 @@ afterEach(() => {
 });
 
 describe("Codex node exec-server", () => {
+  it("uses admitted Full launch authority without asking for a human decision", async () => {
+    const { placement } = createManagedWorkspaceInvocation(process.cwd());
+    const request = vi.fn(async () => ({ decision: "deny" as const }));
+    const invokeNode = vi.fn();
+    const invokeNodeWithSessionFull = vi.fn(async () => ({ ok: true as const }));
+    await expect(
+      createCodexNodeExecServerInvokePolicy().handle({
+        nodeId: "paired-node",
+        command: CODEX_NODE_EXEC_SERVER_COMMAND,
+        params: placement,
+        config: {},
+        risk: { level: "high", family: "codex.exec-server" },
+        approvals: { request },
+        invokeNode,
+        invokeNodeWithSessionFull,
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(request).not.toHaveBeenCalled();
+    expect(invokeNode).not.toHaveBeenCalled();
+    expect(invokeNodeWithSessionFull).toHaveBeenCalledOnce();
+  });
+
+  it("checks node-local authorization before starting the pinned process", async () => {
+    const frames = createNodeFrames();
+    const workspace = createManagedWorkspaceInvocation(process.cwd());
+    const prepareExecAuthorization = vi.fn(() => {
+      throw new Error("node-local execution denied");
+    });
+    const invocation = createCodexNodeExecServerCommand().handle(
+      JSON.stringify({ placement: workspace.placement, authorization: "human-approved" }),
+      frames.io,
+      { ...workspace.context, prepareExecAuthorization },
+    );
+    void invocation.catch(() => {});
+    try {
+      await expect(Promise.race([frames.ready, invocation])).rejects.toThrow(
+        "node-local execution denied",
+      );
+      expect(prepareExecAuthorization).toHaveBeenCalledOnce();
+    } finally {
+      frames.controller.abort(new Error("policy fixture closed"));
+      await invocation.catch(() => {});
+    }
+  });
+
+  it("rejects forged launch authorization at the public policy boundary", async () => {
+    const { placement } = createManagedWorkspaceInvocation(process.cwd());
+    const request = vi.fn();
+    const invokeNode = vi.fn();
+    const invokeNodeWithSessionFull = vi.fn();
+    for (const params of [
+      { ...placement, authorization: "session-full" },
+      { placement, authorization: "human-approved" },
+      { placement, authorization: "session-full" },
+    ]) {
+      await expect(
+        createCodexNodeExecServerInvokePolicy().handle({
+          nodeId: "paired-node",
+          command: CODEX_NODE_EXEC_SERVER_COMMAND,
+          params,
+          config: {},
+          risk: { level: "high", family: "codex.exec-server" },
+          approvals: { request },
+          invokeNode,
+          invokeNodeWithSessionFull,
+        }),
+      ).resolves.toMatchObject({ ok: false, code: "CODEX_NODE_EXEC_WORKSPACE_INVALID" });
+    }
+    expect(request).not.toHaveBeenCalled();
+    expect(invokeNode).not.toHaveBeenCalled();
+    expect(invokeNodeWithSessionFull).not.toHaveBeenCalled();
+  });
+
+  it("revalidates local policy after awaited binary setup and fails closed without node support", async () => {
+    const transport = await import("./app-server/transport-stdio.js");
+    const spawn = vi.spyOn(transport, "createStdioTransport");
+    const workspace = createManagedWorkspaceInvocation(process.cwd());
+    const frames = createNodeFrames();
+    const encoded = JSON.stringify({
+      placement: workspace.placement,
+      authorization: "session-full",
+    });
+    const assertCurrent = vi.fn(() => {
+      throw new Error("node policy tightened");
+    });
+    try {
+      await expect(
+        createCodexNodeExecServerCommand().handle(encoded, frames.io, {
+          ...workspace.context,
+          prepareExecAuthorization: () => assertCurrent,
+        }),
+      ).rejects.toThrow("node policy tightened");
+      expect(assertCurrent).toHaveBeenCalledOnce();
+      expect(spawn).not.toHaveBeenCalled();
+      await expect(
+        createCodexNodeExecServerCommand().handle(encoded, frames.io, {
+          ...workspace.context,
+          prepareExecAuthorization: undefined,
+        }),
+      ).rejects.toThrow("update the node");
+      expect(spawn).not.toHaveBeenCalled();
+    } finally {
+      spawn.mockRestore();
+    }
+  });
+
   it.each([
     { host: "paired device", nodeId: "paired-node" },
     { host: "cloud worker", nodeId: "cloud-worker-node" },
-  ])("requires critical one-time approval on a $host", async ({ nodeId }) => {
+  ])("requires critical scoped approval on a $host", async ({ nodeId }) => {
     const policy = createCodexNodeExecServerInvokePolicy();
     expect(policy.commands).toEqual([CODEX_NODE_EXEC_SERVER_COMMAND]);
     expect(policy.dangerous).toBe(true);
+    expect(policy.standingApproval).toEqual({ kind: "placement", scope: "codex.exec-server" });
     expect(policy.defaultPlatforms).toBeUndefined();
     expect(policy.classifyRisk?.({ command: CODEX_NODE_EXEC_SERVER_COMMAND, params: {} })).toEqual({
       level: "high",
@@ -152,7 +260,9 @@ describe("Codex node exec-server", () => {
 
     const invokeNode = vi.fn(async () => ({ ok: true as const, payload: { connected: true } }));
     const request = vi.fn();
-    const { placement } = createManagedWorkspaceInvocation(process.cwd());
+    const { placement } = createManagedWorkspaceInvocation(
+      path.join(process.cwd(), "long-session-workspace-".repeat(20)),
+    );
     const context = {
       nodeId,
       command: CODEX_NODE_EXEC_SERVER_COMMAND,
@@ -163,12 +273,28 @@ describe("Codex node exec-server", () => {
       invokeNode,
     } satisfies OpenClawPluginNodeInvokePolicyContext;
 
-    for (const decision of ["deny", "allow-always", null] as const) {
+    for (const { decision, result } of [
+      {
+        decision: "deny",
+        result: {
+          ok: false,
+          code: "CODEX_NODE_EXEC_APPROVAL_DENIED",
+          message:
+            "Codex node execution was denied. Retry the action and choose Allow once or Allow always to continue.",
+        },
+      },
+      {
+        decision: null,
+        result: {
+          ok: false,
+          code: "CODEX_NODE_EXEC_APPROVAL_EXPIRED",
+          message:
+            "Codex node execution approval expired before a decision. Retry the action and approve the new request.",
+        },
+      },
+    ] as const) {
       request.mockResolvedValueOnce({ decision });
-      await expect(policy.handle(context)).resolves.toMatchObject({
-        ok: false,
-        code: "CODEX_NODE_EXEC_APPROVAL_DENIED",
-      });
+      await expect(policy.handle(context)).resolves.toEqual(result);
       expect(invokeNode).not.toHaveBeenCalled();
     }
     await expect(policy.handle({ ...context, approvals: undefined })).resolves.toMatchObject({
@@ -185,6 +311,14 @@ describe("Codex node exec-server", () => {
     });
     expect(invokeNode).not.toHaveBeenCalled();
 
+    request.mockResolvedValueOnce({ decision: "allow-always" });
+    await expect(policy.handle(context)).resolves.toEqual({
+      ok: true,
+      payload: { connected: true },
+    });
+    expect(invokeNode).toHaveBeenCalledOnce();
+    invokeNode.mockClear();
+
     const approvedPlacement = { ...placement };
     request.mockImplementationOnce(async () => {
       placement.cwd = path.parse(process.cwd()).root;
@@ -195,17 +329,30 @@ describe("Codex node exec-server", () => {
       payload: { connected: true },
     });
     expect(invokeNode).toHaveBeenCalledOnce();
-    expect(invokeNode).toHaveBeenCalledWith({ params: approvedPlacement });
+    expect(invokeNode).toHaveBeenCalledWith({
+      workspace: {
+        workspaceDir: approvedPlacement.cwd,
+        environmentId: approvedPlacement.environmentId,
+        sessionId: approvedPlacement.sessionId,
+        ownerEpoch: approvedPlacement.ownerEpoch,
+        sessionKey: approvedPlacement.sessionKey,
+      },
+      params: { placement: approvedPlacement, authorization: "human-approved" },
+    });
     expect(request).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: "Run Codex execution on node",
+        title: "Run Codex on this node placement",
         description: expect.stringContaining(`${nodeId}: ${approvedPlacement.cwd}`),
         severity: "critical",
-        allowedDecisions: ["allow-once"],
+        allowedDecisions: ["allow-once", "allow-always"],
       }),
     );
-    expect(request.mock.lastCall?.[0].description).toContain(
-      "arbitrary processes and filesystem access across the node account",
+    // Gateway approval descriptions are bounded to 256 characters.
+    expect(request.mock.lastCall?.[0].description.slice(0, 256)).toContain(
+      "arbitrary processes and filesystem access across the node account, not only this workspace",
+    );
+    expect(request.mock.lastCall?.[0].description.slice(0, 256)).toContain(
+      "Allow always applies only while this exact placement remains active",
     );
   });
 
@@ -213,7 +360,10 @@ describe("Codex node exec-server", () => {
     const command = createCodexNodeExecServerCommand();
     const frames = createNodeFrames();
     const workspace = createManagedWorkspaceInvocation(process.cwd());
-    const encodedPlacement = JSON.stringify(workspace.placement);
+    const encodedPlacement = JSON.stringify({
+      placement: workspace.placement,
+      authorization: "human-approved",
+    });
     await expect(command.handle(encodedPlacement)).rejects.toThrow("requires duplex frames");
     await expect(
       command.handle(
@@ -221,7 +371,7 @@ describe("Codex node exec-server", () => {
         frames.io,
         workspace.context,
       ),
-    ).rejects.toThrow("exact managed placement workspace");
+    ).rejects.toThrow("managed placement workspace");
     await expect(command.handle(encodedPlacement, frames.io)).rejects.toThrow(
       "active managed placement authority",
     );
@@ -240,7 +390,10 @@ describe("Codex node exec-server", () => {
     ]) {
       await expect(
         command.handle(
-          JSON.stringify({ ...workspace.placement, ...replacement }),
+          JSON.stringify({
+            placement: { ...workspace.placement, ...replacement },
+            authorization: "human-approved",
+          }),
           frames.io,
           workspace.context,
         ),
@@ -280,7 +433,7 @@ describe("Codex node exec-server", () => {
         const command = createCodexNodeExecServerCommand();
         const workspace = createManagedWorkspaceInvocation(cwd);
         const invocation = command.handle(
-          JSON.stringify(workspace.placement),
+          JSON.stringify({ placement: workspace.placement, authorization: "human-approved" }),
           frames.io,
           workspace.context,
         );

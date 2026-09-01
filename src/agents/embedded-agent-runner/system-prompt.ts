@@ -8,13 +8,13 @@ import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PreparedMemoryPromptSection } from "../../plugins/memory-state.js";
 import type { AgentPromptSurfaceKind } from "../../plugins/types.js";
-import type { ActiveProcessSessionReference } from "../bash-process-references.js";
 import type { BootstrapMode } from "../bootstrap-mode.js";
 import type { EmbeddedContextFile } from "../embedded-agent-helpers.js";
 import type { AgentTool } from "../runtime/index.js";
 import type { AgentSession } from "../sessions/index.js";
 import { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import type { ProviderSystemPromptContribution } from "../system-prompt-contribution.js";
+import type { SystemPromptRuntimeInfo } from "../system-prompt.js";
 import type { PromptMode, SilentReplyPromptMode } from "../system-prompt.types.js";
 import type { PreparedWatchedSessionsPrompt } from "../watched-sessions-prompt.js";
 import type { EmbeddedSandboxInfo } from "./types.js";
@@ -58,23 +58,16 @@ export function buildEmbeddedSystemPrompt(params: {
   nativeCommandNames?: string[];
   /** Plugin-owned prompt guidance for registered native slash commands. */
   nativeCommandGuidanceLines?: string[];
-  runtimeInfo: {
-    agentId?: string;
-    sessionKey?: string;
-    sessionId?: string;
+  runtimeInfo: SystemPromptRuntimeInfo & {
     host: string;
     os: string;
     arch: string;
     node: string;
     model: string;
     provider?: string;
-    capabilities?: string[];
-    channel?: string;
     chatType?: ChatType;
     /** Supported message actions for the current channel (e.g., react, edit, unsend) */
     channelActions?: string[];
-    activeProcessSessions?: ActiveProcessSessionReference[];
-    activeNode?: string;
   };
   messageToolHints?: string[];
   toolSchemaDirectoryPrompt?: string;

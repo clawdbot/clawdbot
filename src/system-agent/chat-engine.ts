@@ -112,10 +112,6 @@ export class SystemAgentChatEngine {
     return this.router.propose(operation);
   }
 
-  hasPendingProposal(): boolean {
-    return this.router.hasPendingProposal();
-  }
-
   getPendingOperatorProposal(): { operation: SystemAgentOperation; hash: string } | null {
     return this.router.getPendingOperatorProposal();
   }
@@ -123,9 +119,14 @@ export class SystemAgentChatEngine {
   async resolveOperatorApproval(
     decision: "allow-once" | "allow-always" | "deny" | null,
     proposalHash: string,
+    beforePersistentApply?: () => void,
   ): Promise<SystemAgentChatReply | null> {
     const turn = this.turnQueue.then(async () => {
-      const reply = await this.router.resolveOperatorApproval(decision, proposalHash);
+      const reply = await this.router.resolveOperatorApproval(
+        decision,
+        proposalHash,
+        beforePersistentApply,
+      );
       if (reply?.text) {
         this.history.push({ role: "assistant", text: reply.text });
       }

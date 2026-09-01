@@ -55,7 +55,7 @@ private struct ConnectionAttempt {
     let routeAuthorityGeneration: UInt64
     let codexThreadCatalogAdvertised: Bool
     let claudeSessionCatalogAdvertised: Bool
-    let workerUnavailableReason: String?
+    let workerUnavailable: (reason: String, diagnostic: String?)?
     let endpoint: GatewayConnection.EndpointSnapshot
     let options: GatewayConnectOptions
     let sessionBox: WebSocketSessionBox?
@@ -115,7 +115,7 @@ final class MacNodeModeCoordinator: NSObject {
     private var nodeHostWorkerRetryTaskGeneration: UInt64 = 0
     private var pendingEndpoint: GatewayConnection.EndpointSnapshot?
     private var activeNodeHostWorkerInput: MacNodeHostWorkerRetryPolicy.Input?
-    private var lastNodeHostWorkerStartFailure: String?
+    private var lastNodeHostWorkerStartFailure: (reason: String, diagnostic: String?)?
     private var lastObservedPaused: Bool
     private var lastObservedComputerControlEnabled: Bool
     private var lastObservedComputerControlProvider: ComputerControlProvider
@@ -204,6 +204,11 @@ final class MacNodeModeCoordinator: NSObject {
             object: nil)
         self.notificationCenter.addObserver(
             self,
+            selector: #selector(self.nodeHostManifestChanged),
+            name: .openclawNodeHostManifestChanged,
+            object: nil)
+        self.notificationCenter.addObserver(
+            self,
             selector: #selector(self.nodeHostWorkerFailed),
             name: .openclawNodeHostWorkerFailed,
             object: nil)
@@ -215,13 +220,14 @@ final class MacNodeModeCoordinator: NSObject {
         self.notificationCenter.addObserver(
             self,
             selector: #selector(self.nodeHostConfigurationChanged),
-            name: .openclawCLIInstalled,
-            object: nil)
-        self.notificationCenter.addObserver(
-            self,
-            selector: #selector(self.nodeHostConfigurationChanged),
             name: .openclawCuaDriverAvailabilityChanged,
             object: nil)
+    }
+
+    @objc private nonisolated func nodeHostManifestChanged() {
+        Task { @MainActor [weak self] in
+            self?.enqueueRouteInvalidation(mode: .reconnectRefresh)
+        }
     }
 
     deinit {
@@ -527,8 +533,8 @@ final class MacNodeModeCoordinator: NSObject {
                 if error is MacNodeHostWorkerRetryPolicy.RetryBackoffPending {
                     // The lifecycle-owned delayed wake is the only event allowed
                     // to admit this same worker input after an unexpected exit.
-                    self.channelStatus.record(.unavailable(
-                        reason: self.lastNodeHostWorkerStartFailure ?? error.localizedDescription))
+                    let failure = self.lastNodeHostWorkerStartFailure ?? (error.localizedDescription, nil)
+                    self.channelStatus.record(.unavailable(reason: failure.reason, diagnostic: failure.diagnostic))
                     guard await refreshIterator.next() != nil else { return }
                     continue
                 }
@@ -544,7 +550,8 @@ final class MacNodeModeCoordinator: NSObject {
                     continue
                 }
                 self.logger.error("mac node gateway connect failed: \(error.localizedDescription, privacy: .public)")
-                self.channelStatus.record(.unavailable(reason: error.localizedDescription))
+                let failure = Self.nodeHostWorkerFailure(error)
+                self.channelStatus.record(.unavailable(reason: failure.reason, diagnostic: failure.diagnostic))
                 try? await Task.sleep(nanoseconds: min(retryDelay, 10_000_000_000))
                 retryDelay = min(retryDelay * 2, 10_000_000_000)
             }
@@ -562,7 +569,7 @@ final class MacNodeModeCoordinator: NSObject {
     {
         let config = endpoint.config
         let provider = ComputerControlProvider.current()
-        let (workerManifest, workerUnavailableReason) =
+        let (workerManifest, workerUnavailable) =
             try await self.resolveWorkerManifestForConnection(provider: provider)
         let nativeCaps = self.currentCaps(
             browserControlEnabled: browserControlEnabled,
@@ -635,7 +642,7 @@ final class MacNodeModeCoordinator: NSObject {
                 MacNodeCodexThreadCatalogContract.listCommand),
             claudeSessionCatalogAdvertised: commands.contains(
                 MacNodeClaudeSessionCatalogContract.listCommand),
-            workerUnavailableReason: workerUnavailableReason,
+            workerUnavailable: workerUnavailable,
             endpoint: endpoint,
             options: options,
             sessionBox: sessionBox,
@@ -661,10 +668,11 @@ final class MacNodeModeCoordinator: NSObject {
                     installedRoute,
                     authorityGeneration: attempt.routeAuthorityGeneration) ?? true
                 guard workerRouteInstalled else { return }
-                await self.nodeHostWorker?.publishInventory(ifCurrentRoute: installedRoute)
+                await self.nodeHostWorker?.gatewayConnected(ifCurrentRoute: installedRoute)
                 await self.cancelReconnectProbe()
                 await self.channelStatus.record(.connected(
-                    workerUnavailableReason: attempt.workerUnavailableReason))
+                    workerUnavailableReason: attempt.workerUnavailable?.reason,
+                    diagnostic: attempt.workerUnavailable?.diagnostic))
                 self.logger.info("mac node connected to gateway")
                 // The node hello owns this route's session defaults. Reusing the operator
                 // connection here can trigger remote-tunnel recovery while the node connects.
@@ -697,7 +705,9 @@ final class MacNodeModeCoordinator: NSObject {
             },
             onDisconnected: { [weak self] reason in
                 guard let self else { return }
-                await self.channelStatus.record(.unavailable(reason: reason))
+                await self.channelStatus.record(.unavailable(
+                    reason: reason,
+                    diagnostic: attempt.workerUnavailable?.diagnostic))
                 await self.invalidateRuntimeRoute(authorityGeneration: attempt.routeAuthorityGeneration)
                 await self.scheduleReconnectProbe()
                 self.logger.error("mac node disconnected: \(reason, privacy: .public)")
@@ -873,7 +883,7 @@ final class MacNodeModeCoordinator: NSObject {
 
     func resolveWorkerManifestForConnectionForTesting(
         provider: ComputerControlProvider = .peekaboo) async throws
-        -> (manifest: MacNodeHostManifest?, unavailableReason: String?)
+        -> (manifest: MacNodeHostManifest?, unavailable: (reason: String, diagnostic: String?)?)
     {
         try await self.resolveWorkerManifestForConnection(provider: provider)
     }
@@ -950,7 +960,7 @@ extension MacNodeModeCoordinator {
     /// native capabilities only and surfaces the reason to the operator.
     private func resolveWorkerManifestForConnection(
         provider: ComputerControlProvider) async throws
-        -> (manifest: MacNodeHostManifest?, unavailableReason: String?)
+        -> (manifest: MacNodeHostManifest?, unavailable: (reason: String, diagnostic: String?)?)
     {
         do {
             let manifest = try await Self.workerManifest(
@@ -973,27 +983,17 @@ extension MacNodeModeCoordinator {
         }
         if let activeInput = self.activeNodeHostWorkerInput {
             // Worker launch metadata is startup-scoped. Route retries reuse it instead of
-            // repeating CLI and runtime discovery until an explicit restart resets state.
+            // resolving the bundle again until an explicit restart resets state.
             try self.nodeHostWorkerRetryPolicy.prepareForStart(activeInput)
             return try await nodeHostWorker.start(launch: activeInput.launch)
         }
         let launch: MacNodeHostWorkerLaunch
         do {
-            if let projectLaunch = try await CommandResolver.projectNodeHostWorkerLaunch() {
-                launch = projectLaunch
-            } else {
-                switch await CLIInstaller.status() {
-                case let .ready(location, _):
-                    launch = MacNodeHostWorkerLaunch(command: CommandResolver.nodeHostWorkerCommand(
-                        prefix: [location]))
-                case let status:
-                    throw MacNodeHostWorker.WorkerError.unavailable(status.message)
-                }
-            }
+            launch = try await CommandResolver.nodeHostWorkerLaunch()
         } catch let error as RuntimeResolutionError {
-            throw MacNodeHostWorker.WorkerError.unavailable(RuntimeLocator.describeFailure(error))
+            throw MacNodeHostWorker.WorkerError.unavailable(reason: RuntimeLocator.describeFailure(error))
         }
-        var workerEnvironment: [String: String] = [:]
+        var workerEnvironment = launch.environment
         if provider == .cua, let endpoint = CuaDriverHostCoordinator.shared.workerEndpoint {
             workerEnvironment[CuaDriverWorkerEnvironment.endpoint] = try endpoint.environmentValue()
         }
@@ -1010,14 +1010,24 @@ extension MacNodeModeCoordinator {
 
     /// Retry exhaustion keeps the concrete worker error it exhausted on; the
     /// bare "stopped after N unexpected exits" text cannot guide the operator.
-    private func recordNodeHostWorkerStartFailure(_ error: Error) -> String {
+    private func recordNodeHostWorkerStartFailure(_ error: Error) -> (reason: String, diagnostic: String?) {
         if error is MacNodeHostWorkerRetryPolicy.RetryBudgetExhausted {
-            let detail = self.lastNodeHostWorkerStartFailure.map { " — \($0)" } ?? ""
-            return error.localizedDescription + detail
+            let previous = self.lastNodeHostWorkerStartFailure
+            let detail = previous.map { " — \($0.reason)" } ?? ""
+            return (error.localizedDescription + detail, previous?.diagnostic)
         }
-        let reason = error.localizedDescription
-        self.lastNodeHostWorkerStartFailure = reason
-        return reason
+        let failure = Self.nodeHostWorkerFailure(error)
+        self.lastNodeHostWorkerStartFailure = failure
+        return failure
+    }
+
+    private static func nodeHostWorkerFailure(_ error: Error) -> (reason: String, diagnostic: String?) {
+        if let workerError = error as? MacNodeHostWorker.WorkerError,
+           case let .unavailable(reason, diagnostic) = workerError
+        {
+            return (reason, diagnostic)
+        }
+        return (error.localizedDescription, nil)
     }
 
     private func handleNodeHostWorkerFailure(configurationGeneration: UInt64) {

@@ -1,7 +1,9 @@
 // Covers the compaction planning worker boundary and timeout behavior.
+import { createAssistantMessageEventStream } from "@openclaw/llm-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { serializeConversation } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { estimateTokens } from "../../packages/agent-core/src/harness/compaction/compaction.js";
 import * as compactionPlanningWorkerRuntime from "./compaction-planning-worker-runtime.js";
 import {
   CompactionPlanningWorkerError,
@@ -13,8 +15,12 @@ import {
   buildSummaryChunksWithWorker,
   computeAdaptiveChunkRatioWithWorker,
 } from "./compaction-planning-worker.js";
-import { estimateMessagesTokens } from "./compaction-planning.js";
-import { runCompactionPlanningWorkerInput } from "./compaction-planning.worker.js";
+import { buildSummaryChunks, estimateMessagesTokens } from "./compaction-planning.js";
+import {
+  type CompactionPlanningWorkerInput,
+  runCompactionPlanningWorkerInput,
+} from "./compaction-planning.worker.js";
+import { summarizeInStages } from "./compaction.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
@@ -69,7 +75,7 @@ describe("compaction planning worker", () => {
     });
   });
 
-  it("rejects invalid and retired worker input", () => {
+  it("rejects invalid and retired worker input", async () => {
     for (const input of [
       { kind: "summaryChunks" },
       {
@@ -81,9 +87,15 @@ describe("compaction planning worker", () => {
         maxHistoryShare: 0.5,
       },
     ]) {
-      expect(runCompactionPlanningWorkerInput(input)).toEqual({
-        status: "failed",
-        error: "invalid compaction planning worker input",
+      await expect(
+        runCompactionPlanningWorker({
+          // SAFETY: Exercise the worker's runtime validation with malformed protocol input.
+          input: input as CompactionPlanningWorkerInput,
+        }),
+      ).rejects.toMatchObject({
+        name: "CompactionPlanningWorkerError",
+        code: "failed",
+        message: "invalid compaction planning worker input",
       });
     }
   });
@@ -213,39 +225,168 @@ describe("compaction planning worker", () => {
     );
   }, 45_000);
 
-  it("preserves oversized tool-result text in returned summary input", async () => {
-    const hugeText = "x".repeat(120_000);
-    const messages: AgentMessage[] = [
-      {
-        role: "toolResult",
-        toolCallId: "call_large",
-        toolName: "browser",
-        isError: false,
-        content: [{ type: "text", text: hugeText }],
-        timestamp: 1,
+  it.each(
+    [
+      { script: "ASCII", glyph: "x" },
+      { script: "common CJK", glyph: "漢" },
+      { script: "rare BMP CJK", glyph: "㐀" },
+      { script: "supplementary CJK", glyph: "𠀀" },
+    ].flatMap(({ script, glyph }) =>
+      ["text", "arguments"].map((source) => ({ script, glyph, source })),
+    ),
+  )(
+    "preserves $script $source chunk budgets after restoring originals",
+    async ({ glyph, source }) => {
+      const hugeText = glyph.repeat(40_000);
+      const messages: AgentMessage[] =
+        source === "text"
+          ? Array.from({ length: 64 }, (_, index) =>
+              index === 0
+                ? {
+                    role: "toolResult",
+                    toolCallId: "call_large",
+                    toolName: "browser",
+                    isError: false,
+                    content: [{ type: "text", text: hugeText }],
+                    timestamp: 0,
+                  }
+                : makeMessage(index, hugeText),
+            )
+          : Array.from({ length: 32 }, (_, index) => [
+              makeAgentAssistantMessage({
+                content: [
+                  {
+                    type: "toolCall",
+                    id: `call_${index}`,
+                    name: "write",
+                    arguments: { [hugeText]: { nested: [hugeText] } },
+                  },
+                ],
+                stopReason: "toolUse",
+                timestamp: index * 2,
+              }),
+              {
+                role: "toolResult" as const,
+                toolCallId: `call_${index}`,
+                toolName: "write",
+                isError: false,
+                content: [{ type: "text" as const, text: "ok" }],
+                timestamp: index * 2 + 1,
+              },
+            ]).flat();
+      const groupSize = source === "text" ? 1 : 2;
+      const groupTokens = estimateMessagesTokens(messages.slice(0, groupSize));
+      const maxChunkTokens = Math.ceil(groupTokens * 1.75);
+      const chunks = await buildSummaryChunksWithWorker({ messages, maxChunkTokens });
+
+      expect(chunks.map((chunk) => chunk.length)).toEqual(
+        buildSummaryChunks({ messages, maxChunkTokens }).map((chunk) => chunk.length),
+      );
+      expect(chunks).toHaveLength(messages.length / groupSize);
+      expect(Math.max(...chunks.map(estimateMessagesTokens))).toBeLessThanOrEqual(maxChunkTokens);
+      chunks.flat().forEach((message, index) => expect(message).toBe(messages[index]));
+      const fallback = await buildOversizedFallbackPlanWithWorker({
+        messages,
+        contextWindow: maxChunkTokens,
+      });
+      expect(fallback.smallMessages).toEqual([]);
+      expect(fallback.oversizedNotes).toHaveLength(messages.length / groupSize);
+    },
+    45_000,
+  );
+
+  it("summarizes CJK history after ASCII exhausts the worker projection budget", async () => {
+    const model = {
+      id: "gpt-5.6-luna",
+      name: "Synthetic context-limit model",
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://unused.invalid",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 8_192,
+    } satisfies Parameters<typeof summarizeInStages>[0]["model"];
+    const markers = Array.from(
+      { length: 64 },
+      (_, index) => `[history-${String(index).padStart(2, "0")}]`,
+    );
+    // The ASCII prefix fills the 256 KiB payload budget. Without weighted omitted
+    // pressure, stage planning keeps all 64 messages and restores an overflowing chunk.
+    const messages = markers.map((marker, index) =>
+      makeMessage(
+        index + 1,
+        index < 32 ? "x".repeat(8_192 - marker.length) + marker : "漢".repeat(40_000) + marker,
+      ),
+    );
+    const inputTokens: number[] = [];
+    const seen = new Set<string>();
+    let omissionNotes = false;
+    const maxChunkTokens = 395_904;
+
+    const summary = await summarizeInStages({
+      messages,
+      model,
+      apiKey: "synthetic-no-credential", // pragma: allowlist secret
+      signal: AbortSignal.timeout(45_000),
+      reserveTokens: 4_096,
+      maxChunkTokens,
+      contextWindow: model.contextWindow,
+      streamFn: (_model, context) => {
+        const tokens = context.messages.reduce(
+          (sum, message) => sum + estimateTokens(message),
+          estimateTokens(makeMessage(0, context.systemPrompt ?? "")),
+        );
+        inputTokens.push(tokens);
+        const text = context.messages
+          .map((message) =>
+            typeof message.content === "string"
+              ? message.content
+              : message.content
+                  .filter((block) => block.type === "text")
+                  .map((block) => block.text)
+                  .join("\n"),
+          )
+          .join("\n");
+        for (const marker of markers) {
+          if (text.includes(marker)) {
+            seen.add(marker);
+          }
+        }
+        omissionNotes ||= /\[Large .*omitted from summary\]|\[Partial summary:/.test(text);
+        if (tokens > model.contextWindow) {
+          throw new Error(`context length exceeded: ${tokens} > ${model.contextWindow}`);
+        }
+        const stream = createAssistantMessageEventStream();
+        stream.push({
+          type: "done",
+          reason: "stop",
+          message: makeAgentAssistantMessage({
+            content: [{ type: "text", text: "Compact summary." }],
+          }),
+        });
+        stream.end();
+        return stream;
       },
-      ...Array.from({ length: 63 }, (_, index) => makeMessage(index + 2)),
-    ];
+    });
 
-    const chunks = await buildSummaryChunksWithWorker({ messages, maxChunkTokens: 8_000 });
-    const returnedMessages = chunks.flat();
-
-    expect(JSON.stringify(returnedMessages)).toBe(JSON.stringify(messages));
-    expect(JSON.stringify(returnedMessages)).toContain(hugeText);
+    expect(summary).toBe("Compact summary.");
+    expect(inputTokens.length).toBeGreaterThan(0);
+    expect(Math.max(...inputTokens)).toBeLessThanOrEqual(model.contextWindow);
+    expect(Math.max(...inputTokens)).toBeLessThanOrEqual(maxChunkTokens);
+    expect([...seen].toSorted()).toEqual(markers.toSorted());
+    expect(omissionNotes).toBe(false);
+    expect(summary).not.toMatch(/\[Large .*omitted from summary\]|\[Partial summary:/);
   }, 45_000);
 
   it("plans summary chunks for worker input", () => {
-    const result = runCompactionPlanningWorkerInput({
+    const value = runCompactionPlanningWorkerInput({
       kind: "summaryChunks",
       messages: [makeMessage(1), makeMessage(2), makeMessage(3)],
       maxChunkTokens: 1200,
     });
 
-    expect(result.status).toBe("ok");
-    if (result.status !== "ok") {
-      return;
-    }
-    const value = result.value;
     expect(value.kind).toBe("summaryChunks");
     if (value.kind !== "summaryChunks") {
       return;
@@ -260,8 +401,7 @@ describe("compaction planning worker", () => {
     { kind: "adaptiveChunkRatio", messages: [makeMessage(1)], contextWindow: 1200 },
   ])("plans $kind for worker input", (input) => {
     expect(runCompactionPlanningWorkerInput(input)).toMatchObject({
-      status: "ok",
-      value: { kind: input.kind },
+      kind: input.kind,
     });
   });
 
@@ -300,13 +440,13 @@ describe("compaction planning worker", () => {
   it("clamps oversized worker timeouts before scheduling", async () => {
     const workerUrl = createSyntheticWorkerUrl(`
       import { parentPort } from "node:worker_threads";
-      parentPort.postMessage({
+      parentPort.on("message", () => parentPort.postMessage({
         status: "ok",
         value: {
           kind: "summaryChunks",
-          chunks: [],
+          chunkIndexes: [],
         },
-      });
+      }));
     `);
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
@@ -348,13 +488,13 @@ describe("compaction planning worker", () => {
     // winning this race proves the worker path yielded control.
     const workerUrl = createSyntheticWorkerUrl(`
       import { parentPort } from "node:worker_threads";
-      parentPort.postMessage({
+      parentPort.on("message", () => parentPort.postMessage({
         status: "ok",
         value: {
           kind: "stageSplit",
           mode: "single",
         },
-      });
+      }));
     `);
     const timer = new Promise<"timer">((resolve) => {
       setTimeout(() => resolve("timer"), 0);

@@ -44,6 +44,7 @@ const OVERSIZED_ENTRY_WORKER_SOURCE = `
         isSidechain: entry.isSidechain === true,
         isMeta: entry.isMeta === true,
         isCompactSummary: entry.isCompactSummary === true,
+        isVisibleInTranscriptOnly: entry.isVisibleInTranscriptOnly === true,
         message: {
           role: type,
           content: ${JSON.stringify(OVERSIZED_HISTORY_PLACEHOLDER)},
@@ -82,6 +83,7 @@ function normalizeOversizedEntry(value: unknown): ClaudeCliProjectEntry | null {
     ...(value.isSidechain === true ? { isSidechain: true } : {}),
     ...(value.isMeta === true ? { isMeta: true } : {}),
     ...(value.isCompactSummary === true ? { isCompactSummary: true } : {}),
+    ...(value.isVisibleInTranscriptOnly === true ? { isVisibleInTranscriptOnly: true } : {}),
     message: {
       role: value.type,
       content: OVERSIZED_HISTORY_PLACEHOLDER,

@@ -8,6 +8,7 @@ import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import type { SessionMemoryTranscript } from "../../hooks/bundled/session-memory/capture.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -187,6 +188,8 @@ export async function handleInlineActions(params: {
   initialSessionEntry?: SessionEntry;
   allowCreateSessionEntry?: boolean;
   previousSessionEntry?: SessionEntry;
+  previousSessionMemory?: SessionMemoryTranscript;
+  previousSessionResetMessages?: unknown[];
   sessionStore?: Record<string, SessionEntry>;
   sessionKey: string;
   storePath?: string;
@@ -234,6 +237,8 @@ export async function handleInlineActions(params: {
     initialSessionEntry,
     allowCreateSessionEntry,
     previousSessionEntry,
+    previousSessionMemory,
+    previousSessionResetMessages,
     sessionStore,
     sessionKey,
     storePath,
@@ -468,34 +473,29 @@ export async function handleInlineActions(params: {
       }
     }
 
-    const rewrittenBody = skillInvocation.command.promptTemplate
-      ? expandBundleCommandPromptTemplate(
-          skillInvocation.command.promptTemplate,
-          skillInvocation.args,
-        )
-      : [
-          `Use the "${skillInvocation.command.skillName}" skill for this request.`,
-          skillInvocation.args ? `User input:\n${skillInvocation.args}` : null,
-        ]
-          .filter((entry): entry is string => Boolean(entry))
-          .join("\n\n");
-    ctx.Body = rewrittenBody;
-    ctx.agentText = rewrittenBody;
-    ctx.BodyForAgent = rewrittenBody;
-    sessionCtx.Body = rewrittenBody;
-    sessionCtx.agentText = rewrittenBody;
-    sessionCtx.BodyForAgent = rewrittenBody;
-    sessionCtx.BodyStripped = rewrittenBody;
-    cleanedBody = rewrittenBody;
+    if (skillInvocation.command.promptTemplate) {
+      const rewrittenBody = expandBundleCommandPromptTemplate(
+        skillInvocation.command.promptTemplate,
+        skillInvocation.args,
+      );
+      ctx.Body = rewrittenBody;
+      ctx.agentText = rewrittenBody;
+      ctx.BodyForAgent = rewrittenBody;
+      sessionCtx.Body = rewrittenBody;
+      sessionCtx.agentText = rewrittenBody;
+      sessionCtx.BodyForAgent = rewrittenBody;
+      sessionCtx.BodyStripped = rewrittenBody;
+      cleanedBody = rewrittenBody;
+    }
   }
 
   const referenced =
     allowTextCommands &&
     (hasSkillReferences || hasSkillSlashCandidate) &&
-    !skillInvocation &&
+    !skillInvocation?.command.promptTemplate &&
     (hasSkillSlashCandidate || resolveSlashCommandName(cleanedBody) === null)
       ? expandExplicitSkillReferences({
-          text: hasSkillReferences ? explicitSkillReferenceBody : cleanedBody,
+          text: explicitSkillReferenceBody,
           skillCommands,
           allSkillCommands,
         })
@@ -569,6 +569,7 @@ export async function handleInlineActions(params: {
     const { buildStatusReply } = await loadCommandsRuntime();
     const inlineStatusReply = await buildStatusReply({
       cfg,
+      agentId,
       command,
       sessionEntry: targetSessionEntry,
       sessionKey,
@@ -615,6 +616,8 @@ export async function handleInlineActions(params: {
       initialSessionEntry,
       allowCreateSessionEntry,
       previousSessionEntry,
+      previousSessionMemory,
+      previousSessionResetMessages,
       sessionStore,
       sessionKey,
       storePath,

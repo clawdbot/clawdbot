@@ -1,24 +1,21 @@
 /** Loads and normalizes OpenClaw plugin manifests, including contracts and config schemas. */
-import fs from "node:fs";
 import path from "node:path";
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
-import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
+import { matchRootFileOpenFailure } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
-import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { coerceDoctorSessionRouteStateOwners } from "./doctor-session-route-state-owner-types.js";
 import * as capabilityNormalizers from "./manifest-capability-normalizers.js";
 import { normalizeManifestCommandAliases } from "./manifest-command-aliases.js";
 import * as modelProviderNormalizers from "./manifest-model-provider-normalizers.js";
 import * as setupNormalizers from "./manifest-setup-normalizers.js";
 import type {
-  PluginDiagnosticCode,
-  PluginManifest,
   PluginManifestBackupResource,
   PluginManifestDoctorContract,
 } from "./manifest-types.js";
-import { createPluginCacheKey, PluginLruCache } from "./plugin-cache-primitives.js";
+import { parsePluginCacheJson, readPluginCacheFile } from "./plugin-cache-files.js";
+import type { CachedPluginManifestResult as PluginManifestLoadResult } from "./plugin-cache-files.types.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 
@@ -31,93 +28,12 @@ export {
 
 /** Canonical plugin manifest filename inside plugin roots. */
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
-const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
 const MAX_PLUGIN_MANIFEST_BYTES = 256 * 1024;
-const MAX_PLUGIN_MANIFEST_LOAD_CACHE_ENTRIES = 512;
 const CORE_RESERVED_PLUGIN_IDS = new Set(["node-mcp"]);
 const VALID_PLUGIN_KINDS: ReadonlySet<string> = new Set<PluginKind>(["memory", "context-engine"]);
 
 export function isCoreReservedPluginId(id: string): boolean {
   return CORE_RESERVED_PLUGIN_IDS.has(normalizePluginPolicyId(id));
-}
-
-type PluginManifestLoadResult =
-  | { ok: true; manifest: PluginManifest; manifestPath: string }
-  | {
-      ok: false;
-      error: string;
-      manifestPath: string;
-      diagnosticCode?: PluginDiagnosticCode;
-    };
-
-type PluginManifestLoadCacheEntry = {
-  result: PluginManifestLoadResult;
-  size: number;
-  mtimeMs: number;
-  ctimeMs: number;
-};
-
-const pluginManifestLoadCache = new PluginLruCache<PluginManifestLoadCacheEntry>(
-  MAX_PLUGIN_MANIFEST_LOAD_CACHE_ENTRIES,
-);
-
-function resolvePluginManifestPath(rootDir: string): string {
-  for (const filename of PLUGIN_MANIFEST_FILENAMES) {
-    const candidate = path.join(rootDir, filename);
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  return path.join(rootDir, PLUGIN_MANIFEST_FILENAME);
-}
-
-function buildPluginManifestLoadCacheKey(params: {
-  manifestPath: string;
-  rejectHardlinks: boolean;
-  rootRealPath?: string;
-  stats: fs.Stats;
-}): string {
-  return createPluginCacheKey([
-    [
-      path.resolve(params.manifestPath),
-      params.rejectHardlinks,
-      params.rootRealPath ?? "",
-      params.stats.dev,
-      params.stats.ino,
-    ],
-    params.stats.size,
-    params.stats.mtimeMs,
-    params.stats.ctimeMs,
-  ]);
-}
-
-function getCachedPluginManifestLoadResult(
-  key: string,
-  stats: fs.Stats,
-): PluginManifestLoadResult | undefined {
-  const entry = pluginManifestLoadCache.get(key);
-  if (
-    !entry ||
-    entry.size !== stats.size ||
-    entry.mtimeMs !== stats.mtimeMs ||
-    entry.ctimeMs !== stats.ctimeMs
-  ) {
-    return undefined;
-  }
-  return entry.result;
-}
-
-function setCachedPluginManifestLoadResult(
-  key: string,
-  stats: fs.Stats,
-  result: PluginManifestLoadResult,
-): void {
-  pluginManifestLoadCache.set(key, {
-    result,
-    size: stats.size,
-    mtimeMs: stats.mtimeMs,
-    ctimeMs: stats.ctimeMs,
-  });
 }
 
 function parsePluginKind(raw: unknown): PluginKind | PluginKind[] | undefined {
@@ -196,17 +112,16 @@ export function loadPluginManifest(
   rejectHardlinks = true,
   rootRealPath?: string,
 ): PluginManifestLoadResult {
-  const manifestPath = resolvePluginManifestPath(rootDir);
-  const opened = openRootFileSync({
-    absolutePath: manifestPath,
-    rootPath: rootDir,
+  const manifestPath = path.join(rootDir, PLUGIN_MANIFEST_FILENAME);
+  const file = readPluginCacheFile({
+    rootDir,
+    relativePath: PLUGIN_MANIFEST_FILENAME,
     ...(rootRealPath !== undefined ? { rootRealPath } : {}),
-    boundaryLabel: "plugin root",
     maxBytes: MAX_PLUGIN_MANIFEST_BYTES,
     rejectHardlinks,
   });
-  if (!opened.ok) {
-    return matchRootFileOpenFailure(opened, {
+  if (!file.ok) {
+    return matchRootFileOpenFailure(file.failure, {
       path: () => ({
         ok: false,
         error: `plugin manifest not found: ${manifestPath}`,
@@ -219,34 +134,21 @@ export function loadPluginManifest(
       }),
     });
   }
-  const stats = opened.stat;
-  const cacheKey = buildPluginManifestLoadCacheKey({
-    manifestPath,
-    rejectHardlinks,
-    ...(rootRealPath !== undefined ? { rootRealPath } : {}),
-    stats,
-  });
-  const cached = getCachedPluginManifestLoadResult(cacheKey, stats);
-  if (cached) {
-    fs.closeSync(opened.fd);
-    return cached;
+  if (file.manifest) {
+    return file.manifest;
   }
   const cacheResult = (result: PluginManifestLoadResult): PluginManifestLoadResult => {
-    setCachedPluginManifestLoadResult(cacheKey, stats, result);
-    return result;
+    return (file.manifest = result);
   };
-  let raw: unknown;
-  try {
-    raw = parseJsonWithJson5Fallback(fs.readFileSync(opened.fd, "utf-8"));
-  } catch (err) {
+  const parsed = parsePluginCacheJson(file, { json5: true });
+  if (!parsed.ok) {
     return cacheResult({
       ok: false,
-      error: `failed to parse plugin manifest: ${String(err)}`,
+      error: `failed to parse plugin manifest: ${String(parsed.error)}`,
       manifestPath,
     });
-  } finally {
-    fs.closeSync(opened.fd);
   }
+  const raw = parsed.value;
   if (!isRecord(raw)) {
     return cacheResult({ ok: false, error: "plugin manifest must be an object", manifestPath });
   }
@@ -350,6 +252,7 @@ export function loadPluginManifest(
     activation: setupNormalizers.normalizeManifestActivation(raw.activation),
     setup: setupNormalizers.normalizeManifestSetup(raw.setup),
     doctorContract,
+    doctorHealthChecks: raw.doctorHealthChecks === true ? true : undefined,
     sessionRouteStateOwners:
       raw.sessionRouteStateOwners === undefined
         ? undefined

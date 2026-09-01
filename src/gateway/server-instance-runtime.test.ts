@@ -128,9 +128,18 @@ describe("createGatewayInstanceRuntime", () => {
     ).rejects.toThrow("cwd must be absolute");
     expect(rawAgent).not.toHaveBeenCalled();
 
+    const retainedFacade = await runtime.createAgentTurnFacade({
+      client: createSyntheticPluginRuntimeClient({ scopes: [WRITE_SCOPE] }),
+    });
     runtime.close();
     expect(getGatewayRecoveryRuntime()).toBeUndefined();
     await expect(runtime.recovery.waitForAgent({ runId: "run-1" })).rejects.toThrow(
+      "Gateway instance dispatch unavailable",
+    );
+    await expect(
+      retainedFacade.dispatch({ message: "stale completion", idempotencyKey: "closed-host" }),
+    ).rejects.toThrow("Gateway instance dispatch unavailable");
+    await expect(retainedFacade.wait({ runId: "run-1" })).rejects.toThrow(
       "Gateway instance dispatch unavailable",
     );
   });

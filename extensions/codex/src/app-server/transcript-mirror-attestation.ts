@@ -10,6 +10,22 @@ const MIRROR_SOURCE_FINGERPRINT_META_KEY = "mirrorSourceFingerprint" as const;
 const CODEX_APP_SERVER_MIRROR_ORIGIN = "codex-app-server" as const;
 const CODEX_META_KEY = "__openclaw";
 
+export function applyCodexTranscriptTaint(
+  message: AgentMessage,
+  state: { tainted: boolean },
+): AgentMessage {
+  if (message.role === "user") {
+    state.tainted = false;
+    return message;
+  }
+  const existing = CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
+  const metadata = asOptionalRecord(existing);
+  state.tainted ||= metadata?.turnTainted === true || metadata?.resultContentSource === "network";
+  return message.role === "assistant" && state.tainted
+    ? ({ ...message, __openclaw: { ...metadata, turnTainted: true } } as AgentMessage) // SAFETY: Only provider metadata changes.
+    : message;
+}
+
 export function attachCodexMirrorAttestation(
   message: AgentMessage,
   sourceFingerprint?: string,
@@ -46,6 +62,11 @@ export function attachCodexMirrorRunId<T extends AgentMessage>(
       ...(terminal ? { runTerminal: true } : {}),
     },
   } as T; // SAFETY: AgentMessage variants permit provider metadata at runtime; preserve T.
+}
+
+export function hasCodexMirrorOrigin(message: AgentMessage): boolean {
+  const meta = CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
+  return asOptionalRecord(meta)?.[MIRROR_ORIGIN_META_KEY] === CODEX_APP_SERVER_MIRROR_ORIGIN;
 }
 
 export function readCodexMirrorSourceFingerprint(message: AgentMessage): string | undefined {

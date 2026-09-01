@@ -4,7 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { DEFAULT_REDACT_PATTERNS } from "./redact-patterns.js";
+import {
+  DEFAULT_REDACT_PATTERNS,
+  TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS,
+} from "./redact-patterns.js";
+import { redactSourceInputTextWithConfig } from "./redact-source.js";
 import {
   computeSensitiveRedactionBitmap,
   getDefaultRedactPatterns,
@@ -119,6 +123,69 @@ describe("registered exact secret values", () => {
 });
 
 describe("model-visible tool payload redaction", () => {
+  it.each([
+    'const API_TOKEN = "fixture-only-not-a-real-secret"; return API_TOKEN;',
+    "const API_TOKEN = 'fixture-only-not-a-real-secret'; return API_TOKEN;",
+    "const API_TOKEN = `fixture-only-not-a-real-secret`; return API_TOKEN;",
+    "const API_TOKEN = 987654321; return API_TOKEN;",
+    'const note = "API_TOKEN=fixture-only-not-a-real-secret";',
+    "// API_TOKEN=fixture-only-not-a-real-secret\nreturn 42;",
+    'return { "api_key": "fixture-only-not-a-real-secret" };',
+    'const API_TOKEN = "fixture-only-not-a-real-secret" + suffix; return API_TOKEN;',
+    "const API_TOKEN = computeToken(); /* API_TOKEN=fixture-only-not-a-real-secret */",
+    'const API_TOKEN = "fixture-only-not-a-real-secret"; @',
+    '(token="fixture-only-not-a-real-secret");',
+  ])("retains diagnostic literal masking in input source: %s", (source) => {
+    const redacted = redactSourceInputTextWithConfig(source);
+    expect(redactToolPayloadTextWithConfig(source)).not.toBe(source);
+    expect(redacted).not.toMatch(/fixture-only-not-a-real-secret|987654321/);
+    expect(redacted).toContain("***");
+    expect(redacted).not.toBe(source);
+    expect(redactSourceInputTextWithConfig(redacted)).toBe(redacted);
+  });
+
+  it.each([
+    "const API_TOKEN = computeToken(); return API_TOKEN;",
+    "const API_TOKEN: number = computeToken(); return API_TOKEN;",
+    "const API_TOKEN = computeToken<string>(); return API_TOKEN;",
+    "const API_TOKEN = (40 + 2); return API_TOKEN;",
+    "const API_TOKEN = await computeToken(); return API_TOKEN;",
+    "const HAS_API_TOKEN = false; return HAS_API_TOKEN;",
+    "const HAS_API_TOKEN = true; return HAS_API_TOKEN;",
+    "let API_TOKEN = null; return API_TOKEN;",
+    "(token=computeToken());",
+  ])("preserves input computations without changing diagnostics: %s", (source) => {
+    expect(redactSourceInputTextWithConfig(source)).toBe(source);
+    expect(redactToolPayloadTextWithConfig(source)).not.toBe(source);
+  });
+
+  it("keeps explicit custom assignment patterns authoritative over source syntax", () => {
+    const source = "const API_TOKEN = computeToken(); return API_TOKEN;";
+    const assignmentPatterns = [...TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS].filter(
+      (pattern) => redactSensitiveText(source, { patterns: [pattern] }) !== source,
+    );
+    expect(assignmentPatterns.length).toBeGreaterThan(0);
+    for (const pattern of ["computeToken", ...assignmentPatterns]) {
+      expect(redactSourceInputTextWithConfig(source, { redactPatterns: [pattern] })).not.toContain(
+        "computeToken",
+      );
+    }
+  });
+
+  it("does not substitute the weaker output policy for input source", () => {
+    const source = 'const API_TOKEN = "fixture-only-not-a-real-secret"; return API_TOKEN;';
+    expect(redactModelVisibleToolPayloadText(source)).toBe(source);
+    expect(redactSourceInputTextWithConfig(source)).toBe(
+      'const API_TOKEN = "***"; return API_TOKEN;',
+    );
+  });
+
+  it("uses bounded diagnostic masking for oversized source", () => {
+    const source = `const API_TOKEN = computeToken();\n${" ".repeat(131_072)}`;
+    expect(redactSourceInputTextWithConfig(source)).toBe(redactToolPayloadTextWithConfig(source));
+    expect(redactSourceInputTextWithConfig(source)).not.toContain("computeToken");
+  });
+
   it("preserves source assignments while masking explicit credential forms", () => {
     const registeredSecret = "registered-model-visible-secret";
     registerSecretValueForRedaction(registeredSecret);
@@ -132,6 +199,7 @@ describe("model-visible tool payload redaction", () => {
       "token = timeObserverToken",
       "API_TOKEN = computeToken()",
       "API_TOKEN=computeToken()",
+      "(token=computeToken())",
       "API_KEY: str = computeKey()",
       '"api_key": "computeToken()"',
       `registered: ${credentials[0]}`,
@@ -145,6 +213,7 @@ describe("model-visible tool payload redaction", () => {
     expect(output).toContain("token = timeObserverToken");
     expect(output).toContain("API_TOKEN = computeToken()");
     expect(output).toContain("API_TOKEN=computeToken()");
+    expect(output).toContain("(token=computeToken())");
     expect(output).toContain("API_KEY: str = computeKey()");
     expect(output).toContain('"api_key": "computeToken()"');
     for (const credential of credentials) {
@@ -292,10 +361,25 @@ describe("redactSensitiveText", () => {
     expect(output).not.toContain(token);
   });
 
-  it("masks standalone lowercase token assignments in diagnostic output", () => {
-    const input = "matrix access_token=abcdef1234567890ghij next";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("matrix access_token=abcdef…ghij next");
+  it.each([
+    ["matrix access_token=abcdef1234567890ghij next", "matrix access_token=abcdef…ghij next"],
+    [
+      "Docker authentication failed (password=fixture-secret); install and start the engine",
+      "Docker authentication failed (password=*** install and start the engine",
+    ],
+    ["failed [token=fixture-secret]; retry", "failed [token=*** retry"],
+    ["failed {client_secret=fixture-secret}; retry", "failed {client_secret=*** retry"],
+    ['failed (password="it\'s-a-secret"); retry', 'failed (password="***"); retry'],
+    ["failed [token='has\"quotes']; retry", "failed [token='***']; retry"],
+    ["failed {secret=`has'quotes`}; retry", "failed {secret=`***`}; retry"],
+    ['failed (token="unterminated retry', "failed (token=*** retry"],
+  ])("masks standalone diagnostic assignments: %s", (input, expected) => {
+    expect(redactSensitiveText(input)).toBe(expected);
+  });
+
+  it("preserves non-secret key names after opening delimiters", () => {
+    const input = "(token_count=42) [password_hint=visible] {mytoken=visible}";
+    expect(redactSensitiveText(input)).toBe(input);
   });
 
   it("masks JSON fields", () => {

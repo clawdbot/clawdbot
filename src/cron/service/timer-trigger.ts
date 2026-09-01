@@ -296,42 +296,42 @@ export function resolveDeliveryState(params: {
   delivered?: boolean;
   deliveryAttempted?: boolean;
   error?: string;
+  deliverySuppressionReason?: CronResolvedDeliveryState["deliverySuppressionReason"];
 }): CronResolvedDeliveryState {
   const primaryDeliveryPlan = resolveCronDeliveryPlan(params.job);
   const primaryDeliveryRequested = primaryDeliveryPlan.requested;
   const noFailureNotification = { status: "not-requested" as const };
+  const verifiedDelivery =
+    params.delivered === true &&
+    (params.runStatus !== "error" || params.delivery?.delivered === true);
+  if (verifiedDelivery) {
+    return {
+      delivered: true,
+      status: "delivered",
+      failureNotification: noFailureNotification,
+    };
+  }
   if (!primaryDeliveryRequested) {
-    if (primaryDeliveryPlan.mode === "webhook") {
-      if (params.delivered === true) {
-        return {
-          delivered: true,
-          status: "delivered",
-          failureNotification: noFailureNotification,
-        };
-      }
-      if (params.deliveryAttempted === true) {
-        return {
-          delivered: false,
-          status: "not-delivered",
-          error: params.error,
-          failureNotification: noFailureNotification,
-        };
-      }
+    if (primaryDeliveryPlan.mode === "webhook" && params.deliveryAttempted === true) {
+      return {
+        delivered: false,
+        status: "not-delivered",
+        error: params.error,
+        failureNotification: noFailureNotification,
+      };
     }
     return {
       status: "not-requested",
       failureNotification: noFailureNotification,
     };
   }
-  if (
-    params.runStatus === "error" &&
-    !(params.delivered === true && params.delivery?.delivered === true)
-  ) {
+  if (params.runStatus === "error") {
     if (params.delivered !== undefined) {
       return {
         delivered: false,
         status: "not-delivered",
         error: params.error,
+        deliverySuppressionReason: params.deliverySuppressionReason,
         failureNotification: noFailureNotification,
       };
     }
@@ -341,18 +341,12 @@ export function resolveDeliveryState(params: {
       failureNotification: noFailureNotification,
     };
   }
-  if (params.delivered === true) {
-    return {
-      delivered: true,
-      status: "delivered",
-      failureNotification: { status: "not-requested" },
-    };
-  }
   if (params.delivered === false) {
     return {
       delivered: false,
       status: "not-delivered",
       error: params.error,
+      deliverySuppressionReason: params.deliverySuppressionReason,
       failureNotification: { status: "not-requested" },
     };
   }

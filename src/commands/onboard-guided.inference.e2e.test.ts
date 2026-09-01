@@ -161,9 +161,25 @@ describe("guided onboarding inference composition", () => {
       expect(prompter.select).toHaveBeenNthCalledWith(
         1,
         expect.objectContaining({
+          initialValue: false,
+          options: [
+            expect.objectContaining({ value: false }),
+            expect.objectContaining({ value: true }),
+          ],
+        }),
+      );
+      expect(prompter.select).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
           options: expect.arrayContaining([expect.objectContaining({ value: "full" })]),
         }),
       );
+      const persisted = await configModule.readConfigFileSnapshot();
+      expect(persisted.valid).toBe(true);
+      expect(persisted.sourceConfig).toMatchObject({
+        telemetry: { enabled: false, consentedAt: expect.any(String) },
+        wizard: { accessMode: "full" },
+      });
       expect(mockOpenAi.requestBodies).toHaveLength(1);
       expect(JSON.parse(mockOpenAi.requestBodies[0] ?? "{}")).toMatchObject({
         model: "gpt-5.6-sol",

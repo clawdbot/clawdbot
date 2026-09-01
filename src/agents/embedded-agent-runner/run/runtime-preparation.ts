@@ -258,7 +258,7 @@ export async function prepareEmbeddedRunRuntime(input: {
     pluginHarnessOwnsTransport &&
     (preparedApiKeyRoute ||
       (!pluginHarnessOwnsAuthBootstrap &&
-        profileCandidates.some((profileId) => Boolean(profileId))));
+        preparedAuthAttempts.some((attempt) => attempt.kind !== "implicit")));
   const findPreparedAuthAttempt = (profileId: string | undefined, attemptIndex?: number) => {
     const attempt =
       attemptIndex === undefined

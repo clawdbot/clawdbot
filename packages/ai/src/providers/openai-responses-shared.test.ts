@@ -1055,10 +1055,7 @@ describe("processResponsesStream", () => {
     }
   });
 
-  it.each([
-    [undefined, 0],
-    [2, 2],
-  ])("passes SDK maxRetries %s as %i", async (maxRetries, expected) => {
+  it("pins SDK maxRetries to zero", async () => {
     let requestMaxRetries: number | undefined;
     const output = createAssistantOutput();
     const stream = new AssistantMessageEventStream();
@@ -1067,7 +1064,6 @@ describe("processResponsesStream", () => {
       stream,
       model: nativeOpenAIModel,
       output,
-      options: maxRetries === undefined ? undefined : { maxRetries },
       createClient: () => ({
         responses: {
           create: (_params, requestOptions) => {
@@ -1090,7 +1086,7 @@ describe("processResponsesStream", () => {
       buildParams: () => ({ model: nativeOpenAIModel.id, input: [], stream: true }),
     });
 
-    expect(requestMaxRetries).toBe(expected);
+    expect(requestMaxRetries).toBe(0);
     expect(output.stopReason).toBe("stop");
   });
 
@@ -2065,10 +2061,12 @@ describe("processResponsesStream", () => {
         responseEvents([
           {
             type: "response.output_item.added",
+            output_index: 0,
             item: { type: "function_call", name: "computer", arguments: "" },
           },
           {
             type: "response.output_item.done",
+            output_index: 0,
             item: { type: "function_call", name: "computer", arguments: "{}" },
           },
           { type: "response.completed", response: { id: "resp_idless", status: "completed" } },
@@ -2473,7 +2471,7 @@ describe("processResponsesStream", () => {
         stream,
         nativeOpenAIModel,
       ),
-    ).rejects.toThrow("Responses stream completed with unresolved tool calls");
+    ).rejects.toThrow("Responses stream changed output item identity");
     expect(events.map((event) => event.type)).toEqual(["toolcall_start", "toolcall_delta"]);
   });
 

@@ -133,24 +133,6 @@ describe("gateway suspend coordinator", () => {
     expect(isGatewayWorkAdmissionClosed()).toBe(false);
   });
 
-  it("rejects terminating drain requests before acquiring admission or pausing scheduling", () => {
-    const pauseScheduling = vi.fn();
-
-    expect(() =>
-      prepareGatewaySuspend({
-        requestId: "request-invalid-terminating-drain",
-        terminalPolicy: "terminate",
-        drain: true,
-        pauseScheduling,
-        resumeScheduling: vi.fn(),
-        inspect: inspectors(),
-      }),
-    ).toThrow("gateway suspension draining requires terminalPolicy preserve");
-
-    expect(pauseScheduling).not.toHaveBeenCalled();
-    expect(isGatewayWorkAdmissionClosed()).toBe(false);
-  });
-
   it("holds a preserve-only drain until terminal persistence, delivery, and sessions settle", () => {
     let pendingReplies = 1;
     let terminalPersistence = 1;
@@ -224,62 +206,69 @@ describe("gateway suspend coordinator", () => {
     expect(isGatewayWorkAdmissionClosed()).toBe(false);
   });
 
-  it("renews the same draining owner and rejects conflicting request, policy, or drain modes", () => {
-    let queued = 2;
-    let nowMs = 1_000;
-    const pauseScheduling = vi.fn();
-    const resumeScheduling = vi.fn();
-    const params = {
-      requestId: "request-drain-renewal",
-      terminalPolicy: "preserve" as const,
-      drain: true,
-      pauseScheduling,
-      resumeScheduling,
-      inspect: inspectors({ getQueueSize: () => queued }),
-      nowMs: () => nowMs,
-      createSuspensionId: () => "suspension-drain-renewal",
-    };
+  it.each(["preserve", "terminate"] as const)(
+    "renews the same %s drain and rejects conflicting request, policy, or drain modes",
+    (terminalPolicy) => {
+      let queued = 2;
+      let nowMs = 1_000;
+      const pauseScheduling = vi.fn();
+      const resumeScheduling = vi.fn();
+      const params = {
+        requestId: "request-drain-renewal",
+        terminalPolicy,
+        drain: true,
+        pauseScheduling,
+        resumeScheduling,
+        inspect: inspectors({
+          getQueueSize: () => queued,
+          getTerminalSessions: () => (terminalPolicy === "terminate" ? 2 : 0),
+        }),
+        nowMs: () => nowMs,
+        createSuspensionId: () => "suspension-drain-renewal",
+      };
 
-    expect(prepareGatewaySuspend(params)).toMatchObject({
-      status: "draining",
-      suspensionId: "suspension-drain-renewal",
-      expiresAtMs: 1_000 + SUSPEND_TTL_MS,
-      activeCount: 2,
-    });
-
-    nowMs = 2_000;
-    queued = 1;
-    expect(prepareGatewaySuspend(params)).toMatchObject({
-      status: "draining",
-      suspensionId: "suspension-drain-renewal",
-      expiresAtMs: 2_000 + SUSPEND_TTL_MS,
-      activeCount: 1,
-    });
-    for (const conflict of [
-      { requestId: "request-other" },
-      { drain: false },
-      { terminalPolicy: "terminate" as const, drain: false },
-    ]) {
-      expect(prepareGatewaySuspend({ ...params, ...conflict })).toEqual({
-        status: "conflict",
-        expiresAtMs: 2_000 + SUSPEND_TTL_MS,
+      expect(prepareGatewaySuspend(params)).toMatchObject({
+        status: "draining",
+        suspensionId: "suspension-drain-renewal",
+        expiresAtMs: 1_000 + SUSPEND_TTL_MS,
+        activeCount: 2,
       });
-    }
-    expect(pauseScheduling).toHaveBeenCalledOnce();
 
-    nowMs = 3_000;
-    queued = 0;
-    expect(prepareGatewaySuspend(params)).toEqual({
-      status: "ready",
-      suspensionId: "suspension-drain-renewal",
-      expiresAtMs: 3_000 + SUSPEND_TTL_MS,
-      activeCount: 0,
-      blockers: [],
-    });
-    expect(getGatewaySuspendAdmissionPhase()).toBe("prepared");
-    expect(pauseScheduling).toHaveBeenCalledOnce();
-    expect(resumeScheduling).not.toHaveBeenCalled();
-  });
+      nowMs = 2_000;
+      queued = 1;
+      expect(prepareGatewaySuspend(params)).toMatchObject({
+        status: "draining",
+        suspensionId: "suspension-drain-renewal",
+        expiresAtMs: 2_000 + SUSPEND_TTL_MS,
+        activeCount: 1,
+      });
+      const otherTerminalPolicy = terminalPolicy === "preserve" ? "terminate" : "preserve";
+      for (const conflict of [
+        { requestId: "request-other" },
+        { drain: false },
+        { terminalPolicy: otherTerminalPolicy },
+      ] satisfies Partial<typeof params>[]) {
+        expect(prepareGatewaySuspend({ ...params, ...conflict })).toEqual({
+          status: "conflict",
+          expiresAtMs: 2_000 + SUSPEND_TTL_MS,
+        });
+      }
+      expect(pauseScheduling).toHaveBeenCalledOnce();
+
+      nowMs = 3_000;
+      queued = 0;
+      expect(prepareGatewaySuspend(params)).toEqual({
+        status: "ready",
+        suspensionId: "suspension-drain-renewal",
+        expiresAtMs: 3_000 + SUSPEND_TTL_MS,
+        activeCount: 0,
+        blockers: [],
+      });
+      expect(getGatewaySuspendAdmissionPhase()).toBe("prepared");
+      expect(pauseScheduling).toHaveBeenCalledOnce();
+      expect(resumeScheduling).not.toHaveBeenCalled();
+    },
+  );
 
   it("resumes a still-draining lease without dropping its admission fence first", () => {
     const resumeScheduling = vi.fn(() => {
@@ -352,10 +341,11 @@ describe("gateway suspend coordinator", () => {
     });
   });
 
-  it("prepares with terminal sessions excluded when they will be terminated", () => {
+  it.each([false, true])("prepares with terminal sessions excluded (drain: %s)", (drain) => {
     const params = {
       requestId: "request-terminal-terminate",
       terminalPolicy: "terminate" as const,
+      drain,
       pauseScheduling: vi.fn(),
       resumeScheduling: vi.fn(),
       inspect: inspectors({ getTerminalSessions: () => 2 }),

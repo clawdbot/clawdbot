@@ -56,6 +56,23 @@ openclaw config get agents.entries
 openclaw config set 'agents.entries.work.tools.exec.node' "node-id-or-name"
 ```
 
+Prefer `agents.entries.<id>` paths for agent edits. The legacy `agents.list[0]`
+syntax and whole-list inputs still work with `set`, `patch`, and `unset`; writes
+persist the canonical keyed roster. Indexed edits use the current roster order.
+Within a batch, a submitted list keeps its order across subsequent keyed edits,
+including when agent IDs are numeric strings. Existing roster-deletion and
+`$include` ownership protections still apply.
+
+When a legacy roster expands a single-agent installation in the root config file,
+writes retire its `default` marker and preserve the existing agent's responsibilities
+with explicit owners. An explicitly authored `ownership: "explicit"` cannot be
+combined with a legacy `default: true` marker.
+
+For root-file writes, changing `session.store` clears a copied
+`agents.defaults.sessionStore.agentId` because that owner belongs to the previous
+store. To assign the destination store's owner, set that owner path explicitly in
+the same batch.
+
 ### `config get`
 
 Reads a value from the redacted config snapshot (secrets never print). `--json` prints the same redacted value as JSON; otherwise strings/numbers/booleans print bare and objects/arrays print as formatted JSON.
@@ -107,10 +124,21 @@ machine-output spelling and keeps stdout reserved for the schema document.
 
 Validates the current config against the active schema without starting the gateway. It also checks provider/source compatibility for every registry-declared SecretRef, including disabled plugin or channel configuration. This strict command can report an inactive mismatch that does not block normal Gateway startup, where SecretRef resolution remains limited to effectively active surfaces.
 
+After schema validation, it checks every configured manual exec provider's command path using the same non-executing trust checks as startup: file presence, symlinks, trusted directories, permissions, ownership, and Windows ACL availability. `config set`, `config patch`, and `config unset` apply these checks only to providers changed or referenced by the operation, including during dry runs. Replacing the `secrets` or `secrets.providers` collection checks every remaining provider. An unrelated inactive provider does not block targeted repairs or removal of that provider.
+
+Path validation does not execute providers or verify their output. Passing it does not guarantee successful secret resolution; exec dry runs require `--allow-exec` to test that separately.
+
 ```bash
 openclaw config validate
 openclaw config validate --json
 ```
+
+<Note>
+The exec-provider checks inspect the filesystem of the host where the CLI
+runs. Run `config validate` on the gateway host itself (or on a host with
+matching command paths, ownership, and ACLs). Paths and permissions can change
+after validation; startup checks them again before execution.
+</Note>
 
 <Note>
 If validation is already failing, start with `openclaw configure` or `openclaw doctor --fix`. `openclaw chat` does not bypass the invalid-config guard.
@@ -135,7 +163,7 @@ openclaw config set channels.whatsapp.groups '["*"]' --strict-json
 
 `config get <path> --json` prints the redacted value as JSON instead of terminal-formatted text.
 
-When a write changes `agents.defaults.model` or a per-agent `agents.entries.*.model`, OpenClaw resolves each changed primary or fallback through the configured provider catalogs before writing. Unknown model references are rejected without changing the active config; run `openclaw models list` to see available models.
+When a write changes `agents.defaults.model` or a per-agent `agents.entries.*.model`, OpenClaw resolves each changed primary or fallback through the configured catalogs and the selected provider's model resolver before writing. Provider-supported exact `provider/model` pins are accepted even when absent from the curated picker; validation does not replace the selected model. Unknown model references are rejected without changing the active config. Run `openclaw models list` to browse the picker, or check the provider's documentation for an exact model ID. Successful validation does not prove that your account can call the model.
 
 <Note>
 Object assignment replaces the target path by default. Protected paths that commonly hold user-added entries refuse replacements that would remove existing entries unless you pass `--replace`: `agents.defaults.models`, `agents.entries`, `models.providers`, `models.providers.<id>`, `models.providers.<id>.models`, `plugins.entries`, and `auth.profiles`.
@@ -207,6 +235,8 @@ SecretRef assignments are rejected on unsupported runtime-mutable surfaces (for 
 </Warning>
 
 Batch parsing always uses the batch payload (`--batch-json`/`--batch-file`) as the source of truth; `--strict-json` / `--json` do not change batch parsing behavior.
+
+Batch assignments apply in order, then validation checks the final config. A SecretRef replaced by a later assignment is not resolved or counted in dry-run output, even with `--allow-exec`. Providers that remain in a changed provider collection still receive command-path trust checks.
 
 JSON path/value mode also works for SecretRefs and providers directly:
 
@@ -357,7 +387,7 @@ openclaw config set channels.discord.token \
     - Builder mode: runs SecretRef resolvability checks for changed refs/providers.
     - JSON mode (`--strict-json`, `--json`, or batch mode): runs schema validation plus SecretRef resolvability checks.
     - Policy validation runs against the full post-change config, so parent-object writes (for example setting `hooks` as an object) cannot bypass unsupported-surface validation.
-    - Exec SecretRef checks are skipped by default to avoid command side effects; pass `--allow-exec` to opt in (this may execute provider commands). `--allow-exec` is dry-run only and errors without `--dry-run`.
+    - Exec command-path trust checks run without executing providers. Exec SecretRef resolvability checks are skipped by default to avoid command side effects; pass `--allow-exec` to opt in (this may execute provider commands). `--allow-exec` is dry-run only and errors without `--dry-run`.
 
   </Accordion>
   <Accordion title="--dry-run --json fields">
@@ -491,7 +521,7 @@ ls -lt "$CONFIG".rejected.* 2>/dev/null | head
 openclaw config validate
 ```
 
-Direct editor writes are still allowed, but the running Gateway treats them as untrusted until they validate. Invalid direct edits fail startup or are skipped by hot reload; Gateway does not rewrite `openclaw.json`. Run `openclaw doctor --fix` to repair prefixed/clobbered config or restore the last-known-good copy. See [Gateway troubleshooting](/gateway/troubleshooting#gateway-rejected-invalid-config).
+Direct editor writes are still allowed, but the running Gateway treats them as untrusted until they validate. At startup, eligible single-file configs can receive deterministic legacy-key migrations if the complete result validates, with the previous config kept in the `.bak` ring. Other invalid direct edits fail startup; hot reload skips invalid edits without rewriting `openclaw.json`. Run `openclaw doctor --fix` to repair prefixed/clobbered config or restore the last-known-good copy. See [Gateway troubleshooting](/gateway/troubleshooting#gateway-rejected-invalid-config).
 
 Whole-file recovery is reserved for doctor repair. Plugin schema changes or `minHostVersion` skew stay loud instead of rolling back unrelated user settings such as models, providers, auth profiles, channels, gateway exposure, tools, memory, browser, or cron config.
 

@@ -108,7 +108,7 @@ private actor CoordinatorNodeHostWorkerProbe: MacNodeHostWorking {
         self.routeClearReleaseGate.open()
     }
 
-    func publishInventory(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
+    func gatewayConnected(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
     func stop() async {
         self.stopCount += 1
         self.stopGate.open()
@@ -124,12 +124,15 @@ private actor CoordinatorNodeHostWorkerProbe: MacNodeHostWorking {
 }
 
 private actor CoordinatorFailingStartWorkerProbe: MacNodeHostWorking {
+    static let failureReason = "worker exited with status exited(1)"
+    static let failureDiagnostic = "[openclaw] state database uses newer schema version 10"
     private var startCalls = 0
 
     func start(launch _: MacNodeHostWorkerLaunch) async throws -> MacNodeHostManifest {
         self.startCalls += 1
         throw MacNodeHostWorker.WorkerError.unavailable(
-            "state database uses newer schema version 10")
+            reason: Self.failureReason,
+            diagnostic: Self.failureDiagnostic)
     }
 
     func supports(_: String) async -> Bool {
@@ -146,7 +149,7 @@ private actor CoordinatorFailingStartWorkerProbe: MacNodeHostWorking {
         true
     }
 
-    func publishInventory(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
+    func gatewayConnected(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
     func stop() async {}
 
     func startCallCount() -> Int {
@@ -372,14 +375,20 @@ struct MacNodeModeCoordinatorTests {
 
         try coordinator.prepareNodeHostWorkerRetryForTesting(
             command: ["/usr/local/bin/openclaw", "node", "worker"])
+        let initialFailure = try await coordinator.resolveWorkerManifestForConnectionForTesting()
+        #expect(initialFailure.unavailable?.reason == CoordinatorFailingStartWorkerProbe.failureReason)
+        #expect(initialFailure.unavailable?.diagnostic == CoordinatorFailingStartWorkerProbe.failureDiagnostic)
+
         coordinator.handleNodeHostWorkerFailureForTesting()
         await coordinator.waitForRouteInvalidationForTesting()
 
         let resolved = try await coordinator.resolveWorkerManifestForConnectionForTesting()
         #expect(resolved.manifest == nil)
-        #expect(resolved.unavailableReason?.contains("unexpected exits") == true)
+        #expect(resolved.unavailable?.reason.contains("unexpected exits") == true)
+        #expect(resolved.unavailable?.reason.contains(CoordinatorFailingStartWorkerProbe.failureReason) == true)
+        #expect(resolved.unavailable?.diagnostic == initialFailure.unavailable?.diagnostic)
         // The exhausted budget must also stop worker respawn attempts.
-        #expect(await worker.startCallCount() == 0)
+        #expect(await worker.startCallCount() == 1)
         await coordinator.stopAndWait()
     }
 
@@ -391,13 +400,57 @@ struct MacNodeModeCoordinatorTests {
             .connected(workerUnavailableReason: "worker exited: schema mismatch")
             .operatorStatusLine
         #expect(degraded?.label == "Mac node degraded — worker exited: schema mismatch")
+        #expect(degraded?.diagnostic == nil)
         #expect(degraded?.isDegraded == true)
 
         let unavailable = MacNodeChannelState
             .unavailable(reason: "state database uses newer schema version 10\nTry: openclaw doctor")
             .operatorStatusLine
         #expect(unavailable?.label == "Mac node unavailable — state database uses newer schema version 10")
+        #expect(unavailable?.diagnostic == nil)
         #expect(unavailable?.isDegraded == false)
+    }
+
+    @Test func `worker stderr never becomes part of the operator status headline`() throws {
+        let diagnostic = "[openclaw] bootstrap failed: state database uses a newer schema"
+        let reason = "worker exited with status exited(1)"
+        let states: [MacNodeChannelState] = [
+            .unavailable(reason: reason, diagnostic: diagnostic),
+            .connected(workerUnavailableReason: reason, diagnostic: diagnostic),
+        ]
+
+        for state in states {
+            let line = try #require(state.operatorStatusLine)
+            #expect(line.label.contains(reason))
+            #expect(!line.label.contains(diagnostic))
+            #expect(line.diagnostic == diagnostic)
+        }
+    }
+
+    @Test func `operator diagnostics preserve complete lines within their display budget`() throws {
+        let inputLines = (0..<10).map { index in
+            "[openclaw] line \(index): " + String(repeating: "bootstrap failure details ", count: 5)
+        }
+        let input = inputLines.joined(separator: "\n")
+        let line = try #require(MacNodeChannelState.unavailable(
+            reason: "worker exited",
+            diagnostic: input).operatorStatusLine)
+        let diagnostic = try #require(line.diagnostic)
+        let completeLines = String(diagnostic.dropLast()).split(separator: "\n").map(String.init)
+
+        #expect(diagnostic.count <= 360)
+        #expect(completeLines.count <= 4)
+        #expect(diagnostic.hasSuffix("…"))
+        #expect(completeLines.elementsEqual(inputLines.prefix(completeLines.count)))
+
+        let longLine = Array(repeating: "bootstrap", count: 100).joined(separator: " ")
+        let singleLine = try #require(MacNodeChannelState.unavailable(
+            reason: "worker exited",
+            diagnostic: longLine).operatorStatusLine?.diagnostic)
+
+        #expect(singleLine.count <= 360)
+        #expect(singleLine.hasSuffix("…"))
+        #expect(String(singleLine.dropLast()).split(separator: " ").allSatisfy { $0 == "bootstrap" })
     }
 
     @Test func `paused node state requires route disconnect`() {
@@ -1311,47 +1364,45 @@ struct MacNodeModeCoordinatorTests {
         #expect(!route.permitsTrustedPinReplacement(url: url, failure: failure))
     }
 
-    @Test func `stale repair cannot replace a newer stored pin`() async throws {
-        try await withFakeGatewayTLSKeychain {
-            let url = try #require(URL(string: "wss://gateway.example.ts.net"))
-            let storeKey = "test-stale-repair"
-            GatewayTLSStore.saveFingerprint("old", stableID: storeKey)
-            let route = try #require(GatewayTLSRoute.resolve(
-                url: url,
-                connectionMode: .remote,
-                configuredFingerprint: nil,
-                storedFingerprint: "old",
-                storeKey: storeKey))
-            let firstFailure = GatewayTLSValidationFailure(
-                kind: .pinMismatch,
-                host: "gateway.example.ts.net",
-                storeKey: storeKey,
-                expectedFingerprint: "old",
-                observedFingerprint: "new",
-                systemTrustOk: true,
-                port: 443)
-            let staleFailure = GatewayTLSValidationFailure(
-                kind: .pinMismatch,
-                host: "gateway.example.ts.net",
-                storeKey: storeKey,
-                expectedFingerprint: "old",
-                observedFingerprint: "stale",
-                systemTrustOk: true,
-                port: 443)
+    @Test(.gatewayTLSStoreIsolated) func `stale repair cannot replace a newer stored pin`() async throws {
+        let url = try #require(URL(string: "wss://gateway.example.ts.net"))
+        let storeKey = "test-stale-repair"
+        GatewayTLSStore.saveFingerprint("old", stableID: storeKey)
+        let route = try #require(GatewayTLSRoute.resolve(
+            url: url,
+            connectionMode: .remote,
+            configuredFingerprint: nil,
+            storedFingerprint: "old",
+            storeKey: storeKey))
+        let firstFailure = GatewayTLSValidationFailure(
+            kind: .pinMismatch,
+            host: "gateway.example.ts.net",
+            storeKey: storeKey,
+            expectedFingerprint: "old",
+            observedFingerprint: "new",
+            systemTrustOk: true,
+            port: 443)
+        let staleFailure = GatewayTLSValidationFailure(
+            kind: .pinMismatch,
+            host: "gateway.example.ts.net",
+            storeKey: storeKey,
+            expectedFingerprint: "old",
+            observedFingerprint: "stale",
+            systemTrustOk: true,
+            port: 443)
 
-            let firstRepaired = await GatewayTLSRepairCoordinator.shared.repair(
-                route: route,
-                url: url,
-                failure: firstFailure)
-            let staleRepaired = await GatewayTLSRepairCoordinator.shared.repair(
-                route: route,
-                url: url,
-                failure: staleFailure)
+        let firstRepaired = await GatewayTLSRepairCoordinator.shared.repair(
+            route: route,
+            url: url,
+            failure: firstFailure)
+        let staleRepaired = await GatewayTLSRepairCoordinator.shared.repair(
+            route: route,
+            url: url,
+            failure: staleFailure)
 
-            #expect(firstRepaired)
-            #expect(!staleRepaired)
-            #expect(GatewayTLSStore.loadFingerprint(stableID: storeKey) == "new")
-        }
+        #expect(firstRepaired)
+        #expect(!staleRepaired)
+        #expect(GatewayTLSStore.loadFingerprint(stableID: storeKey) == "new")
     }
 
     @Test func `auto repairs trusted loopback pin mismatch`() throws {

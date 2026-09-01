@@ -1,11 +1,12 @@
 import { createServer, type ServerResponse } from "node:http";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const TEST_TIMEOUT_MS = 120_000;
 const REQUEST_TIMEOUT_MS = 20_000;
@@ -16,7 +17,7 @@ const ORIGINAL_MESSAGE = "Return exactly SESSION-DEDUP-RECONNECT-OK.";
 const CHANGED_MESSAGE = "This changed replay must not create another turn.";
 const TERMINAL_TEXT = "SESSION-DEDUP-RECONNECT-OK";
 
-type GatewayHandle = Awaited<ReturnType<typeof startQaGatewayChild>>;
+type GatewayHandle = QaGatewayChild;
 type AgentResult = {
   runId?: string;
   status?: string;
@@ -212,7 +213,9 @@ describe("agent session deduplication across reconnect", () => {
     async () => {
       const provider = await startControlledProvider();
       cleanups.push(() => provider.stop());
-      const gateway = await startQaGatewayChild({
+      const gatewayOwner = createQaGatewayChild();
+      cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
+      const gateway = await gatewayOwner.start({
         repoRoot: process.cwd(),
         command: {
           executablePath: process.execPath,
@@ -228,13 +231,11 @@ describe("agent session deduplication across reconnect", () => {
         controlUiEnabled: false,
         fastMode: true,
         runtimeEnvPatch: {
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
           OPENCLAW_SKIP_CHANNELS: "1",
           OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
         },
-        mutateConfig: ({ plugins: _plugins, ...config }) => config,
+        mutateConfig: (config) => ({ ...config, plugins: { enabled: false } }),
       });
-      cleanups.push(() => gateway.stop());
 
       const clientA = await connectOperator(gateway, "Session dedup client A");
       const acceptedA = await clientA.request<AgentResult>("agent", {

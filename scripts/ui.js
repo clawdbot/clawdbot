@@ -1,4 +1,5 @@
 #!/usr/bin/env node
-import { runTsxCliShim } from "./lib/tsx-cli-shim.mjs";
+import { runUiCli } from "./ui.mts";
 
-await runTsxCliShim(import.meta.url, { implementation: "./ui.mts", detached: false });
+// Native imports avoid loader startup and leave process lifetime with the UI owner.
+runUiCli();

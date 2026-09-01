@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { writeSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
-import { startQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
+import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 type StabilityEvent = {
   seq?: unknown;
@@ -11,6 +12,8 @@ type StabilityEvent = {
   reason?: unknown;
   outcome?: unknown;
   ageMs?: unknown;
+  durationMs?: unknown;
+  failureKind?: unknown;
   queueDepth?: unknown;
   source?: unknown;
 };
@@ -56,19 +59,24 @@ const QUEUED_PROMPT =
 const QUEUED_REPLY_MARKER = "GATEWAY_REPEATED_REQUEST_QUEUED_OK";
 const RECOVERY_REASON = "repeated_model_requests_without_progress";
 const PRODUCTION_RECOVERY_BOUND_MS = 360_000;
+const MODEL_REQUEST_ALLOWANCE_SECONDS = 90;
 const RECOVERY_PROGRESS_INTERVAL_MS = 60_000;
 const HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const HISTORY_RETRY_INTERVAL_MS = 250;
 
-let harness: Awaited<ReturnType<typeof startQaLiveLaneGateway>> | undefined;
+let gatewayOwner: ReturnType<typeof createQaLiveLaneGateway> | undefined;
+let harness: Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>> | undefined;
 
 afterEach(async () => {
-  await harness?.stop().catch(() => undefined);
+  if (gatewayOwner) {
+    await stopQaGatewayFixture(gatewayOwner);
+  }
   harness = undefined;
+  gatewayOwner = undefined;
 });
 
 async function readStability(
-  gateway: Awaited<ReturnType<typeof startQaLiveLaneGateway>>["gateway"],
+  gateway: Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>>["gateway"],
   sinceSeq?: number,
 ): Promise<StabilitySnapshot> {
   return (await gateway.call(
@@ -79,7 +87,7 @@ async function readStability(
 }
 
 async function waitForStability(
-  gateway: Awaited<ReturnType<typeof startQaLiveLaneGateway>>["gateway"],
+  gateway: Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>>["gateway"],
   sinceSeq: number,
   predicate: (events: StabilityEvent[]) => boolean,
   timeoutMs: number,
@@ -173,7 +181,7 @@ function resolveRetryableHistoryDelayMs(error: unknown): number | null {
 }
 
 async function waitForQueuedReply(
-  gateway: Awaited<ReturnType<typeof startQaLiveLaneGateway>>["gateway"],
+  gateway: Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>>["gateway"],
   sessionKey: string,
 ): Promise<GatewayChatHistory> {
   const startedAt = Date.now();
@@ -237,7 +245,7 @@ async function readClassifiedMockRequests(mockBaseUrl: string): Promise<Classifi
 }
 
 async function readFailureEvidence(params: {
-  gateway: Awaited<ReturnType<typeof startQaLiveLaneGateway>>["gateway"];
+  gateway: Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>>["gateway"];
   mockBaseUrl: string | undefined;
   sinceSeq: number;
 }): Promise<string> {
@@ -276,12 +284,13 @@ async function readFailureEvidence(params: {
   return JSON.stringify({ stability, requests, gatewayLogs });
 }
 
-describe("Gateway repeated-request recovery", () => {
+describe("Gateway repeated-request provider timeout", () => {
   it(
-    "aborts the real stalled owner once and releases one queued followup",
+    "lets the provider timeout terminate the stalled attempt before draining one queued followup",
     { timeout: 510_000 },
     async () => {
-      harness = await startQaLiveLaneGateway({
+      gatewayOwner = createQaLiveLaneGateway();
+      harness = await gatewayOwner.start({
         repoRoot: process.cwd(),
         providerMode: "mock-openai",
         primaryModel: "mock-openai/gpt-5.6-luna",
@@ -294,7 +303,27 @@ describe("Gateway repeated-request recovery", () => {
         },
         transportBaseUrl: "http://127.0.0.1",
         controlUiEnabled: false,
-        mutateConfig: (config) => ({ ...config, diagnostics: { enabled: true } }),
+        mutateConfig: (config) => {
+          const models = config.models;
+          const provider = models?.providers?.["mock-openai"];
+          if (!models || !provider) {
+            throw new Error("mock-openai provider config unavailable");
+          }
+          return {
+            ...config,
+            diagnostics: { enabled: true },
+            models: {
+              ...models,
+              providers: {
+                ...models.providers,
+                "mock-openai": {
+                  ...provider,
+                  timeoutSeconds: MODEL_REQUEST_ALLOWANCE_SECONDS,
+                },
+              },
+            },
+          };
+        },
       });
       const { gateway } = harness;
 
@@ -338,7 +367,14 @@ describe("Gateway repeated-request recovery", () => {
       const events = await waitForStability(
         gateway,
         baselineSeq,
-        (records) => records.some((event) => event.type === "session.recovery.completed"),
+        (records) =>
+          records.some(
+            (event) =>
+              event.type === "model.call.error" &&
+              event.failureKind === "timeout" &&
+              typeof event.durationMs === "number" &&
+              event.durationMs >= MODEL_REQUEST_ALLOWANCE_SECONDS * 1_000,
+          ),
         350_000,
       );
       const stalled = events.filter(
@@ -352,15 +388,11 @@ describe("Gateway repeated-request recovery", () => {
       expect(stalled).toHaveLength(1);
       expect(stalled[0]?.ageMs).toEqual(expect.any(Number));
       expect(stalled[0]?.ageMs as number).toBeGreaterThanOrEqual(PRODUCTION_RECOVERY_BOUND_MS);
-      expect(requested).toEqual([
-        expect.objectContaining({ action: "abort", reason: RECOVERY_REASON }),
-      ]);
-      expect(completed).toEqual([
-        expect.objectContaining({ action: "abort_embedded_run", outcome: "aborted" }),
-      ]);
+      expect(requested).toEqual([]);
+      expect(completed).toEqual([]);
       expect(
         events.filter((event) => event.type === "model.call.started").length,
-      ).toBeGreaterThanOrEqual(4);
+      ).toBeGreaterThanOrEqual(5);
 
       const activeTerminal = (await gateway.call(
         "agent.wait",
@@ -368,13 +400,6 @@ describe("Gateway repeated-request recovery", () => {
         { timeoutMs: 35_000 },
       )) as GatewayChatRun;
       expect(activeTerminal.status).not.toBe("ok");
-
-      const queuedTerminal = (await gateway.call(
-        "agent.wait",
-        { runId: queued.runId, timeoutMs: 30_000 },
-        { timeoutMs: 35_000 },
-      )) as GatewayChatRun;
-      expect(queuedTerminal.status).toBe("ok");
 
       const history = await waitForQueuedReply(gateway, sessionKey).catch(
         async (error: unknown) => {
@@ -387,6 +412,12 @@ describe("Gateway repeated-request recovery", () => {
         },
       );
       expect(historyContainsQueuedReply(history)).toBe(true);
+      const queuedTerminal = (await gateway.call(
+        "agent.wait",
+        { runId: queued.runId, timeoutMs: 30_000 },
+        { timeoutMs: 35_000 },
+      )) as GatewayChatRun;
+      expect(queuedTerminal.status).toBe("ok");
       const mockBaseUrl = harness?.mock?.baseUrl;
       if (!mockBaseUrl) {
         throw new Error("mock provider request evidence unavailable");
@@ -394,7 +425,7 @@ describe("Gateway repeated-request recovery", () => {
       const requests = await readClassifiedMockRequests(mockBaseUrl);
       expect(
         requests.filter((request) => request.prompt === "recovery").length,
-      ).toBeGreaterThanOrEqual(4);
+      ).toBeGreaterThanOrEqual(5);
       expect(requests.filter((request) => request.prompt === "queued")).toEqual([
         expect.objectContaining({ outcome: "success" }),
       ]);
@@ -402,10 +433,10 @@ describe("Gateway repeated-request recovery", () => {
       const finalEvents = (await readStability(gateway, baselineSeq)).events ?? [];
       expect(
         finalEvents.filter((event) => event.type === "session.recovery.requested"),
-      ).toHaveLength(1);
+      ).toHaveLength(0);
       expect(
         finalEvents.filter((event) => event.type === "session.recovery.completed"),
-      ).toHaveLength(1);
+      ).toHaveLength(0);
     },
   );
 });

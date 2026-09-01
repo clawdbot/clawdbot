@@ -14,7 +14,7 @@ import { SYSTEM_AGENT_ID } from "./agent-id.js";
 import { SYSTEM_AGENT_SYSTEM_PROMPT } from "./assistant-prompts.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
-import type { SystemAgentOperation } from "./operations.js";
+import type { SystemAgentProposalRef } from "./operator-approval.js";
 import type { SystemAgentOverview } from "./overview.js";
 import {
   resolveSystemAgentExpectedAgentHarnessRuntimeArtifact,
@@ -54,6 +54,8 @@ export type SystemAgentTurnRunner = (params: {
   surface: "cli" | "gateway";
   /** Host-verified: the user's current message is an explicit approval. */
   approvalArmed: boolean;
+  /** Delegated sessions can only resolve approvals in the operator UI. */
+  operatorApprovalOnly?: boolean;
   session: SystemAgentSession;
 }) => Promise<SystemAgentTurnReply | null>;
 
@@ -62,7 +64,7 @@ export type SystemAgentSession = {
   /** Exact live-tested inference owner for this ephemeral conversation. */
   verifiedInference: SystemAgentVerifiedInferenceBinding;
   /** Host-owned pending-proposal fingerprint; see system-agent-tool.ts. */
-  proposalRef: { current?: string; operation?: SystemAgentOperation };
+  proposalRef: SystemAgentProposalRef;
   /** Native CLI continuity, bound to the exact configured model/auth owner route. */
   cliSession?: {
     routeKey: string;
@@ -219,11 +221,11 @@ function resolveSystemAgentCliToolAvailability(
  */
 async function mirrorSystemAgentToolStateFromEvents(params: {
   runId: string;
-  proposalRef: { current?: string; operation?: SystemAgentOperation };
+  proposalRef: SystemAgentProposalRef;
   directiveRef: { current?: SystemAgentTurnDirective };
 }): Promise<() => void> {
   const [
-    { onAgentEvent },
+    { onAgentEventForRun },
     { extractToolResultText },
     { resolveSystemAgentProposalTransition, resolveSystemAgentDirectiveTransition },
   ] = await Promise.all([
@@ -231,7 +233,7 @@ async function mirrorSystemAgentToolStateFromEvents(params: {
     import("../agents/embedded-agent-tool-results.js"),
     import("../agents/tools/system-agent-tool.js"),
   ]);
-  return onAgentEvent((evt) => {
+  return onAgentEventForRun(params.runId, (evt) => {
     if (evt.runId !== params.runId || evt.stream !== "tool" || evt.data.phase !== "result") {
       return;
     }
@@ -333,6 +335,7 @@ async function runSystemAgentTurnWithDeps(
   const systemAgentTool = {
     surface: params.surface,
     approvalArmed: params.approvalArmed,
+    ...(params.operatorApprovalOnly ? { operatorApprovalOnly: true } : {}),
     proposalRef: params.session.proposalRef,
     directiveRef,
   };

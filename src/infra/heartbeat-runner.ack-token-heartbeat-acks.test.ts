@@ -130,6 +130,7 @@ describe("runHeartbeatOnce ack handling", () => {
           mediaAccess: {},
           mediaLocalRoots: undefined,
           mediaReadFile: undefined,
+          assertDirectAdapterHandoff: expect.any(Function),
           onDeliveryResult: expect.any(Function),
           onPlatformSendDispatch: expect.any(Function),
           preparedMessageId: undefined,
@@ -679,7 +680,8 @@ describe("runHeartbeatOnce ack handling", () => {
       if (!("reason" in res)) {
         throw new Error("expected skipped heartbeat result reason");
       }
-      expect(res.reason).toBe("whatsapp-not-linked");
+      expect(res.reason).toBe("channel-not-ready");
+      expect(getLastHeartbeatEvent()).toMatchObject({ reason: "whatsapp-not-linked" });
       expect(sendWhatsApp).not.toHaveBeenCalled();
     });
   });

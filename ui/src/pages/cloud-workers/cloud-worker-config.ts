@@ -1,9 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
-export const CLOUD_WORKER_MACHINE_CLASSES = ["standard", "fast", "large", "beast"] as const;
-const CLOUD_WORKER_MACHINE_CLASS_IDS = new Set<string>(CLOUD_WORKER_MACHINE_CLASSES);
-
 export type CloudWorkerProfileDraft = {
   id: string;
   backend: string;
@@ -13,7 +10,6 @@ export type CloudWorkerProfileDraft = {
   setup: string;
   desktop: boolean;
   binary: string;
-  customClass: boolean;
 };
 
 export type ConfiguredCloudWorkerProfile = {
@@ -92,17 +88,15 @@ export function readCloudWorkerProfiles(
 export function createCloudWorkerDraft(
   profile?: ConfiguredCloudWorkerProfile,
 ): CloudWorkerProfileDraft {
-  const machineClass = profile?.machineClass || "standard";
   return {
     id: profile?.id ?? "",
     backend: profile?.backend ?? "",
-    machineClass,
+    machineClass: profile?.machineClass ?? "",
     ttl: profile?.ttl || "8h",
     idleTimeout: profile?.idleTimeout || "45m",
     setup: profile?.setup ?? "",
     desktop: profile?.desktop ?? false,
     binary: profile?.binary ?? "",
-    customClass: !CLOUD_WORKER_MACHINE_CLASS_IDS.has(machineClass),
   };
 }
 
@@ -153,10 +147,15 @@ export function buildCloudWorkerUpsertPatch(
   }
   const id = editingId ?? draft.id;
   const existing = isRecord(profiles[id]) ? profiles[id] : {};
-  if (editingId && normalizeOptionalString(existing.provider) !== "crabbox") {
+  const existingSettings = profileSettings(existing);
+  // Recheck the authoritative snapshot: a stale rich draft must not overwrite an Advanced profile.
+  if (
+    editingId &&
+    (normalizeOptionalString(existing.provider) !== "crabbox" ||
+      !stringSetting(existingSettings, "class"))
+  ) {
     return { error: "profileMissing" };
   }
-  const existingSettings = profileSettings(existing);
   const settings = {
     ...existingSettings,
     provider: draft.backend.trim(),

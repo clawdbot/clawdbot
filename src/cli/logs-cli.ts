@@ -35,7 +35,9 @@ import { redactSensitiveLines, resolveRedactOptions } from "../logging/redact.js
 import { formatTimestamp } from "../logging/timestamps.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
+import { resolveGatewayLocalPortOverride } from "./gateway-port-option.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
+import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 
 type LogsTailPayload = {
   file?: string;
@@ -50,6 +52,7 @@ type LogsTailPayload = {
   lines?: string[];
   truncated?: boolean;
   reset?: boolean;
+  skippedBytes?: number;
   localFallback?: boolean;
 };
 
@@ -87,20 +90,20 @@ async function loadLogsCliRuntime(): Promise<LogsCliRuntimeModule> {
   return await import("./logs-cli.runtime.js");
 }
 
-type LogsCliOptions = {
+type LogsCliOptions = GatewayRpcOpts & {
   limit?: string;
   maxBytes?: string;
   follow?: boolean;
   interval?: string;
-  json?: boolean;
   plain?: boolean;
   color?: boolean;
   localTime?: boolean;
   utc?: boolean;
-  url?: string;
-  token?: string;
-  timeout?: string;
-  expectFinal?: boolean;
+};
+
+type LogsRequestOptions = LogsCliOptions & {
+  localPortOverride?: number;
+  connection: GatewayConnectionDetails;
 };
 
 const LOCAL_FALLBACK_NOTICE = "Local Gateway RPC unavailable; reading configured file log instead.";
@@ -158,7 +161,7 @@ function buildLogMetaRecord(payload: LogsTailPayload): Record<string, unknown> {
 }
 
 async function fetchGatewayLogs(
-  opts: LogsCliOptions,
+  opts: LogsRequestOptions,
   gatewayCursor: number | undefined,
   showProgress: boolean,
   params: { limit: number; maxBytes: number; signal?: AbortSignal },
@@ -177,7 +180,7 @@ async function fetchGatewayLogs(
 }
 
 async function fetchLogs(
-  opts: LogsCliOptions,
+  opts: LogsRequestOptions,
   cursors: LogCursorState,
   showProgress: boolean,
   params: { limit: number; maxBytes: number },
@@ -210,7 +213,7 @@ async function fetchLogs(
   }
 }
 
-function shouldUseLocalLogsFallback(opts: LogsCliOptions, error: unknown): boolean {
+function shouldUseLocalLogsFallback(opts: LogsRequestOptions, error: unknown): boolean {
   // Fallback reads local files only for implicit loopback Gateway RPC failures.
   if (!isLocalGatewayRpcUnavailableError(error)) {
     return false;
@@ -218,15 +221,13 @@ function shouldUseLocalLogsFallback(opts: LogsCliOptions, error: unknown): boole
   if (typeof opts.url === "string" && opts.url.trim().length > 0) {
     return false;
   }
-  const connection = isGatewayTransportError(error)
-    ? error.connectionDetails
-    : buildGatewayConnectionDetails();
+  const connection = isGatewayTransportError(error) ? error.connectionDetails : opts.connection;
   return isImplicitLoopbackGatewayConnection(connection);
 }
 
-function buildLogsTailGatewayExtra(opts: LogsCliOptions, showProgress: boolean) {
+function buildLogsTailGatewayExtra(opts: LogsRequestOptions, showProgress: boolean) {
   const base = { progress: showProgress };
-  if (!shouldUsePassiveLocalLogsClient(opts)) {
+  if (opts.url?.trim() || !isImplicitLoopbackGatewayConnection(opts.connection)) {
     return base;
   }
   return {
@@ -235,13 +236,6 @@ function buildLogsTailGatewayExtra(opts: LogsCliOptions, showProgress: boolean) 
     mode: GATEWAY_CLIENT_MODES.BACKEND,
     deviceIdentity: null,
   };
-}
-
-function shouldUsePassiveLocalLogsClient(opts: LogsCliOptions): boolean {
-  if (typeof opts.url === "string" && opts.url.trim().length > 0) {
-    return false;
-  }
-  return isImplicitLoopbackGatewayConnection(buildGatewayConnectionDetails());
 }
 
 function isImplicitLoopbackGatewayConnection(connection: GatewayConnectionDetails): boolean {
@@ -343,6 +337,12 @@ function normalizeTailText(text: string, truncated: boolean): { text: string; tr
     return { text: "", truncated };
   }
   return { text: text.slice(firstNewline + 1), truncated };
+}
+
+function formatLogResetNotice(skippedBytes: number | undefined): string {
+  return skippedBytes !== undefined && skippedBytes > 0
+    ? `Log cursor re-anchored (skipped ${skippedBytes} bytes).`
+    : "Log cursor reset (file rotated).";
 }
 
 function parseJournalctlOutput(output: string): { lines: string[]; cursor?: string } {
@@ -483,38 +483,33 @@ function createLogWriters(onOutputClosed?: () => void) {
 
 async function emitGatewayError(
   err: unknown,
-  opts: LogsCliOptions,
+  opts: LogsRequestOptions,
   mode: "json" | "text",
   rich: boolean,
   emitJsonLine: (payload: Record<string, unknown>, toStdErr?: boolean) => boolean,
   errorLine: (text: string) => boolean,
 ) {
-  const message = "Gateway not reachable. Is it running and accessible?";
   const hint = `Hint: run \`${formatCliCommand("openclaw doctor")}\`.`;
   const errorText = redactSensitiveUrlLikeString(formatErrorMessage(err));
 
   const details = projectGatewayConnectionDetailsForDiagnostics(
-    buildGatewayConnectionDetails({ url: opts.url }),
+    isGatewayTransportError(err) ? err.connectionDetails : opts.connection,
   );
   if (mode === "json") {
-    if (
-      !emitJsonLine(
-        {
-          type: "error",
-          message,
-          error: errorText,
-          details,
-          hint,
-        },
-        true,
-      )
-    ) {
-      return;
-    }
+    emitJsonLine(
+      {
+        type: "error",
+        message: errorText,
+        error: errorText,
+        details,
+        hint,
+      },
+      true,
+    );
     return;
   }
 
-  if (!errorLine(colorize(rich, theme.error, message))) {
+  if (!errorLine(colorize(rich, theme.error, errorText))) {
     return;
   }
   if (!errorLine(details.message)) {
@@ -544,7 +539,14 @@ export function registerLogsCli(program: Command) {
 
   addGatewayClientOptions(logs);
 
-  logs.action(async (opts: LogsCliOptions) => {
+  logs.action(async (rawOpts: LogsCliOptions) => {
+    const localPortOverride = resolveGatewayLocalPortOverride(rawOpts);
+    // Client identity, fallback, and diagnostics must describe the same selected target.
+    const opts: LogsRequestOptions = {
+      ...rawOpts,
+      localPortOverride,
+      connection: buildGatewayConnectionDetails({ url: rawOpts.url, localPortOverride }),
+    };
     let gatewayRecovery: GatewayRecoveryState = { kind: "idle" };
     const abortGatewayRecoveryProbe = () => {
       if (gatewayRecovery.kind === "probing") {
@@ -735,7 +737,7 @@ export function registerLogsCli(program: Command) {
           if (
             !emitJsonLine({
               type: "notice",
-              message: "Log cursor reset (file rotated).",
+              message: formatLogResetNotice(payload.skippedBytes),
             })
           ) {
             return;
@@ -790,7 +792,7 @@ export function registerLogsCli(program: Command) {
           }
         }
         if (payload.reset) {
-          if (!errorLine("Log cursor reset (file rotated).")) {
+          if (!errorLine(formatLogResetNotice(payload.skippedBytes))) {
             return;
           }
         }

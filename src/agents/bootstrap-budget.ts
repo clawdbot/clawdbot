@@ -187,18 +187,14 @@ export function analyzeBootstrapBudget(params: {
 export function buildBootstrapBudgetState(params: {
   config?: OpenClawConfig;
   agentId?: string | null;
-  bootstrapFiles: WorkspaceBootstrapFile[];
-  injectedFiles: EmbeddedContextFile[];
+  files: BootstrapInjectionStat[];
   previousSignature?: string;
   seenSignatures?: string[];
 }) {
   const bootstrapMaxChars = resolveBootstrapMaxChars(params.config, params.agentId);
   const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config, params.agentId);
   const bootstrapAnalysis = analyzeBootstrapBudget({
-    files: buildBootstrapInjectionStats({
-      bootstrapFiles: params.bootstrapFiles,
-      injectedFiles: params.injectedFiles,
-    }),
+    files: params.files,
     bootstrapMaxChars,
     bootstrapTotalMaxChars,
   });
@@ -216,30 +212,6 @@ export function buildBootstrapBudgetState(params: {
     bootstrapPromptWarningMode,
     bootstrapTotalMaxChars,
   };
-}
-
-/** Appends a detailed truncation warning block to the agent prompt when needed. */
-export function appendBootstrapPromptWarning(
-  prompt: string,
-  warningLines?: string[],
-  options?: {
-    preserveExactPrompt?: string;
-  },
-): string {
-  const normalizedLines = (warningLines ?? []).map((line) => line.trim()).filter(Boolean);
-  if (normalizedLines.length === 0) {
-    return prompt;
-  }
-  if (options?.preserveExactPrompt && prompt === options.preserveExactPrompt) {
-    return prompt;
-  }
-  const warningBlock = [
-    "[Bootstrap truncation warning]",
-    "Some workspace bootstrap files were truncated before injection.",
-    "Treat Project Context as partial and read the relevant files directly if details seem missing.",
-    ...normalizedLines.map((line) => `- ${line}`),
-  ].join("\n");
-  return prompt ? `${prompt}\n\n${warningBlock}` : warningBlock;
 }
 
 /** Builds the compact truncation notice mirrored into run metadata. */

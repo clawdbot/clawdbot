@@ -3,7 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import chalk from "chalk";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const originalChalkLevel = chalk.level;
 chalk.level = 3;
@@ -15,14 +15,13 @@ const stripAnsi = (str: string) =>
   str.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g"), "");
 
 let themeImportCase = 0;
-const originalEnv = { ...process.env };
 
 afterAll(() => {
   chalk.level = originalChalkLevel;
 });
 
 afterEach(() => {
-  process.env = { ...originalEnv };
+  vi.unstubAllEnvs();
 });
 
 type ThemeEnvOverrides = {
@@ -74,18 +73,10 @@ function readActivePalette(mod: ThemeModule) {
 
 async function importThemeWithEnv(env: ThemeEnvOverrides) {
   if (Object.hasOwn(env, "OPENCLAW_THEME")) {
-    if (env.OPENCLAW_THEME === undefined) {
-      delete process.env.OPENCLAW_THEME;
-    } else {
-      process.env.OPENCLAW_THEME = env.OPENCLAW_THEME;
-    }
+    vi.stubEnv("OPENCLAW_THEME", env.OPENCLAW_THEME);
   }
   if (Object.hasOwn(env, "COLORFGBG")) {
-    if (env.COLORFGBG === undefined) {
-      delete process.env.COLORFGBG;
-    } else {
-      process.env.COLORFGBG = env.COLORFGBG;
-    }
+    vi.stubEnv("COLORFGBG", env.COLORFGBG);
   }
   const mod = await importFreshModule<ThemeModule>(
     import.meta.url,

@@ -11,12 +11,14 @@ export type ResponsesStreamOutputSlot<TMessage, TToolCall> =
       item: ResponseReasoningItem;
       block: ResponsesThinkingBlock;
       contentIndex: number;
+      outputIndex: number | undefined;
     }
   | {
       type: "text";
       item: TMessage;
       block: TextContent | null;
       contentIndex: number | undefined;
+      outputIndex: number | undefined;
       pendingText: string | null;
       collapseCandidate: TextBlockReference | null;
     }
@@ -33,25 +35,72 @@ type ResponsesOutputIdentityItem = {
   call_id?: string | null;
 };
 
-export function createResponsesOutputContentIndex() {
-  const indexes = new Map<string, number>();
+type ResponsesOutputState = {
+  type: string;
+  callId?: string | null;
+  outputIndex?: number;
+  contentIndex: number;
+  completed: boolean;
+};
+
+export type ResponsesOutputTracker = ReturnType<typeof createResponsesOutputTracker>;
+
+export function createResponsesOutputTracker() {
+  const outputs = new Map<string | number, ResponsesOutputState>();
   const identity = (item: ResponsesOutputIdentityItem): string | undefined => {
     if ((item.type === "reasoning" || item.type === "message") && item.id) {
       return `${item.type}:${item.id}`;
     }
-    return item.type === "function_call"
-      ? `function_call:${item.call_id ?? item.id ?? ""}`
-      : undefined;
+    const callId = item.call_id ?? item.id;
+    return item.type === "function_call" && callId ? `function_call:${callId}` : undefined;
+  };
+  const get = (item: ResponsesOutputIdentityItem, outputIndex?: number) => {
+    const key = identity(item);
+    const output =
+      (outputIndex === undefined ? undefined : outputs.get(outputIndex)) ??
+      (key === undefined ? undefined : outputs.get(key));
+    if (
+      !output ||
+      (outputIndex !== undefined &&
+        output.outputIndex !== undefined &&
+        output.outputIndex !== outputIndex)
+    ) {
+      return undefined;
+    }
+    if (
+      output.type !== item.type ||
+      (output.callId && item.call_id && output.callId !== item.call_id)
+    ) {
+      throw new Error("Responses stream changed output item identity");
+    }
+    return output;
   };
   return {
-    get(item: ResponsesOutputIdentityItem): number | undefined {
-      const key = identity(item);
-      return key === undefined ? undefined : indexes.get(key);
-    },
-    set(item: ResponsesOutputIdentityItem, contentIndex: number): void {
+    get,
+    set(
+      item: ResponsesOutputIdentityItem,
+      contentIndex: number,
+      outputIndex?: number,
+      completed = false,
+    ): void {
+      const output: ResponsesOutputState = get(item, outputIndex) ?? {
+        type: item.type,
+        contentIndex,
+        completed,
+      };
+      Object.assign(output, { contentIndex, completed });
+      if (item.call_id) {
+        output.callId = item.call_id;
+      }
+      if (outputIndex !== undefined) {
+        output.outputIndex = outputIndex;
+        outputs.set(outputIndex, output);
+      }
+      // Output positions survive encrypted ID rotation. Aliases retain the
+      // supported unindexed stream contract without owning lifecycle state.
       const key = identity(item);
       if (key !== undefined) {
-        indexes.set(key, contentIndex);
+        outputs.set(key, output);
       }
     },
   };

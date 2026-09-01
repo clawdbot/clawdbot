@@ -51,27 +51,24 @@ export function resolveEmbeddingEndpointUrl(baseUrl: string, endpoint: string): 
   return url.toString();
 }
 
-function resolveEmbeddingHeaders(params: {
-  headers: Record<string, unknown> | undefined;
-  path: string;
-}): Record<string, string> {
-  const resolved: Record<string, string> = {};
-  for (const [name, value] of Object.entries(params.headers ?? {})) {
-    const header = resolveMemorySecretInputString({
-      value,
-      path: `${params.path}.${name}`,
-    });
-    if (header) {
-      resolved[name] = header;
+function resolveEmbeddingHeaders(
+  ...sources: Array<{ headers: Record<string, unknown> | undefined; path: string }>
+): Map<string, [string, string]> {
+  const resolved = new Map<string, [string, string]>();
+  for (const source of sources) {
+    // Retain each source's existing SecretRef and prototype-key handling.
+    const headers: Record<string, string> = {};
+    for (const [name, value] of Object.entries(source.headers ?? {})) {
+      const header = resolveMemorySecretInputString({ value, path: `${source.path}.${name}` });
+      if (header) {
+        headers[name] = header;
+      }
+    }
+    for (const entry of Object.entries(headers)) {
+      resolved.set(entry[0].toLowerCase(), entry);
     }
   }
   return resolved;
-}
-
-function hasAuthorizationHeader(headers: Record<string, string>): boolean {
-  return Object.entries(headers).some(
-    ([name, value]) => name.toLowerCase() === "authorization" && value.trim().length > 0,
-  );
 }
 
 /** Detect the native OpenAI embeddings API route that accepts attribution headers. */
@@ -105,20 +102,17 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
     baseUrl,
     providerBaseUrl,
   });
-  const headerOverrides = Object.assign(
-    {},
-    providerOwnsDestination
-      ? resolveEmbeddingHeaders({
-          headers: providerConfig?.headers,
-          path: `models.providers.${params.provider}.headers`,
-        })
-      : undefined,
-    resolveEmbeddingHeaders({
+  const headerOverrides = resolveEmbeddingHeaders(
+    {
+      headers: providerOwnsDestination ? providerConfig?.headers : undefined,
+      path: `models.providers.${params.provider}.headers`,
+    },
+    {
       headers: remote?.headers,
       path: "memory.search.remote.headers",
-    }),
+    },
   );
-  const hasExplicitAuthorization = hasAuthorizationHeader(headerOverrides);
+  const hasExplicitAuthorization = headerOverrides.has("authorization");
   const apiKey = hasExplicitAuthorization
     ? undefined
     : remoteApiKey
@@ -138,13 +132,18 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
       `${params.provider} embedding credentials are not configured for ${baseUrl}. Set memory.search.remote.apiKey or an Authorization header for this destination.`,
     );
   }
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-    ...headerOverrides,
-  };
-  if (isNativeOpenAIEmbeddingRoute(params.provider, baseUrl)) {
-    Object.assign(headers, resolveOpenClawAttributionHeaders());
+  const entries: Array<[string, string]> = [["Content-Type", "application/json"]];
+  if (apiKey) {
+    entries.push(["Authorization", `Bearer ${apiKey}`]);
   }
+  entries.push(...headerOverrides.values());
+  if (isNativeOpenAIEmbeddingRoute(params.provider, baseUrl)) {
+    entries.push(...Object.entries(resolveOpenClawAttributionHeaders()));
+  }
+  // Fetch joins duplicate names; retain only the last source, but preserve its
+  // spelling so ordinary non-secret embedding cache identities stay unchanged.
+  const headers = Object.fromEntries(
+    new Map(entries.map((entry) => [entry[0].toLowerCase(), entry])).values(),
+  );
   return { baseUrl, headers, ssrfPolicy: buildRemoteBaseUrlPolicy(baseUrl) };
 }

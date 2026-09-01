@@ -17,6 +17,7 @@ function cronOutcomeEvent(job: CronJob, result: TimedCronRunOutcome, runAtMs: nu
     delivered: job.state.lastDelivered,
     deliveryStatus: job.state.lastDeliveryStatus,
     deliveryError: job.state.lastDeliveryError,
+    deliverySuppressionReason: job.state.deliverySuppressionReason,
     failureNotificationDelivery: failureNotificationDeliveryFromJobState(job),
     delivery: result.delivery,
     sessionId: result.sessionId,

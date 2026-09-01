@@ -366,7 +366,7 @@ export function registerImageCapabilityCommands(capability: Command): void {
     image
       .command("edit")
       .description("Edit images with one or more input files")
-      .requiredOption("--file <path>", "Input file", collectOption, [])
+      .requiredOption("--file <path>", "Input file", collectOption)
       .requiredOption("--prompt <text>", "Prompt text"),
   ).action(async (opts, command) => {
     await runCommandWithRuntime(defaultRuntime, async () => {
@@ -410,7 +410,7 @@ export function registerImageCapabilityCommands(capability: Command): void {
   image
     .command("describe-many")
     .description("Describe multiple image files")
-    .requiredOption("--file <path>", "Image file", collectOption, [])
+    .requiredOption("--file <path>", "Image file", collectOption)
     .option("--prompt <text>", "Prompt hint")
     .option("--model <provider/model>", "Model override")
     .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")

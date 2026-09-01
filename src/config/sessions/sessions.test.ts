@@ -453,4 +453,35 @@ describe("session work admission", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("keeps restart-recovery tombstones terminal when archive metadata is missing", () => {
+    const entry = {
+      sessionId: "failed-session",
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 4,
+        chargedAttempts: 3,
+        tombstone: {
+          reason: "automatic recovery exhausted",
+          recoveredSessionId: "dashboard-successor",
+          recoveredSessionKey: "agent:main:dashboard:successor",
+        },
+      },
+    };
+
+    expect(resolveSessionWorkStartError("agent:main:matrix:channel:room-a", entry)).toContain(
+      "ended during restart recovery",
+    );
+    expect(
+      resolveSessionWorkStartError("agent:main:matrix:channel:room-a", {
+        ...entry,
+        modelSelectionLocked: true,
+      }),
+    ).toContain("Open it in WebChat and use Resume in new session");
+    expect(
+      resolveSessionWorkStartError("agent:main:matrix:channel:room-a", entry, {
+        allowRestartTombstoneReplacement: true,
+      }),
+    ).toBeUndefined();
+  });
 });

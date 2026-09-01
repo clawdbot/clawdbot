@@ -3,6 +3,7 @@ import type { AgentsDeleteResult } from "../../packages/gateway-protocol/src/sch
 import {
   findOverlappingWorkspaceAgentIds,
   formatSharedAuthStoreOwnerDeleteError,
+  isInheritedAuthStoreOwner,
   isSharedAuthStoreOwner,
 } from "../agents/agent-delete-safety.js";
 import {
@@ -24,7 +25,6 @@ import {
   resolveSharedAuthStorePath,
 } from "../agents/auth-profiles/path-resolve.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
-import { resolveLegacyInheritedAuthAgentId } from "../agents/legacy-inherited-auth-dir.js";
 import {
   prepareLegacyWorkspaceStateReset,
   removeLegacyWorkspaceStateForReset,
@@ -199,11 +199,7 @@ export async function agentsDeleteCommand(
     );
     return;
   }
-  const explicitInheritedAuthAgentId = cfg.agents?.defaults?.authInheritance?.agentId?.trim();
-  const inheritedAuthAgentId =
-    explicitInheritedAuthAgentId ||
-    (sharedAuthOwnership.location === "legacy-main" ? resolveLegacyInheritedAuthAgentId(cfg) : "");
-  if (inheritedAuthAgentId && agentId === normalizeAgentId(inheritedAuthAgentId)) {
+  if (isInheritedAuthStoreOwner(cfg, agentId)) {
     failAgentsDelete(
       opts,
       runtime,

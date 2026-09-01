@@ -17,7 +17,6 @@ import {
   prepareCompaction as prepareCompactionCore,
   serializeConversation,
   shouldCompact,
-  openClawAgentCoreRuntime,
   type CompactionDetails,
   type CompactionPreparation,
   type CompactionResult,
@@ -29,6 +28,7 @@ import {
   type ThinkingLevel,
 } from "../../runtime/index.js";
 import type { SessionEntry } from "../session-manager.js";
+import { createCompactionRuntime, type SessionModelUsageSink } from "./runtime.js";
 
 export {
   calculateContextTokens,
@@ -75,6 +75,7 @@ export async function generateSummary(
   previousSummary?: string,
   thinkingLevel?: ThinkingLevel,
   streamFn?: StreamFn,
+  usageSink?: SessionModelUsageSink,
 ): Promise<string> {
   return unwrapCompactionResult(
     await generateSummaryCore(
@@ -88,7 +89,7 @@ export async function generateSummary(
       previousSummary,
       thinkingLevel,
       streamFn,
-      openClawAgentCoreRuntime,
+      createCompactionRuntime(usageSink),
     ),
   );
 }
@@ -103,6 +104,7 @@ export async function compact(
   signal?: AbortSignal,
   thinkingLevel?: ThinkingLevel,
   streamFn?: StreamFn,
+  usageSink?: SessionModelUsageSink,
 ): Promise<CompactionResult> {
   return unwrapCompactionResult(
     await compactCore(
@@ -114,7 +116,7 @@ export async function compact(
       signal,
       thinkingLevel,
       streamFn,
-      openClawAgentCoreRuntime,
+      createCompactionRuntime(usageSink),
     ),
   );
 }

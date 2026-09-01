@@ -29,8 +29,7 @@ import {
   type ChatPaneConnectionScope,
 } from "./chat-pane-shared.ts";
 import { resetSessionCompanion } from "./chat-session-companion.ts";
-import type { ChatPageHost } from "./chat-state-host.ts";
-import { resolveChatAgentId } from "./chat-state-route.ts";
+import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { clearTypingActorForSessionMessage } from "./chat-typing-presence.ts";
 import {
   canManageChatSessionSharing,
@@ -335,15 +334,6 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
     return hasMultiplePresenceIdentities(this.presencePayload);
   }
 
-  protected isCurrentSessionArchived(state: ChatPageHost): boolean {
-    return (
-      state.selectedChatSessionArchived ||
-      state.sessionsResult?.sessions.some(
-        (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, state.sessionKey),
-      ) === true
-    );
-  }
-
   protected resetSessionSuggestions(): void {
     this.sessionSuggestionsRequestVersion += 1;
     this.sessionSuggestionsRefreshQueued = false;
@@ -398,9 +388,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
   protected async loadSessionSuggestions(requestVersion: number): Promise<void> {
     const targetSignature = this.sessionSuggestionTargetSignature;
     const scope = this.captureConnectionScope();
-    const row = scope?.state.sessionsResult?.sessions.find((candidate) =>
-      areUiSessionKeysEquivalent(candidate.key, scope.state.sessionKey),
-    );
+    const row = scope ? selectedChatSessionRow(scope.state) : undefined;
     // Solo dormancy intentionally hides persisted rows too; when a second identity
     // returns, the presence transition below triggers a fresh authoritative list.
     if (
@@ -639,9 +627,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
   protected handleSessionTypingEvent(event: SessionTypingEvent): void {
     const selfId = this.context.gateway.snapshot.selfUser?.id;
     const state = this.state;
-    const selectedSession = state?.sessionsResult?.sessions.find((row) =>
-      areUiSessionKeysEquivalent(row.key, state.sessionKey),
-    );
+    const selectedSession = state ? selectedChatSessionRow(state) : undefined;
     if (
       !this.hasMultipleIdentities() ||
       event.actor.id === selfId ||
@@ -716,9 +702,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       return;
     }
     const sessionKey = scope.state.sessionKey;
-    const sessionId = scope.state.sessionsResult?.sessions.find((row) =>
-      areUiSessionKeysEquivalent(row.key, sessionKey),
-    )?.sessionId;
+    const sessionId = selectedChatSessionRow(scope.state)?.sessionId;
     if (!sessionId) {
       return;
     }

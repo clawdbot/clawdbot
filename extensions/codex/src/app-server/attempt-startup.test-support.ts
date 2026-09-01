@@ -1,6 +1,7 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { expect, vi } from "vitest";
 import type { startCodexAttemptThread } from "./attempt-startup.js";
+import { withEphemeralCodexAuthStore } from "./auth-start-options.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { resolveCodexAppServerSpawnIdentity } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
@@ -69,14 +70,15 @@ export async function captureExpectedRuntimeArtifact(
 ) {
   const { captureCodexAppServerRuntimeArtifactBeforeStart, finalizeCodexAppServerRuntimeArtifact } =
     await import("./runtime-artifact.js");
-  const spawnIdentity = resolveCodexAppServerSpawnIdentity(appServer.start);
+  const startOptions = withEphemeralCodexAuthStore({ startOptions: appServer.start });
+  const spawnIdentity = resolveCodexAppServerSpawnIdentity(startOptions);
   const before = await captureCodexAppServerRuntimeArtifactBeforeStart({
-    startOptions: appServer.start,
+    startOptions,
     spawnIdentity,
   });
   return finalizeCodexAppServerRuntimeArtifact({
     before,
-    startOptions: appServer.start,
+    startOptions,
     spawnIdentity,
     runtimeIdentity: { serverVersion: "0.149.0", userAgent: "openclaw/0.149.0 (macOS; test)" },
   });

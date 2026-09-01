@@ -5,7 +5,6 @@
 import type { BedrockClient } from "@aws-sdk/client-bedrock";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { adaptMemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type {
   OpenClawPluginApi,
@@ -24,7 +23,7 @@ import { createPayloadPatchStreamWrapper } from "openclaw/plugin-sdk/provider-st
 import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
 import { supportsBedrockPromptCaching } from "./bedrock-options.js";
 import { loadBedrockControlPlaneSdk, runBedrockControlPlaneRequest } from "./control-plane.js";
-import { mergeImplicitBedrockProvider, resolveBedrockConfigApiKey } from "./discovery-shared.js";
+import { resolveBedrockConfigApiKey } from "./discovery-shared.js";
 import { bedrockMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import { streamSimpleBedrock } from "./stream.runtime.js";
 import {
@@ -399,9 +398,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     );
   }
 
-  api.registerEmbeddingProvider(
-    adaptMemoryEmbeddingProviderAdapter(bedrockMemoryEmbeddingProviderAdapter),
-  );
+  api.registerEmbeddingProvider(bedrockMemoryEmbeddingProviderAdapter);
 
   const baseWrapStreamFn = ({
     modelId,
@@ -534,10 +531,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
           return null;
         }
         return {
-          provider: mergeImplicitBedrockProvider({
-            existing: ctx.config.models?.providers?.[providerId],
-            implicit,
-          }),
+          provider: implicit,
         };
       },
     },

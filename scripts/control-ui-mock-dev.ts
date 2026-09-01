@@ -5,10 +5,7 @@ import { fileURLToPath } from "node:url";
 import qrcode from "qrcode";
 import { createServer, type Plugin, type ViteDevServer } from "vite";
 import type {
-  RequestFrame,
   SystemAgentChatHistoryResult,
-  SystemAgentChatQuestion,
-  SystemAgentChatResult,
   SystemChangesListResult,
   UserProfile,
 } from "../packages/gateway-protocol/src/index.js";
@@ -21,10 +18,12 @@ import { buildUpdateRestartSentinelPayload } from "../src/infra/update-restart-s
 import type { UpdateRunResult } from "../src/infra/update-runner.js";
 import type { UpdateAvailable, UpdateScheduleState } from "../ui/src/api/types.ts";
 import {
+  controlUiSessionPath,
   createControlUiMockBootstrapConfig,
   createControlUiMockGatewayInitScript,
   type ControlUiMockGatewayScenario,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow } from "../ui/src/test-helpers/control-ui-session-fixtures.ts";
 import {
   resolveExternalPackageAliasesForVite,
   resolveSourcePackageAliasesForVite,
@@ -41,7 +40,13 @@ import {
   buildChannelWizardMocks,
 } from "./control-ui-mock-channels.ts";
 import { buildCronMocks } from "./control-ui-mock-cron.ts";
-import { buildPluginCatalogMock } from "./control-ui-mock-plugins.ts";
+import {
+  buildPluginCatalogMock,
+  buildPluginInspectMock,
+  buildPluginSetEnabledMock,
+} from "./control-ui-mock-plugins.ts";
+import { createControlUiPreviewInitScript } from "./control-ui-mock-preview.ts";
+import { skillLibraryMockInitScript } from "./control-ui-mock-skill-library.ts";
 import { buildSkillWorkshopMocks } from "./control-ui-mock-skill-workshop.js";
 
 type CliOptions = {
@@ -51,6 +56,7 @@ type CliOptions = {
     | "attachments"
     | "board"
     | "code-fences"
+    | "goal"
     | "swarm"
     | "update-available"
     | "update-blocked"
@@ -85,7 +91,6 @@ const MOCK_ACTOR_MIRA: SessionActorFixture = {
 const MOCK_SESSION_OWNERS: readonly SessionActorFixture[] = [MOCK_ACTOR_PETER, MOCK_ACTOR_MIRA];
 
 const SESSION_PAGE_SIZE = 50;
-const TOTAL_MOCK_SESSIONS = 650;
 const TOTAL_TELEGRAM_SESSIONS = 180;
 const ATTENTION_FIXTURE_EXPIRES_AT = Date.parse("2099-01-01T00:00:00.000Z");
 const NARRATION_DEMO_SESSION_KEY = "agent:main:sidebar-narration-demo";
@@ -93,8 +98,6 @@ const NARRATION_DEMO_RUN_ID = "mock-sidebar-narration-run";
 const OBSERVER_DEMO_SESSION_KEY = "agent:main:session-observer-demo";
 const OBSERVER_DEMO_RUN_ID = "mock-session-observer-run";
 const PLAN_DEMO_RUN_ID = "mock-plan-run";
-const CUSTODIAN_CHAT_REPLY_DELAY_MS = 600;
-const CHAT_SEND_REPLY_DELAY_MS = 200;
 type UpdateFixture = {
   available: UpdateAvailable;
   runResponse: unknown;
@@ -354,6 +357,7 @@ function parseFixture(value: string | undefined): CliOptions["fixture"] {
     value !== "attachments" &&
     value !== "board" &&
     value !== "code-fences" &&
+    value !== "goal" &&
     value !== "swarm" &&
     value !== "update-available" &&
     value !== "update-blocked" &&
@@ -385,23 +389,15 @@ function sessionRow(
   options: { model?: string; modelProvider?: string } & Record<string, unknown> = {},
 ) {
   const { model, modelProvider, ...extra } = options;
-  return {
+  return createControlUiSessionRow(key, label, updatedAt, {
     contextTokens: 200_000,
-    displayName: label,
-    hasActiveRun: false,
-    key,
-    kind: "direct",
-    label,
-    model: (model as string | undefined) ?? "gpt-5.6-luna",
-    modelProvider: (modelProvider as string | undefined) ?? "openai",
-    status: "done",
-    totalTokens: 0,
-    updatedAt,
+    model: model ?? "gpt-5.6-luna",
+    modelProvider: modelProvider ?? "openai",
     ...extra,
-  };
+  });
 }
 
-function sessionsListResponse(sessions: unknown[], options: SessionListOptions) {
+function sessionsListResponse(sessions: Array<{ key: string }>, options: SessionListOptions) {
   return {
     count: sessions.length,
     defaults: {
@@ -415,14 +411,15 @@ function sessionsListResponse(sessions: unknown[], options: SessionListOptions) 
     ...(options.owners ? { owners: options.owners } : {}),
     offset: options.offset ?? 0,
     path: "",
-    sessions,
+    // Cases select membership; canonical metadata comes from the scenario's rows.
+    sessions: sessions.map(({ key }) => ({ key })),
     totalCount: options.totalCount,
     ts: Date.now(),
   };
 }
 
 function pagedSessionsListResponse(
-  sessions: unknown[],
+  sessions: Array<{ key: string }>,
   offset: number,
   owners?: readonly SessionActorFixture[],
 ) {
@@ -459,7 +456,7 @@ function buildSessionRows(params: {
 }
 
 function buildSessionListCases(
-  sessions: unknown[],
+  sessions: Array<{ key: string }>,
   matchBase: Record<string, unknown> = {},
   owners?: readonly SessionActorFixture[],
 ): Array<{ match: Record<string, unknown>; response: unknown }> {
@@ -478,7 +475,7 @@ function buildSessionListCases(
 }
 
 function buildSearchSessionListCases(
-  sessions: unknown[],
+  sessions: Array<{ key: string }>,
   searchTerms: string[],
 ): Array<{ match: Record<string, unknown>; response: unknown }> {
   return searchTerms.flatMap((search) => buildSessionListCases(sessions, { search }));
@@ -1289,7 +1286,7 @@ function buildScrollableChatHistory(baseTime: number): unknown[] {
   const messages: unknown[] = [
     chatHistoryMessage(
       "assistant",
-      `Mock Control UI is running with ${TOTAL_MOCK_SESSIONS} sessions. Open the chat picker, search for "telegram" or "claude", then use Load more repeatedly.`,
+      'Mock Control UI is running. Open the chat picker, search for "telegram" or "claude", then use Load more repeatedly.',
       baseTime,
     ),
   ];
@@ -1694,7 +1691,22 @@ async function createChatPickerScenario(
         ]
       : [];
   const workboardMocks = buildWorkboardMocks(baseTime);
-  const activitySessions = buildActivitySessionRows(Date.now());
+  const activityTime = Date.now();
+  const activitySessions = buildActivitySessionRows(activityTime);
+  const activeGoal = {
+    schemaVersion: 1 as const,
+    id: "goal-mobile-parity",
+    objective:
+      "Make Goal work on mobile exactly as it does on desktop while preserving action access, progress visibility, timing, token usage, and composer space across narrow viewports. Keep the collapsed state compact enough for active conversations, while making the expanded state comfortable to scan and operate with one hand. Preserve clear hierarchy between the objective, elapsed time, token budget, and available actions without letting long content push the composer out of reach. Ensure the full objective remains readable when it contains detailed constraints, acceptance criteria, rollout notes, and operational context that cannot be reduced to a short summary. Account for long-running sessions whose goals accumulate multiple requirements, edge cases, validation steps, ownership notes, and deployment considerations. The operator should be able to review all of that context without losing access to the Goal controls or forcing the message composer below the visible viewport.",
+    status: "active" as const,
+    createdAt: activityTime - 14 * 60_000,
+    updatedAt: activityTime - 30_000,
+    tokenStart: 120_000,
+    tokenStartFresh: true,
+    tokensUsed: 127_000,
+    tokenBudget: 300_000,
+    continuationTurns: 3,
+  };
   const sessions = [
     ...activitySessions,
     ...(fixture === "workboard"
@@ -1709,8 +1721,10 @@ async function createChatPickerScenario(
       activeRunIds: [PLAN_DEMO_RUN_ID],
       childSessions: ["agent:main:lisbon-trip", ...swarmChildRows.map((row) => row.key)],
       hasActiveRun: true,
+      status: "running",
       totalTokens: 170_000,
       totalTokensFresh: true,
+      ...(fixture === "goal" ? { goal: activeGoal } : {}),
     }),
     ...swarmChildRows,
     sessionRow(OBSERVER_DEMO_SESSION_KEY, "Session observer demo", baseTime - 3_000, {
@@ -1739,6 +1753,32 @@ async function createChatPickerScenario(
       status: "running",
       childSessions: ["agent:main:subagent:tax-receipts"],
       pinned: true,
+    }),
+    sessionRow("agent:main:cloud-refactor", "Cloud refactor worker", baseTime - 70_000, {
+      hasActiveRun: true,
+      status: "running",
+      startedAt: baseTime - 3_500_000,
+      execCwd: "/workspace/openclaw",
+      placement: {
+        state: "active",
+        generation: 3,
+        createdAtMs: baseTime - 3_600_000,
+        updatedAtMs: baseTime - 20_000,
+        stateChangedAtMs: baseTime - 3_500_000,
+        environmentId: "worker:9f2c4e7a81d24b06a5c3f8e1b7d94c1a",
+        providerId: "machine0",
+        profileId: "team",
+        activeOwnerEpoch: 4,
+        workerBundleHash: "b".repeat(64),
+        workspaceBaseManifestRef: "sha256:cloud-refactor-base",
+        remoteWorkspaceDir: "/workspace/openclaw",
+        diskSpace: {
+          status: "ok",
+          availableBytes: 61 * 1024 ** 3,
+          totalBytes: 100 * 1024 ** 3,
+          observedAtMs: baseTime - 20_000,
+        },
+      },
     }),
     sessionRow(
       "agent:main:production-export",
@@ -1794,6 +1834,18 @@ async function createChatPickerScenario(
         branch: "claude/sidebar-agent-zones",
         repoRoot: "~/Projects/openclaw",
       },
+    }),
+    // Second repo plus a spawned worktree checkout so the sidebar's
+    // Project grouping shows several sections and the worktree fold.
+    sessionRow("agent:main:clawdbot-vite", "Vite upgrade spike", baseTime - 160_000, {
+      worktree: {
+        id: "wt-clawdbot-vite",
+        branch: "openclaw/vite-upgrade",
+        repoRoot: "~/Projects/clawdbot",
+      },
+    }),
+    sessionRow("agent:main:project-grouping", "Sidebar project grouping", baseTime - 170_000, {
+      spawnedCwd: "~/Projects/openclaw/.claude/worktrees/groups-c7c338",
     }),
     ...buildSessionRows({
       baseTime: baseTime - 400_000,
@@ -1892,11 +1944,6 @@ async function createChatPickerScenario(
       : fixture === "code-fences"
         ? buildCodeFenceChatHistory(baseTime)
         : buildScrollableChatHistory(baseTime);
-  const planSessionInfo = {
-    activeRunIds: [PLAN_DEMO_RUN_ID],
-    hasActiveRun: true,
-    key: "agent:main:main",
-  };
   const planInFlightRun = {
     runId: PLAN_DEMO_RUN_ID,
     text: "",
@@ -1911,13 +1958,7 @@ async function createChatPickerScenario(
       ],
     },
   };
-  const planChatHistory = {
-    messages: historyMessages,
-    sessionId: "control-ui-e2e-session",
-    sessionInfo: planSessionInfo,
-    inFlightRun: planInFlightRun,
-    thinkingLevel: null,
-  };
+  const backgroundTasks = buildBackgroundTasksMock(baseTime);
   const custodianHistory = {
     turns: [
       {
@@ -1981,6 +2022,9 @@ async function createChatPickerScenario(
     featureMethods: [
       "browser.request",
       "chat.abort",
+      "chat.history",
+      "chat.send",
+      "config.patch",
       "config.schema",
       "chat.metadata",
       "chat.startup",
@@ -2046,6 +2090,11 @@ async function createChatPickerScenario(
     // so people-aware UI (People sort, Person grouping) is exercisable here.
     hasMultipleSessionSharingIdentities: true,
     historyMessages,
+    sessionGroups: ["Research"],
+    sessionTranscripts: {
+      ...backgroundTasks.sessionTranscripts,
+      "agent:main:main": { messages: historyMessages, inFlightRun: planInFlightRun },
+    },
     // Lights up the footer facepile and who's-online roster; the email-only
     // entry keeps the roster's no-display-name row exercised.
     presenceUsers: [
@@ -2055,40 +2104,42 @@ async function createChatPickerScenario(
         name: selfProfile.displayName ?? undefined,
         email: selfProfile.emails[0],
       },
-      { id: "presence-colin", name: "Colin", email: "colin@example.com" },
-      { id: "presence-patricia", email: "patricia.erichsen@example.com" },
+      {
+        id: "presence-colin",
+        name: "Colin",
+        email: "colin@example.com",
+        onlineSince: activityTime - 47 * 60_000,
+        lastActivityAt: activityTime - 2 * 60_000,
+        deviceFamily: "Mac",
+        platform: "macOS",
+        timeZone: "America/Los_Angeles",
+        watchedSessions: ["agent:activity:design-review", "agent:main:main"],
+      },
+      {
+        id: "presence-colin",
+        name: "Colin",
+        email: "colin@example.com",
+        onlineSince: activityTime - 47 * 60_000,
+        lastActivityAt: activityTime - 2 * 60_000,
+        deviceFamily: "Mac",
+        platform: "macOS",
+        timeZone: "America/Los_Angeles",
+        watchedSessions: ["agent:activity:design-review"],
+      },
+      {
+        id: "presence-patricia",
+        email: "patricia.erichsen@example.com",
+        onlineSince: activityTime - 12 * 60_000,
+        lastActivityAt: activityTime - 30_000,
+        deviceFamily: "iPhone",
+        platform: "iOS",
+        timeZone: "Europe/Stockholm",
+        watchedSessions: ["agent:activity:support-handoff"],
+      },
     ],
     methodResponses: {
-      ...buildBackgroundTasksMock(baseTime),
+      ...backgroundTasks.methodResponses,
       ...cronMocks,
-      "chat.history": {
-        cases: [{ match: { sessionKey: "agent:main:main" }, response: planChatHistory }],
-      },
-      "chat.startup": {
-        cases: [
-          {
-            match: { sessionKey: "agent:main:main" },
-            response: {
-              ...planChatHistory,
-              agentsList: {
-                agents: [
-                  {
-                    id: "main",
-                    identity: { name: "Molty" },
-                    name: "Molty",
-                    workspace: "/Users/peter/Projects/openclaw",
-                    workspaceGit: true,
-                  },
-                ],
-                defaultId: "main",
-                mainKey: "main",
-                scope: "agent",
-              },
-              metadata: { models: modelProviders.models },
-            },
-          },
-        ],
-      },
       "progressCard.get": { card: null },
       "users.self": { profile: selfProfile },
       // Talk settings page pickers: realtime catalog with the model/voice
@@ -2114,7 +2165,6 @@ async function createChatPickerScenario(
                 "gpt-realtime-2.1-mini",
                 "gpt-realtime-2",
                 "gpt-live-1-codex",
-                "gpt-live-1-boulder-alpha",
               ],
               voices: [
                 "alloy",
@@ -2146,9 +2196,6 @@ async function createChatPickerScenario(
           ],
         },
       },
-      // Custom session group catalog so the sidebar's category zone (and its
-      // drag-reordering against built-in sections) is exercised in the mock.
-      "sessions.groups.list": { groups: [{ name: "Research", position: 0 }] },
       // Coding session catalogs so the sidebar's catalog sections (header
       // right-click menu, hide/restore preference) are exercised in the mock.
       // Ids must match registered plugin catalogs (`claude`, `codex`) or the
@@ -2477,6 +2524,8 @@ async function createChatPickerScenario(
         ],
       },
       "plugins.list": buildPluginCatalogMock(),
+      "plugins.inspect": buildPluginInspectMock(),
+      "plugins.setEnabled": buildPluginSetEnabledMock(),
       "channels.status": buildChannelsStatusMock(baseTime),
       "channels.pairing.list": buildChannelsPairingMock(baseTime),
       "channels.pairing.approve": {
@@ -3002,6 +3051,13 @@ async function createChatPickerScenario(
       ],
     },
     sessionArchiveFiltering: true,
+    sessions: [
+      ...sessions,
+      ...archivedSessions,
+      ...telegramSessions,
+      ...claudeSessions,
+      taxChildRow,
+    ],
     sessionKey: fixture === "workboard" ? workboardMocks.sessionKey : "agent:main:main",
     workspace: "/Users/peter/Projects/openclaw",
     workspaceGit: true,
@@ -3012,170 +3068,14 @@ function escapeScriptContent(script: string): string {
   return script.replaceAll("</script", "<\\/script");
 }
 
-/** Adds the stateful mock surfaces the generic scenario fixture cannot express. */
-function installControlUiStatefulMocks(
-  custodianReplyDelayMs: number,
-  chatReplyDelayMs: number,
-): void {
-  type MockGatewayControls = {
-    deferNext: (method: string) => void;
-    emit: (event: string, payload: unknown) => void;
-    resolveDeferred: (method: string, payload: unknown) => void;
-  };
-  type MockWindow = Window & {
-    openclawControlUiE2eGateway?: MockGatewayControls;
-  };
-
-  const gateway = (window as MockWindow).openclawControlUiE2eGateway;
-  const MockWebSocket = window.WebSocket;
-  if (!gateway || !MockWebSocket) {
-    return;
-  }
-  const sendDescriptor = Object.getOwnPropertyDescriptor(MockWebSocket.prototype, "send");
-  const originalSend = sendDescriptor?.value as WebSocket["send"] | undefined;
-  if (typeof originalSend !== "function") {
-    return;
-  }
-  const sendOriginal = (socket: WebSocket, data: Parameters<WebSocket["send"]>[0]): void => {
-    Reflect.apply(originalSend, socket, [data]);
-  };
-  const sessionTurns = new Map<string, number>();
-  MockWebSocket.prototype.send = function (data): void {
-    let frame: RequestFrame | null = null;
-    if (typeof data === "string") {
-      try {
-        frame = JSON.parse(data) as RequestFrame;
-      } catch {
-        frame = null;
-      }
-    }
-    if (frame?.type !== "req") {
-      sendOriginal(this, data);
-      return;
-    }
-
-    if (frame.method === "chat.send") {
-      const params =
-        frame.params && typeof frame.params === "object"
-          ? (frame.params as {
-              idempotencyKey?: unknown;
-              message?: unknown;
-              sessionKey?: unknown;
-            })
-          : {};
-      const runId =
-        typeof params.idempotencyKey === "string" && params.idempotencyKey.trim()
-          ? params.idempotencyKey
-          : "control-ui-mock-run";
-      const sessionKey =
-        typeof params.sessionKey === "string" && params.sessionKey.trim()
-          ? params.sessionKey
-          : "agent:main:main";
-      const message = typeof params.message === "string" ? params.message.trim() : "";
-      gateway.deferNext("chat.send");
-      sendOriginal(this, data);
-      window.setTimeout(() => {
-        gateway.resolveDeferred("chat.send", { runId, status: "started" });
-        window.setTimeout(
-          () =>
-            gateway.emit("chat", {
-              message: {
-                content: [{ text: `Mock reply: ${message || "message received"}`, type: "text" }],
-                role: "assistant",
-                timestamp: Date.now(),
-              },
-              runId,
-              seq: 1,
-              sessionKey,
-              state: "final",
-            }),
-          0,
-        );
-      }, chatReplyDelayMs);
-      return;
-    }
-
-    if (frame.method !== "openclaw.chat") {
-      sendOriginal(this, data);
-      return;
-    }
-
-    const params =
-      frame.params && typeof frame.params === "object"
-        ? (frame.params as { message?: unknown; sessionId?: unknown })
-        : {};
-    const sessionId =
-      typeof params.sessionId === "string" && params.sessionId.trim()
-        ? params.sessionId
-        : "control-ui-custodian-mock";
-    const message = typeof params.message === "string" ? params.message : undefined;
-    const turn = sessionTurns.get(sessionId) ?? 0;
-    sessionTurns.set(sessionId, turn + 1);
-    const channelQuestion = {
-      id: "mock-channel-choice",
-      header: "Channel setup",
-      question: "Which channel would you like to work on?",
-      options: [
-        {
-          label: "WhatsApp",
-          reply: "help me connect WhatsApp",
-          description: "Review linking and account status.",
-          recommended: true,
-        },
-        {
-          label: "Telegram",
-          reply: "help me connect Telegram",
-          description: "Review the bot token and delivery status.",
-        },
-        {
-          label: "Discord",
-          reply: "help me connect Discord",
-          description: "Review the bot and server connection.",
-        },
-      ],
-      isOther: true,
-    } satisfies SystemAgentChatQuestion;
-    const response: SystemAgentChatResult = message
-      ? message.toLowerCase().includes("channel")
-        ? {
-            sessionId,
-            reply: "I can help with that.\n\nChoose a channel to continue.",
-            action: "none",
-            question: channelQuestion,
-          }
-        : {
-            sessionId,
-            reply: `I checked the mock system. Everything looks healthy.\n\nThat was demo turn ${turn}.`,
-            action: "none",
-          }
-      : {
-          sessionId,
-          reply:
-            "Hi — I’m OpenClaw, your system caretaker.\n\nAsk me about setup, channels, or recent changes.",
-          action: "none",
-        };
-
-    // Defer before forwarding so the generic gateway records the request but
-    // cannot race its normal immediate response against this stateful reply.
-    gateway.deferNext("openclaw.chat");
-    sendOriginal(this, data);
-    window.setTimeout(
-      () => gateway.resolveDeferred("openclaw.chat", response),
-      message === undefined ? 0 : custodianReplyDelayMs,
-    );
-  };
-}
-
-function createStatefulMockInitScript(): string {
-  return `(() => { const __name = (target) => target; (${installControlUiStatefulMocks.toString()})(${CUSTODIAN_CHAT_REPLY_DELAY_MS}, ${CHAT_SEND_REPLY_DELAY_MS}); })();`;
-}
-
 function createMockGatewayPlugin(
   scenario: ControlUiMockGatewayScenario,
   fixture?: CliOptions["fixture"],
 ): Plugin {
   const initScript = escapeScriptContent(createControlUiMockGatewayInitScript(scenario));
-  const statefulInitScript = escapeScriptContent(createStatefulMockInitScript());
+  const statefulInitScript = escapeScriptContent(
+    createControlUiPreviewInitScript() + skillLibraryMockInitScript(scenario.models),
+  );
   const bootstrapBody = JSON.stringify(createControlUiMockBootstrapConfig(scenario));
   const attachmentThemeToggle =
     fixture === "attachments"
@@ -3333,7 +3233,9 @@ const server = await createServer({
 });
 
 await server.listen();
-console.log(`[control-ui-mock] ${resolveServerUrl(server, options.host)}`);
+console.log(
+  `[control-ui-mock] ${resolveServerUrl(server, options.host, controlUiSessionPath(scenario.sessionKey ?? "agent:main:main"))}`,
+);
 console.log(
   `[control-ui-mock] board fixture: ${resolveServerUrl(server, options.host, boardFixturePath)}`,
 );

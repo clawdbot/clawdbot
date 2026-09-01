@@ -199,10 +199,13 @@ describe("native image tool result context projection", () => {
     },
   );
 
-  it("keeps a fitting image without letting oversized text starve a later text block", async () => {
+  it.each([
+    ["short", "retain the image description"],
+    ["2,000-character", "d".repeat(2_000)],
+  ])("keeps a fitting image without starving a later %s text block", async (_name, description) => {
     const native = await executeNativeImageTool(2);
     const nativeBlocks = blocksOf(native);
-    const trailingText = { type: "text", text: "retain the image description" };
+    const trailingText = { type: "text", text: description };
     const source = castAgentMessage({
       ...native,
       content: [

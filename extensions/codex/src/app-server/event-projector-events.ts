@@ -93,6 +93,13 @@ function normalizeApprovalReviewStatus(status: string | undefined): string | und
 const GUARDIAN_TIMEOUT_WARNING =
   "Automatic approval review timed out while evaluating the requested approval.";
 
+// These routine Codex diagnostics lack structured codes. Match complete templates so only
+// host-managed notices stay log-only and other actionable warnings still reach chat.
+const LOG_ONLY_CODEX_WARNING_PATTERNS = [
+  /^Configured service tier `[^`\r\n]+` is not advertised as supported for model `[^`\r\n]+` and will be omitted from requests\.$/,
+  /^Code Mode is enabled in configuration, but model `[^`\r\n]+` does not advertise Code Mode support\. This may degrade model performance\. Disable `features\.code_mode` and `features\.code_mode_only`, or select a model whose metadata enables Code Mode\.$/,
+];
+
 export function projectNormalizedToolItem(params: {
   phase: "start" | "result";
   item: CodexThreadItem | undefined;
@@ -275,7 +282,9 @@ export class CodexEventProjection {
     const summary = readString(params, "summary") ?? readString(params, "message");
     const details = readString(params, "details");
     const message = [summary, details].filter(Boolean).join("\n");
-    if (message) {
+    if (LOG_ONLY_CODEX_WARNING_PATTERNS.some((pattern) => pattern.test(message))) {
+      embeddedAgentLog.warn(message);
+    } else if (message) {
       this.emitAgentEvent({ stream: "notice", data: { phase: "warning", message } });
     }
   }

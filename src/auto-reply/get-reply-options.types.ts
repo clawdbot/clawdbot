@@ -1,7 +1,9 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
 /** Public option types for reply generation callbacks, streaming, and delivery policy. */
 import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import type { AgentPlanStep } from "../channels/streaming.js";
+import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
 import type { ImageContent } from "../llm/types.js";
 import type { MediaFact } from "../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
@@ -11,6 +13,24 @@ import type { TypingController } from "./reply/typing.js";
 import type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types.js";
 
 export type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types.js";
+
+/** A successful runtime append, independent of optional active-path projection anchors. */
+export type ReplyDispatchAssistantTranscript = Pick<
+  TranscriptEntryAnchor,
+  "agentId" | "sessionId" | "sessionKey" | "storePath"
+> & {
+  messageId: string;
+  anchor?: TranscriptEntryAnchor;
+  idempotencyKey: string;
+};
+
+export type ReplyDispatchRun = {
+  completionSource: "reply-dispatch";
+  getResult: () => {
+    assistantTranscript?: ReplyDispatchAssistantTranscript;
+    terminalOutcome?: AgentRunTerminalOutcome;
+  };
+};
 
 export type BlockReplyContext = {
   abortSignal?: AbortSignal;
@@ -72,6 +92,8 @@ export type TurnAdoptionLifecycle = {
   onAdopted: () => void | Promise<void>;
   /** Return false to reject followup enqueue. */
   onDeferred?: () => boolean | void;
+  /** Reports that a deferred turn is still queued behind an active turn. */
+  onDeferredHeartbeat?: () => void;
   /** Deferred turn finished without owning the reply lane. */
   onAbandoned?: () => void;
   /** Always fires when the followup ownership cycle ends (admitted or not). Gateway cleanup. */
@@ -125,11 +147,17 @@ export type GetReplyOptions = {
   imageOrder?: PromptImageOrderEntry[];
   /** Ordered media facts whose model-facing text projection is already present in the prompt. */
   media?: MediaFact[];
-  /** Notifies when an agent run actually starts (useful for webchat command handling). */
+  /**
+   * Notifies when an agent run starts. Return "reply-dispatch" synchronously to accept
+   * completion ownership offered in options; all other legacy callback results are ignored.
+   */
   onAgentRunStart?: (
     runId: string,
     executionIdentityToken?: ExecutionIdentityAdmissionToken,
-  ) => void;
+    options?: ReplyDispatchRun,
+  ) => unknown;
+  /** Reports the terminal agent-run classification to the shared dispatch owner. */
+  onAgentRunTerminalOutcome?: (outcome: "completed" | "failed") => void;
   /**
    * Canonical adoption lifecycle (adopted / deferred / abandoned / settled + pre-adoption abort).
    */

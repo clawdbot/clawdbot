@@ -119,7 +119,7 @@ const hook: HookStatusEntry = {
   baseDir: "/tmp/openclaw-hook-workspace",
   handlerPath: "/tmp/openclaw-hook-workspace/handler.js",
   hookKey: "metadata-key",
-  events: [],
+  events: ["command:new"],
   unknownEvents: [],
   always: false,
   enabledByConfig: true,
@@ -379,18 +379,142 @@ describe("hooks CLI metadata config keys", () => {
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
-  it("preserves machine-readable missing-hook output and requests a failing exit", async () => {
-    await createHooksProgram().parseAsync(["hooks", "info", "missing-hook", "--json"], {
-      from: "user",
+  describe.each(["human", "leaf JSON", "parent JSON"])("info selection (%s)", (output) => {
+    const json = output !== "human";
+    const argv = (identifier: string) => [
+      "hooks",
+      ...(output === "parent JSON" ? ["--json"] : []),
+      "info",
+      identifier,
+      ...(output === "leaf JSON" ? ["--json"] : []),
+    ];
+    const exactNameHook = { ...hook, name: "shared" };
+    const collidingKeyHook = { ...hook, name: "another-hook", hookKey: "shared" };
+
+    it.each([
+      {
+        label: "key before name",
+        hooks: [collidingKeyHook, exactNameHook],
+        identifier: "shared",
+        selected: exactNameHook,
+      },
+      {
+        label: "name before key",
+        hooks: [exactNameHook, collidingKeyHook],
+        identifier: "shared",
+        selected: exactNameHook,
+      },
+      { label: "unique key alias", hooks: [hook], identifier: "metadata-key", selected: hook },
+      {
+        label: "plugin-managed hook",
+        hooks: [
+          { ...hook, source: "openclaw-plugin", managedByPlugin: true, pluginId: "demo-plugin" },
+        ],
+        identifier: "metadata-key",
+        selected: hook,
+      },
+      {
+        label: "ineligible hook",
+        hooks: [{ ...hook, requirementsSatisfied: false, loadable: false }],
+        identifier: "metadata-key",
+        selected: hook,
+      },
+    ])("inspects $label without mutation", async ({ hooks, identifier, selected }) => {
+      mocks.callGateway.mockResolvedValue({ ...report, hooks });
+
+      await createHooksProgram().parseAsync(argv(identifier), { from: "user" });
+
+      expect(capture.runtimeLogs).toHaveLength(1);
+      if (json) {
+        expect(JSON.parse(capture.runtimeLogs[0] ?? "")).toMatchObject({
+          name: selected.name,
+          hookKey: selected.hookKey,
+        });
+        expect(capture.defaultRuntime.writeStdout).toHaveBeenCalledOnce();
+      } else {
+        expect(capture.runtimeLogs[0]).toContain(`${selected.name} `);
+        expect(capture.runtimeLogs[0]).not.toContain("another-hook");
+        expect(capture.defaultRuntime.writeStdout).not.toHaveBeenCalled();
+      }
+      expect(mocks.requestExitAfterOneShotOutput).toHaveBeenCalledWith(capture.defaultRuntime, 0);
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+      expect(capture.runtimeErrors).toEqual([]);
     });
 
-    expect(JSON.parse(capture.runtimeLogs.at(-1) ?? "{}")).toEqual({
-      ok: false,
-      error: { type: "cli_error", message: 'Hook "missing-hook" not found.' },
-      hook: "missing-hook",
+    it("rejects an ambiguous key instead of reporting a successful inspection", async () => {
+      mocks.callGateway.mockResolvedValue({
+        ...report,
+        hooks: [
+          { ...hook, name: "first-hook", hookKey: "shared-key" },
+          { ...hook, name: "second-hook", hookKey: "shared-key" },
+        ],
+      });
+
+      await expect(
+        createHooksProgram().parseAsync(argv("shared-key"), { from: "user" }),
+      ).rejects.toMatchObject({
+        name: "ExpectedCliError",
+        message:
+          'Hook "shared-key" is ambiguous; matches: first-hook (shared-key), second-hook (shared-key). Use a unique hook name or hook key.',
+      });
+      expect(capture.runtimeLogs).toEqual([]);
+      expect(mocks.requestExitAfterOneShotOutput).not.toHaveBeenCalled();
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
     });
-    expect(mocks.requestExitAfterOneShotOutput).toHaveBeenCalledWith(capture.defaultRuntime, 1);
+
+    it("preserves missing-hook output and requests a failing exit", async () => {
+      await createHooksProgram().parseAsync(argv("missing-hook"), { from: "user" });
+
+      expect(capture.runtimeLogs).toHaveLength(1);
+      if (json) {
+        expect(JSON.parse(capture.runtimeLogs[0] ?? "")).toEqual({
+          ok: false,
+          error: { type: "cli_error", message: 'Hook "missing-hook" not found.' },
+          hook: "missing-hook",
+        });
+        expect(capture.defaultRuntime.writeStdout).toHaveBeenCalledOnce();
+      } else {
+        expect(capture.runtimeLogs[0]).toBe(
+          'Hook "missing-hook" not found. Run `openclaw hooks list` to see available hooks.',
+        );
+        expect(capture.defaultRuntime.writeStdout).not.toHaveBeenCalled();
+      }
+      expect(mocks.requestExitAfterOneShotOutput).toHaveBeenCalledWith(capture.defaultRuntime, 1);
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each(["enable", "disable"])("still rejects %s for plugin-managed hooks", async (action) => {
+    mocks.buildWorkspaceHookStatus.mockReturnValue({
+      ...report,
+      hooks: [
+        { ...hook, source: "openclaw-plugin", managedByPlugin: true, pluginId: "demo-plugin" },
+      ],
+    });
+    await expect(
+      createHooksProgram().parseAsync(["hooks", action, "metadata-key"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+    expect(capture.runtimeErrors.at(-1)).toContain('managed by plugin "demo-plugin"');
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("allows disabling a hook with missing requirements", async () => {
+    mocks.buildWorkspaceHookStatus.mockReturnValue({
+      ...report,
+      hooks: [{ ...hook, requirementsSatisfied: false, loadable: false }],
+    });
+    await createHooksProgram().parseAsync(["hooks", "disable", "metadata-key"], { from: "user" });
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: {
+        hooks: {
+          internal: {
+            enabled: true,
+            entries: { "metadata-key": { env: { HOOK_ENV: "preserved" }, enabled: false } },
+          },
+        },
+      },
+      baseHash: "config-hash",
+    });
   });
 
   it.each([

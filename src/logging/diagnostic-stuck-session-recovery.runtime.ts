@@ -1,15 +1,18 @@
+import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/active-run-projections.js";
 // Stuck session recovery runtime helpers inspect embedded sessions for recovery.
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
+import { resolveActiveEmbeddedRunRecoveryBlocker } from "../agents/embedded-agent-runner/run-state.js";
 import {
   abortAndDrainEmbeddedAgentRun,
   isEmbeddedAgentRunActive,
   isEmbeddedAgentRunHandleActive,
   resolveEmbeddedReplyActivity,
-  resolveActiveEmbeddedRunSessionId,
   resolveActiveEmbeddedRunSessionIdBySessionFile,
   resolveActiveEmbeddedRunHandleSessionId,
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
 } from "../agents/embedded-agent-runner/runs.js";
+import { recoverTerminalSessionPlacementTurn } from "../agents/session-placement-admission.js";
+import { prepareStaleFollowupDrainRetirement } from "../auto-reply/reply/queue/drain.js";
 import {
   getCommandLaneActiveTaskIds,
   getCommandLaneSnapshot,
@@ -148,6 +151,24 @@ export async function recoverStuckDiagnosticSession(
         sessionKey: params.sessionKey,
       };
     }
+    const terminalWorkerError = params.sessionId
+      ? recoverTerminalSessionPlacementTurn({
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+        })
+      : undefined;
+    if (terminalWorkerError !== undefined) {
+      // The placement owner already recorded failure and released its cleanup wait.
+      // Let ordinary turn completion unwind the reply and lane instead of resetting them.
+      return reportRecoveryOutcome({
+        status: "failed",
+        action: "fail_worker_turn",
+        reason: "terminal_worker",
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        error: terminalWorkerError,
+      });
+    }
     const fallbackActiveSessionId =
       params.sessionId && isEmbeddedAgentRunHandleActive(params.sessionId)
         ? params.sessionId
@@ -168,6 +189,7 @@ export async function recoverStuckDiagnosticSession(
         fileActiveWorkSessionId ??
         params.sessionId)
       : (fileActiveWorkSessionId ?? params.sessionId);
+    const retireStaleFollowupDrain = prepareStaleFollowupDrainRetirement(key);
     const sessionLane = key ? resolveEmbeddedSessionLane(key) : null;
     const preAbortActiveTaskIds = new Set(
       sessionLane ? getCommandLaneActiveTaskIds(sessionLane) : [],
@@ -238,6 +260,17 @@ export async function recoverStuckDiagnosticSession(
       }
       // Active embedded runs own their cleanup; registry terminal settle bounds
       // lane release if the owner never drains after this abort.
+      const recoveryBlocker = resolveActiveEmbeddedRunRecoveryBlocker(activeSessionId);
+      if (recoveryBlocker) {
+        return {
+          status: "skipped",
+          action: "keep_lane",
+          reason: recoveryBlocker,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          activeSessionId,
+        };
+      }
       const result = await abortAndDrainEmbeddedAgentRun({
         sessionId: activeSessionId,
         sessionKey: params.sessionKey,
@@ -316,6 +349,7 @@ export async function recoverStuckDiagnosticSession(
         // after the ownerless-lane window and only if no fresh task appeared.
         if (!laneStartedFreshTask && params.ageMs >= staleActiveLaneTaskReleaseMs) {
           const released = resetCommandLane(sessionLane);
+          retireStaleFollowupDrain?.();
           return reportRecoveryOutcome({
             status: "released",
             action: "release_lane",
@@ -359,6 +393,7 @@ export async function recoverStuckDiagnosticSession(
     const clearStaleSession = !aborted && released === 0 && !activeSessionId;
 
     if (aborted || forceCleared || released > 0 || clearStaleSession) {
+      retireStaleFollowupDrain?.();
       const action = aborted || forceCleared ? "abort_embedded_run" : "release_lane";
       const stoppedFields = formatStoppedCronSessionDiagnosticFields(
         resolveCronSessionDiagnosticContext({ sessionKey: params.sessionKey, activeSessionId }),

@@ -4,7 +4,6 @@ import type { ArtifactDownloadResult, SessionWorkspaceGetResult } from "../../..
 import { hasOperatorAdminAccess } from "../../../app/operator-access.ts";
 import { patchSettings, type ChatWorkspaceDock } from "../../../app/settings.ts";
 import { t } from "../../../i18n/index.ts";
-import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
 import {
@@ -177,6 +176,13 @@ function isCurrentWorkspaceOpenRequest(
   );
 }
 
+export function isSessionWorkspaceItemLoading(state: SessionWorkspaceHost): boolean {
+  const workspace = state.sessionWorkspaceState;
+  return Boolean(
+    workspace && isCurrentSessionWorkspace(state, workspace) && workspace.openRequest !== undefined,
+  );
+}
+
 function openWorkspaceItem<T>(
   state: SessionWorkspaceHost,
   workspace: SessionWorkspaceState,
@@ -185,11 +191,11 @@ function openWorkspaceItem<T>(
   render: (result: T) => SidebarContent | null,
   missingMessage: string,
 ) {
+  if (!state.client || !state.connected) {
+    return;
+  }
   const request = beginWorkspaceOpenRequest(workspace, itemId);
   void (async () => {
-    if (!state.client || !state.connected) {
-      return;
-    }
     state.handleOpenSidebar(null);
     workspace.error = null;
     try {
@@ -209,6 +215,9 @@ function openWorkspaceItem<T>(
         workspace.error = formatUiError(error);
       }
     } finally {
+      if (workspace.openRequest === request) {
+        delete workspace.openRequest;
+      }
       requestWorkspaceUpdate(state);
     }
   })();
@@ -478,9 +487,6 @@ export function createSessionWorkspaceProps(
       workspace.browserPath = path;
       workspace.browserSearch = "";
       loadSessionWorkspace(state, workspace, true);
-    },
-    onCopyPath: (path) => {
-      void copyToClipboard(path);
     },
     onOpenFile: (path, origin) => {
       // Session paths are cwd-relative; browser rows are workspace-root-relative.

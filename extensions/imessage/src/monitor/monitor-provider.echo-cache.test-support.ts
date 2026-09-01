@@ -1,19 +1,18 @@
 // Imessage test support covers monitor provider.echo cache plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  IMESSAGE_SENT_ECHOES_MAX_ENTRIES,
+  IMESSAGE_SENT_ECHOES_NAMESPACE,
+  IMESSAGE_SENT_ECHOES_TTL_MS,
+  resolveIMessageSentEchoEntryKey,
+} from "../state-contract.js";
+import {
   createIMessagePluginStateSyncStoreForTest,
   installIMessageFailingStateRuntimeForTest,
   installIMessageStateRuntimeForTest,
 } from "../test-support/runtime.js";
 import { createSentMessageCache } from "./echo-cache.js";
-import {
-  IMESSAGE_SENT_ECHOES_MAX_ENTRIES,
-  IMESSAGE_SENT_ECHOES_NAMESPACE,
-  IMESSAGE_SENT_ECHOES_TTL_MS,
-  hasPersistedIMessageEcho,
-  rememberPersistedIMessageEcho,
-  resolveIMessageSentEchoEntryKey,
-} from "./persisted-echo-cache.js";
+import { hasPersistedIMessageEcho, rememberPersistedIMessageEcho } from "./persisted-echo-cache.js";
 
 describe("iMessage sent-message echo cache", () => {
   beforeEach(() => {

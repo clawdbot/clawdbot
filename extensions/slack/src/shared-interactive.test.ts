@@ -399,7 +399,13 @@ describe("buildSlackInteractiveBlocks", () => {
       expect(
         buildSlackInteractiveBlocks(
           { blocks: [{ type: "buttons", buttons: [{ label: "Continue", action }] }] },
-          { buttonIndexOffset: 4 },
+          {
+            buttonIndexOffset: 4,
+            questionOptionIndices:
+              action.type === "question"
+                ? new Map([[action.questionId, new Map([[action.optionValue.toLowerCase(), 0]])]])
+                : undefined,
+          },
         ),
       ).toMatchObject([
         {
@@ -440,17 +446,30 @@ describe("buildSlackPresentationBlocks", () => {
   it("renders question choices with compact private indices", () => {
     const questionId = "ask_0123456789abcdef0123456789abcdef";
     expect(
-      buildSlackPresentationBlocks({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: ["Staging", "Production"].map((label) => ({
-              label,
-              action: { type: "question" as const, questionId, optionValue: label },
-            })),
-          },
-        ],
-      }),
+      buildSlackPresentationBlocks(
+        {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: ["Staging", "Production"].map((label) => ({
+                label,
+                action: { type: "question" as const, questionId, optionValue: label },
+              })),
+            },
+          ],
+        },
+        {
+          questionOptionIndices: new Map([
+            [
+              questionId,
+              new Map([
+                ["staging", 0],
+                ["production", 1],
+              ]),
+            ],
+          ]),
+        },
+      ),
     ).toEqual([
       {
         type: "actions",
@@ -464,6 +483,55 @@ describe("buildSlackPresentationBlocks", () => {
             action_id: "openclaw:question_button:1:2",
             value: `slq1:${questionId}:1`,
           }),
+        ],
+      },
+    ]);
+  });
+
+  it("keeps question choices native when custom input stays on the text path", () => {
+    const questionId = "ask_0123456789abcdef0123456789abcdef";
+    const presentation: MessagePresentation = {
+      blocks: [
+        { type: "text", text: "Tap a choice, or reply with your own answer." },
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Production",
+              action: { type: "question" as const, questionId, optionValue: "Production" },
+            },
+            {
+              label: "Other…",
+              action: { type: "question" as const, questionId, intent: "custom-input" as const },
+            },
+            {
+              label: "Staging",
+              action: { type: "question" as const, questionId, optionValue: "Staging" },
+            },
+          ],
+        },
+      ],
+    };
+
+    const renderOptions = {
+      questionOptionIndices: new Map([
+        [
+          questionId,
+          new Map([
+            ["staging", 0],
+            ["production", 1],
+          ]),
+        ],
+      ]),
+    };
+    expect(canRenderSlackPresentation(presentation, renderOptions)).toBe(true);
+    expect(buildSlackPresentationBlocks(presentation, renderOptions)).toMatchObject([
+      { type: "section" },
+      {
+        type: "actions",
+        elements: [
+          { action_id: "openclaw:question_button:1:1", value: `slq1:${questionId}:1` },
+          { action_id: "openclaw:question_button:1:3", value: `slq1:${questionId}:0` },
         ],
       },
     ]);

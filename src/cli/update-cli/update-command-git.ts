@@ -11,16 +11,15 @@ import {
 } from "../../infra/update-global.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
-import {
-  OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
-  preflightOpenClawDatabaseSchemas,
-  type IncompatibleOpenClawDatabase,
-  type IndeterminateOpenClawDatabase,
-  type OpenClawDatabaseSchemaPreflight,
-} from "../../state/openclaw-database-preflight.js";
+import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "../../state/openclaw-database-preflight.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { splitShellArgs } from "../../utils/shell-argv.js";
-import { createUpdateProgress, printResult } from "./progress.js";
+import { createUpdateProgress } from "./progress.js";
+import {
+  checkTargetDatabaseSchemas,
+  formatSchemaRefusalLines,
+  hasSchemaRefusal,
+} from "./schema-preflight.js";
 import {
   createGlobalCommandRunner,
   DEFAULT_PACKAGE_NAME,
@@ -29,9 +28,12 @@ import {
   resolveGitInstallDir,
   resolveGlobalManager,
   runUpdateStep,
-  type UpdateCommandOptions,
+  UpdatePreMutationError,
 } from "./shared.js";
-import { UpdateCommandAbort, type PreManagedServiceStop } from "./update-command-service.js";
+import {
+  resolvePreparedGatewayUpdatePolicy,
+  type PreManagedServiceStop,
+} from "./update-command-service.js";
 
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
 
@@ -119,61 +121,26 @@ type BeforeGitMutation = (target: {
   allowGatewayActivation?: boolean;
 } | void>;
 
-export function formatSchemaRefusalLines(
-  schemas: {
-    incompatible: readonly IncompatibleOpenClawDatabase[];
-    indeterminate: readonly IndeterminateOpenClawDatabase[];
-  },
-  dryRun = false,
-): string[] {
-  const prefix = dryRun ? "Would refuse update" : "Update refused";
-  return [
-    ...schemas.incompatible.map((database) => {
-      const agent = database.agentId ? ` (agent ${database.agentId})` : "";
-      return `${prefix}: ${database.kind} database${agent} ${database.path} has schema ${database.foundVersion}; target supports ${database.supportedVersion}; writer build ${database.writerAppVersion ?? "unknown"}.`;
-    }),
-    ...schemas.indeterminate.map(
-      (database) =>
-        `${prefix}: could not inspect ${database.kind} database ${database.path}: ${database.reason}; retry once the gateway releases it.`,
-    ),
-    OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
-    "Installing manually via npm bypasses this guard; back up first and verify compatibility.",
-  ];
-}
-
-export function checkTargetDatabaseSchemas(
-  supportedVersions: OpenClawSchemaVersions | undefined,
-  env: NodeJS.ProcessEnv = process.env,
-): OpenClawDatabaseSchemaPreflight {
-  return supportedVersions
-    ? preflightOpenClawDatabaseSchemas({ env, supportedVersions })
-    : { incompatible: [], indeterminate: [] };
-}
-
-export function hasSchemaRefusal(schemas: OpenClawDatabaseSchemaPreflight): boolean {
-  return schemas.incompatible.length > 0 || schemas.indeterminate.length > 0;
-}
-
 export function createBeforeGitMutation(params: {
   roots: readonly string[];
   shouldRestart: boolean;
   stopManagedService: (roots: readonly string[]) => Promise<void>;
   getPreManagedServiceStop: () => PreManagedServiceStop | undefined;
-  markSchemaRefusalAfterStop: () => void;
+  switchToGit: boolean;
 }): BeforeGitMutation {
   return async (target) => {
     if (target?.metadataUnreadable) {
-      defaultRuntime.error(
+      throw new UpdatePreMutationError(
+        "target-metadata-preflight",
         `Update refused: could not inspect the target's schema support (${target.metadataUnreadable}). Retry, or see ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
       );
-      defaultRuntime.exit(1);
-      throw new UpdateCommandAbort();
     }
     const preStopSchemas = checkTargetDatabaseSchemas(target?.schemaVersions);
     if (hasSchemaRefusal(preStopSchemas)) {
-      defaultRuntime.error(formatSchemaRefusalLines(preStopSchemas).join("\n"));
-      defaultRuntime.exit(1);
-      throw new UpdateCommandAbort();
+      throw new UpdatePreMutationError(
+        "database-schema-preflight",
+        formatSchemaRefusalLines(preStopSchemas).join("\n"),
+      );
     }
     await params.stopManagedService(params.roots);
     const preManagedServiceStop = params.getPreManagedServiceStop();
@@ -182,19 +149,16 @@ export function createBeforeGitMutation(params: {
       preManagedServiceStop?.serviceEnv ?? process.env,
     );
     if (hasSchemaRefusal(postStopSchemas)) {
-      params.markSchemaRefusalAfterStop();
-      defaultRuntime.error(formatSchemaRefusalLines(postStopSchemas).join("\n"));
-      throw new UpdateCommandAbort();
+      throw new UpdatePreMutationError(
+        "database-schema-preflight",
+        formatSchemaRefusalLines(postStopSchemas).join("\n"),
+      );
     }
-    return {
-      // Only a positively owned service may be rewritten. Activation
-      // additionally requires this update to have stopped it.
-      allowGatewayServiceRepair: preManagedServiceStop?.serviceMatchesMutationRoot === true,
-      allowGatewayActivation:
-        params.shouldRestart &&
-        preManagedServiceStop?.stopped === true &&
-        preManagedServiceStop.serviceMatchesMutationRoot === true,
-    };
+    // A candidate checkout cannot own the service until its global exposure
+    // succeeds. Finalization refreshes and activates the verified installation.
+    return params.switchToGit
+      ? { allowGatewayServiceRepair: false, allowGatewayActivation: false }
+      : resolvePreparedGatewayUpdatePolicy(preManagedServiceStop, params.shouldRestart);
   };
 }
 
@@ -207,9 +171,6 @@ export async function updateGitInstall(params: {
   progress: ReturnType<typeof createUpdateProgress>["progress"];
   channel: UpdateChannel;
   tag: string;
-  showProgress: boolean;
-  opts: UpdateCommandOptions;
-  stop: () => void;
   devTarget?: DevUpdateTarget;
   beforeGitMutation?: BeforeGitMutation;
   allowGatewayServiceRepair: boolean;
@@ -238,18 +199,16 @@ export async function updateGitInstall(params: {
   // Package-to-Git updates must settle package-manager policy before cloning or
   // updating the checkout; carry this exact decision into the later install.
   if (npmLifecycleGate.error) {
-    const result: UpdateRunResult = {
+    defaultRuntime.error(npmLifecycleGate.error);
+    return {
       status: "error",
       mode: "git",
       root: updateRoot,
       reason: "npm lifecycle policy preflight",
+      recovery: { serviceRestartSafe: true },
       steps: [],
       durationMs: Date.now() - params.startedAt,
     };
-    params.stop();
-    defaultRuntime.error(npmLifecycleGate.error);
-    defaultRuntime.exit(1);
-    return result;
   }
 
   const checkout = params.switchToGit
@@ -264,18 +223,15 @@ export async function updateGitInstall(params: {
   updateRoot = checkout?.checkoutDir ?? updateRoot;
 
   if (cloneStep && cloneStep.exitCode !== 0) {
-    const result: UpdateRunResult = {
+    return {
       status: "error",
       mode: "git",
       root: updateRoot,
       reason: cloneStep.name,
+      recovery: { serviceRestartSafe: true },
       steps: [cloneStep],
       durationMs: Date.now() - params.startedAt,
     };
-    params.stop();
-    printResult(result, { ...params.opts, hideSteps: params.showProgress });
-    defaultRuntime.exit(1);
-    return result;
   }
 
   const updateResult = await runGatewayUpdate({
@@ -309,6 +265,9 @@ export async function updateGitInstall(params: {
       timeoutMs: effectiveTimeout,
       env: installEnv,
       installCwd: updateRoot,
+      // ensureGitCheckout already resolved the root; only the successful Git
+      // build/doctor flow can authorize exposing that exact checkout globally.
+      expectedGitCheckout: { root: updateRoot, sha: updateResult.after?.sha ?? null },
     });
     steps.push(...packageUpdate.steps);
 
@@ -316,6 +275,7 @@ export async function updateGitInstall(params: {
       ...updateResult,
       status: packageUpdate.failedStep ? "error" : "ok",
       reason: packageUpdate.failedStep?.name,
+      recovery: packageUpdate.recovery,
       steps,
       durationMs: Date.now() - params.startedAt,
     };

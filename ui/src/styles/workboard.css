@@ -246,24 +246,6 @@
   min-width: min(280px, 100%);
 }
 
-.workboard-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-height: var(--workboard-control-height);
-  color: var(--muted);
-  font-size: 0.8rem;
-  font-weight: 600;
-  line-height: 1.2;
-  white-space: nowrap;
-}
-
-.workboard-toggle input {
-  width: 15px;
-  height: 15px;
-  margin: 0;
-}
-
 .workboard-draft {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;

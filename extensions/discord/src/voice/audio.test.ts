@@ -80,37 +80,39 @@ async function collectBuffers(stream: Readable): Promise<Buffer[]> {
   return chunks;
 }
 
+const decodeModes = [
+  { mode: "buffered", decode: decodeOpusStream },
+  {
+    mode: "streaming",
+    decode: async (stream: Readable, params: Parameters<typeof decodeOpusStream>[1]) => {
+      const chunks: Buffer[] = [];
+      await decodeOpusStreamChunks(stream, { ...params, onChunk: (chunk) => chunks.push(chunk) });
+      return Buffer.concat(chunks);
+    },
+  },
+];
+
 describe("discord voice opus codec", () => {
-  it("defaults to libopus-wasm for receive decoding", async () => {
-    const verbose: string[] = [];
-    const warnings: string[] = [];
+  it.each(decodeModes)(
+    "round-trips Discord PCM through $mode Opus decoding",
+    async ({ decode }) => {
+      const encoder = createDiscordOpusEncodeStream();
+      const packetsPromise = collectBuffers(encoder);
 
-    const decoded = await decodeOpusStream(Readable.from([]), {
-      onVerbose: (message) => verbose.push(message),
-      onWarn: (message) => warnings.push(message),
-    });
+      encoder.end(Buffer.alloc(960 * 2 * 2));
+      const packets = await packetsPromise;
 
-    expect(decoded.length).toBe(0);
-    expect(verbose).toContain("opus decoder: libopus-wasm");
-    expect(warnings).toEqual([]);
-  });
+      expect(packets).toHaveLength(1);
+      expect(packets[0]?.length).toBeGreaterThan(0);
 
-  it("encodes raw Discord PCM into Opus packets for realtime playback", async () => {
-    const encoder = createDiscordOpusEncodeStream();
-    const packetsPromise = collectBuffers(encoder);
-
-    encoder.end(Buffer.alloc(960 * 2 * 2));
-    const packets = await packetsPromise;
-
-    expect(packets).toHaveLength(1);
-    expect(packets[0]?.length).toBeGreaterThan(0);
-
-    const decoded = await decodeOpusStream(Readable.from(packets), {
-      onVerbose: vi.fn(),
-      onWarn: vi.fn(),
-    });
-    expect(decoded.length).toBe(960 * 2 * 2);
-  });
+      const onVerbose = vi.fn();
+      const onWarn = vi.fn();
+      const decoded = await decode(Readable.from(packets), { onVerbose, onWarn });
+      expect(decoded.length).toBe(960 * 2 * 2);
+      expect(onVerbose).toHaveBeenCalledWith("opus decoder: libopus-wasm");
+      expect(onWarn).not.toHaveBeenCalled();
+    },
+  );
 
   it("pads final partial PCM frames before encoding", async () => {
     const encoder = createDiscordOpusEncodeStream();
@@ -120,26 +122,35 @@ describe("discord voice opus codec", () => {
     const packets = await packetsPromise;
 
     expect(packets).toHaveLength(1);
-  });
-
-  it("surfaces chunk decode stream failures to callers", async () => {
-    const err = new Error("memory access out of bounds");
-    const onError = vi.fn();
-    const stream = new Readable({
-      read() {
-        this.destroy(err);
-      },
-    });
-
-    await decodeOpusStreamChunks(stream, {
-      onChunk: vi.fn(),
-      onError,
+    const decoded = await decodeOpusStream(Readable.from(packets), {
       onVerbose: vi.fn(),
       onWarn: vi.fn(),
     });
-
-    expect(onError).toHaveBeenCalledWith(err);
+    expect(decoded).toHaveLength(960 * 2 * 2);
   });
+
+  it.each(decodeModes)(
+    "preserves decoded audio and reports $mode stream failures",
+    async ({ decode }) => {
+      const err = new Error("memory access out of bounds");
+      const onError = vi.fn();
+      const stream = Readable.from(
+        (async function* () {
+          yield Buffer.from([0xf8, 0xff, 0xfe]);
+          throw err;
+        })(),
+      );
+
+      const decoded = await decode(stream, {
+        onError,
+        onVerbose: vi.fn(),
+        onWarn: vi.fn(),
+      });
+
+      expect(onError).toHaveBeenCalledWith(err);
+      expect(decoded).toHaveLength(960 * 2 * 2);
+    },
+  );
 });
 
 describe("createDiscordOpusPlaybackStream child stream errors", () => {

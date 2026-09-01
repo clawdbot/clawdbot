@@ -1,11 +1,13 @@
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { extractErrorCode, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   listMemoryCorpusSupplements,
   type MemoryCorpusSearchResult,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
+  createMemorySearchDeadlineError,
   DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
+  isMemorySearchDeadlineError,
   resolveMemorySearchAbortError,
 } from "./memory/search-deadline.js";
 
@@ -19,17 +21,40 @@ type MemorySupplementReadResult = Omit<MemorySupplementGetResult, "content"> & {
   text: string;
 };
 
+export type MemoryCorpusFailure = { error: string; code?: string; deadline: boolean };
+type UnavailableMemoryCorpus<T> = {
+  corpus: MemoryCorpus;
+  outcome: "unavailable";
+  value: T;
+} & MemoryCorpusFailure;
+
 export type MemoryCorpusAttempt<T> =
   | { corpus: MemoryCorpus; outcome: "ok"; value: T }
-  | { corpus: MemoryCorpus; outcome: "unavailable"; value: T; error: string }
+  | UnavailableMemoryCorpus<T>
   | { corpus: MemoryCorpus; outcome: "not-registered" };
 
+/**
+ * Flattening the failure to a string is where provenance would be lost: a
+ * provider is free to emit the very text this tool uses for its own timeout, so
+ * the deadline is carried across the boundary as a flag taken from the error
+ * object while it is still here. Callers that already hold a flattened error
+ * pass the flag they were given.
+ */
 export function unavailableMemoryCorpus<T>(
   corpus: MemoryCorpus,
   value: T,
   error: unknown,
-): MemoryCorpusAttempt<T> {
-  return { corpus, outcome: "unavailable", value, error: formatErrorMessage(error) };
+  deadline = isMemorySearchDeadlineError(error),
+): UnavailableMemoryCorpus<T> {
+  const code = extractErrorCode(error);
+  return {
+    corpus,
+    outcome: "unavailable",
+    value,
+    error: formatErrorMessage(error),
+    deadline,
+    ...(code ? { code } : {}),
+  };
 }
 
 async function raceMemoryCorpusSignal<T>(signal: AbortSignal, task: Promise<T>): Promise<T> {
@@ -77,7 +102,9 @@ export async function runMemoryCorpusDeadline<T>(params: {
   const controller = new AbortController();
   const timer = setTimeout(() => {
     controller.abort(
-      new Error(`${params.operation} timed out after ${DEFAULT_MEMORY_SEARCH_TIMEOUT_MS / 1000}s`),
+      createMemorySearchDeadlineError(
+        `${params.operation} timed out after ${DEFAULT_MEMORY_SEARCH_TIMEOUT_MS / 1000}s`,
+      ),
     );
   }, DEFAULT_MEMORY_SEARCH_TIMEOUT_MS);
   timer.unref?.();
@@ -103,15 +130,13 @@ export function composeMemoryCorpusMetadata(
     (left, right) => Number(left.corpus === "wiki") - Number(right.corpus === "wiki"),
   );
   const warnings = ordered.flatMap((attempt) => {
-    if (attempt.outcome === "ok") {
-      return [];
-    }
     const label = attempt.corpus === "memory" ? "Memory" : "Wiki";
-    return [
-      attempt.outcome === "not-registered"
-        ? `${label} corpus is not registered; results do not cover that requested corpus.`
-        : `${label} corpus unavailable: ${attempt.error}`,
-    ];
+    if (attempt.outcome === "unavailable") {
+      return [`${label} corpus unavailable: ${attempt.error}`];
+    }
+    return attempt.outcome === "not-registered" && ordered.length === 1
+      ? [`${label} corpus is not registered; results do not cover that requested corpus.`]
+      : [];
   });
   warnings.push(...extraWarnings);
   const errors = ordered.flatMap((attempt) =>
@@ -177,7 +202,8 @@ async function settleMemorySupplements<T>(params: {
     orderedFailures.length === 1
       ? orderedFailures[0]!.error
       : orderedFailures.map((entry) => `${entry.pluginId}: ${entry.error}`).join("; ");
-  return { corpus: "wiki", outcome: "unavailable", value, error };
+  // Individual supplement failures are the plugin's, never this tool's deadline.
+  return { corpus: "wiki", outcome: "unavailable", value, error, deadline: false };
 }
 
 export async function searchMemoryCorpusSupplements(params: {

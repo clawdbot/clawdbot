@@ -26,7 +26,6 @@ import {
   parseCanonicalSessionSyncTargetFromPath,
   resolveSessionIdentityForTranscriptFile,
   resolveSessionFileForSyncTarget,
-  sessionPathForFile,
   statSessionEntrySync,
   type SessionFileEntry,
 } from "./session-files.js";
@@ -754,28 +753,6 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
   });
 });
 
-describe("sessionPathForFile", () => {
-  it("includes the owning agent id when the transcript lives under an agent sessions dir", () => {
-    const absPath = path.join(
-      tmpDir,
-      "agents",
-      "main",
-      "sessions",
-      "deleted-session.jsonl.deleted.2026-02-16T22-27-33.000Z",
-    );
-
-    expect(sessionPathForFile(absPath)).toBe(
-      "sessions/main/deleted-session.jsonl.deleted.2026-02-16T22-27-33.000Z",
-    );
-  });
-
-  it("keeps the legacy basename-only path when the agent owner cannot be derived", () => {
-    expect(sessionPathForFile(path.join(tmpDir, "loose-session.jsonl"))).toBe(
-      "sessions/loose-session.jsonl",
-    );
-  });
-});
-
 describe("memory session sync targets", () => {
   it("parses deprecated canonical OpenClaw transcript paths into sync identity", () => {
     const sessionFile = path.join(tmpDir, "agents", "main", "sessions", "active.jsonl");
@@ -1031,20 +1008,29 @@ describe("buildSessionEntry", () => {
     expect(entry.generatedByCronRun).toBe(true);
   });
 
-  it("skips blank lines and invalid JSON without breaking lineMap", async () => {
-    const jsonlLines = [
-      "",
-      "not valid json",
-      JSON.stringify({ type: "message", message: { role: "user", content: "First" } }),
-      "",
-      JSON.stringify({ type: "message", message: { role: "assistant", content: "Second" } }),
-    ];
-    const filePath = path.join(tmpDir, "gaps.jsonl");
-    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+  it.each([false, true])(
+    "preserves blank/malformed archive line ordinals (compressed=%s)",
+    async (compressed) => {
+      const jsonlLines = [
+        "",
+        "not valid json",
+        JSON.stringify({ type: "message", message: { role: "user", content: "First" } }),
+        "",
+        JSON.stringify({ type: "message", message: { role: "assistant", content: "Second" } }),
+        "",
+      ];
+      const raw = jsonlLines.join("\n");
+      const encoded = compressed ? encodeSessionArchiveContent(raw) : { bytes: raw, suffix: "" };
+      const filePath = path.join(
+        tmpDir,
+        `gaps.jsonl.reset.2026-07-01T10-00-00.000Z${encoded.suffix}`,
+      );
+      fsSync.writeFileSync(filePath, encoded.bytes);
 
-    const entry = requireSessionEntry(await buildSessionEntry(filePath));
-    expect(entry.lineMap).toStrictEqual([3, 5]);
-  });
+      const entry = requireSessionEntry(await buildSessionEntry(filePath));
+      expect(entry.lineMap).toStrictEqual([3, 5]);
+    },
+  );
 
   it("strips inbound metadata when a user envelope is split across text blocks", async () => {
     const jsonlLines = [

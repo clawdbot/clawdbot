@@ -39,9 +39,11 @@ type SessionSqliteDatabase = Pick<
   | "conversations"
   | "heartbeat_outcomes"
   | "session_conversations"
+  | "session_goal_operations"
   | "session_members"
   | "session_nodes"
   | "session_participants"
+  | "session_pending_inputs"
   | "session_progress_cards"
   | "session_suggestions"
   | "session_transcript_archives"
@@ -60,6 +62,7 @@ export type ResolvedSqliteScope = {
   agentId: string;
   databaseAgentId?: string;
   env?: NodeJS.ProcessEnv;
+  ownerStorePath?: string;
   path?: string;
   sessionKey: string;
 };
@@ -68,6 +71,7 @@ export type ResolvedSqliteReadScope = {
   agentId: string;
   databaseAgentId?: string;
   env?: NodeJS.ProcessEnv;
+  ownerStorePath?: string;
   path?: string;
   sessionKey?: string;
 };
@@ -169,6 +173,7 @@ export function resolveSqliteScope(
     agentId,
     ...(storeTarget?.shared && storeTarget.agentId ? { databaseAgentId: storeTarget.agentId } : {}),
     ...(scope.env ? { env: scope.env } : {}),
+    ...(effectiveStorePath ? { ownerStorePath: effectiveStorePath } : {}),
     ...(storeTarget ? { path: storeTarget.path } : {}),
     sessionKey,
   };
@@ -215,6 +220,7 @@ export function resolveSqliteReadScope(
     agentId,
     ...(storeTarget?.shared && storeTarget.agentId ? { databaseAgentId: storeTarget.agentId } : {}),
     ...(scope.env ? { env: scope.env } : {}),
+    ...(effectiveStorePath ? { ownerStorePath: effectiveStorePath } : {}),
     ...(storeTarget ? { path: storeTarget.path } : {}),
     ...(sessionKey ? { sessionKey } : {}),
   };

@@ -26,7 +26,6 @@ import type { FeishuClientCredentials } from "./client.js";
 const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
 const sendCardFeishuMock = vi.hoisted(() => vi.fn());
-const sendMarkdownCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendStructuredCardFeishuMock = vi.hoisted(() => vi.fn());
 const createFeishuClientMock = vi.hoisted(() =>
   vi.fn((_account: FeishuClientCredentials) => ({ request: vi.fn() })),
@@ -67,15 +66,16 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
 
 vi.mock("./media.js", () => ({
   sendMediaFeishu: sendMediaFeishuMock,
+  sendStickerFeishu: vi.fn(),
   shouldSuppressFeishuTextForVoiceMedia: shouldSuppressFeishuTextForVoiceMediaMock,
 }));
 
-vi.mock("./send.js", () => ({
+vi.mock("./send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./send.js")>()),
   editMessageFeishu: vi.fn(),
   getMessageFeishu: vi.fn(),
   sendCardFeishu: sendCardFeishuMock,
   sendMessageFeishu: sendMessageFeishuMock,
-  sendMarkdownCardFeishu: sendMarkdownCardFeishuMock,
   sendStructuredCardFeishu: sendStructuredCardFeishuMock,
   resolveFeishuCardTemplate: (template?: string) =>
     new Set([
@@ -235,7 +235,6 @@ function resetOutboundMocks() {
   vi.clearAllMocks();
   sendMessageFeishuMock.mockResolvedValue({ messageId: "text_msg" });
   sendCardFeishuMock.mockResolvedValue({ messageId: "native_card_msg" });
-  sendMarkdownCardFeishuMock.mockResolvedValue({ messageId: "card_msg" });
   sendStructuredCardFeishuMock.mockResolvedValue({ messageId: "card_msg" });
   sendMediaFeishuMock.mockResolvedValue({ messageId: "media_msg" });
   deliverCommentThreadTextMock.mockResolvedValue({
@@ -262,11 +261,6 @@ function sendCardCall(index = 0): Record<string, any> | undefined {
 
 function sendStructuredCardCall(index = 0): Record<string, any> | undefined {
   const calls = sendStructuredCardFeishuMock.mock.calls as unknown as Array<[Record<string, any>]>;
-  return calls[index]?.[0];
-}
-
-function sendMarkdownCardCall(index = 0): Record<string, any> | undefined {
-  const calls = sendMarkdownCardFeishuMock.mock.calls as unknown as Array<[Record<string, any>]>;
   return calls[index]?.[0];
 }
 
@@ -494,6 +488,101 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
       sendMediaFeishuMock.mock.invocationCallOrder[0] ?? 0,
     );
   });
+
+  it.each(
+    [false, true].flatMap((visibleTextAlreadyDelivered) =>
+      ["direct", "core-rendered"].flatMap((deliveryPath) =>
+        ["controls", "empty", "empty-with-prose"].map((presentationKind) => ({
+          visibleTextAlreadyDelivered,
+          deliveryPath,
+          presentationKind,
+        })),
+      ),
+    ),
+  )(
+    "preserves oversized presentation before TTS ($deliveryPath, prose visible: $visibleTextAlreadyDelivered, content: $presentationKind)",
+    async ({ visibleTextAlreadyDelivered, deliveryPath, presentationKind }) => {
+      const hasPresentationContent = presentationKind === "controls";
+      const payload = {
+        text: presentationKind === "empty" ? undefined : "Spoken summary",
+        mediaUrl: "https://example.com/reply.ogg",
+        audioAsVoice: true,
+        ttsSupplement: { spokenText: "Spoken summary", visibleTextAlreadyDelivered },
+        presentation: {
+          blocks: hasPresentationContent
+            ? [
+                ...Array.from({ length: 196 }, () => ({ type: "divider" as const })),
+                { type: "text" as const, text: "Presentation detail" },
+                {
+                  type: "buttons" as const,
+                  buttons: [
+                    { label: "Help", action: { type: "command" as const, command: "/help" } },
+                    {
+                      label: "Inspect",
+                      action: { type: "callback" as const, value: "opaque-tts" },
+                    },
+                  ],
+                },
+              ]
+            : Array.from({ length: 201 }, () => ({ type: "divider" as const })),
+        },
+      };
+      const context = {
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: payload.text ?? "",
+        accountId: "main",
+        replyToId: "om_root",
+        replyToIdSource: "implicit" as const,
+        replyToMode: "first" as const,
+      };
+      let outboundPayload: ReplyPayload = payload;
+      if (deliveryPath === "core-rendered") {
+        const rendered = await feishuOutbound.renderPresentation?.({
+          payload,
+          presentation: payload.presentation,
+          ctx: { ...context, payload },
+        });
+        if (!rendered) {
+          throw new Error("expected Feishu-rendered presentation");
+        }
+        const { presentation: _presentation, ...coreRenderedPayload } = rendered;
+        outboundPayload = coreRenderedPayload;
+      }
+      const onDeliveryResult = vi.fn();
+      await feishuOutbound.sendPayload?.({
+        ...context,
+        text: outboundPayload.text ?? "",
+        payload: outboundPayload,
+        onDeliveryResult,
+      });
+
+      const text = sendMessageFeishuMock.mock.calls
+        .map((call) => String(call[0]?.text ?? ""))
+        .join("\n");
+      if (hasPresentationContent) {
+        expect(text).toContain("Presentation detail");
+        expect(text).toContain("- Help: `/help`");
+        expect(text).toContain("- Inspect");
+        expect(text).not.toContain("opaque-tts");
+      } else {
+        expect(text).toBe(visibleTextAlreadyDelivered ? "" : "Spoken summary");
+      }
+      const sendsText = hasPresentationContent || !visibleTextAlreadyDelivered;
+      expect(sendCardFeishuMock).not.toHaveBeenCalled();
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(sendsText ? 1 : 0);
+      expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+      expect(onDeliveryResult).toHaveBeenCalledTimes(sendsText ? 2 : 1);
+      expect(sendMediaCall()?.mediaUrl).toBe(payload.mediaUrl);
+      expect(sendMessageCall()?.replyToMessageId).toBe(sendsText ? "om_root" : undefined);
+      expect(sendMediaCall()?.replyToMessageId).toBe(sendsText ? undefined : "om_root");
+      if (sendsText) {
+        expect(sendMessageFeishuMock.mock.invocationCallOrder[0]).toBeLessThan(
+          sendMediaFeishuMock.mock.invocationCallOrder[0] ?? 0,
+        );
+      }
+    },
+  );
 
   it.each([".png", ".heic", ".tif", ".tiff"])(
     "sends an existing absolute %s image path as media instead of leaking it",
@@ -854,6 +943,48 @@ describe("feishuOutbound.sendPayload native cards", () => {
     expectFeishuResult(result, "native_card_msg");
   });
 
+  it.each(["title", "text", "context"] as const)(
+    "delivers complete authored %s through native presentation cards",
+    async (kind) => {
+      const text = `${"x".repeat(3999)} \n  TAIL_NOT_DELIVERED`;
+      const original: MessagePresentation =
+        kind === "title" ? { title: text, blocks: [] } : { blocks: [{ type: kind, text }] };
+      const presentation = adaptMessagePresentationForChannel({
+        presentation: original,
+        capabilities: feishuOutbound.presentationCapabilities,
+      });
+      const payload = { presentation };
+      const rendered = await feishuOutbound.renderPresentation?.({
+        payload,
+        presentation,
+        ctx: { cfg: emptyConfig, to: "chat_1", text: "", accountId: "main", payload },
+      });
+      if (!rendered) {
+        throw new Error("expected native Feishu presentation");
+      }
+      expect(rendered.text).toBe(text);
+      const { presentation: _presentation, ...coreRenderedPayload } = rendered;
+      await feishuOutbound.sendPayload?.({
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: rendered.text ?? "",
+        accountId: "main",
+        payload: coreRenderedPayload,
+      });
+      const card = sendCardCall()?.card;
+      expect(JSON.stringify(card)).toContain("TAIL_NOT_DELIVERED");
+      expect(
+        [
+          card?.header?.title?.content ?? "",
+          ...(card?.body?.elements ?? []).map((element: { content?: string }) =>
+            (element.content ?? "").replace(/<\/?font[^>]*>/gu, ""),
+          ),
+        ].join(""),
+      ).toBe(text);
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("renders webApp presentation buttons into Feishu channelData link buttons", async () => {
     const presentation: MessagePresentation = {
       blocks: [
@@ -895,6 +1026,19 @@ describe("feishuOutbound.sendPayload native cards", () => {
 
   it("falls back to chunked text when a table exceeds the Feishu card envelope", async () => {
     const presentation = createOversizedTablePresentation();
+    presentation.blocks.push({
+      type: "buttons",
+      buttons: [
+        { label: "Unavailable link", url: "javascript:alert(1)" },
+        { label: "Docs", action: { type: "url", url: "https://example.com/docs" } },
+        { label: "Help", action: { type: "command", command: "/help" } },
+        {
+          label: "[Inspect](https://example.com/label)",
+          action: { type: "callback", value: "opaque-inspect" },
+        },
+        { label: "Disabled", disabled: true, action: { type: "command", command: "/disabled" } },
+      ],
+    });
     const rawCardText = JSON.stringify({
       schema: "2.0",
       body: { elements: [{ tag: "markdown", content: "Raw card JSON must stay hidden" }] },
@@ -950,6 +1094,16 @@ describe("feishuOutbound.sendPayload native cards", () => {
     expect(deliveredText).toContain("account-0-");
     expect(deliveredText).toContain("account-399-");
     expect(deliveredText).not.toContain("Raw card JSON must stay hidden");
+    for (const text of [directDeliveredText, deliveredText]) {
+      expect(text).toContain("- Unavailable link");
+      expect(text).not.toContain("javascript:");
+      expect(text).toContain("- Docs: https://example.com/docs");
+      expect(text).toContain("- Help: `/help`");
+      expect(text).toContain("- \\[Inspect\\]\\(https://example.com/label\\)");
+      expect(text).not.toContain("opaque-inspect");
+      expect(text).toContain("- Disabled");
+      expect(text).not.toContain("/disabled");
+    }
     expectFeishuResult(directResult, "text_msg");
     expectFeishuResult(result, "text_msg");
   });
@@ -1560,6 +1714,33 @@ describe("feishuOutbound.sendPayload native cards", () => {
       { type: "open_url", default_url: "https://example.com/path" },
     ]);
     expect(JSON.stringify(card)).not.toContain("javascript:");
+    expect(card.body.elements.at(-1)).toEqual({ tag: "markdown", content: "- Bad" });
+  });
+
+  it("keeps rejected button URLs out of oversized presentation fallback", async () => {
+    await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "",
+      accountId: "main",
+      payload: {
+        presentation: {
+          blocks: [
+            ...Array.from({ length: 200 }, () => ({ type: "divider" as const })),
+            {
+              type: "buttons",
+              buttons: [
+                { label: "[Unavailable](https://example.com/label)", url: "javascript:alert(1)" },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageCall()?.text).toContain("- \\[Unavailable\\]\\(https://example.com/label\\)");
+    expect(sendMessageCall()?.text).not.toContain("javascript:");
   });
 
   it("normalizes caller-supplied native Feishu cards before sending", async () => {
@@ -2176,38 +2357,57 @@ describe("feishuOutbound.sendPayload native cards", () => {
       },
     });
 
-    expect(commentThreadParams()?.content).toBe("Review this\n\n- Open URL: `/approve req_1`");
+    expect(commentThreadParams()?.content).toBe(
+      "Review this\n\n- Open URL: `/approve req_1`\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.",
+    );
     expectFeishuResult(result, "reply_msg");
   });
 
-  it("omits command guidance for disabled command buttons", async () => {
-    const result = await feishuOutbound.sendPayload?.({
-      cfg: emptyConfig,
-      to: "comment:docx:doxcn123:7623358762119646411",
-      text: "Review this",
-      accountId: "main",
-      payload: {
+  it.each(["direct", "core-rendered"] as const)(
+    "keeps disabled labels literal without command guidance in %s document comments",
+    async (deliveryPath) => {
+      const presentation = {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Disabled [Approve](https://example.com) & <at>",
+                disabled: true,
+                action: { type: "command", command: "/approve req_1" },
+              },
+            ],
+          },
+        ],
+      } satisfies MessagePresentation;
+      const context = {
+        cfg: emptyConfig,
+        to: "comment:docx:doxcn123:7623358762119646411",
         text: "Review this",
-        interactive: {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [
-                {
-                  label: "Disabled Approve",
-                  disabled: true,
-                  action: { type: "command", command: "/approve req_1" },
-                },
-              ],
-            },
-          ],
-        },
-      },
-    });
+        accountId: "main",
+      };
+      let payload: ReplyPayload = { text: context.text, interactive: presentation };
+      if (deliveryPath === "core-rendered") {
+        const originalPayload = { text: context.text, presentation };
+        const rendered = await feishuOutbound.renderPresentation?.({
+          payload: originalPayload,
+          presentation,
+          ctx: { ...context, payload: originalPayload },
+        });
+        if (!rendered) {
+          throw new Error("expected Feishu-rendered presentation");
+        }
+        const { presentation: _presentation, ...coreRenderedPayload } = rendered;
+        payload = coreRenderedPayload;
+      }
+      const result = await feishuOutbound.sendPayload?.({ ...context, payload });
 
-    expect(commentThreadParams()?.content).toBe("Review this\n\n- Disabled Approve");
-    expectFeishuResult(result, "reply_msg");
-  });
+      expect(commentThreadParams()?.content).toBe(
+        "Review this\n\n- Disabled [Approve](https://example.com) & <at>",
+      );
+      expectFeishuResult(result, "reply_msg");
+    },
+  );
 
   it("adds command guidance when presentation is stripped but channelData carries the rendered-command marker", async () => {
     // Core strips presentation before sendPayload; channelData retains the fact.
@@ -2338,7 +2538,6 @@ describe("feishuOutbound comment-thread routing", () => {
     expect(commentThreadParams()?.comment_id).toBe("7623358762119646411");
     expect(commentThreadParams()?.content).toBe("```ts\nconst x = 1\n```");
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
-    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
     expectFeishuResult(result, "reply_msg");
   });
 
@@ -2355,7 +2554,6 @@ describe("feishuOutbound comment-thread routing", () => {
     expect(commentThreadParams()?.comment_id).toBe("7623358762119646411");
     expect(commentThreadParams()?.content).toBe("handled in thread");
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
-    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
     expectFeishuResult(result, "reply_msg");
   });
 
@@ -3037,7 +3235,7 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
     }));
     const onDeliveryResult = vi.fn();
 
-    await feishuOutbound.sendMedia?.({
+    const result = await feishuOutbound.sendMedia?.({
       cfg: emptyConfig,
       to: "chat_1",
       text: Array.from({ length: 2_200 }, () => "a").join("\n"),
@@ -3047,10 +3245,15 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
     });
 
     expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
-    expect(onDeliveryResult.mock.calls.map(([result]) => result.messageId)).toEqual([
+    expect(onDeliveryResult.mock.calls.map(([delivery]) => delivery.messageId)).toEqual([
       ...sendMessageFeishuMock.mock.calls.map((_call, index) => `caption_${index + 1}`),
       "media_msg",
     ]);
+    expect(result?.receipt?.parts.map((part) => part.platformMessageId)).toEqual(
+      onDeliveryResult.mock.calls.map(([delivery]) => delivery.messageId),
+    );
+    expect(result?.messageId).toBe("media_msg");
+    expect(result?.receipt?.primaryPlatformMessageId).toBe("media_msg");
   });
 
   it("preserves accepted caption chunks when a later chunk fails before media", async () => {
@@ -3237,35 +3440,42 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
   // duplicates the already-visible caption. Pre-fix the catch block threw a plain
   // Error with no receipt; post-fix it throws a ChannelPartialDeliveryError
   // carrying the caption's messageId.
-  it("preserves a delivered caption as partial delivery when media upload fails", async () => {
-    sendMessageFeishuMock.mockResolvedValueOnce({
-      messageId: "caption_msg",
-      chatId: "chat_1",
-    });
-    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
+  it.each(["see attachment", "x".repeat(8_500), `\`\`\`text\n${"x".repeat(8_500)}\n\`\`\``])(
+    "preserves all delivered caption chunks when media upload fails (%#)",
+    async (text) => {
+      const sender = text.startsWith("```") ? sendStructuredCardFeishuMock : sendMessageFeishuMock;
+      sender.mockImplementation(async () => ({
+        messageId: `caption_${sender.mock.calls.length}`,
+        chatId: "chat_1",
+      }));
+      sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
 
-    let caught: unknown;
-    try {
-      await feishuOutbound.sendMedia?.({
-        cfg: emptyConfig,
-        to: "chat_1",
-        text: "see attachment",
-        mediaUrl: "https://example.com/file.png",
-        accountId: "main",
-        propagateMediaUploadFailure: true,
-      } as never);
-    } catch (err) {
-      caught = err;
-    }
+      let caught: unknown;
+      try {
+        await feishuOutbound.sendMedia?.({
+          cfg: emptyConfig,
+          to: "chat_1",
+          text,
+          mediaUrl: "https://example.com/file.png",
+          accountId: "main",
+          propagateMediaUploadFailure: true,
+        } as never);
+      } catch (err) {
+        caught = err;
+      }
 
-    expect(isChannelPartialDeliveryError(caught)).toBe(true);
-    const partial = caught as ReturnType<typeof createChannelPartialDeliveryError>;
-    expect(partial.deliveryResult.visibleReplySent).toBe(true);
-    expect(partial.deliveryResult.messageIds).toEqual(["caption_msg"]);
-    // The caption was delivered exactly once; no retry/duplicate send occurred.
-    expect(sendMessageFeishuMock).toHaveBeenCalledOnce();
-    expect(sendMediaFeishuMock).toHaveBeenCalledOnce();
-  });
+      expect(isChannelPartialDeliveryError(caught)).toBe(true);
+      const partial = caught as ReturnType<typeof createChannelPartialDeliveryError>;
+      expect(partial.deliveryResult.visibleReplySent).toBe(true);
+      const ids = sender.mock.calls.map((_call, index) => `caption_${index + 1}`);
+      expect(ids.length).toBe(text.length > 4_000 ? 3 : 1);
+      expect(new Set(partial.deliveryResult.messageIds)).toEqual(new Set(ids));
+      expect(partial.deliveryResult.receipt?.parts.map((part) => part.platformMessageId)).toEqual(
+        ids,
+      );
+      expect(sendMediaFeishuMock).toHaveBeenCalledOnce();
+    },
+  );
 
   // Regression for #112244 (seventeenth-review P1, scope guard): a media-upload
   // failure with NO delivered caption is a wholly failed send, so the propagated
@@ -3442,9 +3652,9 @@ describe("feishuOutbound.sendMedia renderMode", () => {
       accountId: "main",
     });
 
-    expect(sendMarkdownCardCall()?.to).toBe("chat_1");
-    expect(sendMarkdownCardCall()?.text).toBe("| a | b |\n| - | - |");
-    expect(sendMarkdownCardCall()?.accountId).toBe("main");
+    expect(sendStructuredCardCall()?.to).toBe("chat_1");
+    expect(sendStructuredCardCall()?.text).toBe("| a | b |\n| - | - |");
+    expect(sendStructuredCardCall()?.accountId).toBe("main");
     expect(sendMediaCall()?.to).toBe("chat_1");
     expect(sendMediaCall()?.mediaUrl).toBe("https://example.com/image.png");
     expect(sendMediaCall()?.accountId).toBe("main");

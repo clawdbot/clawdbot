@@ -126,15 +126,26 @@ canonical**:
 
 - Before `exec`, OpenClaw syncs the local workspace into the sandbox.
 - After `exec`, OpenClaw syncs the remote workspace back to local.
-- Concurrent operations sharing the same workspace wait for the current
-  upload, command, and download to finish before starting their own sync.
+- Within one OpenClaw Gateway process, commands and file-tool operations sharing
+  a workspace wait for the current operation to finish. The lock covers the
+  complete upload, command, and download, or the complete file read/mutation and
+  its synchronization; separate backend handles share the same lock.
 - File tools go through the sandbox bridge, but local stays source of truth
   between turns.
+- Working-directory checks inspect the host directories that will be uploaded
+  and release their lock before returning. Execution owns its own complete
+  upload-to-download operation; an abandoned check cannot block later tools.
+  Remote permissions and image-specific restrictions are checked when execution
+  starts.
 
 Best for development workflows: local edits outside OpenClaw show up on the
 next exec, and the sandbox behaves close to the Docker backend.
 
 Tradeoff: upload + download cost on every exec turn.
+
+External editors and other Gateway processes do not participate in that lock.
+Avoid changing the host workspace while a mirrored command is running, because
+its download can replace those external edits.
 
 ### remote
 
@@ -147,6 +158,13 @@ Tradeoff: upload + download cost on every exec turn.
 - After that, `exec`, `read`, `write`, `edit`, and `apply_patch` operate
   directly on the remote workspace. OpenClaw does **not** sync remote changes
   back to local.
+- Initialization is serialized per remote runtime, but commands and file tools
+  can overlap after initialization, including across agent turns. A background
+  command can therefore wait for a file written by a later turn. Concurrent
+  writes to the same file follow normal remote filesystem semantics.
+- Materialized skills refresh when a backend initializes for a turn, rather
+  than before every filesystem operation. As with other sandbox backends, a
+  later turn can refresh skills while older background commands are running.
 - Prompt-time media reads still work (file/media tools read through the
   sandbox bridge).
 - Outbound images and other attachments can use paths under the configured
@@ -354,10 +372,10 @@ remote workspace for that scope, and the next use seeds a fresh one from
 local. For `mirror` mode, recreate mainly resets the remote execution
 environment since local stays canonical.
 
-Sandbox CLI commands activate the configured backend's owning plugin before
-looking up runtime status or deleting a sandbox. Unrelated plugins are not
-loaded for these operations, and browser-only commands remain independent of
-the OpenShell backend.
+Sandbox list and recreate commands activate the configured backend's owning
+plugin plus the owner of each recorded runtime before inspecting or deleting
+it. Unrelated plugins are not loaded for these operations, and browser-only
+commands remain independent of the OpenShell backend.
 
 OpenClaw keeps a registered sandbox's shipped legacy runtime name after an
 upgrade so its remote workspace remains addressable. Recreating that scope
@@ -403,6 +421,13 @@ Workspace synchronization excludes `.git`, `hooks`, and `git-hooks` in both
 directions. Repository credentials, history, and trusted hook code remain on
 the OpenClaw Gateway host instead of being copied into an untrusted sandbox.
 
+Mirror synchronization never copies entries it cannot represent, such as
+symlinks, FIFOs, or Unix sockets, into either workspace. Existing host entries
+of those types remain intact at every depth, along with their parent directories,
+even if the sandbox deletes those directories or replaces them with files.
+Remote replacements that conflict with these preserved host paths are ignored;
+ordinary files and directories still receive remote changes and deletions.
+
 ## Custom image contract
 
 The OpenShell source image owns the remote operating system and package set.
@@ -413,8 +438,8 @@ Custom images used with the OpenClaw filesystem bridge must provide:
 
 - `/bin/sh`
 - `sleep` for the persistent sandbox main process on current OpenShell releases
-- `python3` or `python` for pinned write, edit, rename, and remove operations
-- GNU-compatible `stat` and `find`
+- `python3` for pinned remote filesystem reads and mutations
+- GNU-compatible `stat` (`-c`), `readlink` (`-f`), and `find`
 - standard `mkdir`, `mv`, `rm`, and `rmdir` utilities
 
 When the agent workspace differs from the sandbox workspace, the sandbox user

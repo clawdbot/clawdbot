@@ -66,6 +66,8 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-state-db-schema-additive.ts",
     "src/state/openclaw-state-db-schema-helpers.ts",
     "src/state/openclaw-state-db-schema-repair.ts",
+    "src/state/openclaw-state-db-schema-v12-foldin.ts",
+    "src/state/openclaw-state-db-schema-v13-widerow.ts",
     "src/state/openclaw-state-db-startup-checkpoint.ts",
     "src/state/openclaw-state-db-table-retirements.ts",
     "src/state/openclaw-state-db-fast-path.ts",
@@ -109,8 +111,11 @@ const rawSqliteAllowPathGroups = {
     "src/commands/doctor-sqlite-compact.ts",
     "src/commands/doctor-session-sqlite.ts",
     "src/commands/doctor-session-sqlite-readers.ts",
+    "src/commands/doctor-session-sqlite-transcript-readers.ts",
     "src/commands/doctor-session-sqlite-recover-report.ts",
     "src/commands/doctor-state-sqlite-compact.ts",
+    // Disposable import planning only; canonical session tables still use Kysely.
+    "src/config/sessions/session-accessor.sqlite-import-stage.ts",
     "src/infra/state-migrations.task-sidecar-rows.ts",
     "src/infra/state-migrations.storage.ts",
     "src/infra/state-migrations.cron-run-logs.ts",
@@ -135,11 +140,11 @@ const rawSqliteAllowPathGroups = {
     "src/media/store.ts",
     "src/plugin-sdk/memory-core-host-engine-storage.ts",
     "src/plugins/installed-plugin-index-record-reader.ts",
+    "src/plugins/installed-plugin-index-store-write.ts",
     "src/plugins/installed-plugin-index-store.ts",
     "src/plugin-state/plugin-state-store.sqlite.ts",
     "src/tasks/task-flow-registry.store.sqlite.ts",
     "src/tasks/task-registry.store.sqlite.ts",
-    "src/tui/tui-last-session.ts",
   ],
 };
 

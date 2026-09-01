@@ -18,4 +18,20 @@ describe("normalizeFeishuExternalKey", () => {
     expect(normalizeFeishuExternalKey(123)).toBeUndefined();
     expect(normalizeFeishuExternalKey("abc\u0000def")).toBeUndefined();
   });
+
+  it.each(["x", "界", "👍", "e\u0301", "👩‍💻"])(
+    "bounds received keys by Unicode scalars for %s",
+    (unit) => {
+      const key = Array.from(unit.repeat(512)).slice(0, 512).join("");
+      expect(normalizeFeishuExternalKey(` \t${key}\n`)).toBe(key);
+      expect(normalizeFeishuExternalKey(key + "x")).toBeUndefined();
+    },
+  );
+
+  it.each(["file\ud800key", "file\udfffkey", "file\u007fkey", "file\u0085key", "file\u009fkey"])(
+    "rejects malformed Unicode and control characters in %j",
+    (key) => {
+      expect(normalizeFeishuExternalKey(key)).toBeUndefined();
+    },
+  );
 });

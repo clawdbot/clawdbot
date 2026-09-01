@@ -172,7 +172,6 @@ struct NodeMenuEntryFormatter {
 
 struct NodeMenuRowView: View {
     let entry: NodeInfo
-    let width: CGFloat
     @Environment(\.menuItemHighlighted) private var isHighlighted
 
     private var palette: MenuItemHighlightColors.Palette {
@@ -236,7 +235,7 @@ struct NodeMenuRowView: View {
         .padding(.vertical, 8)
         .padding(.leading, 18)
         .padding(.trailing, 12)
-        .frame(width: max(1, self.width), alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder

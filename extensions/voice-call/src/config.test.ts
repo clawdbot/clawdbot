@@ -1,5 +1,5 @@
 // Voice Call tests cover config plugin behavior.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   VoiceCallConfigSchema,
   resolveTwilioAuthToken,
@@ -45,18 +45,17 @@ function requireElevenLabsTtsConfig(config: Pick<VoiceCallConfig, "tts">) {
 }
 
 describe("validateProviderConfig", () => {
-  const originalEnv = { ...process.env };
   const clearProviderEnv = () => {
-    delete process.env.TWILIO_ACCOUNT_SID;
-    delete process.env.TWILIO_AUTH_TOKEN;
-    delete process.env.TWILIO_FROM_NUMBER;
-    delete process.env.TELNYX_API_KEY;
-    delete process.env.TELNYX_CONNECTION_ID;
-    delete process.env.TELNYX_PUBLIC_KEY;
-    delete process.env.PLIVO_AUTH_ID;
-    delete process.env.PLIVO_AUTH_TOKEN;
-    delete process.env.NGROK_AUTHTOKEN;
-    delete process.env.NGROK_DOMAIN;
+    vi.stubEnv("TWILIO_ACCOUNT_SID", undefined);
+    vi.stubEnv("TWILIO_AUTH_TOKEN", undefined);
+    vi.stubEnv("TWILIO_FROM_NUMBER", undefined);
+    vi.stubEnv("TELNYX_API_KEY", undefined);
+    vi.stubEnv("TELNYX_CONNECTION_ID", undefined);
+    vi.stubEnv("TELNYX_PUBLIC_KEY", undefined);
+    vi.stubEnv("PLIVO_AUTH_ID", undefined);
+    vi.stubEnv("PLIVO_AUTH_TOKEN", undefined);
+    vi.stubEnv("NGROK_AUTHTOKEN", undefined);
+    vi.stubEnv("NGROK_DOMAIN", undefined);
   };
 
   beforeEach(() => {
@@ -64,8 +63,7 @@ describe("validateProviderConfig", () => {
   });
 
   afterEach(() => {
-    // Restore original env
-    process.env = { ...originalEnv };
+    vi.unstubAllEnvs();
   });
 
   describe("provider credential sources", () => {

@@ -99,9 +99,18 @@ const runWithTimeout = async (timeout, command, commandArgs) => {
   let parentSignal = null;
   let killTimer;
   let killDeadlineAt = 0;
+  let forceKillIssued = false;
+  const forceKill = () => {
+    // The timer and post-close drain can race while a killed group is exiting.
+    // Share the successful signal so neither path tries to kill it twice.
+    if (!forceKillIssued) {
+      signalChild(child, "SIGKILL");
+      forceKillIssued = true;
+    }
+  };
   const scheduleForceKill = () => {
     killDeadlineAt = Date.now() + killGrace;
-    killTimer ??= setTimeout(() => signalChild(child, "SIGKILL"), killGrace);
+    killTimer ??= setTimeout(forceKill, killGrace);
     killTimer.unref();
   };
 
@@ -152,8 +161,10 @@ const runWithTimeout = async (timeout, command, commandArgs) => {
       await waitForProcessGroupExit(child, remainingGraceMs);
     }
     if (processGroupAlive(child)) {
-      signalChild(child, "SIGKILL");
-      await waitForProcessGroupExit(child, 100);
+      forceKill();
+      if (!(await waitForProcessGroupExit(child, 100))) {
+        throw new Error(`command process group remained active after SIGKILL: ${command}`);
+      }
     }
     clearTimeout(killTimer);
   }
@@ -267,9 +278,10 @@ if (mode === "assert-openclaw-trusted") {
   if (/(?:^|\s)(?:\.?[\\/])?node_modules[\\/]openclaw(?:\s|@|$)/imu.test(untrustedOutput)) {
     throw new Error(`OpenClaw lifecycle scripts remain blocked by Bun:\n${untrustedOutput}`);
   }
-  const installGuardPath = path.join(packageRoot, "dist", "openclaw-install-guard");
-  if (fs.existsSync(installGuardPath)) {
-    throw new Error(`OpenClaw preinstall lifecycle did not remove ${installGuardPath}`);
+  const pendingPath = path.join(packageRoot, ".openclaw-lifecycle-pending");
+  const legacyGuardPath = path.join(packageRoot, "dist", "openclaw-install-guard");
+  if (fs.existsSync(pendingPath) || fs.existsSync(legacyGuardPath)) {
+    throw new Error("OpenClaw package lifecycle did not complete");
   }
   process.exit(0);
 }

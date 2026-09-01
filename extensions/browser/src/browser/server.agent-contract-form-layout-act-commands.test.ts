@@ -215,17 +215,19 @@ describe("browser control server", () => {
     async () => {
       const base = await startServerAndBase();
 
-      const select = await postJson<{ ok: boolean }>(`${base}/act`, {
-        kind: "select",
-        ref: "5",
-        values: ["a", "b"],
-      });
-      expect(select.ok).toBe(true);
-      expectBrowserCallFields(requirePwMock("selectOptionViaPlaywright"), {
-        targetId: "abcd1234",
-        ref: "5",
-        values: ["a", "b"],
-      });
+      for (const values of [["a", "b"], [""], ["  spaced  "], ["", "  spaced  "]]) {
+        const select = await postJson<{ ok: boolean }>(`${base}/act`, {
+          kind: "select",
+          ref: "5",
+          values,
+        });
+        expect(select.ok).toBe(true);
+        expectBrowserCallFields(
+          requirePwMock("selectOptionViaPlaywright"),
+          { targetId: "abcd1234", ref: "5", values },
+          requirePwMock("selectOptionViaPlaywright").mock.calls.length - 1,
+        );
+      }
 
       const fillCases: Array<{
         input: Record<string, unknown>;
@@ -368,7 +370,7 @@ describe("browser control server", () => {
   );
 
   it(
-    "preserves exact type text in batch normalization",
+    "preserves exact type text and select values in batch normalization",
     async () => {
       const base = await startServerAndBase();
 
@@ -377,6 +379,7 @@ describe("browser control server", () => {
         actions: [
           { kind: "type", selector: "input.name", text: "  padded  " },
           { kind: "type", selector: "input.clearable", text: "" },
+          { kind: "select", selector: "select.choice", values: ["", "  spaced  "] },
         ],
       });
 
@@ -393,6 +396,7 @@ describe("browser control server", () => {
             selector: "input.clearable",
             text: "",
           },
+          { kind: "select", selector: "select.choice", values: ["", "  spaced  "] },
         ],
       });
     },
@@ -845,37 +849,47 @@ describe("browser control server", () => {
     expect(String(waitCall.path)).toContain("safe-wait.pdf");
   });
 
-  it("cancels wait/download when its HTTP caller disconnects", async () => {
-    const base = await startServerAndBase();
-    let operationSignal: AbortSignal | undefined;
-    requirePwMock("waitForDownloadViaPlaywright").mockImplementationOnce(async (value) => {
-      const options = value as { signal?: AbortSignal };
-      operationSignal = options.signal;
-      await new Promise<void>((_resolve, reject) => {
-        options.signal?.addEventListener(
-          "abort",
-          () => {
-            const reason = options.signal?.reason;
-            reject(reason instanceof Error ? reason : new Error("request aborted"));
-          },
-          { once: true },
-        );
+  it.each([
+    {
+      route: "/wait/download",
+      mockName: "waitForDownloadViaPlaywright",
+      body: { path: "cancelled-wait.pdf" },
+    },
+    { route: "/response/body", mockName: "responseBodyViaPlaywright", body: { url: "**/api" } },
+  ] as const)(
+    "cancels $route when its HTTP caller disconnects",
+    async ({ route, mockName, body }) => {
+      const base = await startServerAndBase();
+      let operationSignal: AbortSignal | undefined;
+      requirePwMock(mockName).mockImplementationOnce(async (value) => {
+        const options = value as { signal?: AbortSignal };
+        operationSignal = options.signal;
+        await new Promise<void>((_resolve, reject) => {
+          options.signal?.addEventListener(
+            "abort",
+            () => {
+              const reason = options.signal?.reason;
+              reject(reason instanceof Error ? reason : new Error("request aborted"));
+            },
+            { once: true },
+          );
+        });
+        throw new Error("unreachable");
       });
-      throw new Error("unreachable");
-    });
-    const controller = new AbortController();
-    const response = realFetch(`${base}/wait/download`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: "cancelled-wait.pdf" }),
-      signal: controller.signal,
-    });
+      const controller = new AbortController();
+      const response = realFetch(`${base}${route}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
 
-    await vi.waitFor(() => expect(operationSignal).toBeInstanceOf(AbortSignal));
-    controller.abort(new Error("caller disconnected"));
-    await expect(response).rejects.toThrow();
-    await vi.waitFor(() => expect(operationSignal?.aborted).toBe(true));
-  });
+      await vi.waitFor(() => expect(operationSignal).toBeInstanceOf(AbortSignal));
+      controller.abort(new Error("caller disconnected"));
+      await expect(response).rejects.toThrow();
+      await vi.waitFor(() => expect(operationSignal?.aborted).toBe(true));
+    },
+  );
 
   it("download accepts in-root relative output path", async () => {
     const base = await startServerAndBase();

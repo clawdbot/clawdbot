@@ -14,9 +14,13 @@ import { isRecord as isJsonRecord } from "../packages/normalization-core/src/rec
 import {
   classifyReleaseGhTransportError,
   formatReleaseStateOutcome,
+  isReleaseGhArtifactMissingError,
+  MAX_RELEASE_ARTIFACT_BYTES,
   validateReleaseStateArtifact,
 } from "./full-release-validation-policy.mjs";
+import { requireOptionArgument } from "./lib/arg-utils.mts";
 import { execGhRead } from "./lib/plain-gh.mjs";
+import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 
 const WORKFLOW = "full-release-validation.yml";
 const TRUSTED_WORKFLOW_PATH = `.github/workflows/${WORKFLOW}`;
@@ -28,10 +32,10 @@ const RELEASE_EVIDENCE_VERIFIER_PATHS = [
 ];
 const GH_READ_TIMEOUT_MS = 60_000;
 export const FULL_RELEASE_WAIT_TIMEOUT_MINUTES = 720;
-export const FULL_RELEASE_WAIT_POLL_INTERVAL_MS = 45_000;
-const FULL_RELEASE_PROGRESS_INTERVAL_MS = 5 * 60_000;
+export const FULL_RELEASE_GITHUB_POLL_INTERVAL_MS = 2 * 60_000;
+const FULL_RELEASE_PROGRESS_INTERVAL_MS = 15 * 60_000;
+const FULL_RELEASE_RUN_DISCOVERY_DELAYS_MS = [30_000, 60_000, 120_000];
 const RELEASE_DECISION_FILE = "full-release-decision.json";
-const MAX_RELEASE_DECISION_BYTES = 128 * 1024;
 const GH_READ_OPTIONS = {
   encoding: "utf8",
   killSignal: "SIGKILL",
@@ -158,14 +162,6 @@ function runStatus(command: string, args: string[], options: CommandOptions = {}
   });
 }
 
-function readOptionValue(argv: string[], index: number, optionName: string): string {
-  const value = argv[index + 1];
-  if (value === undefined || value === "" || value.startsWith("-")) {
-    throw new Error(`${optionName} requires a value`);
-  }
-  return value;
-}
-
 export function parseArgs(argv: string[]) {
   const inputs: ReleaseInputs = { ...DEFAULT_INPUTS };
   const args = {
@@ -185,22 +181,22 @@ export function parseArgs(argv: string[]) {
       process.exit(0);
     }
     if (arg === "--sha") {
-      args.sha = readOptionValue(argv, i, arg);
+      args.sha = requireOptionArgument(argv, i, arg);
       i += 1;
       continue;
     }
     if (arg === "--workflow-sha") {
-      args.workflowSha = readOptionValue(argv, i, arg);
+      args.workflowSha = requireOptionArgument(argv, i, arg);
       i += 1;
       continue;
     }
     if (arg === "--trusted-workflow-ref") {
-      args.trustedWorkflowRef = readOptionValue(argv, i, arg);
+      args.trustedWorkflowRef = requireOptionArgument(argv, i, arg);
       i += 1;
       continue;
     }
     if (arg === "--target-ref") {
-      args.targetRef = readOptionValue(argv, i, arg);
+      args.targetRef = requireOptionArgument(argv, i, arg);
       i += 1;
       continue;
     }
@@ -218,7 +214,7 @@ export function parseArgs(argv: string[]) {
         const extra = extras[extraIndex]!;
         let assignment;
         if (extra === "-f") {
-          assignment = readOptionValue(extras, extraIndex, extra);
+          assignment = requireOptionArgument(extras, extraIndex, extra);
           extraIndex += 1;
         } else {
           assignment = extra.startsWith("-f") ? extra.slice(2).trim() : extra;
@@ -232,7 +228,7 @@ export function parseArgs(argv: string[]) {
       break;
     }
     if (arg === "-f") {
-      const assignment = readOptionValue(argv, i, arg);
+      const assignment = requireOptionArgument(argv, i, arg);
       i += 1;
       const [key, ...valueParts] = assignment.split("=");
       if (!key || valueParts.length === 0) {
@@ -360,9 +356,17 @@ export function verifyTargetRef(
       );
     }
   } else if (extendedStableMatch) {
-    if (targetVersion !== extendedStableMatch[1]) {
+    const branchVersion = parseReleaseVersion(extendedStableMatch[1]!);
+    const candidateVersion = parseReleaseVersion(targetVersion);
+    if (
+      branchVersion === null ||
+      candidateVersion === null ||
+      classifyReleaseTrain(candidateVersion) !== "extended-stable" ||
+      candidateVersion.year !== branchVersion.year ||
+      candidateVersion.month !== branchVersion.month
+    ) {
       throw new Error(
-        `Target package version ${targetVersion} does not match extended-stable branch ${targetRef}`,
+        `Target package version ${targetVersion} does not belong to extended-stable branch ${targetRef}; expected a final ${branchVersion?.year}.${branchVersion?.month}.PATCH version with PATCH >= 33`,
       );
     }
   } else if (tagMatch && targetVersion !== tagMatch[1]) {
@@ -626,11 +630,7 @@ export function tryReadReleaseDecision(
     );
     if (result.status !== 0) {
       const stderr = stringValue(result.stderr);
-      if (
-        /no valid artifacts found|artifact .* not found|could not find any artifacts|no artifact matches any of the names or patterns provided/iu.test(
-          stderr,
-        )
-      ) {
+      if (isReleaseGhArtifactMissingError({ cause: result.error, stderr })) {
         return undefined;
       }
       const downloadError = Object.assign(
@@ -666,7 +666,7 @@ export function tryReadReleaseDecision(
         `Release Decision artifact ${artifactName} omitted ${RELEASE_DECISION_FILE}.`,
       );
     }
-    if (statSync(decisionPath).size > MAX_RELEASE_DECISION_BYTES) {
+    if (statSync(decisionPath).size > MAX_RELEASE_ARTIFACT_BYTES) {
       throw new Error(`Release Decision artifact ${artifactName} exceeds the size limit.`);
     }
     return validateReleaseDecisionPayload(JSON.parse(readFileSync(decisionPath, "utf8")), {
@@ -679,12 +679,41 @@ export function tryReadReleaseDecision(
   }
 }
 
+function releaseDecisionAvailable(parentRunId: string, parentRunAttempt: number) {
+  const artifactName = `full-release-decision-${parentRunId}-${parentRunAttempt}`;
+  try {
+    const response: unknown = JSON.parse(
+      execGhRead(
+        [
+          "api",
+          `repos/openclaw/openclaw/actions/runs/${parentRunId}/artifacts?per_page=100&name=${artifactName}`,
+        ],
+        { ...GH_READ_OPTIONS, stdio: ["ignore", "pipe", "pipe"] },
+      ),
+    );
+    if (!isJsonRecord(response) || !Array.isArray(response.artifacts)) {
+      throw new Error(`Full Release Validation run ${parentRunId} returned invalid artifacts`);
+    }
+    return response.artifacts.some(
+      (artifact) =>
+        isJsonRecord(artifact) && artifact.name === artifactName && artifact.expired === false,
+    );
+  } catch (error) {
+    if (classifyReleaseGhTransportError(error) !== "transient") {
+      throw error;
+    }
+    console.warn(`Release Decision metadata unavailable this poll; retrying: ${String(error)}`);
+    return false;
+  }
+}
+
 function waitForWorkflowRun(parentRunId: string, workflowSha: string) {
   let lastSummary = "";
   let consecutiveErrors = 0;
   const startedAt = Date.now();
   const deadline = startedAt + FULL_RELEASE_WAIT_TIMEOUT_MINUTES * 60_000;
   let nextProgressAt = startedAt + FULL_RELEASE_PROGRESS_INTERVAL_MS;
+  let decision: { attempt: number; state: "unavailable" | "ready" | "passed" } | undefined;
   while (Date.now() < deadline) {
     let suite: Record<string, unknown> | undefined;
     try {
@@ -707,15 +736,30 @@ function waitForWorkflowRun(parentRunId: string, workflowSha: string) {
       lastSummary = summary;
     }
     if (suite) {
-      const releaseDecision = tryReadReleaseDecision(
-        parentRunId,
-        requiredPositiveInteger(suite.run_attempt, "parent run attempt"),
-        workflowSha,
-      );
-      if (releaseDecision && releaseDecisionStopsForeground(releaseDecision.state)) {
-        throw new Error(
-          `${formatReleaseStateOutcome(releaseDecision)}\nhttps://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
-        );
+      const attempt = requiredPositiveInteger(suite.run_attempt, "parent run attempt");
+      if (decision?.attempt !== attempt) {
+        decision = { attempt, state: "unavailable" };
+      }
+      // Metadata is only a readiness hint. Once advertised, keep trying the
+      // authoritative download across status regressions until this attempt validates.
+      if (
+        decision.state === "unavailable" &&
+        (suite.status === "completed" || releaseDecisionAvailable(parentRunId, attempt))
+      ) {
+        decision.state = "ready";
+      }
+      if (decision.state === "ready") {
+        const releaseDecision = tryReadReleaseDecision(parentRunId, attempt, workflowSha);
+        if (releaseDecision && releaseDecisionStopsForeground(releaseDecision.state)) {
+          throw new Error(
+            `${formatReleaseStateOutcome(releaseDecision)}\nhttps://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
+          );
+        }
+        // The workflow uploads one immutable decision per attempt; final success
+        // still requires the parent's terminal conclusion and strict evidence verifier.
+        if (releaseDecision?.state === "passed") {
+          decision.state = "passed";
+        }
       }
     }
     if (suite?.status === "completed" && stringValue(suite.conclusion)) {
@@ -742,7 +786,7 @@ function waitForWorkflowRun(parentRunId: string, workflowSha: string) {
           `Parent run progress query failed: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
-      nextProgressAt += FULL_RELEASE_PROGRESS_INTERVAL_MS;
+      nextProgressAt = now + FULL_RELEASE_PROGRESS_INTERVAL_MS;
     }
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
@@ -752,7 +796,7 @@ function waitForWorkflowRun(parentRunId: string, workflowSha: string) {
       new Int32Array(new SharedArrayBuffer(4)),
       0,
       0,
-      Math.min(FULL_RELEASE_WAIT_POLL_INTERVAL_MS, remainingMs),
+      Math.min(FULL_RELEASE_GITHUB_POLL_INTERVAL_MS, remainingMs),
     );
   }
   throw new Error(
@@ -981,12 +1025,19 @@ function main() {
     }
     parentRunId = collectRunId(dispatchOutput);
     if (!parentRunId && !args.dryRun) {
-      for (let attempt = 0; attempt < 60; attempt += 1) {
+      for (let attempt = 0; attempt <= FULL_RELEASE_RUN_DISCOVERY_DELAYS_MS.length; attempt += 1) {
         parentRunId = findLatestRunId(branch, workflowSha);
         if (parentRunId) {
           break;
         }
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5000);
+        if (attempt < FULL_RELEASE_RUN_DISCOVERY_DELAYS_MS.length) {
+          Atomics.wait(
+            new Int32Array(new SharedArrayBuffer(4)),
+            0,
+            0,
+            FULL_RELEASE_RUN_DISCOVERY_DELAYS_MS[attempt],
+          );
+        }
       }
     }
     if (!parentRunId) {

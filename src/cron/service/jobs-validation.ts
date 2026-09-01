@@ -307,7 +307,7 @@ export function cronPatchTouchesDeliveryResolution(patch: CronJobPatch): boolean
   );
 }
 
-export function hasConcreteFailureDestination(
+function hasConcreteFailureDestination(
   destination: CronDelivery["failureDestination"] | undefined,
 ): boolean {
   return Boolean(

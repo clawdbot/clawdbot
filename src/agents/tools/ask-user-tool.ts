@@ -41,7 +41,7 @@ const AskUserToolSchema = Type.Object(
           }),
           question: Type.String({
             minLength: 1,
-            description: "Single-sentence question for the user.",
+            description: "Single-sentence question only. Put all selectable choices in options.",
           }),
           options: Type.Array(
             Type.Object(
@@ -51,15 +51,29 @@ const AskUserToolSchema = Type.Object(
               },
               { additionalProperties: false },
             ),
-            { minItems: 2, maxItems: 4 },
+            {
+              minItems: 2,
+              maxItems: 4,
+              description:
+                "Every selectable choice. Put the recommended choice first; do not repeat choices only in the question text.",
+            },
           ),
-          multiSelect: Type.Optional(Type.Boolean()),
+          multiSelect: Type.Optional(
+            Type.Boolean({
+              description: "True only when the user may choose several options at once.",
+            }),
+          ),
         },
         { additionalProperties: false },
       ),
       { minItems: 1, maxItems: 3 },
     ),
-    timeoutSeconds: Type.Optional(Type.Integer()),
+    timeoutSeconds: Type.Optional(
+      Type.Integer({
+        description:
+          "Maximum human wait in seconds; default 900, clamped 30-3600. Earlier run cancellation or overall run timeout still applies.",
+      }),
+    ),
   },
   { additionalProperties: false },
 );

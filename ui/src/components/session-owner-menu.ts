@@ -2,7 +2,7 @@ import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
-import { renderSessionOwnerMenuAvatar, type SessionOwnerOption } from "./session-owner-chip.ts";
+import { renderSessionOwnerAvatar, type SessionOwnerOption } from "./session-owner-chip.ts";
 import { syncDropdownItemRadio } from "./web-awesome.ts";
 
 type SessionOwnerAssignment = Pick<SessionOwnerOption, "type" | "id">;
@@ -42,7 +42,7 @@ export function renderSessionOwnerAssignmentOptions(
         title=${title}
       >
         <span slot="icon" class="session-menu__icon" aria-hidden="true"
-          >${renderSessionOwnerMenuAvatar(owner)}</span
+          >${renderSessionOwnerAvatar(owner)}</span
         >
         <span class="session-menu__text">${owner.label ?? owner.id}</span>
         ${checked

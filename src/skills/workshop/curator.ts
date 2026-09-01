@@ -5,12 +5,9 @@ import {
   onTrustedInternalDiagnosticEvent,
   type DiagnosticSkillUsedEvent,
 } from "../../infra/diagnostic-events.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../../infra/kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { readConfigMachineState } from "../../state/config-machine-state.js";
 import type { DB as OpenClawStateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -26,16 +23,12 @@ import {
 import { parseSkillProposalRow } from "./store-sqlite-record.js";
 
 const log = createSubsystemLogger("skills/curator");
-const CURATOR_STATE_ID = 1;
 
 export const SKILL_LIFECYCLE_CURATION_RETIRED_MESSAGE =
   "Skill lifecycle curation is retired. The weekly collection review manages the skill collection; pin, unpin, and restore no longer exist.";
 
 type SkillLifecycleState = "active" | "archived" | "stale";
-type CuratorDatabase = Pick<
-  OpenClawStateDatabase,
-  "skill_curator_state" | "skill_usage" | "skill_workshop_proposals"
->;
+type CuratorDatabase = Pick<OpenClawStateDatabase, "skill_usage" | "skill_workshop_proposals">;
 type SkillOverlapCandidate = { left: string; right: string; score: number };
 
 export type SkillCuratorStatus = {
@@ -103,10 +96,12 @@ export function getSkillCuratorStatus(
   options: OpenClawStateDatabaseOptions = {},
 ): SkillCuratorStatus {
   const { database, kysely } = curatorDb(options);
-  const state = executeSqliteQueryTakeFirstSync(
-    database.db,
-    kysely.selectFrom("skill_curator_state").selectAll().where("id", "=", CURATOR_STATE_ID),
-  );
+  const state = readConfigMachineState<{
+    lastAttemptAtMs: number;
+    lastSuccessAtMs: number | null;
+    lastError: string | null;
+    lastResult: Record<string, unknown>;
+  }>("skills.curatorState", options);
   const reviewOutcomes = readSkillReviewOutcomes(options);
   const proposalRows = executeSqliteQuerySync(
     database.db,
@@ -167,9 +162,9 @@ export function getSkillCuratorStatus(
     };
   });
   return {
-    lastAttemptAtMs: state?.last_attempt_at_ms ?? null,
-    lastSuccessAtMs: state?.last_success_at_ms ?? null,
-    lastError: state?.last_error ?? null,
+    lastAttemptAtMs: state?.lastAttemptAtMs ?? null,
+    lastSuccessAtMs: state?.lastSuccessAtMs ?? null,
+    lastError: state?.lastError ?? null,
     collectionReview: reviewOutcomes.collectionReviews,
     experienceReview: reviewOutcomes.experienceReviews,
     counts: { active: skills.length, stale: 0, archived: 0 },

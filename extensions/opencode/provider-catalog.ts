@@ -4,15 +4,16 @@ import {
   buildLiveModelProviderConfig,
   fetchLiveProviderModelIds,
   getCachedUpstreamProviderCatalog,
-  projectUpstreamProviderCatalogModel,
+  listProviderCatalogSnapshotEntries,
+  projectProviderCatalogSnapshotRows,
+  projectUpstreamProviderCatalogSnapshot,
   type LiveModelCatalogFetchGuard,
+  type ProviderCatalogSnapshot,
+  type ProjectedUpstreamProviderCatalogModel as OpencodeZenModelDefinition,
   type UpstreamProviderCatalog,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
-import type {
-  ModelDefinitionConfig,
-  ModelProviderConfig,
-} from "openclaw/plugin-sdk/provider-model-shared";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const PROVIDER_ID = "opencode";
@@ -23,13 +24,6 @@ const OPENCODE_UPSTREAM_CATALOG_ENDPOINT = "https://models.opencode.ai/api.json"
 const OPENCODE_ZEN_MODELS_TIMEOUT_MS = 5_000;
 const OPENCODE_ZEN_MODELS_CACHE_TTL_MS = 60_000;
 
-type OpencodeZenModelDefinition = ModelDefinitionConfig & {
-  provider: typeof PROVIDER_ID;
-  api: NonNullable<ModelDefinitionConfig["api"]>;
-  baseUrl: string;
-  input: Array<"text" | "image">;
-};
-
 type FetchOpencodeZenLiveModelIdsParams = {
   apiKey?: string;
   discoveryApiKey?: string;
@@ -37,68 +31,47 @@ type FetchOpencodeZenLiveModelIdsParams = {
   signal?: AbortSignal;
 };
 
-type OpencodeZenModelLifecycle = {
-  status?: "deprecated";
-  replacedBy?: string;
-};
-
 const OPENCODE_ZEN_MANIFEST_PROVIDER = manifest.modelCatalog.providers.opencode;
-const OPENCODE_ZEN_SEED_MODELS = OPENCODE_ZEN_MANIFEST_PROVIDER.models.map((model) =>
-  normalizeModelCompat({
-    ...model,
-    provider: PROVIDER_ID,
-    api: model.api ?? OPENCODE_ZEN_MANIFEST_PROVIDER.api,
-    baseUrl: model.baseUrl ?? OPENCODE_ZEN_MANIFEST_PROVIDER.baseUrl,
-  } as OpencodeZenModelDefinition),
-) as OpencodeZenModelDefinition[];
-const OPENCODE_ZEN_MODEL_BY_ID = new Map(
-  OPENCODE_ZEN_SEED_MODELS.map((model) => [model.id, model]),
+const OPENCODE_ZEN_SEED_CATALOG: ProviderCatalogSnapshot = new Map(
+  OPENCODE_ZEN_MANIFEST_PROVIDER.models.map((row) => {
+    // SAFETY: Bundled rows and inherited transport supply the complete runtime model shape.
+    const model = normalizeModelCompat({
+      ...row,
+      provider: PROVIDER_ID,
+      api: row.api ?? OPENCODE_ZEN_MANIFEST_PROVIDER.api,
+      baseUrl: row.baseUrl ?? OPENCODE_ZEN_MANIFEST_PROVIDER.baseUrl,
+    } as OpencodeZenModelDefinition) as OpencodeZenModelDefinition;
+    return [
+      model.id,
+      {
+        model,
+        ...("status" in row && row.status === "deprecated"
+          ? { status: "deprecated" as const }
+          : {}),
+        ...("replacedBy" in row && typeof row.replacedBy === "string"
+          ? { replacedBy: row.replacedBy }
+          : {}),
+      },
+    ];
+  }),
 );
-const OPENCODE_ZEN_MODEL_LIFECYCLE_BY_ID = new Map<string, OpencodeZenModelLifecycle>(
-  OPENCODE_ZEN_MANIFEST_PROVIDER.models.map((model) => [
-    model.id,
-    {
-      ...("status" in model && model.status === "deprecated"
-        ? { status: "deprecated" as const }
-        : {}),
-      ...("replacedBy" in model && typeof model.replacedBy === "string"
-        ? { replacedBy: model.replacedBy }
-        : {}),
-    },
-  ]),
-);
-
-function isActiveOpencodeZenModel(model: OpencodeZenModelDefinition): boolean {
-  return OPENCODE_ZEN_MODEL_LIFECYCLE_BY_ID.get(model.id)?.status !== "deprecated";
-}
+let opencodeZenCatalog = OPENCODE_ZEN_SEED_CATALOG;
 
 function listStaticOpencodeZenModels(): OpencodeZenModelDefinition[] {
-  return OPENCODE_ZEN_SEED_MODELS.filter(isActiveOpencodeZenModel);
+  return [...OPENCODE_ZEN_SEED_CATALOG.values()]
+    .filter(({ model }) => opencodeZenCatalog.get(model.id)?.status !== "deprecated")
+    .map(({ model }) => model);
 }
 
 function cacheUpstreamOpencodeZenModels(catalog: UpstreamProviderCatalog): void {
-  OPENCODE_ZEN_MODEL_BY_ID.clear();
-  OPENCODE_ZEN_MODEL_LIFECYCLE_BY_ID.clear();
-  for (const model of OPENCODE_ZEN_SEED_MODELS) {
-    OPENCODE_ZEN_MODEL_BY_ID.set(model.id, model);
-  }
-  for (const upstreamModel of Object.values(catalog.models)) {
-    const projected = projectUpstreamProviderCatalogModel({
-      providerId: PROVIDER_ID,
-      provider: catalog,
-      model: upstreamModel,
-      anthropicBaseUrl: OPENCODE_ZEN_ANTHROPIC_BASE_URL,
-      defaultBaseUrl: OPENCODE_ZEN_OPENAI_BASE_URL,
-    });
-    if (!projected) {
-      continue;
-    }
-    const model = normalizeModelCompat(projected) as OpencodeZenModelDefinition;
-    OPENCODE_ZEN_MODEL_BY_ID.set(model.id.toLowerCase(), model);
-    if (upstreamModel.status === "deprecated") {
-      OPENCODE_ZEN_MODEL_LIFECYCLE_BY_ID.set(model.id, { status: "deprecated" });
-    }
-  }
+  opencodeZenCatalog = projectUpstreamProviderCatalogSnapshot({
+    providerId: PROVIDER_ID,
+    provider: catalog,
+    // Zen refreshes lifecycle entirely from upstream; Go retains omitted seed lifecycle.
+    seed: new Map(Array.from(OPENCODE_ZEN_SEED_CATALOG, ([id, { model }]) => [id, { model }])),
+    anthropicBaseUrl: OPENCODE_ZEN_ANTHROPIC_BASE_URL,
+    defaultBaseUrl: OPENCODE_ZEN_OPENAI_BASE_URL,
+  });
 }
 
 export async function prepareOpencodeZenModel(params: {
@@ -147,40 +120,9 @@ export async function resolveOpencodeZenStarterModel(params: {
   return liveModelIds.includes(preferredModelId) ? params.preferredModelRef : undefined;
 }
 
-function readLiveModelId(row: unknown): string | undefined {
-  if (!row || typeof row !== "object" || Array.isArray(row)) {
-    return undefined;
-  }
-  if ("object" in row && row.object !== undefined && row.object !== "model") {
-    return undefined;
-  }
-  if (!("id" in row) || typeof row.id !== "string") {
-    return undefined;
-  }
-  return row.id.trim().toLowerCase() || undefined;
-}
-
-function projectOpencodeZenLiveModels(rows: readonly unknown[]): OpencodeZenModelDefinition[] {
-  const seen = new Set<string>();
-  const models: OpencodeZenModelDefinition[] = [];
-  for (const row of rows) {
-    const modelId = readLiveModelId(row);
-    if (!modelId || seen.has(modelId)) {
-      continue;
-    }
-    seen.add(modelId);
-    const model = OPENCODE_ZEN_MODEL_BY_ID.get(modelId);
-    if (model && isActiveOpencodeZenModel(model)) {
-      models.push(model);
-    }
-  }
-  return models;
-}
-
 export async function buildOpencodeZenLiveProviderConfig(
   params: FetchOpencodeZenLiveModelIdsParams = {},
 ): Promise<ModelProviderConfig> {
-  const fallbackModels = listStaticOpencodeZenModels();
   if (!params.apiKey && !params.discoveryApiKey) {
     return buildStaticOpencodeZenProviderConfig();
   }
@@ -204,7 +146,7 @@ export async function buildOpencodeZenLiveProviderConfig(
       api: "openai-completions",
       baseUrl: OPENCODE_ZEN_OPENAI_BASE_URL,
     },
-    models: fallbackModels,
+    models: listStaticOpencodeZenModels(),
     apiKey: params.apiKey,
     discoveryApiKey: params.discoveryApiKey,
     fetchGuard: params.fetchGuard,
@@ -212,32 +154,16 @@ export async function buildOpencodeZenLiveProviderConfig(
     timeoutMs: OPENCODE_ZEN_MODELS_TIMEOUT_MS,
     ttlMs: OPENCODE_ZEN_MODELS_CACHE_TTL_MS,
     auditContext: "opencode-zen-model-discovery",
-    projectRows: projectOpencodeZenLiveModels,
+    projectRows: (rows) => projectProviderCatalogSnapshotRows(rows, opencodeZenCatalog),
   });
 }
 
 export function listOpencodeZenModelCatalogEntries(): ModelCatalogEntry[] {
-  return Array.from(OPENCODE_ZEN_MODEL_BY_ID.values(), (model) => {
-    const lifecycle = OPENCODE_ZEN_MODEL_LIFECYCLE_BY_ID.get(model.id);
-    return {
-      provider: model.provider,
-      id: model.id,
-      name: model.name,
-      api: model.api,
-      baseUrl: model.baseUrl,
-      reasoning: model.reasoning,
-      input: model.input,
-      contextWindow: model.contextWindow,
-      contextTokens: model.contextTokens,
-      compat: model.compat,
-      ...(lifecycle?.status ? { status: lifecycle.status } : {}),
-      ...(lifecycle?.replacedBy ? { replacedBy: lifecycle.replacedBy } : {}),
-    };
-  });
+  return listProviderCatalogSnapshotEntries(opencodeZenCatalog);
 }
 
 export function resolveOpencodeZenModel(modelId: string): ProviderRuntimeModel | undefined {
-  return OPENCODE_ZEN_MODEL_BY_ID.get(modelId.trim().toLowerCase());
+  return opencodeZenCatalog.get(modelId.trim().toLowerCase())?.model;
 }
 
 function normalizeBaseUrl(baseUrl: string | undefined): string {

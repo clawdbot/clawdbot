@@ -237,6 +237,17 @@ export type WorkerSessionPlacementRecord =
   | ReclaimedPlacementRecord
   | FailedPlacementRecord;
 
+export function reportPlacementTransition(
+  observer: ((placement: WorkerSessionPlacementRecord) => void) | undefined,
+  placement: WorkerSessionPlacementRecord,
+): void {
+  try {
+    observer?.(placement);
+  } catch {
+    // Reporting cannot overturn the durable placement transition.
+  }
+}
+
 export function projectWorkerSessionTurnClaim(
   record: WorkerSessionPlacementRecord,
 ): WorkerSessionTurnClaim | undefined {
