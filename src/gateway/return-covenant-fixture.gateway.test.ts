@@ -1,6 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createReturnCovenantGatewayConfigSnapshot } from "../auto-reply/continuation/return-covenant-fixture/gateway-config.js";
 import {
   readReturnCovenantProcessStartFingerprint,
   type ReturnCovenantGatewayBinding,
@@ -46,22 +47,22 @@ describe("return-covenant authenticated Gateway seam", () => {
         VITEST: "1",
       },
     });
-    const config: OpenClawConfig = {
-      gateway: { auth: { mode: "token", token }, mode: "local", port },
+    const sourceConfig: OpenClawConfig = {
+      gateway: { mode: "local" },
       agents: {
         defaults: {
-          continuation: {
-            enabled: true,
-            crossSessionTargeting: "disabled",
-          },
           model: "openai/gpt-5.6-sol",
         },
       },
       plugins: { entries: { codex: { enabled: true } } },
       session: { mainKey: "main", scope: "per-sender" },
     };
-    await state.writeConfig(config);
+    await state.writeConfig(sourceConfig);
     state.applyEnv();
+    const { config, snapshot } = createReturnCovenantGatewayConfigSnapshot({
+      path: state.configPath,
+      raw: sourceConfig,
+    });
     const binding: ReturnCovenantGatewayBinding = {
       bootId: "return-covenant-test-generation",
       endpoint: `http://127.0.0.1:${port}`,
@@ -82,6 +83,7 @@ describe("return-covenant authenticated Gateway seam", () => {
           bootId: binding.bootId,
           controlUiEnabled: false,
           sidecarStartup: "defer",
+          startupConfigSnapshotRead: { snapshot },
         },
         service.handlers,
       ),

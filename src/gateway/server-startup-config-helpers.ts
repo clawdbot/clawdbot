@@ -30,6 +30,7 @@ import {
 } from "../secrets/runtime-gateway-auth-surfaces.js";
 import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
+import { mergeActivationSectionsIntoRuntimeConfig } from "./plugin-activation-runtime-config.js";
 import { mergeGatewayAuthConfig, mergeGatewayTailscaleConfig } from "./startup-auth.js";
 
 export type GatewayStartupLog = {
@@ -136,9 +137,13 @@ export async function loadGatewayStartupConfigSnapshot(params: {
     `gateway: auto-enabled plugins for this runtime without writing config:\n${autoEnable.changes.map((entry) => `- ${entry}`).join("\n")}`,
   );
   const legacyDefaultAgentId = tryGetLegacyDefaultAgentId(configSnapshot.sourceConfig);
-  const runtimeConfig = legacyDefaultAgentId
-    ? materializeLegacyDefaultAgentRoles(autoEnable.config, legacyDefaultAgentId).config
-    : autoEnable.config;
+  const runtimeBaseConfig = legacyDefaultAgentId
+    ? materializeLegacyDefaultAgentRoles(configSnapshot.config, legacyDefaultAgentId).config
+    : configSnapshot.config;
+  const runtimeConfig = mergeActivationSectionsIntoRuntimeConfig({
+    runtimeConfig: runtimeBaseConfig,
+    activationConfig: autoEnable.config,
+  });
   retainLegacyDefaultAgentId(runtimeConfig, legacyDefaultAgentId);
   return {
     snapshot: withRuntimeConfig(configSnapshot, runtimeConfig),
