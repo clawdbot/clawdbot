@@ -98,6 +98,19 @@ export function controlUiBundledSettingsStorageKey(baseUrl: string): string {
   return `openclaw.control.settings.v1:${controlUiBundledGatewayUrl(baseUrl)}`;
 }
 
+export function createControlUiMockSameOriginGatewayScript(): string {
+  return `;(${installControlUiMockSameOriginGateway.toString()})();`;
+}
+
+function installControlUiMockSameOriginGateway() {
+  // Standalone mock pages emulate Gateway-served UI so same-origin security
+  // checks exercise package assets instead of falling back to initials.
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  window["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = {
+    gatewayUrl: `${protocol}//${window.location.host}`,
+  };
+}
+
 type ControlUiRouteTarget = {
   hash?: string;
   pathname?: string;
