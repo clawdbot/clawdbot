@@ -301,58 +301,56 @@ describe("Apple app i18n catalogs", () => {
     expect(ios.contradictions).toEqual([]);
   });
 
-  it("converts inflected Swift count resources into typed catalog placeholders", () => {
-    const source = "^[\\(count) entry](inflect: true)";
-    const translated = "^[\\(count) Eintrag](inflect: true)";
-    const build = buildIosCatalog(
-      { sourceLanguage: "en", strings: {} },
-      {
-        version: 2,
-        entries: [
-          {
-            id: "native.apple.count",
-            source,
-            sites: [{ kind: "ui-localized-call", path: "apps/ios/Sources/Example.swift" }],
-            surface: "apple",
-          },
-        ],
-      },
-      [
+  it.each([
+    ["iOS", buildIosCatalog, "apps/ios/Sources/Example.swift"],
+    ["macOS", buildMacosCatalog, "apps/macos/Sources/OpenClaw/Example.swift"],
+    ["shared iOS", buildIosCatalog, "apps/shared/OpenClawKit/Sources/OpenClawChatUI/Example.swift"],
+    [
+      "shared macOS",
+      buildMacosCatalog,
+      "apps/shared/OpenClawKit/Sources/OpenClawChatUI/Example.swift",
+    ],
+  ] as const)(
+    "converts only constrained inflected counts into typed %s catalog keys",
+    (_platform, buildCatalog, sourcePath) => {
+      const source = "^[\\(count) entry](inflect: true)";
+      const translated = "^[\\(count) Eintrag](inflect: true)";
+      const build = buildCatalog(
+        { sourceLanguage: "en", strings: {} },
         {
           version: 2,
-          locale: "de",
-          translations: { "native.apple.count": translated },
+          entries: [
+            {
+              id: "native.apple.count",
+              source,
+              sites: [{ kind: "ui-localized-call", path: sourcePath }],
+              surface: "apple",
+            },
+            {
+              id: "native.apple.mixed-count",
+              source: "\\(name) has " + source,
+              sites: [{ kind: "ui-localized-call", path: sourcePath }],
+              surface: "apple",
+            },
+          ],
         },
-      ],
-    );
-
-    const key = "^[%lld entry](inflect: true)";
-    expect(build.catalog.strings?.[key]?.localizations?.en?.stringUnit?.value).toBe(key);
-    expect(build.catalog.strings?.[key]?.localizations?.de?.stringUnit?.value).toBe(
-      "^[%lld Eintrag](inflect: true)",
-    );
-  });
-
-  it("rejects mixed inflected resources whose placeholder types are ambiguous", () => {
-    const source = "\\(name) has ^[\\(count) entry](inflect: true)";
-    const build = buildIosCatalog(
-      { sourceLanguage: "en", strings: {} },
-      {
-        version: 2,
-        entries: [
+        [
           {
-            id: "native.apple.mixed-count",
-            source,
-            sites: [{ kind: "ui-localized-call", path: "apps/ios/Sources/Example.swift" }],
-            surface: "apple",
+            version: 2,
+            locale: "de",
+            translations: { "native.apple.count": translated },
           },
         ],
-      },
-      [],
-    );
+      );
 
-    expect(build.catalog.strings).toEqual({});
-  });
+      const key = "^[%lld entry](inflect: true)";
+      expect(Object.keys(build.catalog.strings ?? {})).toEqual([key]);
+      expect(build.catalog.strings?.[key]?.localizations?.en?.stringUnit?.value).toBe(key);
+      expect(build.catalog.strings?.[key]?.localizations?.de?.stringUnit?.value).toBe(
+        "^[%lld Eintrag](inflect: true)",
+      );
+    },
+  );
 
   it("keeps custom component text on explicit localized or verbatim paths", async () => {
     const design = await readFile("apps/ios/Sources/Design/OpenClawProComponents.swift", "utf8");
@@ -560,6 +558,14 @@ describe("Apple app i18n catalogs", () => {
     const outputDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-apple-i18n-"));
     try {
       await compileMacosLocalizations(outputDir);
+      const english = await readFile(
+        path.join(outputDir, "en.lproj", "Localizable.strings"),
+        "utf8",
+      );
+      expect(english).toContain('"Expires in %lld minutes" = "Expires in %lld minutes";');
+      expect(english).toContain(
+        '"^[%lld message](inflect: true)" = "^[%lld message](inflect: true)";',
+      );
       const swedish = await readFile(
         path.join(outputDir, "sv.lproj", "Localizable.strings"),
         "utf8",

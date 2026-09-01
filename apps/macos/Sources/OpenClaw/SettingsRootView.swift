@@ -184,8 +184,8 @@ struct SettingsRootView: View {
             }
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("Config: \(configPath)")
-                Text("State:  \(stateDir)")
+                Text(String(format: String(localized: "Config: %@"), configPath))
+                Text(String(format: String(localized: "State:  %@"), stateDir))
             }
             .font(.caption.monospaced())
             .foregroundStyle(.secondary)

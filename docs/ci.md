@@ -713,6 +713,13 @@ pnpm test:extensions:memory -- --json .artifacts/openclaw-performance/source/moc
 pnpm perf:kova:summary --report .artifacts/kova/reports/mock-provider/report.json --output .artifacts/kova/summary.md
 ```
 
+The native source gate covers catalog-owned macOS, iOS, and shared Apple source
+roots. Linux-runnable source extraction requires explicit typed localized formats
+(for example, `String(format: String(localized: "Expires in %lld minutes"), minutes)`
+for an `Int`) instead of arbitrary Swift interpolation. Constrained inflected
+count resources are supported on both platforms. Use explicit verbatim text for
+user, system, or already-localized data.
+
 ## OpenClaw Performance
 
 `OpenClaw Performance` is the product/runtime performance workflow. It runs daily on `main` and can be dispatched manually:
