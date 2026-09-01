@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { emitAgentRunOutputTokens } from "../../infra/agent-events.js";
 import { getActiveDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import {
@@ -13,6 +14,7 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
+import { bindUserTurnTranscriptAnnotation } from "../../sessions/user-turn-transcript-annotation.js";
 import {
   getAdmittedRunDelegatedAuthority,
   retainAdmittedRunBeforeToolCallRecovery,
@@ -35,9 +37,11 @@ import {
   getInternalToolExecutionPreparer,
 } from "../runtime/internal-hooks.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
+import { registerTrustedToolNoStartError } from "../tool-result-error.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
+  getGatewayToolCallerIdentity,
   withGatewayToolApprovalOwner,
   withGatewayToolCallerIdentity,
   wrapToolWithGatewayCallerIdentity,
@@ -130,7 +134,13 @@ function gateBoundTool(
     ...(execute
       ? {
           execute: async (...args: Parameters<NonNullable<AnyAgentTool["execute"]>>) => {
-            assertActive();
+            try {
+              assertActive();
+            } catch (error) {
+              // This gate precedes dispatch; a revoked owner must not look like
+              // a tool that started and failed in downstream terminal evidence.
+              throw registerTrustedToolNoStartError(error);
+            }
             const result = await execute(...args);
             assertActive();
             observeResult(result);
@@ -218,6 +228,11 @@ export function createAgentHarnessHostCapabilities(params: {
   // Lexical closure must also fence work already past its entry guard. The
   // result guards below cover exact authority loss that does not use close().
   const capabilityAbortController = new AbortController();
+  const inheritedCaller = getGatewayToolCallerIdentity();
+  const sourceCaller =
+    inheritedCaller?.operationalRunInstance === operationalRunInstance
+      ? inheritedCaller
+      : undefined;
   const callerIdentity = createBoundCallerIdentity(
     attempt,
     assertActive,
@@ -232,6 +247,20 @@ export function createAgentHarnessHostCapabilities(params: {
         callerIdentity.gatewayContextResolver() === undefined)
     ) {
       throw new Error("agent harness host capability is no longer active");
+    }
+    // The captured worker/source claim owns every host capability use, including
+    // native configuration writes that do not pass through prompt annotation.
+    if (
+      (sourceCaller &&
+        (sourceCaller.agentId !== attempt.agentId ||
+          sourceCaller.sessionKey !== attempt.sessionKey)) ||
+      (sourceCaller?.workerTurnClaim &&
+        (sourceCaller.workerTurnClaim.sessionId !== attempt.sessionId ||
+          sourceCaller.workerTurnClaim.runId !== attempt.runId)) ||
+      (sourceCaller?.workerTurnClaim && !sourceCaller.receiptAuthority) ||
+      sourceCaller?.receiptAuthority?.() === false
+    ) {
+      throw new Error("agent harness host capability lost its source execution claim");
     }
   }
   const observeCoreTtsToolResult = (result: unknown) => {
@@ -251,6 +280,47 @@ export function createAgentHarnessHostCapabilities(params: {
       : {}),
   };
   const config = attempt.config ? cloneSnapshot(attempt.config) : undefined;
+  const recorder = attempt.userTurnTranscriptRecorder;
+  const sessionTarget = attempt.sessionTarget ? cloneSnapshot(attempt.sessionTarget) : undefined;
+  const annotateCurrentUserTurn =
+    attempt.userTurnTranscriptRecorder &&
+    attempt.sessionTarget &&
+    attempt.agentId &&
+    attempt.sessionId &&
+    attempt.sessionKey &&
+    attempt.sessionTarget.storePath &&
+    !attempt.suppressNextUserMessagePersistence &&
+    attempt.trigger !== "memory"
+      ? bindUserTurnTranscriptAnnotation({
+          recorder: attempt.userTurnTranscriptRecorder,
+          target: {
+            ...attempt.sessionTarget,
+            agentId: attempt.agentId,
+            sessionId: attempt.sessionId,
+            sessionKey: attempt.sessionKey,
+            storePath: attempt.sessionTarget.storePath,
+          },
+          runId: attempt.runId,
+          config,
+          abortSignal: attempt.abortSignal
+            ? AbortSignal.any([attempt.abortSignal, capabilityAbortController.signal])
+            : capabilityAbortController.signal,
+          assertCurrent: () => {
+            assertActive();
+            if (
+              attempt.userTurnTranscriptRecorder !== recorder ||
+              !isDeepStrictEqual(attempt.sessionTarget, sessionTarget) ||
+              (sessionTarget?.agentId !== undefined && sessionTarget.agentId !== attempt.agentId) ||
+              (sessionTarget?.sessionId !== undefined &&
+                sessionTarget.sessionId !== attempt.sessionId) ||
+              (sessionTarget?.sessionKey !== undefined &&
+                sessionTarget.sessionKey !== attempt.sessionKey)
+            ) {
+              throw new Error("native prompt annotation lost its source execution claim");
+            }
+          },
+        })
+      : undefined;
   const skillsSnapshot = attempt.skillsSnapshot ? cloneSnapshot(attempt.skillsSnapshot) : undefined;
   const preparedRunEnvironment = prepareGitHubToolEnvironment({
     config: config ?? {},
@@ -416,6 +486,7 @@ export function createAgentHarnessHostCapabilities(params: {
         });
       }
     },
+    ...(annotateCurrentUserTurn ? { annotateCurrentUserTurn } : {}),
     ...(trajectoryRecorder
       ? {
           trajectory: Object.freeze({

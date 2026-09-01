@@ -2166,6 +2166,8 @@ describe("scripts/changed-lanes", () => {
   it("runs macOS app CI tests for macOS app dependency changes", () => {
     for (const changedPath of [
       "apps/macos/Sources/OpenClawMac/AppDelegate.swift",
+      "apps/macos/Package.swift",
+      "apps/macos/Tests/OpenClawIPCTests/Fixtures/state.json",
       "apps/macos-mlx-tts/Sources/OpenClawMLXTTS/main.swift",
       "apps/shared/OpenClawKit/Sources/OpenClawKit/Client.swift",
       "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
@@ -2194,6 +2196,41 @@ describe("scripts/changed-lanes", () => {
         }),
       );
     }
+  });
+
+  it.each([
+    "apps/macos/Tests/OpenClawIPCTests/MacNodeHostWorkerTests.swift",
+    "./apps/macos/Tests/OpenClawIPCTests/RemovedTests.swift",
+    "apps\\macos\\Tests\\OpenClawIPCTests\\Nested\\WorkerTests.swift",
+  ])("keeps Swift test-only changes out of local packaging tests: %s", (changedPath) => {
+    const plan = createChangedCheckPlan(detectChangedLanes([changedPath]), {
+      env: { PATH: "/usr/bin" },
+      platform: "darwin",
+      swiftlintAvailable: true,
+    });
+
+    expect(plan.commands.map((command) => command.args[0])).toContain("lint:apps");
+    expect(plan.commands.map((command) => command.name)).toContain(
+      "native state schema version guard",
+    );
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("test:macos:ci");
+  });
+
+  it("preserves the full changed gate alongside a Swift test change", () => {
+    const fullPlan = createChangedCheckPlan(detectChangedLanes(["pnpm-lock.yaml"]));
+    const mixedPlan = createChangedCheckPlan(
+      detectChangedLanes([
+        "pnpm-lock.yaml",
+        "apps/macos/Tests/OpenClawIPCTests/MacNodeHostWorkerTests.swift",
+      ]),
+    );
+    const withoutFormat = (plan: typeof fullPlan) =>
+      plan.commands.filter((command) => command.name !== "format changed files");
+
+    expect(fullPlan.commands.map((command) => command.args[0])).toEqual(
+      expect.arrayContaining(["tsgo:all", "lint"]),
+    );
+    expect(withoutFormat(mixedPlan)).toEqual(withoutFormat(fullPlan));
   });
 
   it("runs macOS CI tests for workspace rsync receiver owners", () => {
@@ -2243,64 +2280,73 @@ describe("scripts/changed-lanes", () => {
     }
   });
 
-  it("runs macOS app CI tests for macOS packaging scripts and owner tests", () => {
-    for (const changedPath of [
-      "scripts/codesign-mac-app.sh",
-      "scripts/create-dmg.sh",
-      "scripts/lib/plistbuddy.sh",
-      "scripts/lib/swift-toolchain.sh",
-      "scripts/mac-elevation-host.sh",
-      "scripts/notarize-mac-artifact.sh",
-      "scripts/package-mac-app.sh",
-      "scripts/package-mac-dist.sh",
-      "scripts/restart-mac.sh",
-      "scripts/stage-mac-node-worker.sh",
-      "scripts/test-macos-native.mts",
-      "test/scripts/macos-native-test-launch.test.ts",
-      "scripts/verify-mac-node-worker.mjs",
-      "scripts/verify-mac-node-worker-fs.mjs",
-      "scripts/materialize-mac-node-worker.py",
-      "scripts/lib/mac-app-bundle.sh",
-      "scripts/lib/mac-native-inventory.py",
-      "scripts/lib/mac-worker-portability.mjs",
-      "scripts/lib/mac-node-worker-proof-state.mjs",
-      "scripts/lib/mac-bundle-mutation.py",
-      "test/helpers/mac-native.ts",
-      "test/helpers/mac-signing.ts",
-      "test/scripts/mac-node-worker.test.ts",
-      "test/scripts/verify-mac-node-worker-fs.test.ts",
-      "test/scripts/restart-mac.test.ts",
-      "test/scripts/mac-elevation-artifact.test-support.ts",
-      "test/scripts/mac-native-fixtures.test-support.ts",
-      "test/scripts/mac-node-worker-materialization.test-support.ts",
-      "test/scripts/codesign-mac-app.test.ts",
-      "test/scripts/create-dmg.test.ts",
-      "test/scripts/mac-elevation-host.test.ts",
-      "test/scripts/notarize-mac-artifact.test.ts",
-      "test/scripts/package-mac-app.test.ts",
-      "test/scripts/package-mac-dist.test.ts",
-    ]) {
-      const result = detectChangedLanes([changedPath]);
-      const plan = createChangedCheckPlan(result, {
-        env: { PATH: "/usr/bin" },
-        platform: "linux",
-        swiftlintAvailable: false,
-      });
+  it.each([false, true])(
+    "runs macOS app CI tests for macOS packaging scripts and owner tests (mixed Swift test: %s)",
+    (includeSwiftTest) => {
+      for (const changedPath of [
+        "scripts/codesign-mac-app.sh",
+        "scripts/create-dmg.sh",
+        "scripts/lib/plistbuddy.sh",
+        "scripts/lib/swift-toolchain.sh",
+        "scripts/mac-elevation-host.sh",
+        "scripts/notarize-mac-artifact.sh",
+        "scripts/package-mac-app.sh",
+        "scripts/package-mac-dist.sh",
+        "scripts/restart-mac.sh",
+        "scripts/stage-mac-node-worker.sh",
+        "scripts/test-macos-native.mts",
+        "test/scripts/macos-native-test-launch.test.ts",
+        "scripts/verify-mac-node-worker.mjs",
+        "scripts/verify-mac-node-worker-fs.mjs",
+        "scripts/materialize-mac-node-worker.py",
+        "scripts/lib/mac-app-bundle.sh",
+        "scripts/lib/mac-native-inventory.py",
+        "scripts/lib/mac-worker-portability.mjs",
+        "scripts/lib/mac-node-worker-proof-state.mjs",
+        "scripts/lib/mac-bundle-mutation.py",
+        "test/helpers/mac-native.ts",
+        "test/helpers/mac-signing.ts",
+        "test/scripts/mac-node-worker.test.ts",
+        "test/scripts/verify-mac-node-worker-fs.test.ts",
+        "test/scripts/restart-mac.test.ts",
+        "test/scripts/mac-elevation-artifact.test-support.ts",
+        "test/scripts/mac-native-fixtures.test-support.ts",
+        "test/scripts/mac-node-worker-materialization.test-support.ts",
+        "test/scripts/codesign-mac-app.test.ts",
+        "test/scripts/create-dmg.test.ts",
+        "test/scripts/mac-elevation-host.test.ts",
+        "test/scripts/notarize-mac-artifact.test.ts",
+        "test/scripts/package-mac-app.test.ts",
+        "test/scripts/package-mac-dist.test.ts",
+      ]) {
+        const result = detectChangedLanes([
+          changedPath,
+          ...(includeSwiftTest
+            ? ["apps/macos/Tests/OpenClawIPCTests/MacNodeHostWorkerTests.swift"]
+            : []),
+        ]);
+        const plan = createChangedCheckPlan(result, {
+          env: { PATH: "/usr/bin" },
+          platform: "linux",
+          swiftlintAvailable: false,
+        });
 
-      expectLanes(result.lanes, {
-        scripts: changedPath.endsWith(".mts"),
-        testRoot: changedPath.endsWith(".ts"),
-        tooling: true,
-      });
-      expect(plan.commands.map((command) => command.args[0])).not.toContain("lint:apps");
-      expect(plan.commands).toContainEqual(
-        expect.objectContaining({
-          name: "macOS app CI tests",
-          args: ["test:macos:ci"],
-        }),
-      );
-    }
-  });
+        expectLanes(result.lanes, {
+          scripts: changedPath.endsWith(".mts"),
+          testRoot: changedPath.endsWith(".ts"),
+          tooling: true,
+          apps: includeSwiftTest,
+        });
+        expect(plan.commands.map((command) => command.args[0])).not.toContain("lint:apps");
+        expect(plan.commands).toContainEqual(
+          expect.objectContaining({
+            name: "macOS app CI tests",
+            args: ["test:macos:ci"],
+          }),
+        );
+      }
+    },
+  );
 
   it("routes appcast changes to appcast owner tests", () => {
     const result = detectChangedLanes(["appcast.xml"]);

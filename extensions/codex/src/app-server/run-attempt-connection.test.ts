@@ -152,88 +152,76 @@ describe("prepareCodexAttemptConnection", () => {
     expect(connection.disableLoginShell).toBe(true);
   });
 
-  it("adds the host-prepared environment to a local app-server process", async () => {
-    const sessionFile = path.join(tempDir, "local-process-env.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace-local-process-env");
-    const params = createParams(sessionFile, workspaceDir);
-    params.hostCapabilities = Object.freeze({
-      ...params.hostCapabilities,
-      preparedEnvironment: () =>
-        Object.freeze({
-          credentialScrubEnv: Object.freeze({ GH_TOKEN: "", GITHUB_TOKEN: "" }),
-          localIdentityEnv: Object.freeze({
-            GH_CONFIG_DIR: "/private/managed-gh",
-            GIT_AUTHOR_NAME: "Managed Author",
+  it.each(["local", "sandbox", "remote"] as const)(
+    "projects managed identity only to local execution: %s",
+    async (location) => {
+      const sessionFile = path.join(tempDir, `${location}-process-env.jsonl`);
+      const workspaceDir = path.join(tempDir, `workspace-${location}-process-env`);
+      const params = createParams(sessionFile, workspaceDir);
+      const credentialScrubEnv = { GH_TOKEN: "", GITHUB_TOKEN: "", PREVIEW_SERVICE_TOKEN: "" };
+      const localIdentityEnv = {
+        GH_CONFIG_DIR: "/private/managed-gh",
+        GIT_AUTHOR_NAME: "Managed Author",
+        GIT_AUTHOR_EMAIL: "managed@example.test",
+        GIT_COMMITTER_NAME: "Managed Committer",
+        GIT_COMMITTER_EMAIL: "committer@example.test",
+      };
+      params.hostCapabilities = Object.freeze({
+        ...params.hostCapabilities,
+        preparedEnvironment: () =>
+          Object.freeze({
+            credentialScrubEnv: Object.freeze(credentialScrubEnv),
+            localIdentityEnv: Object.freeze(localIdentityEnv),
+            managedLocalIdentity: true,
           }),
-          managedLocalIdentity: true,
-        }),
-    });
-    registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
+      });
+      if (location !== "local") {
+        params.sandbox = {
+          ...createSandboxContext({}),
+          ...(location === "remote" ? { placementExecutionMode: "remote-exec" } : {}),
+        } as NonNullable<typeof params.sandbox>;
+      }
+      if (location === "remote") {
+        const runtimePlan = createCodexRuntimePlanFixture();
+        params.runtimePlan = {
+          ...runtimePlan,
+          auth: {
+            ...runtimePlan.auth,
+            providerForAuth: "openai",
+            authProfileProviderForAuth: "openai",
+            selectedAuthMode: "api-key",
+            modelRoute: {
+              provider: "openai",
+              modelId: "gpt-5.6-luna",
+              api: "openai-responses",
+              baseUrl: "https://api.openai.com/v1",
+              authRequirement: "api-key",
+              requestTransportOverrides: "none",
+            },
+          },
+        };
+        params.resolvedApiKey = "prepared-test-key";
+      }
+      registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
 
-    const connection = await prepareCodexAttemptConnection({
-      params,
-      options: { bindingStore: testCodexAppServerBindingStore },
-    });
+      const connection = await prepareCodexAttemptConnection({
+        params,
+        options: { bindingStore: testCodexAppServerBindingStore },
+      });
 
-    expect(connection.appServer.start.env).toMatchObject({
-      GH_CONFIG_DIR: "/private/managed-gh",
-      GIT_AUTHOR_NAME: "Managed Author",
-    });
-    expect(connection.disableLoginShell).toBe(true);
-  });
-
-  it("adds only credential scrubbing to remote execution", async () => {
-    const sessionFile = path.join(tempDir, "remote-process-env.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace-remote-process-env");
-    const params = createParams(sessionFile, workspaceDir);
-    params.hostCapabilities = Object.freeze({
-      ...params.hostCapabilities,
-      preparedEnvironment: () =>
-        Object.freeze({
-          credentialScrubEnv: Object.freeze({ GH_TOKEN: "", GITHUB_TOKEN: "" }),
-          localIdentityEnv: Object.freeze({
-            GH_CONFIG_DIR: "/private/managed-gh",
-            GIT_AUTHOR_NAME: "Managed Author",
-          }),
-          managedLocalIdentity: true,
-        }),
-    });
-    params.sandbox = {
-      ...createSandboxContext({}),
-      placementExecutionMode: "remote-exec",
-    } as NonNullable<typeof params.sandbox> & { placementExecutionMode: "remote-exec" };
-    const runtimePlan = createCodexRuntimePlanFixture();
-    params.runtimePlan = {
-      ...runtimePlan,
-      auth: {
-        ...runtimePlan.auth,
-        providerForAuth: "openai",
-        authProfileProviderForAuth: "openai",
-        selectedAuthMode: "api-key",
-        modelRoute: {
-          provider: "openai",
-          modelId: "gpt-5.4-codex",
-          api: "openai-responses",
-          baseUrl: "https://api.openai.com/v1",
-          authRequirement: "api-key",
-          requestTransportOverrides: "none",
-        },
-      },
-    };
-    params.resolvedApiKey = "prepared-test-key";
-    registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
-
-    const connection = await prepareCodexAttemptConnection({
-      params,
-      options: { bindingStore: testCodexAppServerBindingStore },
-    });
-
-    expect(connection.appServer.start.env).toMatchObject({ GH_TOKEN: "", GITHUB_TOKEN: "" });
-    expect(connection.appServer.start.env ?? {}).not.toHaveProperty("GH_CONFIG_DIR");
-    expect(connection.appServer.start.env ?? {}).not.toHaveProperty("GIT_AUTHOR_NAME");
-    expect(connection.shellEnvironment).toEqual({ GH_TOKEN: "", GITHUB_TOKEN: "" });
-    expect(connection.disableLoginShell).toBe(true);
-  });
+      expect(connection.shellEnvironment).toEqual({
+        ...credentialScrubEnv,
+        ...(location === "local" ? localIdentityEnv : {}),
+      });
+      expect(connection.appServer.start.env).toMatchObject(connection.shellEnvironment!);
+      if (location !== "local") {
+        for (const key of Object.keys(localIdentityEnv)) {
+          expect(connection.appServer.start.env).not.toHaveProperty(key);
+        }
+      }
+      expect(connection.disableLoginShell).toBe(true);
+    },
+  );
 
   it.each([
     {

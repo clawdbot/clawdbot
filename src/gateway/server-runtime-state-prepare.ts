@@ -323,7 +323,10 @@ export async function prepareGatewayKernelState(params: {
     tailscaleMode,
   } = runtimeConfig;
   if (bootstrap.generatedStartupAuthToken && isLoopbackHost(bindHost)) {
-    const { ensureStartupLocalCliPairing } = await import("./startup-local-cli-pairing.js");
+    const { ensureStartupLocalCliPairing } = await startupTrace.measure(
+      "runtime.local-cli-pairing-import",
+      () => import("./startup-local-cli-pairing.js"),
+    );
     const pairingResult = await startupTrace.measure("runtime.local-cli-pairing", () =>
       ensureStartupLocalCliPairing(),
     );
@@ -391,11 +394,16 @@ export async function prepareGatewayKernelState(params: {
       log,
     }),
   );
-  const { createTerminalLaunchPolicy } = await import("./terminal/launch.js");
+  const { createTerminalLaunchPolicy } = await startupTrace.measure(
+    "terminal.launch-import",
+    () => import("./terminal/launch.js"),
+  );
   const terminalLaunchPolicy = createTerminalLaunchPolicy(cfgAtStart);
 
-  const { runDefaultChannelSetupWizard, runDefaultSetupWizard } =
-    await import("./server-methods/wizard.js");
+  const { runDefaultChannelSetupWizard, runDefaultSetupWizard } = await startupTrace.measure(
+    "gateway.wizard-imports",
+    () => import("./server-methods/wizard.js"),
+  );
   const wizardRunner = opts.wizardRunner ?? runDefaultSetupWizard;
   const channelWizardRunner = opts.channelWizardRunner ?? runDefaultChannelSetupWizard;
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
@@ -425,7 +433,10 @@ export async function prepareGatewayKernelState(params: {
   // Internal principals belong to this server generation and become usable only after bind.
   // Closing flips this first so delayed recovery/channel work cannot enter a retired context.
 
-  const { createChannelManager } = await import("./server-channels.js");
+  const { createChannelManager } = await startupTrace.measure(
+    "gateway.channel-manager-import",
+    () => import("./server-channels.js"),
+  );
   const channelManager = createChannelManager({
     getRuntimeConfig: () => {
       const runtimeConfigLocal = getRuntimeConfig();

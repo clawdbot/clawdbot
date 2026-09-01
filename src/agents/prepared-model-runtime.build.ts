@@ -298,6 +298,7 @@ async function buildSnapshotBatch(
   agentBuildCompletions: Map<string, Promise<void>>,
   pluginMetadataSnapshot?: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void,
+  includeCredentialProviders = catalogMode === "live",
 ): Promise<PreparedModelRuntimeBuildResult[]> {
   const freshGroups = new Map<string, PreparedModelRuntimeBuildCandidate[]>();
   const reusableGroups = new Map<
@@ -366,7 +367,10 @@ async function buildSnapshotBatch(
     const prepared = await prepareWorkspaceBuildGroup(
       groupCandidates.map(({ input }) => input),
       catalogMode,
-      { preferBuiltPluginArtifacts },
+      {
+        preferBuiltPluginArtifacts,
+        includeCredentialProviders,
+      },
       prepareInboundPluginRegistry ? loadInboundPluginRegistry : undefined,
       pluginGeneration,
       pluginMetadataSnapshot,
@@ -569,6 +573,7 @@ export function startSerializedSnapshotBuildBatch(
   catalogMode: PreparedModelRuntimeCatalogMode = "live",
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void,
   pluginMetadataSnapshot?: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
+  includeCredentialProviders = catalogMode === "live",
 ): {
   pending: Promise<PreparedModelRuntimeBuildResult[]>;
   completion: Promise<void>;
@@ -594,6 +599,7 @@ export function startSerializedSnapshotBuildBatch(
         agentBuildCompletions,
         pluginMetadataSnapshot,
         onBuildStats,
+        includeCredentialProviders,
       ),
     };
   })();

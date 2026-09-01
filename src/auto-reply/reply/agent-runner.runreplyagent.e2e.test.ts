@@ -39,7 +39,6 @@ import {
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
 } from "../../plugins/before-agent-reply.js";
-import { defaultRuntime } from "../../runtime.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { TemplateContext } from "../templating.js";
@@ -4010,50 +4009,16 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(toolPayload.text).toBeUndefined();
   });
 
-  it("retries transient HTTP failures once with timer-driven backoff", async () => {
-    vi.useFakeTimers();
-    const retryStarted = createDeferred();
-    const retryMessage =
-      "Transient HTTP provider error before reply (502 Bad Gateway). Retrying once in 2500ms.";
-    const runtimeError = vi.spyOn(defaultRuntime, "error").mockImplementation((message) => {
-      if (message === retryMessage) {
-        retryStarted.resolve();
-      }
-    });
-    const abortController = new AbortController();
-    let calls = 0;
-    state.runEmbeddedAgentMock.mockImplementation(async () => {
-      calls += 1;
-      if (calls === 1) {
-        throw new Error("502 Bad Gateway");
-      }
-      return { payloads: [{ text: "final" }], meta: {} };
-    });
+  it("does not retry transient HTTP failures in the reply layer", async () => {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("502 Bad Gateway"));
 
-    const { run } = createMinimalRun({
-      typingMode: "message",
-      opts: { abortSignal: abortController.signal },
-    });
-    const runPromise = run();
+    const { run } = createMinimalRun({ typingMode: "message" });
+    const result = await run();
+    const payloads = Array.isArray(result) ? result : [result];
 
-    try {
-      // Preparation is asynchronous; measure from the retry owner's scheduled backoff.
-      await Promise.race([retryStarted.promise, runPromise]);
-      expect(runtimeError).toHaveBeenCalledWith(retryMessage);
-      await vi.advanceTimersByTimeAsync(2_499);
-      expect(calls).toBe(1);
-      await vi.advanceTimersByTimeAsync(1);
-      const result = await runPromise;
-      const payloads = Array.isArray(result) ? result : [result];
-      expect(payloads.map((payload) => payload?.text)).toEqual(["final"]);
-      expect(calls).toBe(2);
-    } finally {
-      // A failed assertion must not leave a run or fake clock alive for the next test.
-      abortController.abort();
-      await runPromise.catch(() => undefined);
-      runtimeError.mockRestore();
-      vi.useRealTimers();
-    }
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(payloads.map((payload) => payload?.text)).toHaveLength(1);
+    expect(payloads[0]?.text).toContain("provider internal error");
   });
 
   it("announces model fallback transitions across verbose levels", async () => {
@@ -4353,15 +4318,6 @@ describe("runReplyAgent typing (heartbeat)", () => {
       },
     },
     {
-      label: "accepted child spawn",
-      pendingContinuation: false,
-      result: {
-        payloads: [],
-        meta: {},
-        acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:child" }],
-      },
-    },
-    {
       label: "yielded continuation",
       pendingContinuation: true,
       result: { payloads: [], meta: { yielded: true } },
@@ -4378,6 +4334,27 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
     await expect(run()).resolves.toBeUndefined();
     expect(onPendingContinuation).toHaveBeenCalledTimes(pendingContinuation ? 1 : 0);
+  });
+
+  it("delivers one bounded status for an accepted child continuation", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "I’m continuing this work and will send the result when it is ready." }],
+      meta: { continuationPending: true },
+      acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:child" }],
+    });
+    const onPendingContinuation = vi.fn();
+    const { run } = createMinimalRun({ opts: { onPendingContinuation } });
+
+    await expect(run()).resolves.toMatchObject({
+      text: "I’m continuing this work and will send the result when it is ready.",
+      replyToId: "msg",
+    });
+    expect(onPendingContinuation).toHaveBeenCalledOnce();
+    expect(onPendingContinuation.mock.calls[0]?.[0]).toMatchObject({
+      statusPayload: {
+        text: "I’m continuing this work and will send the result when it is ready.",
+      },
+    });
   });
 
   it("delivers an explicit yield acknowledgment after accepting a child spawn", async () => {

@@ -250,6 +250,22 @@ describe("legacy config migration end to end", () => {
     }
   });
 
+  it("loads WhatsApp-owned acknowledgement migration guidance", () => {
+    const result = migrateLegacyConfig({
+      channels: {
+        whatsapp: {
+          ackReaction: { emoji: "👀", direct: true, group: "mentions" },
+        },
+      },
+    });
+
+    expect(result.sourceConfig?.messages).toEqual({ ackReaction: "👀" });
+    expect(result.config?.channels?.whatsapp?.ackReaction).toBeUndefined();
+    expect(result.changes.join("\n")).toContain(
+      "cannot preserve both direct-message and mentioned-group acknowledgements",
+    );
+  });
+
   it("preserves canonical OpenAI personality over the retired prompt overlay", () => {
     const result = migrateLegacyConfig({
       agents: { defaults: { promptOverlays: { gpt5: { personality: "off" } } } },

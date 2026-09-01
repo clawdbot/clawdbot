@@ -559,6 +559,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
             readOnly: true,
             authScope: resolveAuthRefreshScope(cfg),
             refreshAuth: true,
+            refreshFullCatalog: false,
           })
         : await readPreparedCatalog(context, scope.agentId);
       if (!preparedSnapshot) {

@@ -113,7 +113,7 @@ function evaluateWorkflowExpression(
     cancelled?: boolean;
     dispatchId?: string;
     draft?: boolean;
-    eventName: "pull_request" | "push" | "workflow_dispatch";
+    eventName: "pull_request" | "push" | "workflow_dispatch" | "repository_dispatch" | "schedule";
     frozenTarget?: boolean;
     fileHashes?: Record<string, string>;
     headRepository?: string;
@@ -292,6 +292,7 @@ function runCiManifestFixture(options: {
   iosBuildCapability?: boolean;
   androidCiCapabilities?: boolean;
   nativeI18nCapabilities?: boolean;
+  macosNodeParts?: boolean;
   openClawKitTests?: boolean;
   protocolCoverage?: boolean;
   qaSmokePlan?: boolean;
@@ -354,6 +355,7 @@ function runCiManifestFixture(options: {
     const iosCapabilities = options.iosCapabilities ?? options.bundledPlanner;
     const iosBuildCapability = options.iosBuildCapability ?? iosCapabilities;
     const nativeI18nCapabilities = options.nativeI18nCapabilities ?? options.bundledPlanner;
+    const macosNodeParts = options.macosNodeParts ?? options.bundledPlanner;
     const packageScripts = options.bundledPlanner
       ? {
           ...(nativeI18nCapabilities
@@ -364,6 +366,9 @@ function runCiManifestFixture(options: {
               }
             : {}),
           ...(iosBuildCapability ? { "ios:build": "true" } : {}),
+          ...(macosNodeParts
+            ? Object.fromEntries([1, 2, 3].map((part) => [`test:macos:ci:${part}`, "true"]))
+            : {}),
           "check:assertion-safety": "true",
           "check:max-lines-ratchet": "true",
         }
@@ -405,6 +410,7 @@ function runCiManifestFixture(options: {
                     requiresDist: false,
                     runner: "ubuntu-24.04",
                     shardName: "changed-extension-fallback-plan",
+                    predictedSeconds: 120,
                   }]
                 : [{
                   checkName: "changed-extension-fallback-plan",
@@ -412,6 +418,7 @@ function runCiManifestFixture(options: {
                   requiresDist: false,
                   runner: "ubuntu-24.04",
                   shardName: "changed-extension-fallback-plan",
+                  predictedSeconds: 120,
                   targets: ["extensions/codex/src/focused.test.ts"],
                 }]
               : [];
@@ -3105,6 +3112,51 @@ NODE
     expect(runStep.run).not.toContain("pnpm test:windows:ci:3");
   });
 
+  it.skipIf(process.platform === "win32").for(["blacksmith", "github", "hybrid"] as const)(
+    "executes each Mac partition once and keeps historical coverage on %s",
+    (runnerBackend) => {
+      const workflow = readCiWorkflow();
+      const job = workflow.jobs["macos-node"];
+      const runStep = job.steps.find((step: WorkflowStep) => step.name === "TS tests (macOS)");
+      const cwd = tempDirs.make("macos-partition-routing-");
+      const bin = path.join(cwd, "bin");
+      mkdirSync(bin);
+      writeFileSync(path.join(bin, "pnpm"), '#!/bin/sh\nprintf "selected=%s\\n" "$*"\n');
+      chmodSync(path.join(bin, "pnpm"), 0o755);
+      for (const partsSupported of [true, false]) {
+        const manifest = runCiManifestFixture({
+          bundledPlanner: true,
+          eventName: "workflow_dispatch",
+          historicalCompatibility: !partsSupported,
+          macosNodeParts: partsSupported,
+          runnerBackend,
+        });
+        expect(manifest.status, manifest.output).toBe(0);
+        const rows = JSON.parse(
+          expectDefined(manifest.outputs.macos_node_matrix, "Mac Node matrix"),
+        ).include as Array<{ task: string }>;
+        expect(rows.map(({ task }) => task)).toEqual(
+          partsSupported ? ["test-1", "test-2", "test-3"] : ["test"],
+        );
+        const commands = rows.map(({ task }) => {
+          const result = runWorkflowShellScript(runStep.run, {
+            cwd,
+            env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, TASK: task },
+          });
+          expect(result.status, result.stdout + result.stderr).toBe(0);
+          return result.stdout.match(/^selected=(.*)$/m)?.[1];
+        });
+        expect(commands).toEqual(
+          partsSupported
+            ? ["test:macos:ci:1", "test:macos:ci:2", "test:macos:ci:3"]
+            : ["test:macos:ci"],
+        );
+      }
+      expect(job.strategy["max-parallel"]).toBe(3);
+      expect(runStep.env.OPENCLAW_VITEST_MAX_WORKERS).toBe(2);
+    },
+  );
+
   it.skipIf(process.platform === "win32")(
     "bounds Windows project overlap to existing self-hosted capacity",
     () => {
@@ -4176,6 +4228,22 @@ NODE
       /(?:^|\n)\s*(?:\.artifacts\/build-all-cache|dist\/|dist-runtime\/|packages\/\*\/dist\/|extensions\/\*\/dist\/|~\/\.cache\/ms-playwright|~\/\.local\/share\/pnpm|~\/\.cache\/pnpm|node_modules)(?:\n|$)/u;
     for (const { file, step } of directCaches) {
       if (step.uses?.startsWith("actions/cache/save@")) {
+        if (step.with?.path === ".cache/openclaw-cross-os-npm-cache/_cacache") {
+          expect([
+            ".github/workflows/openclaw-cross-os-release-checks-reusable.yml",
+            ".github/workflows/release-npm-cache-warm.yml",
+          ]).toContain(file);
+          const workflow = parse(readFileSync(file, "utf8"));
+          const owner = Object.values(workflow.jobs).find((candidate) =>
+            (candidate as { steps?: WorkflowStep[] }).steps?.some(
+              (entry) => entry.name === step.name,
+            ),
+          ) as { if?: string } | undefined;
+          const authority = `${owner?.if ?? ""} ${step.if ?? ""}`;
+          expect(authority).toContain("github.repository == 'openclaw/openclaw'");
+          expect(authority).toContain("github.event_name == 'workflow_dispatch'");
+          continue;
+        }
         const condition = String(step.if);
         expect(
           condition.includes(".outputs.cache-mode == 'read-write'") ||
@@ -5623,6 +5691,54 @@ server.listen(0, "127.0.0.1", () => {
       path: "${{ steps.setup-node-env.outputs.pnpm-store-cache-path }}",
       key: "${{ steps.setup-node-env.outputs.pnpm-store-cache-key }}",
     });
+  });
+
+  it("publishes a portable release npm seed without hooks or push-time downloads", () => {
+    const warmer = parse(readFileSync(".github/workflows/release-npm-cache-warm.yml", "utf8"));
+    expect(warmer.on).not.toHaveProperty("push");
+    expect(warmer.on).toHaveProperty("schedule");
+    expect(warmer.on).toHaveProperty("workflow_dispatch");
+    expect(warmer.concurrency.group).not.toBe(
+      parse(readFileSync(".github/workflows/vitest-cache-warm.yml", "utf8")).concurrency.group,
+    );
+    const seed = warmer.jobs["warm-release-npm"];
+    for (const repository of ["openclaw/openclaw", "example/fork"]) {
+      for (const eventName of [
+        "push",
+        "pull_request",
+        "repository_dispatch",
+        "schedule",
+        "workflow_dispatch",
+      ] as const) {
+        expect(evaluateWorkflowExpression(seed.if, { repository, eventName, runAttempt: 1 })).toBe(
+          repository === "openclaw/openclaw" &&
+            (eventName === "schedule" || eventName === "workflow_dispatch"),
+        );
+      }
+    }
+    expect(seed["runs-on"]).toBe("ubuntu-24.04");
+    const steps = seed.steps as WorkflowStep[];
+    const install = expectDefined(
+      steps.find((entry) => entry.run),
+      "npm seed install",
+    );
+    expect(install.run).toContain("openclaw@latest --ignore-scripts --omit=dev");
+    expect(install.env).toEqual({
+      NPM_CONFIG_CACHE: "${{ github.workspace }}/.cache/openclaw-cross-os-npm-cache",
+    });
+    const save = expectDefined(
+      steps.find((entry) => entry.uses?.startsWith("actions/cache/save@")),
+      "npm seed publication",
+    );
+    expect(save.with).toMatchObject({
+      path: ".cache/openclaw-cross-os-npm-cache/_cacache",
+      enableCrossOsArchive: true,
+    });
+    expect(save.with?.key).toMatch(/^openclaw-cross-os-npm-v1-seed-/u);
+    expect(save["continue-on-error"]).toBe(true);
+    expect(save.if ?? "").not.toMatch(/always\(|failure\(|cancelled\(/u);
+    expect(steps.indexOf(save)).toBeGreaterThan(steps.indexOf(install));
+    expect(steps.some((entry) => entry.uses?.startsWith("actions/cache/restore@"))).toBe(false);
   });
 
   it("uses bundled Node shards and telemetry-backed runner sizes", () => {
@@ -8488,6 +8604,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       selectedJobs: ["macos-node", "macos-swift"],
     },
     {
+      label: "Mac artifact proof",
+      changedPath: "test/scripts/mac-elevation-artifact.test.ts",
+      selectedJobs: ["macos-node", "macos-swift"],
+    },
+    {
       label: "shared native",
       changedPath: "apps/shared/OpenClawKit/Sources/Foo.swift",
       selectedJobs: ["macos-node", "macos-swift", "ios-build", "android"],
@@ -8592,7 +8713,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         JSON.parse(expectDefined(manifest.outputs.macos_node_matrix, "Mac Node matrix")).include,
       ).toEqual(
         selectedJobs.includes("macos-node")
-          ? [{ check_name: "macos-node", runtime: "node", task: "test" }]
+          ? legacyOutput
+            ? [{ check_name: "macos-node", runtime: "node", task: "test" }]
+            : [1, 2, 3].map((part) => ({
+                check_name: `macos-node-${part}`,
+                runtime: "node",
+                task: `test-${part}`,
+              }))
           : [],
       );
       expect(
@@ -8648,6 +8775,35 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       );
     },
   );
+
+  it("admits slow compact and plugin fallback rows before shorter work", () => {
+    const result = runCiManifestFixture({
+      bundledPlanner: true,
+      changedPaths: ["extensions/matrix/src/channel.ts"],
+      eventName: "pull_request",
+      nodeTestShards: [30, 240, 240].map((predictedSeconds, index) => ({
+        checkName: `compact-${index}`,
+        shardName: `compact-${index}`,
+        configs: ["test/vitest/vitest.infra.config.ts"],
+        runner: "ubuntu-24.04",
+        requiresDist: false,
+        predictedSeconds,
+      })),
+    });
+    expect(result.status, result.output).toBe(0);
+    const rows = JSON.parse(
+      expectDefined(result.outputs.checks_node_core_nondist_matrix, "Node matrix"),
+    ).include;
+    expect(rows.map((row: { check_name: string }) => row.check_name)).toEqual([
+      "compact-1",
+      "compact-2",
+      "changed-extension-fallback-plan",
+      "compact-0",
+    ]);
+    expect(rows.map((row: { predicted_seconds: number }) => row.predicted_seconds)).toEqual([
+      240, 240, 120, 30,
+    ]);
+  });
 
   it("uses target-owned CI plans and capabilities for older release checkouts", () => {
     const androidRun = readCiWorkflow().jobs.android.steps.find(

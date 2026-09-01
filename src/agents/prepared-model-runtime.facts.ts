@@ -95,6 +95,7 @@ function prepareAgentFacts(
   catalogMode: PreparedModelRuntimeCatalogMode,
   ambientCredentials: Readonly<AgentCredentialMap>,
   additionalProviderIds: readonly string[] = [],
+  includeCredentialProviders = catalogMode === "live",
 ): PreparedModelRuntimeAgentBaseFacts {
   const env = input.env ?? process.env;
   const preparedStore = loadPreparedModelRuntimeAuthStore(input);
@@ -135,7 +136,7 @@ function prepareAgentFacts(
         ...collectPreparedModelRuntimeProviderIds(
           input.config,
           credentials,
-          catalogMode === "live",
+          includeCredentialProviders,
           rawConfiguredModelRefs,
           input.agentId,
         ),
@@ -155,6 +156,7 @@ export async function prepareWorkspaceBuildGroup(
   options: {
     providerDiscoveryProviderIds?: readonly string[];
     preferBuiltPluginArtifacts?: boolean;
+    includeCredentialProviders?: boolean;
   } = {},
   loadInboundPluginRegistry?: PreparedInboundRegistryLoader,
   reusablePluginGeneration?: PreparedModelRuntimePluginGeneration,
@@ -346,6 +348,7 @@ export async function prepareWorkspaceBuildGroup(
         catalogMode,
         ambientCredentials,
         options.providerDiscoveryProviderIds,
+        options.includeCredentialProviders,
       ),
     );
     const agentFactsMs = performance.now() - agentFactsStartedAt;
