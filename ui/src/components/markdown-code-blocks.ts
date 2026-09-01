@@ -13,6 +13,9 @@ import rust from "highlight.js/lib/languages/rust";
 import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
+import { nothing } from "lit";
+import { AsyncDirective } from "lit/async-directive.js";
+import { directive, type ElementPart } from "lit/directive.js";
 import { t } from "../i18n/index.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
@@ -151,92 +154,116 @@ function updateCodeBlockWidthOverflow(wrapper: HTMLElement): void {
 }
 
 const initializedCodeBlocks = new WeakSet<HTMLElement>();
-const observedCodeBlockNodes = new Set<HTMLElement>();
-const pendingCodeBlockRoots = new Set<ParentNode>();
-const codeBlockResizeObserver =
-  typeof ResizeObserver === "undefined"
-    ? null
-    : new ResizeObserver((entries) => {
-        const wrappers = new Set(
-          entries.map(({ target }) => target.closest<HTMLElement>(".code-block-wrapper")),
-        );
-        for (const wrapper of wrappers) {
-          if (wrapper) {
-            updateCodeBlockWidthOverflow(wrapper);
+class MarkdownCodeBlocksDirective extends AsyncDirective {
+  private root: Element | undefined;
+  private scanPending = false;
+  private readonly observedNodes = new Set<HTMLElement>();
+  private readonly resizeObserver =
+    typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver((entries) => {
+          const wrappers = new Set(
+            entries.map(({ target }) => target.closest<HTMLElement>(".code-block-wrapper")),
+          );
+          for (const wrapper of wrappers) {
+            if (wrapper) {
+              updateCodeBlockWidthOverflow(wrapper);
+            }
           }
+        });
+
+  render() {
+    return nothing;
+  }
+
+  override update(part: ElementPart) {
+    this.root = part.element;
+    this.scheduleScan();
+    return nothing;
+  }
+
+  protected override disconnected(): void {
+    // A final route-away has no later scan to release detached transcript trees.
+    this.resizeObserver?.disconnect();
+    this.observedNodes.clear();
+  }
+
+  protected override reconnected(): void {
+    this.scheduleScan();
+  }
+
+  private scheduleScan(): void {
+    if (this.scanPending || !this.isConnected) {
+      return;
+    }
+    this.scanPending = true;
+    // Element directives commit before their children. Coalesce after the commit,
+    // and fence queued scans when the host is removed before the microtask runs.
+    queueMicrotask(() => {
+      this.scanPending = false;
+      if (this.isConnected && this.root?.isConnected) {
+        this.scan(this.root);
+      }
+    });
+  }
+
+  private scan(root: Element): void {
+    if (root.querySelector(".markdown-mermaid pre code")) {
+      void import("./markdown-mermaid.ts").then(
+        ({ mountMermaidBlocks }) => {
+          if (
+            this.isConnected &&
+            this.root === root &&
+            root.isConnected &&
+            mountMermaidBlocks(root)
+          ) {
+            this.scheduleScan();
+          }
+        },
+        () => {
+          for (const block of root.querySelectorAll(".markdown-mermaid")) {
+            block.classList.remove("markdown-mermaid");
+            block.prepend(t("chat.mermaid.error"));
+          }
+        },
+      );
+    }
+    for (const node of this.observedNodes) {
+      if (!root.contains(node)) {
+        this.resizeObserver?.unobserve(node);
+        this.observedNodes.delete(node);
+      }
+    }
+    for (const wrapper of root.querySelectorAll<HTMLElement>(".code-block-wrapper")) {
+      const viewport = wrapper.querySelector<HTMLElement>(".code-block-viewport");
+      const code = viewport?.querySelector<HTMLElement>("code");
+      if (!viewport || !code) {
+        continue;
+      }
+      if (!initializedCodeBlocks.has(wrapper)) {
+        initializedCodeBlocks.add(wrapper);
+        const expandButton = wrapper.querySelector<HTMLButtonElement>(".code-block-expand");
+        if (expandButton) {
+          const regionId = `code-block-${++codeBlockRegionSequence}`;
+          viewport.id = regionId;
+          expandButton.setAttribute("aria-controls", regionId);
         }
-      });
-
-function observeCodeBlockNode(node: HTMLElement): void {
-  observedCodeBlockNodes.add(node);
-  codeBlockResizeObserver?.observe(node);
-}
-
-/**
- * A transcript re-render replaces its code blocks, and a ResizeObserver keeps its
- * targets alive, so detached nodes are released before each scan instead of
- * accumulating for the life of the session.
- */
-function releaseDetachedCodeBlockNodes(): void {
-  for (const node of observedCodeBlockNodes) {
-    if (!node.isConnected) {
-      codeBlockResizeObserver?.unobserve(node);
-      observedCodeBlockNodes.delete(node);
+      }
+      // A reconnected host reuses initialized DOM but must reacquire observation.
+      for (const node of [viewport, code]) {
+        if (!this.observedNodes.has(node)) {
+          this.observedNodes.add(node);
+          this.resizeObserver?.observe(node);
+        }
+      }
+      if (!this.resizeObserver) {
+        updateCodeBlockWidthOverflow(wrapper);
+      }
     }
   }
 }
 
-function scanMarkdownCodeBlocks(root: ParentNode): void {
-  for (const wrapper of root.querySelectorAll<HTMLElement>(".code-block-wrapper")) {
-    if (initializedCodeBlocks.has(wrapper)) {
-      continue;
-    }
-    const viewport = wrapper.querySelector<HTMLElement>(".code-block-viewport");
-    const code = viewport?.querySelector<HTMLElement>("code");
-    if (!viewport || !code) {
-      continue;
-    }
-    initializedCodeBlocks.add(wrapper);
-    const expandButton = wrapper.querySelector<HTMLButtonElement>(".code-block-expand");
-    if (expandButton) {
-      codeBlockRegionSequence += 1;
-      const regionId = `code-block-${codeBlockRegionSequence}`;
-      viewport.id = regionId;
-      expandButton.setAttribute("aria-controls", regionId);
-    }
-    observeCodeBlockNode(viewport);
-    observeCodeBlockNode(code);
-    // The observer owns initial geometry too, after the browser lays out new blocks.
-    if (!codeBlockResizeObserver) {
-      updateCodeBlockWidthOverflow(wrapper);
-    }
-  }
-}
-
-/**
- * Single measurement owner for interactive fenced code below `root`. It names the
- * reveal region and tracks code width, which is what decides whether the wrap
- * control is offered at all; without it a host renders controls that never appear.
- *
- * The scan is deferred and coalesced because a Lit element `ref` commits before
- * that render's children: scanning inline would miss exactly the blocks the host
- * called about, and the last message of a quiet transcript would never measure.
- */
-export function initializeMarkdownCodeBlocks(root: ParentNode): void {
-  const alreadyScheduled = pendingCodeBlockRoots.size > 0;
-  pendingCodeBlockRoots.add(root);
-  if (alreadyScheduled) {
-    return;
-  }
-  queueMicrotask(() => {
-    const roots = [...pendingCodeBlockRoots];
-    pendingCodeBlockRoots.clear();
-    releaseDetachedCodeBlockNodes();
-    for (const pending of roots) {
-      scanMarkdownCodeBlocks(pending);
-    }
-  });
-}
+export const markdownCodeBlocks = directive(MarkdownCodeBlocksDirective);
 
 /** Highlight a snippet; output is escaped hljs markup safe for unsafeHTML in a code block. */
 export function highlightCodeHtml(text: string, lang: string): string {

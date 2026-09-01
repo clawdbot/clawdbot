@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { collectManifestModelIdNormalizationPolicies } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -152,6 +153,7 @@ export function buildPluginMetadataProviderFacts(plugins: readonly PluginManifes
   return {
     providerEndpoints,
     providerRequests,
+    modelIdNormalizationPolicies: collectManifestModelIdNormalizationPolicies(plugins),
     providerAuthAliases: buildPluginMetadataProviderAuthAliases(plugins),
   };
 }

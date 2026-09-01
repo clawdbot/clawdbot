@@ -361,6 +361,36 @@ def checkout_selected_ref():
     run_git(workspace, "checkout", "--detach", "refs/remotes/origin/checkout")
 
 
+def checkout_harness(sha):
+    action = ".github/actions/setup-node-env/action.yml"
+    if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
+        raise GitFailure(1)
+    harness = os.path.join(workspace, ".ci-harness")
+    os.makedirs(harness, exist_ok=True)
+    if sha == os.environ["WORKFLOW_SHA"]:
+        # Export the workflow revision from the freshly populated index, replacing
+        # retained platform files without updating the index or trusting later edits.
+        paths = git_output(workspace, "ls-files", "-z", "--", ".github/actions").split("\0")[:-1]
+        run_git(workspace, "checkout-index", "--force", f"--prefix={harness}/", "--", *paths)
+    else:
+        run_git(harness, "init", harness)
+        run_git(harness, "remote", "add", "origin", remote)
+        # The harness only supplies .github/actions, so narrow the fetch before it runs:
+        # sparse first, then blob-less. A full snapshot here downloads a second copy of
+        # the repository that the checkout below immediately discards, and every extra
+        # byte is amplified by the shared runner egress.
+        run_git(harness, "sparse-checkout", "set", ".github/actions")
+        fetch(harness, f"+{os.environ['WORKFLOW_SHA']}:refs/remotes/origin/ci-harness",
+              max_attempts=1, blobless=True)
+        # Checkout now materializes the sparse blobs over the network, so it carries the
+        # fetch deadline instead of running unbounded like a local checkout.
+        run_git(harness, "checkout", "--force", "--detach", os.environ["WORKFLOW_SHA"],
+                timeout=fetch_timeout_seconds)
+    if not os.path.isfile(os.path.join(harness, action)):
+        raise GitFailure(1)
+    check_cancelled()
+
+
 def checkout():
     check_cancelled()
     prerequisites = json.loads(os.environ.get("CHECKOUT_GIT_COMMITS_JSON", "null")) if kind == "linux-node" else None
@@ -383,6 +413,8 @@ def checkout():
     run_git(workspace, "remote", "add", "origin", remote)
     if kind in ("preflight", "manual"):
         checkout_selected_ref()
+        if kind == "preflight" and resolve_ref("HEAD") == os.environ["WORKFLOW_SHA"]:
+            checkout_harness(os.environ["WORKFLOW_SHA"])
         return
     target = "refs/remotes/origin/ci-target" if kind in ("linux-node", "android") else "refs/remotes/origin/checkout"
     sha = "refs/heads/main" if kind == "clawhub" else os.environ["CHECKOUT_SHA"]
@@ -403,27 +435,7 @@ def checkout():
         return
     if kind in ("clawhub", "skills"):
         return
-    action = ".github/actions/setup-node-env/action.yml"
-    if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
-        raise GitFailure(1)
-    harness = os.path.join(workspace, ".ci-harness")
-    os.makedirs(harness, exist_ok=True)
-    run_git(harness, "init", harness)
-    run_git(harness, "remote", "add", "origin", remote)
-    # The harness only supplies .github/actions, so narrow the fetch before it runs:
-    # sparse first, then blob-less. A full snapshot here downloads a second copy of
-    # the repository that the checkout below immediately discards, and every extra
-    # byte is amplified by the shared runner egress.
-    run_git(harness, "sparse-checkout", "set", ".github/actions")
-    fetch(harness, f"+{os.environ['WORKFLOW_SHA']}:refs/remotes/origin/ci-harness",
-          max_attempts=1, blobless=True)
-    # Checkout now materializes the sparse blobs over the network, so it carries the
-    # fetch deadline instead of running unbounded like a local checkout.
-    run_git(harness, "checkout", "--force", "--detach", os.environ["WORKFLOW_SHA"],
-            timeout=fetch_timeout_seconds)
-    if not os.path.isfile(os.path.join(harness, action)):
-        raise GitFailure(1)
-    check_cancelled()
+    checkout_harness(sha)
 
 
 def main():

@@ -8468,6 +8468,7 @@ data class GatewayModelSummary(
   val name: String,
   val provider: String,
   val available: Boolean?,
+  val unavailableReason: GatewayModelUnavailableReason? = null,
   val supportsVision: Boolean,
   val supportsAudio: Boolean,
   val supportsVideo: Boolean,
@@ -8475,6 +8476,12 @@ data class GatewayModelSummary(
   val supportsReasoning: Boolean,
   val contextTokens: Long?,
 )
+
+enum class GatewayModelUnavailableReason {
+  MissingAuth,
+  AuthFailed,
+  Cooldown,
+}
 
 internal fun parseGatewayModels(models: JsonArray?): List<GatewayModelSummary> =
   models
@@ -8489,6 +8496,13 @@ internal fun parseGatewayModels(models: JsonArray?): List<GatewayModelSummary> =
         name = obj["name"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: id,
         provider = provider,
         available = obj.optionalBoolean("available"),
+        unavailableReason =
+          when (obj["unavailableReason"].asStringOrNull()?.trim()?.lowercase()) {
+            "missing-auth" -> GatewayModelUnavailableReason.MissingAuth
+            "auth-failed" -> GatewayModelUnavailableReason.AuthFailed
+            "cooldown" -> GatewayModelUnavailableReason.Cooldown
+            else -> null
+          },
         supportsVision = "image" in inputTypes,
         supportsAudio = "audio" in inputTypes,
         supportsVideo = "video" in inputTypes,

@@ -99,6 +99,7 @@ describe("generate-npm-package-lock", () => {
     expect(
       normalizeOverrides({
         "openclaw@2026.5.28>undici": "8.5.0",
+        "parent>unused-adapter": "-",
         tar: 7.5,
       }),
     ).toEqual({

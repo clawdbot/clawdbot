@@ -824,6 +824,7 @@ describe("prepared harness source delivery", () => {
     expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
       expect.objectContaining({ config, loadRuntimePlugins: true, workspaceDir }),
       abortSignal,
+      "static",
     );
     expect(result.payloads).toEqual([{ text: "ok" }]);
     expect(release).toHaveBeenCalledOnce();

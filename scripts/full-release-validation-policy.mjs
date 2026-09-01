@@ -1838,7 +1838,21 @@ function verifyStateStructure(state, executionPlan, label) {
   }
 }
 
-function verifyStateTransition(decision, drain) {
+function acceptedJobBlockerAttempt(state, blocker) {
+  const child = state.children[blocker.child];
+  if (blocker.kind !== "job_failure" || !child || child.runId !== blocker.runId) {
+    return undefined;
+  }
+  return child.timing.jobs.find(
+    (job) =>
+      job.name === blocker.job &&
+      job.url === blocker.url &&
+      job.conclusion === blocker.conclusion &&
+      job.status === "completed",
+  )?.acceptedRunAttempt;
+}
+
+function verifyStateTransition(decision, drain, executionPlan) {
   const reuseRecovery =
     ["blocked_complete", "blocked_diagnostics_running"].includes(decision.state) &&
     drain.state === "passed" &&
@@ -1864,6 +1878,12 @@ function verifyStateTransition(decision, drain) {
       drain.blockers.some(
         (candidate) =>
           JSON.stringify(candidate) === JSON.stringify(blocker) ||
+          // A verified newer attempt can replace a job URL while retaining the
+          // same blocker. Both URLs must belong to their accepted job evidence.
+          (executionPlan.attemptEvidenceVersion !== undefined &&
+            JSON.stringify({ ...candidate, url: blocker.url }) === JSON.stringify(blocker) &&
+            acceptedJobBlockerAttempt(drain, candidate) >
+              acceptedJobBlockerAttempt(decision, blocker)) ||
           (blocker.kind === "workflow_failure" &&
             candidate.kind === "job_failure" &&
             ["child", "runId"].every((key) => candidate[key] === blocker[key])),
@@ -1888,7 +1908,7 @@ function verifyReleaseStatePair(planPayload, decisionPayload, drainPayload, expe
   }
   verifyStateStructure(decision, executionPlan, "release decision");
   verifyStateStructure(drain, executionPlan, "diagnostic drain");
-  verifyStateTransition(decision, drain);
+  verifyStateTransition(decision, drain, executionPlan);
   return {
     decision,
     drain,

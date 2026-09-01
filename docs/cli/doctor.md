@@ -56,6 +56,12 @@ This maintenance window also applies when repair ultimately finds no changes.
 Diagnostic runs without `--fix`, `--repair`, or `--yes` do not enter maintenance.
 Custom state directories remain runtime-only and do not adopt a native service.
 
+When an updater supplies an explicit Gateway activation policy, Doctor leaves
+stop and restart ownership with that updater. The native manager must confirm
+the service is already offline before repair. If `openclaw update --no-restart`
+reaches Doctor while that service is running, repair fails without stopping or
+restarting it; stop the service through its owner, then retry the update.
+
 If service inspection is unavailable or an unmatched service can still run,
 Doctor refuses maintenance before changing config or state. Inspect it with
 `openclaw gateway status --deep`, restore service-manager access, and stop the
@@ -238,6 +244,13 @@ openclaw doctor --lint --skip core/doctor/skills-readiness
 ## Post-upgrade mode
 
 `openclaw doctor --post-upgrade` runs plugin compatibility probes for chaining after a build or upgrade. Findings go to stdout; exit code is 1 if any finding has `level: "error"`. Add `--json` for a machine-readable envelope (`{ probesRun, findings }`), suitable for CI, the community `fork-upgrade` skill, and other post-upgrade smoke tooling. If the installed plugin index is missing or malformed, JSON mode still emits the envelope with a `plugin.index_unavailable` error finding.
+
+The probes also warn with `plugin.version_drift` when an enabled official plugin
+in the installed index belongs to a different release cohort than the upgraded
+OpenClaw CLI. Follow the reported plugin update command, then restart the
+Gateway. Exact npm pins receive an update command only after the registry
+confirms that target exists. Independently versioned community plugins and
+disabled plugins are excluded; version drift alone does not change the exit code.
 
 Container image startup is the exception to the usual "run doctor after
 updating" flow. When `openclaw gateway run` starts on a new OpenClaw version, it

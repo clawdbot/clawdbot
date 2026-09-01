@@ -4,6 +4,7 @@ import type { ModelsProbeResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { DefaultModelSelection, ModelProviderLogoutTarget } from "./data.ts";
 import type { ModelProvidersData } from "./load.ts";
+import type { ModelBehaviorConfig } from "./model-behavior.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
 import "./model-providers-page.ts";
 
@@ -16,7 +17,7 @@ export type ModelProvidersPageTestElement = HTMLElement & {
   addProviderId: string;
   addProviderKey: string;
   addProviderOpen: boolean;
-  defaultsDraft: DefaultModelSelection | null;
+  defaultsDraft: (DefaultModelSelection & Partial<ModelBehaviorConfig>) | null;
   keyDraft: string;
   keyEditorProvider: string | null;
   logout: (cardId: string, targets: ModelProviderLogoutTarget[]) => Promise<void>;
@@ -27,7 +28,7 @@ export type ModelProvidersPageTestElement = HTMLElement & {
   refresh: (opts: { force: boolean }) => Promise<void>;
   routeData: ModelProvidersRouteData | undefined;
   requestUpdate: () => void;
-  saveDefaultModels: () => Promise<void>;
+  saveDefaults: () => Promise<void>;
   saveKey: (provider: string, configKey: string) => Promise<void>;
   selectedAgentId: string;
 };
@@ -115,6 +116,7 @@ export function createHarness(initialScopeId: string) {
   };
   const subscribe = () => () => undefined;
   const runtimeConfig = {
+    canPatch: true,
     state: {
       connected: true,
       configSnapshot: { config: {} },

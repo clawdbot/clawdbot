@@ -61,6 +61,9 @@ describe("DraftSubmissionFlow", () => {
       initialRun: { status: "started", runId: "run-background" },
     });
     flow.setMessage("start this in the background");
+    stubObjectUrls("blob:background-note");
+    const attachment = registerTextPayload("background-note");
+    flow.attachmentDraft.replace([attachment]);
 
     await flow.submit(undefined, true);
     await Promise.resolve();
@@ -81,6 +84,22 @@ describe("DraftSubmissionFlow", () => {
       { timeoutMs: null },
     );
     expect(request.mock.calls.filter(([method]) => method === "agent.wait")).toHaveLength(2);
+    expect(context.sessions.createResult).toHaveBeenCalledOnce();
+    expect(request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+    expect(getChatAttachmentDataUrl(attachment)).toBeNull();
+    const retained = context.chatSubmissions.readInitial(
+      "agent:main:dashboard:background",
+      context.gateway.snapshot.client,
+    );
+    expect(retained?.message.content).toContainEqual({
+      type: "attachment",
+      attachment: {
+        url: `data:text/plain;base64,${btoa("background-note")}`,
+        kind: "document",
+        label: "background-note.txt",
+        mimeType: "text/plain",
+      },
+    });
     expect(flow.message).toBe("");
     expect(flow.submitting).toBe(false);
   });

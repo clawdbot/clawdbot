@@ -1,9 +1,9 @@
-import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
-import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+  readAssistantStreamSegmentIdentity,
+  readSessionMessageIdentity,
+} from "@openclaw/gateway-client/browser";
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChatItem } from "../../lib/chat/chat-types.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { userTurnRunId, type TurnInsertionBounds } from "./chat-thread-items.ts";
@@ -22,18 +22,6 @@ export function transcriptRunId(message: unknown): string | undefined {
     normalizeOptionalString(record?.runId) ??
     normalizeOptionalString(asRecord(record?.openclawStreamFallback)?.runId)
   );
-}
-
-export function readAssistantStreamSegmentIdentity(
-  message: unknown,
-): { itemId: string; runId?: string } | undefined {
-  const record = asRecord(message);
-  if (normalizeLowercaseStringOrEmpty(record?.role) !== "assistant") {
-    return undefined;
-  }
-  const fallback = asRecord(record?.openclawStreamFallback);
-  const itemId = normalizeOptionalString(fallback?.itemId);
-  return itemId ? { itemId, ...optionalRunIdentity(transcriptRunId(message)) } : undefined;
 }
 
 export function isKeyedAssistantStreamFallbackMessage(message: unknown): boolean {

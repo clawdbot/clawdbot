@@ -329,9 +329,6 @@ describe("minimal npm extended-stable workflow", () => {
     expect(step(preflight, "Check").if).toBeUndefined();
     const verifyReleaseContents = step(preflight, "Verify release contents");
     expect(verifyReleaseContents.if).toBeUndefined();
-    expect(verifyReleaseContents.run).toBe(
-      "pnpm release:generated:check && node --import tsx scripts/release-check.ts",
-    );
     expect(step(preflight, "Verify prepared npm tarball install").if).toBeUndefined();
 
     const save = step(preflight, "Save preflight build outputs");

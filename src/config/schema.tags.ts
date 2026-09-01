@@ -42,6 +42,7 @@ const TAG_PRIORITY: Record<ConfigTag, number> = {
 };
 
 const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
+  worktreeRoot: ["storage", "advanced"],
   cloudWorkers: ["network", "automation"],
   "gateway.roles": ["security", "auth", "access", "advanced"],
   "gateway.auth.token": ["security", "auth", "access", "network"],

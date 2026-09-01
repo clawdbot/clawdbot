@@ -8,6 +8,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
@@ -210,13 +211,25 @@ describe("resolveTsdownBuildInvocation", () => {
     );
   });
 
-  it("expands the full-build unified selector into one runtime and bounded declaration graphs", () => {
+  it.each([
+    {
+      label: "implicit unified declarations",
+      selected: [],
+      expected: TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
+    },
+    {
+      label: "explicit declaration subset",
+      selected: TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
+      expected: TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
+    },
+  ])("serializes runtime and $label without adding other groups", ({ selected, expected }) => {
     const results = resolveTsdownBuildInvocations({
       args: [
         "--config",
         "tsdown.config.ts",
         "--filter",
         TSDOWN_UNIFIED_CONFIG_GROUP,
+        ...selected.flatMap((group) => ["--filter", group]),
         "--format",
         "esm",
       ],
@@ -227,13 +240,13 @@ describe("resolveTsdownBuildInvocation", () => {
       ...NO_MEMORY_LIMIT,
     });
 
-    expect(results).toHaveLength(1 + TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.length);
+    expect(results).toHaveLength(1 + expected.length);
     expect(
       results.map((result) => {
         const filterIndex = result.args.indexOf("--filter");
         return result.args[filterIndex + 1];
       }),
-    ).toEqual([TSDOWN_UNIFIED_CONFIG_GROUP, ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS]);
+    ).toEqual([TSDOWN_UNIFIED_CONFIG_GROUP, ...expected]);
     for (const result of results) {
       expect(result.args).toEqual(expect.arrayContaining(["--config", "tsdown.config.ts"]));
       expect(result.args).toEqual(expect.arrayContaining(["--format", "esm"]));

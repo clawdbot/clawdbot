@@ -33,6 +33,13 @@ type CoverageReason =
 type CoverageIssue = { subject: string; reason: CoverageReason };
 type PackageVersions = Record<string, string[]>;
 type RepositoryPackages = Map<string, Set<string>>;
+type AdvisoryReconciliation = {
+  id: string;
+  packageName: string;
+  repositoryRange: string;
+  reviewedRanges: string[];
+  matchedVersions: string[];
+};
 type JsonResponse = { data: unknown; link: string | null };
 
 export type PublishedRepositoryAdvisory = {
@@ -214,6 +221,39 @@ function collectRepositoryMatches(
   }
 }
 
+function reviewedPackageRanges(data: unknown, advisory: PublishedRepositoryAdvisory) {
+  if (
+    !isRecord(data) ||
+    data.ghsa_id !== advisory.id ||
+    data.withdrawn_at !== null ||
+    typeof data.published_at !== "string" ||
+    !Number.isFinite(Date.parse(data.published_at)) ||
+    typeof data.github_reviewed_at !== "string" ||
+    !Number.isFinite(Date.parse(data.github_reviewed_at)) ||
+    !Array.isArray(data.vulnerabilities)
+  ) {
+    return null;
+  }
+  const ranges: semver.Comparator[][] = [];
+  for (const vulnerability of data.vulnerabilities) {
+    if (!isRecord(vulnerability) || !isRecord(vulnerability.package)) {
+      return null;
+    }
+    if (
+      vulnerability.package.ecosystem !== "npm" ||
+      vulnerability.package.name !== advisory.packageName
+    ) {
+      continue;
+    }
+    const range = githubRange(vulnerability.vulnerable_version_range);
+    if (!range) {
+      return null;
+    }
+    ranges.push(range);
+  }
+  return ranges.length > 0 ? ranges : null;
+}
+
 export async function fetchPublishedRepositoryAdvisories({
   payload,
   registryBaseUrl,
@@ -267,9 +307,33 @@ export async function fetchPublishedRepositoryAdvisories({
               (response.status === 429 ||
                 (response.status === 403 && response.headers.get("x-ratelimit-remaining") === "0"));
             const reason = rateLimited ? "rate-limited" : "request-failed";
-            // Secondary limits can return 403 with primary quota remaining. Do not
-            // continue through repositories after a throttle or credential denial.
-            if (github && [401, 403, 429].includes(response.status)) {
+            let resourceDenied = false;
+            if (
+              github &&
+              response.status === 403 &&
+              !rateLimited &&
+              !response.headers.has("retry-after")
+            ) {
+              try {
+                const error: unknown = JSON.parse(
+                  await readBoundedResponseText(
+                    response,
+                    "GitHub advisory denial",
+                    MAX_RESPONSE_BYTES,
+                    { signal, timeoutPromise },
+                  ),
+                );
+                // GitHub documents these as resource-scoped permission failures, not throttling.
+                // Keep that advisory unresolved without poisoning unrelated reviewed requests.
+                resourceDenied =
+                  isRecord(error) &&
+                  (error.message === "Resource not accessible by integration" ||
+                    error.message === "Resource not accessible by personal access token");
+              } catch {
+                // Unknown or unreadable 403 responses may be secondary limits: stop globally.
+              }
+            }
+            if (github && [401, 403, 429].includes(response.status) && !resourceDenied) {
               githubFailure = reason;
             }
             void response.body?.cancel().catch(() => undefined);
@@ -414,13 +478,52 @@ export async function fetchPublishedRepositoryAdvisories({
       }),
   });
 
+  const reconciliations: AdvisoryReconciliation[] = [];
+  const reconciled = await runTasksWithConcurrency({
+    limit: CONCURRENCY,
+    throwOnError: true,
+    tasks: advisories.map((advisory) => async () => {
+      // Repository ranges can remain stale after GitHub reviews the same GHSA.
+      // Only exact reviewed package ranges may replace them; missing proof retains the blocker.
+      const response = await request(`${GITHUB_API}/advisories/${advisory.id}`, "github");
+      const ranges = response.ok ? reviewedPackageRanges(response.value.data, advisory) : null;
+      if (!ranges) {
+        issues.push({
+          subject: `${advisory.packageName}#${advisory.id}`,
+          reason: response.ok ? "invalid-advisory" : response.error,
+        });
+        return advisory;
+      }
+      const reviewedRanges = ranges.map((range) => range.map((bound) => bound.value).join(" "));
+      const matchedVersions = [...new Set(payload[advisory.packageName] ?? [])]
+        .filter((version) => ranges.some((range) => range.every((bound) => bound.test(version))))
+        .toSorted();
+      reconciliations.push({
+        id: advisory.id,
+        packageName: advisory.packageName,
+        repositoryRange: advisory.vulnerable_versions,
+        reviewedRanges,
+        matchedVersions,
+      });
+      return matchedVersions.length > 0
+        ? { ...advisory, vulnerable_versions: reviewedRanges.join(" || "), matchedVersions }
+        : null;
+    }),
+  });
+
   return {
-    advisories: advisories.toSorted(
-      (left, right) =>
-        left.packageName.localeCompare(right.packageName) || left.id.localeCompare(right.id),
-    ),
+    advisories: reconciled.results
+      .filter((entry): entry is PublishedRepositoryAdvisory => entry !== null)
+      .toSorted(
+        (left, right) =>
+          left.packageName.localeCompare(right.packageName) || left.id.localeCompare(right.id),
+      ),
     coverage: {
       source: "github-public-repository-advisories" as const,
+      reconciliations: reconciliations.toSorted(
+        (left, right) =>
+          left.packageName.localeCompare(right.packageName) || left.id.localeCompare(right.id),
+      ),
       status: issues.length === 0 ? ("checked" as const) : ("partial" as const),
       packageVersions: entries.length,
       mappedPackageVersions,

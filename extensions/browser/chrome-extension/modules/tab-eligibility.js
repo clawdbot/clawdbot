@@ -1,4 +1,4 @@
-function isValidTabId(value) {
+export function isValidTabId(value) {
   return Number.isSafeInteger(value) && value >= 0;
 }
 

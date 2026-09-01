@@ -80,7 +80,8 @@ describeControlUiE2e("Control UI Custodian channel onboarding mocked Gateway E2E
         "channels.pairing.list",
         "channels.status",
         "openclaw.setup.detect",
-        "openclaw.setup.activate",
+        "openclaw.setup.activate.start",
+        "wizard.next",
         "openclaw.chat",
       ],
       methodResponses: {
@@ -107,11 +108,15 @@ describeControlUiE2e("Control UI Custodian channel onboarding mocked Gateway E2E
           workspace: "/tmp/openclaw-e2e",
           setupComplete: false,
         },
-        "openclaw.setup.activate": {
-          ok: true,
-          modelRef: "openai/gpt-5",
-          latencyMs: 73,
-          lines: ["Model ready"],
+        "openclaw.setup.activate.start": {
+          sessionId: "activation-session",
+          done: false,
+          status: "running",
+        },
+        "wizard.next": {
+          done: true,
+          status: "done",
+          modelActivation: { modelRef: "openai/gpt-5" },
         },
         "openclaw.chat": {
           sessionId: "e2e-channel-onboarding",

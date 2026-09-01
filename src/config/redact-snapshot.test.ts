@@ -50,13 +50,14 @@ function expectGatewayAuthFieldValue(
 }
 
 describe("redactConfigSnapshot", () => {
-  it("does not expose internal plugin metadata snapshot fields", () => {
+  it.each([true, false])("does not expose internal plugin metadata (valid=%s)", (valid) => {
     const snapshot = {
       ...makeSnapshot({
         plugins: {
           allow: ["demo"],
         },
       }),
+      valid,
       pluginMetadataSnapshot: {
         manifestRegistry: {
           plugins: [
@@ -75,6 +76,57 @@ describe("redactConfigSnapshot", () => {
 
     expect("pluginMetadataSnapshot" in result).toBe(false);
   });
+
+  it.each([true, false])(
+    "redacts pre-migration credentials without mutating source (valid=%s)",
+    (valid) => {
+      const source = makeSnapshot({
+        channels: { discord: { token: "synthetic-discord-token" } },
+        models: {
+          providers: {
+            inline: { apiKey: "synthetic-provider-key", models: [] },
+            referenced: {
+              apiKey: { source: "env", provider: "default", id: "SYNTHETIC_PROVIDER_KEY" },
+              models: [],
+            },
+          },
+        },
+      });
+      const snapshot = {
+        ...makeSnapshot({}),
+        valid,
+        sourceConfigBeforeMigrations: source.sourceConfig,
+      };
+      const before = structuredClone(snapshot);
+
+      const result = redactConfigSnapshot(snapshot, mainSchemaHints);
+
+      expect(snapshot).toEqual(before);
+      expect(result.sourceConfigBeforeMigrations).toEqual(
+        valid
+          ? {
+              channels: { discord: { token: REDACTED_SENTINEL } },
+              models: {
+                providers: {
+                  inline: { apiKey: REDACTED_SENTINEL, models: [] },
+                  referenced: {
+                    apiKey: { source: "env", provider: "default", id: REDACTED_SENTINEL },
+                    models: [],
+                  },
+                },
+              },
+            }
+          : {},
+      );
+      for (const secret of [
+        "synthetic-discord-token",
+        "synthetic-provider-key",
+        "SYNTHETIC_PROVIDER_KEY",
+      ]) {
+        expect(JSON.stringify(result)).not.toContain(secret);
+      }
+    },
+  );
 
   it("redacts common secret field patterns across config sections", () => {
     const snapshot = makeSnapshot({

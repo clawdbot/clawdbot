@@ -527,12 +527,12 @@ export function resolvePreparedExecEnvironment(params: {
     ...params.credentialScrubEnv,
     ...(params.host === "gateway" ? params.localIdentityEnv : undefined),
   };
-  // Prepared host values are authoritative over ambient, model, plugin, and store projections.
+  // Prepared values win locally; nodes sanitize their own base env and reject scrub override keys.
   Object.assign(env, preparedEnv);
 
   return {
     env,
-    ...(Object.keys(preparedEnv).length > 0
+    ...(params.host !== "node" && Object.keys(preparedEnv).length > 0
       ? { requestedEnv: { ...requestedEnv, ...preparedEnv } }
       : { requestedEnv }),
   };

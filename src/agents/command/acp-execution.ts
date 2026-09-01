@@ -163,6 +163,7 @@ export async function runAcpAgentCommand(params: {
       admittedRunContext,
       cfg: params.cfg,
       sessionKey: params.sessionKey,
+      agentId: params.sessionAgentId,
       provenance: params.provenance,
       text: params.body,
       attachments: acpImageAttachments.length > 0 ? acpImageAttachments : undefined,

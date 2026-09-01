@@ -1,7 +1,6 @@
 // Table row helpers for status report sections.
 // These functions keep terminal styling decisions out of the scan/data layer.
 
-import type { RenderTableOptions } from "../../../packages/terminal-core/src/table.js";
 import { formatTimeAgo } from "./format.js";
 import type { StatusReportSection } from "./text-report.js";
 
@@ -58,16 +57,12 @@ export function buildStatusAgentTableRows(params: {
 /** Converts per-channel account detail rows into renderable table sections. */
 export function buildStatusChannelDetailSections(params: {
   details: ChannelDetailLike[];
-  width: number;
-  renderTable: (input: RenderTableOptions) => string;
   ok: (text: string) => string;
   warn: (text: string) => string;
 }): StatusReportSection[] {
   return params.details.map((detail) => ({
     kind: "table" as const,
     title: detail.title,
-    width: params.width,
-    renderTable: params.renderTable,
     columns: detail.columns.map((column) => ({
       key: column,
       header: column,

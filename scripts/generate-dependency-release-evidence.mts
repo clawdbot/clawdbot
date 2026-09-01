@@ -325,68 +325,36 @@ function runEvidenceReports(
   baseRef: string,
   execFileSyncImpl: ExecFileSyncLike,
 ) {
-  runCommand(
-    "pnpm",
-    [
-      "deps:vuln:gate",
-      "--",
-      "--json",
-      reportPath(outputDir, "dependency-vulnerability-gate.json"),
-      "--markdown",
-      reportPath(outputDir, "dependency-vulnerability-gate.md"),
-    ],
-    rootDir,
-    execFileSyncImpl,
-  );
-  runCommand(
-    "pnpm",
-    [
-      "deps:transitive-risk:report",
-      "--",
-      "--json",
-      reportPath(outputDir, "transitive-manifest-risk-report.json"),
-      "--markdown",
-      reportPath(outputDir, "transitive-manifest-risk-report.md"),
-    ],
-    rootDir,
-    execFileSyncImpl,
-  );
-  runCommand(
-    "pnpm",
-    [
-      "deps:ownership-surface:report",
-      "--",
-      "--json",
-      reportPath(outputDir, "dependency-ownership-surface-report.json"),
-      "--markdown",
-      reportPath(outputDir, "dependency-ownership-surface-report.md"),
-    ],
-    rootDir,
-    execFileSyncImpl,
-  );
-  runCommand(
-    "pnpm",
-    [
-      "deps:changes:report",
-      "--",
-      "--base-ref",
-      baseRef,
-      "--json",
-      reportPath(outputDir, "dependency-changes-report.json"),
-      "--markdown",
-      reportPath(outputDir, "dependency-changes-report.md"),
-    ],
-    rootDir,
-    execFileSyncImpl,
-  );
+  // Report implementations belong to this tooling checkout; --root selects only the source data.
+  // Release branches can keep frozen product bytes while trusted release tooling is repaired.
+  for (const report of DEPENDENCY_EVIDENCE_REPORTS) {
+    runCommand(
+      "pnpm",
+      [
+        "--dir",
+        path.resolve(import.meta.dirname, ".."),
+        report.command.slice("pnpm ".length),
+        "--",
+        "--root",
+        rootDir,
+        ...(report.json === "dependency-changes-report.json" ? ["--base-ref", baseRef] : []),
+        "--json",
+        reportPath(outputDir, report.json),
+        "--markdown",
+        reportPath(outputDir, report.markdown),
+      ],
+      rootDir,
+      execFileSyncImpl,
+    );
+  }
 }
 
 /**
  * Generates dependency evidence reports, manifest, and summaries for a release.
  */
 async function generateDependencyReleaseEvidence({
-  rootDir = process.cwd(),
-  outputDir,
+  rootDir: sourceRoot = process.cwd(),
+  outputDir: requestedOutputDir,
   releaseRef,
   npmDistTag,
   baseRef = null,
@@ -397,7 +365,7 @@ async function generateDependencyReleaseEvidence({
   execFileSyncImpl = execFileSync,
   now = new Date(),
 }: GenerateEvidenceParams = {}) {
-  if (!outputDir) {
+  if (!requestedOutputDir) {
     throw new Error("Expected --output-dir <path>.");
   }
   if (!releaseRef) {
@@ -407,6 +375,8 @@ async function generateDependencyReleaseEvidence({
     throw new Error("Expected --npm-dist-tag <tag>.");
   }
 
+  const rootDir = path.resolve(sourceRoot);
+  const outputDir = path.resolve(requestedOutputDir);
   await rm(outputDir, { recursive: true, force: true });
   await mkdir(outputDir, { recursive: true });
   // Publish the artifact location before a blocking report exits so CI can retain its evidence.

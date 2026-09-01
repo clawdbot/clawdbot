@@ -71,6 +71,8 @@ function toolAuthorityOverlay(
   run: ReturnType<typeof createQueueTestRun>,
 ): ReplyToolAuthorityOverlay {
   return {
+    permissionMode: run.run.permissionMode,
+    toolOverrides: run.run.toolOverrides,
     originatingChannel: run.originatingChannel,
     messageProvider: run.run.messageProvider,
     chatType: run.run.chatType,
@@ -147,6 +149,22 @@ describe("reply run registry", () => {
       );
     },
   );
+
+  it("distinguishes session permission and tool settings in steering authority", () => {
+    const full = createQueueTestRun({ prompt: "full authority" });
+    const guarded = createQueueTestRun({ prompt: "guarded authority" });
+    full.run.permissionMode = "full";
+    guarded.run.permissionMode = "guarded";
+    expect(resolveFollowupRunToolAuthorityFingerprint(full)).not.toBe(
+      resolveFollowupRunToolAuthorityFingerprint(guarded),
+    );
+
+    guarded.run.permissionMode = "full";
+    guarded.run.toolOverrides = { webSearch: false };
+    expect(resolveFollowupRunToolAuthorityFingerprint(full)).not.toBe(
+      resolveFollowupRunToolAuthorityFingerprint(guarded),
+    );
+  });
 
   it.each([
     {
@@ -1992,6 +2010,14 @@ describe("reply run registry", () => {
       queueCurrentReplyRunMessage("session-projected-authority", "changed authority", {
         isInboundUserMessage: true,
         toolAuthorityOverlay: { ...overlay, clientCaps: ["changed-capability"] },
+      }),
+    ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
+    expect(queueMessage).toHaveBeenCalledOnce();
+
+    await expect(
+      queueCurrentReplyRunMessage("session-projected-authority", "restricted authority", {
+        isInboundUserMessage: true,
+        toolAuthorityOverlay: { ...overlay, permissionMode: "guarded" },
       }),
     ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
     expect(queueMessage).toHaveBeenCalledOnce();

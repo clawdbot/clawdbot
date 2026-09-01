@@ -72,8 +72,10 @@ export function shouldPrepareUpdatedInstallRestart(params: {
   serviceLoaded: boolean;
   serviceStoppedForUpdate?: boolean;
   serviceMatchesUpdateRoot?: boolean;
+  requiresInstallRootRefresh?: boolean;
 }): boolean {
   const useInstalledState =
+    params.requiresInstallRootRefresh === true ||
     isPackageManagerUpdateMode(params.updateMode) ||
     (params.updateMode === "git" && params.serviceStoppedForUpdate);
   return useInstalledState
@@ -191,6 +193,8 @@ export async function maybeRestartService(params: {
   const verdict = activation.serviceUpdateVerdict;
   let preserveDefinition =
     verdict?.kind === "unresolved" || (verdict?.kind === "owned" && !verdict.refreshDefinition);
+  const requiresInstallRootRefresh =
+    verdict?.kind === "owned" && verdict.requiresInstallRootRefresh;
   const isPackageUpdate = isPackageManagerUpdateMode(activation.result.mode);
   const requiresVerifiedRestart = () =>
     preserveDefinition || isPackageUpdate || activation.requireRunningServiceAfterRestart;
@@ -310,6 +314,15 @@ export async function maybeRestartService(params: {
   };
 
   if (activation.shouldRestart) {
+    if (
+      requiresInstallRootRefresh &&
+      (!activation.refreshServiceEnv || activation.serviceInstallEnv === null)
+    ) {
+      defaultRuntime.error(
+        "The updated installation requires a writable gateway service definition.",
+      );
+      return false;
+    }
     if (!activation.opts.json) {
       defaultRuntime.log("");
       defaultRuntime.log(theme.heading("Restarting service..."));
@@ -334,12 +347,14 @@ export async function maybeRestartService(params: {
       if (activation.refreshServiceEnv && activation.serviceInstallEnv !== null) {
         try {
           await runUpdatedInstallGatewayCommand(activation, "install");
-          if (isPackageUpdate && expectedGatewayVersion) {
+          if (expectedGatewayVersion && (isPackageUpdate || expectedGatewayBuildId)) {
             const health = await waitForGatewayHealthyRestart({
               service: resolveGatewayService(),
               port: activation.gatewayPort,
               expectedVersion: expectedGatewayVersion,
+              ...(expectedGatewayBuildId ? { expectedBuildId: expectedGatewayBuildId } : {}),
               env: activation.serviceEnv,
+              requireRunningService: true,
               attempts: POST_REFRESH_ALREADY_HEALTHY_ATTEMPTS,
               delayMs: POST_REFRESH_ALREADY_HEALTHY_DELAY_MS,
             });
@@ -393,10 +408,21 @@ export async function maybeRestartService(params: {
             updatedInstallRestartNeedsServiceRootProof = !canVerifyUpdatedGatewayByVersion;
           }
         }
+        if (
+          requiresInstallRootRefresh &&
+          (await gatewayServiceCommandUsesRoot({
+            root: activation.result.root,
+            env: activation.serviceEnv,
+          })) !== true
+        ) {
+          defaultRuntime.error(
+            "Gateway service did not point at the updated install after refresh.",
+          );
+          return false;
+        }
       }
-      // Service refresh can bootstrap a RunAtLoad LaunchAgent directly. When
-      // that already produced the expected gateway version, a second kickstart
-      // would only race the healthy supervisor-owned process.
+      // Refresh can start the service directly. Once its version and source
+      // build are healthy, another restart only interrupts the new process.
       if (!refreshedGatewayAlreadyHealthy && restartScriptPath) {
         await createUpdateConfigSnapshot();
         await runRestartScript(restartScriptPath);

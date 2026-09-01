@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import {
   loadCronRows,
@@ -54,6 +55,7 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import type { ProcessSupervisor } from "../process/supervisor/types.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -3162,6 +3164,96 @@ EOF`,
     );
     expect(requireSentFollowupText(0)).toContain("Verify the resulting state before retrying");
   });
+
+  it.skipIf(process.platform === "win32").each(["missing", "rotated"])(
+    "resolves a %s GitHub credential only after delayed approval",
+    async (credentialState) => {
+      buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+      createExecApprovalDecisionStateMock.mockReturnValue({
+        baseDecision: { timedOut: false },
+        approvedByAsk: false,
+        deniedReason: null,
+      });
+      const runtime = await vi.importActual<typeof import("./bash-tools.exec-runtime.js")>(
+        "./bash-tools.exec-runtime.js",
+      );
+      runExecProcessMock.mockImplementation(runtime.runExecProcess);
+      const profileDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "delayed-github-")));
+      const hostsPath = path.join(profileDir, "hosts.yml");
+      fs.writeFileSync(hostsPath, "github.com:\n  oauth_token: synthetic-before-approval\n", {
+        mode: 0o600,
+      });
+      let releaseApproval: () => void = () => {};
+      resolveApprovalDecisionOrUndefinedMock.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseApproval = () => resolve("allow-once");
+          }),
+      );
+      const supervisor = createProcessSupervisor();
+      startupCancellationMocks.spawn.mockImplementation(supervisor.spawn.bind(supervisor));
+      const fixturePath = path.join(profileDir, "auth-result.cjs");
+      fs.writeFileSync(
+        fixturePath,
+        `
+        process.stdout.write(process.env.GH_TOKEN === "synthetic-after-approval"
+          ? "selected-after-approval" : "wrong-account");
+      `,
+      );
+      const command = [process.execPath, fixturePath].map(quoteCliArg).join(" ");
+      const env = Object.freeze({
+        PATH: "/usr/bin:/bin",
+        GH_CONFIG_DIR: profileDir,
+        GH_TOKEN: "",
+        GITHUB_TOKEN: "",
+      });
+      try {
+        const result = await runGatewayAllowlist({
+          command,
+          turnSourceChannel: "feishu",
+          env,
+          requestedEnv: env,
+          githubProfileDir: profileDir,
+        });
+        expect(result.pendingResult?.details.status).toBe("approval-pending");
+        await vi.waitFor(() =>
+          expect(resolveApprovalDecisionOrUndefinedMock).toHaveBeenCalledOnce(),
+        );
+        expect(startupCancellationMocks.spawn).not.toHaveBeenCalled();
+        if (credentialState === "missing") {
+          fs.rmSync(hostsPath);
+        } else {
+          fs.writeFileSync(hostsPath, "github.com:\n  oauth_token: synthetic-after-approval\n");
+        }
+        releaseApproval();
+        await vi.waitFor(() => expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledOnce());
+        if (credentialState === "missing") {
+          expect(requireSentFollowupText(0)).toContain(
+            "GitHub Identity credential is unavailable or insecure. Reconnect or change GitHub Identity, then retry.",
+          );
+          expect(requireSentFollowupText(0)).not.toContain("wrong-account");
+        } else {
+          expect(requireSentFollowupText(0)).toContain("selected-after-approval");
+        }
+        expect(startupCancellationMocks.spawn).toHaveBeenCalledOnce();
+        expect(env.GH_TOKEN).toBe("");
+        expect(
+          JSON.stringify(createAndRegisterDefaultExecApprovalRequestMock.mock.calls),
+        ).not.toContain("synthetic-after-approval");
+        expect(JSON.stringify(sendExecApprovalFollowupResultMock.mock.calls)).not.toContain(
+          "synthetic-after-approval",
+        );
+        expect(JSON.stringify(startupCancellationMocks.spawn.mock.calls)).not.toContain(
+          "synthetic-after-approval",
+        );
+      } finally {
+        releaseApproval();
+        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+        await supervisor.shutdown();
+        fs.rmSync(profileDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("does not spawn or send a detached followup after cancellation during startup", async () => {
     const controller = new AbortController();

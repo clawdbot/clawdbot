@@ -7,7 +7,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { resolvePluginArtifactDeclaredSurface } from "./capability-consent.js";
+import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
 import { computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -156,8 +156,6 @@ vi.mock("./package-entry-resolution.js", async (importOriginal) => {
     },
   };
 });
-
-vi.resetModules();
 
 const { syncPluginsForUpdateChannel, updateNpmInstalledPlugins } = await import("./update.js");
 
@@ -877,6 +875,24 @@ describe("updateNpmInstalledPlugins", () => {
       childEnabled: false,
     },
     {
+      label: "asks for consent when an enabled legacy record lacks artifact acceptance",
+      nextProviders: ["existing-child-provider"],
+      review: "accept",
+      priorAcceptance: "missing",
+      rejected: false,
+      ownerEnabled: true,
+      childEnabled: false,
+    },
+    {
+      label: "defers missing artifact acceptance for a disabled legacy record",
+      nextProviders: ["existing-child-provider"],
+      review: "none",
+      priorAcceptance: "missing",
+      rejected: false,
+      ownerEnabled: false,
+      childEnabled: false,
+    },
+    {
       label: "rejects an unchanged replacement when prior acceptance has no artifact integrity",
       nextProviders: ["existing-child-provider"],
       review: "none",
@@ -1028,11 +1044,15 @@ describe("updateNpmInstalledPlugins", () => {
               spec: packageName,
               installPath: installedDir,
               ...(priorAcceptance !== "unanchored" ? { integrity: "sha512-previous" } : {}),
-              acceptedSurface: previousDeclared,
-              acceptedSurfaceHash: computeDeclaredSurfaceHash(previousDeclared),
-              acceptedSurfaceAt: previousAcceptedAt,
-              ...(priorAcceptance !== "unanchored"
-                ? { acceptedSurfaceIntegrity: "sha512-previous" }
+              ...(priorAcceptance !== "missing"
+                ? {
+                    acceptedSurface: previousDeclared,
+                    acceptedSurfaceHash: computeDeclaredSurfaceHash(previousDeclared),
+                    acceptedSurfaceAt: previousAcceptedAt,
+                    ...(priorAcceptance !== "unanchored"
+                      ? { acceptedSurfaceIntegrity: "sha512-previous" }
+                      : {}),
+                  }
                 : {}),
             },
           },
@@ -1092,11 +1112,13 @@ describe("updateNpmInstalledPlugins", () => {
 
       const callbackFailure =
         review === "throw-undefined" ? undefined : new Error("consent guard cancelled");
+      const beforePersistentEffect = vi.fn();
       let reviewed = false;
       const onCapabilityConsent: UpdateInstalledPluginParams["onCapabilityConsent"] =
         review === "none"
           ? undefined
           : async (details) => {
+              expect(beforePersistentEffect).not.toHaveBeenCalled();
               reviewed = true;
               if (review === "throw" || review === "throw-undefined") {
                 // oxlint-disable-next-line typescript/only-throw-error -- JavaScript callbacks may throw undefined; preserve that exact failure.
@@ -1118,11 +1140,12 @@ describe("updateNpmInstalledPlugins", () => {
             };
       const pendingUpdate = updatePlugin(config, pluginId, {
         onCapabilityConsent,
+        beforePersistentEffect,
         disableOnFailure,
         packagePluginIds: { [pluginId]: [rootPluginId, `${pluginId}-addon`] },
       });
       if (omitStageReview) {
-        await expect(pendingUpdate).rejects.toThrow("did not review the staged artifact");
+        await expect(pendingUpdate).rejects.toThrow("did not expose its verified artifact");
         return;
       }
       if (review === "throw" || review === "throw-undefined") {
@@ -1155,6 +1178,7 @@ describe("updateNpmInstalledPlugins", () => {
       }
 
       const install = result.config.plugins?.installs?.[pluginId];
+      expect(beforePersistentEffect).toHaveBeenCalledTimes(reviewRetryStage ? 2 : 1);
       expect(result.outcomes).toEqual([expect.objectContaining({ pluginId, status: "updated" })]);
       if (!ownerEnabled && !childEnabled) {
         expect(result.config.plugins?.entries).toEqual(config.plugins.entries);

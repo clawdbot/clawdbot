@@ -87,7 +87,12 @@ export function createVitestReportFixture(root: string, evidence = path.join(roo
 
   return async (
     mode: ReportFixtureMode,
-    options: { nativeArgs?: string[]; entry?: "projects" | "batch-cli"; report?: boolean } = {},
+    options: {
+      nativeArgs?: string[];
+      entry?: "projects" | "batch-cli";
+      report?: boolean;
+      crashSignal?: "SIGABRT" | "SIGKILL";
+    } = {},
   ) => {
     const deadline = performance.now() + 45000;
     const output = path.join(evidence, "result.json");
@@ -99,6 +104,7 @@ export function createVitestReportFixture(root: string, evidence = path.join(roo
       const prelude = `import fs from 'node:fs';
 ${mode === "teardown-timeout" && index === 0 ? "setInterval(()=>{},1000);" : ""}
 const merging = process.argv.includes('--mergeReports');
+${options.crashSignal && index === 0 ? `if(!merging){process.kill(process.pid,${JSON.stringify(options.crashSignal)});await new Promise(()=>setInterval(()=>{},1000));}` : ""}
 const output = process.argv.find(arg => arg.startsWith('--outputFile.json='))?.slice('--outputFile.json='.length);
 ${mode === "coverage-missing" && index === 0 ? `if(!merging)process.once('exit',()=>{const dir=process.argv.find(arg=>arg.startsWith('--coverage.reportsDirectory='))?.split('=').slice(1).join('=');if(dir&&fs.existsSync(dir+'/lcov.info')){fs.copyFileSync(dir+'/lcov.info',dir+'/lcov.info.native-original');fs.unlinkSync(dir+'/lcov.info');}});` : ""}
 ${mode === "merge-failure" ? `if(merging)throw new Error('owned native merge failure');` : ""}

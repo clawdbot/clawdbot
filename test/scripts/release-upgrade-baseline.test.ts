@@ -3,7 +3,7 @@ import {
   parseArgs,
   resolveDefaultReleaseUpgradeBaseline,
   resolveFrozenExtendedStableUpgradeBaseline,
-} from "../../scripts/lib/release-upgrade-baseline.mts";
+} from "../../scripts/lib/release-upgrade-baseline.mjs";
 
 describe("release upgrade baseline resolver", () => {
   it("rejects short flag values before resolving baselines", () => {

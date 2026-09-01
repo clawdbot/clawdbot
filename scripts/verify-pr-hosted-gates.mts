@@ -4,6 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { minimatch } from "minimatch";
 import { parse } from "yaml";
+// Materialized PR wrappers must use the verified source, not the caller's tsconfig aliases.
 import { isRecord, readStringField } from "../packages/normalization-core/src/record-coerce.ts";
 import {
   booleanFlag,

@@ -6,6 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { createNodeBootstrapArtifactProvider } from "./node-bootstrap-artifact.js";
 
 const roots: string[] = [];
@@ -276,13 +277,43 @@ describe("node bootstrap distribution", () => {
     await expect(fs.access(artifact.tarballPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("does not retain an artifact for an enrollment cancelled during preparation", async () => {
+  it("cancels one waiting enrollment without abandoning shared artifact preparation", async () => {
     const { provider } = await fixture();
+    const stagingRoot = await fs.mkdtemp(path.join(os.tmpdir(), "node-artifact-held-"));
+    roots.push(stagingRoot);
+    const entered = createDeferredCore();
+    const resume = createDeferredCore<string>();
+    const makeTemp = vi.spyOn(fs, "mkdtemp").mockImplementationOnce(async () => {
+      entered.resolve();
+      return await resume.promise;
+    });
     const enrollment = new AbortController();
-    const pending = provider.prepare(enrollment.signal);
-    enrollment.abort(new Error("enrollment cancelled"));
-    await expect(pending).rejects.toThrow("enrollment cancelled");
-    await provider.close();
+    const completed = vi.fn();
+    const pending = provider.prepare(enrollment.signal).then(
+      (artifact) => completed({ artifact }),
+      (error: unknown) => completed({ error }),
+    );
+    const retained = provider.prepare();
+    try {
+      await entered.promise;
+      enrollment.abort(new DOMException("enrollment cancelled", "AbortError"));
+      await vi.waitFor(() =>
+        expect(completed).toHaveBeenCalledExactlyOnceWith({
+          error: expect.objectContaining({ name: "AbortError" }),
+        }),
+      );
+      expect(makeTemp).toHaveBeenCalledOnce();
+      resume.resolve(stagingRoot);
+      const artifact = await retained;
+      expect(await provider.prepare()).toBe(artifact);
+      expect(makeTemp).toHaveBeenCalledOnce();
+      await provider.close();
+      await expect(fs.access(artifact.tarballPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      resume.resolve(stagingRoot);
+      await Promise.allSettled([pending, retained]);
+      makeTemp.mockRestore();
+    }
   });
 
   it.each(["plugin", "private runtime"])(

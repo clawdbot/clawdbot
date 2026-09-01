@@ -11,9 +11,12 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { loadPreparedModelCatalogOwnerSnapshot } from "./prepared-model-catalog.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   loadPublishedGatewayReplyDispatchRuntime,
+  prepareModelRuntimeSnapshot,
+  refreshStalePreparedModelRuntimeCatalog,
   registerPreparedModelRuntimePublicationListener,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
@@ -26,6 +29,175 @@ describe("prepared model runtime reload auth adoption", () => {
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "prepared-model-runtime" });
     resetPreparedModelRuntimeHarness(state);
+  });
+
+  it("refreshes stale catalog content only when an explicit read requests it", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const model = {
+      provider: "catalog-refresh-fixture",
+      id: "authenticated-model",
+      name: "Authenticated model",
+      api: "openai-completions" as const,
+    };
+    mocks.runPreparedModelCatalogWorker.mockResolvedValue({
+      entries: [model],
+      routeVariants: [model],
+    });
+    const input = {
+      agentId: "default",
+      agentDir: state.agentDir("default"),
+      inheritedAuthDir: state.agentDir("default"),
+      config: {},
+    };
+    const liveBuild = createDeferred<{
+      entries: Array<typeof model>;
+      routeVariants: Array<typeof model>;
+    }>();
+
+    await refreshPreparedModelRuntimeSnapshots(input.config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+    });
+    mocks.buildPreparedModelCatalogSnapshot.mockClear();
+    mocks.createPreparedModelCatalogWorkerInput.mockClear();
+    expect((await prepareModelRuntimeSnapshot(input)).modelCatalog.entries).toEqual([]);
+
+    mocks.mutationListener?.({
+      agentDir: input.agentDir,
+      affectsInheritedStores: false,
+      profileSetChanged: true,
+    });
+
+    const published = await prepareModelRuntimeSnapshot(input);
+    expect(published).toMatchObject({
+      modelCatalog: { entries: [] },
+    });
+    expect(
+      mocks.createPreparedModelCatalogWorkerInput.mock.calls.at(-1)?.[0].agentFacts.providerIds,
+    ).toContain("custom");
+    expect(mocks.buildPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
+    expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
+
+    let requestReadSettled = false;
+    const requestRead = loadPreparedModelCatalogOwnerSnapshot({
+      ...input,
+      readOnly: true,
+    }).then(() => {
+      requestReadSettled = true;
+    });
+    mocks.runPreparedModelCatalogWorker.mockImplementation(() => liveBuild.promise);
+    for (let i = 0; i < 5; i += 1) {
+      await Promise.resolve();
+    }
+    try {
+      expect(requestReadSettled).toBe(true);
+      expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
+    } finally {
+      liveBuild.resolve({ entries: [model], routeVariants: [model] });
+      await requestRead;
+    }
+
+    mocks.runPreparedModelCatalogWorker.mockResolvedValue({
+      entries: [model],
+      routeVariants: [model],
+    });
+    await expect(refreshStalePreparedModelRuntimeCatalog(published)).resolves.toMatchObject({
+      entries: [model],
+    });
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce();
+    await expect(refreshStalePreparedModelRuntimeCatalog(published)).resolves.toBeUndefined();
+  });
+
+  it("does not refresh a catalog snapshot that is not owned by the runtime", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const input = {
+      agentId: "default",
+      agentDir: state.agentDir("default"),
+      inheritedAuthDir: state.agentDir("default"),
+      config: {},
+    };
+    await refreshPreparedModelRuntimeSnapshots(input.config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+    });
+    const published = await prepareModelRuntimeSnapshot(input);
+    const unowned = { ...published };
+
+    await expect(refreshStalePreparedModelRuntimeCatalog(unowned)).resolves.toBeUndefined();
+    expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
+  });
+
+  it("does not live-refresh a token rotation with the same profile set", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const input = {
+      agentId: "default",
+      agentDir: state.agentDir("default"),
+      inheritedAuthDir: state.agentDir("default"),
+      config: {},
+    };
+
+    await refreshPreparedModelRuntimeSnapshots(input.config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+    });
+    mocks.runPreparedModelCatalogWorker.mockClear();
+    mocks.createPreparedModelCatalogWorkerInput.mockClear();
+    mocks.mutationListener?.({
+      agentDir: input.agentDir,
+      affectsInheritedStores: false,
+      profileSetChanged: false,
+    });
+
+    await prepareModelRuntimeSnapshot(input);
+    expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
+    expect(
+      mocks.createPreparedModelCatalogWorkerInput.mock.calls.at(-1)?.[0].agentFacts.providerIds,
+    ).toEqual([]);
+  });
+
+  it("shares one live rebuild across concurrent stale catalog reads", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const model = {
+      provider: "catalog-refresh-fixture",
+      id: "concurrent-model",
+      name: "Concurrent model",
+      api: "openai-completions" as const,
+    };
+    const liveBuild = createDeferred<{
+      entries: Array<typeof model>;
+      routeVariants: Array<typeof model>;
+    }>();
+    mocks.runPreparedModelCatalogWorker.mockImplementation(() => liveBuild.promise);
+    const input = {
+      agentId: "default",
+      agentDir: state.agentDir("default"),
+      inheritedAuthDir: state.agentDir("default"),
+      config: {},
+    };
+
+    await refreshPreparedModelRuntimeSnapshots(input.config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+    });
+    mocks.mutationListener?.({
+      agentDir: input.agentDir,
+      affectsInheritedStores: false,
+      profileSetChanged: true,
+    });
+    const published = await prepareModelRuntimeSnapshot(input);
+    expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
+
+    const first = refreshStalePreparedModelRuntimeCatalog(published);
+    const second = refreshStalePreparedModelRuntimeCatalog(published);
+    await vi.waitFor(() => expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce());
+    liveBuild.resolve({ entries: [model], routeVariants: [model] });
+
+    const catalogs = await Promise.all([first, second]);
+    expect(catalogs).toHaveLength(2);
+    for (const catalog of catalogs) {
+      expect(catalog).toMatchObject({ entries: [model], routeVariants: [model] });
+    }
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce();
   });
 
   it("commits auth invalidation inside the active lifecycle publication", async () => {

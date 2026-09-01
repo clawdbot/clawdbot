@@ -7,7 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { convertPathToPattern } from "tinyglobby";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, vi } from "vitest";
 import { isVitestWorkerMetadataRequest } from "../../scripts/lib/vitest-cli-mode.mts";
 import { stripVitestAnsi } from "../../scripts/lib/vitest-unhandled-errors.mts";
 import {
@@ -21,7 +21,7 @@ import { createVitestProcessCompletion } from "../../scripts/vitest-process-grou
 import { resolveRuntimeWorkerArgv } from "../../src/infra/runtime-worker-url.js";
 import { createDeferred } from "../helpers/promise.js";
 import {
-  createWorkerArtifactFixtures,
+  createWorkerArtifactTest,
   preparationClient,
   waitForFixtureFile,
   workerProbe,
@@ -29,15 +29,15 @@ import {
 } from "./vitest-worker-artifacts.test-support.js";
 
 const root = process.cwd();
-const { fixtureLifetime, fixtureDirectory, createFixtureCommands } = createWorkerArtifactFixtures();
+const it = createWorkerArtifactTest();
 const compilerModule = "scripts/lib/vitest-worker-run.mts";
 const compilerEntry = "scripts/lib/vitest-worker-compiler.mts";
 const artifactsModule = "scripts/lib/vitest-worker-artifacts.mts";
 
-describe("fresh compiled subprocess invocation", () => {
-  it("carries native fs-safe writes and verifies every copied target", (context) =>
-    fixtureLifetime.run(async () => {
-      const { node, prepareWorkers } = createFixtureCommands(context);
+describe.concurrent("fresh compiled subprocess invocation", () => {
+  it("carries native fs-safe writes and verifies every copied target", ({ workerArtifacts }) =>
+    workerArtifacts.fixtureLifetime.run(async () => {
+      const { node, prepareWorkers } = workerArtifacts.createFixtureCommands();
       const source = path.join(
         path.dirname(createRequire(import.meta.url).resolve("@openclaw/fs-safe/package.json")),
         "dist/native",
@@ -57,7 +57,7 @@ describe("fresh compiled subprocess invocation", () => {
           expect(manifest.outputs[path.join("native", name)]).toBe(
             createHash("sha256").update(bytes).digest("hex"),
           );
-          expect(fs.readFileSync(path.join(native, name))).toEqual(bytes);
+          expect(fs.readFileSync(path.join(native, name)).equals(bytes), name).toBe(true);
         }
         const probe = async (name: string, mode: string | undefined, outcome: string) => {
           const rootDir = path.join(directory, name);
@@ -162,10 +162,10 @@ describe("fresh compiled subprocess invocation", () => {
 
   it.for(["native", "compiler"])(
     "rejects %s output altered during the real copy phase before publishing a manifest",
-    (target, context) =>
-      fixtureLifetime.run(async () => {
-        const { node } = createFixtureCommands(context);
-        const directory = fixtureDirectory();
+    (target, { workerArtifacts }) =>
+      workerArtifacts.fixtureLifetime.run(async () => {
+        const { node } = workerArtifacts.createFixtureCommands();
+        const directory = workerArtifacts.fixtureDirectory();
         const altered = path.join(directory, "altered");
         const preload = writeFixture(
           directory,
@@ -213,10 +213,10 @@ describe("fresh compiled subprocess invocation", () => {
     .runIf(process.platform !== "win32")
     .for(["close before ready", "cancel while compiling", "terminated group", "uncertain output"])(
     "owns the real compiler lifetime: %s",
-    (mode, context) =>
-      fixtureLifetime.run(async () => {
-        const { node } = createFixtureCommands(context);
-        const directory = fixtureDirectory();
+    (mode, { workerArtifacts }) =>
+      workerArtifacts.fixtureLifetime.run(async () => {
+        const { node } = workerArtifacts.createFixtureCommands();
+        const directory = workerArtifacts.fixtureDirectory();
         const preload = writeFixture(
           directory,
           "compiler-lifetime.mjs",
@@ -371,10 +371,10 @@ describe("fresh compiled subprocess invocation", () => {
 
   it.for(["failed observation", "cancellation", "timeout"])(
     "joins complete bodies before input disposal after %s in real Vitest",
-    (fault, context) =>
-      fixtureLifetime.run(async () => {
-        const { node } = createFixtureCommands(context);
-        const directory = fixtureDirectory();
+    (fault, { workerArtifacts }) =>
+      workerArtifacts.fixtureLifetime.run(async () => {
+        const { node } = workerArtifacts.createFixtureCommands();
+        const directory = workerArtifacts.fixtureDirectory();
         const receipt = path.join(directory, "lifetime.json");
         const test = writeFixture(
           directory,
@@ -484,9 +484,11 @@ describe("fresh compiled subprocess invocation", () => {
       }),
   );
 
-  it("observes readiness when borrower completion wins the file-watch event", () =>
-    fixtureLifetime.run(async () => {
-      const filename = path.join(fixtureDirectory(), "ready");
+  it("observes readiness when borrower completion wins the file-watch event", ({
+    workerArtifacts,
+  }) =>
+    workerArtifacts.fixtureLifetime.run(async () => {
+      const filename = path.join(workerArtifacts.fixtureDirectory(), "ready");
       const { promise: completion, resolve: finish } = createDeferred();
       let ready = false;
       const waiting = waitForFixtureFile(filename, completion).then(() => {
@@ -499,10 +501,12 @@ describe("fresh compiled subprocess invocation", () => {
       await waiting;
     }));
 
-  it("keeps standalone configured Vitest on source without a subprocess owner", (context) =>
-    fixtureLifetime.run(async () => {
-      const { node } = createFixtureCommands(context);
-      const directory = fixtureDirectory();
+  it("keeps standalone configured Vitest on source without a subprocess owner", ({
+    workerArtifacts,
+  }) =>
+    workerArtifacts.fixtureLifetime.run(async () => {
+      const { node } = workerArtifacts.createFixtureCommands();
+      const directory = workerArtifacts.fixtureDirectory();
       const { config } = workerProbe(directory, false, "source");
       const result = await node([
         "node_modules/vitest/vitest.mjs",
@@ -533,13 +537,15 @@ describe("fresh compiled subprocess invocation", () => {
     },
   );
 
-  it("uses the prepared Anthropic failover hook in a fresh process without global activation", (context) =>
-    fixtureLifetime.run(async () => {
-      const { node, prepareWorkers } = createFixtureCommands(context);
+  it("uses the prepared Anthropic failover hook in a fresh process without global activation", ({
+    workerArtifacts,
+  }) =>
+    workerArtifacts.fixtureLifetime.run(async () => {
+      const { node, prepareWorkers } = workerArtifacts.createFixtureCommands();
       const owner = createVitestWorkerRun();
       try {
         const manifest = await prepareWorkers(owner);
-        const directory = fixtureDirectory();
+        const directory = workerArtifacts.fixtureDirectory();
         const bundled = path.join(directory, "bundled");
         const pluginRoot = path.join(bundled, "anthropic");
         writeFixture(
@@ -570,9 +576,11 @@ describe("fresh compiled subprocess invocation", () => {
       expect(fs.existsSync(owner.descriptor.directory)).toBe(false);
     }));
 
-  it("preserves scoped and prepared provider hooks in source and compiled TUI payloads", (context) =>
-    fixtureLifetime.run(async () => {
-      const { node, prepareWorkers } = createFixtureCommands(context);
+  it("preserves scoped and prepared provider hooks in source and compiled TUI payloads", ({
+    workerArtifacts,
+  }) =>
+    workerArtifacts.fixtureLifetime.run(async () => {
+      const { node, prepareWorkers } = workerArtifacts.createFixtureCommands();
       const owner = createVitestWorkerRun();
       try {
         const manifest = await prepareWorkers(owner);
@@ -581,7 +589,7 @@ describe("fresh compiled subprocess invocation", () => {
         );
         for (const mode of ["source", "compiled"] as const) {
           for (const scope of ["scoped", "prepared"] as const) {
-            const directory = fixtureDirectory();
+            const directory = workerArtifacts.fixtureDirectory();
             const events = path.join(directory, "provider-events.jsonl");
             const bundled = path.join(directory, "bundled");
             const pluginRoot = path.join(bundled, "fixture-hook");
@@ -621,6 +629,9 @@ describe("fresh compiled subprocess invocation", () => {
             import {createEmptyPluginRegistry} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/registry-empty.ts")).href)};
             import {getPluginRegistryState} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/runtime-state.ts")).href)};
             import {withPluginRuntimeRegistryScope} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/runtime/gateway-request-scope.ts")).href)};
+            import {clearActivePluginRegistry,setActivePluginRegistry} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/runtime.ts")).href)};
+            import {withPluginRuntimeGenerationScope} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/runtime/generation-scope.ts")).href)};
+            import {createPluginMetadataSnapshot} from ${JSON.stringify(pathToFileURL(path.join(root, "src/config/plugin-auto-enable.test-helpers.ts")).href)};
             const events = ${JSON.stringify(events)};
             const observed = () => fs.existsSync(events) ? fs.readFileSync(events,'utf8').trim().split('\\n').map(line=>JSON.parse(line)) : [];
             const started = performance.now();
@@ -638,11 +649,11 @@ describe("fresh compiled subprocess invocation", () => {
             registry.providers.push({pluginId:'fixture-hook',provider:{id:'fixture-provider',label:'Fixture',auth:[],
               classifyFailoverReason(context) {
                 assert.equal(context.provider,'fixture-provider');assert.equal(context.status,403);
-                scopedCalls++;return 'overloaded';
+                scopedCalls++;return ${JSON.stringify(scope === "prepared" ? "billing" : "overloaded")};
               },
             }});
             const unprepared = buildEmbeddedRunPayloads(input('403 fixture refusal'));
-            assert.ok(unprepared.some(payload=>payload.isError), 'an unprepared error still needs a visible outcome');
+            assert.deepEqual(unprepared,[{text:'⚠️ fixture-provider/fixture-model request failed (authentication failed, HTTP 403). Re-authenticate the provider and try again.',isError:true}], 'an unprepared error must retain safe provider, model and status facts');
             assert.deepEqual(observed(),[], 'error formatting must not materialize the provider');
             const providerOwner = ${scope === "prepared" ? "resolveProviderRuntimePluginHandle({provider:'fixture-provider'}).plugin" : "undefined"};
             if (${scope === "prepared"}) {
@@ -650,14 +661,17 @@ describe("fresh compiled subprocess invocation", () => {
               assert.deepEqual(observed(),[{event:'import'},{event:'register',mode:'discovery'}]);
             }
             const callStarted = performance.now();
+            const render = providerOwner => buildEmbeddedRunPayloads({...input('403 fixture refusal'),providerOwner});
+            const prepare = () => resolveProviderRuntimePluginHandle({provider:'fixture-provider'}).plugin;
             const call = () => {
-              const activeProviderOwner = ${scope === "scoped" ? "resolveProviderRuntimePluginHandle({provider:'fixture-provider'}).plugin" : "providerOwner"};
+              const activeProviderOwner = ${scope === "scoped" ? "prepare()" : "providerOwner"};
               if (${scope === "scoped"}) {
                 assert.equal(activeProviderOwner?.classifyFailoverReason,registry.providers[0].provider.classifyFailoverReason,'preparation must retain the scoped provider hook identity');
               }
-              return buildEmbeddedRunPayloads({...input('403 fixture refusal'),providerOwner:activeProviderOwner});
+              assert.deepEqual(render(),unprepared,'ownerless presentation must ignore loaded provider policy');
+              return render(activeProviderOwner);
             };
-            const payloads = ${scope === "scoped" ? "withPluginRuntimeRegistryScope(registry,call)" : "call()"};
+            const payloads = withPluginRuntimeRegistryScope(registry,call);
             const callMs = performance.now()-callStarted;
             const records = observed();
             if (${scope === "scoped"}) {
@@ -671,6 +685,29 @@ describe("fresh compiled subprocess invocation", () => {
             }
             assert.ok(payloads.some(payload=>payload.isError && payload.text.includes('temporarily overloaded')));
             assert.equal(getPluginRegistryState()?.activeRegistry ?? null,null,'preparation and error handling must not install a global registry');
+            if (${scope === "scoped"}) {
+              const config = {};
+              const metadataSnapshot = createPluginMetadataSnapshot({config,manifestRegistry:{plugins:[],diagnostics:[]}});
+              setActivePluginRegistry(registry,'fixture-active');
+              try {
+                assert.deepEqual(call(),payloads,'preparation must select the active loaded provider');
+                withPluginRuntimeGenerationScope({metadataSnapshot,pluginRegistry:registry},()=>{
+                  assert.deepEqual(call(),payloads,'preparation must select the generation provider');
+                  const callsBeforeEmptyGeneration = scopedCalls;
+                  withPluginRuntimeGenerationScope({metadataSnapshot},()=>{
+                    withPluginRuntimeRegistryScope(registry,()=>{
+                      const absentOwner = prepare();
+                      assert.equal(absentOwner,undefined,'an empty generation must fence request and active providers');
+                      assert.deepEqual(render(absentOwner),unprepared);
+                      assert.equal(scopedCalls,callsBeforeEmptyGeneration);
+                    });
+                  });
+                  assert.deepEqual(call(),payloads,'the outer generation must be restored');
+                });
+              } finally {await clearActivePluginRegistry();}
+              assert.deepEqual(render(),unprepared,'presentation outside the scope still needs an explicit owner');
+              assert.deepEqual(observed(),[],'loaded lookups must not import the fixture plugin');
+            }
             console.log(JSON.stringify({pid:process.pid,mode:${JSON.stringify(mode)},scope:${JSON.stringify(scope)},importMs:imported-started,callMs,scopedCalls,records,payloads,rss:process.memoryUsage().rss}));
           `,
             );
@@ -723,13 +760,15 @@ describe("fresh compiled subprocess invocation", () => {
     expect(isVitestWorkerMetadataRequest(args)).toBe(metadata);
   });
 
-  it("shares one lazy build across projects and supports Promise config factories with the runner loader", (context) =>
-    fixtureLifetime.run(async () => {
-      const { node } = createFixtureCommands(context);
+  it("shares one lazy build across projects and supports Promise config factories with the runner loader", ({
+    workerArtifacts,
+  }) =>
+    workerArtifacts.fixtureLifetime.run(async () => {
+      const { node } = workerArtifacts.createFixtureCommands();
       const observed = await Promise.all(
         ["separate", "equals"].map((configForm) =>
-          fixtureLifetime.run(async () => {
-            const directory = fixtureDirectory();
+          workerArtifacts.fixtureLifetime.run(async () => {
+            const directory = workerArtifacts.fixtureDirectory();
             const { config } = workerProbe(directory);
             const result = await node([
               "scripts/run-vitest.mjs",
@@ -757,66 +796,72 @@ describe("fresh compiled subprocess invocation", () => {
       expect(new Set(observed).size).toBe(2);
     }));
 
-  it("shares a completed generation between real borrower processes until both finish", (context) =>
-    fixtureLifetime.run(async () => {
-      const { startBorrower } = createFixtureCommands(context);
-      const directory = fixtureDirectory();
-      const { config } = workerProbe(directory, true);
-      const owner = createVitestWorkerRun();
-      const preparationLog = vi.spyOn(console, "error");
-      let generation: string | undefined;
-      const handles = ["first", "second"].map((project) =>
-        startBorrower(owner, ["run", "--config", config, "--project", project]),
-      );
-      const results = handles.map((handle) => handle.result);
-      let secondFinished = false;
-      void results[1]!.then(() => {
-        secondFinished = true;
-      });
-      try {
-        const first = await results[0]!;
-        expect(first.code, first.stderr + first.stdout).toBe(0);
-        expect(secondFinished).toBe(false);
-        const generations = fs
-          .readFileSync(path.join(directory, "generations.jsonl"), "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line) as string);
-        expect(new Set(generations).size).toBe(1);
-        generation = generations[0]!;
-        expect(fs.existsSync(new URL(generation))).toBe(true);
-        const declaration = path.join(root, "src/infra/runtime-process-entrypoints.ts");
-        const buildDirectory = path.dirname(path.dirname(path.dirname(fileURLToPath(generation))));
-        expect(
-          resolveVitestWorkerDeclaration(declaration.replaceAll("/", "\\"), buildDirectory),
-        ).toBe(resolveVitestWorkerDeclaration(declaration, buildDirectory));
-      } finally {
-        fs.writeFileSync(path.join(directory, "release"), "finish");
+  it(
+    "shares a completed generation between real borrower processes until both finish",
+    { concurrent: false },
+    ({ workerArtifacts }) =>
+      workerArtifacts.fixtureLifetime.run(async () => {
+        const { startBorrower } = workerArtifacts.createFixtureCommands();
+        const directory = workerArtifacts.fixtureDirectory();
+        const { config } = workerProbe(directory, true);
+        const owner = createVitestWorkerRun();
+        const preparationLog = vi.spyOn(console, "error");
+        let generation: string | undefined;
+        const handles = ["first", "second"].map((project) =>
+          startBorrower(owner, ["run", "--config", config, "--project", project]),
+        );
+        const results = handles.map((handle) => handle.result);
+        let secondFinished = false;
+        void results[1]!.then(() => {
+          secondFinished = true;
+        });
         try {
-          const completed = await Promise.all(results);
+          const first = await results[0]!;
+          expect(first.code, first.stderr + first.stdout).toBe(0);
+          expect(secondFinished).toBe(false);
+          const generations = fs
+            .readFileSync(path.join(directory, "generations.jsonl"), "utf8")
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line) as string);
+          expect(new Set(generations).size).toBe(1);
+          generation = generations[0]!;
+          expect(fs.existsSync(new URL(generation))).toBe(true);
+          const declaration = path.join(root, "src/infra/runtime-process-entrypoints.ts");
+          const buildDirectory = path.dirname(
+            path.dirname(path.dirname(fileURLToPath(generation))),
+          );
           expect(
-            preparationLog.mock.calls.filter(([line]) =>
-              String(line).startsWith("[vitest-workers] prepared"),
-            ),
-          ).toHaveLength(1);
-          for (const result of completed) {
-            expect(result.code, result.stderr + result.stdout).toBe(0);
-            expect(result.stderr).not.toContain("[vitest-workers] prepared");
-          }
+            resolveVitestWorkerDeclaration(declaration.replaceAll("/", "\\"), buildDirectory),
+          ).toBe(resolveVitestWorkerDeclaration(declaration, buildDirectory));
         } finally {
-          preparationLog.mockRestore();
-          await owner.dispose();
+          fs.writeFileSync(path.join(directory, "release"), "finish");
+          try {
+            const completed = await Promise.all(results);
+            expect(
+              preparationLog.mock.calls.filter(([line]) =>
+                String(line).startsWith("[vitest-workers] prepared"),
+              ),
+            ).toHaveLength(1);
+            for (const result of completed) {
+              expect(result.code, result.stderr + result.stdout).toBe(0);
+              expect(result.stderr).not.toContain("[vitest-workers] prepared");
+            }
+          } finally {
+            preparationLog.mockRestore();
+            await owner.dispose();
+          }
         }
-      }
-      expect(fs.existsSync(new URL(generation!))).toBe(false);
-    }));
+        expect(fs.existsSync(new URL(generation!))).toBe(false);
+      }),
+  );
 
   it.for(["infra/sqlite-readonly-location.worker.js", "tui/tui.js"])(
     "refuses missing %s in the real consumer without rebuilding",
-    (missingEntry, context) =>
-      fixtureLifetime.run(async () => {
-        const { startBorrower } = createFixtureCommands(context);
-        const directory = fixtureDirectory();
+    (missingEntry, { workerArtifacts }) =>
+      workerArtifacts.fixtureLifetime.run(async () => {
+        const { startBorrower } = workerArtifacts.createFixtureCommands();
+        const directory = workerArtifacts.fixtureDirectory();
         const { config } = workerProbe(directory);
         const owner = createVitestWorkerRun();
         let generation: string | undefined;
@@ -842,7 +887,7 @@ describe("fresh compiled subprocess invocation", () => {
           ]).result;
           expect(refused.code).not.toBe(0);
           expect(refused.stderr).toContain("ENOENT");
-          expect(refused.stderr.trim().split("\n").at(-1)).toBe("[test] FAILED (exit 1)");
+          expect(refused.stderr).not.toContain("FAILED (exit");
           expect(
             fs.readFileSync(path.join(directory, "generations.jsonl"), "utf8").trim().split("\n"),
           ).toHaveLength(1);
@@ -856,10 +901,10 @@ describe("fresh compiled subprocess invocation", () => {
 
   it.for(["cancel", "owner disconnect"])(
     "joins actual borrowers after %s before deleting artifacts",
-    (action, context) =>
-      fixtureLifetime.run(async () => {
-        const { startBorrower } = createFixtureCommands(context);
-        const directory = fixtureDirectory();
+    (action, { workerArtifacts }) =>
+      workerArtifacts.fixtureLifetime.run(async () => {
+        const { startBorrower } = workerArtifacts.createFixtureCommands();
+        const directory = workerArtifacts.fixtureDirectory();
         const { config } = workerProbe(directory, true);
         const owner = createVitestWorkerRun();
         // Node26 parent-side child.disconnect() omits ChildProcess.close. Close the
@@ -893,7 +938,7 @@ describe("fresh compiled subprocess invocation", () => {
           expect(result.code).not.toBe(0);
           if (action === "owner disconnect") {
             expect(result.stderr).toContain("owner disconnected");
-            expect(result.stderr.trim().split("\n").at(-1)).toBe("[test] FAILED (exit 1)");
+            expect(result.stderr).not.toContain("FAILED (exit");
           }
           await owner.dispose();
           expect(fs.existsSync(new URL(generation))).toBe(false);
@@ -905,10 +950,10 @@ describe("fresh compiled subprocess invocation", () => {
 
   it.runIf(process.platform !== "win32")(
     "retains artifacts after an uncertain join and waits for the surviving borrower",
-    (context) =>
-      fixtureLifetime.run(async () => {
-        const { observeChild } = createFixtureCommands(context);
-        const directory = fixtureDirectory();
+    ({ workerArtifacts }) =>
+      workerArtifacts.fixtureLifetime.run(async () => {
+        const { observeChild } = workerArtifacts.createFixtureCommands();
+        const directory = workerArtifacts.fixtureDirectory();
         const owner = createVitestWorkerRun();
         const generation = owner.descriptor.directory;
         const artifact = path.join(generation, "dist/infra/runtime-process-entrypoints.js");
@@ -987,10 +1032,10 @@ describe("fresh compiled subprocess invocation", () => {
       }),
   );
 
-  it("ends verification failure with a failed trailer", (context) =>
-    fixtureLifetime.run(async () => {
-      const { node } = createFixtureCommands(context);
-      const directory = fixtureDirectory();
+  it("ends verification failure with a failed trailer", ({ workerArtifacts }) =>
+    workerArtifacts.fixtureLifetime.run(async () => {
+      const { node } = workerArtifacts.createFixtureCommands();
+      const directory = workerArtifacts.fixtureDirectory();
       const { config } = workerProbe(directory);
       const reporter = writeFixture(
         directory,
@@ -1016,13 +1061,18 @@ describe("fresh compiled subprocess invocation", () => {
       expect(result.code).not.toBe(0);
       expect(result.stderr).toContain("Compiled subprocess artifact changed");
       expect(result.stderr).not.toContain("[test] passed");
+      expect(result.stderr.match(/^\[.*\] FAILED \(exit \d+\)$/gmu)).toEqual([
+        "[test] FAILED (exit 1)",
+      ]);
       expect(result.stderr.trim().split("\n").at(-1)).toBe("[test] FAILED (exit 1)");
     }));
 
-  it("does not build for config imports, pure shards, or metadata collection", (context) =>
-    fixtureLifetime.run(async () => {
-      const { node, startBorrower } = createFixtureCommands(context);
-      const directory = fixtureDirectory();
+  it("does not build for config imports, pure shards, or metadata collection", ({
+    workerArtifacts,
+  }) =>
+    workerArtifacts.fixtureLifetime.run(async () => {
+      const { node, startBorrower } = workerArtifacts.createFixtureCommands();
+      const directory = workerArtifacts.fixtureDirectory();
       const test = writeFixture(
         directory,
         "tiny.test.ts",
@@ -1069,9 +1119,12 @@ describe("fresh compiled subprocess invocation", () => {
       }
     }));
 
-  it("keeps watch launches on live source across dependency edits", ({ onTestFinished }) =>
-    fixtureLifetime.run(async () => {
-      const directory = fixtureDirectory();
+  it("keeps watch launches on live source across dependency edits", ({
+    workerArtifacts,
+    onTestFinished,
+  }) =>
+    workerArtifacts.fixtureLifetime.run(async () => {
+      const directory = workerArtifacts.fixtureDirectory();
       const observed = path.join(directory, "watch-result.txt");
       const dependency = writeFixture(
         directory,
@@ -1134,10 +1187,12 @@ describe("fresh compiled subprocess invocation", () => {
       }
     }));
 
-  it("builds changed source despite valid stale dist and fails visibly on build errors", (context) =>
-    fixtureLifetime.run(async () => {
-      const { node, prepareWorkers } = createFixtureCommands(context);
-      const fixture = fixtureDirectory();
+  it("builds changed source despite valid stale dist and fails visibly on build errors", ({
+    workerArtifacts,
+  }) =>
+    workerArtifacts.fixtureLifetime.run(async () => {
+      const { node, prepareWorkers } = workerArtifacts.createFixtureCommands();
+      const fixture = workerArtifacts.fixtureDirectory();
       const initial = createVitestWorkerRun();
       const initialDirectory = initial.descriptor.directory;
       try {
@@ -1237,6 +1292,9 @@ describe("fresh compiled subprocess invocation", () => {
           expect(failed.code).not.toBe(0);
           expect(failed.stderr).toContain("owner refused:");
           expect(failed.stderr).toContain(error!);
+          expect(failed.stderr.match(/^\[.*\] FAILED \(exit \d+\)$/gmu)).toEqual([
+            "[test] FAILED (exit 1)",
+          ]);
           expect(failed.stderr.trim().split("\n").at(-1)).toBe("[test] FAILED (exit 1)");
           expect(fs.readdirSync(parent).toSorted()).toEqual(before);
         }

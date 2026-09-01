@@ -2,6 +2,7 @@
 // real chat composer and verify chat.send receives it without overflowing base64 handling.
 import { copyFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { crc32 } from "node:zlib";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -44,17 +45,6 @@ function requireArray(value: unknown, label: string): unknown[] {
     throw new Error(`Expected ${label} to be an array`);
   }
   return value;
-}
-
-function crc32(bytes: Uint8Array): number {
-  let crc = 0xffffffff;
-  for (const byte of bytes) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit += 1) {
-      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
-    }
-  }
-  return (crc ^ 0xffffffff) >>> 0;
 }
 
 function uint32(value: number): Uint8Array {

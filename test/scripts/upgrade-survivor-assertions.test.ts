@@ -1174,6 +1174,36 @@ process.stdout.write(sessionDir + "\\n");
     },
   );
 
+  it("requires every seeded legacy cron specimen before update", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-cron-"));
+    try {
+      const stateDir = join(root, "state");
+      const workspace = join(root, "workspace");
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_TEST_WORKSPACE_DIR: workspace,
+        OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "cron-scheduled-authority",
+        OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: "baseline",
+      };
+      const run = (command: string) =>
+        spawnSync(process.execPath, [ASSERTIONS_PATH, command], { env, encoding: "utf8" });
+      const seeded = run("seed");
+      expect(seeded.status, seeded.stderr).toBe(0);
+      const cronStore = join(stateDir, "cron", "jobs.json");
+      const baseline = run("assert-state");
+      expect(baseline.status, baseline.stderr).toBe(0);
+      const store = JSON.parse(readFileSync(cronStore, "utf8"));
+      store.jobs.pop();
+      writeJson(cronStore, store);
+      const missingRow = run("assert-state");
+      expect(missingRow.status).not.toBe(0);
+      expect(missingRow.stderr).toContain("legacy cron authority fixture row count changed");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("accepts the ACPX OpenClaw tools bridge scenario during seed", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-acpx-"));
     try {

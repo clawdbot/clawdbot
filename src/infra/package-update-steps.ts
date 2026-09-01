@@ -905,9 +905,9 @@ export async function runGlobalPackageUpdateSteps(params: {
     verifiedPackageRoot: packageRoot,
     afterVersion,
     failedStep,
-    ...(serviceRestartSafe
-      ? {}
-      : { recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" } }),
+    recovery: serviceRestartSafe
+      ? { serviceRestartSafe: true }
+      : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
   });
 
   try {
@@ -1273,9 +1273,6 @@ export async function runGlobalPackageUpdateSteps(params: {
       ? packageUpdateFailure(failedStep, verifiedPackageRoot, steps)
       : { steps, verifiedPackageRoot, afterVersion, failedStep };
   } catch (error) {
-    if (serviceRestartSafe) {
-      throw error;
-    }
     const failedStep: PackageUpdateStepResult = {
       name: "package update",
       command: "update installed package",

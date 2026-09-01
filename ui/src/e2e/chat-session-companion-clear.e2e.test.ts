@@ -29,9 +29,9 @@ const nextSessionKey = "agent:main:companion-next";
 const resetError = "Companion reset unavailable during reconnect";
 
 type CompanionSurface = {
+  clearButton: Locator;
   companion: Locator;
   gateway: MockGatewayControls;
-  menu: Locator;
   page: Page;
 };
 
@@ -87,23 +87,20 @@ async function withCompanion(run: (surface: CompanionSurface) => Promise<void>):
       await companion.getByText(answer, { exact: true }).waitFor();
       // The embedded rail has no header of its own: its destructive clear is
       // contributed to the shared side-panel header by the active panel.
-      const menu = page.locator(
-        ".side-panel__action-group--content wa-dropdown.chat-session-rail__menu",
-      );
-      await run({ companion, gateway, menu, page });
+      const clearButton = page.getByRole("button", { name: "Clear side chat", exact: true });
+      await run({ clearButton, companion, gateway, page });
     },
   );
 }
 
-async function clearCompanion(menu: Locator): Promise<void> {
-  await menu.getByRole("button", { name: "More companion actions" }).click();
-  await menu.locator('wa-dropdown-item[value="clear"]').click();
+async function clearCompanion(clearButton: Locator): Promise<void> {
+  await clearButton.click();
 }
 
 suite.define(() => {
   it("shows a reset failure without clearing the thread, then clears after a successful retry", async () => {
-    await withCompanion(async ({ companion, gateway, menu, page }) => {
-      await clearCompanion(menu);
+    await withCompanion(async ({ clearButton, companion, gateway, page }) => {
+      await clearCompanion(clearButton);
       await gateway.waitForRequest("sessions.companion.reset");
 
       const alert = page.getByRole("alert").filter({ hasText: resetError });
@@ -118,7 +115,7 @@ suite.define(() => {
 
       await alert.getByRole("button", { name: "Dismiss error" }).click();
       await gateway.setMethodResponse("sessions.companion.reset", { ok: true });
-      await clearCompanion(menu);
+      await clearCompanion(clearButton);
 
       await expect
         .poll(async () => (await gateway.getRequests("sessions.companion.reset")).length)
@@ -135,9 +132,9 @@ suite.define(() => {
   });
 
   it("does not publish a delayed reset rejection into a newly selected session", async () => {
-    await withCompanion(async ({ gateway, menu, page }) => {
+    await withCompanion(async ({ clearButton, gateway, page }) => {
       await gateway.deferNext("sessions.companion.reset");
-      await clearCompanion(menu);
+      await clearCompanion(clearButton);
       await gateway.waitForRequest("sessions.companion.reset");
 
       await navigateToControlUiSession(page, nextSessionKey);

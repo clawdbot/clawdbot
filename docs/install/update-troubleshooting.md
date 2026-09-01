@@ -73,6 +73,14 @@ Use `openclaw update --dry-run` to preview a new attempt. If a package update
 failed after installation began, follow the installer recovery steps in
 [Updating](/install/updating#alternative-re-run-the-installer).
 
+If the updater crashes or is killed after the Gateway stops, the Gateway stays
+stopped unless the updater completed and verified recovery. Inspect
+`openclaw gateway status --deep`, repair the reported dependency or installation
+failure, and rerun `openclaw update`. A failed Git dependency install restores
+and rebuilds the previous runtime before allowing an automatic restart. Restarts
+after verified recovery still check the installed configuration, service ownership,
+and Gateway health.
+
 ## Rollback boundary
 
 Do not restore state as the first response to an update failure. First reinstall

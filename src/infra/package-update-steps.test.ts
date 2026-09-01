@@ -1049,7 +1049,10 @@ describe("runGlobalPackageUpdateSteps", () => {
           },
           timeoutMs: 1000,
         }),
-      ).rejects.toThrow("install crashed");
+      ).resolves.toMatchObject({
+        recovery: { serviceRestartSafe: true },
+        failedStep: { stderrTail: "install crashed", exitCode: 1 },
+      });
 
       if (stagePrefix === undefined) {
         throw new Error("expected staged install prefix");

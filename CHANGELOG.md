@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 - **Developer workflow:** remove the obsolete scoped-commit helper and use standard Git commands in isolated worktrees.
 - Fixed Crabbox hydration on unprivileged cloud sandboxes by falling back to a user-writable pnpm store when the shared `/var/cache/crabbox` cache is unavailable, preserving the hardlink import mode after hydration, and making Docker an explicit routed capability instead of an implicit install requirement.
 
+- **Model setup capability review:** let macOS and Control UI users review runtime plugin capabilities during activation, preserving the selected model route when review is declined or cancelled. (#133793) Thanks @coygeek.
 - **Channel plugin ingress monitors:** add a shared plugin SDK monitor for durable admission, polling, pruning, claim identity validation, adoption handoff, and shutdown, and migrate IRC, Synology Chat, and Google Chat to the shared lifecycle.
 - **TUI fuzzy selectors:** delegate list matching to pi-tui, adding slash-token and alpha-number matching while removing the local matcher fork.
 - **GPT-5.6 Ultra and runtime switching:** support Sol, Terra, and Luna across OpenClaw and Codex engines; keep model, runtime, and thinking selection atomic through `/model` and fallback; and add live matrix coverage for both harnesses. (#98021) Thanks @anyech.
@@ -33,6 +34,13 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Apple chat:** make queued messages immediately retryable after session-settings failures, while keeping retries bound to the exact failed attempt.
+
+- **macOS AI setup:** show confirmed capability-review cancellation and retry guidance directly instead of a misleading Gateway failure headline. (#134573)
+- **Doctor memory:** keep Matrix migration codecs separate from the live client and avoid loading the ACP runtime when no legacy session records need inspection.
+- **Agent prompts:** keep model-identity guidance conditional so ordinary requests are not mistaken for questions about the current model.
+
+- **Update/Doctor:** preserve `update --no-restart` by requiring an offline managed Gateway during updater-owned repair and leaving restart ownership with the parent.
 - **Bun Gateway:** restore Gateway health checks and agent connections under Bun 1.4 while preserving WebSocket frame limits and authenticated request scheduling.
 - **Doctor recovery notes:** show interrupted auth-profile archive recovery failures and completions even when no further migration runs or another migration is declined. (#134009) Thanks @angeliti999.
 - Matrix lifecycle: drain in-flight monitor tasks without deadlocking shared-client retirement, and reject late acquisitions after their owning task closes.
@@ -47,6 +55,7 @@ Docs: https://docs.openclaw.ai
 - **Upgrade state metadata:** record the current application version after repairing older databases with an unset version marker, allowing CLI commands to use the running Gateway without attempting another schema repair.
 - **Gateway cancellation:** route the first `chat.abort` directly to its cancellation handler without loading unrelated chat history and send workflows.
 
+- **AI setup cleanup:** prepare isolated inference probes from configured model facts instead of starting a separate live catalog client, so temporary Codex homes do not retain a background plugin clone after setup completes.
 - **Buzz plugin packaging:** keep the live QA runner on the shipped QA runner SDK surface and remove the obsolete package shrinkwrap so standalone npm and ClawHub package builds use current host exports and dependency resolutions. Thanks @shakkernerd.
 - **Parallels release smoke:** preserve Windows installer reboot results across Parallels, wait for WSL MSI/default-version readiness, force explicit test-owned gateway stops, and reset Linux package, config, and cache state before install lanes, preventing false prerequisite, safety-gate, and stale-config failures.
 
@@ -197,6 +206,8 @@ Docs: https://docs.openclaw.ai
 - **Task state migration:** canonicalize legacy `not-requested` delivery statuses during sidecar import and existing shared-database open so upgraded task registries and linked TaskFlows recover without manual SQL, and surface rejected persisted values in compact console diagnostics. (#103946) Thanks @bek91.
 
 ## 2026.8.1
+
+> **Release correction:** The package published as `2026.9.1-beta.1` was incorrectly versioned and is actually `2026.8.1-beta.4`. It should not be interpreted as newer than stable `2026.8.1`.
 
 ### Highlights
 

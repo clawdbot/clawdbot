@@ -300,6 +300,9 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                 changes.forEach((change) => emitSessionsChanged(context, change)),
               replyOptions: {
                 prepareAssistantTranscriptMessage: replyDispatch.prepareAssistantTranscriptMessage,
+                ...(admission.admittedSessionSettings
+                  ? { admittedSessionSettings: admission.admittedSessionSettings }
+                  : {}),
                 runId: clientRunId,
                 skillWorkshopProposalRevision,
                 ...(cronCreatorAuthority

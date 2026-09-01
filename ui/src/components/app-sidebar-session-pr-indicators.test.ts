@@ -76,9 +76,10 @@ describe("SessionPullRequestIndicatorsController", () => {
     vi.useFakeTimers();
     const host = new TestHost();
     const harness = createGatewayHarness();
+    const getRows = vi.fn(() => []);
     const controller = new SessionPullRequestIndicatorsController(host, {
       getConnected: () => true,
-      getRows: () => [],
+      getRows,
       getSelectedAgentId: () => "main",
       getGateway: () => harness.gateway,
       getSessions: () => undefined,
@@ -86,8 +87,10 @@ describe("SessionPullRequestIndicatorsController", () => {
 
     controller.hostConnected();
     controller.hostUpdated();
+    controller.hostUpdated();
     await vi.advanceTimersByTimeAsync(0);
 
+    expect(getRows).toHaveBeenCalledOnce();
     expect(host.requestUpdate).not.toHaveBeenCalled();
   });
 
@@ -102,9 +105,10 @@ describe("SessionPullRequestIndicatorsController", () => {
         isChild: false,
         worktreeId: "wt-demo",
       } as SidebarRecentSession;
+      const getRows = vi.fn(() => [row]);
       const controller = new SessionPullRequestIndicatorsController(host, {
         getConnected: () => true,
-        getRows: () => [row],
+        getRows,
         getSelectedAgentId: () => "main",
         getGateway: () => harness.gateway,
         getSessions: () => undefined,
@@ -117,6 +121,7 @@ describe("SessionPullRequestIndicatorsController", () => {
       expect(harness.request).toHaveBeenCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
         sessionKeys: [row.key],
       });
+      expect(getRows).toHaveBeenCalledOnce();
 
       harness.emit({
         sessions: {
@@ -138,6 +143,7 @@ describe("SessionPullRequestIndicatorsController", () => {
           },
         },
       });
+      expect(getRows).toHaveBeenCalledTimes(2);
       expect(controller.summary(row.key, row.worktreeId ?? "")).toEqual({
         numbers: [1, 2],
         state,

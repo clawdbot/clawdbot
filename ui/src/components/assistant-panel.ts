@@ -23,11 +23,7 @@ import {
 } from "../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
-import {
-  buildHomeWorkContext,
-  subscribeChatWorkContext,
-  type ChatWorkContext,
-} from "../pages/chat/chat-work-context.ts";
+import { buildHomeWorkContext, subscribeChatWorkContext } from "../pages/chat/chat-work-context.ts";
 import {
   custodianSessionStore,
   type CustodianSessionStore,
@@ -52,6 +48,8 @@ type AssistantDestination = "home" | "custodian";
 type AssistantDock = Exclude<DockPanelSide, "left">;
 
 const panelLayout = createDockPanelLayout({
+  // Shipped key: operators' saved dock size and placement live here, so the
+  // legacy custodian spelling stays even though the dock is now shared.
   storageKey: "openclaw.custodian.panel.v1",
   minHeight: 240,
   minWidth: 320,
@@ -68,10 +66,9 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
   @property({ type: Boolean }) custodianAvailable = false;
   @property({ type: Boolean }) homeAvailable = false;
   @property({ type: Boolean }) custodianSuppressed = false;
-  @property({ type: Boolean }) sessionPage = false;
   @property() pageSessionKey = "";
   @property() pageAgentId = "";
-  @property({ attribute: false }) workContext: ChatWorkContext | undefined;
+  @property() pageRouteId: RouteId = "chat";
   @state() private destination: AssistantDestination = "custodian";
   private readonly homeLoader = new LazyCustomElementRequestController(this);
   @property({ type: Number }) minimizeRequestId = 0;
@@ -79,7 +76,7 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
 
   private readonly dockLayout = new DockLayoutController(this, {
     layout: panelLayout,
-    reservationPrefix: "custodian",
+    reservationPrefix: "assistant",
     isAvailable: () => this.available,
   });
   private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
@@ -99,9 +96,7 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
     window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.onToggleRequest);
     window.addEventListener(HOME_PANEL_TOGGLE_EVENT, this.onToggleRequest);
     this.dockLayout.setSuppressed(this.suppressed);
-    if (this.dockLayout.open && this.destination === "custodian") {
-      void this.store.refreshTranscriptIfIdle();
-    }
+    this.refreshCustodianTranscript(this.dockLayout.open);
   }
 
   override disconnectedCallback(): void {
@@ -124,6 +119,10 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
         subscribeChatWorkContext(this.context, () => this.requestUpdate()),
         // The sidebar switcher owns agent choice; the dock follows it.
         this.context.agentSelection.subscribe(() => this.requestUpdate()),
+        // Snapshot changes need not change route facts; keep the open Home reference current.
+        this.context.sessions.subscribe(() => this.requestUpdate()),
+        this.context.agents.subscribe(() => this.requestUpdate()),
+        this.context.gateway.subscribe(() => this.requestUpdate()),
       ];
       this.contextCleanup = () => {
         for (const cleanup of cleanups) {
@@ -169,9 +168,7 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
     } else {
       this.dockLayout.restoreOpenState();
     }
-    if (!wasOpen && this.dockLayout.open && this.destination === "custodian") {
-      void this.store.refreshTranscriptIfIdle();
-    }
+    this.refreshCustodianTranscript(!wasOpen && this.dockLayout.open);
     if (wasOpen && !this.dockLayout.open) {
       this.claimInput("page");
     }
@@ -218,8 +215,19 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
     };
   }
 
+  /** Ask OpenClaw hydrates lazily; only refresh when it actually becomes visible. */
+  private refreshCustodianTranscript(becameVisible: boolean): void {
+    if (becameVisible && this.destination === "custodian") {
+      void this.store.refreshTranscriptIfIdle();
+    }
+  }
+
+  private availableFor(destination: AssistantDestination): boolean {
+    return destination === "home" ? this.homeAvailable : this.custodianAvailable;
+  }
+
   private get available(): boolean {
-    return this.destination === "home" ? this.homeAvailable : this.custodianAvailable;
+    return this.availableFor(this.destination);
   }
 
   private get suppressed(): boolean {
@@ -227,7 +235,7 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
       return this.custodianSuppressed;
     }
     const context = this.context;
-    if (!context || !this.sessionPage) {
+    if (!context || this.pageRouteId !== "chat") {
       return false;
     }
     const page = resolveUiConversationIdentity(
@@ -292,9 +300,7 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
     this.persistTarget();
     this.dockLayout.setOpen(open);
     this.claimInput(open ? "dock" : "page");
-    if (open && this.destination === "custodian") {
-      void this.store.refreshTranscriptIfIdle();
-    }
+    this.refreshCustodianTranscript(open);
   }
 
   toggle(): void {
@@ -312,7 +318,7 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
 
   handleToggleRequest(event: Event): void {
     const destination = event.type === HOME_PANEL_TOGGLE_EVENT ? "home" : "custodian";
-    if (destination === "home" ? !this.homeAvailable : !this.custodianAvailable) {
+    if (!this.availableFor(destination)) {
       return;
     }
     const detail = asNullableRecord(event instanceof CustomEvent ? event.detail : null);
@@ -342,23 +348,23 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
     const dock = this.dockLayout.dock;
     const home = this.homeTarget;
     const homeState = this.homeLoader.visibleState;
-    const workContext =
-      this.context && this.workContext
-        ? buildHomeWorkContext(this.context, this.workContext.page, this.workContext.sessionKey)
-        : this.workContext;
+    // The deferred panel owns preparation; the eager shell supplies route facts only.
+    const workContext = this.context
+      ? buildHomeWorkContext(this.context, this.pageRouteId, this.pageSessionKey, this.pageAgentId)
+      : undefined;
     const style =
       dock === "bottom" ? `height:${this.dockLayout.height}px` : `width:${this.dockLayout.width}px`;
     return html`
       <section
-        class="cp cp--${dock}"
+        class="assistant-panel assistant-panel--${dock}"
         style=${style}
         aria-label=${t("assistantPanel.title")}
         @pointerdown=${() => this.claimInput("dock")}
         @focusin=${() => this.claimInput("dock")}
       >
-        ${this.dockLayout.renderResizer("cp", t("assistantPanel.resize"))}
-        <header class="rail-header cp-header" @mousedown=${beginNativeWindowDrag}>
-          <div class="cp-title">
+        ${this.dockLayout.renderResizer("assistant-panel", t("assistantPanel.resize"))}
+        <header class="rail-header assistant-panel-header" @mousedown=${beginNativeWindowDrag}>
+          <div class="assistant-panel-title">
             <openclaw-mascot
               .mood=${this.destination === "custodian" && this.store.sending ? "thinking" : "idle"}
               .size=${16}
@@ -367,7 +373,7 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
               (destination === "home" ? this.homeAvailable : this.custodianAvailable)
                 ? html`<button
                     type="button"
-                    class="cp-tab"
+                    class="assistant-panel-tab"
                     aria-pressed=${this.destination === destination}
                     @click=${() => this.openDestination(destination)}
                   >
@@ -376,10 +382,10 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
                 : nothing,
             )}
           </div>
-          <div class="rail-header__actions cp-actions">
+          <div class="rail-header__actions assistant-panel-actions">
             ${this.destination === "home"
               ? html`<button
-                  class="rail-header__action cp-icon"
+                  class="rail-header__action assistant-panel-icon"
                   type="button"
                   aria-label=${t("assistantPanel.openHome")}
                   @click=${() => this.openHomePage()}
@@ -388,7 +394,7 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
                 </button>`
               : nothing}
             <button
-              class="rail-header__action cp-icon"
+              class="rail-header__action assistant-panel-icon"
               type="button"
               aria-label=${dock === "bottom"
                 ? t("assistantPanel.dockRight")
@@ -398,7 +404,7 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
               ${dock === "bottom" ? icons.panelRightOpen : icons.panelBottomOpen}
             </button>
             <button
-              class="rail-header__action cp-icon"
+              class="rail-header__action assistant-panel-icon"
               type="button"
               aria-label=${t("assistantPanel.close")}
               @click=${() => this.setOpen(false)}

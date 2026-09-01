@@ -187,12 +187,13 @@ export function inspectManagedProcessGroup(
   }
   try {
     process.kill(-pid, 0);
-    if (
-      platform === "linux" &&
-      (child.exitCode != null || child.signalCode != null) &&
-      isLinuxZombieProcessGroup(pid)
-    ) {
-      return "dead";
+    if (platform === "linux" && (child.exitCode != null || child.signalCode != null)) {
+      if (isLinuxZombieProcessGroup(pid)) {
+        return "dead";
+      }
+      // The group may be reaped while ps runs. Recheck kernel existence without
+      // treating an empty or failed snapshot as proof of completion.
+      process.kill(-pid, 0);
     }
     return "live";
   } catch (error) {

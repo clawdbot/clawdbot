@@ -1,0 +1,159 @@
+name: OpenClaw Repo E2E (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        required: true
+        type: string
+      workflow_repository:
+        required: true
+        type: string
+      workflow_sha:
+        required: true
+        type: string
+      build_profile:
+        required: true
+        type: string
+      suites:
+        required: true
+        type: string
+      use_github_hosted_runners:
+        required: true
+        type: boolean
+      advisory:
+        required: true
+        type: boolean
+      allow_unreleased_changelog:
+        required: true
+        type: boolean
+      allow_frozen_target_scenario_omissions:
+        required: true
+        type: boolean
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  OPENCLAW_BUILD_PRIVATE_QA: "1"
+  OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+  OPENCLAW_VITEST_MAX_WORKERS: "2"
+  OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
+  OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: ${{ inputs.allow_frozen_target_scenario_omissions && '1' || '0' }}
+  OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT: ${{ github.workspace }}
+
+jobs:
+  build:
+    name: Build repo E2E (${{ inputs.build_profile }})
+    continue-on-error: ${{ inputs.advisory }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    timeout-minutes: 90
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_run_id: ${{ github.run_id }}
+    steps:
+      - &checkout_target
+        name: Checkout selected ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 1
+      - &checkout_harness
+        name: Checkout trusted artifact harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.workflow_repository }}
+          ref: ${{ inputs.workflow_sha }}
+          path: .release-harness
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: scripts
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          node-version: "24.19.0"
+          install-bun: "true"
+          build-all-cache-scope: full
+      - name: Build dist for repo E2E
+        env:
+          BUILD_PROFILE: ${{ inputs.build_profile }}
+          NODE_OPTIONS: --max-old-space-size=8192
+        # Gateway package/type consumers retain full declarations; runtime consumers keep SDK checks.
+        run: |
+          set -euo pipefail
+          case "$BUILD_PROFILE" in
+            full) pnpm build ;;
+            ciArtifacts) pnpm build:ci-artifacts ;;
+            *) echo "Unsupported repo E2E build profile: $BUILD_PROFILE" >&2; exit 1 ;;
+          esac
+      - name: Pack repo E2E build
+        env:
+          BUILD_PROFILE: ${{ inputs.build_profile }}
+        run: node .release-harness/scripts/repo-e2e-artifacts.mts pack "$RUNNER_TEMP/repo-e2e-build" "$BUILD_PROFILE"
+      - name: Upload repo E2E build
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: repo-e2e-${{ inputs.build_profile }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/repo-e2e-build/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  test:
+    name: Repo E2E (${{ matrix.name }})
+    needs: build
+    continue-on-error: ${{ inputs.advisory }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        include: ${{ fromJSON(inputs.suites) }}
+    steps:
+      - *checkout_target
+      - *checkout_harness
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          node-version: "24.19.0"
+          install-bun: "true"
+      - name: Download repo E2E build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact_id }}
+          run-id: ${{ needs.build.outputs.artifact_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/repo-e2e-build/
+      - name: Restore repo E2E build
+        env:
+          BUILD_PROFILE: ${{ inputs.build_profile }}
+        run: node .release-harness/scripts/repo-e2e-artifacts.mts restore "$RUNNER_TEMP/repo-e2e-build" "$BUILD_PROFILE"
+      - name: Install Playwright Chromium
+        run: pnpm --dir ui exec playwright install --with-deps chromium
+      - name: Build sandbox image
+        run: scripts/sandbox-setup.sh
+      - name: Run repo E2E suite
+        env:
+          OPENCLAW_E2E_WORKERS: "2"
+          OPENCLAW_E2E_USE_PREBUILT_DIST: "1"
+          TARGET_REQUIRED_SCRIPT: ${{ matrix.target_script || '' }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$TARGET_REQUIRED_SCRIPT" ]] && ! node -e '
+            const packageJson = JSON.parse(require("node:fs").readFileSync("package.json", "utf8"));
+            if (typeof packageJson.scripts?.[process.argv[1]] !== "string") process.exit(1);
+          ' "$TARGET_REQUIRED_SCRIPT"; then
+            if [[ "$OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS" != "1" ]]; then
+              echo "::error::Selected target does not provide required repo E2E capability: $TARGET_REQUIRED_SCRIPT."
+              exit 1
+            fi
+            echo "::notice::Skipping $TARGET_REQUIRED_SCRIPT: selected target does not provide this newer repo E2E capability."
+            exit 0
+          fi
+          ${{ matrix.command }}

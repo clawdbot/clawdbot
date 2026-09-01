@@ -1348,6 +1348,65 @@ EOF
     expect(result.status).toBe(0);
   });
 
+  it.each(["EEXIST", "ENOTEMPTY"])("recovers from %s with default npm logging", (code) => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-npm-recovery-"));
+    const bin = join(tmp, "bin");
+    const npmRoot = join(tmp, "lib", "node_modules");
+    const packageDir = join(npmRoot, "openclaw");
+    const calls = join(tmp, "calls");
+    const conflict = code === "EEXIST" ? join(bin, "openclaw") : join(npmRoot, ".openclaw-stale");
+    mkdirSync(bin, { recursive: true });
+    mkdirSync(packageDir, { recursive: true });
+    writeFileSync(join(packageDir, "retained"), "existing package data");
+    if (code === "EEXIST") {
+      symlinkSync(join(tmp, "missing-launcher"), conflict);
+    } else {
+      mkdirSync(conflict);
+    }
+    linkNodeExecutable(bin);
+    writeNpmInstallRetryFixture(join(bin, "npm"));
+    const error =
+      code === "EEXIST"
+        ? `npm error File exists: ${conflict}\nnpm error code EEXIST`
+        : `npm error ENOTEMPTY: directory not empty, rename ${packageDir} -> ${conflict}`;
+    try {
+      const result = runInstallShell(
+        [
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `PATH=${JSON.stringify(`${bin}:/usr/bin:/bin`)}`,
+          "install_openclaw_npm openclaw@latest",
+          "commit_openclaw_bin_backup",
+        ].join("\n"),
+        {
+          NPM_FAKE_ROOT: npmRoot,
+          NPM_FAKE_PREFIX: tmp,
+          NPM_FAKE_PACKAGE_DIR: packageDir,
+          NPM_FAKE_CALLS: calls,
+          NPM_FAKE_CONFLICT: conflict,
+          NPM_FAKE_OUTCOME: "transient",
+          NPM_FAKE_ERROR: error,
+        },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual([
+        "openclaw@latest",
+        "openclaw@latest",
+      ]);
+      expect(existsSync(conflict)).toBe(false);
+      expect(readFileSync(join(packageDir, "retained"), "utf8")).toBe("existing package data");
+      if (code === "EEXIST") {
+        expect(() => lstatSync(conflict)).toThrow();
+        const backups = readdirSync(bin).filter((name) =>
+          name.startsWith("openclaw.openclaw-backup."),
+        );
+        expect(backups).toHaveLength(1);
+        expect(lstatSync(join(bin, backups[0]!)).isSymbolicLink()).toBe(true);
+      }
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
   it("does not report npm owner retirement when uninstall fails", () => {
     const result = runInstallShell(`
       source "${SCRIPT_PATH}"
@@ -2022,6 +2081,29 @@ EOF
   });
 
   it.each([
+    { name: "flag", args: "--dry-run", dryRunEnv: "0", dryRun: true },
+    { name: "environment", args: "", dryRunEnv: "1", dryRun: true },
+    { name: "normal install", args: "", dryRunEnv: "0", dryRun: false },
+  ])("keeps Gum initialization consistent with $name", ({ args, dryRunEnv, dryRun }) => {
+    const result = runInstallShell(
+      [
+        `source ${JSON.stringify(SCRIPT_PATH)}`,
+        "bootstrap_gum_temp() { printf 'gum-bootstrap\\n'; }",
+        "print_gum_status() { printf 'gum-status\\n'; }",
+        "check_existing_openclaw() { exit 73; }",
+        `parse_args --npm --no-onboard ${args}`,
+        "main",
+      ].join("\n"),
+      { OPENCLAW_DRY_RUN: dryRunEnv },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(dryRun ? 0 : 73);
+    expect(result.stdout).toContain("Install plan");
+    expect(result.stdout.includes("Dry run complete (no changes made)")).toBe(dryRun);
+    expect(result.stdout.includes("gum-bootstrap")).toBe(!dryRun);
+    expect(result.stdout.includes("gum-status")).toBe(!dryRun);
+  });
+
+  it.each([
     {
       name: "fresh retained config rejects failed Doctor before success",
       configured: true,
@@ -2456,7 +2538,6 @@ EOF
             `OPENCLAW_VERSION=${requested}`,
             "USE_BETA=0",
             "NPM_LOGLEVEL=error",
-            "NPM_SILENT_FLAG=",
             `npm_global_bin_dir() { printf '%s\\n' ${JSON.stringify(bin)}; }`,
             "set +e",
             "install_openclaw",
@@ -2506,7 +2587,6 @@ EOF
           "OPENCLAW_VERSION=latest",
           "USE_BETA=0",
           "NPM_LOGLEVEL=error",
-          "NPM_SILENT_FLAG=",
           `npm_global_bin_dir() { printf '%s\\n' ${JSON.stringify(bin)}; }`,
           "install_openclaw",
         ].join("\n"),
@@ -2553,7 +2633,6 @@ EOF
           `HOME=${JSON.stringify(home)}`,
           `PATH=${JSON.stringify(`${bin}:/usr/bin:/bin`)}`,
           "NPM_LOGLEVEL=error",
-          "NPM_SILENT_FLAG=",
           `run_npm_global_install openclaw@latest ${JSON.stringify(join(tmp, "install.log"))}`,
         ].join("\n"),
       );
@@ -2592,7 +2671,6 @@ EOF
           `HOME=${JSON.stringify(home)}`,
           `PATH=${JSON.stringify(`${bin}:/usr/bin:/bin`)}`,
           "NPM_LOGLEVEL=error",
-          "NPM_SILENT_FLAG=",
           `run_npm_global_install openclaw@latest ${JSON.stringify(join(tmp, "install.log"))}`,
         ].join("\n"),
       );
@@ -3600,9 +3678,10 @@ EOF
       expect(warning.status).toBe(0);
       expect(warning.stdout).toContain(`PATH updated in ${fishRc}`);
       expect(warning.stdout).not.toContain("PATH missing user-local bin dir");
-      const fishVersion = spawnSync("fish", ["--version"], { encoding: "utf8" });
-      if (fishVersion.status === 0) {
-        const fresh = spawnSync("fish", ["-lc", "command -v openclaw"], {
+      // Resolve the executable before restricting the child shell's PATH.
+      const fishPath = runInstallShell("command -v fish");
+      if (fishPath.status === 0) {
+        const fresh = spawnSync(fishPath.stdout.trim(), ["-lc", "command -v openclaw"], {
           encoding: "utf8",
           env: { HOME: home, PATH: "/usr/bin:/bin" },
         });
@@ -4217,7 +4296,9 @@ HOOK
       const repo = join(tmp, "repo");
       const outer = join(tmp, "outer");
       const temp = join(tmp, "temp");
-      for (const dir of [bin, repo, outer, temp]) mkdirSync(dir, { recursive: true });
+      for (const dir of [bin, repo, outer, temp]) {
+        mkdirSync(dir, { recursive: true });
+      }
       writeFileSync(
         join(repo, "package.json"),
         JSON.stringify({ packageManager: `pnpm@${version}` }),

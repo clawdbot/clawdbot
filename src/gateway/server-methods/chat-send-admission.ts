@@ -15,7 +15,6 @@ import {
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
-import { readSessionTranscriptActivePathEntryRelation } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { createAbortError } from "../../infra/abort-signal.js";
@@ -48,6 +47,7 @@ import {
   isRetryableUnadoptedChatClaim,
   resolveRestartSafeChatAdmission,
 } from "./chat-restart-recovery.js";
+import { assertExpectedLeafActive } from "./chat-send-active-leaf.js";
 import {
   ACTIVE_LEAF_CHANGED_ERROR_REASON,
   inspectGoalChatSendRetry,
@@ -55,6 +55,10 @@ import {
   respondChatSessionRoutingChanged,
 } from "./chat-send-pre-admission.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
+import {
+  captureAdmittedChatSendSessionSettings,
+  SESSION_SETTINGS_CHANGED_ERROR_REASON,
+} from "./chat-send-session-settings.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { normalizeOptionalChatText, normalizeUnknownChatText } from "./chat-text-normalization.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
@@ -180,6 +184,7 @@ export async function admitChatSend(params: {
   let admittedRunAbort: ReturnType<typeof registerChatAbortController> | undefined;
   let restartSafeAdmission: ReturnType<typeof resolveRestartSafeChatAdmission>;
   let initialSessionEntry: SessionEntry | undefined;
+  let admittedSessionSettings: ReturnType<typeof captureAdmittedChatSendSessionSettings>;
   let messageInjectionTarget: ReturnType<
     typeof replyRunRegistry.resolveCurrentMessageInjectionTarget
   >;
@@ -245,6 +250,13 @@ export async function admitChatSend(params: {
       throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
     }
     const latestEntry = latestSession.entry;
+    // Freeze the writer-barrier snapshot; later preparation must retain this authority.
+    admittedSessionSettings = captureAdmittedChatSendSessionSettings({
+      commit: commitOutcome,
+      entry: latestEntry,
+      expectedPermissionMode: p.expectedPermissionMode,
+      expectedToolOverrides: p.expectedToolOverrides,
+    });
     if (
       request.goalOperation &&
       (isCompetingSessionWorkAdmissionActive(storePath, [sessionKey, backingSessionId]) ||
@@ -273,32 +285,7 @@ export async function admitChatSend(params: {
       runInterruptTarget = resolvedInterruptTarget;
     }
     if (commitOutcome && p.queueMode !== "steer" && expectedLeafEntryId !== undefined) {
-      // Runtime session identity resolves through the canonical SQLite accessor;
-      // legacy/reset-archive files are read-only history fallbacks, never send targets.
-      const activePathRelation = latestEntry?.sessionId
-        ? readSessionTranscriptActivePathEntryRelation(
-            {
-              agentId,
-              sessionId: latestEntry.sessionId,
-              sessionKey: latestSession.canonicalKey,
-              sessionEntry: latestEntry,
-              storePath: latestSession.storePath,
-            },
-            expectedLeafEntryId,
-          )
-        : expectedLeafEntryId === null
-          ? "exact"
-          : "off-path";
-      // Branch switches preserve entry ids while rotating session ids. A supplied session id
-      // must fence exact and ancestor matches; omission remains legacy exact-only compatibility.
-      const matchesRequestedSession =
-        requestedSessionId === undefined || requestedSessionId === latestEntry?.sessionId;
-      const matchesActivePath =
-        activePathRelation === "exact" ||
-        (activePathRelation === "ancestor" && requestedSessionId !== undefined);
-      if (!matchesRequestedSession || !matchesActivePath) {
-        throw new Error(ACTIVE_LEAF_CHANGED_ERROR_REASON);
-      }
+      assertExpectedLeafActive(latestSession, agentId, expectedLeafEntryId, requestedSessionId);
     }
     // Admission can queue behind reset. Never route a request captured
     // against the old session into the replacement transcript. Expected-leaf sends
@@ -465,6 +452,16 @@ export async function admitChatSend(params: {
     }
     if (err instanceof Error && err.message === ACTIVE_LEAF_CHANGED_ERROR_REASON) {
       respondChatActiveLeafChanged(respond);
+      return { ok: false as const };
+    }
+    if (err instanceof Error && err.message === SESSION_SETTINGS_CHANGED_ERROR_REASON) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "Session settings changed before send. Retry.", {
+          details: { reason: SESSION_SETTINGS_CHANGED_ERROR_REASON },
+        }),
+      );
       return { ok: false as const };
     }
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
@@ -696,6 +693,7 @@ export async function admitChatSend(params: {
     ok: true as const,
     value: {
       activeRunAbort,
+      admittedSessionSettings,
       admittedSessionId,
       sessionBinding,
       onSessionPrepared,

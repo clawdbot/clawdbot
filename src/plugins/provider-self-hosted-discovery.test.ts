@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { discoverOpenAICompatibleLocalModels } from "./provider-self-hosted-discovery.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -136,6 +137,10 @@ describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
       id: `model-${index}`,
       status: { value: "loaded" },
     }));
+    const started = createDeferred();
+    const release = createDeferred();
+    const now = vi.spyOn(Date, "now").mockReturnValue(0);
+    let active = 0;
     fetchWithSsrFGuardMock.mockImplementation(async ({ url }: { url: string }) => {
       if (url.endsWith("/health")) {
         return guarded(new Response(null, { status: 200 }));
@@ -143,13 +148,15 @@ describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
       if (url.endsWith("/models")) {
         return guarded(new Response(JSON.stringify({ data: models })));
       }
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 20);
-      });
+      active += 1;
+      if (active === 8) {
+        started.resolve();
+      }
+      await release.promise;
       return guarded(new Response(JSON.stringify({ n_ctx: 8192 })));
     });
 
-    const result = await discoverOpenAICompatibleLocalModels({
+    const resultPromise = discoverOpenAICompatibleLocalModels({
       baseUrl: "http://127.0.0.1:8080/v1",
       label: "llama-server",
       healthPath: "/health",
@@ -159,10 +166,22 @@ describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
       rawResult: true,
     });
 
-    expect(result.kind === "success" ? result.rows : []).toHaveLength(17);
-    expect(
-      fetchWithSsrFGuardMock.mock.calls.filter(([call]) => call.url.includes("/props?")).length,
-    ).toBe(8);
+    try {
+      await withTestTimeout(started.promise, 1_000, "initial eight property probes did not start");
+      // Expire the budget only after the first wave starts, independent of runner load.
+      now.mockReturnValue(20);
+      release.resolve();
+      const result = await withTestTimeout(resultPromise, 1_000, "discovery did not finish");
+
+      expect(result.kind === "success" ? result.rows : []).toHaveLength(17);
+      expect(
+        fetchWithSsrFGuardMock.mock.calls.filter(([call]) => call.url.includes("/props?")).length,
+      ).toBe(8);
+    } finally {
+      release.resolve();
+      now.mockRestore();
+      await withTestTimeout(resultPromise, 1_000, "property probes did not settle during cleanup");
+    }
   });
 
   it("bounds concurrent property probes and keeps results associated by model", async () => {
@@ -170,6 +189,8 @@ describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
       id: `model-${index}`,
       status: { value: "loaded" },
     }));
+    const started = models.map(() => createDeferred());
+    const releases = models.map(() => createDeferred());
     let active = 0;
     let maxActive = 0;
     fetchWithSsrFGuardMock.mockImplementation(async ({ url }: { url: string }) => {
@@ -183,14 +204,13 @@ describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
       const index = Number(modelId?.replace("model-", ""));
       active += 1;
       maxActive = Math.max(maxActive, active);
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 10 - index);
-      });
+      started[index]!.resolve();
+      await releases[index]!.promise;
       active -= 1;
       return guarded(new Response(JSON.stringify({ n_ctx: 8_000 + index })));
     });
 
-    const result = await discoverOpenAICompatibleLocalModels({
+    const resultPromise = discoverOpenAICompatibleLocalModels({
       baseUrl: "http://127.0.0.1:8080/v1",
       label: "llama-server",
       healthPath: "/health",
@@ -199,10 +219,40 @@ describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
       rawResult: true,
     });
 
-    expect(maxActive).toBe(8);
-    expect(result.kind === "success" ? result.rows.map((row) => row.props?.n_ctx) : []).toEqual(
-      models.map((_, index) => 8_000 + index),
-    );
+    try {
+      await withTestTimeout(
+        started[7]!.promise,
+        1_000,
+        "initial eight property probes did not start",
+      );
+      // Finish later models first so completion order cannot stand in for model identity.
+      releases[7]!.resolve();
+      await withTestTimeout(
+        started[8]!.promise,
+        1_000,
+        "model-8 probe did not start after model-7",
+      );
+      releases[6]!.resolve();
+      await withTestTimeout(
+        started[9]!.promise,
+        1_000,
+        "model-9 probe did not start after model-6",
+      );
+      for (const release of releases.toReversed()) {
+        release.resolve();
+      }
+      const result = await withTestTimeout(resultPromise, 1_000, "discovery did not finish");
+
+      expect(maxActive).toBe(8);
+      expect(result.kind === "success" ? result.rows.map((row) => row.props?.n_ctx) : []).toEqual(
+        models.map((_, index) => 8_000 + index),
+      );
+    } finally {
+      for (const release of releases) {
+        release.resolve();
+      }
+      await withTestTimeout(resultPromise, 1_000, "property probes did not settle during cleanup");
+    }
   });
 
   it("caps property probes at 200 models", async () => {
