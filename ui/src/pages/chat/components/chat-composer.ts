@@ -492,13 +492,21 @@ export function renderChatComposer(props: ChatComposerProps) {
     enabled: props.composerHoldToRecord !== false,
     dictationAvailable: devicePicker.dictationStatus === "ready",
     realtimeTalkActive: props.realtimeTalkActive === true,
-    onCommit: (transcript: string) => {
+    onCommit: (transcript: string, late = false) => {
       const target = state.composerTextarea;
-      const selection = state.dictationSelection ?? {
-        start: target?.selectionStart ?? visibleDraft.length,
-        end: target?.selectionEnd ?? visibleDraft.length,
-        value: props.getDraft?.() ?? props.draft,
-      };
+      // A late final arrives after the composer unlocked; use the live draft and
+      // caret so edits made during the drain are preserved.
+      const selection = late
+        ? {
+            start: target?.selectionStart ?? visibleDraft.length,
+            end: target?.selectionEnd ?? visibleDraft.length,
+            value: props.getDraft?.() ?? props.draft,
+          }
+        : (state.dictationSelection ?? {
+            start: target?.selectionStart ?? visibleDraft.length,
+            end: target?.selectionEnd ?? visibleDraft.length,
+            value: props.getDraft?.() ?? props.draft,
+          });
       const insertion = insertComposerDictation(
         selection.value,
         transcript,

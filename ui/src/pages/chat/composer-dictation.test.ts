@@ -693,7 +693,7 @@ describe("ComposerDictationController", () => {
       final: true,
     });
     emit({ transcriptionSessionId: "dictation-1", type: "close", reason: "completed" });
-    await waitForFast(() => expect(onCommit).toHaveBeenCalledWith("late words"));
+    await waitForFast(() => expect(onCommit).toHaveBeenCalledWith("late words", true));
     expect(controller.active).toBe(false);
     controller.dispose();
   });

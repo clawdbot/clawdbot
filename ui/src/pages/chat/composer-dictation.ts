@@ -64,7 +64,7 @@ type ComposerDictationControllerOptions = {
   enabled: boolean;
   dictationAvailable?: boolean;
   realtimeTalkActive: boolean;
-  onCommit: (text: string) => void;
+  onCommit: (text: string, late?: boolean) => void;
   onError: (message: string, failure: ComposerDictationFailure) => void;
   onStateChange: () => void;
   onTap?: () => void;
@@ -693,7 +693,7 @@ export class ComposerDictationController {
       finalTranscript && wasActive && !this.disposed && this.pendingFinalOwner === pendingOwner,
     );
     if (finalCommitted) {
-      this.options.onCommit(finalTranscript);
+      this.options.onCommit(finalTranscript, true);
     }
     return finalCommitted;
   }

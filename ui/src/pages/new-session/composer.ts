@@ -282,16 +282,20 @@ export class NewSessionComposerTextareaController {
    * Writing the final insertion directly grows the box before the next render
    * commits that same value into the page-owned draft.
    */
-  insertTranscript(transcript: string): string | null {
+  insertTranscript(transcript: string, late = false): string | null {
     const target = this.textarea;
     if (!target) {
       return null;
     }
-    const selection = this.capturedSelection ?? {
-      start: target.value.length,
-      end: target.value.length,
-      value: target.value,
-    };
+    // A late final arrives after the composer unlocked; use the live draft and
+    // caret so edits made during the drain are preserved.
+    const selection = late
+      ? { start: target.selectionStart, end: target.selectionEnd, value: target.value }
+      : (this.capturedSelection ?? {
+          start: target.value.length,
+          end: target.value.length,
+          value: target.value,
+        });
     this.capturedSelection = null;
     const insertion = insertComposerDictation(
       selection.value,
