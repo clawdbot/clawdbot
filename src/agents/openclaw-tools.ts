@@ -6,7 +6,7 @@ import { resolveControlUiSessionLinkBase } from "../config/control-ui-link-base.
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
-import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { isCronRunSessionKey, isCronSessionKey } from "../sessions/session-key-utils.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
 import { bindAssembledAgentToolActionDescriptor } from "./agent-tool-metadata.js";
 import {
@@ -78,7 +78,10 @@ import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsTool } from "./tools/sessions-tool.js";
-import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
+import {
+  createSessionsYieldTool,
+  UNSUPPORTED_CRON_YIELD_ERROR,
+} from "./tools/sessions-yield-tool.js";
 import { createConfiguredSkillWorkshopTool } from "./tools/skill-workshop-tool-factory.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTaskSuggestionTools } from "./tools/task-suggestion-tools.js";
@@ -584,6 +587,9 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
         claimYieldCompletion: options?.claimYieldCompletion,
       }),
       onYield: options?.onYield,
+      ...(isCronSessionKey(trimmedRunSessionKey || options?.agentSessionKey)
+        ? { unsupportedError: UNSUPPORTED_CRON_YIELD_ERROR }
+        : {}),
     }),
     createSubagentsTool({
       agentSessionKey: options?.agentSessionKey,

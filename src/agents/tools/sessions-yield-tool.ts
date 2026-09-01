@@ -10,6 +10,11 @@ import { jsonResult, readToolStringParam } from "./common.js";
 const NO_PENDING_CHILD_COMPLETION_ERROR =
   "No pending child completion is owned by this turn. Continue working because independent background operations complete separately.";
 
+const UNSUPPORTED_CRON_YIELD_ERROR =
+  "Yield is not supported in isolated automation turns; continue working because a spawned child cannot resume this session.";
+
+export { UNSUPPORTED_CRON_YIELD_ERROR };
+
 const SessionsYieldToolSchema = Type.Object({
   message: Type.Optional(
     Type.String({ description: "Private context for the resumed turn; not sent to the user." }),
@@ -26,6 +31,8 @@ export function createSessionsYieldTool(opts?: {
   sessionId?: string;
   claimYield?: () => boolean | Promise<boolean>;
   onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
+  /** Dedicated rejection when a claim callback is unavailable (e.g. cron automation). */
+  unsupportedError?: string;
 }): AnyAgentTool {
   return {
     label: "Yield",
@@ -46,7 +53,13 @@ export function createSessionsYieldTool(opts?: {
       if (!opts?.onYield) {
         return jsonResult({ status: "error", error: "Yield not supported in this context" });
       }
-      if (!(await opts.claimYield?.())) {
+      if (!opts?.claimYield) {
+        return jsonResult({
+          status: "error",
+          error: opts?.unsupportedError ?? "Yield not supported in this context",
+        });
+      }
+      if (!(await opts.claimYield())) {
         return jsonResult({
           status: "error",
           error: NO_PENDING_CHILD_COMPLETION_ERROR,

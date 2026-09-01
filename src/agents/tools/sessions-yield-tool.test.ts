@@ -111,9 +111,14 @@ describe("sessions_yield tool", () => {
   });
 
   it.each([
-    { name: "the claim callback is unavailable" },
-    { name: "the turn owns no pending child completion", claimYield: () => false },
-  ])("keeps the turn active when $name", async ({ claimYield }) => {
+    { name: "the claim callback is unavailable", error: "Yield not supported in this context" },
+    {
+      name: "the turn owns no pending child completion",
+      claimYield: () => false,
+      error:
+        "No pending child completion is owned by this turn. Continue working because independent background operations complete separately.",
+    },
+  ])("keeps the turn active when $name", async ({ claimYield, error }) => {
     const onYield = vi.fn();
     const tool = createSessionsYieldTool({
       sessionId: "test-session",
@@ -123,10 +128,23 @@ describe("sessions_yield tool", () => {
 
     const result = await tool.execute("call-1", {});
 
+    expect(result.details).toMatchObject({ status: "error", error });
+    expect(onYield).not.toHaveBeenCalled();
+  });
+
+  it("returns the dedicated unsupported error for a cron automation", async () => {
+    const onYield = vi.fn();
+    const tool = createSessionsYieldTool({
+      sessionId: "test-session",
+      onYield,
+      unsupportedError: "Yield is not supported in isolated automation turns.",
+    });
+
+    const result = await tool.execute("call-1", {});
+
     expect(result.details).toMatchObject({
       status: "error",
-      error:
-        "No pending child completion is owned by this turn. Continue working because independent background operations complete separately.",
+      error: "Yield is not supported in isolated automation turns.",
     });
     expect(onYield).not.toHaveBeenCalled();
   });
