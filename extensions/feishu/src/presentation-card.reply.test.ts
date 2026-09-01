@@ -1,6 +1,6 @@
 // Feishu tests cover reply presentation resolution behavior.
 import { describe, expect, it } from "vitest";
-import { resolveFeishuReplyPresentation } from "./reply-presentation.js";
+import { resolveFeishuReplyPresentation } from "./presentation-card.js";
 
 function cardJson(result: ReturnType<typeof resolveFeishuReplyPresentation>): string {
   expect(result?.kind, "resolved presentation kind").toBe("card");
