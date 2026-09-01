@@ -19,6 +19,9 @@ const HOLD_ARM_DELAY_MS = 150,
 const DICTATION_ENCODING = "g711_ulaw";
 const DICTATION_SAMPLE_RATE_HZ = 8000;
 const MAX_PENDING_AUDIO_SAMPLES = DICTATION_SAMPLE_RATE_HZ * 10;
+// The Gateway relay drains the provider for up to 5s after close; wait a bit
+// longer than that for the terminal close event before retiring the listener.
+const CLOSE_EVENT_TIMEOUT_MS = 6_000;
 
 type DictationPhase = "idle" | "pressing" | "holding" | "connecting" | "recording" | "stopping";
 
@@ -125,6 +128,8 @@ class ComposerDictationSession {
   private pendingAudioSamples = 0;
   private appendChain: Promise<void> = Promise.resolve();
   private closePromise: Promise<void> | null = null;
+  private closeEvent: Promise<void> | null = null;
+  private resolveCloseEvent: (() => void) | null = null;
   private stopped = false;
   private discarded = false;
   private failed = false;
@@ -189,7 +194,7 @@ class ComposerDictationSession {
     return this.transcriptIncludingPartial();
   }
 
-  async finish(): Promise<string> {
+  async finish(waitForTerminal = false): Promise<string> {
     await this.stopCapture();
     await this.startPromise?.catch((error: unknown) => {
       if (!isAbortError(error)) {
@@ -198,11 +203,27 @@ class ComposerDictationSession {
     });
     await this.appendChain;
     await this.closeRemote();
-    // Retire the listener only after the remote close drained any late final
-    // transcript, so a Stop with no prior partial still keeps the utterance.
+    if (waitForTerminal) {
+      // `talk.session.close` only acknowledges scheduling the provider drain;
+      // wait for the terminal close event so a late final transcript still
+      // lands before the listener is retired.
+      await this.waitForCloseEvent();
+    }
     this.unsubscribe?.();
     this.unsubscribe = null;
     return this.transcriptIncludingPartial();
+  }
+
+  private async waitForCloseEvent(): Promise<void> {
+    this.closeEvent ??= new Promise<void>((resolve) => {
+      this.resolveCloseEvent = resolve;
+    });
+    await Promise.race([
+      this.closeEvent,
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, CLOSE_EVENT_TIMEOUT_MS);
+      }),
+    ]);
   }
 
   async cancel(): Promise<void> {
@@ -264,9 +285,14 @@ class ComposerDictationSession {
     if (!payload || payload.transcriptionSessionId !== this.transcriptionSessionId) {
       return;
     }
-    // After stop, only a matching final transcript may still update the draft;
-    // partials and other events are ignored because capture already ended.
-    if (this.stopped && !(payload.type === "transcript" && payload.final === true)) {
+    // After stop, only a matching final transcript and the terminal close event
+    // may still reach the draft; partials and other events are ignored because
+    // capture already ended.
+    if (
+      this.stopped &&
+      !(payload.type === "transcript" && payload.final === true) &&
+      payload.type !== "close"
+    ) {
       return;
     }
     if (payload.type === "partial" && typeof payload.text === "string") {
@@ -297,8 +323,12 @@ class ComposerDictationSession {
       );
       return;
     }
-    if (payload.type === "close" && payload.reason === "error") {
-      this.reportFailure(t("chat.composer.dictationDisconnected"));
+    if (payload.type === "close") {
+      if (payload.reason === "error") {
+        this.reportFailure(t("chat.composer.dictationDisconnected"));
+      }
+      this.resolveCloseEvent?.();
+      this.resolveCloseEvent = null;
     }
   }
 
@@ -323,6 +353,11 @@ class ComposerDictationSession {
       return;
     }
     this.stopped = true;
+    // Arm the terminal-event wait at stop so a close event that races the
+    // finish() continuation can still resolve it.
+    this.closeEvent ??= new Promise<void>((resolve) => {
+      this.resolveCloseEvent = resolve;
+    });
     this.input.stop();
     this.inputPump.stop();
     // Keep the event listener alive until remote close so a late matching
@@ -642,7 +677,7 @@ export class ComposerDictationController {
     // accumulated final transcript exactly once. Detach the session first so a
     // late drain error cannot be surfaced as the current session's failure.
     this.session = null;
-    const finalTranscript = await session.finish().catch(() => "");
+    const finalTranscript = await session.finish(true).catch(() => "");
     this.reset();
     const finalCommitted = Boolean(finalTranscript && wasActive && !this.disposed);
     if (finalCommitted) {

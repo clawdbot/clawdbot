@@ -559,6 +559,8 @@ describe("ComposerDictationController", () => {
     const withoutTranscript = createHarness();
     await startHold(withoutTranscript.target);
     const empty = withoutTranscript.controller.finishActive();
+    // The bounded drain ends with a terminal close and no final transcript.
+    emit({ transcriptionSessionId: "dictation-1", type: "close", reason: "completed" });
     await expect(empty).resolves.toBe(false);
     withoutTranscript.controller.dispose();
   });
@@ -682,13 +684,15 @@ describe("ComposerDictationController", () => {
     await commitLatched(controller, target);
     expect(onCommit).not.toHaveBeenCalled();
 
-    // The matching final transcript arrives during the bounded final drain.
+    // The matching final transcript arrives during the bounded final drain,
+    // followed by the terminal relay close event.
     emit({
       transcriptionSessionId: "dictation-1",
       type: "transcript",
       text: "late words",
       final: true,
     });
+    emit({ transcriptionSessionId: "dictation-1", type: "close", reason: "completed" });
     await waitForFast(() => expect(onCommit).toHaveBeenCalledWith("late words"));
     expect(controller.active).toBe(false);
     controller.dispose();
