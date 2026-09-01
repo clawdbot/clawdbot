@@ -20,7 +20,7 @@ By default, OpenClaw stores managed checkouts under `<openclaw-state-dir>/worktr
 }
 ```
 
-Use an absolute path on the Gateway host, or a path beginning with `~/` for the Gateway user's home directory. Relative paths are rejected. The Gateway user must be able to create and write to the directory.
+Use an absolute path on the Gateway host, `~` for the Gateway user's home directory, or a path beginning with `~/` for a folder inside it. Relative paths are rejected. The Gateway user must be able to create and write to the directory.
 
 This setting applies to all managed worktrees, including session, manual, and Workboard worktrees; there is no per-agent override. It changes checkout storage only. The shared state database, snapshots of provisioned ignored files, allocation limits, and cleanup lifecycle remain associated with the same OpenClaw state directory.
 

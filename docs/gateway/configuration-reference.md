@@ -60,7 +60,7 @@ Optional global root directory for [managed worktree](/concepts/managed-worktree
 }
 ```
 
-Use an absolute Gateway-host path or `~/` for the Gateway user's home directory; relative paths are rejected. OpenClaw creates checkouts at `<worktreeRoot>/<repo-fingerprint>/<name>`. This setting applies to all agents and all managed-worktree owners, with no per-agent override. The shared state database and allocation limits remain under the existing state directory.
+Use an absolute Gateway-host path, `~` for the Gateway user's home directory, or `~/` followed by a folder inside it; relative paths are rejected. OpenClaw creates checkouts at `<worktreeRoot>/<repo-fingerprint>/<name>`. This setting applies to all agents and all managed-worktree owners, with no per-agent override. The shared state database and allocation limits remain under the existing state directory.
 
 Changes affect new allocations only. Registered worktrees retain their original paths for reuse, cleanup, and snapshot restore; existing checkouts are not moved automatically. Keep their original storage available while those records are still needed.
 
