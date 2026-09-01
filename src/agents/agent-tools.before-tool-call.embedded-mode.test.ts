@@ -179,6 +179,23 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(receiptAuthority).toHaveBeenCalledOnce();
   });
 
+  it("routes skill_workshop lifecycle approvals through the workspace-skills owner", async () => {
+    setRuntimeConfigSnapshot({
+      skills: { workshop: { approvalPolicy: "pending" } },
+    } as never);
+    mockCallGatewayTool.mockResolvedValueOnce({ id: "server-id-1", status: "accepted" });
+    mockCallGatewayTool.mockResolvedValueOnce({ id: "server-id-1", decision: "allow-once" });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "skill_workshop",
+      params: { action: "apply", name: "Weather Helper" },
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(mockCallGatewayTool).toHaveBeenCalled();
+    expect(mockCallGatewayTool.mock.calls[0]?.[0]).toBe("plugin.approval.request");
+  });
+
   it("blocks approval-required tools in embedded mode when no gateway approval route exists", async () => {
     setEmbeddedMode(true);
     const onResolution = vi.fn();
