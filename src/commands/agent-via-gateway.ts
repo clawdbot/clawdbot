@@ -1235,6 +1235,16 @@ export async function agentCliCommand(
   if (opts.agent !== undefined && !opts.agent.trim()) {
     throw new Error("--agent must not be blank");
   }
+  // Same reason as --agent above. Downstream, a blank session selector is
+  // trimmed away and reads as "no explicit target" (see hasExplicitSessionTarget
+  // in normalizeSessionKeyOptsForDispatch), so the turn silently lands in the
+  // agent's default session instead of the one the caller named.
+  if (opts.sessionId !== undefined && !opts.sessionId.trim()) {
+    throw new Error("--session-id must not be blank");
+  }
+  if (opts.sessionKey !== undefined && !opts.sessionKey.trim()) {
+    throw new Error("--session-key must not be blank");
+  }
   protectJsonStdout(opts);
   const messageOpts = await resolveAgentMessageOpts(opts);
   // `/compact` cannot run as a plain CLI agent turn: the slash-command handler

@@ -373,6 +373,24 @@ describe("agentCliCommand", () => {
     expect(agentCommand).not.toHaveBeenCalled();
   });
 
+  it("rejects a blank session id before selecting a local or Gateway target", async () => {
+    await expect(
+      agentCliCommand({ message: "hi", agent: "ops", sessionId: "" }, runtime),
+    ).rejects.toThrow("--session-id must not be blank");
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(agentCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects a whitespace-only session key before selecting a local or Gateway target", async () => {
+    await expect(
+      agentCliCommand({ message: "hi", agent: "ops", sessionKey: "   " }, runtime),
+    ).rejects.toThrow("--session-key must not be blank");
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(agentCommand).not.toHaveBeenCalled();
+  });
+
   it("clamps oversized gateway timeout seconds at the command boundary", async () => {
     await withTempStore(async () => {
       mockGatewaySuccessReply();
