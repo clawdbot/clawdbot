@@ -414,7 +414,7 @@ describe("Codex plugin recheck command", () => {
       test.io,
       test.runtime,
     );
-    expect(result.text).toContain("App inventory recheck completed");
+    expect(result.text).toContain("App inventory check completed");
     expect(result.text).toContain("disabled by effective Codex app policy");
     expect(result.text).toContain("/new or /reset");
     expect(result.text).toContain("Snapshot freshness is unknown");
@@ -424,7 +424,10 @@ describe("Codex plugin recheck command", () => {
       ["app/installed", { forceRefresh: true }],
       ["app/installed", { threadId: "thread-a", forceRefresh: false }],
     ]);
-    expect(test.request).toHaveBeenCalledWith("app/read", { appIds: ["app-0"] });
+    expect(test.request).toHaveBeenCalledWith("app/read", {
+      appIds: ["app-0"],
+      includeTools: true,
+    });
     expect(test.runtime.refresh).not.toHaveBeenCalled();
     expect(test.runtime.install).not.toHaveBeenCalled();
     expect(test.io.mutate).not.toHaveBeenCalled();
@@ -434,6 +437,9 @@ describe("Codex plugin recheck command", () => {
     { options: { disabled: true }, expected: "disabled for new conversations" },
     { options: { blocked: true }, expected: "blocked by marketplace policy" },
     { options: { appCount: 0 }, expected: "No hosted apps declared" },
+    { options: { accountType: "apiKey" as const }, expected: "ChatGPT sign-in" },
+    { options: { appsFeature: false }, expected: "disabled in this Codex runtime" },
+    { options: { missingMetadata: true }, expected: "app-page permissions are unknown" },
   ])("does not refresh when $expected", async ({ options, expected }) => {
     const test = fixture(options);
     const result = await handleCodexPluginsSubcommand(
@@ -443,7 +449,7 @@ describe("Codex plugin recheck command", () => {
       test.runtime,
     );
     expect(result.text).toContain(expected);
-    expect(result.text).not.toContain("recheck completed");
+    expect(result.text).not.toContain("check completed");
     expect(test.request).not.toHaveBeenCalledWith("app/installed", { forceRefresh: true });
     expect(test.io.mutate).not.toHaveBeenCalled();
   });
@@ -481,7 +487,7 @@ describe("Codex plugin recheck command", () => {
       expect(result.text).toContain(expected);
       expect(result.text).toContain("/codex plugins recheck notes@company-tools");
       expect(result.text).toContain("Previous inventory was not confirmed");
-      expect(result.text).not.toContain("recheck completed");
+      expect(result.text).not.toContain("check completed");
       expect(result.text).not.toContain("private upstream response");
       expect(test.io.mutate).not.toHaveBeenCalled();
     },

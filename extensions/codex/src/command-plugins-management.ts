@@ -534,8 +534,11 @@ async function installCodexPlugin(
           type: "buttons",
           buttons: [
             {
-              label: "Finished connecting / recheck",
-              action: { type: "command", command: `/codex plugins recheck ${requestedId}` },
+              label: appLinks.length > 0 ? "Recheck app tools" : "Check status",
+              action: {
+                type: "command",
+                command: `/codex plugins ${appLinks.length > 0 ? "recheck" : "status"} ${requestedId}`,
+              },
             },
           ],
         },
