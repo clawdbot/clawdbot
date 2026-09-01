@@ -680,15 +680,15 @@ describe("buildAgentSystemPrompt", () => {
       promptMode: "minimal",
     });
 
-    expect(defaultPrompt).not.toContain("## Control UI Session Companion");
-    expect(webchatPrompt).toContain("## Control UI Session Companion");
-    expect(webchatPrompt).toContain("read-only rail companion");
+    expect(defaultPrompt).not.toContain("## Control UI Side Chat");
+    expect(webchatPrompt).toContain("## Control UI Side Chat");
+    expect(webchatPrompt).toContain("read-only Side chat");
     expect(webchatPrompt).toContain("do not spawn sub-agents or burn main-thread turns");
     expect(webchatPrompt).toContain(
       "Reserve `sessions_spawn` for delegated work with its own deliverable",
     );
     expect(webchatWithoutSpawn).not.toContain("sessions_spawn");
-    expect(minimalWebchatPrompt).not.toContain("## Control UI Session Companion");
+    expect(minimalWebchatPrompt).not.toContain("## Control UI Side Chat");
   });
 
   it("guides subagent workflows to avoid polling loops", () => {

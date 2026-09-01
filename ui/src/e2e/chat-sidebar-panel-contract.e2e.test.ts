@@ -636,6 +636,12 @@ suite.define(() => {
     await clearAction.waitFor();
     expect(await clearAction.locator('path[d^="M3 6h18M19 6v14"]').count()).toBe(1);
     expect(await contentActions.locator("wa-dropdown").count()).toBe(0);
+    const restingColor = await clearAction.evaluate((button) => getComputedStyle(button).color);
+    for (const selector of [".side-panel__expand", ".side-panel__minimize"]) {
+      expect(
+        await page.locator(selector).evaluate((button) => getComputedStyle(button).color),
+      ).toBe(restingColor);
+    }
     const clearTooltip = clearAction.locator("..");
     await clearAction.hover();
     await expect

@@ -1001,7 +1001,7 @@ suite.define(() => {
         expect(await mainComposer.evaluate((element) => element === document.activeElement)).toBe(
           true,
         );
-        const input = companion.getByRole("textbox", { name: "Ask the session companion" });
+        const input = companion.getByRole("textbox", { name: "Ask in side chat" });
         await input.fill("Can I use side chat here?");
         await companion.getByRole("button", { name: "Ask", exact: true }).click();
         const request = await gateway.waitForRequest("sessions.companion.ask");
