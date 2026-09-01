@@ -331,8 +331,11 @@ function renderHeader(input: SessionHovercardInput) {
   </header>`;
 }
 
-function renderProgressHeadsUp(card: ProgressCard | null | undefined) {
-  const headsUp = progressCardHeadsUp(card);
+function renderProgressHeadsUp(
+  card: ProgressCard | null | undefined,
+  sessionStatus: SidebarSessionHovercardRow["status"],
+) {
+  const headsUp = progressCardHeadsUp(card, sessionStatus);
   if (!headsUp) {
     return nothing;
   }
@@ -378,7 +381,7 @@ function renderSessionContext({ row, progressCard }: SessionHovercardInput) {
     !placementIdentity &&
     row?.boardFace !== "dashboard" &&
     row?.hasAutomation !== true &&
-    !progressCardHeadsUp(progressCard)
+    !progressCardHeadsUp(progressCard, row?.status)
   ) {
     return nothing;
   }
@@ -441,7 +444,7 @@ function renderSessionContext({ row, progressCard }: SessionHovercardInput) {
           >
         </div>`
       : nothing}
-    ${renderProgressHeadsUp(progressCard)}
+    ${renderProgressHeadsUp(progressCard, row?.status)}
   </div>`;
 }
 
@@ -541,7 +544,7 @@ export function renderSessionHovercard(input: SessionHovercardInput) {
     (input.row?.placementProviderId && input.row.placementProfileId) ||
     input.row?.boardFace === "dashboard" ||
     input.row?.hasAutomation === true ||
-    progressCardHeadsUp(input.progressCard),
+    progressCardHeadsUp(input.progressCard, input.row?.status),
   );
   const lastMessagePreview = input.progressCard
     ? undefined

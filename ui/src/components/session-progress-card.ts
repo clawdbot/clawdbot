@@ -144,7 +144,11 @@ function unfinishedProgressStep(steps: readonly ProgressCardStep[]): ProgressCar
 
 export function progressCardHeadsUp(
   card: ProgressCard | null | undefined,
+  sessionStatus?: SessionRunStatus,
 ): ProgressCardHeadsUp | null {
+  if (sessionStatus && TERMINAL_OUTCOME_LABEL_KEYS[sessionStatus]) {
+    return null;
+  }
   const counts = card ? progressCounts(card) : null;
   if (!counts || !card?.steps) {
     return null;

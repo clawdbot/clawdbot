@@ -483,6 +483,23 @@ describe("renderSessionHovercard", () => {
     expect(container.querySelector(".session-hovercard__notepad")).toBeNull();
   });
 
+  it.each(["done", "failed", "timeout", "killed"] as const)(
+    "hides stale plan work after the session is %s",
+    (status) => {
+      const container = document.createElement("div");
+      render(
+        renderSessionHovercard({
+          row: row({ status }),
+          progressCard: progressCard(),
+        }),
+        container,
+      );
+
+      expect(container.querySelector(".session-hovercard__plan-row")).toBeNull();
+      expect(container.querySelector(".session-hovercard__notepad")).not.toBeNull();
+    },
+  );
+
   it("deduplicates creator and self from the compact attribution", () => {
     const container = document.createElement("div");
     render(
