@@ -43,6 +43,8 @@ export function runFixture(
       ...env,
       OPENCLAW_BUILD_PRIVATE_QA: privateQa ? "1" : "0",
       OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
+      // This synthetic graph fits a small heap; the full-repository floor does not apply.
+      OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: "1024",
       // Use the build owner's existing direct-tool path, without a fixture pnpm shim.
       OPENCLAW_BUILD_ALL_NO_PNPM: "1",
     },

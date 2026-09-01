@@ -7,6 +7,7 @@ import {
   createFixture,
   declarationInputs,
   expectStagingClean,
+  runFixture,
   runUnifiedBuild,
   runUnifiedWriter,
   treeHashes,
@@ -24,7 +25,11 @@ describe("write-unified-entry-dts", () => {
     write("extensions/fixture-a/typed-runtime.d.ts", 'export declare const typedRuntime: "typed";');
     fs.appendFileSync(
       path.join(root, "extensions/fixture-a/index.ts"),
-      '\nexport { typedRuntime } from "./typed-runtime.js";\n',
+      [
+        '\nexport { typedRuntime } from "./typed-runtime.js";',
+        'export type { Schema as ArrowSchema } from "apache-arrow";',
+        'export type { Message as ArrowMessage } from "apache-arrow/ipc/metadata/message";',
+      ].join("\n"),
     );
     const preserved = {
       "dist/control-ui/retained.d.ts": "Vite-owned declaration",
@@ -36,6 +41,31 @@ describe("write-unified-entry-dts", () => {
     }
     write("dist/obsolete.d.ts", "obsolete root declaration");
     write("dist/extensions/removed/api.d.ts", "obsolete plugin declaration");
+    write(
+      "consumer.ts",
+      [
+        'import type { Schema } from "apache-arrow";',
+        'import type { Message } from "apache-arrow/ipc/metadata/message";',
+        'import type { ArrowSchema, ArrowMessage } from "./dist/extensions/fixture-a/index.js";',
+        "declare const schema: Schema; const projectedSchema: ArrowSchema = schema;",
+        "const originalSchema: Schema = projectedSchema; void originalSchema;",
+        "declare const message: Message; const projectedMessage: ArrowMessage = message;",
+        "const originalMessage: Message = projectedMessage; void originalMessage;",
+        "declare const encode: typeof Schema.encode; const projectedEncode: typeof ArrowSchema.encode = encode; void projectedEncode;",
+      ].join("\n"),
+    );
+    write(
+      "consumer.json",
+      JSON.stringify({
+        compilerOptions: {
+          module: "NodeNext",
+          moduleResolution: "NodeNext",
+          strict: true,
+          types: [],
+        },
+        files: ["consumer.ts"],
+      }),
+    );
     const initial = runUnifiedBuild(root);
     expect(initial.status, initial.stdout + initial.stderr).toBe(0);
     expect(
@@ -44,6 +74,13 @@ describe("write-unified-entry-dts", () => {
     for (const entry of production) {
       expect(fs.statSync(path.join(root, `dist/${entry}.d.ts`)).size, entry).toBeGreaterThan(0);
     }
+    const consumer = runFixture(root, [
+      path.resolve("scripts/run-tsgo.mjs"),
+      "-p",
+      "consumer.json",
+      "--noEmit",
+    ]);
+    expect(consumer.status, consumer.stdout + consumer.stderr).toBe(0);
     for (const name of ["runtime-only", "typed-runtime"]) {
       expect(
         fs.statSync(path.join(root, `dist/extensions/fixture-a/${name}.js`)).size,
