@@ -165,6 +165,39 @@ describe("matrixMessageActions", () => {
     expect(sendSchema?.visibility).toBe("all-configured");
   });
 
+  it("preserves Matrix emote intent when preparing durable sends", async () => {
+    const payload = {
+      text: "waves",
+      channelData: {
+        shared: { keep: true },
+        matrix: {
+          extraContent: { "com.example.existing": { keep: true } },
+        },
+      },
+    };
+
+    const prepared = await matrixMessageActions.prepareSendPayload?.({
+      ctx: {
+        action: "send",
+        cfg: createConfiguredMatrixConfig(),
+        params: { emote: true },
+      },
+      to: "room:!room:example",
+      payload,
+    } as never);
+
+    expect(prepared).toEqual({
+      ...payload,
+      channelData: {
+        ...payload.channelData,
+        matrix: {
+          ...payload.channelData.matrix,
+          emote: true,
+        },
+      },
+    });
+  });
+
   it("hides self-profile updates without owner identity context", () => {
     const discovery = matrixMessageActions.describeMessageTool({
       cfg: createConfiguredMatrixConfig(),

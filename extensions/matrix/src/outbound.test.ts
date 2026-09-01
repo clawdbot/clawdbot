@@ -407,6 +407,46 @@ describe("matrixOutbound cfg threading", () => {
     });
   });
 
+  it("passes Matrix emote intent through durable sendPayload", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          accessToken: "resolved-token",
+        },
+      },
+    } as OpenClawConfig;
+
+    await matrixOutbound.sendPayload!({
+      cfg,
+      to: "room:!room:example",
+      text: "waves",
+      payload: {
+        text: "waves",
+        channelData: { matrix: { emote: true } },
+      },
+      accountId: "default",
+    });
+
+    expect(mockOptions(mocks.sendMessageMatrix, "sendMessageMatrix").emote).toBe(true);
+  });
+
+  it("rejects Matrix emote payloads with media before transport", async () => {
+    await expect(
+      matrixOutbound.sendPayload!({
+        cfg: {} as OpenClawConfig,
+        to: "room:!room:example",
+        text: "waves",
+        payload: {
+          text: "waves",
+          mediaUrls: ["file:///tmp/a.png"],
+          channelData: { matrix: { emote: true } },
+        },
+      }),
+    ).rejects.toThrow("Matrix emote sends cannot include media");
+
+    expect(mocks.sendMessageMatrix).not.toHaveBeenCalled();
+  });
+
   it("sends empty Matrix presentation payloads with a minimal fallback body", async () => {
     const cfg = {
       channels: {

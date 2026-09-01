@@ -12,7 +12,10 @@ import type {
   ChannelMessageActionName,
   ChannelMessageToolSchemaContribution,
 } from "openclaw/plugin-sdk/channel-contract";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { Type } from "typebox";
 import { requiresExplicitMatrixDefaultAccount } from "./account-selection.js";
@@ -201,7 +204,25 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
       cfg: ctx.cfg as CoreConfig,
       accountId: ctx.accountId,
     });
-    return account && createActionGate(account.config.actions)("messages") ? payload : null;
+    if (!account || !createActionGate(account.config.actions)("messages")) {
+      return null;
+    }
+    if (readBooleanParam(ctx.params, "emote") !== true) {
+      return payload;
+    }
+
+    const channelData = asOptionalRecord(payload.channelData);
+    const matrixData = asOptionalRecord(channelData?.matrix);
+    return {
+      ...payload,
+      channelData: {
+        ...channelData,
+        matrix: {
+          ...matrixData,
+          emote: true,
+        },
+      },
+    };
   },
   handleAction: async (ctx: ChannelMessageActionContext) => {
     const { handleMatrixAction } = await import("./tool-actions.runtime.js");
