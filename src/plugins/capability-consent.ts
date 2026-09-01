@@ -273,8 +273,8 @@ async function resolvePluginArtifactCapabilityConsent(params: {
       resolveAcceptedSurfaceCurrent(params.previousRecord, params.previousDeclared) &&
       resolvePluginInstallRecordIntegrity(params.previousRecord) !== undefined;
     acceptanceCurrent = !hasWidening && priorAcceptanceCurrent;
-    // Managed installs activate the package, even when its previous version was disabled.
-    // Update-only flows preserve disablement in preparePluginUpdateCapabilityConsent instead.
+    // Reinstalls preserve authored disablement but still require consent before commit.
+    // Only update-only flows defer it in preparePluginUpdateCapabilityConsent.
   }
   const acknowledgment =
     official || !params.enabled || acceptanceCurrent

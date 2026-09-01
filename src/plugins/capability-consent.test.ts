@@ -505,7 +505,7 @@ describe("plugin capability consent", () => {
     },
   );
 
-  it("requires consent when reinstalling a previously disabled plugin will enable it", async () => {
+  it("rejects reinstall without capability consent even when the plugin is disabled", async () => {
     const rootDir = createArtifactFixture({
       "package.json": { openclaw: { extensions: ["./index.js"] } },
       "index.js": "export {};",
