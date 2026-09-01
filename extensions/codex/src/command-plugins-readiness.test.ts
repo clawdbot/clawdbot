@@ -403,7 +403,7 @@ describe("Codex plugin status command", () => {
       const continuation = first.presentation?.blocks
         .flatMap((block) => (block.type === "buttons" ? block.buttons : []))
         .find((button) => button.label === "More apps");
-      if (continuation?.action.type !== "command") {
+      if (continuation?.action?.type !== "command") {
         throw new Error("Expected the first status page to provide a More apps command");
       }
       const next = await handleCodexPluginsSubcommand(
