@@ -355,6 +355,7 @@ suite.define(() => {
     await expect.poll(async () => (await gateway.getRequests("board.widget.put")).length).toBe(1);
     expect((await gateway.getRequests("board.widget.put"))[0]?.params).toEqual({
       sessionKey,
+      agentId: "main",
       name: "canvas-cv_release",
       title: "Release status",
       content: { kind: "canvas-doc", docId: "cv_release" },
@@ -549,6 +550,7 @@ suite.define(() => {
     await expect.poll(async () => (await gateway.getRequests("board.widget.put")).length).toBe(1);
     expect((await gateway.getRequests("board.widget.put"))[0]?.params).toEqual({
       sessionKey,
+      agentId: "main",
       name: "mcp-app-28b65635ecaa78ac",
       title: "Demo App",
       content: { kind: "mcp-app", viewId: "view-session-bound" },

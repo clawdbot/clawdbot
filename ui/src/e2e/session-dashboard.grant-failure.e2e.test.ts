@@ -88,6 +88,7 @@ suite.define(() => {
       const request = await gateway.waitForRequest("board.widget.grant");
       expect(request.params).toEqual({
         sessionKey,
+        agentId: "main",
         name: "status",
         decision: "granted",
         revision: 1,

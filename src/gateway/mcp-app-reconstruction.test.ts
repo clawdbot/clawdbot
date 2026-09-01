@@ -132,53 +132,67 @@ describe("MCP App transcript reconstruction", () => {
     });
   });
 
-  it("mints a fresh board lease from the stable transcript descriptor", async () => {
-    mocks.visitSessionMessagesAsync.mockImplementation(
-      async (_scope: unknown, visit: (message: unknown) => void) => {
-        for (const message of [
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "toolCall",
-                id: "call-1",
-                name: "demo__show",
-                arguments: { city: "Paris" },
-              },
-            ],
-          },
-          toolResult("mcp-app-original", "call-1"),
-        ]) {
-          visit(message);
-        }
-      },
-    );
-
-    const authorizeAppInteraction = vi.fn(async () => true);
-    await expect(
-      mintMcpAppViewFromTranscript({
-        cfg: {},
-        sessionKey: "agent:main:main",
-        descriptor: {
-          serverName: "demo",
-          toolName: "show",
-          uiResourceUri: "ui://demo/app",
-          toolCallId: "call-1",
+  it.each([
+    { sessionKey: "agent:main:main", agentId: undefined, expectedOwner: "main" },
+    { sessionKey: "global", agentId: "work", expectedOwner: "work" },
+  ])(
+    "mints a fresh board lease for $sessionKey owned by $expectedOwner",
+    async ({ sessionKey, agentId, expectedOwner }) => {
+      mocks.loadSessionEntry.mockReturnValue({
+        canonicalKey: sessionKey,
+        entry: { sessionId: "session-1" },
+        storePath: "/tmp/openclaw-agent.sqlite",
+      });
+      mocks.visitSessionMessagesAsync.mockImplementation(
+        async (_scope: unknown, visit: (message: unknown) => void) => {
+          for (const message of [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call-1",
+                  name: "demo__show",
+                  arguments: { city: "Paris" },
+                },
+              ],
+            },
+            toolResult("mcp-app-original", "call-1"),
+          ]) {
+            visit(message);
+          }
         },
-        allowedAppToolNames: new Set(["refresh"]),
-        authorizeAppInteraction,
-        readOnly: false,
-      }),
-    ).resolves.toEqual({ runtime, view });
-    expect(mocks.fetchMcpAppView).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowedAppToolNames: new Set(["refresh"]),
-        authorizeAppInteraction,
-        toolCallId: "call-1",
-      }),
-    );
-    expect(mocks.fetchMcpAppView.mock.calls.at(-1)?.[0]).not.toHaveProperty("viewId");
-  });
+      );
+
+      const authorizeAppInteraction = vi.fn(async () => true);
+      await expect(
+        mintMcpAppViewFromTranscript({
+          cfg: {},
+          sessionKey,
+          agentId,
+          descriptor: {
+            serverName: "demo",
+            toolName: "show",
+            uiResourceUri: "ui://demo/app",
+            toolCallId: "call-1",
+          },
+          allowedAppToolNames: new Set(["refresh"]),
+          authorizeAppInteraction,
+          readOnly: false,
+        }),
+      ).resolves.toEqual({ runtime, view });
+      expect(mocks.fetchMcpAppView).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: expectedOwner,
+          allowedAppToolNames: new Set(["refresh"]),
+          authorizeAppInteraction,
+          toolCallId: "call-1",
+        }),
+      );
+      expect(mocks.loadSessionEntry).toHaveBeenCalledWith(sessionKey, { agentId: expectedOwner });
+      expect(mocks.fetchMcpAppView.mock.calls.at(-1)?.[0]).not.toHaveProperty("viewId");
+    },
+  );
 
   it("rejects client-selected descriptors that do not match transcript ownership", async () => {
     await expect(
