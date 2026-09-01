@@ -466,6 +466,7 @@ export async function executePreparedCliRun(
 
       let executionCommand = backend.command;
       let executionLeadingArgv: readonly string[] = [];
+      let executionArgv0: string | undefined;
       context.runtimeOwnerFingerprint = undefined;
       context.runtimeArtifactFingerprint = undefined;
       const exactToolAvailabilityVersionPolicy = params.cliToolAvailability
@@ -509,6 +510,7 @@ export async function executePreparedCliRun(
         }
         executionCommand = executableIdentity.invocation.command;
         executionLeadingArgv = executableIdentity.invocation.leadingArgv;
+        executionArgv0 = executableIdentity.invocation.argv0;
         context.runtimeArtifactFingerprint = fingerprintCliRuntimeArtifact({
           provider: params.provider,
           backendId: context.backendResolved.id,
@@ -577,6 +579,7 @@ export async function executePreparedCliRun(
         resolvedSessionId,
         executionCommand,
         executionLeadingArgv,
+        executionArgv0,
         executionArgs: args,
         env,
         prompt,

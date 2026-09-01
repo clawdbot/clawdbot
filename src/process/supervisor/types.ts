@@ -104,6 +104,12 @@ type SpawnBaseInput = {
 type SpawnChildInput = SpawnBaseInput & {
   mode: "child";
   argv: string[];
+  /**
+   * Override argv[0] without changing the executed command. Wrapper shims
+   * (mise/asdf) route on argv[0], so this keeps the launch bound to the
+   * verified canonical file while carrying the shim name.
+   */
+  argv0?: string;
   /** Preserve a caller-prepared environment without environment-mutating spawn wrappers. */
   exactEnv?: true;
   windowsVerbatimArguments?: boolean;

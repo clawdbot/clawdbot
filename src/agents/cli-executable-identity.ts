@@ -29,6 +29,13 @@ export type CliExecutableIdentity = Readonly<{
     command: string;
     leadingArgv: readonly string[];
     resolution: "direct" | "node-entrypoint" | "exe-entrypoint";
+    /**
+     * Optional argv[0] override for wrapper shims (mise/asdf/direnv). The
+     * command stays bound to the hashed canonical target; argv0 carries the
+     * shim name so the wrapper can route its own argv without dereferencing a
+     * mutable alias at launch.
+     */
+    argv0?: string;
   }>;
   files: readonly CliExecutableFileIdentity[];
   runtimeArtifact:
@@ -472,20 +479,21 @@ async function resolvePosixIdentity(params: {
     };
   }
   const resolvedPath = commandFile.identity.path;
-  // A wrapper shim (e.g. mise, asdf, direnv) presents a different basename
-  // than the real target. Spawn the original resolved path so the shim can
-  // route its own argv; the owner proof still hashes the real target file.
-  const invocationCommand =
+  // A wrapper shim (mise/asdf/direnv) routes on argv[0]. Keep the launch bound
+  // to the hashed canonical target and convey the shim name via argv0, so a
+  // retargeted alias can never start a different program after verification.
+  const wrapperShim =
     path.basename(resolvedPath) !== path.basename(params.resolvedPath)
       ? params.resolvedPath
-      : resolvedPath;
+      : undefined;
   return {
     command: params.command,
     resolvedPath,
     invocation: {
-      command: invocationCommand,
+      command: resolvedPath,
       leadingArgv: [],
       resolution: "direct",
+      ...(wrapperShim ? { argv0: wrapperShim } : {}),
     },
     files: dedupeFileIdentities(files),
     runtimeArtifact,

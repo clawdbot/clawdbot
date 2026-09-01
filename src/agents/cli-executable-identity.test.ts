@@ -212,7 +212,7 @@ describe("CLI executable implementation identity", () => {
     }
   });
 
-  it("spawns a wrapper shim by its resolved path instead of the real target", async () => {
+  it("binds a wrapper shim launch to its canonical target and carries the shim name via argv0", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-shim-"));
     tempDirs.push(root);
     const realBinary = path.join(root, "mise");
@@ -231,7 +231,35 @@ describe("CLI executable implementation identity", () => {
 
     expect(identity?.runtimeArtifact).toEqual({ kind: "self-contained-executable" });
     expect(identity?.resolvedPath).toBe(fs.realpathSync(realBinary));
-    expect(identity?.invocation.command).toBe(shim);
+    expect(identity?.invocation.command).toBe(fs.realpathSync(realBinary));
+    expect(identity?.invocation.argv0).toBe(shim);
+  });
+
+  it("keeps the launch command canonical when a wrapper shim is retargeted after resolution", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-shim-race-"));
+    tempDirs.push(root);
+    const realBinary = path.join(root, "mise");
+    const otherBinary = path.join(root, "attacker");
+    const shim = path.join(root, "claude");
+    fs.copyFileSync(process.execPath, realBinary);
+    fs.chmodSync(realBinary, 0o755);
+    fs.copyFileSync(process.execPath, otherBinary);
+    fs.chmodSync(otherBinary, 0o755);
+    fs.symlinkSync(realBinary, shim);
+
+    const identity = await resolveCliExecutableIdentity({
+      command: shim,
+      runtimeArtifact: { ...commandPackagePolicy, nativeExecutableNames: ["mise"] },
+    });
+    const canonicalCommand = identity?.invocation.command;
+    expect(canonicalCommand).toBe(fs.realpathSync(realBinary));
+
+    // Retarget the alias after resolution; the launch command must not follow it.
+    fs.unlinkSync(shim);
+    fs.symlinkSync(otherBinary, shim);
+
+    expect(identity?.invocation.command).toBe(canonicalCommand);
+    expect(identity?.invocation.argv0).toBe(shim);
   });
 
   it("rejects package script shebang flags that can load external code", async () => {

@@ -329,6 +329,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
                 env: input.env,
                 exactEnv: input.exactEnv,
                 windowsVerbatimArguments: input.windowsVerbatimArguments,
+                ...(input.argv0 ? { argv0: input.argv0 } : {}),
                 input: input.input,
                 stdinMode: input.stdinMode,
                 secretInput: input.secretInput,

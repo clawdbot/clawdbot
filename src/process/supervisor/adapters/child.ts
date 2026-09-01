@@ -90,6 +90,8 @@ type ChildAdapterInput = {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   windowsVerbatimArguments?: boolean;
+  /** Override argv[0] while keeping the executed command bound to the verified canonical file. */
+  argv0?: string;
   input?: string;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
   secretInput?: SpawnSecretInput;
@@ -159,6 +161,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
     detached: useDetached,
     windowsHide: true,
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+    ...(params.argv0 ? { argv0: params.argv0 } : {}),
   };
 
   const spawned = await spawnWithFallback({
