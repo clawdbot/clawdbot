@@ -48,7 +48,14 @@ type DesktopAcquireRequest = {
 };
 
 type DesktopAcquireResult = { attachment: DesktopRfbAttachment; vncPassword?: string };
-type WorkerDesktopTunnelFileSystem = Pick<typeof fs, "chmod" | "mkdtemp" | "rm">;
+type WorkerDesktopTunnelFileSystem = {
+  mkdtemp: (prefix: string) => Promise<string>;
+  chmod: (
+    target: Parameters<typeof fs.chmod>[0],
+    mode: Parameters<typeof fs.chmod>[1],
+  ) => Promise<void>;
+  rm: (target: Parameters<typeof fs.rm>[0], options: Parameters<typeof fs.rm>[1]) => Promise<void>;
+};
 
 type DesktopAppLaunchEntry = {
   environmentId: string;
