@@ -372,6 +372,7 @@ suite.define(() => {
           "Logs",
           "Updates",
           "About",
+          "Profile",
           "Appearance",
           "Notifications",
           "Gateway",

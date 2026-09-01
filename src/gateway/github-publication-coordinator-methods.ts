@@ -9,14 +9,19 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import {
+  listUnreportedPersonalGitHubPublications,
+  markPersonalGitHubPublicationReported,
+} from "./github-personal-publication-store.js";
+import {
+  assertExpectedSharedGitHubPublisher,
   prepareCurrentGitHubPublicationIdentity,
   resolveGitHubPublicationWorktreeOwner,
 } from "./github-publication-availability.js";
-import { matchesGitHubPublicationIdentityRow } from "./github-publication-executor.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
 import {
   deferGitHubPublicationRequests as deferRequests,
   digestGitHubPublicationRequest as digestRequest,
+  insertGitHubPublicationRequest,
   ensureGitHubPublicationStore as ensureSchema,
   githubPublicationDatabase as publicationDb,
   hasGitHubPublicationStore as schemaExists,
@@ -37,6 +42,7 @@ type ClaimRequest = {
   title?: string;
   body?: string;
   assertCurrent?: () => void;
+  expectedPublisher?: import("../../packages/gateway-protocol/src/schema/session-github-publication.js").GitHubPublicationPublisher;
 };
 
 function exactClaimForPlacement(
@@ -101,6 +107,10 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         assertCurrent?: () => void;
       },
     ): Promise<SessionGitHubPublicationResult> {
+      if (input.selection?.source === "personal") {
+        throw new Error("My GitHub publication requires direct personal authorization.");
+      }
+      const expected = input.selection?.expected;
       ensureSchema();
       if (!input.sessionKey) {
         throw new Error("GitHub publication requires an authoritative session.");
@@ -143,6 +153,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       const claim = placement ? exactClaimForPlacement(placement) : undefined;
       if (claim && input.expectedRunId && claim.runId === input.expectedRunId) {
         const accepted = await requestForClaim({
+          expectedPublisher: expected,
           claim,
           sessionKey: loaded.canonicalKey,
           agentId: input.agentId,
@@ -197,12 +208,18 @@ export function createGitHubPublicationCoordinatorMethods(params: {
           throw new Error("GitHub publication idempotency key was reused.");
         }
         if (existing.status === "published" || existing.status === "failed") {
-          return publicationResult(existing);
+          const result = publicationResult(existing);
+          assertExpectedSharedGitHubPublisher(expected, result.publisher!);
+          return result;
         }
       }
       input.assertCurrent?.();
       const identity = await prepareCurrentGitHubPublicationIdentity(input.agentId);
       input.assertCurrent?.();
+      assertExpectedSharedGitHubPublisher(expected, {
+        source: identity.source,
+        ...identity.account,
+      });
       const insertSessionRequest = (snapshot?: {
         sourceHeadCommit: string;
         sourceIndexTree: string;
@@ -213,68 +230,16 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         input.assertCurrent?.();
         return runOpenClawStateWriteTransaction(
           ({ db }) => {
-            const query = publicationDb(db);
-            executeSqliteQuerySync(
-              db,
-              query
-                .insertInto("github_publication_requests")
-                .values({
-                  request_id: requestId,
-                  idempotency_key: input.idempotencyKey,
-                  request_digest: requestDigest,
-                  session_id: sessionId,
-                  session_key: loaded.canonicalKey,
-                  agent_id: input.agentId,
-                  worktree_id: worktree.id,
-                  repository_fingerprint: worktree.repoFingerprint,
-                  claim_id: null,
-                  run_id: null,
-                  environment_id: null,
-                  owner_epoch: null,
-                  placement_generation: null,
-                  identity_source: identity.source,
-                  identity_profile_id: identity.profileId ?? null,
-                  identity_account_id: identity.account.accountId,
-                  identity_login: identity.account.login,
-                  title: input.title ?? null,
-                  body: input.body ?? null,
-                  status: "requested",
-                  gateway_instance_id: null,
-                  repository: null,
-                  branch: worktree.branch,
-                  base_branch: null,
-                  source_head_commit: snapshot?.sourceHeadCommit ?? null,
-                  source_index_tree: snapshot?.sourceIndexTree ?? null,
-                  workspace_tree: snapshot?.workspaceTree ?? null,
-                  head_commit: null,
-                  pull_request_url: null,
-                  error_code: null,
-                  next_action: null,
-                  created_at_ms: now,
-                  updated_at_ms: now,
-                  reported_at_ms: null,
-                })
-                .onConflict((conflict) =>
-                  conflict.columns(["session_id", "idempotency_key"]).doNothing(),
-                ),
-            );
-            const stored = executeSqliteQuerySync(
-              db,
-              query
-                .selectFrom("github_publication_requests")
-                .selectAll()
-                .where("session_id", "=", sessionId)
-                .where("idempotency_key", "=", input.idempotencyKey),
-            ).rows[0];
-            if (
-              !stored ||
-              stored.request_digest !== requestDigest ||
-              !matchesGitHubPublicationIdentityRow(stored, identity) ||
-              !sameWorktree(stored, worktree)
-            ) {
-              throw new Error("GitHub publication idempotency key was reused.");
-            }
-            return stored;
+            return insertGitHubPublicationRequest(db, {
+              request: { ...input, sessionKey: loaded.canonicalKey },
+              requestId,
+              requestDigest,
+              now,
+              identity,
+              worktree,
+              sessionId,
+              snapshot,
+            });
           },
           undefined,
           { operationLabel: "github-publication.request-session" },
@@ -439,24 +404,28 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       agentId: string;
       result: SessionGitHubPublicationResult;
     }> {
+      const personal = listUnreportedPersonalGitHubPublications();
       if (!schemaExists()) {
-        return [];
+        return personal;
       }
       const db = openOpenClawStateDatabase().db;
-      return executeSqliteQuerySync(
-        db,
-        publicationDb(db)
-          .selectFrom("github_publication_requests")
-          .selectAll()
-          .where("status", "in", ["published", "failed"])
-          .where("reported_at_ms", "is", null)
-          .orderBy("updated_at_ms"),
-      ).rows.map((row) => ({
-        sessionId: row.session_id,
-        sessionKey: row.session_key,
-        agentId: row.agent_id,
-        result: publicationResult(row),
-      }));
+      return [
+        ...personal,
+        ...executeSqliteQuerySync(
+          db,
+          publicationDb(db)
+            .selectFrom("github_publication_requests")
+            .selectAll()
+            .where("status", "in", ["published", "failed"])
+            .where("reported_at_ms", "is", null)
+            .orderBy("updated_at_ms"),
+        ).rows.map((row) => ({
+          sessionId: row.session_id,
+          sessionKey: row.session_key,
+          agentId: row.agent_id,
+          result: publicationResult(row),
+        })),
+      ];
     },
 
     read(requestId: string): SessionGitHubPublicationResult | undefined {
@@ -465,6 +434,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
     },
 
     markReported(requestId: string): void {
+      markPersonalGitHubPublicationReported(requestId);
       ensureSchema();
       runOpenClawStateWriteTransaction(
         ({ db }) => {

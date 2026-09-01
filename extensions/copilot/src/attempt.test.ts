@@ -1885,11 +1885,34 @@ describe("runCopilotAttempt", () => {
     expect(capturedParams).toBe(params);
   });
 
-  it("F7: result.yieldDetected is true when the tool bridge fires onYieldDetected during the attempt", async () => {
+  it("F7: preserves an accepted session spawn when the tool bridge yields the attempt", async () => {
     const sdk = makeFakeSdk();
     const pool = makeFakePool(sdk);
     const createToolBridge = vi.fn(
-      async (input: { onYieldDetected?: (message?: string, acknowledgment?: string) => void }) => {
+      async (input: {
+        onToolCompleted?: (completion: {
+          args: Record<string, unknown>;
+          result: unknown;
+          startedAt: number;
+          toolCallId: string;
+          toolName: string;
+        }) => void | Promise<void>;
+        onYieldDetected?: (message?: string, acknowledgment?: string) => void;
+      }) => {
+        await input.onToolCompleted?.({
+          args: { task: "review" },
+          result: {
+            details: {
+              status: "accepted",
+              runId: "run-copilot-child",
+              childSessionKey: "agent:main:subagent:copilot-child",
+              expectsCompletionMessage: true,
+            },
+          },
+          startedAt: Date.now(),
+          toolCallId: "spawn-1",
+          toolName: "sessions_spawn",
+        });
         // Simulate a wrapped tool invoking sessions_yield before the
         // attempt settles. The bridge is responsible for notifying the
         // caller via onYieldDetected so the final result can carry the
@@ -1907,6 +1930,13 @@ describe("runCopilotAttempt", () => {
 
     expect(result.yieldDetected).toBe(true);
     expect(result.yieldAcknowledgment).toBe("Research started; results will follow.");
+    expect(result.acceptedSessionSpawns).toEqual([
+      {
+        runId: "run-copilot-child",
+        childSessionKey: "agent:main:subagent:copilot-child",
+        expectsCompletionMessage: true,
+      },
+    ]);
   });
 
   it("F7: result.yieldDetected is false on a clean attempt (no sessions_yield fired)", async () => {

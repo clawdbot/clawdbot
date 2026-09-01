@@ -122,29 +122,29 @@ describe("OpenAI Responses continuation", () => {
     });
   });
 
-  it("still continues when instructions changed between turns, and keeps the current turn's instructions on the wire", () => {
-    const priorState: ResponsesContinuationState = {
-      ...continuationState(),
-      lastRequest: {
-        ...continuationState().lastRequest,
-        instructions: "You are a helpful assistant. Active background tasks: none.",
-      },
-    };
-    const currentRequest: ResponsesContinuationRequest = {
-      ...nextRequest(),
-      // Rebuilt fresh this turn from live runtime state (per
-      // resolveOpenAIResponsesInstructions) -- deliberately different text
-      // from priorState, same as a real second turn would produce.
-      instructions: "You are a helpful assistant. Active background tasks: 1 running.",
-    };
+  it.each([
+    {
+      name: "instructions",
+      previous: { instructions: "Active background tasks: none." },
+      current: { instructions: "Active background tasks: 1 running." },
+    },
+    {
+      name: "tools",
+      previous: { tools: [{ type: "function", name: "read", parameters: { type: "object" } }] },
+      current: { tools: [{ type: "function", name: "write", parameters: { type: "object" } }] },
+    },
+  ])("keeps current $name while continuing unchanged history", ({ previous, current }) => {
+    const state = continuationState();
+    state.lastRequest = { ...state.lastRequest, ...previous };
+    const request = { ...nextRequest(), ...current };
+    const before = structuredClone({ state, request });
 
-    const resolved = resolveResponsesContinuationRequest(priorState, currentRequest);
+    const resolved = resolveResponsesContinuationRequest(state, request);
 
     expect(resolved.continuationStatus).toBe("continued");
-    expect(resolved.request.previous_response_id).toBe("resp_1");
-    expect(resolved.request.instructions).toBe(
-      "You are a helpful assistant. Active background tasks: 1 running.",
-    );
+    expect(resolved.request).toMatchObject({ ...current, previous_response_id: "resp_1" });
+    expect(resolved.request.input).toHaveLength(1);
+    expect({ state, request }).toEqual(before);
   });
 
   it.each([

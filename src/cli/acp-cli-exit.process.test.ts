@@ -125,7 +125,7 @@ describe("ACP CLI process exit", () => {
     try {
       const result = spawnSync(
         process.execPath,
-        ["--import", "tsx", "src/entry.ts", "acp", "--require-existing"],
+        [path.resolve("openclaw.mjs"), "acp", "--require-existing"],
         {
           cwd: path.resolve("."),
           encoding: "utf8",
@@ -204,9 +204,7 @@ describe("ACP CLI process exit", () => {
       child = spawn(
         process.execPath,
         [
-          "--import",
-          "tsx",
-          "src/entry.ts",
+          path.resolve("openclaw.mjs"),
           "acp",
           "--require-existing",
           "--url",

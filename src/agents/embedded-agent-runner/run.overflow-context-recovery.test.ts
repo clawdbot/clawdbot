@@ -270,6 +270,31 @@ describe("recoverEmbeddedRunOverflow", () => {
     expect(mocks.compact).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { name: "refusal alone", promptError: null, action: "none" },
+    { name: "independent prompt overflow", promptError: overflowError(), action: "retry" },
+    {
+      name: "non-overflow prompt failure",
+      promptError: new Error("transport disconnected"),
+      action: "none",
+    },
+  ])("preserves a structured refusal alongside $name", async ({ promptError, action }) => {
+    const assistant = makeAssistantMessage({
+      stopReason: "error",
+      errorMessage: "Anthropic refusal: prompt is too long.",
+    });
+    assistant.diagnostics = [{ type: "provider_refusal", timestamp: 1 }];
+    const input = makeInput({
+      promptError,
+      assistantOverflowCandidate: assistant,
+      assistantErrorText: assistant.errorMessage,
+    });
+
+    expect(await recoverEmbeddedRunOverflow(input)).toEqual({ action });
+    expect(mocks.compact).toHaveBeenCalledTimes(action === "retry" ? 1 : 0);
+    expect(mocks.truncateOversizedToolResults).not.toHaveBeenCalled();
+  });
+
   it("preserves compaction recovery after a bodyless 413", async () => {
     const assistantOverflowCandidate = makeAssistantMessage({
       stopReason: "error",

@@ -427,7 +427,13 @@ describe("package-openclaw-for-docker", () => {
   });
 
   it("rejects missing package artifact option values", () => {
-    for (const flag of ["--output-dir", "--output-name", "--source-dir", "--bundle-plugin"]) {
+    for (const flag of [
+      "--output-dir",
+      "--output-name",
+      "--pack-json",
+      "--source-dir",
+      "--bundle-plugin",
+    ]) {
       expect(() => parseArgs([flag])).toThrow(`${flag} requires a value`);
       expect(() => parseArgs([flag, "--skip-build"])).toThrow(`${flag} requires a value`);
       expect(() => parseArgs([flag, "-h"])).toThrow(`${flag} requires a value`);
@@ -441,6 +447,33 @@ describe("package-openclaw-for-docker", () => {
       "demo",
       "other",
     ]);
+  });
+
+  it.each([
+    {
+      args: ["--output-dir=one", "--output-dir"],
+      message: "--output-dir requires a value",
+    },
+    {
+      args: ["--output-name=../bad.tgz", "--invalid"],
+      message: "unknown argument: --invalid",
+    },
+    {
+      args: ["--output-name=../bad.tgz", "--output-name=valid.tgz"],
+      message: "--output-name was provided more than once",
+    },
+    {
+      args: ["--output-name=../bad.tgz", "--pack-json=pack.json", "--pnpm-pack"],
+      message: "--output-name must be a tarball filename, not a path: ../bad.tgz",
+    },
+    {
+      args: ["--pack-json=pack.json", "--pnpm-pack", "--invalid"],
+      message: "unknown argument: --invalid",
+    },
+    { args: ["--"], message: "unknown argument: --" },
+    { args: ["--skip-build=true"], message: "unknown argument: --skip-build=true" },
+  ])("preserves argument error precedence for $args", ({ args, message }) => {
+    expect(() => parseArgs(args)).toThrow(new Error(message));
   });
 
   it("builds explicit plugin selections through the canonical build environment", async () => {

@@ -693,8 +693,9 @@ async function processDiscordMessageInner(
       return;
     }
     dispatchError = true;
-    const conflictCompleted = await completeDiscordSessionConflict(
+    const conflictOutcome = await completeDiscordSessionConflict(
       err,
+      sourceReplyDeliveryMode,
       (payload, info) =>
         deliverDiscordPayload(payload, {
           ...info,
@@ -703,8 +704,12 @@ async function processDiscordMessageInner(
         }),
       onDiscordDeliveryError,
     );
-    if (conflictCompleted) {
-      // The visible terminal notice owns this event, so replay can commit.
+    if (conflictOutcome) {
+      runtime.error(
+        `discord: reply session init conflict exhausted; terminal notice ${conflictOutcome} ` +
+          `(sourceReplyDeliveryMode=${sourceReplyDeliveryMode}, message=${message.id}, session=${persistedSessionKey})`,
+      );
+      // Both a delivered notice and recorded policy suppression consume the event.
       return;
     }
     throw err;
