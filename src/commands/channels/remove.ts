@@ -11,7 +11,6 @@ import {
 } from "../../channels/plugins/account-config-mutation.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import {
   formatUnknownChannelMessage,
@@ -63,12 +62,11 @@ type IngressDiscardOutcome =
  * the same line that reports the deletion instead, the way the pre-removal runtime stop
  * already does.
  */
-function discardRemovedAccountIngressRows(params: {
-  channelId: string;
-  accountId: string;
-  catalogPluginId?: string | undefined;
-  plugin?: Pick<ChannelPlugin, "config"> | undefined;
-}): IngressDiscardOutcome {
+function discardRemovedAccountIngressRows(
+  // Derived from the callee rather than restated: the two were identical by hand, and
+  // nothing would have caught them drifting apart.
+  params: Parameters<typeof resolveChannelIngressQueueKey>[0],
+): IngressDiscardOutcome {
   try {
     // Resolving inside the try is the point. Half the key comes from a plugin-declared
     // callback, and evaluating that as an argument left it OUTSIDE this guard: a plugin
