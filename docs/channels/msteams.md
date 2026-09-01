@@ -948,9 +948,20 @@ OpenClaw sends Teams polls as Adaptive Cards (there is no native Teams poll API)
 
 ## Presentation cards
 
-Send semantic presentation payloads to Teams users or conversations using the `message` tool, CLI, or normal reply delivery. OpenClaw renders them as Teams Adaptive Cards from the generic presentation contract.
+Send semantic presentation payloads to Teams users or conversations using the `message` tool, CLI, or normal reply delivery. OpenClaw renders them as Teams Adaptive Cards from the generic presentation contract. Agent replies get the same card as an explicit `message send` of the same payload.
 
 The `presentation` parameter accepts semantic blocks. When `presentation` is provided, the message text is optional. Buttons render as Adaptive Card submit or URL actions. Select menus are not native in the Teams renderer, so OpenClaw downgrades them to readable text before delivery.
+
+### When a reply keeps its text instead of becoming a card
+
+An Adaptive Card is one Teams activity, and it carries its own text. Where a card would cost the reply more than it adds, OpenClaw sends the reply as text and writes the control labels into it rather than dropping them:
+
+- **The reply carries media.** A card and a media attachment cannot share one activity, so the media is sent and the controls become text.
+- **The reply mentions someone.** `@[Name](id)` notifies through the activity's mention entity, which a card body cannot carry.
+- **The reply is longer than one message.** Text is chunked to the channel limit; a card cannot be split.
+- **Teams has no action for any of the controls.** Teams renders `url`, `web-app`, `command` and `callback` actions. A reply whose controls are all of some other kind — an `ask_user` prompt, for example — keeps the prose its producer wrote, because a card there would repeat that prose and offer nothing to tap. Where a card exists for other reasons, those labels are listed under `Actions:` inside it.
+
+In a one-to-one chat OpenClaw streams the reply's text natively. The card then carries only what the stream did not: the controls Teams can render. Nothing is sent twice.
 
 **Agent tool:**
 

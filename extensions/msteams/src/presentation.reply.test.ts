@@ -4,7 +4,11 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { ReplyPayload } from "../runtime-api.js";
 import { renderReplyPayloadsToMessages } from "./messenger.js";
 import { installMSTeamsRenderTestRuntime } from "./messenger.test-helpers.js";
-import { prepareMSTeamsReplyPayload, readMSTeamsPresentationCard } from "./presentation.js";
+import {
+  prepareMSTeamsReplyPayload,
+  readMSTeamsPresentationCard,
+  renderMSTeamsPresentationPayload,
+} from "./presentation.js";
 
 const PRESENTATION = {
   title: "Deploy",
@@ -259,18 +263,18 @@ describe("msteams reply presentation", () => {
     expect(messages.map((message) => message.text ?? "").join("")).toContain("Open");
   });
 
-  it("renders the card's text in the dialect a plain reply would use", () => {
+  it("puts the same text in the card that a `message send` of the payload would", () => {
     const table = "| Region | Runs |\n| --- | --- |\n| EU | 12 |";
 
-    // The card path skipped formatMSTeamsMarkdown, so a markdown table reached Teams as
-    // raw pipes inside the card while the same reply without controls rendered properly.
-    const [plain] = renderReply({ text: table });
-    const [carded] = renderReply({ text: table, presentation: PRESENTATION });
+    // Both delivery paths hand the reply's own text to one shared card builder, so the
+    // card a reply produces and the card `message send` produces are the same card.
+    const [reply] = renderReply({ text: table, presentation: PRESENTATION });
+    const outbound = renderMSTeamsPresentationPayload({
+      payload: { text: table },
+      presentation: PRESENTATION,
+    });
 
-    expect(plain?.text).toBeDefined();
-    expect(carded?.card?.body).toEqual(
-      expect.arrayContaining([{ type: "TextBlock", text: plain?.text, wrap: true }]),
-    );
+    expect(reply?.card).toEqual(cardOf(outbound ?? {}));
   });
 
   it("keeps the authored fallback prose when the reply also carries media", () => {

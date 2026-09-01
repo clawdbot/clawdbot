@@ -151,12 +151,6 @@ export function renderMSTeamsPresentationPayload(params: {
   if (payload.mediaUrl || payload.mediaUrls?.length) {
     return null;
   }
-  // With no text of its own and no action Teams can render, a card carries nothing the
-  // caller's text rendering does not - and it would replace the producer's prose with a
-  // flattened copy of itself under an instruction to tap buttons that are not there.
-  if (!normalizeOptionalString(payload.text) && !hasMSTeamsCardAction(presentation)) {
-    return null;
-  }
   const card = buildMSTeamsPresentationCard({ presentation, text: payload.text });
   const msteamsData = asOptionalRecord(payload.channelData?.msteams) ?? {};
   return {
@@ -181,10 +175,10 @@ export function prepareMSTeamsReplyPayload(
   payload: ReplyPayload,
   options?: {
     /**
-     * Renders the text a card may carry, or returns undefined when this reply has to stay
-     * on the text path because one activity cannot hold it.
+     * Answers whether this reply's text can live in one activity. A card cannot be
+     * chunked and cannot carry a mention entity, so the caller owns that judgement.
      */
-    renderCardText?: (text: string) => string | undefined;
+    fitsOneActivity?: (text: string) => boolean;
   },
 ): ReplyPayload {
   const presentation = normalizeMessagePresentation(payload.presentation);
@@ -198,17 +192,21 @@ export function prepareMSTeamsReplyPayload(
     presentation,
     capabilities: MSTEAMS_PRESENTATION_CAPABILITIES,
   });
+  // "fallback" prose already renders every block; a card that adds no action Teams can
+  // draw would restate it under an instruction to tap buttons that are not there, and the
+  // card's text never reaches the activity, so the prose would simply be lost.
+  if (textIsFallback && !hasMSTeamsCardAction(adapted)) {
+    return replyWithControlsAsText();
+  }
   // The gate asks whether this reply fits one activity, so it reads the reply's own text
   // even when the card will not carry it: fallback prose still holds the mention entity
   // only the text path can send. A reply that fails it keeps the text path and degrades
   // its controls to prose - the same trade the media branch makes.
-  const cardText =
-    rest.text && options?.renderCardText ? options.renderCardText(rest.text) : rest.text;
-  if (rest.text && cardText === undefined) {
+  if (rest.text && options?.fitsOneActivity && !options.fitsOneActivity(rest.text)) {
     return replyWithControlsAsText();
   }
   const rendered = renderMSTeamsPresentationPayload({
-    payload: textIsFallback ? { ...rest, text: undefined } : { ...rest, text: cardText },
+    payload: textIsFallback ? { ...rest, text: undefined } : rest,
     presentation: adapted,
   });
   return rendered ?? replyWithControlsAsText();
