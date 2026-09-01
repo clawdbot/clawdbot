@@ -38,7 +38,6 @@ const MAX_SIGNAL_SSE_EVENT_DATA_BYTES = 1_048_576;
 
 type SignalHttpResponse = {
   status: number;
-  statusText: string;
   body: Buffer;
 };
 
@@ -116,7 +115,7 @@ function normalizeSignalSseTimeoutMs(timeoutMs: number): number | null {
   return resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
 }
 
-function requestSignalHttpResponse(
+function requestSignalHttp(
   url: URL,
   options: {
     method: "GET" | "POST";
@@ -181,7 +180,6 @@ function requestSignalHttpResponse(
         res.on("end", () => {
           resolveOnce({
             status: res.statusCode ?? 0,
-            statusText: res.statusMessage || "error",
             body: Buffer.concat(chunks),
           });
         });
@@ -210,22 +208,20 @@ export async function signalRpcRequest<T = unknown>(
     params,
     id,
   });
-  const res = await requestSignalHttpResponse(
-    resolveSignalEndpointUrl(opts.baseUrl, "/api/v1/rpc"),
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Content-Length": String(Buffer.byteLength(body)),
-      },
-      body,
-      timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-      maxResponseBytes: opts.maxResponseBytes,
+  const res = await requestSignalHttp(resolveSignalEndpointUrl(opts.baseUrl, "/api/v1/rpc"), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Content-Length": String(Buffer.byteLength(body)),
     },
-  );
+    body,
+    timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    maxResponseBytes: opts.maxResponseBytes,
+  });
   if (res.status === 201) {
     return undefined as T;
   }
+  // Decode JSON bodies here; health checks use status without interpreting their bytes.
   const text = new TextDecoder("utf-8", { fatal: true }).decode(res.body);
   if (!text) {
     throw new Error(`Signal RPC empty response (status ${res.status})`);
@@ -244,14 +240,10 @@ export async function signalCheck(
   timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
   try {
-    // Health checks intentionally inspect only HTTP status; JSON-RPC decodes at its consumer boundary.
-    const res = await requestSignalHttpResponse(
-      resolveSignalEndpointUrl(baseUrl, "/api/v1/check"),
-      {
-        method: "GET",
-        timeoutMs,
-      },
-    );
+    const res = await requestSignalHttp(resolveSignalEndpointUrl(baseUrl, "/api/v1/check"), {
+      method: "GET",
+      timeoutMs,
+    });
     if (res.status < 200 || res.status >= 300) {
       return { ok: false, status: res.status, error: `HTTP ${res.status}` };
     }
