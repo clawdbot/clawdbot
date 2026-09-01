@@ -140,6 +140,32 @@ describe("buildPendingApprovalView", () => {
     ]);
   });
 
+  it("keeps external verification off generic native actions", () => {
+    const request: PluginApprovalRequest = {
+      id: "plugin:external-approval",
+      createdAtMs: 1,
+      expiresAtMs: 2,
+      request: {
+        title: "World verification",
+        description: "Verify personhood before continuing.",
+        pluginId: "agentkit",
+        externalResolution: {
+          label: "Verify with World",
+          decisions: ["allow-once", "allow-always"],
+        },
+      },
+    };
+
+    const view = buildPendingApprovalView(request);
+
+    expect(view.actions).toEqual([
+      expect.objectContaining({
+        command: "/approve plugin:external-approval deny",
+        action: expect.objectContaining({ type: "approval", decision: "deny" }),
+      }),
+    ]);
+  });
+
   it.each([
     { request: {} },
     { request: { command: "echo hi", title: "Ambiguous", description: "Ambiguous" } },

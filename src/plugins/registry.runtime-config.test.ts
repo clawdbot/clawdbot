@@ -5,8 +5,11 @@ import { describe, expect, it, vi } from "vitest";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveUserPath } from "../utils.js";
+import { getPluginExternalApprovalVerifier } from "./hook-runner-global-state.js";
 import { createPluginRecord } from "./loader-records.js";
+import { markPluginRegistryRetired } from "./registry-lifecycle.js";
 import { createPluginRegistry } from "./registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
@@ -1012,5 +1015,145 @@ describe("plugin registry runtime config scope", () => {
     await expect(
       otherApi.runtime.gateway.request("voicecall.start", { to: "+15550001234" }),
     ).resolves.toEqual({ ok: true });
+  });
+
+  it("registers exactly one external verifier for a fully activated plugin", () => {
+    const pluginRegistry = createTestRegistry(createPluginRuntime());
+    const record = createPluginRecord({
+      id: "approval-owner",
+      name: "Approval Owner",
+      source: "/plugins/approval-owner/index.js",
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+    });
+    const api = pluginRegistry.createApi(record, {
+      config: {} as OpenClawConfig,
+      registrationMode: "full",
+    });
+    const handler = vi.fn();
+
+    api.approvals.onExternalVerification(handler);
+
+    expect(pluginRegistry.registry.externalApprovalVerifiers).toEqual([
+      expect.objectContaining({
+        pluginId: "approval-owner",
+        pluginName: "Approval Owner",
+        handler,
+      }),
+    ]);
+    expect(() => api.approvals.onExternalVerification(vi.fn())).toThrow(
+      "registered more than one external verifier",
+    );
+  });
+
+  it("provides bounded plugin-scoped grant storage without broad external state access", async () => {
+    await withOpenClawTestState({ label: "external-approval-grants", applyEnv: true }, async () => {
+      const pluginRegistry = createTestRegistry(createPluginRuntime());
+      const record = createPluginRecord({
+        id: "external-approval-owner",
+        source: "/plugins/external-approval-owner/index.js",
+        origin: "global",
+        enabled: true,
+        configSchema: false,
+      });
+      const api = pluginRegistry.createApi(record, {
+        config: {} as OpenClawConfig,
+        registrationMode: "full",
+      });
+
+      expect(() =>
+        api.runtime.state.openSyncKeyedStore({
+          namespace: "unrestricted",
+          maxEntries: 10,
+        }),
+      ).toThrow("openSyncKeyedStore is only available for trusted plugins");
+
+      const grants = api.approvals.openGrantStore<{ status: "active" | "revoked" }>();
+      expect(grants.registerIfAbsent("grant-1", { status: "active" })).toBe(true);
+      expect(grants.registerIfAbsent("grant-1", { status: "active" })).toBe(false);
+      expect(grants.update("grant-1", (current) => ({ ...current, status: "revoked" }))).toBe(true);
+      expect(grants.lookup("grant-1")).toEqual({ status: "revoked" });
+      expect(grants.entries()).toEqual([
+        expect.objectContaining({
+          key: "grant-1",
+          value: { status: "revoked" },
+        }),
+      ]);
+      expect(api.approvals.openGrantStore().lookup("grant-1")).toEqual({
+        status: "revoked",
+      });
+      expect(grants).not.toHaveProperty("delete");
+      expect(grants).not.toHaveProperty("clear");
+    });
+  });
+
+  it("revokes external approval grant storage when its plugin registry retires", async () => {
+    await withOpenClawTestState(
+      { label: "external-approval-retired-grants", applyEnv: true },
+      async () => {
+        const pluginRegistry = createTestRegistry(createPluginRuntime());
+        const record = createPluginRecord({
+          id: "retired-approval-owner",
+          source: "/plugins/retired-approval-owner/index.js",
+          origin: "global",
+          enabled: true,
+          configSchema: false,
+        });
+        const api = pluginRegistry.createApi(record, {
+          config: {} as OpenClawConfig,
+          registrationMode: "full",
+        });
+        const grants = api.approvals.openGrantStore<{ status: "active" | "revoked" }>();
+        expect(grants.registerIfAbsent("grant-1", { status: "active" })).toBe(true);
+
+        markPluginRegistryRetired(pluginRegistry.registry);
+
+        const ownerRetired = "external approval grant store owner is no longer active";
+        expect(() => grants.lookup("grant-1")).toThrow(ownerRetired);
+        expect(() => grants.entries()).toThrow(ownerRetired);
+        expect(() => grants.registerIfAbsent("grant-2", { status: "active" })).toThrow(
+          ownerRetired,
+        );
+        expect(() => grants.update("grant-1", () => ({ status: "revoked" }))).toThrow(ownerRetired);
+        expect(() => api.approvals.openGrantStore()).toThrow(ownerRetired);
+
+        const replacementRegistry = createTestRegistry(createPluginRuntime());
+        const replacementApi = replacementRegistry.createApi(record, {
+          config: {} as OpenClawConfig,
+          registrationMode: "full",
+        });
+        const replacementGrants = replacementApi.approvals.openGrantStore<{
+          status: "active" | "revoked";
+        }>();
+        expect(replacementGrants.lookup("grant-1")).toEqual({ status: "active" });
+      },
+    );
+  });
+
+  it("records a discovery-mode verifier in its own registry without global activation", () => {
+    const pluginRegistry = createTestRegistry(createPluginRuntime());
+    const record = createPluginRecord({
+      id: "approval-discovery",
+      source: "/plugins/approval-discovery/index.js",
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+    });
+    const api = pluginRegistry.createApi(record, {
+      config: {} as OpenClawConfig,
+      registrationMode: "discovery",
+    });
+
+    api.approvals.onExternalVerification(vi.fn());
+
+    // Prepared-run generations load plugins in discovery mode and execute
+    // their hooks, so the verifier must live in the loaded registry itself;
+    // liveness is owned by that registry's lifecycle, never by load mode.
+    expect(
+      pluginRegistry.registry.externalApprovalVerifiers.map((entry) => entry.pluginId),
+    ).toEqual(["approval-discovery"]);
+    // A scan that is never activated leaks nothing into global resolution.
+    expect(getPluginExternalApprovalVerifier("approval-discovery")).toBeNull();
   });
 });

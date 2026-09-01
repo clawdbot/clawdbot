@@ -1041,6 +1041,32 @@ export interface PluginBlobEntries {
   plugin_id: string;
 }
 
+export interface PluginExternalVerificationAttempts {
+  agent_id: string | null;
+  approval_id: string;
+  attempt_id: string;
+  completion_applied: number | null;
+  created_at_ms: number;
+  decision: string;
+  ended_at_ms: number | null;
+  error_class: string | null;
+  expires_at_ms: number;
+  grant_authorization_id: string | null;
+  grant_issued_at_ms: number | null;
+  interaction_id: string;
+  label: string;
+  outcome: string | null;
+  plugin_id: string;
+  resolver_plugin_id: string | null;
+  run_id: string;
+  runtime_epoch: string;
+  session_id: string | null;
+  session_key: string | null;
+  terminal_source: string | null;
+  tool_call_id: string | null;
+  tool_name: string;
+}
+
 export interface PluginStateEntries {
   created_at: number;
   entry_key: string;
@@ -1633,6 +1659,7 @@ export interface DB {
   outbound_message_progress: OutboundMessageProgress;
   plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;
+  plugin_external_verification_attempts: PluginExternalVerificationAttempts;
   plugin_state_entries: PluginStateEntries;
   projects: Projects;
   sandbox_registry_entries: SandboxRegistryEntries;

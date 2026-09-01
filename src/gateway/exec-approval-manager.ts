@@ -718,7 +718,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
 
   /** Settle one durable terminal transition and report whether this manager published it. */
   reconcileDurableTerminal(record: OperatorApprovalRecord): boolean {
-    return this.settleLocalFromStore(record);
+    return this.settleLocalFromStore(record, undefined, record.resolver?.id ?? null);
   }
 
   /** Reconciles durable truth with an existing waiter without rehydrating its request. */

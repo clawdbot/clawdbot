@@ -24,6 +24,7 @@ import type {
 import type { CliBackendPlugin, PluginTextTransforms } from "./cli-backend.types.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { PluginConversationBindingResolvedEvent } from "./conversation-binding.types.js";
+import type { OpenClawPluginApprovalsApi } from "./external-verification-approval-types.js";
 import type {
   PluginHookHandlerMap,
   PluginHookName,
@@ -201,6 +202,8 @@ export type OpenClawPluginApi = {
   runContext: OpenClawPluginRunContextApi;
   /** Grouped facade for plugin-owned lifecycle cleanup hooks. */
   lifecycle: OpenClawPluginLifecycleApi;
+  /** Plugin-bound external approval verification capability. */
+  approvals: OpenClawPluginApprovalsApi;
   registerTool: (
     tool: AnyAgentTool | OpenClawPluginToolFactory,
     opts?: OpenClawPluginToolOptions,
