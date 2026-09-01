@@ -28,7 +28,7 @@ const REPLY_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*([^\]\n]+))\s*\]
 const INLINE_DIRECTIVE_TAG_WITH_PADDING_RE =
   /(?:\s*(?:\[\[\s*audio_as_voice\s*\]\]|\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\])\s*|^[\t ]*\[\[\s*(?:reply_to_current(?:[\t ]*\](?!\])|(?=[\t ]+\S)|[\t ]*$)|reply_to\s*:\s*(?:[^\]\r\n]*\](?!\])|[\t ]*$))[\t ]*)/giu;
 const MAX_REPLY_DIRECTIVE_ID_LENGTH = 256;
-const UNSAFE_REPLY_DIRECTIVE_CHARS_RE = /[\p{Cc}\[\]]/gu;
+const UNSAFE_REPLY_DIRECTIVE_CHARS_RE = /[\p{Cc}[\]]/gu;
 const NO_INLINE_DIRECTIVES = {
   audioAsVoice: false,
   replyToCurrent: false,
