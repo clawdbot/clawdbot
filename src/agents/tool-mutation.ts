@@ -72,6 +72,7 @@ const REPLAY_SAFE_TOOL_NAMES = new Set([
   "sessions_search",
   "tool_describe",
   "tool_search",
+  "tool_search_batch",
   "web_fetch",
   "web_search",
   "x_search",
