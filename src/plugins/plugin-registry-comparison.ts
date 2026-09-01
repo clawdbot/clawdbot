@@ -49,12 +49,9 @@ function resolvePluginRegistryRecordContent(
   // build-only metadata that runtime selection does not consume.
   const stableRecord = Object.assign(
     record,
-    packageBuild === undefined
+    packageBuild?.bundledDist === undefined
       ? {}
-      : {
-          packageBuild:
-            packageBuild.bundledDist === undefined ? {} : { bundledDist: packageBuild.bundledDist },
-        },
+      : { packageBuild: { bundledDist: packageBuild.bundledDist } },
   );
   if (!packageJson || !comparePackageJsonPath) {
     return stableRecord;
