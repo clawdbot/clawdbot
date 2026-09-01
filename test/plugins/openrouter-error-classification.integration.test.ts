@@ -3,13 +3,16 @@ import type { AddressInfo } from "node:net";
 import type { AssistantMessage, Context, Model } from "@openclaw/ai";
 import { streamOpenAICompletions } from "@openclaw/ai/internal/openai";
 import { aroundEach, beforeAll, describe, expect, it } from "vitest";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
-import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
-import { registerSingleProviderPlugin } from "../test-utils/plugin-registration.js";
-import { classifyAssistantFailoverReason } from "./embedded-agent-helpers/assistant-message-failures.js";
-import { formatAssistantErrorText } from "./embedded-agent-helpers/error-text.js";
-import { resolveFailoverStatus, resolveModelFallbackError } from "./failover-error.js";
+import { classifyAssistantFailoverReason } from "../../src/agents/embedded-agent-helpers/assistant-message-failures.js";
+import { formatAssistantErrorText } from "../../src/agents/embedded-agent-helpers/error-text.js";
+import {
+  resolveFailoverStatus,
+  resolveModelFallbackError,
+} from "../../src/agents/failover-error.js";
+import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
+import { withPluginRuntimeRegistryScope } from "../../src/plugins/runtime/gateway-request-scope.js";
+import { loadBundledPluginFacade } from "../../src/test-utils/bundled-plugin-public-surface.js";
+import { registerSingleProviderPlugin } from "../../src/test-utils/plugin-registration.js";
 
 const pluginRegistry = createEmptyPluginRegistry();
 
