@@ -8,6 +8,7 @@ import {
   type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
 import {
+  buildConfiguredCodexAccountFingerprint,
   buildLegacyScheduledCodexAppRecoveryPrompt,
   buildScheduledCodexAppAuthorityInputFingerprint,
   captureScheduledCodexAppAuthority,
@@ -309,6 +310,11 @@ describe("scheduled Codex app authority", () => {
   });
 
   it("captures the configured app-server account without storing credentials", async () => {
+    const accountResponse = {
+      account: { type: "chatgpt", email: "Configured.Account@example.com", planType: "business" },
+      requiresOpenaiAuth: false,
+    };
+    const accountFingerprint = buildConfiguredCodexAccountFingerprint(accountResponse);
     const request = vi.fn(async (method: string) => {
       if (method === "app/installed") {
         return { apps: [{ id: "calendar", enabled: true, callable: true }] };
@@ -324,8 +330,8 @@ describe("scheduled Codex app authority", () => {
           nextCursor: null,
         };
       }
-      if (method === "account/rateLimits/read") {
-        return { accountId: "configured-account" };
+      if (method === "account/read") {
+        return accountResponse;
       }
       if (method === "config/read") {
         return { config: {} };
@@ -348,7 +354,7 @@ describe("scheduled Codex app authority", () => {
         auth: {
           kind: "configured-app-server",
           connectionFingerprint: "configured-connection",
-          accountId: "configured-account",
+          accountFingerprint,
         },
         apps: [
           {
@@ -361,7 +367,11 @@ describe("scheduled Codex app authority", () => {
         ],
       }),
     );
-    expect(request).toHaveBeenCalledWith("account/rateLimits/read", {}, expect.any(Object));
+    expect(request).toHaveBeenCalledWith(
+      "account/read",
+      { refreshToken: false },
+      expect.any(Object),
+    );
   });
 
   it("refuses configured app authority when the account identity is unavailable", async () => {
@@ -372,8 +382,8 @@ describe("scheduled Codex app authority", () => {
       if (method === "mcpServerStatus/list") {
         return { data: [], nextCursor: null };
       }
-      if (method === "account/rateLimits/read") {
-        return { accountId: null };
+      if (method === "account/read") {
+        return { account: null, requiresOpenaiAuth: true };
       }
       return { config: {} };
     });
@@ -488,13 +498,13 @@ describe("scheduled Codex app authority", () => {
           auth: {
             kind: "configured-app-server",
             connectionFingerprint: "configured-connection",
-            accountId: "creator-account",
+            accountFingerprint: "creator-account",
           },
         }),
         {
           config: {},
           toolNamesByApp: new Map([["calendar", new Set(["list"])]]),
-          accountId: "runtime-account",
+          accountFingerprint: "runtime-account",
         },
       ),
     ).toThrow("different configured Codex ChatGPT account");

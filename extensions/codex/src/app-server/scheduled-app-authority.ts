@@ -33,7 +33,7 @@ type CodexAppToolApprovalMode = "auto" | "prompt" | "writes" | "approve";
 export type CurrentCodexScheduledAppPolicy = {
   config: Record<string, unknown>;
   toolNamesByApp: ReadonlyMap<string, ReadonlySet<string>>;
-  accountId?: string;
+  accountFingerprint?: string;
 };
 
 export type ScheduledCodexAppCreatorAuth =
@@ -102,7 +102,7 @@ type ScheduledCodexAppPreparedProfileAuth = {
 type ScheduledCodexAppConfiguredServerAuth = {
   kind: "configured-app-server";
   connectionFingerprint: string;
-  accountId: string;
+  accountFingerprint: string;
 };
 type ScheduledCodexAppAuthorityAuth =
   | ScheduledCodexAppPreparedProfileAuth
@@ -154,10 +154,11 @@ function parseScheduledCodexAppAuthority(
   const auth = asOptionalRecord(payload?.auth);
   const profileId = normalizeOptionalString(auth?.profileId);
   const connectionFingerprint = normalizeOptionalString(auth?.connectionFingerprint);
+  const accountFingerprint = normalizeOptionalString(auth?.accountFingerprint);
   const accountId = normalizeOptionalString(auth?.accountId);
   const parsedAuth: ScheduledCodexAppAuthorityAuth | undefined =
-    auth?.kind === "configured-app-server" && connectionFingerprint && accountId
-      ? { kind: "configured-app-server", connectionFingerprint, accountId }
+    auth?.kind === "configured-app-server" && connectionFingerprint && accountFingerprint
+      ? { kind: "configured-app-server", connectionFingerprint, accountFingerprint }
       : auth?.kind === undefined && profileId && accountId
         ? { profileId, accountId }
         : undefined;
@@ -273,16 +274,14 @@ export async function readCurrentCodexScheduledAppPolicy(params: {
     }),
     readCodexScheduledAppToolNamesByApp(params),
     params.readAccountIdentity
-      ? params.request("account/rateLimits/read", {})
+      ? params.request("account/read", { refreshToken: false })
       : Promise.resolve(undefined),
   ]);
   if (!isJsonObject(configResponse)) {
     throw new Error("Codex config/read returned an invalid scheduled app policy response");
   }
-  const accountId = isJsonObject(accountResponse)
-    ? normalizeOptionalString(accountResponse.accountId)
-    : undefined;
-  if (params.readAccountIdentity && !accountId) {
+  const accountFingerprint = buildConfiguredCodexAccountFingerprint(accountResponse);
+  if (params.readAccountIdentity && !accountFingerprint) {
     throw new Error(
       params.accountIdentityUnavailableMessage ??
         "The configured Codex app-server did not expose a genuine ChatGPT account identity.",
@@ -291,8 +290,24 @@ export async function readCurrentCodexScheduledAppPolicy(params: {
   return {
     config: isJsonObject(configResponse.config) ? configResponse.config : {},
     toolNamesByApp,
-    ...(accountId ? { accountId } : {}),
+    ...(accountFingerprint ? { accountFingerprint } : {}),
   };
+}
+
+/** Fingerprints the authenticated ChatGPT principal without retaining its email address. */
+export function buildConfiguredCodexAccountFingerprint(value: unknown): string | undefined {
+  const response = asOptionalRecord(value);
+  const account = asOptionalRecord(response?.account);
+  const type = normalizeOptionalString(account?.type)?.toLowerCase();
+  const email = normalizeOptionalString(account?.email)?.toLowerCase();
+  if (response?.requiresOpenaiAuth !== false || type !== "chatgpt" || !email) {
+    return undefined;
+  }
+  return crypto
+    .createHash("sha256")
+    .update("openclaw:codex:configured-account:v1\0")
+    .update(email)
+    .digest("hex");
 }
 
 function readToolApprovalMode(
@@ -404,8 +419,8 @@ export async function captureScheduledCodexAppAuthority(params: {
   if (apps.length === 0) {
     return undefined;
   }
-  const configuredAccountId = currentPolicy.accountId;
-  if (params.auth.kind === "configured-app-server" && !configuredAccountId) {
+  const configuredAccountFingerprint = currentPolicy.accountFingerprint;
+  if (params.auth.kind === "configured-app-server" && !configuredAccountFingerprint) {
     throw new Error(
       "Codex app authority requires a genuine ChatGPT account identity from the configured app-server. Reauthenticate that app-server, then retry; no automation changes were saved.",
     );
@@ -416,7 +431,7 @@ export async function captureScheduledCodexAppAuthority(params: {
       : {
           kind: "configured-app-server",
           connectionFingerprint: params.auth.connectionFingerprint,
-          accountId: configuredAccountId,
+          accountFingerprint: configuredAccountFingerprint,
         };
   return {
     version: 1,
@@ -506,7 +521,7 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
   }
   if (
     scheduled.auth.kind === "configured-app-server" &&
-    currentPolicy.accountId !== scheduled.auth.accountId
+    currentPolicy.accountFingerprint !== scheduled.auth.accountFingerprint
   ) {
     throw new AgentHarnessPreflightError(
       "This automation was authorized for a different configured Codex ChatGPT account. Restore that account or reauthorize the automation from a fresh owner turn.",

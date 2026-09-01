@@ -107,7 +107,7 @@ describe("assertScheduledCodexAppAuthorityRuntime", () => {
         auth: {
           kind: "configured-app-server",
           connectionFingerprint: connectionIdentity,
-          accountId: "account-1",
+          accountFingerprint: "account-1",
         },
       },
     };
