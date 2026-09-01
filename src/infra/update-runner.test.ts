@@ -13,6 +13,7 @@ import { pathExists } from "../utils.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import type { UpdateChannel } from "./update-channels.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
+import { prepareStableGitFetch } from "./update-runner-git-fetch.js";
 import type { UpdateStepProgress } from "./update-runner-types.js";
 import {
   resolveUpdateDoctorExecutionPolicy,
@@ -1055,6 +1056,56 @@ describe("runGatewayUpdate", () => {
     ).rejects.toBe(reachedMutation);
 
     await expect(runRealGit(localRoot, "rev-parse", `${releaseTag}^{}`)).resolves.toBe(releaseSha);
+  });
+
+  it("preserves tag-excluded mirror mappings during branch refresh", async () => {
+    const { localRoot, baseSha, releaseSha, releaseTag } = await createRecreatedReleaseTagFixture();
+    await runRealGit(localRoot, "config", "--add", "remote.origin.fetch", "refs/*:refs/*");
+    const steps = [];
+    const realRunner = createRealGitUpdateRunner();
+    const runCommand = async (argv: string[], options?: { cwd?: string; timeoutMs?: number }) => {
+      if (argv[3] === "config" && argv.at(-1) === "^remote\\..*\\.fetch$") {
+        // Git 2.27 accepts this value in config but rejects negative refspecs when fetching;
+        // synthesize the supported-config report while keeping the real fetch path exercised.
+        return toCommandResult({
+          stdout:
+            "remote.origin.fetch +refs/heads/*:refs/remotes/origin/*\n" +
+            "remote.origin.fetch refs/*:refs/*\n" +
+            "remote.origin.fetch ^refs/tags/*\n",
+        });
+      }
+      return await realRunner(argv, options);
+    };
+
+    const result = await prepareStableGitFetch({
+      gitRoot: localRoot,
+      timeoutMs: 5000,
+      runCommand,
+      steps,
+      fetchAllArgv: [
+        "git",
+        "-C",
+        localRoot,
+        "fetch",
+        "--all",
+        "--prune",
+        "--no-prune-tags",
+        "--no-tags",
+      ],
+    });
+
+    expect(result).toMatchObject({ remotes: ["origin", "skipped"] });
+    await expect(runRealGit(localRoot, "rev-parse", "refs/remotes/origin/main")).resolves.toBe(
+      releaseSha,
+    );
+    await expect(runRealGit(localRoot, "rev-parse", `${releaseTag}^{}`)).resolves.toBe(baseSha);
+    expect(steps).toContainEqual(
+      expect.objectContaining({
+        name: "git fetch origin",
+        command: expect.stringContaining("refs/heads/*:refs/remotes/origin/*"),
+        exitCode: 0,
+      }),
+    );
   });
 
   async function runWithCommand(

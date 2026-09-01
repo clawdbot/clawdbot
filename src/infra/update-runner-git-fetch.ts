@@ -9,6 +9,17 @@ import type {
 
 type RemoteFetchConfig = Map<string, string[]>;
 
+function isBroadRefspecMapping(source: string, destination: string): boolean {
+  const sourceWildcard = source.indexOf("*");
+  const destinationWildcard = destination.indexOf("*");
+  return (
+    sourceWildcard >= 0 &&
+    destinationWildcard >= 0 &&
+    source.slice(0, sourceWildcard) === "refs/" &&
+    destination.slice(0, destinationWildcard) === "refs/"
+  );
+}
+
 function parseRemoteFetchConfig(stdout: string): RemoteFetchConfig {
   const config: RemoteFetchConfig = new Map();
   for (const line of stdout.split("\n")) {
@@ -38,14 +49,22 @@ function isTagFetchRefspec(refspec: string): boolean {
 
   // A broad refs/*:refs/* mapping expands a tag source into refs/tags locally;
   // keep it out of the preliminary refresh so the canonical tag fetch owns updates.
-  const sourceWildcard = source.indexOf("*");
-  const destinationWildcard = destination.indexOf("*");
-  return (
-    sourceWildcard >= 0 &&
-    destinationWildcard >= 0 &&
-    source.slice(0, sourceWildcard) === "refs/" &&
-    destination.slice(0, destinationWildcard) === "refs/"
-  );
+  return isBroadRefspecMapping(source, destination);
+}
+
+function isFullTagNamespaceExclusion(refspec: string): boolean {
+  const normalized = refspec.trim();
+  return normalized === "^refs/tags" || normalized === "^refs/tags/*";
+}
+
+function isBroadTagFetchRefspec(refspec: string): boolean {
+  const withoutForce = refspec.trim().replace(/^\+/u, "");
+  const [source = "", destination = ""] = withoutForce.split(":", 2).map((ref) => ref.trim());
+  return isBroadRefspecMapping(source, destination);
+}
+
+function deriveRemoteTrackingBranchRefspec(remote: string): string {
+  return `+refs/heads/*:refs/remotes/${remote}/*`;
 }
 
 export type StableGitFetchResult = {
@@ -132,7 +151,28 @@ export async function prepareStableGitFetch(params: {
       continue;
     }
     const configuredRefspecs = fetchConfig.get(remote);
-    const branchRefspecs = configuredRefspecs?.filter((refspec) => !isTagFetchRefspec(refspec));
+    const preserveBroadMappings = configuredRefspecs?.some(isFullTagNamespaceExclusion) ?? false;
+    const branchRefspecs = configuredRefspecs
+      ? [
+          ...new Set(
+            configuredRefspecs.flatMap((refspec) => {
+              const normalized = refspec.trim();
+              if (normalized.startsWith("^")) {
+                // Keep exclusions out of explicit argv: supported Git versions apply configured
+                // negatives while older Git rejects the syntax. The derived branch mapping keeps
+                // this preliminary refresh tag-safe without relying on that CLI syntax.
+                return [];
+              }
+              if (!isTagFetchRefspec(refspec)) {
+                return [refspec];
+              }
+              return preserveBroadMappings && isBroadTagFetchRefspec(refspec)
+                ? [deriveRemoteTrackingBranchRefspec(remote)]
+                : [];
+            }),
+          ),
+        ]
+      : undefined;
     if (configuredRefspecs && branchRefspecs?.length === 0) {
       continue;
     }
