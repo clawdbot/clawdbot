@@ -226,8 +226,9 @@ required scalar `query` with an optional `limit`:
 
 Model-facing calls return the compact candidate array directly. Omitted limits
 use `searchDefaultLimit`, and explicit limits may not exceed `maxSearchLimit`.
-The closed scalar shape avoids provider-specific schema normalization changing
-which requests are admitted.
+The scalar handler canonicalizes calls to these advertised fields, so a
+provider compatibility pass that removes object-closure keywords cannot route
+undeclared legacy batch fields into the model-facing parser.
 
 The runtime retains batch parsing for internal callers. Internal batches return
 `{ results: [{ query, candidates }] }` in request order and accept at most 16

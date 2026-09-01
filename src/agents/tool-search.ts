@@ -44,7 +44,7 @@ import {
   type ToolSearchMode,
   type ToolSearchToolContext,
 } from "./tool-search-types.js";
-import { jsonResult, type AnyAgentTool } from "./tools/common.js";
+import { asToolParamsRecord, jsonResult, type AnyAgentTool } from "./tools/common.js";
 
 export {
   clearToolSearchCatalog,
@@ -316,7 +316,18 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
         { additionalProperties: false },
       ),
       execute: async (_toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> => {
-        const request = readToolSearchRequest(args, config);
+        const params = asToolParamsRecord(args);
+        // Provider compatibility passes may strip additionalProperties. Once the
+        // required scalar query is present, discard undeclared fields before parsing.
+        const request = readToolSearchRequest(
+          params.query === undefined
+            ? params
+            : {
+                query: params.query,
+                limit: params.limit,
+              },
+          config,
+        );
         if (request.kind === "single") {
           return jsonResult(
             await runtime.search(request.search.query, { limit: request.search.limit }),

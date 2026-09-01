@@ -28,6 +28,7 @@ import {
   resolveToolExecutionErrorKind,
 } from "./tool-result-error.js";
 import { compactToolSearchCatalogEntry } from "./tool-search-catalog.js";
+import { readToolSearchRequest } from "./tool-search-request.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import {
   addClientToolsToToolSearchCatalog as addRunClientToolsToToolSearchCatalog,
@@ -236,6 +237,43 @@ describe("Tool Search", () => {
     }
   });
 
+  it("canonicalizes scalar calls after provider schema closure is stripped", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    registerHeadlessToolSearchCatalog({
+      catalogRef,
+      tools: [pluginTool("fake_calendar", "calendar scheduling")],
+    });
+    const searchTool = expectDefined(
+      createToolSearchTools({ catalogRef }).find((tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME),
+      "catalog-backed tool_search test invariant",
+    );
+    const finalizedSearchTool = expectDefined(
+      finalizeAgentTools({
+        tools: [searchTool],
+        modelCompat: { unsupportedToolSchemaKeywords: ["additionalProperties"] },
+        hookContext: {},
+        wrapBeforeToolCallHook: false,
+      })[0],
+      "finalized tool_search test invariant",
+    );
+    const mixedInput = {
+      query: "calendar",
+      limit: 1,
+      queries: [{ query: "Slack" }],
+      options: { limit: 20 },
+      legacy: true,
+    };
+
+    expect(finalizedSearchTool.parameters).not.toHaveProperty("additionalProperties");
+    expect(Value.Check(finalizedSearchTool.parameters, mixedInput)).toBe(true);
+    expect(() => readToolSearchRequest(mixedInput, resolveToolSearchConfig())).toThrow(
+      "provide exactly one of query or queries",
+    );
+    await expect(
+      finalizedSearchTool.execute("call-normalized-scalar", mixedInput),
+    ).resolves.toMatchObject({ details: [{ name: "fake_calendar" }] });
+  });
+
   it.each([5.5, 0, -1])("rejects runtime limit %s", async (limit) => {
     await expect(limitSearchTool.execute("call-limit", { query: "test", limit })).rejects.toThrow(
       "limit must be a positive integer",
@@ -246,11 +284,6 @@ describe("Tool Search", () => {
     {
       label: "missing request",
       input: {},
-      error: "provide exactly one of query or queries",
-    },
-    {
-      label: "mixed single and batch request",
-      input: { query: "calendar", queries: [{ query: "Slack" }] },
       error: "provide exactly one of query or queries",
     },
     {
