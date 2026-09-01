@@ -8,8 +8,13 @@ const createInteractionHandlerMock = vi.hoisted(() =>
 );
 const registerPluginHttpRouteMock = vi.hoisted(() => vi.fn(() => () => {}));
 
+const authorizeMock = vi.hoisted(() => vi.fn());
 vi.mock("openclaw/plugin-sdk/question-gateway-runtime", () => ({
   questionGatewayRuntime: { resolveOption: resolveOptionMock },
+}));
+vi.mock("./monitor-auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./monitor-auth.js")>()),
+  authorizeMattermostCommandInvocation: authorizeMock,
 }));
 vi.mock("./interactions.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./interactions.js")>()),
@@ -43,9 +48,9 @@ function registerAndCaptureDispatcher(handleModelPickerInteraction: ReturnType<t
       account: { accountId: "main" },
       cfg: {},
       client: {},
-      core: {},
-      pairing: {},
-      resources: {},
+      core: { channel: { commands: { shouldHandleTextCommands: () => true } } },
+      pairing: { readAllowFromStore: async () => [] },
+      resources: { resolveChannelInfo: async () => ({ id: "chan-1", type: "O" }) },
       runtime: { error: vi.fn(), log: vi.fn() },
       botUserId: "bot",
     },
@@ -64,6 +69,8 @@ describe("registerMattermostInteractions handler order", () => {
   beforeEach(() => {
     resolveOptionMock.mockReset();
     resolveOptionMock.mockResolvedValue({ status: "answered" });
+    authorizeMock.mockReset();
+    authorizeMock.mockResolvedValue({ ok: true, roomLabel: "#town-square" });
     createInteractionHandlerMock.mockClear();
   });
 

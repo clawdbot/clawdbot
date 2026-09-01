@@ -34,13 +34,35 @@ type MattermostInteractionDispatch = NonNullable<
 export function createMattermostQuestionInteractionHandler(
   monitor: MattermostMonitorContext,
 ): MattermostInteractionDispatch {
-  const { account, cfg, runtime } = monitor;
+  const { account, cfg, core, pairing, resources, runtime } = monitor;
   return async (interaction) => {
     const selection = parseMattermostQuestionContext(interaction.context);
     if (!selection) {
       return null;
     }
-    let ephemeral_text: string;
+    // Resolving the question is a privileged Gateway write, so it takes its own
+    // current-policy decision at the point of effect, the same way the
+    // model-picker handler does, instead of leaning on the transport's earlier
+    // check.
+    const channelInfo = await resources.resolveChannelInfo(interaction.payload.channel_id);
+    const auth = await authorizeMattermostCommandInvocation({
+      account,
+      cfg,
+      senderId: interaction.payload.user_id,
+      senderName: interaction.userName,
+      channelId: interaction.payload.channel_id,
+      channelInfo,
+      readStoreAllowFrom: pairing.readAllowFromStore,
+      allowTextCommands: core.channel.commands.shouldHandleTextCommands({
+        cfg,
+        surface: "mattermost",
+      }),
+      hasControlCommand: false,
+    });
+    if (!auth.ok) {
+      // No Gateway I/O for a click current policy refuses; the prompt stays usable.
+      return { ephemeral_text: `OpenClaw ignored this action for ${auth.roomLabel}.` };
+    }
     try {
       const result = await questionGatewayRuntime.resolveOption({
         cfg,
@@ -49,12 +71,15 @@ export function createMattermostQuestionInteractionHandler(
         senderId: interaction.payload.user_id,
         clientDisplayName: `Mattermost question (${account.accountId})`,
       });
-      ephemeral_text =
-        result.status === "answered" ? "Answer submitted." : "This question was already answered.";
+      if (result.status !== "answered") {
+        return { ephemeral_text: "This question was already answered." };
+      }
     } catch (err) {
       runtime.error?.(`mattermost question interaction failed: ${String(err)}`);
-      ephemeral_text = "Could not submit this answer.";
+      // The buttons survive an unaccepted click so it can be retried.
+      return { ephemeral_text: "Could not submit this answer." };
     }
+    // Only an accepted answer retires the prompt.
     const response: MattermostInteractionResponse = {
       update: {
         message: interaction.post.message ?? "",
@@ -64,7 +89,7 @@ export function createMattermostQuestionInteractionHandler(
           ],
         },
       },
-      ephemeral_text,
+      ephemeral_text: "Answer submitted.",
     };
     return response;
   };
