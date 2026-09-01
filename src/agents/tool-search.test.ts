@@ -1508,7 +1508,13 @@ describe("Tool Search", () => {
         text: `Status ${(result.details as { status: number }).status}`,
       }),
       executeTool: async (params) => {
-        await params.tool.execute(params.toolCallId, params.input, params.signal, params.onUpdate);
+        await params.tool.execute(
+          params.toolCallId,
+          params.input,
+          params.signal,
+          params.onUpdate,
+          undefined as never,
+        );
         return await params.acceptResultBeforeProjection(jsonResult({ status: 201 }));
       },
     });
@@ -1535,6 +1541,7 @@ describe("Tool Search", () => {
           params.input,
           params.signal,
           params.onUpdate,
+          undefined as never,
         );
         await params.acceptResultBeforeProjection(raw);
         throw executorError;
@@ -1579,6 +1586,7 @@ describe("Tool Search", () => {
           params.input,
           params.signal,
           params.onUpdate,
+          undefined as never,
         );
         sourceCompletion = execution;
         return await raceWithAbortSignal(
