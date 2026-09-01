@@ -1125,6 +1125,30 @@ function acceptedSurfaceHash(surface) {
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
 
+function hasCompanionPluginConsent(record) {
+  return [
+    record.acceptedSurface,
+    record.acceptedSurfaceHash,
+    record.acceptedSurfaceAt,
+    record.acceptedSurfaceIntegrity,
+  ].some((value) => value !== undefined);
+}
+
+function isTrustedOfficialNpmCompanion(record, packageName) {
+  const isPackageSpec = (value) =>
+    value === undefined ||
+    (typeof value === "string" && (value === packageName || value.startsWith(`${packageName}@`)));
+  return (
+    record.source === "npm" &&
+    record.artifactKind === undefined &&
+    record.sourcePath === undefined &&
+    record.resolvedName === packageName &&
+    isPackageSpec(record.spec) &&
+    isPackageSpec(record.resolvedSpec) &&
+    (record.clawhubPackage === undefined || record.clawhubPackage === packageName)
+  );
+}
+
 function assertCompanionPluginConsent(record, pluginId, integrity) {
   assert(
     record.acceptedSurface && typeof record.acceptedSurface === "object",
@@ -1158,10 +1182,10 @@ function assertCompanionPluginInstalls([expectedVersion, capabilityConsentSuppor
     "assert-companion-installs requires candidate capability-consent support",
   );
   const records = readInstalledPluginIndex().installRecords ?? {};
-  for (const [pluginId, packageName, source] of [
-    ["discord", "@openclaw/discord", "npm"],
-    ["whatsapp", "@openclaw/whatsapp", "clawhub"],
-    ["codex", "@openclaw/codex", "npm"],
+  for (const [pluginId, packageName, source, allowsOfficialConsentExemption] of [
+    ["discord", "@openclaw/discord", "npm", true],
+    ["whatsapp", "@openclaw/whatsapp", "clawhub", false],
+    ["codex", "@openclaw/codex", "npm", true],
   ]) {
     const packageJson = assertExternalPluginInstall(records, pluginId, packageName);
     const record = records[pluginId];
@@ -1172,6 +1196,7 @@ function assertCompanionPluginInstalls([expectedVersion, capabilityConsentSuppor
       packageJson,
       expectedVersion,
       capabilityConsentSupported,
+      allowsOfficialConsentExemption,
     );
   }
 }
@@ -1182,6 +1207,7 @@ function assertPluginArtifactConsent(
   packageJson,
   expectedVersion,
   capabilityConsentSupported,
+  allowsOfficialConsentExemption = false,
 ) {
   const installedVersion = record.source === "clawhub" ? record.version : record.resolvedVersion;
   assert(
@@ -1197,7 +1223,14 @@ function assertPluginArtifactConsent(
     typeof integrity === "string" && integrity.length > 0,
     `${pluginId} plugin integrity missing`,
   );
-  if (capabilityConsentSupported === "1") {
+  // Verified first-party packages intentionally omit operator-acceptance metadata.
+  // Any unverified or partially accepted record still takes the strict path below.
+  if (
+    capabilityConsentSupported === "1" &&
+    (!allowsOfficialConsentExemption ||
+      hasCompanionPluginConsent(record) ||
+      !isTrustedOfficialNpmCompanion(record, packageJson.name))
+  ) {
     assertCompanionPluginConsent(record, pluginId, integrity);
   }
 }

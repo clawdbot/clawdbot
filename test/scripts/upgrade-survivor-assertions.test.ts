@@ -660,7 +660,7 @@ function assertCompanionPluginRecords(
         resolvedVersion: version,
         integrity: npmIntegrity,
         installPath: discordInstallPath,
-        ...(capabilityConsentSupported ? consent(npmIntegrity) : {}),
+        ...(capabilityConsentSupported && recoveryPluginIds ? consent(npmIntegrity) : {}),
       },
       whatsapp: {
         source: "clawhub",
@@ -680,7 +680,7 @@ function assertCompanionPluginRecords(
         resolvedVersion: version,
         integrity: npmIntegrity,
         installPath: codexInstallPath,
-        ...(capabilityConsentSupported ? consent(npmIntegrity) : {}),
+        ...(capabilityConsentSupported && recoveryPluginIds ? consent(npmIntegrity) : {}),
       },
     };
     mutate?.(records, {
@@ -1304,17 +1304,49 @@ process.stdout.write(sessionDir + "\\n");
     ).not.toThrow();
   });
 
-  it("requires exact artifact-bound consent for direct companion installs", () => {
+  it("accepts verified first-party companions without recording operator acceptance", () => {
     expect(() => assertCompanionPluginRecords()).not.toThrow();
+  });
+
+  it("requires exact artifact-bound consent for an unverified companion install", () => {
+    expect(() =>
+      assertCompanionPluginRecords((records) => {
+        const whatsapp = records.whatsapp;
+        if (!whatsapp) {
+          throw new Error("whatsapp fixture missing");
+        }
+        Reflect.deleteProperty(whatsapp, "acceptedSurfaceIntegrity");
+      }),
+    ).toThrow(/whatsapp plugin consent integrity/);
+  });
+
+  it("rejects genuinely unaccepted or unverified companion state", () => {
+    expect(() =>
+      assertCompanionPluginRecords((records) => {
+        const whatsapp = records.whatsapp;
+        if (!whatsapp) {
+          throw new Error("whatsapp fixture missing");
+        }
+        for (const field of [
+          "acceptedSurface",
+          "acceptedSurfaceHash",
+          "acceptedSurfaceAt",
+          "acceptedSurfaceIntegrity",
+        ]) {
+          Reflect.deleteProperty(whatsapp, field);
+        }
+      }),
+    ).toThrow(/whatsapp plugin accepted surface missing/);
+
     expect(() =>
       assertCompanionPluginRecords((records) => {
         const discord = records.discord;
         if (!discord) {
           throw new Error("discord fixture missing");
         }
-        Reflect.deleteProperty(discord, "acceptedSurfaceIntegrity");
+        discord.artifactKind = "npm-pack";
       }),
-    ).toThrow(/discord plugin consent integrity/);
+    ).toThrow(/discord plugin accepted surface missing/);
   });
 
   it("requires artifact-bound consent for every published recovery plugin", () => {
