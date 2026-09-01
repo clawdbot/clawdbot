@@ -108,7 +108,6 @@ const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
 ];
 
 const ACCENT_PRESETS = [
-  { id: "default", hex: undefined, labelKey: "configView.appearance.accents.default" },
   { id: "claw", hex: "#ff5c5c", labelKey: "configView.appearance.accents.claw" },
   { id: "coral", hex: "#ff8066", labelKey: "configView.appearance.accents.coral" },
   { id: "amber", hex: "#f5b942", labelKey: "configView.appearance.accents.amber" },
@@ -448,20 +447,14 @@ export function renderAppearanceSection(
               ${ACCENT_PRESETS.map((preset) => {
                 const selected = preset.hex === props.accent;
                 const label = t(preset.labelKey);
-                // The default swatch previews the active theme's own accent via the
-                // theme-invariant chip vars; bare var(--accent) would show the live
-                // override and render as a duplicate of the selected preset. Uses a
-                // swatch-scoped class so theme-card locators stay unique.
-                const themeChipScope = preset.hex ? "" : ` settings-accent-theme--${props.theme}`;
                 return html`
                   <button
                     type="button"
-                    class="settings-accent-swatch${themeChipScope} ${selected
+                    class="settings-accent-swatch ${selected
                       ? "settings-accent-swatch--active"
                       : ""}"
                     style=${styleMap({
-                      "--settings-accent-swatch":
-                        preset.hex ?? "var(--theme-chip-accent, var(--accent))",
+                      "--settings-accent-swatch": preset.hex,
                     })}
                     data-accent-preset=${preset.id}
                     aria-label=${label}
@@ -482,9 +475,9 @@ export function renderAppearanceSection(
                   ? "settings-accent-swatch--active"
                   : ""}"
                 style=${styleMap({
-                  "--settings-accent-swatch": props.accent ?? ACCENT_PRESETS[1].hex,
+                  "--settings-accent-swatch": props.accent ?? ACCENT_PRESETS[0].hex,
                   "--settings-accent-swatch-ink": controlUiAccentInk(
-                    props.accent ?? ACCENT_PRESETS[1].hex,
+                    props.accent ?? ACCENT_PRESETS[0].hex,
                   ),
                 })}
               >
@@ -495,7 +488,7 @@ export function renderAppearanceSection(
                   aria-label=${t("configView.appearance.customAccent")}
                   aria-describedby="settings-accent-status"
                   title=${t("configView.appearance.customAccent")}
-                  .value=${props.accent ?? ACCENT_PRESETS[1].hex}
+                  .value=${props.accent ?? ACCENT_PRESETS[0].hex}
                   @input=${(event: Event & { currentTarget: HTMLInputElement }) =>
                     props.setAccent(event.currentTarget.value)}
                 />
@@ -503,6 +496,19 @@ export function renderAppearanceSection(
                   >${icons.pipette}</span
                 >
               </span>
+              <button
+                type="button"
+                class="settings-accent-swatch settings-accent-swatch--reset ${props.accent == null
+                  ? "settings-accent-swatch--active"
+                  : ""}"
+                data-accent-preset="default"
+                aria-label=${t("configView.appearance.accents.default")}
+                aria-pressed=${String(props.accent == null)}
+                title=${t("configView.appearance.accents.default")}
+                @click=${() => props.setAccent(undefined)}
+              >
+                <span aria-hidden="true">${icons.rotateCcw}</span>
+              </button>
             </div>
           </div>
         </div>
