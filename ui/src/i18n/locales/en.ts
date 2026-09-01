@@ -5974,6 +5974,8 @@ export const en: TranslationMap = {
     },
     questions: {
       other: "Type your own answer here",
+      answer: "Answer",
+      answerPlaceholder: "{label}",
       submit: "Submit",
       next: "Next",
       back: "Back",

@@ -324,7 +324,7 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
     }
   });
 
-  let messages = getRecord(raw.messages);
+  const messages = getRecord(raw.messages);
   const statusReactions = getRecord(messages?.statusReactions);
   if (statusReactions && Object.hasOwn(statusReactions, "emojis")) {
     delete statusReactions.emojis;
@@ -337,49 +337,6 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
 
   visitChannelEntries(raw, "whatsapp", (entry, path) => {
     moveKey(entry, "messagePrefix", "responsePrefix", path, changes);
-    const ack = getRecord(entry.ackReaction);
-    if (!ack) {
-      return;
-    }
-    messages ??= ensureRecord(raw, "messages");
-    if (messages.ackReaction === undefined) {
-      const legacyAgents = getRecord(raw.agents)?.list;
-      const agentEntries = Array.isArray(legacyAgents)
-        ? legacyAgents.filter((value): value is Record<string, unknown> =>
-            Boolean(getRecord(value)),
-          )
-        : [];
-      const defaultAgent =
-        agentEntries.find((value) => getRecord(value)?.default === true) ?? agentEntries[0];
-      const identityEmoji = getRecord(getRecord(defaultAgent)?.identity)?.emoji;
-      messages.ackReaction =
-        typeof ack.emoji === "string"
-          ? ack.emoji
-          : typeof identityEmoji === "string"
-            ? identityEmoji
-            : "👀";
-    }
-    if (messages.ackReactionScope === undefined) {
-      const direct = ack.direct !== false;
-      const group = ack.group ?? "mentions";
-      const scope =
-        direct && group === "always"
-          ? "all"
-          : direct && group === "never"
-            ? "direct"
-            : !direct && group === "always"
-              ? "group-all"
-              : !direct && group === "mentions"
-                ? "group-mentions"
-                : !direct && group === "never"
-                  ? "off"
-                  : undefined;
-      if (scope) {
-        messages.ackReactionScope = scope;
-      }
-    }
-    delete entry.ackReaction;
-    changes.push(`Moved translatable ${path}.ackReaction settings to messages ack settings.`);
   });
 
   visitChannelEntries(raw, "slack", (entry, path) => {
