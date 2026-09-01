@@ -1,4 +1,5 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import type {
@@ -26,6 +27,7 @@ import {
 } from "./session-accessor.sqlite-maintenance.js";
 import {
   cloneSessionEntry,
+  getSessionKysely,
   resolveSqliteScope,
   resolveSqliteTranscriptArchiveDirectory,
   toDatabaseOptions,
@@ -43,10 +45,12 @@ type SqliteSessionEntryReplacement = SessionEntryReplacement & {
 };
 
 type ReplacementProjectionOptions = {
+  assertCommitAllowed?: () => void;
   activeSessionKey?: string;
   agentId?: string;
   requireWriteSuccess?: boolean;
   sessionKeys?: readonly string[];
+  includeLabelOwners?: string;
   statuses?: readonly SessionEntryStatus[];
   skipMaintenance?: boolean;
   storePath: string;
@@ -69,14 +73,28 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
     sessionKey: params.activeSessionKey ?? params.sessionKeys?.[0] ?? "",
     storePath: params.storePath,
   });
-  const committed = await runPreparedSqliteSessionWrite(resolved, async () => {
+  const preparedWrite = await runPreparedSqliteSessionWrite(resolved, async () => {
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
     const selectedKeys = params.sessionKeys ? new Set(params.sessionKeys) : undefined;
     const selectedStatuses = params.statuses ? new Set(params.statuses) : undefined;
+    const readLabelOwnerKeys = (db = database.db) =>
+      params.includeLabelOwners === undefined
+        ? []
+        : executeSqliteQuerySync(
+            db,
+            getSessionKysely(db)
+              .selectFrom("session_nodes")
+              .select("session_key")
+              .where("label", "=", params.includeLabelOwners)
+              .orderBy("session_key"),
+          ).rows.map((row) => row.session_key);
+    // Label owners join the read snapshot, never the caller's mutation authority.
+    // Reading only their keys avoids hydrating unrelated sessions on every rename.
+    const labelOwnerKeys = readLabelOwnerKeys();
     const selected = selectedStatuses
       ? readSessionEntriesByStatus(database, [...selectedStatuses], params.sessionKeys)
       : selectedKeys
-        ? [...selectedKeys].map((sessionKey) => ({ sessionKey }))
+        ? uniqueStrings([...selectedKeys, ...labelOwnerKeys]).map((sessionKey) => ({ sessionKey }))
         : Object.keys(readSessionEntryStore(database)).map((sessionKey) => ({ sessionKey }));
     const expectedRows = new Map<string, ResolvedSessionEntryRow>();
     const entries = selected.flatMap(({ sessionKey }) => {
@@ -150,17 +168,20 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
         commit: () => ({ maintenancePlans: [], result: operation.result }),
       };
     }
-    const validationKeys = new Set(
+    const mutationKeys = new Set(
       applicable.flatMap((replacement) => [
         replacement.sessionKey,
         ...(replacement.previousSessionKeys ?? []),
       ]),
     );
+    // Read-only label owners need the same row CAS as targets: their label can
+    // change between key selection and hydration, then change back during planning.
+    const validationKeys = new Set([...mutationKeys, ...labelOwnerKeys]);
 
     const maintenancePlans: SessionEntryMaintenancePlan[] = [];
     const previous = new Map<string, SessionEntry>();
     const current = new Map<string, SessionEntry>();
-    const deletedOwners = [...validationKeys].flatMap((sessionKey) => {
+    const deletedOwners = [...mutationKeys].flatMap((sessionKey) => {
       const entry = expectedRows.get(sessionKey)?.entry;
       return entry && !applicable.some((replacement) => replacement.sessionKey === sessionKey)
         ? [{ entry, sessionKey }]
@@ -171,6 +192,15 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
       commit: () => {
         runOpenClawAgentWriteTransaction(
           (transactionDb) => {
+            // Planning can await providers or hooks. Recheck uniqueness under the
+            // write transaction so an external label claim cannot race this snapshot.
+            if (
+              params.includeLabelOwners !== undefined &&
+              JSON.stringify(readLabelOwnerKeys(transactionDb.db)) !==
+                JSON.stringify(labelOwnerKeys)
+            ) {
+              throw new Error("SQLite session label owners changed before replacement");
+            }
             const transactionEntries = new Map<string, SessionEntry>();
             for (const sessionKey of validationKeys) {
               const transactionRow = readExactSessionEntryRow(transactionDb, sessionKey);
@@ -187,6 +217,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
                 transactionEntries.set(sessionKey, transactionRow.entry);
               }
             }
+            params.assertCommitAllowed?.();
             for (const replacement of applicable) {
               const sourceEntries = [
                 replacement.sessionKey,
@@ -232,9 +263,11 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
       },
     };
   });
+  const committed = preparedWrite.result;
   await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
     resolved,
     committed.maintenancePlans,
+    { deletedEntriesBeforeMaintenance: preparedWrite.deletedEntries },
   );
   return committed.result;
 }

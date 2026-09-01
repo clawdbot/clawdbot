@@ -12,7 +12,7 @@ import {
   withCachedMigrationConfigRuntime,
   writeMigrationReport,
 } from "./migration-runtime.js";
-import { createMigrationItem } from "./migration.js";
+import { createMigrationItem, summarizeMigrationItems } from "./migration.js";
 import type { MigrationProviderContext } from "./plugin-entry.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -107,6 +107,43 @@ describe("withCachedMigrationConfigRuntime", () => {
 describe("copyMigrationFileItem", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("reports the completed backup when copying the source fails", async () => {
+    const root = tempDirs.make("openclaw-migration-runtime-");
+    const reportDir = path.join(root, "report");
+    const source = path.join(root, "source", "SKILL.md");
+    const target = path.join(root, "target", "SKILL.md");
+    await writeFile(source, "new skill");
+    await writeFile(target, "local skill");
+    const item = createMigrationItem({
+      id: "skill:review",
+      kind: "skill",
+      action: "copy",
+      source,
+      target,
+      details: { sourceLabel: "reviewed skill" },
+    });
+    await fs.unlink(source);
+
+    const result = await copyMigrationFileItem(item, reportDir, { overwrite: true });
+
+    expect(result).toMatchObject({ status: "error", reason: expect.stringContaining("ENOENT") });
+    expect(result.details?.sourceLabel).toBe("reviewed skill");
+    const backupPath = result.details?.backupPath;
+    expect(backupPath).toBeTypeOf("string");
+    await expect(fs.readFile(String(backupPath), "utf8")).resolves.toBe("local skill");
+    await expect(fs.readFile(target, "utf8")).resolves.toBe("local skill");
+    await writeMigrationReport({
+      providerId: "claude",
+      source: path.dirname(source),
+      reportDir,
+      items: [result],
+      summary: summarizeMigrationItems([result]),
+    });
+    expect(
+      JSON.parse(await fs.readFile(path.join(reportDir, "report.json"), "utf8")).items,
+    ).toEqual([result]);
   });
 
   it("uses unique backup paths for same-basename targets in the same millisecond", async () => {

@@ -26,6 +26,7 @@ import { peekSystemEvents, resetSystemEventsForTest } from "../../../../src/infr
 import { resetTaskRegistryForTests } from "../../../../src/tasks/task-runtime.test-helpers.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../../../src/test-utils/env.js";
 import { normalizeSessionDeliveryState } from "../../../../src/utils/delivery-context.shared.js";
+import { waitForFile } from "../../../helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const PROOF_CHANNEL_ID = "heartbeat-route-proof";
@@ -112,6 +113,7 @@ function writeAssistantResponse(response: ServerResponse, text: string): void {
 async function writeRouteCapturePlugin(params: {
   pluginDir: string;
   tracePath: string;
+  cronReadyPath: string;
 }): Promise<void> {
   await fs.mkdir(params.pluginDir, { recursive: true });
   await fs.writeFile(
@@ -136,6 +138,9 @@ async function writeRouteCapturePlugin(params: {
       "module.exports = {",
       `  id: ${JSON.stringify(PROOF_CHANNEL_ID)},`,
       "  register(api) {",
+      '    api.on("cron_reconciled", (event) => {',
+      `      fs.writeFileSync(${JSON.stringify(params.cronReadyPath)}, JSON.stringify(event));`,
+      "    });",
       "    api.registerChannel({",
       "      plugin: {",
       `        id: ${JSON.stringify(PROOF_CHANNEL_ID)},`,
@@ -222,6 +227,7 @@ describe("Gateway heartbeat session routing", () => {
       const workspaceDir = path.join(tempHome, "workspace");
       const pluginDir = path.join(workspaceDir, "plugins", PROOF_CHANNEL_ID);
       const deliveryTracePath = path.join(tempHome, "heartbeat-deliveries.jsonl");
+      const cronReadyPath = path.join(tempHome, "cron-reconciled.json");
       const bundledPluginsDir = path.join(tempHome, "empty-bundled-plugins");
       const configPath = path.join(stateDir, "openclaw.json");
       await Promise.all([
@@ -234,7 +240,7 @@ describe("Gateway heartbeat session routing", () => {
           path.join(workspaceDir, "HEARTBEAT.md"),
           "Process all pending system events and report what was handled.\n",
         ),
-        writeRouteCapturePlugin({ pluginDir, tracePath: deliveryTracePath }),
+        writeRouteCapturePlugin({ pluginDir, tracePath: deliveryTracePath, cronReadyPath }),
       ]);
 
       const token = nextId("heartbeat-routing-token");
@@ -405,6 +411,12 @@ describe("Gateway heartbeat session routing", () => {
         ).resolves.toEqual({ ok: true });
         expect(peekSystemEvents(configuredSessionKey)).toContain(configuredEvent);
 
+        // A connected Gateway may still be starting cron; its lifecycle hook owns readiness.
+        await waitForFile(cronReadyPath, 15_000);
+        expect(JSON.parse(await fs.readFile(cronReadyPath, "utf8"))).toEqual({
+          reason: "startup",
+          enabled: true,
+        });
         const listed = await client.request<{
           jobs: Array<{
             agentId?: string;

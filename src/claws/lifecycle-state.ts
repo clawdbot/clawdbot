@@ -588,15 +588,13 @@ export async function applyClawRemovePlan(
     fallbackWorkspace: record.install.workspace,
     config: options.config,
     commitConfig: options.commitConfig,
+    stateDatabase: options,
     trashPath: options.trashPath,
     onModified: () => new ClawRemoveError("agent_modified", "Agent config changed during remove."),
   });
-  const {
-    agentRemoved,
-    cleanupTargets,
-    configBeforeDelete,
-    nextConfig: committedNextConfig,
-  } = configRemoval;
+  const { agentRemoved, cleanupTargets, configBeforeDelete } = configRemoval;
+  const committedNextConfig = configRemoval.nextConfig;
+  const completeDeletion = configRemoval.completeDeletion;
   // Agent adoption owns managed config and resources, never history that predates adoption.
   if (!retainHistoricalAgentState && (!options.commitConfig || options.purgeSessions)) {
     const purgeSessions =
@@ -679,6 +677,7 @@ export async function applyClawRemovePlan(
     plan.agentId,
     workspaceFiles,
     complete,
+    completeDeletion,
     options,
     retainHistoricalAgentState,
   );

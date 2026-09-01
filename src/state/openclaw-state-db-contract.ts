@@ -1,6 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 
+// v15 removes redundant agent/session projections from conversation bindings.
+// v14 retains unknown creator namespaces on historical cron jobs.
 // v13 keeps cron jobs and subagent runs canonical in JSON, removing unused projections.
 // v12 folds singleton state into config_machine_state and retires write-only cron epochs.
 // v11 retires the legacy skill curator lifecycle and write-only proposal origin runs.
@@ -10,11 +12,16 @@ import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 // v7 retires the inert shared commitments table.
 // v6 makes every committed shared-state table part of the canonical runtime schema.
 // v5 records durable cloud-worker result refs on pending workspace fences.
-export const OPENCLAW_STATE_SCHEMA_VERSION = 13;
+export const OPENCLAW_STATE_SCHEMA_VERSION = 15;
 export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
 // Privacy-sensitive feature tables remain absent even in fresh databases until
 // their feature-local first write. The canonical SQL still owns their shape.
 export const FIRST_USE_STATE_TABLES = [
+  "skill_library_entries",
+  "skill_library_revisions",
+  "skill_library_events",
+  "skill_library_uploads",
+  "github_personal_publication_requests",
   "cron_job_runtime_authorities",
   "execution_identity_contexts",
   "mcp_oauth_pending_authorizations",
@@ -23,16 +30,20 @@ export const FIRST_USE_STATE_TABLES = [
   "node_worker_turns",
   "operator_approval_execution_identities",
   "operator_approval_standing_grants",
+  "web_push_approval_deliveries",
   "execution_decision_facts",
   "execution_owner_lifecycle_bindings",
   "outbound_message_execution_bindings",
   "outbound_message_progress",
 ] as const;
 export const FIRST_USE_STATE_INDEXES = [
+  "idx_github_personal_publication_owner_session",
+  "idx_github_personal_publication_pending",
   "idx_node_worker_launches_terminal_completed",
   "idx_node_worker_turns_terminal_completed",
   "idx_node_worker_turns_active_owner",
   "idx_operator_approval_standing_grants_binding",
+  "idx_web_push_approval_deliveries_subscription",
   "execution_identity_contexts_run_created_idx",
   "execution_decision_facts_context_occurred_idx",
   "execution_decision_facts_run_occurred_idx",
@@ -98,6 +109,8 @@ export type OpenClawStateDatabaseSchemaMigration = {
     | "state-table-retirement-v11"
     | "singleton-state-foldin-v12"
     | "state-consolidation-v13"
+    | "creator-namespace-v14"
+    | "conversation-binding-targets-v15"
     | "operator-approvals-system-agent"
     | "session-watch-cursor-provenance-v4"
     | "strict-tables-v3";

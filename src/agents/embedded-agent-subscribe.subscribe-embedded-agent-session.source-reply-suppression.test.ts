@@ -75,6 +75,9 @@ async function emitMessageToolLifecycle(params: {
   message: string;
   media?: string;
   to?: string | null;
+  action?: string;
+  channelId?: string;
+  threadId?: string;
   result: unknown;
 }) {
   // Message tool sends are modeled as normal tool start/end events because the
@@ -84,8 +87,10 @@ async function emitMessageToolLifecycle(params: {
     toolName: "message",
     toolCallId: params.toolCallId,
     args: {
-      action: "send",
+      action: params.action ?? "send",
       ...(params.to === null ? {} : { to: params.to ?? "+1555" }),
+      ...(params.channelId ? { channelId: params.channelId } : {}),
+      ...(params.threadId ? { threadId: params.threadId } : {}),
       message: params.message,
       media: params.media,
     },
@@ -179,6 +184,33 @@ describe("subscribeEmbeddedAgentSession", () => {
       result: { details: { deliveryStatus: "sent" } },
     });
     emitAssistantMessageEnd(emit, "Done.");
+    await Promise.resolve();
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("suppresses the automatic final after a confirmed current-source thread reply", async () => {
+    const { emit, onBlockReply } = createBlockReplyHarness("message_end", {
+      sourceReplyDeliveryMode: "automatic",
+    });
+
+    await emitMessageToolLifecycle({
+      emit,
+      toolCallId: "tool-message-current-thread",
+      action: "thread-reply",
+      channelId: "qa-room",
+      threadId: "thread-1",
+      message: "QA-THREAD-RECEIPT-TOOL-OK",
+      to: null,
+      result: {
+        details: {
+          ok: true,
+          deliveryStatus: "sent",
+          sourceReplyRoute: "current-source",
+        },
+      },
+    });
+    emitAssistantMessageEnd(emit, "QA-THREAD-RECEIPT-FINAL-OK");
     await Promise.resolve();
 
     expect(onBlockReply).not.toHaveBeenCalled();

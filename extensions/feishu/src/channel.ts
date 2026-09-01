@@ -2019,6 +2019,17 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       },
     },
     threading: {
+      matchesToolContextTarget: ({ target, toolContext }) => {
+        const normalizedTarget = normalizeFeishuTarget(target);
+        if (!normalizedTarget) {
+          return false;
+        }
+        return [toolContext.currentChannelId, toolContext.currentMessagingTarget].some(
+          (currentTarget) =>
+            currentTarget !== undefined &&
+            normalizeFeishuTarget(currentTarget) === normalizedTarget,
+        );
+      },
       buildToolContext: ({ context, hasRepliedRef }) => ({
         currentChannelId:
           normalizeOptionalString(context.NativeChannelId) ?? normalizeOptionalString(context.To),

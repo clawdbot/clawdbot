@@ -59,7 +59,7 @@ import {
   snapshotAiViaPlaywright,
   snapshotAriaViaPlaywright,
   snapshotRoleViaPlaywright,
-  storeAriaSnapshotRefsViaPlaywright,
+  storeSnapshotRefsViaPlaywright,
 } from "./pw-tools-core.snapshot.js";
 import {
   emulateMediaViaPlaywright,
@@ -140,7 +140,7 @@ export const pwAi = {
   snapshotAiViaPlaywright,
   snapshotAriaViaPlaywright,
   snapshotRoleViaPlaywright,
-  storeAriaSnapshotRefsViaPlaywright,
+  storeSnapshotRefsViaPlaywright,
   screenshotWithLabelsViaPlaywright,
   storageClearViaPlaywright,
   storageGetViaPlaywright,

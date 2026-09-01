@@ -10,6 +10,7 @@ import {
   stubGatewayStoreTestGlobals,
 } from "./gateway-store.test-support.ts";
 import { loadSettings } from "./settings.ts";
+import { readPresenceEntries, resolveCurrentSelfUser } from "./user-profile.ts";
 
 const { scheduleStaleChunkReloadMock } = vi.hoisted(() => ({
   scheduleStaleChunkReloadMock: vi.fn(async () => true),
@@ -920,24 +921,49 @@ describe("createApplicationGateway connection phase", () => {
     expect(gateway.eventLog).toHaveLength(1);
   });
 
-  it("updates sender provenance when presence qualification alone changes", () => {
-    const { gateway, current } = createStore();
-    gateway.start();
-    const user = { id: "same-id", name: "Person", avatarUrl: "/api/users/same-id/avatar" };
-    current().opts.onHello?.({
-      ...HELLO,
-      snapshot: { presence: [{ instanceId: current().instanceId, user }] },
-    });
-    const identity = { type: "profile", id: user.id };
-    for (const nextUser of [{ ...user, identity }, user, { ...user, identity }]) {
-      current().opts.onEvent?.({
-        type: "event",
-        event: "presence",
-        payload: { presence: [{ instanceId: current().instanceId, user: nextUser }] },
+  it.each([false, true])(
+    "keeps refreshed self authoritative over hello (initial profile: %s)",
+    (qualified) => {
+      const { gateway, current } = createStore();
+      gateway.start();
+      const user = { id: "same-id", name: "Person", avatarUrl: "/api/users/same-id/avatar" };
+      const profile = { ...user, identity: { type: "profile" as const, id: user.id } };
+      const initialUser = qualified ? profile : user;
+      current().opts.onHello?.({
+        ...HELLO,
+        snapshot: { presence: [{ instanceId: current().instanceId, user: initialUser }] },
       });
-      expect(gateway.snapshot.selfUser).toEqual(nextUser);
-    }
-  });
+      const renderedSelf = vi.fn(() =>
+        resolveCurrentSelfUser({
+          snapshotUser: gateway.snapshot.selfUser,
+          presenceEntries: readPresenceEntries(gateway.snapshot.hello?.snapshot),
+          presenceInstanceId: current().instanceId,
+        }),
+      );
+      gateway.subscribeEvents(renderedSelf);
+      for (const nextUser of [
+        profile,
+        user,
+        {
+          ...profile,
+          id: "merged-profile",
+          identity: { type: "profile" as const, id: "merged-profile" },
+        },
+      ]) {
+        current().opts.onEvent?.({
+          type: "event",
+          event: "presence",
+          payload: { presence: [{ instanceId: current().instanceId, user: nextUser }] },
+        });
+        expect(gateway.snapshot.selfUser).toEqual(nextUser);
+        expect(renderedSelf.mock.lastCall).toBeDefined();
+        expect(renderedSelf.mock.results.at(-1)?.value).toEqual(nextUser);
+        expect(readPresenceEntries(gateway.snapshot.hello?.snapshot)?.[0]?.user).toEqual(
+          initialUser,
+        );
+      }
+    },
+  );
 
   it("projects only this browser connection's optional presence identity", () => {
     const { gateway, current } = createStore();

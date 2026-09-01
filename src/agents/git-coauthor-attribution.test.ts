@@ -154,6 +154,28 @@ describe("Git co-author attribution", () => {
         storePath: state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
       });
 
+      const personalPublisher = resolveGitCoauthorAttribution({
+        agentId: "main",
+        config: {
+          tools: {
+            github: {
+              profileId: "ghp_11111111111111111111111111111111",
+              gitAuthor: { email: "30+primary@users.noreply.github.com" },
+            },
+          },
+        },
+        excludeAccountId: 20,
+        env: state.env,
+        sessionKey,
+        storePath: state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
+      });
+      expect(personalPublisher?.trailers).toContain(
+        "Co-authored-by: primary <30+primary@users.noreply.github.com>",
+      );
+      expect(personalPublisher?.trailers).not.toContain(
+        "Co-authored-by: ada <20+ada@users.noreply.github.com>",
+      );
+
       const modelPrompt = appendGitCoauthorContext("commit this", attribution);
       expect(modelPrompt).toContain(
         [

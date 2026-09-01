@@ -33,7 +33,7 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "session.store":
     "Sets the session storage file path used to persist session records across restarts. Use an explicit path only when you need custom disk layout, backup routing, or mounted-volume storage.",
   "session.mainKey":
-    'Overrides the canonical main session key used for continuity when dmScope or routing logic points to "main". Use a stable value only if you intentionally need custom session anchoring.',
+    'Accepted but ignored: the per-agent main session suffix is always "main". Omit this field; global session scope uses "global" instead.',
   "session.sendPolicy":
     "Controls cross-session send permissions using allow/deny rules evaluated against channel, chatType, and key prefixes. Use this to fence where session tools can deliver messages in complex environments.",
   "session.sendPolicy.default":
@@ -53,11 +53,11 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "session.sendPolicy.rules[].match.rawKeyPrefix":
     "Matches the raw, unnormalized session-key prefix for exact full-key policy targeting. Use this when normalized keyPrefix is too broad and you need agent-prefixed or transport-specific precision.",
   "session.threadBindings":
-    "Shared defaults for thread-bound session routing behavior across providers that support thread focus workflows. Configure global defaults here and override per channel only when behavior differs.",
+    "Shared defaults for thread-bound session spawning and routing across supported channels. Configure global defaults here and override per channel only when behavior differs.",
   "session.threadBindings.enabled":
-    "Global master switch for thread-bound session routing features and focused thread delivery behavior. Keep enabled for modern thread workflows unless you need to disable thread binding globally.",
+    "Global master switch for thread-bound session spawning, routing, and delivery. Disable to turn off thread binding globally.",
   "session.threadBindings.idleHours":
-    "Default inactivity window in hours for thread-bound sessions across providers/channels (0 disables idle auto-unfocus). Default: 24.",
+    "Default inactivity window in hours for thread-bound sessions across providers/channels (0 disables idle expiry). Default: 24.",
   "session.threadBindings.maxAgeHours":
     "Optional hard max age in hours for thread-bound sessions across providers/channels (0 disables hard cap). Default: 0.",
   "session.threadBindings.spawnSessions":

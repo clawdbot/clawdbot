@@ -13,6 +13,7 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -878,6 +879,7 @@ describe("mirrorCodexAppServerTranscript", () => {
     expect(intermediate).not.toHaveProperty("__openclaw.runTerminal");
   });
   it("hides current memory-maintenance messages without hiding replayed turns", async () => {
+    const prepareAssistantTranscriptMessage = vi.fn((message: AssistantMessage) => message);
     initializeGlobalHookRunner(
       createMockPluginRegistry([
         {
@@ -940,6 +942,9 @@ describe("mirrorCodexAppServerTranscript", () => {
       ...target,
       messages,
       idempotencyScope: "codex-app-server:memory",
+      runId: "run-memory",
+      terminalAssistantOwner: { mirrorIdentity: "turn-memory:assistant", runId: "run-memory" },
+      prepareAssistantTranscriptMessage,
     });
 
     const persistedMessages = (await readMirrorEvents(target))
@@ -952,6 +957,7 @@ describe("mirrorCodexAppServerTranscript", () => {
     expect(persistedMessages).toHaveLength(messages.length);
     expect(persistedMessages[0]).not.toHaveProperty("display", false);
     expect(persistedMessages.slice(1).every((message) => message.display === false)).toBe(true);
+    expect(prepareAssistantTranscriptMessage).not.toHaveBeenCalled();
   });
 
   it("mirrors user, assistant, and tool result messages by SQLite identity", async () => {
@@ -1352,6 +1358,113 @@ describe("mirrorCodexAppServerTranscript", () => {
       }),
     ).toEqual(["user", "assistant"]);
   });
+
+  it.each([false, true])(
+    "prepares only the owned terminal media row before persistence and publication (skip hooks: %s)",
+    async (skipBeforeMessageWriteHooks) => {
+      const target = await createSqliteMirrorTarget("openclaw-codex-mirror-media-owner-");
+      const sourceText = "Artifacts ready\nMEDIA:./artifact.json";
+      const rewrittenText = skipBeforeMessageWriteHooks
+        ? sourceText
+        : `${sourceText}\nMEDIA:./hook-only.json`;
+      const prepareAssistantTranscriptMessage = vi.fn((message: AssistantMessage) => ({
+        ...message,
+        openclawDelivery: { mediaUrls: ["./artifact.json"] },
+      }));
+      const beforeMessageWrite = vi.fn((input: unknown) => {
+        const message = (input as { message: AgentMessage }).message;
+        return message.role === "assistant" &&
+          message.content.some((part) => part.type === "text" && part.text === sourceText)
+          ? { message: { ...message, content: [{ type: "text", text: rewrittenText }] } }
+          : undefined;
+      });
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_message_write",
+            handler: beforeMessageWrite,
+          },
+        ]),
+      );
+      const messages = [
+        attachCodexMirrorIdentity(makeAgentUserMessage({ content: sourceText }), "turn-1:prompt"),
+        ...[
+          "turn-0:assistant",
+          "turn-1:commentary:item",
+          "turn-1:async:item",
+          "turn-1:assistant",
+        ].map((identity) =>
+          attachCodexMirrorIdentity(
+            makeAgentAssistantMessage({
+              content: [
+                {
+                  type: "text",
+                  text: identity === "turn-1:assistant" ? sourceText : "MEDIA:./unowned.json",
+                },
+              ],
+            }),
+            identity,
+          ),
+        ),
+      ];
+      if (skipBeforeMessageWriteHooks) {
+        await mirrorCodexAppServerTranscript({
+          ...target,
+          messages,
+          runId: "run-media",
+          idempotencyScope: "codex-app-server:thread-1",
+          runMirrorIdentityPrefix: "turn-1:",
+          terminalAssistantOwner: { mirrorIdentity: "turn-1:assistant", runId: "run-media" },
+          prepareAssistantTranscriptMessage,
+          skipBeforeMessageWriteHooks,
+        });
+      } else {
+        await mirrorTranscriptBestEffort({
+          params: {
+            ...target,
+            sessionTarget: target,
+            runId: "run-media",
+            prepareAssistantTranscriptMessage,
+          } as unknown as EmbeddedRunAttemptParams,
+          result: { messagesSnapshot: messages } as Parameters<
+            typeof mirrorTranscriptBestEffort
+          >[0]["result"],
+          agentId: target.agentId,
+          sessionKey: target.sessionKey,
+          notifyUserMessagePersisted: () => undefined,
+          cwd: path.dirname(target.storePath),
+          threadId: "thread-1",
+          turnId: "turn-1",
+        });
+      }
+
+      expect(beforeMessageWrite).toHaveBeenCalledTimes(skipBeforeMessageWriteHooks ? 0 : 5);
+      expect(prepareAssistantTranscriptMessage).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ content: [{ type: "text", text: rewrittenText }] }),
+        sourceText,
+      );
+      const published = publishSessionTranscriptUpdateByIdentityMock.mock.calls.map(
+        ([params]) => params.update.message,
+      );
+      expect(published).toHaveLength(5);
+      expect(published.slice(0, -1)).toEqual(
+        messages
+          .slice(0, -1)
+          .map((message) =>
+            expect.objectContaining({ role: message.role, content: message.content }),
+          ),
+      );
+      expect(published.slice(0, -1).some((message) => message.openclawDelivery)).toBe(false);
+      expect(published.at(-1)).toMatchObject({
+        content: [{ type: "text", text: rewrittenText }],
+        openclawDelivery: { mediaUrls: ["./artifact.json"] },
+      });
+      const persisted = (await readMirrorEvents(target)).flatMap((event) =>
+        event && typeof event === "object" && "message" in event ? [event.message] : [],
+      );
+      expect(persisted).toEqual(published);
+    },
+  );
 
   it("keeps assistant ownership when live update publication fails", async () => {
     publishSessionTranscriptUpdateByIdentityMock.mockRejectedValueOnce(new Error("publish failed"));

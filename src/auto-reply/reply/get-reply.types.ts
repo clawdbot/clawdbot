@@ -1,6 +1,7 @@
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { CronCreatorAuthorityCapability } from "../../agents/cron-creator-authority-context.js";
-import type { SessionToolOverrides } from "../../config/sessions/types.js";
+import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
+import type { SessionEntry, SessionToolOverrides } from "../../config/sessions/types.js";
 // Shared get-reply type contracts for command, directive, and runtime layers.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginCommandReplyOptions } from "../../plugins/plugin-command-dispatch-contract.js";
@@ -19,14 +20,23 @@ export type ReplySessionBinding = {
   storePath?: string;
 };
 
+export type PendingContinuationSettlement = {
+  statusPayload: ReplyPayload;
+  settle: (statusDelivered: boolean) => Promise<void>;
+};
+
 type InternalReplySessionOptions = {
+  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
+  /** Exact authority-bearing settings captured by Gateway chat admission. */
+  admittedSessionSettings?: Readonly<Pick<SessionEntry, "permissionMode" | "toolOverrides">>;
   /** Host-stamped exact-run capability for late Codex creator-authority capture. */
   cronCreatorAuthorityCapability?: CronCreatorAuthorityCapability;
   expectedExistingSessionId?: string;
   /** First dispatch only: admission created this exact pinned session before reply initialization. */
   newlyCreatedSessionId?: string;
   onDeliberateSilentTerminalReply?: () => void;
-  onPendingContinuation?: () => void;
+  /** Defers the child-completion wake until the visible waiting status is delivered. */
+  onPendingContinuation?: (settlement?: PendingContinuationSettlement) => void;
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
   /** Prevent implicit rollover after a caller has durably admitted this exact session. */
   pinExpectedExistingSession?: boolean;
@@ -44,6 +54,7 @@ type InternalReplySessionOptions = {
   skillOverrides?: SessionToolOverrides["skills"];
   /** Gateway-private optimistic-concurrency constraint for an operator-requested proposal revision. */
   skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
+  skillLibraryAuthoring?: import("../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
 };
 
 export type InternalGetReplyOptions = GetReplyOptions &

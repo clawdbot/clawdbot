@@ -16,12 +16,85 @@ Scope:
 
 The lists below are generated from the source target registry and checked against `docs/reference/secretref-user-supplied-credentials-matrix.json` in CI; do not hand-edit entries.
 
+Source generation fails if a present channel secret-contract artifact cannot load, rather than publishing an incomplete list. A plugin without that optional artifact contributes no channel targets. This generation check does not change runtime SecretRef owner-isolation behavior.
+
 ## Supported credentials
 
 ### `openclaw.json` targets (`secrets configure` + `secrets apply` + `secrets audit`)
 
 [//]: # "secretref-supported-list-start"
 
+- `agents.entries.*.memory.search.remote.apiKey`
+- `agents.entries.*.tts.personas.*.providers.*.apiKey`
+- `agents.entries.*.tts.providers.*.apiKey`
+- `channels.buzz.accounts.*.authTag`
+- `channels.buzz.accounts.*.privateKey`
+- `channels.buzz.authTag`
+- `channels.buzz.privateKey`
+- `channels.clickclack.accounts.*.token`
+- `channels.clickclack.token`
+- `channels.discord.accounts.*.pluralkit.token`
+- `channels.discord.accounts.*.token`
+- `channels.discord.accounts.*.voice.realtime.providers.*.apiKey`
+- `channels.discord.accounts.*.voice.tts.personas.*.providers.*.apiKey`
+- `channels.discord.accounts.*.voice.tts.providers.*.apiKey`
+- `channels.discord.pluralkit.token`
+- `channels.discord.token`
+- `channels.discord.voice.realtime.providers.*.apiKey`
+- `channels.discord.voice.tts.personas.*.providers.*.apiKey`
+- `channels.discord.voice.tts.providers.*.apiKey`
+- `channels.feishu.accounts.*.appSecret`
+- `channels.feishu.accounts.*.encryptKey`
+- `channels.feishu.accounts.*.verificationToken`
+- `channels.feishu.appSecret`
+- `channels.feishu.encryptKey`
+- `channels.feishu.verificationToken`
+- `channels.googlechat.accounts.*.serviceAccount`
+- `channels.googlechat.serviceAccount`
+- `channels.irc.accounts.*.nickserv.password`
+- `channels.irc.accounts.*.password`
+- `channels.irc.nickserv.password`
+- `channels.irc.password`
+- `channels.matrix.accessToken`
+- `channels.matrix.accounts.*.accessToken`
+- `channels.matrix.accounts.*.password`
+- `channels.matrix.password`
+- `channels.mattermost.accounts.*.botToken`
+- `channels.mattermost.botToken`
+- `channels.msteams.appPassword`
+- `channels.nextcloud-talk.accounts.*.apiPassword`
+- `channels.nextcloud-talk.accounts.*.botSecret`
+- `channels.nextcloud-talk.apiPassword`
+- `channels.nextcloud-talk.botSecret`
+- `channels.nostr.privateKey`
+- `channels.qqbot.accounts.*.clientSecret`
+- `channels.qqbot.clientSecret`
+- `channels.slack.accounts.*.appToken`
+- `channels.slack.accounts.*.botToken`
+- `channels.slack.accounts.*.relay.authToken`
+- `channels.slack.accounts.*.signingSecret`
+- `channels.slack.accounts.*.userToken`
+- `channels.slack.appToken`
+- `channels.slack.botToken`
+- `channels.slack.relay.authToken`
+- `channels.slack.signingSecret`
+- `channels.slack.userToken`
+- `channels.sms.accounts.*.authToken`
+- `channels.sms.authToken`
+- `channels.telegram.accounts.*.botToken`
+- `channels.telegram.accounts.*.webhookSecret`
+- `channels.telegram.botToken`
+- `channels.telegram.webhookSecret`
+- `channels.zalo.accounts.*.botToken`
+- `channels.zalo.accounts.*.webhookSecret`
+- `channels.zalo.botToken`
+- `channels.zalo.webhookSecret`
+- `cron.webhookToken`
+- `gateway.auth.password`
+- `gateway.auth.token`
+- `gateway.remote.password`
+- `gateway.remote.token`
+- `memory.search.remote.apiKey`
 - `models.providers.*.apiKey`
 - `models.providers.*.headers.*`
 - `models.providers.*.request.auth.token`
@@ -35,13 +108,6 @@ The lists below are generated from the source target registry and checked agains
 - `models.providers.*.request.tls.cert`
 - `models.providers.*.request.tls.key`
 - `models.providers.*.request.tls.passphrase`
-- `skills.entries.*.apiKey`
-- `memory.search.remote.apiKey`
-- `agents.entries.*.tts.providers.*.apiKey`
-- `agents.entries.*.memory.search.remote.apiKey`
-- `talk.providers.*.apiKey`
-- `talk.realtime.providers.*.apiKey`
-- `tts.providers.*.apiKey`
 - `plugins.entries.acpx.config.mcpServers.*.env.*`
 - `plugins.entries.brave.config.webSearch.apiKey`
 - `plugins.entries.codex.config.appServer.authToken`
@@ -49,85 +115,27 @@ The lists below are generated from the source target registry and checked agains
 - `plugins.entries.comfy.config.headers.*`
 - `plugins.entries.exa.config.webSearch.apiKey`
 - `plugins.entries.firecrawl.config.webFetch.apiKey`
+- `plugins.entries.firecrawl.config.webSearch.apiKey`
 - `plugins.entries.google-meet.config.realtime.providers.*.apiKey`
 - `plugins.entries.google.config.webSearch.apiKey`
 - `plugins.entries.google.config.webSearch.headers.*`
 - `plugins.entries.imap.config.accounts.*.password`
-- `plugins.entries.xai.config.webSearch.apiKey`
-- `plugins.entries.moonshot.config.webSearch.apiKey`
-- `plugins.entries.perplexity.config.webSearch.apiKey`
-- `plugins.entries.firecrawl.config.webSearch.apiKey`
 - `plugins.entries.minimax.config.webSearch.apiKey`
-- `plugins.entries.tavily.config.webSearch.apiKey`
+- `plugins.entries.moonshot.config.webSearch.apiKey`
 - `plugins.entries.parallel.config.webSearch.apiKey`
+- `plugins.entries.perplexity.config.webSearch.apiKey`
+- `plugins.entries.tavily.config.webSearch.apiKey`
 - `plugins.entries.voice-call.config.realtime.providers.*.apiKey`
 - `plugins.entries.voice-call.config.streaming.providers.*.apiKey`
 - `plugins.entries.voice-call.config.tts.providers.*.apiKey`
 - `plugins.entries.voice-call.config.twilio.authToken`
 - `plugins.entries.webhooks.config.routes.*.secret`
-- `gateway.auth.password`
-- `gateway.auth.token`
-- `gateway.remote.token`
-- `gateway.remote.password`
-- `cron.webhookToken`
-- `channels.telegram.botToken`
-- `channels.telegram.webhookSecret`
-- `channels.telegram.accounts.*.botToken`
-- `channels.telegram.accounts.*.webhookSecret`
-- `channels.slack.botToken`
-- `channels.slack.appToken`
-- `channels.slack.relay.authToken`
-- `channels.slack.userToken`
-- `channels.slack.signingSecret`
-- `channels.slack.accounts.*.botToken`
-- `channels.slack.accounts.*.appToken`
-- `channels.slack.accounts.*.relay.authToken`
-- `channels.slack.accounts.*.userToken`
-- `channels.slack.accounts.*.signingSecret`
-- `channels.sms.authToken`
-- `channels.sms.accounts.*.authToken`
-- `channels.buzz.authTag`
-- `channels.buzz.privateKey`
-- `channels.clickclack.token`
-- `channels.clickclack.accounts.*.token`
-- `channels.discord.token`
-- `channels.discord.pluralkit.token`
-- `channels.discord.voice.realtime.providers.*.apiKey`
-- `channels.discord.voice.tts.providers.*.apiKey`
-- `channels.discord.accounts.*.token`
-- `channels.discord.accounts.*.pluralkit.token`
-- `channels.discord.accounts.*.voice.realtime.providers.*.apiKey`
-- `channels.discord.accounts.*.voice.tts.providers.*.apiKey`
-- `channels.irc.password`
-- `channels.irc.nickserv.password`
-- `channels.irc.accounts.*.password`
-- `channels.irc.accounts.*.nickserv.password`
-- `channels.feishu.appSecret`
-- `channels.feishu.encryptKey`
-- `channels.feishu.verificationToken`
-- `channels.feishu.accounts.*.appSecret`
-- `channels.feishu.accounts.*.encryptKey`
-- `channels.feishu.accounts.*.verificationToken`
-- `channels.qqbot.clientSecret`
-- `channels.qqbot.accounts.*.clientSecret`
-- `channels.msteams.appPassword`
-- `channels.mattermost.botToken`
-- `channels.mattermost.accounts.*.botToken`
-- `channels.matrix.accessToken`
-- `channels.matrix.password`
-- `channels.matrix.accounts.*.accessToken`
-- `channels.matrix.accounts.*.password`
-- `channels.nextcloud-talk.botSecret`
-- `channels.nextcloud-talk.apiPassword`
-- `channels.nextcloud-talk.accounts.*.botSecret`
-- `channels.nextcloud-talk.accounts.*.apiPassword`
-- `channels.nostr.privateKey`
-- `channels.zalo.botToken`
-- `channels.zalo.webhookSecret`
-- `channels.zalo.accounts.*.botToken`
-- `channels.zalo.accounts.*.webhookSecret`
-- `channels.googlechat.serviceAccount`
-- `channels.googlechat.accounts.*.serviceAccount`
+- `plugins.entries.xai.config.webSearch.apiKey`
+- `skills.entries.*.apiKey`
+- `talk.providers.*.apiKey`
+- `talk.realtime.providers.*.apiKey`
+- `tts.personas.*.providers.*.apiKey`
+- `tts.providers.*.apiKey`
 
 ### SQLite auth-profile targets (`secrets configure` + `secrets apply` + `secrets audit`)
 
@@ -170,10 +178,10 @@ These credentials are minted, rotated, session-bearing, or OAuth-durable classes
 - `hooks.gmail.pushToken`
 - `hooks.mappings[].sessionKey`
 - `auth-profiles.oauth.*`
-- `channels.discord.threadBindings.webhookToken`
 - `channels.discord.accounts.*.threadBindings.webhookToken`
-- `channels.whatsapp.creds.json`
+- `channels.discord.threadBindings.webhookToken`
 - `channels.whatsapp.accounts.*.creds.json`
+- `channels.whatsapp.creds.json`
 
 [//]: # "secretref-unsupported-list-end"
 

@@ -60,8 +60,9 @@ function parseChannelFilter(raw?: string): ChannelLogFilter {
 }
 
 function matchesChannelContext(value: string | undefined, channel: string) {
-  const path = `gateway/channels/${channel}`;
-  return value === channel || value === path || value?.startsWith(`${path}/`) === true;
+  return [channel, `gateway/channels/${channel}`].some(
+    (root) => value === root || value?.startsWith(`${root}/`) === true,
+  );
 }
 
 function matchesChannel(
@@ -73,8 +74,7 @@ function matchesChannel(
     return true;
   }
   return (
-    matchesChannelContext(line.subsystem, channel) ||
-    matchesChannelContext(line.module, channel) ||
+    [line.subsystem, line.module].some((value) => matchesChannelContext(value, channel)) ||
     (line.plugin !== undefined && filter.pluginIds.has(line.plugin))
   );
 }

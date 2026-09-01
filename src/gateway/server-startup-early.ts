@@ -3,6 +3,7 @@
 import { isNixMode } from "../config/paths.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 
@@ -174,7 +175,7 @@ export async function startGatewayEarlyRuntime(params: {
         };
       });
 
-  const startMaintenance = async () => {
+  const startMaintenance = async (activeWorkInspectors: Partial<GatewayActiveWorkInspectors>) => {
     // Defer periodic maintenance until the caller has finished ready-state
     // wiring, but keep the lazy import owned by this early-runtime bundle.
     if (params.minimalTestGateway) {
@@ -189,6 +190,7 @@ export async function startGatewayEarlyRuntime(params: {
         getHealthVersion: params.getHealthVersion,
         refreshGatewayHealthSnapshot: params.refreshGatewayHealthSnapshot,
         restartRunningChannels: params.restartRunningChannels,
+        activeWorkInspectors,
         refreshPresence: params.refreshPresence,
         resetEventLoopHealth: params.resetEventLoopHealth,
         logHealth: params.logHealth,

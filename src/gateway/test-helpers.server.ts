@@ -12,6 +12,7 @@ import "./test-helpers.mocks.js";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { getRuntimeConfig, parseConfigJson5, resetConfigRuntimeState } from "../config/config.js";
 import { resolveSystemMainSessionKey, type SessionEntry } from "../config/sessions.js";
 import {
@@ -553,17 +554,32 @@ export async function prepareGatewayReplyRuntimeForTest(options?: {
   gatewayReplyRuntimePrepared = true;
 }
 
-export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) {
-  const scope = options?.scope ?? "test";
-  if (scope === "suite") {
-    beforeAll(async () => {
-      vi.useRealTimers();
-      if (activeSuiteHookScopeCount === 0) {
-        await setupGatewayTestHome();
-        await resetGatewayTestState({ uniqueConfigRoot: false });
-      }
-      activeSuiteHookScopeCount += 1;
+export function installGatewayTestHooks(
+  options?:
+    | { scope?: "test" }
+    | { scope: "suite"; setup?: () => Promise<void>; cleanup?: () => Promise<void> },
+) {
+  if (options?.scope === "suite") {
+    let homeSetup: Promise<void> | undefined;
+    let fixtureSetup: Promise<void> | undefined;
+    let suiteCleanup: Promise<void> | undefined;
+    beforeAll(() => {
+      fixtureSetup = undefined;
+      suiteCleanup = undefined;
+      homeSetup = (async () => {
+        vi.useRealTimers();
+        const createHome = activeSuiteHookScopeCount === 0;
+        activeSuiteHookScopeCount += 1;
+        if (createHome) {
+          await setupGatewayTestHome();
+          await resetGatewayTestState({ uniqueConfigRoot: false });
+        }
+      })();
+      return homeSetup;
     });
+    if (options.setup) {
+      beforeAll(() => (fixtureSetup = Promise.resolve().then(options.setup)));
+    }
     beforeEach(async () => {
       vi.useRealTimers();
       if (activeSuiteGatewayServerCount > 0) {
@@ -580,10 +596,25 @@ export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) 
       await cleanupGatewayTestHome({ restoreEnv: false });
     });
     afterAll(async () => {
-      activeSuiteHookScopeCount = Math.max(0, activeSuiteHookScopeCount - 1);
-      if (activeSuiteHookScopeCount === 0) {
-        await cleanupGatewayTestHome({ restoreEnv: true });
+      if (!homeSetup) {
+        return;
       }
+      await (suiteCleanup ??= runQaGatewayFixture(
+        async () => {
+          // Vitest times out hooks without cancelling them. Keep late acquisition
+          // and fixture cleanup inside the environment's lifetime; setup errors
+          // are already reported by beforeAll, not duplicated by this join.
+          await homeSetup?.catch(() => {});
+          await fixtureSetup?.catch(() => {});
+          await options.cleanup?.();
+        },
+        async () => {
+          activeSuiteHookScopeCount -= 1;
+          if (activeSuiteHookScopeCount === 0) {
+            await cleanupGatewayTestHome({ restoreEnv: true });
+          }
+        },
+      ));
     }, 300_000);
     return;
   }

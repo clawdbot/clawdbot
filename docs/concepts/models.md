@@ -86,6 +86,11 @@ Other selection rules:
 - The Control UI starts from the Gateway's prepared configured model view, so opening chat does not start provider discovery. Opening or refreshing a model picker may discover models required by a trailing `provider/*` policy entry. Default and configured picker views hide catalog rows marked `deprecated` or `disabled` unless that exact model is configured as a primary, fallback, utility/tool model, alias/settings key, or exact policy entry. Hidden rows remain selectable by exact `provider/model` ref. The full built-in catalog, including hidden rows, is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
 - Provider inventory UIs use `models.list` with `view: "provider-config"` to show source-authored `models.providers.*.models` rows without applying picker allowlists.
 
+Once the Gateway has discovered a provider inventory, model-selection hot reloads
+retain it without running discovery again. Aliases, policy, and runtime capabilities
+use the new configuration. Explicit catalog refresh replaces that inventory;
+changes to its provider, plugin, auth, environment, or workspace scope invalidate it.
+
 Full mechanics: [Model failover](/concepts/model-failover).
 
 ## Quick model policy
@@ -110,6 +115,17 @@ Reauthentication preserves an existing explicit primary model, including
 `openai/gpt-5.5` explicitly; OpenClaw does not silently downgrade it.
 
 ## "Model is not allowed" (and why replies stop)
+
+When `modelPolicy.allow` is omitted or empty, you can select an explicit
+`provider/model` even when it is absent from the finite `/model` picker catalog.
+The catalog supplies browse choices and model metadata; it is not an implicit
+allowlist. Provider availability, runtime compatibility, and authentication are
+validated independently. An unrestricted policy does not make an unknown
+provider or an unsupported runtime usable. If the policy is omitted, unmigrated
+legacy model-map restrictions described above still apply.
+
+The same policy applies to explicit `provider/model` and configured-alias hints
+after `/new` or `/reset`. Unrecognized leading text stays in the prompt.
 
 If `agents.defaults.modelPolicy.allow` is non-empty, it becomes the allowlist for `/model`, session overrides, and `--model`. Selecting a model outside that allowlist returns before any normal reply is generated. A per-agent `agents.entries.*.modelPolicy.allow` replaces the default policy for that agent.
 
@@ -169,6 +185,26 @@ openclaw config set agents.defaults.modelPolicy.allow '["openai/gpt-5.4","anthro
 
 ## Choose a model for a session
 
+Gateway `sessions.create` and `sessions.patch` resolve model aliases and
+`modelPolicy.allow` in the target session's agent scope. An explicit per-agent
+allowlist replaces the shared default, including `[]` to allow any model.
+Policy permission does not supply provider credentials or guarantee that the
+selected model is available to its runtime.
+
+Before saving a model selection, these Gateway methods check that any required
+embedded harness has an installed, activatable plugin. A missing or disabled
+plugin rejects the change and preserves the previous session selection and
+configured default. Install and enable the named harness plugin, restart the
+Gateway, then select the model again. This check does not start the runtime or
+verify provider credentials.
+
+If an existing session's harness becomes unavailable, the failed turn reports
+the owner plugin when known and its activation or loading blocker. Follow the error's
+`openclaw doctor --fix` or `openclaw plugins inspect <id> --runtime --json`
+guidance, repair the plugin, and restart the Gateway before retrying. Gateway
+health probes remain independent of model execution; use [Models status](/cli/models)
+and [Doctor](/gateway/doctor) to diagnose the configured route.
+
 Choose the model when you create a session whenever possible. The Control UI's
 **New Chat** composer includes the model picker for this reason: a fresh session
 gives the selected model a clean conversation boundary.
@@ -200,7 +236,7 @@ Without a scope flag, `agents.defaults.modelSelectionScope` can opt into `"sessi
 ```text
 /model
 /model list
-/model 3
+/model Opus
 /model openai/gpt-5.4
 /model openai/gpt-5.4 -s
 /model openai/gpt-5.4 -a
@@ -210,7 +246,11 @@ Without a scope flag, `agents.defaults.modelSelectionScope` can opt into `"sessi
 /model status
 ```
 
-- `/model` and `/model list` show a compact numbered picker. `/model <#>` selects from it. Discord pickers follow the direct command behavior, including `modelSelectionScope`. Telegram callback pickers always stay session-only. `/models add` is deprecated and returns a message instead of registering models from chat.
+- In text chat, `/model` shows the current selection. `/model list` (or `/models`) browses providers; `/models <provider>` lists model refs.
+- Select with `/model <provider/model>` or `/model <alias>` (for example, `/model Opus` with the alias configured above). Numeric selections such as `/model 3` are not supported.
+- On Discord, native `/model` and `/models` without arguments open an interactive picker. Choose a provider and model, then press **Submit**. Discord pickers follow the direct command behavior, including `modelSelectionScope`.
+- On Telegram, `/model` offers a **Browse providers** button; `/model list` and `/models` open the provider menu directly. Tap a provider, then a model. Telegram callback selections always stay session-only.
+- `/models add` is deprecated and returns a message instead of registering models from chat.
 - **Current session:** `/model <model> -s` (or `--session`) changes only this session, regardless of `modelSelectionScope`. Neither configured default changes.
 - **Agent default:** Owner/admin `/model <model> -a` (or `--agent`) selects the model for this session and requests an update for `agents.entries.<agent>.model`. It creates an explicit primary for that configured agent when needed and never falls through to the shared global default.
 - **Global default:** Owner/admin `/model <model> -g` (or `--global`) changes this session and requests an update for the shared `agents.defaults.model` fallback. It does not overwrite other agents' explicit primaries or other sessions' model pins. New and existing unpinned sessions, and cron jobs that inherit this default, can use the changed model on their next run.
@@ -267,8 +307,19 @@ build stamp is ignored.
 
 The hosted file is published from the public
 [`openclaw/catalog`](https://github.com/openclaw/catalog) GitHub repository.
-Its scheduled workflow refreshes from OpenClaw's shipped plugin manifests and
-pricing sources; every catalog content change is preserved as a public commit.
+Its scheduled workflow checks OpenClaw's default-branch plugin manifests and
+public pricing sources every four hours; every catalog content change is
+preserved as a public commit. Provider-owned policies select complete price
+schedules, including context tiers, without mixing rates from different sources.
+Declared native sources read the public Cerebras, Chutes, DeepInfra, OpenCode, and Venice
+catalogs, so connected installations can receive advertised price changes without
+a new OpenClaw release. When a valid native feed no longer supplies a model's
+price, publication preserves the model metadata without an estimate; it does not
+infer retirement or substitute another source's rate. Explicit user costs still
+win. DeepInfra uses its agent projection for model metadata and its native
+`/models/list` feed for prices, including numeric discounts. Qualified schedules
+that cannot be represented as unconditional token costs stay unknown; models
+remain available. See [DeepInfra price estimates](/providers/deepinfra#price-estimates).
 
 Run `openclaw models refresh` for an immediate metadata and pricing check, or
 disable every hosted catalog request with `models.catalogRefresh.enabled:

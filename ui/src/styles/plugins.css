@@ -10,7 +10,7 @@
   width: 100%;
   max-width: 1120px;
   margin-inline: auto;
-  padding-inline: var(--space-4);
+  padding-inline: var(--settings-header-inline-padding, var(--space-4));
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -150,35 +150,6 @@
   flex-direction: column;
   gap: var(--space-8);
   min-width: 0;
-}
-
-.plugins-readonly {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid color-mix(in srgb, var(--warn) 28%, var(--border));
-  border-radius: var(--radius-md);
-  background: var(--warn-subtle);
-  color: var(--warn);
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.45;
-}
-
-.plugins-readonly svg {
-  width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.plugins-readonly > span:first-child {
-  width: 16px;
-  height: 16px;
-  flex: 0 0 auto;
 }
 
 .plugins-page-error {

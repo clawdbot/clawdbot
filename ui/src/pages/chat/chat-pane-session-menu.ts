@@ -22,6 +22,7 @@ import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
+import { runSessionNavigationAction } from "../../lib/sessions/session-menu-navigation.ts";
 import { showToast } from "../../lib/toast.ts";
 import { ChatPaneContext } from "./chat-pane-context.ts";
 import { headerPlatformByClient } from "./chat-pane-shared.ts";
@@ -68,9 +69,23 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       this.beginHeaderRename(row);
       return;
     }
-    if (action.kind === "copy-session-id") {
-      const copied = row.sessionId ? await copyToClipboard(row.sessionId) : false;
-      showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });
+    if (
+      action.kind === "copy-session-id" ||
+      action.kind === "copy-session-link" ||
+      action.kind === "copy-markdown" ||
+      action.kind === "open-new-tab" ||
+      action.kind === "open-new-window" ||
+      action.kind === "split-right" ||
+      action.kind === "split-below"
+    ) {
+      const owner = this.headerOutcomeOwner;
+      await runSessionNavigationAction(action.kind, {
+        context: this.context,
+        session: row,
+        agentId: this.state ? resolveChatAgentId(this.state) : row.agentId,
+        sourceSessionKey: row.key,
+        isCurrent: () => this.ownsHeaderOutcome(owner),
+      });
       return;
     }
     if (action.kind === "continue-in-terminal") {
@@ -137,7 +152,6 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
           );
           scope.context.navigation.update({ sidebarEntries });
         },
-        replaceCurrentSession: (key) => this.onPaneSessionChange?.(this.paneId, key),
         selectSession: (key) => this.onPaneSessionChange?.(this.paneId, key),
         sidebarSessionStatusFilter: () => "active",
         knownSessionGroups: () =>
@@ -171,10 +185,18 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
           }
           break;
         }
-        case "set-icon": {
+        case "set-icon":
+        case "set-color":
+        case "reset-appearance": {
           const currentSession = resolveCurrentSession(true);
           if (currentSession) {
-            await operations.patchSession(host, currentSession, { icon: action.icon }, scope);
+            const patch =
+              action.kind === "set-icon"
+                ? { icon: action.icon }
+                : action.kind === "set-color"
+                  ? { color: action.color }
+                  : { icon: null, color: null };
+            await operations.patchSession(host, currentSession, patch, scope);
           }
           break;
         }

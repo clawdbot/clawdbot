@@ -26,7 +26,10 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("../runtime.js", () => ({ defaultRuntime: mocks.defaultRuntime }));
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
+  defaultRuntime: mocks.defaultRuntime,
+}));
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
   isGatewayClientRequestError: (error: unknown) =>

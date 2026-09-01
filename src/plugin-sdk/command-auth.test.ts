@@ -1,9 +1,18 @@
 /**
  * Tests command authorization helpers and native command gating.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveSenderCommandAuthorization } from "./command-auth.js";
+import {
+  resolveCommandAuthorization as resolveNativeCommandAuthorization,
+  type CommandAuthorization as NativeCommandAuthorization,
+} from "./command-auth-native.js";
+import {
+  resolveCommandAuthorization,
+  resolveSenderCommandAuthorization,
+  type CommandAuthorization,
+} from "./command-auth.js";
 import {
   buildCommandsMessage,
   buildCommandsMessagePaginated,
@@ -39,6 +48,44 @@ async function resolveAuthorization(params: {
 }
 
 describe("plugin-sdk/command-auth", () => {
+  it("keeps the published authorization object and resolver return types unchanged", () => {
+    type PublishedAuthorization = {
+      providerId?: ChannelId;
+      ownerList: string[];
+      senderId?: string;
+      senderIsOwner: boolean;
+      isAuthorizedSender: boolean;
+      from?: string;
+      to?: string;
+    };
+    expectTypeOf<CommandAuthorization>().toEqualTypeOf<PublishedAuthorization>();
+    expectTypeOf<NativeCommandAuthorization>().toEqualTypeOf<PublishedAuthorization>();
+    expectTypeOf<
+      ReturnType<typeof resolveCommandAuthorization>
+    >().toEqualTypeOf<PublishedAuthorization>();
+    expectTypeOf<
+      ReturnType<typeof resolveNativeCommandAuthorization>
+    >().toEqualTypeOf<PublishedAuthorization>();
+    const expected: PublishedAuthorization = {
+      providerId: undefined,
+      ownerList: ["owner"],
+      senderId: "guest",
+      senderIsOwner: false,
+      isAuthorizedSender: false,
+      from: undefined,
+      to: undefined,
+    };
+    for (const resolve of [resolveCommandAuthorization, resolveNativeCommandAuthorization]) {
+      const actual = resolve({
+        ctx: { Provider: "webchat", Surface: "webchat", SenderId: "guest" },
+        cfg: { commands: { ownerAllowFrom: ["owner"] } },
+        commandAuthorized: true,
+      });
+      expect(actual).toStrictEqual(expected);
+      expect(new Set(Reflect.ownKeys(actual))).toEqual(new Set(Reflect.ownKeys(expected)));
+    }
+  });
+
   it("keeps command status builders on their focused subpath", () => {
     const cfg = { commands: { config: false, debug: false } } as unknown as OpenClawConfig;
 

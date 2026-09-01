@@ -562,6 +562,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         payload: ttsPayload,
         channel: params.originatingChannel,
         to: params.originatingTo,
+        agentId: params.agentId,
         sessionKey: deliverySessionKey,
         ...(deliverySessionKey !== params.ctx.SessionKey
           ? { policySessionKey: params.ctx.SessionKey }

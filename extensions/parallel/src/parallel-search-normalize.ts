@@ -22,6 +22,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { PARALLEL_FREE_SESSION_ID_MAX_LENGTH } from "./parallel-free-web-search-provider.shared.js";
 
 // Internal-only bounds (the model-facing tool schema declares its own copies).
 const PARALLEL_MAX_SEARCH_COUNT = 40;
@@ -35,13 +36,7 @@ const PARALLEL_MAX_SEARCH_QUERIES = 5;
 // `tools/list` schema caps session_id at 100. Each runtime passes its own limit
 // (and advertises it in the tool schema) so callers never send an out-of-contract id.
 const PARALLEL_SESSION_ID_MAX_LENGTH = 1000;
-export const PARALLEL_FREE_SESSION_ID_MAX_LENGTH = 100;
 const PARALLEL_CLIENT_MODEL_MAX_LENGTH = 100;
-
-export const normalizeParallelSessionId: (
-  value: string | undefined,
-  maxLength: number,
-) => string | undefined = normalizeBoundedOptionalString;
 
 type ParallelSearchResult = {
   title?: unknown;
@@ -84,7 +79,10 @@ function normalizeParallelSearchRequest(
     objective,
     searchQueries,
     count: resolveParallelSearchCount(args, configuredCount),
-    sessionId: normalizeParallelSessionId(readStringParam(args, "session_id"), sessionIdMaxLength),
+    sessionId: normalizeBoundedOptionalString(
+      readStringParam(args, "session_id"),
+      sessionIdMaxLength,
+    ),
     clientModel: normalizeParallelClientModel(readStringParam(args, "client_model")),
   };
 }

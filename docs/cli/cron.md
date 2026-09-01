@@ -85,7 +85,7 @@ Agent-turn jobs default to the creating conversation when session context is ava
 
 ## Delivery
 
-`openclaw automations list` and `openclaw automations show <job-id>` preview the resolved delivery route. For `channel: "last"`, the preview shows whether the route resolved from the main or current session, or will fail closed.
+`openclaw automations add`, `openclaw automations list`, and `openclaw automations show <job-id>` preview the resolved delivery route. For `channel: "last"`, the preview shows whether the route resolved from the main or current session, or will fail closed.
 
 Provider-prefixed targets can disambiguate unresolved announce channels. For example, `to: "telegram:123"` selects Telegram when `delivery.channel` is omitted or `last`. Only prefixes advertised by the loaded plugin are provider selectors. If `delivery.channel` is explicit, the prefix must match that channel; `channel: "whatsapp"` with `to: "telegram:123"` is rejected. Service prefixes such as `imessage:` and `sms:` remain channel-owned target syntax.
 
@@ -169,7 +169,7 @@ Add `--wait` when a script should block until that exact queued run records a te
 openclaw automations run <job-id> --wait --wait-timeout 10m --poll-interval 2s
 ```
 
-With `--wait`, the CLI calls `cron.run` first, then polls the durable `cron.runs` row for the returned `runId`; it does not reread mutable job delivery settings. JSON reports payload execution as `status` and whole-run completion as `completionStatus`. The command exits `0` only for `completionStatus: "succeeded"`; `failed`, `unknown`, execution errors/skips, a missing `runId`, and timeout expiry exit non-zero (default `10m`, polled every `2s` by default). `--poll-interval` must be greater than zero.
+With `--wait`, the CLI calls `cron.run` first, then polls the durable `cron.runs` row for the returned `runId`; it does not reread mutable job delivery settings. JSON reports payload execution as `status` and whole-run completion as `completionStatus`. The command exits `0` only for `completionStatus: "succeeded"`; `failed`, `unknown`, execution errors/skips, a missing `runId`, and timeout expiry exit non-zero (default `10m`, polled every `2s` by default). `--poll-interval` must be greater than zero. Completed JSON output, including the run summary, is flushed before the command exits, so it can be piped to a JSON reader.
 
 <Note>
 Use `--due` when you want the manual command to run only if the job is currently due. If `--due --wait` does not enqueue a run, the command returns the normal non-run response instead of polling.

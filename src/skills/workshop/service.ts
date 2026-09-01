@@ -83,7 +83,7 @@ export async function reviseSkillProposal(
     throw new Error("Skill proposal revision requires at least one changed field.");
   }
   const config = resolveSkillWorkshopConfig(input.config);
-  const revision = withPendingSkillProposalMutation(input, "revised", async (read) => {
+  const revision = withPendingSkillProposalRevision(input, async (read) => {
     const { record } = read;
     assertInsideWorkspace(input.workspaceDir, record.target.skillFile, "skill file");
     assertInsideWorkspace(input.workspaceDir, record.target.skillDir, "skill directory");
@@ -224,41 +224,7 @@ export async function rejectSkillProposal(
 export async function quarantineSkillProposal(
   input: SkillProposalActionInput,
 ): Promise<SkillProposalRecord> {
-  const result = await withPendingSkillProposalMutation(input, "quarantined", async (read) => {
-    const now = new Date().toISOString();
-    const record: SkillProposalRecord = {
-      ...read.record,
-      status: "quarantined",
-      updatedAt: now,
-      quarantinedAt: now,
-      statusReason: normalizeOptionalString(input.reason),
-      scan: {
-        ...read.record.scan,
-        state: "quarantined",
-      },
-    };
-    const event = await updateSkillProposalRecord({
-      record,
-      event: createSkillProposalEvent({
-        record,
-        type: "quarantined",
-        actor: input.eventActor,
-        ...(input.correlationId ? { correlationId: input.correlationId } : {}),
-        occurredAt: now,
-      }),
-      store: proposalStoreOptions(input.env),
-    });
-    return { record, event };
-  });
-  if (result.event) {
-    await dispatchSkillProposalChanged({
-      event: result.event,
-      record: result.record,
-      workspaceDir: input.workspaceDir,
-      ...(input.agentId ? { agentId: input.agentId } : {}),
-    });
-  }
-  return result.record;
+  return await markProposal(input, "quarantined");
 }
 
 export async function applySkillProposal(
@@ -269,7 +235,7 @@ export async function applySkillProposal(
 
 async function markProposal(
   input: SkillProposalActionInput,
-  status: "rejected",
+  status: "quarantined" | "rejected",
 ): Promise<SkillProposalRecord> {
   const scope = {
     ...(input.agentId ? { agentId: input.agentId } : {}),
@@ -279,6 +245,7 @@ async function markProposal(
     input.proposalId,
     proposalStoreOptions(input.env),
     scope,
+    input.config ? { config: input.config } : undefined,
   );
   if (!initial) {
     throw new Error(`Skill proposal not found: ${input.proposalId}`);
@@ -297,18 +264,25 @@ async function markProposal(
       }
       if (current.status !== "pending") {
         throw new Error(
-          `Only pending proposals can be rejected. Current status: ${current.status}.`,
+          `Only pending proposals can be ${status}. Current status: ${current.status}.`,
         );
       }
       assertExpectedRevisionHash(hashSkillProposalRevision(current), input.expectedRevisionHash);
       const now = new Date().toISOString();
-      const record: SkillProposalRecord = {
+      const base = {
         ...current,
         status,
         updatedAt: now,
-        rejectedAt: now,
         statusReason: normalizeOptionalString(input.reason),
       };
+      const record: SkillProposalRecord =
+        status === "rejected"
+          ? { ...base, rejectedAt: now }
+          : {
+              ...base,
+              quarantinedAt: now,
+              scan: { ...current.scan, state: "quarantined" },
+            };
       const event = await updateSkillProposalRecord({
         record,
         event: createSkillProposalEvent({
@@ -335,18 +309,11 @@ async function markProposal(
   return result.record;
 }
 
-async function withPendingSkillProposalMutation<T>(
+async function withPendingSkillProposalRevision<T>(
   input: Pick<
     SkillProposalActionInput,
-    | "agentId"
-    | "config"
-    | "env"
-    | "eventActor"
-    | "expectedRevisionHash"
-    | "proposalId"
-    | "workspaceDir"
+    "agentId" | "config" | "env" | "expectedRevisionHash" | "proposalId" | "workspaceDir"
   >,
-  action: "applied" | "quarantined" | "rejected" | "revised",
   fn: (read: SkillProposalReadResult) => Promise<T>,
 ): Promise<T> {
   const recoveryReadOptions = input.config ? { config: input.config } : undefined;
@@ -373,7 +340,7 @@ async function withPendingSkillProposalMutation<T>(
       );
       if (read.record.status !== "pending") {
         throw new Error(
-          `Only pending proposals can be ${action}. Current status: ${read.record.status}.`,
+          `Only pending proposals can be revised. Current status: ${read.record.status}.`,
         );
       }
       assertExpectedRevisionHash(read.revisionHash, input.expectedRevisionHash);

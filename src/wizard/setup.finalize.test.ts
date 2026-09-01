@@ -1276,6 +1276,38 @@ describe("finalizeSetupWizard", () => {
     expectNoteContains(prompter, "service install exploded", "Gateway");
   });
 
+  it.each([
+    { systemdAvailable: true, supervisor: undefined },
+    { systemdAvailable: false, supervisor: undefined },
+    { systemdAvailable: true, supervisor: "external" },
+  ])(
+    "never enables lingering or installs services for explicit skips ($systemdAvailable, $supervisor)",
+    async ({ systemdAvailable, supervisor }) => {
+      await withPlatform("linux", async () => {
+        await withEnvAsync({ OPENCLAW_SUPERVISOR_MODE: supervisor }, async () => {
+          isSystemdUserServiceAvailable.mockResolvedValue(systemdAvailable);
+          const prompter = createLaterPrompter();
+
+          const result = await ensureGatewayServiceForOnboarding(
+            createFinalizeArgs("quickstart", { prompter }),
+          );
+
+          expect(result.gateway).toEqual({
+            status: "skipped",
+            reason: supervisor ? "external" : systemdAvailable ? "explicit" : "systemd-unavailable",
+          });
+          expect(readSystemdUserLingerStatus).not.toHaveBeenCalled();
+          expect(gatewayServiceIsLoaded).not.toHaveBeenCalled();
+          expect(gatewayServiceInstall).not.toHaveBeenCalled();
+          expect(gatewayServiceRestart).not.toHaveBeenCalled();
+          expect(startGatewayService).not.toHaveBeenCalled();
+          expect(prompter.confirm).not.toHaveBeenCalled();
+          expect(prompter.select).not.toHaveBeenCalled();
+        });
+      });
+    },
+  );
+
   it("recognizes external supervision before probing Linux systemd", async () => {
     await withPlatform("linux", async () => {
       await withEnvAsync({ OPENCLAW_SUPERVISOR_MODE: "external" }, async () => {

@@ -47,6 +47,8 @@ type OpenClawPluginNodeHostCommandBase = {
   command: string;
   cap?: string;
   dangerous?: boolean;
+  /** Settle node-local startup before the initial capability declaration; registration stays synchronous. */
+  prepare?: (context: OpenClawPluginNodeHostCommandAvailabilityContext) => Promise<void> | void;
   /** Return false to omit this command and capability from the node declaration. */
   isAvailable?: (context: OpenClawPluginNodeHostCommandAvailabilityContext) => boolean;
   /** Watch node-local availability and request a fresh Gateway declaration. */

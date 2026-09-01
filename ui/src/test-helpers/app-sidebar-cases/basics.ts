@@ -6,10 +6,6 @@ import {
   sessionRefFromPath,
 } from "../../app-session-route-paths.ts";
 import {
-  clearSessionBoardAvailability,
-  recordSessionBoardAvailability,
-} from "../../lib/board/provider.ts";
-import {
   SESSION_FACE_PREFERENCE_PARAM,
   SESSION_NAVIGATION_KEY_PARAM,
 } from "../../lib/sessions/route-navigation.ts";
@@ -51,14 +47,26 @@ describe("AppSidebar new session navigation", () => {
       agentsList,
     );
     const onOpenNewSession = vi.fn();
+    const onOpenPalette = vi.fn();
+    const onToggleSidebar = vi.fn();
     sidebar.basePath = "/control";
     sidebar.connected = false;
     sidebar.onOpenNewSession = onOpenNewSession;
+    sidebar.onOpenPalette = onOpenPalette;
+    sidebar.onToggleSidebar = onToggleSidebar;
     await sidebar.updateComplete;
 
     const actions = sidebar.querySelector(".sidebar-brand__actions");
     const brandLink = sidebar.querySelector<HTMLAnchorElement>(".sidebar-brand__new-thread");
-    expect(actions?.firstElementChild?.querySelector(".sidebar-brand__new-thread")).toBe(brandLink);
+    expect(
+      Array.from(actions?.querySelectorAll("[aria-label]") ?? [], (action) =>
+        action.getAttribute("aria-label"),
+      ),
+    ).toEqual(["Collapse sidebar", "Open command palette", "New session"]);
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-brand__collapse")?.click();
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-brand__search")?.click();
+    expect(onToggleSidebar).toHaveBeenCalledOnce();
+    expect(onOpenPalette).toHaveBeenCalledOnce();
     expect(brandLink?.getAttribute("aria-label")).toBe("New session");
     expect(brandLink).toBeInstanceOf(HTMLAnchorElement);
     expect(brandLink?.getAttribute("aria-disabled")).toBe("true");
@@ -66,8 +74,6 @@ describe("AppSidebar new session navigation", () => {
     expect(brandLink?.tabIndex).toBe(-1);
     brandLink?.click();
     expect(onOpenNewSession).not.toHaveBeenCalled();
-    expect(sidebar.querySelector(".sidebar-search")).toBeNull();
-    expect(sidebar.querySelector(".sidebar-brand__collapse")).toBeNull();
 
     sidebar.connected = true;
     await sidebar.updateComplete;
@@ -291,9 +297,7 @@ describe("AppSidebar agent chip", () => {
     expect(connectionStatus?.getAttribute("aria-live")).toBe("polite");
     expect(connectionStatus?.textContent).toContain("Offline");
     expect(connectionStatus?.textContent).toContain("Reconnecting…");
-    expect(sidebar.querySelector(".sidebar-agent-card__subtitle")?.textContent).not.toContain(
-      "Offline",
-    );
+    expect(sidebar.querySelector(".sidebar-agent-card__subtitle-row")).toBeNull();
 
     card?.click();
     await sidebar.updateComplete;
@@ -308,7 +312,7 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".sidebar-footer-bar__status")).toBeNull();
   });
 
-  it("shows a working subtitle while the agent has an active run", async () => {
+  it("shows the Home spinner without an agent subtitle during an active run", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const harness = createSessionsHarness("main", ["agent:main:main"]);
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
@@ -333,9 +337,7 @@ describe("AppSidebar agent chip", () => {
     });
     await sidebar.updateComplete;
 
-    expect(sidebar.querySelector(".sidebar-agent-card__subtitle")?.textContent).toContain(
-      "Working",
-    );
+    expect(sidebar.querySelector(".sidebar-agent-card__subtitle-row")).toBeNull();
     // Run state uses the session spinner at the row edge without changing the Home icon.
     const spinner = sidebar.querySelector(".nav-item--home .nav-item__state .session-run-spinner");
     expect(spinner).not.toBeNull();
@@ -359,28 +361,6 @@ describe("AppSidebar agent chip", () => {
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".nav-item--home .session-run-spinner")).toBeNull();
     expect(sidebar.querySelector(".nav-item--home .session-glyph__badge--unread")).not.toBeNull();
-  });
-
-  it("uses the shared tooltip for the Home dashboard glyph", async () => {
-    const mainKey = "agent:main:main";
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", [mainKey]));
-
-    try {
-      recordSessionBoardAvailability(mainKey, true);
-      sidebar.requestUpdate();
-      await sidebar.updateComplete;
-
-      const glyph = sidebar.querySelector('.nav-item--home [aria-label="Dashboard available"]');
-      expect(glyph?.getAttribute("aria-label")).toBe("Dashboard available");
-      expect(glyph?.hasAttribute("title")).toBe(false);
-      expect(
-        (glyph?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
-          ?.content,
-      ).toBe("Dashboard available");
-    } finally {
-      clearSessionBoardAvailability();
-    }
   });
 
   it("keeps the sessions list flat for the selected agent and flags other-agent unread", async () => {
@@ -421,12 +401,12 @@ describe("AppSidebar agent chip", () => {
 
     // No per-agent sections: the card switcher owns agent switching now, and
     // the main session lives behind the identity card instead of the list.
-    expect(sidebar.querySelector(".sidebar-agent-card__subtitle")?.textContent?.trim()).toBe(
-      "Main task",
-    );
+    expect(sidebar.querySelector(".sidebar-agent-card__subtitle-row")).toBeNull();
     expect(sidebar.querySelector(".sidebar-agent-section")).toBeNull();
     expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(0);
-    expect(sidebar.querySelector(".sidebar-agent-card__menu-unread")).not.toBeNull();
+    expect(
+      sidebar.querySelector(".sidebar-agent-card__avatar .sidebar-agent-card__menu-unread"),
+    ).not.toBeNull();
 
     // Mid-switch (selected agent != loaded result agent) the list renders the
     // target agent's cached rows instead of flashing empty until refresh.

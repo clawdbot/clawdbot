@@ -591,6 +591,18 @@ function operatorApprovalRemediation(
         },
       ];
     case "run-aborted":
+      if (
+        record.resolver?.kind === "system" &&
+        (record.resolver.id === "permission-change" ||
+          record.resolver.id === "approval-scope-closed")
+      ) {
+        return [
+          {
+            code: "request_approval_again",
+            text: "Request the action again under the current permissions if it is still needed.",
+          },
+        ];
+      }
       return [
         {
           code: "start_new_run",
@@ -1671,7 +1683,9 @@ export function resolveOperatorApproval(params: {
   nowMs?: number;
   databaseOptions?: OpenClawStateDatabaseOptions;
   /** Cron-context allow-always mints this scoped grant in the same transaction. */
-  standingGrant?: CronStandingGrantMintSpec & { expiresAtMs: number | null };
+  standingGrant?: { kind: "cron" } & CronStandingGrantMintSpec & {
+      expiresAtMs: number | null;
+    };
 }): ResolveOperatorApprovalResult {
   const id = requireApprovalId(params.id);
   const resolverId = normalizeNullableString(params.resolver.id);

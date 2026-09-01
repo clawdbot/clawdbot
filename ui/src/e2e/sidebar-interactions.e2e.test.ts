@@ -84,7 +84,7 @@ suite.define(() => {
       const draft = "Keep this unsent conversation draft";
       await composer.fill(draft);
       const originalUrl = page.url();
-      await captureSidebarUiProof(page, "new-session-links-source.png");
+      await captureSidebarUiProof(suite, page, "new-session-links-source.png");
 
       const actions: Array<{ selector: string; section?: string; params: Record<string, string> }> =
         [
@@ -107,7 +107,7 @@ suite.define(() => {
         ];
       for (const [index, action] of actions.entries()) {
         if (index === actions.length - 1) {
-          await page.locator(".shell-chrome-controls__nav-toggle").click();
+          await page.locator(".sidebar-brand__collapse").click();
         }
         if (action.section) {
           await page
@@ -149,7 +149,7 @@ suite.define(() => {
           expect(await composer.inputValue()).toBe(draft);
           expect(await sessionCreates(page)).toEqual([]);
           if ("group" in action.params) {
-            await captureSidebarUiProof(popup, "new-session-links-group-tab.png");
+            await captureSidebarUiProof(suite, popup, "new-session-links-group-tab.png");
           }
         } finally {
           await popup.close();
@@ -229,7 +229,7 @@ suite.define(() => {
         duration: "0.6s",
         name: "chat-composer-prefill-attention",
       });
-      await captureSidebarUiProof(page, "capabilities-composer-focus.png");
+      await captureSidebarUiProof(suite, page, "capabilities-composer-focus.png");
       await expect
         .poll(() => input.getAttribute("class"))
         .not.toContain("agent-chat__input--prefill-attention");
@@ -247,7 +247,7 @@ suite.define(() => {
     try {
       expect(cueStyle.name).toBe("none");
       expect(cueStyle.boxShadow).not.toBe("none");
-      await captureSidebarUiProof(page, "capabilities-composer-reduced-motion.png");
+      await captureSidebarUiProof(suite, page, "capabilities-composer-reduced-motion.png");
       await expect
         .poll(() => input.getAttribute("class"))
         .not.toContain("agent-chat__input--prefill-attention");
@@ -396,7 +396,7 @@ suite.define(() => {
           agentsList,
           messages: [],
           metadata: { models: [] },
-          sessionId: "control-ui-e2e-session",
+          sessionId: "session:agent:main:main",
           thinkingLevel: null,
         },
       },
@@ -496,7 +496,7 @@ suite.define(() => {
       await expect
         .poll(() => researchSwitch.evaluate((element) => element === document.activeElement))
         .toBe(true);
-      await captureSidebarUiProof(page, "agent-menu-without-new-session-rows.png");
+      await captureSidebarUiProof(suite, page, "agent-menu-without-new-session-rows.png");
       await page.keyboard.press("Enter");
       await expect
         .poll(() => new URL(page.url()).pathname)
@@ -534,7 +534,7 @@ suite.define(() => {
           agentsList,
           messages: [],
           metadata: { models: [] },
-          sessionId: "control-ui-e2e-session",
+          sessionId: "session:agent:main:main",
           thinkingLevel: null,
         },
       },
@@ -552,7 +552,7 @@ suite.define(() => {
       await expect
         .poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth))
         .toBe(1);
-      await captureSidebarUiProof(page, "workspace-agent-avatar.png");
+      await captureSidebarUiProof(suite, page, "workspace-agent-avatar.png");
     } finally {
       await suite.closeBrowserContext(context);
     }

@@ -10,7 +10,7 @@ import {
   stopHoverMarqueeFromEvent,
 } from "../lib/hover-marquee.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
-import type { PresenceViewer } from "../lib/presence-users.ts";
+import { presenceMatchesProfile, type PresenceViewer } from "../lib/presence-users.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
   resolveSessionPreferredFace,
@@ -250,11 +250,11 @@ export function renderPersonActivityCard(input: PersonCardInput) {
   const recent = sessions.filter(
     ({ row, agentId }) =>
       !watched.has(sessionIdentity(row.key, agentId, input)) &&
-      [row.owner?.actor, row.createdActor].some(
-        (actor) => actor?.type === "human" && actor.id === user.id,
+      [row.owner?.actor, row.createdActor].some((actor) =>
+        presenceMatchesProfile(user, actor?.identity),
       ),
   );
-  const activity = personActivityLink(user.id, input.routing)!;
+  const activity = personActivityLink(user.identity?.id, input.routing);
   return html`<div class="person-activity-card">
     <header class="person-activity-card__header">
       <openclaw-viewer-avatar
@@ -293,10 +293,14 @@ export function renderPersonActivityCard(input: PersonCardInput) {
       </div>
     </dl>
     ${renderSessions(viewing, input, false)}${renderSessions(recent, input, true)}
-    <footer>
-      <a href=${activity.href} @click=${activity.open}
-        >${t("presence.card.viewActivity")}<span aria-hidden="true">${icons.chevronRight}</span></a
-      >
-    </footer>
+    ${activity
+      ? html`<footer>
+          <a href=${activity.href} @click=${activity.open}
+            >${t("presence.card.viewActivity")}<span aria-hidden="true"
+              >${icons.chevronRight}</span
+            ></a
+          >
+        </footer>`
+      : nothing}
   </div>`;
 }

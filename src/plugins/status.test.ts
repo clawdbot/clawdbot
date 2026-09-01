@@ -254,6 +254,7 @@ function expectBundledCompatChainApplied(params: {
   expect(withBundledPluginEnablementCompatMock).toHaveBeenCalledWith({
     config: params.config,
     pluginIds: params.pluginIds,
+    activation: "defaults",
   });
   if (params.loadModules) {
     expectPluginLoaderCall({ config: params.enabledConfig, loadModules: true });
@@ -266,10 +267,7 @@ function createAutoEnabledStatusConfig(
   entries: Record<string, unknown>,
   rawConfigOverrides?: Record<string, unknown>,
 ) {
-  const rawConfig = {
-    plugins: {},
-    ...rawConfigOverrides,
-  };
+  const rawConfig = { plugins: {}, ...rawConfigOverrides };
   const autoEnabledConfig = {
     ...rawConfig,
     plugins: {
@@ -1098,7 +1096,6 @@ describe("plugin status reports", () => {
 
   it("formats and summarizes compatibility notices", () => {
     const notice = createCompatibilityNotice({ pluginId: "legacy-plugin", code: "hook-only" });
-
     expect(formatPluginCompatibilityNotice(notice)).toBe(`legacy-plugin ${HOOK_ONLY_MESSAGE}`);
     expect(summarizePluginCompatibility([notice])).toEqual({
       noticeCount: 1,

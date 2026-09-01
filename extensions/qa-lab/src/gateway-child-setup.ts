@@ -4,10 +4,8 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   createQaBundledPluginsDir,
   resolveQaOwnerPluginIdsForProviderIds,
@@ -26,7 +24,7 @@ import {
 } from "./gateway-child-env.js";
 import type { QaGatewayChildLifecycle } from "./gateway-child-lifecycle.js";
 import { createQaGatewayChildLogCollector } from "./gateway-child-process.js";
-import { redactQaGatewayDebugText } from "./gateway-log-redaction.js";
+import { createQaGatewayCliError, redactQaGatewayDebugText } from "./gateway-log-redaction.js";
 import { reserveQaGatewayPort } from "./gateway-port-reservation.js";
 import { createQaGatewayProcessBoundaryController } from "./gateway-process-boundary.js";
 import { splitQaModelRef, type QaProviderMode } from "./model-selection.js";
@@ -48,7 +46,6 @@ import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
 import { buildQaGatewayConfig, type QaThinkingLevel } from "./qa-gateway-config.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import type { RuntimeId } from "./runtime-parity.js";
-const QA_PACKAGE_AUTH_FAILURE_MAX_CHARS = 2_048;
 export type QaGatewayChildStateMutationContext = {
   configPath: string;
   runtimeEnv: NodeJS.ProcessEnv;
@@ -111,7 +108,21 @@ function createQaPackagedMockApiKey(): string {
   return `${prefix}-${["qa", "mock", randomUUID().replaceAll("-", "")].join("-")}`;
 }
 
+async function runQaPackagedBootstrap(
+  failureMessage: string,
+  operation: () => Promise<unknown>,
+): Promise<void> {
+  try {
+    await operation();
+  } catch (error) {
+    const details = createQaGatewayCliError(error).message;
+    // oxlint-disable-next-line preserve-caught-error -- Candidate CLI output can contain credentials; only the bounded redacted message crosses this boundary, never its raw cause.
+    throw new Error(`${failureMessage}: ${details}`);
+  }
+}
+
 async function stageQaPackagedMockAuthProfiles(params: {
+  lifetime: QaGatewayChildLifecycle;
   command: QaGatewayChildCommand;
   configPath: string;
   cwd: string;
@@ -119,35 +130,29 @@ async function stageQaPackagedMockAuthProfiles(params: {
   providers: readonly string[];
 }): Promise<void> {
   for (const provider of uniqueStrings(params.providers)) {
-    try {
-      await runQaGatewayCliCommand({
-        executablePath: params.command.executablePath,
-        argsPrefix: params.command.argsPrefix ?? [],
-        args: [
-          "models",
-          "auth",
-          "--agent",
-          "qa",
-          "paste-api-key",
-          "--provider",
-          provider,
-          "--profile-id",
-          buildQaMockProfileId(provider),
-        ],
-        cwd: params.command.cwd ?? params.cwd,
-        env: { ...params.env, OPENCLAW_CONFIG_PATH: params.configPath },
-        stdin: `${createQaPackagedMockApiKey()}\n`,
-      });
-    } catch (error) {
-      const errorMessage = toErrorObject(error, "installed package auth command failed").message;
-      const details = sliceUtf16Safe(
-        redactQaGatewayDebugText(errorMessage),
-        0,
-        QA_PACKAGE_AUTH_FAILURE_MAX_CHARS,
-      );
-      // oxlint-disable-next-line preserve-caught-error -- Candidate CLI errors can contain the submitted API key; only the redacted message crosses this boundary.
-      throw new Error(`installed package mock auth bootstrap failed for ${provider}: ${details}`);
-    }
+    await runQaPackagedBootstrap(
+      `installed package mock auth bootstrap failed for ${provider}`,
+      () =>
+        runQaGatewayCliCommand({
+          lifetime: params.lifetime,
+          executablePath: params.command.executablePath,
+          argsPrefix: params.command.argsPrefix ?? [],
+          args: [
+            "models",
+            "auth",
+            "--agent",
+            "qa",
+            "paste-api-key",
+            "--provider",
+            provider,
+            "--profile-id",
+            buildQaMockProfileId(provider),
+          ],
+          cwd: params.command.cwd ?? params.cwd,
+          env: { ...params.env, OPENCLAW_CONFIG_PATH: params.configPath },
+          stdin: `${createQaPackagedMockApiKey()}\n`,
+        }),
+    );
   }
 }
 
@@ -414,6 +419,7 @@ export async function prepareQaGatewayChild(
             mode: 0o600,
           });
           await stageQaPackagedMockAuthProfiles({
+            lifetime,
             command: gatewayCommand,
             configPath: packagedAuthConfigPath,
             cwd: gatewayCwd,
@@ -424,6 +430,32 @@ export async function prepareQaGatewayChild(
             throw new Error("installed package mock auth bootstrap mutated canonical config");
           }
           packagedMockAuthStaged = true;
+        }
+        if (usesPackagedCandidate && gatewayCommand) {
+          const command = {
+            lifetime,
+            executablePath: gatewayCommand.executablePath,
+            argsPrefix: gatewayCommand.argsPrefix ?? [],
+            cwd: gatewayCwd,
+            env,
+          };
+          await runQaPackagedBootstrap("installed package plugin setup failed", async () => {
+            // The separate onboarding smoke cannot prepare this child's state.
+            // Converge every freshly written config; a new-port retry can otherwise
+            // restore plugin entries the candidate removed before verify-only startup.
+            // Published candidates such as 2026.7.1-2 predate capability consent.
+            const help = await runQaGatewayCliCommand({
+              ...command,
+              args: ["update", "repair", "--help"],
+            });
+            const consentArgs = help.includes("--accept-capabilities")
+              ? ["--accept-capabilities"]
+              : [];
+            await runQaGatewayCliCommand({
+              ...command,
+              args: ["update", "repair", ...consentArgs, "--yes", "--no-restart", "--json"],
+            });
+          });
         }
       }
       if (!env) {

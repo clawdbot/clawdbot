@@ -14,7 +14,6 @@ import {
   cancelCronEdit,
   createInitialCronState,
   getVisibleCronJobs,
-  loadCronFailingCount,
   loadCronModelSuggestions,
   toggleCronJob,
   loadCronJobsPage,
@@ -2400,7 +2399,8 @@ describe("cron controller", () => {
     expect(state.cronJobs).toEqual([existingJob]);
     expect(state.cronJobsSnapshotRevision).toBe("accepted-revision");
     expect(state.cronJobsTotal).toBe(1);
-    expect(state.cronError).toContain("cron.list returned an invalid inventory page");
+    expect(state.cronJobsError).toContain("cron.list returned an invalid inventory page");
+    expect(state.cronError).toBeNull();
   });
 
   it("keeps table-only filters out of shared cron jobs loads", async () => {
@@ -2549,6 +2549,26 @@ describe("cron controller", () => {
     expect(state.cronJobs.map((job) => job.id)).toEqual(["job-ok"]);
     expect(state.cronJobsTotal).toBe(2);
     expect(state.cronJobsHasMore).toBe(false);
+  });
+
+  it("keeps list failures separate from other Cron errors", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "cron.list") {
+        return emptyCronListResponse({ snapshotRevision: "loaded-empty" });
+      }
+      if (method === "cron.runs") {
+        throw new Error("run history unavailable");
+      }
+      return {};
+    });
+    const state = createStateWithRequest(request);
+
+    await loadCronJobsPage(state);
+    await expect(loadCronRuns(state, null)).resolves.toBe("error");
+
+    expect(state.cronJobsSnapshotRevision).toBe("loaded-empty");
+    expect(state.cronJobsError).toBeNull();
+    expect(state.cronError).toBe("run history unavailable");
   });
 
   it("loads and appends paged run history", async () => {
@@ -3012,62 +3032,6 @@ describe("cron one-shot schedule precision", () => {
       kind: "at",
       at: originalMinute.toISOString(),
     });
-  });
-});
-
-describe("loadCronFailingCount", () => {
-  it("queries the unfiltered enabled+error total and stores it", async () => {
-    const request = vi.fn(async () => ({ jobs: [], total: 4, offset: 0, limit: 1 }));
-    const state = createStateWithRequest(request);
-    await loadCronFailingCount(state);
-
-    expect(request).toHaveBeenCalledWith("cron.list", {
-      enabled: "enabled",
-      includeDeliveryPreviews: false,
-      lastRunStatus: "error",
-      limit: 1,
-      offset: 0,
-    });
-    expect(state.cronFailingCount).toBe(4);
-  });
-
-  it("refreshes after job mutations such as pause/resume", async () => {
-    const job = createCronJob({ id: "job-1", name: "Pause me" });
-    const request = vi.fn(async (method: string, payload?: unknown) => {
-      if (
-        method === "cron.list" &&
-        (payload as { lastRunStatus?: string })?.lastRunStatus === "error"
-      ) {
-        return { jobs: [], total: 1, offset: 0, limit: 1 };
-      }
-      if (method === "cron.list") {
-        return emptyCronListResponse();
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 0 };
-      }
-      if (method === "cron.update") {
-        return { ...job, enabled: false, configRevision: "config-revision-2" };
-      }
-      return {};
-    });
-    const state = createStateWithRequest(request, { cronJobs: [job] });
-    await toggleCronJob(state, job, false);
-
-    expect(state.cronFailingCount).toBe(1);
-  });
-
-  it("degrades to null on request failure without touching cronError", async () => {
-    const request = vi.fn(async () => {
-      throw new Error("nope");
-    });
-    const state = createStateWithRequest(request, {
-      cronFailingCount: 2,
-    });
-    await loadCronFailingCount(state);
-
-    expect(state.cronFailingCount).toBeNull();
-    expect(state.cronError).toBeNull();
   });
 });
 

@@ -19,7 +19,9 @@ export type WorkerTurnEnvironmentService = Pick<
   | "startTunnel"
   | "stopTunnel"
 > &
-  Partial<Pick<WorkerEnvironmentService, "resolveSshIdentity" | "supportsNodePortal">>;
+  Partial<
+    Pick<WorkerEnvironmentService, "resolveSshIdentity" | "supportsNodePortal" | "prepareComputer">
+  >;
 
 export type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "active" }>;
 

@@ -1,10 +1,16 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+let artifactDir: string | undefined;
+beforeEach(() => {
+  artifactDir = artifactRoot
+    ? createControlUiE2eArtifactDir("mobile-inbox-sheet", artifactRoot)
+    : undefined;
+});
 const viewport = { width: 390, height: 844 };
 const suite = createControlUiE2eSuite({
   name: "Control UI mobile Inbox sheet",
@@ -103,7 +109,6 @@ suite.define(() => {
       results.push(result);
 
       if (artifactDir) {
-        await mkdir(artifactDir, { recursive: true });
         const previousStyle = await page.addStyleTag({
           content: `
             .shell--mobile-nav .sidebar-issues-panel { background: var(--bg-elevated); }

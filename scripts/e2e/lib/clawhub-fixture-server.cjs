@@ -19,12 +19,21 @@ async function assertPrepublishRequests(
   requestedPackage,
   version,
   securityMode = "required",
+  attempts = "1",
+  minimumAttempts = "1",
 ) {
   if (!baseUrl || !requestedPackage || !version) {
     throw new Error("assert-prepublish-requests requires <base-url> <package-name> <version>");
   }
   if (securityMode !== "required" && securityMode !== "absent") {
     throw new Error("assert-prepublish-requests security mode must be required or absent");
+  }
+  if (attempts !== "1" && attempts !== "2" && attempts !== "complete") {
+    throw new Error("assert-prepublish-requests attempts must be 1, 2, or complete");
+  }
+  const minimumCount = Number(minimumAttempts);
+  if (!Number.isInteger(minimumCount) || minimumCount < 1 || minimumCount > 16) {
+    throw new Error("assert-prepublish-requests minimum attempts must be an integer from 1 to 16");
   }
   const response = await fetch(new URL("/__fixture__/requests", baseUrl));
   if (!response.ok) {
@@ -42,9 +51,18 @@ async function assertPrepublishRequests(
     ...(securityMode === "required" ? [`GET ${versionPath}/security`] : []),
     `GET ${versionPath}/artifact/download`,
   ];
-  if (JSON.stringify(payload.requests) !== JSON.stringify(expected)) {
+  // Multi-command upgrade recovery can stage an artifact in several convergence
+  // phases. Every request must still belong to a complete authorized audit sequence.
+  const count =
+    attempts === "complete" ? payload.requests.length / expected.length : Number(attempts);
+  if (!Number.isInteger(count) || count < minimumCount || count > 16) {
+    throw new Error(`expected ${minimumCount}-16 complete ClawHub artifact audit sequences`);
+  }
+  const expectedRequests = Array.from({ length: count }, () => expected).flat();
+  if (JSON.stringify(payload.requests) !== JSON.stringify(expectedRequests)) {
     throw new Error(`unexpected ClawHub fixture requests: ${JSON.stringify(payload.requests)}`);
   }
+  console.log(`Verified ${count} complete ClawHub artifact audit sequence(s).`);
 }
 
 async function assertNoRequests(baseUrl) {
@@ -647,7 +665,14 @@ profiles["catalog-search"] = {
 };
 
 if (profile === "assert-prepublish-requests") {
-  assertPrepublishRequests(portFile, artifactManifestFile, process.argv[5], process.argv[6]).catch(
+  assertPrepublishRequests(
+    portFile,
+    artifactManifestFile,
+    process.argv[5],
+    process.argv[6],
+    process.argv[7],
+    process.argv[8],
+  ).catch(
     /** @param {unknown} error */ (error) => {
       console.error(error);
       process.exit(1);

@@ -114,6 +114,34 @@ describe("pw-session page-scoped CDP client", () => {
     expect(sessionDetach).toHaveBeenCalledTimes(1);
   });
 
+  it("marks both generated role refs and raw accessibility refs", async () => {
+    const sessionSend = vi.fn(async (method: string) => {
+      if (method === "DOM.pushNodesByBackendIdsToFrontend") {
+        return { nodeIds: [101, 202] };
+      }
+      return {};
+    });
+    const page = {
+      context: () => ({
+        newCDPSession: vi.fn(async () => ({
+          send: sessionSend,
+          detach: vi.fn(async () => {}),
+        })),
+      }),
+      locator: vi.fn(() => ({ evaluateAll: vi.fn(async () => {}) })),
+    };
+
+    const marked = await markBackendDomRefsOnPage({
+      page: page as never,
+      refs: [
+        { ref: "e1", backendDOMNodeId: 42 },
+        { ref: "ax2", backendDOMNodeId: 84 },
+      ],
+    });
+
+    expect(marked).toEqual(new Set(["e1", "ax2"]));
+  });
+
   it("clears stale markers even when no backend refs are valid", async () => {
     const newCDPSession = vi.fn();
     const evaluateAll = vi.fn(async () => {});

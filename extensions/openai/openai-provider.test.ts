@@ -26,6 +26,7 @@ type OpenAITestCatalogResult = {
   outcomes: readonly {
     provider: string;
     profileId?: string;
+    rejectionScope?: "catalog";
     status: "ready" | "auth-rejected" | "unavailable";
   }[];
 };
@@ -673,29 +674,60 @@ describe("buildOpenAIProvider", () => {
   });
 
   it.each([
-    ["returns an empty model list", () => Response.json({ data: [] })],
+    [
+      "returns an empty model list",
+      () => Response.json({ data: [] }),
+      "sk-openai-unavailable",
+      false,
+    ],
     [
       "returns only unsupported models",
       () => Response.json({ data: [{ id: "not-in-manifest", object: "model" }] }),
+      "sk-openai-unavailable",
+      false,
     ],
-    ["rejects the API key", () => new Response("unauthorized", { status: 401 })],
-    ["denies account access", () => new Response("forbidden", { status: 403 })],
-  ])("does not invent available OpenAI models when discovery %s", async (_label, response) => {
-    const release = vi.fn(async () => undefined);
-    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
-      response: response(),
-      finalUrl: "https://api.openai.com/v1/models",
-      release,
-    }));
+    [
+      "rejects a SecretRef marker",
+      () => new Response("unauthorized", { status: 401 }),
+      "secretref-managed",
+      true,
+    ],
+    [
+      "rejects a concrete API key",
+      () => new Response("unauthorized", { status: 401 }),
+      "sk-openai-unavailable",
+      false,
+    ],
+    [
+      "denies account access",
+      () => new Response("forbidden", { status: 403 }),
+      "sk-openai-unavailable",
+      false,
+    ],
+  ])(
+    "does not invent available OpenAI models when discovery %s",
+    async (_label, response, apiKey, catalogScoped) => {
+      const release = vi.fn(async () => undefined);
+      const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
+        response: response(),
+        finalUrl: "https://api.openai.com/v1/models",
+        release,
+      }));
 
-    const provider = await buildOpenAILiveProviderConfig({
-      apiKey: "sk-openai-unavailable",
-      fetchGuard,
-    });
+      const result = await runCatalogWithFetchGuard({
+        fetchGuard,
+        auth: {
+          mode: "api_key",
+          apiKey,
+          source: "profile",
+        },
+      });
 
-    expect(provider.models).toEqual([]);
-    expect(release).toHaveBeenCalledOnce();
-  });
+      expect(result.provider.models).toEqual([]);
+      expect(result.outcomes[0]?.rejectionScope).toBe(catalogScoped ? "catalog" : undefined);
+      expect(release).toHaveBeenCalledOnce();
+    },
+  );
 
   it("keeps only manifest fallback models when OpenAI discovery is unavailable", async () => {
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({

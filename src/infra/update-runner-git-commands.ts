@@ -1,5 +1,4 @@
-import { DEV_BRANCH } from "./update-channels.js";
-import type { CommandRunner, UpdateStepResult } from "./update-runner-types.js";
+import type { CommandRunner } from "./update-runner-types.js";
 
 const BUILD_MAX_OLD_SPACE_MB = 8192;
 const DEV_PREFLIGHT_LINT_ENV: NodeJS.ProcessEnv = {
@@ -36,6 +35,10 @@ export function resolveBuildEnv(
     NODE_OPTIONS: resolveBuildNodeOptions(env.NODE_OPTIONS ?? process.env.NODE_OPTIONS),
     ...(buildCacheRoot ? { BUILD_ALL_CACHE_ROOT: buildCacheRoot } : {}),
   };
+}
+
+export function gitCleanCheckArgs(gitRoot: string): string[] {
+  return ["git", "-C", gitRoot, "status", "--porcelain", "--", ":!dist/control-ui/"];
 }
 
 async function hasExplicitPnpmPreferOfflineConfig(params: {
@@ -90,58 +93,6 @@ export async function resolveInstallEnv(
     installEnv.pnpm_config_prefer_offline = "true";
   }
   return installEnv;
-}
-
-function isSupersededInstallFailure(
-  step: UpdateStepResult,
-  steps: readonly UpdateStepResult[],
-): boolean {
-  return (
-    step.name === "deps install" &&
-    steps.some(
-      (candidate) => candidate.name === "deps install (ignore scripts)" && candidate.exitCode === 0,
-    )
-  );
-}
-
-function isPreflightCandidateFailure(step: UpdateStepResult): boolean {
-  return /^preflight (?:reset|clean|checkout|package manager|deps install(?: \(ignore scripts\))?|build|config validate|lint) \(.+\)$/u.test(
-    step.name,
-  );
-}
-
-function isSupersededTargetRefFailure(
-  step: UpdateStepResult,
-  followingSteps: readonly UpdateStepResult[],
-): boolean {
-  const isTargetRefProbe = step.name.startsWith("git rev-parse ");
-  const isTargetTagFetch = step.name.startsWith("git fetch ") && step.name.includes(" refs/tags/");
-  const isUpstreamProbe = step.name === "upstream check";
-  const isLocalDevBranchProbe = step.name === `git show-ref ${DEV_BRANCH}`;
-  if (!isTargetRefProbe && !isTargetTagFetch && !isUpstreamProbe && !isLocalDevBranchProbe) {
-    return false;
-  }
-  if (isLocalDevBranchProbe) {
-    return followingSteps.some(
-      (candidate) =>
-        candidate.name.startsWith(`git checkout -B ${DEV_BRANCH} `) && candidate.exitCode === 0,
-    );
-  }
-  return followingSteps.some(
-    (candidate) => candidate.name.startsWith("git rev-parse ") && candidate.exitCode === 0,
-  );
-}
-
-export function findBlockingGitFailure(
-  steps: readonly UpdateStepResult[],
-): UpdateStepResult | undefined {
-  return steps.find(
-    (step, index) =>
-      step.exitCode !== 0 &&
-      !isPreflightCandidateFailure(step) &&
-      !isSupersededInstallFailure(step, steps) &&
-      !isSupersededTargetRefFailure(step, steps.slice(index + 1)),
-  );
 }
 
 export function shouldRunDevPreflightLint(env: NodeJS.ProcessEnv = process.env): boolean {

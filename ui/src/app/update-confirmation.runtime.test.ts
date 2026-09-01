@@ -3,7 +3,10 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
-import { confirmAndStartUpdateRuntime } from "./update-confirmation.runtime.ts";
+import {
+  closeFailedUpdateDialog,
+  confirmAndStartUpdateRuntime,
+} from "./update-confirmation.runtime.ts";
 import type { UpdateProgress } from "./update-confirmation.ts";
 
 /** Drives the dialog the way the shell does: one live lifecycle stream. */
@@ -207,6 +210,28 @@ it("closes itself once a watched update finishes without a failure", async () =>
 
   await settled;
   expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+});
+
+it("hands only a failed dialog over to triage", async () => {
+  const stream = createProgressStream();
+  const { settled } = startUpdate({ watchUpdateProgress: stream.watchUpdateProgress });
+  await getRenderedModalDialog(document.body);
+  closeFailedUpdateDialog();
+  expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
+  findButton("Update and restart").click();
+  await stream.push({ busy: true, connected: true, failure: null });
+  closeFailedUpdateDialog();
+  expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
+
+  await stream.push({
+    busy: false,
+    connected: true,
+    failure: "Read the recorded cause before retrying.",
+  });
+  closeFailedUpdateDialog();
+  await settled;
+  expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+  expect(stream.stopped).toBe(true);
 });
 
 /**

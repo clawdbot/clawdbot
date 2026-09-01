@@ -66,6 +66,15 @@ describe("legacy Web Push Doctor migration", () => {
     };
   }
 
+  function withUnexpectedJsonFields<T extends object>(value: T) {
+    return { "": 1, later: 2, ...value };
+  }
+
+  function subscriptionStore(value: unknown) {
+    const endpoint = subscription().endpoint;
+    return { subscriptionsByEndpointHash: { [hashWebPushEndpoint(endpoint)]: value } };
+  }
+
   async function writeLegacyState(params: {
     stateDir: string;
     subscriptions?: unknown;
@@ -243,6 +252,42 @@ describe("legacy Web Push Doctor migration", () => {
     expect(result.warnings[0]).toContain("VAPID keys are invalid");
     expect(readPersistedVapidKeyPair(stateDir)).toBeNull();
     expect(fs.existsSync(paths.vapidKeysPath!)).toBe(true);
+  });
+
+  it.each([
+    ["subscriptions store", false, withUnexpectedJsonFields({ subscriptionsByEndpointHash: {} })],
+    ["subscription", false, subscriptionStore(withUnexpectedJsonFields(subscription()))],
+    [
+      "subscription keys",
+      false,
+      subscriptionStore({
+        ...subscription(),
+        keys: withUnexpectedJsonFields(subscription().keys),
+      }),
+    ],
+    ["VAPID keys", true, withUnexpectedJsonFields(vapidKeys())],
+  ])("rejects unexpected JSON fields before mutation: %s", async (label, isVapid, value) => {
+    const stateDir = useStateDir();
+    const pushDir = path.join(stateDir, "push");
+    const sourcePath = path.join(
+      pushDir,
+      isVapid ? "vapid-keys.json" : "web-push-subscriptions.json",
+    );
+    await fsp.mkdir(pushDir, { recursive: true });
+    await fsp.writeFile(sourcePath, JSON.stringify(value), "utf8");
+
+    const result = await migrateLegacyWebPush({
+      detected: detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }),
+      stateDir,
+    });
+
+    expect(result.warnings[0]).toBe(
+      `Failed reading legacy Web Push state: Error: legacy Web Push ${label} has unexpected field ""`,
+    );
+    expect(listWebPushSubscriptions(stateDir)).toEqual([]);
+    expect(readPersistedVapidKeyPair(stateDir)).toBeNull();
+    expect(fs.existsSync(sourcePath)).toBe(true);
+    expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
   });
 
   it("removes an empty valid store only after opening SQLite", async () => {

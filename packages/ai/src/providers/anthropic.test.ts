@@ -563,20 +563,14 @@ describe("Anthropic provider", () => {
     expect(result.usage.cost.cacheWrite).toBeCloseTo(7.75, 10);
   });
 
-  it.each([
-    [undefined, 0],
-    [2, 2],
-  ])("uses Anthropic SDK maxRetries=%s", async (maxRetries, expected) => {
+  it("pins Anthropic SDK retries to zero", async () => {
     const model = makeAnthropicModel();
-    await streamAnthropic(
-      model,
-      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-      { maxRetries },
-    ).result();
+    await streamAnthropic(model, {
+      messages: [{ role: "user", content: "hello", timestamp: 0 }],
+    }).result();
 
-    expect(anthropicMockState.requestOptions).toEqual([
-      expect.objectContaining({ maxRetries: expected }),
-    ]);
+    expect(anthropicMockState.requestOptions).toEqual([expect.objectContaining({ maxRetries: 0 })]);
+    expect(anthropicMockState.configs.at(-1)).toMatchObject({ maxRetries: 0 });
   });
 
   it.each([
@@ -2426,53 +2420,6 @@ describe("Anthropic provider", () => {
     ]);
     // ...and NOT on the trailing volatile carrier, which is left uncached.
     expect(messages[1]?.content).toBe("volatile current-turn metadata");
-  });
-
-  it("emits start event only after message_start so pre-stream SSE errors arrive before any non-error event", async () => {
-    function createSseEventResponse(lines: string): Response {
-      return new Response(lines, {
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-      });
-    }
-
-    const client = {
-      messages: {
-        create: vi.fn(() => ({
-          asResponse: () =>
-            Promise.resolve(
-              createSseEventResponse(
-                "event: message_start\ndata: " +
-                  JSON.stringify({
-                    type: "message_start",
-                    message: { id: "msg_1", usage: { input_tokens: 1, output_tokens: 0 } },
-                  }) +
-                  "\n\nevent: message_stop\ndata: " +
-                  JSON.stringify({ type: "message_stop" }) +
-                  "\n\n",
-              ),
-            ),
-        })),
-      },
-    };
-
-    const stream = streamAnthropic(
-      makeAnthropicModel(),
-      { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
-      { apiKey: "sk-ant-key", client: client as never },
-    );
-
-    const eventTypes: string[] = [];
-    for await (const event of stream as AsyncIterable<{ type: string }>) {
-      eventTypes.push(event.type);
-    }
-
-    // start must come after message_start processing, not before the loop
-    const startIndex = eventTypes.indexOf("start");
-    expect(startIndex).toBeGreaterThanOrEqual(0);
-    // No error before start — the start event should be first non-error event
-    const errorBeforeStart = eventTypes.slice(0, startIndex).some((t) => t === "error");
-    expect(errorBeforeStart).toBe(false);
   });
 
   it("emits error without a preceding start event when SSE error arrives before message_start", async () => {

@@ -1831,8 +1831,8 @@ struct GatewayNodeSessionTests {
         let error = try #require(params["error"] as? [String: Any])
         #expect(params["id"] as? String == "during-lifecycle")
         #expect(params["ok"] as? Bool == false)
-        #expect(error["code"] as? String == OpenClawNodeErrorCode.unavailable.rawValue)
-        #expect(error["message"] as? String == "UNAVAILABLE: node lifecycle transition in progress")
+        #expect(error["code"] as? String == OpenClawNodeErrorCode.notReady.rawValue)
+        #expect(error["message"] as? String == "Node lifecycle transition in progress")
         #expect(await invocations.values() == [])
 
         await invalidationGate.release()
@@ -3354,6 +3354,30 @@ struct GatewayNodeSessionTests {
         }
         #expect(response.ok == false)
         #expect(cancellation.isCancelled())
+    }
+
+    @Test
+    func `positive invoke timeout admits work from a pre cancelled caller`() async {
+        let entry = AsyncGate()
+        let task = Task {
+            await entry.wait()
+            return await GatewayNodeSession.invokeWithTimeout(
+                request: BridgeInvokeRequest(id: "isolated", command: "x", paramsJSON: nil),
+                timeoutMs: 2000,
+                onInvoke: { _ in
+                    BridgeInvokeResponse(
+                        id: "isolated-response",
+                        ok: true,
+                        payloadJSON: #"{"settled":true}"#)
+                })
+        }
+
+        task.cancel()
+        await entry.release()
+        let response = await task.value
+
+        #expect(response.id == "isolated-response")
+        #expect(response.payloadJSON == #"{"settled":true}"#)
     }
 
     @Test

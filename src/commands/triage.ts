@@ -5,21 +5,41 @@ import path from "node:path";
 import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
+import { formatInstallationTargetCommand } from "../cli/installation-target-format.js";
 import { resolveSubprocessExitCode } from "../cli/subprocess-exit-code.js";
 import { readConfigFileSnapshot } from "../config/config.js";
-import { resolveStateDir } from "../config/paths.js";
 import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
-import type { HealthFindingSeverity } from "../flows/health-checks.js";
+import type { HealthFinding, HealthFindingSeverity } from "../flows/health-checks.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
+import {
+  installationTargetEnv,
+  resolveInstallationTarget,
+  withInstallationTarget,
+} from "../infra/installation-target-context.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
 import { writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { select } from "./configure.shared.js";
 import { renderTriagePrompt, type TriageBundle } from "./triage-prompt.js";
+import { readTriageUpdateFailure, writeTriageUpdateFailure } from "./triage-update.js";
 
-type TriageOptions = {
-  json?: boolean;
+type TriagePreparationOptions = {
   noExport?: boolean;
+  updateResult?: string;
+};
+
+type TriageOptions = TriagePreparationOptions & {
+  json?: boolean;
   run?: boolean;
+  nonInteractive?: boolean;
+};
+
+type TriageReport = {
+  promptPath: string;
+  bundlePath: string | null;
+  bundleError: string | null;
+  findings: Record<HealthFindingSeverity, number>;
+  detectedAgents: TriageExternalAgent[];
+  suggestedCommands: string[];
 };
 
 type TriageExternalAgent = "claude" | "codex";
@@ -29,22 +49,29 @@ type TriageHandoff =
   | { kind: "external"; agent: TriageExternalAgent; executablePath: string };
 type TriageHandoffMode = TriageHandoff | { kind: "offer" };
 
+function triageCollectionError(error: unknown): string {
+  const redaction = { env: process.env, stateDir: resolveInstallationTarget().stateDir };
+  const message = error instanceof Error ? error.message : String(error);
+  return scrubDoctorErrorMessage(redactSupportString(message, redaction));
+}
+
 async function collectTriageBundle(skipExport: boolean): Promise<TriageBundle> {
   if (skipExport) {
     return { kind: "skipped" };
   }
   try {
     const rpc = { timeout: "3000", json: true };
-    const health = await callGatewayFromCliWithTransport("health", rpc, undefined, {
-      defaultTimeoutMs: 3000,
-      sharedStateMode: "read-only",
-    });
     const [{ writeDiagnosticSupportExport }, { gatherDaemonStatus }] = await Promise.all([
       import("../logging/diagnostic-support-export.js"),
       import("../cli/daemon-cli/status.gather.js"),
     ]);
     const result = await writeDiagnosticSupportExport({
-      readHealthSnapshot: async () => health,
+      // The exporter records failed snapshots while preserving local diagnostics.
+      readHealthSnapshot: async () =>
+        await callGatewayFromCliWithTransport("health", rpc, undefined, {
+          defaultTimeoutMs: 3000,
+          sharedStateMode: "read-only",
+        }),
       readStatusSnapshot: async () =>
         await gatherDaemonStatus({ rpc, probe: true, requireRpc: false, deep: false }),
     });
@@ -52,13 +79,13 @@ async function collectTriageBundle(skipExport: boolean): Promise<TriageBundle> {
   } catch (error) {
     return {
       kind: "unavailable",
-      reason: scrubDoctorErrorMessage(error),
+      reason: triageCollectionError(error),
     };
   }
 }
 
 function resolveTriageHandoff(options: TriageOptions): TriageHandoffMode {
-  if (options.json === true) {
+  if (options.json === true || options.nonInteractive === true) {
     return { kind: "print" };
   }
   if (options.run === true) {
@@ -67,20 +94,32 @@ function resolveTriageHandoff(options: TriageOptions): TriageHandoffMode {
   return process.stdin.isTTY && process.stdout.isTTY ? { kind: "offer" } : { kind: "print" };
 }
 
-function quoteShellArgument(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
-/** Collect read-only diagnostics, write the bounded prompt, and optionally run one agent turn. */
-export async function triageCommand(
-  runtime: RuntimeEnv,
-  options: TriageOptions = {},
-): Promise<void> {
-  const { collectDoctorFindings } = await import("./doctor-lint.js");
-  const findings = await collectDoctorFindings(runtime);
-  const redaction = { env: process.env, stateDir: resolveStateDir() };
+async function prepareTriage(runtime: RuntimeEnv, options: TriagePreparationOptions) {
+  let findings: readonly HealthFinding[];
+  try {
+    const { collectDoctorFindings } = await import("./doctor-lint.js");
+    findings = await collectDoctorFindings(runtime);
+  } catch (error) {
+    findings = [
+      {
+        checkId: "core/triage/doctor-collection",
+        severity: "error",
+        message: `Doctor checks unavailable: ${triageCollectionError(error)}`,
+      },
+    ];
+  }
+  // Doctor has loaded dotenv; capture selectors before agent exec redirects run state.
+  const target = resolveInstallationTarget();
+  const redaction = { env: process.env, stateDir: target.stateDir };
+  const updateFailure = options.updateResult
+    ? await readTriageUpdateFailure(options.updateResult, redaction)
+    : undefined;
+  // The caller may delete a private handoff input. Saved commands use our sanitized support export.
+  const updateResultPath = updateFailure
+    ? await writeTriageUpdateFailure(updateFailure)
+    : undefined;
   const bundle = await collectTriageBundle(options.noExport === true);
-  const prompt = renderTriagePrompt({ findings, bundle, redaction });
+  const prompt = renderTriagePrompt({ findings, bundle, redaction, updateFailure });
   const now = new Date().toISOString().replace(/[:.]/gu, "-");
   const outputDir = path.join(redaction.stateDir, "logs", "support");
   const promptPath = path.join(outputDir, `openclaw-triage-prompt-${now}-${process.pid}.md`);
@@ -88,11 +127,20 @@ export async function triageCommand(
   await fs.writeFile(promptPath, prompt, { encoding: "utf8", mode: 0o600 });
 
   // Operator-facing paths and shell commands stay real; only agent prompt content is path-redacted.
-  const quotedPath = quoteShellArgument(promptPath);
   const suggestedCommands = [
-    `claude "$(cat ${quotedPath})"`,
-    `codex exec - < ${quotedPath}`,
-    "openclaw triage --run",
+    formatInstallationTargetCommand(["claude", "-p"], target, { stdinPath: promptPath }),
+    formatInstallationTargetCommand(["codex", "exec", "--skip-git-repo-check", "-"], target, {
+      stdinPath: promptPath,
+    }),
+    formatInstallationTargetCommand(
+      [
+        "openclaw",
+        "triage",
+        "--run",
+        ...(updateResultPath ? ["--update-result", updateResultPath] : []),
+      ],
+      target,
+    ),
   ];
   const findingCounts: Record<HealthFindingSeverity, number> = {
     error: 0,
@@ -102,16 +150,12 @@ export async function triageCommand(
   for (const finding of findings) {
     findingCounts[finding.severity] += 1;
   }
-  let handoff = resolveTriageHandoff(options);
-  const externalAgents =
-    options.json === true || handoff.kind === "offer"
-      ? (["claude", "codex"] as const).flatMap((agent) => {
-          const executablePath = resolveExecutablePath(agent);
-          return executablePath ? [{ agent, executablePath }] : [];
-        })
-      : [];
+  const externalAgents = (["claude", "codex"] as const).flatMap((agent) => {
+    const executablePath = resolveExecutablePath(agent);
+    return executablePath ? [{ agent, executablePath }] : [];
+  });
   const detectedAgents = externalAgents.map(({ agent }) => agent);
-  const report = {
+  const report: TriageReport = {
     promptPath,
     bundlePath: bundle.kind === "available" ? bundle.path : null,
     bundleError:
@@ -120,6 +164,19 @@ export async function triageCommand(
     detectedAgents,
     suggestedCommands,
   };
+  return { prompt, target, bundle, externalAgents, report };
+}
+
+/** Collect read-only diagnostics, write the bounded prompt, and optionally run one agent turn. */
+export async function triageCommand(
+  runtime: RuntimeEnv,
+  options: TriageOptions = {},
+): Promise<void> {
+  const { prompt, target, bundle, externalAgents, report } = await prepareTriage(runtime, options);
+  const { promptPath, suggestedCommands } = report;
+  const targetEnv = installationTargetEnv(target);
+  const redaction = { env: process.env, stateDir: target.stateDir };
+  let handoff = resolveTriageHandoff(options);
   if (options.json === true) {
     writeRuntimeJson(runtime, report);
     return;
@@ -180,7 +237,10 @@ export async function triageCommand(
     let exitCode: number;
     try {
       exitCode = await new Promise<number>((resolve, reject) => {
-        const child = spawn(handoff.executablePath, [prompt], { stdio: "inherit" });
+        const child = spawn(handoff.executablePath, [prompt], {
+          stdio: "inherit",
+          env: { ...process.env, ...targetEnv },
+        });
         child.once("error", reject);
         child.once("exit", (code, signal) => resolve(resolveSubprocessExitCode(code, signal)));
       });
@@ -205,15 +265,14 @@ export async function triageCommand(
   const inference = await verifySetupInference({ runtime, timeoutMs: 15_000 });
   if (!inference.ok) {
     const reason = redactSupportString(scrubDoctorErrorMessage(inference.error), redaction);
-    const message = `Embedded agent unavailable: ${reason}. Run \`openclaw onboard\` or use a suggested handoff command.`;
-    if (options.run === true) {
-      throw new Error(message);
-    }
-    runtime.log(message);
-    return;
+    throw new Error(
+      `Embedded agent unavailable: ${reason}. Run \`openclaw onboard\` or use a suggested handoff command.`,
+    );
   }
   const { agentExecCommand } = await import("./agent-exec.js");
-  const result = await agentExecCommand(undefined, { messageFile: promptPath }, runtime);
+  const result = await withInstallationTarget(target, () =>
+    agentExecCommand(undefined, { messageFile: promptPath }, runtime),
+  );
   if (result.exitCode !== 0) {
     runtime.exit(result.exitCode);
   }

@@ -2,13 +2,34 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { AuthStorage, ModelRegistry } from "../sessions/index.js";
+import { guardModelFixtureAuth } from "./model.fixture.test-support.js";
 import {
   createModelGenerationFixture,
   publishCurrentModelGeneration,
   resetModelGenerationFixtureState,
 } from "./model.generation-scope.test-support.js";
 import { resolveModelAsync } from "./model.js";
+
+let state: OpenClawTestState;
+let auth: ReturnType<typeof guardModelFixtureAuth>;
+beforeEach(async () => {
+  state = await createOpenClawTestState({ label: "model-generation" });
+  auth = guardModelFixtureAuth(state.root);
+});
+afterEach(async () => {
+  try {
+    auth.verify();
+    expect(auth.spy).toHaveBeenCalled();
+  } finally {
+    auth.spy.mockRestore();
+    await state.cleanup();
+  }
+});
 
 async function resolveGeneration(generation: ReturnType<typeof createModelGenerationFixture>) {
   const { preparedModelRuntime } = generation;
@@ -44,7 +65,12 @@ describe("model runtime generation scope", () => {
     { auth: false, registry: true },
     { auth: false, registry: false },
   ])("fills only missing discovery stores (auth=$auth, registry=$registry)", async (supplied) => {
-    const generation = createModelGenerationFixture({ config: {}, label: "stores" });
+    const generation = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
+      config: {},
+      label: "stores",
+    });
     const { preparedModelRuntime } = generation;
     const stores = preparedModelRuntime.createStores();
     stores.authStorage.setRuntimeApiKey(generation.provider, "fixture-runtime-key");
@@ -80,8 +106,19 @@ describe("model runtime generation scope", () => {
 
   it("keeps alias, suppression, static metadata, and runtime hooks on the prepared generation", async () => {
     const config = {} satisfies OpenClawConfig;
-    const generationA = createModelGenerationFixture({ config, label: "a" });
-    const generationB = createModelGenerationFixture({ config, label: "b", suppress: true });
+    const generationA = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
+      config,
+      label: "a",
+    });
+    const generationB = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
+      config,
+      label: "b",
+      suppress: true,
+    });
     publishCurrentModelGeneration(generationB);
 
     const result = await resolveGeneration(generationA);
@@ -111,42 +148,57 @@ describe("model runtime generation scope", () => {
       await gate;
     };
     const generationA = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
       config,
       label: "a",
       prepareDynamicModel,
     });
     const generationB = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
       config,
       label: "b",
       prepareDynamicModel,
     });
     publishCurrentModelGeneration(generationB);
 
-    const [resultA, resultB] = await Promise.all([
-      resolveGeneration(generationA),
-      resolveGeneration(generationB),
-    ]);
-
-    expect(resultA.model).toMatchObject({
-      provider: generationA.provider,
-      name: "Runtime A",
-      mediaInput: { image: generationA.staticImagePolicy },
-    });
-    expect(resultB.model).toMatchObject({
-      provider: generationB.provider,
-      name: "Runtime B",
-      mediaInput: { image: generationB.staticImagePolicy },
-    });
+    const resolutions = [resolveGeneration(generationA), resolveGeneration(generationB)] as const;
+    try {
+      const [resultA, resultB] = await Promise.all(resolutions);
+      expect(resultA.model).toMatchObject({
+        provider: generationA.provider,
+        name: "Runtime A",
+        mediaInput: { image: generationA.staticImagePolicy },
+      });
+      expect(resultB.model).toMatchObject({
+        provider: generationB.provider,
+        name: "Runtime B",
+        mediaInput: { image: generationB.staticImagePolicy },
+      });
+    } finally {
+      // A resolution can reject before both hooks arrive. Release its sibling
+      // and join both owners before afterEach deletes their fixture state.
+      release();
+      await Promise.allSettled(resolutions);
+    }
   });
 
   it("keeps metadata-only prepared generations from borrowing current runtime hooks", async () => {
     const config = {} satisfies OpenClawConfig;
     const generationA = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
       config,
       label: "a",
       withRegistry: false,
     });
-    const generationB = createModelGenerationFixture({ config, label: "b" });
+    const generationB = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
+      config,
+      label: "b",
+    });
     publishCurrentModelGeneration(generationB);
 
     const result = await resolveGeneration(generationA);

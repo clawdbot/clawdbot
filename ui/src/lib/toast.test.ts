@@ -35,6 +35,22 @@ describe("shared toast", () => {
     expect(host.querySelector(".app-toast__message")?.textContent).toBe("Second");
   });
 
+  it("keeps queued outcomes behind an unrelated replacement toast", async () => {
+    const host = await mountHost();
+
+    showToast({ message: "First completion", fifo: true });
+    showToast({ message: "Second completion", fifo: true });
+    await host.updateComplete;
+    expect(host.querySelector(".app-toast__message")?.textContent).toBe("First completion");
+
+    showToast({ message: "Critical observer notice" });
+    await host.updateComplete;
+    expect(host.querySelector(".app-toast__message")?.textContent).toBe("Critical observer notice");
+    host.querySelector<HTMLButtonElement>(".app-toast__dismiss")?.click();
+    await host.updateComplete;
+    expect(host.querySelector(".app-toast__message")?.textContent).toBe("Second completion");
+  });
+
   it("uses the active modal's toast layer before the app layer", async () => {
     const appHost = await mountHost();
     const modal = document.createElement("openclaw-modal-dialog");
@@ -90,19 +106,6 @@ describe("shared toast", () => {
     expect(host.querySelector(".app-toast")).toBeNull();
   });
 
-  it("runs its action once and dismisses", async () => {
-    const host = await mountHost();
-    const onAction = vi.fn();
-    showToast({ message: "Archived", actionLabel: "Undo", onAction });
-    await host.updateComplete;
-
-    host.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
-    await host.updateComplete;
-
-    expect(onAction).toHaveBeenCalledOnce();
-    expect(host.querySelector(".app-toast")).toBeNull();
-  });
-
   it("preserves the dismissal reason when an exiting toast is replaced", async () => {
     vi.useFakeTimers();
     const host = await mountHost();
@@ -134,6 +137,7 @@ describe("shared toast", () => {
     await host.updateComplete;
     host.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
     await host.updateComplete;
+    expect(host.querySelector(".app-toast")).toBeNull();
 
     showToast({ message: "Third", onDismiss: (reason) => reasons.push(reason) });
     await host.updateComplete;

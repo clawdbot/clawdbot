@@ -19,10 +19,13 @@ describe("AcpSessionManager configured bindings", () => {
     const { ensureConfiguredAcpBindingSession } =
       await import("../persistent-bindings.lifecycle.js");
     const runtimeState = createRuntime();
-    runtimeState.setConfigOption.mockImplementation(async ({ value }) => {
+    runtimeState.setConfigOption.mockImplementation(async ({ key, value }) => {
       if (value === "off") {
         throw new AcpRuntimeError("ACP_BACKEND_UNSUPPORTED_CONTROL", "Live off is unsupported");
       }
+      return {
+        configOptions: [{ id: "thinking", currentValue: key === "model" ? "medium" : value }],
+      };
     });
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
       id: "acpx",
@@ -90,6 +93,23 @@ describe("AcpSessionManager configured bindings", () => {
       expect(runtimeState.ensureSession).toHaveBeenCalledOnce();
       expect(runtimeState.close).not.toHaveBeenCalled();
       expect(runtimeState.runTurn).toHaveBeenCalledTimes(4);
+      runtimeState.setConfigOption.mockClear();
+      expect(
+        await ensureConfiguredAcpBindingSession({
+          cfg: baseCfg,
+          spec: { ...spec, model: "openai/gpt-5.6-luna", thinking: "high" },
+        }),
+      ).toEqual({ ok: true, sessionKey });
+      expect(
+        runtimeState.setConfigOption.mock.calls.map(([input]) => [input.key, input.value]),
+      ).toEqual([
+        ["model", "openai/gpt-5.6-luna"],
+        ["thinking", "high"],
+      ]);
+      expect(currentMeta?.runtimeOptions).toEqual({
+        model: "openai/gpt-5.6-luna",
+        thinking: "high",
+      });
     } finally {
       getManager.mockRestore();
     }

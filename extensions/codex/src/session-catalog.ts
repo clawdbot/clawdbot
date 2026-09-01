@@ -1,4 +1,4 @@
-import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   OpenClawPluginApi,
@@ -149,7 +149,7 @@ function registerCodexSessionCatalog(params: {
       : homes;
   };
   const resolveRequestAgentId = (agentId?: string) =>
-    resolveSessionAgentIds({
+    resolveSessionAgentIdsStrict({
       config: params.getRuntimeConfig() ?? (params.api.config as OpenClawConfig),
       agentId,
     }).sessionAgentId;

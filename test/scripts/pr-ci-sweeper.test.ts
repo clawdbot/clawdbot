@@ -495,7 +495,7 @@ describe("runPrCiSweeper", () => {
     ).toEqual([]);
   });
 
-  it("does not spend the re-fire budget on PRs that change during revalidation", async () => {
+  it("closes and reopens a dropped-CI PR without spending budget on stale heads", async () => {
     const dropped = Array.from({ length: 11 }, (_, index) => ({
       ...pr(),
       number: 200 + index,
@@ -517,9 +517,11 @@ describe("runPrCiSweeper", () => {
       github: github as never,
       context: context as never,
       core: loggedCore as never,
+      appSlug: "openclaw-barnacle",
       now: NOW,
     });
 
+    expect(results).toHaveLength(dropped.length);
     expect(results.slice(0, 10)).toEqual(
       dropped.slice(0, 10).map((candidate) => ({
         number: candidate.number,
@@ -575,29 +577,6 @@ describe("runPrCiSweeper", () => {
     expect(results).toEqual([
       { number: 30, sha: "7".repeat(12), action: "refire", reason: "ci-run-missing" },
     ]);
-  });
-
-  it("closes and reopens a dropped-CI PR in live mode", async () => {
-    const dropped = {
-      ...pr(),
-      number: 9,
-      state: "open",
-      head: { sha: "c".repeat(40) },
-    };
-    const { github, calls } = fakeGithub({ prs: [dropped], runsBySha: {} });
-    const results = await runPrCiSweeper({
-      github: github as never,
-      context: context as never,
-      core: core as never,
-      appSlug: "openclaw-barnacle",
-      now: NOW,
-    });
-    expect(results).toEqual([
-      { number: 9, sha: "c".repeat(12), action: "refire", reason: "ci-run-missing" },
-    ]);
-    expect(
-      calls.filter((call) => call.method === "pulls.update").map((call) => call.args.state),
-    ).toEqual(["closed", "open"]);
   });
 
   it("revives a cancelled GitHub Actions check exactly once", async () => {

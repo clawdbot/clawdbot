@@ -240,7 +240,7 @@ test("projects.list returns only the caller's deterministic resolved recents", a
     const project = await registerProjectRegistry({ path: repo, name: "Registered" });
     const sourceProfile = ensureProfileForEmail("source@example.test");
     const targetProfile = ensureProfileForEmail("target@example.test");
-    const actor = { type: "human" as const, id: sourceProfile.id };
+    const actor = { type: "human" as const, source: "profile" as const, id: sourceProfile.id };
     const entries: Array<{
       key: string;
       updatedAt: number;
@@ -273,7 +273,7 @@ test("projects.list returns only the caller's deterministic resolved recents", a
       {
         sessionId: "session-other",
         updatedAt: 1_000,
-        createdActor: { type: "human", id: "profile-bob" },
+        createdActor: { type: "human", source: "profile", id: "profile-bob" },
         spawnedCwd: "/work/private-bob",
       },
     );

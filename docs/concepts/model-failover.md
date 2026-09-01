@@ -13,6 +13,14 @@ OpenClaw handles failures in two stages:
 1. **Auth profile rotation** within the current provider.
 2. **Model fallback** to the next model in `agents.defaults.model.fallbacks`.
 
+The embedded runner also performs bounded same-model recovery. When a transient
+network failure interrupts a provider call before any assistant content or tool
+call is produced, the provider records a transport-failure diagnostic. After a
+settled tool batch, this lets the runner continue from the current transcript up
+to twice without rerunning those tools. Partial responses and unfinished tool
+batches do not qualify for this recovery. No additional retry configuration is
+required.
+
 ## Runtime flow
 
 <Steps>
@@ -257,11 +265,11 @@ Overloaded and rate-limit errors are handled more aggressively than billing cool
 
 ## Model fallback
 
-If all profiles for a provider fail, OpenClaw moves to the next model in `agents.defaults.model.fallbacks`. This applies to auth failures, rate limits, and timeouts that exhausted profile rotation (other errors do not advance fallback). Provider errors that do not expose enough detail are still labeled precisely in fallback state: `empty_response` means the provider returned no usable message or status, `no_error_details` means the provider explicitly returned `Unknown error (no error details in response)`, and `unclassified` means OpenClaw preserved the raw preview but no classifier matched it yet.
+If all profiles for a provider fail, OpenClaw moves to the next model in `agents.defaults.model.fallbacks` when the failure matches one of the failover reasons listed below. This includes `model_not_found` for HTTP 404 responses unless the response body identifies a more specific condition such as context overflow, session expiry, billing, authentication, or request format. Provider errors that do not expose enough detail are still labeled precisely in fallback state: `empty_response` means the provider returned no usable message or status, `no_error_details` means the provider explicitly returned `Unknown error (no error details in response)`, and `unclassified` means OpenClaw preserved the raw preview but no classifier matched it yet.
 
 Provider-busy signals such as `ModelNotReadyException` land in the overloaded bucket and follow the same one-rotation-then-fallback policy as rate limits (see the defaults table above).
 
-If the entire candidate chain is exhausted only by overload failures, the reply runner retries the chain up to 10 times in the same turn. Full-turn retry is allowed only before tool execution or assistant output starts, avoiding duplicate mutations or messages if an overload arrives after observable work. Backoff starts at 2.5 seconds and doubles to a 30-second cap. Once the turn has been waiting for 30 seconds, OpenClaw sends one transient status notice: `The AI service is temporarily overloaded. I’m still retrying; this may take a few minutes.` The retry and any fallback winner remain turn-local; ordinary transient server errors retain their separate one-retry policy.
+The embedded failover controller owns transient retries, including overloads and server errors. `retry.provider.maxRetries` sets the retry budget (default: 3), with jittered backoff, provider retry pacing, and a fixed 90-second retry window. Once that budget or window is exhausted, recovery proceeds to profile rotation, configured model fallback, or a visible error. Provider SDKs and the reply runner do not add separate replay loops. Retry and any fallback winner remain turn-local, and replay-unsafe attempts are not retried.
 
 When a run starts from the configured default primary, a cron job primary, an agent primary with explicit fallbacks, or an auto-selected fallback override, OpenClaw can walk the matching configured fallback chain. Agent primaries without explicit fallbacks and explicit user selections (for example `/model ollama/qwen3.5:27b`, the model picker, `sessions.patch`, or one-off CLI provider/model overrides) are strict: if that provider/model is unreachable or fails before producing a reply, OpenClaw reports the failure instead of answering from an unrelated fallback.
 
@@ -290,6 +298,7 @@ OpenClaw builds the candidate list from the currently requested `provider/model`
     - overloaded/provider-busy errors
     - timeout-shaped failover errors
     - billing disables
+    - `model_not_found`, including eligible HTTP 404 responses
     - `LiveSessionModelSwitchError` for a stale current or earlier candidate; later configured targets redirect directly, while targets outside the chain return to the bounded session-model retry owner
     - a provider request-size ceiling reaching the fallback boundary, which happens when a transport-owning plugin harness bypasses embedded recovery. The ceiling belongs to the refusing provider's quota rather than to any model's context window, so a differently provisioned candidate may still admit the request
     - other unrecognized errors when there are still remaining candidates
@@ -300,7 +309,7 @@ OpenClaw builds the candidate list from the currently requested `provider/model`
     - context overflow errors that should stay inside compaction/retry logic (for example `request_too_large`, `input token count exceeds the maximum number of input tokens`, `input exceeds the maximum number of tokens`, `input too long for the model`, or `ollama error: context length exceeded`)
     - context overflow inside an embedded run that has already been declared terminal, including a provider request-size ceiling (for example Groq's `413 ... on tokens per minute (TPM): Limit 8000, Requested 8098`), which the runner stops on rather than compacting
     - a final unknown error when there are no candidates left
-    - Claude Fable 5 safety refusals; direct API-key requests handle those at the provider level via Anthropic's server-side fallback to `claude-opus-4-8` instead (see [Anthropic](/providers/anthropic#safety-refusal-fallback-claude-opus-5-and-fable-5))
+    - final provider refusals; eligible Anthropic direct API-key requests handle refusal fallback within the provider request instead (see [Anthropic](/providers/anthropic#safety-refusal-fallback-claude-opus-5-and-fable-5))
 
   </Tab>
 </Tabs>
@@ -349,6 +358,8 @@ The active run carries its chosen candidate directly. Live reconciliation change
 - human-readable error summary
 
 Structured `model_fallback_decision` logs also include flat `fallbackStep*` fields when a candidate fails, is skipped, or a later fallback succeeds. These fields make the attempted transition explicit (`fallbackStepFromModel`, `fallbackStepToModel`, `fallbackStepFromFailureReason`, `fallbackStepFromFailureDetail`, `fallbackStepFinalOutcome`) so log and diagnostic exporters can reconstruct the primary failure even when the terminal fallback also fails.
+
+For a missing-model fallback, look for a `model_fallback_decision` event whose `reason` or `fallbackStepFromFailureReason` is `model_not_found`.
 
 When every candidate fails, OpenClaw throws `FailoverError` with structured attempt records. The outer reply runner can use those records to build a more specific message such as "all models are temporarily rate-limited" and include the soonest cooldown expiry when one is known.
 

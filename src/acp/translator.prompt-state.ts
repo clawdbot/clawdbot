@@ -1,5 +1,6 @@
 import type { PromptResponse, ToolCallLocation, ToolKind } from "@agentclientprotocol/sdk";
 import type { AgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
+import type { GatewayExecApprovalDecision } from "./permission-relay.js";
 
 export type AcpDisconnectContext = {
   generation: number;
@@ -26,6 +27,8 @@ export type AcpPendingApprovalRelay = {
   sessionId: string;
   sessionKey: string;
   state: "active" | "completed";
+  /** User decision captured while the gateway was unreachable; replayed on reconnect. */
+  pendingDecision?: GatewayExecApprovalDecision;
 };
 
 type AcpPendingToolCall = {

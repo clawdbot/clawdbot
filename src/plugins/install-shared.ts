@@ -390,6 +390,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
   ) => Promise<Extract<InstallPluginResult, { ok: false }> | null>;
   nameEncoder?: (pluginId: string) => string;
   onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
+  beforePersistentApply?: () => void;
 }): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
   let targetDir = params.targetDir;
@@ -437,6 +438,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
     sourceHardlinks: params.sourceHardlinks ?? "reject",
     depsLogMessage: params.depsLogMessage,
     afterCopy: params.afterCopy,
+    beforePersistentApply: params.beforePersistentApply,
     afterInstall: async (installedDir: string) => {
       const postInstallResult = await params.afterInstall?.(installedDir);
       if (postInstallResult) {

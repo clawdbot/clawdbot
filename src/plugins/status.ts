@@ -246,6 +246,8 @@ function buildPluginReport(
   const runtimeCompatConfig = withBundledPluginEnablementCompat({
     config,
     pluginIds: bundledProviderIds,
+    ...(params?.env ? { env: params.env } : {}),
+    activation: "defaults",
   });
   const onlyPluginIds =
     params?.effectiveOnly === true

@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveUserPath } from "../utils.js";
-import { isPathInside } from "./path-safety.js";
+import { isPluginInPackageBundledRoots } from "./bundled-dir.js";
 import { pluginCacheExistsSync, pluginCacheRealpathSync } from "./plugin-cache-files.js";
 import { getPluginCache } from "./plugin-cache.js";
 
@@ -40,7 +40,7 @@ export function resolveOpenClawDevSourceRoot(env: NodeJS.ProcessEnv = process.en
   return result;
 }
 
-/** True when a bundled plugin root is inside the configured development source root. */
+/** Prioritizes already-bundled candidates; the selector itself never grants provenance. */
 export function isBundledPluginInsideDevSourceRoot(params: {
   rootDir: string;
   env: NodeJS.ProcessEnv;
@@ -49,10 +49,8 @@ export function isBundledPluginInsideDevSourceRoot(params: {
   if (!devSourceRoot) {
     return false;
   }
-  const extensionsRoot = pluginCacheRealpathSync(path.join(devSourceRoot, "extensions"));
-  const pluginRoot = pluginCacheRealpathSync(resolveUserPath(params.rootDir, params.env));
-  if (!extensionsRoot || !pluginRoot) {
-    return false;
-  }
-  return isPathInside(extensionsRoot, pluginRoot);
+  return isPluginInPackageBundledRoots({
+    packageRoot: devSourceRoot,
+    rootDir: resolveUserPath(params.rootDir, params.env),
+  });
 }

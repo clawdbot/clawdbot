@@ -148,6 +148,23 @@ For agent browser tool calls:
 
 Set `browser.defaultProfile: "openclaw"` if you want managed mode by default.
 
+### Browser panel in the Control UI
+
+The Browser panel follows the current session's latest successful browser tab,
+including its profile and host or node. Opening a browser preview card selects
+that card's browser and tab. This does not change `browser.defaultProfile` or
+another session's selection. Without a session browser target, the panel uses
+the configured default routing.
+
+Preview cards are interactive only when OpenClaw can identify the browser's
+route. Sandbox browser results remain available to the agent but do not open a
+host-browser preview.
+
+If a listed tab cannot be accessed, the panel explains whether navigation rules
+blocked it or its address could not be verified. Select another tab, enter an
+allowed address, or refresh after a temporary lookup failure. Blocked URLs stay
+hidden; displaying a tab title does not grant access to its contents.
+
 ## Configuration
 
 Browser settings live in `~/.openclaw/openclaw.json`.
@@ -476,7 +493,9 @@ tokens instead of committing them to config files.
 
 If you run a **node host** on the machine that has your browser, OpenClaw can
 auto-route browser tool calls to that node without any extra browser config.
-This is the default path for remote gateways.
+This is the default path for remote gateways. Automatic host fallback is allowed
+only before the selected node handles a request. Once an action reaches the node,
+its follow-up snapshot or settings stay on that node instead of switching browsers.
 
 Notes:
 
@@ -914,7 +933,7 @@ Important behavior details:
 Security guidance:
 
 - Do **not** relax browser SSRF policy by default.
-- Prefer narrow wildcard-aware `allowedHostnames` exceptions over broad private-network access.
+- Prefer narrow exact-hostname `allowedHostnames` exceptions over broad private-network access.
 - Use `dangerouslyAllowPrivateNetwork: true` only in intentionally trusted environments where private-network browser access is required and reviewed.
 
 ## Agent tools + how control works

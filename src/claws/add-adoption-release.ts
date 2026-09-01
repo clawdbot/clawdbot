@@ -16,6 +16,11 @@ import type { PersistedClawInstall, PersistedClawPackageRef } from "./provenance
 import type { ClawAddPlan } from "./types.js";
 import type { PersistedClawWorkspaceFile } from "./workspace.js";
 
+// Adoption release unwinds a config commit that never landed, so no deletion journal was opened
+// for this agent (beginAgentDeletion runs only in claimClawAgentConfigRemoval) and there is no
+// fence to complete when the rows go.
+const noDeletionJournal = () => {};
+
 /**
  * Releases an adoption record whose config commit never landed. Returns the paths that survived
  * rollback; while any remain, Claw still owns real state and keeps the record to clean it later.
@@ -71,7 +76,14 @@ export async function releaseUnclaimedClawAdoption(params: {
   // Stop before the packages when a file survived: half-uninstalling what the retained record
   // still claims would leave ownership describing state that is already gone.
   if (retained.length > 0) {
-    releaseClawRemoveRows(params.install.agentId, removals, false, params.options, true);
+    releaseClawRemoveRows(
+      params.install.agentId,
+      removals,
+      false,
+      noDeletionJournal,
+      params.options,
+      true,
+    );
     return { released: false, retained };
   }
   if (params.packages.length > 0) {
@@ -90,11 +102,25 @@ export async function releaseUnclaimedClawAdoption(params: {
     );
   }
   if (retained.length > 0) {
-    releaseClawRemoveRows(params.install.agentId, removals, false, params.options, true);
+    releaseClawRemoveRows(
+      params.install.agentId,
+      removals,
+      false,
+      noDeletionJournal,
+      params.options,
+      true,
+    );
     return { released: false, retained };
   }
   // Adopted state was never Claw-created, so its durable agent-database registration is not this
   // attempt's to unregister.
-  releaseClawRemoveRows(params.install.agentId, removals, true, params.options, true);
+  releaseClawRemoveRows(
+    params.install.agentId,
+    removals,
+    true,
+    noDeletionJournal,
+    params.options,
+    true,
+  );
   return { released: true, retained: [] };
 }

@@ -1,8 +1,8 @@
 // Control UI tests cover inherited defaults across curated settings pages.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -14,12 +14,16 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "curated-settings-defaults",
-);
+const thinkingDefaultExplanation =
+  "Uses the selected model's thinking policy instead of saving a global thinking override.";
+const fastModeDefaultExplanation =
+  "Uses the selected model's fast-mode policy. Unlike Auto, Default does not enable fast mode by itself.";
+let uiProofArtifactDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    uiProofArtifactDir = createControlUiE2eArtifactDir("curated-settings-defaults");
+  }
+});
 
 function configResponse(config: Record<string, unknown>, hash: string) {
   return {
@@ -67,6 +71,21 @@ async function expectInherited(row: Locator, value: string) {
   await expect.poll(() => row.textContent()).toContain(`Using default: ${value}`);
 }
 
+async function expectDefaultInfo(row: Locator, explanation: string) {
+  const info = row.locator('wa-radio[value=""] .model-providers__segment-info');
+  await info.waitFor();
+  await expect.poll(() => info.getAttribute("aria-label")).toBe(explanation);
+  await expect.poll(() => info.locator("svg").count()).toBe(1);
+}
+
+async function selectDefault(row: Locator) {
+  await row.locator("wa-radio-group").evaluate((element) => {
+    const group = element as HTMLElement & { value: string };
+    group.value = "";
+    group.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+  });
+}
+
 suite.define(() => {
   it("restores Labs, Security, and Models overrides to inherited defaults across reloads", async () => {
     await suite.withPage(
@@ -96,6 +115,17 @@ suite.define(() => {
           browser: initialConfig.browser,
           tools: { profile: "minimal" },
         };
+        const afterThinkingReset = {
+          agents: {
+            defaults: {
+              fastModeDefault: true,
+              model: "openai/gpt-5.5",
+            },
+          },
+        };
+        const afterModelResets = {
+          agents: { defaults: { model: "openai/gpt-5.5" } },
+        };
         const gateway = await installMockGateway(page, {
           methodResponses: {
             "config.get": configResponse(initialConfig, "curated-defaults-1"),
@@ -110,7 +140,6 @@ suite.define(() => {
         await expect.poll(() => codeModeRow.textContent()).toContain("Default: Disabled");
 
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await codeModeRow.screenshot({
             animations: "disabled",
             path: path.join(uiProofArtifactDir, "01-labs-explicit-override.png"),
@@ -203,8 +232,8 @@ suite.define(() => {
             .getByRole("radio", { name: "High", exact: true })
             .getAttribute("aria-checked"),
         ).toBe("true");
-        await expect.poll(() => thinkingRow.textContent()).toContain("Default: Model policy");
-        await expect.poll(() => fastModeRow.textContent()).toContain("Default: Model policy");
+        await expectDefaultInfo(thinkingRow, thinkingDefaultExplanation);
+        await expectDefaultInfo(fastModeRow, fastModeDefaultExplanation);
 
         if (captureUiProofEnabled) {
           await page.locator("#settings-model-behavior").screenshot({
@@ -213,28 +242,50 @@ suite.define(() => {
           });
         }
 
-        const modelSavesBefore = (await gateway.getRequests("config.set")).length;
-        await thinkingRow.getByRole("radio", { name: "Default", exact: true }).click();
-        await fastModeRow.getByRole("radio", { name: "Default", exact: true }).click();
-        await expectInherited(thinkingRow, "Model policy");
-        await expectInherited(fastModeRow, "Model policy");
+        await gateway.setMethodResponse(
+          "config.get",
+          configResponse(afterThinkingReset, "curated-defaults-model-thinking-reset"),
+        );
+        const modelSavesBefore = (await gateway.getRequests("config.patch")).length;
+        await selectDefault(thinkingRow);
+        expect(
+          requestRaw(await gateway.waitForRequest("config.patch", { after: modelSavesBefore })),
+        ).toEqual({
+          agents: {
+            defaults: {
+              model: "openai/gpt-5.5",
+              utilityModel: null,
+              thinkingDefault: null,
+              fastModeDefault: true,
+            },
+          },
+        });
         await expect
-          .poll(async () => {
-            const requests = await gateway.getRequests("config.set");
-            const latest = requests.at(-1);
-            if (requests.length <= modelSavesBefore || !latest) {
-              return false;
-            }
-            const raw = requestRaw(latest);
-            return (
-              !hasOwnPath(raw, ["agents", "defaults", "thinkingDefault"]) &&
-              !hasOwnPath(raw, ["agents", "defaults", "fastModeDefault"])
-            );
-          })
-          .toBe(true);
+          .poll(() => page.getByRole("status").filter({ hasText: "Defaults saved" }).count())
+          .toBeGreaterThan(0);
+        await gateway.setMethodResponse(
+          "config.get",
+          configResponse(afterModelResets, "curated-defaults-model-resets"),
+        );
+        const fastModeSavesBefore = (await gateway.getRequests("config.patch")).length;
+        await selectDefault(fastModeRow);
+        expect(
+          requestRaw(await gateway.waitForRequest("config.patch", { after: fastModeSavesBefore })),
+        ).toEqual({
+          agents: {
+            defaults: {
+              model: "openai/gpt-5.5",
+              utilityModel: null,
+              thinkingDefault: null,
+              fastModeDefault: null,
+            },
+          },
+        });
+        await expectDefaultInfo(thinkingRow, thinkingDefaultExplanation);
+        await expectDefaultInfo(fastModeRow, fastModeDefaultExplanation);
         await expect
-          .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
-          .toContain("Saved");
+          .poll(() => page.getByRole("status").filter({ hasText: "Defaults saved" }).count())
+          .toBeGreaterThan(0);
 
         if (captureUiProofEnabled) {
           await page.locator("#settings-model-behavior").screenshot({
@@ -246,16 +297,16 @@ suite.define(() => {
         expect((await page.reload())?.status()).toBe(200);
         const reloadedThinkingRow = settingsRow(page, "Thinking");
         const reloadedFastModeRow = settingsRow(page, "Fast mode");
-        await expectInherited(reloadedThinkingRow, "Model policy");
-        await expectInherited(reloadedFastModeRow, "Model policy");
+        await expectDefaultInfo(reloadedThinkingRow, thinkingDefaultExplanation);
+        await expectDefaultInfo(reloadedFastModeRow, fastModeDefaultExplanation);
         expect(
           await reloadedThinkingRow
-            .getByRole("radio", { name: "Default", exact: true })
+            .getByRole("radio", { name: /^Default/u })
             .getAttribute("aria-checked"),
         ).toBe("true");
         expect(
           await reloadedFastModeRow
-            .getByRole("radio", { name: "Default", exact: true })
+            .getByRole("radio", { name: /^Default/u })
             .getAttribute("aria-checked"),
         ).toBe("true");
 

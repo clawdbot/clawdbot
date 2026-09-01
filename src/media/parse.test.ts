@@ -1,4 +1,6 @@
 // Media parse tests cover media reference parsing from text and payloads.
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { splitMediaFromOutput } from "./parse.js";
 
@@ -88,13 +90,27 @@ describe("splitMediaFromOutput", () => {
       String.raw`MEDIA:/path/to/image.png\"}],\"details\":{\"provider\":\"openai\"}`,
     ],
     ["/tmp/render,final.png", "MEDIA:/tmp/render,final.png"],
-    ["/tmp/generated.png", "MEDIA:FILE:///tmp/generated.png"],
-    ["/tmp/generated.png", "MEDIA:FILE:/tmp/generated.png"],
-    ["/tmp/generated.png", "MEDIA:file:///tmp/generated.png"],
-    ["/Users/pete/My File.png", "MEDIA:FILE:///Users/pete/My File.png"],
-    ["/Users/pete/My File.png", "MEDIA:file:///Users/pete/My File.png"],
   ] as const)("accepts supported media path variant: %s", (expectedPath, input) => {
     expectAcceptedMediaPathCase(expectedPath, input);
+  });
+
+  const nativeFilePath = path.resolve("media", "café 100% image.png");
+  const nativeFileUrl = pathToFileURL(nativeFilePath).href;
+  it.each([
+    nativeFileUrl,
+    nativeFileUrl.replace(/^file:\/\//u, "FILE:"),
+    nativeFileUrl.replace(/^file:/u, "FILE:"),
+    nativeFileUrl.replace(/^file:\/\//u, "file://localhost"),
+    nativeFileUrl.replace(/%20/gu, " "),
+  ])("preserves file URLs for native media loading: %s", (fileUrl) => {
+    expectAcceptedMediaPathCase(fileUrl, `MEDIA:${fileUrl}`);
+  });
+
+  it.each([nativeFileUrl, nativeFilePath])("keeps file URL siblings separate from %s", (first) => {
+    const secondPath = path.resolve("media", "second image.png");
+    expectParsedMediaOutputCase(`MEDIA:${first} ${pathToFileURL(secondPath).href}`, {
+      mediaUrls: [first, pathToFileURL(secondPath).href],
+    });
   });
 
   it.each([
@@ -156,10 +172,6 @@ describe("splitMediaFromOutput", () => {
       "MEDIA:/tmp/project screenshots/shot.png media\\second.png",
       ["/tmp/project screenshots/shot.png", "media\\second.png"],
     ],
-    [
-      "MEDIA:/tmp/project screenshots/shot.png file:///tmp/second.png",
-      ["/tmp/project screenshots/shot.png", "/tmp/second.png"],
-    ],
     ["MEDIA:C:\\Users\\First Last\\..\\secret.png D:\\safe\\second.png", ["D:\\safe\\second.png"]],
     ["MEDIA:/tmp/project screenshots/../../.env /tmp/safe/second.png", ["/tmp/safe/second.png"]],
   ] as const)("keeps separate media items on one directive line: %s", (input, mediaUrls) => {
@@ -174,6 +186,7 @@ describe("splitMediaFromOutput", () => {
     "MEDIA:./foo/../../../etc/shadow",
     "MEDIA:C:\\Users\\First Last\\..\\secret.png",
     "MEDIA:/tmp/project screenshots/../../.env",
+    "MEDIA:file:///tmp/../secret.png",
   ] as const)("rejects traversal and unsupported home-dir path: %s", (input) => {
     expectRejectedMediaPathCase(input);
   });

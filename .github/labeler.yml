@@ -302,17 +302,8 @@
   - changed-files:
       - any-glob-to-any-file:
           - "docs/**"
+          - ".agents/skills/openclaw-update/**"
           - ".agents/skills/update-team-server/**"
-
-"r: skill":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "custodian-skills/**"
-          - "skills/**"
-          - "src/skills/**"
-          - "docs/tools/custodian-skills.md"
-          - "docs/tools/skills-config.md"
-          - "docs/tools/skills.md"
 
 "cli":
   - changed-files:

@@ -161,7 +161,7 @@ async function seedSpeechTTS(params: VolcengineTTSParams & { apiKey: string }): 
   });
 
   try {
-    const responseText = new TextDecoder().decode(
+    const responseText = new TextDecoder("utf-8", { fatal: true }).decode(
       await readResponseWithLimit(response, VOLCENGINE_TTS_RESPONSE_MAX_BYTES, {
         onOverflow: ({ maxBytes }) =>
           new Error(`BytePlus Seed Speech TTS response exceeds ${maxBytes} bytes`),
@@ -253,7 +253,7 @@ async function legacyVolcengineTTS(
   });
 
   try {
-    const responseText = new TextDecoder().decode(
+    const responseText = new TextDecoder("utf-8", { fatal: true }).decode(
       await readResponseWithLimit(response, VOLCENGINE_TTS_RESPONSE_MAX_BYTES, {
         onOverflow: ({ maxBytes }) =>
           new Error(`Volcengine TTS response exceeds ${maxBytes} bytes`),

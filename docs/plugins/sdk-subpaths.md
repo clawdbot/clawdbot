@@ -23,6 +23,19 @@ inventory of every internal runtime helper. Four files define the boundary:
 - `scripts/lib/plugin-sdk-entries.mts`: derived public/private export metadata,
   supported bundled facades, and plugin-owned public surfaces.
 
+After changing the entrypoint inventories, run `pnpm plugin-sdk:sync-exports`,
+then `pnpm plugin-sdk:check-exports`. The same registration command maintains
+package exports, private artifact exclusions in `package.json`'s `files`, and
+private workspace declaration aliases in
+`extensions/tsconfig.package-boundary.paths.json` and `extensions/xai/tsconfig.json`.
+It owns literal flat `!dist/plugin-sdk/<name>.js` and `.d.ts` exclusions, including
+names with underscores, uppercase letters, dots, or Unicode, and removes obsolete
+exclusions when entries become public or are removed. Nested paths, glob or escape
+syntax, non-entrypoint metadata, and other file rules retain their order; unrelated
+mappings and XAI's intentional private-alias omissions are preserved.
+These local declaration aliases do not add types to JavaScript-only published
+SDK exports; test-only entries remain unexported.
+
 Maintainers audit the public export count with `pnpm plugin-sdk:surface` and
 the compatibility queue with `pnpm plugins:boundary-report:summary`.
 
@@ -202,7 +215,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/approval-native-runtime` | Native approval target, account-binding, route-gate, forwarding fallback, and local native exec prompt suppression helpers |
     | `plugin-sdk/approval-reaction-runtime` | Private-local after July 2026; Hardcoded approval reaction bindings, reaction prompt payloads, reaction target stores, reaction hint text helpers, and compatibility export for local native exec prompt suppression |
     | `plugin-sdk/approval-reply-runtime` | Exec/plugin approval reply payload helpers |
-    | `plugin-sdk/approval-runtime` | Exec/plugin approval payload helpers, approval-capability builders, approval auth/profile helpers, native approval routing/runtime helpers, and structured approval display helpers such as `formatApprovalDisplayPath` |
+    | `plugin-sdk/approval-runtime` | Exec/plugin/system-agent approval payload helpers, approval-capability builders, approval auth/profile helpers, native approval routing/runtime helpers, and structured approval display helpers such as `formatApprovalDisplayPath` |
     | `plugin-sdk/command-auth-native` | Native command auth, dynamic argument menu formatting, and native session-target helpers |
     | `plugin-sdk/command-detection` | Shared command detection helpers |
     | `plugin-sdk/command-primitives-runtime` | Lightweight command text predicates for hot channel paths |
@@ -216,12 +229,14 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/ssrf-policy` | Host allowlist and private-network SSRF policy helpers |
     | `plugin-sdk/ssrf-dispatcher` | Private-local after July 2026; Narrow pinned-dispatcher helpers without the broad infra runtime surface |
     | `plugin-sdk/ssrf-runtime` | Pinned-dispatcher, SSRF-guarded fetch, `SsrFBlockedError` and `GuardedFetchRedirectError`, SSRF policy helpers, and loopback/private host classification |
-    | `plugin-sdk/secret-input` | Secret input parsing helpers |
-    | `plugin-sdk/secret-input-runtime` | Secret input normalization, SecretRef coercion, and configured secret resolution helpers |
+    | `plugin-sdk/secret-input` | Secret input parsing helpers and `isBuiltInDefaultSecretProviderRef(config, ref)`, which returns true when the built-in `env` or `store` provider owns its source's selected default alias, and false for a same-source explicit provider entry |
+    | `plugin-sdk/secret-input-runtime` | Secret input normalization, SecretRef coercion, configured secret resolution, and manifest-owned capability availability guards |
     | `plugin-sdk/secret-ref-readonly` | Closed available/missing/blocked resolution and provider-policy checks for read-only env SecretRefs |
     | `plugin-sdk/webhook-ingress` | Webhook request/target helpers and raw websocket/body coercion |
     | `plugin-sdk/webhook-request-guards` | Request body size/timeout helpers, canonical Gateway browser-origin acceptance via `resolveAcceptedBrowserOrigin`, and `runDetachedWebhookWork` for tracked post-ack processing |
   </Accordion>
+
+For structured SecretRefs, `resolveReadOnlyEnvSecretRef` returns `blocked` when the ref cannot be used, including an allowed env ref whose value is missing or empty. Callers may apply their existing fallback only for `missing`; a blocked ref must not borrow ambient or auth-profile credentials. Its provider check follows source-specific default aliases and explicit env allowlists.
 
 Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It accepts `localhost`, IPv4 loopback literals across `127.0.0.0/8`, `::1`, bracketed IPv6, and IPv4-mapped IPv6 loopback literals. It parses IP literals rather than matching text prefixes, so a DNS name such as `127.0.0.1.evil.com` is not loopback. Use `isPrivateOrLoopbackHost(host)` only when private-network hosts such as RFC 1918 addresses are also valid.
 
@@ -230,6 +245,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | --- | --- |
     | `plugin-sdk/runtime` | Runtime/logging/backup helpers, plugin install-path warnings, and process helpers |
     | `plugin-sdk/runtime-env` | Narrow runtime env, logger, timeout, retry, and backoff helpers |
+    | `plugin-sdk/browser-cdp` | Private host runtime; `parseBrowserHttpUrl` and `redactCdpUrl` for Browser URL handling. JavaScript-only package export, not a typed third-party SDK contract. |
     | `plugin-sdk/browser-config` | Private-local after July 2026; Supported browser config facade for normalized profile/defaults, CDP URL parsing, and browser-control auth helpers |
     | `plugin-sdk/agent-harness-task-runtime` | Private-local after July 2026; Generic task lifecycle and completion delivery helpers for harness-backed agents using a host-issued task scope |
     | `plugin-sdk/agent-harness-runtime` | Agent-harness runtime helpers, including the bounded `agentHarnessStructuredInput` form/URL compilation and execution surface. `acquireSessionWriteLock`, `resolveSessionWriteLockAcquireTimeoutMs`, `resolveSessionWriteLockOptions`, and `SessionWriteLockAcquireTimeoutConfig` are deprecated no-op compatibility exports scheduled for removal in the 2026.10 release train. They no longer block or create lock sidecars; harnesses should rely on OpenClaw's per-session lane plus the durable writer claim and in-transaction fence. |
@@ -242,13 +258,15 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/plugin-runtime` | Deprecated broad barrel for plugin command/hook/http/interactive helpers; prefer focused plugin runtime subpaths |
     | `plugin-sdk/hook-runtime` | Deprecated broad barrel for webhook/internal hook pipeline helpers; prefer focused hook/plugin runtime subpaths |
     | `plugin-sdk/lazy-runtime` | Lazy runtime import/binding helpers such as `createLazyRuntimeModule`, `createLazyRuntimeMethod`, and `createLazyRuntimeSurface` |
-    | `plugin-sdk/process-runtime` | Private-local after July 2026; bounded process execution with per-stream and aggregate output caps, opt-in stream-error termination, and configurable TERM-to-KILL grace |
+    | `plugin-sdk/process-runtime` | Private-local after July 2026; bounded process execution with per-stream and aggregate output caps, opt-in stream-error termination, configurable TERM-to-KILL grace, and `prepareSecretInputStdio` for one-shot credential descriptors |
     | `plugin-sdk/node-host` | Private-local after July 2026; Node-host executable resolution and PTY resume helpers |
     | `plugin-sdk/node-selection-runtime` | Private-local bundled runtime facade for shared capability-gated node selection policy |
     | `plugin-sdk/cli-argv` | Dependency-light root-option parsing for CLI metadata, including `getRootOptionAwareCommandPath` and `consumeRootOptionToken` |
     | `plugin-sdk/cli-runtime` | Private-local after July 2026; Deprecated broad barrel for CLI formatting, wait, version, argument-invocation, and lazy command-group helpers; prefer focused CLI/runtime subpaths |
+    | `plugin-sdk/node-cli-runtime` | Shared node CLI Gateway options, invoke envelope, terminal presentation, and authorization-hint error handling for plugin-owned node commands |
     | `plugin-sdk/qa-runner-runtime` | Private-local after July 2026; Supported facade exposing plugin QA scenarios through the CLI command surface |
     | `plugin-sdk/tts-runtime` | Private-local after July 2026; Supported facade for text-to-speech config schemas and runtime helpers |
+    | `plugin-sdk/gateway-config-runtime` | Private-local bundled runtime facade for dependency-light Gateway port resolution (`resolveGatewayPort`); not for third-party plugins |
     | `plugin-sdk/gateway-method-runtime` | Reserved Gateway method dispatch helper for plugin HTTP routes that declare `contracts.gatewayMethodDispatch: ["authenticated-request"]` |
     | `plugin-sdk/gateway-runtime` | Gateway client, event-loop-ready client start helper, gateway CLI RPC, gateway protocol errors, advertised LAN host resolution, and channel-status patch helpers |
     | `plugin-sdk/config-contracts` | Focused config surface for plugin config shapes such as `OpenClawConfig` and channel/provider config types, plus the dependency-light runtime helper `resolveGatewayPublicOrigin(cfg)` which returns the normalized `gateway.publicOrigin` (bare http(s) origin, optional reverse-proxy path, no query/hash) or `undefined` when unset, for building links back to the Gateway |
@@ -263,7 +281,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/reply-history` | Shared short-window reply-history helpers. New message-turn code should use `createChannelHistoryWindow`; lower-level map helpers remain deprecated compatibility exports only |
     | `plugin-sdk/reply-reference` | Private-local after July 2026; `createReplyReferencePlanner` |
     | `plugin-sdk/reply-chunking` | Narrow text/markdown chunking helpers |
-    | `plugin-sdk/agent-scope-runtime` | Focused agent ID, directory, default-agent, and session-agent scope resolution helpers for dependency-light control-plane and migration paths |
+    | `plugin-sdk/agent-scope-runtime` | Focused agent ID, directory, default-agent, and session-agent scope resolution helpers for dependency-light control-plane and migration paths. New plugins use `resolveSessionAgentIdsStrict` or `resolveSessionAgentIdStrict` with an explicit or prepared owner. The legacy resolver names preserve ambient system-agent fallback through November 29, 2026; see [Plugin compatibility](/plugins/compatibility#session-agent-resolution-aliases). |
     | `plugin-sdk/session-store-runtime` | Session workflow helpers (`getSessionEntry`, `listSessionEntries`, `patchSessionEntry`, `upsertSessionEntry`), repair/lifecycle helpers (`deleteSessionEntry`, `cleanupSessionLifecycleArtifacts`, `resolveSessionStoreBackupPaths`), marker helpers for transitional `sessionFile` values, bounded recent user/assistant transcript text reads by session identity, session store path/session-key helpers, and updated-at reads, without broad config writes/maintenance imports |
     | `plugin-sdk/session-catalog` | External session catalog contracts, canonical cursor/parameter/transcript paging, explicit local-plus-node family composition, node-host bindings, adoption helpers, and history import |
     | `plugin-sdk/session-discussion` | External session discussion provider contracts, registration, and canonical Control UI session path building |
@@ -320,11 +338,13 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/exec-approvals-runtime` | Private-local after July 2026; Exec approval policy file helpers without the broad infra-runtime barrel |
     | `plugin-sdk/infra-runtime` | Deprecated compatibility shim; use injected runtime APIs or documented typed-public subpaths |
     | `plugin-sdk/collection-runtime` | Small bounded cache helpers |
+    | `plugin-sdk/diagnostic-flags` | `isDiagnosticFlagEnabled` for flag-only consumers without event, trace, or redaction initialization |
     | `plugin-sdk/diagnostic-runtime` | Diagnostic flag, event, trace-context, and low-cardinality dimension normalization helpers |
     | `plugin-sdk/error-runtime` | Error graph, formatting, unknown-value coercion, shared error classification helpers, `PlatformMessageNotDispatchedError`, `isApprovalNotFoundError` |
     | `plugin-sdk/fetch-runtime` | Private-local after July 2026; Wrapped fetch, proxy, EnvHttpProxyAgent option, and pinned lookup helpers |
     | `plugin-sdk/proxy-capture` | Debug proxy capture configuration, SQLite-backed capture storage, HTTP/WebSocket capture events, and capture lifecycle helpers |
     | `plugin-sdk/runtime-fetch` | Private-local after July 2026; Dispatcher-aware runtime fetch without proxy/guarded-fetch imports |
+    | `plugin-sdk/blob-runtime` | Private official-plugin runtime; Exact Buffer views for synchronous Blob construction |
     | `plugin-sdk/inline-image-data-url-runtime` | Private-local after July 2026; Inline image data URL sanitizer and signature sniffing helpers without the broad media runtime surface |
     | `plugin-sdk/response-limit-runtime` | Private-local after July 2026; Byte-, idle-, and deadline-bounded response-body readers without the broad media runtime surface |
     | `plugin-sdk/session-binding-runtime` | Private-local after July 2026; Current conversation binding state without configured binding routing or pairing stores |
@@ -338,6 +358,14 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/agent-runtime` | Deprecated broad barrel for agent dir/identity/workspace helpers, including `resolveAgentDir`, `resolveDefaultAgentDir`, and the deprecated `resolveOpenClawAgentDir` compatibility export; prefer focused agent/runtime subpaths |
     | `plugin-sdk/directory-runtime` | Config-backed directory query/dedup |
     | `plugin-sdk/keyed-async-queue` | Private-local after July 2026; `KeyedAsyncQueue` |
+
+    Private process callers declare `using prepared = prepareSecretInputStdio(stdio, secretInput)`
+    before spawning, then call `await prepared?.deliverTo(child)` once. Delivery closes the writer
+    and zeroes the transient credential buffer; disposal closes any untransferred descriptors,
+    including when spawning throws. POSIX uses anonymous pipes that support descriptor-path readers
+    without credential files; Windows retains its overlapped child pipe. Callers own child cleanup
+    when delivery fails.
+
   </Accordion>
 
   <Accordion title="Capability and testing subpaths">

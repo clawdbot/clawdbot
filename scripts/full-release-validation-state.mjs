@@ -6,6 +6,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -23,11 +24,16 @@ import {
   composeReleaseChildAttemptEvidence,
   formatReleaseStateOutcome,
   releasePlanGateFailures,
+  MAX_RELEASE_ARTIFACT_BYTES,
+  serializeReleaseArtifact,
   selectReleaseStateArtifacts,
   validateReleaseChildRunProvenance,
+  validateReleaseCoveragePolicyBinding,
   validateReleaseExecutionPlanArtifact,
+  validateReleaseTelegramWaiverBinding,
   verifyReleaseStateArtifacts,
 } from "./full-release-validation-policy.mjs";
+import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
 
 export * from "./full-release-validation-policy.mjs";
 
@@ -39,8 +45,9 @@ const API_ERROR_PATTERN =
   /HTTP [45][0-9][0-9]|API|Bad credentials|rate limit|network|connection|timeout|ETIMEDOUT|ECONNRESET|EAI_AGAIN/u;
 const DEFAULT_POLL_INTERVAL_MS = 60_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 5 * 60_000;
-const DEFAULT_TRANSIENT_READ_GRACE_POLLS = 2;
 const GH_TIMEOUT_MS = 60_000;
+const TRANSPORT_UNCERTAINTY_MS = 15 * 60_000;
+let ghRetryDeadline;
 
 function stringValue(value, fallback = "") {
   return typeof value === "string" ? value : fallback;
@@ -86,6 +93,13 @@ async function abortableSleep(milliseconds, signal) {
   }
 }
 
+const deadlineDelayMs = (delay, deadline, now) =>
+  Number.isFinite(deadline) ? Math.max(0, Math.min(delay, deadline - now)) : delay;
+
+export function releaseGhRetryDelayMs(attempt, deadlineMonotonicMs, nowMonotonicMs) {
+  return deadlineDelayMs(Math.min(attempt * 10_000, 60_000), deadlineMonotonicMs, nowMonotonicMs);
+}
+
 async function runGh(args, options = {}) {
   const attempts = options.attempts ?? 6;
   let lastError;
@@ -108,7 +122,11 @@ async function runGh(args, options = {}) {
       if (attempt === attempts || classifyReleaseGhTransportError(error) !== "transient") {
         throw error;
       }
-      await abortableSleep(Math.min(attempt * 10_000, 60_000), options.signal);
+      const delay = releaseGhRetryDelayMs(attempt, ghRetryDeadline, performance.now());
+      if (delay === 0) {
+        throw error;
+      }
+      await abortableSleep(delay, options.signal);
     }
   }
   throw lastError;
@@ -188,12 +206,8 @@ export async function readChild(child, previous, signal, options = {}) {
     return { ...child, errors: [], jobs: [], status: "skipped" };
   }
   if (!child.runId || !child.runAttempt) {
-    return {
-      ...child,
-      errors: [issue("dispatch_missing", child, `${child.key} omitted its exact run identity`)],
-      jobs: [],
-      status: "missing",
-    };
+    const error = issue("dispatch_missing", child, `${child.key} omitted its exact run identity`);
+    return { ...child, errors: [error], jobs: [], status: "missing" };
   }
   try {
     const run = options.readRun
@@ -223,11 +237,19 @@ export async function readChild(child, previous, signal, options = {}) {
       if (attempts.slice(0, -1).some((attempt) => attempt.jobs.length === 0)) {
         throw new Error(`${child.key} child attempt evidence is gapped`);
       }
-      return validateChildBinding(child, run, {
+      const partial = validateChildBinding(child, run, {
         jobs: [],
         observedRunAttempts: [],
         sha256: "",
       });
+      return (previous?.compositeJobsSha256 || previous?.transportFailure) &&
+        partial.errors.length === 0
+        ? {
+            ...previous,
+            conclusion: stringValue(run.conclusion),
+            status: stringValue(run.status),
+          }
+        : partial;
     }
     const evidence = composeReleaseChildAttemptEvidence({
       attempts,
@@ -244,14 +266,7 @@ export async function readChild(child, previous, signal, options = {}) {
       sha256: evidence.compositeJobsSha256,
     });
   } catch (error) {
-    const transientReadFailures = Number(previous?.transientReadFailures ?? 0) + 1;
-    const transientGracePolls =
-      Number.isSafeInteger(options.transientGracePolls) && options.transientGracePolls >= 0
-        ? options.transientGracePolls
-        : DEFAULT_TRANSIENT_READ_GRACE_POLLS;
-    const degraded =
-      classifyReleaseGhTransportError(error) === "transient" &&
-      transientReadFailures <= transientGracePolls;
+    const degraded = classifyReleaseGhTransportError(error) === "transient";
     const provenanceMismatch =
       error instanceof Error && error.message.startsWith("release child provenance changed:");
     const readError = issue(
@@ -259,33 +274,61 @@ export async function readChild(child, previous, signal, options = {}) {
       child,
       `${child.key} GitHub read failed: ${error instanceof Error ? error.message : String(error)}`,
     );
-    if (degraded) {
-      console.warn(
-        `${child.key} GitHub read degraded (${transientReadFailures}/${transientGracePolls}); preserving the last snapshot`,
-      );
-    }
+    ghRetryDeadline ??= degraded ? performance.now() + TRANSPORT_UNCERTAINTY_MS : undefined;
     return {
       ...child,
-      conclusion: stringValue(previous?.conclusion),
-      createdAt: stringValue(previous?.createdAt),
+      ...previous,
       errors: degraded
         ? (previous?.errors ?? []).filter((entry) => entry.kind === "provenance_mismatch")
         : [
             ...(previous?.errors ?? []).filter((entry) => entry.kind === "provenance_mismatch"),
             readError,
           ],
-      jobs: previous?.jobs ?? [],
-      compositeJobsSha256: stringValue(previous?.compositeJobsSha256),
-      observedRunAttempts: previous?.observedRunAttempts ?? [],
-      plannedRunAttempt: positiveInteger(
-        previous?.plannedRunAttempt ?? child.runAttempt,
-        "planned run attempt",
-      ),
-      status: degraded ? "read_degraded" : stringValue(previous?.status, "unknown"),
-      transientReadFailures,
-      updatedAt: stringValue(previous?.updatedAt),
+      status: degraded ? "transport_uncertain" : stringValue(previous?.status, "unknown"),
+      transportFailure: degraded ? { errorClass: "transient" } : undefined,
     };
   }
+}
+
+export function updateReleaseTransportEpisode(previous, children, options = {}) {
+  const monotonicNow = options.monotonicNow ?? performance.now();
+  const wallNow = options.wallNow ?? Date.now();
+  const uncertain = children.filter((child) => child.transportFailure?.errorClass === "transient");
+  const affected = uncertain
+    .map((child) => ({
+      child: child.key,
+      compositeJobsSha256: stringValue(child.compositeJobsSha256),
+      errorClass: "transient",
+      lastValidAt: stringValue(child.updatedAt),
+      runAttempt: child.runAttempt,
+      runId: String(child.runId),
+    }))
+    .toSorted((left, right) => left.child.localeCompare(right.child, "en"));
+  if (affected.length === 0) {
+    return { status: "certain" };
+  }
+  const deadline = options.deadline ?? ghRetryDeadline ?? monotonicNow + TRANSPORT_UNCERTAINTY_MS;
+  const wallStart = wallNow + deadline - monotonicNow - TRANSPORT_UNCERTAINTY_MS;
+  const episode = previous?.deadlineMonotonicMs
+    ? previous
+    : {
+        deadlineAt: new Date(wallStart + TRANSPORT_UNCERTAINTY_MS).toISOString(),
+        deadlineMonotonicMs: deadline,
+        startedAt: new Date(wallStart).toISOString(),
+      };
+  return {
+    ...episode,
+    affected,
+    error:
+      monotonicNow >= episode.deadlineMonotonicMs
+        ? issue(
+            "transport_deadline_exceeded",
+            { key: "<collector>" },
+            `GitHub transport remained uncertain; affected ${affected.map((child) => `${child.child}:${child.runId}:${child.runAttempt}`).join(",")}`,
+          )
+        : undefined,
+    status: monotonicNow >= episode.deadlineMonotonicMs ? "expired" : "uncertain",
+  };
 }
 
 export function parsePlanInputs(value) {
@@ -310,7 +353,12 @@ export function hydrateReusedPlan(plan, evidence) {
       ...child,
       displayTitle: reused.displayTitle,
       result: "success",
-      runAttempt: reused.runAttempt,
+      // Reuse keeps the dispatch origin, so a human rerun still composes earlier jobs.
+      // Verified manifests predating childEvidence only carry the effective attempt.
+      runAttempt:
+        evidence.manifest.childEvidence === undefined
+          ? reused.runAttempt
+          : evidence.manifest.childEvidence[child.key].plannedRunAttempt,
       runId: reused.runId,
       url: reused.url,
       workflowRef: reused.headBranch,
@@ -331,53 +379,40 @@ function changedPathsValue(value) {
   }
 }
 
-function canonicalJson(value) {
-  if (Array.isArray(value)) {
-    return value.map(canonicalJson);
-  }
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value)
-        .toSorted(([left], [right]) => left.localeCompare(right))
-        .map(([key, entry]) => [key, canonicalJson(entry)]),
-    );
-  }
-  return value;
-}
-
-async function validateReuse(plan, planInputs, signal) {
-  if (!(planInputs.evidenceReuse === true || planInputs.evidenceReuse === "true")) {
+async function validateReuse(executionPlan, signal) {
+  const { children: plan, evidenceReuse, trustedWorkflow } = executionPlan;
+  if (!evidenceReuse.requested) {
     return { blockers: [], children: plan, errors: [] };
   }
   try {
     const args = [
       RELEASE_SUMMARY_PATH,
       "--validate-run",
-      requiredString(planInputs.evidenceRunId, "evidence selected run ID"),
+      requiredString(evidenceReuse.selectedRunId, "evidence selected run ID"),
       "--repo",
       requiredString(process.env.GITHUB_REPOSITORY, "GitHub repository"),
       "--trusted-workflow-ref",
-      requiredString(planInputs.trustedWorkflow?.ref, "trusted workflow ref"),
+      requiredString(trustedWorkflow?.ref, "trusted workflow ref"),
       "--trusted-workflow-full-ref",
-      requiredString(planInputs.trustedWorkflow?.fullRef, "trusted workflow full ref"),
+      requiredString(trustedWorkflow?.fullRef, "trusted workflow full ref"),
       "--trusted-workflow-sha",
-      requiredString(planInputs.trustedWorkflow?.sha, "trusted workflow SHA"),
+      requiredString(trustedWorkflow?.sha, "trusted workflow SHA"),
       "--verifier-source-sha",
-      requiredString(planInputs.workflowSha, "workflow SHA"),
+      requiredString(executionPlan.workflowSha, "workflow SHA"),
       "--verifier-source-file",
       RELEASE_SUMMARY_PATH,
       "--expected-target-sha",
       requiredString(process.env.TARGET_SHA, "target SHA"),
       "--expected-evidence-policy",
-      requiredString(planInputs.evidencePolicy, "evidence policy"),
+      requiredString(evidenceReuse.policy, "evidence policy"),
       "--expected-evidence-sha",
-      requiredString(planInputs.evidenceSha, "evidence SHA"),
+      requiredString(evidenceReuse.evidenceSha, "evidence SHA"),
       "--expected-root-run-id",
-      requiredString(planInputs.evidenceRootRunId, "evidence root run ID"),
+      requiredString(evidenceReuse.rootRunId, "evidence root run ID"),
       "--expected-selected-run-id",
-      requiredString(planInputs.evidenceRunId, "evidence selected run ID"),
+      requiredString(evidenceReuse.selectedRunId, "evidence selected run ID"),
       "--expected-changed-paths-json",
-      JSON.stringify(changedPathsValue(planInputs.evidenceChangedPaths)),
+      JSON.stringify(changedPathsValue(evidenceReuse.changedPaths)),
       "--json",
     ];
     const result = await execFileAsync(process.execPath, args, {
@@ -398,11 +433,13 @@ async function validateReuse(plan, planInputs, signal) {
     ) {
       throw new Error("reused release evidence no longer matches the requested validation");
     }
+    validateReleaseTelegramWaiverBinding(executionPlan, evidence.manifest.validationInputs);
+    validateReleaseCoveragePolicyBinding(executionPlan, evidence.manifest.validationInputs);
     return {
       blockers: [],
       children: hydrateReusedPlan(plan, evidence),
       errors: [],
-      sourceManifest: canonicalJson(evidence.manifest),
+      sourceManifest: sortJsonValueKeys(evidence.manifest),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -410,8 +447,8 @@ async function validateReuse(plan, planInputs, signal) {
       child: "<evidence>",
       kind: API_ERROR_PATTERN.test(message) ? "api_error" : "reused_evidence_invalid",
       message,
-      runId: stringValue(planInputs.evidenceRunId),
-      url: stringValue(planInputs.evidenceRunUrl),
+      runId: stringValue(evidenceReuse.selectedRunId),
+      url: stringValue(evidenceReuse.runUrl),
     };
     return API_ERROR_PATTERN.test(message)
       ? { blockers: [], children: plan, errors: [entry] }
@@ -420,8 +457,9 @@ async function validateReuse(plan, planInputs, signal) {
 }
 
 function writeArtifact(path, payload) {
+  const json = serializeReleaseArtifact(payload);
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(payload, null, 2)}\n`);
+  writeFileSync(path, json);
 }
 
 function writeResult(path, payload) {
@@ -483,6 +521,9 @@ async function cancelAffectedChildren(children, blockers, cancelledRunIds, signa
 
 function readArtifact(path, label) {
   try {
+    if (statSync(path).size > MAX_RELEASE_ARTIFACT_BYTES) {
+      throw new Error("release artifact exceeds the size limit");
+    }
     return JSON.parse(readFileSync(path, "utf8"));
   } catch (error) {
     throw new Error(
@@ -518,6 +559,9 @@ function verifyMode() {
 
 function planExpected() {
   return {
+    coveragePolicy: process.env.COVERAGE_POLICY || undefined,
+    telegramWaiver: process.env.TELEGRAM_WAIVER ?? "",
+    ...(process.env.TARGET_VERSION ? { targetVersion: process.env.TARGET_VERSION } : {}),
     parentRunId: requiredString(process.env.GITHUB_RUN_ID, "parent run ID"),
     repository: requiredString(process.env.GITHUB_REPOSITORY, "GitHub repository"),
     releaseProfile: requiredString(process.env.RELEASE_PROFILE, "release profile"),
@@ -623,7 +667,10 @@ async function planMode() {
     throw new Error("collector retry omitted the immutable attempt-one execution plan");
   }
 
-  const planInputs = parsePlanInputs(process.env.FULL_RELEASE_PLAN_INPUTS_JSON);
+  const planInputs = {
+    ...parsePlanInputs(process.env.FULL_RELEASE_PLAN_INPUTS_JSON),
+    releaseProfile: expected.releaseProfile,
+  };
   const attemptEvidenceVersion = Number(planInputs.childPhaseVersion) === 3 ? 3 : 2;
   const built = buildReleaseExecutionPlan(planInputs);
   const candidate = candidateFromInputs(planInputs, built.gates);
@@ -633,12 +680,15 @@ async function planMode() {
   let plan = buildReleaseExecutionPlanArtifact({
     attemptEvidenceVersion,
     candidate,
+    coveragePolicy: planInputs.coveragePolicy,
     children: built.children,
     evidenceReuse: evidenceReuseFromInputs(planInputs),
     expected: { ...expected, candidateRequest, parentRunAttempt: currentAttempt },
     gates: built.gates,
     releaseProfile: expected.releaseProfile,
     rerunGroup: expected.rerunGroup,
+    telegramWaiver: planInputs.telegramWaiver,
+    targetVersion: planInputs.targetVersion,
     trustedWorkflow: trustedWorkflowFromInputs(planInputs),
   });
   const stop = () => {
@@ -650,6 +700,7 @@ async function planMode() {
       attemptEvidenceVersion,
       blockers: plan.blockers,
       candidate: plan.candidate,
+      coveragePolicy: plan.coveragePolicy,
       children: plan.children,
       errors: [
         ...plan.errors,
@@ -668,6 +719,8 @@ async function planMode() {
       gates: plan.gates,
       releaseProfile: expected.releaseProfile,
       rerunGroup: expected.rerunGroup,
+      telegramWaiver: plan.telegramWaiver,
+      targetVersion: plan.targetVersion,
       trustedWorkflow: plan.trustedWorkflow,
     });
     writeExecutionPlan(outputPath, plan);
@@ -677,7 +730,7 @@ async function planMode() {
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
 
-  const reuse = await validateReuse(built.children, planInputs, abortController.signal);
+  const reuse = await validateReuse(plan, abortController.signal);
   if (finished) {
     return;
   }
@@ -685,6 +738,7 @@ async function planMode() {
     attemptEvidenceVersion,
     blockers: reuse.blockers,
     candidate,
+    coveragePolicy: planInputs.coveragePolicy,
     children: reuse.children,
     errors: reuse.errors,
     evidenceReuse: evidenceReuseFromInputs(planInputs, reuse.sourceManifest),
@@ -692,6 +746,8 @@ async function planMode() {
     gates: built.gates,
     releaseProfile: expected.releaseProfile,
     rerunGroup: expected.rerunGroup,
+    telegramWaiver: planInputs.telegramWaiver,
+    targetVersion: planInputs.targetVersion,
     trustedWorkflow: trustedWorkflowFromInputs(planInputs),
   });
   writeExecutionPlan(outputPath, plan);
@@ -744,6 +800,7 @@ async function collectMode(mode) {
   let finished = false;
   const abortController = new AbortController();
   let decisionReuse = { blockers: [], children: plan, errors: [] };
+  let transport = { status: "certain" };
 
   const writePayload = (decision, cancellation = {}) => {
     const payload = buildReleaseStateArtifact({
@@ -755,6 +812,7 @@ async function collectMode(mode) {
       mode,
       releaseProfile,
       rerunGroup,
+      transport,
     });
     writeResult(outputPath, payload);
     appendSummary(mode, payload);
@@ -771,6 +829,7 @@ async function collectMode(mode) {
       extraBlockers: executionPlan.blockers,
       extraErrors: [
         ...executionPlan.errors,
+        ...(transport.error ? [transport.error] : []),
         {
           child: "<collector>",
           kind: "collector_cancelled",
@@ -789,21 +848,7 @@ async function collectMode(mode) {
   process.once("SIGTERM", stop);
 
   if (mode === "decision" && executionPlan.evidenceReuse.requested) {
-    decisionReuse = await validateReuse(
-      plan,
-      {
-        evidenceChangedPaths: executionPlan.evidenceReuse.changedPaths,
-        evidencePolicy: executionPlan.evidenceReuse.policy,
-        evidenceReuse: true,
-        evidenceRunId: executionPlan.evidenceReuse.selectedRunId,
-        evidenceRootRunId: executionPlan.evidenceReuse.rootRunId,
-        evidenceRunUrl: executionPlan.evidenceReuse.runUrl,
-        evidenceSha: executionPlan.evidenceReuse.evidenceSha,
-        trustedWorkflow: executionPlan.trustedWorkflow,
-        workflowSha: executionPlan.workflowSha,
-      },
-      abortController.signal,
-    );
+    decisionReuse = await validateReuse(executionPlan, abortController.signal);
     const exactPlan = JSON.stringify(
       plan.map(({ key, runAttempt, runId }) => ({ key, runAttempt, runId })),
     );
@@ -826,8 +871,8 @@ async function collectMode(mode) {
       };
     }
     if (
-      JSON.stringify(canonicalJson(decisionReuse.sourceManifest)) !==
-      JSON.stringify(canonicalJson(executionPlan.evidenceReuse.sourceManifest))
+      JSON.stringify(sortJsonValueKeys(decisionReuse.sourceManifest)) !==
+      JSON.stringify(sortJsonValueKeys(executionPlan.evidenceReuse.sourceManifest))
     ) {
       decisionReuse = {
         ...decisionReuse,
@@ -847,13 +892,16 @@ async function collectMode(mode) {
 
   let nextHeartbeat = 0;
   while (!finished) {
+    ghRetryDeadline = transport.deadlineMonotonicMs;
     snapshots = await Promise.all(
       plan.map((child, index) => readChild(child, snapshots[index], abortController.signal)),
     );
+    transport = updateReleaseTransportEpisode(transport, snapshots);
+    const transportReadErrors = transport.error ? [transport.error] : [];
     let decision = classifyReleaseSnapshot({
       children: snapshots,
       extraBlockers: [...executionPlan.blockers, ...decisionReuse.blockers],
-      extraErrors: [...executionPlan.errors, ...decisionReuse.errors],
+      extraErrors: [...transportReadErrors, ...executionPlan.errors, ...decisionReuse.errors],
       localFailures: gateFailures,
       releaseProfile,
       workflowRef: expected.workflowRef,
@@ -877,7 +925,12 @@ async function collectMode(mode) {
             ...decisionReuse.blockers,
             ...decision.blockers,
           ],
-          extraErrors: [...executionPlan.errors, ...decisionReuse.errors, ...cancellationErrors],
+          extraErrors: [
+            ...transportReadErrors,
+            ...executionPlan.errors,
+            ...decisionReuse.errors,
+            ...cancellationErrors,
+          ],
           localFailures: gateFailures,
           releaseProfile,
           workflowRef: expected.workflowRef,
@@ -886,9 +939,11 @@ async function collectMode(mode) {
     }
     const done =
       mode === "decision"
-        ? decision.state !== "qualifying"
-        : decision.state === "orchestration_error" ||
-          (decision.state !== "qualifying" && decision.activeRunIds.length === 0);
+        ? decision.state !== "qualifying" &&
+          !(decision.state === "passed" && transport.status === "uncertain")
+        : transport.status !== "uncertain" &&
+          (decision.state === "orchestration_error" ||
+            (decision.state !== "qualifying" && decision.activeRunIds.length === 0));
     if (done) {
       const payload = writePayload(decision, { cancelledRunIds, requested: false });
       finished = true;
@@ -896,7 +951,10 @@ async function collectMode(mode) {
         payload.state === "passed" ? 0 : payload.state === "orchestration_error" ? 2 : 1;
       return;
     }
-    await abortableSleep(pollIntervalMs, abortController.signal);
+    await abortableSleep(
+      deadlineDelayMs(pollIntervalMs, transport.deadlineMonotonicMs, performance.now()),
+      abortController.signal,
+    );
   }
 }
 
@@ -974,6 +1032,8 @@ async function validateManifestMode() {
     workflowRef: executionPlan.workflowRef,
     workflowSha: executionPlan.workflowSha,
   });
+  validateReleaseTelegramWaiverBinding(executionPlan, manifest.validationInputs);
+  validateReleaseCoveragePolicyBinding(executionPlan, manifest.validationInputs);
   const expectedChildRunIds = Object.fromEntries(
     executionPlan.children.map((child) => [
       child.key,
@@ -1019,18 +1079,19 @@ async function validateManifestMode() {
     manifest.targetSha !== executionPlan.targetSha ||
     manifest.releaseProfile !== executionPlan.releaseProfile ||
     manifest.rerunGroup !== executionPlan.rerunGroup ||
-    JSON.stringify(canonicalJson(manifest.childRunIds)) !==
-      JSON.stringify(canonicalJson(expectedChildRunIds)) ||
-    JSON.stringify(canonicalJson(manifest.evidenceReuse)) !==
-      JSON.stringify(canonicalJson(expectedEvidenceReuse)) ||
+    JSON.stringify(sortJsonValueKeys(manifest.childRunIds)) !==
+      JSON.stringify(sortJsonValueKeys(expectedChildRunIds)) ||
+    JSON.stringify(sortJsonValueKeys(manifest.evidenceReuse)) !==
+      JSON.stringify(sortJsonValueKeys(expectedEvidenceReuse)) ||
     (executionPlan.attemptEvidenceVersion !== undefined &&
-      JSON.stringify(canonicalJson(rawManifest.childEvidence)) !==
-        JSON.stringify(canonicalJson(expectedChildEvidence))) ||
+      JSON.stringify(sortJsonValueKeys(rawManifest.childEvidence)) !==
+        JSON.stringify(sortJsonValueKeys(expectedChildEvidence))) ||
     rawManifest.executionPlanSha256 !== executionPlan.sha256 ||
     Number(rawManifest.sourceParentRunAttempt) !== executionPlan.parentRunAttempt
   ) {
     throw new Error("release validation manifest differs from the immutable execution plan");
   }
+  writeArtifact(manifestPath, rawManifest);
 }
 
 function selectMode() {

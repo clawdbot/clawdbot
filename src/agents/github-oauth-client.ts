@@ -1,14 +1,15 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readResponseWithLimit } from "../infra/http-body.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import type { GitHubToolAccount } from "./github-tool-account.js";
 
 const GITHUB_OAUTH_CLIENT_ID = "Ov23liUjOXHi28w2fDlH";
 const GITHUB_OAUTH_DEVICE_CODE_URL = "https://github.com/login/device/code";
 const GITHUB_OAUTH_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token";
 const GITHUB_OAUTH_VERIFICATION_URL = "https://github.com/login/device";
 
-// gh auth login --with-token requires repo, read:org, and gist. workflow is
-// additionally required to publish branches that modify workflow files.
+// Request repository/workflow publication and the existing device-flow scopes.
 const GITHUB_OAUTH_SCOPE = "repo workflow read:org gist offline_access";
 const GITHUB_OAUTH_REQUEST_TIMEOUT_MS = 30_000;
 const GITHUB_OAUTH_RESPONSE_MAX_BYTES = 16 * 1024;
@@ -169,8 +170,12 @@ function parseGitHubOAuthTokenPair(
   ) {
     throw githubOAuthProtocolError(surface);
   }
+  const accessToken = readBoundedString(record.access_token, surface);
+  const refreshToken = readBoundedString(record.refresh_token, surface);
+  registerSecretValueForRedaction(accessToken);
+  registerSecretValueForRedaction(refreshToken);
   return {
-    accessToken: readBoundedString(record.access_token, surface),
+    accessToken,
     tokenType: "bearer",
     scopes,
     expiresInSeconds: readPositiveInteger(
@@ -178,7 +183,7 @@ function parseGitHubOAuthTokenPair(
       surface,
       GITHUB_OAUTH_MAX_DURATION_SECONDS,
     ),
-    refreshToken: readBoundedString(record.refresh_token, surface),
+    refreshToken,
     refreshTokenExpiresInSeconds: readPositiveInteger(
       record.refresh_token_expires_in,
       surface,
@@ -264,6 +269,10 @@ async function postGitHubOAuthForm(
     body: form,
     signal,
   });
+  return { response, body: await readGitHubResponse(response, surface, timeoutMs) };
+}
+
+async function readGitHubResponse(response: Response, surface: string, timeoutMs: number) {
   const bytes = await readResponseWithLimit(response, GITHUB_OAUTH_RESPONSE_MAX_BYTES, {
     chunkTimeoutMs: timeoutMs,
     timeoutMs,
@@ -271,7 +280,54 @@ async function postGitHubOAuthForm(
     onIdleTimeout: () => githubOAuthProtocolError(surface),
     onTimeout: () => githubOAuthProtocolError(surface),
   });
-  return { response, body: parseJsonObject(bytes, surface) };
+  return parseJsonObject(bytes, surface);
+}
+
+/** Verifies only the supplied credential at GitHub's fixed account endpoint. */
+export async function verifyGitHubCredential(
+  token: string,
+  options: GitHubOAuthRequestOptions = {},
+): Promise<
+  | { status: "available"; account: GitHubToolAccount; scopes: string[] }
+  | { status: "unavailable" | "rate_limited" | "unverified" }
+> {
+  registerSecretValueForRedaction(token);
+  try {
+    readBoundedString(token, "account");
+    if (/\s/u.test(token)) {
+      return { status: "unavailable" };
+    }
+    const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, GITHUB_OAUTH_REQUEST_TIMEOUT_MS, 1);
+    const timeout = AbortSignal.timeout(timeoutMs);
+    const response = await fetch("https://api.github.com/user", {
+      method: "GET",
+      redirect: "error",
+      headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}` },
+      signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout,
+    });
+    if (response.status !== 200) {
+      void response.body?.cancel().catch(() => undefined);
+      const rateLimited =
+        response.status === 429 ||
+        (response.status === 403 &&
+          (response.headers.get("x-ratelimit-remaining") === "0" ||
+            response.headers.has("retry-after")));
+      return {
+        status:
+          response.status === 401 ? "unavailable" : rateLimited ? "rate_limited" : "unverified",
+      };
+    }
+    const body = await readGitHubResponse(response, "account", timeoutMs);
+    const accountId = readPositiveInteger(body.id, "account", Number.MAX_SAFE_INTEGER);
+    const login = readBoundedString(body.login, "account", 100);
+    const avatarUrl =
+      body.avatar_url == null ? null : readBoundedString(body.avatar_url, "account");
+    const scopes = normalizeGitHubScopes(response.headers.get("x-oauth-scopes") ?? "", "account");
+    return { status: "available", account: { accountId, login, avatarUrl }, scopes };
+  } catch {
+    // Network errors, response bodies, and abort reasons can contain credentials.
+    return { status: "unverified" };
+  }
 }
 
 function throwGitHubOAuthHttpError(response: Response, surface: string): never {

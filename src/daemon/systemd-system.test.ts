@@ -129,7 +129,7 @@ describe("system systemd ownership", () => {
 
       expect(capability).toEqual({
         kind,
-        detail: `System service ${unitName} requires its privileged deployment owner.`,
+        reason: kind === "sealed" ? "system-owned" : "system-ownership-unverified",
       });
       expect(JSON.stringify(capability)).not.toContain("manager-secret-canary");
       // Denial permits only system ownership probes, never user-manager or artifact reads.

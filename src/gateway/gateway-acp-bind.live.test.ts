@@ -12,9 +12,9 @@ import { isLiveTestEnabled, readLiveTestConfig } from "../agents/live-test-helpe
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { clearPluginLoaderCache } from "../plugins/loader.test-fixtures.js";
-import { getActivePluginRegistry, resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { activateTestChannelRegistry, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { sleep } from "../utils.js";
 import type { GatewayClient } from "./client.js";
@@ -751,6 +751,8 @@ describeLive("gateway live (ACP bind)", () => {
           auth: { mode: "token", token },
           controlUiEnabled: false,
         });
+        await server.startupSettled;
+        await activateTestChannelRegistry(createSlackCurrentConversationBindingRegistry());
         logLiveStep("gateway startup returned");
         await waitForGatewayPort({ host: "127.0.0.1", port, timeoutMs: CONNECT_TIMEOUT_MS });
         logLiveStep("gateway port is reachable");
@@ -760,11 +762,6 @@ describeLive("gateway live (ACP bind)", () => {
           timeoutMs: CONNECT_TIMEOUT_MS,
         });
         logLiveStep("gateway websocket connected");
-        const activeRegistry = getActivePluginRegistry();
-        if (!activeRegistry) {
-          throw new Error("expected gateway root plugin registry");
-        }
-        activeRegistry.channels.push(...createSlackCurrentConversationBindingRegistry().channels);
 
         const bindResult = await bindConversationAndWait({
           client,

@@ -91,6 +91,7 @@ vi.mock("./cli.host.runtime.js", async () => {
     {
       defaultRuntime,
       formatErrorMessage,
+      getMemoryEmbeddingCommandSecretTargetIds,
       setVerbose,
       shortenHomeInString,
       shortenHomePath,
@@ -109,6 +110,7 @@ vi.mock("./cli.host.runtime.js", async () => {
   return {
     defaultRuntime,
     formatErrorMessage,
+    getMemoryEmbeddingCommandSecretTargetIds,
     getMemorySearchManager,
     listMemoryFiles,
     getRuntimeConfig,
@@ -129,6 +131,7 @@ vi.mock("./cli.host.runtime.js", async () => {
 
 let registerMemoryCli: typeof import("./cli.js").registerMemoryCli;
 let defaultRuntime: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").defaultRuntime;
+let getMemoryEmbeddingCommandSecretTargetIds: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").getMemoryEmbeddingCommandSecretTargetIds;
 let isVerbose: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").isVerbose;
 let setVerbose: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").setVerbose;
 let fixtureRoot = "";
@@ -140,10 +143,12 @@ beforeAll(async () => {
   ({ registerMemoryCli } = await import("./cli.js"));
   const {
     defaultRuntime: loadedDefaultRuntime,
+    getMemoryEmbeddingCommandSecretTargetIds: loadedGetMemoryEmbeddingCommandSecretTargetIds,
     isVerbose: loadedIsVerbose,
     setVerbose: loadedSetVerbose,
   } = await import("openclaw/plugin-sdk/memory-core-host-runtime-cli");
   defaultRuntime = loadedDefaultRuntime;
+  getMemoryEmbeddingCommandSecretTargetIds = loadedGetMemoryEmbeddingCommandSecretTargetIds;
   isVerbose = loadedIsVerbose;
   setVerbose = loadedSetVerbose;
   fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-cli-fixtures-"));
@@ -705,6 +710,7 @@ describe("memory cli", () => {
         makeMemoryStatus({
           files: 2,
           chunks: 5,
+          sourceCounts: [{ source: "memory", files: 2, chunks: 5, chunkBytes: 2048 }],
           cache: { enabled: true, entries: 123, maxEntries: 50000 },
           fts: { enabled: true, available: true },
           vector: {
@@ -730,6 +736,7 @@ describe("memory cli", () => {
     expectLogged(log, "Vector dims: 1024");
     expectLogged(log, "Vector path: /opt/sqlite-vec.dylib");
     expectLogged(log, "FTS: ready");
+    expectLogged(log, "2.0 KiB text + embeddings");
     expectLogged(log, "Embedding cache: enabled (123 entries)");
     expect(close).toHaveBeenCalled();
   });
@@ -980,9 +987,7 @@ describe("memory cli", () => {
     ) as { config?: unknown; commandName?: unknown; targetIds?: unknown; mode?: unknown };
     expect(secretRefsCall.config).toBe(config);
     expect(secretRefsCall.commandName).toBe("memory status");
-    expect(secretRefsCall.targetIds).toStrictEqual(
-      new Set(["memory.search.remote.apiKey", "agents.entries.*.memory.search.remote.apiKey"]),
-    );
+    expect(secretRefsCall.targetIds).toStrictEqual(getMemoryEmbeddingCommandSecretTargetIds());
     expect(secretRefsCall.mode).toBe("read_only_status");
   });
 
@@ -2073,7 +2078,7 @@ describe("memory cli", () => {
     });
   });
 
-  it("warns before reporting no matches from a dirty index", async () => {
+  it("does not warn before reporting no matches from routine pending work", async () => {
     const close = vi.fn(async () => {});
     mockManager({
       search: vi.fn(async () => []),
@@ -2085,9 +2090,7 @@ describe("memory cli", () => {
     const log = spyRuntimeLogs(defaultRuntime);
     await runMemoryCli(["search", "hidden codeword"]);
 
-    expect(error).toHaveBeenCalledWith(
-      "Memory index is dirty. Search results may be incomplete. Run: openclaw memory status --index --agent main",
-    );
+    expect(error).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith("No matches.");
   });
 

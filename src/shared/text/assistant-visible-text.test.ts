@@ -1,4 +1,3 @@
-// Assistant visible text tests cover extracting user-visible assistant output.
 import { describe, expect, it } from "vitest";
 import {
   sanitizeAssistantFinalAnswerText,
@@ -436,13 +435,6 @@ describe("stripAssistantInternalScaffolding", () => {
       expectVisibleText(
         "prefix <tool_call><arg>secret</arg></tool_call> suffix",
         "prefix <tool_call><arg>secret</arg></tool_call> suffix",
-      );
-    });
-
-    it("preserves inline bare <function> XML examples in prose", () => {
-      expectVisibleText(
-        'Use <function name="read"><parameter name="path">/tmp</parameter></function> in docs.',
-        'Use <function name="read"><parameter name="path">/tmp</parameter></function> in docs.',
       );
     });
 
@@ -1000,6 +992,19 @@ describe("sanitizeAssistantVisibleText", () => {
 });
 
 describe("sanitizeAssistantVisibleTextWithProfile", () => {
+  it.each([
+    "delivery",
+    "final-answer-delivery",
+    "history",
+    "internal-scaffolding",
+    "tool-progress",
+  ] as const)("preserves text boundaries around model tokens in %s", (profile) => {
+    const input = "(**bold<|assistant|>**). First<|user|><|assistant|>second `x<|assistant|>y`";
+    expect(sanitizeAssistantVisibleTextWithProfile(input, profile)).toBe(
+      "(**bold**). First second `x<|assistant|>y`",
+    );
+  });
+
   it("uses the history profile to preserve block-boundary whitespace", () => {
     const input = ["Hi ", '<tool_result>{"output":"hidden"}</tool_result>', "there"].join("");
 

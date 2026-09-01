@@ -1,8 +1,9 @@
 // Control UI browser proof covers the config snapshot and guarded-write lifecycle.
-import { mkdir, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -14,12 +15,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "config-safe-write",
-);
+let uiProofArtifactDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    uiProofArtifactDir = createControlUiE2eArtifactDir("config-safe-write");
+  }
+});
 
 function configResponse(config: Record<string, unknown>, hash: string, appliedConfigHash = hash) {
   return {
@@ -130,7 +131,6 @@ async function capture(page: Page, name: string): Promise<void> {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(uiProofArtifactDir, { recursive: true });
   await page.screenshot({
     animations: "disabled",
     fullPage: true,
@@ -383,7 +383,7 @@ suite.define(() => {
         await codeModeRow.locator("wa-switch").click();
         const patchParams = mutationParams(await gateway.waitForRequest("config.patch"));
         expect(patchParams.baseHash).toBe("snapshot-1");
-        expect(patchParams.sessionKey).toBe("main");
+        expect(patchParams.sessionKey).toBe("agent:main:main");
         expect(JSON.parse(String(patchParams.raw))).toEqual({
           tools: { codeMode: { enabled: "auto" } },
         });
@@ -495,7 +495,7 @@ suite.define(() => {
         const applyParams = mutationParams(await gateway.waitForRequest("config.apply"));
         expect(applyParams.baseHash).toBe("mock-config-hash-2");
         expect(applyParams.raw).toBe(rawDraft);
-        expect(applyParams.sessionKey).toBe("main");
+        expect(applyParams.sessionKey).toBe("agent:main:main");
         await expect.poll(() => saveIndicator.textContent()).toContain("Applying");
         await capture(page, "03-applying.png");
 
@@ -757,7 +757,6 @@ suite.define(() => {
         expect(typeof submitted.tools.elevated.allowFrom.discord[0]).toBe("string");
 
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await writeFile(
             path.join(uiProofArtifactDir, "09-id-config-set-payload.json"),
             `${JSON.stringify({ before: initialConfig, submitted }, null, 2)}\n`,

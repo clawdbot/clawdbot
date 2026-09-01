@@ -70,8 +70,8 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("./agent-bundle-mcp-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./agent-bundle-mcp-runtime.js")>();
+vi.mock("./agent-bundle-mcp-manager-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./agent-bundle-mcp-manager-api.js")>();
   return {
     ...actual,
     getOrCreateRequesterScopedMcpRuntime: mocks.getOrCreateRequesterScopedMcpRuntime,

@@ -87,9 +87,11 @@ describe("message action media helpers", () => {
   });
 
   it("prefers sandbox media policy when sandbox roots are non-blank", () => {
+    const mediaReadFile = async () => Buffer.from("sandbox");
     expect(
       resolveAttachmentMediaPolicy({
         sandboxRoot: "  /tmp/workspace  ",
+        mediaAccess: { readFile: mediaReadFile },
         mediaLocalRoots: ["/tmp/a"],
       }),
     ).toEqual({
@@ -100,11 +102,14 @@ describe("message action media helpers", () => {
       resolveAttachmentMediaPolicy({
         sandboxRoot: "/tmp/workspace",
         sandboxContainerWorkdir: "/sandbox",
+        mediaAccess: { readFile: mediaReadFile },
+        mediaReadFile,
       }),
     ).toEqual({
       mode: "sandbox",
       sandboxRoot: "/tmp/workspace",
       containerWorkdir: "/sandbox",
+      mediaReadFile,
     });
     expect(
       resolveAttachmentMediaPolicy({

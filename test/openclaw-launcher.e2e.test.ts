@@ -454,7 +454,7 @@ describe("openclaw launcher", () => {
 
     const result = spawnSync(
       process.execPath,
-      [path.join(fixtureRoot, "openclaw.mjs"), "--profile", "work", "--no-color", "models", "-h"],
+      [path.join(fixtureRoot, "openclaw.mjs"), "--log-level", "warn", "--no-color", "models", "-h"],
       {
         cwd: fixtureRoot,
         env: launcherEnv(),
@@ -464,6 +464,43 @@ describe("openclaw launcher", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("PRECOMPUTED models help\n");
+  });
+
+  it.each(
+    [
+      ["--profile", "work", "nodes", "--help"],
+      ["--profile=work", "nodes", "--help"],
+      ["--dev", "nodes", "--help"],
+      ["--profile", "default", "models", "--help"],
+      ["--profile=", "models", "--help"],
+      ["--profile", "bad profile", "models", "--help"],
+      ["--dev", "--profile", "work", "models", "--help"],
+      ["--profile", "work", "--dev", "models", "--help"],
+    ].map((args) => ({ args, invocation: args.join(" ") })),
+  )("passes profile selection to the runtime before cached help: $invocation", async ({ args }) => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
+      JSON.stringify({
+        nodesHelpText: "PRECOMPUTED nodes help\n",
+        subcommandHelpText: { models: "PRECOMPUTED models help\n" },
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      "process.stdout.write(JSON.stringify(process.argv.slice(2)));\n",
+      "utf8",
+    );
+
+    const result = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs"), ...args], {
+      cwd: fixtureRoot,
+      env: launcherEnv(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(JSON.stringify(args));
   });
 
   it("defers precomputed subcommand help to the runtime entry when container env is set", async () => {
@@ -997,6 +1034,33 @@ describe("openclaw launcher", () => {
 
       expect(result.status).toBe(0);
       expect(result.stdout).toBe("cache:disabled;respawn:1");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "preserves a packaged pnpm project path through compile-cache respawn",
+    async () => {
+      const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+      await fs.writeFile(path.join(fixtureRoot, "package.json"), '{"version":"2026.8.1"}\n');
+      await fs.writeFile(
+        path.join(fixtureRoot, "dist", "entry.js"),
+        'process.stdout.write(process.argv[1] ?? "");\n',
+        "utf8",
+      );
+      const globalRoot = makeTempDir(fixtureRoots, "openclaw-pnpm-global-");
+      const packageRoot = path.join(globalRoot, "v11", "active", "node_modules", "openclaw");
+      await fs.mkdir(path.dirname(packageRoot), { recursive: true });
+      await fs.symlink(fixtureRoot, packageRoot, "dir");
+      const launcher = path.join(packageRoot, "openclaw.mjs");
+
+      const result = spawnSync(process.execPath, [launcher], {
+        cwd: globalRoot,
+        env: launcherEnv({ NODE_COMPILE_CACHE: path.join(globalRoot, ".node-compile-cache") }),
+        encoding: "utf8",
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe(launcher);
     },
   );
 

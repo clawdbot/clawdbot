@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { markPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.full-catalog.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import {
   type PreparedGatewayModelCatalogSnapshot,
   registerGatewayModelCatalogPrivateAccess,
@@ -12,14 +13,80 @@ import {
 } from "./models-list-result.js";
 import type { GatewayRequestContext } from "./types.js";
 
-const metadataSnapshot = {
-  index: { plugins: [] },
-  manifestRegistry: { plugins: [] },
-  plugins: [],
-} as never;
+const metadataSnapshot = createPluginMetadataSnapshotFixture();
 const emptyAuthStore = { version: 1, profiles: {} } as const;
 
 describe("models.list provider catalog outcomes", () => {
+  it.each([
+    {
+      name: "implicit provider",
+      providers: undefined,
+      baseUrl: "http://127.0.0.1:11434",
+      available: true,
+    },
+    {
+      name: "empty provider config",
+      providers: { ollama: {} },
+      baseUrl: "http://127.0.0.1:11434",
+      available: true,
+    },
+    {
+      name: "remote route without credentials",
+      providers: undefined,
+      baseUrl: "https://ollama.example.com",
+      available: false,
+    },
+    {
+      name: "explicit auth ownership without credentials",
+      providers: { ollama: { auth: "token" as const } },
+      baseUrl: "http://127.0.0.1:11434",
+      available: false,
+    },
+  ])(
+    "projects a discovered Ollama model with $name as available=$available",
+    async ({ providers, baseUrl, available }) => {
+      const config = {
+        ...(providers ? { models: { providers } } : {}),
+        agents: { defaults: { models: { "ollama/qwen3.5": {} } } },
+      } as OpenClawConfig;
+      const model = {
+        id: "qwen3.5",
+        name: "Qwen 3.5",
+        provider: "ollama",
+        api: "ollama" as const,
+        baseUrl,
+      };
+      const snapshot = markPreparedModelCatalogFull({ entries: [model], routeVariants: [model] });
+      const projector = createGatewayAgentModelCatalogProjector({
+        cfg: config,
+        agentId: "main",
+        snapshot,
+        metadataSnapshot: createPluginMetadataSnapshotFixture({
+          plugins: [{ id: "ollama", providers: ["ollama"], syntheticAuthRefs: ["ollama"] }],
+        }),
+        preparedAuthStore: emptyAuthStore,
+      });
+      const context = {
+        getRuntimeConfig: () => config,
+        loadGatewayModelCatalogSnapshot: vi.fn(),
+        logGateway: { debug: vi.fn() },
+      } as unknown as GatewayRequestContext;
+
+      await expect(
+        buildModelsListResult({
+          context,
+          agentId: "main",
+          params: { view: "configured" },
+          preloadedCatalog: { agentId: "main", config, snapshot },
+          preloadedOnly: true,
+          catalogProjector: projector,
+        }),
+      ).resolves.toEqual({
+        models: [expect.objectContaining({ provider: "ollama", id: "qwen3.5", available })],
+      });
+    },
+  );
+
   it("preserves an auth rejection when no usable models are visible", async () => {
     const config = {} as OpenClawConfig;
     const snapshot = {
@@ -60,8 +127,21 @@ describe("models.list provider catalog outcomes", () => {
     });
   });
 
-  it("marks configured rows unavailable when stored credentials were rejected", async () => {
+  it.each([
+    { name: "provider auth", rejectionScope: undefined, usageStats: undefined },
+    {
+      name: "model-route auth",
+      rejectionScope: "catalog" as const,
+      usageStats: {
+        "openai:chatgpt": {
+          disabledUntil: 2_000_000_000_000,
+          disabledReason: "auth_permanent" as const,
+        },
+      },
+    },
+  ])("marks configured API-key rows unavailable after $name rejection", async (testCase) => {
     const config = {
+      auth: { order: { openai: ["openai:chatgpt"] } },
       agents: {
         defaults: {
           model: { primary: "openai/gpt-5.6-sol" },
@@ -73,8 +153,8 @@ describe("models.list provider catalog outcomes", () => {
       id: "gpt-5.6-sol",
       name: "GPT-5.6 Sol",
       provider: "openai",
-      api: "openai-chatgpt-responses" as const,
-      baseUrl: "https://chatgpt.com/backend-api/codex",
+      api: "openai-responses" as const,
+      baseUrl: "https://api.openai.com/v1",
     };
     const snapshot = markPreparedModelCatalogFull({
       entries: [model],
@@ -83,6 +163,7 @@ describe("models.list provider catalog outcomes", () => {
         {
           provider: "openai",
           profileId: "openai:chatgpt",
+          ...(testCase.rejectionScope ? { rejectionScope: testCase.rejectionScope } : {}),
           status: "auth-rejected" as const,
         },
       ],
@@ -96,11 +177,9 @@ describe("models.list provider catalog outcomes", () => {
         version: 1,
         profiles: {
           "openai:chatgpt": {
-            type: "oauth",
+            type: "api_key",
             provider: "openai",
-            access: "rejected-access-token",
-            refresh: "rejected-refresh-token",
-            expires: Date.now() + 30 * 60_000,
+            key: "rejected-api-key",
           },
           "openai:other": {
             type: "oauth",
@@ -110,6 +189,7 @@ describe("models.list provider catalog outcomes", () => {
             expires: Date.now() + 30 * 60_000,
           },
         },
+        ...(testCase.usageStats ? { usageStats: testCase.usageStats } : {}),
       },
       preferredProfileId: "openai:chatgpt",
     });

@@ -333,6 +333,12 @@
   let filterMode = "default";
   let searchQuery = "";
 
+  function isHiddenEntry(entry) {
+    return entry.type === "message"
+      ? entry.message.display === false
+      : entry.type === "custom_message" && !entry.display;
+  }
+
   function hasTextContent(content) {
     if (typeof content === "string") {
       return content.trim().length > 0;
@@ -422,6 +428,11 @@
       const label = flatNode.node.label;
       const isCurrentLeaf = entry.id === currentLeafId;
 
+      // All is the raw archive index; hidden input never becomes a conversation card.
+      if (isHiddenEntry(entry) && filterMode !== "all") {
+        return false;
+      }
+
       // Always show current leaf
       if (isCurrentLeaf) {
         return true;
@@ -510,7 +521,8 @@
         if (visibleIds.has(currentId)) {
           return currentId;
         }
-        currentId = entryMap.get(currentId)?.node.entry.parentId;
+        const parentId = entryMap.get(currentId)?.node.entry.parentId;
+        currentId = parentId === currentId ? null : parentId;
       }
       return null;
     }
@@ -751,7 +763,9 @@
    */
   function getTreeNodeDisplayHtml(entry, label) {
     const normalize = (s) => s.replace(/[\n\t]/g, " ").trim();
-    const labelHtml = label ? `<span class="tree-label">[${escapeHtml(label)}]</span> ` : "";
+    const labelHtml =
+      (isHiddenEntry(entry) ? '<span class="tree-muted">[hidden]</span> ' : "") +
+      (label ? `<span class="tree-label">[${escapeHtml(label)}]</span> ` : "");
 
     switch (entry.type) {
       case "message": {
@@ -1355,6 +1369,9 @@
   }
 
   function renderEntry(entry) {
+    if (isHiddenEntry(entry)) {
+      return "";
+    }
     const ts = formatTimestamp(entry.timestamp);
     const tsHtml = ts ? `<div class="message-timestamp">${ts}</div>` : "";
     const entryId = `entry-${escapeHtmlAttr(entry.id)}`;
@@ -1465,7 +1482,7 @@
           </div>`;
     }
 
-    if (entry.type === "custom_message" && entry.display) {
+    if (entry.type === "custom_message") {
       return `<div class="hook-message" id="${entryId}">${tsHtml}
             <div class="hook-type">[${escapeHtml(entry.customType)}]</div>
             <div class="markdown-content">${safeMarkedParse(typeof entry.content === "string" ? entry.content : JSON.stringify(entry.content))}</div>

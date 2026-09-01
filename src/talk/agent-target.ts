@@ -4,14 +4,6 @@ import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/sess
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 
-/** Resolves the configured owner for Talk work that has no agent-scoped session key. */
-export function resolveTalkTargetAgentId(config: OpenClawConfig): string {
-  return resolveAmbientOwnerAgentId(config, config.talk?.agentId, {
-    surface: "Talk relay ownership",
-    hint: "Set talk.agentId to the agent that owns unscoped Talk sessions.",
-  });
-}
-
 /** Agent-scoped keys own their Talk session; legacy/unscoped aliases use the Talk target. */
 export function resolveTalkSessionAgentId(
   config: OpenClawConfig,
@@ -23,6 +15,9 @@ export function resolveTalkSessionAgentId(
     return normalizeAgentId(scopedAgentId);
   }
   return resolvePersistedSessionStoreOwnerForKey(config, normalizedSessionKey).kind === "none"
-    ? resolveTalkTargetAgentId(config)
+    ? resolveAmbientOwnerAgentId(config, config.talk?.agentId, {
+        surface: "Talk session ownership",
+        hint: "Set talk.agentId to the agent that owns unscoped Talk sessions.",
+      })
     : resolveSessionAgentId({ config, sessionKey: normalizedSessionKey });
 }

@@ -143,6 +143,7 @@ describe("runProviderCatalog", () => {
     const outcomes: Array<{
       provider: string;
       profileId?: string;
+      rejectionScope?: "catalog";
       status: "ready" | "auth-rejected" | "unavailable";
     }> = [];
     const provider: ProviderPlugin = {
@@ -158,6 +159,7 @@ describe("runProviderCatalog", () => {
               {
                 provider: "openai",
                 profileId: "openai:chatgpt",
+                rejectionScope: "catalog",
                 status: "auth-rejected",
               },
             ],
@@ -178,7 +180,12 @@ describe("runProviderCatalog", () => {
     });
 
     expect(outcomes).toEqual([
-      { provider: "openai", profileId: "openai:chatgpt", status: "auth-rejected" },
+      {
+        provider: "openai",
+        profileId: "openai:chatgpt",
+        rejectionScope: "catalog",
+        status: "auth-rejected",
+      },
     ]);
   });
 

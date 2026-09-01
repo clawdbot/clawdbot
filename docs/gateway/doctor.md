@@ -23,7 +23,7 @@ openclaw doctor
     openclaw doctor --yes
     ```
 
-    Accept defaults without prompting (including restart/service/sandbox repair steps when applicable).
+    Accept default non-service repairs without prompting and enter maintenance while preserving the installed gateway service definition.
 
   </Tab>
   <Tab title="--fix">
@@ -31,7 +31,7 @@ openclaw doctor
     openclaw doctor --fix
     ```
 
-    Apply recommended repairs without prompting (`--repair` is an alias).
+    Apply recommended non-service repairs without prompting (`--repair` is an alias) and enter maintenance while preserving the installed gateway service definition.
 
   </Tab>
   <Tab title="--lint">
@@ -49,7 +49,7 @@ openclaw doctor
     openclaw doctor --fix --force
     ```
 
-    Apply aggressive repairs too (overwrites custom supervisor configs).
+    Apply aggressive config/state repairs too. Repair maintenance preserves the installed service definition; use `openclaw gateway install --force` from the intended installation to replace its launcher and managed environment.
 
   </Tab>
   <Tab title="--non-interactive">
@@ -248,7 +248,13 @@ That stages grounded durable candidates into the short-term dreaming store while
 
   </Accordion>
   <Accordion title="2. Legacy config key migrations">
-    When the config contains a deprecated key with an active migration, other commands refuse to run and ask you to run `openclaw doctor`. Doctor explains which legacy keys were found, shows the migration it applied, and rewrites `~/.openclaw/openclaw.json` with the updated schema. Gateway startup refuses legacy config formats and asks you to run `openclaw doctor --fix`; it does not rewrite `openclaw.json` on startup. Cron job store migrations are also handled by `openclaw doctor --fix`.
+    Gateway startup automatically applies deterministic, prompt-free legacy config migrations when an otherwise invalid single-file config can be fully migrated. It uses the same migration transforms as `openclaw doctor --fix`, validates the complete result including plugin config before writing, and reports the applied changes. The write runs under the startup migration lease and preserves the previous config in the five-slot `openclaw.json.bak` / `.bak.1` through `.bak.4` backup ring.
+
+    Startup does not migrate configs using `$include`, configs in Nix mode, or configs last written by a newer OpenClaw version. It also skips automatic config migration while an update is in progress and plugin validation is deferred; the post-update doctor run owns that repair. If any validation or legacy-key issue remains after migration, startup leaves the config unchanged, refuses to start, and prints the `openclaw doctor --fix` hint. An interactive terminal can still offer to run doctor and retry once for configs that need other repairs; headless services stop with the hint.
+
+    Other commands that encounter legacy keys still ask you to run `openclaw doctor`. Doctor explains the issues, shows its migrations, and rewrites `~/.openclaw/openclaw.json` with the updated schema. Cron job store migrations are also handled by `openclaw doctor --fix`; automatic config-key migration does not import legacy session stores or repair services.
+
+    Per-agent migrations apply to both keyed `agents.entries` and legacy `agents.list` rosters, including rosters that already set `agents.ownership: "explicit"`. For example, Doctor preserves an agent's legacy `memorySearch` settings under `memory.search` and converts `sandbox.perSession` to `sandbox.scope`. Existing values at the current config paths take precedence.
 
     <Note>
       Doctor only carries automatic migrations for roughly two months after a
@@ -344,12 +350,12 @@ That stages grounded durable candidates into the short-term dreaming store while
     | Runtime and channel tuning knobs retired in 2026.7                                               | removed (built-in production defaults apply)                               |
 
     <Note>
-      The `plugins.entries.voice-call.config.*` rows above are normalized by
-      the Voice Call plugin itself on every config load, not by `openclaw
-      doctor`. The plugin also logs a startup warning pointing at `openclaw
-      doctor --fix`, but doctor does not currently rewrite
-      `openclaw.json` for these keys; the plugin's own normalization is what
-      applies the change at runtime.
+      The Voice Call plugin supplies the migration for its legacy config keys.
+      `openclaw doctor --fix` invokes it and persists the canonical shape in
+      `openclaw.json`; runtime config parsing accepts only current keys.
+      Existing canonical settings win over legacy values, including streaming
+      provider credentials, models, and timing. Doctor reports retained
+      destinations instead of claiming those legacy values were moved.
     </Note>
 
     Account-default guidance for multi-account channels:
@@ -422,6 +428,8 @@ That stages grounded durable candidates into the short-term dreaming store while
     - Signed device identity: from `~/.openclaw/identity/device.json` into the `primary` `device_identities` row in `state/openclaw.sqlite`; Gateway startup also performs this verified import for valid legacy identities, while Doctor retains repair authority for invalid canonical rows; the separate device-auth file is left untouched
 
     Legacy session-file import and repair belong to explicit Doctor runs. Gateway and local CLI startup use SQLite; they do not import, restore, or rewrite session JSON/JSONL files. When startup finds a legacy session store, it refuses readiness and prints the Doctor command for the active profile instead of serving empty history. Stop the Gateway, back up its state, and run `openclaw doctor --fix` before restarting it to upgrade old session history. The [targeted migration sequence](/cli/doctor#session-sqlite-migration) provides inspection and validation evidence. Current SQLite maintenance does not require legacy files to remain on disk.
+
+    Doctor reports individual channel migration-plan failures while continuing plans for unrelated sources, including those from the same plugin. Plans sharing the failed source are deferred, and source cleanup waits for its last consumer to finish without reported failures or incomplete imports. A startup migration warning still blocks Gateway readiness; resolve the reported failure and run `openclaw doctor --fix` before retrying startup.
 
     Doctor emits warnings when migrations leave legacy folders behind as backups. WhatsApp auth is intentionally only migrated via `openclaw doctor`. Talk provider/provider-map normalization compares by structural equality, so key-order-only diffs no longer trigger repeat no-op `doctor --fix` changes.
 
@@ -592,22 +600,27 @@ That stages grounded durable candidates into the short-term dreaming store while
 
     Use `openclaw memory status --deep` to verify embedding readiness at runtime.
 
+    Embedding-provider readiness is a health check, not a state migration. Gateway startup does not initialize memory embedding providers during migration preflight, so auth-profile SecretRefs can activate afterward. If embeddings remain unavailable, memory sync preserves an existing semantic index rather than replacing it with FTS-only data. Genuine migration warnings still block Gateway readiness.
+
   </Accordion>
   <Accordion title="14. Channel status warnings">
     If the gateway is healthy, doctor runs a channel status probe and reports warnings with suggested fixes.
   </Accordion>
   <Accordion title="15. Supervisor config audit + repair">
-    Doctor checks the installed supervisor config (launchd/systemd/schtasks) for missing or outdated defaults (for example systemd network-online dependencies and restart delay). When it finds a mismatch, it recommends an update and can rewrite the service file/task to the current defaults.
+    Plain Doctor inspection checks the installed supervisor config (launchd/systemd/schtasks) for missing or outdated defaults (for example systemd network-online dependencies and restart delay) and can offer an interactive repair. Explicit repair maintenance preserves the installed service definition and skips this separate service-rewrite phase. Run `openclaw gateway install --force` from the intended installation to replace the launcher and managed environment.
 
     Notes:
 
     - `openclaw doctor` prompts before rewriting supervisor config.
-    - `openclaw doctor --yes` accepts the default repair prompts.
-    - `openclaw doctor --fix` applies recommended fixes without prompts (`--repair` is an alias).
-    - `openclaw doctor --fix --force` can overwrite the managed supervisor config; operator-owned systemd drop-ins remain unchanged.
+    - `openclaw doctor --yes` accepts default non-service repair prompts and enters maintenance while preserving the service definition.
+    - `openclaw doctor --fix` applies recommended repairs without prompts (`--repair` is an alias; `--yes` also enters repair maintenance). It stops the matching managed Gateway before plugin or mutable-state inspection, verifies repairs, and restarts the same service once, even when no changes are needed. It preserves the installed service definition, leaves already-stopped services stopped, and refuses to stop an ancestor Gateway. Plain inspection does not enter maintenance, and custom state directories do not adopt native services.
+    - Explicit repair refuses unavailable service inspection and unmatched services that may still run. After their owner stops them and the native manager confirms they are offline, Doctor repairs its selected state without changing or starting those services. A disabled systemd unit can still be restarting; Doctor checks runtime state as well as installation state.
+    - An updater's explicit Gateway activation policy leaves stop/restart ownership with the updater. Doctor still requires native proof that the service is offline; a live `update --no-restart` repair fails without stopping or restarting it. Stop the service through its owner before retrying the update. Older update parents without that policy retain ordinary Doctor maintenance.
+    - `openclaw doctor --fix --force` preserves the service definition too. Use `openclaw gateway install --force` to request a rewrite; operator-owned systemd drop-ins remain unchanged.
     - `OPENCLAW_SERVICE_REPAIR_POLICY=external` keeps doctor read-only for gateway service lifecycle. It still reports service health and runs non-service repairs, but skips service install/start/restart/bootstrap, supervisor config rewrites, and legacy service cleanup because an external supervisor owns that lifecycle.
     - On macOS, a same-label system LaunchDaemon blocks user LaunchAgent install, start, restart, and bootstrap repair. Doctor reports the system owner and stops service recovery; `--force` does not bypass this ownership boundary. See [Existing system LaunchDaemons](/gateway#existing-system-launchdaemons).
     - On Linux, doctor does not rewrite command/entrypoint metadata while the matching systemd gateway unit is active. If a stopped unit's command or working directory is overridden by an operator-owned systemd drop-in, inspect it with `systemctl --user cat <unit>.service`, then update or remove the drop-in; rewriting the managed base cannot change the effective launcher. `Environment=` drop-ins remain supported. Doctor also ignores inactive non-legacy extra gateway-like units during the duplicate-service scan so companion service files do not create cleanup noise.
+    - On Linux, doctor checks authority over the installed and planned service files before persisting a recovered gateway token. If that check blocks service repair, the repair leaves config and token unchanged and reports how to restore inspection access or involve the deployment owner; `--force` cannot bypass it. Unrelated Doctor config repairs are unaffected.
     - If token auth requires a token and `gateway.auth.token` is SecretRef-managed, doctor service install/repair validates the SecretRef but does not persist resolved plaintext token values into supervisor service environment metadata.
     - Doctor detects managed `.env`/SecretRef-backed service environment values that older LaunchAgent, systemd, or Windows Scheduled Task installs embedded inline and rewrites the service metadata so those values load from the runtime source instead of the supervisor definition.
     - Doctor detects when the service command still pins an old `--port` after `gateway.port` changes and rewrites the service metadata to the current port.
