@@ -4568,12 +4568,6 @@ extension NodeAppModel {
                         }
                         return nextProblem
                     }
-                    if problem?.needsPairingApproval == true {
-                        self.operatorGatewayTask?.cancel()
-                        self.operatorGatewayTask = nil
-                        await self.operatorGateway.disconnect()
-                        break
-                    }
                     if problem?.pauseReconnect == true {
                         self.operatorGatewayTask?.cancel()
                         self.operatorGatewayTask = nil
@@ -4822,7 +4816,7 @@ extension NodeAppModel {
             context: context)
         GatewayDiagnostics.log("gateway connect error: \(error.localizedDescription)")
 
-        if problem?.needsPairingApproval == true {
+        if problem?.needsPairingApproval == true, problem?.pauseReconnect == true {
             // Stop both watchdogs so pairing keeps one stable request and remediation surface.
             self.operatorGatewayTask?.cancel()
             self.operatorGatewayTask = nil

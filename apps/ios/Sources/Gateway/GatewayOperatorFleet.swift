@@ -198,7 +198,7 @@ final class GatewayOperatorFleet {
                 guard !Task.isCancelled, self.runtimes[key]?.id == runtime.id else { break }
                 attempt += 1
                 let problem = GatewayConnectionProblemMapper.map(error: error)
-                let pauses = problem?.pauseReconnect == true || problem?.needsPairingApproval == true
+                let pauses = problem?.pauseReconnect == true
                 runtime.isPausedForAttention = pauses
                 self.setStatus(
                     stableID: config.effectiveStableID,
