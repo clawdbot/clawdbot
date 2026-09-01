@@ -276,19 +276,15 @@ describe("shared auth store relocation", () => {
     const stateRow = source
       .prepare("SELECT state_json, updated_at FROM auth_profile_state WHERE state_key = 'primary'")
       .get() as { state_json: string; updated_at: number };
-    const credential = fixture.sharedStore.profiles["openai:shared"];
     const targetStore = {
       profiles: {
         ...makeStore("openai:extra", "extra-key").profiles,
         ...(scenario === "source-only profile"
           ? {}
-          : {
-              "openai:shared": {
-                key: scenario === "changed credential" ? "different-key" : credential.key,
-                provider: credential.provider,
-                type: credential.type,
-              },
-            }),
+          : makeStore(
+              "openai:shared",
+              scenario === "changed credential" ? "different-key" : "shared-key",
+            ).profiles),
       },
       version: 1,
       ...(scenario === "changed metadata" ? { legacyMetadata: "keep" } : {}),

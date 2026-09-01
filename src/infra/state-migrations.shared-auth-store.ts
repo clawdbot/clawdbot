@@ -204,13 +204,12 @@ function recordMigrationLedger(
             .where("source_key", "=", sourceKey)
             .where("removed_source", "=", 0),
         );
-    return {
-      ...entry,
+    return Object.assign(entry, {
       sourceKey,
       sourceSha256: pending?.source_sha256 ?? rowDigest(entry.row),
       sourceRecordCount: pending?.source_record_count ?? Number(entry.row !== null),
       sourceSizeBytes: pending?.source_size_bytes ?? params.sourceSize,
-    };
+    });
   });
   const runHash = createHash("sha256");
   for (const entry of entries) {
