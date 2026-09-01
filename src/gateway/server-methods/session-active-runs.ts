@@ -1,6 +1,12 @@
 import { resolveEmbeddedAgentRunProgressState } from "../../agents/embedded-agent-runner/runs.js";
 import {
-  hasProjectedAgentRunForSession,
+  getLatestLiveSubagentRunByChildSessionKey,
+  isSubagentRunQueued,
+} from "../../agents/subagents/registry/subagent-registry-read.js";
+import { isSwarmRunWaitingForCapacity } from "../../agents/subagents/swarm/swarm-scheduler.js";
+import { isAgentRunWaitingForCapacity } from "../../infra/agent-run-capacity-wait.js";
+import {
+  resolveProjectedAgentRunProgressState,
   type ProjectedAgentRunIndex,
 } from "../../infra/agent-run-registry.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -13,7 +19,6 @@ type TrackedActiveSessionRun = {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
-  executionStarted: boolean;
   terminalPersistence?: boolean;
 };
 
@@ -51,8 +56,6 @@ export function collectTrackedActiveSessionRuns(
         ...(sessionKey ? { sessionKey } : {}),
         ...(sessionId ? { sessionId } : {}),
         agentId: typeof active.agentId === "string" ? normalizeAgentId(active.agentId) : undefined,
-        // Entries created before this state existed are already executing.
-        executionStarted: active.executionStarted !== false,
         ...(terminalPersistence ? { terminalPersistence: true } : {}),
       });
     }
@@ -200,9 +203,30 @@ export function resolveVisibleActiveSessionRunState(params: {
   const hasTerminalPersistence = matchingTrackedRuns.some((active) => active.terminalPersistence);
   const runIds = matchingTrackedRuns
     .filter((active) => !active.terminalPersistence)
-    .map((active) => active.runId)
-    .toSorted();
-  const hasProjectedRun = hasProjectedAgentRunForSession({
+    .map((active) => active.runId);
+  const queuedSubagent = getLatestLiveSubagentRunByChildSessionKey(params.canonicalKey);
+  const hasQueuedSubagent = Boolean(
+    queuedSubagent &&
+    isSubagentRunQueued(queuedSubagent) &&
+    isTrackedActiveSessionRunForKey(
+      { sessionKey: queuedSubagent.childSessionKey },
+      params.canonicalKey,
+      resolvedAgentId,
+      params.defaultAgentId,
+    ),
+  );
+  if (hasQueuedSubagent && queuedSubagent && !runIds.includes(queuedSubagent.runId)) {
+    runIds.push(queuedSubagent.runId);
+  }
+  const subagentCapacityWait =
+    hasQueuedSubagent &&
+    queuedSubagent &&
+    (isAgentRunWaitingForCapacity(queuedSubagent.runId) ||
+      isSwarmRunWaitingForCapacity(
+        queuedSubagent.schedulerSlotId ?? queuedSubagent.runId,
+        queuedSubagent,
+      ));
+  const projectedRunState = resolveProjectedAgentRunProgressState({
     sessionKeys: [params.requestedKey, params.canonicalKey],
     ...(sessionId ? { sessionId } : {}),
     ...(resolvedAgentId ? { agentId: resolvedAgentId } : {}),
@@ -214,17 +238,32 @@ export function resolveVisibleActiveSessionRunState(params: {
   // Connection, worker-lifecycle, and embedded registries are independent owners.
   // Settlement in one must not hide live work owned by another.
   const running =
-    matchingTrackedRuns.some((active) => active.executionStarted) ||
-    hasProjectedRun ||
+    (hasQueuedSubagent && !subagentCapacityWait) ||
+    matchingTrackedRuns.some((active) => !isAgentRunWaitingForCapacity(active.runId)) ||
+    projectedRunState === "running" ||
     embeddedRunState === "running";
-  const active = running || matchingTrackedRuns.length > 0 || embeddedRunState === "queued";
+  const active =
+    running ||
+    hasTerminalPersistence ||
+    runIds.length > 0 ||
+    embeddedRunState === "queued" ||
+    projectedRunState === "queued";
   // Terminal persistence is history visibility, not operational run identity.
   // Omit the exact set until the persisted terminal projection releases it.
   const identitiesComplete =
-    !hasProjectedRun && embeddedRunState === undefined && !hasTerminalPersistence;
+    projectedRunState !== "running" &&
+    projectedRunState !== "queued" &&
+    embeddedRunState === undefined &&
+    !hasTerminalPersistence;
   return {
     active,
-    ...(identitiesComplete ? { runIds } : {}),
-    ...(active && !running ? { status: "queued" as const } : {}),
+    ...(identitiesComplete ? { runIds: runIds.toSorted() } : {}),
+    ...(active &&
+    !running &&
+    (subagentCapacityWait ||
+      projectedRunState === "queued" ||
+      projectedRunState === "capacity-wait")
+      ? { status: "queued" as const }
+      : {}),
   };
 }

@@ -142,6 +142,7 @@ export const en: TranslationMap = {
       zoomOut: "Zoom out",
       zoomReset: "Reset zoom",
       terminalPanel: "Toggle terminal panel",
+      homePanel: "Talk to your Home agent",
       workspaceFiles: "Toggle workspace files",
       approveOnce: "Approve once",
       approveAlways: "Always allow",
@@ -1212,10 +1213,20 @@ export const en: TranslationMap = {
     markRead: "Mark as read",
     markUnreadCount: "Mark {count} as unread",
     markReadCount: "Mark {count} as read",
-    forkSession: "Fork",
+    forkSession: "Fork conversation",
     forkFromLastCompleted: "Fork from last completed message",
     forkedSession: "Forked session",
-    copySessionId: "Copy session ID",
+    copySessionId: "Session ID",
+    copySessionLink: "Session link",
+    copyMarkdown: "Conversation as Markdown",
+    openNewTab: "New tab",
+    openNewWindow: "New window",
+    splitBelow: "Split below",
+    workspaceEditors: "Workspace · editor",
+    resetAppearance: "Reset to default",
+    copyTranscriptChanged: "Conversation changed while copying. Try again.",
+    openWindowBlocked: "Allow pop-ups for this site, then try again.",
+    splitUnavailable: "Open a conversation on a wide screen to use split view.",
     openPullRequest: "Open PR",
     openInEditorMenu: "Open in",
     archiveSession: "Archive session",
@@ -1260,6 +1271,7 @@ export const en: TranslationMap = {
     groupByCategory: "Custom groups",
     groupByPerson: "Person",
     showSessionPreview: "Show message preview",
+    hideEmptyGroups: "Hide empty groups",
     showCronSessions: "Show automation sessions",
     showSystemSessions: "Show system sessions",
     groupByChannel: "Channel",
@@ -1635,8 +1647,8 @@ export const en: TranslationMap = {
         description: "Gateway server settings (port, auth, binding)",
       },
       wizard: {
-        label: "Setup Wizard",
-        description: "Setup wizard state and history",
+        label: "Setup",
+        description: "Discovery preferences for setup and read-only setup history.",
       },
       meta: {
         label: "Metadata",
@@ -1835,7 +1847,7 @@ export const en: TranslationMap = {
       mcp: "MCP",
       theme: "Theme",
       ui: "UI",
-      wizard: "Setup Wizard",
+      wizard: "Setup",
     },
     themes: {
       claw: {
@@ -1865,6 +1877,22 @@ export const en: TranslationMap = {
       phosphor: {
         label: "Phosphor",
         description: "Green on glass",
+      },
+      crt: {
+        label: "CRT",
+        description: "Console mono",
+      },
+      manuscript: {
+        label: "Manuscript",
+        description: "Ink on paper",
+      },
+      rose: {
+        label: "Rosé",
+        description: "Plum & rose",
+      },
+      miami: {
+        label: "Miami",
+        description: "Magenta & cyan",
       },
     },
     textSizes: {
@@ -2671,7 +2699,7 @@ export const en: TranslationMap = {
     config: "Legacy settings route; opens Appearance.",
     profile: "Your display name, avatar, and identity on this gateway.",
     communications: "Messages and text-to-speech settings.",
-    appearance: "Theme, UI, and setup wizard settings.",
+    appearance: "Theme and UI settings.",
     lobsterdex: "Every lobster palette that has visited this browser.",
     automation: "Commands, hooks, automations, and plugins.",
     mcp: "MCP servers, auth, tools, and diagnostics.",
@@ -3011,6 +3039,23 @@ export const en: TranslationMap = {
       doneTitle: "Memory import finished",
       doneBody: "Migrated {migrated}, skipped {skipped}. You can continue setting up OpenClaw.",
     },
+  },
+  assistantPanel: {
+    title: "Assistant sidebar",
+    home: "Home",
+    toggle: "Talk to your Home agent",
+    openHome: "Open Home full page",
+    close: "Close assistant sidebar",
+    resize: "Resize assistant sidebar",
+    dockBottom: "Dock assistant sidebar at bottom",
+    dockRight: "Dock assistant sidebar at right",
+    context: "Working on: {context}",
+    contextOff: "Work context off",
+    removeContext: "Remove work context",
+    includeContext: "Include work context",
+    selection: "Selected text",
+    attachSelection: "Attach selected text",
+    removeSelection: "Remove selected text",
   },
   custodian: {
     title: "OpenClaw",
@@ -4069,7 +4114,7 @@ export const en: TranslationMap = {
       batchError: "Analysis error",
       modelMissing: "No vision model",
       modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.6-sol) or configure tools.media models.",
+        "Set plugins.entries.logbook.config.visionModel or configure tools.media models.",
     },
     actions: {
       pause: "Pause",
@@ -5370,6 +5415,8 @@ export const en: TranslationMap = {
       notFoundExplanation: "The session may have been removed, or the link may be incorrect.",
       goToMain: "Go to main session",
       viewSessions: "View sessions",
+      catalogShareUnavailable: "This shared session route is unavailable.",
+      catalogShareInvalid: "This {catalog} share URL is invalid.",
     },
     commandResults: {
       startingNewThread: "Starting new session...",
@@ -5778,8 +5825,8 @@ export const en: TranslationMap = {
     },
     turnRecap: {
       doneIn: "Done in {duration}",
-      tokens: "{count} tokens",
-      tokensOne: "1 token",
+      tokens: "{count} output tokens",
+      tokensOne: "1 output token",
     },
     commands: {
       arguments: "Command arguments",
@@ -5870,6 +5917,9 @@ export const en: TranslationMap = {
         "Delivery is unconfirmed. Check delivery looks for the original message without resending it or starting a worker. Inspect the conversation, or copy the retained prompt if you choose to start a separate attempt.",
       retry: "Retry",
       retryQueuedMessage: "Retry queued message",
+      discard: "Discard",
+      discardPendingMessage:
+        "Discard this local pending copy. This does not cancel a message already received by the Gateway.",
       steer: "Steer",
       steerQueuedMessage: "Steer queued message",
       removeQueuedMessage: "Remove queued message",
@@ -5880,6 +5930,8 @@ export const en: TranslationMap = {
       cancelEdit: "Cancel editing and keep the queued message",
       states: {
         applyingSettings: "Applying chat settings",
+        blockedByUnconfirmed:
+          "Queue paused. Retry or discard the earlier unconfirmed message in the conversation.",
         runningCommand: "Running command",
         waitingForReconnect: "Waiting for reconnect",
         editing: "Editing",
@@ -6031,8 +6083,8 @@ export const en: TranslationMap = {
     },
     permissionControls: {
       label: "Permissions",
-      help: "Choose permissions for new runs.",
-      nextRun: "New permissions apply to the next run.",
+      help: "Choose permissions for this session.",
+      applying: "Applying permissions…",
       default: "Default",
       defaultDescription: "Follow the agent's configured policy.",
       defaultWithMode: "Default ({mode})",
@@ -6040,7 +6092,7 @@ export const en: TranslationMap = {
       updateFailed: "Failed to update permissions: {error}",
       modes: {
         "read-only": {
-          label: "Read only",
+          label: "Read Only",
           description: "Read within the session root; writes and commands are blocked.",
         },
         guarded: {
@@ -6052,7 +6104,7 @@ export const en: TranslationMap = {
           description: "An AI reviewer checks requests beyond the session root.",
         },
         full: {
-          label: "Full access",
+          label: "Full Access",
           description: "No reviewer; files and commands are unrestricted.",
         },
       },
@@ -6293,6 +6345,8 @@ export const en: TranslationMap = {
       cameraPreview: "Camera preview",
       dismissVoiceInputError: "Dismiss voice input error",
       microphoneAccessFailed: "Unable to access microphone inputs.",
+      microphoneAccessPending:
+        "Waiting for microphone access. Bring this tab to the foreground and allow access if prompted.",
       microphoneBusy: "Microphone inputs are busy or unavailable to the browser.",
       microphoneStopped: "Microphone input stopped. Choose an available input and start again.",
       microphoneFallback: "Microphone {number}",
@@ -6320,7 +6374,6 @@ export const en: TranslationMap = {
         "Hold until dictation starts, then release and keep speaking. Tap Stop to insert the transcript.",
       dictationAudioUnsupported: "The Gateway returned an unsupported dictation audio format.",
       dictationBrowserAudioUnsupported: "This browser cannot capture dictation audio at 8 kHz.",
-      dictationConnecting: "Starting dictation…",
       dictationDisconnected: "Dictation stopped because the Gateway disconnected.",
       dictationFailed: "Dictation failed.",
       dictationInterruptedRecovery:
@@ -6369,6 +6422,7 @@ export const en: TranslationMap = {
     },
     voice: {
       asking: "Asking OpenClaw...",
+      preparing: "Preparing voice session...",
       connecting: "Connecting voice input...",
       listening: "Listening...",
     },

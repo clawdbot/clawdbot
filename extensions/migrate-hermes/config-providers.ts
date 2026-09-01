@@ -9,6 +9,7 @@ import {
   readProviderApiKeyEnv,
   readProviderBaseUrl,
   readProviderHeaders,
+  readProviderTransport,
   resolveHermesEndpointApiKeyEnv,
   resolveHermesImplicitBaseUrl,
   resolveHermesProviderApiKeyEnv,
@@ -265,8 +266,7 @@ export function providerManualItems(
   }
   const items: MigrationItem[] = [];
   for (const { id, raw, source } of entries) {
-    const transport =
-      normalizeOptionalString(raw.transport) ?? normalizeOptionalString(raw.api_mode);
+    const transport = readProviderTransport(raw);
     const baseUrlConfig = readProviderBaseUrl(raw, env);
     const baseUrl = baseUrlConfig.baseUrl ?? resolveHermesImplicitBaseUrl(id);
     const headerConfig = readProviderHeaders(raw, env, includeSecrets);
@@ -299,7 +299,8 @@ export function providerManualItems(
         }),
       );
     }
-    if (normalizeOptionalString(raw.api_key) && !readEnvReference(raw.api_key)) {
+    const inlineKey = raw.api_key ?? raw.apiKey;
+    if (normalizeOptionalString(inlineKey) && !readEnvReference(inlineKey)) {
       items.push(
         createMigrationManualItem({
           id: `manual:model-provider-inline-key:${sanitizeName(id)}`,

@@ -202,9 +202,9 @@ export function describeAnthropicProviderRuntimeContract(
       });
     });
 
-    it("owns auth doctor hint generation", () => {
+    it("owns auth doctor hint generation", async () => {
       const provider = requireProviderContractProvider("anthropic");
-      const hint = provider.buildAuthDoctorHint?.({
+      const hint = await provider.buildAuthDoctorHint?.({
         provider: "anthropic",
         profileId: "anthropic:default",
         config: {

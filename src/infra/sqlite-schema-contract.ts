@@ -193,7 +193,11 @@ export function collectSqliteSchemaIssues(
       ) {
         continue;
       }
-      if (!actualTable.triggers.some((actualTrigger) => isEqual(actualTrigger, expectedTrigger))) {
+      if (
+        !actualTable.triggers.some((actualTrigger) =>
+          isEqualTrigger(actualTrigger, expectedTrigger),
+        )
+      ) {
         add("missing-or-drifted-trigger", expectedTrigger.name);
       }
     }
@@ -208,7 +212,9 @@ export function collectSqliteSchemaIssues(
       }
       for (const canonicalTrigger of triggerGroup.triggers) {
         if (
-          !actualTable.triggers.some((actualTrigger) => isEqual(actualTrigger, canonicalTrigger))
+          !actualTable.triggers.some((actualTrigger) =>
+            isEqualTrigger(actualTrigger, canonicalTrigger),
+          )
         ) {
           add("missing-or-drifted-trigger", canonicalTrigger.name);
         }
@@ -217,10 +223,10 @@ export function collectSqliteSchemaIssues(
     for (const actualTrigger of actualTable.triggers) {
       if (
         !expectedTable.triggers.some((expectedTrigger) =>
-          isEqual(actualTrigger, expectedTrigger),
+          isEqualTrigger(actualTrigger, expectedTrigger),
         ) &&
         !optionalCanonicalTriggers.some((canonicalTrigger) =>
-          isEqual(actualTrigger, canonicalTrigger),
+          isEqualTrigger(actualTrigger, canonicalTrigger),
         )
       ) {
         add("unexpected-trigger", actualTrigger.name);
@@ -433,7 +439,10 @@ function collectSqliteTableContract(
     name: trigger.name,
     sql: normalizeSchemaSql(trigger.sql),
   }));
-  const normalizedTableSql = normalizeSchemaSql(table.sql);
+  // This literal prefix cannot become CREATE VIRTUAL TABLE after normalization.
+  const normalizedTableSql = table.sql?.startsWith("CREATE TABLE ")
+    ? null
+    : normalizeSchemaSql(table.sql);
   const isVirtualTable =
     normalizedTableSql !== null && /^CREATE VIRTUAL TABLE /iu.test(normalizedTableSql);
 
@@ -495,7 +504,7 @@ function compareTableDefinitions(
       add("column-definition-drift", objectName);
     }
   }
-  if (!isEqual(actual.constraints, expected.constraints)) {
+  if (JSON.stringify(actual.constraints) !== JSON.stringify(expected.constraints)) {
     add("table-constraint-drift", tableName);
   }
   return issues;
@@ -582,8 +591,8 @@ function sqliteIndexTermKind(cid: number): SqliteIndexTermContract["kind"] {
   return cid === -2 ? "expression" : cid === -1 ? "rowid" : "column";
 }
 
-function isEqual(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+function isEqualTrigger(left: SqliteSchemaRow, right: SqliteSchemaRow): boolean {
+  return left.name === right.name && left.sql === right.sql;
 }
 
 function compareJson(left: unknown, right: unknown): number {

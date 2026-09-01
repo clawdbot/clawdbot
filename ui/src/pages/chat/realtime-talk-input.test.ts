@@ -41,8 +41,11 @@ function microphoneEndedListener(
 
 const ownedInputs = new Set<RealtimeTalkInputController>();
 
-function createMicrophoneInput(onEnded: (detail: string) => void = () => undefined) {
-  const input = new RealtimeTalkInputController(onEnded);
+function createMicrophoneInput(
+  onEnded: (detail: string) => void = () => undefined,
+  onConnecting?: (detail?: string) => void,
+) {
+  const input = new RealtimeTalkInputController(onEnded, onConnecting);
   ownedInputs.add(input);
   return input;
 }
@@ -58,6 +61,24 @@ afterEach(() => {
 });
 
 describe("realtime Talk microphone lifetime", () => {
+  it.each(["requesting", "acquired"])(
+    "releases ownership if the %s status callback throws",
+    async (phase) => {
+      const { track, stream } = microphoneFixture();
+      const getUserMedia = vi.fn(async () => stream);
+      vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+      const input = createMicrophoneInput(undefined, (detail) => {
+        if ((phase === "requesting") === Boolean(detail)) {
+          throw new Error("status consumer failed");
+        }
+      });
+      await expect(input.open(undefined)).rejects.toThrow("status consumer failed");
+      expect(input.stream).toBeNull();
+      expect(getUserMedia).toHaveBeenCalledTimes(phase === "requesting" ? 0 : 1);
+      expect(track.stop).toHaveBeenCalledTimes(phase === "requesting" ? 0 : 1);
+    },
+  );
+
   it("releases input before a throwing microphone-loss callback", async () => {
     const { track, addEventListener, stream } = microphoneFixture();
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: vi.fn(async () => stream) } });
@@ -123,8 +144,11 @@ describe("realtime Talk microphone lifetime", () => {
       },
     });
     const onEnded = vi.fn();
-    const input = createMicrophoneInput(onEnded);
+    const onConnecting = vi.fn();
+    const input = createMicrophoneInput(onEnded, onConnecting);
     const opening = input.open(undefined);
+    expect(onConnecting).toHaveBeenCalledWith(expect.stringContaining("Waiting for microphone"));
+    onConnecting.mockClear();
     input.stop();
     await expect(opening).rejects.toMatchObject({ name: "AbortError" });
 
@@ -133,6 +157,7 @@ describe("realtime Talk microphone lifetime", () => {
     expect(input.stream).toBeNull();
     expect(addEventListener).not.toHaveBeenCalled();
     expect(onEnded).not.toHaveBeenCalled();
+    expect(onConnecting).not.toHaveBeenCalled();
   });
 });
 

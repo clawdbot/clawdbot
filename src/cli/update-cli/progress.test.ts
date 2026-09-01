@@ -1,14 +1,14 @@
 // Update progress tests cover progress event formatting for update operations.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
-import { printResult } from "./progress.js";
+import { createUpdateProgress, printResult } from "./progress.js";
 
 function makeResult(
   stepName: string,
   stderrTail: string,
   mode: UpdateRunResult["mode"] = "npm",
-): UpdateRunResult {
+): UpdateRunResult & { steps: [UpdateStepResult] } {
   return {
     status: "error",
     mode,
@@ -27,12 +27,12 @@ function makeResult(
   };
 }
 
-function renderResult(result: UpdateRunResult): string {
+function renderResult(result: UpdateRunResult, hideSteps = true): string {
   const lines: string[] = [];
   vi.spyOn(defaultRuntime, "log").mockImplementation((...args: unknown[]) => {
     lines.push(args.map(String).join(" "));
   });
-  printResult(result, { hideSteps: true });
+  printResult(result, { hideSteps });
   return lines.join("\n");
 }
 
@@ -118,5 +118,64 @@ describe("update failure hints", () => {
     const output = renderResult(result);
     expect(output).not.toContain("Recovery hints:");
     expect(output).not.toContain("npm config set prefix ~/.local");
+  });
+
+  it("shows the final diagnostics from both build streams", () => {
+    const result = makeResult("build", "Build failed", "git");
+    result.steps[0].stdoutTail = [
+      "old output",
+      ...Array.from({ length: 10 }, (_, i) => `diagnostic ${i}`),
+    ].join("\n");
+
+    const output = renderResult(result, false);
+
+    expect(output).toContain("Building");
+    expect(output).toContain("diagnostic 9");
+    expect(output).toContain("Build failed");
+    expect(output).not.toContain("old output");
+  });
+
+  it("explains a timeout even when the subprocess produced no output", () => {
+    const result = makeResult("build", "", "git");
+    result.steps[0].exitCode = null;
+    result.steps[0].termination = "timeout";
+
+    expect(renderResult(result, false)).toContain("Building — timed out");
+  });
+
+  it("reports redirected progress before completion and preserves stdout failures", () => {
+    const tty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: false });
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const { progress, stop } = createUpdateProgress(true);
+    const step = { name: "build", command: "pnpm build", index: 0, total: 1 };
+    try {
+      progress.onStepStart?.(step);
+      expect(log).toHaveBeenCalledWith("Building...");
+      progress.onStepComplete?.({
+        ...step,
+        durationMs: 1200,
+        exitCode: 1,
+        stdoutTail: "Build type error",
+      });
+      expect(log.mock.calls.flat().join("\n")).toContain("Build type error");
+    } finally {
+      stop();
+      if (tty) {
+        Object.defineProperty(process.stdout, "isTTY", tty);
+      } else {
+        Reflect.deleteProperty(process.stdout, "isTTY");
+      }
+    }
+  });
+
+  it("keeps progress silent when JSON output owns stdout", () => {
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const { progress, stop } = createUpdateProgress(false);
+    const step = { name: "build", command: "pnpm build", index: 0, total: 1 };
+    progress.onStepStart?.(step);
+    progress.onStepComplete?.({ ...step, durationMs: 1, exitCode: 0 });
+    stop();
+    expect(log).not.toHaveBeenCalled();
   });
 });

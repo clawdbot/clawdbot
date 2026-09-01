@@ -217,7 +217,13 @@ class Tooltip extends OpenClawLitElement {
     this.attachTrigger();
     this.syncDescription();
     this.syncWebAwesomeTooltip();
-    if (this.disabled || !this.tooltipText || this.isRedundant()) {
+    // Closed tooltips check redundancy in show(); measuring their triggers here
+    // forces layout while a new transcript is still rendering.
+    if (
+      this.disabled ||
+      !this.tooltipText ||
+      (this.webAwesomeTooltip?.open && this.isRedundant())
+    ) {
       this.close();
     }
   }

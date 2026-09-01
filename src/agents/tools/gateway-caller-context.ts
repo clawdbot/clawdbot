@@ -27,6 +27,8 @@ type GatewayToolCallerIdentity = {
   operationalRunInstance?: OperationalRunInstanceRef;
   /** Exact host-resolved owner of this individual approval request. */
   approvalOwnerPluginId?: string;
+  /** Host-owned tool/turn lifetimes; every same-run wrapper preserves earlier fences. */
+  approvalSignals?: readonly AbortSignal[];
   /** Opaque already-signed identity used only by isolated worker transports. */
   signedAgentRuntimeIdentityToken?: string;
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
@@ -95,6 +97,7 @@ function bindGatewayToolContextResolver(
 type AdmittedGatewayToolCallerParams = {
   admittedRunContext: AdmittedRunContext;
   receiptAuthority?: () => boolean | void;
+  approvalSignals?: readonly AbortSignal[];
   agentId?: string;
   sessionKey?: string;
   turnSourceChannel?: string;
@@ -150,6 +153,7 @@ export function createAdmittedGatewayToolCallerIdentity(
         getAdmittedRunDelegatedAuthority(params.admittedRunContext) === delegatedAuthority,
       params.receiptAuthority,
     ),
+    ...(params.approvalSignals?.length ? { approvalSignals: params.approvalSignals } : {}),
     turnSourceChannel: params.turnSourceChannel,
     turnSourceLocal: params.turnSourceLocal,
     turnSourceTo: params.turnSourceTo,
@@ -196,6 +200,9 @@ export async function withGatewayToolCallerIdentity<T>(
     inheritedOwner?.receiptAuthority,
     identity.receiptAuthority,
   );
+  const approvalSignals = [
+    ...new Set([...(inheritedOwner?.approvalSignals ?? []), ...(identity.approvalSignals ?? [])]),
+  ];
   const workerTurnClaim = inheritedOwner?.workerTurnClaim ?? identity.workerTurnClaim;
   const workerTurnExecutionIdentityCapability =
     inheritedOwner?.workerTurnExecutionIdentityCapability ??
@@ -233,6 +240,7 @@ export async function withGatewayToolCallerIdentity<T>(
       ...(cronCreatorAuthorityGrant ? { cronCreatorAuthorityGrant } : {}),
       ...(executionIdentityToken ? { executionIdentityToken } : {}),
       ...(receiptAuthority ? { receiptAuthority } : {}),
+      ...(approvalSignals.length ? { approvalSignals } : {}),
       ...(workerTurnClaim ? { workerTurnClaim } : {}),
       ...(workerTurnExecutionIdentityCapability ? { workerTurnExecutionIdentityCapability } : {}),
       ...(gatewayContextResolver ? { gatewayContextResolver } : {}),

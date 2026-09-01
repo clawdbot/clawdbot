@@ -43,6 +43,7 @@ import {
 } from "./embedded-agent-utils.js";
 import type { AgentEvent, AgentMessage } from "./runtime/index.js";
 import {
+  hasBillableUsage,
   hasNonzeroUsage,
   makeZeroUsageSnapshot,
   normalizeUsage,
@@ -56,12 +57,22 @@ export function preservePendingAssistantUsage(
 ): AssistantMessage {
   if (
     isSubscribeTranscriptOnlyOpenClawAssistantMessage(message) ||
-    !hasNonzeroUsage(pendingUsage)
+    !hasBillableUsage(pendingUsage)
   ) {
     return message;
   }
   const messageUsage = normalizeUsage((message as { usage?: UsageLike }).usage);
   if (hasNonzeroUsage(messageUsage)) {
+    if (
+      pendingUsage.cost?.totalOrigin === "provider-billed" &&
+      messageUsage.cost?.totalOrigin !== "provider-billed"
+    ) {
+      message.usage.cost = {
+        ...makeZeroUsageSnapshot().cost,
+        ...message.usage.cost,
+        ...pendingUsage.cost,
+      };
+    }
     return message;
   }
 
@@ -77,12 +88,16 @@ export function preservePendingAssistantUsage(
     output,
     cacheRead,
     cacheWrite,
+    ...(pendingUsage.cacheWrite1h !== undefined ? { cacheWrite1h: pendingUsage.cacheWrite1h } : {}),
     ...(pendingUsage.contextUsage ? { contextUsage: { ...pendingUsage.contextUsage } } : {}),
     totalTokens: pendingUsage.total ?? input + output + cacheRead + cacheWrite,
     ...(pendingUsage.reasoningTokens !== undefined
       ? { reasoningTokens: pendingUsage.reasoningTokens }
       : {}),
   };
+  if (pendingUsage.cost) {
+    Object.assign(message.usage.cost, pendingUsage.cost);
+  }
   return message;
 }
 
@@ -157,7 +172,6 @@ export function handleMessageEnd(
   }
   ctx.noteLastAssistant(assistantMessage);
   ctx.noteCompletedAssistant(assistantMessage);
-  ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
   ctx.commitAssistantUsage();
   if (suppressVisibleAssistantOutput) {
     appendRawStream(() => ({

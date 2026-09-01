@@ -1,7 +1,7 @@
-import type { LiveTransportQaCommandOptions } from "openclaw/plugin-sdk/qa-runtime";
 import { runQaSuiteCommand } from "../../cli.runtime.js";
 import type { QaProviderMode } from "../../providers/index.js";
 import { defaultQaModelForMode, normalizeQaProviderMode } from "../../run-config.js";
+import type { LiveTransportQaCommandOptions } from "./live-transport-cli.js";
 
 type LiveTransportScenarioSelection = (params: {
   profile?: string;
@@ -54,9 +54,9 @@ export async function runLiveTransportQaSuiteCommand(params: {
     fastMode: options.fastMode,
     allowFailures: options.allowFailures,
     failFast: options.failFast,
+    ...(options.concurrency !== undefined ? { concurrency: options.concurrency } : {}),
     channelDriver: "live",
     channel: params.channelId,
-    concurrency: 1,
     scenarioIds: selectedScenarioIds,
     sutAccountId: options.sutAccountId,
     ...(options.credentialFile ? { credentialFile: options.credentialFile } : {}),

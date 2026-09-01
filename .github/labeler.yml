@@ -302,6 +302,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "docs/**"
+          - ".agents/skills/openclaw-update/**"
           - ".agents/skills/update-team-server/**"
 
 "cli":

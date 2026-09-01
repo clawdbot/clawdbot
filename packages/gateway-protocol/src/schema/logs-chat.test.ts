@@ -62,6 +62,8 @@ describe("ChatHistoryCursorResultSchema", () => {
       Value.Check(ChatHistoryCursorResultSchema, {
         ...delta,
         inFlightRun: { runId: "run-live", text: "still working" },
+        inputReceipts: [{ runId: "retained-run", state: "pending" }],
+        inputConsumptions: [{ runId: "consumed-run", consumedByEventId: "event-1" }],
       }),
     ).toBe(true);
     expect(Value.Check(ChatHistoryCursorResultSchema, { kind: "reset" })).toBe(true);

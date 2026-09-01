@@ -1267,25 +1267,28 @@ describe("agentCliCommand", () => {
     );
   });
 
-  it("scopes legacy global session keys to the requested agent before gateway dispatch", async () => {
-    await withTempStore(
-      async () => {
-        mockGatewaySuccessReply();
+  it.each(["global", "unknown"])(
+    "preserves logical %s keys with an explicit agent before gateway dispatch",
+    async (sessionKey) => {
+      await withTempStore(
+        async () => {
+          mockGatewaySuccessReply();
 
-        await agentCliCommand({ message: "hi", agent: "ops", sessionKey: "global" }, runtime);
+          await agentCliCommand({ message: "hi", agent: "ops", sessionKey }, runtime);
 
-        expect(callGateway).toHaveBeenCalledTimes(1);
-        const request = requireRecord(
-          requireFirstCallArg(callGateway, "gateway"),
-          "gateway request",
-        );
-        const params = requireRecord(request.params, "gateway request params");
-        expect(params.agentId).toBe("ops");
-        expect(params.sessionKey).toBe("agent:ops:global");
-      },
-      { agents: { list: [{ id: "main" }, { id: "ops" }] } },
-    );
-  });
+          expect(callGateway).toHaveBeenCalledTimes(1);
+          const request = requireRecord(
+            requireFirstCallArg(callGateway, "gateway"),
+            "gateway request",
+          );
+          const params = requireRecord(request.params, "gateway request params");
+          expect(params.agentId).toBe("ops");
+          expect(params.sessionKey).toBe(sessionKey);
+        },
+        { agents: { list: [{ id: "main" }, { id: "ops" }] } },
+      );
+    },
+  );
 
   it("preserves unscoped global session keys when no agent is requested", async () => {
     await withTempStore(

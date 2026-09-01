@@ -16,6 +16,7 @@ import {
   findCliTimeoutError,
   isFailoverError,
 } from "../../agents/failover-error.js";
+import { renderAssistantRequestFailureCopy } from "../../agents/failover/assistant-request-failure-copy.js";
 import { classifyProviderRequestFacets } from "../../agents/failover/request-error-facets.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
@@ -23,6 +24,7 @@ import {
   renderAuthProfileFailoverCopy,
   renderBillingReplyCopy,
   renderCliTimeoutReplyCopy,
+  renderFailoverCodeUserCopy,
   renderMissingApiKeyReplyCopy,
   renderRateLimitOrOverloadedCopy,
   renderRateLimitReplyCopy,
@@ -54,7 +56,10 @@ export function resolveReplyFailoverFacts(error: unknown, message: string) {
     : null;
   return {
     reason: classification?.kind === "reason" ? classification.reason : undefined,
+    code: described.code,
     provider: described.provider,
+    model: described.model,
+    status: described.status,
     authMode: described.authMode,
     providerRequestError: resolveProviderRequestFailureCopy({
       classification,
@@ -223,6 +228,10 @@ export function buildExternalRunFailureReply(
   const failoverFacts =
     options?.failoverFacts ??
     resolveReplyFailoverFacts(error ?? normalizedMessage, normalizedMessage);
+  const failoverCodeCopy = renderFailoverCodeUserCopy(failoverFacts.code);
+  if (failoverCodeCopy) {
+    return { text: failoverCodeCopy, isGenericRunnerFailure: false };
+  }
   const oauthRefreshFailure =
     classifyOAuthRefreshFailureError(error) ?? classifyOAuthRefreshFailure(normalizedMessage);
   const codexLoginRecovery = buildCodexLoginRecovery({
@@ -283,7 +292,10 @@ export function buildExternalRunFailureReply(
   }
   const providerRequestError = failoverFacts.providerRequestError;
   if (providerRequestError) {
-    return { text: providerRequestError.userMessage, isGenericRunnerFailure: false };
+    return {
+      text: providerRequestError.userMessage ?? renderAssistantRequestFailureCopy(failoverFacts),
+      isGenericRunnerFailure: false,
+    };
   }
   const authError = isProviderAuthError(error) ? error : undefined;
   const missingApiKeyFailure = renderMissingApiKeyReplyCopy(
@@ -301,6 +313,12 @@ export function buildExternalRunFailureReply(
   if (codexAppServerFailure) {
     return { text: codexAppServerFailure, isGenericRunnerFailure: false };
   }
+  const classifiedFailure = renderAssistantRequestFailureCopy(failoverFacts);
+  if (classifiedFailure) {
+    return { text: classifiedFailure, isGenericRunnerFailure: false };
+  }
+  // Only unclassified thrown text reaches this branch. Verbose mode is the
+  // explicit opt-in because sanitization does not make raw provider bodies safe.
   return {
     text: options?.includeDetails
       ? formatForwardedExternalRunFailureText(normalizedMessage)

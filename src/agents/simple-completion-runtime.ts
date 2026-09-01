@@ -126,7 +126,9 @@ type SimpleCompletionSelectionParams = {
   agentDir?: string;
   modelRef?: string;
   useUtilityModel?: boolean;
-  manifestPlugins?: PluginMetadataSnapshot["plugins"];
+  manifestPlugins?:
+    | PluginMetadataSnapshot["plugins"]
+    | Pick<PluginMetadataSnapshot, "plugins" | "owners">;
 };
 
 type SimpleCompletionSelectionRequest = {
@@ -152,7 +154,12 @@ function resolveSimpleCompletionSelectionRequest(
           agentId: params.agentId,
           primaryProvider: fallbackRef.provider,
           ...(params.manifestPlugins
-            ? { metadataSnapshot: { plugins: params.manifestPlugins } }
+            ? {
+                metadataSnapshot:
+                  "plugins" in params.manifestPlugins
+                    ? params.manifestPlugins
+                    : { plugins: params.manifestPlugins },
+              }
             : {}),
         })
       : undefined) ||
@@ -572,7 +579,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
   const resolveSelection = () =>
     resolveSimpleCompletionSelectionForAgent({
       ...selectionParams,
-      manifestPlugins: metadataSnapshot.plugins,
+      manifestPlugins: metadataSnapshot,
     });
   let selection = resolveSelection();
   if (!selection) {

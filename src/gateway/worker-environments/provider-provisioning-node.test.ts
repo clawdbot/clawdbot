@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { bindCloudWorkerSetupCompletion } from "../../infra/device-pairing-cloud-worker.js";
-import type { WorkerNodeEnrollment, WorkerProvider } from "../../plugins/types.js";
+import type {
+  WorkerNodeEnrollment,
+  WorkerNodeRuntimePreparation,
+  WorkerProvider,
+} from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { admitWorkerConnection } from "./admission.js";
 import { hashWorkerCredential } from "./credential.js";
@@ -162,12 +166,26 @@ describe("node worker provider provisioning", () => {
     },
   );
 
-  it.each(["provider-error", "provider-timeout", "enrollment-timeout"] as const)(
+  it.each(["provider-error", "provider-timeout", "enrollment-timeout", "runtime-timeout"] as const)(
     "closes the exact enrollment and rejects retained callbacks after %s",
     async (outcome) => {
       const providerEntered = createDeferredCore();
       const finishProvider = createDeferredCore();
       const finishEnrollment = createDeferredCore<WorkerNodeEnrollment>();
+      const finishRuntime = createDeferredCore<WorkerNodeRuntimePreparation>();
+      const runtime: WorkerNodeRuntimePreparation = {
+        nodeBootstrap: support.NODE_BOOTSTRAP,
+        workerBundle: {
+          ...support.NODE_BOOTSTRAP,
+          packageRelativePath: `worker-artifacts/${support.NODE_BOOTSTRAP.sha256}.tgz`,
+        },
+      };
+      let runtimeSignal: AbortSignal | undefined;
+      const prepareNodeRuntime = vi.fn(async (_record, _bundle, signal?: AbortSignal) => {
+        runtimeSignal = signal;
+        return outcome === "runtime-timeout" ? await finishRuntime.promise : runtime;
+      });
+      const closeNodeRuntime = vi.fn();
       const enrollment: WorkerNodeEnrollment = {
         mode: "resume",
         deviceId: "cloud-device-closed",
@@ -182,6 +200,8 @@ describe("node worker provider provisioning", () => {
       const closeNodeEnrollment = vi.fn();
       let begin: (() => Promise<WorkerNodeEnrollment>) | undefined;
       let pendingEnrollment: Promise<WorkerNodeEnrollment> | undefined;
+      let prepareRuntime: (() => Promise<WorkerNodeRuntimePreparation>) | undefined;
+      let pendingRuntime: Promise<WorkerNodeRuntimePreparation> | undefined;
       const workerService = support.createService(
         support.createProvider({
           supportedExecutionModes: ["worker-turn"],
@@ -189,6 +209,12 @@ describe("node worker provider provisioning", () => {
           requiresNodeEnrollment: true,
           provision: async (_profile, _operationId, options) => {
             begin = options!.beginNodeEnrollment!;
+            prepareRuntime = options!.prepareNodeRuntime!;
+            pendingRuntime = prepareRuntime();
+            if (outcome === "runtime-timeout") {
+              providerEntered.resolve();
+            }
+            await pendingRuntime;
             pendingEnrollment = begin();
             providerEntered.resolve();
             await pendingEnrollment;
@@ -199,13 +225,27 @@ describe("node worker provider provisioning", () => {
             return { leaseId: "cloud-lease-closed", node: { deviceId: "cloud-device-closed" } };
           },
         }),
-        { prepareNodeEnrollment, closeNodeEnrollment, providerCallTimeoutMs: 20 },
+        {
+          prepareNodeRuntime,
+          closeNodeRuntime,
+          prepareNodeEnrollment,
+          closeNodeEnrollment,
+          providerCallTimeoutMs: 20,
+        },
       );
       const creation = workerService.create("development", `request-node-closed-${outcome}`);
       const rejected = expect(creation).rejects.toMatchObject({ code: "provider_failure" });
       try {
         await providerEntered.promise;
         await rejected;
+        expect(runtimeSignal?.aborted).toBe(true);
+        if (outcome === "runtime-timeout") {
+          const lateRejected = expect(pendingRuntime).rejects.toThrow(
+            "Worker provisioning operation is closed",
+          );
+          finishRuntime.resolve(runtime);
+          await lateRejected;
+        }
         if (outcome === "enrollment-timeout") {
           const lateRejected = expect(pendingEnrollment).rejects.toThrow(
             "Worker provisioning operation is closed",
@@ -213,11 +253,26 @@ describe("node worker provider provisioning", () => {
           finishEnrollment.resolve(enrollment);
           await lateRejected;
         }
-        await expect(begin!()).rejects.toThrow("Worker provisioning operation is closed");
-        expect(closeNodeEnrollment).toHaveBeenCalledExactlyOnceWith(enrollment);
-        expect(prepareNodeEnrollment).toHaveBeenCalledOnce();
+        await expect(begin!()).rejects.toMatchObject({
+          name: "AbortError",
+          message: "Worker provisioning operation is closed",
+        });
+        await expect(prepareRuntime!()).rejects.toMatchObject({
+          name: "AbortError",
+          message: "Worker provisioning operation is closed",
+        });
+        expect(closeNodeRuntime).toHaveBeenCalledExactlyOnceWith(runtime);
+        expect(prepareNodeRuntime).toHaveBeenCalledOnce();
+        if (outcome === "runtime-timeout") {
+          expect(closeNodeEnrollment).not.toHaveBeenCalled();
+          expect(prepareNodeEnrollment).not.toHaveBeenCalled();
+        } else {
+          expect(closeNodeEnrollment).toHaveBeenCalledExactlyOnceWith(enrollment);
+          expect(prepareNodeEnrollment).toHaveBeenCalledOnce();
+        }
       } finally {
         finishEnrollment.resolve(enrollment);
+        finishRuntime.resolve(runtime);
         finishProvider.resolve();
       }
     },
@@ -424,7 +479,7 @@ describe("node worker provider provisioning", () => {
       sharedHost: true,
       ownerEpoch: 1,
     });
-    expect(support.testState.prepareInstallation).not.toHaveBeenCalled();
+    expect(support.testState.prepareInstallation).toHaveBeenCalledExactlyOnceWith("bundle");
     expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
     const credential = workerService.takeMintedCredential({
       environmentId: result.environmentId,

@@ -771,12 +771,14 @@ describe("skill workshop proposals", () => {
     });
 
     const listed = await listSkillProposals({ agentId: "main", workspaceDir: secondWorkspaceDir });
-    expect(listed.proposals).toEqual([
-      expect.objectContaining({ id: second.record.id }),
+    expect(listed.proposals.toSorted((a, b) => a.skillKey.localeCompare(b.skillKey))).toEqual([
       expect.objectContaining({ id: quarantined.record.id, workspaceMismatch: true }),
       expect.objectContaining({ id: first.record.id, workspaceMismatch: true }),
+      expect.objectContaining({ id: second.record.id }),
     ]);
-    expect(listed.proposals[0]).not.toHaveProperty("workspaceMismatch");
+    expect(listed.proposals.find((entry) => entry.id === second.record.id)).not.toHaveProperty(
+      "workspaceMismatch",
+    );
     await expect(
       inspectSkillProposal(first.record.id, {
         agentId: "main",
@@ -971,7 +973,13 @@ describe("skill workshop proposals", () => {
     );
   });
 
-  it("rejects and quarantines proposals without touching active skills", async () => {
+  it("rejects and quarantines proposals without touching active skills", async (ctx) => {
+    // Manifest order follows updatedAt, so each terminal mutation needs a distinct timestamp.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    ctx.onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    vi.setSystemTime(new Date("2026-08-30T00:00:00.000Z"));
     const workspaceDir = await makeWorkspace();
     const rejected = await proposeCreateSkill({
       workspaceDir,
@@ -997,21 +1005,27 @@ describe("skill workshop proposals", () => {
       proposalId: rejected.record.id,
       reason: "not useful",
     });
+    vi.setSystemTime(new Date("2026-08-30T00:00:01.000Z"));
     await quarantineSkillProposal({
       workspaceDir,
       proposalId: quarantined.record.id,
       reason: "needs review",
     });
+    vi.setSystemTime(new Date("2026-08-30T00:00:02.000Z"));
     await applySkillProposal({
       workspaceDir,
       proposalId: applied.record.id,
     });
 
     const manifest = await readSkillProposalManifest();
-    expect(manifest.proposals.map((entry) => [entry.skillKey, entry.status])).toEqual([
+    expect(
+      manifest.proposals
+        .toSorted((a, b) => a.skillKey.localeCompare(b.skillKey))
+        .map((entry) => [entry.skillKey, entry.status]),
+    ).toEqual([
+      ["draft-one", "rejected"],
       ["draft-three", "applied"],
       ["draft-two", "quarantined"],
-      ["draft-one", "rejected"],
     ]);
     await expect(
       fs.access(path.join(workspaceDir, "skills", "draft-one", "SKILL.md")),

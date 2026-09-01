@@ -1,8 +1,11 @@
 // Qa Lab plugin module implements cli behavior.
 import type { Command } from "commander";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { collectString } from "./cli-options.js";
+import {
+  collectString,
+  invalidQaCliArgument,
+  parseQaCliPositiveIntegerOption,
+} from "./cli-options.js";
 import type {
   QaLabSelfCheckCommandOptions,
   QaProfileCommandOptions,
@@ -83,22 +86,6 @@ type QaSuiteCliOptions = QaScenarioRunCliOptions & {
 };
 
 const loadQaLabCliRuntime = createLazyRuntimeModule(() => import("./cli.runtime.js"));
-
-function invalidQaCliArgument(message: string): Error & { code: string; exitCode: number } {
-  const error = new Error(message) as Error & { code: string; exitCode: number };
-  error.name = "InvalidArgumentError";
-  error.code = "commander.invalidArgument";
-  error.exitCode = 1;
-  return error;
-}
-
-function parseQaCliPositiveIntegerOption(value: string, flag: string): number {
-  const parsed = parseStrictPositiveInteger(value);
-  if (parsed === undefined) {
-    throw invalidQaCliArgument(`${flag} must be a positive integer.`);
-  }
-  return parsed;
-}
 
 function parseQaCliTcpPortOption(value: string, flag: string): number {
   const parsed = parseQaCliPositiveIntegerOption(value, flag);

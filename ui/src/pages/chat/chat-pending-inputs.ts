@@ -1,5 +1,11 @@
-import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
-import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import {
+  CHAT_INPUT_RECEIPT_MAX_RUN_IDS,
+  CHAT_INPUT_RUN_ID_MAX_CHARS,
+} from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
+import type {
+  ChatInputReceipts,
+  ChatPendingInputsPage,
+} from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { t } from "../../i18n/index.ts";
 import type { ChatItem } from "../../lib/chat/chat-types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -7,6 +13,11 @@ import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.
 import { removeQueuedMessage } from "./chat-queue.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { messageMatchesSearchQuery } from "./chat-thread-items.ts";
+import {
+  getChatSessionProjection,
+  readChatSessionProjectionScope,
+  reconcileChatInputCustody,
+} from "./history-merge.ts";
 
 type PendingInputView = {
   sessionKey: string;
@@ -21,20 +32,14 @@ const pendingInputViews = new WeakMap<ChatState, PendingInputView>();
 
 export function buildPendingInputItems(
   inputs: ChatPendingInputsPage["items"],
-  history: unknown[],
   searchQuery?: string,
 ): ChatItem[] {
   // Custody records stay outside active-run ordering until the writer promotes them.
   const items: ChatItem[] = [];
+  if (!inputs.length) {
+    return items;
+  }
   for (const input of inputs) {
-    if (
-      history.some((message) => {
-        const identity = readSessionMessageIdentity(message);
-        return identity?.role === "user" && identity.id === input.id;
-      })
-    ) {
-      continue;
-    }
     if (searchQuery?.trim() && !messageMatchesSearchQuery(input.message, searchQuery)) {
       continue;
     }
@@ -68,25 +73,57 @@ export function clearChatPendingInputs(state: ChatState): void {
   pendingInputViews.delete(state);
 }
 
+export function readChatInputRunIds(state: ChatState): string[] {
+  const projection = getChatSessionProjection(
+    state,
+    readChatSessionProjectionScope(state, { agentId: resolveUiSelectedSessionAgentId(state) }),
+  );
+  const runIds = [
+    ...projection.entries
+      .filter((entry) => entry.pending && entry.identity?.role === "user")
+      .map((entry) => entry.pendingRunId),
+    ...state.chatQueue
+      .filter((item) => (item.sendAttempts ?? 0) > 0 || item.sendState === "unconfirmed")
+      .map((item) => item.sendRunId),
+  ];
+  return [
+    ...new Set(
+      runIds.filter((id): id is string => Boolean(id && id.length <= CHAT_INPUT_RUN_ID_MAX_CHARS)),
+    ),
+  ]
+    .toSorted()
+    .slice(0, CHAT_INPUT_RECEIPT_MAX_RUN_IDS);
+}
+
 export function applyChatPendingInputs(
   state: ChatState,
   page: ChatPendingInputsPage | undefined,
-  before?: number,
+  options: { before?: number; receipts?: ChatInputReceipts } = {},
 ): void {
+  const { page: displayPage, acceptedRunIds } = reconcileChatInputCustody(
+    state,
+    page,
+    options.receipts,
+  );
   pendingInputViews.set(state, {
     sessionKey: state.sessionKey,
     sessionId: state.currentSessionId ?? null,
     agentId: resolveUiSelectedSessionAgentId(state),
-    page: page ?? { items: [], total: 0 },
-    before,
+    page: displayPage,
+    before: options.before,
     loading: false,
   });
-  const acceptedRunIds = new Set(page?.items.flatMap((item) => (item.runId ? [item.runId] : [])));
-  // The server owns accepted input even after an interruption. Retiring the
-  // outbox copy prevents reconnect from silently submitting it a second time.
-  for (const item of state.chatQueue) {
-    if (item.sendRunId && acceptedRunIds.has(item.sendRunId)) {
-      removeQueuedMessage(state, item.id);
+  if (acceptedRunIds.size) {
+    // The server owns accepted input even after an interruption. Retiring the
+    // outbox copy prevents reconnect from silently submitting it a second time.
+    for (const item of state.chatQueue) {
+      if (
+        item.sendRunId &&
+        acceptedRunIds.has(item.sendRunId) &&
+        (!item.sessionId || item.sessionId === state.currentSessionId)
+      ) {
+        removeQueuedMessage(state, item.id);
+      }
     }
   }
   state.requestUpdate?.();
@@ -118,7 +155,7 @@ export async function loadChatPendingInputs(state: ChatState, before?: number): 
       ...(before === undefined ? {} : { pendingBefore: before }),
     });
     if (current() && result.sessionId === view.sessionId) {
-      applyChatPendingInputs(state, result.pendingInputs, before);
+      applyChatPendingInputs(state, result.pendingInputs, { before });
     }
   } catch (error) {
     if (current()) {

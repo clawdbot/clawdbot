@@ -1079,9 +1079,9 @@ verify_npm_lifecycle_completed() {
     local npm_cmd="$1" npm_root=""
     npm_root="$("$npm_cmd" root -g 2>/dev/null | awk 'NF { value = $0 } END { print value }')" || true
     [[ -n "$npm_root" ]] || { echo "Unable to resolve npm global root after install." >&2; return 1; }
-    [[ ! -e "${npm_root%/}/openclaw/dist/openclaw-install-guard" ]] || {
-        echo "OpenClaw lifecycle scripts did not complete; refusing installer success." >&2
-        return 1
+    [[ ! -e "${npm_root%/}/openclaw/.openclaw-lifecycle-pending" && ! -e "${npm_root%/}/openclaw/dist/openclaw-install-guard" ]] || {
+      echo "OpenClaw lifecycle scripts did not complete; refusing installer success." >&2
+      return 1
     }
 }
 
@@ -1790,15 +1790,18 @@ node_binary_sqlite_version() {
     printf '%s\n' "${version:-unavailable}"
 }
 
-node_is_supported() {
+node_version_is_supported() {
     local version_components major minor patch
     version_components="$(parse_node_version_components || true)"
     read -r major minor patch <<< "$version_components"
     if [[ ! "$major" =~ ^[0-9]+$ || ! "$minor" =~ ^[0-9]+$ || ! "$patch" =~ ^[0-9]+$ ]]; then
         return 1
     fi
-    node_version_components_are_supported "$major" "$minor" "$patch" &&
-        node_binary_has_safe_sqlite node
+    node_version_components_are_supported "$major" "$minor" "$patch"
+}
+
+node_is_supported() {
+    node_version_is_supported && node_binary_has_safe_sqlite node
 }
 
 node_binary_is_supported() {
@@ -2190,7 +2193,9 @@ check_node() {
 }
 
 finish_linux_node_install() {
-    activate_supported_node_on_path || true
+    if ! node_is_supported; then
+        activate_supported_node_on_path || true
+    fi
     if ! node_is_supported; then
         local active_path active_version
         active_path="$(command -v node 2>/dev/null || echo "not found")"
@@ -2243,6 +2248,30 @@ install_node_with_apk() {
     exit 1
 }
 
+install_node_with_user_prefix() {
+    local cli_installer prefix node_bin_dir
+    prefix="${HOME}/.openclaw"
+    node_bin_dir="${prefix}/tools/node/bin"
+    mktempfile cli_installer
+
+    ui_info "Using a user-space Node.js runtime because the system Node.js links unsafe SQLite"
+    run_required_step "Downloading user-space Node.js installer" \
+        download_validated_script "https://openclaw.ai/install-cli.sh" "$cli_installer"
+    # The child Bash expands this script's positional arguments, not this shell.
+    # shellcheck disable=SC2016
+    run_required_step "Installing user-space Node.js" \
+        env OPENCLAW_INSTALL_CLI_SH_NO_RUN=1 OPENCLAW_PREFIX="$prefix" \
+        bash -c '
+            set -euo pipefail
+            source "$1"
+            install_node "$(os_detect)" "$(arch_detect)"
+        ' openclaw-install-node "$cli_installer"
+
+    prepend_path_dir "$node_bin_dir"
+    persist_shell_path_prepend "$node_bin_dir" "\$HOME/.openclaw/tools/node/bin" || true
+    finish_linux_node_install
+}
+
 # Install Node.js
 install_node() {
     if [[ "$OS" == "macos" ]]; then
@@ -2265,6 +2294,14 @@ install_node() {
             ui_success "Build tools installed"
         else
             ui_warn "Continuing without auto-installing build tools"
+        fi
+
+        # RPM distributions can link a supported Node release to a vulnerable
+        # system SQLite. Preserve distro packages and use the managed runtime.
+        if { command -v dnf &> /dev/null || command -v yum &> /dev/null; } &&
+            node_version_is_supported && ! node_binary_has_safe_sqlite node; then
+            install_node_with_user_prefix
+            return 0
         fi
 
         # Arch-based distros: use pacman with official repos
@@ -3010,8 +3047,18 @@ warn_shell_path_missing_dir() {
     # that case new shells are fine and the user only needs to reload this one.
     # RC lines may spell the home dir as $HOME instead of the expanded path.
     local dir_home_form="\$HOME${dir#"$HOME"}"
+    local managed_node_bin="$HOME/.openclaw/tools/node/bin"
+    local managed_node_home_form="\$HOME/.openclaw/tools/node/bin"
+    if [[ ! -d "$managed_node_bin" || ! -d "$dir" ||
+        "$(canonicalize_dir "$managed_node_bin" || true)" != "$(canonicalize_dir "$dir" || true)" ]]; then
+        managed_node_bin=""
+        managed_node_home_form=""
+    fi
     for rc in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile" "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.config/fish/conf.d/openclaw.fish"; do
-        if [[ -f "$rc" ]] && { grep -Fq "$dir" "$rc" || grep -Fq "$dir_home_form" "$rc"; }; then
+        if [[ -f "$rc" ]] && {
+            grep -Fq "$dir" "$rc" || grep -Fq "$dir_home_form" "$rc" ||
+                { [[ -n "$managed_node_bin" ]] && { grep -Fq "$managed_node_bin" "$rc" || grep -Fq "$managed_node_home_form" "$rc"; }; }
+        }; then
             echo ""
             ui_info "PATH updated in ${rc}: added ${label} (${dir})"
             echo "  New terminals pick this up automatically."
@@ -3654,17 +3701,29 @@ verify_installation() {
 
 retire_npm_owner_after_git_install() {
     local wrapper="$HOME/.local/bin/openclaw" npm_cmd="" npm_root="" npm_bin="" package_root="" package_name=""
-    npm_cmd="$(npm_command_path npm)" || return 1
+    if ! npm_cmd="$(npm_command_path npm)"; then
+        ui_error "Could not retire the previous npm install: npm not found on PATH"
+        return 1
+    fi
     npm_root="$("$npm_cmd" root -g 2>/dev/null | awk 'NF { value = $0 } END { print value }')" || true
     package_root="${npm_root%/}/openclaw"
     [[ -n "$npm_root" && -f "$package_root/package.json" ]] || return 0
     package_name="$(node -e 'const p=require(process.argv[1]); process.stdout.write(String(p.name || ""))' "$package_root/package.json" 2>/dev/null || true)"
-    [[ "$package_name" == "openclaw" ]] || return 1
+    if [[ "$package_name" != "openclaw" ]]; then
+        ui_error "Could not retire the previous npm install: ${package_root} contains package '${package_name:-unknown}', not openclaw"
+        return 1
+    fi
     npm_bin="$(npm_global_bin_dir "$npm_cmd" || true)"
     if [[ "${npm_bin%/}/openclaw" == "$wrapper" ]]; then
-        rm -rf "$package_root" || return 1
+        if ! rm -rf "$package_root"; then
+            ui_error "Could not retire the previous npm install: failed to remove ${package_root}"
+            return 1
+        fi
     else
-        "$npm_cmd" uninstall -g openclaw >/dev/null 2>&1 || return 1
+        if ! "$npm_cmd" uninstall -g openclaw >/dev/null 2>&1; then
+            ui_error "Could not retire the previous npm install: npm uninstall -g openclaw failed"
+            return 1
+        fi
     fi
     ui_success "Previous npm install retired"
 }
@@ -3680,10 +3739,13 @@ is_installer_git_wrapper() {
 
 prepare_git_wrapper_backup_for_npm() {
     local npm_cmd="" npm_root="" npm_bin="" target="" launcher=""
-    npm_cmd="$(npm_command_path npm)" || return 1
+    # Without a resolvable npm there is nothing to back up; let the npm
+    # install step report the missing npm with its own remediation text
+    # instead of silently exiting here (Arch splits node and npm packages).
+    npm_cmd="$(npm_command_path npm)" || return 0
     npm_root="$("$npm_cmd" root -g 2>/dev/null || true)"
     npm_bin="$(npm_global_bin_dir "$npm_cmd" || true)"
-    [[ -n "$npm_root" && -n "$npm_bin" ]] || return 1
+    [[ -n "$npm_root" && -n "$npm_bin" ]] || return 0
     target="${npm_bin%/}/openclaw"
     is_installer_git_wrapper "$target" || return 0
     launcher="${npm_root%/}/openclaw/openclaw.mjs"
@@ -3693,7 +3755,10 @@ prepare_git_wrapper_backup_for_npm() {
 retire_git_wrapper_after_npm_install() {
     local wrapper="$HOME/.local/bin/openclaw"
     is_installer_git_wrapper "$wrapper" || return 0
-    rm -f "$wrapper" || return 1
+    if ! rm -f "$wrapper"; then
+        ui_error "Could not retire the previous git wrapper: failed to remove ${wrapper}"
+        return 1
+    fi
     ui_success "Previous git wrapper retired"
 }
 

@@ -188,4 +188,33 @@ describe("canvas pnpm runner", () => {
       }
     },
   );
+
+  it.runIf(process.platform === "win32")(
+    "preserves literal arguments through spaced cmd wrappers",
+    () => {
+      const tempDir = mkdtempSync(path.join(os.tmpdir(), "canvas pnpm argv "));
+      try {
+        const capturePath = path.join(tempDir, "capture.cjs");
+        writeFileSync(
+          capturePath,
+          "process.stdout.write(JSON.stringify(process.argv.slice(2)));\n",
+        );
+        const cmdPath = path.join(tempDir, "pnpm.cmd");
+        writeFileSync(cmdPath, `@echo off\r\n"${process.execPath}" "${capturePath}" %*\r\n`);
+        const expected = ["", "left ^ right", "C:\\two words\\", 'say "hi"'];
+        const spec = resolvePnpmRunner({ npmExecPath: cmdPath, pnpmArgs: expected });
+
+        const result = spawnSync(spec.command, spec.args, {
+          encoding: "utf8",
+          shell: spec.shell,
+          windowsVerbatimArguments: spec.windowsVerbatimArguments,
+        });
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(result.stdout)).toEqual(expected);
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
 });

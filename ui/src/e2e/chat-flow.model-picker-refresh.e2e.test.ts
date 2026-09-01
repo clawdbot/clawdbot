@@ -11,14 +11,16 @@ import {
 const suite = createChatFlowE2eSuite();
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "model-picker-refresh");
 
 async function screenshot(page: Page, name: string) {
   if (!captureUiProof) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
-  await page.screenshot({ animations: "disabled", path: path.join(proofDir, name) });
+  await mkdir(path.join(suite.artifactDir, "model-picker-refresh"), { recursive: true });
+  await page.screenshot({
+    animations: "disabled",
+    path: path.join(path.join(suite.artifactDir, "model-picker-refresh"), name),
+  });
 }
 
 suite.define(() => {
@@ -28,7 +30,12 @@ suite.define(() => {
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
       ...(captureUiProof
-        ? { recordVideo: { dir: proofDir, size: { height: 900, width: 1280 } } }
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "model-picker-refresh"),
+              size: { height: 900, width: 1280 },
+            },
+          }
         : {}),
     });
     const page = await context.newPage();

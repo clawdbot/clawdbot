@@ -8,9 +8,16 @@ import {
 import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-const readAcpSessionMeta = vi.hoisted(() => vi.fn(() => undefined));
+const { readAcpSessionMeta, readAcpSessionMetaForEntry } = vi.hoisted(() => ({
+  readAcpSessionMeta: vi.fn<typeof import("../acp/runtime/session-meta.js").readAcpSessionMeta>(),
+  readAcpSessionMetaForEntry:
+    vi.fn<typeof import("../acp/runtime/session-meta.js").readAcpSessionMetaForEntry>(),
+}));
 
-vi.mock("../acp/runtime/session-meta.js", () => ({ readAcpSessionMeta }));
+vi.mock("../acp/runtime/session-meta.js", () => ({
+  readAcpSessionMeta,
+  readAcpSessionMetaForEntry,
+}));
 
 import { resolveGatewaySessionThinkingProjectionInternal } from "./session-utils-model.js";
 
@@ -18,7 +25,8 @@ describe("resolveGatewaySessionThinkingProjectionInternal", () => {
   const registeredHarnesses = listRegisteredAgentHarnesses();
   beforeEach(() => {
     clearAgentHarnesses();
-    readAcpSessionMeta.mockClear();
+    readAcpSessionMeta.mockReset();
+    readAcpSessionMetaForEntry.mockReset();
   });
   afterAll(() => restoreRegisteredAgentHarnesses(registeredHarnesses));
 
@@ -102,5 +110,42 @@ describe("resolveGatewaySessionThinkingProjectionInternal", () => {
     });
 
     expect(readAcpSessionMeta).toHaveBeenCalledWith({ sessionKey: "global", agentId: "ops" });
+  });
+
+  it("keeps a prepared row from adopting a replacement session's ACP runtime", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        entries: { ops: {} },
+        defaults: { models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } } } },
+      },
+    };
+    const entry = { sessionId: "original", lifecycleRevision: "original-revision", updatedAt: 1 };
+    const sessionKey = "agent:ops:acp:owned";
+    readAcpSessionMeta.mockReturnValue({
+      backend: "replacement-backend",
+      agent: "ops",
+      runtimeSessionName: "replacement",
+      mode: "persistent",
+      state: "idle",
+      lastActivityAt: 2,
+    });
+
+    const projection = resolveGatewaySessionThinkingProjectionInternal({
+      cfg,
+      agentId: "ops",
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      sessionKey,
+      entry,
+    });
+
+    expect(projection.agentRuntime.id).toBe("openclaw");
+    expect(readAcpSessionMeta).not.toHaveBeenCalled();
+    expect(readAcpSessionMetaForEntry).toHaveBeenCalledWith({
+      cfg,
+      sessionKey,
+      agentId: "ops",
+      entry,
+    });
   });
 });

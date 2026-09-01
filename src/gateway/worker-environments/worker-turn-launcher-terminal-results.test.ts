@@ -133,9 +133,11 @@ describe("worker turn launcher terminal results", () => {
     visibleText?: string;
     rawText?: string;
     terminalReply: AgentRunTerminalReplySnapshot;
+    costs?: { first: number; last: number; total: number };
   }>([
     {
       name: "visible final answer",
+      costs: { first: 0.125, last: 0.25, total: 0.375 },
       content: [
         { type: "thinking", thinking: "Private reasoning" },
         {
@@ -184,7 +186,13 @@ describe("worker turn launcher terminal results", () => {
     },
   ])(
     "reports canonical usage and $name",
-    async ({ content, visibleText, rawText, terminalReply }) => {
+    async ({
+      content,
+      visibleText,
+      rawText,
+      terminalReply,
+      costs = { first: 0, last: 0, total: 0 },
+    }) => {
       seedActivePlacement();
       const environments: WorkerTurnEnvironmentService = {
         get: vi.fn(() => attachedEnvironment()),
@@ -215,7 +223,7 @@ describe("worker turn launcher terminal results", () => {
                   cacheRead: 20,
                   cacheWrite: 5,
                   totalTokens: 135,
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: costs.first },
                 },
               }),
             );
@@ -244,7 +252,7 @@ describe("worker turn launcher terminal results", () => {
                     totalTokens: 270,
                   },
                   totalTokens: 270,
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: costs.last },
                 },
               }),
             );
@@ -309,12 +317,14 @@ describe("worker turn launcher terminal results", () => {
         sessionFile,
         provider: "anthropic",
         model: "claude-reported",
+        costUsd: costs.total,
         usage: {
           input: 300,
           output: 40,
           cacheRead: 60,
           cacheWrite: 5,
           total: 405,
+          cost: { total: costs.total },
         },
         lastCallUsage: {
           input: 200,
@@ -327,6 +337,7 @@ describe("worker turn launcher terminal results", () => {
             totalTokens: 270,
           },
           total: 270,
+          cost: { total: costs.last },
         },
         promptTokens: 240,
       });

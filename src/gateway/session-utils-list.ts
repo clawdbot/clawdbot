@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -71,12 +72,9 @@ import type {
   SessionsListResult,
 } from "./session-utils.types.js";
 
-/**
- * Number of session rows to build per batch before yielding to the event loop.
- * Keeps the main thread responsive during large session list operations while
- * avoiding excessive yielding overhead for small stores.
- */
-const SESSIONS_LIST_YIELD_BATCH_SIZE = 10;
+// Bound synchronous projection work without repeatedly requeueing cheap prepared rows.
+const SESSIONS_LIST_YIELD_INTERVAL_MS = 12;
+const SESSIONS_LIST_ROW_CONTEXT_THRESHOLD = 10;
 
 const SESSIONS_LIST_DEFAULT_LIMIT = 100;
 const SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS = 100;
@@ -486,7 +484,7 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
     Boolean(rowContext) ||
     hasSpawnedByFilter ||
     filteredSessionKeys.size > 0 ||
-    selection.entries.length > SESSIONS_LIST_YIELD_BATCH_SIZE;
+    selection.entries.length > SESSIONS_LIST_ROW_CONTEXT_THRESHOLD;
   const sharedRowContext =
     usePreparedChildReads || selection.entries.length > 0 ? getRowContext() : undefined;
   const storePath = hasIncognito ? params.storePath : (params.durableStorePath ?? params.storePath);
@@ -523,30 +521,28 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
   };
 }
 
-function buildSessionsListResult(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  list: ReturnType<typeof prepareSessionList>;
-  modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
-  sessions: GatewaySessionRow[];
-}): SessionsListResult {
-  const { list, sessions } = params;
+function buildSessionsListResult(
+  params: ListSessionsFromStoreParams,
+  list: ReturnType<typeof prepareSessionList>,
+  sessions: GatewaySessionRow[],
+): SessionsListResult {
+  const { cfg, opts, modelCatalog } = params;
   // The defaults projection uses the same agent identity as getSessionDefaults:
   // the requested agent when scoped, otherwise the legacy compatibility agent.
   // Legacy plain-array catalogs (direct list callers) pass through
   // unchanged; per-agent maps resolve by the same identity.
   const preparedDefaultsCatalog =
-    params.modelCatalog instanceof Map
-      ? params.modelCatalog.get(
-          params.agentId
-            ? normalizeAgentId(params.agentId)
+    modelCatalog instanceof Map
+      ? modelCatalog.get(
+          opts.agentId
+            ? normalizeAgentId(opts.agentId)
             : normalizeAgentId(
-                tryResolveLegacyCompatibilityAgentId(params.cfg) ?? LEGACY_IMPLICIT_AGENT_ID,
+                tryResolveLegacyCompatibilityAgentId(cfg) ?? LEGACY_IMPLICIT_AGENT_ID,
               ),
         )
       : undefined;
   const defaultsCatalog =
-    params.modelCatalog instanceof Map ? preparedDefaultsCatalog?.entries : params.modelCatalog;
+    modelCatalog instanceof Map ? preparedDefaultsCatalog?.entries : modelCatalog;
   return {
     ts: list.now,
     path: list.storePath,
@@ -565,8 +561,8 @@ function buildSessionsListResult(params: {
           peopleSessionCount: list.peopleSessionCount,
         }
       : {}),
-    defaults: getSessionDefaults(params.cfg, defaultsCatalog, {
-      ...(params.agentId ? { agentId: params.agentId } : {}),
+    defaults: getSessionDefaults(cfg, defaultsCatalog, {
+      ...(opts.agentId ? { agentId: opts.agentId } : {}),
       allowPluginNormalization: false,
       providerPolicySource: preparedDefaultsCatalog?.pluginRegistry,
     }),
@@ -586,7 +582,7 @@ export function filterAndSortSessionEntries(params: {
   return selectSessionEntries(params).entries;
 }
 
-/** Build rows in batches so session lists do not starve other Gateway work. */
+/** Projects lightweight list rows while sharing the event loop with other requests. */
 export async function listSessionsFromStoreAsync(
   params: ListSessionsFromStoreParams,
 ): Promise<SessionsListResult> {
@@ -596,6 +592,7 @@ export async function listSessionsFromStoreAsync(
   // between rows, the memo never hits, and each row triggers a full
   // loadPluginMetadataSnapshot scan (~100 ms).
   return withPinnedActivePluginRegistryWorkspaceDir(async () => {
+    let workStartedAt = performance.now();
     const { cfg, store, opts } = params;
     const list = prepareSessionList(params);
     const sessions: GatewaySessionRow[] = [];
@@ -663,21 +660,18 @@ export async function listSessionsFromStoreAsync(
         }
       }
       sessions.push(row);
-      // Yield to the event loop between batches so WebSocket heartbeats,
-      // channel I/O, and concurrent RPC calls are not starved.
-      if ((i + 1) % SESSIONS_LIST_YIELD_BATCH_SIZE === 0 && i + 1 < list.entries.length) {
+      if (
+        i + 1 < list.entries.length &&
+        performance.now() - workStartedAt >= SESSIONS_LIST_YIELD_INTERVAL_MS
+      ) {
         await new Promise<void>((resolve) => {
           setImmediate(resolve);
         });
+        // Waiting behind other work is not projection work; start the next budget on resume.
+        workStartedAt = performance.now();
       }
     }
 
-    return buildSessionsListResult({
-      cfg,
-      list,
-      modelCatalog: params.modelCatalog,
-      sessions,
-      agentId: opts.agentId,
-    });
+    return buildSessionsListResult(params, list, sessions);
   });
 }

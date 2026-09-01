@@ -6,7 +6,6 @@
 import { statSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import { Text } from "@earendil-works/pi-tui";
 import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { Type } from "typebox";
 import { releaseChildProcessOutputAfterExit } from "../../../process/child-process.js";
@@ -16,11 +15,12 @@ import type { AgentTool } from "../../runtime/index.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { appendBoundedTextTail, normalizePositiveLimit } from "./limits.js";
-import { resolveToCwd } from "./path-utils.js";
+import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 import {
   appendSessionToolTruncationWarning,
   formatSessionToolOutput,
   invalidArgText,
+  reuseTextComponent,
   shortenPath,
   str,
 } from "./render-utils.js";
@@ -55,31 +55,11 @@ const DEFAULT_LIMIT = 100;
 
 type RipgrepJsonText = { text?: string; bytes?: string };
 
-type RipgrepPath = {
-  displayPath: string;
-  identity: string;
-};
-
 function decodeRipgrepJsonText(value: RipgrepJsonText | undefined): string | undefined {
   return (
     value?.text ??
-    (value?.bytes !== undefined ? Buffer.from(value.bytes, "base64").toString("utf8") : undefined)
+    (value?.bytes === undefined ? undefined : Buffer.from(value.bytes, "base64").toString("utf8"))
   );
-}
-
-function decodeRipgrepPath(value: RipgrepJsonText | undefined): RipgrepPath | undefined {
-  if (value?.text !== undefined) {
-    return { displayPath: value.text, identity: `text:${value.text}` };
-  }
-  if (value?.bytes !== undefined) {
-    // Invalid byte paths can decode to the same display text, so keep ripgrep's
-    // lossless byte payload as the identity used for context and line lookups.
-    return {
-      displayPath: Buffer.from(value.bytes, "base64").toString("utf8"),
-      identity: `bytes:${value.bytes}`,
-    };
-  }
-  return undefined;
 }
 
 /**
@@ -149,6 +129,7 @@ export function createGrepToolDefinition(
   options?: GrepToolOptions,
 ): ToolDefinition<typeof grepSchema, GrepToolDetails | undefined> {
   const customOps = options?.operations;
+  const resolvePath = customOps ? resolveToCwd : resolveLocalPathToCwd;
   return {
     name: "grep",
     label: "grep",
@@ -237,7 +218,7 @@ export function createGrepToolDefinition(
               return;
             }
 
-            const searchPath = resolveToCwd(searchDir || ".", cwd);
+            const searchPath = resolvePath(searchDir || ".", cwd);
             let isDirectory: boolean;
             try {
               isDirectory = await (customOps?.isDirectory(searchPath) ??
@@ -336,9 +317,10 @@ export function createGrepToolDefinition(
               } catch {
                 return;
               }
-              const file = decodeRipgrepPath(event.data?.path);
-              const filePath = file?.displayPath;
-              const pathIdentity = file?.identity;
+              const filePath = decodeRipgrepJsonText(event.data?.path);
+              // Ripgrep emits exactly one text/bytes tag. Keep that lossless identity:
+              // distinct invalid-byte paths can have the same replacement-character display.
+              const pathIdentity = JSON.stringify(event.data?.path);
               const lineNumber = event.data?.line_number;
               const lineText = event.data?.lines?.text;
               if (event.type === "match") {
@@ -496,14 +478,11 @@ export function createGrepToolDefinition(
       });
     },
     renderCall(args, theme, context) {
-      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      text.setText(formatGrepCall(args, theme));
-      return text;
+      return reuseTextComponent(context.lastComponent, formatGrepCall(args, theme));
     },
     renderResult(result, optionsLocal, theme, context) {
-      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      text.setText(formatGrepResult(result, optionsLocal, theme, context.showImages));
-      return text;
+      const content = formatGrepResult(result, optionsLocal, theme, context.showImages);
+      return reuseTextComponent(context.lastComponent, content);
     },
   };
 }

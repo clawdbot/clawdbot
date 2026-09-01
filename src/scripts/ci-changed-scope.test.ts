@@ -399,51 +399,6 @@ describe("detectChangedScope", () => {
   });
 
   it.each([
-    ".github/actions/publish-generated-pr/action.yml",
-    ".github/actions/publish-generated-pr/policy.py",
-    ".github/workflows/maturity-scorecard.yml",
-    "test/scripts/generated-publisher.test-support.ts",
-    ".github/actions/git-owner/action.yml",
-    ".github/workflows/workflow-sanity.yml",
-    ".github/workflows/qa-profile-evidence.yml",
-    ".github/workflows/docs-sync-publish.yml",
-    ".github/workflows/docs-agent.yml",
-    ".github/workflows/openclaw-performance.yml",
-    ".github/workflows/linux-app-release.yml",
-    ".github/workflows/macos-release.yml",
-    ".github/workflows/npm-placeholder-bootstrap.yml",
-    ".github/actions/mantis-validate-trusted-ref/action.yml",
-    ".github/workflows/mantis-discord-smoke.yml",
-    ".github/workflows/mantis-discord-status-reactions.yml",
-    ".github/workflows/mantis-discord-thread-attachment.yml",
-    ".github/workflows/mantis-slack-desktop-smoke.yml",
-    ".github/workflows/mantis-web-ui-chat-proof.yml",
-    ".github/actions/git-owner/owner.py",
-    ".github/actions/ensure-base-commit/action.yml",
-    ".github/actions/ensure-base-commit/policy.py",
-    "scripts/generate-ci-git-owner.mts",
-    "test/scripts/ci-checkout.test-support.ts",
-    "test/scripts/ci-git-owner.test.ts",
-    "test/scripts/ci-git-owner.test-support.ts",
-    "test/scripts/ci-linux-git.test.ts",
-    "test/scripts/ci-platform-checkout.test.ts",
-    "test/scripts/openclaw-performance-git-lifecycle.test.ts",
-    "test/scripts/openclaw-performance-workflow.test-support.ts",
-    "test/scripts/openclaw-performance-workflow.test.ts",
-    "test/scripts/release-workflow-git-lifecycle.test.ts",
-    "test/scripts/fixtures/ci-platform-checkout.mjs",
-  ])("routes Git-owner native proof for %s without selecting app builds", (changedPath) => {
-    expect(detectChangedScope([changedPath])).toMatchObject({
-      runNode: true,
-      runMacosNode: true,
-      runWindows: true,
-      runMacos: false,
-      runIosBuild: false,
-      runAndroid: false,
-    });
-  });
-
-  it.each([
     "scripts/codesign-mac-app.sh",
     "scripts/create-dmg.sh",
     "scripts/lib/plistbuddy.sh",
@@ -456,6 +411,8 @@ describe("detectChangedScope", () => {
     "scripts/lib/mac-app-bundle.sh",
     "test/scripts/restart-mac.test.ts",
     "scripts/materialize-mac-node-worker.py",
+    "scripts/swift-build-cache-metadata.py",
+    "test/scripts/swift-build-cache-metadata.test.ts",
     "scripts/lib/mac-native-inventory.py",
     "scripts/lib/mac-bundle-mutation.py",
     "scripts/verify-mac-node-worker.mjs",
@@ -986,6 +943,7 @@ describe("detectChangedScope", () => {
   it.each([
     ["empty diff without a manifest", "", "missing", false],
     ["declared native test", "src/process/exec.windows.integration.test.ts", "valid", false],
+    ["Mac fixture helper", "test/scripts/mac-script-fixture.test-support.ts", "valid", false],
     ["unrelated process test", "src/process/exec.test.ts", "valid", false],
     ["missing manifest", "src/process/exec.test.ts", "missing", true],
     ["invalid manifest", "src/process/exec.test.ts", "invalid", true],
@@ -1049,6 +1007,8 @@ describe("detectChangedScope", () => {
         const selected =
           (failSafe && !key.startsWith("run_node_fast")) ||
           (key === "run_node" && Boolean(changedPath)) ||
+          (key === "run_macos_node" &&
+            changedPath === "test/scripts/mac-script-fixture.test-support.ts") ||
           (key === "run_windows" && changedPath === "src/process/exec.windows.integration.test.ts");
         expect(value, key).toBe(String(selected));
       }

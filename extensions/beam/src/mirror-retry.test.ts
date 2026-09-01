@@ -3,84 +3,48 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import type { ActiveSessionCatalog } from "openclaw/plugin-sdk/session-catalog-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  beamTestNow,
+  createBeamTestCatalog,
+  createBeamTestRunner,
+  type BeamTestSession,
+} from "./beam.test-support.js";
 import { createBeamRequestHandler } from "./http.js";
-import { beamMirrorId, createBeamMirrorRunner, type BeamMirrorUpload } from "./mirror.js";
+import { beamMirrorId } from "./mirror.js";
 import type { BeamStore } from "./store.js";
-import { BEAM_MAX_SESSIONS, BEAM_RETENTION_MS, type BeamStoredSession } from "./types.js";
+import {
+  BEAM_MAX_SESSIONS,
+  BEAM_RETENTION_MS,
+  type BeamStoredSession,
+  type BeamUpload,
+} from "./types.js";
 
-const NOW = Date.parse("2026-07-27T12:00:00.000Z");
-type TestSession = { threadId: string; recencyAt: number };
-type SentRequest = { payload: BeamMirrorUpload; status: number };
+type SentRequest = { payload: BeamUpload; status: number };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function retryRuntime(endpoint: string): Parameters<typeof createBeamMirrorRunner>[0]["runtime"] {
-  return {
-    config: {
-      current: () => ({
-        plugins: { entries: { beam: { config: { mirror: { endpoint, catalogs: ["claude"] } } } } },
-      }),
-    },
-  };
-}
-
-function retryCatalog(
-  sessions: () => TestSession[],
-  transcriptText: (threadId: string) => string = (threadId) => threadId,
-): ActiveSessionCatalog {
-  return {
-    pluginId: "claude",
-    id: "claude",
-    label: "Claude",
-    processHomeFallbackAllowed: true,
-    list: async () => [
-      {
-        hostId: "gateway:local",
-        label: "Local",
-        kind: "gateway",
-        connected: true,
-        sessions: sessions().map((session) => ({
-          threadId: session.threadId,
-          status: "stored",
-          createdAt: session.recencyAt,
-          updatedAt: session.recencyAt,
-          recencyAt: session.recencyAt,
-          archived: false,
-          canContinue: false,
-          canArchive: false,
-        })),
-      },
-    ],
-    read: async ({ hostId, threadId }) => ({
-      hostId,
-      label: "Local",
-      threadId,
-      items: [{ type: "agentMessage", text: transcriptText(threadId) }],
-    }),
-  };
-}
-
 function createRetryRunner(params: {
-  sessions: () => TestSession[];
+  sessions: () => BeamTestSession[];
   sent: SentRequest[];
-  status: (payload: BeamMirrorUpload) => number;
+  status: (payload: BeamUpload) => number;
   now: () => number;
 }) {
-  const catalog = retryCatalog(params.sessions);
+  const catalog = createBeamTestCatalog({
+    sessions: params.sessions,
+    items: (threadId) => [{ type: "agentMessage", text: threadId }],
+  });
   const fetchFn = async (_input: RequestInfo | URL, init?: RequestInit) => {
     if (typeof init?.body !== "string") {
       throw new Error("expected Beam JSON request body");
     }
-    const payload = JSON.parse(init.body) as BeamMirrorUpload;
+    const payload = JSON.parse(init.body) as BeamUpload;
     const status = params.status(payload);
     params.sent.push({ payload, status });
     return new Response("{}", { status });
   };
-  return createBeamMirrorRunner({
-    runtime: retryRuntime("http://127.0.0.1:19351/api/v1/beam/sessions"),
-    logger: { warn: () => {}, info: () => {} },
+  return createBeamTestRunner({
+    endpoint: "http://127.0.0.1:19351/api/v1/beam/sessions",
     fetchFn: fetchFn as typeof fetch,
     now: params.now,
     listCatalogs: () => [catalog],
@@ -91,9 +55,9 @@ describe("Beam terminal retry policy", () => {
   it("expires failed terminal work with the receiver row", async () => {
     const sent: SentRequest[] = [];
     let active = true;
-    let clock = NOW;
+    let clock = beamTestNow;
     const runner = createRetryRunner({
-      sessions: () => (active ? [{ threadId: "t1", recencyAt: NOW - 60_000 }] : []),
+      sessions: () => (active ? [{ threadId: "t1", recencyAt: beamTestNow - 60_000 }] : []),
       sent,
       status: (payload) => (payload.completed ? 503 : 200),
       now: () => clock,
@@ -104,7 +68,7 @@ describe("Beam terminal retry policy", () => {
       active = false;
       clock += 4 * 60 * 60_000;
       await runner.tick();
-      clock = NOW + BEAM_RETENTION_MS;
+      clock = beamTestNow + BEAM_RETENTION_MS;
       await runner.tick();
       await runner.tick();
 
@@ -116,7 +80,7 @@ describe("Beam terminal retry policy", () => {
 
   it("rotates failed terminal work behind later sessions", async () => {
     const sent: SentRequest[] = [];
-    let clock = NOW;
+    let clock = beamTestNow;
     let activeThreadIds = Array.from({ length: 32 }, (_, index) => `early-${index}`);
     const runner = createRetryRunner({
       sessions: () => activeThreadIds.map((threadId) => ({ threadId, recencyAt: clock - 60_000 })),
@@ -151,7 +115,9 @@ describe("Beam terminal retry policy", () => {
     const sent: SentRequest[] = [];
     const overflowThreadId = "active-overflow";
     const overflowBeamId = beamMirrorId("claude", "gateway:local", overflowThreadId);
-    let activeSessions: TestSession[] = [{ threadId: overflowThreadId, recencyAt: NOW }];
+    let activeSessions: BeamTestSession[] = [
+      { threadId: overflowThreadId, recencyAt: beamTestNow },
+    ];
     let overflowTerminalAttempts = 0;
     const runner = createRetryRunner({
       sessions: () => activeSessions,
@@ -162,7 +128,7 @@ describe("Beam terminal retry policy", () => {
         }
         return 200;
       },
-      now: () => NOW,
+      now: () => beamTestNow,
     });
 
     try {
@@ -170,9 +136,9 @@ describe("Beam terminal retry policy", () => {
       activeSessions = [
         ...Array.from({ length: 32 }, (_, index) => ({
           threadId: `newer-${index}`,
-          recencyAt: NOW + index + 1,
+          recencyAt: beamTestNow + index + 1,
         })),
-        { threadId: overflowThreadId, recencyAt: NOW },
+        { threadId: overflowThreadId, recencyAt: beamTestNow },
       ];
       await runner.tick();
       await runner.tick();
@@ -231,7 +197,7 @@ describe("Beam terminal retry policy", () => {
         clientIp: `capacity-test-${requestNumber}`,
         scopes: ["operator.write"],
       }),
-      resolveControlUiTarget: () => ({ agentId: "main" }),
+      resolveControlUiBasePath: () => "",
     });
     const server = createServer((request, response) => {
       requestNumber += 1;
@@ -250,12 +216,13 @@ describe("Beam terminal retry policy", () => {
       throw new Error("capacity receiver did not expose a TCP port");
     }
 
-    let activeSessions: TestSession[] = [];
-    const catalog = retryCatalog(() => activeSessions);
-    const runner = createBeamMirrorRunner({
-      runtime: retryRuntime(`http://127.0.0.1:${address.port}/api/v1/beam/sessions`),
-      logger: { warn: () => {}, info: () => {} },
-      now: () => NOW,
+    let activeSessions: BeamTestSession[] = [];
+    const catalog = createBeamTestCatalog({
+      sessions: () => activeSessions,
+      items: (threadId) => [{ type: "agentMessage", text: threadId }],
+    });
+    const runner = createBeamTestRunner({
+      endpoint: `http://127.0.0.1:${address.port}/api/v1/beam/sessions`,
       listCatalogs: () => [catalog],
     });
     try {
@@ -264,13 +231,13 @@ describe("Beam terminal retry policy", () => {
         const batchSize = Math.min(32, BEAM_MAX_SESSIONS - createdSessions);
         activeSessions = Array.from({ length: batchSize }, (_, index) => ({
           threadId: `session-${createdSessions + index}`,
-          recencyAt: NOW + batch,
+          recencyAt: beamTestNow + batch,
         }));
         createdSessions += batchSize;
         await runner.tick();
       }
 
-      activeSessions = [{ threadId: "session-500", recencyAt: NOW + 101 }];
+      activeSessions = [{ threadId: "session-500", recencyAt: beamTestNow + 101 }];
       await runner.tick();
       await expect(store.get(targetBeamId)).resolves.toMatchObject({ completed: false });
 

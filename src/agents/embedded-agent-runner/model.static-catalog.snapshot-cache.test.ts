@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginManifestRecord } from "../../plugins/manifest-registry.types.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
-import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 
 const manifestMocks = vi.hoisted(() => ({
   getGatewayPluginMetadataSnapshot: vi.fn(),
@@ -86,15 +87,13 @@ function createMistralManifestPlugin() {
       },
       discovery: { mistral: "static" },
     },
-  };
+  } satisfies Partial<PluginManifestRecord>;
 }
 
-function setCurrentManifestPlugins(plugins: unknown[]) {
-  const snapshot = {
-    plugins,
-    manifestRegistry: { plugins },
-    owners: { providerEndpoints: [], providerRequests: new Map() },
-  };
+function setCurrentManifestPlugins(
+  plugins: Array<Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id">>,
+) {
+  const snapshot = createPluginMetadataSnapshotFixture({ plugins });
   manifestMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(snapshot);
   return snapshot;
 }
@@ -204,10 +203,9 @@ describe("bundled static model catalog snapshot cache", () => {
         },
       },
     };
-    const capturedSnapshot = {
+    const capturedSnapshot = createPluginMetadataSnapshotFixture({
       plugins: [capturedPlugin],
-      manifestRegistry: { plugins: [capturedPlugin] },
-    } as unknown as PluginMetadataSnapshot;
+    });
     const resolveModel = createBundledStaticCatalogModelResolver({
       cfg,
       metadataSnapshot: capturedSnapshot,

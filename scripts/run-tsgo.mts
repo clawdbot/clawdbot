@@ -11,7 +11,7 @@ import {
   resolveLocalCheckEnv,
   resolveRepoToolBinPath,
 } from "./lib/local-check-runtime.mts";
-import { runManagedCommand } from "./lib/managed-child-process.mts";
+import { createManagedCommandInvocation, runManagedCommand } from "./lib/managed-child-process.mts";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import {
   getSparseTsgoGuardError,
@@ -34,70 +34,87 @@ export function resolveTsgoTimeoutMs(env: NodeJS.ProcessEnv): number | undefined
   );
 }
 
-async function runTsgo(argv: string[] = process.argv.slice(2)): Promise<number> {
+/** Prepare one compiler invocation; the caller owns its process group and deadline. */
+export function prepareTsgoCommand(
+  args: string[],
+  baseEnv: NodeJS.ProcessEnv = process.env,
+  cwd = process.cwd(),
+) {
   const hostResources = {
     logicalCpuCount:
       typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length,
     totalMemoryBytes: os.totalmem(),
   };
   const { args: finalArgs, env } = applyLocalTsgoPolicy(
-    argv,
-    resolveLocalCheckEnv(process.env),
+    args,
+    resolveLocalCheckEnv(baseEnv),
     hostResources,
   );
 
-  const tsgoPath = resolveRepoToolBinPath("tsgo");
+  const tsgoPath = resolveRepoToolBinPath("tsgo", { cwd });
   const tsBuildInfoFile = readFlagValue(finalArgs, "--tsBuildInfoFile");
   if (tsBuildInfoFile) {
-    fs.mkdirSync(path.dirname(path.resolve(tsBuildInfoFile)), { recursive: true });
+    fs.mkdirSync(path.dirname(path.resolve(cwd, tsBuildInfoFile)), { recursive: true });
   }
-  const sparseGuardError = getSparseTsgoGuardError(finalArgs, { cwd: process.cwd() });
+  const sparseGuardError = getSparseTsgoGuardError(finalArgs, { cwd });
   if (sparseGuardError) {
-    console.error(sparseGuardError);
     if (shouldSkipSparseTsgoGuardError(env)) {
+      console.error(sparseGuardError);
       console.error("[tsgo] skipping sparse-missing project because OPENCLAW_TSGO_SPARSE_SKIP=1");
-      return 0;
+      return null;
     }
-    return 1;
+    throw new Error(sparseGuardError);
   }
 
-  ensureRepoToolNodeModulesLink(tsgoPath);
+  ensureRepoToolNodeModulesLink(tsgoPath, { cwd });
   let timeoutMs: number | undefined;
   try {
     timeoutMs = resolveTsgoTimeoutMs(env);
   } catch {
-    // The CLI is top-level awaited, so an escaping parse error would surface as a raw
-    // module rejection with no guidance about the variable that caused it.
-    console.error(
+    throw new Error(
       `[tsgo] OPENCLAW_TSGO_TIMEOUT_MS must be plain decimal digits with no leading zero, sign, exponent, or decimal point, between 1 and ${Number.MAX_SAFE_INTEGER}; got ${env.OPENCLAW_TSGO_TIMEOUT_MS}. Unset it to disable the watchdog.`,
     );
-    return 1;
+  }
+  const { command: bin, ...invocation } = createManagedCommandInvocation({
+    bin: tsgoPath,
+    args: finalArgs,
+    env,
+  });
+  return { ...invocation, bin, cwd, env, timeoutMs };
+}
+
+async function main(): Promise<void> {
+  let command: ReturnType<typeof prepareTsgoCommand>;
+  try {
+    command = prepareTsgoCommand(process.argv.slice(2));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+    return;
+  }
+  if (!command) {
+    return;
   }
   try {
     // Managed cleanup forwards SIGTERM before bounded SIGKILL escalation, then
     // joins the compiler group and output before reporting a timeout.
-    return await runManagedCommand({
-      bin: tsgoPath,
-      args: finalArgs,
-      env,
-      // The compiler owns a nested group that outer preparation cannot verify.
+    process.exitCode = await runManagedCommand({
+      ...command,
+      // Standalone execution owns the compiler group through verified completion.
       requireProcessTreeExit: process.platform !== "win32",
-      timeoutMs,
     });
   } catch (error) {
     if ((error as { code?: string } | undefined)?.code !== "ETIMEDOUT") {
       throw error;
     }
     console.error(
-      `[tsgo] no completion after ${timeoutMs}ms; killed the tsgo process tree. Raise OPENCLAW_TSGO_TIMEOUT_MS for intentionally longer builds, or unset it to disable the watchdog.`,
+      `[tsgo] no completion after ${command.timeoutMs}ms; killed the tsgo process tree. Raise OPENCLAW_TSGO_TIMEOUT_MS for intentionally longer builds, or unset it to disable the watchdog.`,
     );
-    return 1;
+    process.exitCode = 1;
   }
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
-  // noEmit does not distinguish source checks from dist-backed consumers, and
-  // argv can override project settings. Keep standalone runs serialized; owning
-  // orchestrators inherit ownership to preserve their explicit concurrency.
-  process.exitCode = await withDistArtifactOwnership(process.cwd(), () => runTsgo());
+  // Standalone checks serialize with dist consumers; inherited entries reuse their owner.
+  await withDistArtifactOwnership(process.cwd(), () => main());
 }

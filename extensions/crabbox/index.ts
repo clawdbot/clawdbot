@@ -38,7 +38,7 @@ export default definePluginEntry({
       id: "crabbox-worker-cleanup",
       start() {},
       stop() {
-        provider.dispose();
+        return provider.dispose();
       },
     } satisfies OpenClawPluginService);
   },

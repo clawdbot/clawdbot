@@ -1,10 +1,11 @@
 import { copyReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
-import { estimateUsageCost, resolveModelCostConfig } from "../../../utils/usage-format.js";
+import { estimateAggregateUsageCost, resolveModelCostConfig } from "../../../utils/usage-format.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AgentRunTerminalReceipt } from "../../agent-run-terminal-receipt.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
+import { getCoreTtsAttemptResultMediaUrls } from "../../tools/tts-tool-result-provenance.js";
 import type { NormalizedUsage, UsageLike } from "../../usage.js";
 import { hasMessagingToolDeliveryEvidence } from "../delivery-evidence.js";
 import { resolveEmbeddedRunFailureSignal } from "../failure-signal.js";
@@ -87,7 +88,7 @@ export function prepareEmbeddedRunTerminal(input: {
   const finalAssistantStopReason = (terminalAssistant?.stopReason ?? "").trim().toLowerCase();
   const terminalAssistantCanOwnFinalText =
     finalAssistantStopReason !== "error" && finalAssistantStopReason !== "aborted";
-  const costUsd = estimateUsageCost({
+  const costUsd = estimateAggregateUsageCost({
     usage: usageMeta.usage,
     cost: resolveModelCostConfig({
       provider: reportedModelRef.provider,
@@ -231,6 +232,11 @@ export function prepareEmbeddedRunTerminal(input: {
     // Preserve harness provenance through terminal delivery. Without it,
     // message-tool-only routes silently drop native runtime artifacts.
     hostOwnedToolMediaUrls: attempt.hostOwnedToolMediaUrls,
+    toolAutoDeliveryMediaUrls: getCoreTtsAttemptResultMediaUrls(
+      attempt,
+      attempt.toolMediaUrls,
+      runParams.admittedRunContext?.operationalRunInstance,
+    ),
     toolAudioAsVoice: attempt.toolAudioAsVoice,
     toolTrustedLocalMedia: attempt.toolTrustedLocalMedia,
     sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,

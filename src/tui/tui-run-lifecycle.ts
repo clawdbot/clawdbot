@@ -167,7 +167,7 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
       return undefined;
     }
     const provider = state.sessionInfo.modelProvider?.trim();
-    const failoverReason = classifyFailoverReason(errorMessage, { provider });
+    const failoverReason = classifyFailoverReason(errorMessage, { provider, providerPlugin: null });
     if (failoverReason === "billing" || failoverReason === "rate_limit") {
       return undefined;
     }

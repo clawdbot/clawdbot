@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildPluginApi } from "./api-builder.js";
+import { isLateCallablePluginApiMethod } from "./api-lifecycle.js";
 import { runPluginRegisterSyncInRegistry } from "./loader-module-runtime.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -114,25 +115,37 @@ describe("plugin api lifecycle", () => {
     const api = captureRegisteredPluginApi({ enqueueNextTurnInjection });
 
     const groupedResult = await api.session.workflow.enqueueNextTurnInjection({
-      sessionKey: "agent:main:main",
+      sessionKey: "global",
       text: "grouped",
+      agentId: "work",
     });
     const flatResult = await api.enqueueNextTurnInjection({
-      sessionKey: "agent:main:main",
+      sessionKey: "global",
       text: "flat",
+      agentId: "main",
     });
 
     expect(groupedResult).toEqual({
       enqueued: true,
       id: "injection-grouped",
-      sessionKey: "agent:main:main",
+      sessionKey: "global",
     });
     expect(flatResult).toEqual({
       enqueued: true,
       id: "injection-flat",
-      sessionKey: "agent:main:main",
+      sessionKey: "global",
     });
     expect(enqueueNextTurnInjection).toHaveBeenCalledTimes(2);
+    expect(enqueueNextTurnInjection).toHaveBeenNthCalledWith(1, {
+      sessionKey: "global",
+      agentId: "work",
+      text: "grouped",
+    });
+    expect(enqueueNextTurnInjection).toHaveBeenNthCalledWith(2, {
+      sessionKey: "global",
+      agentId: "main",
+      text: "flat",
+    });
   });
 
   it("blocks registration-phase methods after registration", () => {
@@ -146,5 +159,25 @@ describe("plugin api lifecycle", () => {
 
     expect(result).toBeUndefined();
     expect(registerSessionExtension).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, boolean]>([
+    ["clearRunContext", true],
+    ["emitAgentEvent", true],
+    ["enqueueNextTurnInjection", true],
+    ["getRunContext", true],
+    ["sendSessionAttachment", true],
+    ["scheduleSessionTurn", true],
+    ["setRunContext", true],
+    ["unscheduleSessionTurnsByTag", true],
+    ["registerTool", false],
+    ["registerSessionExtension", false],
+    ["unknown", false],
+    ["", false],
+    ["constructor", false],
+    ["toString", false],
+    ["__proto__", false],
+  ])("classifies late-call eligibility for %j as %s", (methodName, expected) => {
+    expect(isLateCallablePluginApiMethod(methodName)).toBe(expected);
   });
 });

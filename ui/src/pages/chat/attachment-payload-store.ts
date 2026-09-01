@@ -57,17 +57,6 @@ export function getChatAttachmentPreviewUrl(attachment: ChatAttachment): string 
   return attachment.previewUrl ?? storedPreview ?? getChatAttachmentDataUrl(attachment);
 }
 
-function cloneChatAttachmentMetadata(attachment: ChatAttachment): ChatAttachment {
-  const { dataUrl: _dataUrl, ...metadata } = attachment;
-  return metadata;
-}
-
-export function cloneChatAttachmentsMetadata(
-  attachments: readonly ChatAttachment[],
-): ChatAttachment[] {
-  return attachments.map(cloneChatAttachmentMetadata);
-}
-
 /** Gives another mounted composer payload ownership independent of the source. */
 export function cloneChatAttachmentsForIndependentOwner(
   attachments: readonly ChatAttachment[],

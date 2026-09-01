@@ -174,7 +174,7 @@ export function isPluginMetadataSnapshotCompatible(params: {
       serializePluginIdScope(snapshotPluginIds) === serializePluginIdScope(requestedPluginIds));
   return (
     scopeMatches &&
-    params.snapshot.policyHash === resolveInstalledPluginIndexPolicyHash(params.config) &&
+    params.snapshot.policyHash === resolveInstalledPluginIndexPolicyHash(params.config, env) &&
     (!params.snapshot.configFingerprint ||
       params.snapshot.configFingerprint ===
         resolvePluginControlPlaneFingerprint({
@@ -249,10 +249,10 @@ function buildPluginMetadataOwnerMaps(
       appendOwner(modelCatalogProviders, providerId, plugin.id);
     }
     for (const cliBackendId of plugin.cliBackends ?? []) {
-      appendOwner(cliBackends, cliBackendId, plugin.id);
+      appendOwner(cliBackends, normalizeProviderId(cliBackendId), plugin.id);
     }
     for (const cliBackendId of plugin.setup?.cliBackends ?? []) {
-      appendOwner(cliBackends, cliBackendId, plugin.id);
+      appendOwner(cliBackends, normalizeProviderId(cliBackendId), plugin.id);
     }
     for (const setupProvider of plugin.setup?.providers ?? []) {
       appendOwner(setupProviders, setupProvider.id, plugin.id);

@@ -4,7 +4,25 @@ import {
   readSessionMethodAccess,
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
+import { isTerminalAvailable } from "../../lib/terminal-availability.ts";
 import { createManagedWorktree } from "../../lib/worktrees/create-worktree.ts";
+import * as catalog from "./catalog-target.ts";
+import type { DraftSubmissionSnapshot } from "./draft-submission-contract.ts";
+
+export function canShowNewSessionTerminalStart(
+  snapshot: DraftSubmissionSnapshot,
+  hasPlacementTarget: boolean,
+): boolean {
+  const { context, data } = snapshot;
+  return Boolean(
+    context &&
+    catalog.isTarget(data) &&
+    !hasPlacementTarget &&
+    data?.startTerminal &&
+    context.config.current.cliAgentsEnabled === true &&
+    isTerminalAvailable(context.gateway.snapshot, context.config.current.terminalEnabled ?? false),
+  );
+}
 
 export function readNewSessionTerminalStartAccess(
   gateway: Parameters<typeof readSessionMethodAccess>[0],

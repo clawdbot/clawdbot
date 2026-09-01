@@ -1145,6 +1145,8 @@ child.once('message', () => { ${normalExit ? "process.exit(0);" : ""} });
                 args,
                 stdio: ["ignore", "pipe", "pipe"],
                 timeoutMs: mode === "timeout" ? 100 : undefined,
+                // This row verifies the full pipe-drain budget, not the default TERM grace.
+                timeoutKillGraceMs: 100,
                 requireProcessTreeExit: normalExit,
                 signal: abortController.signal,
                 onReady: (owned) => {
@@ -1161,7 +1163,7 @@ child.once('message', () => { ${normalExit ? "process.exit(0);" : ""} });
                 },
               })
             : runNodeStepsInParallel([
-                { label: "blocked", args, timeoutMs: 100 },
+                { label: "blocked", args, timeoutMs: 100, abortKillGraceMs: 100 },
                 {
                   label: "primary",
                   args: [

@@ -93,6 +93,7 @@ async function prestageMediaPathOffloads(params: {
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
     const sandbox = await ensureSandboxWorkspaceForSession({
       config: params.cfg,
+      agentId: params.agentId,
       sessionKey: params.sessionKey,
       workspaceDir,
     });
@@ -124,6 +125,7 @@ async function prestageMediaPathOffloads(params: {
         ctx: stagingCtx,
         sessionCtx: stagingCtx as TemplateContext,
         cfg: params.cfg,
+        agentId: params.agentId,
         sessionKey: params.sessionKey,
         workspaceDir,
       });

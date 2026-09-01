@@ -106,6 +106,19 @@ function readMatrixQaScenarioTopology(scenarioId: string): MatrixQaTopologySpec 
   return value as MatrixQaTopologySpec;
 }
 
+export async function prepareMatrixQaSelectedScenarios(
+  scenarioIds: readonly string[],
+): Promise<void> {
+  if (
+    scenarioIds.some((id) =>
+      readMatrixQaScenarioTopology(id)?.rooms.some((room) => room.encrypted === true),
+    )
+  ) {
+    const { loadMatrixQaE2eeRuntime } = await import("./substrate/e2ee-client.js");
+    await loadMatrixQaE2eeRuntime();
+  }
+}
+
 function resolveMatrixQaAdapterTopology(scenarioIds: readonly string[] | undefined) {
   const scenarioTopologies = (scenarioIds ?? []).flatMap((scenarioId) => {
     const topology = readMatrixQaScenarioTopology(scenarioId);

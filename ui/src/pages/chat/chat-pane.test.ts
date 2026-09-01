@@ -3,12 +3,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import { t } from "../../i18n/index.ts";
 import { showToast } from "../../lib/toast.ts";
 import {
-  getRenderedModalDialog,
   installDialogPolyfill,
   submitInputDialog,
   waitForConfirmDialogActions,
@@ -50,34 +49,59 @@ function dispatchSidebarShortcut(pane: TestChatPane, shiftKey = true) {
 }
 
 describe("chat pane retained presentation", () => {
-  it("keeps a hidden retained session current without requesting a transcript redraw", () => {
-    const { pane, requestUpdate, state } = createTestChatPane({
-      client: createGatewayBrowserClientFixture(),
-      sessions: createSessionCapabilityFixture(),
-    });
-    pane.presented = false;
-    requestUpdate.mockClear();
-    const result = {
-      count: 1,
-      path: "",
-      sessions: [{ key: state.sessionKey, kind: "direct", updatedAt: 1 }],
-    } as NonNullable<ApplicationContext["sessions"]["state"]["result"]>;
+  it.each(["hidden", "frame", "no-frame"] as const)(
+    "keeps session publications current while scheduling %s presentation",
+    (presentation) => {
+      const { pane, requestUpdate, state } = createTestChatPane({
+        client: createGatewayBrowserClientFixture(),
+        sessions: createSessionCapabilityFixture(),
+      });
+      pane.presented = presentation !== "hidden";
+      requestUpdate.mockClear();
+      const frames: FrameRequestCallback[] = [];
+      const requestFrame = vi.fn((callback: FrameRequestCallback) => frames.push(callback));
+      vi.stubGlobal(
+        "requestAnimationFrame",
+        presentation === "no-frame" ? undefined : requestFrame,
+      );
+      const rendered: Array<ChatPageHost["sessionsResult"]> = [];
+      requestUpdate.mockImplementation(() => rendered.push(state.sessionsResult));
+      for (const updatedAt of [1, 2, 3]) {
+        const result = {
+          ts: updatedAt,
+          count: 1,
+          path: "",
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [{ key: state.sessionKey, kind: "direct", updatedAt }],
+        } satisfies NonNullable<ApplicationContext["sessions"]["state"]["result"]>;
+        pane.applySessionsState({
+          agentId: "main",
+          deletedSessions: [],
+          error: null,
+          groups: [],
+          groupSettings: [],
+          loading: false,
+          modelOverrides: {},
+          result,
+          sectionOrder: [],
+        });
+        expect(state.sessionsResult).toBe(result);
+      }
 
-    pane.applySessionsState({
-      agentId: "main",
-      deletedSessions: [],
-      error: null,
-      groups: [],
-      groupSettings: [],
-      loading: false,
-      modelOverrides: {},
-      result,
-      sectionOrder: [],
-    });
-
-    expect(state.sessionsResult).toBe(result);
-    expect(requestUpdate).not.toHaveBeenCalled();
-  });
+      if (presentation === "frame") {
+        expect(requestUpdate).not.toHaveBeenCalled();
+        expect(requestFrame).toHaveBeenCalledOnce();
+        frames[0]?.(0);
+        expect(rendered).toEqual([state.sessionsResult]);
+      } else {
+        expect(requestFrame).not.toHaveBeenCalled();
+        expect(requestUpdate).toHaveBeenCalledTimes(presentation === "hidden" ? 0 : 3);
+        if (presentation === "no-frame") {
+          expect(rendered.at(-1)).toBe(state.sessionsResult);
+        }
+      }
+    },
+  );
 
   it("does not redraw a retained transcript when its navigation callback is replaced", async () => {
     const { pane } = createTestChatPane({
@@ -702,7 +726,7 @@ describe("chat pane initialization", () => {
     } as unknown as ApplicationContext;
     state.sessionKey = "main";
     state.hello = hello;
-    state.initialUserMessage = createInitialUserMessageHandoff();
+    state.chatSubmissions = createChatSubmissions();
     state.chatRunId = "run-reconnected";
     state.chatStream = "The response survived navigation.";
     state.loadAssistantIdentity = vi.fn(async () => undefined);
@@ -721,62 +745,6 @@ describe("chat pane initialization", () => {
 });
 
 describe("chat pane keyboard shortcuts", () => {
-  it("does not steal typing focus from a shadow-root confirmation", async () => {
-    const restoreDialogPolyfill = installDialogPolyfill();
-    const { pane } = createTestChatPane({
-      client: createGatewayBrowserClientFixture(),
-      sessions: createSessionCapabilityFixture(),
-    });
-    pane.active = true;
-    pane.presented = true;
-    const composer = document.createElement("div");
-    composer.className = "agent-chat__composer-combobox";
-    const textarea = composer.appendChild(document.createElement("textarea"));
-    pane.append(composer);
-    const focus = vi.spyOn(textarea, "focus");
-    const container = document.body.appendChild(document.createElement("div"));
-    const modal = container.appendChild(document.createElement("openclaw-modal-dialog"));
-    const cancel = modal.appendChild(document.createElement("button"));
-
-    try {
-      const { dialog } = await getRenderedModalDialog(container);
-      expect(dialog.open).toBe(true);
-      expect(document.querySelector("dialog[open]")).toBeNull();
-      cancel.addEventListener("keydown", (event) => pane.handleDocumentKeydown(event));
-
-      cancel.dispatchEvent(new KeyboardEvent("keydown", { key: "x", cancelable: true }));
-
-      expect(focus).not.toHaveBeenCalled();
-    } finally {
-      container.remove();
-      restoreDialogPolyfill();
-    }
-  });
-
-  it("does not steal typing focus from a light-DOM confirmation", () => {
-    const { pane } = createTestChatPane({
-      client: createGatewayBrowserClientFixture(),
-      sessions: createSessionCapabilityFixture(),
-    });
-    pane.active = true;
-    pane.presented = true;
-    const composer = document.createElement("div");
-    composer.className = "agent-chat__composer-combobox";
-    const textarea = composer.appendChild(document.createElement("textarea"));
-    pane.append(composer);
-    const focus = vi.spyOn(textarea, "focus");
-    const modal = document.body.appendChild(document.createElement("div"));
-    modal.setAttribute("aria-modal", "true");
-
-    try {
-      pane.handleDocumentKeydown(new KeyboardEvent("keydown", { key: "x", cancelable: true }));
-
-      expect(focus).not.toHaveBeenCalled();
-    } finally {
-      modal.remove();
-    }
-  });
-
   it("toggles only the active pane's session workspace", () => {
     const client = createGatewayBrowserClientFixture();
     const sessions = createSessionCapabilityFixture();

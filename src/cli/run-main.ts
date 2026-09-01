@@ -1273,11 +1273,9 @@ async function runCliWithPreparedOutputMode(
           return configIo.readSourceConfigBestEffort();
         }
         const readOptions: Parameters<typeof configIo.readBestEffortConfig>[0] = {
-          ...(isolateProxyConfigEnv ? { isolateEnv: true, observe: false } : {}),
-          ...(bestEffortConfigStartupPolicy.skipConfigGuard ||
-          bestEffortConfigStartupPolicy.validateConfigOnly
-            ? { observe: false }
-            : {}),
+          // Routing must not create state before Doctor decides whether migrations are needed.
+          observe: false,
+          ...(isolateProxyConfigEnv ? { isolateEnv: true } : {}),
           ...(bestEffortConfigStartupPolicy.validateConfigOnly
             ? { pluginValidation: "core-only" }
             : { skipPluginValidation: true }),
