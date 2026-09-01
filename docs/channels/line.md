@@ -297,8 +297,10 @@ A `buttons` block renders a Flex card that carries the presentation's title and
 text. A presentation whose only control is a `select` renders no card, because
 quick replies attach to the reply's own text message; its title and text blocks
 are appended to that text instead. LINE draws at most 13 quick replies on one
-message, counted across every `select` block in the reply rather than per block,
-and the options past that are appended to the same text.
+message, counted across every `select` block in the reply rather than per block.
+Each select keeps its prompt and any overflow options together in that text.
+Prompts and overflow option names remain complete; only native quick-reply button
+labels are shortened to LINE's 20-character limit.
 
 ```json5
 {

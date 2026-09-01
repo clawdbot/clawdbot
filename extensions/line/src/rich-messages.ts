@@ -118,9 +118,7 @@ export const lineMessageActions: ChannelMessageActionAdapter = {
   prepareSendPayload: ({ payload }) => payload,
 };
 
-// LINE caps quick replies per message, not per select block, and rejects the
-// whole request at one item over. Core budgets each block against this same
-// number, so several blocks can still add up past it.
+// LINE's 13-item quick-reply budget is shared by every select in one message.
 const LINE_QUICK_REPLY_LIMIT = 13;
 
 export const LINE_PRESENTATION_CAPABILITIES = {
@@ -130,7 +128,9 @@ export const LINE_PRESENTATION_CAPABILITIES = {
   context: true,
   limits: {
     actions: { maxActions: 4, maxActionsPerRow: 1, maxRows: 4, maxLabelLength: 40 },
-    selects: { maxOptions: LINE_QUICK_REPLY_LIMIT, maxLabelLength: 20, maxValueBytes: 300 },
+    // Native action encoding bounds labels; clipping here also loses plain-text
+    // placeholders and option names that overflow the shared quick-reply row.
+    selects: { maxOptions: LINE_QUICK_REPLY_LIMIT, maxValueBytes: 300 },
     text: { markdownDialect: "plain" },
   },
 } satisfies NonNullable<ChannelOutboundAdapter["presentationCapabilities"]>;
@@ -157,86 +157,73 @@ export function renderLinePresentation(
   payload: ReplyPayload,
   presentation: MessagePresentation,
 ): ReplyPayload | null {
-  const buttons = presentation.blocks.flatMap((block) =>
-    block.type === "buttons" ? block.buttons : [],
+  const hasCard = presentation.blocks.some(
+    (block) => block.type === "buttons" && block.buttons.length > 0,
   );
-  const buttonActions = buttons.map(toLineAction);
-  const options = presentation.blocks.flatMap((block) =>
-    block.type === "select" ? block.options : [],
-  );
-  const quickReplyItems = options.flatMap<LineQuickReplyItem>((option) => {
-    const action = resolveMessagePresentationOptionAction(option);
-    return action?.type === "command" || action?.type === "callback"
-      ? [{ label: option.label, action }]
-      : [];
-  });
-  if (
-    (buttons.length > 0 && buttonActions.some((action) => !action)) ||
-    quickReplyItems.length !== options.length ||
-    (buttons.length === 0 && options.length === 0)
-  ) {
+  const buttons: Array<{ label: string; action: Action }> = [];
+  const quickReplyItems: LineQuickReplyItem[] = [];
+  const carriedBlocks: MessagePresentationBlock[] = [];
+  const cardBody: string[] = [];
+  for (const block of presentation.blocks) {
+    if (block.type === "buttons") {
+      for (const button of block.buttons) {
+        const action = toLineAction(button);
+        if (!action) {
+          return null;
+        }
+        buttons.push({ label: button.label, action });
+      }
+    } else if (block.type === "select") {
+      const overflow: typeof block.options = [];
+      for (const option of block.options) {
+        const action = resolveMessagePresentationOptionAction(option);
+        if (!action) {
+          return null;
+        }
+        if (quickReplyItems.length < LINE_QUICK_REPLY_LIMIT) {
+          quickReplyItems.push({ label: option.label, action });
+        } else {
+          overflow.push(option);
+        }
+      }
+      // Keep each prompt beside its own overflow; an empty select would lose its
+      // placeholder in the fallback renderer even though its chips still need it.
+      if (overflow.length > 0) {
+        carriedBlocks.push({ ...block, options: overflow });
+      } else if (block.placeholder) {
+        carriedBlocks.push({ type: "context", text: block.placeholder });
+      }
+    } else if (!hasCard) {
+      carriedBlocks.push(block);
+    } else if (block.type === "text" || block.type === "context") {
+      cardBody.push(block.text);
+    }
+  }
+  if (buttons.length === 0 && quickReplyItems.length === 0) {
     return null;
   }
 
   const lineData = isRecord(payload.channelData?.line) ? payload.channelData.line : {};
-  const cardBody = presentation.blocks
-    .flatMap((block) => (block.type === "text" || block.type === "context" ? [block.text] : []))
-    .join("\n");
   const title = presentation.title || "Choose an option";
-  const flexMessage =
-    buttonActions.length > 0
-      ? {
-          altText: title,
-          contents: createActionCard(
-            title,
-            cardBody || "Choose an option.",
-            buttons.map((button, index) => ({
-              label: button.label,
-              action: buttonActions[index]!,
-            })),
-          ),
-        }
-      : undefined;
-  // Quick replies ride on the reply's own text message, so a select-only
-  // presentation renders no card and has nowhere native to keep its words.
-  // Everything LINE did not draw joins that text or it reaches nobody.
-  let drawn = 0;
-  const carriedBlocks = presentation.blocks.flatMap<MessagePresentationBlock>((block) => {
-    if (block.type !== "select") {
-      // A card already shows the title and the text blocks; only selects are left.
-      return flexMessage ? [] : [block];
-    }
-    // LINE fills one shared quick-reply row, so each select draws from what the
-    // blocks before it left. Keeping the block carries its own prompt with its
-    // own leftovers instead of pooling every select under one generic heading.
-    const spill = block.options.slice(Math.max(0, LINE_QUICK_REPLY_LIMIT - drawn));
-    drawn += block.options.length - spill.length;
-    if (spill.length > 0) {
-      return [{ ...block, options: spill }];
-    }
-    // Every option became a chip. The fallback renderer drops a select with no
-    // options, so the prompt that explains those chips needs its own block.
-    return block.placeholder ? [{ type: "context", text: block.placeholder }] : [];
-  });
-  const undrawn = flexMessage
-    ? { blocks: carriedBlocks }
-    : { ...presentation, blocks: carriedBlocks };
-  // Ask the renderer rather than predicting it: anything it adds to the reply
-  // text is content LINE would otherwise drop, whichever field it came from.
-  const rendered = renderMessagePresentationFallbackText({
+  const flexMessage = hasCard
+    ? {
+        altText: title,
+        contents: createActionCard(title, cardBody.join("\n") || "Choose an option.", buttons),
+      }
+    : undefined;
+  const text = renderMessagePresentationFallbackText({
     text: payload.text,
-    presentation: undrawn,
+    presentation: { title: hasCard ? undefined : presentation.title, blocks: carriedBlocks },
   });
-  const carriedText = rendered === (payload.text ?? "") ? undefined : rendered;
   return {
     ...payload,
-    ...(carriedText ? { text: carriedText } : {}),
+    ...(text ? { text } : {}),
     channelData: {
       ...payload.channelData,
       line: {
         ...lineData,
         ...(flexMessage ? { flexMessage } : {}),
-        quickReplyItems: quickReplyItems.slice(0, LINE_QUICK_REPLY_LIMIT),
+        quickReplyItems,
       },
     },
   };
@@ -256,7 +243,7 @@ export function prepareLineReplyPayload(payload: ReplyPayload): ReplyPayload {
   }
   const { presentation: _presentation, presentationTextMode, ...rest } = payload;
   // "fallback" text already renders these controls as prose; native ones replace it.
-  const usesFallbackText = presentationTextMode === "fallback";
+  const usesFallbackText = presentationTextMode === "fallback" && Boolean(rest.text?.trim());
   const rendered = renderLinePresentation(
     usesFallbackText ? { ...rest, text: undefined } : rest,
     adaptMessagePresentationForChannel({

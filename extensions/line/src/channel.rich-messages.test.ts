@@ -137,6 +137,58 @@ describe("LINE rich-message boundaries", () => {
     expect(line?.quickReplyItems).toHaveLength(1);
   });
 
+  it.each([undefined, "", "   "])("keeps the select prompt when fallback text is %j", (text) => {
+    const prepared = prepareLineReplyPayload({
+      text,
+      presentationTextMode: "fallback",
+      presentation: {
+        title: "Choose a deployment",
+        blocks: [
+          {
+            type: "select",
+            placeholder: "Which environment should receive this deployment?",
+            options: [{ label: "Staging", action: { type: "callback", value: "staging" } }],
+          },
+        ],
+      },
+    });
+
+    expect(prepared.text).toBe(
+      "Choose a deployment\n\nWhich environment should receive this deployment?",
+    );
+  });
+
+  it("preserves full select prompts and overflow labels while bounding native labels", () => {
+    const placeholder = "Which region should receive this deployment?";
+    const options = Array.from({ length: 8 }, (_, index) => ({
+      label: `Deployment region number ${index + 1}`,
+      action: { type: "command" as const, command: `/region ${index + 1}` },
+    }));
+    const prepared = prepareLineReplyPayload({
+      presentation: {
+        blocks: [
+          { type: "select", placeholder: "Choose the first region", options },
+          { type: "select", placeholder, options },
+        ],
+      },
+    });
+    const line = prepared.channelData?.line as {
+      quickReplyItems: Parameters<typeof createLineQuickReply>[0];
+    };
+
+    expect(prepared.text).toBe(
+      `Choose the first region\n\n${placeholder}:\n` +
+        options
+          .slice(5)
+          .map((option) => `- ${option.label}: \`${option.action.command}\``)
+          .join("\n"),
+    );
+    const native = createLineQuickReply(line.quickReplyItems);
+    expect(native.items).toHaveLength(13);
+    expect(native.items?.every((item) => (item.action?.label?.length ?? 0) <= 20)).toBe(true);
+    expect(native.items?.at(-1)?.action).toMatchObject({ type: "message", text: "/region 5" });
+  });
+
   it("keeps the words around quick replies when no Flex body carries them", () => {
     const prepared = prepareLineReplyPayload({
       text: "Here are the files.",
