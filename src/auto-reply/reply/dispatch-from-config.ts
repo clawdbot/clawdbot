@@ -143,7 +143,12 @@ async function dispatchReplyFromConfigInner(
           releaseInboundDedupe(inboundDedupeClaim.key);
         }
       }
-      if (!(err instanceof DispatchSessionRefreshRequiredError)) {
+      if (err instanceof DispatchSessionRefreshRequiredError) {
+        // This attempt already incremented diagnostic queue depth before admission
+        // detected the rotated owner. Balance only that state transition; the
+        // refreshed attempt owns the single processed/audit terminal outcome.
+        markIdle("session_refresh");
+      } else {
         recordAgentDispatchCompleted("error", { error: String(err) });
         recordProcessed("error", { error: String(err) });
         markIdle("message_error");
