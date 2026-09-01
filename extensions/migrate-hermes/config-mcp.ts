@@ -31,8 +31,7 @@ function readToolFilterList(value: unknown): string[] | undefined {
   if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) {
     return undefined;
   }
-  const normalized = [...new Set(value.map((entry) => entry.trim()).filter(Boolean))];
-  return normalized;
+  return [...new Set(value.map((entry) => entry.trim()).filter(Boolean))];
 }
 
 function hasUnsupportedToolPattern(pattern: string): boolean {
@@ -192,8 +191,7 @@ export function mapMcpServer(
   next.auth = normalizeOptionalString(value.auth) === "oauth" ? "oauth" : undefined;
   next.oauth = mapHermesMcpOauth(value);
   Object.assign(next, mapHermesClientCertificate(value));
-  const toolFilter = mapHermesToolFilter(value);
-  next.toolFilter = toolFilter;
+  next.toolFilter = mapHermesToolFilter(value);
   const tools = isRecord(value.tools) ? value.tools : undefined;
   if (
     tools &&
