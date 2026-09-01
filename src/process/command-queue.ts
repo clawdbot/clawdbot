@@ -730,6 +730,11 @@ export function resetCommandLane(lane: string = CommandLane.Main): number {
   return released;
 }
 
+/** Drops every lane-release observer. Test-reset only; production never unwinds these globally. */
+export function clearCommandLaneReleaseListenersForTest(): void {
+  laneReleaseListeners.clear();
+}
+
 /**
  * Reset all lane runtime state to idle. Used after SIGUSR1 in-process
  * restarts where interrupted tasks' finally blocks may not run, leaving
@@ -744,11 +749,6 @@ export function resetCommandLane(lane: string = CommandLane.Main): number {
  * preserved work is pumped immediately rather than waiting for a future
  * `enqueueCommandInLane()` call (which may never come).
  */
-/** Drops every lane-release observer. Test-reset only; production never unwinds these globally. */
-export function clearCommandLaneReleaseListenersForTest(): void {
-  laneReleaseListeners.clear();
-}
-
 export function resetAllLanes(): void {
   const queueState = getQueueState();
   resetGatewayWorkAdmission();

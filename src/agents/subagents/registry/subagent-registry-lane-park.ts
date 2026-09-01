@@ -100,6 +100,19 @@ export function parkAnnounceForRequesterLane(
       `Subagent announce resuming after requester lane release run=${runId} ` +
         `requester=${requesterSessionKey} parkedForMs=${Date.now() - parkedAt}`,
     );
+    // The lane release IS the readiness signal the backstop timestamp was
+    // standing in for, so it has to retire that timestamp before re-driving.
+    // `resumeSubagentRun` treats `delivery.nextAttemptAt` as a hard not-before
+    // gate for required completions: left set, the edge would only reschedule
+    // the remaining backstop delay, which is exactly the wait this park exists
+    // to remove. Cleared durably, because a process that dies between here and
+    // the announce must not restore a row still gated on a deadline whose
+    // reason has passed.
+    const resumeDelivery = ensureDeliveryState(entry);
+    if (resumeDelivery.nextAttemptAt !== undefined) {
+      resumeDelivery.nextAttemptAt = undefined;
+      params.persist(runId);
+    }
     params.resumedRuns.delete(runId);
     params.resumeSubagentRun(runId);
   };

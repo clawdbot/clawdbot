@@ -44,8 +44,15 @@ function createParkContext(entry: SubagentRunRecord) {
   const runs = new Map<string, SubagentRunRecord>([[entry.runId, entry]]);
   const waiters = new Map<string, () => void>();
   const timers = new Set<ReturnType<typeof setTimeout>>();
-  const resumeSubagentRun = vi.fn();
-  const persist = vi.fn();
+  // Captured at call time, not read afterwards: the invariant is that the row
+  // is already ungated when the resumer receives it, and a later read cannot
+  // tell an in-order clear from a clear that happened too late.
+  const deadlineAtResume: Array<number | undefined> = [];
+  const persistedBeforeResume: string[] = [];
+  const persist = vi.fn((runId: string) => void persistedBeforeResume.push(runId));
+  const resumeSubagentRun = vi.fn(() => {
+    deadlineAtResume.push(entry.delivery?.nextAttemptAt);
+  });
   const context = {
     options: {
       runs,
@@ -65,7 +72,15 @@ function createParkContext(entry: SubagentRunRecord) {
       return unsubscribe;
     },
   } as unknown as SubagentLifecycleAnnounceCleanupContext;
-  return { context, resumeSubagentRun, persist, waiters, timers };
+  return {
+    context,
+    resumeSubagentRun,
+    persist,
+    waiters,
+    timers,
+    deadlineAtResume,
+    persistedBeforeResume,
+  };
 }
 
 function holdRequesterLane() {
@@ -208,6 +223,67 @@ describe("parkAnnounceForRequesterLane", () => {
     await requesterTurn.release();
 
     expect(resumeSubagentRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands the resumer an ungated row, because the real resumer honours nextAttemptAt", async () => {
+    // The park writes a 60s backstop deadline. `resumeSubagentRun` treats that
+    // value as a hard not-before gate for required completions, so a release
+    // wake that leaves it set only re-schedules the remaining delay — the exact
+    // wait the park exists to remove. This pins the clear, and pins that it
+    // happens BEFORE the resumer sees the row.
+    const entry = makeParkedRun();
+    const { context, resumeSubagentRun, deadlineAtResume } = createParkContext(entry);
+    const requesterTurn = holdRequesterLane();
+    const now = Date.now();
+
+    parkAnnounceForRequesterLane(context, { runId: RUN_ID, entry, now });
+    expect(entry.delivery?.nextAttemptAt).toBe(now + REQUESTER_LANE_BUSY_BACKSTOP_MS);
+
+    await requesterTurn.release();
+
+    expect(resumeSubagentRun).toHaveBeenCalledWith(RUN_ID);
+    expect(deadlineAtResume).toEqual([undefined]);
+    expect(entry.delivery?.nextAttemptAt).toBeUndefined();
+  });
+
+  it("persists the retired deadline, so a restart mid-release cannot re-gate the row", async () => {
+    // The clear has to survive the process. A restore that reads a row still
+    // carrying the deadline would wait it out even though the lane is free.
+    const entry = makeParkedRun();
+    const { context, persist, persistedBeforeResume } = createParkContext(entry);
+    const requesterTurn = holdRequesterLane();
+
+    parkAnnounceForRequesterLane(context, { runId: RUN_ID, entry, now: Date.now() });
+    const persistsAtPark = persist.mock.calls.length;
+
+    await requesterTurn.release();
+
+    expect(persist.mock.calls.length).toBeGreaterThan(persistsAtPark);
+    expect(persistedBeforeResume).toContain(RUN_ID);
+  });
+
+  it("still lets the timer backstop re-drive a row whose deadline is intact", async () => {
+    // The edge retires the deadline; the timer path must not be collateral.
+    // A park whose listener never fires keeps its deadline and its wake.
+    vi.useFakeTimers();
+    const entry = makeParkedRun();
+    const { context, resumeSubagentRun } = createParkContext(entry);
+    const holding = createDeferred();
+    const requesterTurn = enqueueCommandInLane(REQUESTER_LANE, async () => {
+      await holding.promise;
+    });
+
+    parkAnnounceForRequesterLane(context, { runId: RUN_ID, entry, now: Date.now() });
+    expect(entry.delivery?.nextAttemptAt).toBeGreaterThan(Date.now());
+
+    await vi.advanceTimersByTimeAsync(REQUESTER_LANE_BUSY_BACKSTOP_MS + 1);
+
+    expect(resumeSubagentRun).toHaveBeenCalledWith(RUN_ID);
+    // Untouched by the timer path: only the lane-release edge retires it.
+    expect(entry.delivery?.nextAttemptAt).toBeGreaterThan(0);
+
+    holding.resolve(undefined);
+    await requesterTurn;
   });
 
   it("reports a park that outlived the announce window", () => {

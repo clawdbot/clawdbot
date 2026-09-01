@@ -5553,10 +5553,13 @@ describe("requester settle wake trigger", () => {
     expect(entry.delivery?.status).toBe("pending");
     expect(entry.delivery?.payload).toBeDefined();
     expect(entry.delivery?.attemptCount).toBeUndefined();
-    expect(entry.delivery?.nextAttemptAt).toBeGreaterThan(endedAt);
     // The requester lane is free in this test, so the park's re-read finds it
-    // takeable and re-drives the row without waiting for the backstop.
+    // takeable and re-drives the row without waiting for the backstop. That
+    // release path also retires the backstop deadline it just armed, because
+    // `resumeSubagentRun` would otherwise treat it as a hard not-before gate
+    // and reschedule the full delay instead of announcing.
     await waitForLifecycleState(() => expect(resumeSubagentRun).toHaveBeenCalledWith(entry.runId));
+    expect(entry.delivery?.nextAttemptAt).toBeUndefined();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
