@@ -258,7 +258,8 @@ function isWritableProviderConfig(provider: ProviderConfig): boolean {
   if (!Array.isArray(provider.models) || provider.models.length === 0) {
     return true;
   }
-  return Boolean(provider.baseUrl?.trim() && provider.apiKey);
+  // AuthStorage can supply omitted keys; an explicitly empty key still violates the schema.
+  return Boolean(provider.baseUrl?.trim() && (provider.apiKey === undefined || provider.apiKey));
 }
 
 function filterWritableProviders(
