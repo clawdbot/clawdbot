@@ -63,7 +63,8 @@ describe("test runtime prerequisites", () => {
     ],
     ["update CLI process", ["src/cli/update-dry-run-state.process.test.ts"], "runtime"],
     ["CLI directory", ["src/cli"], "runtime"],
-    ["CLI config", ["test/vitest/vitest.cli.config.ts"], "runtime"],
+    ["CLI config", ["test/vitest/vitest.cli.config.ts"], undefined],
+    ["CLI process config", ["test/vitest/vitest.cli-process.config.ts"], "runtime"],
     ["ordinary CLI unit test", ["src/cli/command-path-policy.test.ts"], undefined],
     ["Active Memory Gateway", ["src/gateway/gateway-active-memory.test.ts"], "runtime"],
     ["concurrent Gateway streams", ["src/gateway/gateway-concurrent-streams.test.ts"], "runtime"],
@@ -2240,12 +2241,15 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it("routes CLI process tests through their isolated project", () => {
-    expectSingleVitestRunPlan(buildVitestRunPlans(["src/cli/help-exit.process.test.ts"]), {
-      config: "test/vitest/vitest.cli-process.config.ts",
-      includePatterns: ["src/cli/help-exit.process.test.ts"],
-    });
-  });
+  it.each(["src/cli/help-exit.process.test.ts", "src/cli/update-dry-run-state.process.test.ts"])(
+    "routes CLI process test %s through its isolated project",
+    (file) => {
+      expectSingleVitestRunPlan(buildVitestRunPlans([file]), {
+        config: "test/vitest/vitest.cli-process.config.ts",
+        includePatterns: [file],
+      });
+    },
+  );
 
   it("adds the CLI process project for broad CLI targets", () => {
     const plans = buildVitestRunPlans(["src/cli"]);
@@ -2261,6 +2265,7 @@ describe("scripts/test-projects changed-target routing", () => {
       (plan) => plan.config === "test/vitest/vitest.cli-process.config.ts",
     );
     expect(processPlan?.includePatterns).toContain("src/cli/help-exit.process.test.ts");
+    expect(processPlan?.includePatterns).toContain("src/cli/update-dry-run-state.process.test.ts");
   });
 
   it("rejects broad CLI watch targets that cross shared and process projects", () => {

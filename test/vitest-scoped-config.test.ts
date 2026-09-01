@@ -616,6 +616,7 @@ describe("scoped vitest configs", () => {
       expect.arrayContaining(cliProcessTestFiles.map((file) => file.replace("src/cli/", ""))),
     );
     const processTestConfig = requireTestConfig(defaultCliProcessConfig);
+    expect(processTestConfig.include).toContain("src/cli/update-dry-run-state.process.test.ts");
     expect(processTestConfig.include).toEqual(cliProcessTestFiles);
     for (const file of cliProcessTestFiles) {
       expect(matchingExcludePatterns(processTestConfig.exclude ?? [], file), file).toEqual([]);

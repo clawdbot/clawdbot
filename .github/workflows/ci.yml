@@ -1371,6 +1371,12 @@ jobs:
                   ...changedExtensionFallbackShards,
                 ]
             : [];
+          const goToolingConfig = "test/vitest/vitest.tooling.config.ts";
+          const knownToolingConfigs = new Set([
+            goToolingConfig,
+            "test/vitest/vitest.tooling-isolated.config.ts",
+            "test/vitest/vitest.tooling-docker.config.ts",
+          ]);
           // The same capped matrix owns compact and plugin work; admit its longest rows first.
           const nodeTestShards = rawNodeTestShards
             .toSorted((a, b) => (b.predictedSeconds ?? 0) - (a.predictedSeconds ?? 0))
@@ -1393,11 +1399,15 @@ jobs:
                 targets: shard.targets,
                 requires_go: (shard.groups ?? [shard]).some((plan) => {
                   const patterns = plan.targets ?? plan.includePatterns;
-                  // Explicit stripes own their prerequisites; historical whole-config
-                  // plans retain the original tooling setup when selection is unknown.
-                  return patterns
-                    ? patterns.some((pattern) => matchesGlob("test/scripts/docs-i18n.test.ts", pattern))
-                    : (plan.shard_name ?? plan.shardName).startsWith("core-tooling");
+                  if (patterns) {
+                    return patterns.some((pattern) => matchesGlob("test/scripts/docs-i18n.test.ts", pattern));
+                  }
+                  if (plan.configs?.length && plan.configs.every((config) => knownToolingConfigs.has(config))) {
+                    return plan.configs.includes(goToolingConfig);
+                  }
+                  // Unknown historical configs retain their original Go setup;
+                  // current isolated and Docker catalogs exclude the Go owner.
+                  return (plan.shard_name ?? plan.shardName).startsWith("core-tooling");
                 }),
                 requires_ripgrep:
                   shard.targets?.includes("src/agents/sessions/tools/index.test.ts") ||
