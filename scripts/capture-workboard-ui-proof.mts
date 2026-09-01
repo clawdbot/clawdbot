@@ -6,25 +6,15 @@ import {
   canRunPlaywrightChromium,
   resolvePlaywrightChromiumExecutablePath,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
-
+import { readControlUiProofOption } from "./lib/control-ui-proof-args.mts";
 const DEFAULT_BASE_URL = "http://127.0.0.1:5187";
 const DEFAULT_OUTPUT_DIR = path.resolve(".artifacts/control-ui-e2e/workboard-proof");
 const WORKBOARD_SESSION_KEY = "agent:main:workboard-proof";
 
-function readOption(name: string): string | undefined {
-  const prefix = `--${name}=`;
-  const inline = process.argv.slice(2).find((arg) => arg.startsWith(prefix));
-  if (inline) {
-    return inline.slice(prefix.length);
-  }
-  const index = process.argv.indexOf(`--${name}`);
-  return index >= 0 ? process.argv[index + 1] : undefined;
-}
-
-const baseUrl = new URL(readOption("base-url") ?? DEFAULT_BASE_URL);
+const baseUrl = new URL(readControlUiProofOption(process.argv, "base-url") ?? DEFAULT_BASE_URL);
 const outputDir = createControlUiE2eArtifactDir(
   "workboard-proof",
-  readOption("output-dir") ?? DEFAULT_OUTPUT_DIR,
+  readControlUiProofOption(process.argv, "output-dir") ?? DEFAULT_OUTPUT_DIR,
 );
 const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 if (!canRunPlaywrightChromium(executablePath)) {
