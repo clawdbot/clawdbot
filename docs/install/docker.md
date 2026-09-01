@@ -244,7 +244,8 @@ checkouts also compile first-party plugins published separately with
 external npm or ClawHub ownership and does not change either artifact contract.
 Unknown, invalid, or ambiguous ids fail the image build.
 This includes WhatsApp: `OPENCLAW_EXTENSIONS=whatsapp` compiles and packages its
-runtime while ordinary core and npm builds continue to exclude it. Selected
+runtime. Ordinary source builds generate its runtime through the separate
+external-plugin build path; root npm artifacts continue to exclude it. Selected
 plugins must compile successfully; unselected external plugin source and
 runtime output are pruned.
 
