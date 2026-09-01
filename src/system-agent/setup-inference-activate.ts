@@ -375,7 +375,7 @@ async function activateSetupInferenceUnredacted(
       stagedRoute.runner !== testPlan.runner ||
       stagedRoute.provider !== testPlan.provider ||
       stagedRoute.model !== testPlan.model ||
-      stagedRoute.modelLabel !== plan.modelRef ||
+      stagedRoute.modelLabel !== (plan.persistModelRef ?? plan.modelRef) ||
       (plan.authProfileId && stagedRoute.authProfileId !== plan.authProfileId)
     ) {
       return {

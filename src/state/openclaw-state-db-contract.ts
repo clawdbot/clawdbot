@@ -17,6 +17,7 @@ export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
 // Privacy-sensitive feature tables remain absent even in fresh databases until
 // their feature-local first write. The canonical SQL still owns their shape.
 export const FIRST_USE_STATE_TABLES = [
+  "github_personal_publication_requests",
   "cron_job_runtime_authorities",
   "execution_identity_contexts",
   "mcp_oauth_pending_authorizations",
@@ -32,6 +33,8 @@ export const FIRST_USE_STATE_TABLES = [
   "outbound_message_progress",
 ] as const;
 export const FIRST_USE_STATE_INDEXES = [
+  "idx_github_personal_publication_owner_session",
+  "idx_github_personal_publication_pending",
   "idx_node_worker_launches_terminal_completed",
   "idx_node_worker_turns_terminal_completed",
   "idx_node_worker_turns_active_owner",

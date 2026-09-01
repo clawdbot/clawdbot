@@ -1782,7 +1782,7 @@ describe("activateSetupInference", () => {
       defaults: { systemAgent: { agentId: "ops" } },
       entries: {
         ops: { model: "openai/gpt-5.5" },
-        research: { model: "claude-cli/claude-opus-5" },
+        research: { model: "anthropic/claude-opus-5" },
       },
     });
   });
@@ -1896,7 +1896,12 @@ describe("activateSetupInference", () => {
         sourceConfig,
         runtimeConfig: {
           ...sourceConfig,
-          agents: { ...sourceConfig.agents, entries: { main: { default: true } } },
+          agents: {
+            ...sourceConfig.agents,
+            entries: {
+              main: { default: true, ...sourceConfig.agents?.entries?.main },
+            },
+          },
         },
       };
     });
@@ -1932,7 +1937,7 @@ describe("activateSetupInference", () => {
     });
 
     expect(result).toMatchObject({ ok: true, modelRef: "claude-cli/claude-opus-5" });
-    expect(committedConfig?.agents?.defaults?.model).toBe("claude-cli/claude-opus-5");
+    expect(committedConfig?.agents?.defaults?.model).toBe("anthropic/claude-opus-5");
   });
 
   it("persists only the verified model before OpenClaw configures the rest", async () => {
@@ -1954,7 +1959,7 @@ describe("activateSetupInference", () => {
       lines: ["Inference verified: claude-cli/claude-opus-5"],
     });
     const persistedConfig = configHarness.current();
-    expect(persistedConfig.agents?.defaults?.model).toBe("claude-cli/claude-opus-5");
+    expect(persistedConfig.agents?.defaults?.model).toBe("anthropic/claude-opus-5");
     expect(persistedConfig.agents?.defaults?.workspace).toBeUndefined();
     expect(persistedConfig.gateway).toBeUndefined();
   });
@@ -1987,7 +1992,7 @@ describe("activateSetupInference", () => {
     expect(onCommitStarted).toHaveBeenCalledWith(lockedConfig);
     expect(configHarness.current()).toMatchObject({
       wizard: { securityAcknowledgedAt: "2026-08-03T00:00:00.000Z" },
-      agents: { defaults: { model: "claude-cli/claude-opus-5" } },
+      agents: { defaults: { model: "anthropic/claude-opus-5" } },
     });
   });
 
@@ -2045,7 +2050,7 @@ describe("activateSetupInference", () => {
     expect(result).toMatchObject({ ok: true, modelRef: "claude-cli/claude-opus-5" });
     expect(configHarness.current()).toMatchObject({
       agents: {
-        defaults: { model: "claude-cli/claude-opus-5" },
+        defaults: { model: "anthropic/claude-opus-5" },
         entries: { main: { default: true } },
       },
     });
@@ -2201,9 +2206,9 @@ describe("activateSetupInference", () => {
     expect(persistedConfig.agents?.entries).toEqual({
       work: {
         default: true,
-        model: "claude-cli/claude-opus-5",
+        model: "anthropic/claude-opus-5",
         name: "edited during probe",
-        models: { "claude-cli/claude-opus-5": {} },
+        models: { "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } } },
       },
       "new-agent": { model: "anthropic/claude-opus-5" },
     });
@@ -2465,7 +2470,7 @@ describe("activateSetupInference", () => {
 
     expect(result).toMatchObject({ ok: true });
     expect(resolveCliRuntimeOwnerFingerprint).toHaveBeenCalledOnce();
-    expect(configHarness.current().agents?.defaults?.model).toBe("claude-cli/claude-opus-5");
+    expect(configHarness.current().agents?.defaults?.model).toBe("anthropic/claude-opus-5");
   });
 
   it("rejects a CLI owner drift on an existing route before handoff", async () => {
@@ -2567,9 +2572,50 @@ describe("activateSetupInference", () => {
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
     expect(configHarness.transform).toHaveBeenCalledOnce();
     expect(configHarness.current()).toMatchObject({
-      agents: { defaults: { model: "claude-cli/claude-opus-5" } },
+      agents: { defaults: { model: "anthropic/claude-opus-5" } },
     });
     expect(configHarness.current().plugins?.entries?.codex).toBeUndefined();
+  });
+
+  it("does not persist a legacy claude-cli key beside an existing canonical Anthropic CLI route", async () => {
+    const initialConfig = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-fable-5": {},
+            "anthropic/claude-opus-5": {
+              alias: "Claude Code · Opus 5",
+              agentRuntime: { id: "claude-cli" },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const configHarness = createConfigTransformHarness(initialConfig);
+    const runCliAgent = vi.fn(successfulRunner("claude-cli", "claude-opus-5"));
+
+    const result = await activateSetupInference({
+      kind: "claude-cli",
+      deps: {
+        readConfigFileSnapshot: mockConfigSnapshot(initialConfig),
+        runCliAgent: runCliAgent as never,
+        transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, modelRef: "claude-cli/claude-opus-5" });
+    expect(runCliAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "claude-cli", model: "claude-opus-5" }),
+    );
+    const persisted = configHarness.current();
+    expect(persisted.agents?.defaults?.models).toEqual(initialConfig.agents.defaults.models);
+    expect(persisted.agents?.defaults?.model).toBe("anthropic/claude-opus-5");
+    expect(persisted.agents?.entries?.main).toMatchObject({
+      default: true,
+      models: {
+        "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
+      },
+    });
   });
 
   it.each([
@@ -2605,7 +2651,7 @@ describe("activateSetupInference", () => {
     expect(configHarness.transform).toHaveBeenCalledOnce();
     expect(configHarness.current()).toMatchObject(config);
     expect(configHarness.current()).toMatchObject({
-      agents: { defaults: { model: "claude-cli/claude-opus-5" } },
+      agents: { defaults: { model: "anthropic/claude-opus-5" } },
     });
   });
 

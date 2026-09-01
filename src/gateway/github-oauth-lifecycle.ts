@@ -10,9 +10,7 @@ import {
 } from "../agents/agent-lifecycle-registry.js";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import {
-  pollGitHubOAuthDeviceToken,
   refreshGitHubOAuthToken,
-  requestGitHubOAuthDeviceCode,
   type GitHubOAuthTokenPair,
 } from "../agents/github-oauth-client.js";
 import {
@@ -43,19 +41,20 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { pollGitHubDeviceFlow, startGitHubDeviceFlow } from "./github-oauth-device-flow.js";
 import {
   authorizationStillOwned,
   configuredOAuthIdentities,
   currentIdentityForRecord,
   defaultGitAuthor,
-  DEVICE_MAX_LIFETIME_SECONDS,
-  DEVICE_MAX_POLL_INTERVAL_SECONDS,
   identityStillSelected,
   MAINTENANCE_INTERVAL_MS,
   REFRESH_SKEW_MS,
   SHUTDOWN_DRAIN_TIMEOUT_MS,
   type ConfiguredOAuthIdentity,
 } from "./github-oauth-lifecycle-helpers.js";
+import { createPersonalGitHubOAuthLifecycle } from "./github-personal-oauth.js";
 import { updateGitHubToolIdentityConfig } from "./github-tool-identity-config.js";
 
 type GitHubOAuthLifecycle = ReturnType<typeof createGitHubOAuthLifecycle>;
@@ -75,11 +74,19 @@ export async function requestCurrentGitHubOAuthRefresh(agentId: string): Promise
   await activeLifecycle?.refreshEffectiveIdentity(agentId);
 }
 
+export async function requestCurrentPersonalGitHubRefresh(owner: string): Promise<void> {
+  if (!activeLifecycle) {
+    throw new Error("My GitHub lifecycle is unavailable; retry after Gateway startup.");
+  }
+  await activeLifecycle.personal.refresh(owner);
+}
+
 export function createGitHubOAuthLifecycle(params: {
   getConfig: () => OpenClawConfig;
   getPersistedConfig?: () => OpenClawConfig;
   warn: (message: string) => void;
 }) {
+  const personal = createPersonalGitHubOAuthLifecycle();
   const deviceController = new AbortController();
   const devicePolls = new Map<string, Promise<ToolsGitHubAuthorizePollResult>>();
   const committingRequests = new Set<string>();
@@ -262,24 +269,7 @@ export function createGitHubOAuthLifecycle(params: {
       queueDeviceCleanup(requestId);
       return { status: "failed", reason: "identity_changed" };
     }
-    if (now < record.nextPollAtMs) {
-      return { status: "pending", retryAfterMs: record.nextPollAtMs - now };
-    }
-    let result;
-    try {
-      result = await pollGitHubOAuthDeviceToken({
-        deviceCode: record.deviceCode,
-        signal: deviceController.signal,
-      });
-    } catch {
-      const currentRecord = readGitHubDeviceAuthorizationRecord(requestId);
-      if (!currentRecord) {
-        return { status: "expired" };
-      }
-      const retryAtMs = Math.min(currentRecord.expiresAtMs, now + currentRecord.pollIntervalMs);
-      writeGitHubDeviceAuthorizationRecord({ ...currentRecord, nextPollAtMs: retryAtMs });
-      return { status: "network_error", retryAfterMs: Math.max(1, retryAtMs - now) };
-    }
+    const result = await pollGitHubDeviceFlow(record, deviceController.signal);
     const currentRecord = readGitHubDeviceAuthorizationRecord(requestId);
     if (!currentRecord) {
       return { status: "expired" };
@@ -293,35 +283,19 @@ export function createGitHubOAuthLifecycle(params: {
       return { status: "failed", reason: "identity_changed" };
     }
     const activeRecord = currentRecord;
-    if (result.status === "authorized") {
+    if (result.kind === "authorized") {
       return await installDeviceTokens(activeRecord, result.tokens);
     }
-    if (result.status === "authorization_pending" || result.status === "slow_down") {
-      const pollIntervalMs =
-        result.status === "slow_down"
-          ? Math.min(
-              DEVICE_MAX_POLL_INTERVAL_SECONDS * 1_000,
-              Math.max(activeRecord.pollIntervalMs + 5_000, (result.intervalSeconds ?? 0) * 1_000),
-            )
-          : activeRecord.pollIntervalMs;
-      const nextPollAtMs = Math.min(activeRecord.expiresAtMs, now + pollIntervalMs);
-      writeGitHubDeviceAuthorizationRecord({ ...activeRecord, pollIntervalMs, nextPollAtMs });
-      return {
-        status: result.status === "slow_down" ? "slow_down" : "pending",
-        retryAfterMs: Math.max(1, nextPollAtMs - now),
-      };
+    if (result.kind === "waiting") {
+      writeGitHubDeviceAuthorizationRecord({
+        ...activeRecord,
+        pollIntervalMs: result.pollIntervalMs,
+        nextPollAtMs: result.nextPollAtMs,
+      });
+    } else {
+      queueDeviceCleanup(requestId);
     }
-    queueDeviceCleanup(requestId);
-    if (result.status === "access_denied") {
-      return { status: "access_denied" };
-    }
-    if (result.status === "expired_token") {
-      return { status: "expired" };
-    }
-    if (result.code === "incorrect_device_code" || result.code === "bad_verification_code") {
-      return { status: "incorrect_device_code" };
-    }
-    return { status: "failed", reason: "setup_failed" };
+    return result.result;
   };
 
   const applyPendingRefresh = async (
@@ -422,24 +396,16 @@ export function createGitHubOAuthLifecycle(params: {
     await applyPendingRefresh(rotatedRecord, refreshed.tokens.accessToken);
   };
 
-  const requestRefresh = (configured: ConfiguredOAuthIdentity): Promise<void> => {
-    const refreshKey = configured.identity.profileId;
-    const existing = refreshes.get(refreshKey);
-    if (existing) {
-      return existing;
-    }
-    const operation = refreshOne(configured)
-      .catch((error: unknown) => {
-        params.warn(`GitHub OAuth refresh failed; will retry: ${formatErrorMessage(error)}`);
-      })
-      .finally(() => {
-        if (refreshes.get(refreshKey) === operation) {
-          refreshes.delete(refreshKey);
-        }
-      });
-    refreshes.set(refreshKey, operation);
-    return operation;
-  };
+  const requestRefresh = (configured: ConfiguredOAuthIdentity): Promise<void> =>
+    getOrCreatePromise(
+      refreshes,
+      configured.identity.profileId,
+      () =>
+        refreshOne(configured).catch((error: unknown) => {
+          params.warn(`GitHub OAuth refresh failed; will retry: ${formatErrorMessage(error)}`);
+        }),
+      { evictOnSettled: true },
+    );
 
   const reconcileRecords = async (): Promise<void> => {
     for (const { requestId, record } of listGitHubDeviceAuthorizationRecords()) {
@@ -551,7 +517,15 @@ export function createGitHubOAuthLifecycle(params: {
     return maintenance;
   };
 
+  // Each credential owner singleflights independently: personal file cleanup must not delay System refresh.
+  const maintainAll = async (): Promise<void> => {
+    await Promise.all([maintain(), personal.maintain()]).catch((error: unknown) => {
+      params.warn(`GitHub OAuth maintenance failed; will retry: ${formatErrorMessage(error)}`);
+    });
+  };
+
   return {
+    personal,
     startAuthorization: async (input: {
       scope: GitHubIdentityScope;
       agentId: string;
@@ -569,7 +543,7 @@ export function createGitHubOAuthLifecycle(params: {
       if (input.scope === "agent" && !agentLifecycleBinding) {
         throw new Error("GitHub authorization requires an active agent.");
       }
-      const authorization = await requestGitHubOAuthDeviceCode({ signal: deviceController.signal });
+      const authorization = await startGitHubDeviceFlow(deviceController.signal);
       if (
         !identityStillSelected(params.getConfig(), input, expectedIdentity) ||
         (agentLifecycleBinding !== undefined &&
@@ -577,22 +551,13 @@ export function createGitHubOAuthLifecycle(params: {
       ) {
         throw new Error("GitHub identity changed while authorization was starting.");
       }
-      if (
-        authorization.expiresInSeconds > DEVICE_MAX_LIFETIME_SECONDS ||
-        authorization.intervalSeconds > DEVICE_MAX_POLL_INTERVAL_SECONDS
-      ) {
-        throw new Error("GitHub device authorization timing is outside the supported bounds.");
-      }
       for (const existing of listGitHubDeviceAuthorizationRecords()) {
         if (existing.record?.scope === input.scope && existing.record.agentId === input.agentId) {
           queueDeviceCleanup(existing.requestId);
         }
       }
       const requestId = `github-device-${randomBytes(16).toString("hex")}`;
-      const createdAtMs = Date.now();
-      const expiresAtMs = createdAtMs + authorization.expiresInSeconds * 1_000;
-      const pollIntervalMs = authorization.intervalSeconds * 1_000;
-      const nextPollAtMs = createdAtMs + pollIntervalMs;
+      const { createdAtMs, expiresAtMs, pollIntervalMs, nextPollAtMs } = authorization;
       writeGitHubDeviceAuthorizationRecord({
         version: 1,
         requestId,
@@ -612,23 +577,14 @@ export function createGitHubOAuthLifecycle(params: {
         requestId,
         userCode: authorization.userCode,
         verificationUri: authorization.verificationUri,
-        expiresInMs: authorization.expiresInSeconds * 1_000,
+        expiresInMs: Math.max(0, expiresAtMs - Date.now()),
         pollAfterMs: pollIntervalMs,
       };
     },
-    pollAuthorization: (requestId: string): Promise<ToolsGitHubAuthorizePollResult> => {
-      const existing = devicePolls.get(requestId);
-      if (existing) {
-        return existing;
-      }
-      const operation = pollOnce(requestId).finally(() => {
-        if (devicePolls.get(requestId) === operation) {
-          devicePolls.delete(requestId);
-        }
-      });
-      devicePolls.set(requestId, operation);
-      return operation;
-    },
+    pollAuthorization: (requestId: string): Promise<ToolsGitHubAuthorizePollResult> =>
+      getOrCreatePromise(devicePolls, requestId, () => pollOnce(requestId), {
+        evictOnSettled: true,
+      }),
     cancelAuthorization: (requestId: string): boolean => {
       if (committingRequests.has(requestId)) {
         return false;
@@ -655,13 +611,13 @@ export function createGitHubOAuthLifecycle(params: {
         identity: { ...identity, kind: "oauth" },
       });
     },
-    maintain,
+    maintain: maintainAll,
     start: () => {
       if (stopping) {
         return;
       }
-      void maintain();
-      interval ??= setInterval(() => void maintain(), MAINTENANCE_INTERVAL_MS);
+      void maintainAll();
+      interval ??= setInterval(() => void maintainAll(), MAINTENANCE_INTERVAL_MS);
       interval.unref?.();
     },
     stop: async () => {
@@ -673,6 +629,7 @@ export function createGitHubOAuthLifecycle(params: {
       deviceController.abort();
       const drain = (async () => {
         await Promise.allSettled([
+          personal.stop(),
           ...(maintenance ? [maintenance] : []),
           ...devicePolls.values(),
           ...refreshes.values(),

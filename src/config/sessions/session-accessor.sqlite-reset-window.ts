@@ -387,12 +387,22 @@ export function readVisibleMessageRange(
   start: number,
   endExclusive: number,
 ): ResetWindowMessageEvent[] {
-  return selectVisibleMessageRanges(projection, start, endExclusive).flatMap((range) =>
-    executeSqliteQuerySync(
+  return Array.from(iterateVisibleMessageRange(projection, start, endExclusive));
+}
+
+export function* iterateVisibleMessageRange(
+  projection: ResetWindowProjection,
+  start: number,
+  endExclusive: number,
+): IterableIterator<ResetWindowMessageEvent> {
+  for (const range of selectVisibleMessageRanges(projection, start, endExclusive)) {
+    for (const row of iterateSqliteQuerySync(
       projection.database.db,
       range.query.select(["active.event_seq", "active.message_position", "event.event_json"]),
-    ).rows.map(parseMessageEventRow),
-  );
+    )) {
+      yield parseMessageEventRow(row);
+    }
+  }
 }
 
 /** Sizes the same logical ranges without fetching or parsing excluded payloads. */

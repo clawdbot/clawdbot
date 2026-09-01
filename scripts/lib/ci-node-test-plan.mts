@@ -35,12 +35,15 @@ import {
 } from "./vitest-build-prerequisites.mts";
 import {
   VITEST_PRETEST_BUILD_SECONDS,
+  createCompactSplitTimingGeneration,
   estimateVitestTestFileSeconds as stripeFileWeight,
   estimateVitestToolingFileSeconds as toolingFileWeight,
+  parseCompactSplitTimingKey,
 } from "./vitest-shard-metadata.mts";
 
 type NodeTestShardGroup = {
   shard_name: string;
+  timing_key?: string;
   configs: string[];
   includePatterns?: string[];
   pretestBuildMode?: NodeTestPretestBuildMode;
@@ -48,6 +51,10 @@ type NodeTestShardGroup = {
   runner: string;
   env?: Record<string, string>;
 };
+
+function compactGroupTimingKey(group: NodeTestShardGroup): string {
+  return group.timing_key ?? group.shard_name;
+}
 
 type NodeTestShard = {
   checkName: string;
@@ -661,7 +668,7 @@ function applyCompactGroupWorkerPins(group: NodeTestShardGroup): NodeTestShardGr
 
 function estimateDefaultCompactGroupSeconds(group: NodeTestShardGroup): number {
   const hint =
-    readCompactGroupTimings("blacksmith")[group.shard_name] ??
+    readCompactGroupTimings("blacksmith")[compactGroupTimingKey(group)] ??
     COMPACT_GROUP_SECONDS_HINTS.get(group.shard_name);
   if (hint !== undefined) {
     return hint;
@@ -688,7 +695,7 @@ function readUnmeasuredCompactHint(
   group: NodeTestShardGroup,
   hints: ReadonlyMap<string, number>,
 ): number | undefined {
-  return readCompactGroupTimings("blacksmith")[group.shard_name] === undefined
+  return readCompactGroupTimings("blacksmith")[compactGroupTimingKey(group)] === undefined
     ? hints.get(group.shard_name)
     : undefined;
 }
@@ -719,7 +726,7 @@ function estimateCompactGroupSeconds(
     return defaultSeconds;
   }
   return (
-    readCompactGroupTimings("github")[group.shard_name] ??
+    readCompactGroupTimings("github")[compactGroupTimingKey(group)] ??
     COMPACT_GITHUB_GROUP_SECONDS_HINTS.get(group.shard_name) ??
     Math.round(defaultSeconds * COMPACT_GITHUB_GROUP_SECONDS_SCALE)
   );
@@ -730,6 +737,11 @@ function estimateCompactStripeSeconds(
   runnerBackend: string | undefined,
 ): number {
   if (runnerBackend === "github") {
+    if (group.timing_key) {
+      // The planner's parent-derived floor owns a new membership generation
+      // until that exact hosted child has its own successful samples.
+      return readCompactGroupTimings("github")[group.timing_key] ?? 0;
+    }
     return estimateCompactGroupSeconds(group, runnerBackend);
   }
   const blacksmithSeconds =
@@ -745,6 +757,13 @@ function estimateCompactStripeSeconds(
 function compactGiantStripeFamily(group: NodeTestShardGroup): string | undefined {
   if (/^agentic-commands-doctor-sessions-cron(?:-(?:memory|sqlite))?$/u.test(group.shard_name)) {
     return "agentic-commands-doctor-sessions-cron";
+  }
+  const membershipTimedParent =
+    /^(agentic-agents-support|agentic-control-plane-agent-chat)-hosted-\d+$/u.exec(
+      group.shard_name,
+    )?.[1];
+  if (membershipTimedParent) {
+    return membershipTimedParent;
   }
   return /^(agentic-agents-embedded-base|agentic-gateway-core|core-runtime-media-ui|core-unit-src-security)-\d+$/u.exec(
     group.shard_name,
@@ -2317,6 +2336,29 @@ function listAgentEmbeddedBaseTestFiles(): string[] {
   return listAgentOwnerTestFiles(agentVitestProjectOwners.embedded);
 }
 
+function readCompleteSplitGenerationSeconds(
+  profile: "blacksmith" | "github",
+  selectorKey: string,
+): number | undefined {
+  const generations = new Map<string, { expected: number; parts: Map<number, number> }>();
+  for (const [key, seconds] of Object.entries(readCompactGroupTimings(profile))) {
+    const parsed = parseCompactSplitTimingKey(key);
+    if (!parsed || parsed.selectorKey !== selectorKey) {
+      continue;
+    }
+    const current = generations.get(parsed.generationKey) ?? {
+      expected: parsed.expectedParts,
+      parts: new Map(),
+    };
+    current.parts.set(parsed.part, seconds);
+    generations.set(parsed.generationKey, current);
+  }
+  const completeTotals = [...generations.values()]
+    .filter(({ expected, parts }) => parts.size === expected)
+    .map(({ parts }) => [...parts.values()].reduce((total, seconds) => total + seconds, 0));
+  return completeTotals.length > 0 ? Math.max(...completeTotals) : undefined;
+}
+
 // Whole-config groups the hosted splitter may stripe by file: each lister
 // must enumerate exactly its config's include set so a stripe union stays a
 // complete, non-overlapping partition of the suite.
@@ -2339,8 +2381,13 @@ function splitOversizedCompactGroup(
   const isCliProcess = group.shard_name === "agentic-cli-process";
   const measuredProfileSeconds = estimateCompactGroupSeconds(group, runnerBackend);
   const measuredHostedSeconds = estimateCompactGroupSeconds(group, "github");
+  const splitTimingPrefix = `${group.shard_name}#selector-`;
+  const hasSplitTimingHistory = (["blacksmith", "github"] as const).some((profile) =>
+    Object.keys(readCompactGroupTimings(profile)).some((key) => key.startsWith(splitTimingPrefix)),
+  );
   if (
     !isCliProcess &&
+    !hasSplitTimingHistory &&
     Math.max(measuredProfileSeconds, measuredHostedSeconds) <= COMPACT_GITHUB_MAX_PREDICTED_SECONDS
   ) {
     return [{ group, seconds: measuredProfileSeconds }];
@@ -2364,16 +2411,12 @@ function splitOversizedCompactGroup(
     profileSeconds + splitBuildSeconds,
     hostedProfileSeconds + Math.round(splitBuildSeconds * COMPACT_GITHUB_GROUP_SECONDS_SCALE),
   );
-  if (
-    splitSeconds <= COMPACT_GITHUB_MAX_PREDICTED_SECONDS ||
-    !includePatterns ||
-    includePatterns.length < 2
-  ) {
+  if (!includePatterns || includePatterns.length < 2) {
     return [{ group, seconds: profileSeconds }];
   }
 
   // An empty include list falls back to the whole config in the shard runner.
-  const stripeCount = Math.min(
+  let stripeCount = Math.min(
     includePatterns.length,
     Math.ceil(splitSeconds / COMPACT_GITHUB_MAX_PREDICTED_SECONDS),
   );
@@ -2400,12 +2443,55 @@ function splitOversizedCompactGroup(
   const weightForValue = isCliProcess
     ? (file: string) => cliProcessBatchWeight([file])
     : weightForFile;
-  return createStripedBatches(
-    includePatterns,
-    stripeCount,
-    weightForValue,
-    isCliProcess ? cliProcessBatchWeight : undefined,
-  ).map((patterns, index) => ({
+  const createStripes = (count: number) =>
+    createStripedBatches(
+      includePatterns,
+      count,
+      weightForValue,
+      isCliProcess ? cliProcessBatchWeight : undefined,
+    );
+  let stripes = createStripes(stripeCount);
+  let timingGeneration = createCompactSplitTimingGeneration({
+    configs: group.configs,
+    env: group.env,
+    parentShardName: group.shard_name,
+    stripes,
+  });
+  const completeBlacksmithSeconds = readCompleteSplitGenerationSeconds(
+    "blacksmith",
+    timingGeneration.selectorKey,
+  );
+  const completeHostedSeconds = readCompleteSplitGenerationSeconds(
+    "github",
+    timingGeneration.selectorKey,
+  );
+  const completeMeasuredSeconds =
+    runnerBackend === "github"
+      ? (completeHostedSeconds ?? 0)
+      : runnerBackend === "hybrid"
+        ? Math.max(completeBlacksmithSeconds ?? 0, completeHostedSeconds ?? 0)
+        : (completeBlacksmithSeconds ?? 0);
+  if (Math.max(splitSeconds, completeMeasuredSeconds) <= COMPACT_GITHUB_MAX_PREDICTED_SECONDS) {
+    return [{ group, seconds: profileSeconds }];
+  }
+  if (completeMeasuredSeconds > splitSeconds) {
+    stripeCount = Math.min(
+      includePatterns.length,
+      Math.ceil(completeMeasuredSeconds / COMPACT_GITHUB_MAX_PREDICTED_SECONDS),
+    );
+    stripes = createStripes(stripeCount);
+    timingGeneration = createCompactSplitTimingGeneration({
+      configs: group.configs,
+      env: group.env,
+      parentShardName: group.shard_name,
+      stripes,
+    });
+  }
+  const distributedProfileSeconds = Math.max(
+    profileSeconds,
+    runnerBackend === "github" ? (completeHostedSeconds ?? 0) : (completeBlacksmithSeconds ?? 0),
+  );
+  return stripes.map((patterns, index) => ({
     group: {
       ...group,
       includePatterns: patterns,
@@ -2413,9 +2499,11 @@ function splitOversizedCompactGroup(
         { configs: group.configs, includePatterns: patterns },
       ]),
       shard_name: `${group.shard_name}-hosted-${index + 1}`,
+      timing_key: timingGeneration.timingKeys[index]!,
     },
     seconds: Math.ceil(
-      (profileSeconds * patterns.reduce((seconds, file) => seconds + weightForFile(file), 0)) /
+      (distributedProfileSeconds *
+        patterns.reduce((seconds, file) => seconds + weightForFile(file), 0)) /
         totalWeight,
     ),
   }));
@@ -2461,23 +2549,21 @@ function createCompactNodeTestShardBundles(
       const groups = groupsByRunner.get(key) ?? [];
       groups.push(planned.group);
       groupsByRunner.set(key, groups);
-      // A divided parent estimate covers only unmeasured hosted stripes. Once
-      // sampled, the child's runner-specific timing owns admission.
-      if (
-        planned.group.shard_name !== group.shard_name &&
-        readCompactGroupTimings(options.runnerBackend === "github" ? "github" : "blacksmith")[
-          planned.group.shard_name
-        ] === undefined
-      ) {
-        synthesizedSplitSeconds.set(planned.group.shard_name, planned.seconds);
+      // The current complete-file membership always retains its parent-derived
+      // floor. A matching child sample may raise it, but an old partition must
+      // never erase newly assigned work.
+      if (planned.group.shard_name !== group.shard_name) {
+        synthesizedSplitSeconds.set(compactGroupTimingKey(planned.group), planned.seconds);
       }
     }
   }
 
   const compactJobs: CompactNodeTestShard[] = [];
   const estimateStripeSeconds = (group: NodeTestShardGroup) =>
-    synthesizedSplitSeconds.get(group.shard_name) ??
-    estimateCompactStripeSeconds(group, options.runnerBackend);
+    Math.max(
+      synthesizedSplitSeconds.get(compactGroupTimingKey(group)) ?? 0,
+      estimateCompactStripeSeconds(group, options.runnerBackend),
+    );
   const estimateBinSeconds = (groups: NodeTestShardGroup[]) => {
     const mode = mergeVitestPretestBuildModes(groups.map((group) => group.pretestBuildMode));
     const buildSeconds = mode ? VITEST_PRETEST_BUILD_SECONDS[mode] : 0;

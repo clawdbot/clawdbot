@@ -19,9 +19,16 @@ beforeEach(() => {
 });
 
 async function renderLoginGate(page: Page): Promise<void> {
+  const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
   const response = await page.goto(suite.server.baseUrl);
   expect(response?.status()).toBe(200);
-
+  await gateway.waitForRequest("connect");
+  await gateway.rejectDeferred("connect", {
+    code: "INVALID_REQUEST",
+    message: "token missing",
+    details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
+  });
+  await page.locator(".login-gate").waitFor();
   await mountLoginGate(page);
 }
 
