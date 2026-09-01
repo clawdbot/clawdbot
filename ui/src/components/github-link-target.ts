@@ -1,4 +1,4 @@
-const GITHUB_HOST = "github.com";
+const GITHUB_URL_PREFIX = "https://github.com/";
 
 export const GITHUB_HOVERCARD_OPEN_DELAY_MS = 250;
 
@@ -38,14 +38,13 @@ export function parseGitHubItemPath(url: URL): GitHubItemTarget | null {
 export function parseGitHubLinkTarget(href: string): GitHubLinkTarget | null {
   let url: URL;
   try {
-    url = new URL(href, globalThis.location?.href ?? "http://localhost/");
+    // Anchors resolve relative links; the stream scanner supplies absolute URLs.
+    url = new URL(href);
   } catch {
     return null;
   }
-  if (url.protocol !== "https:" || url.hostname.toLowerCase() !== GITHUB_HOST) {
-    return null;
-  }
-  if (url.username || url.password || (url.port && url.port !== "443")) {
+  // Match the parsed URL so credentials, ports, and lookalike hosts cannot pass.
+  if (!url.href.startsWith(GITHUB_URL_PREFIX)) {
     return null;
   }
   const target = parseGitHubItemPath(url);
@@ -53,7 +52,7 @@ export function parseGitHubLinkTarget(href: string): GitHubLinkTarget | null {
 }
 
 export function gitHubProfileUrl(login: string): string {
-  return `https://${GITHUB_HOST}/${encodeURIComponent(login)}`;
+  return `${GITHUB_URL_PREFIX}${encodeURIComponent(login)}`;
 }
 
 export function githubLinkAnchorFromEvent(event: Event): HTMLAnchorElement | null {
@@ -66,8 +65,4 @@ export function githubLinkAnchorFromEvent(event: Event): HTMLAnchorElement | nul
     }
   }
   return null;
-}
-
-export function isGitHubPullRequestLink(href: string): boolean {
-  return parseGitHubLinkTarget(href)?.kind === "pull";
 }

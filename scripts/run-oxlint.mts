@@ -47,6 +47,7 @@ const OXLINT_VALUE_FLAGS = new Set([
 const OXLINT_BOUNDARY_FREE_TS_CONFIGS = new Set([
   "config/tsconfig/oxlint.core.json",
   "config/tsconfig/oxlint.scripts.json",
+  "test/tsconfig/tsconfig.test.root.json",
 ]);
 const OPENCLAW_FOCUSED_CONFIG_FLAG = "--openclaw-focused-config";
 
@@ -65,7 +66,7 @@ export function shouldPrepareExtensionPackageBoundaryArtifacts(args: string[]) {
     }
     return arg.startsWith("--tsconfig=") ? [arg.slice("--tsconfig=".length)] : [];
   });
-  // Core and script lint resolve workspace sources through the root tsconfig;
+  // Core, script, and root-test lint resolve sources through the root tsconfig;
   // generated plugin package declarations are only an extension-lint input.
   return (
     tsconfigs.length === 0 ||

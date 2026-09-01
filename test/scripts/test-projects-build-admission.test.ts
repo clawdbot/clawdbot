@@ -2,10 +2,12 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveVitestCliEntry } from "../../scripts/run-vitest.mts";
 import { createPatternFileHelper } from "../helpers/pattern-file.js";
 import { waitForChildClose, waitForDead, waitForPidFile } from "../helpers/process-wait.js";
 import { createDeferred, withTestTimeout } from "../helpers/promise.js";
 import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createToolingVitestConfig } from "../vitest/vitest.tooling.config.ts";
 
 const commands = vi.hoisted(() => ({ prepare: vi.fn(), prepareE2e: vi.fn(), reader: vi.fn() }));
 vi.mock("../../scripts/lib/managed-child-process.mts", () => ({
@@ -76,6 +78,16 @@ describe("CLI runtime admission", () => {
   const posixIt = process.platform === "win32" ? it.skip : it;
   posixIt.each([
     ["ordinary target", [ordinaryQa]],
+    ["ordinary CLI config", ["--config", "test/vitest/vitest.cli.config.ts"]],
+    [
+      "CLI process exclusion",
+      [
+        "--config",
+        "test/vitest/vitest.cli-process.config.ts",
+        "--exclude",
+        "src/cli/update-dry-run-state.process.test.ts",
+      ],
+    ],
     [
       "Gateway scoped exclusion",
       ["--config", "test/vitest/vitest.gateway-core.config.ts", "--exclude", "gateway-*.test.ts"],
@@ -128,6 +140,12 @@ syncBuiltinESMExports();\n`,
       ["watch", "--config=test/vitest/vitest.extension-qa.config.ts"],
     ],
     ["root config", "scripts/run-vitest.mts", ["run", "--config", "vitest.config.ts"]],
+    [
+      "CLI process",
+      "scripts/run-vitest.mts",
+      ["run", "--config", "test/vitest/vitest.cli-process.config.ts"],
+      "runtime",
+    ],
     [
       "Gateway core",
       "scripts/run-vitest.mts",
@@ -304,6 +322,92 @@ async function start(args: string[]) {
 }
 
 describe("test-projects build admission", () => {
+  const toolingConfig = "test/vitest/vitest.tooling.config.ts";
+  const ordinaryTooling = "test/scripts/run-vitest-state-cleanup.test.ts";
+  const runtimeTooling = "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts";
+
+  it.each([
+    {
+      name: "borrowed ordinary tooling",
+      args: [toolingConfig],
+      include: [ordinaryTooling],
+      build: false,
+    },
+    {
+      name: "borrowed runtime tooling",
+      args: [toolingConfig],
+      include: [runtimeTooling],
+      build: true,
+    },
+    { name: "borrowed empty selection", args: [toolingConfig], include: [], build: false },
+    { name: "whole config without an override", args: [toolingConfig], build: true },
+    {
+      name: "owned ordinary over borrowed runtime",
+      args: [ordinaryTooling],
+      include: [runtimeTooling],
+      build: false,
+    },
+    {
+      name: "owned runtime over borrowed ordinary",
+      args: [runtimeTooling],
+      include: [ordinaryTooling],
+      build: true,
+    },
+    { name: "owned runtime over borrowed empty", args: [runtimeTooling], include: [], build: true },
+  ])("prepares only the effective tooling selection: $name", async ({ args, include, build }) => {
+    const borrowed = include ? patternFiles.writePatternFile("borrowed.json", include) : undefined;
+    const original = borrowed
+      ? { bytes: fs.readFileSync(borrowed), stat: fs.statSync(borrowed) }
+      : undefined;
+    if (borrowed) {
+      vi.stubEnv("OPENCLAW_VITEST_INCLUDE_FILE", borrowed);
+    }
+    commands.prepare.mockResolvedValue(0);
+    const selected: unknown[] = [];
+    commands.reader.mockImplementation(({ env, pnpmArgs }) => {
+      const wrapperArgv = process.argv;
+      // The config consumes the reader's CLI, not its parent wrapper's targets.
+      process.argv = [
+        process.execPath,
+        ...pnpmArgs.slice(pnpmArgs.indexOf(resolveVitestCliEntry())),
+      ];
+      try {
+        selected.push(createToolingVitestConfig(env).test?.include);
+      } finally {
+        process.argv = wrapperArgv;
+      }
+      return {
+        completion: Promise.resolve({ code: 0, signal: null }),
+        getForwardedSignal: () => undefined,
+      };
+    });
+
+    await start(args);
+    expect(await terminal.promise).toMatch(/^\[test\] passed 1 Vitest shard/u);
+    expect(commands.prepare).toHaveBeenCalledTimes(build ? 1 : 0);
+    expect(commands.prepareE2e).not.toHaveBeenCalled();
+    expect(commands.reader).toHaveBeenCalledOnce();
+    expect(selected).toEqual([
+      args[0] === toolingConfig
+        ? (include ?? ["test/**/*.test.ts", "src/scripts/**/*.test.ts"])
+        : args,
+    ]);
+    if (borrowed && original) {
+      expect(fs.readFileSync(borrowed)).toEqual(original.bytes);
+      expect(fs.statSync(borrowed)).toMatchObject({
+        ino: original.stat.ino,
+        mtimeMs: original.stat.mtimeMs,
+      });
+      const readerInclude = commands.reader.mock.calls[0]![0].env.OPENCLAW_VITEST_INCLUDE_FILE;
+      if (args[0] === toolingConfig) {
+        expect(readerInclude).toBe(borrowed);
+      } else {
+        expect(readerInclude).not.toBe(borrowed);
+        expect(fs.existsSync(readerInclude)).toBe(false);
+      }
+    }
+  });
+
   it.each([false, true])(
     "holds every reader until preparation completes (parallel=%s)",
     async (parallel) => {

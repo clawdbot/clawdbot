@@ -8,6 +8,7 @@ import {
   normalizeStringifiedOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMattermostRuntime } from "../runtime.js";
+import { isWildcardBindHost } from "./callback-host.js";
 import { updateMattermostPost, type MattermostClient, type MattermostPost } from "./client.js";
 import {
   isTrustedProxyAddress,
@@ -75,15 +76,6 @@ type InteractionCallbackConfig = Pick<OpenClawConfig, "gateway" | "channels"> & 
 
 export function resolveInteractionCallbackPath(accountId: string): string {
   return `/mattermost/interactions/${accountId}`;
-}
-
-function isWildcardBindHost(rawHost: string): boolean {
-  const trimmed = rawHost.trim();
-  if (!trimmed) {
-    return false;
-  }
-  const host = trimmed.startsWith("[") && trimmed.endsWith("]") ? trimmed.slice(1, -1) : trimmed;
-  return host === "0.0.0.0" || host === "::" || host === "0:0:0:0:0:0:0:0" || host === "::0";
 }
 
 function normalizeCallbackBaseUrl(baseUrl: string): string {

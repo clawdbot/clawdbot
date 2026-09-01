@@ -3,7 +3,6 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { runWithFailedTrailer } from "./failed-trailer.mts";
 import { fsSafeNativeCopy } from "./fs-safe-native-assets.mts";
 import { createStateSchemaInlinePlugin } from "./state-schema-inline-plugin.mts";
 import {
@@ -46,8 +45,8 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     "scripts/lib/managed-child-process.mts",
     "scripts/lib/windows-taskkill.mjs",
     "scripts/windows-cmd-helpers.mjs",
-    "scripts/lib/failed-trailer.mts",
     "scripts/lib/runtime-process-build-entries.mts",
+    "scripts/lib/runtime-process-core-build-entries.mts",
     "scripts/lib/vitest-worker-build-entries.mts",
     "scripts/lib/fs-safe-native-assets.mts",
     "scripts/lib/state-schema-inline-plugin.mts",
@@ -153,7 +152,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
 }
 
 if (import.meta.main) {
-  await runWithFailedTrailer("vitest-workers", async () => {
+  try {
     const directory = fs.realpathSync(process.argv[2]!);
     const parent = fs.realpathSync(path.join(root, ".artifacts/vitest-workers"));
     if (
@@ -165,5 +164,8 @@ if (import.meta.main) {
       throw new Error("Compiled subprocess compiler requires a fresh invocation directory");
     }
     await compileVitestWorkerArtifacts(directory);
-  });
+  } catch (error) {
+    console.error(error);
+    process.exitCode = 1;
+  }
 }

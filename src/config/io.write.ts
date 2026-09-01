@@ -128,6 +128,7 @@ export async function writeConfigFileFromContext(
     options,
     unsetPaths,
     env: deps.env,
+    homedir: deps.homedir,
   });
   const cronOwnerRefusal = cronOwner
     ? await prepareCronOwnerWriteRefusal(snapshot.config, {

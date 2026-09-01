@@ -82,6 +82,9 @@ import { withoutGatewayToolCallerIdentity } from "./tools/gateway-caller-context
 
 type GatewayApprovalResult = Awaited<ReturnType<typeof processGatewayAllowlist>>;
 
+const BACKGROUND_EXEC_FOLLOW_UP =
+  "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.";
+
 function createExecProcessSettlement() {
   const settlement: {
     outcome: ExecProcessOutcome | null;
@@ -649,10 +652,8 @@ export function createExecTool(
 
       const cleanupToolRunListeners = () => {
         run.disableUpdates();
-        if (registeredAbortSignal) {
-          registeredAbortSignal.removeEventListener("abort", onAbortSignal);
-          registeredAbortSignal = null;
-        }
+        registeredAbortSignal?.removeEventListener("abort", onAbortSignal);
+        registeredAbortSignal = null;
         if (yieldTimer) {
           clearTimeout(yieldTimer);
           yieldTimer = null;
@@ -722,7 +723,7 @@ export function createExecTool(
                     type: "text",
                     text: `${getWarningText()}Command still running (session ${run.session.id}, pid ${
                       run.session.pid ?? "n/a"
-                    }). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.`,
+                    }). ${BACKGROUND_EXEC_FOLLOW_UP}`,
                   },
                 ],
                 details: {
@@ -732,6 +733,8 @@ export function createExecTool(
                   startedAt: run.startedAt,
                   cwd: run.session.cwd,
                   tail: run.session.tail,
+                  // Structured callers receive details without the visible content.
+                  followUp: BACKGROUND_EXEC_FOLLOW_UP,
                 },
               },
           approvalReview,

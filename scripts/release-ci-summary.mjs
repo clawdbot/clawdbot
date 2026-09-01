@@ -18,10 +18,12 @@ import {
   formatReleaseStateOutcome,
   isReleaseGhArtifactMissingError,
   MAX_RELEASE_ARTIFACT_BYTES,
+  normalizeReleaseCoveragePolicy,
   normalizeReleaseTelegramWaiver,
   releaseCompositeJobsSha256,
   terminalPolicyPass,
   validateReleaseChildDispatchBinding,
+  validateReleaseCoveragePolicyBinding,
   validateReleaseExecutionPlanArtifact,
   validateReleaseChildRunProvenance,
   validateReleaseStateArtifact,
@@ -420,11 +422,18 @@ function requiredChildKeysForManifest(manifest) {
   ) {
     return new Set(HISTORICAL_MANIFEST_RERUN_GROUP_CHILD_KEYS.get(manifest.rerunGroup));
   }
-  return requiredChildKeysForRerunGroup(
+  const selectedKeys = requiredChildKeysForRerunGroup(
     manifest.rerunGroup,
     manifest.validationInputs,
     manifest.version === 4 ? 3 : 2,
   );
+  // validateParentManifest authenticates the explicit policy before selection;
+  // an older beta receipt without this marker still requires its full child set.
+  if (manifest.validationInputs?.coveragePolicy === "npm-beta-v1") {
+    selectedKeys.delete("productPerformance");
+    selectedKeys.delete("npmTelegram");
+  }
+  return selectedKeys;
 }
 
 export function expectedSelectedChildDispatches(
@@ -898,6 +907,16 @@ export function validateParentManifest(value, expected) {
     releaseProfile,
     rerunGroup: value.rerunGroup,
   });
+  if (validationInputs?.coveragePolicy !== undefined && value.version !== 4) {
+    throw new Error("release coverage policy requires a version 4 manifest");
+  }
+  const coveragePolicy = normalizeReleaseCoveragePolicy({
+    ...validationInputs,
+    candidateVersion: candidateBinding?.package.version,
+    releaseProfile,
+    rerunGroup,
+    runReleaseSoak,
+  });
   const childEvidence = normalizeManifestChildEvidence(value.childEvidence);
   const childRuns = value.childRuns;
   if (!childRuns || typeof childRuns !== "object" || Array.isArray(childRuns)) {
@@ -942,6 +961,15 @@ export function validateParentManifest(value, expected) {
           ),
           releaseChecks: normalizeOptionalRunId(childRuns.releaseChecks, "release checks run ID"),
         };
+  if (
+    coveragePolicy &&
+    (childRunIds.productPerformance ||
+      childRunIds.npmTelegram ||
+      controls.performanceBlocking !== false ||
+      validationInputs.skipPackageTelegramE2e !== "true")
+  ) {
+    throw new Error("npm beta coverage policy requires deferred confidence children");
+  }
   let evidenceReuse;
   if (value.evidenceReuse !== undefined) {
     const reuse = normalizeJsonObject(
@@ -1368,6 +1396,7 @@ export function validateManifestChildRun(
       runId,
     },
     log: selectedParentJobLog,
+    coveragePolicy: parentManifest.validationInputs?.coveragePolicy,
     plannedRunAttempt: plannedRunAttempt ?? run.run_attempt,
     repository: targetRepository,
     targetSha: parentManifest.targetSha,
@@ -2286,6 +2315,7 @@ export async function validateReleaseRunEvidence(
       })
     : undefined;
   validateReleaseTelegramWaiverBinding(executionPlan, rootEvidence.manifest.validationInputs);
+  validateReleaseCoveragePolicyBinding(executionPlan, rootEvidence.manifest.validationInputs);
   const plannedByKey = new Map(
     (executionPlan?.children ?? []).map((plannedChild) => [plannedChild.key, plannedChild]),
   );
@@ -2300,6 +2330,19 @@ export async function validateReleaseRunEvidence(
     }
     if (!rootEvidence.manifest.childEvidence) {
       throw new Error("release validation manifest omitted composite child evidence");
+    }
+    if (
+      executionPlan.coveragePolicy &&
+      JSON.stringify(
+        executionPlan.children
+          .filter((child) => child.selected)
+          .map((child) => child.key)
+          .toSorted(),
+      ) !== JSON.stringify([...selectedKeys].toSorted())
+    ) {
+      throw new Error(
+        "release validation selected child set differs from its immutable execution plan",
+      );
     }
   }
   const expectedChildren = executionPlan

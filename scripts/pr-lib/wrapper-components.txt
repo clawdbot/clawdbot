@@ -20,6 +20,7 @@ scripts/lib/test-projects-delegation.mts
 scripts/lib/test-selector-source-facts.mts
 scripts/lib/vitest-build-prerequisites.mts
 scripts/lib/vitest-cli-mode.mts
+scripts/lib/vitest-cli.mts
 scripts/lib/vitest-local-scheduling.mts
 scripts/lib/vitest-process-env.mts
 scripts/lib/vitest-process.mts
@@ -34,6 +35,7 @@ scripts/run-vitest.mts
 scripts/test-projects.test-support.mts
 scripts/vitest-process-group.mts
 scripts/windows-cmd-helpers.mjs
+src/cli/wait.ts
 test/helpers/temp-dir.ts
 test/vitest/vitest.agents-paths.mjs
 test/vitest/vitest.channel-paths.mjs

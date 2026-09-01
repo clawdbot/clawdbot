@@ -97,6 +97,15 @@ it.each([
 });
 
 describe("CI changed Node test plan", () => {
+  it("leaves native Chromium tests to checks-ui while retaining changed Node-driven tests", () => {
+    const browser = "ui/src/components/markdown-mermaid.runtime.browser.test.ts";
+    const node = "ui/src/components/form-controls.browser.test.ts";
+    const shards = createChangedNodeTestShards([browser, node]);
+    expect(shards).not.toBeNull();
+    const targets = shards?.flatMap((shard) => shard.targets ?? []);
+    expect(targets).toContain(node);
+    expect(targets).not.toContain(browser);
+  });
   it.each([
     "extensions/copilot/index.ts",
     "extensions/copilot/harness.ts",
@@ -219,6 +228,22 @@ describe("CI changed Node test plan", () => {
     // Build-input classification: only sources and the build pipeline can
     // change dist bytes; repo scripts, workflows, and qa scenarios cannot.
     expect(hasBuildArtifactAffectingChange(["scripts/build-all.mts"])).toBe(true);
+    for (const changedPath of [
+      "tsdown.config.ts",
+      "tsdown.ai.config.ts",
+      "scripts/tsdown-build.mts",
+      "scripts/write-plugin-sdk-entry-dts.ts",
+      "scripts/write-unified-entry-dts.ts",
+      "scripts/lib/build-artifact-cache.mts",
+      "scripts/lib/compiler-input-snapshot.mts",
+      "scripts/lib/declaration-stage.mts",
+      "scripts/lib/tsdown-declaration-inputs.mts",
+      "scripts/lib/tsdown-declaration-writer.mts",
+      "scripts/lib/tsdown-config-groups.mts",
+      "scripts/lib/tsdown-output-roots.mts",
+    ]) {
+      expect(hasBuildArtifactAffectingChange([changedPath]), changedPath).toBe(true);
+    }
     expect(hasBuildArtifactAffectingChange(["tsconfig.json"])).toBe(true);
     expect(hasBuildArtifactAffectingChange(["scripts/run-vitest.mjs"])).toBe(false);
     expect(hasBuildArtifactAffectingChange([".github/workflows/ci.yml"])).toBe(false);

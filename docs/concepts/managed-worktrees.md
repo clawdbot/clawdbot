@@ -3,18 +3,39 @@ summary: "Run agent tasks in isolated git checkouts with automatic snapshots and
 read_when:
   - You want an isolated branch and checkout for an agent task
   - You are configuring Workboard cards with worktree workspaces
+  - You want to store managed worktrees on another disk or in a custom folder
   - You need to restore or clean up an OpenClaw-managed worktree
 title: "Managed worktrees"
 ---
 
-Managed worktrees give an agent task its own git branch and checkout without placing temporary directories inside the source repository. OpenClaw creates them under its state directory, records them in the shared state database, and snapshots their tracked and non-ignored untracked contents before removal.
+Managed worktrees give an agent task its own git branch and checkout without placing temporary directories inside the source repository. OpenClaw records them in the shared state database and snapshots their tracked and non-ignored untracked contents before removal.
+
+## Choose where worktrees are stored
+
+By default, OpenClaw stores managed checkouts under `<openclaw-state-dir>/worktrees`. Set the global `worktreeRoot` option in `openclaw.json` to use another folder or disk:
+
+```json5
+{
+  worktreeRoot: "/mnt/workspaces/openclaw-worktrees",
+}
+```
+
+Use an absolute path on the Gateway host, `~` for the Gateway user's home directory, or a path beginning with `~/` for a folder inside it. Relative paths are rejected. The Gateway user must be able to create and write to the directory.
+
+This setting applies to all managed worktrees, including session, manual, and Workboard worktrees; there is no per-agent override. It changes checkout storage only. The shared state database, snapshots of provisioned ignored files, allocation limits, and cleanup lifecycle remain associated with the same OpenClaw state directory.
+
+Changing `worktreeRoot` affects new allocations. Existing registered worktrees keep their recorded paths for reuse and cleanup, and removed worktrees restore to their original paths. OpenClaw does not move existing checkouts or snapshots when this setting changes. Keep their original storage available until those worktrees are no longer needed.
+
+Outside the default state-owned worktree directory, cleanup acts only on registered worktrees. It leaves unrelated, unregistered folders in your custom location alone.
+
+See [Configuration reference](/gateway/configuration-reference#worktreeroot) for the option's default and scope.
 
 ## Layout and names
 
 Each worktree lives at:
 
 ```text
-<openclaw-state-dir>/worktrees/<repo-fingerprint>/<name>
+<worktreeRoot>/<repo-fingerprint>/<name>
 ```
 
 The repository fingerprint is the first 16 hexadecimal characters of a SHA-256 hash over the canonical git common directory and origin URL. A supplied name must match `[a-z0-9][a-z0-9-]{0,63}`. Without a name, OpenClaw generates a readable crustacean-themed name such as `brisk-lobster`. Inferred names already occupied by any registered worktree (including the caller's own removed checkout), local branch, or unmanaged path get a numeric suffix such as `brisk-lobster-2`; only a supplied name reuses or restores the caller's existing record.

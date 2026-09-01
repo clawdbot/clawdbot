@@ -785,6 +785,7 @@ async function expectImageToolExecOk(
     path: imagePath,
   });
   expectToolText(result, "ok");
+  expect((result as ToolTextResult).details).toMatchObject({ text: "ok" });
 }
 
 type ToolTextResult = {

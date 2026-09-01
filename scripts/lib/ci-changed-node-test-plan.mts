@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { isUiBrowserTestFile } from "../../test/vitest/vitest.ui-paths.mjs";
 import { detectChangedLanes } from "../changed-lanes.mts";
 import {
   buildVitestRunPlans,
@@ -109,11 +110,11 @@ function isTestOnlyPath(changedPath: string) {
 }
 
 // Inputs `build:ci-artifacts` consumes: runtime/plugin/package sources plus
-// the build pipeline itself (mirrors the build-all cache key in ci.yml).
+// the build pipeline itself, including shared declaration publication and cache owners.
 // Built-artifact test inputs below also require this lane even though they do
 // not change the bytes under test.
 const BUILD_INPUT_RE =
-  /^(?:src|extensions|packages)\/|^(?:openclaw\.mjs|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)$|^tsconfig[^/]*\.json$|^scripts\/(?:build-[^/]+|runtime-postbuild\.mts|write-plugin-sdk-entry-dts\.ts)$|^scripts\/lib\/(?:copy-assets\.ts|plugin-sdk-entries\.mts)$/u;
+  /^(?:src|extensions|packages)\/|^(?:openclaw\.mjs|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)$|^tsconfig[^/]*\.json$|^tsdown(?:\.[^/]+)?\.config\.ts$|^scripts\/(?:build-[^/]+|runtime-postbuild\.mts|tsdown-build\.mts|write-(?:plugin-sdk|unified)-entry-dts\.ts)$|^scripts\/lib\/(?:copy-assets\.ts|plugin-sdk-entries\.mts|(?:build-artifact-cache|compiler-input-snapshot|declaration-stage|tsdown-[^/]+)\.mts)$/u;
 const BUILT_ARTIFACT_TEST_INPUTS = new Set([
   "extensions/browser/chrome-extension/relay-key.test-support.ts",
   "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts",
@@ -545,10 +546,14 @@ export function createChangedNodeTestShards(
   // suite scans the checked-out tree and never consumes the built dist.
   const shards = [
     ...createChangedExtensionConfigShardsForPaths(livePaths, cwd),
-    ...createChangedTargetShards(targets, {
-      checkName: "checks-node-changed",
-      shardName: "changed",
-    }),
+    // Native browser files run in checks-ui, including precise changed-file plans.
+    ...createChangedTargetShards(
+      targets.filter((target) => !isUiBrowserTestFile(target)),
+      {
+        checkName: "checks-node-changed",
+        shardName: "changed",
+      },
+    ),
     ...(hasBuildArtifactAffectingChange(changedPaths) ? [] : [createBoundaryShard()]),
   ];
   return shards.length > 0 ? shards : null;

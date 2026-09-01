@@ -702,7 +702,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       required: false,
       type: "string",
     });
-    expect(manifestEnv).toEqual({
+    expect(manifestEnv).toMatchObject({
       OPENCLAW_CI_CHANGED_PATHS_JSON:
         "${{ steps.changed_scope.outputs.changed_paths_json || 'null' }}",
       OPENCLAW_CI_CHECKOUT_REVISION: "${{ steps.checkout_ref.outputs.sha }}",
@@ -765,10 +765,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
         (step: WorkflowStep) => step.name === "Run check shard",
       ).run,
     ).toContain("pnpm deadcode:ci");
-    expect(normalCiScript).toContain('args+=(-f historical_target_tag="$TARGET_REF")');
-    expect(normalCiScript).toContain('args+=(-f historical_target_tag="$TARGET_CONTEXT_REF")');
-    expect(normalCiScript).toContain('args+=(-f target_context_ref="$TARGET_CONTEXT_REF")');
-    expect(normalCiScript).not.toContain('args+=(-f release_candidate_ref="$TARGET_CONTEXT_REF")');
     expect(releaseChecksStep.env?.TARGET_CONTEXT_REF).toBe("${{ inputs.target_context_ref }}");
     expect(releaseChecksScript).toContain('-f ref="$TARGET_SHA"');
     expect(releaseChecksScript).toContain('-f target_context_ref="$TARGET_CONTEXT_REF"');

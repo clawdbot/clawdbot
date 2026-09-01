@@ -274,6 +274,7 @@ function shouldExposeVideoReferenceAudioParams(params: {
 
   for (const plugin of snapshot.plugins) {
     if (
+      !plugin.contracts?.videoGenerationProviders?.length ||
       !isManifestPluginAvailableForControlPlane({
         snapshot,
         plugin,
@@ -282,8 +283,7 @@ function shouldExposeVideoReferenceAudioParams(params: {
     ) {
       continue;
     }
-    const providerIds = plugin.contracts?.videoGenerationProviders ?? [];
-    for (const providerId of providerIds) {
+    for (const providerId of plugin.contracts.videoGenerationProviders) {
       knownProviderIds.add(providerId);
       const metadata = plugin.videoGenerationProviderMetadata?.[providerId];
       const providerCanUseReferenceAudio = metadata?.referenceAudioInputs === true;

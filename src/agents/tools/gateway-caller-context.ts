@@ -8,6 +8,7 @@ import type {
 } from "../../gateway/server-methods/types.js";
 import type { WorkerSessionTurnClaim } from "../../gateway/worker-environments/placement-record.js";
 import type { WorkerTurnExecutionIdentityCapability } from "../../gateway/worker-environments/placement-turn-claim-events.js";
+import type { AgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   getAdmittedRunDelegatedAuthority,
@@ -25,6 +26,9 @@ type GatewayToolCallerIdentity = {
   agentId: string;
   sessionKey: string;
   operationalRunInstance?: OperationalRunInstanceRef;
+  /** Exact run authority used to fence delegated system-agent approvals. */
+  approvalAuthority?: AgentRunDelegatedAuthority;
+  approvalAuthorityCheck?: () => boolean | void;
   /** Exact host-resolved owner of this individual approval request. */
   approvalOwnerPluginId?: string;
   /** Host-owned tool/turn lifetimes; every same-run wrapper preserves earlier fences. */
@@ -143,6 +147,8 @@ export function createAdmittedGatewayToolCallerIdentity(
     agentId,
     sessionKey,
     operationalRunInstance: params.admittedRunContext.operationalRunInstance,
+    ...(delegatedAuthority ? { approvalAuthority: delegatedAuthority } : {}),
+    ...(params.receiptAuthority ? { approvalAuthorityCheck: params.receiptAuthority } : {}),
     executionIdentityToken: params.admittedRunContext.executionIdentityToken,
     gatewayContextResolver: bindGatewayToolContextResolver(
       getGatewayContextResolver(params.admittedRunContext),
@@ -191,6 +197,9 @@ export async function withGatewayToolCallerIdentity<T>(
       : undefined;
   const operationalRunInstance =
     inheritedOwner?.operationalRunInstance ?? identity.operationalRunInstance;
+  const approvalAuthority = inheritedOwner?.approvalAuthority ?? identity.approvalAuthority;
+  const approvalAuthorityCheck =
+    inheritedOwner?.approvalAuthorityCheck ?? identity.approvalAuthorityCheck;
   const signedAgentRuntimeIdentityToken =
     inheritedOwner?.signedAgentRuntimeIdentityToken ??
     identity.signedAgentRuntimeIdentityToken?.trim();
@@ -228,6 +237,8 @@ export async function withGatewayToolCallerIdentity<T>(
       agentId: inheritedOwner?.agentId ?? identity.agentId.trim(),
       sessionKey: inheritedOwner?.sessionKey ?? identity.sessionKey.trim(),
       ...(operationalRunInstance ? { operationalRunInstance } : {}),
+      ...(approvalAuthority ? { approvalAuthority } : {}),
+      ...(approvalAuthorityCheck ? { approvalAuthorityCheck } : {}),
       ...(identity.approvalOwnerPluginId?.trim()
         ? { approvalOwnerPluginId: identity.approvalOwnerPluginId.trim() }
         : inheritedOwner?.approvalOwnerPluginId

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, describe, expect, it } from "vitest";
-import { testing as openclawTestInstanceTesting } from "../../test/helpers/openclaw-test-instance.js";
+import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -16,9 +16,10 @@ import {
   ensureOpenClawAgentDatabaseSchema,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "../state/openclaw-agent-db.js";
-import { getFreePort } from "../test-utils/ports.js";
 import {
+  createBuiltRuntime,
   createSourceRuntime,
+  runBuiltRuntime,
   runIsolatedModuleScript,
   runSourceRuntime,
   seedV17AdditiveRepairDatabase,
@@ -111,7 +112,7 @@ describe("doctor invalid config process exit", () => {
     fs.mkdirSync(path.join(stateDir, "agents", "main", "sessions"), { recursive: true });
     fs.writeFileSync(configPath, "{}\n");
     const databasePath = seedV17AdditiveRepairDatabase(stateDir);
-    const runtimeRoot = createSourceRuntime(root);
+    const runtimeRoot = createBuiltRuntime(root);
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       OPENCLAW_CONFIG_PATH: configPath,
@@ -120,16 +121,9 @@ describe("doctor invalid config process exit", () => {
       OPENCLAW_TEST_FAST: "1",
       NO_COLOR: "1",
     };
-    const args = [
-      path.join(runtimeRoot, "src", "entry.ts"),
-      "doctor",
-      "--fix",
-      "--non-interactive",
-      "--yes",
-      "--no-workspace-suggestions",
-    ];
+    const args = ["doctor", "--fix", "--non-interactive", "--yes", "--no-workspace-suggestions"];
 
-    const first = runSourceRuntime(runtimeRoot, env, args, 60_000);
+    const first = runBuiltRuntime(runtimeRoot, env, args, 60_000);
     expect(first.error, first.stderr).toBeUndefined();
     expect(first.status, first.stderr).toBe(0);
     expect(`${first.stdout}\n${first.stderr}`).toContain("v17 -> v19");
@@ -164,7 +158,7 @@ describe("doctor invalid config process exit", () => {
       repaired.close();
     }
 
-    const second = runSourceRuntime(runtimeRoot, env, args, 60_000);
+    const second = runBuiltRuntime(runtimeRoot, env, args, 60_000);
     expect(second.error, second.stderr).toBeUndefined();
     expect(second.status, second.stderr).toBe(0);
     expect(`${second.stdout}\n${second.stderr}`).not.toMatch(
@@ -275,17 +269,11 @@ describe("doctor invalid config process exit", () => {
         },
       }),
     );
-    const runtimeRoot = createSourceRuntime(root);
-    const result = runSourceRuntime(
+    const runtimeRoot = createBuiltRuntime(root);
+    const result = runBuiltRuntime(
       runtimeRoot,
       env,
-      [
-        path.join(runtimeRoot, "src", "entry.ts"),
-        "doctor",
-        "--repair",
-        "--non-interactive",
-        "--no-workspace-suggestions",
-      ],
+      ["doctor", "--repair", "--non-interactive", "--no-workspace-suggestions"],
       45_000,
     );
     const output = `${result.stderr}\n${result.stdout}`;
@@ -358,16 +346,11 @@ describe("doctor invalid config process exit", () => {
     fs.mkdirSync(stateDir, { recursive: true });
     fs.writeFileSync(configPath, '{"agents": {broken json');
 
-    const runtimeRoot = createSourceRuntime(root);
-    const result = runSourceRuntime(
+    const runtimeRoot = createBuiltRuntime(root);
+    const result = runBuiltRuntime(
       runtimeRoot,
       env,
-      [
-        path.join(runtimeRoot, "src", "entry.ts"),
-        "doctor",
-        "--non-interactive",
-        "--no-workspace-suggestions",
-      ],
+      ["doctor", "--non-interactive", "--no-workspace-suggestions"],
       60_000,
     );
     const output = `${result.stderr}\n${result.stdout}`;
@@ -384,104 +367,85 @@ describe("doctor invalid config process exit", () => {
 // Synchronous CLI probes must not consume neighboring cases' timeout budgets.
 describe("gateway startup-migration refusal", () => {
   it("quarantines every invalid legacy automation before Gateway readiness", async () => {
-    const root = await fs.promises.realpath(tempDirs.make("openclaw-cron-upgrade-ready-"));
-    const stateDir = path.join(root, "state");
-    const configPath = path.join(root, "openclaw.json");
+    const instance = await createOpenClawTestInstance({
+      name: "cron-upgrade-ready",
+      startTimeoutMs: 30_000,
+      stopTimeoutMs: 1_500,
+      env: {
+        NODE_ENV: undefined,
+        NO_COLOR: "1",
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_HOME: undefined,
+        OPENCLAW_NO_RESPAWN: "1",
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_TEST_FAST: "1",
+        VITEST: undefined,
+        // Preserve full startup; the shared fixture otherwise skips sidecar readiness.
+        OPENCLAW_GATEWAY_TOKEN: process.env.OPENCLAW_GATEWAY_TOKEN,
+        OPENCLAW_GATEWAY_PASSWORD: process.env.OPENCLAW_GATEWAY_PASSWORD,
+        OPENCLAW_SKIP_PROVIDERS: process.env.OPENCLAW_SKIP_PROVIDERS,
+        OPENCLAW_SKIP_GMAIL_WATCHER: process.env.OPENCLAW_SKIP_GMAIL_WATCHER,
+        OPENCLAW_SKIP_CRON: process.env.OPENCLAW_SKIP_CRON,
+        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER,
+        OPENCLAW_SKIP_CANVAS_HOST: process.env.OPENCLAW_SKIP_CANVAS_HOST,
+        OPENCLAW_TEST_MINIMAL_GATEWAY: process.env.OPENCLAW_TEST_MINIMAL_GATEWAY,
+      },
+    });
+    const { env, port, stateDir } = instance;
     const storePath = path.join(stateDir, "cron", "jobs.json");
-    const port = await getFreePort();
-    const runtimeRoot = createSourceRuntime(root);
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      HOME: root,
-      USERPROFILE: root,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_NO_RESPAWN: "1",
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_TEST_FAST: "1",
-      NO_COLOR: "1",
-    };
-    delete env.NODE_ENV;
-    delete env.OPENCLAW_HOME;
-    delete env.VITEST;
-
-    fs.mkdirSync(path.dirname(storePath), { recursive: true });
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({ gateway: { mode: "local", auth: { mode: "none" } } }),
-    );
-    const job = {
-      name: "Legacy automation",
-      enabled: true,
-      createdAtMs: 1,
-      updatedAtMs: 1,
-      schedule: { kind: "cron", expr: "0 9 * * *" },
-      sessionTarget: "main",
-      wakeMode: "now",
-      payload: { kind: "systemEvent", text: "tick" },
-      state: {},
-    };
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify({
-        version: 1,
-        jobs: [
-          { ...job, id: "valid-job" },
-          { ...job, id: "invalid-state-job", state: { nextRunAtMs: -1 } },
-          { ...job, id: "invalid-trigger-job", trigger: { script: [] } },
-        ],
-      }),
-    );
-    const stdout = openclawTestInstanceTesting.createBoundedStringLog();
-    const stderr = openclawTestInstanceTesting.createBoundedStringLog();
-    const gateway = spawn(
-      process.execPath,
-      [
-        "--preserve-symlinks",
-        "--preserve-symlinks-main",
-        "--import",
-        "tsx",
-        path.join(runtimeRoot, "src", "entry.ts"),
-        "gateway",
-        "run",
-        "--allow-unconfigured",
-        "--port",
-        String(port),
-      ],
-      { cwd: runtimeRoot, env, stdio: ["ignore", "pipe", "pipe"] },
-    );
-    gateway.stdout.setEncoding("utf8");
-    gateway.stderr.setEncoding("utf8");
-    gateway.stdout.on("data", (chunk) => openclawTestInstanceTesting.appendLogChunk(stdout, chunk));
-    gateway.stderr.on("data", (chunk) => openclawTestInstanceTesting.appendLogChunk(stderr, chunk));
 
     try {
-      await openclawTestInstanceTesting.waitForGatewayReady(gateway, stdout, stderr, port, 30_000);
-      const response = await fetch(`http://127.0.0.1:${port}/readyz`);
-      await expect(response.json()).resolves.toMatchObject({ ready: true, failing: [] });
-    } finally {
-      expect(
-        await openclawTestInstanceTesting.stopGatewayProcess(gateway, Date.now() + 5_000, 1_500, {
-          forceWindowsTree: true,
+      // Readiness must use the migration fixture without extra hooks or Control UI settings.
+      await instance.state.writeConfig({ gateway: { mode: "local", auth: { mode: "none" } } });
+      fs.mkdirSync(path.dirname(storePath), { recursive: true });
+      const job = {
+        name: "Legacy automation",
+        enabled: true,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        schedule: { kind: "cron", expr: "0 9 * * *" },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "tick" },
+        state: {},
+      };
+      fs.writeFileSync(
+        storePath,
+        JSON.stringify({
+          version: 1,
+          jobs: [
+            { ...job, id: "valid-job" },
+            { ...job, id: "invalid-state-job", state: { nextRunAtMs: -1 } },
+            { ...job, id: "invalid-trigger-job", trigger: { script: [] } },
+          ],
         }),
-      ).toBe(true);
-    }
+      );
 
-    const loaded = await loadCronJobsStoreWithConfigJobsReadOnly(storePath, env);
-    expect(loaded.store.jobs.map((entry) => entry.id)).toContain("valid-job");
-    expect(
-      loadCronQuarantinedJobs(storePath, env).map((entry) => ({
-        sourceIndex: entry.sourceIndex,
-        reason: entry.reason,
-        id: entry.job?.id,
-      })),
-    ).toEqual([
-      { sourceIndex: 1, reason: "invalid-state", id: "invalid-state-job" },
-      { sourceIndex: 2, reason: "invalid-trigger", id: "invalid-trigger-job" },
-    ]);
-    expect(fs.existsSync(storePath)).toBe(false);
-    expect(fs.existsSync(`${storePath}.migrated`)).toBe(true);
+      try {
+        await instance.startGateway();
+        const response = await fetch(`http://127.0.0.1:${port}/readyz`);
+        await expect(response.json()).resolves.toMatchObject({ ready: true, failing: [] });
+      } finally {
+        await instance.stopGateway();
+      }
+
+      const loaded = await loadCronJobsStoreWithConfigJobsReadOnly(storePath, env);
+      expect(loaded.store.jobs.map((entry) => entry.id)).toContain("valid-job");
+      expect(
+        loadCronQuarantinedJobs(storePath, env).map((entry) => ({
+          sourceIndex: entry.sourceIndex,
+          reason: entry.reason,
+          id: entry.job?.id,
+        })),
+      ).toEqual([
+        { sourceIndex: 1, reason: "invalid-state", id: "invalid-state-job" },
+        { sourceIndex: 2, reason: "invalid-trigger", id: "invalid-trigger-job" },
+      ]);
+      expect(fs.existsSync(storePath)).toBe(false);
+      expect(fs.existsSync(`${storePath}.migrated`)).toBe(true);
+    } finally {
+      await instance.cleanup();
+    }
   }, 45_000);
 
   it("repairs the stable upgrade config and additive state schema before readiness", async () => {
@@ -718,16 +682,13 @@ describe("gateway startup-migration refusal", () => {
       });
       fs.writeFileSync(configPath, originalConfig);
       seedPluginStateConflict(stateDir);
+      const runtimeRoot = createBuiltRuntime(root);
 
-      const result = spawnSync(
-        process.execPath,
-        ["--import", "tsx", path.resolve("src/entry.ts"), "gateway", "run", "--allow-unconfigured"],
-        {
-          cwd: path.resolve("."),
-          encoding: "utf8",
-          env,
-          timeout: 30_000,
-        },
+      const result = runBuiltRuntime(
+        runtimeRoot,
+        env,
+        ["gateway", "run", "--allow-unconfigured"],
+        30_000,
       );
       const output = `${result.stderr}\n${result.stdout}`;
 
@@ -811,16 +772,13 @@ describe("gateway startup-migration refusal", () => {
           ...(startTime !== null ? { startTime } : {}),
         }),
       );
+      const runtimeRoot = createBuiltRuntime(root);
 
-      const result = spawnSync(
-        process.execPath,
-        ["--import", "tsx", path.resolve("src/entry.ts"), "gateway", "run", "--allow-unconfigured"],
-        {
-          cwd: path.resolve("."),
-          encoding: "utf8",
-          env,
-          timeout: 30_000,
-        },
+      const result = runBuiltRuntime(
+        runtimeRoot,
+        env,
+        ["gateway", "run", "--allow-unconfigured"],
+        30_000,
       );
       const output = `${result.stderr}\n${result.stdout}`;
 

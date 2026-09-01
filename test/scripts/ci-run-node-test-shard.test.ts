@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   utimesSync,
@@ -165,6 +166,59 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     expect(seen.map((run) => run.label).toSorted()).toEqual(["a", "b", "c"]);
     expect(new Set(seen.map((run) => run.cache)).size).toBe(3);
   });
+
+  it.each([
+    { source: "option", concurrency: 3, env: {} },
+    {
+      source: "environment",
+      concurrency: undefined,
+      env: { OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "3" },
+    },
+    { source: "default", concurrency: undefined, env: {} },
+  ])(
+    "bounds $source workers and restored cache slots to actual plans",
+    async ({ env, concurrency }) => {
+      const persistentRoot = makeScratchDir();
+      const seed = path.join(persistentRoot, "vitest-cache-0");
+      mkdirSync(seed);
+      writeFileSync(path.join(seed, "transform"), "cached", "utf8");
+      const seen: string[] = [];
+      const exitCode = await runShardPlans(
+        [{ kind: "group", name: "one", plan: { configs: ["one.config.ts"] } }],
+        {
+          concurrency,
+          env: { ...env, OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: persistentRoot },
+          scratchDir: makeScratchDir(),
+          runChild: async (_args, childEnv) => {
+            seen.push(childEnv.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH ?? "");
+            return 0;
+          },
+        },
+      );
+      expect(exitCode).toBe(0);
+      expect(seen).toEqual([seed]);
+      expect(readdirSync(persistentRoot)).toEqual(["vitest-cache-0"]);
+    },
+  );
+
+  it.each([NaN, 0, 1.5])(
+    "rejects invalid concurrency %s before scheduling plans",
+    async (concurrency) => {
+      let runs = 0;
+      await expect(
+        runShardPlans([{ kind: "group", name: "one", plan: { configs: ["one.config.ts"] } }], {
+          concurrency,
+          env: {},
+          scratchDir: makeScratchDir(),
+          runChild: async () => {
+            runs += 1;
+            return 0;
+          },
+        }),
+      ).rejects.toThrow("Shard plan concurrency must be a positive integer");
+      expect(runs).toBe(0);
+    },
+  );
 
   it("runs per-config groups serially through one persistent cache slot", async () => {
     const scratchDir = makeScratchDir();

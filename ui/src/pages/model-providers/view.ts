@@ -1,24 +1,20 @@
 // Control UI view renders the Models settings page content.
 import { html, nothing } from "lit";
-import { BASE_THINKING_LEVELS } from "../../../../src/auto-reply/thinking.shared.js";
-import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type { FastMode, ModelsProbeResult } from "../../api/types.ts";
+import { icons } from "../../components/icons.ts";
 import { renderProviderBrandIcon } from "../../components/provider-icon.ts";
 import { renderProviderUsageDetails } from "../../components/provider-usage.ts";
 import {
   renderSettingsEmpty,
-  renderSettingsDefaultDescription,
   renderSettingsGroup,
   renderSettingsLoadingSkeleton,
   renderSettingsPage,
   renderSettingsRow,
   renderSettingsSection,
-  renderSettingsSegmented,
   renderSettingsStatus,
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { formatThinkingOverrideLabel } from "../../lib/chat/thinking.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatCompactTokenCount, formatCost, formatTimeMs } from "../../lib/format.ts";
 import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
@@ -53,7 +49,6 @@ type ModelProvidersViewProps = {
   cards: ModelProviderCard[];
   configuredModels: ModelPickerEntry[];
   defaultModels: DefaultModelSelection;
-  defaultModelsDirty: boolean;
   thinkingLevel: string | undefined;
   thinkingOverridden: boolean;
   fastMode: FastMode | undefined;
@@ -90,26 +85,14 @@ type ModelProvidersViewProps = {
   onAddProviderKeyChange: (value: string) => void;
   onAddProvider: () => void;
   onPrimaryChange: (model: string) => void;
-  onFallbackAdd: (model: string) => void;
-  onFallbackRemove: (index: number) => void;
+  onFallbackChange: (model: string | null) => void;
   onUtilityChange: (model: string | null) => void;
-  onDefaultModelsSave: () => void;
-  onDefaultModelsReset: () => void;
   onThinkingChange: (level: string, element: HTMLElement) => void;
   onThinkingReset: () => void;
   onFastModeChange: (mode: FastMode) => void;
   onFastModeReset: () => void;
   onOpenModelSetup: () => void;
 };
-
-// The global default intentionally omits "minimal"; the full list stays
-// available on session-level pickers.
-const THINKING_LEVELS = BASE_THINKING_LEVELS.filter((level) => level !== "minimal");
-const THINKING_LEVEL_SET = new Set<string>(THINKING_LEVELS);
-
-function fastModeOptionValue(value: "auto" | "on" | "off"): FastMode {
-  return value === "auto" ? "auto" : value === "on";
-}
 
 function configMutationDisabled(props: ModelProvidersViewProps): boolean {
   return !props.canMutate || props.configBusy;
@@ -126,66 +109,6 @@ function renderMutationMessage(message: ModelProviderRowMessage | undefined) {
     ${message.warning
       ? html`<div class="callout warning" role="status">${message.warning}</div>`
       : nothing}
-  `;
-}
-
-function renderModelBehavior(props: ModelProvidersViewProps) {
-  const thinkingLevels =
-    props.thinkingLevel && !THINKING_LEVEL_SET.has(props.thinkingLevel)
-      ? [...THINKING_LEVELS, props.thinkingLevel]
-      : THINKING_LEVELS;
-  const fastMode = props.fastMode === undefined ? "" : formatFastModeValue(props.fastMode);
-  return html`
-    <div id=${MODEL_SETTINGS_TARGET_IDS.behavior}>
-      ${renderSettingsSection({ title: t("quickSettings.model.title") }, [
-        renderSettingsRow({
-          title: t("quickSettings.model.thinking"),
-          description: renderSettingsDefaultDescription(
-            t("quickSettings.model.modelPolicy"),
-            props.thinkingOverridden,
-          ),
-          control: renderSettingsSegmented({
-            value: props.thinkingLevel ?? "",
-            options: [
-              { value: "", label: t("quickSettings.model.default") },
-              ...thinkingLevels.map((level) => ({
-                value: level,
-                label: THINKING_LEVEL_SET.has(level)
-                  ? t(`quickSettings.model.thinkingLevels.${level}`)
-                  : formatThinkingOverrideLabel(level),
-              })),
-            ],
-            disabled: props.configBusy,
-            onChange: (value, element) =>
-              value === "" ? props.onThinkingReset() : props.onThinkingChange(value, element),
-          }),
-        }),
-        renderSettingsRow({
-          title: t("quickSettings.model.fastMode"),
-          description: renderSettingsDefaultDescription(
-            t("quickSettings.model.modelPolicy"),
-            props.fastModeOverridden,
-          ),
-          control: renderSettingsSegmented<"" | "auto" | "on" | "off">({
-            value: fastMode,
-            options: [
-              { value: "", label: t("quickSettings.model.default") },
-              { value: "auto", label: t("quickSettings.model.fastModes.auto") },
-              { value: "on", label: t("quickSettings.model.fastModes.fast") },
-              { value: "off", label: t("quickSettings.model.fastModes.standard") },
-            ],
-            disabled: props.configBusy,
-            onChange: (value) => {
-              if (value === "") {
-                props.onFastModeReset();
-              } else if (value !== fastMode) {
-                props.onFastModeChange(fastModeOptionValue(value));
-              }
-            },
-          }),
-        }),
-      ])}
-    </div>
   `;
 }
 
@@ -590,57 +513,100 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
   }
   if (props.loading) {
     return renderSettingsPage(html`
-      ${renderModelBehavior(props)} ${renderSettingsGroup(renderSettingsLoadingSkeleton())}
-    `);
-  }
-  const providerRows = html`
-    ${props.error ? renderProviderNoticeRow(props.error) : nothing}
-    ${props.providerUsageFailed
-      ? renderProviderNoticeRow(t("usage.providerUsage.unavailable"))
-      : nothing}
-    ${props.cards.length === 0
-      ? renderSettingsEmpty(
-          html`<strong>${t("modelProviders.emptyTitle")}</strong><br />${t(
-              "modelProviders.emptySubtitle",
-            )}`,
-        )
-      : props.cards.map((card) => renderProviderRow(card, props))}
-  `;
-  const needsModelSetup = !props.configuredModels.some((model) => model.available !== false);
-  return renderSettingsPage(html`
-    ${needsModelSetup
-      ? renderModelReadiness(props)
-      : renderDefaultModels({
+      <div id=${MODEL_SETTINGS_TARGET_IDS.behavior}>
+        ${renderDefaultModels({
           models: props.configuredModels,
           selection: props.defaultModels,
-          dirty: props.defaultModelsDirty,
+          thinkingLevel: props.thinkingLevel,
+          thinkingOverridden: props.thinkingOverridden,
+          fastMode: props.fastMode,
+          fastModeOverridden: props.fastModeOverridden,
+          loading: true,
           canMutate: !configMutationDisabled(props),
           mutationBlockedReason: props.mutationBlockedReason,
           busy: props.busy,
           message: props.messages.defaults,
           onPrimaryChange: props.onPrimaryChange,
-          onFallbackAdd: props.onFallbackAdd,
-          onFallbackRemove: props.onFallbackRemove,
+          onFallbackChange: props.onFallbackChange,
           onUtilityChange: props.onUtilityChange,
-          onSave: props.onDefaultModelsSave,
-          onReset: props.onDefaultModelsReset,
+          onThinkingChange: props.onThinkingChange,
+          onThinkingReset: props.onThinkingReset,
+          onFastModeChange: props.onFastModeChange,
+          onFastModeReset: props.onFastModeReset,
         })}
-    ${renderModelBehavior(props)}
+      </div>
+      ${renderSettingsGroup(renderSettingsLoadingSkeleton())}
+    `);
+  }
+  const providerRows = html`
+    <div class="model-providers__provider-list">
+      ${props.error ? renderSettingsGroup(renderProviderNoticeRow(props.error)) : nothing}
+      ${props.providerUsageFailed
+        ? renderSettingsGroup(renderProviderNoticeRow(t("usage.providerUsage.unavailable")))
+        : nothing}
+      ${props.cards.length === 0
+        ? renderSettingsGroup(
+            renderSettingsEmpty(
+              html`<strong>${t("modelProviders.emptyTitle")}</strong><br />${t(
+                  "modelProviders.emptySubtitle",
+                )}`,
+            ),
+          )
+        : props.cards.map((card) => renderSettingsGroup(renderProviderRow(card, props)))}
+    </div>
+  `;
+  const needsModelSetup = !props.configuredModels.some((model) => model.available !== false);
+  return renderSettingsPage(html`
+    ${needsModelSetup ? renderModelReadiness(props) : nothing}
+    <div id=${MODEL_SETTINGS_TARGET_IDS.behavior}>
+      ${renderDefaultModels({
+        models: props.configuredModels,
+        selection: props.defaultModels,
+        thinkingLevel: props.thinkingLevel,
+        thinkingOverridden: props.thinkingOverridden,
+        fastMode: props.fastMode,
+        fastModeOverridden: props.fastModeOverridden,
+        canMutate: !configMutationDisabled(props),
+        mutationBlockedReason: props.mutationBlockedReason,
+        busy: props.busy,
+        message: props.messages.defaults,
+        onPrimaryChange: props.onPrimaryChange,
+        onFallbackChange: props.onFallbackChange,
+        onUtilityChange: props.onUtilityChange,
+        onThinkingChange: props.onThinkingChange,
+        onThinkingReset: props.onThinkingReset,
+        onFastModeChange: props.onFastModeChange,
+        onFastModeReset: props.onFastModeReset,
+      })}
+    </div>
     ${renderSettingsSection(
       {
         title: t("modelProviders.title"),
-        description: props.updatedAt
-          ? t("modelProviders.updated", { time: formatTimeMs(props.updatedAt) })
-          : t("modelProviders.subtitle"),
         count: props.cards.length,
         actions: html`
-          <button
-            class="btn btn--sm"
-            ?disabled=${props.refreshing}
-            @click=${() => props.onRefresh()}
+          ${props.updatedAt
+            ? html`<span class="model-providers__updated"
+                >${t("modelProviders.updated", {
+                  time: formatTimeMs(props.updatedAt, {
+                    hour: "numeric",
+                    minute: "2-digit",
+                  }),
+                })}</span
+              >`
+            : nothing}
+          <openclaw-tooltip
+            .content=${props.refreshing ? t("modelProviders.refreshing") : t("common.refresh")}
           >
-            ${props.refreshing ? t("modelProviders.refreshing") : t("common.refresh")}
-          </button>
+            <button
+              type="button"
+              class="btn btn--icon btn--sm model-providers__refresh-button"
+              aria-label=${props.refreshing ? t("modelProviders.refreshing") : t("common.refresh")}
+              ?disabled=${props.refreshing}
+              @click=${() => props.onRefresh()}
+            >
+              ${icons.refresh}
+            </button>
+          </openclaw-tooltip>
         `,
       },
       providerRows,
@@ -648,9 +614,6 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
     ${props.quickAddSupported ? renderAddProvider(props) : nothing}
     ${props.providerUsageStalled
       ? html`<div class="callout warning" role="status">${t("usage.providerUsage.stalled")}</div>`
-      : nothing}
-    ${props.mutationBlockedReason
-      ? html`<div class="callout warning">${props.mutationBlockedReason}</div>`
       : nothing}
   `);
 }

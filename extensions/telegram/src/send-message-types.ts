@@ -43,6 +43,8 @@ export type TelegramSendOpts = {
   quoteText?: string;
   /** Forum topic thread ID (for forum supergroups) */
   messageThreadId?: number;
+  /** Channel Direct Messages topic ID. */
+  directMessagesTopicId?: number;
   /** Inline keyboard buttons (reply markup). */
   buttons?: TelegramInlineButtons;
   /** Send image as document to avoid Telegram compression. Defaults to false. */

@@ -4,10 +4,8 @@ import {
 } from "../../packages/gateway-protocol/src/schema/plugin-declared-surface-groups.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import type {
-  PluginCapabilityConsentHandler,
-  PluginCapabilityConsentReview,
-} from "../plugins/capability-consent.js";
+import type { PluginCapabilityConsentHandler } from "../plugins/capability-consent.js";
+import type { PluginCapabilityConsentReview } from "../plugins/capability-summary.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { promptYesNo } from "./prompt.js";
 

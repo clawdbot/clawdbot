@@ -798,7 +798,7 @@ describe("runGuidedOnboarding", () => {
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
 
     expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
-      expect.objectContaining({ allowedChoices: new Set(["apiKey"]) }),
+      expect.objectContaining({ allowedChoices: new Set(["apiKey", "custom-api-key"]) }),
     );
     expect(activate).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -857,7 +857,7 @@ describe("runGuidedOnboarding", () => {
         includeSkip: true,
         assistantVisibleOnly: false,
         workspaceDir: "/tmp/work",
-        allowedChoices: new Set(["openai"]),
+        allowedChoices: new Set(["openai", "custom-api-key"]),
       }),
     );
     expect(activate).toHaveBeenCalledWith(
@@ -906,7 +906,7 @@ describe("runGuidedOnboarding", () => {
 
     expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
       expect.objectContaining({
-        allowedChoices: new Set(["ollama"]),
+        allowedChoices: new Set(["ollama", "custom-api-key"]),
         detectedProviderIds: new Set(["ollama"]),
       }),
     );
@@ -949,46 +949,6 @@ describe("runGuidedOnboarding", () => {
     expect(prompter.note).toHaveBeenCalledWith(
       expect.stringContaining("Add AI later"),
       "Next steps",
-    );
-  });
-
-  it("fails closed without opening an empty inference selector", async () => {
-    const select = vi.fn() as unknown as WizardPrompter["select"];
-    const prompter = createWizardPrompter({ select });
-    const deps = setupDeps({
-      prompter,
-      detect: vi.fn(async () =>
-        detection({
-          candidates: [],
-          manualProviders: [],
-          recommendedInstalls: [
-            {
-              id: "ollama",
-              label: "Ollama",
-              hint: "Run open models locally",
-              website: "https://ollama.com/download",
-              icon: "https://cdn.simpleicons.org/ollama",
-            },
-          ],
-        }),
-      ),
-    });
-    const runtime = makeRuntime();
-
-    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
-
-    expect(select).toHaveBeenCalledTimes(2);
-    expect(deps.activate).not.toHaveBeenCalled();
-    expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
-    expect(deps.launchHatchTui).not.toHaveBeenCalled();
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(prompter.note).toHaveBeenCalledWith(
-      "Ollama — Run open models locally\n  https://ollama.com/download",
-      "Recommended installs",
-    );
-    expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("No inference option is available yet"),
-      "AI access",
     );
   });
 
@@ -1058,7 +1018,7 @@ describe("runGuidedOnboarding", () => {
     const deps = setupDeps({ prompter });
     const runtime = makeRuntime();
 
-    await runGuidedOnboarding({}, runtime, deps);
+    await runGuidedOnboarding({ tui: true }, runtime, deps);
 
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(deps.detect).not.toHaveBeenCalled();

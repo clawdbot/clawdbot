@@ -1741,7 +1741,7 @@ export const en: TranslationMap = {
       title: "Model & Thinking",
       model: "Model",
       thinking: "Thinking",
-      fastMode: "Fast mode",
+      fastMode: "Fast Mode",
       default: "Default",
       modelPolicy: "Model policy",
       thinkingLevels: {
@@ -1754,6 +1754,8 @@ export const en: TranslationMap = {
         auto: "Auto",
         fast: "Fast",
         standard: "Standard",
+        on: "On",
+        off: "Off",
       },
     },
     channels: {
@@ -3569,8 +3571,8 @@ export const en: TranslationMap = {
       "Install anyway approves every install-policy warning encountered during this install. Each warning is checked again before installation continues.",
     installAnyway: "Install anyway",
     connectToChange: "Connect to the gateway to change plugins.",
-    adminRequired: "Browsing only. Plugin changes require operator.admin access.",
-    changesDisabled: "Browsing only. This gateway does not allow plugin changes.",
+    adminRequired: "Plugin changes require operator.admin access.",
+    changesDisabled: "This gateway does not allow plugin changes.",
     configRefreshFailed: "Could not refresh Control UI configuration: {error}",
     installedSuccess: "Installed {name}.",
     installedRestart: "Installed {name}. A Gateway restart is required to apply the change.",
@@ -4508,8 +4510,6 @@ export const en: TranslationMap = {
     },
   },
   attention: {
-    custodianAlertAria: "Ask OpenClaw, {count} undismissed alert",
-    custodianAlertsAria: "Ask OpenClaw, {count} undismissed alerts",
     cronErrorUnknown: "Unknown error",
     cronFailed: "{job} failed",
     cronOverdue: "{job} overdue",
@@ -4877,6 +4877,7 @@ export const en: TranslationMap = {
   },
   modelProviders: {
     title: "Configured providers",
+    configureModels: "Configure Models",
     subtitle: "Model providers with auth, plan, quota, and cost data.",
     updated: "Updated {time}",
     refreshing: "Refreshing…",
@@ -4969,10 +4970,10 @@ export const en: TranslationMap = {
       saved: "Provider {provider} added.",
     },
     defaults: {
-      title: "Default models",
-      subtitle: "Choose the primary, ordered fallbacks, and utility model.",
-      primary: "Default model",
-      utility: "Utility model",
+      title: "Defaults",
+      subtitle: "Applies across all providers and models where applicable.",
+      primary: "Model",
+      utility: "Utility Model",
       utilityHelpLabel: "About the utility model",
       utilityHelpPurpose:
         "Handles short background tasks such as generated titles, progress narration, and session summaries.",
@@ -4980,14 +4981,21 @@ export const en: TranslationMap = {
         "Automatic uses the primary model provider's recommended small model when available. Generated titles otherwise use the primary model.",
       automatic: "Automatic (provider default)",
       disabled: "Disabled",
-      fallbacks: "Fallbacks",
-      noFallbacks: "No fallback models configured.",
-      unsaved: "Unsaved changes",
-      addFallback: "Add fallback",
+      fallback: "Fallback Model",
+      noFallback: "No fallback model",
       selectModel: "Select a model",
-      selectFallback: "Select a fallback model",
       noModels: "Configure a provider before selecting default models.",
-      saved: "Default models saved.",
+      thinkingHelpLabel: "About thinking defaults",
+      thinkingHelp:
+        "Sets the default for new sessions when no session-specific thinking level is set. OpenClaw maps unsupported levels to the closest option supported by the selected model.",
+      thinkingDefaultHelp:
+        "Uses the selected model's thinking policy instead of saving a global thinking override.",
+      fastModeHelpLabel: "About fast mode defaults",
+      fastModeHelp:
+        "Sets the default for new sessions. Auto starts in fast mode and returns to standard mode after the model's configured interval; On and Off keep that behavior fixed.",
+      fastModeDefaultHelp:
+        "Uses the selected model's fast-mode policy. Unlike Auto, Default does not enable fast mode by itself.",
+      saved: "Defaults saved.",
     },
     readOnly: {
       disconnected: "Connect to the gateway to change model settings.",
@@ -4997,7 +5005,7 @@ export const en: TranslationMap = {
       saveKey: "Save API key for {provider} from Control UI",
       removeKey: "Remove API key for {provider} from Control UI",
       addProvider: "Add model provider {provider} from Control UI",
-      defaultModel: "Update default model selection from Control UI",
+      defaultModel: "Update defaults from Control UI",
     },
   },
   usage: {
@@ -5716,6 +5724,16 @@ export const en: TranslationMap = {
     },
     markdown: {
       truncated: "… truncated ({total} chars, showing first {shown}).",
+    },
+    mermaid: {
+      title: "Mermaid diagram",
+      options: "Diagram options",
+      diagram: "Show diagram",
+      source: "Show source",
+      copySource: "Copy source",
+      expand: "Expand diagram",
+      rendering: "Rendering diagram…",
+      error: "This diagram could not be rendered. Check the source or simplify the diagram.",
     },
     codeBlock: {
       languageFallback: "Code",

@@ -109,7 +109,7 @@ type SystemAgentHistoryTurn = {
   text: string;
 };
 
-type GatewaySystemAgentSession = {
+export type GatewaySystemAgentSession = {
   engine: {
     handle: (
       message: string,
@@ -147,7 +147,12 @@ type GatewaySystemAgentSession = {
     resolveOperatorApproval: (
       decision: "allow-once" | "allow-always" | "deny" | null,
       proposalHash: string,
-    ) => Promise<unknown>;
+      beforePersistentApply?: () => void,
+    ) => Promise<{
+      text: string;
+      action: "none" | "exit" | "open-tui" | "open-setup";
+      applied?: boolean;
+    } | null>;
     dispose: () => Promise<void>;
   };
   welcome: string;

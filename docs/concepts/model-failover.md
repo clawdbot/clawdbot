@@ -13,6 +13,14 @@ OpenClaw handles failures in two stages:
 1. **Auth profile rotation** within the current provider.
 2. **Model fallback** to the next model in `agents.defaults.model.fallbacks`.
 
+The embedded runner also performs bounded same-model recovery. When a transient
+network failure interrupts a provider call before any assistant content or tool
+call is produced, the provider records a transport-failure diagnostic. After a
+settled tool batch, this lets the runner continue from the current transcript up
+to twice without rerunning those tools. Partial responses and unfinished tool
+batches do not qualify for this recovery. No additional retry configuration is
+required.
+
 ## Runtime flow
 
 <Steps>

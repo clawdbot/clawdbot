@@ -8,6 +8,7 @@ import {
   requireRecord,
   requireString,
 } from "./chat-flow.test-support.ts";
+import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 // Durable runtime budgets for the chat streaming surface. Byte budgets
 // (scripts/check-control-ui-performance.mts) cannot see rendering work, so
@@ -629,13 +630,18 @@ suite.define(() => {
         await page.locator(".chat-thread-inner").getByText("LONG-TAIL-SENTINEL").waitFor();
 
         const composer = page.locator(".agent-chat__composer-combobox textarea");
+        const scopeKey = "chat:v3:agent:main:main\u0000agent:main";
         await composer.fill("seed");
         await page.getByRole("button", { name: "Send message" }).waitFor();
+        // The first saved draft notifies presence subscribers. Drain that transition
+        // before measuring edits to an already-present draft.
+        await waitForCommittedComposerDraft(page, scopeKey, "seed", 0);
         await installRenderProbe(page);
         await resetRenderProbe(page);
 
         const suffix = " ordinary typing without commands";
         await composer.pressSequentially(suffix);
+        await waitForCommittedComposerDraft(page, scopeKey, `seed${suffix}`, 0);
         expect(await composer.inputValue()).toBe(`seed${suffix}`);
         const probe = await readRenderProbe(page);
 

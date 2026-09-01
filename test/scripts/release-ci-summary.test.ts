@@ -13,6 +13,7 @@ import {
   composeReleaseAttemptJobs,
   MAX_RELEASE_ARTIFACT_BYTES,
   releaseCompositeJobsSha256,
+  type ReleaseExecutionPlan,
 } from "../../scripts/full-release-validation-policy.mjs";
 import {
   artifactDownloadArgs,
@@ -824,6 +825,105 @@ function trustedMainFullFixture() {
   return { ...fixture, client, manifest, runs };
 }
 
+function trustedMainNpmBetaFixture() {
+  const fixture = trustedMainFullFixture();
+  const targetVersion = "2026.8.28-beta.1";
+  Object.assign(fixture.manifest, { releaseProfile: "beta", runReleaseSoak: "false" });
+  Object.assign(fixture.manifest.validationInputs, {
+    coveragePolicy: "npm-beta-v1",
+    skipPackageTelegramE2e: "true",
+    targetVersion,
+  });
+  fixture.manifest.controls.performanceBlocking = false;
+  fixture.manifest.childRuns.productPerformance = { blocking: false, conclusion: "", runId: "" };
+  const plannedChildren = expectedChildDispatches(fixture.runId, 1, "main", 3).map((child) => {
+    const run = fixture.runs.find((entry) => entry.display_title === child.displayTitle);
+    const selected = !["productPerformance", "npmTelegram"].includes(child.manifestKey);
+    return {
+      displayTitle: child.displayTitle,
+      key: child.manifestKey,
+      required: selected,
+      result: selected ? "success" : "skipped",
+      runAttempt: selected ? 1 : null,
+      runId: selected ? String(expectDefined(run, "selected child run").id) : "",
+      selected,
+      source: "fresh",
+      url: selected ? expectDefined(run, "selected child run").html_url : "",
+      workflow: child.workflow,
+      workflowRef: "main",
+      workflowSha: fixture.workflowSha,
+    };
+  });
+  const executionPlan = buildReleaseExecutionPlanArtifact({
+    attemptEvidenceVersion: 3,
+    candidate: null,
+    children: plannedChildren,
+    coveragePolicy: "npm-beta-v1",
+    evidenceReuse: { requested: false },
+    expected: {
+      candidateRequest: buildFullReleaseCandidateRequest({
+        repository: "openclaw/openclaw",
+        targetSha: fixture.targetSha,
+        toolingSha: fixture.workflowSha,
+        releaseProfile: "beta",
+        releaseSoak: false,
+        upgradeSurvivorBaseline: "openclaw@latest",
+        upgradeSurvivorBaselines: "",
+        upgradeSurvivorScenarios: "",
+        allowFrozenTargetScenarioOmissions: false,
+        allowUnreleasedChangelog: false,
+        sharedImagePolicy: "no-push-artifact",
+      }),
+      parentRunAttempt: 1,
+      parentRunId: fixture.runId,
+      repository: "openclaw/openclaw",
+      targetSha: fixture.targetSha,
+      workflowRef: "main",
+      workflowSha: fixture.workflowSha,
+    },
+    gates: [{ name: "Resolve target ref", required: true, result: "success" }],
+    releaseProfile: "beta",
+    rerunGroup: "all",
+    targetVersion,
+    trustedWorkflow: { fullRef: "refs/heads/main", ref: "main", sha: fixture.workflowSha },
+  });
+  const jobs = [{ ...fixture.parentJob, name: "test" }];
+  const composite = composeReleaseAttemptJobs([{ jobs, runAttempt: 1 }], {
+    effectiveRunAttempt: 1,
+    plannedRunAttempt: 1,
+  });
+  Object.assign(fixture.manifest, {
+    childEvidence: Object.fromEntries(
+      plannedChildren
+        .filter((child) => child.selected)
+        .map((child) => [
+          child.key,
+          {
+            compositeJobsSha256: composite.sha256,
+            dispatchActor: "github-actions[bot]",
+            effectiveRunAttempt: 1,
+            jobs: composite.jobs,
+            observedRunAttempts: [1],
+            plannedRunAttempt: 1,
+            repository: "openclaw/openclaw",
+            runId: child.runId,
+            triggeringActor: "github-actions[bot]",
+          },
+        ]),
+    ),
+    executionPlanSha256: executionPlan.sha256,
+    sourceParentRunAttempt: 1,
+  });
+  const originalLog = fixture.client.getJobLog;
+  const client = {
+    ...fixture.client,
+    getJobLog: vi.fn((jobId: number) => `${originalLog(jobId)}\nCI_RELEASE_SCOPE: npm-beta`),
+    getRunAttemptJobs: vi.fn(() => jobs),
+    loadExecutionPlan: vi.fn<() => ReleaseExecutionPlan | undefined>(() => executionPlan),
+  };
+  return { ...fixture, client, executionPlan };
+}
+
 function createReleaseCiWatchFixture(states: ReleaseCiWatchState[]) {
   const root = mkdtempSync(join(tmpdir(), "release-ci-watch-"));
   const callsPath = join(root, "calls.jsonl");
@@ -1287,7 +1387,70 @@ describe("release CI summary child correlation", () => {
     });
   });
 
-  it.each(["version", "reused", "group", "profile", "soak", "inputs", "target"])(
+  it("verifies all five selected children for sealed npm beta coverage", async () => {
+    const fixture = trustedMainNpmBetaFixture();
+    const options = {
+      runId: fixture.runId,
+      verifierSourceContent: readFileSync(SCRIPT),
+      verifierSourceSha: "c".repeat(40),
+    };
+    const evidence = await validateReleaseRunEvidence(options, fixture.client);
+    expect(evidence.children.map((child: { role: string }) => child.role).toSorted()).toEqual([
+      "normalCi",
+      "pluginPrereleaseCandidate",
+      "pluginPrereleaseIndependent",
+      "releaseChecksCandidate",
+      "releaseChecksIndependent",
+    ]);
+    expect(fixture.client.getRunAttemptJobs).toHaveBeenCalledTimes(5);
+    expect(fixture.client.getJobLog).toHaveBeenCalledTimes(5);
+
+    expectDefined(fixture.runs[0], "CI run").status = "in_progress";
+    await expect(validateReleaseRunEvidence(options, fixture.client)).rejects.toThrow();
+  });
+
+  it.each([
+    "missing-plan",
+    "missing-marker",
+    "wrong-target-version",
+    "full-ci",
+    "deferred-run",
+    "package-telegram",
+  ])("rejects npm beta coverage drift: %s", async (drift) => {
+    const fixture = trustedMainNpmBetaFixture();
+    if (drift === "missing-plan") {
+      fixture.client.loadExecutionPlan.mockReturnValue(undefined);
+    } else if (drift === "missing-marker") {
+      delete fixture.manifest.validationInputs.coveragePolicy;
+    } else if (drift === "wrong-target-version") {
+      fixture.manifest.validationInputs.targetVersion = "2026.8.28-beta.2";
+    } else if (drift === "full-ci") {
+      fixture.client.getJobLog.mockImplementation(
+        (jobId: number) =>
+          `TARGET_SHA: ${fixture.targetSha}\nCI_RELEASE_SCOPE: full\nDispatched ci.yml: https://github.com/openclaw/openclaw/actions/runs/${jobId - 100} (attempt 1)`,
+      );
+    } else if (drift === "package-telegram") {
+      fixture.manifest.validationInputs.skipPackageTelegramE2e = "false";
+    } else {
+      fixture.manifest.childRuns.productPerformance = {
+        blocking: false,
+        conclusion: "success",
+        runId: "106",
+      };
+    }
+    await expect(
+      validateReleaseRunEvidence(
+        {
+          runId: fixture.runId,
+          verifierSourceContent: readFileSync(SCRIPT),
+          verifierSourceSha: "c".repeat(40),
+        },
+        fixture.client,
+      ),
+    ).rejects.toThrow();
+  });
+
+  it.each(["version", "reused", "group", "profile", "soak", "inputs", "coverage", "target"])(
     "rejects an ineligible reuse %s before fetching child evidence",
     async (mismatch) => {
       const fixture = trustedMainFullFixture();
@@ -1321,6 +1484,9 @@ describe("release CI summary child correlation", () => {
           break;
         case "inputs":
           reuseRequest.validationInputs.provider = "anthropic";
+          break;
+        case "coverage":
+          reuseRequest.validationInputs.coveragePolicy = "npm-beta-v1";
           break;
         case "target":
           reuseRequest.targetSha = "7".repeat(40);
@@ -2654,6 +2820,38 @@ describe("release CI summary child correlation", () => {
     ).not.toContain("npmTelegram");
     raw.validationInputs.targetVersion = "2026.8.2";
     expect(() => validateParentManifest(raw, expected)).toThrow(/Telegram waiver/u);
+  });
+
+  it.each([
+    { label: "legacy manifest", version: 3 },
+    { label: "stable profile", releaseProfile: "stable" },
+    { label: "full profile", releaseProfile: "full" },
+    { label: "soak", runReleaseSoak: "true" },
+    { label: "focused run", rerunGroup: "package" },
+    { label: "stable target", targetVersion: "2026.8.28" },
+    { label: "unknown policy", coveragePolicy: "unknown" },
+  ])("rejects reduced coverage in a $label", (drift) => {
+    const fixture = trustedMainFullFixture();
+    Object.assign(fixture.manifest, {
+      releaseProfile: "beta",
+      runReleaseSoak: "false",
+      ...Object.fromEntries(
+        Object.entries(drift).filter(([key]) =>
+          ["version", "releaseProfile", "runReleaseSoak", "rerunGroup"].includes(key),
+        ),
+      ),
+    });
+    Object.assign(fixture.manifest.validationInputs, {
+      coveragePolicy: drift.coveragePolicy ?? "npm-beta-v1",
+      targetVersion: drift.targetVersion ?? "2026.8.28-beta.1",
+    });
+    expect(() =>
+      validateParentManifest(fixture.manifest, {
+        runId: fixture.runId,
+        runAttempt: 1,
+        workflowSha: fixture.workflowSha,
+      }),
+    ).toThrow(/coverage/iu);
   });
 
   it("keeps historical non-reuse v2 manifests readable without validation inputs", () => {

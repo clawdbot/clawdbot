@@ -2023,6 +2023,7 @@ async function createChatPickerScenario(
       "chat.abort",
       "chat.history",
       "chat.send",
+      "config.patch",
       "config.schema",
       "chat.metadata",
       "chat.startup",
