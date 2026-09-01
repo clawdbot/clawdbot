@@ -16,6 +16,7 @@ import {
 } from "./mcp.js";
 import type { ClawManifest } from "./types.js";
 import type { ClawUpdatePlan } from "./update-plan.js";
+import { collectClawRollbackFailures } from "./update-rollback.js";
 
 export type ClawMcpUpdateExecution = {
   appliedNames: string[];
@@ -71,14 +72,7 @@ export async function applyClawMcpUpdate(
   let configMutationUncertain = false;
 
   const rollback = async () => {
-    const failures: string[] = [];
-    for (const revert of undo.toReversed()) {
-      try {
-        await revert();
-      } catch (error) {
-        failures.push(coerceErrorMessage(error));
-      }
-    }
+    const failures = await collectClawRollbackFailures(undo.toReversed());
     if (failures.length > 0) {
       throw new ClawMcpUpdateError(failures.join("; "));
     }

@@ -169,9 +169,8 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
           `${summary}\n${resolveUnsafeUpdateRecoveryGuidance(result.recovery.reason)}${keepStopped}`,
           "Update",
         );
-      } else {
+      } else if (result.recovery?.serviceRestartSafe === true) {
         await serviceLifecycle?.maybeRestartServiceAfterFailedMutableUpdate({
-          root: result.root,
           preManagedServiceStop: inspection,
           jsonMode: false,
         });

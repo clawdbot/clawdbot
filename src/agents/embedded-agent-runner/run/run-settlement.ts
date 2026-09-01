@@ -38,40 +38,46 @@ export async function settleEmbeddedRun(input: {
   const params = runInput.runParams;
   // Publish committed bookkeeping before cleanup can throw or cancellation closes the caller.
   // A returned model/session id is never a substitute for the accepted host target.
-  let fact: CompactionAccountingFact | undefined;
-  if (compaction.state.autoCompactionCount > 0 || compaction.state.currentContextSnapshot) {
-    const committed = compaction.session.committedCompactionSuccessor;
-    const originalCompactionWriter = compaction.session.sessionWriterFence;
-    const target = committed?.sessionTarget ?? compaction.originalTarget;
-    const counts = {
-      count: compaction.state.autoCompactionCount,
-      currentContextTokens: compaction.state.currentContextSnapshot?.tokens,
-    };
-    fact =
-      compaction.durable &&
-      (committed || originalCompactionWriter) &&
-      target.agentId &&
-      target.sessionId &&
-      target.sessionKey &&
-      target.storePath
-        ? {
-            kind: "durable",
-            ...counts,
-            target: {
-              agentId: target.agentId,
-              sessionId: committed?.entry.sessionId ?? target.sessionId,
-              sessionKey: target.sessionKey,
-              storePath: target.storePath,
-              lifecycleRevision: committed
-                ? committed.entry.lifecycleRevision
-                : originalCompactionWriter?.expectedLifecycleRevision,
-              activeWriterRunId: committed
-                ? committed.entry.activeWriterRunId
-                : originalCompactionWriter?.expectedWriterRunId,
-            },
-          }
-        : { kind: "presentation-only", ...counts };
-  }
+  const committed = compaction.session.committedCompactionSuccessor;
+  const originalWriter = compaction.session.sessionWriterFence;
+  const target = committed?.sessionTarget ?? compaction.originalTarget;
+  const counts = {
+    count: compaction.state.autoCompactionCount,
+    currentContextSnapshot:
+      compaction.state.currentContextSnapshot ??
+      (compaction.state.autoCompactionCount > 0 ? { tokens: undefined } : undefined),
+  };
+  // Native runtimes can return usage without ordered context events. Carry their
+  // claimed writer without inventing a context observation that would override it.
+  const fact: CompactionAccountingFact | undefined =
+    compaction.durable &&
+    (committed || originalWriter) &&
+    target.agentId &&
+    target.sessionId &&
+    target.sessionKey &&
+    target.storePath
+      ? {
+          kind: "durable",
+          ...counts,
+          ...(committed?.previousSessionId !== undefined
+            ? { previousSessionId: committed.previousSessionId }
+            : {}),
+          target: {
+            agentId: target.agentId,
+            sessionId: committed?.entry.sessionId ?? target.sessionId,
+            sessionKey: target.sessionKey,
+            storePath: target.storePath,
+            lifecycleRevision: committed
+              ? committed.entry.lifecycleRevision
+              : originalWriter?.expectedLifecycleRevision,
+            activeWriterRunId: committed
+              ? committed.entry.activeWriterRunId
+              : originalWriter?.expectedWriterRunId,
+          },
+        }
+      : counts.count > 0 || counts.currentContextSnapshot
+        ? { kind: "presentation-only", ...counts }
+        : undefined;
   if (params.onCompactionAccounting) {
     params.onCompactionAccounting(fact);
   } else if (fact?.kind === "durable" && fact.count > 0) {
@@ -80,7 +86,7 @@ export async function settleEmbeddedRun(input: {
         ...fact.target,
         expectedSession: fact.target,
         amount: fact.count,
-        tokensAfter: fact.currentContextTokens,
+        tokensAfter: fact.currentContextSnapshot?.tokens,
         // Cancellation preserves bookkeeping, but a reused run id cannot lend a new admission.
         authorize: () =>
           compaction.authority !== undefined &&

@@ -12,6 +12,10 @@ import type {
 } from "../infra/embedded-state-lock.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayLockIdentity, GatewayLockOptions } from "../infra/gateway-lock.js";
+import {
+  getInstallationTarget,
+  LOCAL_INSTALLATION_TARGET_UNSUPPORTED,
+} from "../infra/installation-target-context.js";
 import { writeRuntimeJson, writeRuntimeStdout, type RuntimeEnv } from "../runtime.js";
 import {
   buildExecRunConfig,
@@ -276,6 +280,22 @@ export async function agentExecCommand(
       surface: "agent exec",
       hint: "Set agents.defaults.systemAgent.agentId.",
     });
+    if (getInstallationTarget()) {
+      const [{ resolveSandboxConfigForAgent }, { resolveExecToolConfig }] = await Promise.all([
+        import("../agents/sandbox/config.js"),
+        import("../agents/lazy-exec-tool.js"),
+      ]);
+      const execHost = resolveExecToolConfig({ cfg: runConfig, agentId: execAgentId }).host;
+      // Exec creates a fresh explicit (non-main) session. Preserve its configured
+      // isolation instead of launching a fixer against a remote or sandbox copy.
+      if (
+        resolveSandboxConfigForAgent(runConfig, execAgentId).mode !== "off" ||
+        execHost === "node" ||
+        execHost === "sandbox"
+      ) {
+        throw new Error(LOCAL_INSTALLATION_TARGET_UNSUPPORTED);
+      }
+    }
     // Auth, session keys, and SQLite ownership must share one resolved owner.
     // Splitting these paths can select an agent's store but emit a `main` key.
     const storedAuthAgentDir = resolveAgentDir(baseConfig, execAgentId);

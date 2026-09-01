@@ -1,11 +1,25 @@
+import path from "node:path";
 import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
-import type { CodexThreadStartParams, CodexThreadStartResponse } from "./protocol.js";
+import type { CodexThread, CodexThreadStartParams, CodexThreadStartResponse } from "./protocol.js";
 import type { CodexAppServerContextEngineBinding } from "./session-binding.js";
 import { fingerprintCodexThreadConfig } from "./thread-fingerprints.js";
 import type {
   CodexAppServerThreadLifecycleBinding,
   CodexStartOrResumeThreadParams,
 } from "./thread-lifecycle-types.js";
+
+export function resolveCodexThreadRolloutPath(thread: CodexThread): string | undefined {
+  const rolloutPath = thread.path?.trim();
+  if (
+    !rolloutPath ||
+    !path.isAbsolute(rolloutPath) ||
+    path.extname(rolloutPath) !== ".jsonl" ||
+    !path.basename(rolloutPath).includes(thread.id)
+  ) {
+    return undefined;
+  }
+  return rolloutPath;
+}
 
 type StartedThreadContext = {
   contextEngineBinding?: CodexAppServerContextEngineBinding;

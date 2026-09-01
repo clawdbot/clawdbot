@@ -1,4 +1,6 @@
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { getFailoverErrorCode } from "../../agents/failover/error.js";
+import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
 import { AGENT_RUN_RESTART_ABORT_STOP_REASON } from "../../agents/run-termination.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -21,6 +23,7 @@ const DEFERRED_TERMINAL_METADATA_KEYS = [
   "aborted",
   "livenessState",
   "replayInvalid",
+  "errorObservation",
 ] as const;
 
 export function resolveAgentLifecycleTerminalMetadata(meta: unknown): Record<string, unknown> {
@@ -99,7 +102,9 @@ export function createAgentLifecycleTerminalBackstop(params: {
       data.aborted = true;
       data.stopReason = AGENT_RUN_RESTART_ABORT_STOP_REASON;
     } else if (phase === "error") {
-      data.error = formatErrorMessage(resultOrError);
+      data.error =
+        renderFailoverCodeUserCopy(getFailoverErrorCode(resultOrError)) ??
+        formatErrorMessage(resultOrError);
       Object.assign(data, terminationFields);
     } else {
       const meta =

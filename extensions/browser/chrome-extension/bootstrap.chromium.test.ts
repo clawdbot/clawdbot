@@ -251,7 +251,8 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
             }),
         );
         cleanups.push(async () => {
-          const bridge = getBrowserControlState()?.extensionRelays?.get("e2e")?.bridge;
+          const currentRelay = getBrowserControlState()?.extensionRelays?.get("e2e");
+          const bridge = currentRelay?.ownership === "owned" ? currentRelay.bridge : undefined;
           const sessions = [...chromeMcpSessions.values()].slice(0, 8);
           try {
             await stopBrowserControlService();
@@ -395,8 +396,12 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         try {
           await expect
             .poll(
-              () =>
-                getBrowserControlState()?.extensionRelays?.get("e2e")?.bridge.extensionConnected,
+              () => {
+                const currentRelay = getBrowserControlState()?.extensionRelays?.get("e2e");
+                return (
+                  currentRelay?.ownership === "owned" && currentRelay.bridge.extensionConnected
+                );
+              },
               { timeout: 15_000 },
             )
             .toBe(true);
@@ -409,7 +414,7 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           });
         }
         const relay = getBrowserControlState()?.extensionRelays?.get("e2e");
-        if (!relay || relay.port !== relayPort) {
+        if (!relay || relay.ownership !== "owned" || relay.port !== relayPort) {
           throw new Error("Gateway wakeup did not start the configured extension relay");
         }
         diagnostic.watchRelay(relay.bridge);
@@ -514,6 +519,7 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           const bindingSession = await relayPlaywrightContext.newCDPSession(relayPage);
           const observerSession = await relayPlaywrightContext.newCDPSession(relayPage);
           const bindingName = "__openclawRelayBindingProof";
+          diagnostic.identifyContextBinding(bindingName);
           const bindingPayloads: string[] = [];
           const observerPayloads: string[] = [];
           observerSession.on("Runtime.bindingCalled", (event) => {
@@ -586,12 +592,20 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           "[browser-extension-e2e] same-browser transport-reconnect labeled-ref screenshot passed\n",
         );
 
-        const distractingPage = await context.newPage();
         const distractingUrl = `data:text/html,${encodeURIComponent("<title>Unrelated tab</title>")}`;
-        await distractingPage.goto(distractingUrl);
-        await expect
-          .poll(() => relayPlaywrightContext.pages().some((page) => page.url() === distractingUrl))
-          .toBe(true);
+        diagnostic.arm(reconnectedTarget);
+        diagnostic.inventory(relayPlaywrightContext, relay.bridge, distractingUrl);
+        const distractingPage = await context.newPage();
+        try {
+          await distractingPage.goto(distractingUrl);
+          await expect
+            .poll(() =>
+              relayPlaywrightContext.pages().some((page) => page.url() === distractingUrl),
+            )
+            .toBe(true);
+        } finally {
+          diagnostic.inventory(relayPlaywrightContext, relay.bridge, distractingUrl);
+        }
         const liveTabsResponse = await dispatcher.dispatch({
           method: "GET",
           path: "/tabs",

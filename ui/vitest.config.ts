@@ -5,7 +5,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { playwright } from "@vitest/browser-playwright";
 import { chromium } from "playwright";
-import { defineConfig, defineProject } from "vitest/config";
+import { defineConfig, defineProject, type ViteUserConfig } from "vitest/config";
+import {
+  intersectIncludePatterns,
+  loadPatternListFromEnv,
+  relativizeScopedPatterns,
+} from "../test/vitest/vitest.pattern-file.ts";
+import { loadVitestExperimentalConfig } from "../test/vitest/vitest.performance-config.ts";
 import {
   jsdomOptimizedDeps,
   nonIsolatedRunnerPath,
@@ -13,6 +19,7 @@ import {
   sharedVitestConfig,
 } from "../test/vitest/vitest.shared.config.ts";
 import { uiIsolatedTestFiles } from "../test/vitest/vitest.ui-isolated-paths.mjs";
+import { uiNodeDrivenBrowserTestFiles } from "../test/vitest/vitest.ui-paths.mjs";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -71,6 +78,10 @@ const workspaceSourceAliases = [
     replacement: path.resolve(repoRoot, "packages/session-url-contract/src/parse.ts"),
   },
   {
+    find: "@openclaw/session-url-contract/share-build",
+    replacement: path.resolve(repoRoot, "packages/session-url-contract/src/share-build.ts"),
+  },
+  {
     find: "@openclaw/session-url-contract",
     replacement: path.resolve(repoRoot, "packages/session-url-contract/src/index.ts"),
   },
@@ -87,7 +98,16 @@ const workspaceSourceAliases = [
     replacement: path.resolve(repoRoot, "packages/net-policy/src/index.ts"),
   },
 ];
+function includeUiTests(patterns: string[], env = process.env): string[] {
+  const selected = intersectIncludePatterns(
+    patterns.map((pattern) => `ui/${pattern}`),
+    loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env),
+  );
+  return selected ? relativizeScopedPatterns(selected, "ui") : patterns;
+}
+
 const sharedUiTestConfig = {
+  ...loadVitestExperimentalConfig(process.env, process.platform, here),
   isolate: false,
   pool: resolveDefaultVitestPool(),
   // Real-Chromium layout tests exceed Vitest's 5s default on 4vcpu CI runners;
@@ -95,21 +115,7 @@ const sharedUiTestConfig = {
   testTimeout: 60_000,
   hookTimeout: 60_000,
 } as const;
-const nodeDrivenBrowserLayoutTests = [
-  "src/ui/chat/sidebar-session-picker.browser.test.ts",
-  "src/pages/chat/chat-responsive.browser.test.ts",
-  "src/pages/chat/chat-composer-undo-redo.browser.test.ts",
-  "src/pages/chat/components/chat-swarm-progress.browser.test.ts",
-  "src/components/form-controls.browser.test.ts",
-  "src/components/sidebar-footer-layout.browser.test.ts",
-  "src/pages/sessions/view.browser.test.ts",
-  "src/styles/corner-shape.browser.test.ts",
-  "src/styles/cursor-policy.browser.test.ts",
-  "src/styles/chat-file-link-presentation.browser.test.ts",
-  "src/styles/chat-github-link-presentation.browser.test.ts",
-  "src/styles/shimmer.browser.test.ts",
-  "src/styles/sr-only.browser.test.ts",
-] as const;
+const nodeDrivenBrowserLayoutTests = relativizeScopedPatterns(uiNodeDrivenBrowserTestFiles, "ui");
 const mockRegistryUnitTests = [
   ...uiIsolatedTestFiles.map((testFile) => testFile.slice("ui/".length)),
   "src/components/mcp-app-view.test.ts",
@@ -148,12 +154,40 @@ function resolveChromiumLaunchOptions(): { executablePath: string } | undefined 
 
 const chromiumLaunchOptions = resolveChromiumLaunchOptions();
 
+export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
+  return defineProject({
+    root: here,
+    plugins: [controlUiLocaleModulesPlugin()],
+    resolve: {
+      alias: workspaceSourceAliases,
+    },
+    test: {
+      ...sharedUiTestConfig,
+      name: "browser",
+      // No cleanup runner: it imports node:fs and repo server modules, which
+      // cannot load in browser mode. Browser files own their own teardown.
+      include: includeUiTests(["src/**/*.browser.test.ts"], env),
+      exclude: [...nodeDrivenBrowserLayoutTests],
+      setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
+      browser: {
+        enabled: true,
+        provider: playwright(chromiumLaunchOptions ? { launchOptions: chromiumLaunchOptions } : {}),
+        instances: [{ browser: "chromium", name: "chromium" }],
+        headless: true,
+        ui: false,
+      },
+    },
+  });
+}
+
 export default defineConfig({
+  root: here,
   resolve: {
     alias: workspaceSourceAliases,
   },
   test: {
     ...sharedUiTestConfig,
+    maxWorkers: sharedVitestConfig.test.maxWorkers,
     reporters: sharedVitestConfig.test.reporters,
     projects: [
       defineProject({
@@ -171,7 +205,7 @@ export default defineConfig({
           // The cleanup runner retires that state per file; without it the lane
           // fails whichever sibling the size sequencer happens to pack together.
           runner: nonIsolatedRunnerPath,
-          include: ["src/**/*.test.ts"],
+          include: includeUiTests(["src/**/*.test.ts"]),
           exclude: [
             "src/**/*.browser.test.ts",
             "src/**/*.e2e.test.ts",
@@ -194,7 +228,7 @@ export default defineConfig({
           isolate: true,
           deps: jsdomOptimizedDeps,
           name: "unit-mock-registry",
-          include: [...mockRegistryUnitTests],
+          include: includeUiTests([...mockRegistryUnitTests]),
           environment: "jsdom",
           setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
         },
@@ -211,35 +245,12 @@ export default defineConfig({
           // No cleanup runner: this project also carries the Playwright-driven
           // layout tests, whose browser lives in module scope. Resetting the
           // module graph between files churns that browser and flakes them.
-          include: ["src/**/*.node.test.ts", ...nodeDrivenBrowserLayoutTests],
+          include: includeUiTests(["src/**/*.node.test.ts", ...nodeDrivenBrowserLayoutTests]),
           environment: "jsdom",
           setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
         },
       }),
-      defineProject({
-        plugins: [controlUiLocaleModulesPlugin()],
-        resolve: {
-          alias: workspaceSourceAliases,
-        },
-        test: {
-          ...sharedUiTestConfig,
-          name: "browser",
-          // No cleanup runner: it imports node:fs and repo server modules, which
-          // cannot load in browser mode. Browser files own their own teardown.
-          include: ["src/**/*.browser.test.ts"],
-          exclude: [...nodeDrivenBrowserLayoutTests],
-          setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
-          browser: {
-            enabled: true,
-            provider: playwright(
-              chromiumLaunchOptions ? { launchOptions: chromiumLaunchOptions } : {},
-            ),
-            instances: [{ browser: "chromium", name: "chromium" }],
-            headless: true,
-            ui: false,
-          },
-        },
-      }),
+      createUiBrowserVitestConfig(),
     ],
   },
 });

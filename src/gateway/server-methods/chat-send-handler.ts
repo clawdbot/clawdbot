@@ -1,6 +1,9 @@
 // chat.send owns admission, ACK timing, and detached dispatch handoff.
 import { performance } from "node:perf_hooks";
-import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import {
+  createAgentRunRestartAbortError,
+  isAgentRunRestartAbortReason,
+} from "../../agents/run-termination.js";
 import {
   lookupSessionGoalOperation,
   type SessionGoalOperation,
@@ -13,7 +16,10 @@ import {
   recordSessionCreated,
   recordSessionGoalChanged,
 } from "../../sessions/session-state-events.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
+import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
@@ -48,6 +54,7 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 type ChatSendInternalOptions = {
   goalResume?: SessionGoalOperation & { action: "resume" };
   trustedSystemInput?: boolean;
+  display?: false;
   toolsAllow?: string[];
   skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
 };
@@ -66,7 +73,7 @@ async function handleChatSendWithOptions(
   options?: ChatSendInternalOptions,
 ): Promise<void> {
   const setup = await prepareAndAdmitChatSend(
-    { params, respond, context, client },
+    { params, respond, context, client, sessionMutationAuthorization },
     onAdmissionOwned,
     options,
   );
@@ -111,9 +118,12 @@ async function handleChatSendWithOptions(
   // cleanupAdmittedRun, which fires this armed discard. The hasPersisted gate
   // protects the restart-safe path, which persists durably before its abort
   // and routing exits; dispatch owns persistence after the ACK disarms this.
-  let preparedMediaRecorder: { hasPersisted: () => boolean } | undefined;
+  let preparedMediaRecorder: UserTurnTranscriptRecorder | undefined;
   admitted.value.setDiscardAbandonedPreparedMedia(() => {
-    if (!preparedMediaRecorder?.hasPersisted()) {
+    if (
+      !preparedMediaRecorder?.hasPersisted() &&
+      !preparedMediaRecorder?.getPendingInputMessage?.()
+    ) {
       void discardPreparedInboundMedia(preparedAttachments.value.offloadedRefs);
     }
   });
@@ -156,12 +166,14 @@ async function handleChatSendWithOptions(
       storePath,
       ...terminalState,
     });
+  let pendingStageAttempted = false;
   try {
     const userTurn = createGatewayChatUserTurnController({
       admission: admitted.value,
       client,
       request: normalizedRequest.value,
       session: preparedSession.value,
+      display: options?.display,
       startedAt: admissionStartedAt,
       warn: (message) => context.logGateway.warn(message),
       assertGoalCurrent: () => {
@@ -209,6 +221,15 @@ async function handleChatSendWithOptions(
       replyContextFieldsPromise,
     } = userTurn;
     preparedMediaRecorder = userTurnRecorder;
+    admitted.value.setPendingInputCleanup(() => {
+      userTurnRecorder.finishPendingInput?.(
+        activeRunAbort.controller.signal.aborted &&
+          activeRunAbort.entry?.abortStopReason !== "restart" &&
+          !isAgentRunRestartAbortReason(activeRunAbort.controller.signal.reason)
+          ? "cancelled"
+          : "interrupted",
+      );
+    });
     const preparedUserTurn = prepareChatSendUserTurn({
       request: normalizedRequest.value,
       session: preparedSession.value,
@@ -218,6 +239,51 @@ async function handleChatSendWithOptions(
       logGateway: context.logGateway,
       userTurn,
     });
+    const { ctx, isInternalTextSlashCommandTurn } = preparedUserTurn;
+    if (
+      entry?.sessionId &&
+      isOperatorUiClient(clientInfo) &&
+      !isInternalTextSlashCommandTurn &&
+      !normalizedRequest.value.goalOperation
+    ) {
+      // ACK transfers browser custody. Persist approved source bytes before
+      // either a direct runtime or the in-memory collector can accept them.
+      pendingStageAttempted = true;
+      const staged = await userTurnRecorder.stageApproved?.({
+        runId: clientRunId,
+        assertCurrent: () => {
+          admitted.value.assertWorkAdmissionCurrent();
+          sessionMutationCommitGuard?.();
+          sessionMutationAuthorization?.assertCurrent();
+          if (sessionRoutingChanged(context.getRuntimeConfig())) {
+            throw new Error("Session routing changed before input admission; refresh and retry.");
+          }
+        },
+      });
+      if (userTurnRecorder.isPendingInputConsumed?.()) {
+        admitted.value.cleanupAdmittedRun();
+        clearAgentRunContext(clientRunId, lifecycleGeneration);
+        respond(true, { runId: clientRunId, status: "ok" }, undefined, {
+          cached: true,
+          runId: clientRunId,
+        });
+        return;
+      }
+      if (!staged) {
+        throw new Error("Chat input was not durably admitted; refresh and retry.");
+      }
+      const approved = userTurnRecorder.getPendingInputMessage?.();
+      const text =
+        extractTextFromChatContent(approved?.content, {
+          joinWith: "\n",
+          normalizeText: (value) => value,
+        }) ?? "";
+      ctx.Body = ctx.BodyForAgent = ctx.RawBody = text;
+      ctx.BodyForCommands = ctx.CommandBody = text;
+      if (ctx.CommandTurn) {
+        ctx.CommandTurn = { ...ctx.CommandTurn, body: text };
+      }
+    }
     let goalResult: SessionGoalOperationResult | undefined;
     if (restartSafeAdmission) {
       const persistedUserTurn = await persistGatewayUserTurnTranscript();
@@ -234,7 +300,7 @@ async function handleChatSendWithOptions(
             operation: goalOperation,
           });
         if (goalResult && (!persistedUserTurn || mutation?.replayed)) {
-          admitted.value.cleanupAdmittedRun({ force: true });
+          admitted.value.cleanupAdmittedRun();
           clearAgentRunContext(clientRunId, lifecycleGeneration);
           respond(true, { ...goalResult, replayed: true }, undefined, {
             cached: true,
@@ -301,11 +367,11 @@ async function handleChatSendWithOptions(
       }
     }
 
-    const { ctx, isInternalTextSlashCommandTurn } = preparedUserTurn;
     const beginCapturedMessageInjection = createChatSendMessageInjectionStarter({
       target: messageInjectionTarget,
       request: normalizedRequest.value,
       session: preparedSession.value,
+      admittedSessionSettings: admitted.value.admittedSessionSettings,
       turn: preparedUserTurn,
       imageOrder,
       userTurnTranscriptRecorder: userTurnRecorder,
@@ -357,10 +423,13 @@ async function handleChatSendWithOptions(
       clientRunId,
       ...(chatSendTiming ? { chatSendTiming } : {}),
     });
+    // Only the recorder can attest transcript placement; custody and a started ACK cannot.
+    const receipt = userTurnRecorder.getAdmissionReceipt?.();
     const ackPayload = {
       ...goalResult,
       runId: clientRunId,
       status: "started" as const,
+      ...(receipt ? { messageSeq: receipt.activeMessagePosition + 1 } : {}),
       ...(interruptedActiveRun ? { interruptedActiveRun: true } : {}),
       ...(serverTiming ? { serverTiming } : {}),
     };
@@ -414,7 +483,7 @@ async function handleChatSendWithOptions(
     await handleChatSendSetupError({
       // Uncommitted Goal admissions may retry with their original identity. Committed
       // outcomes replay from the durable receipt instead of this transient error cache.
-      cacheResult: normalizedRequest.value.goalOperation === undefined,
+      cacheResult: normalizedRequest.value.goalOperation === undefined && !pendingStageAttempted,
       admission: admitted.value,
       context,
       error: err,
@@ -441,14 +510,6 @@ export async function handleSessionGoalResumeChat(
   await handleChatSendWithOptions(options, undefined, undefined, { goalResume: operation });
 }
 
-/** Dispatches an internally delegated turn within its caller-owned tool boundary. */
-export async function handleChatSendWithRuntimeTools(
-  options: GatewayRequestHandlerOptions,
-  toolsAllow: string[],
-): Promise<void> {
-  await handleChatSendWithOptions(options, undefined, undefined, { toolsAllow });
-}
-
 /** Dispatches an operator-requested proposal revision with its reviewed revision bound to the run. */
 export async function handleChatSendWithSkillWorkshopProposalRevision(
   options: GatewayRequestHandlerOptions,
@@ -464,8 +525,10 @@ export async function handleChatSendWithSkillWorkshopProposalRevision(
 export async function handleTrustedInternalChatSend(
   options: GatewayRequestHandlerOptions,
   onAdmissionOwned?: () => Promise<boolean>,
+  inputOptions?: Pick<ChatSendInternalOptions, "display" | "toolsAllow">,
 ): Promise<void> {
   await handleChatSendWithOptions(options, onAdmissionOwned, undefined, {
+    ...inputOptions,
     trustedSystemInput: true,
   });
 }

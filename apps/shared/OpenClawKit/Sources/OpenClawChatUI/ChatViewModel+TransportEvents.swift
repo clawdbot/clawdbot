@@ -31,6 +31,9 @@ extension OpenClawChatViewModel {
                 self.scheduleProgressCardFetch()
                 Task { [weak self] in await self?.refreshQuestions() }
                 Task { [weak self] in await self?.refreshSwarmCapability() }
+                Task { [weak self] in await self?.loadComposerCapabilities(force: true) }
+            } else if !ok {
+                self.invalidateComposerCapabilities()
             }
         case .tick:
             let context = self.currentSessionSnapshot()
@@ -67,9 +70,13 @@ extension OpenClawChatViewModel {
             self.swarmEnabled = false
             self.resetSwarmProgress()
             Task { [weak self] in await self?.refreshSwarmCapability() }
+            self.invalidateComposerCapabilities()
+            Task { [weak self] in await self?.loadComposerCapabilities(force: true) }
             let session = self.currentSessionSnapshot()
             Task { [weak self] in await self?.refreshSubagentActivities(sessionSnapshot: session) }
         case .seqGap:
+            self.invalidateComposerCapabilities()
+            Task { [weak self] in await self?.loadComposerCapabilities(force: true) }
             self.errorText = nil
             self.swarmEnabled = false
             self.resetSwarmProgress()

@@ -1,10 +1,10 @@
 // Control UI tests cover session pull request chips above the chat composer.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   controlUiSessionUrl,
@@ -20,18 +20,18 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const publicationProofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "github-publication",
-);
-const stackingProofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "pr-chip-stacking",
-);
+let publicationProofDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    publicationProofDir = createControlUiE2eArtifactDir("github-publication");
+  }
+});
+let stackingProofDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    stackingProofDir = createControlUiE2eArtifactDir("pr-chip-stacking");
+  }
+});
 
 let server: ControlUiE2eServer;
 // Browser contexts preserve test isolation; keep one process warm for this file.
@@ -317,7 +317,6 @@ describeControlUiE2e("session pull request chips", () => {
 
       await overlapLastTranscriptRowWithPullRequestChip(page);
       if (captureUiProof) {
-        await mkdir(stackingProofDir, { recursive: true });
         await page.screenshot({
           animations: "disabled",
           path: path.join(stackingProofDir, `${label}.png`),
@@ -391,9 +390,6 @@ describeControlUiE2e("session pull request chips", () => {
   });
 
   it("publishes through the Gateway and renders the terminal pull request URL", async () => {
-    if (captureUiProof) {
-      await mkdir(publicationProofDir, { recursive: true });
-    }
     const context = await browser.newContext({
       colorScheme: "light",
       locale: "en-US",
@@ -672,7 +668,6 @@ describeControlUiE2e("session pull request chips", () => {
       )
       .toBe("https://github.com/openclaw/openclaw/pull/new/openclaw/rejected-publication");
     if (captureUiProof) {
-      await mkdir(publicationProofDir, { recursive: true });
       await page.screenshot({
         animations: "disabled",
         fullPage: true,
@@ -815,7 +810,6 @@ describeControlUiE2e("session pull request chips", () => {
       .toContain("Start a live agent turn");
     expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
     if (captureUiProof) {
-      await mkdir(publicationProofDir, { recursive: true });
       await page.screenshot({
         animations: "disabled",
         fullPage: true,

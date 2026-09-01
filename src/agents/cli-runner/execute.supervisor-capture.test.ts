@@ -17,6 +17,9 @@ import {
   type TrustedToolExecutionEvent,
 } from "../../infra/diagnostic-events.js";
 import type { CliBackendParseJsonlEvent } from "../../plugins/cli-backend.types.js";
+import { getPluginModuleLoaderStats } from "../../plugins/plugin-module-loader-cache.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { getProcessSupervisor } from "../../process/supervisor/index.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
@@ -151,6 +154,20 @@ beforeEach(() => {
   resetAgentEventsForTest();
   resetDiagnosticEventsForTest();
   supervisorSpawnMock.mockReset();
+  // These contexts bypass preparation, which normally loads the provider owner.
+  // Unknown CLI errors must not materialize bundled plugins inside this fixture.
+  const registry = createEmptyPluginRegistry();
+  registry.providers.push({
+    pluginId: "fixture-cli-provider",
+    provider: {
+      id: "fixture-cli-provider",
+      label: "Fixture CLI provider",
+      hookAliases: ["claude-cli", "codex-cli", "google-gemini-cli"],
+      auth: [],
+    },
+    source: "test",
+  });
+  setActivePluginRegistry(registry);
 });
 
 describe("executePreparedCliRun supervisor output capture", () => {
@@ -1581,6 +1598,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
   });
 
   it("finishes parsed CLI tools when the process exits before a tool result", async () => {
+    const pluginLoaderCalls = getPluginModuleLoaderStats().calls;
     const toolEvents: TrustedToolExecutionEvent[] = [];
     const stop = onTrustedToolExecutionEvent((event) => toolEvents.push(event));
     const toolStart = `${JSON.stringify({
@@ -1633,6 +1651,10 @@ describe("executePreparedCliRun supervisor output capture", () => {
         errorCategory: "cli_tool_incomplete",
       },
     ]);
+    expect(
+      getPluginModuleLoaderStats().calls,
+      "prepared CLI execution must not materialize provider plugins",
+    ).toBe(pluginLoaderCalls);
   });
 
   it("cancels an outstanding parsed CLI tool when the enclosing run is aborted", async () => {

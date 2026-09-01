@@ -113,7 +113,19 @@ describe("channelsLogsCommand", () => {
       shadow: { module: "external-chat-shadow" },
       match: { module: "external-chat" },
     },
-  ])("excludes a shadow $label while preserving an exact channel match", async (fixture) => {
+    {
+      label: "nested subsystem",
+      channel: "slack",
+      shadow: { subsystem: "slack-archive/send" },
+      match: { subsystem: "slack/send" },
+    },
+    {
+      label: "nested module",
+      channel: "external-chat",
+      shadow: { module: "external-chat-shadow/send" },
+      match: { module: "external-chat/send" },
+    },
+  ])("matches channel boundaries and excludes a shadow $label", async (fixture) => {
     await fs.writeFile(
       logPath,
       [

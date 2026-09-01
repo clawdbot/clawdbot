@@ -29,6 +29,8 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
+import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
+import type { SessionEntryListScope } from "../config/sessions/session-accessor.js";
 import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExecPolicyForMode } from "../infra/exec-approvals-core.js";
@@ -137,7 +139,11 @@ function readAcpMetaForDeletedAgentCheck(params: {
 
 function loadSessionEntryWithMode(
   sessionKey: string,
-  opts: { agentId?: string; clone?: boolean; includeStoreChildEntries?: boolean } | undefined,
+  opts:
+    | (Pick<SessionEntryListScope, "agentId" | "clone" | "projection"> & {
+        includeStoreChildEntries?: boolean;
+      })
+    | undefined,
   readOnly: boolean,
 ) {
   const cfg = getRuntimeConfig();
@@ -145,18 +151,22 @@ function loadSessionEntryWithMode(
   const target = resolveGatewaySessionStoreTargetWithStore({
     cfg,
     key,
+    exactRead: true,
+    readOnly,
+    projection: opts?.projection,
     ...(opts?.clone === false ? { clone: false } : {}),
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
-    ...(readOnly
-      ? {
-          exactRead: true,
-          readOnly: true,
-          ...(opts?.includeStoreChildEntries ? { includeStoreChildEntries: true } : {}),
-        }
-      : {}),
+    ...(opts?.includeStoreChildEntries ? { includeStoreChildEntries: true } : {}),
   });
   const storePath = target.storePath;
   const store = target.store;
+  if (!readOnly) {
+    for (const storeKey of target.storeKeys) {
+      if (isInternalSessionEffectsKey(storeKey)) {
+        delete store[storeKey];
+      }
+    }
+  }
   const canonicalMatch = resolveCanonicalSessionStoreMatchFromStoreKeys(store, target.storeKeys);
   const legacyKey = canonicalMatch?.key !== target.canonicalKey ? canonicalMatch?.key : undefined;
   const entry =
@@ -177,7 +187,7 @@ function loadSessionEntryWithMode(
 
 export function loadGatewaySessionEntry(
   sessionKey: string,
-  opts?: { agentId?: string; clone?: boolean },
+  opts?: Pick<SessionEntryListScope, "agentId" | "clone" | "projection">,
 ) {
   return loadSessionEntryWithMode(sessionKey, opts, false);
 }

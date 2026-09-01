@@ -9,6 +9,8 @@ export const SESSIONS_LIST_TOOL_DISPLAY_SUMMARY = "List visible sessions; filter
 export const SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY = "Read sanitized session history.";
 export const SESSIONS_SEARCH_TOOL_DISPLAY_SUMMARY = "Search past session transcripts.";
 export const SESSIONS_SEND_TOOL_DISPLAY_SUMMARY = "Run same-Gateway session/agent.";
+export const SESSIONS_SEND_RESULT_GUIDANCE =
+  'Accepted results report target admission as `targetDisposition: "queued"` or `"steered"`; `delivery.status` is only later announcement state, and neither proves target completion.';
 export const SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY =
   "Spawn hidden subagent (ephemeral) or visible work session (durable).";
 export const SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY = "Spawn subagent session.";
@@ -88,7 +90,7 @@ export function describeSessionsHistoryTool(options?: SessionLinkDescriptionOpti
 /** Describes the sessions_search tool for model-facing instructions. */
 export function describeSessionsSearchTool(options?: SessionLinkDescriptionOptions): string {
   return [
-    "Search your own past sessions for matching user and assistant text.",
+    "Search visible past sessions for matching user and assistant text.",
     ...(options?.sessionLinkBase ? [describeSessionLinkRule(options.sessionLinkBase)] : []),
   ].join(" ");
 }
@@ -98,6 +100,7 @@ export function describeSessionsSendTool(): string {
   return [
     "Run a visible session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label.",
     "A session identifies model context, not an external address; its reply may still announce through established delivery context.",
+    SESSIONS_SEND_RESULT_GUIDANCE,
     'Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available; status "no_reply" is terminal, so do not wait for an announcement.',
     "watch:true: notice arrives when others later change target session.",
   ].join(" ");
@@ -122,10 +125,10 @@ export function describeSessionsSpawnTool(options?: {
   spawnRestricted?: boolean;
 }): string {
   // Callers that resolve the effective visibility get it rendered as fact;
-  // without it the copy must keep the "default" hedge instead of asserting tree.
+  // without it the copy must keep the "default" hedge instead of asserting the effective scope.
   const visibilityLine = options?.sessionToolsVisibility
     ? `Session listing/addressing obeys \`tools.sessions.visibility\` (${options.sessionToolsVisibility}: ${describeSessionVisibilityScope(options.sessionToolsVisibility, { spawnRestricted: options.spawnRestricted })}).`
-    : `Session listing/addressing obeys \`tools.sessions.visibility\` (\`tree\` default: ${describeSessionVisibilityScope("tree")}).`;
+    : `Session listing/addressing obeys \`tools.sessions.visibility\` (\`agent\` default: ${describeSessionVisibilityScope("agent")}).`;
   const runtimeDescription =
     options?.acpAvailable === false
       ? 'Spawn child session; default `runtime="subagent"`.'

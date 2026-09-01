@@ -495,7 +495,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
       expect(testing.activeRuns.size).toBe(0);
       await expect(
         harness.tools[1]!.execute("closed-sibling", { runId: parked.runId }),
-      ).rejects.toThrow(/unavailable|expired/);
+      ).rejects.toBe(handoffReason);
     } finally {
       harness.dispose();
     }
@@ -546,7 +546,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         );
         expect(pending.settled).toBeUndefined();
         expect(otherPending.settled).toBeUndefined();
-        expect(ownerState.snapshotBytes.byteLength).toBeGreaterThan(0);
+        expect(ownerState.snapshot.memory.byteLength).toBeGreaterThan(0);
         expect(testing.resumingRunIds.size).toBe(0);
 
         // Both exec calls have returned; no wait is in flight to perform owner cleanup.

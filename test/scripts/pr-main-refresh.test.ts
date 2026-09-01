@@ -46,6 +46,11 @@ describePosix("native PR main refresh boundaries", () => {
     expect(stamp).toContain(`PREP_HEAD_SHA=${f.head}\n`);
     expect(stamp).toContain(`LOCAL_PREP_HEAD_SHA=${f.head}\n`);
     expect(stamp).toContain(`PREP_MAINLINE_BASE_SHA=${f.main}\n`);
+    expect(stamp).toContain("PREP_REPLACED_HOSTED_ANCESTRY=false\n");
+    expect(stamp).toContain("PREP_AUTHOR_ACCESS=maintainer\n");
+    expect(readFileSync(join(f.local, "prep-context.env"), "utf8")).toContain(
+      "PR_AUTHOR_ACCESS_AT_PREP=maintainer\n",
+    );
     expect(
       f.git(f.canonical, "for-each-ref", "--format=%(refname)", "refs/openclaw/pr-operation-locks"),
     ).toBe("");

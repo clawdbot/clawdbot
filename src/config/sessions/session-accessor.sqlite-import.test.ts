@@ -8,6 +8,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { listSessionBranches } from "./session-accessor.js";
 import { loadExactSessionEntry } from "./session-accessor.sqlite-entry.js";
 import {
   importSqliteSessionRows,
@@ -144,6 +145,7 @@ it("deduplicates existing and incoming bytes and identities, preserves aliases, 
     };
     const first = { ...message, timestamp: 10 };
     const second = { ...message, id: "two", parentId: "one", timestamp: 30 };
+    const rejected = { ...second, timestamp: 99 };
     const opaque = { custom: "no identity", timestamp: 25 };
     const readTranscriptEvents = (append: (event: unknown) => void) => {
       for (const event of [
@@ -153,7 +155,9 @@ it("deduplicates existing and incoming bytes and identities, preserves aliases, 
         opaque,
         opaque,
         second,
-        { ...second, timestamp: 99 },
+        rejected,
+        { ...second, timestamp: 50 },
+        rejected,
       ]) {
         append(event);
       }
@@ -161,6 +165,9 @@ it("deduplicates existing and incoming bytes and identities, preserves aliases, 
     const stages = observeStages();
     await importSqliteSessionRows({ ...params, readTranscriptEvents: (append) => append(first) });
     const db = openOpenClawAgentDatabase({ agentId: "main", env: state.env }).db;
+    db.prepare("UPDATE session_windows SET created_at = 7 WHERE session_id = ?").run(
+      params.entry.sessionId,
+    );
     const generation = db.prepare("SELECT generation FROM transcript_rewrite_watermarks").get();
     expect(await importSqliteSessionRows({ ...params, readTranscriptEvents })).toMatchObject({
       transcriptEvents: 2,
@@ -184,7 +191,10 @@ it("deduplicates existing and incoming bytes and identities, preserves aliases, 
     expect(
       db.prepare("SELECT event_id FROM transcript_event_identities ORDER BY seq").all(),
     ).toEqual([{ event_id: "one" }, { event_id: "two" }]);
-    expect(db.prepare("SELECT updated_at FROM session_windows").get()).toEqual({ updated_at: 99 });
+    expect(db.prepare("SELECT created_at, updated_at FROM session_windows").get()).toEqual({
+      created_at: 7,
+      updated_at: 99,
+    });
     expect(db.prepare("SELECT generation FROM transcript_rewrite_watermarks").get()).toEqual(
       generation,
     );
@@ -197,10 +207,16 @@ it("hands off exact SQLite bytes, duplicate IDs, timestamps and owner without ap
   await withOpenClawTestState({ label: "import-exact" }, async (state) => {
     const params = target(state, "exact");
     const owner = { actor: { type: "human" as const, id: "owner" }, assignedAt: 40 };
+    const firstMessage = { ...message, timestamp: "2026-08-30T00:00:01.000Z" };
+    const canonicalMessage = {
+      ...message,
+      timestamp: "2026-08-30T00:00:02.000Z",
+      message: { role: "user", content: "canonical duplicate" },
+    };
     const rows = [
       { createdAt: 41, eventJson: '{ "type": "session", "id": "exact", "version": 3 }' },
-      { createdAt: 43, eventJson: JSON.stringify(message, null, 2) },
-      { createdAt: 45, eventJson: JSON.stringify(message) },
+      { createdAt: 43, eventJson: JSON.stringify(firstMessage, null, 2) },
+      { createdAt: 45, eventJson: JSON.stringify(canonicalMessage) },
     ];
     await importSqliteSessionRows({
       ...params,
@@ -231,6 +247,16 @@ it("hands off exact SQLite bytes, duplicate IDs, timestamps and owner without ap
       }),
     ).toMatchObject({ skippedExisting: true, transcriptEvents: 0 });
     expect(loadTranscriptEventsSync({ ...params, sessionId: "exact" })).toHaveLength(3);
+    await expect(listSessionBranches(params)).resolves.toEqual({
+      status: "ok",
+      branches: Array.from({ length: 2 }, () => ({
+        leafEntryId: "one",
+        headline: "canonical duplicate",
+        messageCount: 1,
+        updatedAt: canonicalMessage.timestamp,
+        active: true,
+      })),
+    });
   });
 });
 
@@ -249,5 +275,166 @@ it("rejects batches spanning implicit agent stores before reading sources", asyn
       ),
     ).rejects.toThrow("spans multiple stores");
     expect(read).not.toHaveBeenCalled();
+  });
+});
+
+it.each(["implicit", "leaf", "root", "opaque"])(
+  "repairs an original-only prompt rewrite branch in staging (leaf control=%s)",
+  async (mode) => {
+    const leafControl = mode !== "implicit";
+    await withOpenClawTestState({ label: "import-branch-repair" }, async (state) => {
+      const scope = target(state, "repair");
+      const events = [
+        {
+          type: "session",
+          version: 3,
+          id: "repair",
+          timestamp: "2026-08-30T00:00:00Z",
+          cwd: "/fixture",
+        },
+        {
+          type: "message",
+          id: "original",
+          ...(leafControl ? { parentId: null } : {}),
+          message: {
+            role: "user",
+            content:
+              "hello\n\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nretired context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+          },
+        },
+        {
+          type: "message",
+          id: "visible",
+          ...(leafControl ? { parentId: null } : {}),
+          message: { role: "user", content: "hello" },
+        },
+        ...(mode === "opaque" ? [{ type: "metadata", id: "append-root", parentId: null }] : []),
+        ...(leafControl
+          ? [
+              {
+                type: "leaf",
+                id: "selection",
+                parentId: "visible",
+                targetId: "visible",
+                ...(mode === "root"
+                  ? { appendParentId: null }
+                  : mode === "opaque"
+                    ? { appendParentId: "append-root" }
+                    : {}),
+              },
+            ]
+          : []),
+      ];
+      const result = await importSqliteSessionRows({
+        ...scope,
+        repairLegacyTranscript: true,
+        readTranscriptEvents: (append) => {
+          for (const event of events) {
+            append(event);
+          }
+        },
+      });
+      expect(result.recovery).toMatchObject({ complete: mode !== "opaque", repaired: true });
+      const persisted = loadTranscriptEventsSync({ ...scope, sessionId: "repair" });
+      expect(persisted).toEqual(
+        [
+          "repair",
+          "visible",
+          ...(mode === "opaque" ? ["append-root"] : []),
+          ...(leafControl ? ["selection"] : []),
+        ].map((id) => expect.objectContaining({ id })),
+      );
+      if (mode === "root" || mode === "opaque") {
+        expect(persisted.at(-1)).toMatchObject({
+          targetId: "visible",
+          appendParentId: mode === "root" ? null : "append-root",
+        });
+      }
+    });
+  },
+);
+
+it.each([
+  {
+    kind: "indexed",
+    repeated: {
+      type: "message",
+      id: "repeated",
+      parentId: "root",
+      message: { role: "assistant", content: "same replay" },
+    },
+  },
+  {
+    kind: "leaf",
+    repeated: {
+      type: "leaf",
+      id: "repeated",
+      parentId: "root",
+      targetId: "root",
+    },
+  },
+])("repairs an identical repeated $kind event and reruns idempotently", async ({ repeated }) => {
+  await withOpenClawTestState({ label: "import-identical-replay" }, async (state) => {
+    const scope = target(state, "identical-replay");
+    const events = [
+      {
+        type: "session",
+        version: 3,
+        id: "identical-replay",
+        timestamp: "2026-08-30T00:00:00Z",
+        cwd: "/fixture",
+      },
+      {
+        type: "message",
+        id: "root",
+        parentId: null,
+        message: { role: "user", content: "root" },
+      },
+      repeated,
+      repeated,
+    ];
+    const readTranscriptEvents = (append: (event: unknown) => void) => {
+      for (const event of events) {
+        append(event);
+      }
+    };
+
+    const imported = await importSqliteSessionRows({
+      ...scope,
+      repairLegacyTranscript: true,
+      readTranscriptEvents,
+    });
+    expect(imported).toMatchObject({
+      recovery: { complete: true, events: 3, repaired: true },
+      transcriptEvents: 3,
+    });
+    expect(
+      loadTranscriptEventsSync({ ...scope, sessionId: "identical-replay" }).map(
+        (event) => (event as { id?: string }).id,
+      ),
+    ).toEqual(["identical-replay", "root", "repeated"]);
+
+    await expect(
+      importSqliteSessionRows({
+        ...scope,
+        repairLegacyTranscript: true,
+        readTranscriptEvents,
+      }),
+    ).resolves.toMatchObject({
+      recovery: { complete: true, events: 3, repaired: true },
+      transcriptEvents: 0,
+    });
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+    expect(
+      database.db
+        .prepare(
+          "SELECT event_id, COUNT(*) AS count FROM transcript_event_identities GROUP BY event_id ORDER BY event_id",
+        )
+        .all(),
+    ).toEqual([
+      { event_id: "identical-replay", count: 1 },
+      { event_id: "repeated", count: 1 },
+      { event_id: "root", count: 1 },
+    ]);
   });
 });

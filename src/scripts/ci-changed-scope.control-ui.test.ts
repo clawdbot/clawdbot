@@ -27,9 +27,11 @@ it("runs Chromium UI tests for browser copilot extension changes", () => {
   );
 });
 
-it.each(["package.json", ".github/workflows/ci.yml"])(
-  "runs Chromium UI tests when %s can change the browser copilot CI route",
-  (changedPath) => {
-    expect(detectChangedScope([changedPath]).runUiTests).toBe(true);
-  },
-);
+it.each([
+  "package.json",
+  ".github/workflows/ci.yml",
+  "test/vitest/vitest.ui-paths.mjs",
+  "test/vitest/vitest.ui-browser.config.ts",
+])("runs Chromium UI tests when %s can change the browser copilot CI route", (changedPath) => {
+  expect(detectChangedScope([changedPath]).runUiTests).toBe(true);
+});

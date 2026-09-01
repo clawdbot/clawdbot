@@ -300,7 +300,7 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     ```
 
     - `dmScope`: `main` (shared) | `per-peer` | `per-channel-peer` | `per-account-channel-peer`
-    - `threadBindings`: global defaults for thread-bound session routing. `/focus`, `/unfocus`, `/agents`, `/session idle`, and `/session max-age` bind, unbind, list, and tune this per session (Discord binds threads, Telegram binds topics/conversations).
+    - `threadBindings`: global defaults for thread-bound session routing. Spawn with `sessions_spawn({ thread: true })` or `/acp spawn --thread auto`. Use `/session unbind`, `/agents`, `/session idle`, and `/session max-age` to detach, list, and tune bindings (Discord binds threads, Telegram binds topics/conversations).
     - See [Session Management](/concepts/session) for scoping, identity links, and send policy.
     - See [full reference](/gateway/config-agents#session) for all fields.
 
@@ -754,7 +754,7 @@ Rules:
 }
 ```
 
-SecretRef details (including `secrets.providers` for `env`/`file`/`exec`/`store`) are in [Secrets Management](/gateway/secrets).
+The `env` ref above uses the built-in `default` provider and needs no `secrets.providers.default` entry unless `secrets.defaults.env` selects another alias. The same rule applies to `store` refs and `secrets.defaults.store`. See [Secrets Management](/gateway/secrets#secretref-contract) for provider precedence and the required `file`/`exec` provider configuration.
 Supported credential paths are listed in [SecretRef Credential Surface](/reference/secretref-credential-surface).
 </Accordion>
 

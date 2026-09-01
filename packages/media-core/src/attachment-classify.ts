@@ -79,7 +79,7 @@ function resolveUtf16Charset(buffer: Buffer): AttachmentCharset | undefined {
   return zeroOdd >= zeroEven ? "utf-16le" : "utf-16be";
 }
 
-function textRatios(text: string): [printable: number, wordish: number] {
+function textRatios(text: string, includeWordish: boolean): [printable: number, wordish: number] {
   let printable = 0;
   let control = 0;
   let wordish = 0;
@@ -92,7 +92,7 @@ function textRatios(text: string): [printable: number, wordish: number] {
       control += 1;
     } else {
       printable += 1;
-      wordish += Number(WORDISH_CHAR.test(char));
+      wordish += includeWordish ? Number(WORDISH_CHAR.test(char)) : 0;
     }
   }
   const total = printable + control;
@@ -105,9 +105,9 @@ function looksLikeText(buffer: Buffer): boolean {
   }
   const sample = buffer.subarray(0, Math.min(buffer.length, 4096));
   try {
-    return textRatios(new TextDecoder("utf-8", { fatal: true }).decode(sample))[0] > 0.85;
+    return textRatios(new TextDecoder("utf-8", { fatal: true }).decode(sample), false)[0] > 0.85;
   } catch {
-    const [printable, wordish] = textRatios(new TextDecoder("windows-1252").decode(sample));
+    const [printable, wordish] = textRatios(new TextDecoder("windows-1252").decode(sample), true);
     return printable > 0.95 && wordish > 0.3;
   }
 }
@@ -126,7 +126,6 @@ export async function classifyAttachmentBytes(params: {
     filePath: params.name ?? undefined,
   });
   const detectedClass = attachmentClassFromMime(mime);
-  const charset = resolveUtf16Charset(params.buffer);
   const hasUtf16Bom =
     params.buffer.length >= 2 &&
     (params.buffer.readUInt16LE(0) === 0xfeff || params.buffer.readUInt16LE(0) === 0xfffe);
@@ -135,16 +134,16 @@ export async function classifyAttachmentBytes(params: {
     mime?.startsWith("application/vnd.") ||
     (detectedClass !== "binary" && !hasUtf16Bom)
   ) {
+    const charset = detectedClass === "text" ? resolveUtf16Charset(params.buffer) : undefined;
     // Text resolved by extension can still be BOM-less UTF-16; dropping the
     // detected charset here would decode it downstream as UTF-8 mojibake.
-    return detectedClass === "text" && charset
-      ? { mime, class: detectedClass, charset }
-      : { mime, class: detectedClass };
+    return charset ? { mime, class: detectedClass, charset } : { mime, class: detectedClass };
   }
   const signature = params.buffer.length >= 4 ? params.buffer.readUInt32BE(0) : 0;
   if (signature === 0x504b0304 || signature === 0x504b0102 || signature === 0x504b0506) {
     return { mime, class: "archive" };
   }
+  const charset = resolveUtf16Charset(params.buffer);
   if (!charset && !looksLikeText(params.buffer)) {
     return { mime, class: "binary" };
   }

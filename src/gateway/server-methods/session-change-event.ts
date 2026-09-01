@@ -109,7 +109,6 @@ function broadcastSessionsChanged(
               sessionRow,
               agentId: eventAgentId,
               activeRunState,
-              status: activeRunState?.active ? (activeRunState.status ?? "running") : undefined,
             }),
           }
         : {}),

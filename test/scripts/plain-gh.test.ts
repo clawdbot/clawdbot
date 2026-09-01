@@ -1,174 +1,388 @@
-// Plain GitHub CLI helper tests cover wrapper-safe gh execution for maintainer scripts.
-import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+// Exercise real subprocess boundaries with disposable PATH routes and synthetic credentials.
+import { execFileSync } from "node:child_process";
+import {
+  chmodSync,
+  closeSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   execGhApiRead,
   execGhJson,
   execGhRead,
+  execGhReadAsync,
   execPlainGh,
-  plainGhEnv,
-  PLAIN_GH_SYSTEM_CANDIDATES,
+  plainGhAuthenticatedEnv,
   resolvePlainGhBin,
 } from "../../scripts/lib/plain-gh.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const shellHelper = path.resolve("scripts/lib/plain-gh.sh");
+const tokenNames = [
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  "GH_ENTERPRISE_TOKEN",
+  "GITHUB_ENTERPRISE_TOKEN",
+] as const;
+const engines = ["shell", "Node"] as const;
 
-function makeFakeGh(): string {
-  const dir = tempDirs.make("plain-gh-");
-  const binDir = path.join(dir, "bin");
-  mkdirSync(binDir);
-  const ghPath = path.join(binDir, "gh");
-  writeFileSync(
-    ghPath,
-    `#!/usr/bin/env bash
-printf 'argv=%s\\n' "$*"
-printf 'NO_COLOR=%s\\n' "\${NO_COLOR-}"
-printf 'GH_FORCE_TTY=%s\\n' "\${GH_FORCE_TTY-}"
-printf 'FORCE_COLOR=%s\\n' "\${FORCE_COLOR-}"
-printf 'CLICOLOR=%s\\n' "\${CLICOLOR-}"
-printf 'CLICOLOR_FORCE=%s\\n' "\${CLICOLOR_FORCE-}"
-printf 'COLORTERM_SET=%s\\n' "\${COLORTERM+x}"
-printf 'OPENCLAW_GH_BIN_SET=%s\\n' "\${OPENCLAW_GH_BIN+x}"
-printf 'GH_TOKEN_SET=%s\\n' "\${GH_TOKEN:+1}"
-`,
-  );
-  chmodSync(ghPath, 0o755);
-  return ghPath;
+function makeFixture() {
+  const root = tempDirs.make("plain-gh-");
+  const home = path.join(root, "home");
+  const protectedBin = path.join(home, "bin");
+  const secondBin = path.join(root, "second");
+  const toolsBin = path.join(root, "tools");
+  for (const dir of [protectedBin, secondBin, toolsBin]) {
+    mkdirSync(dir, { recursive: true });
+  }
+  symlinkSync("/usr/bin/env", path.join(toolsBin, "env"));
+  const calls = path.join(root, "calls.jsonl");
+  writeFileSync(calls, "");
+  for (const [dir, route] of [
+    [protectedBin, "protected"],
+    [secondBin, "second"],
+  ] as const) {
+    const gh = path.join(dir, "gh");
+    writeFileSync(
+      gh,
+      `#!${process.execPath}
+const fs = require("node:fs");
+const env = process.env;
+const argv = process.argv.slice(2);
+const route = ${JSON.stringify(route)};
+fs.appendFileSync(env.FAKE_GH_CALLS, JSON.stringify({ route, argv, override: env.OPENCLAW_GH_BIN ?? null }) + "\\n");
+if (argv[0] === "auth" && argv[1] === "token") {
+  process.stdout.write("fixture-token\\n");
+} else if (env.FAKE_GH_REJECT && route === "protected") {
+  process.stdout.write("protected refusal\\n");
+  process.stderr.write("policy denied\\n");
+  process.exitCode = 23;
+} else if (env.FAKE_GH_BYTES) {
+  process.stdout.write(Buffer.alloc(Number(env.FAKE_GH_BYTES), 0xff));
+} else {
+  const colors = Object.fromEntries(["NO_COLOR", "FORCE_COLOR", "CLICOLOR", "CLICOLOR_FORCE", "COLORTERM", "GH_FORCE_TTY"].map(key => [key, env[key] ?? null]));
+  const tokens = Object.fromEntries(${JSON.stringify(tokenNames)}.filter(key => env[key]).map(key => [key, env[key]]));
+  const result = JSON.stringify({ route, argv, colors, tokens, override: env.OPENCLAW_GH_BIN ?? null, cwd: process.cwd() });
+  const colored = env.NO_COLOR !== "1" || env.FORCE_COLOR !== "0" || env.CLICOLOR !== "0" || env.CLICOLOR_FORCE !== "0" || env.COLORTERM || env.GH_FORCE_TTY;
+  process.stdout.write(colored ? "\\x1b[31m" + result + "\\x1b[0m" : result);
 }
-
-function makeLargeFakeGh(): string {
-  const dir = tempDirs.make("plain-gh-large-");
-  const ghPath = path.join(dir, "gh");
-  writeFileSync(
-    ghPath,
-    `#!/usr/bin/env node
-const bytes = Number(process.env.PLAIN_GH_FAKE_BYTES ?? "0");
-process.stdout.write("x".repeat(bytes));
 `,
-  );
-  chmodSync(ghPath, 0o755);
-  return ghPath;
-}
-
-function makeCredentialForwardingGh() {
-  const dir = tempDirs.make("plain-gh-auth-forward-");
-  const binDir = path.join(dir, "bin");
-  const calls = path.join(dir, "calls.log");
-  const realGh = path.join(dir, "real-gh");
-  mkdirSync(binDir);
-  writeFileSync(
-    path.join(binDir, "gh"),
-    `#!/bin/sh
-printf 'path:%s\\n' "$*" >> "$PLAIN_GH_FAKE_CALLS"
-if [ "$1 $2" = "auth token" ]; then
-  printf 'forwarded-test-token\\n'
-  exit 0
-fi
-exit 9
-`,
-  );
-  writeFileSync(
-    realGh,
-    `#!/bin/sh
-printf 'plain:%s\\n' "$*" >> "$PLAIN_GH_FAKE_CALLS"
-case "$PLAIN_GH_EXPECTED_TOKEN_ENV" in
-  GH_TOKEN) token="\${GH_TOKEN-}"; other_token="\${GH_ENTERPRISE_TOKEN-}" ;;
-  GH_ENTERPRISE_TOKEN) token="\${GH_ENTERPRISE_TOKEN-}"; other_token="\${GH_TOKEN-}" ;;
-  *) echo 'unexpected token environment' >&2; exit 7 ;;
-esac
-if [ "$token" != "forwarded-test-token" ] || [ -n "$other_token" ]; then
-  echo 'missing forwarded credentials' >&2
-  exit 8
-fi
-printf 'authenticated plain gh\\n'
-`,
-  );
-  chmodSync(path.join(binDir, "gh"), 0o755);
-  chmodSync(realGh, 0o755);
-  return { binDir, calls, realGh };
-}
-
-describe("plain gh helpers", () => {
-  it("prefers OPENCLAW_GH_BIN over PATH shims", () => {
-    const ghPath = makeFakeGh();
-
-    expect(
-      resolvePlainGhBin({
-        HOME: path.dirname(path.dirname(ghPath)),
-        OPENCLAW_GH_BIN: ghPath,
-        PATH: "",
-      }),
-    ).toBe(ghPath);
-  });
-
-  it("prefers package-manager gh paths over bin shims", () => {
-    const realGh = makeFakeGh();
-    const shimGh = makeFakeGh();
-
-    expect(resolvePlainGhBin({ PATH: shimGh }, [realGh, shimGh])).toBe(realGh);
-    expect(PLAIN_GH_SYSTEM_CANDIDATES.indexOf("/opt/homebrew/opt/gh/bin/gh")).toBeLessThan(
-      PLAIN_GH_SYSTEM_CANDIDATES.indexOf("/opt/homebrew/bin/gh"),
     );
-  });
+    chmodSync(gh, 0o755);
+  }
+  const env: NodeJS.ProcessEnv = {
+    HOME: home,
+    PATH: [protectedBin, secondBin, toolsBin].join(path.delimiter),
+    FAKE_GH_CALLS: calls,
+    CLICOLOR: "1",
+    CLICOLOR_FORCE: "1",
+    COLORTERM: "truecolor",
+    FORCE_COLOR: "3",
+    GH_FORCE_TTY: "120",
+  };
+  return {
+    root,
+    home,
+    protectedBin,
+    secondBin,
+    toolsBin,
+    env,
+    override: path.join(secondBin, "gh"),
+    calls: () =>
+      readFileSync(calls, "utf8")
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line)),
+  };
+}
 
-  it("normalizes color environment for JSON-safe gh output", () => {
-    expect(
-      plainGhEnv({
-        CLICOLOR: "1",
-        CLICOLOR_FORCE: "1",
-        COLORTERM: "truecolor",
-        FORCE_COLOR: "3",
+function runGh(engine: (typeof engines)[number], env: NodeJS.ProcessEnv, cwd?: string) {
+  const options = { cwd, encoding: "utf8" as const, env, stdio: "pipe" as const };
+  if (engine === "Node") {
+    return execPlainGh(["--version"], options);
+  }
+  return execFileSync(
+    "/bin/bash",
+    ["-c", 'source "$1"; shift; gh_plain "$@"', "plain-gh", shellHelper, "--version"],
+    options,
+  );
+}
+
+describe.each(engines)("%s plain gh execution", (engine) => {
+  it.each([undefined, ""])(
+    "keeps HOME/bin first on PATH with override %j and does not extract credentials",
+    (override) => {
+      const fixture = makeFixture();
+      fixture.env.OPENCLAW_GH_BIN = override;
+      const before = { ...fixture.env };
+      const result = JSON.parse(runGh(engine, fixture.env));
+      expect(result).toMatchObject({
+        route: "protected",
+        argv: ["--version"],
+        colors: {
+          NO_COLOR: "1",
+          FORCE_COLOR: "0",
+          CLICOLOR: "0",
+          CLICOLOR_FORCE: "0",
+          COLORTERM: null,
+          GH_FORCE_TTY: null,
+        },
+      });
+      expect(result.tokens).toEqual({});
+      expect(fixture.calls()).toEqual([
+        { route: "protected", argv: ["--version"], override: override ?? null },
+      ]);
+      expect(fixture.env).toEqual(before);
+    },
+  );
+
+  it("preserves a protected refusal and both output streams without fallback", () => {
+    const fixture = makeFixture();
+    fixture.env.FAKE_GH_REJECT = "1";
+    expect(() => runGh(engine, fixture.env)).toThrow(
+      expect.objectContaining({
+        status: 23,
+        stdout: "protected refusal\n",
+        stderr: "policy denied\n",
       }),
-    ).toMatchObject({
-      NO_COLOR: "1",
-      FORCE_COLOR: "0",
-      CLICOLOR: "0",
-      CLICOLOR_FORCE: "0",
-    });
-    expect(plainGhEnv({ COLORTERM: "truecolor" })).not.toHaveProperty("COLORTERM");
-    expect(plainGhEnv({ GH_FORCE_TTY: "120" })).not.toHaveProperty("GH_FORCE_TTY");
+    );
+    expect(fixture.calls()).toEqual([{ route: "protected", argv: ["--version"], override: null }]);
   });
 
-  it("routes explicit GET reads through the PATH shim", () => {
-    const ghPath = makeFakeGh();
-    const output = execGhApiRead("repos/openclaw/openclaw/pulls/1", {
+  it.each(["missing PATH command", "nonexecutable override"])(
+    "refuses %s without native discovery",
+    (failure) => {
+      const fixture = makeFixture();
+      if (failure === "missing PATH command") {
+        fixture.env.PATH = fixture.toolsBin;
+      } else {
+        fixture.env.OPENCLAW_GH_BIN = path.join(fixture.root, "not-executable");
+        writeFileSync(fixture.env.OPENCLAW_GH_BIN, "not executable");
+        // Existing ambient credentials isolate executable validation from split-auth probing.
+        fixture.env.GH_TOKEN = "fixture-ambient";
+      }
+      expect(() => runGh(engine, fixture.env)).toThrow();
+      expect(fixture.calls()).toEqual([]);
+    },
+  );
+
+  it.each(tokenNames)("preserves ambient %s without probing in either route", (tokenName) => {
+    const fixture = makeFixture();
+    fixture.env[tokenName] = "fixture-ambient";
+    for (const explicit of [false, true]) {
+      fixture.env.OPENCLAW_GH_BIN = explicit ? fixture.override : undefined;
+      const before = { ...fixture.env };
+      const result = JSON.parse(runGh(engine, fixture.env));
+      expect(result).toMatchObject({
+        route: explicit ? "second" : "protected",
+        override: explicit ? fixture.override : null,
+      });
+      expect(result.tokens).toEqual({ [tokenName]: "fixture-ambient" });
+      expect(fixture.env).toEqual(before);
+    }
+    expect(fixture.calls()).toEqual([
+      { route: "protected", argv: ["--version"], override: null },
+      { route: "second", argv: ["--version"], override: fixture.override },
+    ]);
+  });
+
+  it.each([
+    { host: undefined, tokenName: "GH_TOKEN", args: ["auth", "token"] },
+    {
+      host: "github.com",
+      tokenName: "GH_TOKEN",
+      args: ["auth", "token", "--hostname", "github.com"],
+    },
+    {
+      host: "github.example.com",
+      tokenName: "GH_ENTERPRISE_TOKEN",
+      args: ["auth", "token", "--hostname", "github.example.com"],
+    },
+  ])(
+    "forwards explicit override credentials for host $host only to the child",
+    ({ host, tokenName, args }) => {
+      const fixture = makeFixture();
+      Object.assign(fixture.env, { GH_HOST: host, OPENCLAW_GH_BIN: fixture.override });
+      const before = { ...fixture.env };
+      const output =
+        engine === "Node"
+          ? execFileSync(
+              process.execPath,
+              [
+                "--input-type=module",
+                "-e",
+                `import { execPlainGh } from ${JSON.stringify(path.resolve("scripts/lib/plain-gh.mjs"))};
+const before = JSON.stringify(process.env);
+process.stdout.write(execPlainGh(["--version"], { encoding: "utf8" }));
+if (JSON.stringify(process.env) !== before) throw new Error("parent environment changed");`,
+              ],
+              { encoding: "utf8", env: fixture.env, stdio: "pipe" },
+            )
+          : execFileSync(
+              "/bin/bash",
+              [
+                "-c",
+                'source "$1"; gh_plain --version && test -z "${GH_TOKEN-}${GH_ENTERPRISE_TOKEN-}"',
+                "plain-gh",
+                shellHelper,
+              ],
+              { encoding: "utf8", env: fixture.env, stdio: "pipe" },
+            );
+      const result = JSON.parse(output);
+      expect(result).toMatchObject({
+        route: "second",
+        override: fixture.override,
+      });
+      expect(result.tokens).toEqual({ [tokenName]: "fixture-token" });
+      expect(fixture.calls()).toEqual([
+        { route: "protected", argv: args, override: engine === "shell" ? "" : null },
+        { route: "second", argv: ["--version"], override: fixture.override },
+      ]);
+      expect(fixture.env).toEqual(before);
+    },
+  );
+});
+
+describe("plain gh subprocess contracts", () => {
+  it("ignores a shell function shadowing the external PATH executable", () => {
+    const fixture = makeFixture();
+    const output = execFileSync(
+      "/bin/bash",
+      [
+        "-c",
+        'source "$1"; gh() { echo function-shadow >&2; return 71; }; resolved=$(resolve_plain_gh_bin); "$resolved" --version',
+        "plain-gh",
+        shellHelper,
+      ],
+      { encoding: "utf8", env: fixture.env, stdio: "pipe" },
+    );
+    expect(output).toContain('"route":"protected"');
+    expect(fixture.calls()).toHaveLength(1);
+  });
+
+  it.each(["bin", ""])("uses the Node child cwd for relative PATH entry %j", (entry) => {
+    const fixture = makeFixture();
+    const cwd = entry ? fixture.home : fixture.protectedBin;
+    fixture.env.PATH = [entry, fixture.secondBin, fixture.toolsBin].join(path.delimiter);
+    expect(JSON.parse(runGh("Node", fixture.env, cwd))).toMatchObject({ route: "protected", cwd });
+    expect(fixture.calls()).toHaveLength(1);
+  });
+
+  it("keeps direct resolver/environment consumers on PATH without an auth probe", () => {
+    const fixture = makeFixture();
+    const output = execFileSync(resolvePlainGhBin(fixture.env), ["--version"], {
       encoding: "utf8",
-      env: {
-        ...process.env,
-        OPENCLAW_GH_BIN: "/identity-sensitive/plain-gh",
-        PATH: `${path.dirname(ghPath)}${path.delimiter}${process.env.PATH ?? ""}`,
-      },
+      env: plainGhAuthenticatedEnv(fixture.env),
+      stdio: "pipe",
     });
-
-    expect(output).toContain("argv=api repos/openclaw/openclaw/pulls/1 --method GET");
-    expect(output).toContain("OPENCLAW_GH_BIN_SET=");
+    expect(JSON.parse(output).route).toBe("protected");
+    expect(fixture.calls()).toEqual([{ route: "protected", argv: ["--version"], override: null }]);
   });
 
-  it("shares bounded PATH-shim reads and JSON parsing", () => {
-    const calls: unknown[][] = [];
-    const execFileSyncImpl = (...args: unknown[]) => {
-      calls.push(args);
-      return '{"ok":true}';
-    };
+  it("keeps explicit reads override-independent and parses normalized JSON", async () => {
+    const fixture = makeFixture();
+    fixture.env.OPENCLAW_GH_BIN = "/invalid-explicit-override";
+    const options = { encoding: "utf8" as const, env: fixture.env };
+    expect(JSON.parse(execGhApiRead("repos/example/repo", options))).toMatchObject({
+      route: "protected",
+      argv: ["api", "repos/example/repo", "--method", "GET"],
+      override: null,
+    });
+    expect(execGhJson(["--version"], options)).toMatchObject({
+      route: "protected",
+      override: null,
+    });
+    expect(JSON.parse(await execGhReadAsync(["--version"], options))).toMatchObject({
+      route: "protected",
+      override: null,
+      colors: { NO_COLOR: "1", FORCE_COLOR: "0", CLICOLOR: "0", CLICOLOR_FORCE: "0" },
+    });
+    expect(fixture.calls()).toHaveLength(3);
+    expect(fixture.env.OPENCLAW_GH_BIN).toBe("/invalid-explicit-override");
+  });
 
+  it("preserves asynchronous read refusals and buffer limits without another route", async () => {
+    const fixture = makeFixture();
+    fixture.env.OPENCLAW_GH_BIN = fixture.override;
+    fixture.env.FAKE_GH_REJECT = "1";
+    const options = { env: fixture.env, timeout: 10_000, killSignal: "SIGKILL" as const };
+    await expect(execGhReadAsync(["--version"], options)).rejects.toMatchObject({
+      code: 23,
+      stderr: "policy denied\n",
+      stdout: "protected refusal\n",
+    });
+    delete fixture.env.FAKE_GH_REJECT;
+    fixture.env.FAKE_GH_BYTES = "4096";
+    await expect(
+      execGhReadAsync(["--version"], { ...options, maxBuffer: 1024 }),
+    ).rejects.toMatchObject({
+      code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
+    });
+    expect(fixture.calls()).toEqual([
+      { route: "protected", argv: ["--version"], override: null },
+      { route: "protected", argv: ["--version"], override: null },
+    ]);
+  });
+
+  it.each([execPlainGh, execGhRead])(
+    "preserves binary output, streaming, and caller buffer limits (%#)",
+    (execute) => {
+      const fixture = makeFixture();
+      // Explicit selection also keeps this payload proof harmless on the pre-fix resolver.
+      fixture.env.OPENCLAW_GH_BIN = fixture.override;
+      fixture.env.GH_TOKEN = "fixture-ambient";
+      fixture.env.FAKE_GH_BYTES = String(2 * 1024 * 1024);
+      const options = {
+        env: fixture.env,
+        stdio: "pipe" as const,
+        timeout: 10_000,
+        killSignal: "SIGKILL" as const,
+      };
+      const output = execute(["--version"], options);
+      expect(output).toEqual(Buffer.alloc(2 * 1024 * 1024, 0xff));
+      expect(() => execute(["--version"], { ...options, maxBuffer: 1024 })).toThrow(
+        expect.objectContaining({ code: "ENOBUFS" }),
+      );
+      const destination = path.join(fixture.root, "artifact.bin");
+      const fd = openSync(destination, "w");
+      try {
+        execute(["--version"], { ...options, stdio: ["ignore", fd, "pipe"] });
+      } finally {
+        closeSync(fd);
+      }
+      expect(readFileSync(destination)).toEqual(output);
+    },
+  );
+
+  it("preserves bounded read options and invocation errors", () => {
+    const calls: unknown[][] = [];
     expect(
       execGhJson(
-        ["api", "repos/openclaw/openclaw"],
+        ["api", "repos/example/repo"],
         {
           killSignal: "SIGKILL",
           stdio: ["ignore", "pipe", "inherit"],
           timeout: 60_000,
         },
-        { execFileSyncImpl },
+        {
+          execFileSyncImpl: (...args: unknown[]) => {
+            calls.push(args);
+            return '{"ok":true}';
+          },
+        },
       ),
     ).toEqual({ ok: true });
     expect(calls).toEqual([
       [
         "gh",
-        ["api", "repos/openclaw/openclaw"],
+        ["api", "repos/example/repo"],
         expect.objectContaining({
           encoding: "utf8",
           killSignal: "SIGKILL",
@@ -178,18 +392,10 @@ describe("plain gh helpers", () => {
         }),
       ],
     ]);
-    expect(
-      execGhRead(
-        ["api", "rate_limit"],
-        { encoding: "utf8" },
-        { execFileSyncImpl: () => " result " },
-      ),
-    ).toBe(" result ");
-
     const failure = new Error("gh read failed");
     expect(() =>
       execGhRead(
-        ["api", "rate_limit"],
+        ["--version"],
         {},
         {
           execFileSyncImpl: () => {
@@ -198,120 +404,5 @@ describe("plain gh helpers", () => {
         },
       ),
     ).toThrow(failure);
-  });
-
-  it("runs the shell helper with color disabled", () => {
-    const ghPath = makeFakeGh();
-    const outputPath = path.join(path.dirname(path.dirname(ghPath)), "output.txt");
-    const script = [
-      "set -euo pipefail",
-      "source scripts/lib/plain-gh.sh",
-      `OPENCLAW_GH_BIN=${JSON.stringify(ghPath)}`,
-      "export OPENCLAW_GH_BIN",
-      `gh_plain api rate_limit > ${JSON.stringify(outputPath)}`,
-    ].join("\n");
-
-    const result = spawnSync("bash", ["-lc", script], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        CLICOLOR: "1",
-        CLICOLOR_FORCE: "1",
-        COLORTERM: "truecolor",
-        FORCE_COLOR: "3",
-        GH_TOKEN: "existing-test-token",
-      },
-    });
-
-    expect(result.status).toBe(0);
-    expect(readFileSync(outputPath, "utf8")).toContain("argv=api rate_limit");
-    expect(readFileSync(outputPath, "utf8")).toContain("NO_COLOR=1");
-    expect(readFileSync(outputPath, "utf8")).toContain("GH_FORCE_TTY=");
-    expect(readFileSync(outputPath, "utf8")).toContain("FORCE_COLOR=0");
-    expect(readFileSync(outputPath, "utf8")).toContain("CLICOLOR=0");
-    expect(readFileSync(outputPath, "utf8")).toContain("CLICOLOR_FORCE=0");
-    expect(readFileSync(outputPath, "utf8")).toContain("COLORTERM_SET=");
-  });
-
-  it.each([
-    {
-      host: undefined,
-      name: "github.com",
-      tokenArgs: "auth token",
-      tokenEnv: "GH_TOKEN",
-    },
-    {
-      host: "github.example.com",
-      name: "an Enterprise host",
-      tokenArgs: "auth token --hostname github.example.com",
-      tokenEnv: "GH_ENTERPRISE_TOKEN",
-    },
-  ])("forwards $name credentials from a PATH wrapper to the plain CLI", (testCase) => {
-    const fixture = makeCredentialForwardingGh();
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      OPENCLAW_GH_BIN: fixture.realGh,
-      PATH: `${fixture.binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-      PLAIN_GH_EXPECTED_TOKEN_ENV: testCase.tokenEnv,
-      PLAIN_GH_FAKE_CALLS: fixture.calls,
-    };
-    if (testCase.host) {
-      env.GH_HOST = testCase.host;
-    } else {
-      delete env.GH_HOST;
-    }
-    for (const name of [
-      "GH_TOKEN",
-      "GITHUB_TOKEN",
-      "GH_ENTERPRISE_TOKEN",
-      "GITHUB_ENTERPRISE_TOKEN",
-    ]) {
-      delete env[name];
-    }
-
-    expect(execPlainGh(["api", "user"], { encoding: "utf8", env })).toBe(
-      "authenticated plain gh\n",
-    );
-    const shell = spawnSync("bash", ["-c", "source scripts/lib/plain-gh.sh; gh_plain api user"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env,
-    });
-
-    expect(shell.status, shell.stderr).toBe(0);
-    expect(shell.stdout).toBe("authenticated plain gh\n");
-    expect(readFileSync(fixture.calls, "utf8").trim().split("\n")).toEqual([
-      `path:${testCase.tokenArgs}`,
-      "plain:api user",
-      `path:${testCase.tokenArgs}`,
-      "plain:api user",
-    ]);
-  });
-
-  it("captures large gh payloads by default", () => {
-    const ghPath = makeLargeFakeGh();
-    const bytes = 2 * 1024 * 1024;
-
-    const output = execPlainGh(["api", "large"], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        GH_TOKEN: "large-payload-test-token",
-        OPENCLAW_GH_BIN: ghPath,
-        PLAIN_GH_FAKE_BYTES: String(bytes),
-      },
-    });
-
-    expect(output).toHaveLength(bytes);
-  });
-
-  it("keeps the shell resolver on external gh binaries", () => {
-    const helper = readFileSync("scripts/lib/plain-gh.sh", "utf8");
-
-    expect(helper).toContain("type -P gh");
-    expect(helper).not.toContain("command -v gh");
-    expect(helper.indexOf("/opt/homebrew/opt/gh/bin/gh")).toBeLessThan(
-      helper.indexOf("/opt/homebrew/bin/gh"),
-    );
   });
 });

@@ -115,27 +115,21 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
   ): Promise<MemorySearchResult[]> {
     return await this.withManagerOperation(async () => {
       if (this.memorySourceProvenanceRepairPending) {
-        const repairPending = () =>
+        this.memorySourceProvenanceRepairPending =
           this.db
             .prepare(
               `SELECT 1 FROM memory_index_sources
                WHERE source = 'memory' AND hash = '' LIMIT 1`,
             )
             .get() !== undefined;
-        try {
-          // Provenance schema adoption invalidates legacy source hashes. Finish that
-          // owner-classified reindex before the first automatic candidate read.
-          if (repairPending()) {
-            await this.syncAdmitted(
-              { reason: "search" },
-              { allowEmbeddingBootstrapFallback: true },
-            );
-          }
-        } catch (err) {
-          log.warn(`memory sync failed (automatic candidates): ${formatErrorMessage(err)}`);
-        }
-        this.memorySourceProvenanceRepairPending = repairPending();
         if (this.memorySourceProvenanceRepairPending) {
+          // Automatic recall runs before the model. Keep repair admitted for teardown
+          // without holding the reply; unclassified sources stay excluded.
+          void this.withManagerOperation(() =>
+            this.syncAdmitted({ reason: "search" }, { allowEmbeddingBootstrapFallback: true }),
+          ).catch((err: unknown) => {
+            log.warn(`memory sync failed (automatic candidates): ${formatErrorMessage(err)}`);
+          });
           return [];
         }
       }

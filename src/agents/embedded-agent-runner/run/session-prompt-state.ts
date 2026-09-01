@@ -7,6 +7,7 @@ import type { ContextEngineSessionTarget } from "../../../context-engine/types.j
 import { registerAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
+import { TOOL_FAILURE_INSTRUCTION } from "../../tool-outcome-instructions.js";
 import type { AcceptedCompactionSuccessor } from "../compaction-successor.js";
 import { log } from "../logger.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
@@ -203,15 +204,20 @@ export function createEmbeddedRunSessionPromptState(input: {
       abortSignal?: AbortSignal,
     ) => {
       const sessionId = target?.sessionId ?? activeSessionId;
-      if (settleOwnedTranscriptProjection && target && sessionId) {
+      // A caller's manager owns the transcript even when metadata has a durable target.
+      // Waiting on that borrowed identity can block an unrelated in-memory retry.
+      if (settleOwnedTranscriptProjection && !params.sessionManager && target && sessionId) {
         settleOwnedTranscriptProjection = false;
         const { waitForSessionTranscriptProjection } =
           await import("../../../config/sessions/session-transcript-reconcile.js");
         await waitForSessionTranscriptProjection({ ...target, sessionId }, abortSignal);
       }
     },
-    continueFromCurrentTranscript: () => {
-      activateInternalPrompt(MID_TURN_PRECHECK_CONTINUATION_PROMPT);
+    continueFromCurrentTranscript: (options?: { includeToolFailureInstruction?: boolean }) => {
+      const prompt = options?.includeToolFailureInstruction
+        ? `${MID_TURN_PRECHECK_CONTINUATION_PROMPT} ${TOOL_FAILURE_INSTRUCTION}`
+        : MID_TURN_PRECHECK_CONTINUATION_PROMPT;
+      activateInternalPrompt(prompt);
     },
     onUserMessagePersisted,
     waitForCurrentUserMessagePersistence,

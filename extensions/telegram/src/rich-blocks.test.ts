@@ -1,4 +1,4 @@
-// Telegram rich-blocks unit tests for Bot API 10.2 InputRichBlock emission.
+// Telegram rich-blocks unit tests for Bot API 10.3 InputRichBlock emission.
 import stringWidth from "string-width";
 import { describe, expect, it } from "vitest";
 import { markdownToTelegramHtml } from "./format.js";
@@ -611,9 +611,9 @@ describe("splitTelegramRichBlocks", () => {
     const table: InputRichBlock = {
       type: "table",
       cells: [
-        [{ text: "h".repeat(40), is_header: true }],
-        [{ text: "c".repeat(40) }],
-        [{ text: "d".repeat(40) }],
+        [{ text: "h".repeat(40), is_header: true, align: "left", valign: "middle" }],
+        [{ text: "c".repeat(40), align: "left", valign: "middle" }],
+        [{ text: "d".repeat(40), align: "left", valign: "middle" }],
       ],
     };
     const chunks = splitTelegramRichBlocks([quote, table], { textLimit: 64 });
@@ -684,7 +684,9 @@ describe("splitTelegramRichBlocks", () => {
     const table: InputRichBlock = {
       type: "table",
       caption: "Table caption",
-      cells: Array.from({ length: 6 }, (_, index) => [[{ text: `row ${index}` }]]).flat(),
+      cells: Array.from({ length: 6 }, (_, index) => [
+        [{ text: `row ${index}`, align: "left" as const, valign: "middle" as const }],
+      ]).flat(),
     };
     const collage: InputRichBlock = {
       type: "collage",

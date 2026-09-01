@@ -21,7 +21,10 @@ Recommended: use the built-in uninstaller:
 openclaw uninstall
 ```
 
-State removal preserves configured workspace directories unless you also select `--workspace`.
+The interactive prompt preselects only the Gateway service. For complete local
+removal, also select state, workspace, and app in the prompt, or run
+`openclaw uninstall --all`. State removal preserves configured workspace
+directories unless you also select `--workspace`.
 
 Preview what will be removed (safe):
 

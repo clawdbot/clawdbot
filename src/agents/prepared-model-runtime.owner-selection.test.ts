@@ -175,6 +175,38 @@ describe("prepared model runtime owner selection", () => {
     lease.release();
   });
 
+  it.each(["static", undefined] as const)(
+    "keeps isolated executable catalogs separate from live discovery (%s)",
+    async (catalogMode) => {
+      const discovered = { id: "live-only", name: "Live catalog row", provider: "custom" };
+      mocks.buildPreparedModelCatalogSnapshot.mockResolvedValue({
+        entries: [discovered],
+        routeVariants: [discovered],
+      });
+      const lease = await acquireReadOnlyPreparedModelRuntime(
+        {
+          config: {},
+          agentDir: state.agentDir("isolated-probe-agent"),
+          workspaceDir: state.workspaceDir,
+          loadRuntimePlugins: true,
+        },
+        undefined,
+        catalogMode,
+      );
+      try {
+        expect(lease.snapshot.modelCatalog.entries.map(({ id }) => id)).toEqual(
+          catalogMode === "static" ? [] : [discovered.id],
+        );
+        expect(mocks.buildPreparedModelCatalogSnapshot).toHaveBeenCalledTimes(
+          catalogMode === "static" ? 0 : 1,
+        );
+      } finally {
+        lease.release();
+      }
+      expect(getPreparedModelRuntimeTestApi().getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
+    },
+  );
+
   it("publishes provider selections kept on the core runtime by request parameters", async () => {
     mocks.configuredAgentIds = ["default"];
     const config = {
@@ -247,6 +279,23 @@ describe("prepared model runtime owner selection", () => {
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
   });
 
+  it("replaces a static run owner when an explicit live acquisition follows", async () => {
+    const input = {
+      config: {},
+      agentId: "default",
+      agentDir: state.agentDir("catalog-mode-upgrade"),
+      workspaceDir: "/tmp/catalog-mode-upgrade-workspace",
+    };
+    const staticLease = await acquireAgentRunPreparedModelRuntime(input);
+    const liveLease = await acquireAgentRunPreparedModelRuntime(input, { catalogMode: "live" });
+
+    expect(liveLease.snapshot).not.toBe(staticLease.snapshot);
+    expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce();
+    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
+    staticLease.release();
+    liveLease.release();
+  });
+
   it("rejects unpublished plugin generations while matching pending callers share their owner", async () => {
     mocks.configuredAgentIds = ["default"];
     const config = {};
@@ -276,13 +325,16 @@ describe("prepared model runtime owner selection", () => {
     let matchingPendingA: ReturnType<typeof acquireAgentRunPreparedModelRuntime> | undefined;
     try {
       pendingA = acquireAgentRunPreparedModelRuntime(input, {
+        catalogMode: "live",
         pluginGeneration: generationA!,
       });
       await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2));
       matchingPendingA = acquireAgentRunPreparedModelRuntime(input, {
+        catalogMode: "live",
         pluginGeneration: generationA!,
       });
       const pendingB = acquireAgentRunPreparedModelRuntime(input, {
+        catalogMode: "live",
         pluginGeneration: generationB,
       }).catch((error: unknown) => error);
       await Promise.resolve();

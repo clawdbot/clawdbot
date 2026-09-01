@@ -16,14 +16,7 @@ export type CommandScope = "text" | "native" | "both";
  */
 export type CommandTier = "essential" | "standard" | "power";
 
-export type CommandCategory =
-  | "session"
-  | "options"
-  | "status"
-  | "management"
-  | "media"
-  | "tools"
-  | "docks";
+export type CommandCategory = "session" | "options" | "status" | "management" | "media" | "tools";
 
 /** Primitive command argument kinds supported by native command surfaces. */
 type CommandArgType = "string" | "number" | "boolean";

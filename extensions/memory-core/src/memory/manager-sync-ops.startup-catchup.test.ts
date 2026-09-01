@@ -1,4 +1,5 @@
 // Memory Core tests cover manager sync ops.startup-catchup plugin behavior.
+import { AsyncLocalStorage } from "node:async_hooks";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -647,18 +648,38 @@ describe("session startup catch-up", () => {
     vi.useFakeTimers();
     const session = await writeSqliteSession();
     const harness = new SessionStartupCatchupHarness([], true, true);
-    harness.startTranscriptListener();
+    const turnContext = new AsyncLocalStorage<string>();
+    const pendingInputContext = new AsyncLocalStorage<string>();
+    turnContext.run("opening turn", () => harness.startTranscriptListener());
+    const timerContexts: Array<{ turn?: string; pendingInput?: string }> = [];
+    const originalSetTimeout = globalThis.setTimeout;
+    const timerObserver = vi.spyOn(globalThis, "setTimeout").mockImplementation((...args) => {
+      if (args[1] === 5000) {
+        timerContexts.push({
+          turn: turnContext.getStore(),
+          pendingInput: pendingInputContext.getStore(),
+        });
+      }
+      return originalSetTimeout(...args);
+    });
 
     try {
-      await appendSessionTranscriptMessageByIdentity({
-        agentId: "main",
-        sessionId: session.sessionId,
-        sessionKey: session.sessionKey,
-        storePath: session.storePath,
-        cwd: stateDir,
-        message: { role: "assistant", content: "persisted listener update" },
-      });
-      await publishSessionTranscriptUpdateByIdentity(session);
+      await turnContext.run("later turn", () =>
+        pendingInputContext.run("later input", async () => {
+          await appendSessionTranscriptMessageByIdentity({
+            agentId: "main",
+            sessionId: session.sessionId,
+            sessionKey: session.sessionKey,
+            storePath: session.storePath,
+            cwd: stateDir,
+            message: { role: "assistant", content: "persisted listener update" },
+          });
+          await publishSessionTranscriptUpdateByIdentity(session);
+          expect(turnContext.getStore()).toBe("later turn");
+          expect(pendingInputContext.getStore()).toBe("later input");
+        }),
+      );
+      expect(timerContexts).toEqual([{ turn: undefined, pendingInput: undefined }]);
 
       await vi.advanceTimersByTimeAsync(6000);
       await harness.waitForSessionSync();
@@ -669,6 +690,7 @@ describe("session startup catch-up", () => {
       ]);
     } finally {
       harness.stopTranscriptListener();
+      timerObserver.mockRestore();
     }
   });
 

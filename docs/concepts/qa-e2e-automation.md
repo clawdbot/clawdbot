@@ -216,8 +216,8 @@ Matrix live implementations live under
 
 The adapter provisions a disposable Tuwunel homeserver in Docker (default image
 `ghcr.io/matrix-construct/tuwunel:v1.8.3`, pinned to its multi-architecture OCI
-index digest; server name `matrix-qa.test`, port `28008`), registers temporary
-driver, SUT, and observer users, seeds the required rooms, and records the
+index digest; server name `matrix-qa.test`, Docker-assigned host port), registers
+temporary driver, SUT, and observer users, seeds the required rooms, and records the
 redacted request/response boundary. It then runs the real Matrix plugin inside
 a child QA gateway scoped to that transport (no `qa-channel`) and tears the
 environment down.
@@ -271,8 +271,12 @@ gateway replies.
 
 CI uses the same command surface in
 `.github/workflows/qa-live-transports-convex.yml`. Scheduled, release, and
-manual runs fan the catalog-derived selection across five deterministic shards
-so membership stays scenario-owned while each job remains within its timeout.
+manual runs execute the catalog-derived selection in one job with up to four
+isolated host workers. Each worker owns its disposable homeserver, Gateway,
+state, and artifacts. Scenario membership stays catalog-owned; `--fail-fast`
+keeps execution serial and stops after the first failure.
+Use `openclaw qa matrix --concurrency <count>` to request fewer workers;
+values above the transport limit stay capped.
 
 ### Discord Mantis scenarios
 

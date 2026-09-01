@@ -60,13 +60,24 @@ function createStaleThinkingContent(): AssistantMessage["content"] {
   ] as unknown as AssistantMessage["content"];
 }
 
-function createResultHandlers(summary: string, firstKeptEntryId?: string) {
+function createResultHandlers(
+  summary: string,
+  firstKeptEntryId?: string,
+  onPreparation?: (preparation: { latestUnresolvedUserRequest?: string }) => void,
+) {
   const handlers = createCompactionHandlers();
   handlers.set("session_before_compact", [
     async (event: unknown) => {
       const preparation = (
-        event as { preparation: { firstKeptEntryId: string; tokensBefore: number } }
+        event as {
+          preparation: {
+            firstKeptEntryId: string;
+            latestUnresolvedUserRequest?: string;
+            tokensBefore: number;
+          };
+        }
       ).preparation;
+      onPreparation?.(preparation);
       return {
         compaction: {
           summary,
@@ -538,9 +549,12 @@ describe("AgentSession compaction", () => {
     const sessionManager = SessionManager.inMemory();
     const handlers = createCompactionHandlers();
     const syntheticError = new Error("synthetic cancellation rejection");
+    let thresholdRequestState: string | undefined;
     const abortActiveCompaction = () => session.abortCompaction();
     handlers.set("session_before_compact", [
-      async () => {
+      async (event: unknown) => {
+        thresholdRequestState = (event as { preparation: { latestUnresolvedUserRequest?: string } })
+          .preparation.latestUnresolvedUserRequest;
         abortActiveCompaction();
         throw syntheticError;
       },
@@ -585,6 +599,7 @@ describe("AgentSession compaction", () => {
     expect(subscription.getCompactionCount()).toBe(0);
     expect(subscription.getLastCompactionTokensAfter()).toBeUndefined();
     expect(sessionManager.getEntries().some((entry) => entry.type === "compaction")).toBe(false);
+    expect(thresholdRequestState).toBeUndefined();
     subscription.unsubscribe();
   });
 
@@ -654,9 +669,14 @@ describe("AgentSession compaction", () => {
       timestamp: 2,
     });
     const oversizedSummary = "summary detail ".repeat(2_000);
+    let manualRequestState: string | undefined;
     const { session } = await createTestSession({
       sessionManager,
-      resourceLoader: createResourceLoader(createResultHandlers(oversizedSummary)),
+      resourceLoader: createResourceLoader(
+        createResultHandlers(oversizedSummary, undefined, (preparation) => {
+          manualRequestState = preparation.latestUnresolvedUserRequest;
+        }),
+      ),
     });
 
     const result = await session.compact();
@@ -665,12 +685,14 @@ describe("AgentSession compaction", () => {
     expect(result.summary.length).toBeLessThanOrEqual(16_000);
     expect(result.summary).toContain("[Compaction summary truncated to fit budget]");
     expect(persisted).toMatchObject({ type: "compaction", summary: result.summary });
+    expect(manualRequestState).toBeUndefined();
   });
 
   it.each(Array.from({ length: MAX_OVERFLOW_COMPACTION_ATTEMPTS }, (_, index) => index + 1))(
     "recovers when the provider accepts overflow compaction attempt %i",
     async (overflowCount) => {
       let agentRequests = 0;
+      const preparedRequests: Array<string | undefined> = [];
       streamMocks.streamSimple.mockImplementation((activeModel: Model) => {
         agentRequests += 1;
         const response =
@@ -679,9 +701,38 @@ describe("AgentSession compaction", () => {
             : createAssistant(activeModel, [{ type: "text", text: "complete retry" }]);
         return createAssistantResultStream({ ...response, timestamp: Date.now() + agentRequests });
       });
+      const handlers = createCompactionHandlers();
+      handlers.set("session_before_compact", [
+        async (event: unknown) => {
+          const preparation = (
+            event as {
+              preparation: {
+                firstKeptEntryId: string;
+                latestUnresolvedUserRequest?: string;
+                tokensBefore: number;
+              };
+            }
+          ).preparation;
+          preparedRequests.push(preparation.latestUnresolvedUserRequest);
+          return {
+            compaction: {
+              summary: "condensed history",
+              firstKeptEntryId: preparation.firstKeptEntryId,
+              tokensBefore: preparation.tokensBefore,
+              details: {
+                readFiles: [],
+                modifiedFiles: [],
+                ...(preparation.latestUnresolvedUserRequest
+                  ? { latestUnresolvedUserRequest: preparation.latestUnresolvedUserRequest }
+                  : {}),
+              },
+            },
+          };
+        },
+      ]);
       const { session } = await createTestSession({
         settingsManager: createAutoCompactionSettings(),
-        resourceLoader: createResourceLoader(createCompactionHandlers()),
+        resourceLoader: createResourceLoader(handlers),
       });
       const compactionEvents = collectCompactionEnds(session);
 
@@ -697,6 +748,7 @@ describe("AgentSession compaction", () => {
         ),
       ).toHaveLength(overflowCount);
       expect(session.getLastAssistantText()).toBe("complete retry");
+      expect(preparedRequests).toEqual(Array.from({ length: overflowCount }, () => "long request"));
     },
   );
 

@@ -28,6 +28,7 @@ import {
   attachSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
 } from "../sessions/transcript-events.js";
+import { withRuntimeUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript-runtime-context.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../shared/transcript-only-openclaw-assistant.js";
 import { formatContextLimitTruncationNotice } from "./embedded-agent-runner/context-truncation-notice.js";
 import {
@@ -713,11 +714,13 @@ export function installSessionToolResultGuard(
     copyCodeModeSourceAppend(message, runOwnedMessage, sourceAppend);
     const parentEntryId = sessionManager.getLeafId();
     const appendParentEntryId = sessionManager.getAppendParentId();
-    const { entryId, anchor } = originalAppendWithTranscriptAnchor(
-      runOwnedMessage as never,
-      sourceAppend
-        ? prepareCodeModeSourceAppend(options ?? {}, runOwnedMessage, sourceAppend)
-        : options,
+    const { entryId, anchor } = withRuntimeUserTurnTranscriptRecorder(runOwnedMessage, () =>
+      originalAppendWithTranscriptAnchor(
+        runOwnedMessage as never,
+        sourceAppend
+          ? prepareCodeModeSourceAppend(options ?? {}, runOwnedMessage, sourceAppend)
+          : options,
+      ),
     );
     const entry = sessionManager.getEntry(entryId);
     if (entry?.type !== "message") {
@@ -977,6 +980,7 @@ export function installSessionToolResultGuard(
           callerInvalidatesCache || transformedMessage !== nextMessage || finalWrite.changed,
       },
       sourceAppend,
+      message,
     );
     if (sessionTarget) {
       const runId = resolveTerminalAssistantTranscriptRunId(persistedMessage, transcriptRunId);

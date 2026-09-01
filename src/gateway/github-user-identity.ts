@@ -13,9 +13,11 @@ import {
   fetchGitHubJson,
   GITHUB_API_ORIGIN,
   GITHUB_REQUEST_TIMEOUT_MS,
+  githubApiToken,
   readBoundedResponse,
   readGitHubJsonResponse,
   readOptionalGitHubString,
+  withOptionalGitHubAuth,
 } from "./control-ui-github-api.js";
 
 const CLOUDFLARE_ACCESS_USER_HEADER = "cf-access-authenticated-user-email";
@@ -119,12 +121,13 @@ async function resolveGitHubUserIdentityByLogin(
   if (!requestedLogin) {
     throw new TypeError("GitHub username is invalid");
   }
+  const token = githubApiToken();
   let payload: unknown;
   try {
     payload = await fetchGitHubJson(
       `${GITHUB_API_ORIGIN}/users/${encodeURIComponent(requestedLogin)}`,
       fetch,
-      undefined,
+      token,
     );
   } catch (error) {
     if (error instanceof ControlUiGitHubError) {
@@ -210,6 +213,8 @@ export function createAuthenticatedGitHubIdentitySync(params: {
   authResult: GatewayAuthResult;
   authConfig?: GatewayAuthConfig;
   requestHeaders?: IncomingHttpHeaders;
+  /** Reuse an exact verified Access account/email binding before refreshing GitHub metadata. */
+  preferCachedIdentity?: boolean;
 }): AuthenticatedGitHubIdentitySync | undefined {
   const tailscaleLogin = params.authResult.tailscaleIdentity
     ? classifyTailscaleLogin(params.authResult.tailscaleIdentity.login)
@@ -235,14 +240,30 @@ export function createAuthenticatedGitHubIdentitySync(params: {
       access.assertion,
       access.principal,
     );
+    // Service auth raises public-data quota; Access still owns the signed-in account id.
+    const token = githubApiToken();
+    if (params.preferCachedIdentity) {
+      const cached = resolveCachedGitHubIdentity({
+        accountId: accessIdentity.accountId,
+        email: access.principal,
+      });
+      if (cached) {
+        return cached;
+      }
+    }
     let response: Response | undefined;
     let payload: unknown;
     try {
-      response = await fetchGitHubApi(
-        `${GITHUB_API_ORIGIN}/user/${accessIdentity.accountId}`,
-        fetch,
-      );
-      payload = await readGitHubJsonResponse(response);
+      payload = await withOptionalGitHubAuth(token, async (requestToken) => {
+        // A failed anonymous retry must not inherit the authenticated response's status.
+        response = undefined;
+        response = await fetchGitHubApi(
+          `${GITHUB_API_ORIGIN}/user/${accessIdentity.accountId}`,
+          fetch,
+          requestToken,
+        );
+        return readGitHubJsonResponse(response);
+      });
     } catch (error) {
       const retryable = response
         ? response.status === 429 ||

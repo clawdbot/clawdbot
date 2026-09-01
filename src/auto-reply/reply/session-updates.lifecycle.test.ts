@@ -101,6 +101,27 @@ describe("completed compaction accounting", () => {
     },
   );
 
+  it("records and clears byte-compaction progress with authoritative accounting", async () => {
+    await withAccountingFixture(async (fixture) => {
+      const latch = {
+        activeBytes: 60_000,
+        sessionId: fixture.entry.sessionId,
+        maxBytes: 50_000,
+      };
+
+      expect(
+        await incrementCompactionCount({
+          ...fixture.params,
+          transcriptByteCompactionLatch: latch,
+        }),
+      ).toBe(1);
+      expect(fixture.read()?.transcriptByteCompactionLatch).toEqual(latch);
+
+      expect(await incrementCompactionCount(fixture.params)).toBe(2);
+      expect(fixture.read()?.transcriptByteCompactionLatch).toBeUndefined();
+    });
+  });
+
   it("does not overwrite a newer writer's count or token snapshot", async () => {
     await withAccountingFixture(async (fixture) => {
       await fixture.replace({

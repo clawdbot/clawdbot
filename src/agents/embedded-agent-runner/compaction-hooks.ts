@@ -8,7 +8,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { getActiveMemorySearchManagerCore } from "../../plugins/memory-runtime.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
-import { resolveMemorySearchConfig } from "../memory-search.js";
+import { resolveMemorySearchIndexConfig } from "../memory-search.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { log } from "./logger.js";
 
@@ -43,7 +43,9 @@ async function runPostCompactionSessionMemorySync(params: PostCompactionSession)
       config: params.config,
       agentId: params.agentId,
     });
-    const resolvedMemory = resolveMemorySearchConfig(params.config, agentId);
+    // The memory backend owns provider resolution; an unavailable backend must
+    // not cold-load embedding plugins just to decide whether to sync.
+    const resolvedMemory = resolveMemorySearchIndexConfig(params.config, agentId);
     if (!resolvedMemory || !resolvedMemory.sources.includes("sessions")) {
       return;
     }

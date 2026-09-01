@@ -28,6 +28,12 @@ export type SettingsSearchTarget = {
 // Keep destinations and translation keys together without importing page
 // renderers: settings search runs before the destination page is loaded.
 export const SETTINGS_SEARCH_TARGETS = {
+  updates: {
+    routeId: "updates",
+    labelKey: "tabs.updates",
+    hash: "#config-section-update",
+    searchKeys: ["updates.page.checkForUpdates", "updates.page.automaticUpdates"],
+  },
   channels: {
     routeId: "channels",
     labelKey: "quickSettings.channels.title",

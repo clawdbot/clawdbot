@@ -61,6 +61,25 @@ function workspaceError(error: unknown): string {
   return truncateUtf16Safe(message || "cloud worker turn failed", 1_024);
 }
 
+function remoteExecWorkspaceFailure(executionError: unknown, reconciliationError: unknown): Error {
+  const executionMessage = formatErrorMessage(executionError);
+  const reconciliationDetail =
+    reconciliationError instanceof WorkerWorkspaceReconciliationError &&
+    reconciliationError.cause !== undefined
+      ? reconciliationError.cause
+      : reconciliationError;
+  const reconciliationFailure = new WorkerWorkspaceReconciliationError(
+    workspaceError(reconciliationDetail),
+    { cause: reconciliationDetail },
+  );
+  return new Error(
+    `${executionMessage}\n\nWorkspace recovery also failed: ${reconciliationFailure.message}. ` +
+      "Remote changes may not have been applied locally. Resolve the workspace error, then retry.",
+    // Keep the typed reconciliation failure discoverable so model fallback cannot replay the turn.
+    { cause: reconciliationFailure },
+  );
+}
+
 function workspaceJournal(params: {
   placement: OwnedWorkerPlacement;
   placements: WorkerSessionPlacementStore;
@@ -447,8 +466,7 @@ export async function executeRemoteExecTurn(params: {
       });
     }
     if (executionError) {
-      // Preserve the terminal execution failure while retaining the independent workspace loss.
-      throw new Error(formatErrorMessage(executionError), { cause: reconciliationError });
+      throw remoteExecWorkspaceFailure(executionError, reconciliationError);
     }
     throw reconciliationError;
   });

@@ -26,6 +26,7 @@ import {
   requireResolvedUserProfileById,
   selectResolvedUserProfileById,
   type UserProfileRow,
+  userProfileAvatarPresence,
   userProfilesDb,
 } from "./user-profiles-internal.js";
 import {
@@ -169,10 +170,6 @@ function toUserProfileListItem(
   };
 }
 
-function hasAvatarColumn() {
-  return sql`CASE WHEN avatar IS NULL THEN 0 ELSE 1 END`.as("has_avatar");
-}
-
 function selectUserProfileListItemById(db: DatabaseSync, profileId: string): UserProfileListItem {
   const kysely = userProfilesDb(db);
   const profile = executeSqliteQueryTakeFirstSync(
@@ -187,7 +184,7 @@ function selectUserProfileListItemById(db: DatabaseSync, profileId: string): Use
         ...(hasEnsuredUserProfileRoleSchema(db) ? (["role"] as const) : []),
         "created_at",
         "updated_at",
-        hasAvatarColumn(),
+        userProfileAvatarPresence,
       ])
       .where("id", "=", profileId),
   );
@@ -263,8 +260,6 @@ export function setUserProfileRole(
     { operationLabel: "user-profiles.set-role" },
   );
 }
-
-/** Reads merge-aware display data without exposing avatar content through list/RPC shapes. */
 
 function ensureProfileForEmailWithInitialName(
   email: string,

@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -49,6 +50,48 @@ describe("sessions cleanup applied summary", () => {
     cleanupRace.postCommitFailureStorePath = undefined;
     closeOpenClawAgentDatabasesForTest();
   });
+
+  it.each([true, false])(
+    "reports a sole empty orphan as a mutation (dryRun=%s)",
+    async (dryRun) => {
+      await withOpenClawTestState({}, async (state) => {
+        const storePath = path.join(state.sessionsDir(), "sessions.json");
+        const cfg = {
+          session: { maintenance: { mode: "enforce", maxDiskBytes: false, pruneAfter: "1s" } },
+        } satisfies OpenClawConfig;
+        await state.writeConfig(cfg);
+        await fs.mkdir(state.sessionsDir(), { recursive: true });
+        const orphan = path.join(state.sessionsDir(), "orphan.jsonl");
+        await fs.writeFile(orphan, "");
+        const old = new Date(Date.now() - 60_000);
+        await fs.utimes(orphan, old, old);
+
+        const result = await runSessionsCleanup({
+          cfg,
+          opts: { dryRun, enforce: true },
+          targets: [{ agentId: "main", storePath }],
+        });
+
+        const expected = {
+          beforeCount: 0,
+          afterCount: 0,
+          wouldMutate: true,
+          diskBudget: null,
+          unreferencedArtifacts: { removedFiles: 1, freedBytes: 0 },
+        };
+        expect(result.previewResults[0]?.summary).toMatchObject({ ...expected, dryRun });
+        if (dryRun) {
+          expect(result.appliedSummaries).toEqual([]);
+          await expect(fs.readFile(orphan, "utf8")).resolves.toBe("");
+        } else {
+          expect(result.appliedSummaries).toMatchObject([
+            { ...expected, applied: true, dryRun: false },
+          ]);
+          await expect(fs.stat(orphan)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+      });
+    },
+  );
 
   it("applies the selected agent's preview without pruning a sibling behind the same selector", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {

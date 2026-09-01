@@ -48,10 +48,7 @@ import {
 } from "../agent-runtime-identity-token.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
-import {
-  bindWorkerTurnAdmissionContinuation,
-  bindWorkerTurnExecutionIdentity,
-} from "./placement-turn-claim-events.js";
+import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
 
 type WorkerInitialMessagePlan =
   | { kind: "complete"; messages: WorkerTranscriptMessage[] }
@@ -119,21 +116,15 @@ export async function prepareWorkerAgentRuntimeIdentity(
   }
   assertActive();
   const runtimeIdentity = buildWorkerAgentRuntimeIdentity({ ...params, admittedRunContext });
-  // Worker session RPC carries no raw identity token. Bind provenance to the exact
-  // host claim before launch so child lineage cannot become bearer authority.
-  if (runtimeIdentity.executionIdentityToken) {
-    bindWorkerTurnExecutionIdentity(
-      params.placements,
-      params.turnClaim,
-      runtimeIdentity.executionIdentityToken,
-      admittedRunContext.operationalRunInstance,
-      { agentId: params.agentId, sessionKey: params.sessionKey },
-    );
-  }
-  bindWorkerTurnAdmissionContinuation(
+  // Stop closes the operational run before its placement claim finishes draining.
+  // Worker tools must retain both owners even when audit collection is disabled.
+  bindWorkerTurnOwner(
     params.placements,
     params.turnClaim,
+    runtimeIdentity.executionIdentityToken,
     admittedRunContext.operationalRunInstance,
+    { agentId: params.agentId, sessionKey: params.sessionKey },
+    assertActive,
     params.turn.prepareAssistantTranscriptMessage,
   );
   return {
@@ -326,9 +317,7 @@ export function buildWorkerTurnResult(params: {
         sessionFile: params.sessionFile,
         provider: reportedModelRef.provider,
         model: reportedModelRef.model,
-        usage: usageMeta.usage,
-        lastCallUsage: usageMeta.lastCallUsage,
-        promptTokens: usageMeta.promptTokens,
+        ...usageMeta,
       },
       stopReason: params.terminal.stopReason,
       finalAssistantVisibleText: resolveFinalAssistantVisibleText(params.terminal),

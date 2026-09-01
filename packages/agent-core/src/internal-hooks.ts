@@ -5,6 +5,7 @@ import type {
   AgentToolUpdateCallback,
   InternalBeforeToolBatchContext,
   InternalBeforeToolBatchResult,
+  ToolLoopWarning,
 } from "./types.js";
 
 export type InternalBeforeToolBatchHook = (
@@ -62,6 +63,7 @@ const toolExecutionPreparerByTool = new WeakMap<object, InternalToolExecutionPre
 
 type InternalToolResultAcknowledgement = () => void;
 const toolResultAcknowledgementByValue = new WeakMap<object, InternalToolResultAcknowledgement>();
+const toolResultProvenanceByValue = new WeakMap<object, object>();
 
 /** Install OpenClaw-owned loop control without adding a plugin-facing Agent option. */
 export function setInternalBeforeToolBatch(
@@ -144,16 +146,47 @@ export function attachInternalToolResultAcknowledgement<T extends object>(
   return value;
 }
 
-/** Carry private commit ownership through result transforms and message construction. */
-export function copyInternalToolResultAcknowledgement<T extends object>(
-  source: object,
-  target: T,
+export function attachInternalToolResultProvenance<T extends object>(
+  value: T,
+  provenance: object,
 ): T {
+  toolResultProvenanceByValue.set(value, provenance);
+  return value;
+}
+
+export function getInternalToolResultProvenance(value: object): object | undefined {
+  return toolResultProvenanceByValue.get(value);
+}
+
+/** Carry private commit ownership through result transforms and message construction. */
+export function copyInternalToolResultState<T extends object>(source: object, target: T): T {
   const acknowledge = toolResultAcknowledgementByValue.get(source);
   if (acknowledge) {
     toolResultAcknowledgementByValue.set(target, acknowledge);
   }
+  const provenance = toolResultProvenanceByValue.get(source);
+  if (provenance) {
+    toolResultProvenanceByValue.set(target, provenance);
+  }
   return target;
+}
+
+/** Call only after raw outcome recording: feedback must not change no-progress hashes. */
+export function appendToolLoopWarning<T extends AgentToolResult<unknown>>(
+  result: T,
+  warning: ToolLoopWarning,
+): T {
+  return copyInternalToolResultState(result, {
+    ...result,
+    content: [
+      // Match transcript normalization for tools that omit display content.
+      ...(result.content ?? []),
+      {
+        type: "text",
+        text: `[System note: Tool-loop warning after ${warning.count} repeated calls. Change your approach or stop if you are not making progress.]`,
+      },
+    ],
+  });
 }
 
 /** Commit one tool result after its owning message has attached. */

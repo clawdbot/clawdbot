@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { artifactFixture } from "./mac-elevation-artifact.test-support.js";
 import {
@@ -26,6 +26,7 @@ import {
   macObjectFixture,
   runMacFixtureTool,
 } from "./mac-native-fixtures.test-support.js";
+import { createMacScriptTest } from "./mac-script-fixture.test-support.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
 const systemPath = "/usr/bin:/bin:/usr/sbin:/sbin";
@@ -197,7 +198,7 @@ install_openclaw() { :; }
     destination,
     calls,
     tmp,
-    run(variant: string) {
+    run(variant: string, tempRoot = tmp) {
       return spawnSync(
         "/bin/bash",
         [path.join(scripts, "stage-mac-node-worker.sh"), destination, "arm64", "x86_64"],
@@ -205,7 +206,7 @@ install_openclaw() { :; }
           encoding: "utf8",
           env: {
             HOME: root,
-            TMPDIR: tmp,
+            TMPDIR: tempRoot,
             PATH: `${path.dirname(process.execPath)}:${systemPath}`,
             OPENCLAW_MAC_SIGNING_VARIANT: variant,
           },
@@ -217,11 +218,12 @@ install_openclaw() { :; }
 
 export function registerMacWorkerMaterializationTests() {
   describe.skipIf(process.platform !== "darwin")("elevation worker materialization", () => {
-    it("preserves standard and derived elevation payloads through shared verification", () => {
+    const it = createMacScriptTest();
+    it("provisions beside the destination when system temp is unavailable", () => {
       for (const variant of ["standard", "elevation-host"]) {
         const fixture = stagingFixture();
         const before = snapshot(path.join(fixture.root, "canonical"));
-        const result = fixture.run(variant);
+        const result = fixture.run(variant, path.join(fixture.tmp, "unavailable"));
         expect(result.status, result.stderr).toBe(0);
         expect(snapshot(path.join(fixture.root, "canonical"))).toEqual(before);
         const calls = readFileSync(fixture.calls, "utf8").trim().split("\n");
@@ -232,6 +234,9 @@ export function registerMacWorkerMaterializationTests() {
           expect(node).toBe(`${runtime}/bin/node`);
           expect(runtime).toContain(`/${arch}/${variant === "standard" ? "runtime" : "elevation"}`);
           expect(expected).toBe(path.join(fixture.root, "dist/build-info.json"));
+          const scratch = path.resolve(runtime!, "../..");
+          expect(path.dirname(scratch)).toBe(path.dirname(fixture.destination));
+          expect(existsSync(scratch)).toBe(false);
           expect(snapshot(path.join(fixture.destination, arch))).toEqual(
             snapshot(path.join(fixture.root, "canonical", arch)).filter(
               (entry) => variant === "standard" || entry.path !== "foreign.node",
@@ -261,7 +266,11 @@ export function registerMacWorkerMaterializationTests() {
         const before = existsSync(fixture.destination) ? snapshot(fixture.destination) : [];
         const result = fixture.run(variant);
         expect(result.status, result.stderr).toBe(failure === "verification" ? 42 : 1);
-        expect(readFileSync(fixture.calls, "utf8").trim().split("\n")).toHaveLength(2);
+        const calls = readFileSync(fixture.calls, "utf8").trim().split("\n");
+        expect(calls).toHaveLength(2);
+        for (const call of calls) {
+          expect(existsSync(path.resolve(call.split("|")[1]!, "../.."))).toBe(false);
+        }
         expect(existsSync(path.join(fixture.destination, "arm64"))).toBe(false);
         expect(existsSync(fixture.destination) ? snapshot(fixture.destination) : []).toEqual(
           before,
@@ -864,38 +873,40 @@ def evidence():
       expect(existsSync(fixture.destination)).toBe(false);
     });
 
-    it("feeds freshly derived worker pairs to the real portable consumer", () => {
-      const harness = artifactFixture();
-      for (const arch of ["arm64", "x86_64"] as const) {
-        const worker = harness.at(`Contents/Resources/node-worker/${arch}`);
-        const canonical = path.join(harness.home, `canonical-${arch}`);
-        renameSync(worker, canonical);
-        write(path.join(canonical, "nested/win32/README.md"), "Windows source is retained\n");
-        write(path.join(canonical, "nested/win32/foreign.node"), harness.binaries.pe);
-        write(
-          path.join(canonical, "opposite-mac.node"),
-          harness.binaries[arch === "arm64" ? "x86_64" : "arm64"],
-        );
-        const before = snapshot(canonical);
-        const result = spawnSync(
-          "/usr/bin/python3",
-          ["-B", materializer, canonical, worker, path.dirname(worker), arch],
-          {
-            encoding: "utf8",
-            env: { HOME: harness.home, TMPDIR: harness.home, PATH: systemPath },
-          },
-        );
+    it("feeds freshly derived worker pairs to the real portable consumer", async ({ mac }) =>
+      mac.lifetime.run(async () => {
+        const harness = artifactFixture(mac);
+        for (const arch of ["arm64", "x86_64"] as const) {
+          const worker = harness.at(`Contents/Resources/node-worker/${arch}`);
+          const canonical = path.join(harness.home, `canonical-${arch}`);
+          renameSync(worker, canonical);
+          write(path.join(canonical, "nested/win32/README.md"), "Windows source is retained\n");
+          write(path.join(canonical, "nested/win32/foreign.node"), harness.binaries.pe);
+          write(
+            path.join(canonical, "opposite-mac.node"),
+            harness.binaries[arch === "arm64" ? "x86_64" : "arm64"],
+          );
+          const before = snapshot(canonical);
+          const result = spawnSync(
+            "/usr/bin/python3",
+            ["-B", materializer, canonical, worker, path.dirname(worker), arch],
+            {
+              encoding: "utf8",
+              env: { HOME: harness.home, TMPDIR: harness.home, PATH: systemPath },
+            },
+          );
+          expect(result.status, result.stderr).toBe(0);
+          expect(snapshot(canonical)).toEqual(before);
+          expect(snapshot(worker)).toEqual(
+            before.filter(
+              ({ path: name }) =>
+                !["nested/win32/foreign.node", "opposite-mac.node"].includes(name),
+            ),
+          );
+        }
+        const result = await harness.verify();
         expect(result.status, result.stderr).toBe(0);
-        expect(snapshot(canonical)).toEqual(before);
-        expect(snapshot(worker)).toEqual(
-          before.filter(
-            ({ path: name }) => !["nested/win32/foreign.node", "opposite-mac.node"].includes(name),
-          ),
-        );
-      }
-      const result = harness.verify();
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toContain("Elevation artifact verified");
-    });
+        expect(result.stdout).toContain("Elevation artifact verified");
+      }));
   });
 }

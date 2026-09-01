@@ -111,7 +111,7 @@ const loadSessionLifecycleRuntime = createLazyRuntimeModule(
   () => import("./server-methods/sessions.runtime.js"),
 );
 
-export function resolveSessionCreateModelSelection(
+function resolveSessionCreateModelSelection(
   cfg: OpenClawConfig,
   agentId: string,
   input: string | { model: string; agentRuntime?: string } | undefined,
@@ -905,6 +905,16 @@ export async function createGatewaySession(params: {
     const currentTargetEntry = loadGatewaySessionEntryReadOnly(target.canonicalKey, {
       agentId: target.agentId,
     }).entry;
+    // Lifecycle custody keeps this owner stable through naming and filesystem preparation.
+    const existingOwnershipError = resolvePluginSessionOwnershipError({
+      action: "adopt",
+      entry: currentTargetEntry,
+      key: target.canonicalKey,
+      pluginOwnerId: params.authorizedPluginId,
+    });
+    if (existingOwnershipError) {
+      return { ok: false, error: existingOwnershipError };
+    }
     if (!currentTargetEntry) {
       const creationError = authorizeGatewaySessionCreation({
         cfg: params.cfg,
@@ -962,15 +972,6 @@ export async function createGatewaySession(params: {
           if (creationError) {
             return { ok: false, error: creationError };
           }
-        }
-        const existingOwnershipError = resolvePluginSessionOwnershipError({
-          action: "adopt",
-          entry: existingEntry,
-          key: target.canonicalKey,
-          pluginOwnerId: params.authorizedPluginId,
-        });
-        if (existingOwnershipError) {
-          return { ok: false, error: existingOwnershipError };
         }
         if (
           isAgentHarnessSessionKey(target.canonicalKey) &&
@@ -1108,6 +1109,7 @@ export async function createGatewaySession(params: {
           storeKey: target.canonicalKey,
           agentId: target.agentId,
           preparedSessionRoot: sessionRoot,
+          preparedAgentRuntime: catalogAgentRuntime,
           // Patch appliers read key presence as caller intent (present = change,
           // null = clear), so omitted create fields must stay absent: a present
           // undefined model trips the selection lock and drops modelFallback,

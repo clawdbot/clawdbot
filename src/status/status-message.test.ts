@@ -71,7 +71,7 @@ describe("buildStatusMessageParts presentation", () => {
       queue: { mode: "steer", depth: 0 },
       modelAuth: "api-key",
       uptimeValue: "gateway 1h · system 2d",
-      channelFeatureLine: "Telegram rich messages: on · Bot API 10.2 sendRichMessage enabled",
+      channelFeatureLine: "Telegram rich messages: on · Bot API 10.3 sendRichMessage enabled",
     });
 
     expect(parts.text).toBe(
@@ -84,7 +84,7 @@ describe("buildStatusMessageParts presentation", () => {
         queue: { mode: "steer", depth: 0 },
         modelAuth: "api-key",
         uptimeValue: "gateway 1h · system 2d",
-        channelFeatureLine: "Telegram rich messages: on · Bot API 10.2 sendRichMessage enabled",
+        channelFeatureLine: "Telegram rich messages: on · Bot API 10.3 sendRichMessage enabled",
       }),
     );
     expect(parts.text).toContain("⏱️ Uptime: gateway 1h · system 2d");
@@ -155,6 +155,96 @@ describe("buildStatusMessageParts presentation", () => {
       (block) => block.type === "text" && block.text.startsWith("⚠️ Context"),
     );
     expect(warning?.type === "text" ? warning.text : "").toBe("⚠️ Context 87% full");
+  });
+});
+
+describe("buildStatusMessage cost snapshot", () => {
+  it.each([
+    {
+      name: "recorded per-call total",
+      recorded: 0.25,
+      tiered: true,
+      expected: "Cost: $0.25",
+      tokens: true,
+    },
+    { name: "recorded zero", recorded: 0, tiered: true, expected: "Cost: $0.0000", tokens: true },
+    {
+      name: "unknown tiered total",
+      recorded: undefined,
+      tiered: true,
+      expected: undefined,
+      tokens: true,
+    },
+    {
+      name: "legacy flat estimate",
+      recorded: undefined,
+      tiered: false,
+      expected: "Cost: $0.30",
+      tokens: true,
+    },
+    {
+      name: "cost-only positive total",
+      recorded: 0.25,
+      tiered: true,
+      expected: "Cost: $0.25",
+      tokens: false,
+    },
+    {
+      name: "cost-only zero total",
+      recorded: 0,
+      tiered: true,
+      expected: "Cost: $0.0000",
+      tokens: false,
+    },
+  ])("uses $name without repricing combined calls", ({ recorded, tiered, expected, tokens }) => {
+    const text = buildStatusMessage({
+      agent: { model: "fixture/priced" },
+      config: {
+        models: {
+          providers: {
+            fixture: {
+              baseUrl: "https://fixture.invalid",
+              models: [
+                {
+                  ...statusTestModel("priced", "Priced", 1_000_000),
+                  cost: {
+                    input: 1,
+                    output: 0,
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                    ...(tiered
+                      ? {
+                          tieredPricing: [
+                            { input: 2, output: 0, cacheRead: 0, cacheWrite: 0, range: [200_000] },
+                          ],
+                        }
+                      : {}),
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "status-cost",
+        updatedAt: 0,
+        modelProvider: "fixture",
+        model: "priced",
+        ...(tokens ? { inputTokens: 300_000, outputTokens: 200 } : {}),
+        estimatedCostUsd: recorded,
+      },
+    });
+
+    if (expected) {
+      expect(text).toContain(expected);
+    } else {
+      expect(text).not.toContain("Cost:");
+    }
+    if (!tokens) {
+      expect(text).not.toContain("Tokens:");
+      expect(text).not.toContain("Cache:");
+    }
   });
 });
 

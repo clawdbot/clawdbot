@@ -187,7 +187,11 @@ export async function normalizeEmbeddedRunAttempt(input: {
   // Current-attempt evidence is newest. The session assistant is only a transcript fallback
   // and can predate a carried attempt snapshot after transcript rewrites or compaction.
   const callUsage = resolveLatestCallUsage({
-    currentAttemptCandidates: [currentAttemptAssistantUsage, promptCacheLastCallUsage],
+    currentAttemptCandidates: [
+      attempt.attemptUsage?.contextUsage ? attempt.attemptUsage : undefined,
+      currentAttemptAssistantUsage,
+      promptCacheLastCallUsage,
+    ],
     carriedUsage: input.lastRunPromptUsage,
     transcriptFallback: lastAssistantUsage,
   });
@@ -257,6 +261,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
     ? formatAssistantErrorText(sessionAssistantForCandidate, {
         cfg: params.config,
         sessionKey: runInput.resolvedSessionKey ?? params.sessionId,
+        agentId: params.agentId,
         provider: activeErrorContext.provider,
         providerOwner: runtime.providerRuntimeHandle?.plugin,
         model: activeErrorContext.model,

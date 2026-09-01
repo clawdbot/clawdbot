@@ -270,6 +270,14 @@ export function resolveSettledToolBatchEvidence(attempt: IncompleteTurnAttempt) 
       id !== null && name !== null && settledToolResults.get(id)?.isError === true ? [name] : [],
     ),
   );
+  // ToolErrorSummary has no call id: its owner must match a failed result in the
+  // proven terminal batch, or a stale/unrelated error could authorize continuation.
+  const hasUnsettledToolError = Boolean(
+    attempt.lastToolError &&
+    (assistant?.stopReason !== "toolUse" ||
+      !allToolsProvenSettled ||
+      !failedToolNames.has(attempt.lastToolError.toolName)),
+  );
   const intentionalTermination =
     allToolsProvenSettled &&
     assistant?.stopReason === "toolUse" &&
@@ -288,6 +296,7 @@ export function resolveSettledToolBatchEvidence(attempt: IncompleteTurnAttempt) 
     allToolsProvenSettled,
     parkedCodeModeRun,
     failedToolNames,
+    hasUnsettledToolError,
     intentionalTermination,
   };
 }
@@ -306,8 +315,13 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   attempt: IncompleteTurnAttempt;
 }): string | null {
   const { attempt } = params;
-  const { assistant, allToolsProvenSettled, failedToolNames, intentionalTermination } =
-    resolveSettledToolBatchEvidence(attempt);
+  const {
+    assistant,
+    allToolsProvenSettled,
+    failedToolNames,
+    hasUnsettledToolError,
+    intentionalTermination,
+  } = resolveSettledToolBatchEvidence(attempt);
   const terminal = attempt.terminal;
   const idlePromptTimeout =
     terminal.kind === "timeout" &&
@@ -328,14 +342,6 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
       attempt,
     }),
   );
-  // ToolErrorSummary has no call id: its owner must match a failed result in the
-  // proven terminal batch, or a stale/unrelated error could authorize finalization.
-  const hasUnsettledToolError = Boolean(
-    attempt.lastToolError &&
-    (assistant?.stopReason !== "toolUse" ||
-      !allToolsProvenSettled ||
-      !failedToolNames.has(attempt.lastToolError.toolName)),
-  );
   if (
     params.payloadCount !== 0 ||
     (!params.allowEmptyStopContinuation && hasOnlySilentAssistantReply(attempt.assistantTexts)) ||
@@ -354,7 +360,7 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   ) {
     return null;
   }
-  if (hasCompletedMessagingToolDeliveryEvidence(attempt)) {
+  if (attempt.hasToolMediaBlockReply || hasCompletedMessagingToolDeliveryEvidence(attempt)) {
     return null;
   }
   if (

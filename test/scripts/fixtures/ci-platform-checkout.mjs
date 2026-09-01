@@ -4,13 +4,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { getFileLockProcessStartTime } from "../../../src/shared/pid-alive.ts";
 
 const [mode, root, policyScenario, ...args] = process.argv.slice(2);
 const linux = policyScenario.startsWith("linux:");
 const scenario = linux ? policyScenario.slice("linux:".length) : policyScenario;
 const fixture = fileURLToPath(import.meta.url);
 const instance = randomUUID();
+let ownWindowsCreationTime;
 const workspace = path.join(root, "workspace");
 const runnerTemp = path.join(root, "temp");
 const lease = path.join(root, "lease");
@@ -19,6 +19,17 @@ const eventsFile = path.join(root, "events.jsonl");
 const commandsFile = path.join(root, "commands.jsonl");
 const optionsFile = path.join(root, "fixture-options.json");
 const options = fs.existsSync(optionsFile) ? JSON.parse(fs.readFileSync(optionsFile, "utf8")) : {};
+const localGit = options.localGit ?? options.performance;
+// Preload identity support before the cleanup handshake; its TypeScript graph
+// uses .js specifiers that native Node type stripping cannot resolve.
+let getFileLockProcessStartTime;
+if (options.cancelDuringCleanup && ["supervise", "git"].includes(mode)) {
+  const { tsImport } = await import("tsx/esm/api");
+  ({ getFileLockProcessStartTime } = await tsImport(
+    "../../../src/shared/pid-alive.ts",
+    import.meta.url,
+  ));
+}
 const refsFile = path.join(root, "refs.json");
 
 function resolveRef(cwd, ref) {
@@ -69,8 +80,54 @@ function stall(attempt) {
   }
 }
 
+function readWindowsProcessCensus(pids) {
+  const result = spawnSync(
+    "python",
+    ["-I", "-S", fileURLToPath(new URL("./ci-windows-process-census.py", import.meta.url))],
+    { input: JSON.stringify(pids), encoding: "utf8", timeout: 1_000, killSignal: "SIGKILL" },
+  );
+  if (result.error || result.status !== 0 || result.stderr !== "") {
+    throw new Error(
+      "Fixture Windows process census failed (" +
+        (result.error?.code ?? result.status) +
+        "): " +
+        result.stderr,
+    );
+  }
+  const observations = JSON.parse(result.stdout);
+  if (
+    !Array.isArray(observations) ||
+    observations.length !== pids.length ||
+    observations.some(
+      (entry, index) =>
+        entry?.pid !== pids[index] ||
+        typeof entry.alive !== "boolean" ||
+        (!(typeof entry.creationTime === "string" && /^\d+$/.test(entry.creationTime)) &&
+          !(entry.alive === false && entry.creationTime === null)),
+    )
+  ) {
+    throw new Error("Fixture Windows process census returned invalid identities");
+  }
+  return new Map(observations.map((entry) => [entry.pid, entry]));
+}
+
 function record(pid, role, attempt = 0) {
-  publish(`pids/${pid}.json`, { pid, role, attempt, instance: `${instance}-${pid}` });
+  if (process.platform === "win32" && pid === process.pid && !ownWindowsCreationTime) {
+    const identity = readWindowsProcessCensus([pid]).get(pid);
+    if (!identity.alive || !identity.creationTime) {
+      throw new Error("Fixture actor could not capture its own Windows birth");
+    }
+    ownWindowsCreationTime = identity.creationTime;
+  }
+  publish(`pids/${pid}.json`, {
+    pid,
+    role,
+    attempt,
+    instance: `${instance}-${pid}`,
+    ...(process.platform === "win32" && pid === process.pid
+      ? { creationTime: ownWindowsCreationTime }
+      : {}),
+  });
 }
 
 function records() {
@@ -84,25 +141,26 @@ function records() {
 
 function liveRecords() {
   const owned = records().filter(
-    (entry) => !fs.existsSync(path.join(recordsDir, `${entry.instance}.dead`)),
+    (entry) =>
+      !fs.existsSync(path.join(recordsDir, `${entry.instance}.dead`)) &&
+      // The creator owns this shell through track(close), not a later PID lookup.
+      !(process.platform === "win32" && entry.role === "shell"),
   );
   if (owned.length === 0) {
     return [];
   }
   const alive = new Set();
   const pids = new Set(owned.map((entry) => entry.pid));
-  if (process.platform === "win32") {
-    for (const pid of pids) {
-      try {
-        process.kill(pid, 0);
-        alive.add(pid);
-      } catch (error) {
-        if (error.code === "EPERM") {
-          alive.add(pid);
-        } else if (error.code !== "ESRCH") {
-          throw error;
-        }
+  const windowsCensus =
+    process.platform === "win32" ? readWindowsProcessCensus([...pids]) : undefined;
+  if (windowsCensus) {
+    for (const entry of owned) {
+      if (typeof entry.creationTime !== "string" || !/^\d+$/.test(entry.creationTime)) {
+        throw new Error("Fixture Windows actor is missing its registered birth");
       }
+    }
+    for (const identity of windowsCensus.values()) {
+      if (identity.alive) alive.add(identity.pid);
     }
   } else {
     // Apple ps uses KERN_PROC_ALL for multiple PIDs, including an observer anchor.
@@ -140,7 +198,10 @@ function liveRecords() {
     }
   }
   return owned.filter((entry) => {
-    if (alive.has(entry.pid)) {
+    if (
+      alive.has(entry.pid) &&
+      (!windowsCensus || windowsCensus.get(entry.pid).creationTime === entry.creationTime)
+    ) {
       return true;
     }
     // Separate command processes share this observed-dead fact. PID reuse cannot
@@ -418,7 +479,7 @@ async function command() {
     if (count === (fault.occurrence ?? 1)) commandResult = fault;
   }
   const operation = args.shift();
-  if (operation === "init" && !options.performance) {
+  if (operation === "init" && !localGit) {
     boundary("init");
     const config = path.join(root, "fixture-config.json");
     if (fs.existsSync(config)) {
@@ -452,7 +513,8 @@ async function command() {
     }
   } else if (
     options.publisher ||
-    options.performance ||
+    localGit ||
+    options.pluginRelease ||
     options.releaseAdmission ||
     commandResult ||
     ["fetch", "ls-remote", "clone"].includes(operation) ||
@@ -465,7 +527,7 @@ async function command() {
     // independent results but share unique tree identities with those transports.
     const counterName =
       commandResult ||
-      ((options.performance || options.releaseAdmission) && operation !== "fetch") ||
+      ((localGit || options.pluginRelease || options.releaseAdmission) && operation !== "fetch") ||
       ["rebase", "push", "rev-parse"].includes(operation)
         ? `${operation}-attempt.json`
         : "attempt.json";
@@ -491,7 +553,7 @@ async function command() {
         flag: "wx",
       });
     }
-    if (["fetch", "rebase", "push"].includes(operation) && !options.performance) {
+    if (["fetch", "rebase", "push"].includes(operation) && !localGit) {
       const lock = path.join(cwd, operation === "fetch" ? ".git/shallow.lock" : ".git/index.lock");
       fs.mkdirSync(path.dirname(lock), { recursive: true });
       try {
@@ -544,12 +606,18 @@ async function command() {
       }
       const shell = owned.find((entry) => entry.role === "shell");
       const owner =
-        (options.docsAgent || options.performance || options.releaseAdmission) &&
+        (options.docsAgent ||
+          options.performance ||
+          options.pluginRelease ||
+          options.releaseAdmission) &&
         process.ppid !== shell?.pid
           ? { pid: process.ppid }
           : shell;
       const parent =
-        (options.docsAgent || options.performance || options.releaseAdmission) &&
+        (options.docsAgent ||
+          options.performance ||
+          options.pluginRelease ||
+          options.releaseAdmission) &&
         owner?.pid !== shell?.pid
           ? spawnSync("/bin/ps", ["-o", "ppid=", "-p", String(owner?.pid)], { encoding: "utf8" })
           : undefined;
@@ -591,7 +659,8 @@ async function command() {
                 ? options.pushResults
                 : operation === "rev-parse" && options.revParseResult !== undefined
                   ? [options.revParseResult]
-                  : (options.performance || options.releaseAdmission) && operation !== "fetch"
+                  : (localGit || options.pluginRelease || options.releaseAdmission) &&
+                      operation !== "fetch"
                     ? undefined
                     : options.fetchResults;
       const result =
@@ -602,7 +671,7 @@ async function command() {
       if (remoteResult) {
         fs.writeSync(1, remoteResult.output);
       }
-      if (options.performance && ["fetch", "push"].includes(operation) && result !== 0) {
+      if (localGit && ["fetch", "push"].includes(operation) && result !== 0) {
         const lock = path.join(cwd, ".git/shallow.lock");
         fs.writeFileSync(lock, "owned fixture lock\n", { flag: "wx" });
         process.on("SIGTERM", () => {});
@@ -626,16 +695,16 @@ async function command() {
         stall(attempt);
         return;
       }
-      if (result === 0 && options.performance && commandResult?.output === undefined) {
+      if (result === 0 && localGit && commandResult?.output === undefined) {
         const commandArgs = [...args];
         if (["fetch", "push"].includes(operation)) {
           const index = commandArgs.indexOf("origin");
-          if (index < 0) throw new Error("Unexpected performance transport remote");
-          commandArgs[index] = options.performance.remote;
+          if (index < 0) throw new Error("Unexpected local Git transport remote");
+          commandArgs[index] = localGit.remote;
         }
         // Only local file transport is allowed; never fall through to a live URL.
         const result = spawnSync(
-          options.performance.git,
+          localGit.git,
           [
             "-C",
             cwd,
@@ -652,6 +721,15 @@ async function command() {
         if (operation === "init" && result.status === 0) {
           const directory = args.at(-1) === "main" ? cwd : insideOwnedPath(args.at(-1));
           fs.writeFileSync(path.join(directory, ".git/preexisting.lock"), "not invocation-owned\n");
+        }
+        if (
+          options.localGit &&
+          operation === "checkout" &&
+          cwd === workspace &&
+          result.status === 0
+        ) {
+          // Capture the candidate index at its producer, before harness materialization.
+          fs.copyFileSync(path.join(workspace, ".git/index"), path.join(root, "candidate-index"));
         }
         process.exit(result.status ?? 1);
       }
@@ -842,7 +920,7 @@ async function supervise() {
   for (const tool of extraTools) {
     writeConsumer(path.join(bin, tool), tool);
   }
-  if (options.performance || options.releaseAdmission) {
+  if (options.performance || options.pluginRelease || options.releaseAdmission) {
     fs.writeFileSync(
       path.join(bin, "timeout"),
       '#!/bin/bash\nwhile [[ "$1" == --* ]]; do shift; done\nshift\nexec "$@"\n',

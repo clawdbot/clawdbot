@@ -4,6 +4,7 @@ import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
+  iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import { getChildLogger } from "../../logging/logger.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -37,11 +38,7 @@ import {
 import { projectSqliteSessionParticipants } from "./session-accessor.sqlite-participant-projection.js";
 import { resolveSessionEntryProvenanceRow } from "./session-accessor.sqlite-provenance.js";
 import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
-import {
-  cloneSessionEntry,
-  getSessionKysely,
-  normalizeSqliteSessionKey,
-} from "./session-accessor.sqlite-scope.js";
+import { getSessionKysely, normalizeSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
 import {
   bindSessionNode,
   bindSessionRoot,
@@ -50,6 +47,7 @@ import {
 import {
   hasValidSessionEntryIdentity,
   parseSessionEntryJson as parseSessionEntryRow,
+  sessionEntryMetadataJson,
 } from "./session-accessor.sqlite-status.js";
 import { readTranscriptMutationStateInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
@@ -75,6 +73,7 @@ export type ResolvedSessionEntryRow = {
   row: SessionEntryRow;
 };
 
+/** Decodes a fresh owned entry, including its nested JSON, owner and participant values. */
 export function parseReadableSqliteSessionEntryRow(
   database: Pick<OpenClawAgentDatabase, "db">,
   row: Pick<SessionEntryRow, "current_session_id" | "entry_json" | "session_key" | "updated_at"> &
@@ -113,6 +112,7 @@ export function parseReadableSqliteSessionEntryRow(
   );
 }
 
+/** Exact reads already own nested values; retain them through identity publication. */
 export function readSessionIdentitySnapshot(
   database: OpenClawAgentDatabase,
   sessionKeys: Iterable<string>,
@@ -121,16 +121,10 @@ export function readSessionIdentitySnapshot(
   for (const sessionKey of uniqueStrings([...sessionKeys].map((key) => key.trim()))) {
     const row = readExactSessionEntryRow(database, sessionKey);
     if (row) {
-      snapshot.set(sessionKey, cloneSessionEntry(row.entry));
+      snapshot.set(sessionKey, row.entry);
     }
   }
   return snapshot;
-}
-
-export function createSessionIdentitySnapshot(
-  rows: readonly { entry: SessionEntry; sessionKey: string }[],
-): Map<string, SessionEntry> {
-  return new Map(rows.map((row) => [row.sessionKey, cloneSessionEntry(row.entry)]));
 }
 
 export function readSessionEntryRow(
@@ -219,16 +213,20 @@ export function readExactSessionEntryRowValidated(
 
 export function readSessionEntryStore(
   database: OpenClawAgentDatabase,
-  options: { allowCanonicalRepair?: boolean } = {},
+  options: { allowCanonicalRepair?: boolean; sessionKeys?: readonly string[] } = {},
 ): Record<string, SessionEntry> {
   if (options.allowCanonicalRepair !== true) {
     assertCanonicalSqliteSessionKeysCurrent(database);
   }
+  if (options.sessionKeys?.length === 0) {
+    return {};
+  }
   const db = getSessionKysely(database.db);
-  const rows = executeSqliteQuerySync(
+  const query = db.selectFrom("session_nodes").selectAll().orderBy("session_key");
+  const rows = iterateSqliteQuerySync(
     database.db,
-    db.selectFrom("session_nodes").selectAll().orderBy("session_key"),
-  ).rows;
+    options.sessionKeys ? query.where("session_key", "in", options.sessionKeys) : query,
+  );
   const store: Record<string, SessionEntry> = {};
   for (const row of rows) {
     // Doctor lifecycle projection supplies its separately hydrated expected entry for rejected
@@ -243,22 +241,32 @@ export function readSessionEntryStore(
 
 export function readSessionEntryCount(database: OpenClawAgentDatabase): number {
   const db = getSessionKysely(database.db);
-  const rows = executeSqliteQuerySync(
+  const rows = iterateSqliteQuerySync(
     database.db,
-    db.selectFrom("session_nodes").select("entry_json"),
-  ).rows;
-  return rows.reduce((count, row) => count + (parseSessionEntryRow(row) ? 1 : 0), 0);
+    db.selectFrom("session_nodes").select(sessionEntryMetadataJson),
+  );
+  let count = 0;
+  for (const row of rows) {
+    count += parseSessionEntryRow(row) ? 1 : 0;
+  }
+  return count;
 }
 
 export function readSessionEntryKeys(database: OpenClawAgentDatabaseReader): string[] {
   const db = getSessionKysely(database.db);
-  return executeSqliteQuerySync(
+  const keys: string[] = [];
+  for (const row of iterateSqliteQuerySync(
     database.db,
     db
       .selectFrom("session_nodes")
-      .select(["entry_json", "session_key"])
+      .select([sessionEntryMetadataJson, "session_key"])
       .orderBy("session_key", "asc"),
-  ).rows.flatMap((row) => (parseSessionEntryRow(row) ? [row.session_key] : []));
+  )) {
+    if (parseSessionEntryRow(row)) {
+      keys.push(row.session_key);
+    }
+  }
+  return keys;
 }
 
 export function resolveLifecyclePrimaryEntry(
@@ -327,14 +335,19 @@ export function deleteSessionEntryRows(
     database.db,
     db.selectFrom("session_windows").select("session_id").where("session_key", "=", sessionKey),
   ).rows;
-  const survivingNodes = executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("session_nodes")
-      .select(["current_session_id", "entry_json", "session_key"])
-      .where("session_key", "!=", sessionKey)
-      .orderBy("session_key", "asc"),
-  ).rows;
+  // Skip the survivor scan when maintenance reclaimed every window. Otherwise, project
+  // reference metadata before acquiring rows to avoid loading unrelated saved prompts.
+  const survivingNodes =
+    windows.length > 0
+      ? executeSqliteQuerySync(
+          database.db,
+          db
+            .selectFrom("session_nodes")
+            .select(["current_session_id", sessionEntryMetadataJson, "session_key"])
+            .where("session_key", "!=", sessionKey)
+            .orderBy("session_key", "asc"),
+        ).rows
+      : [];
   for (const window of windows) {
     const survivingNode = survivingNodes.find((node) => {
       if (node.current_session_id === window.session_id) {

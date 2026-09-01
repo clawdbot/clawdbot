@@ -96,7 +96,8 @@ describe("board gateway runtime boundaries", () => {
       name: "reader",
       decision: "granted",
       revision: 2,
-      instanceId: store.getSnapshot("session").widgets[0]?.instanceId,
+      instanceId: store.getSnapshot({ sessionKey: "session", agentId: "main" }).widgets[0]
+        ?.instanceId,
     });
     board = await invoke("board.get", { sessionKey: "session" });
     snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;
@@ -252,7 +253,9 @@ describe("board gateway runtime boundaries", () => {
       const { error } = await requestOutcome;
       expect(error).toBeInstanceOf(Error);
       expect(String(error)).toContain("dashboard unavailable");
-      expect(harness.store.getSnapshot("session").widgets).toEqual([]);
+      expect(harness.store.getSnapshot({ sessionKey: "session", agentId: "main" }).widgets).toEqual(
+        [],
+      );
       expect(events).not.toContain("board.changed");
 
       await client.request("board.widget.put", {
@@ -260,7 +263,9 @@ describe("board gateway runtime boundaries", () => {
         name: "live",
         content: { kind: "canvas-doc", docId: "live-canvas-doc" },
       });
-      expect(harness.store.getSnapshot("session").widgets).toMatchObject([{ name: "live" }]);
+      expect(
+        harness.store.getSnapshot({ sessionKey: "session", agentId: "main" }).widgets,
+      ).toMatchObject([{ name: "live" }]);
       expect(events).toContain("board.changed");
     } finally {
       client.stop();
@@ -313,7 +318,10 @@ describe("board gateway runtime boundaries", () => {
         });
         return {
           response,
-          verify: () => expect(harness.store.getSnapshot("session").tabs).toEqual([]),
+          verify: () =>
+            expect(
+              harness.store.getSnapshot({ sessionKey: "session", agentId: "main" }).tabs,
+            ).toEqual([]),
         };
       },
     },
@@ -352,9 +360,9 @@ describe("board gateway runtime boundaries", () => {
         return {
           response,
           verify: () =>
-            expect(harness.store.getSnapshot("session").widgets).toMatchObject([
-              { name: "approval", grantState: "pending" },
-            ]),
+            expect(
+              harness.store.getSnapshot({ sessionKey: "session", agentId: "main" }).widgets,
+            ).toMatchObject([{ name: "approval", grantState: "pending" }]),
         };
       },
     },
@@ -387,9 +395,9 @@ describe("board gateway runtime boundaries", () => {
         return {
           response,
           verify: () =>
-            expect(harness.store.getSnapshot("session").widgets).toMatchObject([
-              { name: "grant", grantState: "pending" },
-            ]),
+            expect(
+              harness.store.getSnapshot({ sessionKey: "session", agentId: "main" }).widgets,
+            ).toMatchObject([{ name: "grant", grantState: "pending" }]),
         };
       },
     },
@@ -438,7 +446,8 @@ describe("board gateway runtime boundaries", () => {
       name: "reader",
       decision: "granted",
       revision: 1,
-      instanceId: store.getSnapshot("session").widgets[0]?.instanceId,
+      instanceId: store.getSnapshot({ sessionKey: "session", agentId: "main" }).widgets[0]
+        ?.instanceId,
     });
     const board = await invoke("board.get", { sessionKey: "session" });
     const snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;
@@ -467,7 +476,8 @@ describe("board gateway runtime boundaries", () => {
       name: "runner",
       decision: "granted",
       revision: 1,
-      instanceId: store.getSnapshot("session").widgets[0]?.instanceId,
+      instanceId: store.getSnapshot({ sessionKey: "session", agentId: "main" }).widgets[0]
+        ?.instanceId,
     });
     const board = await invoke("board.get", { sessionKey: "session" });
     const snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;
@@ -554,6 +564,6 @@ describe("board gateway runtime boundaries", () => {
       } as unknown as GatewayRequestContext,
     });
     expect(respond.mock.calls[0]?.[0]).toBe(true);
-    expect(boardStore.getSnapshot(sessionKey).widgets).toHaveLength(1);
+    expect(boardStore.getSnapshot({ sessionKey }).widgets).toHaveLength(1);
   });
 });

@@ -423,13 +423,17 @@ describe("ExtensionRelayBridge", () => {
           }),
         );
         // Resolve the old promise, then replace its owner before its continuation.
-        if (lifecycle === "closed client") {
-          cdp.onClose();
-        }
+        const closing = lifecycle === "closed client" ? cdp.onClose() : undefined;
         if (lifecycle === "replaced extension") {
           sendHello(wireExtension(bridge).handlers, []);
         }
         await flush();
+        if (closing) {
+          const detach = socket.frames().find((frame) => frame.type === "detach");
+          expect(detach).toBeDefined();
+          extension.onMessage(JSON.stringify({ type: "result", seq: detach?.seq, result: {} }));
+          await closing;
+        }
         expect(socket.frames().filter((frame) => frame.type === "attach")).toEqual([]);
         if (lifecycle === "active") {
           expect(client.frames().map((frame) => frame.method ?? frame.id)).toEqual([

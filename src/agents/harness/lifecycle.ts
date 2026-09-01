@@ -30,6 +30,7 @@ import {
   projectAgentRunAttemptTerminal,
 } from "../agent-run-terminal-outcome.js";
 import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
+import { copyCoreTtsAttemptResultProvenance } from "../tools/tts-tool-result-provenance.js";
 import { recordAgentHarnessPreflightOwner } from "./errors.js";
 import { applyAgentHarnessResultClassification } from "./result-classification.js";
 import { EmptySettledTurnFinalizationError } from "./settled-turn-finalization-outcome.js";
@@ -204,10 +205,10 @@ function withFallbackDiagnosticTrace(
   if (result.diagnosticTrace || !trace) {
     return result;
   }
-  return {
+  return copyCoreTtsAttemptResultProvenance(result, {
     ...result,
     diagnosticTrace: freezeDiagnosticTraceContext(trace),
-  };
+  });
 }
 
 function withFallbackFinalizationDiagnosticTrace(
@@ -343,8 +344,11 @@ export async function runAgentHarnessLifecycleAttempt(
       phase = "resolve";
       // Classification happens inside the diagnostic phase so failures identify
       // whether they came from send or result resolution.
-      return normalizeAgentHarnessAttemptResult(
-        applyAgentHarnessResultClassification(harness, rawResult, params),
+      return copyCoreTtsAttemptResultProvenance(
+        rawResult,
+        normalizeAgentHarnessAttemptResult(
+          applyAgentHarnessResultClassification(harness, rawResult, params),
+        ),
       );
     };
     result = agentRunTrace
@@ -400,9 +404,9 @@ export async function runAgentHarnessLifecycleFinalization(
   try {
     const runAndValidate = async () => {
       phase = "send";
-      const rawResult = await execute();
-      phase = "resolve";
       try {
+        const rawResult = await execute();
+        phase = "resolve";
         return {
           outcome: "answered" as const,
           result: assertSettledTurnFinalizationResult(rawResult),

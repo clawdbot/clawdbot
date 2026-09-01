@@ -10,6 +10,7 @@ import {
   releaseSessionDeliveryClaim,
   SESSION_DELIVERY_QUEUE_NAME,
 } from "../infra/session-delivery-queue-storage.js";
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import {
   createGatewayConfigPath,
   removeGatewayTempHome,
@@ -18,6 +19,12 @@ import {
 } from "./gateway.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
+
+// Keep the real delivery scheduler, but disable optional idle cache work that
+// can retain admissions after this fixture closes its Gateway.
+vi.mock("./server-idle-task.js", () => ({
+  scheduleGatewayIdleTask: () => ({ stop: vi.fn() }),
+}));
 
 async function startProofProvider(requests: string[]): Promise<http.Server> {
   const server = http.createServer((request, response) => {
@@ -209,6 +216,7 @@ describe("session delivery clock-jump integration", () => {
           }
         }
       }
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
     },
   );
 });

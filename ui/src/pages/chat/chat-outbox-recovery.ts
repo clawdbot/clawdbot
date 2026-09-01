@@ -9,11 +9,11 @@ import {
   type ChatOutboxRecoveryEntry,
 } from "../../lib/chat/outbox-recovery.ts";
 import {
-  resolveStoredChatOutboxScope,
   storageTargetForGateway,
   storedChatOutboxScopeKey,
   subscribeStoredChatOutboxChanges,
 } from "../../lib/chat/outbox-store.ts";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 const draftStore = import("../../lib/chat/composer-draft-store.runtime.ts");
@@ -116,7 +116,7 @@ class ChatOutboxRecovery extends LitElement {
         this.error = t("chat.outboxRecoveryConflict");
         return;
       }
-      const scope = resolveStoredChatOutboxScope(host, host.sessionKey);
+      const scope = resolveUiConversationIdentity(host, host.sessionKey);
       const destination = captureChatOutboxRecoveryDestination(host, scope);
       const durableScope = { ...owner, scopeKey: `chat:v3:${storedChatOutboxScopeKey(scope)}` };
       const store = await draftStore;

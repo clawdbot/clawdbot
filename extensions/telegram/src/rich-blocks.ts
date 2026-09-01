@@ -1,4 +1,4 @@
-// Markdown → Bot API 10.2 InputRichBlock[] for Telegram rich messages.
+// Markdown → Bot API 10.3 InputRichBlock[] for Telegram rich messages.
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import {
   FormatCapabilityProfile,
@@ -361,8 +361,9 @@ function renderTableBlock(table: MarkdownTableMeta): {
     const text = cellToRichText(cell);
     return {
       is_header: true,
+      align: align ?? "left",
+      valign: "middle",
       ...(text !== undefined ? { text } : {}),
-      ...(align ? { align } : {}),
     };
   });
   const bodyRows: RichBlockTableCell[][] = table.rowCells.map((row) =>
@@ -370,8 +371,9 @@ function renderTableBlock(table: MarkdownTableMeta): {
       const align = table.aligns?.[index];
       const text = cellToRichText(row[index]);
       return {
+        align: align ?? "left",
+        valign: "middle",
         ...(text !== undefined ? { text } : {}),
-        ...(align ? { align } : {}),
       };
     }),
   );

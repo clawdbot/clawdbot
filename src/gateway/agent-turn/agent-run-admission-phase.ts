@@ -228,6 +228,7 @@ export async function prepareAgentRunDispatch(params: {
     ? loadSessionEntry(params.resolvedSessionKey, {
         ...(params.activeSessionAgentId ? { agentId: params.activeSessionAgentId } : {}),
         clone: false,
+        projection: "list",
       }).storePath
     : `agent:${params.activeSessionAgentId}`;
   let operationalRunInstance: OperationalRunInstanceRef | undefined;
@@ -285,7 +286,7 @@ export async function prepareAgentRunDispatch(params: {
   }
   const activeRunAbort = params.getAdmittedRunAbort();
   if (!activeRunAbort || !operationalRunInstance) {
-    activeRunAbort?.cleanup({ force: true });
+    activeRunAbort?.cleanup();
     activeGatewayWorkAdmission.release();
     params.io.emitAcceptance([
       false,
@@ -344,7 +345,7 @@ export async function prepareAgentRunDispatch(params: {
   const cleanupPreaccept = (admissionReleased = false) => {
     preparedModelRuntimeLease?.release();
     preparedModelRuntimeLease = undefined;
-    activeRunAbort.cleanup({ force: true });
+    activeRunAbort.cleanup();
     if (!admissionReleased) {
       activeGatewayWorkAdmission.release();
     }

@@ -87,6 +87,105 @@ if (loaded.length) assert(loaded[0].startsWith(path.dirname(rootDir) + path.sep)
 `;
 
 describe("tsdown config", () => {
+  it.each([false, true])(
+    "runs the bundled memory store with only production dependencies (verbose=%s)",
+    async (verbose) => {
+      vi.stubEnv("OPENCLAW_BUILD_VERBOSE", verbose ? "1" : "0");
+      const selected = configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
+      const entryName = "extensions/memory-lancedb/lancedb-store";
+      const source = (selected?.entry as Record<string, string> | undefined)?.[entryName];
+      expect(source).toBeDefined();
+      const root = fs.realpathSync(createTempDir("openclaw-tsdown-memory-"));
+      const manifest = JSON.parse(
+        fs.readFileSync("extensions/memory-lancedb/package.json", "utf8"),
+      ) as {
+        dependencies: Record<string, string>;
+        optionalDependencies: Record<string, string>;
+      };
+      fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
+      for (const name of Object.keys({
+        ...manifest.dependencies,
+        ...manifest.optionalDependencies,
+      })) {
+        const installed = path.resolve("node_modules", name);
+        if (!fs.existsSync(installed)) {
+          continue;
+        }
+        const destination = path.join(root, "node_modules", name);
+        fs.mkdirSync(path.dirname(destination), { recursive: true });
+        fs.symlinkSync(fs.realpathSync(installed), destination, "dir");
+      }
+      const bundles = await build({
+        ...selected,
+        config: false,
+        entry: { [entryName]: source! },
+        outDir: path.join(root, "dist"),
+        dts: false,
+        logLevel: "silent",
+      });
+      try {
+        const script = `
+          import assert from "node:assert/strict";
+          import { registerHooks } from "node:module";
+          import path from "node:path";
+          import { pathToFileURL } from "node:url";
+          const [root, entry, bindingsJson] = process.argv.slice(1);
+          const bindings = new Set(JSON.parse(bindingsJson));
+          const loadedBindings = new Set();
+          registerHooks({ resolve(specifier, context, nextResolve) {
+            assert(!["@lancedb/lancedb", "@huggingface/transformers", "sharp"].includes(specifier),
+              "Unexpected runtime dependency: " + specifier);
+            if (bindings.has(specifier)) loadedBindings.add(specifier);
+            return nextResolve(specifier, context);
+          } });
+          const { MemoryDB } = await import(pathToFileURL(entry).href);
+          const dbPath = path.join(root, "memory-db");
+          let db = new MemoryDB(dbPath, 2);
+          try {
+            const stored = await db.store("alpha", {
+              text: "Bundled memory proof", vector: [1, 0], importance: 0.8, category: "fact"
+            });
+            assert.equal((await db.search("alpha", [1, 0], 1, 0))[0].entry.id, stored.id);
+            assert.deepEqual(await db.search("beta", [1, 0], 1, 0), []);
+            db.close();
+            db = new MemoryDB(dbPath, 2);
+            assert.equal((await db.search("alpha", [1, 0], 1, 0))[0].entry.id, stored.id);
+            assert.equal(await db.count("alpha"), 1);
+            assert(loadedBindings.size > 0, "Expected a declared native binding");
+          } finally {
+            db.close();
+          }
+          console.log("bundled memory store persists and recalls without image dependencies");
+        `;
+        const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
+          (resolve) => {
+            execFile(
+              process.execPath,
+              [
+                "--input-type=module",
+                "-e",
+                script,
+                root,
+                path.join(root, "dist", `${entryName}.js`),
+                JSON.stringify(Object.keys(manifest.optionalDependencies)),
+              ],
+              { cwd: root, timeout: 30_000 },
+              (error, stdout, stderr) => resolve({ error, stdout, stderr }),
+            );
+          },
+        );
+        expect(result.error, result.stderr).toBeNull();
+        expect(result.stdout.trim()).toBe(
+          "bundled memory store persists and recalls without image dependencies",
+        );
+      } finally {
+        for (const bundle of bundles) {
+          await bundle[Symbol.asyncDispose]();
+        }
+      }
+    },
+  );
+
   it("builds retained config repairs without plugin runtime or state migration closures", async () => {
     const selected = configs.find((config) => config.outDir === "dist/config-doctor");
     expect(selected?.name).toBe(TSDOWN_UNIFIED_CONFIG_GROUP);
@@ -389,10 +488,13 @@ describe("tsdown config", () => {
         "jimp",
         "matrix-js-sdk",
         "prism-media",
-        "sharp",
         "typescript",
         "vitest",
         "zod",
+        ...Object.keys(
+          JSON.parse(fs.readFileSync("extensions/memory-lancedb/package.json", "utf8"))
+            .optionalDependencies,
+        ),
       ];
       // No manifest dependencies: only phantom/transitive copies are resolvable.
       // Automatic manifest externalization must not hide a missing build boundary.
@@ -425,7 +527,12 @@ describe("tsdown config", () => {
           );
           const imports = [packageName, `${packageName}/subpath`];
           specifiers.push(...imports);
-          if (!bundleAll && packageName === name && (name !== "zod" || declarations)) {
+          if (
+            !bundleAll &&
+            packageName === name &&
+            name !== "@lancedb/lancedb" &&
+            (name !== "zod" || declarations)
+          ) {
             expectedImports.push(...imports);
           }
         }
@@ -492,7 +599,7 @@ describe("tsdown config", () => {
     }
   });
 
-  it("assigns every unified entry to exactly one bounded declaration graph", () => {
+  it("assigns every TypeScript runtime entry to exactly one bounded declaration graph", () => {
     const unifiedRuntimeConfig = configs.find(
       (entry) => entry.name === TSDOWN_UNIFIED_CONFIG_GROUP,
     );
@@ -512,7 +619,15 @@ describe("tsdown config", () => {
       return dts.entry;
     });
 
-    expect(declarationSources.toSorted()).toEqual(runtimeSources.toSorted());
+    expect(runtimeSources).toEqual(
+      expect.arrayContaining([
+        "extensions/vault/vault-secret-id.js",
+        "extensions/vault/vault-secret-ref-resolver.js",
+      ]),
+    );
+    expect(declarationSources.toSorted()).toEqual(
+      runtimeSources.filter((source) => /\.[cm]?tsx?$/u.test(source)).toSorted(),
+    );
     expect(new Set(declarationSources).size).toBe(declarationSources.length);
   });
 

@@ -24,7 +24,6 @@ import {
   filterPlaceholderCompatibleTranslations,
   parseTranslationBatchReply,
   runProcess,
-  shouldReuseExistingTranslation,
 } from "../../scripts/control-ui-i18n.ts";
 import { collectControlUiRawCopyFromSource } from "../../scripts/lib/control-ui-i18n-raw-copy.ts";
 import { waitForPidFile } from "../helpers/process-wait.js";
@@ -410,23 +409,6 @@ describe("control-ui-i18n process runner", () => {
         { fallbackCount: 0, locale: "fr" },
       ]),
     ).not.toThrow();
-  });
-
-  it("refreshes recorded fallback copy when sync is forced without a provider", () => {
-    expect(
-      shouldReuseExistingTranslation({
-        allowTranslate: false,
-        force: true,
-        isFallback: true,
-      }),
-    ).toBe(false);
-    expect(
-      shouldReuseExistingTranslation({
-        allowTranslate: false,
-        force: false,
-        isFallback: true,
-      }),
-    ).toBe(true);
   });
 
   it("keeps a bounded process output tail", () => {

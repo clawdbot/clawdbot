@@ -120,7 +120,11 @@ function extractComparableText(
   };
 }
 
-function prepareComparableMessage(message: unknown, order: number): ComparableHistoryMessage {
+function prepareComparableMessage(
+  message: unknown,
+  order: number,
+  externalIdentityKey: string | undefined,
+): ComparableHistoryMessage {
   if (!message || typeof message !== "object") {
     return { message, order, hasCliImageMentions: false };
   }
@@ -130,7 +134,7 @@ function prepareComparableMessage(message: unknown, order: number): ComparableHi
   return {
     message,
     order,
-    externalIdentityKey: resolveImportedExternalIdentityKey(message),
+    externalIdentityKey,
     hasCliImageMentions: comparableText.hasCliImageMentions,
     ...(comparableText.cliImageTurnKey ? { cliImageTurnKey: comparableText.cliImageTurnKey } : {}),
     role,
@@ -235,18 +239,6 @@ function hasLocalImageMediaFacts(entry: ComparableHistoryMessage): boolean {
   return message ? (readPersistedMediaFacts(message) ?? []).some(isImageMediaFact) : false;
 }
 
-function findLocalImageMediaMatch(
-  candidates: ComparableHistoryMessage[],
-  imported: ComparableHistoryMessage,
-): number {
-  if (!imported.hasCliImageMentions || !imported.cliImageTurnKey) {
-    return -1;
-  }
-  return candidates.findIndex(
-    (candidate) => candidate.cliImageTurnKey === imported.cliImageTurnKey,
-  );
-}
-
 function compareHistoryMessages(a: ComparableHistoryMessage, b: ComparableHistoryMessage): number {
   if (a.timestamp !== undefined && b.timestamp !== undefined && a.timestamp !== b.timestamp) {
     return a.timestamp - b.timestamp;
@@ -262,11 +254,13 @@ export function mergeImportedChatHistoryMessages(params: {
   if (params.importedMessages.length === 0) {
     return params.localMessages;
   }
-  const merged = params.localMessages.map(prepareComparableMessage);
+  const merged = params.localMessages.map((message, order) =>
+    prepareComparableMessage(message, order, resolveImportedExternalIdentityKey(message)),
+  );
   const exactExternalIdentityIndex = new Set<string>();
   const allMessageRoleTextIndex: RoleTextIndex = new Map();
   const identitylessRoleTextIndex: RoleTextIndex = new Map();
-  const localImageMediaCandidates: ComparableHistoryMessage[] = [];
+  const localImageMediaCounts = new Map<string, number>();
   const indexEntry = (entry: ComparableHistoryMessage) => {
     if (entry.externalIdentityKey) {
       exactExternalIdentityIndex.add(entry.externalIdentityKey);
@@ -276,28 +270,30 @@ export function mergeImportedChatHistoryMessages(params: {
     addRoleTextCandidate(allMessageRoleTextIndex, entry);
   };
   for (const entry of merged) {
+    indexEntry(entry);
+    if (!hasLocalImageMediaFacts(entry)) {
+      continue;
+    }
     const localMeta = asOptionalRecord(asOptionalRecord(entry.message)?.["__openclaw"]);
     const localEntryId = normalizeOptionalString(localMeta?.id);
-    if (localEntryId) {
-      entry.cliImageTurnKey = hashCliImageTurnEntryId(localEntryId);
-    }
-    indexEntry(entry);
-    if (hasLocalImageMediaFacts(entry)) {
-      localImageMediaCandidates.push(entry);
+    const turnKey = localEntryId ? hashCliImageTurnEntryId(localEntryId) : entry.cliImageTurnKey;
+    if (turnKey) {
+      localImageMediaCounts.set(turnKey, (localImageMediaCounts.get(turnKey) ?? 0) + 1);
     }
   }
   let nextOrder = merged.length;
   for (const message of params.importedMessages) {
-    const imported = prepareComparableMessage(message, nextOrder);
-    if (
-      imported.externalIdentityKey &&
-      exactExternalIdentityIndex.has(imported.externalIdentityKey)
-    ) {
+    const externalIdentityKey = resolveImportedExternalIdentityKey(message);
+    if (externalIdentityKey && exactExternalIdentityIndex.has(externalIdentityKey)) {
       continue;
     }
-    const localImageMediaIndex = findLocalImageMediaMatch(localImageMediaCandidates, imported);
-    if (localImageMediaIndex !== -1) {
-      localImageMediaCandidates.splice(localImageMediaIndex, 1);
+    const imported = prepareComparableMessage(message, nextOrder, externalIdentityKey);
+    const turnKey = imported.hasCliImageMentions ? imported.cliImageTurnKey : undefined;
+    const matches = turnKey ? localImageMediaCounts.get(turnKey) : undefined;
+    if (turnKey && matches) {
+      // Each local image turn suppresses one import. Counts preserve repeated
+      // keys without retaining or shifting rows that matching never inspects.
+      localImageMediaCounts.set(turnKey, matches - 1);
       continue;
     }
     const duplicate = imported.externalIdentityKey

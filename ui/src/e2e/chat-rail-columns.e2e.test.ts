@@ -1,7 +1,7 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -17,8 +17,22 @@ const suite = createControlUiE2eSuite({
 });
 
 const sessionKey = "agent:main:rail-tabs";
-const proofDir = process.env.OPENCLAW_UI_RAIL_PROOF_DIR?.trim();
-const videoDir = process.env.OPENCLAW_UI_RAIL_VIDEO_DIR?.trim();
+const proofDirParent = process.env.OPENCLAW_UI_RAIL_PROOF_DIR?.trim();
+let proofDir: string | undefined;
+beforeEach(() => {
+  proofDir = proofDirParent
+    ? createControlUiE2eArtifactDir("chat-rail-columns", proofDirParent)
+    : undefined;
+});
+const videoDirParent = process.env.OPENCLAW_UI_RAIL_VIDEO_DIR?.trim();
+let videoDir: string | undefined;
+beforeEach(() => {
+  videoDir = videoDirParent
+    ? proofDir && proofDirParent && path.resolve(videoDirParent) === path.resolve(proofDirParent)
+      ? proofDir
+      : createControlUiE2eArtifactDir("chat-rail-columns", videoDirParent)
+    : undefined;
+});
 
 const historyMessages = Array.from({ length: 10 }, (_, index) => ({
   id: `rail-tabs-${index}`,
@@ -276,7 +290,6 @@ async function captureRichPanel(page: Page, name: string) {
   if (!proofDir) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
   const clip = await page.evaluate(() => {
     const elements = [
       document.querySelector<HTMLElement>(".chat-pane__header"),
@@ -988,7 +1001,7 @@ suite.define(() => {
         expect(await mainComposer.evaluate((element) => element === document.activeElement)).toBe(
           true,
         );
-        const input = companion.getByRole("textbox", { name: "Ask the session companion" });
+        const input = companion.getByRole("textbox", { name: "Ask in side chat" });
         await input.fill("Can I use side chat here?");
         await companion.getByRole("button", { name: "Ask", exact: true }).click();
         const request = await gateway.waitForRequest("sessions.companion.ask");
@@ -1000,14 +1013,9 @@ suite.define(() => {
         await companion
           .getByText("The mobile side chat stayed inside its panel.", { exact: true })
           .waitFor();
-        const companionActions = sidePanel(page).getByRole("button", {
-          name: "More companion actions",
-        });
-        await companionActions.click();
         await sidePanel(page)
-          .locator('wa-dropdown-item[value="clear"]')
-          .waitFor({ state: "visible" });
-        await page.keyboard.press("Escape");
+          .getByRole("button", { name: "Clear side chat", exact: true })
+          .waitFor();
         await captureRichPanel(page, "rails-side-chat-mobile-light");
 
         await sidePanel(page).getByRole("button", { name: "Expand side panel" }).click();

@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import { createSubscribedSessionHarness } from "../embedded-agent-subscribe.e2e-harness.js";
 import {
@@ -14,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   runAttempt: vi.fn(),
   settleRequesterAfterSessionSpawns: vi.fn(),
 }));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../delegation-capability.js", () => ({
   resolveDelegationCapability: vi.fn(() => undefined),
@@ -135,6 +137,34 @@ describe("embedded run retry dispatch", () => {
     mocks.runAttempt.mockReset().mockResolvedValue({ terminal: { kind: "ok" } });
     mocks.settleRequesterAfterSessionSpawns.mockReset();
   });
+
+  it.each([undefined, "global", "agent:main:policy"])(
+    "dispatches a global plugin attempt with its prepared owner (%s)",
+    async (sandboxSessionKey) => {
+      const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+      input.params.config = {
+        agents: {
+          ownership: "explicit",
+          defaults: { sandbox: { mode: "off" } },
+          list: [{ id: "main" }, { id: "marketing" }],
+        },
+      };
+      input.params.sessionKey = "global";
+      input.params.sandboxSessionKey = sandboxSessionKey;
+      input.runtime.agentId = "marketing";
+      input.runtime.sessionKey = "global";
+      input.runtime.workspaceDir = tempDirs.make("openclaw-global-plugin-attempt-");
+
+      const result = await dispatchEmbeddedRunAttempt(input);
+
+      expect(result.preparedAttempt).toMatchObject({
+        agentId: "marketing",
+        sessionKey: "global",
+        sandbox: null,
+      });
+      expect(mocks.runAttempt).toHaveBeenCalledWith(result.preparedAttempt);
+    },
+  );
 
   it("forwards private commit accounting before queued notices and thrown attempt cleanup", async () => {
     const flushStarted = createDeferred();

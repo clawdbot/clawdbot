@@ -1,5 +1,6 @@
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
-import { afterAll, afterEach, beforeAll, describe, expect, inject } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, inject } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiE2eWaitTimeoutMs,
   startControlUiE2eServer,
@@ -27,6 +28,7 @@ type ControlUiE2ePage = {
 };
 
 type ControlUiE2eSuite = {
+  readonly artifactDir: string;
   readonly browser: Browser;
   readonly server: ControlUiE2eServer;
   closeBrowserContext: (context: BrowserContext) => Promise<void>;
@@ -96,6 +98,7 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
   const openBrowserContexts = new Set<BrowserContext>();
   let browser: Browser | undefined;
   let server: ControlUiE2eServer | undefined;
+  let artifactDir: string | undefined;
 
   const closeBrowserContext = async (context: BrowserContext): Promise<void> => {
     openBrowserContexts.delete(context);
@@ -118,6 +121,11 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
   };
 
   return {
+    get artifactDir() {
+      return (artifactDir ??= createControlUiE2eArtifactDir(
+        options.name.toLowerCase().replaceAll(/[^a-z0-9_-]+/gu, "-"),
+      ));
+    },
     get browser() {
       if (!browser) {
         throw new Error("Control UI E2E browser accessed before suite setup");
@@ -133,6 +141,10 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
     closeBrowserContext,
     define(defineTests) {
       describeControlUiE2e(options.name, () => {
+        // Each retry/repeat owns new proof, but disabled capture never reads the lazy directory.
+        beforeEach(() => {
+          artifactDir = undefined;
+        });
         beforeAll(async () => {
           if (!chromiumAvailable && options.unavailableMessage) {
             throw new Error(options.unavailableMessage(chromiumExecutablePath));

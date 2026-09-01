@@ -502,7 +502,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         roster.scheduleEvent();
         return;
       }
-      void (async () => {
+      const hydrate = async () => {
         if (connection.isCurrent(scope)) {
           const sessionKey = gateway.snapshot.sessionKey?.trim();
           const agentScope = sessionKey
@@ -520,7 +520,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
             await roster.refreshManagedLists();
           }
         }
-      })();
+      };
+      void hydrate().catch(() => undefined);
     }
   });
 
@@ -528,10 +529,11 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (!isSessionStateEvent(event)) {
       return;
     }
-    swarmActivity.observe(event.payload);
-    const decoratedResult = decorateRows(state.result);
-    if (decoratedResult !== state.result) {
-      publish({ ...state, result: decoratedResult });
+    if (swarmActivity.observe(event.payload)) {
+      const decoratedResult = decorateRows(state.result);
+      if (decoratedResult !== state.result) {
+        publish({ ...state, result: decoratedResult });
+      }
     }
     const { eventInfo, reconciled, claimChanged } = reconcileChangedEvent(event.payload, {
       resultAgentId: state.agentId,

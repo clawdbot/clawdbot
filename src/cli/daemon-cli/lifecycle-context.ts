@@ -26,7 +26,7 @@ export async function resolveGatewayLifecycleContext(
     .readBestEffortConfig()
     .catch(() => undefined);
   const port = parseTcpPortFromArgs(command?.programArguments) ?? resolveGatewayPort(config, env);
-  return { port, env, command };
+  return { port, env, config, command };
 }
 
 export async function resolveGatewayConfigPorts() {

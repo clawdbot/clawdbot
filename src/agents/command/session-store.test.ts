@@ -30,14 +30,9 @@ vi.mock("../model-selection.js", () => ({
   normalizeProviderId: (provider: string) => provider.trim().toLowerCase(),
 }));
 
-type MockCost = {
-  input?: number;
-  output?: number;
-};
-
 type MockProviderModel = {
   id: string;
-  cost?: MockCost;
+  cost?: import("../../utils/usage-format.js").ModelCostConfig;
 };
 
 type MockUsageFormatConfig = {
@@ -46,44 +41,27 @@ type MockUsageFormatConfig = {
   };
 };
 
-vi.mock("../../utils/usage-format.js", () => ({
-  estimateUsageCost: (params: { usage?: { input?: number; output?: number }; cost?: MockCost }) => {
-    if (!params.usage || !params.cost) {
-      return undefined;
-    }
-    const input = params.usage.input ?? 0;
-    const output = params.usage.output ?? 0;
-    const costInput = params.cost.input ?? 0;
-    const costOutput = params.cost.output ?? 0;
-    const total = input * costInput + output * costOutput;
-    if (!Number.isFinite(total)) {
-      return undefined;
-    }
-    return total / 1e6;
-  },
-  resolveModelCostConfig: (params: {
-    provider?: string;
-    model?: string;
-    config?: unknown;
-    agentDir?: string;
-  }) => {
-    const agents = (params.config as OpenClawConfig | undefined)?.agents?.list ?? [];
-    if (agents.length > 1 && !params.agentDir) {
-      throw new Error("multi-agent cost resolution requires an explicit agent directory");
-    }
-    const providers = (params.config as MockUsageFormatConfig | undefined)?.models?.providers;
-    if (!providers) {
-      return undefined;
-    }
-    const model = providers[params.provider ?? ""]?.models?.find(
-      (entry) => entry.id === params.model,
-    );
-    if (!model) {
-      return undefined;
-    }
-    return model.cost;
-  },
-}));
+vi.mock("../../utils/usage-format.js", async (importOriginal) => {
+  const { estimateAggregateUsageCost } =
+    await importOriginal<typeof import("../../utils/usage-format.js")>();
+  return {
+    estimateAggregateUsageCost,
+    resolveModelCostConfig: (params: {
+      provider?: string;
+      model?: string;
+      config?: unknown;
+      agentDir?: string;
+    }) => {
+      const agents = (params.config as OpenClawConfig | undefined)?.agents?.list ?? [];
+      if (agents.length > 1 && !params.agentDir) {
+        throw new Error("multi-agent cost resolution requires an explicit agent directory");
+      }
+      const providers = (params.config as MockUsageFormatConfig | undefined)?.models?.providers;
+      return providers?.[params.provider ?? ""]?.models?.find((entry) => entry.id === params.model)
+        ?.cost;
+    },
+  };
+});
 
 function acpMeta() {
   return {
@@ -224,7 +202,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
               compactionAccounting: {
                 kind: "durable",
                 count: 0,
-                currentContextTokens: 42,
+                currentContextSnapshot: { tokens: 42 },
                 target: {
                   agentId: "main",
                   sessionId: owner.sessionId,
@@ -1091,7 +1069,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         sessionId: first.sessionId,
         sessionKey: first.sessionKey!,
         storePath: first.storePath,
-        sessionStore: first.sessionStore!,
+        sessionStore: {},
         defaultProvider: "claude-cli",
         defaultModel: "claude-sonnet-4-6",
         result: {
@@ -1163,52 +1141,55 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
-  it("preserves previous totalTokens when provider returns no usage data (#67667)", async () => {
-    await withTempSessionStore(async ({ storePath }) => {
-      const cfg = {} as OpenClawConfig;
-      const sessionKey = "agent:main:explicit:test-no-usage";
-      const sessionId = "test-session";
+  it.each([21_225, 0])(
+    "marks previous totalTokens=%i stale without provider usage (#67667)",
+    async (totalTokens) => {
+      await withTempSessionStore(async ({ storePath }) => {
+        const cfg = {} as OpenClawConfig;
+        const sessionKey = "agent:main:explicit:test-no-usage";
+        const sessionId = "test-session";
 
-      const sessionStore: Record<string, SessionEntry> = {
-        [sessionKey]: {
-          sessionId,
-          updatedAt: 1,
-          totalTokens: 21225,
-          totalTokensFresh: true,
-        },
-      };
-      await seedSessionStore(storePath, sessionStore);
-
-      const result: EmbeddedAgentRunResult = {
-        meta: {
-          durationMs: 500,
-          agentMeta: {
+        const sessionStore: Record<string, SessionEntry> = {
+          [sessionKey]: {
             sessionId,
-            provider: "minimax",
-            model: "MiniMax-M2.7",
+            updatedAt: 1,
+            totalTokens,
+            totalTokensFresh: true,
           },
-        },
-      };
+        };
+        await seedSessionStore(storePath, sessionStore);
 
-      await updateSessionStoreAfterAgentRun({
-        cfg,
-        sessionId,
-        sessionKey,
-        storePath,
-        sessionStore,
-        defaultProvider: "minimax",
-        defaultModel: "MiniMax-M2.7",
-        result,
+        const result: EmbeddedAgentRunResult = {
+          meta: {
+            durationMs: 500,
+            agentMeta: {
+              sessionId,
+              provider: "minimax",
+              model: "MiniMax-M2.7",
+            },
+          },
+        };
+
+        await updateSessionStoreAfterAgentRun({
+          cfg,
+          sessionId,
+          sessionKey,
+          storePath,
+          sessionStore,
+          defaultProvider: "minimax",
+          defaultModel: "MiniMax-M2.7",
+          result,
+        });
+
+        expect(sessionStore[sessionKey]?.totalTokens).toBe(totalTokens);
+        expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(false);
+
+        const persisted = loadPersistedSessionStore(storePath);
+        expect(persisted[sessionKey]?.totalTokens).toBe(totalTokens);
+        expect(persisted[sessionKey]?.totalTokensFresh).toBe(false);
       });
-
-      expect(sessionStore[sessionKey]?.totalTokens).toBe(21225);
-      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(false);
-
-      const persisted = loadPersistedSessionStore(storePath);
-      expect(persisted[sessionKey]?.totalTokens).toBe(21225);
-      expect(persisted[sessionKey]?.totalTokensFresh).toBe(false);
-    });
-  });
+    },
+  );
 
   it("persists estimated context budget status without marking stale usage fresh", async () => {
     await withTempSessionStore(async ({ storePath }) => {
@@ -1473,7 +1454,13 @@ describe("updateSessionStoreAfterAgentRun", () => {
       await seedSessionStore(storePath, {
         [sessionKey]: { ...sessionStore[sessionKey]!, activeWriterRunId: "current-writer" },
       });
-      const usage = { input: 100_000, output: 3_000, cacheRead: 20_000, cacheWrite: 1_000 };
+      const usage = {
+        input: 100_000,
+        output: 3_000,
+        cacheRead: 20_000,
+        cacheWrite: 1_000,
+        cost: { total: 0.75 },
+      };
       const lastCallUsage = { input: 91_000, output: 1_000, cacheRead: 4_000 };
       const result: EmbeddedAgentRunResult = {
         meta: {
@@ -1502,7 +1489,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         compactionAccounting: {
           kind: "durable",
           count,
-          currentContextTokens: tokens,
+          currentContextSnapshot: { tokens },
           target: {
             agentId: "main",
             sessionId,
@@ -1524,7 +1511,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           outputTokens: usage.output,
           cacheRead: usage.cacheRead,
           cacheWrite: usage.cacheWrite,
-          estimatedCostUsd: 1.25,
+          estimatedCostUsd: 0.75,
           compactionCount: 3,
           activeWriterRunId: "current-writer",
           totalTokensFresh: tokens !== undefined,
@@ -1571,7 +1558,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           compactionAccounting: {
             kind: "durable",
             count: 0,
-            currentContextTokens: 42,
+            currentContextSnapshot: { tokens: 42 },
             target: {
               agentId: "main",
               sessionId,
@@ -1581,7 +1568,17 @@ describe("updateSessionStoreAfterAgentRun", () => {
               activeWriterRunId: "previous-writer",
             },
           },
-          result: { meta: { durationMs: 1 } },
+          result: {
+            meta: {
+              durationMs: 1,
+              agentMeta: {
+                sessionId,
+                provider: "openai",
+                model: "gpt-5.6-luna",
+                usage: { cost: { total: 0.75 } },
+              },
+            },
+          },
         });
 
         expect(loadPersistedSessionEntry(storePath, sessionKey)).toEqual(before);
@@ -1670,7 +1667,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           compactionAccounting: {
             kind: "durable",
             count: 1,
-            currentContextTokens: tokens,
+            currentContextSnapshot: { tokens },
             target: {
               agentId: "main",
               sessionId,
@@ -1706,122 +1703,95 @@ describe("updateSessionStoreAfterAgentRun", () => {
     },
   );
 
-  it("keeps ordinary CLI context independent of historical compaction metadata", async () => {
-    await withTempSessionStore(async ({ storePath }) => {
-      const cfg = {} as OpenClawConfig;
-      const sessionKey = "agent:main:explicit:test-zero-compaction-with-usage";
-      const sessionId = "test-zero-compaction-with-usage-session";
-      const sessionStore: Record<string, SessionEntry> = {
-        [sessionKey]: {
-          sessionId,
-          updatedAt: 1,
-          totalTokens: 1_794_391,
-          totalTokensFresh: true,
-          inputTokens: 20,
-          outputTokens: 10_855,
-          cacheRead: 1_761_324,
-          cacheWrite: 33_047,
-        },
-      };
-      await seedSessionStore(storePath, sessionStore);
-
-      await updateSessionStoreAfterAgentRun({
-        cfg,
-        sessionId,
-        sessionKey,
-        storePath,
-        sessionStore,
-        defaultProvider: "claude-cli",
-        defaultModel: "claude-opus-4-7",
-        result: {
-          meta: {
-            durationMs: 500,
-            agentMeta: {
-              sessionId,
-              provider: "claude-cli",
-              model: "claude-opus-4-7",
-              usage: {
-                input: 20,
-                output: 10_855,
-                cacheRead: 1_761_324,
-                cacheWrite: 33_047,
-              },
-              lastCallUsage: {
-                input: 20,
-                output: 10_855,
-                cacheRead: 1_761_324,
-                cacheWrite: 33_047,
-              },
-              compactionCount: 1,
-              compactionTokensAfter: 0,
-            },
+  it.each([
+    {
+      runtime: "CLI",
+      sessionKey: "agent:main:explicit:test-zero-compaction-with-usage",
+      sessionId: "test-zero-compaction-with-usage-session",
+      provider: "claude-cli",
+      model: "claude-opus-4-7",
+      initial: {
+        totalTokens: 1_794_391,
+        inputTokens: 20,
+        outputTokens: 10_855,
+        cacheRead: 1_761_324,
+        cacheWrite: 33_047,
+      },
+      usage: { input: 20, output: 10_855, cacheRead: 1_761_324, cacheWrite: 33_047 },
+      lastCallUsage: { input: 20, output: 10_855, cacheRead: 1_761_324, cacheWrite: 33_047 },
+      compactionTokensAfter: 0,
+      expected: {
+        totalTokens: 1_794_391,
+        inputTokens: 20,
+        outputTokens: 10_855,
+        cacheRead: 1_761_324,
+        cacheWrite: 33_047,
+      },
+    },
+    {
+      runtime: "model",
+      sessionKey: "agent:main:explicit:test-positive-compaction-with-usage",
+      sessionId: "test-positive-compaction-with-usage-session",
+      provider: "openai",
+      model: "gpt-5.5",
+      initial: { totalTokens: 180_000 },
+      usage: { input: 100_000, output: 3_000, cacheRead: 20_000 },
+      lastCallUsage: { input: 91_000, output: 1_000, cacheRead: 4_000 },
+      compactionTokensAfter: 80_000,
+      expected: {
+        totalTokens: 95_000,
+        inputTokens: 100_000,
+        outputTokens: 3_000,
+        cacheRead: 20_000,
+      },
+    },
+  ])(
+    "keeps ordinary $runtime context independent of historical compaction metadata",
+    async (testCase) => {
+      await withTempSessionStore(async ({ storePath }) => {
+        const cfg = {} as OpenClawConfig;
+        const { sessionKey, sessionId, provider, model } = testCase;
+        const sessionStore: Record<string, SessionEntry> = {
+          [sessionKey]: {
+            sessionId,
+            updatedAt: 1,
+            ...testCase.initial,
+            totalTokensFresh: true,
           },
-        } as EmbeddedAgentRunResult,
-      });
+        };
+        await seedSessionStore(storePath, sessionStore);
 
-      expect(sessionStore[sessionKey]?.totalTokens).toBe(1_794_391);
-      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
-      expect(sessionStore[sessionKey]?.inputTokens).toBe(20);
-      expect(sessionStore[sessionKey]?.outputTokens).toBe(10_855);
-      expect(sessionStore[sessionKey]?.cacheRead).toBe(1_761_324);
-      expect(sessionStore[sessionKey]?.cacheWrite).toBe(33_047);
-    });
-  });
-
-  it("keeps ordinary model context independent of historical compaction metadata", async () => {
-    await withTempSessionStore(async ({ storePath }) => {
-      const cfg = {} as OpenClawConfig;
-      const sessionKey = "agent:main:explicit:test-positive-compaction-with-usage";
-      const sessionId = "test-positive-compaction-with-usage-session";
-      const sessionStore: Record<string, SessionEntry> = {
-        [sessionKey]: {
+        await updateSessionStoreAfterAgentRun({
+          cfg,
           sessionId,
-          updatedAt: 1,
-          totalTokens: 180_000,
-          totalTokensFresh: true,
-        },
-      };
-      await seedSessionStore(storePath, sessionStore);
-
-      await updateSessionStoreAfterAgentRun({
-        cfg,
-        sessionId,
-        sessionKey,
-        storePath,
-        sessionStore,
-        defaultProvider: "openai",
-        defaultModel: "gpt-5.5",
-        result: {
-          meta: {
-            durationMs: 500,
-            agentMeta: {
-              sessionId,
-              provider: "openai",
-              model: "gpt-5.5",
-              usage: {
-                input: 100_000,
-                output: 3_000,
-                cacheRead: 20_000,
+          sessionKey,
+          storePath,
+          sessionStore,
+          defaultProvider: provider,
+          defaultModel: model,
+          result: {
+            meta: {
+              durationMs: 500,
+              agentMeta: {
+                sessionId,
+                provider,
+                model,
+                usage: testCase.usage,
+                lastCallUsage: testCase.lastCallUsage,
+                compactionCount: 1,
+                compactionTokensAfter: testCase.compactionTokensAfter,
               },
-              lastCallUsage: {
-                input: 91_000,
-                output: 1_000,
-                cacheRead: 4_000,
-              },
-              compactionCount: 1,
-              compactionTokensAfter: 80_000,
             },
-          },
-        } as EmbeddedAgentRunResult,
-      });
+          } as EmbeddedAgentRunResult,
+        });
 
-      expect(sessionStore[sessionKey]?.totalTokens).toBe(95_000);
-      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
-      expect(sessionStore[sessionKey]?.inputTokens).toBe(100_000);
-      expect(sessionStore[sessionKey]?.outputTokens).toBe(3_000);
-      expect(sessionStore[sessionKey]?.cacheRead).toBe(20_000);
-    });
-  });
+        expect(sessionStore[sessionKey]).toMatchObject({
+          ...testCase.expected,
+          totalTokensFresh: true,
+        });
+      });
+    },
+  );
 
   it.each([0, 80_000, Number.POSITIVE_INFINITY])(
     "does not revive historical compaction snapshot %s without a private fact",
@@ -1868,88 +1838,86 @@ describe("updateSessionStoreAfterAgentRun", () => {
     },
   );
 
-  it("snapshots cost instead of accumulating (fixes #69347)", async () => {
+  it.each([
+    {
+      name: "estimated token usage",
+      usage: { input: 10_000, output: 5_000 },
+      total: 0.25,
+      hasTokens: true,
+    },
+    {
+      name: "cost-only positive total",
+      usage: { cost: { total: 0.75 } },
+      total: 0.75,
+      hasTokens: false,
+    },
+    { name: "cost-only zero total", usage: { cost: { total: 0 } }, total: 0, hasTokens: false },
+  ])("snapshots $name instead of accumulating", async ({ usage, total, hasTokens }) => {
     await withTempSessionStore(async ({ storePath }) => {
-      const cfg = {
+      const cfg: OpenClawConfig = {
         models: {
           providers: {
-            openai: {
+            fixture: {
+              baseUrl: "https://fixture.invalid",
               models: [
                 {
-                  id: "gpt-4",
-                  cost: {
-                    input: 10,
-                    output: 30,
-                    cacheRead: 0,
-                    cacheWrite: 0,
-                  },
+                  id: "priced",
+                  name: "Priced",
+                  reasoning: false,
+                  input: ["text"],
+                  contextWindow: 128_000,
+                  maxTokens: 8_192,
+                  cost: { input: 10, output: 30, cacheRead: 0, cacheWrite: 0 },
                 },
               ],
             },
           },
         },
-      } as unknown as OpenClawConfig;
+      };
       const sessionKey = "agent:main:explicit:test-cost-snapshot";
       const sessionId = "test-cost-snapshot-session";
-
       const sessionStore: Record<string, SessionEntry> = {
-        [sessionKey]: {
-          sessionId,
-          updatedAt: 1,
-        },
+        [sessionKey]: { sessionId, updatedAt: 1, estimatedCostUsd: 1.25 },
       };
       await seedSessionStore(storePath, sessionStore);
-
-      // Simulate a run with 10k input + 5k output tokens
-      // Cost = (10000 * 10 + 5000 * 30) / 1e6 = $0.25
       const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 500,
-          agentMeta: {
-            sessionId,
-            provider: "openai",
-            model: "gpt-4",
-            usage: {
-              input: 10000,
-              output: 5000,
-            },
-          },
+          agentMeta: { sessionId, provider: "fixture", model: "priced", usage },
         },
       };
 
-      await updateSessionStoreAfterAgentRun({
-        cfg,
-        sessionId,
-        sessionKey,
-        storePath,
-        sessionStore,
-        defaultProvider: "openai",
-        defaultModel: "gpt-4",
-        result,
-      });
-
-      // First run: cost should be $0.25
-      expect(sessionStore[sessionKey]?.estimatedCostUsd).toBeCloseTo(0.25, 4);
-
-      // Simulate a second persist with the SAME cumulative usage (e.g., from a heartbeat or
-      // redundant persist). Before the fix, this would double the cost.
-      // After the fix, cost should remain the same because it's snapshotted.
-      await updateSessionStoreAfterAgentRun({
-        cfg,
-        sessionId,
-        sessionKey,
-        storePath,
-        sessionStore,
-        defaultProvider: "openai",
-        defaultModel: "gpt-4",
-        result, // Same usage again
-      });
-
-      // After second persist with same usage, cost should STILL be $0.25 (not $0.50)
-      expect(sessionStore[sessionKey]?.estimatedCostUsd).toBeCloseTo(0.25, 4);
-
-      const persisted = loadPersistedSessionStore(storePath);
-      expect(persisted[sessionKey]?.estimatedCostUsd).toBeCloseTo(0.25, 4);
+      // Repeated finalization replaces the prior run's dollars rather than adding them again.
+      for (let persist = 0; persist < 2; persist += 1) {
+        await updateSessionStoreAfterAgentRun({
+          cfg,
+          sessionId,
+          sessionKey,
+          storePath,
+          sessionStore,
+          defaultProvider: "fixture",
+          defaultModel: "priced",
+          result,
+        });
+        for (const entry of [
+          sessionStore[sessionKey],
+          loadPersistedSessionEntry(storePath, sessionKey),
+        ]) {
+          expect(entry?.estimatedCostUsd).toBeCloseTo(total, 4);
+          if (!hasTokens) {
+            for (const key of [
+              "inputTokens",
+              "outputTokens",
+              "cacheRead",
+              "cacheWrite",
+              "totalTokens",
+            ] as const) {
+              expect(entry?.[key]).toBeUndefined();
+            }
+            expect(entry?.totalTokensFresh).not.toBe(true);
+          }
+        }
+      }
     });
   });
 

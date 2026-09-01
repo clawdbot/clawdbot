@@ -1,6 +1,6 @@
-import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   activateChatHeaderPanelAction,
@@ -14,7 +14,6 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-panel-reflow");
 const chatSessionKey = "agent:main:main";
 
 const longReply =
@@ -65,8 +64,7 @@ async function expectMessagesNotToOverlap(page: import("playwright").Page): Prom
 
 suite.define(() => {
   it("keeps transcript rows separate across background-task, file, and diff panel toggles", async () => {
-    await rm(artifactDir, { force: true, recursive: true });
-    await mkdir(artifactDir, { recursive: true });
+    const artifactDir = createControlUiE2eArtifactDir("chat-panel-reflow");
     await suite.withPage(
       {
         locale: "en-US",

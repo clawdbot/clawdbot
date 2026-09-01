@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -130,12 +131,14 @@ suite.define(() => {
   ] as const)(
     "remeasures recovered assistant text after interrupted scrolling ($reducedMotion, $interruption, $recoveryPosition)",
     async ({ reducedMotion, interruption, recoveryPosition }) => {
-      const artifactDir = path.resolve(
-        process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR ??
-          ".artifacts/control-ui-e2e/virtual-sizing/after",
+      const artifactDir = path.join(
+        createControlUiE2eArtifactDir(
+          "virtual-sizing",
+          process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR,
+        ),
+        "after",
         `${reducedMotion}-${interruption}-${recoveryPosition}`,
       );
-      await fs.mkdir(artifactDir, { recursive: true });
       await suite.withPage(
         {
           reducedMotion,
@@ -596,7 +599,10 @@ suite.define(() => {
   });
 
   it("keeps completed-work and tool disclosures anchored on every expand and collapse frame", async () => {
-    const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDirParent = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactDirParent
+      ? createControlUiE2eArtifactDir("chat-transcript-disclosure-anchor", artifactDirParent)
+      : undefined;
     const context = await suite.browser.newContext({
       reducedMotion: "reduce",
       viewport: { height: 800, width: 1400 },
@@ -773,7 +779,6 @@ suite.define(() => {
     traces.workMiddleCollapse = await toggleDisclosureWithFrameTrace(page, middleWorkSummary);
 
     if (artifactDir) {
-      await fs.mkdir(artifactDir, { recursive: true });
       await fs.writeFile(
         path.join(artifactDir, "disclosure-geometry.json"),
         `${JSON.stringify(traces, null, 2)}\n`,
@@ -796,7 +801,10 @@ suite.define(() => {
   });
 
   it("keeps raw tool details anchored at the end and middle of a long transcript", async () => {
-    const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDirParent = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactDirParent
+      ? createControlUiE2eArtifactDir("chat-transcript-disclosure-anchor", artifactDirParent)
+      : undefined;
     const context = await suite.browser.newContext({
       reducedMotion: "reduce",
       viewport: { height: 600, width: 900 },
@@ -896,7 +904,6 @@ suite.define(() => {
     traces.rawDetailsMiddleExpand = await toggleDisclosureWithFrameTrace(page, rawDetailsToggle);
 
     if (artifactDir) {
-      await fs.mkdir(artifactDir, { recursive: true });
       await fs.writeFile(
         path.join(artifactDir, "raw-details-geometry.json"),
         `${JSON.stringify(traces, null, 2)}\n`,

@@ -51,7 +51,7 @@ const publishedUpgradeSurvivorCommand = upgradeSurvivorScriptCommand(
 );
 const rootManagedVpsUpgradeCommand = upgradeSurvivorScriptCommand(
   "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=1",
-  'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@2026.5.7}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s}"',
+  'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s}"',
 );
 const updateRestartAuthCommand = upgradeSurvivorScriptCommand(
   "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth",
@@ -59,7 +59,7 @@ const updateRestartAuthCommand = upgradeSurvivorScriptCommand(
 );
 const updateMigrationCommand = upgradeSurvivorScriptCommand(
   "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1",
-  'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@2026.4.23}"; export OPENCLAW_UPGRADE_SURVIVOR_SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-plugin-deps-cleanup}"',
+  'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-plugin-deps-cleanup}"',
 );
 const updateRunPackageSelfUpgradeCommand =
   "OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-run-package-self-upgrade";
@@ -877,21 +877,31 @@ const releasePathPackageUpdateOpenAiLanes = [
   scheduledLane("live-codex-npm-plugin"),
   scheduledLane("codex-on-demand", { timeoutMs: 30 * 60 * 1000 }),
   scheduledLane("release-typed-onboarding"),
+  // Use the shorter package row without changing npm weights or upgrade coverage.
+  ...scheduledLaneList("root-managed-vps-upgrade", "update-restart-auth"),
 ];
 
-const releasePathPackageUpdateCoreLanes = scheduledLaneList(
+// Balance the npm-limited rows without raising per-runner resource caps.
+const releasePathPackageOnboardingLanes = scheduledLaneList(
   "npm-onboard-channel-agent",
   "npm-onboard-discord-channel-agent",
   "npm-onboard-slack-channel-agent",
   "doctor-switch",
-  "update-channel-switch",
   "skill-install",
-  "upgrade-survivor",
+);
+const releasePathPackageMigrationLanes = scheduledLaneList(
+  "update-channel-switch",
   "published-upgrade-survivor",
-  "root-managed-vps-upgrade",
-  "update-restart-auth",
+);
+const releasePathPackageSelfUpgradeLanes = scheduledLaneList(
+  "upgrade-survivor",
   "update-run-package-self-upgrade",
 );
+const releasePathPackageUpdateCoreLanes = [
+  ...releasePathPackageOnboardingLanes,
+  ...releasePathPackageMigrationLanes,
+  ...releasePathPackageSelfUpgradeLanes,
+];
 
 const primaryReleasePathChunks: Record<string, DockerE2eLane[]> = {
   core: [
@@ -908,7 +918,9 @@ const primaryReleasePathChunks: Record<string, DockerE2eLane[]> = {
     ),
   ],
   "package-update-openai": releasePathPackageUpdateOpenAiLanes,
-  "package-update-core": releasePathPackageUpdateCoreLanes,
+  "package-update-onboarding": releasePathPackageOnboardingLanes,
+  "package-update-migrations": releasePathPackageMigrationLanes,
+  "package-update-self-upgrade": releasePathPackageSelfUpgradeLanes,
   "plugins-runtime-plugins": releasePathPluginRuntimePluginLanes,
   "plugins-runtime-services": releasePathPluginRuntimeServiceLanes,
   "plugins-runtime-install-a": bundledPluginInstallUninstallLanes.slice(0, 3),
@@ -925,7 +937,9 @@ const primaryReleasePathChunks: Record<string, DockerE2eLane[]> = {
 const primaryReleasePathChunkProfiles: Record<string, DockerE2eReleaseProfile[]> = {
   core: ["stable", "full"],
   "package-update-openai": ["beta", "stable", "full"],
-  "package-update-core": ["beta", "stable", "full"],
+  "package-update-onboarding": ["beta", "stable", "full"],
+  "package-update-migrations": ["beta", "stable", "full"],
+  "package-update-self-upgrade": ["beta", "stable", "full"],
   "plugins-runtime-plugins": ["stable", "full"],
   "plugins-runtime-services": ["stable", "full"],
   "plugins-runtime-install-a": ["stable", "full"],
@@ -941,6 +955,7 @@ const primaryReleasePathChunkProfiles: Record<string, DockerE2eReleaseProfile[]>
 
 const legacyReleasePathChunks: Record<string, DockerE2eLane[]> = {
   "package-update": [...releasePathPackageUpdateOpenAiLanes, ...releasePathPackageUpdateCoreLanes],
+  "package-update-core": releasePathPackageUpdateCoreLanes,
   "plugins-runtime-core": releasePathPluginRuntimeCoreLanes,
   "plugins-runtime": releasePathPluginRuntimeLanes,
   "plugins-integrations": [...releasePathPluginRuntimeLanes, ...releasePathBundledChannelLanes],

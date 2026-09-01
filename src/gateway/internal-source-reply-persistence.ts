@@ -54,7 +54,7 @@ async function completePersistedInternalSourceReply(params: {
   scope.sessionKey = resolveSessionEntrySelection(scope).normalizedKey;
   const expected = {
     expectedSessionId: params.expectedSessionId,
-    ...getOwnedSessionTranscriptWriterFence(),
+    ...getOwnedSessionTranscriptWriterFence({ sessionKey: scope.sessionKey }),
   };
   const found = await findTranscriptEvent(scope, (event) => {
     const message = readTranscriptEventMessage(event);
@@ -171,7 +171,9 @@ export async function persistInternalSourceReply(params: {
         ...(params.payload.text ? [{ type: "text", text: params.payload.text }] : []),
         ...mediaBlocks,
       ];
-      const writerFence = getOwnedSessionTranscriptWriterFence();
+      const writerFence = getOwnedSessionTranscriptWriterFence({
+        sessionKey: params.sessionKey,
+      });
       const appended = await appendAssistantMessageToSessionTranscript({
         agentId: params.agentId,
         sessionKey: params.sessionKey,

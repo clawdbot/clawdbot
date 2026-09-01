@@ -1,6 +1,5 @@
 /** Session update helpers for skill snapshots and completed compaction accounting. */
 import crypto from "node:crypto";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
 import type { EmbeddedAgentCompactResult } from "../../agents/embedded-agent-runner/types.js";
 import {
@@ -73,6 +72,7 @@ function resolveNonNegativeTokenCount(value: number | undefined): number | undef
 
 /** Ensures a session entry has the reusable skill snapshot needed for reply runs. */
 export async function ensureSkillSnapshot(params: {
+  agentId: string;
   sessionEntry?: SessionEntry;
   sessionEntryHandle?: ReplySessionEntryHandle;
   sessionStore?: Record<string, SessionEntry>;
@@ -103,6 +103,7 @@ export async function ensureSkillSnapshot(params: {
   }
 
   const {
+    agentId,
     sessionEntry,
     sessionEntryHandle,
     sessionStore,
@@ -118,12 +119,11 @@ export async function ensureSkillSnapshot(params: {
 
   let nextEntry = sessionEntryHandle?.getCurrent() ?? sessionEntry;
   let systemSent = sessionEntry?.systemSent ?? false;
-  const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
   const nodeSkillsEligibility = resolveNodeExecEligibility({
     cfg,
     sessionEntry,
     sessionKey,
-    agentId: sessionAgentId,
+    agentId,
     execOverrides: params.execOverrides,
   });
   const remoteEligibility = getRemoteSkillEligibility({
@@ -135,7 +135,7 @@ export async function ensureSkillSnapshot(params: {
       workspaceDir,
       ...(params.executionSkillsDir ? { executionSkillsDir: params.executionSkillsDir } : {}),
       config: cfg,
-      agentId: sessionAgentId,
+      agentId,
       skillFilter,
       skillOverrides,
       eligibility: { nodeSkills: nodeSkillsEligibility, remote: remoteEligibility },
@@ -239,6 +239,9 @@ export async function incrementCompactionCount(params: {
     InternalSessionEntry,
     "sessionId" | "lifecycleRevision" | "activeWriterRunId"
   >;
+  transcriptByteCompactionLatch?: NonNullable<
+    InternalSessionEntry["transcriptByteCompactionLatch"]
+  >;
   authorize?: () => boolean;
 }): Promise<number | undefined> {
   const { sessionStore, sessionKey, storePath, authorize } = params;
@@ -257,7 +260,7 @@ export async function incrementCompactionCount(params: {
   };
   const incrementBy = Math.max(0, params.amount ?? 1);
   const tokensAfter = resolveNonNegativeTokenCount(params.tokensAfter);
-  const update = (current: InternalSessionEntry): Partial<SessionEntry> | null => {
+  const update = (current: InternalSessionEntry): Partial<InternalSessionEntry> | null => {
     if (
       !(authorize?.() ?? true) ||
       current.sessionId !== expected.sessionId ||
@@ -267,8 +270,9 @@ export async function incrementCompactionCount(params: {
       return null;
     }
     // The writer-serialized row owns the count, not the caller's pre-await cache.
-    const patch: Partial<SessionEntry> = {
+    const patch: Partial<InternalSessionEntry> = {
       compactionCount: (current.compactionCount ?? 0) + incrementBy,
+      transcriptByteCompactionLatch: params.transcriptByteCompactionLatch,
       updatedAt: params.now ?? Date.now(),
       ...(incrementBy > 0 ? { contextBudgetStatus: undefined } : {}),
     };

@@ -1050,6 +1050,7 @@ export function resetPluginsCliTestState() {
   inspectPluginRegistryMock.mockResolvedValue({
     state: "fresh",
     refreshReasons: [],
+    differences: [],
     persisted: defaultRegistryIndex,
     current: defaultRegistryIndex,
   });

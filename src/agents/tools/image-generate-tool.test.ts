@@ -46,7 +46,6 @@ let mediaStore: typeof import("../../media/store.js");
 let webMedia: typeof import("../../media/web-media.js");
 let resetRecentMediaGenerationDuplicateGuardsForTests: typeof import("../media-generation-task-status-shared.test-support.js").resetRecentMediaGenerationDuplicateGuardsForTests;
 let createImageGenerateToolImpl: typeof import("./image-generate-tool.js").createImageGenerateTool;
-let resolveImageGenerationModelConfigForTool: typeof import("./image-generate-tool.test-support.js").resolveImageGenerationModelConfigForTool;
 import { canonicalizeMediaGenerationTestConfig } from "./media-generation-config.test-support.js";
 
 function createImageGenerateTool(
@@ -361,8 +360,6 @@ describe("createImageGenerateTool", () => {
       await import("../media-generation-task-status-shared.test-support.js"));
     ({ createImageGenerateTool: createImageGenerateToolImpl } =
       await import("./image-generate-tool.js"));
-    ({ resolveImageGenerationModelConfigForTool } =
-      await import("./image-generate-tool.test-support.js"));
   });
 
   beforeEach(() => {
@@ -440,80 +437,25 @@ describe("createImageGenerateTool", () => {
     expect(listProviders).not.toHaveBeenCalled();
   });
 
-  it("matches image-generation providers across plugin-advertised aliases", () => {
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
-      {
-        id: "z.ai",
-        aliases: ["z-ai"],
-        defaultModel: "glm-4.5-image",
-        models: ["glm-4.5-image"],
-        capabilities: {
-          generate: {
-            maxCount: 4,
-          },
-          edit: {
-            enabled: false,
-            maxInputImages: 0,
-          },
-          geometry: {},
-        },
-        generateImage: vi.fn(async () => {
-          throw new Error("not used");
-        }),
-      },
-    ]);
+  it("infers an OpenAI image-generation model from env-backed auth", async () => {
+    stubImageGenerationProviders();
+    vi.stubEnv("OPENAI_API_KEY", "openai-test");
+    const generationError = new Error("image generation stopped");
+    const generateImage = vi
+      .spyOn(imageGenerationRuntime, "generateImage")
+      .mockRejectedValue(generationError);
+    const tool = requireImageGenerateTool(createImageGenerateTool({ config: {} }));
 
-    requireImageGenerateTool(
-      createImageGenerateTool({
-        config: {
-          agents: {
-            defaults: {
-              imageGenerationModel: {
-                primary: "z-ai/glm-4.5-image",
-              },
-            },
-          },
-        },
-      }),
+    await expect(tool.execute("call-inferred-image", { prompt: "An image" })).rejects.toBe(
+      generationError,
+    );
+    expect(mockCallArg(generateImage, 0, "generateImage").cfg).toHaveProperty(
+      "agents.defaults.mediaModels.image",
+      { primary: "openai/gpt-image-1" },
     );
   });
 
-  it("infers an OpenAI image-generation model from env-backed auth", () => {
-    stubImageGenerationProviders();
-    vi.stubEnv("OPENAI_API_KEY", "openai-test");
-
-    expect(resolveImageGenerationModelConfigForTool({ cfg: {} })).toEqual({
-      primary: "openai/gpt-image-1",
-    });
-    requireImageGenerateTool(createImageGenerateTool({ config: {} }));
-  });
-
-  it("does not load runtime providers while resolving an explicitly configured model", () => {
-    const listProviders = vi
-      .spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders")
-      .mockImplementation(() => {
-        throw new Error("runtime provider list should not run for explicit image model config");
-      });
-
-    expect(
-      resolveImageGenerationModelConfigForTool({
-        cfg: {
-          agents: {
-            defaults: {
-              mediaModels: {
-                image: {
-                  primary: "openai/gpt-image-1",
-                },
-              },
-            },
-          },
-        },
-      }),
-    ).toEqual({ primary: "openai/gpt-image-1" });
-    expect(listProviders).not.toHaveBeenCalled();
-  });
-
-  it("infers the canonical OpenAI image model from provider readiness without explicit config", () => {
+  it("infers the canonical OpenAI image model from provider readiness without explicit config", async () => {
     vi.stubEnv("OPENAI_API_KEY", "openai-test");
     const isConfigured = vi.fn(({ agentDir }: { agentDir?: string }) => agentDir === "/tmp/agent");
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
@@ -542,78 +484,39 @@ describe("createImageGenerateTool", () => {
       },
     ]);
 
-    expect(
-      resolveImageGenerationModelConfigForTool({
-        cfg: {},
-        agentDir: "/tmp/agent",
-      }),
-    ).toEqual({
-      primary: "openai/gpt-image-2",
-    });
-    requireImageGenerateTool(createImageGenerateTool({ config: {}, agentDir: "/tmp/agent" }));
+    const generationError = new Error("image generation stopped");
+    const generateImage = vi
+      .spyOn(imageGenerationRuntime, "generateImage")
+      .mockRejectedValue(generationError);
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({ config: {}, agentDir: "/tmp/agent" }),
+    );
+
+    await expect(tool.execute("call-ready-image", { prompt: "An image" })).rejects.toBe(
+      generationError,
+    );
+    expect(mockCallArg(generateImage, 0, "generateImage").cfg).toHaveProperty(
+      "agents.defaults.mediaModels.image",
+      { primary: "openai/gpt-image-2" },
+    );
     expect(isConfigured).toHaveBeenCalledWith({
       cfg: {},
       agentDir: "/tmp/agent",
     });
   });
 
-  it("prefers OpenAI image generation when the default model uses its Codex provider alias", () => {
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
-      {
-        id: "fal",
-        defaultModel: "fal-ai/flux/dev",
-        models: ["fal-ai/flux/dev"],
-        isConfigured: () => true,
-        capabilities: {
-          generate: { maxCount: 4 },
-          edit: { enabled: true, maxInputImages: 1 },
-        },
-        generateImage: vi.fn(async () => {
-          throw new Error("not used");
-        }),
-      },
-      {
-        id: "openai",
-        aliases: ["openai"],
-        defaultModel: "gpt-image-2",
-        models: ["gpt-image-2"],
-        isConfigured: () => true,
-        capabilities: {
-          generate: { maxCount: 4 },
-          edit: { enabled: true, maxInputImages: 5 },
-        },
-        generateImage: vi.fn(async () => {
-          throw new Error("not used");
-        }),
-      },
-    ]);
-
-    expect(
-      resolveImageGenerationModelConfigForTool({
-        cfg: {
-          agents: {
-            defaults: {
-              model: {
-                primary: "openai/gpt-5.5",
-              },
-            },
-          },
-        },
-      }),
-    ).toEqual({
-      primary: "openai/gpt-image-2",
-      fallbacks: ["fal/fal-ai/flux/dev"],
-    });
-  });
-
-  it("prefers the primary model provider when multiple image providers have auth", () => {
+  it("prefers the primary model provider when multiple image providers have auth", async () => {
     stubImageGenerationProviders();
     vi.stubEnv("OPENAI_API_KEY", "openai-test");
     vi.stubEnv("GEMINI_API_KEY", "gemini-test");
 
-    expect(
-      resolveImageGenerationModelConfigForTool({
-        cfg: {
+    const generationError = new Error("image generation stopped");
+    const generateImage = vi
+      .spyOn(imageGenerationRuntime, "generateImage")
+      .mockRejectedValue(generationError);
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
           agents: {
             defaults: {
               model: {
@@ -623,10 +526,18 @@ describe("createImageGenerateTool", () => {
           },
         },
       }),
-    ).toEqual({
-      primary: "google/gemini-3.1-flash-image-preview",
-      fallbacks: ["openai/gpt-image-1"],
-    });
+    );
+
+    await expect(tool.execute("call-primary-image", { prompt: "An image" })).rejects.toBe(
+      generationError,
+    );
+    expect(mockCallArg(generateImage, 0, "generateImage").cfg).toHaveProperty(
+      "agents.defaults.mediaModels.image",
+      {
+        primary: "google/gemini-3.1-flash-image-preview",
+        fallbacks: ["openai/gpt-image-1"],
+      },
+    );
   });
 
   it("generates images and returns details.media paths", async () => {
@@ -829,27 +740,35 @@ describe("createImageGenerateTool", () => {
   });
 
   it("runs explicit deployment refs and preserves timeout-only image defaults", async () => {
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
-      {
-        id: "microsoft-foundry",
-        models: [],
-        isConfigured: () => true,
-        capabilities: {
-          generate: {
-            maxCount: 1,
-            supportsSize: true,
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockImplementation(
+      (params) => {
+        expect(params?.config?.agents?.defaults?.mediaModels?.image).toEqual({
+          primary: "microsoft-foundry/prod-image",
+          timeoutMs: 180_000,
+        });
+        return [
+          {
+            id: "microsoft-foundry",
+            models: [],
+            isConfigured: () => true,
+            capabilities: {
+              generate: {
+                maxCount: 1,
+                supportsSize: true,
+              },
+              edit: {
+                enabled: true,
+                maxInputImages: 1,
+                supportsSize: false,
+              },
+            },
+            generateImage: vi.fn(async () => {
+              throw new Error("not used");
+            }),
           },
-          edit: {
-            enabled: true,
-            maxInputImages: 1,
-            supportsSize: false,
-          },
-        },
-        generateImage: vi.fn(async () => {
-          throw new Error("not used");
-        }),
+        ];
       },
-    ]);
+    );
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
       provider: "microsoft-foundry",
       model: "prod-image",

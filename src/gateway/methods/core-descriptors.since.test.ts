@@ -84,6 +84,7 @@ const CURRENT_TRAIN_METHODS = [
   "diagnostics.lanes",
   "plugins.inspect",
   "device.pair.setupStatus",
+  "openclaw.setup.activate.start",
   "exec.approval.grants.list",
   "exec.approval.grants.revoke",
   "sessions.patchMany",
