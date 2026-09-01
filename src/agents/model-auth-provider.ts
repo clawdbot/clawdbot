@@ -108,11 +108,11 @@ export async function resolveProviderEntryApiKeyAuth(params: {
   secretSentinels?: boolean;
 }): Promise<ResolvedProviderAuth | undefined> {
   const { provider, cfg } = params;
+  assertProviderAuthReady(params);
   const reference = authConfig.resolveProviderEntryApiKeyProfileReference(params);
   if (!("profileId" in reference)) {
     return undefined;
   }
-  assertProviderAuthReady(params);
   assertAuthProfileNotRetired({
     profileId: reference.profileId,
     deprecatedProfileIds: new Set(

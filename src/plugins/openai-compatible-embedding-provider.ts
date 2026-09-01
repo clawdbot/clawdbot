@@ -191,10 +191,10 @@ function resolveRemoteApiKey(value: unknown): string | undefined {
 async function resolveConfiguredProviderApiKey(params: {
   providerId: string;
   options: EmbeddingProviderCreateOptions;
-  configuredApiKey: unknown;
+  configuredProvider: ConfiguredEmbeddingProvider | undefined;
 }): Promise<string | undefined> {
   const apiKey = resolveSecretString({
-    value: params.configuredApiKey,
+    value: params.configuredProvider?.apiKey,
     path: `models.providers.${params.providerId}.apiKey`,
   });
   if (!apiKey) {
@@ -214,6 +214,7 @@ async function resolveConfiguredProviderApiKey(params: {
     await import("../agents/model-auth-provider.js");
   const authParams = {
     provider: params.providerId,
+    modelApi: params.configuredProvider?.api,
     cfg: params.options.config,
     agentDir,
   };
@@ -389,7 +390,7 @@ async function createOpenAICompatibleEmbeddingClient(
     const providerApiKey = await resolveConfiguredProviderApiKey({
       providerId,
       options,
-      configuredApiKey: configuredProvider?.apiKey,
+      configuredProvider,
     });
     if (providerApiKey) {
       headers.authorization = `Bearer ${providerApiKey}`;
