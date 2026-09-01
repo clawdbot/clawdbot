@@ -3891,6 +3891,35 @@ describe("workboard controller", () => {
     ]);
   });
 
+  it("restores distinct links with the same type and target after a delete rejection", async () => {
+    const deletion = createDeferred<unknown>();
+    const parent = makeCard({ id: "parent-1", title: "Parent", status: "done" });
+    const child = makeCard({
+      id: "child-1",
+      title: "Child",
+      metadata: {
+        links: [
+          { id: "link-1", type: "relates_to", targetCardId: parent.id, createdAt: 1 },
+          { id: "link-2", type: "relates_to", targetCardId: parent.id, createdAt: 2 },
+        ],
+      },
+    });
+    const client = createClient((method) =>
+      method === "workboard.cards.delete" ? deletion.promise : {},
+    );
+    state.cards = [parent, child];
+
+    const pending = deleteCard(client, parent.id);
+    expect(state.cards[0]?.metadata?.links).toBeUndefined();
+
+    deletion.reject(new Error("gateway refused delete"));
+    await pending;
+
+    expect(state.cards.find((card) => card.id === child.id)?.metadata?.links).toEqual(
+      child.metadata?.links,
+    );
+  });
+
   it("removes stale dependency links from local cards after delete", async () => {
     const parent = makeCard({
       id: "parent-1",

@@ -127,13 +127,7 @@ function appendMissingLinks(
 ): WorkboardLink[] {
   const nextLinks = [...currentLinks];
   for (const link of linksToAppend) {
-    if (
-      !nextLinks.some(
-        (current) =>
-          current.id === link.id ||
-          (current.type === link.type && current.targetCardId === link.targetCardId),
-      )
-    ) {
+    if (!nextLinks.some((current) => current.id === link.id)) {
       nextLinks.push(link);
     }
   }
