@@ -851,6 +851,16 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     );
     expect(untrustedEvidence.gatewayResult?.message).toContain("unauthorized");
     expect(untrustedEvidence.gatewayResult?.errorReason).toBe(expectedReason);
+    expect(untrustedEvidence.gatewayResult?.errorCode).toBe(
+      ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
+    );
+    const failure = rejected.page.locator(".login-gate__failure");
+    expect(await failure.getAttribute("data-kind")).toBe("trusted-proxy");
+    expect(await failure.locator(".login-gate__failure-steps").textContent()).toContain("SSO");
+    expect(await failure.locator(".login-gate__failure-steps").textContent()).toContain(
+      "WebSocket upgrade",
+    );
+    expect(await failure.locator(".login-gate__command").count()).toBe(0);
     expect(untrustedEvidence.identityInjected).toBe(false);
     expect(untrustedEvidence.requiredHeaderInjected).toBe(false);
     await captureChromiumScreenshot(rejected.page, "02-untrusted-proxy-rejected.png");

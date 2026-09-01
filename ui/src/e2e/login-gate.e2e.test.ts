@@ -346,6 +346,29 @@ suite.define(() => {
       expectedTitle: "Auth required",
     },
     {
+      name: "missing identity header",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "unauthorized",
+        details: { code: ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED },
+      },
+      expectedKind: "trusted-proxy",
+      expectedTitle: "Proxy authentication required",
+    },
+    {
+      name: "proxy account rejection",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "unauthorized",
+        details: {
+          code: ConnectErrorDetailCodes.AUTH_UNAUTHORIZED,
+          authReason: "trusted_proxy_user_not_allowed",
+        },
+      },
+      expectedKind: "trusted-proxy",
+      expectedTitle: "Proxy authentication required",
+    },
+    {
       name: "pairing approval",
       error: {
         code: "NOT_PAIRED",
