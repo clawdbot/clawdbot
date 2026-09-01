@@ -1,8 +1,8 @@
 import Foundation
 import OpenClawIPC
-import OpenClawKit
 import Testing
 @testable import OpenClaw
+@testable import OpenClawKit
 
 private actor CoordinatorInvokeLifecycleProbe {
     private var invokeStarted = false
@@ -62,6 +62,19 @@ private actor CoordinatorDrainSnapshotProbe {
 
     func hasCaptured() -> Bool {
         self.captured
+    }
+}
+
+private actor CoordinatorConnectAuthProbe {
+    private var auth: [String: String]?
+
+    func record(_ message: URLSessionWebSocketTask.Message) {
+        let params = GatewayWebSocketTestSupport.connectRequestParams(from: message)
+        self.auth = (params?["auth"] as? [String: Any])?.compactMapValues { $0 as? String }
+    }
+
+    func snapshot() -> [String: String]? {
+        self.auth
     }
 }
 
@@ -228,6 +241,71 @@ struct MacNodeModeCoordinatorTests {
         #expect(!MacNodeModeCoordinator.endpointAttemptIsCurrent(
             capturedGeneration: 7,
             currentGeneration: 8))
+    }
+
+    @Test func `node connect does not send stored auth without the endpoint owner`() async throws {
+        let stateDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+
+        try await DeviceIdentityStore.withStateDirectory(stateDir) {
+            let identity = DeviceIdentityStore.loadOrCreate()
+            _ = DeviceAuthStore.storeToken(
+                deviceId: identity.deviceId,
+                role: "node",
+                token: "legacy-unscoped-node-token")
+            _ = DeviceAuthStore.storeToken(
+                deviceId: identity.deviceId,
+                role: "node",
+                token: "bound-node-token",
+                gatewayID: "gateway-a")
+
+            for (gatewayID, expectedToken) in [
+                (nil, nil),
+                ("gateway-a", "bound-node-token"),
+            ] {
+                let endpoint = try GatewayConnection.EndpointSnapshot(
+                    config: (
+                        url: #require(URL(string: "ws://gateway.example.invalid")),
+                        token: nil,
+                        password: nil),
+                    routeAuthority: nil,
+                    deviceAuthGatewayID: gatewayID)
+                let options = MacNodeModeCoordinator.connectOptions(
+                    GatewayConnectOptions(
+                        role: "node",
+                        scopes: [],
+                        caps: [],
+                        commands: [],
+                        permissions: [:],
+                        clientId: "openclaw-macos",
+                        clientMode: "node",
+                        clientDisplayName: "macOS Test",
+                        deviceIdentityProfile: .primary),
+                    for: endpoint)
+                let probe = CoordinatorConnectAuthProbe()
+                let webSocketSession = GatewayTestWebSocketSession(taskFactory: {
+                    GatewayTestWebSocketTask(sendHook: { _, message, sendIndex in
+                        guard sendIndex == 0 else { return }
+                        await probe.record(message)
+                    })
+                })
+                let gateway = GatewayNodeSession()
+
+                try await gateway.connect(
+                    url: endpoint.config.url,
+                    credentials: .init(),
+                    connectOptions: options,
+                    sessionBox: WebSocketSessionBox(session: webSocketSession),
+                    onConnected: {},
+                    onDisconnected: { _ in },
+                    onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) })
+
+                #expect(await probe.snapshot()?["token"] == expectedToken)
+                await gateway.disconnect()
+            }
+        }
     }
 
     @Test @MainActor func `config and CLI changes restart startup scoped node host worker`() async {

@@ -605,21 +605,23 @@ final class MacNodeModeCoordinator: NSObject {
                 completedRouteAuthorityGeneration: self.completedRouteAuthorityGeneration,
                 isPaused: false)
         else { return nil }
-        let options = GatewayConnectOptions(
-            role: "node",
-            scopes: [],
-            caps: caps,
-            commands: commands,
-            computerUse: Self.computerUseDescriptor(
-                provider: provider,
+        let options = Self.connectOptions(
+            GatewayConnectOptions(
+                role: "node",
+                scopes: [],
+                caps: caps,
                 commands: commands,
-                workerManifest: workerManifest),
-            pathEnv: workerManifest?.pathEnv,
-            permissions: permissions,
-            clientId: "openclaw-macos",
-            clientMode: "node",
-            clientDisplayName: InstanceIdentity.displayName,
-            deviceIdentityProfile: Self.nodeIdentityProfile)
+                computerUse: Self.computerUseDescriptor(
+                    provider: provider,
+                    commands: commands,
+                    workerManifest: workerManifest),
+                pathEnv: workerManifest?.pathEnv,
+                permissions: permissions,
+                clientId: "openclaw-macos",
+                clientMode: "node",
+                clientDisplayName: InstanceIdentity.displayName,
+                deviceIdentityProfile: Self.nodeIdentityProfile),
+            for: endpoint)
         let sessionBox = self.buildSessionBox(url: config.url, tls: endpoint.tls)
 
         // Resolve compatibility fallback before node admission. Operator recovery
@@ -927,6 +929,18 @@ final class MacNodeModeCoordinator: NSObject {
 }
 
 extension MacNodeModeCoordinator {
+    nonisolated static func connectOptions(
+        _ base: GatewayConnectOptions,
+        for endpoint: GatewayConnection.EndpointSnapshot) -> GatewayConnectOptions
+    {
+        var options = base
+        // A route owner is the credential boundary. Ownerless discovery
+        // handoffs must not read the legacy role-global node token.
+        options.allowStoredDeviceAuth = endpoint.deviceAuthGatewayID != nil
+        options.deviceAuthGatewayID = endpoint.deviceAuthGatewayID
+        return options
+    }
+
     private func currentCaps(
         browserControlEnabled: Bool,
         cameraEnabled: Bool,
