@@ -22,7 +22,7 @@ describe("serializeSessionCleanupResult", () => {
           pruned: 0,
           capped: 0,
           tombstoneRemnants: null,
-    unreferencedArtifacts: {
+          unreferencedArtifacts: {
             scannedFiles: 0,
             removedFiles: 0,
             freedBytes: 0,

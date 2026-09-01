@@ -224,10 +224,13 @@ openclaw sessions cleanup --json
 ([Configuration reference](/gateway/config-agents#session)):
 
 - Scope note: `openclaw sessions cleanup` maintains session stores,
-  transcripts, trajectory rows, and legacy trajectory sidecars. It does not
-  prune cron run history. Task maintenance retains terminal cron history for 7
-  days (`lost` rows for 24 hours) and enforces the newest 2000 rows per job and
-  history class as an additional ceiling ([Task maintenance](/automation/tasks#automatic-maintenance),
+  transcripts, trajectory rows, and legacy trajectory sidecars. It also
+  archives and removes expired canonical placeholders left by isolated cron
+  runs according to `cron.sessionRetention`; unidentified rows and live cron
+  sessions are preserved. Task maintenance separately retains terminal cron
+  history for 7 days (`lost` rows for 24 hours) and enforces the newest 2000
+  rows per job and history class as an additional ceiling
+  ([Task maintenance](/automation/tasks#automatic-maintenance),
   [Cron configuration](/automation/cron-jobs#configuration)).
 - Cleanup also prunes unreferenced legacy/archive transcript artifacts,
   compaction checkpoints, and trajectory sidecars older than

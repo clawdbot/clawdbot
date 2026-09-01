@@ -7,7 +7,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { sweepTombstonedCronRunRemnants } from "./cleanup-tombstones.js";
+import { sweepTombstonedCronRunRemnantsForStore } from "./cleanup-tombstones.js";
 import { replaceSessionEntry } from "./session-accessor.js";
 import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
 import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
@@ -102,20 +102,13 @@ describe("sweepTombstonedCronRunRemnants", () => {
     return sessionId;
   }
 
-  function sweep(params: {
-    dryRun: boolean;
-    olderThanMs?: number;
-    includeUnidentifiedPlaceholders?: boolean;
-  }) {
-    return sweepTombstonedCronRunRemnants({
+  function sweep(params: { dryRun: boolean; olderThanMs?: number }) {
+    return sweepTombstonedCronRunRemnantsForStore({
       agentId: "main",
       storePath,
       sqlitePath,
-      olderThanMs: params.olderThanMs ?? 15 * DAY_MS,
+      retentionMs: params.olderThanMs ?? 15 * DAY_MS,
       dryRun: params.dryRun,
-      ...(params.includeUnidentifiedPlaceholders === undefined
-        ? {}
-        : { includeUnidentifiedPlaceholders: params.includeUnidentifiedPlaceholders }),
       nowMs: NOW_MS,
     });
   }
@@ -411,44 +404,7 @@ describe("sweepTombstonedCronRunRemnants", () => {
 
     const result = await sweep({ dryRun: true });
 
-    expect(result).toMatchObject({ candidates: 0, unidentifiedCandidates: 0 });
+    expect(result).toMatchObject({ candidates: 0 });
     expect(countRows("session_nodes", "session_key", CRON_RUN_KEY)).toBe(1);
-  });
-
-  it("reaps an unidentifiable aged cron row when explicitly opted in", async () => {
-    await seedUnidentifiedPlaceholder();
-
-    const dry = await sweep({ dryRun: true, includeUnidentifiedPlaceholders: true });
-    expect(dry).toMatchObject({
-      candidates: 1,
-      unidentifiedCandidates: 1,
-      removedNodes: 0,
-    });
-    expect(countRows("session_nodes", "session_key", CRON_RUN_KEY)).toBe(1);
-
-    const applied = await sweep({ dryRun: false, includeUnidentifiedPlaceholders: true });
-    expect(applied).toMatchObject({
-      candidates: 1,
-      unidentifiedCandidates: 1,
-      removedNodes: 1,
-    });
-    expect(countRows("session_nodes", "session_key", CRON_RUN_KEY)).toBe(0);
-  });
-
-  it("keeps the age gate under the unidentified opt-in", async () => {
-    await seedUnidentifiedPlaceholder({ ageMs: 2 * DAY_MS });
-
-    const result = await sweep({ dryRun: true, includeUnidentifiedPlaceholders: true });
-
-    expect(result).toMatchObject({ candidates: 0, unidentifiedCandidates: 0 });
-    expect(countRows("session_nodes", "session_key", CRON_RUN_KEY)).toBe(1);
-  });
-
-  it("reports canonical sweeps as identified even with the opt-in on", async () => {
-    await seedCanonicalPlaceholder({});
-
-    const result = await sweep({ dryRun: true, includeUnidentifiedPlaceholders: true });
-
-    expect(result).toMatchObject({ candidates: 1, unidentifiedCandidates: 0 });
   });
 });

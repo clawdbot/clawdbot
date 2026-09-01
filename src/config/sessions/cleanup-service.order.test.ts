@@ -17,7 +17,7 @@ const sweepTombstones = vi.hoisted(() =>
 );
 
 vi.mock("./cleanup-tombstones.js", () => ({
-  sweepTombstonedCronRunRemnants: sweepTombstones,
+  sweepTombstonedCronRunRemnantsForStore: sweepTombstones,
 }));
 
 vi.mock("./session-history-eviction.js", () => ({
@@ -44,11 +44,12 @@ describe("sessions cleanup ordering", () => {
     const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
     process.env.OPENCLAW_STATE_DIR = tempDir;
     try {
-      await runSessionsCleanup({
+      const result = await runSessionsCleanup({
         cfg: { cron: { sessionRetention: "1h" } },
         opts: { enforce: true },
         targets: [{ agentId: "main", storePath }],
       });
+      expect(result.appliedSummaries[0]?.wouldMutate).toBe(true);
     } finally {
       delete process.env.OPENCLAW_STATE_DIR;
     }
@@ -59,7 +60,7 @@ describe("sessions cleanup ordering", () => {
       expect.objectContaining({
         agentId: "main",
         storePath,
-        olderThanMs: 60 * 60 * 1000,
+        retentionMs: 60 * 60 * 1000,
         dryRun: false,
       }),
     );

@@ -130,6 +130,11 @@ Isolated cron runs create their own session entries/transcripts with dedicated r
 - `cron.sessionRetention` (default `"24h"`) prunes old isolated cron run sessions from the store; `false` or a zero duration such as `"0h"` disables.
 - Terminal run history is retained for 7 days (`lost` rows for 24 hours), with the newest 2000 rows per job and history class enforced as an additional ceiling.
 
+`openclaw sessions cleanup` applies the same `cron.sessionRetention` boundary
+to canonical retained-history placeholders left after isolated runs. It
+archives referenced transcript state before removing the placeholder and does
+not delete unidentified rows or live cron sessions.
+
 When cron force-creates a new isolated run session, it sanitizes the previous `cron:<jobId>` session entry before writing the new row: it carries safe preferences (thinking/fast/verbose/reasoning settings, labels, display name) and explicit user-selected model/auth overrides, but drops ambient conversation context (channel/group routing, send/queue policy, elevation, origin, ACP runtime binding) so a fresh isolated run cannot inherit stale delivery or runtime authority from an older run.
 
 ## Session keys (`sessionKey`)

@@ -13,11 +13,11 @@ import {
   type SessionCleanupSummary,
   type SessionsCleanupFailure,
 } from "./cleanup-result.js";
+import { sweepTombstonedCronRunRemnantsForStore } from "./cleanup-tombstones.js";
 import {
   pruneUnreferencedSessionArtifacts,
   resolveSessionArtifactCanonicalPathsForEntry,
 } from "./disk-budget.js";
-import { sweepTombstonedCronRunRemnantsForStore } from "./cleanup-tombstones.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -69,11 +69,6 @@ export type SessionsCleanupOptions = SessionStoreSelectionOptions & {
   json?: boolean;
   fixMissing?: boolean;
   fixDmScope?: boolean;
-  /**
-   * Also reap aged cron-run rows whose entry_json is not a parseable canonical
-   * placeholder. Unsafe by default-off: see sweepTombstonedCronRunRemnants.
-   */
-  sweepUnidentifiedCronRemnants?: boolean;
 };
 
 type SessionCleanupAction =
@@ -337,7 +332,6 @@ async function previewStoreCleanup(params: {
   activeKey?: string;
   fixMissing?: boolean;
   fixDmScope?: boolean;
-  sweepUnidentifiedCronRemnants?: boolean;
 }) {
   const beforeStore = loadCleanupSessionStore(params.target, {
     createIfMissing: !params.dryRun,
@@ -452,7 +446,6 @@ async function previewStoreCleanup(params: {
     sqlitePath: resolveCleanupSqlitePath(params.target),
     retentionMs: resolveCronSessionRetentionMs(params.cfg.cron),
     dryRun: true,
-    includeUnidentifiedPlaceholders: params.sweepUnidentifiedCronRemnants,
   });
   const diskBudgetPreview = fs.existsSync(resolveCleanupSqlitePath(params.target))
     ? await inspectSqliteSessionHistoryDiskBudget({
@@ -630,6 +623,16 @@ export async function runSessionsCleanup(params: {
                 freedBytes: 0,
                 olderThanMs: maintenance.pruneAfterMs,
               });
+        const appliedTombstoneRemnants =
+          mode === "warn"
+            ? null
+            : await sweepTombstonedCronRunRemnantsForStore({
+                agentId: target.agentId,
+                storePath: target.storePath,
+                sqlitePath: resolveCleanupSqlitePath(target),
+                retentionMs: resolveCronSessionRetentionMs(cfg.cron),
+                dryRun: false,
+              });
         const appliedDiskBudget = await enforceSqliteSessionHistoryDiskBudget({
           agentId: target.agentId,
           storePath: target.storePath,
@@ -644,17 +647,6 @@ export async function runSessionsCleanup(params: {
         ).length;
         const maintenanceRemovedEntries =
           lifecycleResult.modelRunPruned + lifecycleResult.pruned + lifecycleResult.capped;
-        const appliedTombstoneRemnants =
-          mode === "warn"
-            ? null
-            : await sweepTombstonedCronRunRemnantsForStore({
-                agentId: target.agentId,
-                storePath: target.storePath,
-                sqlitePath: resolveCleanupSqlitePath(target),
-                retentionMs: resolveCronSessionRetentionMs(cfg.cron),
-                dryRun: false,
-                includeUnidentifiedPlaceholders: opts.sweepUnidentifiedCronRemnants,
-              });
         const summary: SessionCleanupSummary = {
           agentId: target.agentId,
           storePath: target.storePath,
@@ -676,6 +668,7 @@ export async function runSessionsCleanup(params: {
             lifecycleResult.archived > 0 ||
             maintenanceRemovedEntries > 0 ||
             unreferencedArtifacts.removedFiles > 0 ||
+            (appliedTombstoneRemnants?.removedNodes ?? 0) > 0 ||
             (appliedDiskBudget?.removedEntries ?? 0) > 0 ||
             (appliedDiskBudget?.removedFiles ?? 0) > 0 ||
             // Checkpoint/incremental-vacuum reclamation mutates the store
