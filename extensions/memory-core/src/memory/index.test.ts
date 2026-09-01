@@ -354,7 +354,7 @@ describe("memory index", () => {
     }
   });
 
-  it("defers legacy curated provenance reindex to detached maintenance", async () => {
+  it("defers legacy curated provenance reindex off the candidate-read hot path", async () => {
     const projectKey = "github.com/openclaw/openclaw";
     await fs.writeFile(
       path.join(fixture.paths.workspace, "MEMORY.md"),
@@ -391,27 +391,24 @@ describe("memory index", () => {
       }
       const syncAdmitted = vi.spyOn(
         upgradedManager as unknown as {
-          syncAdmitted: (params?: MemorySyncParams) => Promise<void>;
+          syncAdmitted: (
+            params?: MemorySyncParams,
+            options?: { allowEmbeddingBootstrapFallback?: boolean },
+          ) => Promise<void>;
         },
         "syncAdmitted",
       );
-      const syncPublishedIndexInBackground = vi
-        .spyOn(
-          upgradedManager as unknown as {
-            syncPublishedIndexInBackground: (params: { reason: string }) => Promise<void>;
-          },
-          "syncPublishedIndexInBackground",
-        )
-        .mockResolvedValue(undefined);
       await expect(
         upgradedManager.listCuratedProjectCandidates({ activeProjectKeys: [projectKey] }),
       ).resolves.toEqual([]);
-      // The repair is detached: the first turn never blocks on a synchronous sync.
-      expect(syncAdmitted).not.toHaveBeenCalled();
-      expect(syncPublishedIndexInBackground).toHaveBeenCalledWith({ reason: "search" });
+      // The repair is fire-and-forget on the admitted sync slot: the first turn
+      // never blocks, while concurrency and teardown stay covered.
+      expect(syncAdmitted).toHaveBeenCalledWith(
+        { reason: "search" },
+        { allowEmbeddingBootstrapFallback: true },
+      );
       expect(upgradedManager.status().dirty).toBe(true);
       syncAdmitted.mockRestore();
-      syncPublishedIndexInBackground.mockRestore();
     } finally {
       await upgradedManager.close();
     }

@@ -123,12 +123,16 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
             )
             .get() !== undefined;
         // Provenance schema adoption invalidates legacy source hashes. Rebuild it
-        // on the detached maintenance path so the first turn never blocks on the
-        // full reindex. Until the repaired index publishes, serve no automatic
-        // candidates to preserve the provenance boundary.
+        // on the admitted sync slot so the first turn never blocks on the full
+        // reindex while concurrency and teardown stay covered. Until the repaired
+        // index publishes, serve no automatic candidates to preserve the
+        // provenance boundary.
         if (repairPending()) {
           this.memorySourceProvenanceRepairPending = true;
-          void this.syncPublishedIndexInBackground({ reason: "search" }).catch((err) => {
+          void this.syncAdmitted(
+            { reason: "search" },
+            { allowEmbeddingBootstrapFallback: true },
+          ).catch((err) => {
             log.warn(`memory provenance repair failed (background): ${formatErrorMessage(err)}`);
           });
           return [];
