@@ -173,6 +173,55 @@ describe("PluginExternalVerificationRuntime", () => {
     await expect(decision).resolves.toBe("allow-always");
   });
 
+  it("covers matching pending approvals when an allow-always ceremony mints the grant", async () => {
+    const handler = vi.fn(async (attempt: PluginExternalVerificationAttempt) => {
+      await attempt.present({ message: "Scan the World challenge." });
+    });
+    const { owner, decision, manager } = createHarness(handler);
+    const baseRequest: PluginApprovalRequestPayload = {
+      pluginId: "agentkit",
+      title: "World verification",
+      description: "Verify personhood before continuing.",
+      toolName: "dangerous-tool",
+      toolCallId: "call-2",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "session-1",
+      runId: "run-1",
+      externalResolution: {
+        label: "Verify with World",
+        decisions: ["allow-once", "allow-always"],
+      },
+    };
+    // Same tool + session lifecycle: the grant's own predicate covers this one.
+    const covered = manager.create(baseRequest, 60_000, "plugin:runtime-covered");
+    const coveredDecision = manager.register(covered, 60_000);
+    // Different session lifecycle: must keep its own ceremony.
+    const foreign = manager.create(
+      { ...baseRequest, toolCallId: "call-3", sessionId: "session-2" },
+      60_000,
+      "plugin:runtime-foreign",
+    );
+    manager.register(foreign, 60_000);
+
+    const attempt = await runtime!.start({
+      approvalId: "plugin:runtime-approval",
+      decision: "allow-always",
+      interactionId: "b".repeat(64),
+      present: async () => undefined,
+    });
+    await runtime!.complete(owner, "agentkit", {
+      attemptId: attempt.id,
+      outcome: "succeeded",
+    });
+
+    await expect(decision).resolves.toBe("allow-always");
+    await expect(coveredDecision).resolves.toBe("allow-once");
+    expect(manager.listPendingRecords().map((record) => record.id)).toEqual([
+      "plugin:runtime-foreign",
+    ]);
+  });
+
   it("expires through the manager before replaying a delayed reviewer interaction", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     let attempt: PluginExternalVerificationAttempt | undefined;

@@ -14,6 +14,7 @@ import {
 } from "./operator-approval-store.js";
 import {
   completeExternalVerificationAttempt,
+  resolveApprovalsCoveredBySessionGrant,
   failExternalVerificationAttempt,
   getExternalVerificationAttemptSnapshot,
   getExternalVerificationNativeActionState,
@@ -82,6 +83,87 @@ function getApproval(id: string, databaseOptions: OpenClawStateDatabaseOptions, 
 }
 
 describe("plugin external verification store", () => {
+  it("resolves grant-covered pending approvals once and records the ledger attempt", () => {
+    const databaseOptions = createDatabaseOptions();
+    expect(insertExternalApproval({ databaseOptions })).toMatchObject({ outcome: "inserted" });
+    expect(
+      insertExternalApproval({ databaseOptions, id: "plugin:approval-covered" }),
+    ).toMatchObject({ outcome: "inserted" });
+
+    const started = startExternalVerificationAttempt({
+      approvalId: "plugin:approval-1",
+      decision: "allow-always",
+      interactionId: "c".repeat(64),
+      runtimeEpoch: "epoch-1",
+      nowMs: 2_000,
+      databaseOptions,
+    });
+    expect(started).toMatchObject({ outcome: "started" });
+    const attemptId = started.outcome === "started" ? started.attempt.id : "";
+    const completed = completeExternalVerificationAttempt({
+      attemptId,
+      pluginId: "agentkit",
+      outcome: "succeeded",
+      runtimeEpoch: "epoch-1",
+      nowMs: 3_000,
+      databaseOptions,
+    });
+    expect(completed).toMatchObject({ outcome: "completed", applied: true });
+    const grantAuthorizationId =
+      completed.outcome === "completed" && completed.grantAuthorization
+        ? completed.grantAuthorization.id
+        : "";
+    expect(grantAuthorizationId).not.toBe("");
+
+    const covered = resolveApprovalsCoveredBySessionGrant({
+      grantAuthorizationId,
+      grantedApprovalId: "plugin:approval-1",
+      pluginId: "agentkit",
+      toolName: "dangerous-tool",
+      sessionKey: "agent:main:main",
+      sessionId: "session-1",
+      runtimeEpoch: "epoch-1",
+      nowMs: 3_000,
+      databaseOptions,
+    });
+    expect(covered).toEqual([{ approvalId: "plugin:approval-covered" }]);
+    expect(getApproval("plugin:approval-covered", databaseOptions, 3_500)).toMatchObject({
+      status: "allowed",
+      decision: "allow-once",
+      resolver: { kind: "runtime", id: "plugin:agentkit" },
+    });
+
+    // Idempotent: nothing pending matches on a second sweep.
+    expect(
+      resolveApprovalsCoveredBySessionGrant({
+        grantAuthorizationId,
+        grantedApprovalId: "plugin:approval-1",
+        pluginId: "agentkit",
+        toolName: "dangerous-tool",
+        sessionKey: "agent:main:main",
+        sessionId: "session-1",
+        runtimeEpoch: "epoch-1",
+        nowMs: 3_100,
+        databaseOptions,
+      }),
+    ).toEqual([]);
+
+    // A different session lifecycle never matches the grant predicate.
+    expect(
+      resolveApprovalsCoveredBySessionGrant({
+        grantAuthorizationId,
+        grantedApprovalId: "plugin:approval-1",
+        pluginId: "agentkit",
+        toolName: "dangerous-tool",
+        sessionKey: "agent:main:main",
+        sessionId: "session-other",
+        runtimeEpoch: "epoch-1",
+        nowMs: 3_200,
+        databaseOptions,
+      }),
+    ).toEqual([]);
+  });
+
   it("starts one host-bound attempt and replays the same interaction without replacement", () => {
     const databaseOptions = createDatabaseOptions();
     expect(insertExternalApproval({ databaseOptions })).toMatchObject({ outcome: "inserted" });
