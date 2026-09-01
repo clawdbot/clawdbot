@@ -898,11 +898,9 @@ describe("legacy workspace Doctor migration", () => {
     const identity = resolveWorkspaceStateIdentity(context.workspaceDir);
     const setupPath = path.join(context.workspaceDir, "openclaw-workspace-state.json");
     const seededAt = "2026-07-15T00:00:00.000Z";
-    await fsp.writeFile(
-      setupPath,
-      JSON.stringify({ version: 1, bootstrapSeededAt: seededAt }),
-      "utf8",
-    );
+    const setupSource = JSON.stringify({ version: 1, bootstrapSeededAt: seededAt });
+    const claimPath = `${setupPath}.doctor-importing`;
+    await fsp.writeFile(setupPath, setupSource, "utf8");
     const first = await migrateLegacyWorkspaceState({
       detected: detect(context),
       env: context.env,
@@ -912,13 +910,21 @@ describe("legacy workspace Doctor migration", () => {
       },
     });
     expect(first.warnings[0]).toContain("legacy cleanup failed");
-    expect(fs.existsSync(`${setupPath}.doctor-importing`)).toBe(true);
+    expect(first.warnings[0]).toContain(setupPath);
+    expect(fs.existsSync(claimPath)).toBe(true);
     const db = openOpenClawStateDatabase({ env: context.env }).db;
 
+    await fsp.writeFile(claimPath, "{invalid", "utf8");
+    const unreadable = await migrate(context);
+    expect(unreadable.warnings[0]).toContain(setupPath);
+    expect(unreadable.warnings[0]).toContain("invalid JSON");
+    expect(await fsp.readFile(claimPath, "utf8")).toBe("{invalid");
+
+    await fsp.writeFile(claimPath, setupSource, "utf8");
     const retry = await migrate(context);
 
     expect(retry.warnings).toEqual([]);
-    expect(fs.existsSync(`${setupPath}.doctor-importing`)).toBe(false);
+    expect(fs.existsSync(claimPath)).toBe(false);
     expect(
       db
         .prepare("SELECT bootstrap_seeded_at FROM workspace_setup_state WHERE workspace_key = ?")
@@ -931,9 +937,7 @@ describe("legacy workspace Doctor migration", () => {
         )
         .get(path.join(identity.workspacePath, "openclaw-workspace-state.json")),
     ).toEqual({
-      source_sha256: createHash("sha256")
-        .update(JSON.stringify({ version: 1, bootstrapSeededAt: seededAt }))
-        .digest("hex"),
+      source_sha256: createHash("sha256").update(setupSource).digest("hex"),
       removed_source: 1,
     });
   });
