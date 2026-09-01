@@ -556,6 +556,31 @@ describe("gateway server cron", () => {
     }
   });
 
+  test("does not persist cron.add when the delivery preview cannot be resolved", async () => {
+    const { prevSkipCron, dir } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-preview-failure-",
+      cronEnabled: false,
+    });
+    testState.sessionStorePath = path.join(dir, "invalid.sqlite");
+    await fs.writeFile(testState.sessionStorePath, "not a SQLite database");
+    const cronState = await createDirectCronState();
+
+    try {
+      const response = await directCronReq(cronState, "cron.add", {
+        name: "preview failure",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: { kind: "agentTurn", message: "check status" },
+      });
+
+      expect(response.ok).toBe(false);
+      expect(await cronState.cron.list({ includeDisabled: true })).toHaveLength(0);
+    } finally {
+      testState.sessionStorePath = undefined;
+      resetConfigRuntimeState();
+      await cleanupCronTestRun({ cronState, prevSkipCron });
+    }
+  });
+
   test("persists an agent-created job with its caller session creator", async () => {
     const { prevSkipCron, dir } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-agent-creator-",

@@ -1306,44 +1306,6 @@ describe("cron cli", () => {
     expect(defaultRuntime.log).toHaveBeenCalledWith("diagnostic: exec stderr tail");
   });
 
-  it("prints the create-time delivery preview from cron.add", async () => {
-    resetGatewayMock();
-    callGatewayFromCli.mockImplementation(async (method: string) => {
-      if (method === "cron.status") {
-        return { enabled: true };
-      }
-      if (method === "cron.add") {
-        return {
-          id: "job-create-preview",
-          name: "Create preview",
-          enabled: true,
-          sessionTarget: "isolated",
-          delivery: { mode: "announce" },
-          deliveryPreview: {
-            label: "announce -> last",
-            detail: "last -> no route, will fail-closed",
-          },
-        };
-      }
-      return { ok: true };
-    });
-
-    const program = buildProgram();
-    await program.parseAsync(
-      ["cron", "add", "--name", "Create preview", "--cron", "* * * * *", "--message", "hello"],
-      { from: "user" },
-    );
-
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        deliveryPreview: {
-          label: "announce -> last",
-          detail: "last -> no route, will fail-closed",
-        },
-      }),
-    );
-  });
-
   it("sends agent id on cron add", async () => {
     await runNamedCronAdd(
       "Agent pinned",

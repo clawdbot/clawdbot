@@ -49,6 +49,9 @@ const loadGatewaySessionEntry = vi.hoisted(() =>
   ),
 );
 const cronTaskRunHistoryPageOverride = vi.hoisted(() => vi.fn());
+const resolveCronDeliveryPreview = vi.hoisted(() =>
+  vi.fn(async () => ({ label: "not requested", detail: "not requested" })),
+);
 const resolveCronDeliveryPreviews = vi.hoisted(() =>
   vi.fn(async ({ jobs }: { jobs: Array<{ id: string }> }) =>
     Object.fromEntries(
@@ -83,6 +86,7 @@ vi.mock("../session-utils.js", () => ({
 }));
 
 vi.mock("../../cron/delivery-preview.js", () => ({
+  resolveCronDeliveryPreview,
   resolveCronDeliveryPreviews,
 }));
 
@@ -620,6 +624,9 @@ describe("cron method validation", () => {
   beforeEach(() => {
     getRuntimeConfig.mockReset().mockReturnValue({} as OpenClawConfig);
     cronTaskRunHistoryPageOverride.mockReset().mockReturnValue(undefined);
+    resolveCronDeliveryPreview
+      .mockReset()
+      .mockResolvedValue({ label: "not requested", detail: "not requested" });
     resolveCronDeliveryPreviews
       .mockReset()
       .mockImplementation(async ({ jobs }: { jobs: Array<{ id: string }> }) =>
