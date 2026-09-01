@@ -2,6 +2,7 @@
 import { isExperimentalClawsEnabled } from "../../claws/experimental.js";
 import { isConfigMachineOutput } from "../config-output-mode.js";
 import { isDoctorMachineOutput } from "../doctor-output-mode.js";
+import { hasMachineOutputOption } from "../machine-output-argv.js";
 import { defineCommandDescriptorCatalog } from "./command-descriptor-utils.js";
 import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 
@@ -45,8 +46,14 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "backup",
-    description: "Create and verify backup archives and SQLite snapshots",
+    description: "Create, verify, and restore backup archives and SQLite snapshots",
     hasSubcommands: true,
+  },
+  {
+    name: "database",
+    description: "Inspect shared-state schema compatibility and write ownership",
+    hasSubcommands: true,
+    parentDefaultHelp: true,
   },
   {
     name: "migrate",
@@ -58,6 +65,12 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     description: "Health checks + quick fixes for the gateway and channels",
     hasSubcommands: false,
     machineOutput: isDoctorMachineOutput,
+  },
+  {
+    name: "triage",
+    description: "Collect sanitized diagnostics and prepare an agent debugging handoff",
+    hasSubcommands: false,
+    machineOutput: ({ argv }) => hasMachineOutputOption(argv, "--json"),
   },
   {
     name: "dashboard",
@@ -121,11 +134,6 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
-    name: "commitments",
-    description: "List and manage inferred follow-up commitments",
-    hasSubcommands: true,
-  },
-  {
     name: "tasks",
     description: "Inspect durable background tasks and TaskFlow state",
     hasSubcommands: true,
@@ -147,7 +155,7 @@ export function getCoreCliCommandDescriptors(): ReadonlyArray<CoreCliCommandDesc
 }
 
 /** Return names for all core root commands. */
-export function getCoreCliCommandNames(): string[] {
+export function getCoreCliCommandNamesCore(): string[] {
   return visibleCoreCliCommandDescriptors().map((descriptor) => descriptor.name);
 }
 

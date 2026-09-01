@@ -31,13 +31,6 @@ function cacheRoomInfo(
   pruneMapToMaxSize(roomCache, ROOM_CACHE_MAX_ENTRIES);
 }
 
-function coerceRoomType(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) {
-    return value;
-  }
-  return parseStrictPositiveInteger(value);
-}
-
 function resolveRoomKindFromType(type: number | undefined): "direct" | "group" | undefined {
   if (!type) {
     return undefined;
@@ -117,7 +110,7 @@ export async function resolveNextcloudTalkRoomKind(params: {
       const payload = await readProviderJsonResponse<{
         ocs?: { data?: { type?: number | string } };
       }>(response, "Nextcloud Talk room info failed");
-      const type = coerceRoomType(payload.ocs?.data?.type);
+      const type = parseStrictPositiveInteger(payload.ocs?.data?.type);
       const kind = resolveRoomKindFromType(type);
       cacheRoomInfo(key, { fetchedAt: Date.now(), kind });
       return kind;

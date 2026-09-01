@@ -26,8 +26,10 @@ describe("settings search target manifest", () => {
         target.hash,
       ]),
     ).toEqual([
+      ["updates", "/settings/updates", "", "#config-section-update"],
       ["channels", "/settings/channels", "", ""],
       ["security", "/settings/security", "", ""],
+      ["secrets", "/settings/secrets", "", ""],
       ["system", "/settings/connection", "", "#settings-connection-host"],
       ["personal", "/settings/profile", "", "#settings-profile-identity"],
       ["modelBehavior", "/settings/model-providers", "", "#settings-model-behavior"],
@@ -42,6 +44,12 @@ describe("settings search target manifest", () => {
         "/settings/appearance",
         "?section=__appearance__",
         "#settings-appearance-theme",
+      ],
+      [
+        "appearanceAccent",
+        "/settings/appearance",
+        "?section=__appearance__",
+        "#settings-appearance-accent",
       ],
       [
         "appearanceTextSize",
@@ -109,7 +117,7 @@ describe("settings search target manifest", () => {
 describe("settings config section ownership", () => {
   const pages: ReadonlyArray<readonly [ConfigPageId, readonly string[]]> = [
     ["communications", ["messages", "tts"]],
-    ["appearance", ["__appearance__", "ui", "wizard"]],
+    ["appearance", ["__appearance__", "ui"]],
     ["notifications", ["__notifications__"]],
     ["security", ["security", "approvals"]],
     ["automation", ["commands", "hooks", "bindings", "cron", "plugins"]],
@@ -117,6 +125,7 @@ describe("settings config section ownership", () => {
     ["memory", ["memory"]],
     ["talk", ["talk"]],
     ["infrastructure", ["gateway", "browser", "nodeHost", "discovery", "acp"]],
+    ["updates", ["update"]],
     ["ai-agents", ["agents", "skills", "tools", "session"]],
   ];
 
@@ -136,6 +145,7 @@ describe("settings config section ownership", () => {
   });
 
   it("keeps uncurated sections on Advanced", () => {
+    expect(configPageForSection("wizard")).toBe("advanced");
     expect(configPageForSection("secrets")).toBe("advanced");
     expect(configPageForSection("broadcast")).toBe("advanced");
     expect(configPageForSection("models")).toBe("advanced");

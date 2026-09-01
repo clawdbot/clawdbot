@@ -1,8 +1,11 @@
 /**
  * Normalizes OpenAI Responses reasoning/tool-call history for safe replay.
  */
-import { sha256HexPrefix } from "../../infra/crypto-digest.js";
+import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
+import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import type { AgentMessage } from "../runtime/index.js";
+import { rewriteToolResultIds } from "../tool-call-id.js";
 
 type OpenAIThinkingBlock = {
   type?: unknown;
@@ -61,14 +64,7 @@ function parseOpenAIReasoningSignature(value: unknown): OpenAIReasoningSignature
 }
 
 function parseTimestampMs(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = Date.parse(value);
-    return Number.isNaN(parsed) ? null : parsed;
-  }
-  return null;
+  return parseDateFirstTimestampMs(value) ?? null;
 }
 
 function hasFollowingNonThinkingBlock(
@@ -106,7 +102,7 @@ function isOpenAIToolCallType(type: unknown): boolean {
 }
 
 function shortOpenAIResponsesIdHash(id: string): string {
-  return sha256HexPrefix(id, 10);
+  return sha256HexPrefixCore(id, 10);
 }
 
 function sanitizeOpenAIResponsesIdTail(value: string): string {
@@ -226,7 +222,7 @@ export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): A
         }
         assistantChanged = true;
         return {
-          ...(block as unknown as Record<string, unknown>),
+          ...block,
           id: nextId,
         } as typeof block;
       });
@@ -236,39 +232,19 @@ export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): A
         continue;
       }
       changed = true;
-      rewrittenMessages.push({ ...assistantMsg, content: nextContent } as AgentMessage);
+      rewrittenMessages.push(replaceCompactionReplayOwnerContent(assistantMsg, nextContent));
       continue;
     }
 
     if (role === "toolResult") {
-      const toolResult = msg as Extract<AgentMessage, { role: "toolResult" }> & {
-        toolUseId?: unknown;
-      };
-      let toolResultChanged = false;
-      const updates: Record<string, string> = {};
-
-      if (typeof toolResult.toolCallId === "string") {
-        const nextToolCallId = resolveId(toolResult.toolCallId);
-        if (nextToolCallId !== toolResult.toolCallId) {
-          updates.toolCallId = nextToolCallId;
-          toolResultChanged = true;
-        }
+      const next = rewriteToolResultIds({
+        message: msg as Extract<AgentMessage, { role: "toolResult" }>,
+        resolveId,
+      });
+      if (next !== msg) {
+        changed = true;
       }
-
-      if (typeof toolResult.toolUseId === "string") {
-        const nextToolUseId = resolveId(toolResult.toolUseId);
-        if (nextToolUseId !== toolResult.toolUseId) {
-          updates.toolUseId = nextToolUseId;
-          toolResultChanged = true;
-        }
-      }
-
-      if (!toolResultChanged) {
-        rewrittenMessages.push(msg);
-        continue;
-      }
-      changed = true;
-      rewrittenMessages.push({ ...toolResult, ...updates } as AgentMessage);
+      rewrittenMessages.push(next);
       continue;
     }
 
@@ -338,7 +314,7 @@ export function downgradeOpenAIFunctionCallReasoningPairs(
         assistantChanged = true;
         localRewrittenIds.set(toolCallBlock.id, pairing.callId);
         return {
-          ...(block as unknown as Record<string, unknown>),
+          ...block,
           id: pairing.callId,
         } as typeof block;
       });
@@ -349,7 +325,7 @@ export function downgradeOpenAIFunctionCallReasoningPairs(
         continue;
       }
       changed = true;
-      rewrittenMessages.push({ ...assistantMsg, content: nextContent } as AgentMessage);
+      rewrittenMessages.push(replaceCompactionReplayOwnerContent(assistantMsg, nextContent));
       continue;
     }
 
@@ -520,7 +496,7 @@ export function downgradeOpenAIReasoningBlocks(
         })
       : nextContent;
 
-    out.push({ ...assistantMsg, content: finalContent } as AgentMessage);
+    out.push(replaceCompactionReplayOwnerContent(assistantMsg, finalContent));
   }
 
   return anyChanged ? out : messages;

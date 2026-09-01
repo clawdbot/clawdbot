@@ -4,6 +4,7 @@
  */
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { TURN_TERMINAL_SETTLEMENT_IDLE_TIMEOUT_MS } from "./attempt-timeouts.js";
 
 type Timer = ReturnType<typeof setTimeout>;
 type WatchTimerKind = "completion" | "assistant" | "attempt" | "terminal";
@@ -36,6 +37,7 @@ export function createCodexAttemptTurnWatchController(params: {
   isCompleted: () => boolean;
   isTerminalTurnNotificationQueued: () => boolean;
   getActiveAppServerTurnRequests: () => number;
+  getActiveAppServerTurnRequestsWithoutTimeout: () => number;
   getActiveTurnItemCount: () => number;
   getActiveCompletionBlockerItemCount: () => number;
   getActiveFinalizationHookCount: () => number;
@@ -136,23 +138,48 @@ export function createCodexAttemptTurnWatchController(params: {
     );
   }
 
+  function shouldPauseAttemptIdleWatch() {
+    // Native tool items and independently timed dynamic tool requests own quiet
+    // windows. Approval, elicitation, and user-input requests keep this deadline.
+    if (params.getActiveAppServerTurnRequestsWithoutTimeout() > 0) {
+      return false;
+    }
+    return (
+      params.getActiveCompletionBlockerItemCount() > 0 ||
+      params.getActiveAppServerTurnRequests() > 0
+    );
+  }
+
   function scheduleAttemptIdleWatch() {
     scheduleWatch(
       "attempt",
       fireAttemptIdleTimeout,
       attemptLastProgressAt,
       attemptIdleTimeoutOverrideMs ?? turnAttemptIdleTimeoutMs,
-      attemptIdleWatchArmed,
+      attemptIdleWatchArmed && !shouldPauseAttemptIdleWatch(),
     );
   }
+
+  const terminalWorkIsActive = () =>
+    params.getActiveAppServerTurnRequests() > 0 ||
+    (params.isTerminalTurnNotificationQueued() && params.getActiveFinalizationHookCount() > 0);
+  // Physical-client backstop: requests own quiet windows via their own timeouts;
+  // responses touch activity and rearm. After terminal receipt, even stuck counters
+  // must respect the absolute silence budget, or a blocked tail leaves the session active.
+  const terminalIdleTimeoutMs = () =>
+    params.isTerminalTurnNotificationQueued() && !terminalWorkIsActive()
+      ? Math.min(TURN_TERMINAL_SETTLEMENT_IDLE_TIMEOUT_MS, turnTerminalIdleTimeoutMs)
+      : turnTerminalIdleTimeoutMs;
 
   function scheduleTerminalIdleWatch() {
     scheduleWatch(
       "terminal",
       fireTerminalIdleTimeout,
       completionLastActivityAt,
-      turnTerminalIdleTimeoutMs,
-      terminalIdleWatchArmed && params.getActiveAppServerTurnRequests() === 0,
+      terminalIdleTimeoutMs(),
+      terminalIdleWatchArmed &&
+        (params.isTerminalTurnNotificationQueued() ||
+          params.getActiveAppServerTurnRequests() === 0),
     );
   }
 
@@ -266,7 +293,12 @@ export function createCodexAttemptTurnWatchController(params: {
   }
 
   function fireAttemptIdleTimeout() {
-    if (params.isCompleted() || params.signal.aborted || !attemptIdleWatchArmed) {
+    if (
+      params.isCompleted() ||
+      params.signal.aborted ||
+      !attemptIdleWatchArmed ||
+      shouldPauseAttemptIdleWatch()
+    ) {
       return;
     }
     const idleMs = Math.max(0, Date.now() - attemptLastProgressAt);
@@ -324,32 +356,28 @@ export function createCodexAttemptTurnWatchController(params: {
   }
 
   function fireTerminalIdleTimeout() {
-    // Physical-client liveness backstop. A terminal timeout retires the shared
-    // client, so it must only measure silence the client owns: while a
-    // server->client request is pending (approval/elicitation/tool call) the
-    // app-server legitimately says nothing until we respond. The response path
-    // touches activity when the request settles, so a wedged client is still
-    // caught within one terminal window after our response.
-    if (
-      params.isCompleted() ||
-      params.isTerminalTurnNotificationQueued() ||
-      params.signal.aborted ||
-      !terminalIdleWatchArmed ||
-      params.getActiveAppServerTurnRequests() > 0
-    ) {
+    if (params.isCompleted() || params.signal.aborted || !terminalIdleWatchArmed) {
       return;
     }
+    if (!params.isTerminalTurnNotificationQueued() && params.getActiveAppServerTurnRequests() > 0) {
+      scheduleTerminalIdleWatch();
+      return;
+    }
+    const timeoutMs = terminalIdleTimeoutMs();
     const idleMs = Math.max(0, Date.now() - completionLastActivityAt);
-    if (idleMs < turnTerminalIdleTimeoutMs) {
+    if (idleMs < timeoutMs) {
       scheduleTerminalIdleWatch();
       return;
     }
     reportTimeout({
       kind: "terminal" as const,
       idleMs,
-      timeoutMs: turnTerminalIdleTimeoutMs,
+      timeoutMs,
       lastActivityReason: completionLastActivityReason,
-      details: completionLastActivityDetails,
+      details: {
+        ...completionLastActivityDetails,
+        terminalTurnNotificationQueued: params.isTerminalTurnNotificationQueued(),
+      },
     });
   }
 
@@ -435,6 +463,10 @@ export function createCodexAttemptTurnWatchController(params: {
       }
       if (options?.attemptProgress) {
         recordAttemptProgress(completionLastActivityReason, options);
+      }
+      // Receipt precedes the handler tail; arm the shorter settlement watch now.
+      if (params.isTerminalTurnNotificationQueued()) {
+        scheduleTerminalIdleWatch();
       }
     },
     extendAttemptIdleWatch: (timeoutMs: number) => {

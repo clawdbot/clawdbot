@@ -9,7 +9,7 @@ import {
   satisfies as satisfiesSemver,
   validRange as validSemverRange,
 } from "semver";
-import { runCommandWithTimeout } from "../process/exec.js";
+import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveArchiveKind } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
@@ -17,6 +17,24 @@ import { applyNpmFreshnessBypassEnv, type NpmProjectInstallEnvOptions } from "./
 import { resolveNpmJsonEntries } from "./npm-registry-spec.js";
 import { withTempWorkspace } from "./private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
+
+export function formatNpmCommandFailureOutput(result: SpawnResult): string {
+  const detail = result.stderr.trim() || result.stdout.trim();
+  if (detail) {
+    return detail;
+  }
+  // Timeouts normalize to exit code 124; retain the owner-recorded cause.
+  if (result.termination === "timeout" || result.termination === "no-output-timeout") {
+    return `termination ${result.termination} (no output from npm)`;
+  }
+  if (result.termination === "exit" && result.code !== null) {
+    return `exit code ${result.code} (no output from npm)`;
+  }
+  if (result.signal) {
+    return `signal ${result.signal} (no output from npm)`;
+  }
+  return `termination ${result.termination} (no output from npm)`;
+}
 
 /** Metadata npm reports when resolving a registry spec or packed archive. */
 export type NpmSpecResolution = {
@@ -122,7 +140,11 @@ function normalizeNpmViewMetadata(value: unknown, spec: string): NpmSpecResoluti
 /** Reads npm registry metadata for a package spec without running package scripts. */
 type NpmMetadataFailureCategory = "metadata-env";
 
-export async function resolveNpmSpecMetadata(params: { spec: string; timeoutMs?: number }): Promise<
+export async function resolveNpmSpecMetadata(params: {
+  spec: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}): Promise<
   | {
       ok: true;
       metadata: NpmSpecResolution;
@@ -147,11 +169,13 @@ export async function resolveNpmSpecMetadata(params: { spec: string; timeoutMs?:
     ],
     {
       timeoutMs: Math.max(params.timeoutMs ?? 60_000, 60_000),
+      signal: params.signal,
+      killProcessTree: true,
       env: createNpmMetadataEnv(),
     },
   );
   if (res.code !== 0) {
-    const raw = res.stderr.trim() || res.stdout.trim();
+    const raw = formatNpmCommandFailureOutput(res);
     if (/E404|is not in this registry/i.test(raw)) {
       return {
         ok: false,
@@ -191,7 +215,7 @@ export type NpmIntegrityDrift = {
 };
 
 /** Runs a callback in a private temp directory and removes it afterward. */
-export async function withTempDir<T>(
+export async function withInstallWorkspace<T>(
   prefix: string,
   fn: (tmpDir: string) => Promise<T>,
   options?: { rootDir?: string },
@@ -344,6 +368,7 @@ export async function packNpmSpecToArchive(params: {
   spec: string;
   timeoutMs: number;
   cwd: string;
+  signal?: AbortSignal;
 }): Promise<
   | {
       ok: true;
@@ -359,12 +384,14 @@ export async function packNpmSpecToArchive(params: {
     ["npm", "pack", params.spec, "--ignore-scripts", "--json"],
     {
       timeoutMs: Math.max(params.timeoutMs, 300_000),
+      signal: params.signal,
+      killProcessTree: true,
       cwd: params.cwd,
       env: createNpmMetadataEnv({ npmConfigCwd: params.cwd }),
     },
   );
   if (res.code !== 0) {
-    const raw = res.stderr.trim() || res.stdout.trim();
+    const raw = formatNpmCommandFailureOutput(res);
     if (/E404|is not in this registry/i.test(raw)) {
       return {
         ok: false,
@@ -407,6 +434,7 @@ export async function packNpmSpecToArchive(params: {
 export async function resolveNpmPackArchiveMetadata(params: {
   archivePath: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<
   | {
       ok: true;
@@ -431,13 +459,15 @@ export async function resolveNpmPackArchiveMetadata(params: {
     ["npm", "pack", archivePath, "--ignore-scripts", "--dry-run", "--json"],
     {
       timeoutMs: Math.max(params.timeoutMs ?? archiveMetadataTimeoutMs, archiveMetadataTimeoutMs),
+      signal: params.signal,
+      killProcessTree: true,
       env: createNpmMetadataEnv(),
     },
   );
   if (res.code !== 0) {
     return {
       ok: false,
-      error: `npm pack metadata read failed: ${res.stderr.trim() || res.stdout.trim()}`,
+      error: `npm pack metadata read failed: ${formatNpmCommandFailureOutput(res)}`,
     };
   }
 

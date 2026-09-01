@@ -1,12 +1,5 @@
 import path from "node:path";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import {
-  UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV,
-  UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV,
-  UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR_ENV,
-  UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
-  UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART_ENV,
-} from "../../commands/doctor/shared/update-phase.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import {
@@ -20,11 +13,11 @@ import {
 } from "../../infra/update-doctor-result.js";
 import {
   createGlobalInstallEnv,
-  cleanupGlobalRenameDirs,
   resolveGlobalInstallSpec,
   resolveGlobalInstallTarget,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
+import { buildUpdateDoctorEnv } from "../../infra/update-runner-doctor.js";
 import {
   resolveUpdateDoctorExecutionPolicy,
   type UpdateRunResult,
@@ -42,7 +35,7 @@ import {
   runUpdateStep,
 } from "./shared.js";
 import { createUpdateConfigSnapshot } from "./update-command-config.js";
-import { resolvePostInstallDoctorEnv } from "./update-command-service.js";
+import { resolvePostInstallDoctorEnv } from "./update-command-service-env.js";
 
 const CLI_NAME = resolveCliName();
 
@@ -94,12 +87,6 @@ export async function runPackageInstallUpdate(params: {
     });
 
   const beforeVersion = pkgRoot ? await readPackageVersion(pkgRoot) : null;
-  if (pkgRoot) {
-    await cleanupGlobalRenameDirs({
-      globalRoot: path.dirname(pkgRoot),
-      packageName,
-    });
-  }
 
   const diskWarning = createLowDiskSpaceWarning({
     targetPath: pkgRoot ? path.dirname(pkgRoot) : params.root,
@@ -161,21 +148,14 @@ export async function runPackageInstallUpdate(params: {
             serviceEnv: params.managedServiceEnv,
             invocationCwd: params.invocationCwd,
           }),
-          OPENCLAW_UPDATE_IN_PROGRESS: "1",
-          [UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV]: "1",
-          [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
-          [UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART_ENV]: "1",
-          [UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR_ENV]: params.allowGatewayServiceRepair
-            ? "1"
-            : "0",
-          [UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV]: params.allowGatewayActivation ? "1" : "0",
-          ...(doctorPolicy.serviceRepairPolicy
-            ? { OPENCLAW_SERVICE_REPAIR_POLICY: doctorPolicy.serviceRepairPolicy }
-            : {}),
+          ...buildUpdateDoctorEnv({
+            allowGatewayServiceRepair: params.allowGatewayServiceRepair,
+            allowGatewayActivation: params.allowGatewayActivation,
+            deferConfiguredPluginInstallRepair: true,
+            serviceRepairPolicy: doctorPolicy.serviceRepairPolicy,
+            compatibilityHostVersion: candidateHostVersion,
+          }),
           [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: doctorResultPath,
-          ...(candidateHostVersion === null
-            ? {}
-            : { OPENCLAW_COMPATIBILITY_HOST_VERSION: candidateHostVersion }),
         },
         timeoutMs: params.timeoutMs,
       });
@@ -185,6 +165,7 @@ export async function runPackageInstallUpdate(params: {
         ...doctorProgressInfo,
         durationMs: completedDoctorStep.durationMs,
         exitCode: completedDoctorStep.exitCode,
+        stdoutTail: completedDoctorStep.stdoutTail,
         stderrTail: completedDoctorStep.stderrTail,
         signal: completedDoctorStep.signal,
         killed: completedDoctorStep.killed,
@@ -203,6 +184,7 @@ export async function runPackageInstallUpdate(params: {
     before: { version: beforeVersion },
     after: { version: packageUpdate.afterVersion ?? beforeVersion },
     steps: packageUpdate.steps,
+    recovery: packageUpdate.recovery,
     durationMs: Date.now() - params.startedAt,
   };
 }

@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJson } from "@openclaw/normalization-core";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -77,6 +78,7 @@ type RestartSentinelRowState =
 
 const RESTART_SENTINEL_KEY = "current";
 const RESTART_SENTINEL_REVISION_FLOOR_KEY = "revision-floor";
+const UPDATE_INSTALL_RECEIPT_KEY = "latest-update-install";
 const RESTART_SENTINEL_KINDS = new Set<RestartSentinelPayload["kind"]>([
   "config-apply",
   "config-auto-recovery",
@@ -356,11 +358,7 @@ function parseRequiredJson(value: string | null): unknown {
   if (value === null) {
     return undefined;
   }
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return undefined;
-  }
+  return safeParseJson(value);
 }
 
 function decodeRestartSentinelRow(row: {
@@ -428,7 +426,10 @@ function decodeRestartSentinelRow(row: {
   return payload ? { version: 1, payload, revision: row.updated_at_ms } : null;
 }
 
-export function readRestartSentinelRowSync(db: DatabaseSync): RestartSentinelRowState {
+function readRestartSentinelRowForKeySync(
+  db: DatabaseSync,
+  sentinelKey: string,
+): RestartSentinelRowState {
   const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
   const row = executeSqliteQueryTakeFirstSync(
     db,
@@ -450,13 +451,22 @@ export function readRestartSentinelRowSync(db: DatabaseSync): RestartSentinelRow
         "stats_json",
         "updated_at_ms",
       ])
-      .where("sentinel_key", "=", RESTART_SENTINEL_KEY),
+      .where("sentinel_key", "=", sentinelKey),
   );
   if (!row) {
     return { kind: "missing" };
   }
   const sentinel = decodeRestartSentinelRow(row);
   return sentinel ? { kind: "valid", sentinel } : { kind: "invalid", revision: row.updated_at_ms };
+}
+
+export function readRestartSentinelRowSync(db: DatabaseSync): RestartSentinelRowState {
+  return readRestartSentinelRowForKeySync(db, RESTART_SENTINEL_KEY);
+}
+
+export function readUpdateInstallReceiptRowSync(db: DatabaseSync): RestartSentinel | null {
+  const current = readRestartSentinelRowForKeySync(db, UPDATE_INSTALL_RECEIPT_KEY);
+  return current.kind === "valid" ? current.sentinel : null;
 }
 
 function requireValidPayload(payload: RestartSentinelPayload): RestartSentinelPayload {
@@ -581,19 +591,51 @@ export function writeRestartSentinelRowSync(
   rawPayload: RestartSentinelPayload,
 ): RestartSentinel {
   const payload = requireValidPayload(rawPayload);
-  const current = readRestartSentinelRowSync(db);
+  const revision = nextRevision(readRestartSentinelSnapshotSync(db).revision);
+  const row = buildRestartSentinelRow(payload, revision);
+  upsertRestartSentinelRowSync(db, row);
+  advanceRestartSentinelRevisionFloorSync(db, revision);
+  return { version: 1, payload, revision };
+}
+
+/** Read inside a transaction; the floor also identifies an absent, consumed notification. */
+export function readRestartSentinelSnapshotSync(db: DatabaseSync): {
+  state: RestartSentinelRowState;
+  revision: number | null;
+} {
+  const state = readRestartSentinelRowSync(db);
+  const currentRevision =
+    state.kind === "missing"
+      ? null
+      : state.kind === "valid"
+        ? state.sentinel.revision
+        : state.revision;
+  return {
+    state,
+    revision: maxRevision(currentRevision, readRestartSentinelRevisionFloorSync(db)),
+  };
+}
+
+export function writeUpdateInstallReceiptRowSync(
+  db: DatabaseSync,
+  rawPayload: RestartSentinelPayload,
+): RestartSentinel {
+  const payload = requireValidPayload(rawPayload);
+  if (payload.kind !== "update" || payload.stats?.mode !== "git") {
+    throw new TypeError("Update install receipt requires a git update payload");
+  }
+  const current = readRestartSentinelRowForKeySync(db, UPDATE_INSTALL_RECEIPT_KEY);
   const currentRevision =
     current.kind === "missing"
       ? null
       : current.kind === "valid"
         ? current.sentinel.revision
         : current.revision;
-  const revision = nextRevision(
-    maxRevision(currentRevision, readRestartSentinelRevisionFloorSync(db)),
+  const revision = nextRevision(currentRevision);
+  upsertRestartSentinelRowSync(
+    db,
+    buildRestartSentinelRow(payload, revision, UPDATE_INSTALL_RECEIPT_KEY),
   );
-  const row = buildRestartSentinelRow(payload, revision);
-  upsertRestartSentinelRowSync(db, row);
-  advanceRestartSentinelRevisionFloorSync(db, revision);
   return { version: 1, payload, revision };
 }
 
@@ -602,14 +644,12 @@ export function writeRestartSentinelRowIfRevisionSync(
   rawPayload: RestartSentinelPayload,
   expectedRevision: number,
 ): RestartSentinel | null {
-  const current = readRestartSentinelRowSync(db);
+  const { state: current, revision: previousRevision } = readRestartSentinelSnapshotSync(db);
   if (current.kind !== "valid" || current.sentinel.revision !== expectedRevision) {
     return null;
   }
   const payload = requireValidPayload(rawPayload);
-  const revision = nextRevision(
-    maxRevision(expectedRevision, readRestartSentinelRevisionFloorSync(db)),
-  );
+  const revision = nextRevision(previousRevision);
   const row = buildRestartSentinelRow(payload, revision);
   const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
   const result = executeSqliteQuerySync(

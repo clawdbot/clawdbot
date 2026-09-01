@@ -19,8 +19,8 @@ type SlackDraftStream = {
   clear: () => Promise<void>;
   discardPending: () => Promise<void>;
   seal: () => Promise<void>;
-  stop: () => void;
   forceNewMessage: () => void;
+  dropDetachedMessages: () => Promise<void>;
   finalizeMessage: (messageId: string, editFinal: () => Promise<void>) => Promise<boolean>;
   messageId: () => string | undefined;
   channelId: () => string | undefined;
@@ -32,6 +32,8 @@ type SlackDraftStreamUpdate =
       text: string;
       blocks?: (Block | KnownBlock)[];
     };
+
+type SlackDraftMessage = { channelId: string; messageId: string };
 
 export function createSlackDraftStream(params: {
   target: string;
@@ -45,7 +47,6 @@ export function createSlackDraftStream(params: {
   throttleMs?: number;
   resolveThreadTs?: () => string | undefined;
   metadata?: MessageMetadata;
-  onMessageSent?: () => void;
   log?: (message: string) => void;
   warn?: (message: string) => void;
   send?: typeof sendMessageSlack;
@@ -58,11 +59,13 @@ export function createSlackDraftStream(params: {
   const edit = params.edit ?? editSlackMessage;
   const remove = params.remove ?? deleteSlackMessage;
 
-  let streamMessageId: string | undefined;
-  let streamChannelId: string | undefined;
+  let streamMessage: SlackDraftMessage | undefined;
   let untrackConversationBoundary: (() => void) | undefined;
   let lastVisibleUpdate: { text: string; blocks?: (Block | KnownBlock)[] } | undefined;
   let lastSentKey = "";
+  const pendingCleanupMessages: SlackDraftMessage[] = [];
+  let cleanupTail = Promise.resolve();
+  const finalizedMessageIds = new Set<string>();
   const streamState = { stopped: false, final: false };
 
   const normalizeUpdate = (update: SlackDraftStreamUpdate) =>
@@ -89,8 +92,8 @@ export function createSlackDraftStream(params: {
     }
     lastSentKey = sentKey;
     try {
-      if (streamChannelId && streamMessageId) {
-        await edit(streamChannelId, streamMessageId, trimmed, {
+      if (streamMessage) {
+        await edit(streamMessage.channelId, streamMessage.messageId, trimmed, {
           cfg: params.cfg,
           token: params.token,
           accountId: params.accountId,
@@ -117,36 +120,32 @@ export function createSlackDraftStream(params: {
         accountId: params.accountId,
         threadTs,
         identity: params.identity,
-        ...(params.eventScope
-          ? { client: params.eventScope.client, enterpriseEventScope: params.eventScope }
-          : {}),
+        eventScope: params.eventScope,
         ...(params.metadata ? { metadata: params.metadata } : {}),
         ...(blocks ? { blocks } : {}),
       });
-      streamChannelId = sent.channelId || streamChannelId;
-      streamMessageId = sent.messageId || streamMessageId;
-      if (!streamChannelId || !streamMessageId) {
+      if (!sent.channelId || !sent.messageId) {
         stopTrackingConversationBoundary();
         streamState.stopped = true;
         params.warn?.("slack stream preview stopped (missing identifiers from sendMessage)");
         return;
       }
+      streamMessage = { channelId: sent.channelId, messageId: sent.messageId };
       lastVisibleUpdate = { text: trimmed, ...(blocks ? { blocks } : {}) };
-      if (pendingBoundary && params.conversationChannelId === streamChannelId) {
-        pendingBoundary.setMessageTs(streamMessageId);
+      if (pendingBoundary && params.conversationChannelId === streamMessage.channelId) {
+        pendingBoundary.setMessageTs(streamMessage.messageId);
       } else {
         stopTrackingConversationBoundary();
         const tracker = trackSlackDraftMessage({
           accountId: params.accountId,
           teamId: params.eventScope?.teamId,
-          channelId: streamChannelId,
+          channelId: streamMessage.channelId,
           threadTs,
-          messageTs: streamMessageId,
+          messageTs: streamMessage.messageId,
           onInterveningMessage: forceNewMessage,
         });
         untrackConversationBoundary = tracker.stop;
       }
-      params.onMessageSent?.();
     } catch (err) {
       stopTrackingConversationBoundary();
       streamState.stopped = true;
@@ -156,6 +155,7 @@ export function createSlackDraftStream(params: {
   const { loop, update, discardPending, seal } =
     createFinalizableDraftStreamControlsForState<SlackDraftStreamUpdate>({
       throttleMs,
+      coalesceInFlight: true,
       state: streamState,
       sendOrEditStreamMessage,
       emptyValue: "",
@@ -167,39 +167,52 @@ export function createSlackDraftStream(params: {
     untrackConversationBoundary = undefined;
   };
 
-  const stop = () => {
-    stopTrackingConversationBoundary();
-    streamState.stopped = true;
-    loop.stop();
+  const dropDetachedMessages = () => {
+    cleanupTail = cleanupTail.then(async () => {
+      // Retain failures for retry without letting one stale preview block the rest.
+      for (let index = 0; index < pendingCleanupMessages.length;) {
+        const message = pendingCleanupMessages[index];
+        if (!message) {
+          return;
+        }
+        try {
+          await remove(message.channelId, message.messageId, {
+            token: params.token,
+            accountId: params.accountId,
+            ...(params.eventScope ? { client: params.eventScope.client } : {}),
+          });
+          pendingCleanupMessages.splice(index, 1);
+        } catch (err) {
+          params.warn?.(`slack stream preview cleanup failed: ${formatSlackError(err)}`);
+          index += 1;
+        }
+      }
+    });
+    return cleanupTail;
   };
 
   const clear = async () => {
     stopTrackingConversationBoundary();
     await discardPending();
-    const channelId = streamChannelId;
-    const messageId = streamMessageId;
-    streamChannelId = undefined;
-    streamMessageId = undefined;
+    if (streamMessage) {
+      pendingCleanupMessages.push(streamMessage);
+      streamMessage = undefined;
+    }
     lastVisibleUpdate = undefined;
     lastSentKey = "";
-    if (!channelId || !messageId) {
-      return;
-    }
-    try {
-      await remove(channelId, messageId, {
-        token: params.token,
-        accountId: params.accountId,
-        ...(params.eventScope ? { client: params.eventScope.client } : {}),
-      });
-    } catch (err) {
-      params.warn?.(`slack stream preview cleanup failed: ${formatSlackError(err)}`);
-    }
+    await dropDetachedMessages();
   };
 
   const forceNewMessage = () => {
     stopTrackingConversationBoundary();
-    streamMessageId = undefined;
-    streamChannelId = undefined;
+    streamState.stopped = false;
+    streamState.final = false;
+    if (streamMessage && !finalizedMessageIds.has(streamMessage.messageId)) {
+      // A card abandoned below a newer human message is unreachable through
+      // finalize/clear and would otherwise linger in its Working state.
+      pendingCleanupMessages.push(streamMessage);
+    }
+    streamMessage = undefined;
     lastVisibleUpdate = undefined;
     lastSentKey = "";
     loop.resetPending();
@@ -214,14 +227,16 @@ export function createSlackDraftStream(params: {
     messageId: string,
     editFinal: () => Promise<void>,
   ): Promise<boolean> => {
-    const channelId = streamChannelId;
+    const currentMessage = streamMessage;
     const previousUpdate = lastVisibleUpdate;
-    if (!channelId || streamMessageId !== messageId || !previousUpdate) {
+    if (!currentMessage || currentMessage.messageId !== messageId || !previousUpdate) {
       return false;
     }
+    const { channelId } = currentMessage;
 
     await editFinal();
-    if (streamChannelId === channelId && streamMessageId === messageId) {
+    if (streamMessage?.channelId === channelId && streamMessage.messageId === messageId) {
+      finalizedMessageIds.add(messageId);
       stopTrackingConversationBoundary();
       return true;
     }
@@ -250,10 +265,10 @@ export function createSlackDraftStream(params: {
     clear,
     discardPending: discardPendingAndStopTracking,
     seal,
-    stop,
     forceNewMessage,
+    dropDetachedMessages,
     finalizeMessage,
-    messageId: () => streamMessageId,
-    channelId: () => streamChannelId,
+    messageId: () => streamMessage?.messageId,
+    channelId: () => streamMessage?.channelId,
   };
 }

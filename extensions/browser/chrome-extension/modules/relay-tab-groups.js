@@ -1,24 +1,6 @@
 import { OPENCLAW_TAB_GROUP_TITLE } from "./relay-core.js";
 
-export async function findOpenClawGroups() {
-  try {
-    return await chrome.tabGroups.query({ title: OPENCLAW_TAB_GROUP_TITLE });
-  } catch {
-    return [];
-  }
-}
-
-export async function listSharedTabs() {
-  const groups = await findOpenClawGroups();
-  const tabs = [];
-  for (const group of groups) {
-    const groupTabs = await chrome.tabs.query({ groupId: group.id });
-    tabs.push(...groupTabs);
-  }
-  return tabs.filter((tab) => typeof tab.id === "number");
-}
-
-export async function isOpenClawGroupId(groupId) {
+async function isOpenClawGroupId(groupId) {
   if (!Number.isInteger(groupId) || groupId < 0) {
     return false;
   }
@@ -30,10 +12,46 @@ export async function isOpenClawGroupId(groupId) {
   }
 }
 
-export async function requireSharedTab(tabId) {
-  const tab = await chrome.tabs.get(tabId);
-  if (!(await isOpenClawGroupId(tab.groupId))) {
-    throw new Error(`tab ${tabId} is not in the ${OPENCLAW_TAB_GROUP_TITLE} tab group`);
+export async function isTabSelected(tab) {
+  return await isOpenClawGroupId(tab?.groupId);
+}
+
+export async function addTabToOpenClawGroup(tabId, { chromeApi, getGroupColor, created }) {
+  const assertCurrent = () => created?.assertCurrent();
+  const tab = await chromeApi.tabs.get(tabId);
+  assertCurrent();
+  if (created && (tab.groupId !== created.groupId || tab.windowId !== created.tab.windowId)) {
+    throw new Error(`tab ${tabId} changed during creation`);
   }
-  return tab;
+  const groups = await chromeApi.tabGroups
+    .query({ title: OPENCLAW_TAB_GROUP_TITLE })
+    .catch(() => []);
+  assertCurrent();
+  const group = groups.find((candidate) => candidate.windowId === tab.windowId);
+  const color = group ? undefined : await getGroupColor();
+  assertCurrent();
+  if (created) {
+    created.grouping = true;
+    created.initialGroup = !group;
+    created.expectedGroupId = group?.id;
+  }
+  const groupId = await chromeApi.tabs.group({
+    tabIds: [tabId],
+    ...(group ? { groupId: group.id } : {}),
+  });
+  assertCurrent();
+  if (created) {
+    if (created.expectedGroupId !== undefined && created.expectedGroupId !== groupId) {
+      throw new Error(`tab ${tabId} group changed during creation`);
+    }
+    created.groupId = groupId;
+    created.expectedGroupId = groupId;
+  }
+  if (!group) {
+    if (created) {
+      created.namingGroup = groupId;
+    }
+    await chromeApi.tabGroups.update(groupId, { title: OPENCLAW_TAB_GROUP_TITLE, color });
+    assertCurrent();
+  }
 }

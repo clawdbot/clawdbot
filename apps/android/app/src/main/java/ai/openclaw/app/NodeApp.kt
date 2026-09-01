@@ -24,6 +24,7 @@ class NodeApp : Application() {
   // System share senders can create overlapping Activity tasks; keep one bounded process queue.
   internal val chatShareDraftSeq = AtomicLong()
   internal val chatShareDraftQueue = ChatShareDraftQueue()
+  internal val conversationNotificationLaunchStore = ConversationNotificationLaunchStore()
   internal val permissionRequester by lazy { PermissionRequester(this) }
 
   private val runtimeScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -82,6 +83,10 @@ class NodeApp : Application() {
     runtimeScope.launch { peekRuntime()?.disconnect() }
   }
 
+  internal fun launchRuntimeTask(block: suspend () -> Unit) {
+    runtimeScope.launch { block() }
+  }
+
   /** Clears pairing auth without racing lazy process-runtime construction. */
   suspend fun resetGatewaySetupAuth(stableId: String): Boolean {
     val runtime =
@@ -115,8 +120,8 @@ class NodeApp : Application() {
 
   override fun onConfigurationChanged(newConfig: Configuration) {
     super.onConfigurationChanged(newConfig)
-    // The process runtime survives Activity recreation, so retained text and
-    // serialized Home Canvas state need an explicit locale refresh signal.
+    // The process runtime survives Activity recreation, so retained text needs an
+    // explicit locale refresh signal.
     NativeStringResources.setConfigurationLocales(newConfig)
     notifyNativeLocaleChanged()
   }

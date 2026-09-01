@@ -1,67 +1,128 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles.js";
+import { resolveExternalCliAuthScopeFromConfig } from "../../agents/auth-profiles/external-cli-scope.js";
+import type { RuntimeAuthMaterialization } from "../../agents/auth-profiles/runtime-materializations.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import {
+  applyCliRuntimeModelAuthAvailability,
   createModelAuthAvailabilityResolver,
   type ModelAuthAvailabilityResolver,
+  type ModelAuthAvailabilityEvaluation,
 } from "../../agents/model-auth-availability.js";
-import { createOpenAIModelRoutesResolver } from "../../agents/openai-model-routes.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import {
+  createOpenAIModelRoutesResolver,
+  openAIModelCatalogRoutePolicy,
+  resolveModelCatalogIdentityKey,
+} from "../../agents/openai-model-routes.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isManifestPluginAvailableForControlPlane } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { loadPluginRegistrySnapshotWithMetadata } from "../../plugins/plugin-registry.js";
+import type { ProviderCatalogOutcome } from "../../plugins/provider-catalog.types.js";
 
-function listEnabledSyntheticAuthProviderRefs(params: {
-  cfg: OpenClawConfig;
-  metadataSnapshot?: PluginMetadataSnapshot;
-  workspaceDir: string;
-}): readonly string[] {
-  if (params.metadataSnapshot) {
-    return params.metadataSnapshot.index.plugins
-      .filter((plugin) => plugin.enabled)
-      .flatMap((plugin) => plugin.syntheticAuthRefs ?? []);
-  }
-  const result = loadPluginRegistrySnapshotWithMetadata({
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    env: process.env,
-  });
-  if (result.source !== "persisted" && result.source !== "provided") {
-    return [];
-  }
-  return result.snapshot.plugins
-    .filter((plugin) => plugin.enabled)
+function listEnabledSyntheticAuthProviderRefs(
+  metadataSnapshot: PluginMetadataSnapshot,
+  config: OpenClawConfig,
+): readonly string[] {
+  return metadataSnapshot.plugins
+    .filter((plugin) =>
+      isManifestPluginAvailableForControlPlane({ snapshot: metadataSnapshot, plugin, config }),
+    )
     .flatMap((plugin) => plugin.syntheticAuthRefs ?? []);
 }
 
 export function createModelsListAuthResolver(params: {
   cfg: OpenClawConfig;
   agentId: string;
-  includeOpenAIExternalProfiles: boolean;
-  metadataSnapshot?: PluginMetadataSnapshot;
-  preparedAuthStore?: AuthProfileStore;
+  metadataSnapshot: PluginMetadataSnapshot;
+  preparedAuthStore: AuthProfileStore;
+  preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
+  preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];
+  preparedSyntheticAuthComplete?: boolean;
   workspaceDir: string;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
 }): ModelAuthAvailabilityResolver {
   const agentDir = resolveAgentDir(params.cfg, params.agentId);
-  // Browse reads persisted auth because another CLI process may have refreshed
-  // it after the Gateway execution snapshot was built.
-  const authStore =
-    params.preparedAuthStore ??
-    loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
-      allowKeychainPrompt: false,
-    });
   return createModelAuthAvailabilityResolver({
     cfg: params.cfg,
-    authStore,
+    authStore: params.preparedAuthStore,
     agentDir,
     workspaceDir: params.workspaceDir,
     env: process.env,
     metadataSnapshot: params.metadataSnapshot,
+    preparedRuntimeAuthModes: params.preparedRuntimeAuthModes,
+    preparedRuntimeAuthMaterializations: params.preparedRuntimeAuthMaterializations,
+    preparedSyntheticAuthComplete: params.preparedSyntheticAuthComplete,
     skipSetupProviderFallback: true,
-    syntheticAuthProviderRefs: listEnabledSyntheticAuthProviderRefs(params),
-    externalCliProviderIds:
-      !params.preparedAuthStore && params.includeOpenAIExternalProfiles ? ["openai"] : [],
-    ...(params.preparedAuthStore ? { allowPreparedRuntimeAuth: false } : {}),
+    syntheticAuthProviderRefs: listEnabledSyntheticAuthProviderRefs(
+      params.metadataSnapshot,
+      params.cfg,
+    ),
+    externalCliProviderIds: resolveExternalCliAuthScopeFromConfig(params.cfg)?.providerIds ?? [],
+    preparedRuntimeAuthStore: params.preparedAuthStore,
     routeResolverFactory: params.routeResolverFactory,
   });
+}
+
+export function createModelsListEntryEvaluator(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  authResolver: ModelAuthAvailabilityResolver;
+  metadataSnapshot: PluginMetadataSnapshot;
+  providerOutcomes?: readonly ProviderCatalogOutcome[];
+  preferredProfileId?: string;
+  lockedProfileId?: string;
+}): (
+  entry: ModelCatalogEntry,
+  routeVariants?: readonly ModelCatalogEntry[],
+) => Promise<ModelAuthAvailabilityEvaluation> {
+  const pending = new Map<string, Promise<ModelAuthAvailabilityEvaluation>>();
+  return (entry, routeVariants = [entry]) => {
+    const identity = openAIModelCatalogRoutePolicy.resolveIdentity(entry);
+    const cacheKey = resolveModelCatalogIdentityKey(entry);
+    const cached = pending.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+    const next = Promise.resolve().then((): ModelAuthAvailabilityEvaluation => {
+      const evaluation = params.authResolver.evaluateModelAuth(entry.provider, {
+        modelId: identity?.id ?? entry.id,
+        ...(params.preferredProfileId ? { preferredProfileId: params.preferredProfileId } : {}),
+        ...(params.lockedProfileId ? { lockedProfileId: params.lockedProfileId } : {}),
+        observedRoutes: routeVariants.map((variant) => ({
+          api: variant.api,
+          baseUrl: variant.baseUrl,
+        })),
+      });
+      const resolved = applyCliRuntimeModelAuthAvailability({
+        authResolver: params.authResolver,
+        evaluation,
+        cfg: params.cfg,
+        agentId: params.agentId,
+        metadataSnapshot: params.metadataSnapshot,
+        provider: entry.provider,
+        modelId: entry.id,
+      });
+      const provider = normalizeProviderId(entry.provider);
+      // Stored credentials prove presence, not acceptance. Apply the live rejection only to the
+      // profile discovery tested; widening it would hide routes backed by another valid profile.
+      return params.providerOutcomes?.some(
+        (outcome) =>
+          outcome.status === "auth-rejected" &&
+          outcome.rejectionScope !== "catalog" &&
+          normalizeProviderId(outcome.provider) === provider &&
+          (outcome.profileId === undefined || outcome.profileId === resolved.selectedProfileId),
+      )
+        ? {
+            ...resolved,
+            availability: false,
+            unavailableReason: "auth-failed",
+            unavailableUntil: undefined,
+          }
+        : resolved;
+    });
+    pending.set(cacheKey, next);
+    return next;
+  };
 }

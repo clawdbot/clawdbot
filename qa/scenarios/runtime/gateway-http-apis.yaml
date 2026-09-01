@@ -17,7 +17,7 @@ scenario:
     - docs/gateway/openai-http-api.md
     - docs/gateway/openresponses-http-api.md
     - docs/gateway/tools-invoke-http-api.md
-    - docs/automation/webhook.md
+    - docs/automation/cron-jobs.md
   codeRefs:
     - src/gateway/models-http.ts
     - src/gateway/openai-http.ts

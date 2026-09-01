@@ -1,6 +1,6 @@
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import type { AssistantPhase } from "../shared/chat-message-content.js";
-import "./embedded-agent-subscribe.handlers.messages.js";
+import "./embedded-agent-subscribe.handlers.messages.update.js";
 import type { EmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.handlers.types.js";
 
 type AssistantStreamDataParams = {
@@ -9,6 +9,7 @@ type AssistantStreamDataParams = {
   replace?: boolean;
   mediaUrls?: string[];
   mediaUrl?: string;
+  managedMediaUrls?: string[];
   phase?: AssistantPhase;
   itemId?: string;
 };
@@ -18,6 +19,7 @@ type AssistantStreamData = {
   delta: string;
   replace?: true;
   mediaUrls?: string[];
+  managedMediaUrls?: string[];
   phase?: AssistantPhase;
   itemId?: string;
 };

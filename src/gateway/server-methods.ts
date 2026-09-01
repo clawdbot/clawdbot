@@ -1,8 +1,14 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ErrorCodes,
   errorShape,
   missingScopeErrorShape,
+  type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
+import {
+  GATEWAY_RESTART_UNAVAILABLE_REASON,
+  GATEWAY_SUSPEND_UNAVAILABLE_REASON,
+} from "../../packages/gateway-protocol/src/restart-unavailable.js";
 import {
   gatewayStartupUnavailableDetails,
   GATEWAY_STARTUP_RETRY_AFTER_MS,
@@ -15,6 +21,7 @@ import {
 import {
   getGatewaySuspendAdmissionPhase,
   isGatewayRestartDraining,
+  tryBeginGatewayPreparedRestartRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
@@ -43,16 +50,25 @@ import {
 } from "./methods/registry.js";
 import { isOperatorScope } from "./operator-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
+import { authenticatedProfileUnavailableError } from "./server-methods/gateway-client-identity.js";
 import { createLazyCoreHandlers, lazyHandlerModule } from "./server-methods/lazy-core-handlers.js";
+import { isTargetedNonSafeGatewayRestartRequest } from "./server-methods/restart-request.js";
 import type {
+  GatewayRequestContext,
   GatewayRequestHandler,
   GatewayRequestHandlers,
   GatewayRequestOptions,
+  SessionMutationAuthorization,
 } from "./server-methods/types.js";
+import {
+  resolveDirectIncognitoTargets,
+  sessionMutationTargetFields,
+} from "./session-sharing-target-input.js";
 import {
   resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,
 } from "./session-sharing.js";
+import { classifyGatewayStaleInstall } from "./stale-install.js";
 
 type CoreGatewayHandlerModuleLoader = () => Promise<GatewayRequestHandlers>;
 
@@ -73,6 +89,11 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "channel-pairing": () =>
     import("./server-methods/channel-pairing.js").then((module) => module.channelPairingHandlers),
   chat: () => import("./server-methods/chat.js").then((module) => module.chatHandlers),
+  // Cancellation must not wait for unrelated chat history and send workflows to load.
+  "chat-abort": () =>
+    import("./server-methods/chat-abort-handler.js").then((module) => ({
+      "chat.abort": module.handleChatAbortRequest,
+    })),
   commands: () => import("./server-methods/commands.js").then((module) => module.commandsHandlers),
   config: () => import("./server-methods/config.js").then((module) => module.configHandlers),
   conversations: () =>
@@ -88,7 +109,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     ),
   diagnostics: () =>
     import("./server-methods/diagnostics.js").then((module) => module.diagnosticsHandlers),
-  doctor: () => import("./server-methods/doctor.js").then((module) => module.doctorHandlers),
+  doctor: () =>
+    import("./server-methods/doctor.js").then((module) => module.createDoctorHandlers()),
   environments: () =>
     import("./server-methods/environments.js").then((module) => module.environmentsHandlers),
   worktrees: () =>
@@ -115,11 +137,17 @@ const CORE_GATEWAY_HANDLER_MODULES = {
       (module) => module.nativeHookRelayHandlers,
     ),
   "nodes-pending": () =>
-    import("./server-methods/nodes-pending.js").then((module) => module.nodePendingHandlers),
+    import("./server-methods/nodes.pending-work.js").then(
+      (module) => module.nodePendingWorkHandlers,
+    ),
   nodes: () => import("./server-methods/nodes.js").then((module) => module.nodeHandlers),
   "plugin-host-hooks": () =>
     import("./server-methods/plugin-host-hooks.js").then((module) => module.pluginHostHookHandlers),
   plugins: () => import("./server-methods/plugins.js").then((module) => module.pluginsHandlers),
+  projects: () => import("./server-methods/projects.js").then((module) => module.projectsHandlers),
+  portals: () => import("./server-methods/portals.js").then((module) => module.portalHandlers),
+  "progress-card": () =>
+    import("./server-methods/progress-card.js").then((module) => module.progressCardHandlers),
   migrations: () =>
     import("./server-methods/migrations.js").then((module) => module.migrationsHandlers),
   push: () => import("./server-methods/push.js").then((module) => module.pushHandlers),
@@ -128,6 +156,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   send: () => import("./server-methods/send.js").then((module) => module.sendHandlers),
   "sessions-files": () =>
     import("./server-methods/sessions-files.js").then((module) => module.sessionsFilesHandlers),
+  "sessions-github": () =>
+    import("./server-methods/sessions-github.js").then((module) => module.sessionsGitHubHandlers),
   "sessions-diff": () =>
     import("./server-methods/sessions-diff.js").then((module) => module.sessionsDiffHandlers),
   "sessions-abort": () =>
@@ -144,6 +174,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     ),
   "sessions-create": () =>
     import("./server-methods/sessions-create.js").then((module) => module.sessionCreateHandlers),
+  "sessions-recover": () =>
+    import("./server-methods/sessions-recover.js").then((module) => module.sessionRecoverHandlers),
   "sessions-delete": () =>
     import("./server-methods/sessions-delete.js").then((module) => module.sessionDeleteHandlers),
   "sessions-dispatch": () =>
@@ -152,6 +184,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     ),
   "sessions-groups": () =>
     import("./server-methods/sessions-groups.js").then((module) => module.sessionGroupHandlers),
+  "sessions-goal": () =>
+    import("./server-methods/sessions-goal.js").then((module) => module.sessionGoalHandlers),
   "sessions-messaging": () =>
     import("./server-methods/sessions-messaging.js").then(
       (module) => module.sessionMessagingHandlers,
@@ -194,6 +228,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./server-methods/task-suggestions.js").then((module) => module.taskSuggestionsHandlers),
   "tools-catalog": () =>
     import("./server-methods/tools-catalog.js").then((module) => module.toolsCatalogHandlers),
+  "tools-github": () =>
+    import("./server-methods/tools-github.js").then((module) => module.toolsGitHubHandlers),
   "tools-effective": () =>
     import("./server-methods/tools-effective.js").then((module) => module.toolsEffectiveHandlers),
   "tools-invoke": () =>
@@ -224,10 +260,7 @@ function authorizeGatewayMethod(
 ) {
   // Pre-connect and health requests are allowed through; role/scope checks require the
   // authenticated connect metadata established by the gateway handshake.
-  if (!client?.connect) {
-    return null;
-  }
-  if (method === "health") {
+  if (!client?.connect || method === "health") {
     return null;
   }
   const roleRaw = client.connect.role ?? "operator";
@@ -240,6 +273,11 @@ function authorizeGatewayMethod(
     return errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${role}`);
   }
   if (role === "node") {
+    return null;
+  }
+  if (method === "device.scopes.requestUpgrade" || method === "device.scopes.waitUpgrade") {
+    // Scope recovery must remain reachable from a paired operator whose grant is empty;
+    // the handlers bind both calls to the connection's exact device identity.
     return null;
   }
   if (scopes.includes(ADMIN_SCOPE)) {
@@ -272,6 +310,93 @@ function isGatewayMethodAllowedDuringSuspension(method: string): boolean {
   return SUSPEND_CONTROL_METHODS.has(method);
 }
 
+function runGatewayPendingWorkContinuation<T>(params: {
+  method: string;
+  client: GatewayRequestOptions["client"];
+  requestParams: unknown;
+  context: GatewayRequestContext;
+  run: () => Promise<T>;
+}): Promise<T> | null {
+  if (!isRecord(params.requestParams)) {
+    return null;
+  }
+  const request = params.requestParams;
+  if (params.client?.connect.role === "node") {
+    if (getGatewaySuspendAdmissionPhase() !== "draining" && !isGatewayRestartDraining()) {
+      return null;
+    }
+    const invokeId =
+      params.method === "node.invoke.progress"
+        ? request.invokeId
+        : params.method === "node.invoke.result"
+          ? request.id
+          : undefined;
+    if (typeof invokeId !== "string" || typeof request.nodeId !== "string") {
+      return null;
+    }
+    return params.context.nodeRegistry.runPendingInvokeContinuation({
+      invokeId,
+      nodeId: request.nodeId,
+      connId: params.client.connId,
+      run: params.run,
+    });
+  }
+  if (
+    getGatewaySuspendAdmissionPhase() !== "draining" ||
+    params.client?.connect.role !== "operator" ||
+    typeof request.id !== "string"
+  ) {
+    return null;
+  }
+  if (params.method === "question.resolve" || params.method === "question.get") {
+    return params.context.questionManager?.runPendingContinuation(request.id, params.run) ?? null;
+  }
+  const manager =
+    params.method === "exec.approval.resolve"
+      ? params.context.execApprovalManager
+      : params.method === "plugin.approval.resolve"
+        ? params.context.pluginApprovalManager
+        : params.method === "approval.resolve"
+          ? request.kind === "exec"
+            ? params.context.execApprovalManager
+            : request.kind === "plugin"
+              ? params.context.pluginApprovalManager
+              : request.kind === "system-agent"
+                ? params.context.systemAgentApprovalManager
+                : undefined
+          : undefined;
+  return manager?.runPendingContinuation(request.id, params.run) ?? null;
+}
+
+async function authorizeAuthenticatedProfileForMethod(params: {
+  client: GatewayRequestOptions["client"];
+  method: string;
+  requestParams: unknown;
+  methodRegistry: GatewayMethodRegistry;
+  context: GatewayRequestContext;
+}): Promise<ErrorShape | null> {
+  const sync = params.client?.authenticatedGitHubIdentitySync;
+  if (!sync || params.client?.authenticatedUserProfile?.profileId.trim()) {
+    return null;
+  }
+  const requiresProfile =
+    params.methodRegistry.requiresAuthenticatedProfile(params.method) ||
+    resolveDirectIncognitoTargets(params.method, params.requestParams).length > 0 ||
+    (sessionMutationTargetFields(params.method).length > 0 &&
+      params.context.getRuntimeConfig().gateway?.roles !== undefined);
+  if (!requiresProfile) {
+    return null;
+  }
+  try {
+    await sync();
+  } catch {
+    return authenticatedProfileUnavailableError();
+  }
+  return params.client?.authenticatedUserProfile?.profileId.trim()
+    ? null
+    : authenticatedProfileUnavailableError();
+}
+
 const coreGatewayHandlerMethodNames = listCoreGatewayHandlerMethodNames();
 const coreGatewayHandlerModules = Object.entries(CORE_GATEWAY_HANDLER_MODULES) as Array<
   [CoreGatewayHandlerFamily, CoreGatewayHandlerModuleLoader]
@@ -289,7 +414,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = Object.fromEntries(
 );
 
 /** Builds the per-request method registry from core, plugin, and explicit extra handlers. */
-function createRequestGatewayMethodRegistry(
+export function createRequestGatewayMethodRegistry(
   extraHandlers?: GatewayRequestHandlers,
 ): GatewayMethodRegistry {
   // Attached gateway methods must not be shadowed by agent-scoped registry loads.
@@ -332,6 +457,230 @@ function createRequestGatewayMethodRegistry(
   );
 }
 
+/** Applies the router-owned authorization fence before any transport or typed dispatch. */
+export async function authorizeGatewayRequestPreDispatch(params: {
+  method: string;
+  requestParams: unknown;
+  client: GatewayRequestOptions["client"];
+  context: GatewayRequestContext;
+  methodRegistry: GatewayMethodRegistry;
+}): Promise<{
+  error: ErrorShape | null;
+  sessionMutationAuthorization?: SessionMutationAuthorization;
+}> {
+  const authError = authorizeGatewayMethod(
+    params.method,
+    params.client,
+    params.requestParams,
+    params.methodRegistry,
+  );
+  if (authError) {
+    return { error: authError };
+  }
+  // GitHub-backed connections receive hello before remote account resolution. Profile-owned
+  // methods must cross this single router fence before session authorization or handler work.
+  const profileError = await authorizeAuthenticatedProfileForMethod(params);
+  if (profileError) {
+    return { error: profileError };
+  }
+  // Startup gating precedes session authorization: session stores are not loaded yet,
+  // so an authorization read here would deny with a misleading non-retryable error.
+  if (params.context.unavailableGatewayMethods?.has(params.method)) {
+    return {
+      error: errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `${params.method} unavailable during gateway startup`,
+        {
+          retryable: true,
+          retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
+          details: { ...gatewayStartupUnavailableDetails(), method: params.method },
+        },
+      ),
+    };
+  }
+  const sessionMutation = resolveSessionMutationAuthorization({
+    client: params.client ?? null,
+    method: params.method,
+    requestParams: params.requestParams,
+    context: params.context,
+  });
+  if (sessionMutation.error) {
+    return { error: sessionMutation.error };
+  }
+  if (
+    params.client?.connect.role === "node" &&
+    (!params.client.connId ||
+      !(await params.context.nodeRegistry.isConnectionCurrentPairingState(params.client.connId)))
+  ) {
+    return {
+      error: errorShape(ErrorCodes.UNAVAILABLE, "node pairing changed before request dispatch", {
+        retryable: true,
+        details: { code: "PAIRING_CHANGED" },
+      }),
+    };
+  }
+  return {
+    error: null,
+    ...(sessionMutation.authorization
+      ? { sessionMutationAuthorization: sessionMutation.authorization }
+      : {}),
+  };
+}
+
+type GatewayRequestEnvelopeOptions<T> = Pick<
+  GatewayRequestOptions,
+  "context" | "isWebchatConnect"
+> & {
+  methodRegistry: GatewayMethodRegistry;
+  requestParams?: unknown;
+  reject: (error: ReturnType<typeof errorShape>) => T | Promise<T>;
+};
+
+/** Runs admitted Gateway work inside the shared root and plugin request scopes. */
+export async function runWithGatewayRequestEnvelope<T>(
+  method: string,
+  client: GatewayRequestOptions["client"],
+  fn: () => T | Promise<T>,
+  options: GatewayRequestEnvelopeOptions<T>,
+): Promise<T> {
+  const rejectRateLimitedControlPlaneWrite = (): ReturnType<typeof errorShape> | undefined => {
+    if (!options.methodRegistry.isControlPlaneWrite(method)) {
+      return undefined;
+    }
+    const budget = consumeControlPlaneWriteBudget({ client, method });
+    if (budget.allowed) {
+      return undefined;
+    }
+    const actor = resolveControlPlaneActor(client);
+    options.context.logGateway.warn(
+      `control-plane write rate-limited method=${method} ${formatControlPlaneActor(actor)} retryAfterMs=${budget.retryAfterMs} key=${budget.key}`,
+    );
+    return errorShape(
+      ErrorCodes.UNAVAILABLE,
+      `rate limit exceeded for ${method}; retry after ${Math.ceil(budget.retryAfterMs / 1000)}s`,
+      {
+        retryable: true,
+        retryAfterMs: budget.retryAfterMs,
+        details: {
+          method,
+          limit: `${CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS} per ${CONTROL_PLANE_RATE_LIMIT_WINDOW_MS / 1000}s`,
+        },
+      },
+    );
+  };
+  const isSuspendPrepare = method === "gateway.suspend.prepare";
+  const preAdmissionRateLimitError = isSuspendPrepare
+    ? rejectRateLimitedControlPlaneWrite()
+    : undefined;
+  if (preAdmissionRateLimitError) {
+    // Preparation must stay protected even before it owns the root admission that it closes.
+    return await options.reject(preAdmissionRateLimitError);
+  }
+  const rootWorkAdmission =
+    tryBeginGatewayRootWorkAdmission(`ws:${method}`) ??
+    (method === "gateway.restart.request" &&
+    isTargetedNonSafeGatewayRestartRequest(options.requestParams)
+      ? tryBeginGatewayPreparedRestartRootWorkAdmission()
+      : null);
+  if (!rootWorkAdmission) {
+    // Completion frames arrive on separate socket chains. Their exact pending owner
+    // may settle them without admitting a new root, including rootless shutdown cleanup.
+    const continuation = runGatewayPendingWorkContinuation({
+      method,
+      client,
+      requestParams: options.requestParams,
+      context: options.context,
+      run: invokeWithRequestScope,
+    });
+    if (continuation) {
+      return await continuation;
+    }
+  }
+  if (isSuspendPrepare && rootWorkAdmission && !rootWorkAdmission.ownsRoot) {
+    return await options.reject(
+      errorShape(ErrorCodes.UNAVAILABLE, "gateway suspension cannot begin from a nested request", {
+        retryable: true,
+        retryAfterMs: 1_000,
+        details: { method, reason: "nested-gateway-request" },
+      }),
+    );
+  }
+  if (!rootWorkAdmission && !isGatewayMethodAllowedDuringSuspension(method)) {
+    const restartDraining = isGatewayRestartDraining();
+    return await options.reject(
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `${method} unavailable during gateway ${restartDraining ? "restart" : "suspension"}`,
+        {
+          retryable: true,
+          retryAfterMs: 1_000,
+          details: {
+            method,
+            reason: restartDraining
+              ? GATEWAY_RESTART_UNAVAILABLE_REASON
+              : GATEWAY_SUSPEND_UNAVAILABLE_REASON,
+            phase: getGatewaySuspendAdmissionPhase(),
+          },
+        },
+      ),
+    );
+  }
+  async function invokeWithRequestScope() {
+    const postAdmissionRateLimitError = isSuspendPrepare
+      ? undefined
+      : rejectRateLimitedControlPlaneWrite();
+    // A closed admission must reject first so refused writes do not exhaust the controller's
+    // budget and strand it behind rate limiting after suspension resumes.
+    if (postAdmissionRateLimitError) {
+      return await options.reject(postAdmissionRateLimitError);
+    }
+    try {
+      const pluginRegistry =
+        (options.methodRegistry.pluginRegistry as
+          | NonNullable<ReturnType<typeof getActivePluginRegistry>>
+          | undefined) ??
+        getPluginRuntimeGatewayRequestScope()?.pluginRegistry ??
+        getActivePluginRegistry() ??
+        undefined;
+      return await withPluginRuntimeGatewayRequestScope(
+        {
+          context: options.context,
+          // Detached turn admission needs the live instance resolver, not a captured request context.
+          resolveGatewayContext: options.context.resolveGatewayContext,
+          client,
+          isWebchatConnect: options.isWebchatConnect,
+          // Only an owner-bound in-process stream may retain admitted Full authority.
+          ...(client?.internal?.nodeInvokeStream
+            ? {
+                invokeWithSessionNodeAuthority:
+                  getPluginRuntimeGatewayRequestScope()?.invokeWithSessionNodeAuthority,
+              }
+            : {}),
+          ...(pluginRegistry ? { pluginRegistry } : {}),
+        },
+        fn,
+      );
+    } catch (error) {
+      if (error instanceof SessionMutationAuthorizationChangedError) {
+        return await options.reject(error.error);
+      }
+      const staleInstall = classifyGatewayStaleInstall(error);
+      if (staleInstall) {
+        return await options.reject(staleInstall.error);
+      }
+      throw error;
+    }
+  }
+  if (!rootWorkAdmission) {
+    return await invokeWithRequestScope();
+  }
+  try {
+    return await rootWorkAdmission.run(invokeWithRequestScope);
+  } finally {
+    rootWorkAdmission.release();
+  }
+}
+
 /** Authorizes and dispatches one gateway JSON-RPC-style request. */
 export async function handleGatewayRequest(
   opts: GatewayRequestOptions & { extraHandlers?: GatewayRequestHandlers },
@@ -345,82 +694,15 @@ export async function handleGatewayRequest(
     opts.methodRegistry?.getHandler(req.method) !== undefined
       ? opts.methodRegistry
       : createRequestGatewayMethodRegistry(opts.extraHandlers);
-  const authError = authorizeGatewayMethod(req.method, client, req.params, methodRegistry);
-  if (authError) {
-    respond(false, undefined, authError);
-    return;
-  }
-  const sessionMutation = resolveSessionMutationAuthorization({
-    client: client ?? null,
+  const authorization = await authorizeGatewayRequestPreDispatch({
     method: req.method,
     requestParams: req.params,
+    client,
     context,
+    methodRegistry,
   });
-  if (sessionMutation.error) {
-    respond(false, undefined, sessionMutation.error);
-    return;
-  }
-  if (
-    client?.connect.role === "node" &&
-    (!client.connId || !(await context.nodeRegistry.isConnectionCurrentPairingState(client.connId)))
-  ) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, "node pairing changed before request dispatch", {
-        retryable: true,
-        details: { code: "PAIRING_CHANGED" },
-      }),
-    );
-    return;
-  }
-  if (context.unavailableGatewayMethods?.has(req.method)) {
-    // During startup, methods can be listed before their runtime is ready. Return the protocol
-    // retry shape so clients can back off without treating startup as a permanent unknown method.
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, `${req.method} unavailable during gateway startup`, {
-        retryable: true,
-        retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
-        details: { ...gatewayStartupUnavailableDetails(), method: req.method },
-      }),
-    );
-    return;
-  }
-  const rejectRateLimitedControlPlaneWrite = (): boolean => {
-    if (!methodRegistry.isControlPlaneWrite(req.method)) {
-      return false;
-    }
-    const budget = consumeControlPlaneWriteBudget({ client, method: req.method });
-    if (budget.allowed) {
-      return false;
-    }
-    const actor = resolveControlPlaneActor(client);
-    context.logGateway.warn(
-      `control-plane write rate-limited method=${req.method} ${formatControlPlaneActor(actor)} retryAfterMs=${budget.retryAfterMs} key=${budget.key}`,
-    );
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.UNAVAILABLE,
-        `rate limit exceeded for ${req.method}; retry after ${Math.ceil(budget.retryAfterMs / 1000)}s`,
-        {
-          retryable: true,
-          retryAfterMs: budget.retryAfterMs,
-          details: {
-            method: req.method,
-            limit: `${CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS} per ${CONTROL_PLANE_RATE_LIMIT_WINDOW_MS / 1000}s`,
-          },
-        },
-      ),
-    );
-    return true;
-  };
-  const isSuspendPrepare = req.method === "gateway.suspend.prepare";
-  if (isSuspendPrepare && rejectRateLimitedControlPlaneWrite()) {
-    // Preparation must stay protected even before it owns the root admission that it closes.
+  if (authorization.error) {
+    respond(false, undefined, authorization.error);
     return;
   }
   const handler = methodRegistry.getHandler(req.method) as GatewayRequestHandler | undefined;
@@ -432,50 +714,6 @@ export async function handleGatewayRequest(
     );
     return;
   }
-  const rootWorkAdmission = tryBeginGatewayRootWorkAdmission();
-  if (
-    req.method === "gateway.suspend.prepare" &&
-    rootWorkAdmission &&
-    !rootWorkAdmission.ownsRoot
-  ) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, "gateway suspension cannot begin from a nested request", {
-        retryable: true,
-        retryAfterMs: 1_000,
-        details: { method: req.method, reason: "nested-gateway-request" },
-      }),
-    );
-    return;
-  }
-  if (!rootWorkAdmission && !isGatewayMethodAllowedDuringSuspension(req.method)) {
-    const restartDraining = isGatewayRestartDraining();
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.UNAVAILABLE,
-        `${req.method} unavailable during gateway ${restartDraining ? "restart" : "suspension"}`,
-        {
-          retryable: true,
-          retryAfterMs: 1_000,
-          details: {
-            method: req.method,
-            reason: restartDraining ? "gateway-restarting" : "gateway-suspending",
-            phase: getGatewaySuspendAdmissionPhase(),
-          },
-        },
-      ),
-    );
-    return;
-  }
-  if (!isSuspendPrepare && rejectRateLimitedControlPlaneWrite()) {
-    // A closed admission must reject first so refused writes do not exhaust the controller's
-    // budget and strand it behind rate limiting after suspension resumes.
-    rootWorkAdmission?.release();
-    return;
-  }
   const invokeHandler = () =>
     handler({
       req,
@@ -485,47 +723,18 @@ export async function handleGatewayRequest(
       respond,
       context,
       ...(signal ? { signal } : {}),
-      ...(sessionMutation.authorization
-        ? { sessionMutationAuthorization: sessionMutation.authorization }
+      ...(opts.sessionMutationCommitGuard
+        ? { sessionMutationCommitGuard: opts.sessionMutationCommitGuard }
+        : {}),
+      ...(authorization.sessionMutationAuthorization
+        ? { sessionMutationAuthorization: authorization.sessionMutationAuthorization }
         : {}),
     });
-  // All handlers run inside a request scope so that plugin runtime
-  // subagent methods (e.g. context engine tools spawning sub-agents
-  // during tool execution) can dispatch back into the gateway.
-  // The scope also carries caller identity into plugin-owned gateway methods.
-  const invokeWithRequestScope = async () => {
-    try {
-      const pluginRegistry =
-        (methodRegistry.pluginRegistry as
-          | NonNullable<ReturnType<typeof getActivePluginRegistry>>
-          | undefined) ??
-        getPluginRuntimeGatewayRequestScope()?.pluginRegistry ??
-        getActivePluginRegistry() ??
-        undefined;
-      await withPluginRuntimeGatewayRequestScope(
-        {
-          context,
-          client,
-          isWebchatConnect,
-          ...(pluginRegistry ? { pluginRegistry } : {}),
-        },
-        invokeHandler,
-      );
-    } catch (error) {
-      if (error instanceof SessionMutationAuthorizationChangedError) {
-        respond(false, undefined, error.error);
-        return;
-      }
-      throw error;
-    }
-  };
-  if (!rootWorkAdmission) {
-    await invokeWithRequestScope();
-    return;
-  }
-  try {
-    await rootWorkAdmission.run(invokeWithRequestScope);
-  } finally {
-    rootWorkAdmission.release();
-  }
+  await runWithGatewayRequestEnvelope(req.method, client, invokeHandler, {
+    context,
+    isWebchatConnect,
+    methodRegistry,
+    requestParams: req.params,
+    reject: (error) => respond(false, undefined, error),
+  });
 }

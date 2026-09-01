@@ -17,7 +17,6 @@ import type {
   OAuthProviderId,
 } from "../../llm/utils/oauth/types.js";
 import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-runtime.errors.js";
-import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { AUTH_STORE_VERSION, OAUTH_REFRESH_LOCK_OPTIONS } from "../auth-profiles/constants.js";
 import {
   assertAuthProfileMigrationReady,
@@ -26,17 +25,18 @@ import {
 } from "../auth-profiles/legacy-source-diagnostic.js";
 import { resolveOAuthRefreshLockPath } from "../auth-profiles/paths.js";
 import { loadPersistedAuthProfileStore } from "../auth-profiles/persisted.js";
-import { getRuntimeAuthProfileStoreSnapshot } from "../auth-profiles/runtime-snapshots.js";
+import { getRuntimeAuthProfileStoreSnapshotCore } from "../auth-profiles/runtime-snapshots.js";
 import {
   inspectPersistedAuthProfileStateRaw,
   inspectPersistedAuthProfileStoreRaw,
   resolveAuthProfileDatabasePath,
   runAuthProfileWriteTransaction,
+  type AuthProfileDatabase,
 } from "../auth-profiles/sqlite.js";
 import { loadPersistedAuthProfileState } from "../auth-profiles/state.js";
 import {
   loadAuthProfileStoreForSecretsRuntime,
-  saveAuthProfileStore,
+  saveAuthProfileStoreWithPreparedOwner,
 } from "../auth-profiles/store.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { getAgentDir } from "../config.js";
@@ -269,13 +269,15 @@ function collectStateOnlyAuthProfileIds(store: AuthProfileStore): string[] {
 
 function loadSqliteAuthStorageStore(
   agentDir: string,
-  database?: OpenClawAgentDatabase,
+  database?: AuthProfileDatabase,
 ): AuthProfileStore {
   const inspection = inspectPersistedAuthProfileStoreRaw(agentDir, database);
   if (inspection.status === "missing") {
     const stateInspection = inspectPersistedAuthProfileStateRaw(agentDir, database);
     if (stateInspection.status === "unreadable") {
-      throw new AuthProfileStoreUnreadableError(agentDir);
+      throw new AuthProfileStoreUnreadableError(
+        database?.path ?? resolveAuthProfileDatabasePath(agentDir),
+      );
     }
     return {
       version: AUTH_STORE_VERSION,
@@ -285,7 +287,9 @@ function loadSqliteAuthStorageStore(
   }
   const store = loadPersistedAuthProfileStore(agentDir, database ? { database } : undefined);
   if (inspection.status === "unreadable" || !store) {
-    throw new AuthProfileStoreUnreadableError(agentDir);
+    throw new AuthProfileStoreUnreadableError(
+      database?.path ?? resolveAuthProfileDatabasePath(agentDir),
+    );
   }
   return store;
 }
@@ -297,7 +301,7 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
   ) {}
 
   private resolveMaterializedRuntimeStores(): AuthProfileStore[] {
-    const current = getRuntimeAuthProfileStoreSnapshot(this.agentDir);
+    const current = getRuntimeAuthProfileStoreSnapshotCore(this.agentDir);
     // A current lifecycle snapshot is authoritative, including an unresolved
     // ref after failed/revoked secrets reload. Prepared data is bootstrap-only.
     return current ? [current] : this.preparedStore ? [this.preparedStore] : [];
@@ -312,12 +316,12 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
     assertAuthProfileMigrationReady(this.agentDir);
     const snapshots = this.resolveMaterializedRuntimeStores();
     assertAuthProfileMigrationReady(this.agentDir);
-    return runAuthProfileWriteTransaction(this.agentDir, (database) => {
+    return runAuthProfileWriteTransaction(this.agentDir, (database, owner) => {
       const store = loadSqliteAuthStorageStore(this.agentDir, database);
       const materializedData = projectAuthoritativeAuthStorageData(store, snapshots);
       const { result, next } = fn(JSON.stringify(materializedData));
       if (next !== undefined) {
-        saveAuthProfileStore(
+        saveAuthProfileStoreWithPreparedOwner(
           applyAuthStorageData(store, JSON.parse(next) as AuthStorageData, materializedData),
           this.agentDir,
           {
@@ -326,6 +330,7 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
             syncExternalCli: false,
           },
           database,
+          owner,
         );
       }
       return result;
@@ -348,7 +353,7 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
           return result;
         }
         assertAuthProfileMigrationReady(this.agentDir);
-        runAuthProfileWriteTransaction(this.agentDir, (database) => {
+        runAuthProfileWriteTransaction(this.agentDir, (database, owner) => {
           const authoritative = loadSqliteAuthStorageStore(this.agentDir, database);
           if (!isDeepStrictEqual(authoritative.profiles, initialRaw.profiles)) {
             throw new AuthStoragePersistenceError(
@@ -356,7 +361,7 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
               undefined,
             );
           }
-          saveAuthProfileStore(
+          saveAuthProfileStoreWithPreparedOwner(
             applyAuthStorageData(authoritative, JSON.parse(next) as AuthStorageData, initialData),
             this.agentDir,
             {
@@ -365,6 +370,7 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
               syncExternalCli: false,
             },
             database,
+            owner,
           );
         });
         return result;
@@ -446,7 +452,7 @@ export class AuthStorage {
   static forAgent(agentDir: string = getAgentDir()): AuthStorage {
     assertAuthProfileMigrationReady(agentDir);
     const preparedStore =
-      getRuntimeAuthProfileStoreSnapshot(agentDir) ??
+      getRuntimeAuthProfileStoreSnapshotCore(agentDir) ??
       loadAuthProfileStoreForSecretsRuntime(agentDir);
     assertAuthStorageSecretRefsMaterialized(preparedStore);
     return new AuthStorage(new SqliteAuthStorageBackend(agentDir, preparedStore), agentDir);

@@ -28,6 +28,7 @@ type OpenClawReleaseClawHubPlanArgs = {
   releaseTag: string;
   releaseSha: string;
   releasePublishBranch: string;
+  releasePublishFullRef: string;
   releasePublishRunAttempt: string;
   releasePublishRunId: string;
   pluginPublishScope: PluginReleaseSelectionMode;
@@ -58,6 +59,7 @@ type OpenClawReleaseClawHubRuntimeStateArgs = {
   waitForClawHub: boolean;
   forceSkipClawHub: boolean;
   normalRunId?: string;
+  normalPublicationStaged?: boolean;
   bootstrapRunId?: string;
   bootstrapCompleted: boolean;
 };
@@ -138,6 +140,8 @@ function createDispatchTarget(params: {
   packages: readonly string[];
   releasePublishRunId: string;
   releasePublishBranch: string;
+  releasePublishFullRef?: string;
+  releasePublishWorkflowSha?: string;
   includePublishScope: boolean;
   bootstrapWorkflowSha?: string;
   releaseTag?: string;
@@ -170,6 +174,12 @@ function createDispatchTarget(params: {
       ...(params.releasePublishRunAttempt
         ? { release_publish_run_attempt: params.releasePublishRunAttempt }
         : {}),
+      ...(params.releasePublishFullRef
+        ? { release_publish_full_ref: params.releasePublishFullRef }
+        : {}),
+      ...(params.releasePublishWorkflowSha
+        ? { release_publish_workflow_sha: params.releasePublishWorkflowSha }
+        : {}),
       plugins,
       release_publish_run_id: params.releasePublishRunId,
       release_publish_branch: params.releasePublishBranch,
@@ -193,7 +203,9 @@ export function buildOpenClawReleaseClawHubRuntimeState(
     args.bootstrapCompleted &&
     (normalRunId === undefined || args.waitForClawHub);
   const shouldSkipClawHubPackages =
-    args.forceSkipClawHub || !(shouldIncludeNormalRun || shouldVerifyClawHubPackages);
+    args.forceSkipClawHub ||
+    (normalRunId !== undefined && args.normalPublicationStaged === true) ||
+    !(shouldIncludeNormalRun || shouldVerifyClawHubPackages);
 
   const verifierArgs = shouldSkipClawHubPackages ? ["--skip-clawhub"] : [];
   if (shouldIncludeNormalRun) {
@@ -204,7 +216,9 @@ export function buildOpenClawReleaseClawHubRuntimeState(
   }
 
   let normalProofLine = "- plugin ClawHub publish: no normal OIDC candidates";
-  if (normalRunId !== undefined && args.waitForClawHub) {
+  if (normalRunId !== undefined && args.normalPublicationStaged === true) {
+    normalProofLine = `- plugin ClawHub submission: ${runUrl(repository, normalRunId)}; public artifact verification follows successful release-parent completion`;
+  } else if (normalRunId !== undefined && args.waitForClawHub) {
     normalProofLine = `- plugin ClawHub publish: ${runUrl(repository, normalRunId)}`;
   } else if (normalRunId !== undefined) {
     normalProofLine = `- plugin ClawHub publish: dispatched separately, not awaited by this proof: ${runUrl(repository, normalRunId)}`;
@@ -239,6 +253,7 @@ export function parseOpenClawReleaseClawHubPlanArgs(
   let bootstrapWorkflowRef: string | undefined;
   let bootstrapWorkflowSha: string | undefined;
   let releasePublishBranch: string | undefined;
+  let releasePublishFullRef: string | undefined;
   let releasePublishRunAttempt: string | undefined;
   let releasePublishRunId: string | undefined;
   let pluginPublishScope: PluginReleaseSelectionMode | undefined;
@@ -271,6 +286,9 @@ export function parseOpenClawReleaseClawHubPlanArgs(
         break;
       case "--release-publish-branch":
         releasePublishBranch = next();
+        break;
+      case "--release-publish-full-ref":
+        releasePublishFullRef = next();
         break;
       case "--release-publish-run-attempt":
         releasePublishRunAttempt = next();
@@ -307,6 +325,7 @@ export function parseOpenClawReleaseClawHubPlanArgs(
     releaseTag: requireArg(releaseTag, "--release-tag"),
     releaseSha: requireCommitSha(releaseSha, "--release-sha"),
     releasePublishBranch: requireArg(releasePublishBranch, "--release-publish-branch"),
+    releasePublishFullRef: requireArg(releasePublishFullRef, "--release-publish-full-ref"),
     releasePublishRunAttempt: requirePositiveInteger(
       releasePublishRunAttempt,
       "--release-publish-run-attempt",
@@ -330,6 +349,7 @@ export async function buildOpenClawReleaseClawHubPlan(
   const releaseTag = requireArg(args.releaseTag, "releaseTag");
   const releaseSha = requireCommitSha(args.releaseSha, "releaseSha");
   const releasePublishBranch = requireArg(args.releasePublishBranch, "releasePublishBranch");
+  const releasePublishFullRef = requireArg(args.releasePublishFullRef, "releasePublishFullRef");
   const releasePublishRunAttempt = requirePositiveInteger(
     args.releasePublishRunAttempt,
     "releasePublishRunAttempt",
@@ -353,15 +373,20 @@ export async function buildOpenClawReleaseClawHubPlan(
 
   return {
     bootstrapWorkflowSha,
-    clawHubWorkflowRef: releaseTag,
+    clawHubWorkflowRef: bootstrapWorkflowRef,
     releasePublishBranch,
     normal: createDispatchTarget({
       workflow: "plugin-clawhub-release.yml",
-      ref: releaseTag,
+      ref: bootstrapWorkflowRef,
       packages: normalPackages,
       releasePublishRunId,
       releasePublishBranch,
       includePublishScope: true,
+      releasePublishFullRef,
+      releasePublishWorkflowSha: bootstrapWorkflowSha,
+      releaseTag,
+      releasePublishRunAttempt,
+      targetRef: releaseSha,
     }),
     bootstrap: createDispatchTarget({
       workflow: "plugin-clawhub-new.yml",
@@ -384,7 +409,7 @@ export async function buildOpenClawReleaseClawHubPlan(
       missingTrustedPlugins: joinPackageNames(missingTrustedPlugins),
     },
     verifier: {
-      clawHubWorkflowRef: releaseTag,
+      clawHubWorkflowRef: bootstrapWorkflowRef,
     },
   };
 }

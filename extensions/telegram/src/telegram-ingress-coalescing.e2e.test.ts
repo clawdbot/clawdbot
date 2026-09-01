@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
+  createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
@@ -20,7 +21,12 @@ import { runTelegramChannelInboundEventWithHarness } from "./bot.test-helpers.js
 import type { TelegramTransport } from "./fetch.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 
-const downstreamTurns = vi.hoisted(() => vi.fn());
+const downstreamTurns = vi.hoisted(() =>
+  vi.fn(async (_ctx: MsgContext) => ({
+    queuedFinal: false,
+    counts: { block: 0, final: 0, tool: 0 },
+  })),
+);
 
 vi.mock("./fetch.js", () => ({
   resolveTelegramApiBase: (apiRoot?: string) => apiRoot ?? "https://api.telegram.org",
@@ -38,8 +44,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
     ...actual,
     runChannelInboundEvent: async (params: Parameters<typeof actual.runChannelInboundEvent>[0]) =>
       await runTelegramChannelInboundEventWithHarness(actual, params, async (dispatchParams) => {
-        downstreamTurns(dispatchParams.ctx);
-        return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+        return await downstreamTurns(dispatchParams.ctx);
       }),
   };
 });
@@ -57,14 +62,9 @@ vi.mock("./telegram-media.runtime.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./bot.agent.runtime.js", () => ({
-  resolveDefaultAgentId: vi.fn(() => "default"),
-}));
-
 vi.mock("./bot-handlers.agent.runtime.js", () => ({
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
-  resolveDefaultAgentId: vi.fn(() => "default"),
   resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-test" })),
 }));
 
@@ -75,6 +75,7 @@ vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
   resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-test" })),
+  resolveHumanDelayConfig: vi.fn(() => undefined),
 }));
 
 const { createTelegramBot } = await import("./bot.js");
@@ -133,7 +134,7 @@ function forwardedTextUpdate(params: { updateId: number; messageId: number; text
   };
 }
 
-function createBotApiTransport(): TelegramTransport {
+function createBotApiTransport() {
   let getFileCall = 0;
   const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
     const url = input instanceof Request ? input.url : input instanceof URL ? input.href : input;
@@ -176,6 +177,7 @@ function createTelegramDeps(stateDir: string): TelegramBotDeps {
       providers: [],
       resolvedDefault: { provider: "openai", model: "gpt-test" },
       modelNames: new Map<string, string>(),
+      modelCatalog: [],
     }),
     listSkillCommandsForAgents: () => [],
     wasSentByBot: () => false,
@@ -224,6 +226,7 @@ describe("Telegram durable ingress coalescing", () => {
   let activeResources: Array<{
     monitor: ReturnType<typeof createTelegramTransportIngressMonitor>;
     telegramTransport: TelegramTransport;
+    abortController: AbortController;
   }>;
 
   beforeEach(async () => {
@@ -231,7 +234,9 @@ describe("Telegram durable ingress coalescing", () => {
     process.env.OPENCLAW_STATE_DIR = stateDir;
     spoolDir = path.join(stateDir, "telegram", "ingress-spool-default");
     activeResources = [];
-    downstreamTurns.mockClear();
+    downstreamTurns
+      .mockReset()
+      .mockResolvedValue({ queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } });
     resetInboundDedupe();
     resetPluginStateStoreForTests({ closeDatabase: false });
     resetTelegramAccountThrottlersForTest();
@@ -240,6 +245,13 @@ describe("Telegram durable ingress coalescing", () => {
         openChannelIngressQueue: (
           options?: Omit<Parameters<typeof createChannelIngressQueueForTests>[0], "channelId">,
         ) => createChannelIngressQueueForTests({ ...options, channelId: "telegram" }),
+        // Command-menu locale ledger reads the keyed store during hydration;
+        // an absent store degrades with a warning that breaks watchdog asserts.
+        openKeyedStore: ((options) =>
+          createPluginStateKeyedStoreForTests(
+            "telegram",
+            options,
+          )) as TelegramRuntime["state"]["openKeyedStore"],
       },
       channel: {},
     } as TelegramRuntime);
@@ -247,7 +259,8 @@ describe("Telegram durable ingress coalescing", () => {
 
   afterEach(async () => {
     await Promise.all(
-      activeResources.map(async ({ monitor, telegramTransport }) => {
+      activeResources.map(async ({ monitor, telegramTransport, abortController }) => {
+        abortController.abort(new Error("test cleanup"));
         await monitor.stop();
         await telegramTransport.close();
       }),
@@ -262,20 +275,31 @@ describe("Telegram durable ingress coalescing", () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
-  async function createMonitor() {
-    const telegramTransport = createBotApiTransport();
+  async function createMonitor(
+    options: {
+      telegramTransport?: TelegramTransport;
+      adoptionStallTimeoutMs?: number;
+      onRuntimeError?: (error: unknown) => void;
+    } = {},
+  ) {
+    const telegramTransport = options.telegramTransport ?? createBotApiTransport();
+    const abortController = new AbortController();
     const bot = createTelegramBot({
       token: "tok",
       botInfo: telegramBotInfoForTest,
       config: cfg,
       telegramDeps: createTelegramDeps(stateDir),
       telegramTransport,
+      fetchAbortSignal: abortController.signal,
+      mediaAbortSignal: abortController.signal,
       testTimings: { mediaGroupFlushMs: 40, textFragmentGapMs: 20 },
       runtime: {
         log: () => {},
-        error: (error) => {
-          throw error instanceof Error ? error : new Error(String(error));
-        },
+        error:
+          options.onRuntimeError ??
+          ((error) => {
+            throw error instanceof Error ? error : new Error(String(error));
+          }),
         getRuntimeConfig: () => cfg,
         exit: () => {
           throw new Error("unexpected runtime exit");
@@ -288,9 +312,12 @@ describe("Telegram durable ingress coalescing", () => {
       cfg,
       accountId: "default",
       botInfo: telegramBotInfoForTest,
+      ...(options.adoptionStallTimeoutMs === undefined
+        ? {}
+        : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
       pollIntervalMs: 10,
     });
-    const resources = { monitor, telegramTransport };
+    const resources = { monitor, telegramTransport, abortController };
     activeResources.push(resources);
     return resources;
   }
@@ -403,6 +430,42 @@ describe("Telegram durable ingress coalescing", () => {
     expect(turn.Body).toContain("First note");
     expect(turn.Body).toContain("Second note");
     await assertSpoolTombstoned({ spoolDir, updateIds: [401, 402] });
+
+    await monitor.stop();
+    await telegramTransport.close();
+  });
+
+  it("releases a stale forwarded claim once when custom debounce dispatch fails", async () => {
+    const update = forwardedTextUpdate({
+      updateId: 701,
+      messageId: 1,
+      text: "recovered forward",
+    });
+    const eventId = telegramQueueEventId(update.update_id);
+    const sessionError = new Error("Session changed while starting work. Retry.");
+    await writeTelegramSpooledUpdate({ spoolDir, update });
+    const queue = openTelegramIngressQueue(spoolDir);
+    expect(await queue.claim(eventId, { ownerId: "999:1:dead-owner" })).not.toBeNull();
+    downstreamTurns.mockRejectedValueOnce(sessionError);
+    const runtimeError = vi.fn();
+    const { monitor, telegramTransport } = await createMonitor({
+      adoptionStallTimeoutMs: 5_000,
+      onRuntimeError: runtimeError,
+    });
+
+    monitor.start();
+    await vi.waitFor(
+      async () => {
+        expect(await queue.listClaims()).toEqual([]);
+        expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
+        expect(await queue.listPending({ limit: "all" })).toMatchObject([
+          { id: eventId, attempts: 2, lastError: sessionError.message },
+        ]);
+      },
+      { timeout: 2_000, interval: 5 },
+    );
+    expect(downstreamTurns).toHaveBeenCalledOnce();
+    expect(runtimeError).toHaveBeenCalledOnce();
 
     await monitor.stop();
     await telegramTransport.close();

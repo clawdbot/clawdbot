@@ -79,16 +79,10 @@ enum ExecApprovalsPolicyLoadState: Equatable {
 @Observable
 final class AppState {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "app-state")
-    private static let execApprovalsReadRetryAttempts = 5
 
-    private let isPreview: Bool
-    @ObservationIgnored private let execApprovalsDefaultsAsyncResolver:
-        @MainActor () async -> Result<ExecApprovalsResolvedDefaults, ExecApprovalsReadError>
-    @ObservationIgnored private let execApprovalsReadRetryDelay: Duration
+    let isPreview: Bool
     @ObservationIgnored private let gatewayConfigSaver: ([String: Any]) -> Bool
     @ObservationIgnored let bundleLocationAllowsPersistentIntegration: Bool
-    @ObservationIgnored private var execApprovalsReadRetryTask: Task<Void, Never>?
-    @ObservationIgnored private var execApprovalsReadGeneration = 0
     @ObservationIgnored private var isHydratingLaunchAtLogin = false
     private var isInitializing = true
     private var isApplyingGatewayConfig = false
@@ -113,9 +107,11 @@ final class AppState {
     @ObservationIgnored private let voiceWakeGlobalSyncScheduler = VoiceWakeGlobalSyncScheduler()
     @ObservationIgnored private var activeComputerPresenceTask: Task<Void, Never>?
     @ObservationIgnored private var activeComputerPresenceUpdateGeneration: UInt64 = 0
+    @ObservationIgnored private var computerControlHostReconciliationTask: Task<Void, Never>?
+    @ObservationIgnored private var computerControlHostGeneration: UInt64 = 0
 
     var isPaused: Bool {
-        didSet { self.ifNotPreview { UserDefaults.standard.set(self.isPaused, forKey: pauseDefaultsKey) } }
+        didSet { self.ifNotPreview { AppDefaults.standard.set(self.isPaused, forKey: pauseDefaultsKey) } }
     }
 
     var launchAtLogin: Bool {
@@ -131,13 +127,13 @@ final class AppState {
     }
 
     var onboardingSeen: Bool {
-        didSet { self.ifNotPreview { UserDefaults.standard.set(self.onboardingSeen, forKey: onboardingSeenKey) }
+        didSet { self.ifNotPreview { AppDefaults.standard.set(self.onboardingSeen, forKey: onboardingSeenKey) }
         }
     }
 
     var debugPaneEnabled: Bool {
         didSet {
-            self.ifNotPreview { UserDefaults.standard.set(self.debugPaneEnabled, forKey: debugPaneEnabledKey) }
+            self.ifNotPreview { AppDefaults.standard.set(self.debugPaneEnabled, forKey: debugPaneEnabledKey) }
             CanvasManager.shared.refreshDebugStatus()
         }
     }
@@ -145,7 +141,7 @@ final class AppState {
     var nativeSettingsPanesEnabled: Bool {
         didSet {
             self.ifNotPreview {
-                UserDefaults.standard.set(self.nativeSettingsPanesEnabled, forKey: nativeSettingsPanesEnabledKey)
+                AppDefaults.standard.set(self.nativeSettingsPanesEnabled, forKey: nativeSettingsPanesEnabledKey)
             }
         }
     }
@@ -153,7 +149,7 @@ final class AppState {
     var swabbleEnabled: Bool {
         didSet {
             self.ifNotPreview {
-                UserDefaults.standard.set(self.swabbleEnabled, forKey: swabbleEnabledKey)
+                AppDefaults.standard.set(self.swabbleEnabled, forKey: swabbleEnabledKey)
                 Task { await VoiceWakeRuntime.shared.refresh(state: self) }
             }
         }
@@ -163,7 +159,7 @@ final class AppState {
         didSet {
             // Preserve the raw editing state; sanitization happens when we actually use the triggers.
             self.ifNotPreview {
-                UserDefaults.standard.set(self.swabbleTriggerWords, forKey: swabbleTriggersKey)
+                AppDefaults.standard.set(self.swabbleTriggerWords, forKey: swabbleTriggersKey)
                 if self.swabbleEnabled {
                     Task { await VoiceWakeRuntime.shared.refresh(state: self) }
                 }
@@ -181,7 +177,7 @@ final class AppState {
     }
 
     var iconAnimationsEnabled: Bool {
-        didSet { self.ifNotPreview { UserDefaults.standard.set(
+        didSet { self.ifNotPreview { AppDefaults.standard.set(
             self.iconAnimationsEnabled,
             forKey: iconAnimationsEnabledKey) } }
     }
@@ -189,7 +185,7 @@ final class AppState {
     var showDockIcon: Bool {
         didSet {
             self.ifNotPreview {
-                UserDefaults.standard.set(self.showDockIcon, forKey: showDockIconKey)
+                AppDefaults.standard.set(self.showDockIcon, forKey: showDockIconKey)
                 AppActivationPolicy.apply(showDockIcon: self.showDockIcon)
             }
         }
@@ -198,7 +194,7 @@ final class AppState {
     var voiceWakeMicID: String {
         didSet {
             self.ifNotPreview {
-                UserDefaults.standard.set(self.voiceWakeMicID, forKey: voiceWakeMicKey)
+                AppDefaults.standard.set(self.voiceWakeMicID, forKey: voiceWakeMicKey)
                 if self.swabbleEnabled, !self.talkEnabled {
                     Task { await VoiceWakeRuntime.shared.refresh(state: self) }
                 }
@@ -210,13 +206,13 @@ final class AppState {
     }
 
     var voiceWakeMicName: String {
-        didSet { self.ifNotPreview { UserDefaults.standard.set(self.voiceWakeMicName, forKey: voiceWakeMicNameKey) } }
+        didSet { self.ifNotPreview { AppDefaults.standard.set(self.voiceWakeMicName, forKey: voiceWakeMicNameKey) } }
     }
 
     var voiceWakeLocaleID: String {
         didSet {
             self.ifNotPreview {
-                UserDefaults.standard.set(self.voiceWakeLocaleID, forKey: voiceWakeLocaleKey)
+                AppDefaults.standard.set(self.voiceWakeLocaleID, forKey: voiceWakeLocaleKey)
                 if self.swabbleEnabled {
                     Task { await VoiceWakeRuntime.shared.refresh(state: self) }
                 }
@@ -225,13 +221,13 @@ final class AppState {
     }
 
     var voiceWakeAdditionalLocaleIDs: [String] {
-        didSet { self.ifNotPreview { UserDefaults.standard.set(
+        didSet { self.ifNotPreview { AppDefaults.standard.set(
             self.voiceWakeAdditionalLocaleIDs,
             forKey: voiceWakeAdditionalLocalesKey) } }
     }
 
     var voicePushToTalkEnabled: Bool {
-        didSet { self.ifNotPreview { UserDefaults.standard.set(
+        didSet { self.ifNotPreview { AppDefaults.standard.set(
             self.voicePushToTalkEnabled,
             forKey: voicePushToTalkEnabledKey) } }
     }
@@ -239,7 +235,7 @@ final class AppState {
     var voiceWakeTriggersTalkMode: Bool {
         didSet {
             self.ifNotPreview {
-                UserDefaults.standard.set(self.voiceWakeTriggersTalkMode, forKey: voiceWakeTriggersTalkModeKey)
+                AppDefaults.standard.set(self.voiceWakeTriggersTalkMode, forKey: voiceWakeTriggersTalkModeKey)
                 if self.swabbleEnabled {
                     Task { await VoiceWakeRuntime.shared.refresh(state: self) }
                 }
@@ -252,16 +248,20 @@ final class AppState {
     var talkEnabled: Bool {
         didSet {
             self.ifNotPreview {
-                UserDefaults.standard.set(self.talkEnabled, forKey: talkEnabledKey)
+                AppDefaults.standard.set(self.talkEnabled, forKey: talkEnabledKey)
                 Task { await TalkModeController.shared.setEnabled(self.talkEnabled) }
             }
         }
     }
 
+    var talkRealtimeRelayEnabled = isTalkRealtimeRelayEnabled() {
+        didSet { self.persistTalkRealtimeRelayPreference(previousValue: oldValue) }
+    }
+
     var talkPhaseSoundsEnabled: Bool {
         didSet {
             self.ifNotPreview {
-                UserDefaults.standard.set(self.talkPhaseSoundsEnabled, forKey: talkPhaseSoundsEnabledKey)
+                AppDefaults.standard.set(self.talkPhaseSoundsEnabled, forKey: talkPhaseSoundsEnabledKey)
             }
         }
     }
@@ -269,7 +269,7 @@ final class AppState {
     var talkShiftToStopEnabled: Bool {
         didSet {
             self.ifNotPreview {
-                UserDefaults.standard.set(self.talkShiftToStopEnabled, forKey: talkShiftToStopEnabledKey)
+                AppDefaults.standard.set(self.talkShiftToStopEnabled, forKey: talkShiftToStopEnabledKey)
                 Task { TalkSpeechInterruptMonitor.shared.setEnabled(self.talkShiftToStopEnabled && self.talkEnabled) }
             }
         }
@@ -278,8 +278,17 @@ final class AppState {
     /// Gateway-provided UI accent color (hex). Optional; clients provide a default.
     var seamColorHex: String?
 
+    /// Caller's per-profile accent (users.prefs.get). Kept separate from
+    /// seamColorHex so settings-pane config refreshes cannot clobber it.
+    var profileAccentHex: String?
+
+    /// Accent the UI renders: the profile accent wins over the gateway seam color.
+    var effectiveAccentHex: String? {
+        self.profileAccentHex ?? self.seamColorHex
+    }
+
     var iconOverride: IconOverrideSelection {
-        didSet { self.ifNotPreview { UserDefaults.standard.set(self.iconOverride.rawValue, forKey: iconOverrideKey) } }
+        didSet { self.ifNotPreview { AppDefaults.standard.set(self.iconOverride.rawValue, forKey: iconOverrideKey) } }
     }
 
     var isWorking: Bool = false
@@ -289,7 +298,7 @@ final class AppState {
     var heartbeatsEnabled: Bool {
         didSet {
             self.ifNotPreview {
-                UserDefaults.standard.set(self.heartbeatsEnabled, forKey: heartbeatsEnabledKey)
+                AppDefaults.standard.set(self.heartbeatsEnabled, forKey: heartbeatsEnabledKey)
                 Task { _ = await GatewayConnection.shared.setHeartbeatsEnabled(self.heartbeatsEnabled) }
             }
         }
@@ -297,7 +306,7 @@ final class AppState {
 
     var connectionMode: ConnectionMode {
         didSet {
-            self.ifNotPreview { UserDefaults.standard.set(self.connectionMode.rawValue, forKey: connectionModeKey) }
+            self.ifNotPreview { AppDefaults.standard.set(self.connectionMode.rawValue, forKey: connectionModeKey) }
             if oldValue != self.connectionMode {
                 self.markGatewayConfigDirty([.mode])
             }
@@ -321,20 +330,36 @@ final class AppState {
     }
 
     var canvasEnabled: Bool {
-        didSet { self.ifNotPreview { UserDefaults.standard.set(self.canvasEnabled, forKey: canvasEnabledKey) } }
+        didSet { self.ifNotPreview { AppDefaults.standard.set(self.canvasEnabled, forKey: canvasEnabledKey) } }
     }
 
     var quickChatEnabled: Bool {
-        didSet { self.ifNotPreview { UserDefaults.standard.set(self.quickChatEnabled, forKey: quickChatEnabledKey) } }
+        didSet { self.ifNotPreview { AppDefaults.standard.set(self.quickChatEnabled, forKey: quickChatEnabledKey) } }
+    }
+
+    var cookieSyncEnabled: Bool {
+        didSet {
+            self.ifNotPreview { AppDefaults.standard.set(self.cookieSyncEnabled, forKey: cookieSyncEnabledKey) }
+        }
+    }
+
+    var cookieSyncIntoProfile: String {
+        didSet {
+            self.ifNotPreview {
+                AppDefaults.standard.set(self.cookieSyncIntoProfile, forKey: cookieSyncIntoProfileKey)
+            }
+        }
+    }
+
+    var cookieSyncDomains: [String] {
+        didSet {
+            self.ifNotPreview { AppDefaults.standard.set(self.cookieSyncDomains, forKey: cookieSyncDomainsKey) }
+        }
     }
 
     var activeComputerPresenceEnabled: Bool {
         didSet { self.scheduleActiveComputerPresenceUpdate() }
     }
-
-    var execApprovalMode: ExecApprovalQuickMode
-    var execApprovalPolicyLoadState: ExecApprovalsPolicyLoadState
-    var execApprovalMutationError: String?
 
     /// Tracks whether the Canvas panel is currently visible (not persisted).
     var canvasPanelVisible: Bool = false
@@ -342,26 +367,51 @@ final class AppState {
     var peekabooBridgeEnabled: Bool {
         didSet {
             self.ifNotPreview {
-                UserDefaults.standard.set(self.peekabooBridgeEnabled, forKey: peekabooBridgeEnabledKey)
+                AppDefaults.standard.set(self.peekabooBridgeEnabled, forKey: peekabooBridgeEnabledKey)
             }
-            self.applyPeekabooBridgeHostState()
+            self.applyComputerControlHostState()
         }
     }
 
-    /// PeekabooBridge shares Computer Control's local UI-automation surface, so the host only
-    /// runs while Computer Control is enabled. With Computer Control off, users drive Peekaboo
-    /// via its own Mac app instead of a second, separately toggled bridge here.
-    func applyPeekabooBridgeHostState() {
+    /// The selected provider owns the complete Computer Control execution surface.
+    /// Keep the unselected host stopped so one node execution never mixes backends.
+    func applyComputerControlHostState() {
         self.ifNotPreview {
             let computerControlEnabled = isComputerControlEnabled()
-            let shouldRun = self.peekabooBridgeEnabled && computerControlEnabled
-            Task { await PeekabooBridgeHostCoordinator.shared.setEnabled(shouldRun) }
+            let provider = ComputerControlProvider.current()
+            let launchPlan = AppLaunchRuntimePlan.current
+            let peekabooBridgeEnabled = self.peekabooBridgeEnabled
+            self.computerControlHostGeneration &+= 1
+            let generation = self.computerControlHostGeneration
+            let predecessor = self.computerControlHostReconciliationTask
+            let task = Task { @MainActor [weak self] in
+                await predecessor?.value
+                guard let self, generation == self.computerControlHostGeneration else { return }
+                switch provider {
+                case .cua where computerControlEnabled:
+                    await PeekabooBridgeHostCoordinator.shared.setEnabled(false)
+                    guard generation == self.computerControlHostGeneration else { return }
+                    await CuaDriverHostCoordinator.shared.setEnabled(true)
+                case .peekaboo:
+                    if launchPlan.allowsCuaComputerControl {
+                        await CuaDriverHostCoordinator.shared.setEnabled(false)
+                    }
+                    guard generation == self.computerControlHostGeneration else { return }
+                    await PeekabooBridgeHostCoordinator.shared.setEnabled(
+                        peekabooBridgeEnabled && computerControlEnabled)
+                case .cua:
+                    await CuaDriverHostCoordinator.shared.setEnabled(false)
+                    guard generation == self.computerControlHostGeneration else { return }
+                    await PeekabooBridgeHostCoordinator.shared.setEnabled(false)
+                }
+            }
+            self.computerControlHostReconciliationTask = task
         }
     }
 
     var remoteTarget: String {
         didSet {
-            self.ifNotPreview { UserDefaults.standard.set(self.remoteTarget, forKey: remoteTargetKey) }
+            self.ifNotPreview { AppDefaults.standard.set(self.remoteTarget, forKey: remoteTargetKey) }
             if oldValue != self.remoteTarget {
                 self.markGatewayConfigDirty([.remoteTarget, .remoteUrl, .remoteHostKeyPolicy])
             }
@@ -410,7 +460,7 @@ final class AppState {
 
     var remoteIdentity: String {
         didSet {
-            self.ifNotPreview { UserDefaults.standard.set(self.remoteIdentity, forKey: remoteIdentityKey) }
+            self.ifNotPreview { AppDefaults.standard.set(self.remoteIdentity, forKey: remoteIdentityKey) }
             if oldValue != self.remoteIdentity {
                 self.markGatewayConfigDirty([.remoteIdentity])
             }
@@ -419,42 +469,32 @@ final class AppState {
     }
 
     var remoteProjectRoot: String {
-        didSet { self.ifNotPreview { UserDefaults.standard.set(self.remoteProjectRoot, forKey: remoteProjectRootKey) } }
+        didSet { self.ifNotPreview { AppDefaults.standard.set(self.remoteProjectRoot, forKey: remoteProjectRootKey) } }
     }
 
     var remoteCliPath: String {
-        didSet { self.ifNotPreview { UserDefaults.standard.set(self.remoteCliPath, forKey: remoteCliPathKey) } }
+        didSet { self.ifNotPreview { AppDefaults.standard.set(self.remoteCliPath, forKey: remoteCliPathKey) } }
     }
-
-    @ObservationIgnored private var earBoostTask: Task<Void, Never>?
 
     init(
         preview: Bool = false,
-        execApprovalsDefaultsAsyncResolver: @escaping @MainActor () async -> Result<
-            ExecApprovalsResolvedDefaults,
-            ExecApprovalsReadError,
-        > = {
-            await ExecApprovalsStore.resolveDefaultsAsyncResult()
-        },
-        execApprovalsReadRetryDelay: Duration = .milliseconds(250),
         gatewayConfigSaver: @escaping ([String: Any]) -> Bool = { OpenClawConfigFile.saveDict($0) })
     {
         let isPreview = preview || ProcessInfo.processInfo.isRunningTests
         self.isPreview = isPreview
         self.bundleLocationAllowsPersistentIntegration =
-            isPreview || ApplicationRelocator.currentBundleAllowsPersistentIntegration()
-        self.execApprovalsDefaultsAsyncResolver = execApprovalsDefaultsAsyncResolver
-        self.execApprovalsReadRetryDelay = execApprovalsReadRetryDelay
+            !AppProfile.current.isActive &&
+            (isPreview || ApplicationRelocator.currentBundleAllowsPersistentIntegration())
         self.gatewayConfigSaver = gatewayConfigSaver
-        let onboardingSeen = UserDefaults.standard.bool(forKey: onboardingSeenKey)
-        self.isPaused = UserDefaults.standard.bool(forKey: pauseDefaultsKey)
+        let onboardingSeen = AppDefaults.standard.bool(forKey: onboardingSeenKey)
+        self.isPaused = AppLaunchRuntimePlan.current.resolvePaused(AppDefaults.standard.bool(forKey: pauseDefaultsKey))
         self.launchAtLogin = false
         self.onboardingSeen = onboardingSeen
-        self.debugPaneEnabled = UserDefaults.standard.bool(forKey: debugPaneEnabledKey)
-        self.nativeSettingsPanesEnabled = UserDefaults.standard.bool(forKey: nativeSettingsPanesEnabledKey)
-        let savedVoiceWake = UserDefaults.standard.bool(forKey: swabbleEnabledKey)
+        self.debugPaneEnabled = AppDefaults.standard.bool(forKey: debugPaneEnabledKey)
+        self.nativeSettingsPanesEnabled = AppDefaults.standard.bool(forKey: nativeSettingsPanesEnabledKey)
+        let savedVoiceWake = AppDefaults.standard.bool(forKey: swabbleEnabledKey)
         self.swabbleEnabled = voiceWakeSupported ? savedVoiceWake : false
-        self.swabbleTriggerWords = UserDefaults.standard
+        self.swabbleTriggerWords = AppDefaults.standard
             .stringArray(forKey: swabbleTriggersKey) ?? defaultVoiceWakeTriggers
         self.voiceWakeTriggerChime = Self.loadChime(
             key: voiceWakeTriggerChimeKey,
@@ -462,54 +502,55 @@ final class AppState {
         self.voiceWakeSendChime = Self.loadChime(
             key: voiceWakeSendChimeKey,
             fallback: .system(name: "Glass"))
-        if let storedIconAnimations = UserDefaults.standard.object(forKey: iconAnimationsEnabledKey) as? Bool {
+        if let storedIconAnimations = AppDefaults.standard.object(forKey: iconAnimationsEnabledKey) as? Bool {
             self.iconAnimationsEnabled = storedIconAnimations
         } else {
             self.iconAnimationsEnabled = true
-            UserDefaults.standard.set(true, forKey: iconAnimationsEnabledKey)
+            AppDefaults.standard.set(true, forKey: iconAnimationsEnabledKey)
         }
-        if let storedShowDockIcon = UserDefaults.standard.object(forKey: showDockIconKey) as? Bool {
+        if let storedShowDockIcon = AppDefaults.standard.object(forKey: showDockIconKey) as? Bool {
             self.showDockIcon = storedShowDockIcon
         } else {
             self.showDockIcon = true
-            UserDefaults.standard.set(true, forKey: showDockIconKey)
+            AppDefaults.standard.set(true, forKey: showDockIconKey)
         }
-        self.voiceWakeMicID = UserDefaults.standard.string(forKey: voiceWakeMicKey) ?? ""
-        self.voiceWakeMicName = UserDefaults.standard.string(forKey: voiceWakeMicNameKey) ?? ""
-        self.voiceWakeLocaleID = UserDefaults.standard.string(forKey: voiceWakeLocaleKey) ?? Locale.current.identifier
-        self.voiceWakeAdditionalLocaleIDs = UserDefaults.standard
+        self.voiceWakeMicID = AppDefaults.standard.string(forKey: voiceWakeMicKey) ?? ""
+        self.voiceWakeMicName = AppDefaults.standard.string(forKey: voiceWakeMicNameKey) ?? ""
+        self.voiceWakeLocaleID = AppDefaults.standard.string(forKey: voiceWakeLocaleKey) ?? Locale.current.identifier
+        self.voiceWakeAdditionalLocaleIDs = AppDefaults.standard
             .stringArray(forKey: voiceWakeAdditionalLocalesKey) ?? []
-        self.voicePushToTalkEnabled = UserDefaults.standard
+        self.voicePushToTalkEnabled = AppDefaults.standard
             .object(forKey: voicePushToTalkEnabledKey) as? Bool ?? false
-        self.voiceWakeTriggersTalkMode = UserDefaults.standard
+        self.voiceWakeTriggersTalkMode = AppDefaults.standard
             .object(forKey: voiceWakeTriggersTalkModeKey) as? Bool ?? false
-        self.talkEnabled = UserDefaults.standard.bool(forKey: talkEnabledKey)
-        if let storedPhaseSounds = UserDefaults.standard.object(forKey: talkPhaseSoundsEnabledKey) as? Bool {
+        self.talkEnabled = AppDefaults.standard.bool(forKey: talkEnabledKey)
+        if let storedPhaseSounds = AppDefaults.standard.object(forKey: talkPhaseSoundsEnabledKey) as? Bool {
             self.talkPhaseSoundsEnabled = storedPhaseSounds
         } else {
             self.talkPhaseSoundsEnabled = true
-            UserDefaults.standard.set(true, forKey: talkPhaseSoundsEnabledKey)
+            AppDefaults.standard.set(true, forKey: talkPhaseSoundsEnabledKey)
         }
-        if let storedShiftToStop = UserDefaults.standard.object(forKey: talkShiftToStopEnabledKey) as? Bool {
+        if let storedShiftToStop = AppDefaults.standard.object(forKey: talkShiftToStopEnabledKey) as? Bool {
             self.talkShiftToStopEnabled = storedShiftToStop
         } else {
             self.talkShiftToStopEnabled = true
-            UserDefaults.standard.set(true, forKey: talkShiftToStopEnabledKey)
+            AppDefaults.standard.set(true, forKey: talkShiftToStopEnabledKey)
         }
         self.seamColorHex = nil
-        if let storedHeartbeats = UserDefaults.standard.object(forKey: heartbeatsEnabledKey) as? Bool {
+        self.profileAccentHex = nil
+        if let storedHeartbeats = AppDefaults.standard.object(forKey: heartbeatsEnabledKey) as? Bool {
             self.heartbeatsEnabled = storedHeartbeats
         } else {
             self.heartbeatsEnabled = true
-            UserDefaults.standard.set(true, forKey: heartbeatsEnabledKey)
+            AppDefaults.standard.set(true, forKey: heartbeatsEnabledKey)
         }
-        if let storedOverride = UserDefaults.standard.string(forKey: iconOverrideKey),
+        if let storedOverride = AppDefaults.standard.string(forKey: iconOverrideKey),
            let selection = IconOverrideSelection(rawValue: storedOverride)
         {
             self.iconOverride = selection
         } else {
             self.iconOverride = .system
-            UserDefaults.standard.set(IconOverrideSelection.system.rawValue, forKey: iconOverrideKey)
+            AppDefaults.standard.set(IconOverrideSelection.system.rawValue, forKey: iconOverrideKey)
         }
 
         let configRoot = OpenClawConfigFile.loadDict()
@@ -528,7 +569,7 @@ final class AppState {
         let hasConfigRemoteTarget = configRemote?.keys.contains("sshTarget") == true
         let configRemoteTarget = (configRemote?["sshTarget"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let storedRemoteTarget = UserDefaults.standard.string(forKey: remoteTargetKey) ?? ""
+        let storedRemoteTarget = AppDefaults.standard.string(forKey: remoteTargetKey) ?? ""
         if resolvedConnectionMode == .remote,
            hasConfigRemoteTarget
         {
@@ -551,21 +592,22 @@ final class AppState {
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         self.remoteIdentity = hasConfigRemoteIdentity
             ? configRemoteIdentity
-            : UserDefaults.standard.string(forKey: remoteIdentityKey)?.nonEmpty ?? ""
-        self.remoteProjectRoot = UserDefaults.standard.string(forKey: remoteProjectRootKey)?.nonEmpty ?? ""
-        self.remoteCliPath = UserDefaults.standard.string(forKey: remoteCliPathKey)?.nonEmpty ?? ""
-        self.canvasEnabled = UserDefaults.standard.object(forKey: canvasEnabledKey) as? Bool ?? true
-        self.quickChatEnabled = UserDefaults.standard.object(forKey: quickChatEnabledKey) as? Bool ?? true
+            : AppDefaults.standard.string(forKey: remoteIdentityKey)?.nonEmpty ?? ""
+        self.remoteProjectRoot = AppDefaults.standard.string(forKey: remoteProjectRootKey)?.nonEmpty ?? ""
+        self.remoteCliPath = AppDefaults.standard.string(forKey: remoteCliPathKey)?.nonEmpty ?? ""
+        self.canvasEnabled = AppDefaults.standard.object(forKey: canvasEnabledKey) as? Bool ?? true
+        self.quickChatEnabled = AppDefaults.standard.object(forKey: quickChatEnabledKey) as? Bool ?? true
+        (self.cookieSyncEnabled, self.cookieSyncIntoProfile, self.cookieSyncDomains) = Self.loadCookieSyncDefaults()
         self.activeComputerPresenceEnabled = Self.resolveActiveComputerPresenceEnabled()
-        self.execApprovalMode = .deny
-        self.execApprovalPolicyLoadState = .loading
-        self.peekabooBridgeEnabled = UserDefaults.standard
-            .object(forKey: peekabooBridgeEnabledKey) as? Bool ?? true
-        if !self.isPreview {
+        self.peekabooBridgeEnabled = AppLaunchRuntimePlan.current.resolvePeekabooBridgeEnabled(
+            AppDefaults.standard.object(forKey: peekabooBridgeEnabledKey) as? Bool ?? true)
+        if !self.isPreview, !AppProfile.current.isActive {
             Task.detached(priority: .utility) { [weak self] in
                 let current = await LaunchAgentManager.status()
                 await MainActor.run { [weak self] in self?.hydrateLaunchAtLogin(current) }
             }
+        } else if !self.isPreview, AppProfile.current.isActive {
+            Self.logger.info("login-agent status skipped (unavailable under app profile)")
         }
 
         if self.swabbleEnabled, !PermissionManager.voiceWakePermissionsGranted() {
@@ -585,9 +627,6 @@ final class AppState {
         }
         self.isInitializing = false
         if !self.isPreview {
-            scheduleExecApprovalModeReadRetry()
-        }
-        if !self.isPreview {
             self.startConfigWatcher()
         }
     }
@@ -601,7 +640,6 @@ final class AppState {
 
     @MainActor
     deinit {
-        self.execApprovalsReadRetryTask?.cancel()
         self.gatewayConfigSyncTask?.cancel()
         self.configWatcher?.stop()
     }
@@ -1020,28 +1058,11 @@ extension AppState {
         }
     }
 
-    func triggerVoiceEars(ttl: TimeInterval? = 5) {
-        self.earBoostTask?.cancel()
-        self.earBoostTask = nil
+    func startVoiceEars() {
         self.earBoostActive = true
-
-        guard let ttl else { return }
-
-        self.earBoostTask = Task { [weak self] in
-            do {
-                try await Task.sleep(nanoseconds: UInt64(ttl * 1_000_000_000))
-            } catch {
-                return
-            }
-            guard !Task.isCancelled, let self else { return }
-            self.earBoostTask = nil
-            self.earBoostActive = false
-        }
     }
 
     func stopVoiceEars() {
-        self.earBoostTask?.cancel()
-        self.earBoostTask = nil
         self.earBoostActive = false
     }
 
@@ -1084,16 +1105,10 @@ extension AppState {
     }
 
     func setTalkEnabled(_ enabled: Bool) async {
-        guard voiceWakeSupported else {
-            self.talkEnabled = false
-            await GatewayConnection.shared.talkMode(enabled: false, phase: "disabled")
-            return
-        }
-
-        self.talkEnabled = enabled
+        self.talkEnabled = enabled && voiceWakeSupported
         guard !self.isPreview else { return }
 
-        if !enabled {
+        if !self.talkEnabled {
             await GatewayConnection.shared.talkMode(enabled: false, phase: "disabled")
             return
         }
@@ -1125,7 +1140,7 @@ extension AppState {
     // MARK: - Chime persistence
 
     private static func loadChime(key: String, fallback: VoiceWakeChime) -> VoiceWakeChime {
-        guard let data = UserDefaults.standard.data(forKey: key) else { return fallback }
+        guard let data = AppDefaults.standard.data(forKey: key) else { return fallback }
         if let decoded = try? JSONDecoder().decode(VoiceWakeChime.self, from: data) {
             return decoded
         }
@@ -1134,11 +1149,11 @@ extension AppState {
 
     private func storeChime(_ chime: VoiceWakeChime, key: String) {
         guard let data = try? JSONEncoder().encode(chime) else { return }
-        UserDefaults.standard.set(data, forKey: key)
+        AppDefaults.standard.set(data, forKey: key)
     }
 }
 
-// MARK: - Exec approval settings
+// MARK: - App state helpers
 
 extension AppState {
     private func ifNotPreview(_ action: () -> Void) {
@@ -1153,112 +1168,6 @@ extension AppState {
         bundleLocationAllowsPersistentIntegration: Bool) -> Bool
     {
         !isInitializing && !isHydrating && (!isEnabling || bundleLocationAllowsPersistentIntegration)
-    }
-
-    var execApprovalPolicyAvailable: Bool {
-        self.execApprovalPolicyLoadState.isAvailable
-    }
-
-    var execApprovalLoadError: String? {
-        self.execApprovalPolicyLoadState.errorMessage
-    }
-
-    func updateExecApprovalMode(_ mode: ExecApprovalQuickMode) {
-        guard !self.isPreview else {
-            self.syncExecApprovalMode(mode)
-            return
-        }
-        let result = ExecApprovalsStore.updateDefaults { defaults in
-            defaults.security = mode.security
-            defaults.ask = mode.ask
-        }
-        self.applyExecApprovalModeMutation(mode, result: result)
-    }
-
-    func applyExecApprovalModeMutation(
-        _ mode: ExecApprovalQuickMode,
-        result: Result<Void, ExecApprovalsMutationError>)
-    {
-        switch result {
-        case .success:
-            self.syncExecApprovalMode(mode)
-        case let .failure(error):
-            self.execApprovalMutationError = error.message
-        }
-    }
-
-    func syncExecApprovalMode(_ mode: ExecApprovalQuickMode) {
-        self.execApprovalsReadGeneration += 1
-        self.execApprovalsReadRetryTask?.cancel()
-        self.execApprovalsReadRetryTask = nil
-        self.execApprovalMode = mode
-        self.execApprovalPolicyLoadState = .available
-        self.execApprovalMutationError = nil
-    }
-
-    func retryExecApprovalModeRead() {
-        self.scheduleExecApprovalModeReadRetry()
-    }
-
-    func waitForExecApprovalModeRead() async {
-        await self.execApprovalsReadRetryTask?.value
-    }
-
-    func recoverExecApprovalModeRead(maxAttempts: Int) async {
-        self.execApprovalsReadGeneration += 1
-        let generation = self.execApprovalsReadGeneration
-        self.execApprovalsReadRetryTask?.cancel()
-        self.execApprovalsReadRetryTask = nil
-        await self.performExecApprovalModeReadAttempts(
-            maxAttempts: maxAttempts,
-            generation: generation)
-    }
-
-    private func performExecApprovalModeReadAttempts(maxAttempts: Int, generation: Int) async {
-        guard self.execApprovalsReadGeneration == generation else { return }
-        guard maxAttempts > 0 else {
-            self.execApprovalPolicyLoadState = .unavailable(ExecApprovalsReadError.unavailable.message)
-            return
-        }
-        self.execApprovalPolicyLoadState = .loading
-        for attempt in 0..<maxAttempts {
-            if attempt > 0 {
-                do {
-                    try await Task.sleep(for: self.execApprovalsReadRetryDelay)
-                } catch {
-                    return
-                }
-            }
-            guard self.execApprovalsReadGeneration == generation else { return }
-            let result = await execApprovalsDefaultsAsyncResolver()
-            guard self.execApprovalsReadGeneration == generation else { return }
-            switch result {
-            case let .success(defaults):
-                self.syncExecApprovalMode(
-                    ExecApprovalQuickMode.from(security: defaults.security, ask: defaults.ask))
-                return
-            case let .failure(.migrationRequired(error)):
-                self.execApprovalPolicyLoadState = .unavailable(
-                    ExecApprovalsReadError.migrationRequired(error).message)
-                return
-            case .failure(.unavailable):
-                continue
-            }
-        }
-        guard self.execApprovalsReadGeneration == generation else { return }
-        self.execApprovalPolicyLoadState = .unavailable(ExecApprovalsReadError.unavailable.message)
-    }
-
-    private func scheduleExecApprovalModeReadRetry() {
-        self.execApprovalsReadGeneration += 1
-        let generation = self.execApprovalsReadGeneration
-        self.execApprovalsReadRetryTask?.cancel()
-        self.execApprovalPolicyLoadState = .loading
-        self.execApprovalsReadRetryTask = Task { [weak self] in
-            await self?.performExecApprovalModeReadAttempts(
-                maxAttempts: Self.execApprovalsReadRetryAttempts,
-                generation: generation)
-        }
     }
 }
 
@@ -1518,45 +1427,15 @@ extension AppState {
 }
 
 extension AppState {
-    static var preview: AppState {
-        let state = AppState(preview: true)
-        state.isPaused = false
-        state.launchAtLogin = true
-        state.onboardingSeen = true
-        state.debugPaneEnabled = true
-        state.nativeSettingsPanesEnabled = true
-        state.swabbleEnabled = true
-        state.swabbleTriggerWords = ["Claude", "Computer", "Jarvis"]
-        state.voiceWakeTriggerChime = .system(name: "Glass")
-        state.voiceWakeSendChime = .system(name: "Ping")
-        state.iconAnimationsEnabled = true
-        state.showDockIcon = true
-        state.voiceWakeMicID = "BuiltInMic"
-        state.voiceWakeMicName = "Built-in Microphone"
-        state.voiceWakeLocaleID = Locale.current.identifier
-        state.voiceWakeAdditionalLocaleIDs = ["en-US", "de-DE"]
-        state.voicePushToTalkEnabled = false
-        state.talkEnabled = false
-        state.talkPhaseSoundsEnabled = true
-        state.talkShiftToStopEnabled = true
-        state.iconOverride = .system
-        state.heartbeatsEnabled = true
-        state.connectionMode = .local
-        state.remoteTransport = .ssh
-        state.canvasEnabled = true
-        state.quickChatEnabled = true
-        state.remoteTarget = "user@example.com"
-        state.remoteUrl = "wss://gateway.example.ts.net"
-        state.remoteToken = "example-token"
-        state.remoteIdentity = "~/.ssh/id_ed25519"
-        state.remoteProjectRoot = "~/Projects/openclaw"
-        state.remoteCliPath = ""
-        return state
+    private static func loadCookieSyncDefaults() -> (Bool, String, [String]) {
+        let defaults = AppDefaults.standard
+        return (
+            defaults.object(forKey: cookieSyncEnabledKey) as? Bool ?? false,
+            defaults.string(forKey: cookieSyncIntoProfileKey) ?? "imported",
+            defaults.stringArray(forKey: cookieSyncDomainsKey) ?? [])
     }
-}
 
-extension AppState {
-    static func resolveActiveComputerPresenceEnabled(defaults: UserDefaults = .standard) -> Bool {
+    static func resolveActiveComputerPresenceEnabled(defaults: UserDefaults = AppDefaults.standard) -> Bool {
         defaults.bool(forKey: activeComputerPresenceEnabledKey)
     }
 
@@ -1575,7 +1454,7 @@ extension AppState {
     private func scheduleActiveComputerPresenceUpdate() {
         self.ifNotPreview {
             let enabled = self.activeComputerPresenceEnabled
-            UserDefaults.standard.set(enabled, forKey: activeComputerPresenceEnabledKey)
+            AppDefaults.standard.set(enabled, forKey: activeComputerPresenceEnabledKey)
             PresenceReporter.shared.sendImmediate(reason: "activity-sharing-changed")
             self.activeComputerPresenceUpdateGeneration &+= 1
             let generation = self.activeComputerPresenceUpdateGeneration
@@ -1674,7 +1553,7 @@ extension AppState {
 
 @MainActor
 enum AppStateStore {
-    static let shared = AppState()
+    static let shared = AppState(preview: ProcessInfo.processInfo.isPreview)
 
     static func updateLaunchAtLogin(enabled: Bool) {
         Task.detached(priority: .utility) {

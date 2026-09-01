@@ -38,7 +38,7 @@ import {
   getInternalToolExecutionPreparer,
 } from "./runtime/internal-hooks.js";
 import type { ToolDefinition } from "./sessions/index.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 import { jsonResult, payloadTextResult, ToolInputError } from "./tools/common.js";
 
 type AnyAgentTool = AgentTool;
@@ -357,7 +357,7 @@ export function findClientToolNameConflicts(params: {
   for (const name of params.existingToolNames ?? []) {
     const trimmed = name.trim();
     if (trimmed) {
-      existingNormalized.add(normalizeToolName(trimmed));
+      existingNormalized.add(normalizeToolPolicyName(trimmed));
     }
   }
 
@@ -368,7 +368,7 @@ export function findClientToolNameConflicts(params: {
     if (!rawName) {
       continue;
     }
-    const normalizedName = normalizeToolName(rawName);
+    const normalizedName = normalizeToolPolicyName(rawName);
     if (existingNormalized.has(normalizedName)) {
       conflicts.add(rawName);
     }
@@ -397,10 +397,15 @@ export function isClientToolNameConflictError(err: unknown): err is Error {
 export function toToolDefinitions(
   tools: AnyAgentTool[],
   hookContext?: HookContext,
+  abortSignal?: AbortSignal,
 ): ToolDefinition[] {
+  // Adaptation installs policy hooks outside source tools. Bind their lifetime
+  // here too, so revoked generations cannot leave approvals waiting upstream.
+  const resolveAbortSignal = (signal?: AbortSignal) =>
+    signal && abortSignal ? AbortSignal.any([signal, abortSignal]) : (signal ?? abortSignal);
   return tools.map((tool) => {
     const name = tool.name || "tool";
-    const normalizedName = normalizeToolName(name);
+    const normalizedName = normalizeToolPolicyName(name);
     const beforeHookWrapped = isToolWrappedWithBeforeToolCallHook(tool);
     const sourcePreparer = getInternalToolExecutionPreparer(tool);
     const definition = {
@@ -413,7 +418,9 @@ export function toToolDefinitions(
       prepareArguments: tool.prepareArguments,
       executionMode: tool.executionMode,
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
-        const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
+        const { toolCallId, params, onUpdate, signal: callSignal } = splitToolExecuteArgs(args);
+        const signal = resolveAbortSignal(callSignal);
+        signal?.throwIfAborted();
         const control = readInternalExecutionControl(args[4]);
         recordStructuredReplayTrustForToolCall(toolCallId, tool, hookContext?.runId);
         let executeParams = params;
@@ -499,6 +506,8 @@ export function toToolDefinitions(
       return beforeHookWrapped ? definition : attachAdapterExecutionPreparer(definition);
     }
     return attachInternalToolExecutionPreparer(definition, async (params) => {
+      const signal = resolveAbortSignal(params.signal);
+      signal?.throwIfAborted();
       recordStructuredReplayTrustForToolCall(params.toolCallId, tool, hookContext?.runId);
       const settle = (run: () => Promise<unknown>) =>
         executeAdaptedToolOperation({
@@ -506,7 +515,7 @@ export function toToolDefinitions(
           normalizedToolName: normalizedName,
           rawParams: params.args,
           getEffectiveParams: () => params.args,
-          signal: params.signal,
+          signal,
           hookContext,
           run,
         });
@@ -544,7 +553,7 @@ export function toToolDefinitions(
         prepared = await sourcePreparer({
           toolCallId: params.toolCallId,
           args: params.args,
-          ...(params.signal ? { signal: params.signal } : {}),
+          ...(signal ? { signal } : {}),
           ...(params.onUpdate ? { onUpdate: params.onUpdate } : {}),
         });
       } catch (error) {
@@ -557,7 +566,10 @@ export function toToolDefinitions(
       return {
         kind: "ready",
         args: ready.args,
-        execute: (onImplementationStart) => settle(() => ready.execute(onImplementationStart)),
+        execute: (onImplementationStart) => {
+          signal?.throwIfAborted();
+          return settle(() => ready.execute(onImplementationStart));
+        },
         dispose: ready.dispose,
       };
     });
@@ -677,6 +689,7 @@ export function toClientToolDefinitions(
               runId: hookContext?.runId,
             });
           }
+          signal?.throwIfAborted();
           decision?.start?.();
           // Notify handler that a client tool was called.
           if (onClientToolCall) {

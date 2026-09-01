@@ -5,17 +5,27 @@ import { WizardNextResultSchema } from "./wizard.js";
 describe("WizardNextResultSchema", () => {
   const validate = Compile(WizardNextResultSchema);
 
-  it("accepts an exact prepared model on a terminal result", () => {
+  it.each([
+    { preparedModelRef: "ollama/qwen3:0.6b" },
+    { modelActivation: { modelRef: "openai/gpt-5.6-luna" } },
+    { modelActivation: { modelRef: "openai/gpt-5.6-luna", gatewayRestartRequired: true } },
+  ])("accepts an exact model outcome on a terminal result (%j)", (outcome) => {
     expect(
       validate.Check({
         done: true,
         status: "done",
-        preparedModelRef: "ollama/qwen3:0.6b",
+        ...outcome,
       }),
     ).toBe(true);
   });
 
-  it("rejects an empty prepared model reference", () => {
-    expect(validate.Check({ done: true, status: "done", preparedModelRef: "" })).toBe(false);
+  it.each([
+    { preparedModelRef: "" },
+    { modelActivation: { modelRef: "" } },
+    { modelActivation: { modelRef: "openai/gpt-5.6-luna", gatewayRestartRequired: false } },
+    { modelActivation: { modelRef: "openai/gpt-5.6-luna", gatewayRestartRequired: "true" } },
+    { modelActivation: { modelRef: "openai/gpt-5.6-luna", apiKey: "not-a-wire-field" } },
+  ])("rejects malformed model outcomes (%j)", (outcome) => {
+    expect(validate.Check({ done: true, status: "done", ...outcome })).toBe(false);
   });
 });

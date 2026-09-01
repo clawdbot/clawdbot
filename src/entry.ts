@@ -14,9 +14,10 @@ import {
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import type { RootHelpRenderOptions } from "./cli/program/root-help.js";
 import { isNativeHookRelayArgv } from "./cli/respawn-policy.js";
+import { withCliProcessScope } from "./cli/runtime-cleanup-scope.js";
 import {
   configureGatewayStartupTraceConsoleFormatting,
-  createGatewayStartupTrace,
+  createGatewayDispatchStartupTrace,
 } from "./cli/startup-trace.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import {
@@ -24,6 +25,7 @@ import {
   resolveEntryInstallRoot,
   respawnWithoutOpenClawCompileCacheIfNeeded,
 } from "./entry.compile-cache.js";
+import { installDistEsmResolveFastPath } from "./entry.esm-resolve-fast-path.js";
 import { buildCliRespawnPlan, runCliRespawnPlan } from "./entry.respawn.js";
 import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
 import { normalizeEnv } from "./infra/env.js";
@@ -34,6 +36,7 @@ import { defaultRuntime } from "./runtime.js";
 
 const ENTRY_WRAPPER_PAIRS = [
   { wrapperBasename: "openclaw.mjs", entryBasename: "entry.js" },
+  { wrapperBasename: "openclaw.mjs", entryBasename: "entry.mjs" },
   { wrapperBasename: "openclaw.js", entryBasename: "entry.js" },
 ] as const;
 
@@ -46,6 +49,13 @@ async function writeCapturedCliArgumentError(message: string): Promise<void> {
   await configureGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace);
   const { enableConsoleCapture } = await import("./logging.js");
   enableConsoleCapture();
+  const [{ formatCliJsonFailure }, { isJsonOutputModeActive }] = await Promise.all([
+    import("./cli/failure-output.js"),
+    import("./cli/json-output-mode.js"),
+  ]);
+  if (isJsonOutputModeActive(process.argv)) {
+    defaultRuntime.writeJson(formatCliJsonFailure(message));
+  }
   console.error(`[openclaw] ${message}`);
 }
 
@@ -94,7 +104,7 @@ function shouldForceReadOnlyAuthStore(argv: string[]): boolean {
   return false;
 }
 
-const gatewayEntryStartupTrace = createGatewayStartupTrace(process.argv, "entry");
+const gatewayEntryStartupTrace = createGatewayDispatchStartupTrace(process.argv, "entry");
 
 // Guard: only run entry-point logic when this file is the main module.
 // The bundler may import entry.js as a shared dependency when dist/index.js
@@ -111,6 +121,7 @@ if (
 } else {
   const entryFile = fileURLToPath(import.meta.url);
   const installRoot = resolveEntryInstallRoot(entryFile);
+  installDistEsmResolveFastPath(import.meta.url);
   process.title = "openclaw";
   ensureOpenClawExecMarkerOnProcess();
   installProcessWarningFilter();
@@ -195,7 +206,7 @@ if (
       gatewayEntryStartupTrace.mark("argv");
 
       if (!tryHandleRootVersionFastPath(process.argv)) {
-        await runMainOrRootHelp(process.argv);
+        await withCliProcessScope(() => runMainOrRootHelp(process.argv));
       }
     }
   }
@@ -306,7 +317,11 @@ export async function runMainOrRootHelp(
       await configureGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace);
       const { enableConsoleCapture } = await import("./logging.js");
       enableConsoleCapture();
-      const { formatCliFailureLines } = await import("./cli/failure-output.js");
+      const [{ formatCliFailureLines, formatCliJsonFailure }, { isJsonOutputModeActive }] =
+        await Promise.all([import("./cli/failure-output.js"), import("./cli/json-output-mode.js")]);
+      if (isJsonOutputModeActive(argv)) {
+        defaultRuntime.writeJson(formatCliJsonFailure(error));
+      }
       for (const line of formatCliFailureLines({
         title: "Could not start the CLI.",
         error,

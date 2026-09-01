@@ -21,6 +21,9 @@ vi.mock("../agents/prepared-model-catalog.js", async () => {
       entries: (await loadPreparedModelCatalog(params)) ?? [],
       routeVariants: [],
     })),
+    loadProviderScopedThinkingCatalog: vi.fn(
+      async (params) => (await loadPreparedModelCatalog(params)) ?? [],
+    ),
     loadPublishedPreparedModelCatalog: loadPreparedModelCatalog,
     publishedModelCatalogOwnerMatchesAgent: (owner: { agentId: string }, agentId: string) =>
       owner.agentId === agentId.trim().toLowerCase(),
@@ -58,11 +61,15 @@ vi.mock("../agents/model-selection.js", async () => {
   };
 });
 
+vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: () => undefined,
+}));
+
 vi.mock("../agents/runtime-plugins.js", () => ({
   loadAgentRuntimePluginRegistryHandle: vi.fn(),
 }));
 
-vi.mock("../agents/subagent-announce.js", () => ({
+vi.mock("../agents/subagents/announce/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(),
 }));
 

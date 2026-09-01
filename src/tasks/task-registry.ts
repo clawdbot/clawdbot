@@ -14,7 +14,7 @@ export { assertTaskCancellationReadyById, cancelTaskById } from "./task-registry
 export { maybeDeliverTaskTerminalUpdate } from "./task-registry-delivery.js";
 export {
   createTaskRecord,
-  finalizeTaskRunByRunId,
+  finalizeTaskRecordByRunId,
   linkTaskToFlowById,
   markTaskLostById,
   markTaskRunningByRunId,
@@ -37,7 +37,6 @@ export {
   listTasksForFlowId,
   listTasksForOwnerKey,
   listTasksForRelatedSessionKey,
-  listTasksForSessionKey,
   resolveTaskForLookupToken,
 } from "./task-registry-query.js";
 export { publishTaskRecordAfterAtomicStore } from "./task-registry-mutation.js";

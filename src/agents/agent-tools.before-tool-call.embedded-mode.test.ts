@@ -7,6 +7,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import {
@@ -18,8 +19,10 @@ import type { HookRunner } from "../plugins/hooks.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { PluginApprovalResolutions } from "../plugins/types.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveBeforeToolCallApprovalOutcome } from "./agent-tools.before-tool-call.approval.js";
 import { runBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 vi.mock("../plugins/hook-runner-global.js", async () => {
@@ -105,6 +108,77 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     resetGlobalHookRunner();
   });
 
+  it.each(["request", "waitDecision"])(
+    "cancels the gateway approval %s transport when the owning tool lifetime ends",
+    async (phase) => {
+      const controller = new AbortController();
+      const parked = createDeferredCore();
+      const pending = createDeferredCore<Record<string, unknown>>();
+      let transportCancelled = false;
+      mockCallGatewayTool.mockImplementation(async (method, _options, _request, extra) => {
+        if (method !== `plugin.approval.${phase}`) {
+          return { id: "generation-approval", status: "accepted" };
+        }
+        const signal = extra?.signal;
+        const abort = () => {
+          transportCancelled = true;
+          pending.reject(signal?.reason);
+        };
+        signal?.addEventListener("abort", abort, { once: true });
+        parked.resolve();
+        try {
+          return await pending.promise;
+        } finally {
+          signal?.removeEventListener("abort", abort);
+        }
+      });
+      const outcome = resolveBeforeToolCallApprovalOutcome({
+        result: {
+          requireApproval: {
+            pluginId: "mcp-policy",
+            title: "MCP write",
+            description: "Approve remote mutation",
+          },
+        },
+        toolName: "mcp_write",
+        baseParams: {},
+        signal: controller.signal,
+      });
+      try {
+        await parked.promise;
+        controller.abort(new Error("Permission change"));
+        expect(transportCancelled).toBe(true);
+        await expect(outcome).resolves.toMatchObject({ blocked: true });
+      } finally {
+        pending.reject(controller.signal.reason);
+        await outcome;
+      }
+    },
+  );
+
+  it("carries the host receipt fence beside the execution identity token", async () => {
+    const executionIdentityToken = createExecutionIdentityAdmissionToken("run-receipt-fence");
+    const receiptAuthority = vi.fn(() => true);
+    runBeforeToolCallMock.mockResolvedValue({});
+
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey: "agent:main:session",
+        operationalRunInstance: { instanceId: "instance-receipt", runId: "run-receipt-fence" },
+        executionIdentityToken,
+        receiptAuthority,
+      },
+      () => runBeforeToolCallHook({ toolName: "exec", params: { command: "true" } }),
+    );
+
+    const call = requireBeforeToolCall(runBeforeToolCallMock, "receipt-fenced hook invocation");
+    expect(call[2]?.token).toBe(executionIdentityToken);
+    expect(call[2]?.assertAuthority).toEqual(expect.any(Function));
+    expect(call[2]?.assertAuthority()).toBe(true);
+    expect(receiptAuthority).toHaveBeenCalledOnce();
+  });
+
   it("blocks approval-required tools in embedded mode when no gateway approval route exists", async () => {
     setEmbeddedMode(true);
     const onResolution = vi.fn();
@@ -144,7 +218,6 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
         agentId: undefined,
         allowedDecisions: undefined,
         description: "Test approval request",
-        pluginId: "test-plugin",
         sessionKey: undefined,
         severity: "info",
         timeoutMs: 120_000,
@@ -211,6 +284,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
         pluginId: "test-plugin",
         title: "Needs approval",
         description: "Test approval request",
+        scope: { kind: "external-post", target: "git‮hub", visibility: "public" },
         severity: "info",
         timeoutBehavior: "allow",
         onResolution,
@@ -226,6 +300,11 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     });
     await vi.waitFor(() => {
       expect(broker.listPending()).toHaveLength(1);
+    });
+    expect(broker.listPending()[0]?.request.scope).toEqual({
+      kind: "external-post",
+      target: "git\\u{202E}hub",
+      visibility: "public",
     });
 
     broker.stop(new Error("local TUI stopped"));
@@ -436,7 +515,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(result.blocked).toBe(true);
     const approvalCall = requireApprovalRequestCall("non-embedded approval request");
     expect(approvalCall.timeoutParams.timeoutMs).toBe(15_000);
-    expect(approvalCall.request.pluginId).toBe("test-plugin");
+    expect(approvalCall.request.pluginId).toBeUndefined();
     expect(approvalCall.request.title).toBe("Needs approval");
     expect(approvalCall.request.description).toBe("Test approval request");
     expect(approvalCall.request.severity).toBe("info");
@@ -523,7 +602,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     });
     const approvalCall = requireApprovalRequestCall("trusted policy approval request");
     expect(approvalCall.timeoutParams.timeoutMs).toBe(130_000);
-    expect(approvalCall.request.pluginId).toBe("trusted-policy");
+    expect(approvalCall.request.pluginId).toBeUndefined();
     expect(approvalCall.request.title).toBe("Policy approval");
     expect(approvalCall.request.description).toBe("Policy requested approval");
     expect(approvalCall.request.toolName).toBe("exec");
@@ -616,6 +695,46 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       expect(adjustedApprovalCall.request.toolCallId).toBe("call-skill-hook-apply");
       expect(runBeforeToolCallMock).toHaveBeenCalledTimes(1);
     }
+  });
+
+  it("requires approval before skill_workshop restores a collection", async () => {
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "skill-workshop-restore-approval",
+      decision: PluginApprovalResolutions.ALLOW_ONCE,
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "skill_workshop",
+      params: { action: "restore_collection" },
+      toolCallId: "call-skill-restore",
+      ctx: {
+        agentId: "main",
+        sessionKey: "main",
+        config: {
+          skills: {
+            workshop: {
+              approvalPolicy: "pending",
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      blocked: false,
+      params: { action: "restore_collection" },
+      approvalResolution: PluginApprovalResolutions.ALLOW_ONCE,
+    });
+    const approvalCall = requireApprovalRequestCall("skill_workshop restore approval request");
+    expect(approvalCall.request).toMatchObject({
+      title: "Restore previous skill collection",
+      description:
+        "Replace current workspace skills with the previous collection backup. Later skill changes may be removed.",
+      severity: "warning",
+      toolName: "skill_workshop",
+      toolCallId: "call-skill-restore",
+    });
+    expect(runBeforeToolCallMock).toHaveBeenCalledTimes(1);
   });
 
   it("returns an actionable pending outcome when skill_workshop approval expires", async () => {

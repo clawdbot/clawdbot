@@ -13,6 +13,10 @@ import type { PollInput } from "../../polls.js";
 /** Delivery durability requested by core when a channel sends agent output. */
 export type MessageDurabilityPolicy = "required" | "best_effort" | "disabled";
 
+export type OutboundReplyFacts =
+  | Readonly<{ source: "explicit"; replyToId: string }>
+  | Readonly<{ source: "implicit"; replyToId: string; mode: "first" | "all" }>;
+
 /** Capability names a channel must advertise before core can rely on durable final delivery. */
 export const durableFinalDeliveryCapabilities = [
   "text",
@@ -48,8 +52,14 @@ type DurableFinalDeliveryPayloadShape = {
 
 /** Raw platform result shape normalized into a message receipt. */
 export type MessageReceiptSourceResult = {
+  /** Provider-confirmed intentional omission before dispatch, never an ambiguous send. */
+  outcome?: "not_sent";
   channel?: string;
   messageId?: string;
+  target?: {
+    kind: "chat" | "channel" | "room" | "conversation";
+    id: string;
+  };
   chatId?: string;
   channelId?: string;
   roomId?: string;
@@ -189,6 +199,8 @@ export type ChannelMessageSendTextContext<TConfig = OpenClawConfig> = {
   preparedMessageId?: string;
   /** @internal Refresh durable timing before recipient-visible or finalizing platform I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
+  /** @internal Synchronously fence custody after refresh and immediately before provider I/O. */
+  assertDirectAdapterHandoff?: () => void;
   /** @internal Report each completed platform sub-send before another fallible step. */
   onDeliveryResult?: (result: ChannelMessageSendResult) => Promise<void> | void;
 };
@@ -230,8 +242,10 @@ export type ChannelMessageSendPollContext<TConfig = OpenClawConfig> = Omit<
 
 /** Adapter send result normalized to a receipt plus optional legacy message id. */
 export type ChannelMessageSendResult = {
+  outcome?: MessageReceiptSourceResult["outcome"];
   receipt: MessageReceipt;
   messageId?: string;
+  target?: MessageReceiptSourceResult["target"];
 };
 
 /** Discriminator for lifecycle hooks around a concrete adapter send attempt. */

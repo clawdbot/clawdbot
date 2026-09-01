@@ -1,7 +1,5 @@
 import AppKit
 import OpenClawDiscovery
-import OpenClawIPC
-import OpenClawKit
 import SwiftUI
 
 extension OnboardingView {
@@ -16,8 +14,6 @@ extension OnboardingView {
             self.cliPage()
         case 3:
             self.aiSetupPage(contentHeight: contentHeight)
-        case 5:
-            self.permissionsPage()
         case 9:
             self.readyPage()
         default:
@@ -107,9 +103,7 @@ extension OnboardingView {
                         systemImage: "network",
                         selected: self.selectedConnectionMode == .remote)
                     {
-                        withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-                            self.showRemoteChoices.toggle()
-                        }
+                        self.handleRemoteSelection()
                     }
 
                     if self.showRemoteChoices || self.selectedConnectionMode == .remote {
@@ -176,11 +170,7 @@ extension OnboardingView {
         guard let probe = localGatewayProbe else {
             return "Private to this computer. Installs and starts automatically."
         }
-        let base = probe.expected
-            ? "Existing gateway detected"
-            : "Port \(probe.port) already in use"
-        let command = probe.command.isEmpty ? "" : " (\(probe.command) pid \(probe.pid))"
-        return "\(base)\(command). Will attach."
+        return probe.subtitle
     }
 
     private var remoteChoiceSubtitle: String {
@@ -812,52 +802,11 @@ extension OnboardingView {
         .buttonStyle(.plain)
     }
 
-    func permissionsPage() -> some View {
-        onboardingPage {
-            VStack(spacing: 12) {
-                // Keep intro and rows in one document so short windows can reveal every permission.
-                HStack(spacing: 8) {
-                    Text("Grant permissions")
-                        .font(.largeTitle.weight(.semibold))
-                    if self.isRequesting {
-                        ProgressView()
-                            .controlSize(.small)
-                    }
-                }
-                Text(
-                    "These macOS permissions let OpenClaw automate apps and capture context on this Mac. " +
-                        "Status updates automatically.")
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 520)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                self.onboardingCard(spacing: 4, padding: 12) {
-                    ForEach(Capability.importanceOrdered, id: \.self) { cap in
-                        PermissionRow(
-                            capability: cap,
-                            status: self.permissionMonitor.status[cap] ?? .notGranted,
-                            compact: true)
-                        {
-                            Task { await self.request(cap) }
-                        }
-                    }
-                }
-            }
-        }
-        // The root onboarding layout keeps navigation outside this scrollable document.
-    }
-
     func cliPage() -> some View {
-        let remoteMode = self.state.connectionMode == .remote
-        let detail = if remoteMode {
-            "OpenClaw is installing the matching runtime for this Mac node. " +
-                "It will connect to your selected Gateway without starting another one here."
-        } else {
-            "OpenClaw is setting up its background service on this Mac. " +
-                "This usually takes under a minute — no Terminal, no administrator password."
-        }
+        let detail = "OpenClaw is setting up its Gateway background service on this Mac. " +
+            "Published Stable and Beta installs are usually quick. " +
+            "Dev (Git main) downloads and builds OpenClaw from source, so allow several minutes " +
+            "and several gigabytes of free space. No administrator password is required."
         return onboardingPage {
             Text("Getting things ready")
                 .font(.largeTitle.weight(.semibold))
@@ -871,27 +820,25 @@ extension OnboardingView {
             self.onboardingCard(spacing: 14, padding: 16) {
                 self.installStepRow(
                     title: "Install OpenClaw",
-                    detail: self.cliInstalled
+                    detail: self.cliExecutableReady
                         ? (self.cliInstallLocation ?? "Installed")
                         : "A private copy inside your user folder.",
                     state: self.installStepStateForInstall,
-                    monospacedDetail: self.cliInstalled && self.cliInstallLocation != nil)
+                    monospacedDetail: self.cliExecutableReady && self.cliInstallLocation != nil)
                 self.installStepRow(
-                    title: remoteMode ? "Prepare the Mac node" : "Start the background service",
-                    detail: remoteMode
-                        ? "Runs inside the app and uses its macOS permissions."
-                        : "Runs quietly and starts again after a restart.",
+                    title: "Start the background service",
+                    detail: "Runs quietly and starts again after a restart.",
                     state: self.installStepStateForService)
                 self.installStepRow(
                     title: "Ready for the next step",
-                    detail: remoteMode
-                        ? "Once ready, this Mac connects to your selected Gateway."
-                        : "Once the service answers, you’ll connect your AI.",
+                    detail: "Once the service answers, you’ll connect your AI.",
                     state: self.cliInstalled ? .done : .pending)
 
                 if self.installFailed {
                     OnboardingErrorCard(
-                        title: "The Gateway didn’t start",
+                        title: self.cliExecutableReady
+                            ? "The Gateway didn’t start"
+                            : "OpenClaw installation failed",
                         message: self.cliStatus ?? "The installer did not finish.",
                         docsSlug: "platforms/mac/bundled-gateway",
                         retryTitle: "Try again")
@@ -918,21 +865,57 @@ extension OnboardingView {
     /// Exactly one spinner at a time: the install row finishes before the
     /// service row starts, mirroring the actual runCLIInstall phases.
     private var installStepStateForInstall: InstallStepState {
-        if self.cliInstalled { return .done }
-        if self.installingCLI {
-            return self.cliInstallPhase == .startingService ? .done : .running
-        }
-        if self.installFailed { return .failed }
-        return .running // status probe still deciding
+        Self.cliInstallStepStates(
+            executableReady: self.cliExecutableReady,
+            gatewayReady: self.cliInstalled,
+            statusKnown: self.cliStatusKnown,
+            installing: self.installingCLI,
+            phase: self.cliInstallPhase).install
     }
 
     private var installStepStateForService: InstallStepState {
-        if self.cliInstalled { return .done }
-        if self.installingCLI {
-            return self.cliInstallPhase == .startingService ? .running : .pending
+        Self.cliInstallStepStates(
+            executableReady: self.cliExecutableReady,
+            gatewayReady: self.cliInstalled,
+            statusKnown: self.cliStatusKnown,
+            installing: self.installingCLI,
+            phase: self.cliInstallPhase).service
+    }
+
+    static func cliInstallStepStates(
+        executableReady: Bool,
+        gatewayReady: Bool,
+        statusKnown: Bool,
+        installing: Bool,
+        phase: CLIInstallPhase) -> (install: InstallStepState, service: InstallStepState)
+    {
+        let install: InstallStepState = if executableReady || gatewayReady {
+            .done
+        } else if installing {
+            if phase == .choosingTarget {
+                .pending
+            } else if phase == .startingService {
+                .done
+            } else {
+                .running
+            }
+        } else if statusKnown {
+            .failed
+        } else {
+            .running
         }
-        if self.installFailed { return .failed }
-        return .pending
+
+        let service: InstallStepState = if gatewayReady {
+            .done
+        } else if installing {
+            phase == .startingService ? .running : .pending
+        } else if statusKnown, executableReady {
+            .failed
+        } else {
+            .pending
+        }
+
+        return (install, service)
     }
 
     enum InstallStepState {
@@ -987,32 +970,13 @@ extension OnboardingView {
         onboardingPage {
             Text("You’re all set!")
                 .font(.largeTitle.weight(.semibold))
-            if self.state.connectionMode != .unconfigured {
-                Text("Finish opens the chat — say hi to your new agent.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-            }
             self.onboardingCard {
-                if self.state.connectionMode == .unconfigured {
-                    self.featureRow(
-                        title: "Configure later",
-                        subtitle: "Pick Local or Remote in Settings → General whenever you’re ready.",
-                        systemImage: "gearshape")
-                    Divider()
-                        .padding(.vertical, 6)
-                }
-                if self.state.connectionMode == .remote {
-                    self.featureRow(
-                        title: "Remote gateway checklist",
-                        subtitle: """
-                        On your gateway host: install/update the `openclaw` package and make sure credentials exist
-                        (typically `~/.openclaw/credentials/oauth.json`). Then connect again if needed.
-                        """,
-                        systemImage: "network")
-                    Divider()
-                        .padding(.vertical, 6)
-                }
+                self.featureRow(
+                    title: "Configure later",
+                    subtitle: "Pick Local or Remote in Settings → General whenever you’re ready.",
+                    systemImage: "gearshape")
+                Divider()
+                    .padding(.vertical, 6)
                 self.featureRow(
                     title: "Open the menu bar panel",
                     subtitle: "Click the OpenClaw menu bar icon for the compact chat panel and status.",
@@ -1042,94 +1006,12 @@ extension OnboardingView {
                 {
                     self.openSettings(tab: .skills)
                 }
-                self.skillsOverview
-                Toggle("Launch at login", isOn: self.$state.launchAtLogin)
-                    .disabled(!self.state.bundleLocationAllowsPersistentIntegration && !self.state.launchAtLogin)
-            }
-        }
-        .task { await self.maybeLoadOnboardingSkills() }
-        .onChange(of: currentPage) { _, newValue in
-            // The pager builds every page up front, so the initial load above
-            // can run before the local gateway is configured and fail. Retry
-            // when the user actually lands here instead of latching the error.
-            guard self.activePageIndex(for: newValue) == self.pageOrder.last else { return }
-            Task { await self.maybeLoadOnboardingSkills() }
-        }
-    }
-
-    private func maybeLoadOnboardingSkills() async {
-        if self.onboardingSkillsModel.isLoading { return }
-        if self.didLoadOnboardingSkills, self.onboardingSkillsModel.error == nil { return }
-        self.didLoadOnboardingSkills = true
-        await self.onboardingSkillsModel.refresh()
-    }
-
-    private var skillsOverview: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Divider()
-                .padding(.vertical, 6)
-
-            HStack(spacing: 10) {
-                Text("Skills included")
-                    .font(.headline)
-                Spacer(minLength: 0)
-                if self.onboardingSkillsModel.isLoading {
-                    ProgressView()
-                        .controlSize(.small)
+                if AppProfile.current.isActive {
+                    LabeledContent("Launch at login", value: "Unavailable under profile")
                 } else {
-                    Button("Refresh") {
-                        Task { await self.onboardingSkillsModel.refresh() }
-                    }
-                    .buttonStyle(.link)
+                    Toggle("Launch at login", isOn: self.$state.launchAtLogin)
+                        .disabled(!self.state.bundleLocationAllowsPersistentIntegration && !self.state.launchAtLogin)
                 }
-            }
-
-            if let error = self.onboardingSkillsModel.error {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Couldn’t load skills from the Gateway.")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.orange)
-                    Text(
-                        "Make sure the Gateway is running and connected, " +
-                            "then hit Refresh (or open Settings → Skills).")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text("Details: \(error)")
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            } else if self.onboardingSkillsModel.skills.isEmpty {
-                Text("No skills reported yet.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 10) {
-                        ForEach(self.onboardingSkillsModel.skills) { skill in
-                            HStack(alignment: .top, spacing: 10) {
-                                Text(skill.emoji ?? "✨")
-                                    .font(.callout)
-                                    .frame(width: 22, alignment: .leading)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(skill.name)
-                                        .font(.callout.weight(.semibold))
-                                    Text(skill.description)
-                                        .font(.footnote)
-                                        .foregroundStyle(.secondary)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-                                Spacer(minLength: 0)
-                            }
-                        }
-                    }
-                    .padding(10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color(NSColor.windowBackgroundColor)))
-                }
-                .frame(maxHeight: 160)
             }
         }
     }

@@ -20,7 +20,10 @@ const requireFromSlackSocketMode = (() => {
 function loadSlackUndiciRuntime(): SlackUndiciRuntime {
   return requireFromSlackSocketMode("undici") as SlackUndiciRuntime;
 }
-export type SlackLookupClientOptions = Pick<WebClientOptions, "fetch" | "slackApiUrl" | "timeout">;
+export type SlackLookupClientOptions = Pick<
+  WebClientOptions,
+  "fetch" | "slackApiUrl" | "teamId" | "timeout"
+>;
 
 export const SLACK_DEFAULT_RETRY_OPTIONS: RetryOptions = {
   retries: 2,

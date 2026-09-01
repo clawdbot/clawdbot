@@ -74,7 +74,7 @@ describe("i18n", () => {
     });
   }
 
-  function readString(value: unknown, path: string): string {
+  function readTranslationString(value: unknown, path: string): string {
     let cursor = value;
     for (const part of path.split(".")) {
       cursor =
@@ -109,6 +109,14 @@ describe("i18n", () => {
     expect(translate.t("connection.help.copyCommandAria", { command: "openclaw dashboard" })).toBe(
       "Copy command: openclaw dashboard",
     );
+  });
+
+  it("renders a provided empty-string param as empty, not the raw placeholder", () => {
+    expect(translate.t("connection.help.copyCommandAria", { command: "" })).toBe("Copy command: ");
+  });
+
+  it("keeps the visible placeholder when the param is missing", () => {
+    expect(translate.t("connection.help.copyCommandAria", {})).toBe("Copy command: {command}");
   });
 
   it("should fallback to English if key is missing in another locale", async () => {
@@ -193,7 +201,7 @@ describe("i18n", () => {
 
       await vi.waitFor(() => expect(fresh.i18n.getLocale()).toBe(expectedLocale));
       expect(fresh.t("common.health")).toBe(
-        readString(expectedLocale === "zh-TW" ? zh_TW : zh_CN, "common.health"),
+        readTranslationString(expectedLocale === "zh-TW" ? zh_TW : zh_CN, "common.health"),
       );
     },
   );
@@ -266,19 +274,23 @@ describe("i18n", () => {
       zh_TW,
     })) {
       for (const key of checkedKeys) {
-        expect(readString(value, key), `${locale}:${key}`).not.toBe(readString(en, key));
+        expect(readTranslationString(value, key), `${locale}:${key}`).not.toBe(
+          readTranslationString(en, key),
+        );
       }
     }
   });
 
   it("keeps mobile pairing copy localized in shipped locale bundles", () => {
     const checkedKeys = flatten(en).filter(
-      (key) => key.startsWith("nodes.pairing.") && key !== "nodes.pairing.title",
+      (key) => key.startsWith("devices.pairing.") && key !== "devices.pairing.title",
     );
 
     for (const [locale, value] of Object.entries(shippedLocales)) {
       for (const key of checkedKeys) {
-        expect(readString(value, key), `${locale}:${key}`).not.toBe(readString(en, key));
+        expect(readTranslationString(value, key), `${locale}:${key}`).not.toBe(
+          readTranslationString(en, key),
+        );
       }
     }
   });
@@ -288,7 +300,9 @@ describe("i18n", () => {
 
     for (const [locale, value] of Object.entries(shippedLocales)) {
       for (const key of checkedKeys) {
-        expect(readString(value, key), `${locale}:${key}`).not.toBe(readString(en, key));
+        expect(readTranslationString(value, key), `${locale}:${key}`).not.toBe(
+          readTranslationString(en, key),
+        );
       }
     }
   });

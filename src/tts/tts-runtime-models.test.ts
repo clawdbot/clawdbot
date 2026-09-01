@@ -283,10 +283,12 @@ describe("TTS runtime voice model and streaming behavior", () => {
     expect(streamSynthesize).toHaveBeenCalledOnce();
   });
 
-  it("classifies streaming timeouts before falling back with raw text", async () => {
+  it("classifies streaming timeouts before falling back with normalized speech text", async () => {
+    // Real transport timeouts arrive as "TimeoutError" (fetch-timeout.ts), not
+    // AbortError; the classifier must catch the shape providers actually throw.
     const timeoutStreamSynthesize = vi.fn(async () => {
-      const error = new Error("stalled");
-      error.name = "AbortError";
+      const error = new Error("request timed out");
+      error.name = "TimeoutError";
       throw error;
     });
     const fallbackStreamSynthesize = vi.fn(async () => ({
@@ -336,6 +338,8 @@ describe("TTS runtime voice model and streaming behavior", () => {
       outcome: "success",
       reasonCode: "success",
     });
-    expect(fallbackStreamSynthesize).toHaveBeenCalledWith(expect.objectContaining({ text }));
+    expect(fallbackStreamSynthesize).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Keep streaming Markdown raw!" }),
+    );
   });
 });

@@ -1,28 +1,20 @@
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   forkSessionEntryFromParentTarget,
   forkSessionFromParentTranscript,
   resolveSessionParentForkDecision,
   type SessionParentForkDecision,
   type ParentForkedSessionTranscript,
+  type ForkSessionFromParentTranscriptResult,
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  isModelSelectionLocked,
-  ModelSelectionLockedError,
+  assertModelSelectionUnlocked,
+  MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE,
 } from "../../sessions/model-overrides.js";
 
-export const MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE =
-  "Model-selection-locked sessions cannot create child sessions from parent context.";
-
-function assertParentSessionForkAllowed(parentEntry: SessionEntry): void {
-  // A locked harness owns both the model and transcript lineage. Copying that
-  // context into an ordinary child would let the child continue it elsewhere.
-  if (isModelSelectionLocked(parentEntry)) {
-    throw new ModelSelectionLockedError(MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
-  }
-}
+export { MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE } from "../../sessions/model-overrides.js";
 
 type ParentForkDecision = SessionParentForkDecision;
 
@@ -34,12 +26,15 @@ type ParentForkDecisionParams = {
 };
 
 type ForkSessionFromParentParams = {
+  maxTokens?: number;
   parentSessionKey: string;
   parentEntry: SessionEntry;
   agentId: string;
+  commitGuard?: () => void;
   config?: OpenClawConfig;
   sessionKey: string;
   storePath?: string;
+  forkFrom?: "last-completed";
 
   /** Cross-agent forks land the child transcript in the target agent's store. */
   targetStorePath?: string;
@@ -94,14 +89,15 @@ function resolveParentForkStorePath(params: {
   storePath?: string;
 }): string {
   return (
-    params.storePath ?? resolveStorePath(params.config?.session?.store, { agentId: params.agentId })
+    params.storePath ??
+    resolveSessionStorePathCore(params.config?.session?.store, { agentId: params.agentId })
   );
 }
 
 export async function resolveParentForkDecision(
   params: ParentForkDecisionParams,
 ): Promise<ParentForkDecision> {
-  assertParentSessionForkAllowed(params.parentEntry);
+  assertModelSelectionUnlocked(params.parentEntry, MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
   return await resolveSessionParentForkDecision({
     parentEntry: params.parentEntry,
     storePath: resolveParentForkStorePath(params),
@@ -112,17 +108,37 @@ export async function forkSessionFromParent(
   params: ForkSessionFromParentParams,
 ): Promise<{ sessionId: string; sessionFile: string } | null> {
   // Keep direct callers fail-closed even if they skipped the normal decision step.
-  assertParentSessionForkAllowed(params.parentEntry);
+  assertModelSelectionUnlocked(params.parentEntry, MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
   const storePath = resolveParentForkStorePath(params);
   const fork = await forkSessionFromParentTranscript({
     agentId: params.agentId,
+    ...(params.commitGuard ? { commitGuard: params.commitGuard } : {}),
     parentEntry: params.parentEntry,
     parentSessionKey: params.parentSessionKey,
     sessionKey: params.sessionKey,
     storePath,
+    ...(params.forkFrom ? { forkFrom: params.forkFrom } : {}),
     ...(params.targetStorePath ? { targetStorePath: params.targetStorePath } : {}),
   });
   return fork.status === "created" ? fork.transcript : null;
+}
+
+export async function forkSessionFromParentWithDecision(
+  params: ForkSessionFromParentParams,
+): Promise<ForkSessionFromParentTranscriptResult> {
+  assertModelSelectionUnlocked(params.parentEntry, MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
+  return await forkSessionFromParentTranscript({
+    agentId: params.agentId,
+    ...(params.commitGuard ? { commitGuard: params.commitGuard } : {}),
+    enforceTokenLimit: true,
+    ...(params.maxTokens ? { maxTokens: params.maxTokens } : {}),
+    parentEntry: params.parentEntry,
+    parentSessionKey: params.parentSessionKey,
+    sessionKey: params.sessionKey,
+    storePath: resolveParentForkStorePath(params),
+    ...(params.forkFrom ? { forkFrom: params.forkFrom } : {}),
+    ...(params.targetStorePath ? { targetStorePath: params.targetStorePath } : {}),
+  });
 }
 
 function normalizeForkTarget(params: { canonicalKey: string; storeKeys?: readonly string[] }): {

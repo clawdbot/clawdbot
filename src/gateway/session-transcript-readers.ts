@@ -1,10 +1,8 @@
 import path from "node:path";
+import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
   isSessionTranscriptProjectionUnavailableError,
   readRecentSessionTranscriptMessageEvents,
-  readSessionTranscriptMessageEventById,
-  readSessionTranscriptMessageEventCount,
-  readSessionTranscriptMessageEventPage,
   readSessionTranscriptMessageEvents,
   resolveConcreteSessionStorePath,
   resolveSessionTranscriptReadTarget,
@@ -13,8 +11,19 @@ import {
   type SessionTranscriptReadScope,
   type TranscriptEvent,
 } from "../config/sessions/session-accessor.js";
+import {
+  readRecentSessionTranscriptHistoryEvents,
+  readSessionTranscriptHistoryEventById,
+  readSessionTranscriptHistoryEventCount,
+  readSessionTranscriptHistoryEventPage,
+  readSessionTranscriptHistoryEvents,
+} from "../config/sessions/session-accessor.sqlite-history-events.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import { aggregateSqliteUsageSnapshots } from "./session-transcript-derived-readers.js";
+import { aggregateSessionTranscriptUsage } from "./session-transcript-derived-readers.js";
+import {
+  attachOpenClawTranscriptMeta,
+  projectTranscriptEntryMessage,
+} from "./session-transcript-message.js";
 import type {
   ReadRecentSessionMessagesOptions,
   ReadSessionMessagesAsyncOptions,
@@ -22,20 +31,22 @@ import type {
 } from "./session-utils.fs.js";
 import {
   ArchivedTranscriptReader,
-  attachOpenClawTranscriptMeta,
   buildSessionPreviewItems,
-  readLatestSessionUsageFromTranscriptAsync as readLatestSessionUsageFromTranscriptAsyncFile,
+  readLatestSessionUsageFromTranscriptFileAsync,
 } from "./session-utils.fs.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
 
 export type { ReadSessionMessagesAsyncOptions };
-export { attachOpenClawTranscriptMeta, capArrayByJsonBytes } from "./session-utils.fs.js";
-export { readSessionTranscriptVisibleMessageDelta } from "../config/sessions/session-accessor.js";
+export { capArrayByJsonBytes } from "./session-utils.fs.js";
+export { attachOpenClawTranscriptMeta } from "./session-transcript-message.js";
+export { readSessionTranscriptVisibleMessageDeltaCore } from "../config/sessions/session-accessor.js";
 
 export type { SessionTranscriptReadScope };
 
 export type ReadRecentSessionMessagesResult = {
   activeLeafEntryId?: string | null;
+  deltaCursor?: string;
+  displaySource?: string;
   messages: unknown[];
   transcriptEvents?: TranscriptEvent[];
   transcriptPath?: string;
@@ -96,10 +107,7 @@ function archivedTranscriptReader(target: ResolvedTranscriptReadTarget): Archive
 }
 
 function readTranscriptRecordTimestampMs(event: Record<string, unknown>): number | undefined {
-  const raw = event.timestamp;
-  const timestampMs =
-    typeof raw === "string" ? Date.parse(raw) : typeof raw === "number" ? raw : Number.NaN;
-  return Number.isFinite(timestampMs) ? timestampMs : undefined;
+  return parseDateFirstTimestampMs(event.timestamp);
 }
 
 function extractMessageRecord(
@@ -136,22 +144,21 @@ function extractMessageRecordsFromEventEntries(
   });
 }
 
-function readSqliteMessageRecordsSync(target: ResolvedTranscriptReadTarget): SqliteMessageRecord[] {
+function readSqliteMessageRecords(target: ResolvedTranscriptReadTarget): SqliteMessageRecord[] {
   return extractMessageRecordsFromEventEntries(
     readSessionTranscriptMessageEvents(toTranscriptReadScope(target)),
   );
 }
 
-async function readSqliteMessageRecords(
-  target: ResolvedTranscriptReadTarget,
-): Promise<SqliteMessageRecord[]> {
-  return extractMessageRecordsFromEventEntries(
-    readSessionTranscriptMessageEvents(toTranscriptReadScope(target)),
-  );
+function projectSqliteHistoryEvents(entries: readonly SessionTranscriptMessageEvent[]): unknown[] {
+  return entries.flatMap((entry) => {
+    const message = projectTranscriptEntryMessage(entry.event, entry.seq, entry.displayPosition);
+    return message ? [message] : [];
+  });
 }
 
 function readSqliteMessagesSync(target: ResolvedTranscriptReadTarget): unknown[] {
-  return readSqliteMessageRecordsSync(target).map(sqliteRecordMessageWithSeq);
+  return readSqliteMessageRecords(target).map(sqliteRecordMessageWithSeq);
 }
 
 function normalizeRecentSqliteReadOptions(opts?: Partial<ReadRecentSessionMessagesOptions>) {
@@ -173,17 +180,21 @@ async function readRecentSqliteMessageRecords(
   opts?: Partial<ReadRecentSessionMessagesOptions>,
 ): Promise<{
   activeLeafEntryId?: string | null;
-  records: SqliteMessageRecord[];
+  deltaCursor?: string;
+  displaySource?: string;
+  messages: unknown[];
   transcriptEvents: TranscriptEvent[];
   totalMessages: number;
 }> {
   const normalized = normalizeRecentSqliteReadOptions(opts);
-  const page = readRecentSessionTranscriptMessageEvents(toTranscriptReadScope(target), normalized);
+  const page = readRecentSessionTranscriptHistoryEvents(toTranscriptReadScope(target), normalized);
   return {
     ...(Object.hasOwn(page, "activeLeafEntryId")
       ? { activeLeafEntryId: page.activeLeafEntryId }
       : {}),
-    records: extractMessageRecordsFromEventEntries(page.events),
+    ...(page.deltaCursor ? { deltaCursor: page.deltaCursor } : {}),
+    displaySource: page.displaySource,
+    messages: projectSqliteHistoryEvents(page.events),
     transcriptEvents: page.events.map((entry) => entry.event),
     totalMessages: page.totalMessages,
   };
@@ -223,47 +234,16 @@ function sqliteRecordMessageWithSeq(record: {
   });
 }
 
-export function sqliteMessageEventWithSeq(entry: SessionTranscriptMessageEvent): unknown {
-  const record = extractMessageRecord(entry.event);
-  return record ? sqliteRecordMessageWithSeq({ ...record, seq: entry.seq }) : undefined;
-}
-
-export function extractMessageRole(message: unknown): string | undefined {
-  return message && typeof message === "object" && !Array.isArray(message)
-    ? ((message as { role?: unknown }).role as string | undefined)
-    : undefined;
-}
-
-export function extractMessageText(message: unknown): string | null {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return null;
-  }
-  const record = message as { content?: unknown; text?: unknown };
-  if (typeof record.content === "string") {
-    return record.content.trim() || null;
-  }
-  if (Array.isArray(record.content)) {
-    const text = record.content
-      .map((entry) =>
-        entry && typeof entry === "object" && typeof (entry as { text?: unknown }).text === "string"
-          ? (entry as { text: string }).text
-          : "",
-      )
-      .filter((part) => part.trim())
-      .join("\n")
-      .trim();
-    return text || null;
-  }
-  if (typeof record.text === "string") {
-    return record.text.trim() || null;
-  }
-  return null;
+export function sqliteMessageEventWithSeq(
+  entry: Pick<SessionTranscriptMessageEvent, "event" | "seq" | "displayPosition">,
+): unknown {
+  return projectTranscriptEntryMessage(entry.event, entry.seq, entry.displayPosition);
 }
 
 function readSqliteAggregateUsageSnapshot(
   target: ResolvedTranscriptReadTarget,
 ): SessionTranscriptUsageSnapshot | null {
-  return aggregateSqliteUsageSnapshots(readSqliteMessagesSync(target));
+  return aggregateSessionTranscriptUsage(readSqliteMessagesSync(target));
 }
 
 function buildSqlitePreviewItems(
@@ -271,7 +251,33 @@ function buildSqlitePreviewItems(
   maxItems: number,
   maxChars: number,
 ): SessionPreviewItem[] {
-  return buildSessionPreviewItems(readSqliteMessagesSync(target), maxItems, maxChars);
+  // Tool-only and suppressed rows need headroom; cap even the recovery scan so previews
+  // never materialize an entire large transcript or monopolize the Gateway thread.
+  const initialMaxEvents = Math.min(256, Math.max(64, Math.ceil(maxItems) * 4));
+  const readPreviewPage = (maxEvents: number, maxBytes: number) => {
+    const page = readRecentSessionTranscriptHistoryEvents(toTranscriptReadScope(target), {
+      maxBytes,
+      maxLines: maxEvents,
+      maxMessages: maxEvents,
+    });
+    return {
+      items: buildSessionPreviewItems(
+        extractMessageRecordsFromEventEntries(page.events).map(sqliteRecordMessageWithSeq),
+        maxItems,
+        maxChars,
+      ),
+      hasOlderEvents: page.totalMessages > page.events.length,
+    };
+  };
+  const preview = readPreviewPage(initialMaxEvents, 1024 * 1024);
+  if (preview.items.length >= maxItems || !preview.hasOlderEvents) {
+    return preview.items;
+  }
+  const recoveryMaxEvents = Math.min(
+    2048,
+    Math.max(1024, initialMaxEvents * 8, Math.ceil(maxItems)),
+  );
+  return readPreviewPage(recoveryMaxEvents, 8 * 1024 * 1024).items;
 }
 
 /** Reads display messages asynchronously through the reader seam. */
@@ -279,21 +285,7 @@ export async function readSessionMessagesAsync(
   scope: SessionTranscriptReadScope,
   opts: ReadSessionMessagesAsyncOptions,
 ): Promise<unknown[]> {
-  const target = resolveTranscriptReadTarget(scope);
-  if (opts.mode === "recent") {
-    const { records } = await readRecentSqliteMessageRecords(target, opts);
-    if (records.length === 0 && opts.allowResetArchiveFallback === true) {
-      return (await archivedTranscriptReader(target).read({ ...opts, resetArchiveOnly: true }))
-        .messages;
-    }
-    return records.map(sqliteRecordMessageWithSeq);
-  }
-  const records = await readSqliteMessageRecords(target);
-  if (records.length === 0 && opts.allowResetArchiveFallback === true) {
-    return (await archivedTranscriptReader(target).read({ ...opts, resetArchiveOnly: true }))
-      .messages;
-  }
-  return records.map(sqliteRecordMessageWithSeq);
+  return (await readSessionMessagesWithSourceAsync(scope, opts)).messages;
 }
 
 /** Reads display messages with source metadata through the reader seam. */
@@ -302,15 +294,17 @@ export async function readSessionMessagesWithSourceAsync(
   opts: ReadSessionMessagesAsyncOptions,
 ): Promise<ReadSessionMessagesResult> {
   const target = resolveTranscriptReadTarget(scope);
-  const records =
+  const messages =
     opts.mode === "recent"
-      ? (await readRecentSqliteMessageRecords(target, opts)).records
-      : await readSqliteMessageRecords(target);
-  if (records.length === 0 && opts.allowResetArchiveFallback === true) {
+      ? (await readRecentSqliteMessageRecords(target, opts)).messages
+      : projectSqliteHistoryEvents(
+          readSessionTranscriptHistoryEvents(toTranscriptReadScope(target)),
+        );
+  if (messages.length === 0 && opts.allowResetArchiveFallback === true) {
     return await archivedTranscriptReader(target).read({ ...opts, resetArchiveOnly: true });
   }
   return {
-    messages: records.map(sqliteRecordMessageWithSeq),
+    messages,
     transcriptPath: target.sessionFile,
   };
 }
@@ -322,13 +316,21 @@ export async function readSessionMessageByIdAsync(
   opts?: { allowResetArchiveFallback?: boolean },
 ): Promise<ReadSessionMessageByIdResult> {
   const target = resolveTranscriptReadTarget(scope);
-  const foundEvent = readSessionTranscriptMessageEventById(
+  const foundEvent = readSessionTranscriptHistoryEventById(
     toTranscriptReadScope(target),
     messageId,
   );
-  const found = foundEvent ? extractMessageRecordsFromEventEntries([foundEvent]).at(0) : undefined;
-  if (found) {
-    return { found: true, message: found.message, oversized: false, seq: found.seq };
+  if (foundEvent) {
+    return {
+      found: true,
+      message: projectTranscriptEntryMessage(
+        foundEvent.event,
+        foundEvent.seq,
+        foundEvent.displayPosition,
+      ),
+      oversized: false,
+      seq: foundEvent.seq,
+    };
   }
   if (opts?.allowResetArchiveFallback === true) {
     return await archivedTranscriptReader(target).readById(messageId, {
@@ -347,7 +349,7 @@ export async function visitSessionMessagesAsync(
 ): Promise<number> {
   const target = resolveTranscriptReadTarget(scope);
   let count = 0;
-  for (const record of await readSqliteMessageRecords(target)) {
+  for (const record of readSqliteMessageRecords(target)) {
     visit(record.message, record.seq);
     count += 1;
   }
@@ -361,7 +363,7 @@ export async function readSessionMessageCountAsync(
   const target = resolveTranscriptReadTarget(scope);
   const transcriptScope = toTranscriptReadScope(target);
   try {
-    return readSessionTranscriptMessageEventCount(transcriptScope);
+    return readSessionTranscriptHistoryEventCount(transcriptScope);
   } catch (error) {
     if (!isSessionTranscriptProjectionUnavailableError(error)) {
       throw error;
@@ -369,7 +371,7 @@ export async function readSessionMessageCountAsync(
     // The failed read already scheduled the rebuild; wait before assigning
     // a sequence so a concurrent send cannot fail or reuse a stale count.
     await waitForSessionTranscriptProjection(transcriptScope);
-    return readSessionTranscriptMessageEventCount(transcriptScope);
+    return readSessionTranscriptHistoryEventCount(transcriptScope);
   }
 }
 
@@ -379,9 +381,15 @@ export async function readRecentSessionMessagesWithStatsAsync(
   opts: ReadRecentSessionMessagesOptions,
 ): Promise<ReadRecentSessionMessagesResult> {
   const target = resolveTranscriptReadTarget(scope);
-  const { activeLeafEntryId, records, transcriptEvents, totalMessages } =
-    await readRecentSqliteMessageRecords(target, opts);
-  if (totalMessages === 0 && records.length === 0 && opts.allowResetArchiveFallback === true) {
+  const {
+    activeLeafEntryId,
+    deltaCursor,
+    displaySource,
+    messages,
+    transcriptEvents,
+    totalMessages,
+  } = await readRecentSqliteMessageRecords(target, opts);
+  if (totalMessages === 0 && messages.length === 0 && opts.allowResetArchiveFallback === true) {
     return await archivedTranscriptReader(target).readRecentWithStats({
       ...opts,
       resetArchiveOnly: true,
@@ -389,7 +397,9 @@ export async function readRecentSessionMessagesWithStatsAsync(
   }
   return {
     ...(activeLeafEntryId !== undefined ? { activeLeafEntryId } : {}),
-    messages: records.map(sqliteRecordMessageWithSeq),
+    ...(deltaCursor ? { deltaCursor } : {}),
+    displaySource,
+    messages,
     transcriptEvents,
     totalMessages,
     transcriptPath: target.sessionFile,
@@ -403,7 +413,7 @@ export async function readSessionMessagesPageWithStatsAsync(
   opts: { offset: number; maxMessages: number; allowResetArchiveFallback?: boolean },
 ): Promise<ReadRecentSessionMessagesResult> {
   const target = resolveTranscriptReadTarget(scope);
-  const page = readSessionTranscriptMessageEventPage(toTranscriptReadScope(target), opts);
+  const page = readSessionTranscriptHistoryEventPage(toTranscriptReadScope(target), opts);
   if (page.totalMessages === 0 && opts.allowResetArchiveFallback === true) {
     return await archivedTranscriptReader(target).readPage({ ...opts, resetArchiveOnly: true });
   }
@@ -411,8 +421,9 @@ export async function readSessionMessagesPageWithStatsAsync(
     ...(Object.hasOwn(page, "activeLeafEntryId")
       ? { activeLeafEntryId: page.activeLeafEntryId }
       : {}),
-    messages: extractMessageRecordsFromEventEntries(page.events).map(sqliteRecordMessageWithSeq),
+    messages: projectSqliteHistoryEvents(page.events),
     transcriptEvents: page.events.map((entry) => entry.event),
+    displaySource: page.displaySource,
     totalMessages: page.totalMessages,
     transcriptPath: target.sessionFile,
     transcriptSource: "active",
@@ -433,7 +444,7 @@ export async function readLatestSessionUsageFromTranscriptAsync(
     path.isAbsolute(artifactFile) &&
     artifactFile.endsWith(".jsonl")
   ) {
-    return await readLatestSessionUsageFromTranscriptAsyncFile(
+    return await readLatestSessionUsageFromTranscriptFileAsync(
       scope.sessionId,
       concreteStorePath,
       artifactFile,
@@ -450,7 +461,7 @@ export function readRecentSessionUsageFromTranscript(
   maxBytes: number,
 ): SessionTranscriptUsageSnapshot | null {
   const target = resolveTranscriptReadTarget(scope);
-  return aggregateSqliteUsageSnapshots(readRecentSqliteUsageMessages(target, maxBytes));
+  return aggregateSessionTranscriptUsage(readRecentSqliteUsageMessages(target, maxBytes));
 }
 
 /** Reads compact session preview items through the reader seam. */

@@ -62,6 +62,7 @@ type BuildTrajectoryArtifactsParams = {
   promptCache?: unknown;
   compactionCount: number;
   assistantTexts: string[];
+  stopReason?: string;
   finalPromptText?: string;
   itemLifecycle: {
     startedCount: number;
@@ -134,7 +135,6 @@ function buildPluginsFromActiveRegistry() {
         musicGenerationProviderIds: toSortedUniqueStrings(plugin.musicGenerationProviderIds),
         webFetchProviderIds: toSortedUniqueStrings(plugin.webFetchProviderIds),
         webSearchProviderIds: toSortedUniqueStrings(plugin.webSearchProviderIds),
-        memoryEmbeddingProviderIds: toSortedUniqueStrings(plugin.memoryEmbeddingProviderIds),
         agentHarnessIds: toSortedUniqueStrings(plugin.agentHarnessIds),
       }))
       .toSorted((left, right) => left.id.localeCompare(right.id)),
@@ -340,6 +340,7 @@ export function buildTrajectoryArtifacts(
     promptCache: params.promptCache,
     compactionCount: params.compactionCount,
     assistantTexts: params.assistantTexts,
+    stopReason: params.stopReason,
     finalPromptText: params.finalPromptText,
     itemLifecycle: params.itemLifecycle,
     toolMetas: params.toolMetas,

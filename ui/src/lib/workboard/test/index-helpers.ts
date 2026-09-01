@@ -18,14 +18,6 @@ export function createWorkboardTestClient(responses: RequestResponses): Workboar
   return { request } as unknown as WorkboardTestClient;
 }
 
-export function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
-
 export function createWorkboardCard(overrides: Partial<WorkboardCard> = {}): WorkboardCard {
   const title = overrides.title ?? "Build board";
   return {

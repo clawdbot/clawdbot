@@ -1,6 +1,6 @@
 /** Runtime provider selection and tool construction for the `web_fetch` tool. */
-import { createHash } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose } from "../globals.js";
 import { getActivePluginRegistryVersion } from "../plugins/runtime.js";
@@ -13,7 +13,7 @@ import {
   resolveRuntimeWebFetchProviders,
 } from "../plugins/web-fetch-providers.runtime.js";
 import { sortWebFetchProvidersForAutoDetect } from "../plugins/web-fetch-providers.shared.js";
-import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
+import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
 import type { RuntimeWebFetchMetadata } from "../secrets/runtime-web-tools.types.js";
 import {
   hasWebProviderEntryCredential,
@@ -201,10 +201,6 @@ function resolveWebFetchProviderCacheKey(
   ]);
 }
 
-function createWebFetchProviderConfigFingerprint(config: OpenClawConfig): string {
-  return createHash("sha256").update(JSON.stringify(config)).digest("hex");
-}
-
 function resolveCachedWebFetchProviders(params: {
   cacheKey: string;
   config: OpenClawConfig;
@@ -233,13 +229,6 @@ export function clearWebFetchRuntimeCachesForTest(): void {
   webFetchProviderCache = new WeakMap();
 }
 
-/** Resolves the executable web_fetch provider tool definition. */
-export function resolveWebFetchDefinition(
-  options?: ResolveWebFetchDefinitionParams,
-): WebFetchDefinitionResolution {
-  return resolveWebFetchDefinitionUncached(options);
-}
-
 function resolveWebFetchProvidersForOptions(
   options?: ResolveWebFetchDefinitionParams,
 ): PluginWebFetchProviderEntry[] {
@@ -262,14 +251,15 @@ function resolveWebFetchProvidersForOptions(
     return resolveCachedWebFetchProviders({
       config: options.config,
       cacheKey: resolveWebFetchProviderCacheKey(options),
-      configFingerprint: createWebFetchProviderConfigFingerprint(options.config),
+      configFingerprint: resolveRuntimeConfigCacheKey(options.config),
       load,
     });
   }
   return load();
 }
 
-function resolveWebFetchDefinitionUncached(
+/** Resolves the executable web_fetch provider tool definition. */
+export function resolveWebFetchDefinition(
   options?: ResolveWebFetchDefinitionParams,
 ): WebFetchDefinitionResolution {
   const fetch = resolveWebProviderConfig(options?.config, "fetch") as
@@ -278,7 +268,8 @@ function resolveWebFetchDefinitionUncached(
   if (!resolveWebFetchEnabled({ fetch, sandboxed: options?.sandboxed })) {
     return null;
   }
-  const runtimeWebFetch = options?.runtimeWebFetch ?? getActiveRuntimeWebToolsMetadata()?.fetch;
+  const runtimeWebFetch =
+    options?.runtimeWebFetch ?? getActiveRuntimeWebToolsMetadataFromState()?.fetch;
   const providers = resolveWebFetchProvidersForOptions(options);
   return resolveWebProviderDefinition({
     config: options?.config,

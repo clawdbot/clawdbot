@@ -19,7 +19,7 @@ import {
 } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   resolveDefaultSessionStorePath,
-  resolveSessionFilePath,
+  resolveSessionFilePathCore,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
 import {
@@ -343,7 +343,11 @@ export function resolveExistingUsageSessionFile(params: {
   );
   const explicitMarker = parseSqliteSessionFileMarker(params.sessionFile);
   const matchingEntryMarker =
-    entryMarker && (!sessionId || entryMarker.sessionId === sessionId) ? entryMarker : undefined;
+    entryMarker &&
+    entryMarker.agentId === params.agentId &&
+    (!sessionId || entryMarker.sessionId === sessionId)
+      ? entryMarker
+      : undefined;
   const matchingExplicitMarker =
     explicitMarker &&
     explicitMarker.agentId === params.agentId &&
@@ -387,7 +391,7 @@ export function resolveExistingUsageSessionFile(params: {
   const candidate =
     params.sessionFile ??
     (sessionId
-      ? resolveSessionFilePath(sessionId, params.sessionEntry, {
+      ? resolveSessionFilePathCore(sessionId, params.sessionEntry, {
           agentId: params.agentId,
         })
       : undefined);

@@ -9,7 +9,7 @@ import {
   type MemoryEmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
-  asOptionalRecord as asRecord,
+  asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -263,9 +263,9 @@ function parseSingle(family: Family, raw: string): number[] {
       return asNumberArray(Array.isArray(data.embeddings) ? data.embeddings[0]?.embedding : null);
     case "twelvelabs": {
       if (Array.isArray(data.data)) {
-        return asNumberArray(asRecord(data.data[0])?.embedding);
+        return asNumberArray(asOptionalRecord(data.data[0])?.embedding);
       }
-      const dataRecord = asRecord(data.data);
+      const dataRecord = asOptionalRecord(data.data);
       if (dataRecord) {
         return asNumberArray(dataRecord.embedding);
       }
@@ -283,23 +283,13 @@ function parseCohereBatch(family: Family, raw: string): number[][] {
     throw malformedBedrockEmbeddingResponse();
   }
   if (family === "cohere-v4" && !Array.isArray(embeddings)) {
-    const embeddingRecord = asRecord(embeddings);
+    const embeddingRecord = asOptionalRecord(embeddings);
     if (!embeddingRecord) {
       throw malformedBedrockEmbeddingResponse();
     }
     return asNumberArrayBatch(embeddingRecord.float);
   }
   return asNumberArrayBatch(embeddings);
-}
-
-const testing = {
-  parseCohereBatch,
-  parseSingle,
-  stripInferenceProfilePrefix,
-};
-
-if (process.env.VITEST === "true") {
-  Reflect.set(globalThis, Symbol.for("openclaw.amazonBedrockEmbeddingTestApi"), testing);
 }
 
 // ---------------------------------------------------------------------------
@@ -361,25 +351,26 @@ export async function createBedrockEmbeddingProvider(
     return parseCohereBatch(family, raw).map((e) => sanitizeAndNormalizeEmbedding(e));
   };
 
-  const embedQuery = async (
-    text: string,
-    optionsValue?: { signal?: AbortSignal },
-  ): Promise<number[]> => {
+  const embedQuery = async (text: string, signal?: AbortSignal): Promise<number[]> => {
     if (!text.trim()) {
       return [];
     }
     if (isCohere) {
-      return (await embedCohere([text], "search_query", optionsValue?.signal))[0] ?? [];
+      return (await embedCohere([text], "search_query", signal))[0] ?? [];
     }
-    return embedSingle(text, optionsValue?.signal);
+    return embedSingle(text, signal);
   };
 
   const embedBatch = async (
-    texts: string[],
-    optionsLocal?: { signal?: AbortSignal },
+    inputs: Array<string | { text: string }>,
+    optionsLocal?: { signal?: AbortSignal; inputType?: string },
   ): Promise<number[][]> => {
+    const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
     if (texts.length === 0) {
       return [];
+    }
+    if (optionsLocal?.inputType === "query") {
+      return await Promise.all(texts.map((text) => embedQuery(text, optionsLocal.signal)));
     }
     if (isCohere) {
       return embedCohere(texts, "search_document", optionsLocal?.signal);
@@ -394,7 +385,13 @@ export async function createBedrockEmbeddingProvider(
       id: "bedrock",
       model: client.model,
       maxInputTokens: spec?.maxTokens,
-      embedQuery,
+      embed: async (input, optionsValue) => {
+        const text = typeof input === "string" ? input : input.text;
+        if (optionsValue?.inputType === "query") {
+          return await embedQuery(text, optionsValue.signal);
+        }
+        return (await embedBatch([text], { ...optionsValue, inputType: "document" }))[0] ?? [];
+      },
       embedBatch,
     },
     client,
@@ -456,13 +453,13 @@ function resolveBedrockEmbeddingClient(
   }
 
   let dimensions: number | undefined;
-  if (options.outputDimensionality != null) {
-    if (spec?.validDims && !spec.validDims.includes(options.outputDimensionality)) {
+  if (options.dimensions != null) {
+    if (spec?.validDims && !spec.validDims.includes(options.dimensions)) {
       throw new Error(
-        `Invalid dimensions ${options.outputDimensionality} for ${model}. Valid values: ${spec.validDims.join(", ")}`,
+        `Invalid dimensions ${options.dimensions} for ${model}. Valid values: ${spec.validDims.join(", ")}`,
       );
     }
-    dimensions = options.outputDimensionality;
+    dimensions = options.dimensions;
   } else {
     dimensions = spec?.dims;
   }

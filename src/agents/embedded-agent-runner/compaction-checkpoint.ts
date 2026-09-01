@@ -1,5 +1,5 @@
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
-import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
+import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 /** Owns the shared checkpoint lifecycle around both compaction entry points. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -42,6 +42,7 @@ export async function persistCompactionCheckpoint(params: {
     });
     const stored = await compactionCheckpointStore.persistCheckpoint({
       cfg: params.config,
+      ...(params.sessionTarget?.agentId ? { agentId: params.sessionTarget.agentId } : {}),
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
       reason: resolveSessionCompactionCheckpointReason({ trigger: params.trigger }),

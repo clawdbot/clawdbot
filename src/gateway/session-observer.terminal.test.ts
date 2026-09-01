@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SessionObserverDeps } from "./session-observer-model.js";
 import {
   createHarness as createBaseHarness,
   event,
@@ -114,7 +115,12 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
       "session.observer",
       expect.objectContaining({ health: "done" }),
       harness.subscribers.get("agent:main:session-1"),
-      { dropIfSlow: true },
+      expect.objectContaining({
+        agentId: "main",
+        dropIfSlow: true,
+        sessionKeys: ["agent:main:session-1"],
+        sessionSubscriptionVerified: true,
+      }),
     );
   });
 
@@ -220,6 +226,7 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
         startedAt: 0,
         endedAt: 30_000,
         error: "test failure",
+        ...(phase === "error" ? { fallbackExhaustedFailure: true } : {}),
       });
 
       expect(harness.completeModel).not.toHaveBeenCalled();
@@ -284,6 +291,7 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
       startedAt: 0,
       endedAt: 36_000,
       error: "run failed",
+      fallbackExhaustedFailure: true,
     });
 
     expect(completeModel).toHaveBeenCalledTimes(3);
@@ -415,12 +423,106 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
       startedAt: 0,
       endedAt: 30_000,
       error: "test failure",
+      ...(phase === "error" ? { fallbackExhaustedFailure: true } : {}),
     });
 
     expect(harness.broadcastToConnIds).toHaveBeenCalledOnce();
     const digest = broadcastDigest(harness);
     expect(digest?.health).toBe(expected);
     expect(harness.persistDigest).toHaveBeenCalledOnce();
+  });
+
+  it("does not finalize a retryable attempt error before same-run fallback succeeds", async () => {
+    useFakeTime();
+    const harness = createHarness();
+    harness.observer.handleEvent(lifecycleEvent({ phase: "start", startedAt: 0 }));
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    harness.observer.handleEvent(
+      lifecycleEvent({ phase: "error", endedAt: 30_000, error: "retryable provider failure" }),
+    );
+    await flushObserver();
+    expect(vi.getTimerCount()).toBe(1);
+    harness.observer.handleEvent(lifecycleEvent({ phase: "start", startedAt: 30_000 }));
+    expect(vi.getTimerCount()).toBe(0);
+    vi.setSystemTime(60_000);
+    await handleLifecycle(harness, { phase: "end", endedAt: 60_000 });
+
+    expect(observerBroadcasts(harness).map((call) => call[1])).toEqual([
+      expect.objectContaining({ health: "done" }),
+    ]);
+    expect(harness.persistDigest).toHaveBeenCalledOnce();
+  });
+
+  it("finalizes an unrecovered attempt error after the retry grace", async () => {
+    useFakeTime();
+    const harness = createHarness();
+    harness.observer.handleEvent(lifecycleEvent({ phase: "start", startedAt: 0 }));
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    harness.observer.handleEvent(
+      lifecycleEvent({ phase: "error", endedAt: 30_000, error: "provider failed" }),
+    );
+    await flushObserver();
+    expect(observerBroadcasts(harness)).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(1);
+
+    await advanceAndFlush(15_000);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(broadcastDigest(harness)).toMatchObject({ health: "failed" });
+    expect(harness.persistDigest).toHaveBeenCalledOnce();
+  });
+
+  it.each([1, 2])(
+    "corrects an expired retryable failure after %i same-run attempt errors",
+    async (failureCount) => {
+      useFakeTime();
+      const harness = createHarness();
+      harness.observer.handleEvent(lifecycleEvent({ phase: "start", startedAt: 0 }));
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      for (let attempt = 0; attempt < failureCount; attempt += 1) {
+        harness.observer.handleEvent(
+          lifecycleEvent({
+            phase: "error",
+            endedAt: 30_000 + attempt,
+            error: `retryable provider failure ${attempt + 1}`,
+          }),
+        );
+        await advanceAndFlush(15_000);
+      }
+
+      expect(broadcastDigest(harness, -1)).toMatchObject({ health: "failed" });
+      const failureRevision = broadcastDigest(harness, -1)?.revision;
+      await handleLifecycle(harness, { phase: "end", endedAt: 70_000 });
+
+      expect(broadcastDigest(harness, -1)).toMatchObject({ health: "done", runId: "run-1" });
+      expect(persistedDigest(harness, -1)).toMatchObject({ health: "done", runId: "run-1" });
+      expect(broadcastDigest(harness, -1)?.revision).toBeGreaterThan(failureRevision ?? 0);
+    },
+  );
+
+  it("does not let a provisional prior run evict the newer active session owner", async () => {
+    useFakeTime();
+    const harness = createHarness();
+    harness.observer.handleEvent(lifecycleEvent({ phase: "start", startedAt: 0 }));
+    await vi.advanceTimersByTimeAsync(30_000);
+    harness.observer.handleEvent(
+      lifecycleEvent({ phase: "error", endedAt: 30_000, error: "retryable provider failure" }),
+    );
+    await advanceAndFlush(15_000);
+
+    await handleLifecycle(harness, { phase: "start", startedAt: 45_000 }, { runId: "run-2" });
+    await handleLifecycle(harness, { phase: "end", endedAt: 50_000 });
+    await handleLifecycle(harness, { phase: "end", endedAt: 80_000 }, { runId: "run-2" });
+
+    expect(
+      observerBroadcasts(harness).some((call) => {
+        const digest = call[1] as SessionObserverDigest;
+        return digest.runId === "run-1" && digest.health === "done";
+      }),
+    ).toBe(false);
+    expect(broadcastDigest(harness, -1)).toMatchObject({ health: "done", runId: "run-2" });
   });
 
   it("retries one transient terminal digest failure", async () => {
@@ -526,13 +628,19 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
     expect(harness.completeModel).toHaveBeenCalledOnce();
 
     completeModel.mockRejectedValue(new Error("model unavailable"));
-    harness.observer.handleEvent(lifecycleEvent({ phase: "end", endedAt: 60_000 }));
+    harness.observer.handleEvent(
+      lifecycleEvent({
+        phase: "end",
+        endedAt: 60_000,
+        terminalReply: { disposition: "visible", text: "The repaired tests now pass." },
+      }),
+    );
     await advanceAndFlush(0);
     const observerCalls = observerBroadcasts(harness);
     expect(observerCalls).toHaveLength(2);
     const synthesized = observerCalls.at(-1)?.[1] as SessionObserverDigest;
     expect(synthesized.health).toBe("done");
-    expect(synthesized.headline).toBe("Fixing tests");
+    expect(synthesized.headline).toBe("The repaired tests now pass.");
     expect(synthesized.revision).toBe(2);
     expect(harness.persistDigest).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -540,6 +648,28 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
       }),
     );
   });
+
+  it.each(["silent", "empty"] as const)(
+    "does not invent a terminal headline for a %s reply",
+    async (disposition) => {
+      useFakeTime();
+      const completeModel = vi.fn(async () =>
+        modelMessage({ headline: "Fixing tests", health: "grinding" }),
+      );
+      const harness = createHarness({ completeModel });
+      startAndAddToolNotes(harness.observer);
+      await advanceAndFlush(12_000);
+
+      completeModel.mockRejectedValue(new Error("model unavailable"));
+      harness.observer.handleEvent(
+        lifecycleEvent({ phase: "end", endedAt: 60_000, terminalReply: { disposition } }),
+      );
+      await advanceAndFlush(0);
+
+      const synthesized = observerBroadcasts(harness).at(-1)?.[1] as SessionObserverDigest;
+      expect(synthesized.headline).toBe("Fixing tests");
+    },
+  );
 
   it("does not persist a synthesized terminal digest for a superseded run", async () => {
     useFakeTime();
@@ -567,7 +697,7 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
     expect(terminalBroadcasts).toHaveLength(0);
   });
 
-  it("invalidates the persist-time guard when a newer run replaces the digest's run", async () => {
+  it("invalidates the persist-time guard when a newer run replaces a dormant run", async () => {
     useFakeTime();
     const persistDigest = vi.fn(async (_params: PersistDigestParams) => undefined);
     const harness = createHarness({ persistDigest });
@@ -576,22 +706,44 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
     expect(persistDigest).toHaveBeenCalledOnce();
     const guard = persistGuard(harness);
     expect(guard?.()).toBe(true);
+    harness.observer.setConnectionVisibility("conn-1", false);
 
+    harness.observer.handleEvent(
+      lifecycleEvent({ phase: "error", error: "retryable provider failure" }),
+    );
+    expect(vi.getTimerCount()).toBe(1);
     harness.observer.handleEvent(lifecycleEvent({ phase: "start" }, { runId: "run-2" }));
+    expect(vi.getTimerCount()).toBe(0);
     expect(guard?.()).toBe(false);
   });
 
-  it("drops a completed digest when the session was reset mid-flight", async () => {
+  it.each(["deleted", "reset"])("disables model work after the session is %s", async (change) => {
     useFakeTime();
-    const readSession = vi.fn(() => ({ sessionId: "session-id", updatedAt: 0 }));
+    const readSession = vi.fn<NonNullable<SessionObserverDeps["readSession"]>>(() => ({
+      sessionId: "session-id",
+      updatedAt: 0,
+    }));
     const harness = createHarness({ readSession });
     startAndAddToolNotes(harness.observer);
-    readSession.mockReturnValue({ sessionId: "session-id-reset", updatedAt: 0 });
+    readSession.mockReturnValue(
+      change === "deleted" ? undefined : { sessionId: "session-id-reset", updatedAt: 0 },
+    );
     await advanceAndFlush(12_000);
     expect(harness.completeModel).toHaveBeenCalledOnce();
-    const broadcasts = observerBroadcasts(harness);
-    expect(broadcasts).toHaveLength(0);
+    expect(observerBroadcasts(harness)).toHaveLength(0);
     expect(harness.persistDigest).not.toHaveBeenCalled();
+
+    startAndAddToolNotes(harness.observer, { count: 4 });
+    await advanceAndFlush(24_000);
+    expect(harness.completeModel).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+
+    readSession.mockReturnValue({ sessionId: "session-id-next", updatedAt: 36_000 });
+    startAndAddToolNotes(harness.observer, { runId: "run-2" });
+    await advanceAndFlush(12_000);
+    expect(harness.completeModel).toHaveBeenCalledTimes(2);
+    expect(harness.persistDigest).toHaveBeenCalledOnce();
+    expect(observerBroadcasts(harness)).toHaveLength(1);
   });
 
   it("catches up durable persistence when the live digest already carried terminal health", async () => {
@@ -669,8 +821,13 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
     await advanceAndFlush(12_000);
     const guard = persistGuard(harness);
     expect(guard?.()).toBe(true);
+    harness.observer.handleEvent(
+      lifecycleEvent({ phase: "error", error: "retryable provider failure" }),
+    );
+    expect(vi.getTimerCount()).toBe(1);
     harness.observer.dispose();
     activeHarnesses.delete(harness);
+    expect(vi.getTimerCount()).toBe(0);
     expect(guard?.()).toBe(false);
   });
 

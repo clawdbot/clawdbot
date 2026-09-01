@@ -104,8 +104,8 @@ category changes remain reflected in the channel, but session archive, restore,
 reset, and deletion never archive or replace it. ClickClack owns channel archive
 and restore independently. `workspace`
 defaults to the account workspace, and `section` defaults to `Sessions`.
-`controlUrlBase` adds a link back to `/chat?session=<session-key>` in the
-OpenClaw Control UI.
+`controlUrlBase` adds canonical `/chat/<agent>/<session-ref>` links to the
+OpenClaw Control UI, preserving base paths. Main sessions use `/chat/<agent>`.
 
 ClickClack-managed embed URLs explicitly advertise host-theme support. The
 Control UI uses that provider-owned capability to apply its full palette before
@@ -119,8 +119,8 @@ not have an account selector.
 Messages in the managed channel run in a stable side session under the same
 agent id as the attached main session. The plugin installs a scoped host grant
 for `sessions_history`, `session_status`, and `sessions_send` between that side
-session and its attached main session, so `tools.sessions.visibility` can stay
-at its safer default `tree`. A second host-side policy blocks session discovery
+session and its attached main session, so `tools.sessions.visibility` can be set
+explicitly to `tree` for narrower access than the agent-wide default. A second host-side policy blocks session discovery
 and alternate targets; the side-agent prompt is not the authorization boundary.
 The agent still needs those three tools in its effective tool allowlist.
 

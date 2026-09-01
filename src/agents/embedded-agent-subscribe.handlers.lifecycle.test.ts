@@ -10,6 +10,7 @@ import {
   handleAgentStart,
 } from "./embedded-agent-subscribe.handlers.lifecycle.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
+import { createReplyDelivery } from "./embedded-agent-subscribe.reply-delivery.js";
 
 const { emitAgentEventMock } = vi.hoisted(() => ({
   emitAgentEventMock: vi.fn(),
@@ -66,9 +67,12 @@ function createContext(
     },
     state: {
       lastAssistant: lastAssistant as EmbeddedAgentSubscribeContext["state"]["lastAssistant"],
+      liveEditDiffStateById: new Map(),
       pendingCompactionRetry: 0,
       pendingToolMediaUrls: [],
       pendingToolMediaTrustByUrl: new Map(),
+      toolAutoDeliveryMediaUrls: new Set(),
+      messagingToolSentMediaUrls: [],
       pendingToolAudioAsVoice: false,
       deferredBlockReplies: [],
       replayState: { replayInvalid: false, hadPotentialSideEffects: false },
@@ -184,9 +188,10 @@ describe("handleAgentEnd", () => {
     );
   });
 
-  it("keeps explicit session and agent identity on lifecycle start events", () => {
+  it("keeps identity and the same observed start time on the bus and callback", () => {
     emitAgentEventMock.mockClear();
-    const ctx = createContext(undefined);
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
     ctx.params.sessionId = "session-1";
     ctx.params.agentId = "main";
 
@@ -199,6 +204,12 @@ describe("handleAgentEnd", () => {
       agentId: "main",
       stream: "lifecycle",
       data: expect.objectContaining({ phase: "start" }),
+    });
+    const event = emitAgentEventMock.mock.calls[0]?.[0];
+    expect(event.data.startedAt).toEqual(expect.any(Number));
+    expect(onAgentEvent).toHaveBeenCalledExactlyOnceWith({
+      stream: "lifecycle",
+      data: event.data,
     });
   });
 
@@ -270,7 +281,10 @@ describe("handleAgentEnd", () => {
     await handleAgentEnd(ctx);
 
     const meta = firstWarnMeta(ctx);
-    expect(meta.error).toBe("LLM request failed.");
+    const expectedError =
+      "⚠️ LLM request failed (provider internal error). " +
+      "This is usually temporary — try again shortly.";
+    expect(meta.error).toBe(expectedError);
     const userFacingLifecycleText = JSON.stringify(onAgentEvent.mock.calls);
     expect(userFacingLifecycleText).not.toContain("SECRET_CANARY_69737");
     expect(userFacingLifecycleText).not.toContain("LLM error server_error");
@@ -278,7 +292,7 @@ describe("handleAgentEnd", () => {
       stream: "lifecycle",
       data: {
         phase: "error",
-        error: "LLM request failed.",
+        error: expectedError,
       },
     });
   });
@@ -727,7 +741,10 @@ describe("handleAgentEnd", () => {
     });
   });
 
-  it("marks token-limited terminal text as abandoned before runner finalization", async () => {
+  it("keeps token-limited terminal text replayable before runner finalization", async () => {
+    // The partial answer is delivered, so the turn must not be abandoned or
+    // marked replay-invalid — that is what lets the user ask to continue it
+    // instead of restarting the work.
     const onAgentEvent = vi.fn();
     const ctx = createContext(
       {
@@ -739,6 +756,60 @@ describe("handleAgentEnd", () => {
     );
     ctx.state.livenessState = "working";
     ctx.state.assistantTexts = ["Partial answer"];
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        stopReason: "length",
+        livenessState: "working",
+      },
+    });
+  });
+
+  it("keeps token-limited text replayable when it was never streamed", async () => {
+    // Non-streaming routes can end the turn with empty streamed assistant texts
+    // while the completed assistant message still carries the visible answer.
+    // Payload building falls back to that message, so the reply is delivered and
+    // classification must not call the turn abandoned.
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "length",
+        content: [{ type: "text", text: "Partial answer" }],
+      },
+      { onAgentEvent },
+    );
+    ctx.state.livenessState = "working";
+    ctx.state.assistantTexts = [];
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        stopReason: "length",
+        livenessState: "working",
+      },
+    });
+  });
+
+  it("marks a token-limited turn with nothing to deliver as abandoned", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "length",
+        content: [],
+      },
+      { onAgentEvent },
+    );
+    ctx.state.livenessState = "working";
+    ctx.state.assistantTexts = [];
 
     await handleAgentEnd(ctx);
 
@@ -879,6 +950,9 @@ describe("handleAgentEnd", () => {
     const ctx = createContext(undefined);
     ctx.state.pendingToolMediaUrls = ["/tmp/reply.opus"];
     ctx.state.pendingToolAudioAsVoice = true;
+    vi.mocked(ctx.emitBlockReply).mockImplementation(
+      createReplyDelivery({ params: ctx.params, state: ctx.state, log: ctx.log }).emitBlockReply,
+    );
 
     await handleAgentEnd(ctx);
 

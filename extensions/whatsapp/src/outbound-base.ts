@@ -14,45 +14,13 @@ import {
   normalizeWhatsAppPayloadText,
 } from "./outbound-media-contract.js";
 import { WHATSAPP_LEGACY_OUTBOUND_SEND_DEP_KEYS } from "./outbound-send-deps.js";
-import {
-  lookupInboundMessageMetaForTarget,
-  type WhatsAppQuotedMessageKey,
-} from "./quoted-message.js";
+import { lookupInboundMessageMetaForTarget } from "./quoted-message.js";
 import { toWhatsappJid } from "./text-runtime.js";
 
-type WhatsAppChunker = NonNullable<ChannelOutboundAdapter["chunker"]>;
-type WhatsAppSendTextOptions = {
-  verbose: boolean;
-  cfg: OpenClawConfig;
-  mediaUrl?: string;
-  mediaAccess?: {
-    localRoots?: readonly string[];
-    readFile?: (filePath: string) => Promise<Buffer>;
-  };
-  mediaLocalRoots?: readonly string[];
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
-  gifPlayback?: boolean;
-  audioAsVoice?: boolean;
-  forceDocument?: boolean;
-  accountId?: string;
-  quotedMessageKey?: WhatsAppQuotedMessageKey;
-  preserveLeadingWhitespace?: boolean;
-  /** Report each accepted internal platform send before the next fallible send. */
-  onDeliveryResult?: (result: { messageId: string; toJid: string }) => Promise<void> | void;
-};
-type WhatsAppSendMessage = (
-  to: string,
-  body: string,
-  options: WhatsAppSendTextOptions,
-) => Promise<{ messageId: string; toJid: string }>;
-type WhatsAppSendPoll = (
-  to: string,
-  poll: Parameters<NonNullable<ChannelOutboundAdapter["sendPoll"]>>[0]["poll"],
-  options: { verbose: boolean; accountId?: string; cfg: OpenClawConfig },
-) => Promise<{ messageId: string; toJid: string }>;
+type WhatsAppSendMessage = typeof import("./send.js").sendMessageWhatsApp;
+type WhatsAppSendPoll = typeof import("./send.js").sendPollWhatsApp;
 
 type CreateWhatsAppOutboundBaseParams = {
-  chunker: WhatsAppChunker;
   sendMessageWhatsApp: WhatsAppSendMessage;
   sendPollWhatsApp: WhatsAppSendPoll;
   shouldLogVerbose: () => boolean;
@@ -72,8 +40,6 @@ function resolveQuoteLookupAccountId(cfg?: OpenClawConfig, accountId?: string | 
 type WhatsAppOutboundBaseCore = Pick<
   ChannelOutboundAdapter,
   | "deliveryMode"
-  | "chunker"
-  | "chunkerMode"
   | "textChunkLimit"
   | "sanitizeText"
   | "deliveryCapabilities"
@@ -85,28 +51,14 @@ type WhatsAppOutboundBaseCore = Pick<
 >;
 
 export function createWhatsAppOutboundBase({
-  chunker,
   sendMessageWhatsApp,
   sendPollWhatsApp,
   shouldLogVerbose,
   resolveTarget,
   normalizeText = normalizeWhatsAppPayloadText,
   skipEmptyText = true,
-}: CreateWhatsAppOutboundBaseParams): Pick<
-  ChannelOutboundAdapter,
-  | "deliveryMode"
-  | "chunker"
-  | "chunkerMode"
-  | "textChunkLimit"
-  | "sanitizeText"
-  | "deliveryCapabilities"
-  | "pollMaxOptions"
-  | "resolveTarget"
-  | "sendPayload"
-  | "sendText"
-  | "sendMedia"
-  | "sendPoll"
-> {
+}: CreateWhatsAppOutboundBaseParams): WhatsAppOutboundBaseCore &
+  Pick<ChannelOutboundAdapter, "sendPayload"> {
   const resolveQuotedMessageKey = (params: {
     accountId: string;
     to: string;
@@ -131,8 +83,6 @@ export function createWhatsAppOutboundBase({
 
   const outbound: WhatsAppOutboundBaseCore = {
     deliveryMode: "gateway",
-    chunker,
-    chunkerMode: "text",
     textChunkLimit: 4000,
     sanitizeText: ({ text }) => normalizeText(text),
     deliveryCapabilities: {
@@ -154,6 +104,10 @@ export function createWhatsAppOutboundBase({
         deps,
         gifPlayback,
         replyToId,
+        replyToIdSource,
+        replyToMode,
+        formatting,
+        onPlatformSendDispatch,
         onDeliveryResult,
       }) => {
         const normalizedText = normalizeText(text);
@@ -176,6 +130,10 @@ export function createWhatsAppOutboundBase({
           cfg,
           accountId: accountId ?? undefined,
           gifPlayback,
+          replyToIdSource,
+          replyToMode,
+          formatting,
+          onPlatformSendDispatch,
           ...(quotedMessageKey ? { quotedMessageKey } : {}),
           ...(onDeliveryResult
             ? {
@@ -200,6 +158,10 @@ export function createWhatsAppOutboundBase({
         gifPlayback,
         forceDocument,
         replyToId,
+        replyToIdSource,
+        replyToMode,
+        formatting,
+        onPlatformSendDispatch,
         onDeliveryResult,
       }) => {
         const lookupAccountId = resolveQuoteLookupAccountId(cfg, accountId);
@@ -224,6 +186,10 @@ export function createWhatsAppOutboundBase({
           accountId: accountId ?? undefined,
           gifPlayback,
           forceDocument,
+          replyToIdSource,
+          replyToMode,
+          formatting,
+          onPlatformSendDispatch,
           ...(quotedMessageKey ? { quotedMessageKey } : {}),
           ...(onDeliveryResult
             ? {

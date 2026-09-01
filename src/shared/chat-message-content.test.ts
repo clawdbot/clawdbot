@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   extractAssistantTextForPhase,
-  extractAssistantVisibleText,
+  extractAssistantPhaseText,
   extractFirstTextBlock,
   parseAssistantTextSignature,
   resolveAssistantMessagePhase,
@@ -55,7 +55,7 @@ describe("shared/chat-message-content", () => {
   });
 });
 
-describe("extractAssistantVisibleText", () => {
+describe("extractAssistantPhaseText", () => {
   it("preserves boundary spacing when joining adjacent final_answer text blocks", () => {
     expect(
       extractAssistantTextForPhase(
@@ -81,7 +81,7 @@ describe("extractAssistantVisibleText", () => {
 
   it("prefers final_answer text over commentary text", () => {
     expect(
-      extractAssistantVisibleText({
+      extractAssistantPhaseText({
         role: "assistant",
         content: [
           {
@@ -101,7 +101,7 @@ describe("extractAssistantVisibleText", () => {
 
   it("does not fall back to commentary-only text", () => {
     expect(
-      extractAssistantVisibleText({
+      extractAssistantPhaseText({
         role: "assistant",
         content: [
           {
@@ -116,7 +116,7 @@ describe("extractAssistantVisibleText", () => {
 
   it("does not fall back to unphased legacy text when final_answer is empty", () => {
     expect(
-      extractAssistantVisibleText({
+      extractAssistantPhaseText({
         role: "assistant",
         content: [
           { type: "text", text: "Legacy answer" },
@@ -132,7 +132,7 @@ describe("extractAssistantVisibleText", () => {
 
   it("falls back to unphased legacy text", () => {
     expect(
-      extractAssistantVisibleText({
+      extractAssistantPhaseText({
         role: "assistant",
         content: [{ type: "text", text: "Legacy answer" }],
       }),
@@ -141,7 +141,7 @@ describe("extractAssistantVisibleText", () => {
 
   it("extracts persisted Responses output_text blocks as assistant-visible text", () => {
     expect(
-      extractAssistantVisibleText({
+      extractAssistantPhaseText({
         role: "assistant",
         content: [{ type: "output_text", text: "Persisted assistant answer" }],
       }),
@@ -150,7 +150,7 @@ describe("extractAssistantVisibleText", () => {
 
   it("extracts persisted Responses assistant input_text blocks", () => {
     expect(
-      extractAssistantVisibleText({
+      extractAssistantPhaseText({
         role: "assistant",
         content: [{ type: "input_text", text: "Persisted assistant input" }],
       }),
@@ -159,7 +159,7 @@ describe("extractAssistantVisibleText", () => {
 
   it("does not mix unphased legacy text into final_answer output", () => {
     expect(
-      extractAssistantVisibleText({
+      extractAssistantPhaseText({
         role: "assistant",
         phase: "final_answer",
         content: [

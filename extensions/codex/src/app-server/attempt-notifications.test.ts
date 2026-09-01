@@ -2,6 +2,8 @@
 import { describe, expect, it } from "vitest";
 import {
   describeNotificationActivity,
+  isAssistantCommentaryCompletionNotification,
+  isAssistantCompletionReleaseNotification,
   isCodexTurnAbortMarkerNotification,
 } from "./attempt-notifications.js";
 import type { CodexServerNotification } from "./protocol.js";
@@ -37,6 +39,26 @@ describe("describeNotificationActivity", () => {
     });
 
     expect(details?.lastAssistantTextPreview).toBe(`${"x".repeat(236)}...`);
+  });
+});
+
+describe("assistant completion classification", () => {
+  it("keeps async agent messages on the nonterminal completion lane", () => {
+    const notification: CodexServerNotification = {
+      method: "item/completed",
+      params: {
+        item: {
+          id: "async-message-1",
+          type: "agentMessage",
+          phase: "final_answer",
+          delivery: "async",
+          text: "Background agent update.",
+        },
+      },
+    };
+
+    expect(isAssistantCompletionReleaseNotification(notification, false)).toBe(false);
+    expect(isAssistantCommentaryCompletionNotification(notification)).toBe(true);
   });
 });
 

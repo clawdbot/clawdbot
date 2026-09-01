@@ -27,20 +27,20 @@ extension GatewayConnection {
             ifCurrentRoute: route)
     }
 
+    /// `version` stays nil for external sources: the Gateway pins those to a commit and rejects a
+    /// version selector, so sending one would fail the install the row just offered.
     func skillsInstallClawHub(
         slug: String,
-        version: String,
-        acknowledgeRisk: Bool = false,
+        version: String?,
         on route: Route) async throws -> SkillInstallResult
     {
         var params: [String: AnyCodable] = [
             "source": AnyCodable("clawhub"),
             "slug": AnyCodable(slug),
-            "version": AnyCodable(version),
             "timeoutMs": AnyCodable(clawHubInstallTimeoutMilliseconds),
         ]
-        if acknowledgeRisk {
-            params["acknowledgeClawHubRisk"] = AnyCodable(true)
+        if let version {
+            params["version"] = AnyCodable(version)
         }
         return try await self.requestDecoded(
             method: .skillsInstall,

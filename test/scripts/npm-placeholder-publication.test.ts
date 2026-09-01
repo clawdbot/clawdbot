@@ -261,7 +261,12 @@ describe("npm placeholder publication", () => {
       targetSha: SHA,
       workflowSha: WORKFLOW_SHA,
       fetchImpl: async (input) =>
-        String(input).includes(encodeURIComponent(names[0]))
+        (typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.href
+            : input.url
+        ).includes(encodeURIComponent(names[0]))
           ? registryResponse()
           : existingMeta.clone(),
     });

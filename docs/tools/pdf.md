@@ -100,7 +100,7 @@ Details:
         primary: "anthropic/claude-opus-4-6",
         fallbacks: ["openai/gpt-5.4-mini"],
       },
-      pdfMaxBytesMb: 10,
+      pdfMaxMb: 10,
       pdfMaxPages: 20,
     },
   },
@@ -117,10 +117,11 @@ See [Configuration Reference](/gateway/config-agents#agent-defaults) for full fi
 
 ## Output details
 
-The tool returns text in `content[0].text` and structured metadata in `details`.
+The tool returns analysis in both `content[0].text` and `details.text`, so [Code Mode](/tools/code-mode) and [Tool Search](/tools/tool-search) can read the same result.
 
 Common `details` fields:
 
+- `text`: the analysis text
 - `model`: resolved model ref (`provider/model`)
 - `native`: `true` for native provider mode, `false` for fallback
 - `attempts`: fallback attempts that failed before success
@@ -186,4 +187,4 @@ Encrypted PDF with extraction fallback:
 ## Related
 
 - [Tools Overview](/tools) - all available agent tools
-- [Configuration Reference](/gateway/config-agents#agent-defaults) - pdfMaxBytesMb and pdfMaxPages config
+- [Configuration Reference](/gateway/config-agents#agent-defaults) - `pdfMaxMb` and `pdfMaxPages` config

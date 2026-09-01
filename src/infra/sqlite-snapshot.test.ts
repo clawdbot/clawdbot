@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
@@ -45,6 +46,7 @@ function isDirectoryOpen(flags: string | number | undefined): boolean {
 }
 
 afterEach(async () => {
+  __setFsSafeTestHooksForTest(undefined);
   durabilityTestState.syncOutcome = undefined;
   vi.restoreAllMocks();
   await Promise.all(tempDirs.splice(0).map((tempDir) => fs.rm(tempDir, { recursive: true })));
@@ -565,13 +567,13 @@ describe("createVerifiedSqliteSnapshot", () => {
   });
 
   it("rejects a target replaced after atomic publication", async () => {
-    const originalLink = fs.link.bind(fs);
-    vi.spyOn(fs, "link").mockImplementation(async (source, target) => {
-      await originalLink(source, target);
-      if (path.resolve(String(target)) === targetPath) {
-        await fs.unlink(targetPath);
-        await fs.writeFile(targetPath, "racer");
-      }
+    __setFsSafeTestHooksForTest({
+      afterPublishTargetCreated: async (method, publishedPath) => {
+        if (method === "hardlink" && path.resolve(publishedPath) === targetPath) {
+          await fs.unlink(targetPath);
+          await fs.writeFile(targetPath, "racer");
+        }
+      },
     });
 
     await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).rejects.toThrow(
@@ -602,22 +604,18 @@ describe("createVerifiedSqliteSnapshot", () => {
   );
 
   it("removes its target when inspection fails after atomic publication", async () => {
-    const originalLink = fs.link.bind(fs);
-    const originalLstat = fs.lstat.bind(fs);
-    let linked = false;
     let failedInspection = false;
-    vi.spyOn(fs, "link").mockImplementation(async (source, target) => {
-      await originalLink(source, target);
-      if (path.resolve(String(target)) === targetPath) {
-        linked = true;
-      }
-    });
-    vi.spyOn(fs, "lstat").mockImplementation(async (filePath) => {
-      if (linked && !failedInspection && path.resolve(String(filePath)) === targetPath) {
-        failedInspection = true;
-        throw Object.assign(new Error("target inspection failed"), { code: "EIO" });
-      }
-      return await originalLstat(filePath);
+    __setFsSafeTestHooksForTest({
+      afterPublishTargetCreated: (method, publishedPath) => {
+        if (
+          method === "hardlink" &&
+          !failedInspection &&
+          path.resolve(publishedPath) === targetPath
+        ) {
+          failedInspection = true;
+          throw Object.assign(new Error("target inspection failed"), { code: "EIO" });
+        }
+      },
     });
 
     await expectSnapshotFailureWithoutTarget(

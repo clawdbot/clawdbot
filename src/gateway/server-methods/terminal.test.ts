@@ -2,13 +2,16 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { createTerminalLaunchPolicy } from "../terminal/launch.js";
+import { TerminalSessionManager } from "../terminal/session-manager.js";
+import { makeFakePty } from "../terminal/session-manager.test-helpers.js";
 import type { TerminalSessionSummary } from "../terminal/session-types.js";
-import { terminalHandlers, TERMINAL_OPEN_DEADLINE_MS } from "./terminal.js";
+import { openTerminalSession, terminalHandlers, TERMINAL_OPEN_DEADLINE_MS } from "./terminal.js";
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -24,6 +27,18 @@ const policyMocks = vi.hoisted(() => ({
   })),
   applyPluginNodeInvokePolicy: vi.fn<() => Promise<{ ok: false; message: string } | null>>(
     async () => null,
+  ),
+}));
+const sessionMocks = vi.hoisted(() => ({
+  loadGatewaySessionEntryReadOnly: vi.fn(
+    (
+      _sessionKey: string,
+      _opts?: unknown,
+    ): {
+      entry?: Pick<InternalSessionEntry, "sessionId" | "pendingProjectGitUrl" | "pendingWorktree">;
+    } => ({
+      entry: { sessionId: "ui-session-id" },
+    }),
   ),
 }));
 
@@ -42,6 +57,11 @@ vi.mock("../node-command-policy.js", () => ({
 
 vi.mock("../node-invoke-plugin-policy.js", () => ({
   applyPluginNodeInvokePolicy: policyMocks.applyPluginNodeInvokePolicy,
+}));
+
+vi.mock("../session-utils.js", async () => ({
+  ...(await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js")),
+  loadGatewaySessionEntryReadOnly: sessionMocks.loadGatewaySessionEntryReadOnly,
 }));
 
 function makeOpts(
@@ -121,9 +141,100 @@ afterEach(() => {
   policyMocks.resolveNodeCommandAllowlist.mockReset();
   policyMocks.isNodeCommandAllowed.mockReset().mockReturnValue({ ok: true });
   policyMocks.applyPluginNodeInvokePolicy.mockReset().mockResolvedValue(null);
+  sessionMocks.loadGatewaySessionEntryReadOnly.mockReset().mockReturnValue({
+    entry: { sessionId: "ui-session-id" },
+  });
 });
 
 describe("terminal gateway policy", () => {
+  it("binds a UI terminal to its exact agent session while keeping the UI attached", async () => {
+    const backend = makeFakePty();
+    const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: async () => backend });
+    const agentSessionKey = "agent:main:ui-session";
+    const agentOwner = {
+      kind: "agent",
+      agentSessionKey,
+      agentSessionId: "ui-session-id",
+      agentId: "main",
+    } as const;
+    const { opts, respond } = makeOpts({}, { enabled: true });
+    opts.context.terminalSessions = manager;
+
+    await openTerminalSession(opts, {
+      agentId: "main",
+      sessionKey: agentSessionKey,
+      cols: 80,
+      rows: 24,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ agentId: "main", sessionId: expect.any(String) }),
+    );
+    const owned = manager.listAgent(agentOwner);
+    expect(owned).toHaveLength(1);
+    const session = expectDefined(owned[0], "session-owned UI terminal");
+    expect(session).toMatchObject({ attached: true, owner: `agent:${agentSessionKey}` });
+    expect(manager.write("conn-1", session.sessionId, "operator input\n")).toBe(true);
+
+    backend.emitData("ui session output");
+    expect(manager.snapshotAgent(agentOwner, session.sessionId)).toContain("ui session output");
+    expect(
+      manager.listAgent({ ...agentOwner, agentSessionKey: "agent:main:other-session" }),
+    ).toEqual([]);
+    expect(
+      manager.snapshotAgent({ ...agentOwner, agentId: "research" }, session.sessionId),
+    ).toBeUndefined();
+    expect(sessionMocks.loadGatewaySessionEntryReadOnly).toHaveBeenCalledWith(agentSessionKey, {
+      agentId: "main",
+      clone: false,
+    });
+  });
+
+  it.each([
+    { state: "is missing", entry: undefined, error: { code: ErrorCodes.UNAVAILABLE } },
+    {
+      state: "awaits project preparation",
+      entry: {
+        sessionId: "ui-session-id",
+        pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
+      },
+      error: {
+        code: ErrorCodes.INVALID_REQUEST,
+        message:
+          'Session "agent:main:pending" workspace is not ready. Wait for setup to finish or retry in chat.',
+      },
+    },
+    {
+      state: "awaits worktree preparation",
+      entry: {
+        sessionId: "ui-session-id",
+        pendingWorktree: {
+          workspace: "/tmp/project",
+          titleSource: "Prepare workspace",
+        },
+      },
+      error: {
+        code: ErrorCodes.INVALID_REQUEST,
+        message:
+          'Session "agent:main:pending" workspace is not ready. Wait for setup to finish or retry in chat.',
+      },
+    },
+  ])("rejects UI ownership when the session $state", async ({ entry, error }) => {
+    sessionMocks.loadGatewaySessionEntryReadOnly.mockReturnValue({ entry });
+    const { opts, sessions, respond } = makeOpts({}, { enabled: true });
+
+    await openTerminalSession(opts, {
+      agentId: "main",
+      sessionKey: "agent:main:pending",
+      cols: 80,
+      rows: 24,
+    });
+
+    expect(sessions.open).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
+  });
+
   it("lists agent-owned sessions with their owner marker", async () => {
     const { opts, sessions, respond } = makeOpts({}, { enabled: true });
     sessions.list.mockReturnValue([
@@ -168,6 +279,15 @@ describe("terminal gateway policy", () => {
     );
   });
 
+  it("forwards terminal close to the session manager", async () => {
+    const { opts, sessions, respond } = makeOpts({ sessionId: "terminal-1" }, { enabled: true });
+
+    await expectDefined(terminalHandlers["terminal.close"], "terminal.close")(opts);
+
+    expect(sessions.close).toHaveBeenCalledWith("conn-1", "terminal-1");
+    expect(respond).toHaveBeenCalledWith(true, { ok: true });
+  });
+
   it("keeps legacy protocol-4 attach replies within their closed schema", async () => {
     const { opts, respond } = makeOpts({ sessionId: "terminal-1" }, { enabled: true });
 
@@ -197,10 +317,38 @@ describe("terminal gateway policy", () => {
     expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
   });
 
+  it("reports a missing explicit owner as invalid request", async () => {
+    const { opts, sessions, respond, resolveTerminalLaunchPolicy } = makeOpts(
+      { cols: 80, rows: 24 },
+      { enabled: true },
+    );
+    resolveTerminalLaunchPolicy.mockReturnValue({
+      ok: false,
+      block: { kind: "owner-required", message: "terminal requires an explicit owner" },
+    });
+
+    await expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
+
+    expect(sessions.open).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "terminal requires an explicit owner",
+      }),
+    );
+  });
+
   it("opens a provider-built local resume plan and returns its title", async () => {
     const openTerminal = vi.fn(async () => ({
       kind: "local" as const,
       argv: ["codex", "resume", "thread"],
+      env: {
+        CODEX_HOME: "/agent/codex-home",
+        ComSpec: "C:\\Windows\\System32\\ambient-cmd.exe",
+        COMSPEC: "C:\\Windows\\System32\\configured-cmd.exe",
+      },
       pathEnv: "/login-shell/bin:/usr/bin",
       title: "codex resume thread",
     }));
@@ -225,14 +373,31 @@ describe("terminal gateway policy", () => {
     );
     await expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
 
-    expect(openTerminal).toHaveBeenCalledWith({ hostId: "gateway:local", threadId: "thread" });
+    expect(openTerminal).toHaveBeenCalledWith({
+      agentId: "main",
+      allowProcessHomeFallback: false,
+      hostId: "gateway:local",
+      threadId: "thread",
+    });
     expect(sessions.open).toHaveBeenCalledWith(
       expect.objectContaining({
         shell: expect.any(String),
-        args: ["-il", "-c", "'codex' 'resume' 'thread'"],
-        env: expect.objectContaining({ PATH: "/login-shell/bin:/usr/bin" }),
+        args:
+          process.platform === "win32"
+            ? ["resume", "thread"]
+            : ["-il", "-c", "'codex' 'resume' 'thread'"],
+        env: expect.objectContaining({
+          CODEX_HOME: "/agent/codex-home",
+          PATH: "/login-shell/bin:/usr/bin",
+        }),
       }),
     );
+    if (process.platform === "win32") {
+      const terminalEnv = sessions.open.mock.calls[0]?.[0] as { env: Record<string, string> };
+      expect(
+        Object.entries(terminalEnv.env).filter(([key]) => key.toUpperCase() === "COMSPEC"),
+      ).toEqual([["COMSPEC", "C:\\Windows\\System32\\configured-cmd.exe"]]);
+    }
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ sessionId: "terminal-1", title: "codex resume thread" }),
@@ -482,7 +647,10 @@ describe("terminal gateway policy", () => {
     await opening;
 
     expect(sessions.open).toHaveBeenCalledWith(
-      expect.objectContaining({ cwd: process.cwd(), shell: "/bin/refreshed" }),
+      expect.objectContaining({
+        cwd: process.cwd(),
+        shell: process.platform === "win32" ? "codex" : "/bin/refreshed",
+      }),
     );
   });
 
@@ -840,23 +1008,5 @@ describe("terminal gateway policy", () => {
       timeoutMs: 120_000,
     });
     expect(result).toEqual({ path: "/tmp/node/report.pdf", size: 4 });
-  });
-
-  it("sanitizes terminal snapshots before returning plain text", async () => {
-    const { opts, sessions, respond } = makeOpts({ sessionId: "s1" }, { enabled: true });
-    const finals = Array.from({ length: 0x7e - 0x40 + 1 }, (_, offset) =>
-      String.fromCharCode(0x40 + offset),
-    );
-    const sequences = ["\u001B[", "\u009B"]
-      .flatMap((introducer) => finals.map((finalByte) => introducer + finalByte))
-      .join("");
-    sessions.snapshot.mockReturnValue(`before${sequences}after`);
-
-    await expectDefined(
-      terminalHandlers["terminal.text"],
-      'terminalHandlers["terminal.text"] test invariant',
-    )(opts);
-
-    expect(respond).toHaveBeenCalledWith(true, { text: "beforeafter" });
   });
 });

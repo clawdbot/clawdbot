@@ -4,6 +4,7 @@
  * Profile lookup, JSON errors, and route value coercion shared across browser
  * control endpoints.
  */
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { BrowserProfileUnavailableError, type BrowserErrorResponse } from "../errors.js";
 import {
   type BrowserRouteContext,
@@ -12,10 +13,6 @@ import {
 } from "../server-context.js";
 import { isProfileRestartRequiredError } from "../server-context.lifecycle.js";
 import type { BrowserRequest, BrowserResponse } from "./types.js";
-
-function normalizeOptionalString(value: string): string | undefined {
-  return value.trim() || undefined;
-}
 
 /**
  * Extract profile name from query string or body and get profile context.
@@ -91,11 +88,11 @@ export function jsonError(res: BrowserResponse, status: number, message: string)
 
 /** Send a mapped browser-domain error while preserving validated metadata. */
 export function jsonBrowserError(res: BrowserResponse, error: BrowserErrorResponse) {
-  const body =
-    "reason" in error
-      ? { error: error.message, reason: error.reason, details: error.details }
-      : { error: error.message };
-  res.status(error.status).json(body);
+  res.status(error.status).json({
+    error: error.message,
+    ...("reason" in error ? { reason: error.reason } : {}),
+    ...("details" in error ? { details: error.details } : {}),
+  });
 }
 
 /** Coerce route values to strings while treating nullish values as empty. */

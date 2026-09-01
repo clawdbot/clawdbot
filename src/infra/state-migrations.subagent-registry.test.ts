@@ -5,7 +5,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { SubagentRunRecord } from "../agents/subagent-registry.types.js";
+import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -77,9 +77,6 @@ describe("legacy subagent registry Doctor migration", () => {
           run_id: run.runId,
           child_session_key: run.childSessionKey,
           requester_session_key: run.requesterSessionKey,
-          requester_display_key: run.requesterDisplayKey,
-          task: run.task,
-          cleanup: run.cleanup,
           created_at: run.createdAt,
           payload_json: JSON.stringify(run),
         }),

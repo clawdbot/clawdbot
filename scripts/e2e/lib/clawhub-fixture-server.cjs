@@ -1,4 +1,5 @@
 // CommonJS fixture server for ClawHub package/install E2E scenarios.
+const { execFileSync } = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
@@ -8,11 +9,234 @@ const { createRequire } = require("node:module");
 
 const profile = process.argv[2];
 const portFile = process.argv[3];
+const artifactManifestFile = process.argv[4];
 const requireFromApp = createRequire(path.join(process.cwd(), "package.json"));
-const JSZip = requireFromApp("jszip");
-const tar = requireFromApp("tar");
 const packageName = "@openclaw/kitchen-sink";
 const pluginId = "openclaw-kitchen-sink-fixture";
+
+async function assertPrepublishRequests(
+  baseUrl,
+  requestedPackage,
+  version,
+  securityMode = "required",
+  attempts = "1",
+  minimumAttempts = "1",
+) {
+  if (!baseUrl || !requestedPackage || !version) {
+    throw new Error("assert-prepublish-requests requires <base-url> <package-name> <version>");
+  }
+  if (securityMode !== "required" && securityMode !== "absent") {
+    throw new Error("assert-prepublish-requests security mode must be required or absent");
+  }
+  if (attempts !== "1" && attempts !== "2" && attempts !== "complete") {
+    throw new Error("assert-prepublish-requests attempts must be 1, 2, or complete");
+  }
+  const minimumCount = Number(minimumAttempts);
+  if (!Number.isInteger(minimumCount) || minimumCount < 1 || minimumCount > 16) {
+    throw new Error("assert-prepublish-requests minimum attempts must be an integer from 1 to 16");
+  }
+  const response = await fetch(new URL("/__fixture__/requests", baseUrl));
+  if (!response.ok) {
+    throw new Error(`ClawHub fixture request ledger returned HTTP ${response.status}`);
+  }
+  const payload = await response.json();
+  if (!Array.isArray(payload?.requests)) {
+    throw new Error("ClawHub fixture request ledger must contain a requests array");
+  }
+  const packagePath = `/api/v1/packages/${encodeURIComponent(requestedPackage)}`;
+  const versionPath = `${packagePath}/versions/${encodeURIComponent(version)}`;
+  const expected = [
+    `GET ${packagePath}`,
+    `GET ${versionPath}/artifact`,
+    ...(securityMode === "required" ? [`GET ${versionPath}/security`] : []),
+    `GET ${versionPath}/artifact/download`,
+  ];
+  // Multi-command upgrade recovery can stage an artifact in several convergence
+  // phases. Every request must still belong to a complete authorized audit sequence.
+  const count =
+    attempts === "complete" ? payload.requests.length / expected.length : Number(attempts);
+  if (!Number.isInteger(count) || count < minimumCount || count > 16) {
+    throw new Error(`expected ${minimumCount}-16 complete ClawHub artifact audit sequences`);
+  }
+  const expectedRequests = Array.from({ length: count }, () => expected).flat();
+  if (JSON.stringify(payload.requests) !== JSON.stringify(expectedRequests)) {
+    throw new Error(`unexpected ClawHub fixture requests: ${JSON.stringify(payload.requests)}`);
+  }
+  console.log(`Verified ${count} complete ClawHub artifact audit sequence(s).`);
+}
+
+async function assertNoRequests(baseUrl) {
+  if (!baseUrl) {
+    throw new Error("assert-no-requests requires <base-url>");
+  }
+  const response = await fetch(new URL("/__fixture__/requests", baseUrl));
+  if (!response.ok) {
+    throw new Error(`ClawHub fixture request ledger returned HTTP ${response.status}`);
+  }
+  const payload = await response.json();
+  if (!Array.isArray(payload?.requests)) {
+    throw new Error("ClawHub fixture request ledger must contain a requests array");
+  }
+  if (payload.requests.length !== 0) {
+    throw new Error(`unexpected ClawHub fixture requests: ${JSON.stringify(payload.requests)}`);
+  }
+}
+
+function startPrepublishArtifactServer() {
+  const manifest = JSON.parse(fs.readFileSync(artifactManifestFile, "utf8"));
+  if (!Array.isArray(manifest.packages) || manifest.packages.length === 0) {
+    throw new Error("prepublish artifact manifest must contain packages");
+  }
+  const artifacts = new Map(
+    manifest.packages.map((entry) => {
+      if (
+        typeof entry.name !== "string" ||
+        typeof entry.version !== "string" ||
+        typeof entry.tarball !== "string" ||
+        path.basename(entry.tarball) !== entry.tarball
+      ) {
+        throw new Error("invalid prepublish artifact manifest entry");
+      }
+      const tarballPath = path.join(path.dirname(artifactManifestFile), entry.tarball);
+      const archive = fs.readFileSync(tarballPath);
+      const sha256 = crypto.createHash("sha256").update(archive).digest("hex");
+      const packedPackage = JSON.parse(
+        execFileSync("tar", ["-xOf", tarballPath, "package/package.json"], {
+          encoding: "utf8",
+        }),
+      );
+      const packedPlugin = JSON.parse(
+        execFileSync("tar", ["-xOf", tarballPath, "package/openclaw.plugin.json"], {
+          encoding: "utf8",
+        }),
+      );
+      if (
+        sha256 !== entry.sha256 ||
+        packedPackage.name !== entry.name ||
+        packedPackage.version !== entry.version ||
+        typeof packedPlugin.id !== "string" ||
+        packedPlugin.id.length === 0
+      ) {
+        throw new Error(`prepublish artifact metadata mismatch for ${entry.name}`);
+      }
+      return [
+        entry.name,
+        {
+          ...entry,
+          archive,
+          runtimeId: packedPlugin.id,
+          npmIntegrity: `sha512-${crypto.createHash("sha512").update(archive).digest("base64")}`,
+          npmShasum: crypto.createHash("sha1").update(archive).digest("hex"),
+        },
+      ];
+    }),
+  );
+  const requestLog = [];
+  const json = (response, value, status = 200) => {
+    response.writeHead(status, { "content-type": "application/json" });
+    response.end(`${JSON.stringify(value)}\n`);
+  };
+  const server = http.createServer((request, response) => {
+    const url = new URL(request.url, "http://127.0.0.1");
+    if (url.pathname === "/__fixture__/requests") {
+      json(response, { requests: requestLog });
+      return;
+    }
+    requestLog.push(`${request.method} ${url.pathname}${url.search}`);
+    const match =
+      /^\/api\/v1\/packages\/([^/]+)(?:\/versions\/([^/]+)(?:\/(artifact(?:\/download)?|security))?)?$/u.exec(
+        url.pathname,
+      );
+    const entry = match ? artifacts.get(decodeURIComponent(match[1])) : undefined;
+    if (request.method !== "GET" || !entry) {
+      response.writeHead(request.method === "GET" ? 404 : 405);
+      response.end(request.method === "GET" ? "not found" : "method not allowed");
+      return;
+    }
+    const version = match[2] ? decodeURIComponent(match[2]) : undefined;
+    if (version && version !== entry.version) {
+      json(response, { error: "version not found" }, 404);
+      return;
+    }
+    const packageRecord = {
+      name: entry.name,
+      family: "code-plugin",
+      runtimeId: entry.runtimeId,
+    };
+    const artifact = {
+      kind: "npm-pack",
+      sha256: entry.sha256,
+      npmIntegrity: entry.npmIntegrity,
+      npmShasum: entry.npmShasum,
+    };
+    const versionRecord = {
+      version: entry.version,
+      artifact,
+    };
+    if (!version) {
+      json(response, {
+        package: {
+          ...packageRecord,
+          channel: "official",
+          isOfficial: true,
+          latestVersion: entry.version,
+          tags: { latest: entry.version, beta: entry.version },
+        },
+      });
+    } else if (!match[3]) {
+      json(response, { package: packageRecord, version: versionRecord });
+    } else if (match[3] === "security") {
+      json(response, {
+        package: {
+          name: entry.name,
+          displayName: entry.name,
+          family: "code-plugin",
+        },
+        release: {
+          releaseId: `fixture:${entry.name}@${entry.version}`,
+          version: entry.version,
+          artifactKind: "npm-pack",
+          artifactSha256: entry.sha256,
+          npmIntegrity: entry.npmIntegrity,
+          npmShasum: entry.npmShasum,
+          npmTarballName: entry.tarball,
+          createdAt: 0,
+        },
+        overview: "No security concerns found in the fixture release.",
+        securityAuditUrl: `http://${request.headers.host}${url.pathname}`,
+        trust: {
+          scanStatus: "clean",
+          moderationState: null,
+          blockedFromDownload: false,
+          reasons: [],
+          pending: false,
+          stale: false,
+        },
+      });
+    } else if (match[3] === "artifact") {
+      json(response, {
+        version: versionRecord,
+        artifact: {
+          artifactKind: "npm-pack",
+          artifactSha256: entry.sha256,
+          npmIntegrity: entry.npmIntegrity,
+        },
+      });
+    } else {
+      response.writeHead(200, {
+        "content-type": "application/octet-stream",
+        "X-ClawHub-Artifact-Sha256": entry.sha256,
+        "X-ClawHub-Npm-Integrity": entry.npmIntegrity,
+        "X-ClawHub-Npm-Shasum": entry.npmShasum,
+        "X-ClawHub-Npm-Tarball-Name": entry.tarball,
+      });
+      response.end(entry.archive);
+    }
+  });
+  server.listen(0, "127.0.0.1", () => {
+    fs.writeFileSync(portFile, String(server.address().port));
+  });
+}
 
 const buildArtifactSummary = ({
   clawpackSha256,
@@ -47,6 +271,7 @@ const buildClawPackSummary = ({
 });
 
 async function buildNpmPackArtifact(fixture) {
+  const tar = requireFromApp("tar");
   const packRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-fixture-"));
   try {
     const packageDir = path.join(packRoot, "package");
@@ -427,6 +652,7 @@ profiles["catalog-search"] = {
     skills: [
       {
         score: 99,
+        source: "clawhub",
         slug: "calendar-skill",
         ownerHandle: "acme",
         displayName: "Calendar Skill",
@@ -438,15 +664,47 @@ profiles["catalog-search"] = {
   },
 };
 
+if (profile === "assert-prepublish-requests") {
+  assertPrepublishRequests(
+    portFile,
+    artifactManifestFile,
+    process.argv[5],
+    process.argv[6],
+    process.argv[7],
+    process.argv[8],
+  ).catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error);
+      process.exit(1);
+    },
+  );
+  return;
+}
+
+if (profile === "assert-no-requests") {
+  assertNoRequests(portFile).catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error);
+      process.exit(1);
+    },
+  );
+  return;
+}
+
 const fixture = profiles[profile];
 if (!fixture || !portFile) {
+  if (profile === "prepublish-artifacts" && portFile && artifactManifestFile) {
+    startPrepublishArtifactServer();
+    return;
+  }
   console.error(
-    "usage: clawhub-fixture-server.cjs <catalog-search|kitchen-sink-plugin|plugins> <port-file>",
+    "usage: clawhub-fixture-server.cjs <catalog-search|kitchen-sink-plugin|plugins|prepublish-artifacts> <port-file> [manifest-file]",
   );
   process.exit(1);
 }
 
 async function main() {
+  const JSZip = requireFromApp("jszip");
   const zip = new JSZip();
   zip.file("package/package.json", `${JSON.stringify(fixture.packageJson, null, 2)}\n`, {
     date: new Date(0),
@@ -550,7 +808,11 @@ async function main() {
       url.pathname ===
       `/api/v1/packages/${encodeURIComponent(packageName)}/versions/${fixture.version}/security`
     ) {
-      json(response, securityDetail);
+      json(response, {
+        ...securityDetail,
+        overview: "No security concerns found in the fixture release.",
+        securityAuditUrl: `http://${request.headers.host}${url.pathname}`,
+      });
       return;
     }
     if (

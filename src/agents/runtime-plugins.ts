@@ -1,43 +1,32 @@
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizePluginsConfig } from "../plugins/config-state.js";
-import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { adoptRuntimeContextEngineRegistrations } from "../context-engine/registry.js";
+import {
+  listLoadedRuntimePluginIds,
+  listRuntimePluginIdsFromRegistry,
+  registryContainsRuntimePluginIds,
+} from "../plugins/active-runtime-registry.js";
+import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
 import { loadPluginRegistryHandle } from "../plugins/loader.js";
+import { adoptRuntimeMemoryRegistrations } from "../plugins/memory-state.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
+import {
+  getActivePluginRegistry,
+  getActivePluginRegistryWorkspaceDir,
+} from "../plugins/runtime.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { adoptRuntimeWidgetPresenterRegistrations } from "../plugins/widget-presenters.js";
 import { resolveUserPath } from "../utils.js";
-import { collectConfiguredAgentHarnessRuntimes } from "./harness-runtimes.js";
 import {
   resolveAgentRuntimePluginLoadPlan,
+  resolveAgentRuntimePluginSelections,
   type AgentHarnessPluginSelection,
 } from "./harness/runtime-plugin-load-plan.js";
-
-type StartupScopedPluginSnapshot = NonNullable<
-  ReturnType<typeof getCurrentPluginMetadataSnapshot>
-> & {
-  startup?: {
-    pluginIds?: readonly unknown[];
-  };
-};
-
-function resolveStartupPluginIdsFromCurrentSnapshot(params: {
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  workspaceDir?: string;
-}): string[] | undefined {
-  const snapshot = getCurrentPluginMetadataSnapshot({
-    config: params.config,
-    env: params.env,
-    workspaceDir: params.workspaceDir,
-  }) as StartupScopedPluginSnapshot | undefined;
-  const pluginIds = snapshot?.startup?.pluginIds;
-  if (!Array.isArray(pluginIds)) {
-    return undefined;
-  }
-  return pluginIds.filter((pluginId): pluginId is string => typeof pluginId === "string");
-}
 
 type AgentRuntimePluginRegistryParams = {
   config?: OpenClawConfig;
@@ -46,22 +35,26 @@ type AgentRuntimePluginRegistryParams = {
   allowGatewaySubagentBinding?: boolean;
   /** Explicit base scope for hosts without a Gateway startup registry. */
   basePluginIds?: readonly string[];
+  /** Exact registry from the supplied lifecycle metadata generation. */
+  reusableRegistry?: PluginRegistry;
   selections?: readonly AgentHarnessPluginSelection[];
+  /** Lifecycle-owned selection; standalone/direct generations stay source-default. */
+  preferBuiltPluginArtifacts?: boolean;
+  metadataSnapshot?: PluginMetadataSnapshot;
 };
 
 function resolveAgentRuntimePluginRegistryLoad(params: AgentRuntimePluginRegistryParams) {
-  const workspaceDir =
+  const requestedWorkspaceDir =
     typeof params.workspaceDir === "string" && params.workspaceDir.trim()
       ? resolveUserPath(params.workspaceDir)
       : undefined;
-  if (params.config && !normalizePluginsConfig(params.config.plugins).enabled) {
+  if (params.config?.plugins?.enabled === false) {
     return {
-      requiredPluginIds: [],
       loadOptions: {
         config: params.config,
         activationSourceConfig: params.config,
         ...(params.env ? { env: params.env } : {}),
-        workspaceDir,
+        workspaceDir: requestedWorkspaceDir,
         onlyPluginIds: [],
         runtimeOptions: params.allowGatewaySubagentBinding
           ? { allowGatewaySubagentBinding: true }
@@ -69,34 +62,49 @@ function resolveAgentRuntimePluginRegistryLoad(params: AgentRuntimePluginRegistr
       },
     };
   }
+  const metadataSnapshot =
+    params.metadataSnapshot ??
+    loadPluginMetadataSnapshot({
+      config: params.config ?? {},
+      env: params.env ?? process.env,
+      ...(requestedWorkspaceDir ? { workspaceDir: requestedWorkspaceDir } : {}),
+    });
+  const workspaceDir = metadataSnapshot.workspaceDir ?? requestedWorkspaceDir;
+  const metadataLoadOptions = {
+    ...(metadataSnapshot.discovery ? { discovery: metadataSnapshot.discovery } : {}),
+    installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index),
+    manifestRegistry: metadataSnapshot.manifestRegistry,
+    ...(params.preferBuiltPluginArtifacts ? { preferBuiltPluginArtifacts: true } : {}),
+    ...(workspaceDir ? { workspaceDir } : {}),
+  };
+  const requestPluginRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  // Gateway-hosted fall-through must not cold-load every plugin (30-45s event-loop convoy);
+  // startup runtime plugin ids plus selected run owners bound the registry scope.
+  const activePluginIds = listLoadedRuntimePluginIds();
   const startupPluginIds =
     params.basePluginIds !== undefined
       ? [...params.basePluginIds]
-      : resolveStartupPluginIdsFromCurrentSnapshot({
-          config: params.config,
-          env: params.env,
-          workspaceDir,
-        });
-  const plan = resolveAgentRuntimePluginLoadPlan({
+      : requestPluginRegistry
+        ? listRuntimePluginIdsFromRegistry(requestPluginRegistry)
+        : metadataSnapshot.pluginIds
+          ? [...metadataSnapshot.pluginIds]
+          : activePluginIds.length > 0
+            ? activePluginIds
+            : undefined;
+  const planParams = {
     config: params.config,
     workspaceDir: workspaceDir ?? process.cwd(),
     ...(startupPluginIds === undefined ? {} : { basePluginIds: startupPluginIds }),
-    selections: [
-      ...collectConfiguredAgentHarnessRuntimes(params.config ?? {}).map((runtime) => ({
-        runtime,
-        provider: "",
-        modelId: "",
-      })),
-      ...(params.selections ?? []),
-    ],
-  });
+    selections: resolveAgentRuntimePluginSelections(params.config, params.selections ?? []),
+    metadataSnapshot,
+  };
+  const plan = resolveAgentRuntimePluginLoadPlan(planParams);
   return {
-    requiredPluginIds: plan.pluginIds,
     loadOptions: {
       config: plan.config,
       ...(plan.config ? { activationSourceConfig: plan.config } : {}),
       ...(params.env ? { env: params.env } : {}),
-      workspaceDir,
+      ...metadataLoadOptions,
       ...(startupPluginIds === undefined || plan.pluginIds === undefined
         ? {}
         : { onlyPluginIds: plan.pluginIds }),
@@ -113,7 +121,24 @@ export function loadAgentRuntimePluginRegistryHandle(
   params: AgentRuntimePluginRegistryParams,
 ): PluginRegistry {
   const load = resolveAgentRuntimePluginRegistryLoad(params);
-  return loadPluginRegistryHandle({ ...load.loadOptions, activate: false });
+  if (
+    params.reusableRegistry &&
+    load.loadOptions.onlyPluginIds !== undefined &&
+    registryContainsRuntimePluginIds(params.reusableRegistry, load.loadOptions.onlyPluginIds)
+  ) {
+    return params.reusableRegistry;
+  }
+  // Discovery-only load: full mode can replace process-global sandbox backends.
+  // Adopt full-only runtime capabilities from the matching composition-root owners.
+  const pluginRegistry = loadPluginRegistryHandle({ ...load.loadOptions, activate: false });
+  const activeRegistry = getActivePluginRegistry();
+  if (!activeRegistry) {
+    return pluginRegistry;
+  }
+  return adoptRuntimeWidgetPresenterRegistrations(
+    adoptRuntimeContextEngineRegistrations(pluginRegistry, activeRegistry),
+    activeRegistry,
+  );
 }
 
 /** Binds a scoped plugin generation when a direct host has no Gateway owner. */
@@ -125,10 +150,35 @@ export async function withAgentPluginRegistry<T>(params: {
   if (getPluginRuntimeGatewayRequestScope()?.pluginRegistry) {
     return await params.run();
   }
+  const metadataSnapshot =
+    params.config.plugins?.enabled !== false
+      ? loadPluginMetadataSnapshot({
+          config: params.config,
+          env: process.env,
+          workspaceDir: params.workspaceDir,
+        })
+      : undefined;
   const pluginRegistry = loadAgentRuntimePluginRegistryHandle({
     basePluginIds: [],
     config: params.config,
+    ...(metadataSnapshot ? { metadataSnapshot } : {}),
     workspaceDir: params.workspaceDir,
   });
-  return await withPluginRuntimeRegistryScope(pluginRegistry, params.run);
+  const activeRegistry = getActivePluginRegistry();
+  const scopedRegistry =
+    activeRegistry &&
+    metadataSnapshot &&
+    getActivePluginRegistryWorkspaceDir() === resolveUserPath(params.workspaceDir)
+      ? adoptRuntimeMemoryRegistrations(
+          pluginRegistry,
+          activeRegistry,
+          applyPluginAutoEnable({
+            config: params.config,
+            env: process.env,
+            discovery: metadataSnapshot.discovery,
+            manifestRegistry: metadataSnapshot.manifestRegistry,
+          }).config,
+        )
+      : pluginRegistry;
+  return await withPluginRuntimeRegistryScope(scopedRegistry, params.run);
 }

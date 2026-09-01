@@ -133,12 +133,18 @@ extension AgentProTab {
         async let presence = self.requestOptional([PresenceEntry].self, method: "system-presence")
         async let cronStatus = self.requestOptional(CronStatusLite.self, method: "cron.status")
         async let cronJobs = self.requestAllCronJobs()
-        async let dreaming = self.requestOptional(DreamingStatusEnvelope.self, method: "doctor.memory.status")
-        async let dreamDiary = self.requestOptional(DreamDiaryLite.self, method: "doctor.memory.dreamDiary")
+        async let dreaming = self.requestOptional(
+            DreamingStatusEnvelope.self,
+            method: "doctor.memory.status",
+            paramsJSON: skillsParams)
+        async let dreamDiary = self.requestOptional(
+            DreamDiaryLite.self,
+            method: "doctor.memory.dreamDiary",
+            paramsJSON: skillsParams)
         async let usage = self.requestOptional(
             CostUsageSummaryLite.self,
             method: "usage.cost",
-            paramsJSON: "{\"days\":31}",
+            paramsJSON: CostUsageRequest.monthParamsJSON(),
             timeoutSeconds: 12)
 
         let loadedSkills = await skills

@@ -1,5 +1,6 @@
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import { isReplayUnsafeAssistantError } from "../../../llm/utils/retry.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AuthProfileFailureReason, AuthProfileStore } from "../../auth-profiles.js";
 import {
@@ -8,12 +9,12 @@ import {
   isAuthAssistantError,
   isBillingAssistantError,
   isFailoverAssistantError,
-  isGenericUnknownStreamErrorMessage,
   isRateLimitAssistantError,
   parseImageDimensionError,
   pickFallbackThinkingLevel,
 } from "../../embedded-agent-helpers.js";
-import { hasOnlyAssistantReasoningContent } from "../../replay-turn-classification.js";
+import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
+import { resolveRetryAfterMs } from "../../failover/retry-evidence.js";
 import {
   resolveSessionSuspensionReason,
   type SessionSuspensionParams,
@@ -21,9 +22,10 @@ import {
 import { log } from "../logger.js";
 import type { TraceAttempt } from "../types.js";
 import { handleAssistantFailover, isShortWindowRateLimitMessage } from "./assistant-failover.js";
+import { isCurrentAttemptReplaySafe } from "./attempt-terminal-evidence.js";
 import { createFailoverDecisionLogger } from "./failover-observation.js";
 import { resolveRunFailoverDecision } from "./failover-policy.js";
-import { shouldRetrySilentErrorAssistantTurn } from "./incomplete-turn.js";
+import { shouldRetrySilentErrorAssistantTurn } from "./incomplete-turn-recovery.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import {
   isEmbeddedRunTerminalInterrupted,
@@ -32,7 +34,6 @@ import {
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 const MAX_EMPTY_ERROR_RETRIES = 3;
-const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
 
 type EmbeddedRunAssistantFailureOutcome = {
   action: "retry" | "proceed";
@@ -40,9 +41,7 @@ type EmbeddedRunAssistantFailureOutcome = {
   authRetryPending: boolean;
   emptyErrorRetries: number;
   overloadProfileRotations: number;
-  sameModelIdleTimeoutRetries: number;
   lastRetryFailoverReason: FailoverReason | null;
-  preserveSameModelRateLimitRetryCount: boolean;
   assistantProfileFailureReason: AuthProfileFailureReason | null;
 };
 
@@ -54,6 +53,7 @@ export async function handleEmbeddedAssistantFailure(input: {
   terminalState: EmbeddedRunTerminalState;
   activeErrorContext: { provider: string; model: string };
   provider: string;
+  providerOwner: PreparedProviderFailoverOwner | undefined;
   modelId: string;
   model: string;
   thinkLevel: ThinkLevel;
@@ -62,7 +62,6 @@ export async function handleEmbeddedAssistantFailure(input: {
   attemptedThinking: Set<ThinkLevel>;
   fallbackConfigured: boolean;
   pluginHarnessOwnsTransport: boolean;
-  canRestartForLiveSwitch: boolean;
   authProfileId?: string;
   authProfileStore: AuthProfileStore;
   runtimeAuthRetry: boolean;
@@ -74,52 +73,40 @@ export async function handleEmbeddedAssistantFailure(input: {
   emptyErrorRetries: number;
   overloadProfileRotations: number;
   overloadProfileRotationLimit: number;
-  rateLimitProfileRotations: number;
-  rateLimitProfileRotationLimit: number;
-  sameModelIdleTimeoutRetries: number;
+  getTransientRetryCount: () => number;
   previousRetryFailoverReason: FailoverReason | null;
   maybeMarkAuthProfileFailure: (failure: {
     profileId?: string;
     reason?: AuthProfileFailureReason | null;
     modelId?: string;
   }) => Promise<void>;
-  maybeEscalateRateLimitProfileFallback: Parameters<
+  maybeRetryTransient: Parameters<typeof handleAssistantFailover>[0]["maybeRetryTransient"];
+  advanceAuthProfile: Parameters<typeof handleAssistantFailover>[0]["advanceAuthProfile"];
+  advanceRateLimitAuthProfile: Parameters<
     typeof handleAssistantFailover
-  >[0]["maybeEscalateRateLimitProfileFallback"];
-  maybeRetrySameModelRateLimit: (retry?: { retryAfterSeconds?: number }) => Promise<boolean>;
-  maybeBackoffBeforeOverloadFailover: (reason: FailoverReason | null) => Promise<void>;
-  advanceAttemptAuthProfile: () => Promise<boolean>;
+  >[0]["advanceRateLimitAuthProfile"];
   traceAttempts: TraceAttempt[];
-  suspendForFailure: (params: Omit<SessionSuspensionParams, "laneId">) => void;
+  suspendForFailure: (params: SessionSuspensionParams) => void;
   suspensionSessionId: string;
   agentDir: string;
   isProbeSession: boolean;
 }): Promise<EmbeddedRunAssistantFailureOutcome> {
-  const { aborted, idleTimedOut, promptError, timedOut, timedOutDuringCompaction } =
-    projectAgentRunAttemptTerminal(input.attempt.terminal);
+  const { aborted, idleTimedOut, promptError, timedOut } = projectAgentRunAttemptTerminal(
+    input.attempt.terminal,
+  );
   const terminalInterrupted = isEmbeddedRunTerminalInterrupted(input.terminalState.outcome);
   const { signalOwnedInterruption } = input.terminalState;
   const fallbackThinking = pickFallbackThinkingLevel({
     message: input.attemptAssistant?.errorMessage,
     attempted: input.attemptedThinking,
   });
-  if (fallbackThinking && !terminalInterrupted) {
-    log.warn(
-      `unsupported thinking level for ${input.provider}/${input.modelId}; retrying with ${fallbackThinking}`,
-    );
-    return buildOutcome(input, {
-      action: "retry",
-      thinkLevel: fallbackThinking,
-      preserveSameModelRateLimitRetryCount: true,
-      assistantProfileFailureReason: null,
-    });
-  }
-
   const authFailure = isAuthAssistantError(input.attemptAssistant);
   const rateLimitFailure = isRateLimitAssistantError(input.attemptAssistant);
   const billingFailure = isBillingAssistantError(input.attemptAssistant);
   const failoverFailure = isFailoverAssistantError(input.attemptAssistant);
-  const assistantFailoverReason = classifyAssistantFailoverReason(input.attemptAssistant);
+  const assistantFailoverReason = classifyAssistantFailoverReason(input.attemptAssistant, {
+    providerOwner: input.providerOwner,
+  });
   const assistantProviderStarted =
     Boolean(input.currentAttemptAssistant?.provider) ||
     input.terminalState.outcome.providerStarted === true;
@@ -135,19 +122,37 @@ export async function handleEmbeddedAssistantFailure(input: {
         isShortWindowRateLimitMessage(input.attemptAssistant?.errorMessage),
     },
   );
+  const replayUnsafeAssistantError = isReplayUnsafeAssistantError(input.attemptAssistant);
+  if (replayUnsafeAssistantError || !isCurrentAttemptReplaySafe(input.attempt)) {
+    return buildOutcome(input, {
+      action: "proceed",
+      assistantProfileFailureReason: replayUnsafeAssistantError
+        ? null
+        : assistantProfileFailureReason,
+    });
+  }
+  if (fallbackThinking && !terminalInterrupted) {
+    log.warn(
+      `unsupported thinking level for ${input.provider}/${input.modelId}; retrying with ${fallbackThinking}`,
+    );
+    return buildOutcome(input, {
+      action: "retry",
+      thinkLevel: fallbackThinking,
+      assistantProfileFailureReason,
+    });
+  }
   const cloudCodeAssistFormatError = input.attempt.cloudCodeAssistFormatError;
   const imageDimensionError = parseImageDimensionError(input.attemptAssistant?.errorMessage ?? "");
-  const genericUnknownReasoningError =
-    assistantFailoverReason === "timeout" &&
-    isGenericUnknownStreamErrorMessage(input.attemptAssistant?.errorMessage ?? "") &&
-    Boolean(input.attemptAssistant && hasOnlyAssistantReasoningContent(input.attemptAssistant));
-  const silentErrorRetryReason =
-    assistantFailoverReason === null ||
-    genericUnknownReasoningError ||
+  // Classified reasons consult the failover retry controller so a zero-output
+  // failure draws from the single transient budget instead of stacking silent
+  // retries on top of it; only reasons the controller cannot classify use the
+  // bounded local empty-error counter.
+  const silentControllerConsultReason =
     assistantFailoverReason === "no_error_details" ||
     assistantFailoverReason === "unclassified" ||
-    assistantFailoverReason === "unknown" ||
-    assistantFailoverReason === "server_error";
+    assistantFailoverReason === "unknown"
+      ? null
+      : assistantFailoverReason;
   const replaySafeSilentErrorFailure =
     !authFailure &&
     !rateLimitFailure &&
@@ -156,26 +161,45 @@ export async function handleEmbeddedAssistantFailure(input: {
     !imageDimensionError &&
     !terminalInterrupted &&
     !promptError &&
-    silentErrorRetryReason &&
     shouldRetrySilentErrorAssistantTurn({
       attempt: input.attempt,
       assistant: input.attemptAssistant,
     });
-  if (replaySafeSilentErrorFailure && input.emptyErrorRetries < MAX_EMPTY_ERROR_RETRIES) {
-    const emptyErrorRetries = input.emptyErrorRetries + 1;
-    log.warn(
-      `[empty-error-retry] stopReason=error non-visible-output; resubmitting ` +
-        `attempt=${emptyErrorRetries}/${MAX_EMPTY_ERROR_RETRIES} ` +
-        `provider=${input.attemptAssistant?.provider ?? input.provider} ` +
-        `model=${input.attemptAssistant?.model ?? input.model} ` +
-        `sessionKey=${input.runParams.sessionKey ?? input.runParams.sessionId}`,
-    );
-    return buildOutcome(input, {
-      action: "retry",
-      emptyErrorRetries,
-      preserveSameModelRateLimitRetryCount: true,
-      assistantProfileFailureReason,
-    });
+  if (replaySafeSilentErrorFailure) {
+    if (silentControllerConsultReason === null) {
+      if (input.emptyErrorRetries < MAX_EMPTY_ERROR_RETRIES) {
+        const emptyErrorRetries = input.emptyErrorRetries + 1;
+        log.warn(
+          `[empty-error-retry] stopReason=error non-visible-output; resubmitting ` +
+            `attempt=${emptyErrorRetries}/${MAX_EMPTY_ERROR_RETRIES} ` +
+            `provider=${input.attemptAssistant?.provider ?? input.provider} ` +
+            `model=${input.attemptAssistant?.model ?? input.model} ` +
+            `sessionKey=${input.runParams.sessionKey ?? input.runParams.sessionId}`,
+        );
+        return buildOutcome(input, {
+          action: "retry",
+          emptyErrorRetries,
+          assistantProfileFailureReason,
+        });
+      }
+    } else if (
+      await input.maybeRetryTransient({
+        reason: silentControllerConsultReason,
+        retryAfterMs: resolveRetryAfterMs(input.attemptAssistant?.errorMessage),
+      })
+    ) {
+      log.warn(
+        `[empty-error-retry] stopReason=error non-visible-output; transient ` +
+          `reason=${silentControllerConsultReason} retrying same model ` +
+          `provider=${input.attemptAssistant?.provider ?? input.provider} ` +
+          `model=${input.attemptAssistant?.model ?? input.model} ` +
+          `sessionKey=${input.runParams.sessionKey ?? input.runParams.sessionId}`,
+      );
+      return buildOutcome(input, {
+        action: "retry",
+        assistantProfileFailureReason,
+      });
+    }
   }
 
   // The bounded same-model retry already proved this attempt had no visible output
@@ -205,6 +229,9 @@ export async function handleEmbeddedAssistantFailure(input: {
     fallbackConfigured: input.fallbackConfigured,
     timedOut,
     aborted,
+    retryCount: input.getTransientRetryCount(),
+    profileRotationCount: input.overloadProfileRotations,
+    attemptCount: input.traceAttempts.length + 1,
   });
   if (
     !signalOwnedInterruption &&
@@ -217,7 +244,6 @@ export async function handleEmbeddedAssistantFailure(input: {
     return buildOutcome(input, {
       action: "retry",
       authRetryPending: true,
-      preserveSameModelRateLimitRetryCount: true,
       assistantProfileFailureReason,
     });
   }
@@ -261,23 +287,16 @@ export async function handleEmbeddedAssistantFailure(input: {
     failoverFailure,
     failoverReason: assistantFailoverReason,
     harnessOwnsTransport: input.pluginHarnessOwnsTransport,
-    allowSameModelIdleTimeoutRetry:
-      timedOut &&
-      idleTimedOut &&
-      !timedOutDuringCompaction &&
-      !input.fallbackConfigured &&
-      input.canRestartForLiveSwitch &&
-      input.sameModelIdleTimeoutRetries < MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES,
-    allowSameModelRateLimitRetry:
-      input.rateLimitProfileRotations < input.rateLimitProfileRotationLimit,
     assistantProfileFailureReason,
     lastProfileId: input.authProfileId,
     modelId: input.modelId,
     provider: input.provider,
+    providerOwner: input.providerOwner,
     activeErrorContext: input.activeErrorContext,
     lastAssistant: input.attemptAssistant,
     config: input.runParams.config,
     sessionKey: input.runParams.sessionKey ?? input.runParams.sessionId,
+    agentId: input.runParams.agentId,
     authFailure,
     rateLimitFailure,
     billingFailure,
@@ -288,20 +307,22 @@ export async function handleEmbeddedAssistantFailure(input: {
     isProbeSession: input.isProbeSession,
     overloadProfileRotations: input.overloadProfileRotations,
     overloadProfileRotationLimit: input.overloadProfileRotationLimit,
+    getTransientRetryCount: input.getTransientRetryCount,
     previousRetryFailoverReason: input.previousRetryFailoverReason,
     logAssistantFailoverDecision: logFailoverDecision,
     warn: (message) => log.warn(message),
     maybeMarkAuthProfileFailure: input.maybeMarkAuthProfileFailure,
-    maybeEscalateRateLimitProfileFallback: input.maybeEscalateRateLimitProfileFallback,
-    maybeRetrySameModelRateLimit: input.maybeRetrySameModelRateLimit,
-    maybeBackoffBeforeOverloadFailover: input.maybeBackoffBeforeOverloadFailover,
-    advanceAuthProfile: input.advanceAttemptAuthProfile,
+    maybeRetryTransient: input.maybeRetryTransient,
+    advanceAuthProfile: input.advanceAuthProfile,
+    advanceRateLimitAuthProfile: input.advanceRateLimitAuthProfile,
   });
   if (outcome.action === "retry") {
     const retryTraceResult =
-      outcome.retryKind === "same_model_rate_limit"
-        ? "same_model_rate_limit"
-        : outcome.retryKind === "same_model_idle_timeout" || effectiveFailoverReason === "timeout"
+      outcome.retryKind === "same_model_transient"
+        ? effectiveFailoverReason === "timeout"
+          ? "timeout"
+          : "same_model_transient"
+        : effectiveFailoverReason === "timeout"
           ? "timeout"
           : "rotate_profile";
     input.traceAttempts.push({
@@ -316,11 +337,7 @@ export async function handleEmbeddedAssistantFailure(input: {
       thinkLevel:
         outcome.retryKind === "profile_rotation" ? input.getThinkLevel() : input.thinkLevel,
       overloadProfileRotations: outcome.overloadProfileRotations,
-      sameModelIdleTimeoutRetries:
-        input.sameModelIdleTimeoutRetries +
-        (outcome.retryKind === "same_model_idle_timeout" ? 1 : 0),
       lastRetryFailoverReason: outcome.lastRetryFailoverReason,
-      preserveSameModelRateLimitRetryCount: outcome.retryKind === "same_model_rate_limit",
       assistantProfileFailureReason,
     });
   }
@@ -368,10 +385,7 @@ function buildOutcome(
     authRetryPending: override.authRetryPending ?? false,
     emptyErrorRetries: override.emptyErrorRetries ?? input.emptyErrorRetries,
     overloadProfileRotations: override.overloadProfileRotations ?? input.overloadProfileRotations,
-    sameModelIdleTimeoutRetries:
-      override.sameModelIdleTimeoutRetries ?? input.sameModelIdleTimeoutRetries,
     lastRetryFailoverReason: override.lastRetryFailoverReason ?? input.previousRetryFailoverReason,
-    preserveSameModelRateLimitRetryCount: override.preserveSameModelRateLimitRetryCount ?? false,
     assistantProfileFailureReason: override.assistantProfileFailureReason,
   };
 }

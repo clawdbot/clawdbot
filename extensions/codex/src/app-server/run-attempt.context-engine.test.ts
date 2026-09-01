@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import {
   embeddedAgentLog,
   supportsModelTools,
@@ -14,7 +14,9 @@ import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-de
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 // Codex tests cover run attempt.context engine plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
@@ -208,10 +210,6 @@ type MockCallReader = { mock: { calls: unknown[][] } };
 
 const requireRecord = createRequireRecord("record", "expected-label-object");
 
-function optionalString(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
 function requireFirstCallArg(mock: unknown, label: string): unknown {
   const call = (mock as MockCallReader).mock.calls[0];
   if (!call) {
@@ -256,7 +254,7 @@ function getRequestInputTextAt(
   return input
     .map((entry) => {
       const item = requireRecord(entry, "turn/start input entry");
-      return item.type === "text" ? optionalString(item.text) : "";
+      return item.type === "text" ? (readStringValue(item.text) ?? "") : "";
     })
     .join("\n");
 }
@@ -275,82 +273,140 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
   });
 
-  it("bootstraps and assembles non-legacy context before the Codex turn starts", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
-      assistantMessage("existing context", Date.now()) as never,
+  it.each(["compaction", "branch"] as const)(
+    "bootstraps and assembles non-legacy context before the Codex turn starts (%s summary)",
+    async (boundary) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const sessionManager = openFileBackedSessionManagerForTest(sessionFile, {
+        sessionId: "session-1",
+      });
+      const summary = "The durable code is summary-only-engine-code-8516.";
+      if (boundary === "branch") {
+        sessionManager.branchWithSummary(null, summary);
+      }
+      const retainedId = sessionManager.appendMessage(
+        assistantMessage("ACK: existing context", Date.now()),
+      );
+      if (boundary === "compaction") {
+        sessionManager.appendCompaction(summary, retainedId, 1_000);
+      }
+      const openSpy = vi.spyOn(SessionManager, "open");
+      const contextEngine = createContextEngine();
+      const harness = createStartedThreadHarness();
+      const params = createParams(sessionFile, workspaceDir);
+      params.prompt = "Recall the durable code from our prior work.";
+      params.contextEngine = contextEngine;
+      params.contextTokenBudget = 321;
+      params.requestedModelId = "gpt-5.4-codex-primary";
+      params.fallbackReason = "provider_unavailable";
+      params.degradedReason = "context_overflow";
+      params.config = { memory: { citations: "on" } } as EmbeddedRunAttemptParams["config"];
+
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
+
+      if (!contextEngine.bootstrap) {
+        throw new Error("expected bootstrap hook");
+      }
+      expect(contextEngine["bootstrap"]).toHaveBeenCalledTimes(1);
+      const bootstrapParams = requireFirstCallArg(
+        contextEngine["bootstrap"],
+        "bootstrap",
+      ) as Parameters<NonNullable<ContextEngine["bootstrap"]>>[0];
+      expect(bootstrapParams.sessionId).toBe("session-1");
+      expect(bootstrapParams.sessionKey).toBe("agent:main:session-1");
+      expect(bootstrapParams.sessionFile).toBe(sessionFile);
+      expect(bootstrapParams.runtimeSettings).toMatchObject({
+        runtime: { mode: "degraded" },
+        model: {
+          requested: "gpt-5.4-codex-primary",
+          resolved: "gpt-5.4-codex",
+        },
+        diagnostics: {
+          fallbackReason: "provider_unavailable",
+          degradedReason: "context_overflow",
+        },
+      });
+
+      expect(contextEngine["assemble"]).toHaveBeenCalledTimes(1);
+      const assembleParams = requireFirstCallArg(
+        contextEngine["assemble"],
+        "assemble",
+      ) as Parameters<ContextEngine["assemble"]>[0];
+      expect(assembleParams.sessionId).toBe("session-1");
+      expect(assembleParams.sessionKey).toBe("agent:main:session-1");
+      expect(assembleParams.tokenBudget).toBe(321);
+      expect(assembleParams.citationsMode).toBe("on");
+      expect(assembleParams.model).toBe("gpt-5.4-codex");
+      expect(assembleParams.runtimeSettings).toMatchObject({
+        runtime: { mode: "degraded" },
+        model: {
+          requested: "gpt-5.4-codex-primary",
+          resolved: "gpt-5.4-codex",
+        },
+        diagnostics: {
+          fallbackReason: "provider_unavailable",
+          degradedReason: "context_overflow",
+        },
+      });
+      expect(assembleParams.prompt).toBe(params.prompt);
+      const summaryRole = boundary === "compaction" ? "compactionSummary" : "branchSummary";
+      expect(assembleParams.messages.map((message) => message.role)).toEqual([
+        summaryRole,
+        "assistant",
+      ]);
+      expect(assembleParams.availableTools).toEqual(new Set());
+
+      const threadStartParams = requireRequestParams(harness, "thread/start");
+      expect(readStringValue(threadStartParams.developerInstructions) ?? "").toContain(
+        "context-engine system",
+      );
+      expectRequestInputTextContains(harness, "OpenClaw assembled context for this turn:");
+      expectRequestInputTextContains(harness, `[${summaryRole}]\n${summary}`);
+      expectRequestInputTextContains(harness, "[assistant]\nACK: existing context");
+      expectRequestInputTextContains(
+        harness,
+        `</conversation_context>\n\nCurrent user request:\n${params.prompt}`,
+      );
+
+      await harness.completeTurn();
+      await run;
+      expect(openSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it("starts a fresh turn before the post-start mirror records admission", async () => {
+    const beforeMessageWrite = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_message_write", handler: beforeMessageWrite }]),
     );
-    const openSpy = vi.spyOn(SessionManager, "open");
-    const contextEngine = createContextEngine();
+    const workspaceDir = path.join(tempDir, "workspace-fresh-admission");
+    const params = await createSqliteParams(workspaceDir, "fresh-admission");
+    params.sandboxSessionKey = "agent:main:policy";
+    params.contextEngine = createContextEngine();
+    const recorder = params.userTurnTranscriptRecorder;
+    if (!recorder) {
+      throw new Error("expected user turn transcript recorder");
+    }
+    const markRuntimePersisted = vi.fn();
+    recorder.markRuntimePersisted = markRuntimePersisted;
+    recorder.markSentToProvider = vi.fn(() => {
+      throw new Error("admission is not available before Codex turn/start");
+    });
     const harness = createStartedThreadHarness();
-    const params = createParams(sessionFile, workspaceDir);
-    params.contextEngine = contextEngine;
-    params.contextTokenBudget = 321;
-    params.requestedModelId = "gpt-5.4-codex-primary";
-    params.fallbackReason = "provider_unavailable";
-    params.degradedReason = "context_overflow";
-    params.config = { memory: { citations: "on" } } as EmbeddedRunAttemptParams["config"];
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
 
-    if (!contextEngine.bootstrap) {
-      throw new Error("expected bootstrap hook");
-    }
-    expect(contextEngine["bootstrap"]).toHaveBeenCalledTimes(1);
-    const bootstrapParams = requireFirstCallArg(
-      contextEngine["bootstrap"],
-      "bootstrap",
-    ) as Parameters<NonNullable<ContextEngine["bootstrap"]>>[0];
-    expect(bootstrapParams.sessionId).toBe("session-1");
-    expect(bootstrapParams.sessionKey).toBe("agent:main:session-1");
-    expect(bootstrapParams.sessionFile).toBe(sessionFile);
-    expect(bootstrapParams.runtimeSettings).toMatchObject({
-      runtime: { mode: "degraded" },
-      model: {
-        requested: "gpt-5.4-codex-primary",
-        resolved: "gpt-5.4-codex",
-      },
-      diagnostics: {
-        fallbackReason: "provider_unavailable",
-        degradedReason: "context_overflow",
-      },
-    });
-
-    expect(contextEngine["assemble"]).toHaveBeenCalledTimes(1);
-    const assembleParams = requireFirstCallArg(contextEngine["assemble"], "assemble") as Parameters<
-      ContextEngine["assemble"]
-    >[0];
-    expect(assembleParams.sessionId).toBe("session-1");
-    expect(assembleParams.sessionKey).toBe("agent:main:session-1");
-    expect(assembleParams.tokenBudget).toBe(321);
-    expect(assembleParams.citationsMode).toBe("on");
-    expect(assembleParams.model).toBe("gpt-5.4-codex");
-    expect(assembleParams.runtimeSettings).toMatchObject({
-      runtime: { mode: "degraded" },
-      model: {
-        requested: "gpt-5.4-codex-primary",
-        resolved: "gpt-5.4-codex",
-      },
-      diagnostics: {
-        fallbackReason: "provider_unavailable",
-        degradedReason: "context_overflow",
-      },
-    });
-    expect(assembleParams.prompt).toBe("hello");
-    expect(assembleParams.messages.map((message) => message.role)).toEqual(["assistant"]);
-    expect(assembleParams.availableTools).toEqual(new Set());
-
-    const threadStartParams = requireRequestParams(harness, "thread/start");
-    expect(optionalString(threadStartParams.developerInstructions)).toContain(
-      "context-engine system",
+    expect(recorder.markSentToProvider).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(markRuntimePersisted).toHaveBeenCalledOnce());
+    expect(beforeMessageWrite).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.objectContaining({ role: "user" }) }),
+      { agentId: "main", sessionKey: params.sessionKey },
     );
-    expectRequestInputTextContains(harness, "OpenClaw assembled context for this turn:");
-
     await harness.completeTurn();
     await run;
-    expect(openSpy).not.toHaveBeenCalled();
   });
 
   it("keeps context-engine history bound to the run session when sandbox key differs", async () => {
@@ -577,20 +633,19 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       fingerprint: undefined,
     });
 
-    const secondHarness = createStartedThreadHarness(async (method) => {
-      if (method === "thread/resume") {
-        return threadStartResult("thread-1");
-      }
-      return undefined;
-    });
     const secondRun = runCodexAppServerAttempt(firstParams);
-    await secondHarness.waitForMethod("turn/start");
+    await vi.waitFor(() => {
+      expect(
+        firstHarness.requests.filter((request) => request.method === "turn/start"),
+      ).toHaveLength(2);
+    });
 
-    expect(secondHarness.requests.map((request) => request.method)).toEqual([
-      "thread/resume",
+    expect(firstHarness.requests.map((request) => request.method)).toEqual([
+      "thread/start",
+      "turn/start",
       "turn/start",
     ]);
-    const secondInputText = getRequestInputText(secondHarness);
+    const secondInputText = getRequestInputTextAt(firstHarness, 1);
     expect(secondInputText).not.toContain("OpenClaw assembled context for this turn:");
     expect(secondInputText).not.toContain("bootstrap-only context");
     expect(secondInputText).toBe("hello");
@@ -626,7 +681,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       ],
     ]);
 
-    await secondHarness.completeTurn();
+    await firstHarness.completeTurn();
     await secondRun;
   });
 
@@ -1160,20 +1215,13 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         },
       } as EmbeddedRunAttemptParams["config"];
 
-      let runError: unknown;
-      const run = runCodexAppServerAttempt(params).catch((error: unknown) => {
-        runError = error;
-        throw error;
-      });
-      await vi.waitFor(
-        () => {
-          if (runError) {
-            throw toLintErrorObject(runError, "Non-Error thrown");
-          }
-          expect(harness.requests.map((request) => request.method)).toContain("turn/start");
-        },
-        { interval: 1 },
-      );
+      const run = runCodexAppServerAttempt(params);
+      await Promise.race([
+        harness.waitForMethod("turn/start"),
+        run.then(() => {
+          throw new Error("Codex attempt completed before turn/start");
+        }),
+      ]);
 
       expect(harness.requests.map((request) => request.method)).toEqual([
         "thread/start",
@@ -1782,11 +1830,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
 
   it.each([
     {
-      name: "commitment-only",
-      trigger: "heartbeat",
-      bootstrapContextRunKind: "commitment-only",
-    },
-    {
       name: "Gateway-routed heartbeat",
       trigger: "user",
       bootstrapContextRunKind: "heartbeat",
@@ -1851,6 +1894,58 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     });
   });
 
+  it("persists the admitted user prompt before an async item buffered during turn startup", async () => {
+    const workspaceDir = path.join(tempDir, "workspace-early-async");
+    const params = await createSqliteParams(workspaceDir, "early-async-order");
+    params.onBlockReply = vi.fn();
+    const recorder = params.userTurnTranscriptRecorder;
+    if (!recorder) {
+      throw new Error("expected user turn transcript recorder");
+    }
+    recorder.markRuntimePersistencePending = vi.fn();
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "turn/start") {
+        await harness.notify({
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              type: "agentMessage",
+              id: "startup-async",
+              phase: "final_answer",
+              delivery: "async",
+              text: "Working on the request.",
+            },
+          },
+        });
+      }
+      return undefined;
+    });
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
+    await harness.completeTurn();
+    await run;
+
+    const sessionTarget = params.sessionTarget;
+    if (!sessionTarget?.sessionId || !sessionTarget.sessionKey) {
+      throw new Error("expected a complete session transcript target");
+    }
+    const messages = (
+      await readSessionTranscriptEvents({
+        ...sessionTarget,
+        sessionId: sessionTarget.sessionId,
+        sessionKey: sessionTarget.sessionKey,
+      })
+    )
+      .map((event) => (event as { message?: { role?: string } }).message)
+      .filter((message) => message !== undefined);
+    expect(messages.slice(0, 2).map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(messages[1]).toMatchObject({ openclawAsyncDelivery: { itemId: "startup-async" } });
+  });
+
   it("reloads mirrored history after bootstrap mutates the session transcript", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -1896,9 +1991,31 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("logs assemble failures as a formatted message instead of the raw error object", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
+    openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
+      assistantMessage("first baseline message", 1) as never,
+    );
+    openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
+      userMessage("second baseline message", 2) as never,
+    );
+    let preassemblyMessages: AgentMessage[] = [];
+    let promptHookMessages: AgentMessage[] = [];
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_prompt_build",
+          handler: async (event) => {
+            promptHookMessages = (event as { messages: AgentMessage[] }).messages;
+            return {};
+          },
+        },
+      ]),
+    );
     const rawError = new Error("Authorization: Bearer sk-abcdefghijklmnopqrstuv");
     const contextEngine = createContextEngine({
-      assemble: vi.fn(async () => {
+      assemble: vi.fn(async ({ messages }) => {
+        preassemblyMessages = messages.slice();
+        messages.reverse();
+        messages.pop();
         throw rawError;
       }),
       bootstrap: undefined,
@@ -1920,6 +2037,9 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(typeof details.error).toBe("string");
     expect(warning?.[1]).not.toEqual({ error: rawError });
     expect(String(details.error)).not.toContain("sk-abcdefghijklmnopqrstuv");
+    expect(promptHookMessages).toEqual(preassemblyMessages);
+    expect(promptHookMessages.map((message) => message.role)).toEqual(["assistant", "user"]);
+    expectRequestInputTextContains(harness, params.prompt);
   });
 
   it("does not advance context-engine state on prompt failure", async () => {
@@ -1946,17 +2066,4 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   });
 });
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

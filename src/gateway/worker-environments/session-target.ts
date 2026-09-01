@@ -2,7 +2,7 @@ import type { SessionTranscriptWriteScope } from "../../config/sessions/session-
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolution.js";
 import {
-  loadCombinedSessionStoreForGateway,
+  loadCombinedSessionStoreForGatewayCore,
   resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTargetWithStore,
 } from "../session-utils.js";
@@ -25,7 +25,7 @@ export function resolveWorkerSessionTarget(
   cfg: OpenClawConfig,
   sessionId: string,
 ): ResolvedWorkerSessionTarget | undefined {
-  const { store } = loadCombinedSessionStoreForGateway(cfg);
+  const { store } = loadCombinedSessionStoreForGatewayCore(cfg);
   const matches = Object.entries(store).filter(([, entry]) => entry.sessionId === sessionId);
   const selection = resolveSessionIdMatchSelection(matches, sessionId);
   if (selection.kind !== "selected") {

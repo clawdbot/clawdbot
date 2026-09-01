@@ -3,13 +3,17 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import {
   expectRealExitWinsOverSigkillFallback,
   expectWaitStaysPendingUntilSigkillFallback,
+  mockLinuxOomWrapperShell,
 } from "./test-support.js";
 
-const { spawnMock, ptyKillMock, signalProcessTreeMock } = vi.hoisted(() => ({
-  spawnMock: vi.fn(),
-  ptyKillMock: vi.fn(),
-  signalProcessTreeMock: vi.fn(),
-}));
+const { spawnMock, ptyKillMock, signalProcessTreeMock, signalPtySessionTreeMock } = vi.hoisted(
+  () => ({
+    spawnMock: vi.fn(),
+    ptyKillMock: vi.fn(),
+    signalProcessTreeMock: vi.fn(),
+    signalPtySessionTreeMock: vi.fn(),
+  }),
+);
 
 vi.mock("@lydell/node-pty", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
@@ -17,6 +21,7 @@ vi.mock("@lydell/node-pty", () => ({
 
 vi.mock("../../kill-tree.js", () => ({
   signalProcessTree: (...args: unknown[]) => signalProcessTreeMock(...args),
+  signalPtySessionTree: (...args: unknown[]) => signalPtySessionTreeMock(...args),
 }));
 
 function createStubPty(pid = 1234) {
@@ -79,6 +84,7 @@ describe("createPtyAdapter", () => {
     spawnMock.mockClear();
     ptyKillMock.mockClear();
     signalProcessTreeMock.mockClear();
+    signalPtySessionTreeMock.mockClear();
     vi.useRealTimers();
   });
 
@@ -157,7 +163,7 @@ describe("createPtyAdapter", () => {
 
   it("forwards non-SIGTERM explicit signals to node-pty kill on non-Windows", async () => {
     const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
-    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
     try {
       spawnMock.mockReturnValue(createStubPty());
 
@@ -185,7 +191,8 @@ describe("createPtyAdapter", () => {
     });
 
     adapter.kill("SIGTERM");
-    expect(signalProcessTreeMock).toHaveBeenCalledWith(1234, "SIGTERM", { detached: true });
+    expect(signalPtySessionTreeMock).toHaveBeenCalledWith(1234, "SIGTERM");
+    expect(signalProcessTreeMock).not.toHaveBeenCalled();
     expect(ptyKillMock).not.toHaveBeenCalled();
   });
 
@@ -198,7 +205,8 @@ describe("createPtyAdapter", () => {
     });
 
     adapter.kill();
-    expect(signalProcessTreeMock).toHaveBeenCalledWith(1234, "SIGKILL", { detached: true });
+    expect(signalPtySessionTreeMock).toHaveBeenCalledWith(1234, "SIGKILL");
+    expect(signalProcessTreeMock).not.toHaveBeenCalled();
     expect(ptyKillMock).not.toHaveBeenCalled();
   });
 
@@ -238,21 +246,31 @@ describe("createPtyAdapter", () => {
     });
   });
 
-  it("resolves wait when exit fires before wait is called", async () => {
-    const stub = createStubPty();
-    spawnMock.mockReturnValue(stub);
+  it.each([true, false])(
+    "preserves the first PTY exit across waits (waitBefore=%s)",
+    async (waitBefore) => {
+      const stub = createStubPty();
+      spawnMock.mockReturnValue(stub);
 
-    const adapter = await createPtyAdapter({
-      shell: "bash",
-      args: ["-lc", "exit 3"],
-    });
+      const adapter = await createPtyAdapter({
+        shell: "bash",
+        args: ["-lc", "exit 3"],
+      });
 
-    expect(stub.onExit).toHaveBeenCalledTimes(1);
-    stub.emitExit({ exitCode: 3, signal: 0 });
-    await expect(adapter.wait()).resolves.toEqual({ code: 3, signal: null });
-    expect(adapter.stdin?.destroyed).toBe(true);
-    expect(adapter.stdin?.writable).toBe(false);
-  });
+      expect(stub.onExit).toHaveBeenCalledTimes(1);
+      const pending = waitBefore ? [adapter.wait(), adapter.wait()] : [];
+      stub.emitExit({ exitCode: 3, signal: 0 });
+      const result = await adapter.wait();
+      expect(result).toStrictEqual({ code: 3, signal: null });
+      expect(adapter.stdin?.destroyed).toBe(true);
+      expect(adapter.stdin?.writable).toBe(false);
+      stub.emitExit({ exitCode: 9, signal: 15 });
+      adapter.dispose();
+      for (const wait of [...pending, adapter.wait()]) {
+        await expect(wait).resolves.toBe(result);
+      }
+    },
+  );
 
   it("reports stdin as non-writable after EOF or dispose", async () => {
     const stub = createStubPty();
@@ -284,9 +302,13 @@ describe("createPtyAdapter", () => {
       args: ["-lc", "echo ok"],
     });
     adapter.onStdout(() => undefined);
+    const pending = adapter.wait();
 
     adapter.dispose();
 
+    const result = await pending;
+    expect(result).toStrictEqual({ code: null, signal: null });
+    await expect(adapter.wait()).resolves.toBe(result);
     expect(stub.disposeData).toHaveBeenCalledTimes(1);
     expect(stub.disposeExit).toHaveBeenCalledTimes(1);
   });
@@ -316,17 +338,21 @@ describe("createPtyAdapter", () => {
   it("wraps Linux PTY spawns so shell children inherit higher OOM score", async () => {
     const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const restoreLinuxShell = mockLinuxOomWrapperShell();
+    vi.resetModules();
     try {
+      const { createPtyAdapter: createLinuxPtyAdapter } = await import("./pty.js");
       const stub = createStubPty();
       spawnMock.mockReturnValue(stub);
 
-      const adapter = await createPtyAdapter({
+      const adapter = await createLinuxPtyAdapter({
         shell: "bash",
         args: ["-lc", "env"],
         env: { PATH: "/usr/bin", BASH_ENV: "/tmp/bashenv", TERM: "dumb" },
       });
       expect(adapter.oomScoreWrapperSelected).toBe(true);
     } finally {
+      restoreLinuxShell();
       if (originalPlatform) {
         Object.defineProperty(process, "platform", originalPlatform);
       }
@@ -390,7 +416,8 @@ describe("createPtyAdapter", () => {
       });
 
       adapter.kill("SIGKILL");
-      expect(signalProcessTreeMock).toHaveBeenCalledWith(4567, "SIGKILL", { detached: true });
+      expect(signalPtySessionTreeMock).toHaveBeenCalledWith(4567, "SIGKILL");
+      expect(signalProcessTreeMock).not.toHaveBeenCalled();
       expect(ptyKillMock).not.toHaveBeenCalled();
     } finally {
       if (originalPlatform) {

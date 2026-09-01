@@ -3,9 +3,15 @@ import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
 import type {
   UserProfile,
+  UsersPrefsGetResult,
+  UsersPrefsSetResult,
   UsersSelfResult,
   UsersSetAvatarResult,
   UsersSetDisplayNameResult,
+} from "../../../../packages/gateway-protocol/src/index.ts";
+import {
+  GIT_COAUTHOR_PREFERENCE_KEY,
+  isGitCoauthorCreditEnabled,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
@@ -14,35 +20,36 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
+import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
-import { resolveCurrentSelfUser, userProfileAvatarUrl } from "../../app/user-profile.ts";
+import { resolveCurrentSelfUser } from "../../app/user-profile.ts";
 import { icons } from "../../components/icons.ts";
 import {
-  renderDocsLink,
+  renderLearnMoreLink,
   renderSettingsEmpty,
   renderSettingsGroup,
+  renderSettingsLoadingSkeleton,
   renderSettingsNavRow,
   renderSettingsPage,
   renderSettingsSection,
 } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
+import { AuthenticatedAvatarRouteLoader } from "../../lib/authenticated-avatar-route.ts";
 import { resolveAgentAvatarUrl, resolveAssistantTextAvatar } from "../../lib/avatar.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
-import "../../styles/profile.css";
 import { processProfileAvatar, ProfileAvatarError } from "./avatar-processing.ts";
+import "../../styles/profile.css";
 import { renderIdentitySection } from "./identity-section.ts";
+import { userProfileAvatarUrl } from "./profile-avatar-url.ts";
 
 const PROFILE_DOCS_URL = "https://docs.openclaw.ai/concepts/user-model";
 
 function toIdentityErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message.trim()) {
-    return error.message;
-  }
-  return typeof error === "string" && error.trim()
-    ? error
-    : t("profilePage.identity.profileUnavailable");
+  return formatUiError(error, t("profilePage.identity.profileUnavailable"));
 }
 
 export class ProfilePage extends OpenClawLightDomElement {
@@ -52,13 +59,18 @@ export class ProfilePage extends OpenClawLightDomElement {
   @state() private selfUser: AuthenticatedUser | null = null;
   @state() private ownProfile: UserProfile | null = null;
   @state() private displayName = "";
+  @state() private gitCoauthorEnabled = true;
   @state() private identityLoading = false;
-  @state() private identityBusy: "display-name" | "avatar" | null = null;
+  @state() private identityBusy: "display-name" | "avatar" | "git-coauthor" | null = null;
   @state() private identityError: string | null = null;
   @state() private failedHeroAvatarUrl: string | null = null;
 
   private client: GatewayBrowserClient | null = null;
   private connected = false;
+  private canWrite = false;
+  private heroAvatarAuthCandidates: string[] = [];
+  private heroAvatarAuthReady = false;
+  private readonly heroAvatarLoader = new AuthenticatedAvatarRouteLoader(this);
   private identityRequestId = 0;
   private subscriptions: Array<() => void> = [];
 
@@ -78,22 +90,46 @@ export class ProfilePage extends OpenClawLightDomElement {
     }
     this.subscriptions = [];
     this.identityRequestId += 1;
+    this.heroAvatarAuthCandidates = [];
+    this.heroAvatarAuthReady = false;
     this.client = null;
     this.connected = false;
+    this.canWrite = false;
     super.disconnectedCallback();
   }
 
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
+    // The /api/users avatar route only accepts shared secrets; a single
+    // device-token candidate would 401 forever. Offer the full ordered list.
+    const nextHeroAvatarAuthCandidates = resolveControlUiAuthCandidates({
+      hello: snapshot.hello,
+      settings: { token: this.context.gateway.connection.token },
+      password: this.context.gateway.connection.password,
+    });
+    if (
+      nextHeroAvatarAuthCandidates.join("\u0000") !== this.heroAvatarAuthCandidates.join("\u0000")
+    ) {
+      this.heroAvatarAuthCandidates = nextHeroAvatarAuthCandidates;
+    }
+    this.heroAvatarAuthReady = Boolean(
+      snapshot.hello ||
+      this.context.gateway.connection.token.trim() ||
+      this.context.gateway.connection.password.trim(),
+    );
     const clientChanged = snapshot.client !== this.client;
     const nextConnected = snapshot.phase === "connected";
+    const nextCanWrite = nextConnected && hasOperatorWriteAccess(snapshot.hello?.auth ?? null);
+    const writeAccessChanged = nextCanWrite !== this.canWrite;
     const connectionChanged = nextConnected !== this.connected;
     const nextSelfUser = nextConnected
       ? resolveCurrentSelfUser({ snapshotUser: snapshot.selfUser })
       : null;
     const selfProfileChanged = nextSelfUser?.id !== this.selfUser?.id;
-    const identitySourceChanged = clientChanged || connectionChanged || selfProfileChanged;
+    const identitySourceChanged =
+      clientChanged || connectionChanged || selfProfileChanged || writeAccessChanged;
     this.client = snapshot.client;
     this.connected = nextConnected;
+    this.canWrite = nextCanWrite;
     this.selfUser = nextSelfUser;
     // connected/client are plain fields; an unidentified (token-auth) connect or
     // disconnect changes no @state, so the render branch must be invalidated
@@ -103,6 +139,7 @@ export class ProfilePage extends OpenClawLightDomElement {
       this.identityRequestId += 1;
       this.ownProfile = null;
       this.displayName = "";
+      this.gitCoauthorEnabled = true;
       this.identityLoading = false;
       this.identityBusy = null;
       this.identityError = null;
@@ -110,7 +147,7 @@ export class ProfilePage extends OpenClawLightDomElement {
     if (!nextConnected || !snapshot.client) {
       return;
     }
-    if (nextSelfUser && identitySourceChanged) {
+    if (nextSelfUser && nextCanWrite && identitySourceChanged) {
       void this.loadIdentity();
     }
     void this.context.agents.ensureList().then((list) => {
@@ -124,7 +161,7 @@ export class ProfilePage extends OpenClawLightDomElement {
     const client = this.client;
     // One active request owns the generation; reconnects clear loading before
     // starting their replacement so stale responses cannot win out of order.
-    if (!client || !this.connected || this.identityLoading) {
+    if (!client || !this.connected || !this.canWrite || this.identityLoading) {
       return;
     }
     const requestId = ++this.identityRequestId;
@@ -145,6 +182,18 @@ export class ProfilePage extends OpenClawLightDomElement {
       }
       this.ownProfile = profile;
       this.displayName = hasUnsavedDisplayName ? displayNameDraft : (profile.displayName ?? "");
+      this.gitCoauthorEnabled = true;
+      if (profile.githubIdentity) {
+        const preferences = await client.request<UsersPrefsGetResult>("users.prefs.get", {
+          keys: [GIT_COAUTHOR_PREFERENCE_KEY],
+        });
+        if (requestId !== this.identityRequestId) {
+          return;
+        }
+        this.gitCoauthorEnabled =
+          preferences.status === "ok" &&
+          isGitCoauthorCreditEnabled(preferences.entries[GIT_COAUTHOR_PREFERENCE_KEY]);
+      }
     } catch (error) {
       if (requestId === this.identityRequestId) {
         this.identityError = toIdentityErrorMessage(error);
@@ -164,7 +213,7 @@ export class ProfilePage extends OpenClawLightDomElement {
   private async saveDisplayName() {
     const client = this.client;
     const profile = this.ownProfile;
-    if (!client || !profile || this.identityBusy || this.identityLoading) {
+    if (!client || !profile || !this.canWrite || this.identityBusy || this.identityLoading) {
       return;
     }
     this.identityBusy = "display-name";
@@ -200,7 +249,7 @@ export class ProfilePage extends OpenClawLightDomElement {
   private async saveAvatar(file: File) {
     const client = this.client;
     const profile = this.ownProfile;
-    if (!client || !profile || this.identityBusy || this.identityLoading) {
+    if (!client || !profile || !this.canWrite || this.identityBusy || this.identityLoading) {
       return;
     }
     this.identityBusy = "avatar";
@@ -208,6 +257,8 @@ export class ProfilePage extends OpenClawLightDomElement {
     const identityRequestId = this.identityRequestId;
     const displayNameDraft = this.displayName;
     const hasUnsavedDisplayName = displayNameDraft.trim() !== (profile.displayName ?? "");
+    const selfAvatarUrlBefore =
+      this.selfUser?.id === profile.id ? this.selfUser.avatarUrl : undefined;
     let shouldRefresh = false;
     try {
       const avatar = await processProfileAvatar(file);
@@ -229,9 +280,12 @@ export class ProfilePage extends OpenClawLightDomElement {
       const avatarUrl = userProfileAvatarUrl(
         this.context.gateway.connection.gatewayUrl,
         result.profile.id,
-        result.profile.updatedAt,
+        result.avatarRevision,
+        this.context.resourceBasePath,
       );
-      if (avatarUrl) {
+      const presenceAvatarChanged =
+        this.selfUser?.id === result.profile.id && this.selfUser.avatarUrl !== selfAvatarUrlBefore;
+      if (avatarUrl && !presenceAvatarChanged) {
         this.context.gateway.updateSelfUser?.({ avatarUrl });
       }
       shouldRefresh = true;
@@ -258,41 +312,91 @@ export class ProfilePage extends OpenClawLightDomElement {
     }
   }
 
+  private async saveGitCoauthorPreference(enabled: boolean) {
+    const client = this.client;
+    const profile = this.ownProfile;
+    if (
+      !client ||
+      !profile?.githubIdentity ||
+      !this.canWrite ||
+      this.identityBusy ||
+      this.identityLoading
+    ) {
+      return;
+    }
+    this.identityBusy = "git-coauthor";
+    this.identityError = null;
+    const identityRequestId = this.identityRequestId;
+    try {
+      const result = await client.request<UsersPrefsSetResult>("users.prefs.set", {
+        entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: enabled },
+      });
+      if (client !== this.client || identityRequestId !== this.identityRequestId) {
+        return;
+      }
+      if (result.status !== "ok") {
+        throw new Error(t("profilePage.identity.profileUnavailable"));
+      }
+      this.gitCoauthorEnabled = enabled;
+    } catch (error) {
+      if (client === this.client && identityRequestId === this.identityRequestId) {
+        this.identityError = toIdentityErrorMessage(error);
+      }
+    } finally {
+      if (identityRequestId === this.identityRequestId && this.identityBusy === "git-coauthor") {
+        this.identityBusy = null;
+      }
+    }
+  }
+
   private renderIdentity() {
     if (!this.selfUser) {
       return nothing;
     }
-    if (!this.ownProfile) {
-      // users.self is the idempotent gateway-owned profile ensure path. Retrying
-      // keeps profile ids and authenticated email linkage authoritative server-side.
-      const emptyState = this.identityLoading
-        ? t("profilePage.identity.loading")
-        : this.identityError
-          ? this.identityError
-          : html`<div class="profile-identity-empty">
-              <span>${t("profilePage.identity.notSet")}</span>
-              <button type="button" class="btn btn--sm" @click=${() => void this.loadIdentity()}>
-                ${t("profilePage.identity.setIdentity")}
-              </button>
-            </div>`;
+    if (!this.canWrite) {
       return html`<div id=${PROFILE_SETTINGS_TARGET_IDS.identity}>
         ${renderSettingsSection(
           { title: t("profilePage.identity.title") },
-          renderSettingsEmpty(emptyState),
+          renderSettingsEmpty(t("profilePage.identity.writeRequired")),
+        )}
+      </div>`;
+    }
+    if (!this.ownProfile) {
+      // users.self is the idempotent gateway-owned profile ensure path. Retrying
+      // keeps profile ids and authenticated email linkage authoritative server-side.
+      const emptyState = this.identityError
+        ? this.identityError
+        : html`<div class="profile-identity-empty">
+            <span>${t("profilePage.identity.notSet")}</span>
+            <button type="button" class="btn btn--sm" @click=${() => void this.loadIdentity()}>
+              ${t("profilePage.identity.setIdentity")}
+            </button>
+          </div>`;
+      return html`<div id=${PROFILE_SETTINGS_TARGET_IDS.identity}>
+        ${renderSettingsSection(
+          { title: t("profilePage.identity.title") },
+          this.identityLoading
+            ? renderSettingsLoadingSkeleton({ label: t("profilePage.identity.loading"), rows: 2 })
+            : renderSettingsEmpty(emptyState),
         )}
       </div>`;
     }
     // The gateway route serves an uploaded avatar first and its private Gravatar
     // fallback second, while a 404 still leaves the viewer-avatar initials visible.
-    const avatarUrl = userProfileAvatarUrl(
-      this.context.gateway.connection.gatewayUrl,
-      this.ownProfile.id,
-      this.ownProfile.updatedAt,
-    );
+    const avatarUrl =
+      this.selfUser?.id === this.ownProfile.id && this.selfUser.avatarUrl
+        ? this.selfUser.avatarUrl
+        : userProfileAvatarUrl(
+            this.context.gateway.connection.gatewayUrl,
+            this.ownProfile.id,
+            this.ownProfile.updatedAt,
+            this.context.resourceBasePath,
+          );
     return renderIdentitySection({
       profile: this.ownProfile,
       avatarUrl,
       displayName: this.displayName,
+      gitCoauthorEnabled: this.gitCoauthorEnabled,
       busy: this.identityLoading ? "loading" : this.identityBusy,
       error: this.identityError,
       onDisplayNameInput: (value) => {
@@ -300,11 +404,12 @@ export class ProfilePage extends OpenClawLightDomElement {
       },
       onSaveDisplayName: () => void this.saveDisplayName(),
       onAvatarSelect: (file) => void this.saveAvatar(file),
+      onGitCoauthorChange: (enabled) => void this.saveGitCoauthorPreference(enabled),
     });
   }
 
   private refreshManually() {
-    if (this.selfUser && !this.identityBusy && !this.identityLoading) {
+    if (this.selfUser && this.canWrite && !this.identityBusy && !this.identityLoading) {
       void this.loadIdentity();
     }
   }
@@ -325,15 +430,22 @@ export class ProfilePage extends OpenClawLightDomElement {
   }
 
   private renderAvatar(avatarUrl: string | null, textAvatar: string | null, name: string) {
+    const imageUrl = avatarUrl?.startsWith("/")
+      ? this.heroAvatarAuthReady
+        ? this.heroAvatarLoader.resolve(avatarUrl, this.heroAvatarAuthCandidates)
+        : null
+      : avatarUrl;
     if (avatarUrl && avatarUrl !== this.failedHeroAvatarUrl) {
-      return html`<img
-        class="profile-hero__avatar-image"
-        src=${avatarUrl}
-        alt=${name}
-        @error=${() => {
-          this.failedHeroAvatarUrl = avatarUrl;
-        }}
-      />`;
+      if (imageUrl) {
+        return html`<img
+          class="profile-hero__avatar-image"
+          src=${imageUrl}
+          alt=${name}
+          @error=${() => {
+            this.failedHeroAvatarUrl = avatarUrl;
+          }}
+        />`;
+      }
     }
     if (textAvatar) {
       return html`<span class="profile-hero__avatar-text">${textAvatar}</span>`;
@@ -374,13 +486,16 @@ export class ProfilePage extends OpenClawLightDomElement {
   }
 
   override render() {
+    return this.heroAvatarLoader.withActiveRoutes(() => this.renderContent());
+  }
+
+  private renderContent() {
     return html`
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("profile")}</div>
           <div class="page-subtitle">
-            ${subtitleForRoute("profile")}
-            ${renderDocsLink(PROFILE_DOCS_URL, t("common.learnMore"))}
+            ${subtitleForRoute("profile")} ${renderLearnMoreLink(PROFILE_DOCS_URL)}
           </div>
         </div>
         ${this.selfUser

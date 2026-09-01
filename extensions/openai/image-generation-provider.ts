@@ -11,7 +11,6 @@ import {
   resolveInlineImageJsonResponseMaxBytes,
   toImageDataUrl,
 } from "openclaw/plugin-sdk/image-generation";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import {
   resolveClosestSize,
   resolveGeneratedMediaMaxBytes,
@@ -35,6 +34,7 @@ import {
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import { filterStringRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   canonicalizeCodexResponsesBaseUrl,
@@ -85,7 +85,6 @@ const OPENAI_FLEXIBLE_IMAGE_MODELS = [
   DEFAULT_OPENAI_IMAGE_MODEL,
   "gpt-image-2-2026-04-21",
 ] as const;
-const log = createSubsystemLogger("image-generation/openai");
 
 const AZURE_HOSTNAME_SUFFIXES = [
   ".openai.azure.com",
@@ -447,16 +446,7 @@ function hasChatGPTImageRouteConfig(cfg: OpenClawConfig | undefined): boolean {
 function resolveConfiguredOpenAIImageHeaders(
   cfg: OpenClawConfig | undefined,
 ): Record<string, string> | undefined {
-  const headers = cfg?.models?.providers?.openai?.headers;
-  if (!headers) {
-    return undefined;
-  }
-  const stringHeaders = Object.fromEntries(
-    Object.entries(headers).filter(
-      (entry): entry is [string, string] => typeof entry[1] === "string",
-    ),
-  );
-  return Object.keys(stringHeaders).length > 0 ? stringHeaders : undefined;
+  return filterStringRecord(cfg?.models?.providers?.openai?.headers);
 }
 
 function forceOpenAIImageApiKeyAuth(cfg: OpenClawConfig | undefined): OpenClawConfig | undefined {
@@ -766,11 +756,13 @@ async function resolveOptionalApiKeyForProvider(
   }
 }
 
-function logCodexImageAuthSelected(params: {
+async function logCodexImageAuthSelected(params: {
   req: Parameters<ImageGenerationProvider["generateImage"]>[0];
   authMode?: unknown;
   timeoutMs: number;
 }) {
+  const { createSubsystemLogger } = await import("openclaw/plugin-sdk/logging-core");
+  const log = createSubsystemLogger("image-generation/openai");
   const model = resolveOpenAIImageRequestModel(params.req, {
     allowTransparentDefaultReroute: true,
   });
@@ -968,7 +960,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
           preResolvedImageAuth = codexAuth;
         } else {
           const timeoutMs = resolveOpenAIImageTimeoutMs(req.timeoutMs);
-          logCodexImageAuthSelected({ req, authMode: codexAuth.mode, timeoutMs });
+          await logCodexImageAuthSelected({ req, authMode: codexAuth.mode, timeoutMs });
           return generateOpenAICodexImage({ req, apiKey: codexAuth.apiKey });
         }
       }
@@ -992,7 +984,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
       ) {
         if (publicOpenAIBaseUrl) {
           const timeoutMs = resolveOpenAIImageTimeoutMs(req.timeoutMs);
-          logCodexImageAuthSelected({ req, authMode: imageAuth.mode, timeoutMs });
+          await logCodexImageAuthSelected({ req, authMode: imageAuth.mode, timeoutMs });
           return generateOpenAICodexImage({ req, apiKey: imageAuth.apiKey });
         }
         imageAuth = undefined;

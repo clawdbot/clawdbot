@@ -10,7 +10,7 @@ import {
   getHoisted,
   preloadRunEmbeddedAttemptForTests,
   resetEmbeddedAttemptHarness,
-} from "./attempt.spawn-workspace.test-support.js";
+} from "./attempt-spawn-workspace.test-support.js";
 
 const hoisted = getHoisted();
 const tempPaths: string[] = [];
@@ -63,6 +63,62 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
       | { cwd?: string }
       | undefined;
     expect(resourceLoaderInit?.cwd).toBe(taskRepo);
+  });
+
+  it.each([
+    ["read-only", "deny"],
+    ["guarded", "ask"],
+    ["workspace", "auto"],
+    ["full", "full"],
+  ] as const)("maps session permission mode %s to native exec mode %s", async (mode, execMode) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-permission-mode-"));
+    tempPaths.push(root);
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey: "agent:main:dashboard:permission-mode",
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        permissionMode: mode,
+        sessionRoot: root,
+        workspaceDir: root,
+      },
+    });
+
+    const toolsCall = hoisted.createOpenClawCodingToolsMock.mock.calls.at(-1)?.[0] as
+      | {
+          exec?: { mode?: string };
+          sessionPermissionPolicy?: { root: string; mode: string };
+        }
+      | undefined;
+    expect(toolsCall?.sessionPermissionPolicy).toEqual({ root, mode });
+    expect(toolsCall?.exec?.mode).toBe(execMode);
+  });
+
+  it("defaults rootless session permission boundaries to the canonical agent workspace", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rootless-permission-"));
+    tempPaths.push(workspaceDir);
+    const canonicalWorkspace = await fs.realpath(workspaceDir);
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey: "agent:main:discord:direct:rootless-permission",
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        permissionMode: "workspace",
+        workspaceDir,
+      },
+    });
+
+    const toolsCall = hoisted.createOpenClawCodingToolsMock.mock.calls.at(-1)?.[0] as
+      | { sessionPermissionPolicy?: { root: string; mode: string } }
+      | undefined;
+    expect(toolsCall?.sessionPermissionPolicy).toEqual({
+      root: canonicalWorkspace,
+      mode: "workspace",
+    });
   });
 
   it("forwards native and routable channel targets into runtime tools", async () => {

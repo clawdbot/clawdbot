@@ -17,6 +17,14 @@ import { parseAudioTag } from "./audio-tags.js";
 /** Captures legacy MEDIA: attachment directives from model/tool output. */
 const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
 
+const RENDERABLE_ASSISTANT_MEDIA_PREFIX_RE =
+  /^(?:https?:\/\/|data:(?:image|audio|video)\/|file:|~|\/|[a-z]:[\\/])/iu;
+
+export function isRelativeAssistantMediaReference(url: string): boolean {
+  const trimmed = url.trim();
+  return Boolean(trimmed) && !RENDERABLE_ASSISTANT_MEDIA_PREFIX_RE.test(trimmed);
+}
+
 /** Ordered output segment emitted after visible text and extracted media are separated. */
 type ParsedMediaOutputSegment =
   | {
@@ -30,13 +38,15 @@ type ParsedMediaOutputSegment =
 
 /** Controls which non-MEDIA syntaxes may be lifted into media attachments. */
 type SplitMediaFromOutputOptions = {
+  extractAudioDirectives?: boolean;
   extractMarkdownImages?: boolean;
   extractMediaDirectives?: boolean;
+  markdownImageAllowlist?: readonly string[];
 };
 
-const FILE_URL_PREFIX_RE = /^file:\/\//i;
+const FILE_URL_PREFIX_RE = /^file:(?:\/\/)?/i;
 
-/** Converts file URLs into plain local paths before downstream media validation. */
+// Classify spelling only; preserve file URLs in output so native loaders own decoding and access.
 function normalizeMediaSource(src: string): string {
   return src.replace(FILE_URL_PREFIX_RE, "");
 }
@@ -164,9 +174,10 @@ function isAllowedRemoteMediaUrl(candidate: string): boolean {
 }
 
 function isValidMedia(
-  candidate: string,
+  source: string,
   opts?: { allowSpaces?: boolean; allowBareFilename?: boolean },
 ) {
+  const candidate = normalizeMediaSource(source);
   if (!candidate) {
     return false;
   }
@@ -240,6 +251,10 @@ function unwrapQuoted(value: string): string | undefined {
     return undefined;
   }
   return trimmed.slice(1, -1).trim();
+}
+
+function normalizeMarkdownImageDestination(destination: string): string {
+  return normalizeMediaSource(cleanCandidate(unwrapQuoted(destination) ?? destination));
 }
 
 function mayContainFenceMarkers(input: string): boolean {
@@ -447,7 +462,11 @@ function findMarkdownImageMatches(line: string): MarkdownImageMatch[] {
   return matches;
 }
 
-function collectMarkdownImageSegments(params: { line: string; media: string[] }): {
+function collectMarkdownImageSegments(params: {
+  line: string;
+  media: string[];
+  allowlist?: ReadonlyMap<string, string>;
+}): {
   cleanedLine?: string;
   lineSegments: ParsedMediaOutputSegment[];
   foundMedia: boolean;
@@ -468,17 +487,17 @@ function collectMarkdownImageSegments(params: { line: string; media: string[] })
     segmentPieces.push(before);
     visiblePieces.push(before);
 
-    const target = normalizeMediaSource(
-      cleanCandidate(unwrapQuoted(match.destination) ?? match.destination),
-    );
-    if (isRemoteMarkdownImageMedia(target)) {
+    const target = normalizeMarkdownImageDestination(match.destination);
+    const selectedTarget = params.allowlist?.get(target);
+    if (selectedTarget || (!params.allowlist && isRemoteMarkdownImageMedia(target))) {
       const beforeText = cleanLineText(segmentPieces.join(""));
       if (beforeText) {
         lineSegments.push({ type: "text", text: beforeText });
       }
       segmentPieces.length = 0;
-      params.media.push(target);
-      lineSegments.push({ type: "media", url: target });
+      const mediaTarget = selectedTarget ?? target;
+      params.media.push(mediaTarget);
+      lineSegments.push({ type: "media", url: mediaTarget });
       foundMedia = true;
     } else {
       const original = params.line.slice(match.start, match.end);
@@ -521,7 +540,17 @@ export function splitMediaFromOutput(
   if (!trimmedRaw.trim()) {
     return { text: "" };
   }
-  const extractMarkdownImages = options.extractMarkdownImages === true;
+  const markdownImageAllowlist =
+    options.markdownImageAllowlist === undefined
+      ? undefined
+      : new Map(
+          options.markdownImageAllowlist.map((source) => [
+            normalizeMarkdownImageDestination(source),
+            source,
+          ]),
+        );
+  const extractMarkdownImages =
+    markdownImageAllowlist !== undefined || options.extractMarkdownImages === true;
   const extractMediaDirectives = options.extractMediaDirectives !== false;
   const mayContainMediaToken = extractMediaDirectives && /media:/i.test(trimmedRaw);
   const mayContainMarkdownImage = extractMarkdownImages && /!\[[^\]]*]\(/.test(trimmedRaw);
@@ -558,9 +587,16 @@ export function splitMediaFromOutput(
   const keptLines: string[] = [];
 
   let lineOffset = 0; // Track character offset for fence checking
+  // Line offsets and scanner spans advance in source order.
+  let fenceIndex = 0;
   for (const line of lines) {
     // Fenced examples must remain text; extracting their MEDIA tokens would mutate transcripts.
-    if (fenceSpans.some((span) => lineOffset >= span.start && lineOffset < span.end)) {
+    let fence = fenceSpans[fenceIndex];
+    while (fence && lineOffset >= fence.end) {
+      fenceIndex += 1;
+      fence = fenceSpans[fenceIndex];
+    }
+    if (fence && lineOffset >= fence.start) {
       keptLines.push(line);
       pushTextSegment(line);
       lineOffset += line.length + 1; // +1 for newline
@@ -570,7 +606,7 @@ export function splitMediaFromOutput(
     const trimmedStart = line.trimStart();
     if (!extractMediaDirectives || !trimmedStart.toUpperCase().startsWith("MEDIA:")) {
       const markdownImageResult = extractMarkdownImages
-        ? collectMarkdownImageSegments({ line, media })
+        ? collectMarkdownImageSegments({ line, media, allowlist: markdownImageAllowlist })
         : { lineSegments: [], foundMedia: false };
       if (!markdownImageResult.foundMedia) {
         keptLines.push(line);
@@ -617,10 +653,9 @@ export function splitMediaFromOutput(
       const invalidParts: string[] = [];
       let hasValidMedia = false;
       for (const part of parts) {
-        const candidate = normalizeMediaSource(cleanCandidate(part));
-        if (
-          isValidMedia(candidate, unwrapped || /\s/.test(part) ? { allowSpaces: true } : undefined)
-        ) {
+        const candidate = cleanCandidate(part);
+        const allowSpaces = Boolean(unwrapped) || /\s/.test(candidate);
+        if (isValidMedia(candidate, { allowSpaces })) {
           media.push(candidate);
           hasValidMedia = true;
           foundMediaToken = true;
@@ -642,7 +677,7 @@ export function splitMediaFromOutput(
         looksLikeLocalPath
       ) {
         // A single valid split plus invalid leftovers can be one local path containing spaces.
-        const fallback = normalizeMediaSource(cleanCandidate(payloadValue));
+        const fallback = cleanCandidate(payloadValue);
         if (isValidMedia(fallback, { allowSpaces: true })) {
           media.splice(mediaStartIndex, media.length - mediaStartIndex, fallback);
           hasValidMedia = true;
@@ -652,7 +687,7 @@ export function splitMediaFromOutput(
       }
 
       if (!hasValidMedia && !unwrapped && /\s/.test(payloadValue)) {
-        const spacedFallback = normalizeMediaSource(cleanCandidate(payloadValue));
+        const spacedFallback = cleanCandidate(payloadValue);
         if (isValidMedia(spacedFallback, { allowSpaces: true, allowBareFilename: true })) {
           media.splice(mediaStartIndex, media.length - mediaStartIndex, spacedFallback);
           hasValidMedia = true;
@@ -662,7 +697,7 @@ export function splitMediaFromOutput(
       }
 
       if (!hasValidMedia) {
-        const fallback = normalizeMediaSource(cleanCandidate(payloadValue));
+        const fallback = cleanCandidate(payloadValue);
         if (isValidMedia(fallback, { allowSpaces: true, allowBareFilename: true })) {
           media.push(fallback);
           hasValidMedia = true;
@@ -715,7 +750,10 @@ export function splitMediaFromOutput(
   }
 
   const visibleText = keptLines.join("\n").replace(/^(?:[ \t]*\n)+/, "");
-  const audioTagResult = parseAudioTag(visibleText);
+  const audioTagResult =
+    options.extractAudioDirectives === false
+      ? { text: visibleText, audioAsVoice: false }
+      : parseAudioTag(visibleText);
   const cleanedText = audioTagResult.text.trimEnd();
   const hasAudioAsVoice = audioTagResult.audioAsVoice;
 

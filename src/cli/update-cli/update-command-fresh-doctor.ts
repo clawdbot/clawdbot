@@ -1,4 +1,5 @@
-// Runs the post-plugin migration pass without retaining pre-update plugin modules.
+// Runs post-plugin convergence checks without retaining pre-update plugin modules.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV,
   UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
@@ -7,10 +8,12 @@ import {
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
+import { buildUpdateDoctorEnv } from "../../infra/update-runner-doctor.js";
 import { runExec } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveNodeRunner } from "./shared.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
+import { applyPostPluginUpdateReadiness } from "./update-command-post-plugin-readiness.js";
 import {
   applyPostPluginConfigValidation,
   POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON,
@@ -18,9 +21,11 @@ import {
 import {
   disableUpdatedPackageCompileCacheEnv,
   stripGatewayServiceMarkerEnv,
-} from "./update-command-service.js";
+} from "./update-command-service-env.js";
 
-export function withUpdateFinalizationEnv<T>(run: () => Promise<T>): Promise<T> {
+type UpdateDoctorPhase = "pre-plugin" | "post-plugin";
+
+export async function withPrePluginUpdateDoctorEnv<T>(run: () => Promise<T>): Promise<T> {
   const previousUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
   const previousDeferConfiguredPluginInstallRepair =
     process.env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV];
@@ -30,8 +35,10 @@ export function withUpdateFinalizationEnv<T>(run: () => Promise<T>): Promise<T> 
   process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
   process.env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV] = "1";
   process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV] = "1";
-  process.env[UPDATE_POST_CORE_CONVERGENCE_ENV] = "1";
-  return run().finally(() => {
+  delete process.env[UPDATE_POST_CORE_CONVERGENCE_ENV];
+  try {
+    return await run();
+  } finally {
     if (previousUpdateInProgress === undefined) {
       delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
     } else {
@@ -54,7 +61,7 @@ export function withUpdateFinalizationEnv<T>(run: () => Promise<T>): Promise<T> 
     } else {
       process.env[UPDATE_POST_CORE_CONVERGENCE_ENV] = previousPostCoreConvergence;
     }
-  });
+  }
 }
 
 async function withNormalConfigValidation<T>(run: () => Promise<T>): Promise<T> {
@@ -91,9 +98,11 @@ function createPostPluginDoctorExecutionFailure(
 }
 
 export async function runUpdateFinalizationDoctorInFreshProcess(params: {
+  phase: UpdateDoctorPhase;
   root: string;
   yes: boolean;
   json: boolean;
+  workspaceSuggestions?: boolean;
   timeoutMs: number;
   nodeRunner?: string;
   entryPath?: string;
@@ -107,27 +116,42 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
     "doctor",
     "--repair",
     "--non-interactive",
-    "--no-workspace-suggestions",
+    ...(params.workspaceSuggestions ? [] : ["--no-workspace-suggestions"]),
     ...(params.yes ? ["--yes"] : []),
   ];
-  const result = await runExec(params.nodeRunner ?? resolveNodeRunner(), args, {
-    cwd: params.root,
-    timeoutMs: params.timeoutMs,
-    maxBuffer: 4 * 1024 * 1024,
-    logOutput: false,
-    baseEnv: stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env)),
-    env: {
-      OPENCLAW_UPDATE_IN_PROGRESS: "1",
-      [UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV]: "1",
-      [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
-      [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1",
-    },
-  });
-  if (!params.json) {
-    if (result.stdout.trim()) {
-      defaultRuntime.log(result.stdout.trimEnd());
+  const baseEnv = stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env));
+  delete baseEnv[UPDATE_POST_CORE_CONVERGENCE_ENV];
+  let result: { stdout?: unknown; stderr?: unknown } | undefined;
+  try {
+    result = await runExec(params.nodeRunner ?? resolveNodeRunner(), args, {
+      cwd: params.root,
+      timeoutMs: params.timeoutMs,
+      maxBuffer: 4 * 1024 * 1024,
+      logOutput: false,
+      baseEnv,
+      env: {
+        // The outer updater owns service refresh and activation after every
+        // migration finishes; a fresh Doctor must not resume its parked service.
+        ...buildUpdateDoctorEnv({
+          allowGatewayServiceRepair: false,
+          allowGatewayActivation: false,
+          deferConfiguredPluginInstallRepair: true,
+        }),
+        ...(params.phase === "post-plugin" ? { [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1" } : {}),
+      },
+    });
+  } catch (error) {
+    if (isRecord(error)) {
+      result = error;
     }
-    if (result.stderr.trim()) {
+    throw error;
+  } finally {
+    // Clack writes directly to the child's stdout. Preserve diagnostics on either
+    // exit path without letting them share the parent's JSON result stream.
+    if (typeof result?.stdout === "string" && result.stdout.trim()) {
+      defaultRuntime[params.json ? "error" : "log"](result.stdout.trimEnd());
+    }
+    if (typeof result?.stderr === "string" && result.stderr.trim()) {
       defaultRuntime.error(result.stderr.trimEnd());
     }
   }
@@ -186,11 +210,24 @@ async function applyFreshPostPluginDoctor(params: {
   }
   let pluginUpdate = params.pluginUpdate;
   try {
-    await runUpdateFinalizationDoctorInFreshProcess({ ...params, entryPath });
+    await runUpdateFinalizationDoctorInFreshProcess({
+      ...params,
+      entryPath,
+      phase: "post-plugin",
+    });
   } catch (err) {
     pluginUpdate = createPostPluginDoctorExecutionFailure(params.pluginUpdate, String(err));
   }
   const configValid = await validatePostPluginConfigInFreshProcess({ ...params, entryPath });
+  if (configValid) {
+    pluginUpdate = await applyPostPluginUpdateReadiness({
+      root: params.root,
+      entryPath,
+      pluginUpdate,
+      timeoutMs: params.timeoutMs,
+      ...(params.nodeRunner ? { nodeRunner: params.nodeRunner } : {}),
+    });
+  }
   return { pluginUpdate, configValid };
 }
 
@@ -221,6 +258,13 @@ export async function completePostCorePluginUpdate(params: {
     });
     pluginUpdate = freshResult.pluginUpdate;
     freshConfigValid = freshResult.configValid;
+  } else if (pluginUpdate.status !== "error") {
+    pluginUpdate = await applyPostPluginUpdateReadiness({
+      root: params.root,
+      pluginUpdate,
+      timeoutMs: params.timeoutMs,
+      ...(params.nodeRunner ? { nodeRunner: params.nodeRunner } : {}),
+    });
   }
 
   const configSnapshot = await withNormalConfigValidation(() => readConfigFileSnapshot());

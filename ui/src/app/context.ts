@@ -4,15 +4,21 @@ import type { RouteId } from "../app-route-paths.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
 import type { ChannelCapability } from "../lib/channels/index.ts";
-import type { RuntimeConfigCapability } from "../lib/config/index.ts";
+import type { ChatAttachment, ChatComposerMemoryFallback } from "../lib/chat/chat-types.ts";
+import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import type { WorkboardCapability } from "../lib/workboard/capability.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
+import type { ApplicationChatSubmissions } from "./chat-submissions.ts";
 import type { ApplicationConfigCapability } from "./config.ts";
+import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
+import type { ScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import type { NativeChatDrafts } from "./native-bridge.ts";
 import type { NativeNotificationsCapability } from "./native-notifications.ts";
-import type { ApplicationOverlays } from "./overlays.ts";
+import type { ApplicationOverlays } from "./overlays-types.ts";
+import type { ApplicationPlacementStartup } from "./session-placement-startup.ts";
+import type { UiSettings } from "./settings.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
 import type { WebPushCapability } from "./web-push.ts";
 
@@ -30,7 +36,9 @@ export type ApplicationThemeServerSelection = {
 };
 
 export type ApplicationTheme = {
+  readonly settings: UiSettings;
   readonly mode: ThemeMode;
+  readonly resolvedMode: "dark" | "light";
   readonly serverSelection: ApplicationThemeServerSelection | null;
   recordServerSelection: (theme: ThemeName | null, scope: string) => void;
   setMode: (mode: ThemeMode, element?: HTMLElement | null) => void;
@@ -55,51 +63,46 @@ export type ApplicationNavigationOptions = Partial<
   Pick<RouteLocation, "pathname" | "search" | "hash">
 >;
 
-type SkillWorkshopRevisionHandoff = {
-  sessionKey: string;
-  instructions: string;
-  /** Stable for ordinary snapshots and session selection; rotates on reconnect. */
-  owner: object;
-  proposalId: string;
-  proposalAgentId: string;
+type ChatAttachmentHandoffKey = {
+  owner: ApplicationGateway["snapshot"]["client"];
+  paneId: string;
+  scopeKey: string;
 };
 
-export type ApplicationSkillWorkshopRevisionHandoff = {
-  prepare: (handoff: SkillWorkshopRevisionHandoff) => void;
-  consume: (sessionKey: string, owner: object | null) => SkillWorkshopRevisionHandoff | null;
-  clear: (handoff?: SkillWorkshopRevisionHandoff) => void;
-};
-
-export type ApplicationInitialUserMessage = {
-  role: "user";
-  content: unknown[];
-  timestamp: number;
-  __openclaw?: { idempotencyKey?: string; seq?: number };
-};
-
-type InitialUserMessageHandoff = {
-  message: ApplicationInitialUserMessage;
-  /** Logical Gateway client; per-transport hello objects rotate on reconnect. */
-  owner: object;
-  sessionKey: string;
-};
-
-export type ApplicationInitialUserMessageHandoff = {
-  prepare: (handoff: InitialUserMessageHandoff) => void;
-  read: (sessionKey: string, owner: object | null) => ApplicationInitialUserMessage | null;
-  clear: (sessionKey?: string) => void;
+export type ApplicationChatAttachmentHandoff = {
+  prepare(
+    handoff: ChatAttachmentHandoffKey & {
+      attachments: readonly ChatAttachment[];
+      fallbacks: Readonly<Record<string, ChatComposerMemoryFallback>>;
+      message?: string;
+    },
+  ): void;
+  consume(handoff: ChatAttachmentHandoffKey): {
+    attachments: ChatAttachment[];
+    fallbacks: Record<string, ChatComposerMemoryFallback>;
+    message?: string;
+  } | null;
+  retireScope(scopeKey: string, beforeRevision: number): void;
+  clearPane(paneId: string): void;
+  dispose(): void;
 };
 
 export type ApplicationContext<TRouteId extends string = string> = {
   readonly basePath: string;
+  readonly resourceBasePath: string;
+  readonly lifecycleAbortSignal?: AbortSignal;
   readonly gateway: ApplicationGateway;
+  /** App-owned queue for automatic Gateway reconnect bootstrap work. */
+  readonly connectionBootstrap: ConnectionBootstrapCoordinator;
   readonly agents: AgentCapability;
   readonly agentIdentity: AgentIdentityCapability;
   readonly agentSelection: AgentSelectionCapability;
   readonly channels: ChannelCapability;
   readonly config: ApplicationConfigCapability;
+  readonly scopeUpgrade: ScopeUpgradeCapability;
   readonly runtimeConfig: RuntimeConfigCapability;
   readonly sessions: SessionCapability;
+  readonly placementStartup: ApplicationPlacementStartup;
   readonly workboard: WorkboardCapability;
   readonly overlays: ApplicationOverlays;
   readonly navigation: ApplicationNavigationPreferences;
@@ -107,12 +110,17 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly nativeChatDrafts: NativeChatDrafts;
   readonly nativeNotifications: NativeNotificationsCapability | null;
   readonly webPush: WebPushCapability;
-  readonly skillWorkshopRevision: ApplicationSkillWorkshopRevisionHandoff;
-  readonly initialUserMessage: ApplicationInitialUserMessageHandoff;
+  readonly chatSubmissions: ApplicationChatSubmissions;
+  readonly chatAttachmentHandoff: ApplicationChatAttachmentHandoff;
   readonly navigate: (routeId: TRouteId, options?: ApplicationNavigationOptions) => void;
+  /** Navigates and resolves after any route-specific handoff completes. */
+  readonly navigateAndWait: (
+    routeId: TRouteId,
+    options?: ApplicationNavigationOptions,
+  ) => Promise<void>;
   readonly replace: (routeId: TRouteId, options?: ApplicationNavigationOptions) => void;
   readonly revalidate: (routeId?: TRouteId) => Promise<void>;
-  readonly preload: (routeId: TRouteId) => Promise<void>;
+  readonly preload: (routeId: TRouteId, options?: ApplicationNavigationOptions) => Promise<void>;
 };
 
 export const applicationContext =

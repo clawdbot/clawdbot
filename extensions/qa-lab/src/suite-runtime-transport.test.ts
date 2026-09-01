@@ -15,6 +15,7 @@ describe("qa suite transport helpers", () => {
     const state = createQaBusState();
     state.addOutboundMessage({
       to: "dm:qa-operator",
+      isError: true,
       text: "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.",
       senderId: "openclaw",
       senderName: "OpenClaw QA",
@@ -36,6 +37,7 @@ describe("qa suite transport helpers", () => {
 
     state.addOutboundMessage({
       to: "dm:qa-operator",
+      isError: true,
       text: '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai/gpt-5.6-luna with the Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.',
       senderId: "openclaw",
       senderName: "OpenClaw QA",
@@ -54,6 +56,7 @@ describe("qa suite transport helpers", () => {
 
     state.addOutboundMessage({
       to: "channel:qa-room",
+      isError: true,
       text: "⚠️ ✉️ Message failed",
       senderId: "openclaw",
       senderName: "OpenClaw QA",
@@ -96,6 +99,24 @@ describe("qa suite transport helpers", () => {
     });
 
     await expect(pending).rejects.toThrow("Tool read not found");
+  });
+
+  it("fails success-only waits when a model reports a failed status with equals syntax", async () => {
+    const state = createQaBusState();
+    const pending = waitForOutboundMessage(
+      state,
+      (candidate) => candidate.text.includes("QA-RESTART-OK"),
+      5_000,
+    );
+
+    state.addOutboundMessage({
+      to: "dm:qa-operator",
+      text: "status=FAILED\nerror=Could not parse services",
+      senderId: "openclaw",
+      senderName: "OpenClaw QA",
+    });
+
+    await expect(pending).rejects.toThrow("Could not parse services");
   });
 
   it("checks no-outbound waits from the supplied outbound cursor", async () => {
@@ -150,6 +171,7 @@ describe("qa suite transport helpers", () => {
     state.addOutboundMessage({
       accountId: "other",
       to: "dm:qa-operator",
+      isError: true,
       text: "⚠️ agent failed before reply: foreign account failure",
     });
     const expected = state.addOutboundMessage({
@@ -185,6 +207,7 @@ describe("qa suite transport helpers", () => {
 
     state.addOutboundMessage({
       to: "dm:qa-operator",
+      isError: true,
       text: '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai/gpt-5.6-luna with the Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.',
       senderId: "openclaw",
       senderName: "OpenClaw QA",
@@ -232,6 +255,7 @@ describe("qa suite transport helpers", () => {
 
     state.addOutboundMessage({
       to: "dm:qa-operator",
+      isError: true,
       text: '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai/gpt-5.6-luna with the Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.',
       senderId: "openclaw",
       senderName: "OpenClaw QA",

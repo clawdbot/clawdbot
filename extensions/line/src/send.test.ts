@@ -103,14 +103,6 @@ const LINE_TEST_CFG = {
   },
 };
 
-function createCredentialBearingHttpUrl(): string {
-  const url = new URL("http://example.com/image.jpg");
-  url.username = ["line", "user"].join("-");
-  url.password = ["line", "fixture"].join("-");
-  url.searchParams.set("auth", ["line", "query"].join("-"));
-  return url.href;
-}
-
 describe("LINE send helpers", () => {
   const fixedSentAt = 1_800_000_000_000;
 
@@ -817,7 +809,25 @@ describe("LINE send helpers", () => {
     });
   });
 
-  it("sends video with explicit image preview URL", async () => {
+  it("sends a bare audio URL using the kind inferred by the LINE media owner", async () => {
+    await sendModule.sendMessageLine("line:user:U123", "", {
+      cfg: LINE_TEST_CFG,
+      mediaUrl: "https://example.com/voice.m4a",
+    });
+
+    expect(pushMessageMock).toHaveBeenCalledWith({
+      to: "U123",
+      messages: [
+        {
+          type: "audio",
+          originalContentUrl: "https://example.com/voice.m4a",
+          duration: 60000,
+        },
+      ],
+    });
+  });
+
+  it("forwards explicit video options through the shared LINE media owner", async () => {
     await sendModule.sendMessageLine("line:user:U100", "Video", {
       cfg: LINE_TEST_CFG,
       mediaUrl: "https://example.com/video.mp4",
@@ -835,15 +845,12 @@ describe("LINE send helpers", () => {
           previewImageUrl: "https://example.com/preview.jpg",
           trackingId: "track-1",
         },
-        {
-          type: "text",
-          text: "Video",
-        },
+        { type: "text", text: "Video" },
       ],
     });
   });
 
-  it("throws when video preview URL is missing", async () => {
+  it("keeps a missing explicit video preview as a visible caller error", async () => {
     await expect(
       sendModule.sendMessageLine("line:user:U200", "Video", {
         cfg: LINE_TEST_CFG,
@@ -851,88 +858,18 @@ describe("LINE send helpers", () => {
         mediaKind: "video",
       }),
     ).rejects.toThrow(/require previewimageurl/i);
+
+    expect(pushMessageMock).not.toHaveBeenCalled();
   });
 
-  it("blocks private-network media URLs before calling LINE", async () => {
-    resolvePinnedHostnameWithPolicyMock.mockRejectedValueOnce(
-      new Error("SSRF blocked private network target"),
-    );
-
+  it("keeps the image helper on the validated LINE media path", async () => {
     await expect(
-      sendModule.sendMessageLine("line:user:U200", "Image", {
+      sendModule.pushImageMessage("line:user:U123", "http://example.com/private.jpg", undefined, {
         cfg: LINE_TEST_CFG,
-        mediaUrl: "https://127.0.0.1/image.jpg",
       }),
-    ).rejects.toThrow(/private network/i);
+    ).rejects.toThrow("LINE outbound media URL must use HTTPS");
 
     expect(pushMessageMock).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    {
-      name: "send media URL",
-      run: () =>
-        sendModule.sendMessageLine("line:user:U200", "Image", {
-          cfg: LINE_TEST_CFG,
-          mediaUrl: createCredentialBearingHttpUrl(),
-        }),
-    },
-    {
-      name: "send preview URL",
-      run: () =>
-        sendModule.sendMessageLine("line:user:U200", "Video", {
-          cfg: LINE_TEST_CFG,
-          mediaUrl: "https://example.com/video.mp4",
-          mediaKind: "video",
-          previewImageUrl: createCredentialBearingHttpUrl(),
-        }),
-    },
-    {
-      name: "push image URL",
-      run: () =>
-        sendModule.pushImageMessage("line:user:U200", createCredentialBearingHttpUrl(), undefined, {
-          cfg: LINE_TEST_CFG,
-        }),
-    },
-    {
-      name: "push image preview URL",
-      run: () =>
-        sendModule.pushImageMessage(
-          "line:user:U200",
-          "https://example.com/image.jpg",
-          createCredentialBearingHttpUrl(),
-          { cfg: LINE_TEST_CFG },
-        ),
-    },
-  ])("does not expose credentials from an insecure $name", async ({ run }) => {
-    await expect(run()).rejects.toThrow(new Error("LINE outbound media URL must use HTTPS"));
-    expect(pushMessageMock).not.toHaveBeenCalled();
-    expect(replyMessageMock).not.toHaveBeenCalled();
-  });
-
-  it("omits trackingId for non-user destinations", async () => {
-    await sendModule.sendMessageLine("line:group:C100", "Video", {
-      cfg: LINE_TEST_CFG,
-      mediaUrl: "https://example.com/video.mp4",
-      mediaKind: "video",
-      previewImageUrl: "https://example.com/preview.jpg",
-      trackingId: "track-group",
-    });
-
-    expect(pushMessageMock).toHaveBeenCalledWith({
-      to: "C100",
-      messages: [
-        {
-          type: "video",
-          originalContentUrl: "https://example.com/video.mp4",
-          previewImageUrl: "https://example.com/preview.jpg",
-        },
-        {
-          type: "text",
-          text: "Video",
-        },
-      ],
-    });
   });
 
   it("throws when push messages are empty", async () => {

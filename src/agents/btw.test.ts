@@ -2,15 +2,51 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import type { ProviderResolveModelRoutesContext } from "../plugin-sdk/provider-model-types.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
 import {
   looksLikeSecretSentinel,
   mintSecretSentinel,
   resolveSecretSentinel,
 } from "../secrets/sentinel.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+import { guardModelFixtureWorkspace } from "./embedded-agent-runner/model.fixture.test-support.js";
+import {
+  createModelGenerationFixture,
+  publishCurrentModelGeneration,
+  resetModelGenerationFixtureState,
+} from "./embedded-agent-runner/model.generation-scope.test-support.js";
+import type { AgentHarnessHostCapabilities } from "./harness/host-capability-types.js";
 import type { AgentHarness } from "./harness/types.js";
 import type { AgentRuntimeAuthPlan } from "./runtime-plan/types.js";
+
+let state: OpenClawTestState;
+let workspaceGuard: ReturnType<typeof guardModelFixtureWorkspace>;
+beforeAll(async () => {
+  state = await createOpenClawTestState({ label: "btw-model" });
+});
+beforeEach(() => {
+  workspaceGuard = guardModelFixtureWorkspace(state.root);
+});
+afterEach(() => {
+  try {
+    workspaceGuard.verify();
+  } finally {
+    workspaceGuard.spy.mockRestore();
+  }
+});
+afterAll(async () => {
+  defaultPluginMetadataSnapshot = undefined;
+  await state.cleanup();
+});
 
 const streamSimpleMock = vi.fn();
 const readFileMock = vi.fn();
@@ -28,7 +64,7 @@ const ensureAuthProfileStoreWithoutExternalProfilesMock = vi.fn();
 const resolveModelAsyncMock = vi.fn();
 const getApiKeyForModelMock = vi.fn();
 const requireApiKeyMock = vi.fn();
-const resolveSessionAuthProfileOverrideMock = vi.fn();
+const resolveSessionAuthSelectionMock = vi.fn();
 const getActiveEmbeddedRunSnapshotMock = vi.fn();
 const resolveSessionAgentIdMock = vi.fn();
 const resolveSessionAgentIdsMock = vi.fn();
@@ -41,11 +77,29 @@ const prepareCliRunContextMock = vi.fn();
 const executePreparedCliRunMock = vi.fn();
 const diagDebugMock = vi.fn();
 const ensureSelectedAgentHarnessPluginMock = vi.fn();
+const createAgentHarnessHostCapabilitiesMock = vi.fn();
+const closeAgentHarnessHostCapabilitiesMock = vi.fn();
+const agentHarnessHostCapabilitiesMock: AgentHarnessHostCapabilities = Object.freeze({
+  kind: "agent-harness-host-capability",
+  version: 1,
+  assertActive: vi.fn(),
+  bindToolSurface: vi.fn((tools) => tools),
+  runBeforeToolCall: vi.fn(),
+  requestApproval: vi.fn(),
+  waitForApproval: vi.fn(),
+});
+const listSessionEntriesCoreMock = vi.fn();
+const loadSessionEntryMock = vi.fn();
 const loadTranscriptEventsMock = vi.fn();
+const builtInOpenClawHarnesses = new WeakSet<object>();
 const shouldPreferExplicitConfigApiKeyAuthMock = vi.fn((..._args: unknown[]) => false);
 const hasUsableCustomProviderApiKeyMock = vi.fn((..._args: unknown[]) => false);
 const resolveProviderEntryApiKeyProfileReferenceMock = vi.fn((_params?: unknown): unknown => ({
   kind: "none",
+}));
+const preparedRuntimeSnapshotState = vi.hoisted(() => ({
+  snapshot: undefined as unknown,
+  useSnapshotPluginRegistry: false,
 }));
 
 vi.mock("../llm/stream.js", async () => {
@@ -111,6 +165,10 @@ vi.mock("./prepared-model-runtime.js", () => ({
       ...workspaceOptions,
     });
     return {
+      ...(preparedRuntimeSnapshotState.snapshot as object),
+      ...(preparedRuntimeSnapshotState.useSnapshotPluginRegistry
+        ? {}
+        : { pluginRegistry: getActivePluginRegistry() }),
       agentId: params.agentId,
       agentDir: params.agentDir,
       config: params.config,
@@ -136,7 +194,7 @@ vi.mock("./model-auth.js", () => ({
   ensureAuthProfileStore: (...args: unknown[]) => ensureAuthProfileStoreMock(...args),
   ensureAuthProfileStoreWithoutExternalProfiles: (...args: unknown[]) =>
     ensureAuthProfileStoreWithoutExternalProfilesMock(...args),
-  getApiKeyForModel: (...args: unknown[]) => getApiKeyForModelMock(...args),
+  getApiKeyForModelCore: (...args: unknown[]) => getApiKeyForModelMock(...args),
   hasUsableCustomProviderApiKey: (...args: unknown[]) => hasUsableCustomProviderApiKeyMock(...args),
   requireApiKey: (...args: unknown[]) => requireApiKeyMock(...args),
   resolveProviderEntryApiKeyProfileReference: (params: unknown) =>
@@ -202,6 +260,34 @@ vi.mock("./harness/runtime-plugin.js", () => ({
     ensureSelectedAgentHarnessPluginMock(...args),
 }));
 
+// Selection and host-capability owner suites execute the embedded runner and capability surface.
+// BTW only needs their identities while it verifies side-question orchestration.
+vi.mock("./harness/builtin-openclaw.js", () => ({
+  createOpenClawAgentHarness: (): AgentHarness => {
+    const harness: AgentHarness = {
+      id: "openclaw",
+      label: "OpenClaw embedded agent",
+      supports: () => ({ supported: true, priority: 0 }),
+      runAttempt: vi.fn(),
+    };
+    builtInOpenClawHarnesses.add(harness);
+    return harness;
+  },
+  isBuiltInOpenClawAgentHarness: (harness: AgentHarness) => builtInOpenClawHarnesses.has(harness),
+}));
+
+vi.mock("./harness/host-capability.js", () => {
+  return {
+    createAgentHarnessHostCapabilities: (params: unknown) => {
+      createAgentHarnessHostCapabilitiesMock(params);
+      return {
+        capabilities: agentHarnessHostCapabilitiesMock,
+        close: closeAgentHarnessHostCapabilitiesMock,
+      };
+    },
+  };
+});
+
 vi.mock("./embedded-agent-runner/runs.js", () => ({
   getActiveEmbeddedRunSnapshot: (...args: unknown[]) => getActiveEmbeddedRunSnapshotMock(...args),
 }));
@@ -220,6 +306,52 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   prepareProviderRuntimeAuth: (...args: unknown[]) => prepareProviderRuntimeAuthMock(...args),
 }));
 
+// Provider ownership and public-surface loading have dedicated owner suites. BTW stubs those
+// boundaries so its orchestration tests do not rediscover every plugin.
+vi.mock("../plugins/providers.js", () => ({
+  resolveProviderRefOwnership: () => ({ status: "unowned" as const }),
+}));
+
+vi.mock("../plugins/provider-policy-surface.js", () => ({
+  // Provider route policy has dedicated adapter and OpenAI owner suites. BTW needs only a
+  // deterministic route fixture so orchestration tests do not load plugin public surfaces.
+  resolveDirectBundledProviderPolicySurface: (provider: string) => {
+    if (provider.trim().toLowerCase() !== "openai") {
+      return null;
+    }
+    return {
+      normalizeModelCatalogId: ({ modelId }: { modelId: string }) => modelId,
+      resolveModelRoutes: ({
+        requestTransportOverrides = "none",
+      }: ProviderResolveModelRoutesContext) => {
+        const compatibleIds =
+          requestTransportOverrides === "none" ? ["openclaw", "codex"] : ["openclaw"];
+        return {
+          kind: "routes" as const,
+          defaultRuntimeId: requestTransportOverrides === "none" ? "codex" : "openclaw",
+          routes: [
+            {
+              api: "openai-responses" as const,
+              baseUrl: "https://api.openai.com/v1",
+              authRequirement: "api-key" as const,
+              requestTransportOverrides,
+              runtimePolicy: { compatibleIds },
+            },
+            {
+              api: "openai-chatgpt-responses" as const,
+              baseUrl: "https://chatgpt.com/backend-api/codex",
+              authRequirement: "subscription" as const,
+              requestTransportOverrides,
+              runtimePolicy: { compatibleIds },
+            },
+          ],
+        };
+      },
+    };
+  },
+  resolveTrustedExternalProviderPolicySurface: () => null,
+}));
+
 vi.mock("./provider-stream.js", () => ({
   registerProviderStreamForModel: (...args: unknown[]) =>
     registerProviderStreamForModelMock(...args),
@@ -230,8 +362,7 @@ vi.mock("./embedded-agent-runner/stream-resolution.js", () => ({
 }));
 
 vi.mock("./auth-profiles/session-override.js", () => ({
-  resolveSessionAuthProfileOverride: (...args: unknown[]) =>
-    resolveSessionAuthProfileOverrideMock(...args),
+  resolveSessionAuthSelection: (...args: unknown[]) => resolveSessionAuthSelectionMock(...args),
 }));
 
 vi.mock("../logging/diagnostic.js", () => ({
@@ -240,15 +371,11 @@ vi.mock("../logging/diagnostic.js", () => ({
   },
 }));
 
-vi.mock("../config/sessions/session-accessor.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/sessions/session-accessor.js")>(
-    "../config/sessions/session-accessor.js",
-  );
-  return {
-    ...actual,
-    loadTranscriptEvents: (...args: unknown[]) => loadTranscriptEventsMock(...args),
-  };
-});
+vi.mock("../config/sessions/session-accessor.js", () => ({
+  listSessionEntriesCore: (...args: unknown[]) => listSessionEntriesCoreMock(...args),
+  loadSessionEntry: (...args: unknown[]) => loadSessionEntryMock(...args),
+  loadTranscriptEvents: (...args: unknown[]) => loadTranscriptEventsMock(...args),
+}));
 
 const { runBtwSideQuestion } = await import("./btw.js");
 const { clearAgentHarnesses, registerAgentHarness } = await import("./harness/registry.js");
@@ -263,6 +390,7 @@ const DEFAULT_STORE_PATH = "/tmp/sessions.json";
 const DEFAULT_QUESTION = "What changed?";
 const MATH_QUESTION = "What is 17 * 19?";
 const MATH_ANSWER = "323";
+let defaultPluginMetadataSnapshot: ReturnType<typeof resolvePluginMetadataSnapshot> | undefined;
 
 const DEFAULT_USAGE = {
   input: 1,
@@ -372,6 +500,7 @@ function supportsPreparedOpenAIAuth(ctx: Parameters<AgentHarness["supports"]>[0]
 function runSideQuestion(overrides: Partial<RunBtwSideQuestionParams> = {}) {
   return runBtwSideQuestion({
     cfg: { agents: { entries: { main: { default: true } } } } as never,
+    agentId: "main",
     agentDir: DEFAULT_AGENT_DIR,
     provider: DEFAULT_PROVIDER,
     model: DEFAULT_MODEL,
@@ -573,6 +702,7 @@ function mockOpenAIPlatformProfile(): void {
 describe("runBtwSideQuestion", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
+    resetModelGenerationFixtureState();
   });
 
   beforeEach(() => {
@@ -596,7 +726,7 @@ describe("runBtwSideQuestion", () => {
     ensureAuthProfileStoreWithoutExternalProfilesMock.mockReset();
     getApiKeyForModelMock.mockReset();
     requireApiKeyMock.mockReset();
-    resolveSessionAuthProfileOverrideMock.mockReset();
+    resolveSessionAuthSelectionMock.mockReset();
     getActiveEmbeddedRunSnapshotMock.mockReset();
     resolveSessionAgentIdMock.mockReset();
     resolveSessionAgentIdsMock.mockReset();
@@ -609,6 +739,12 @@ describe("runBtwSideQuestion", () => {
     executePreparedCliRunMock.mockReset();
     diagDebugMock.mockReset();
     ensureSelectedAgentHarnessPluginMock.mockReset();
+    createAgentHarnessHostCapabilitiesMock.mockReset();
+    closeAgentHarnessHostCapabilitiesMock.mockReset();
+    listSessionEntriesCoreMock.mockReset();
+    listSessionEntriesCoreMock.mockReturnValue([]);
+    loadSessionEntryMock.mockReset();
+    loadSessionEntryMock.mockReturnValue(undefined);
     loadTranscriptEventsMock.mockReset();
     shouldPreferExplicitConfigApiKeyAuthMock.mockReset();
     shouldPreferExplicitConfigApiKeyAuthMock.mockReturnValue(false);
@@ -617,6 +753,20 @@ describe("runBtwSideQuestion", () => {
     resolveProviderEntryApiKeyProfileReferenceMock.mockReset();
     resolveProviderEntryApiKeyProfileReferenceMock.mockReturnValue({ kind: "none" });
     clearAgentHarnesses();
+    if (!defaultPluginMetadataSnapshot) {
+      defaultPluginMetadataSnapshot = resolvePluginMetadataSnapshot({
+        config: {},
+        workspaceDir: state.workspaceDir,
+        allowCurrent: false,
+      });
+      expect(workspaceGuard.spy).toHaveBeenCalledWith(
+        expect.objectContaining({ workspaceDir: state.workspaceDir }),
+      );
+    }
+    preparedRuntimeSnapshotState.snapshot = {
+      metadataSnapshot: defaultPluginMetadataSnapshot,
+    };
+    preparedRuntimeSnapshotState.useSnapshotPluginRegistry = false;
 
     readFileMock.mockResolvedValue("mock transcript");
     loadTranscriptEventsMock.mockResolvedValue([]);
@@ -652,7 +802,11 @@ describe("runBtwSideQuestion", () => {
       ...(params.profileId ? { profileId: params.profileId } : {}),
     }));
     requireApiKeyMock.mockReturnValue("secret");
-    resolveSessionAuthProfileOverrideMock.mockResolvedValue("profile-1");
+    resolveSessionAuthSelectionMock.mockResolvedValue({
+      profileId: "profile-1",
+      source: "auto",
+      routeRequirement: undefined,
+    });
     getActiveEmbeddedRunSnapshotMock.mockReturnValue(undefined);
     resolveSessionAgentIdMock.mockReturnValue("main");
     resolveSessionAgentIdsMock.mockReturnValue({ defaultAgentId: "main", sessionAgentId: "main" });
@@ -718,6 +872,7 @@ describe("runBtwSideQuestion", () => {
 
     const result = await runBtwSideQuestion({
       cfg: { agents: { entries: { main: { default: true } } } } as never,
+      agentId: "main",
       agentDir: DEFAULT_AGENT_DIR,
       provider: DEFAULT_PROVIDER,
       model: DEFAULT_MODEL,
@@ -760,21 +915,48 @@ describe("runBtwSideQuestion", () => {
     });
   });
 
-  it("resolves the prepared runtime the way gateway-published owners are keyed", async () => {
-    // Gateway startup publishes configured owners with allowGatewaySubagentBinding
-    // (server-startup-post-attach.ts), and that flag is part of the owner key
-    // (prepared-model-runtime.owner.ts). A gateway-hosted BTW request that omits
-    // it matches no owner, and standalone activation is refused while the gateway
-    // lifecycle is active, so the side question fails with "owner was not published".
-    mockDoneAnswer("Final answer.");
+  it.each([
+    { harness: "openclaw", sandboxSessionKey: undefined },
+    { harness: "codex", sandboxSessionKey: undefined },
+    { harness: "codex", sandboxSessionKey: "agent:main:policy" },
+  ])(
+    "retains the selected global agent for $harness with policy $sandboxSessionKey",
+    async ({ harness, sandboxSessionKey }) => {
+      // Gateway startup publishes configured owners with allowGatewaySubagentBinding
+      // (server-startup-post-attach.ts), and that flag is part of the owner key
+      // (prepared-model-runtime.owner.ts). A gateway-hosted BTW request that omits
+      // it matches no owner, and standalone activation is refused while the gateway
+      // lifecycle is active, so the side question fails with "owner was not published".
+      mockDoneAnswer("Final answer.");
+      resolveSessionAgentIdMock.mockImplementation(
+        (await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js"))
+          .resolveSessionAgentId,
+      );
+      const sideQuestion = harness === "codex" ? registerCodexSideQuestionHarness() : undefined;
 
-    await runSideQuestion({ allowGatewaySubagentBinding: true });
+      await runSideQuestion({
+        agentId: "work",
+        cfg: {
+          agents: { ownership: "explicit", entries: { main: {}, work: {} } },
+          session: { scope: "global" },
+        },
+        sessionKey: "global",
+        sandboxSessionKey,
+        allowGatewaySubagentBinding: true,
+      });
 
-    expect(mockCall(loadPreparedModelRuntimeSnapshotMock)?.[0]).toMatchObject({
-      agentDir: DEFAULT_AGENT_DIR,
-      allowGatewaySubagentBinding: true,
-    });
-  });
+      expect(mockCall(loadPreparedModelRuntimeSnapshotMock)?.[0]).toMatchObject({
+        agentDir: DEFAULT_AGENT_DIR,
+        agentId: "work",
+        allowGatewaySubagentBinding: true,
+      });
+      if (sideQuestion) {
+        expect(sideQuestion).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: "work", sessionKey: "global" }),
+        );
+      }
+    },
+  );
 
   it("keeps gateway subagent binding off for local callers such as the embedded TUI", async () => {
     // The embedded TUI calls runBtwSideQuestion directly and must not borrow the
@@ -789,6 +971,85 @@ describe("runBtwSideQuestion", () => {
     );
   });
 
+  it("keeps model, runtime auth, and stream selection on prepared A after current advances to B", async () => {
+    const cfg = { agents: { entries: { main: { default: true } } } } as never;
+    const generationA = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
+      config: cfg,
+      label: "btw-a",
+      provider: "local-proxy",
+      requestProvider: "local-proxy",
+      modelId: "side-model",
+    });
+    const generationB = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
+      config: cfg,
+      label: "btw-b",
+      provider: "local-proxy",
+      requestProvider: "local-proxy",
+      modelId: "side-model",
+    });
+    preparedRuntimeSnapshotState.snapshot = generationA.preparedModelRuntime;
+    preparedRuntimeSnapshotState.useSnapshotPluginRegistry = true;
+    resolveAgentWorkspaceDirMock.mockReturnValue(state.workspaceDir);
+    publishCurrentModelGeneration(generationB);
+    const runtimeAuthA = vi.fn(async () => ({ apiKey: "runtime-auth-a" }));
+    const runtimeAuthB = vi.fn(async () => ({ apiKey: "runtime-auth-b" }));
+    const streamA = vi.fn(
+      (model: { name?: string }, _context: unknown, options?: { apiKey?: string }) => {
+        const apiKey = options?.apiKey;
+        const resolvedApiKey =
+          apiKey && looksLikeSecretSentinel(apiKey) ? resolveSecretSentinel(apiKey) : apiKey;
+        return makeAsyncEvents([
+          createDoneEvent(`${model.name ?? "missing model"} / ${resolvedApiKey} / Stream A`),
+        ]);
+      },
+    );
+    const streamB = vi.fn(() =>
+      makeAsyncEvents([createDoneEvent("Generation B / runtime-auth-b / Stream B")]),
+    );
+    const activeGenerationRegistry = () =>
+      getPluginRuntimeGenerationRegistry() ?? getActivePluginRegistry();
+    resolveModelWithRegistryMock.mockImplementation(() => {
+      const snapshot = getCurrentPluginMetadataSnapshot({
+        config: cfg,
+        workspaceDir: state.workspaceDir,
+      });
+      const label = snapshot === generationA.metadataSnapshot ? "A" : "B";
+      return {
+        provider: "local-proxy",
+        id: "side-model",
+        name: `Generation ${label}`,
+        api: "openai-responses",
+        baseUrl: `https://generation-${label.toLowerCase()}.example.test/v1`,
+      };
+    });
+    prepareProviderRuntimeAuthMock.mockImplementation(async () =>
+      activeGenerationRegistry() === generationA.pluginRegistry
+        ? await runtimeAuthA()
+        : await runtimeAuthB(),
+    );
+    registerProviderStreamForModelMock.mockImplementation(() =>
+      activeGenerationRegistry() === generationA.pluginRegistry ? streamA : streamB,
+    );
+
+    await expect(
+      runSideQuestion({ cfg, provider: "local-proxy", model: "side-model" }),
+    ).resolves.toEqual({ text: "Generation A / runtime-auth-a / Stream A" });
+    expect(runtimeAuthA).toHaveBeenCalledOnce();
+    expect(runtimeAuthB).not.toHaveBeenCalled();
+    expect(streamA).toHaveBeenCalledOnce();
+    expect(streamA).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "Generation A" }),
+      expect.any(Object),
+      expect.any(Object),
+    );
+    expect(streamB).not.toHaveBeenCalled();
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+  });
+
   it("routes Codex-selected BTW questions through the harness side-question hook", async () => {
     const supports = vi.fn(supportsPreparedOpenAIAuth);
     const codexSideQuestionMock = registerCodexSideQuestionHarness({
@@ -800,7 +1061,11 @@ describe("runBtwSideQuestion", () => {
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
     });
-    resolveSessionAuthProfileOverrideMock.mockResolvedValue("openai:work");
+    resolveSessionAuthSelectionMock.mockResolvedValue({
+      profileId: "openai:work",
+      source: "auto",
+      routeRequirement: "subscription",
+    });
     ensureAuthProfileStoreMock.mockReturnValue({
       version: 1,
       profiles: {
@@ -832,6 +1097,8 @@ describe("runBtwSideQuestion", () => {
       provider: "openai",
       model: "gpt-5.5",
       sessionKey: DEFAULT_SESSION_KEY,
+      authorityRunId: "btw-side-authority",
+      opts: { runId: "parent-correlation" },
       sandboxSessionKey: "agent:main:runtime-policy",
       agentAccountId: "account-1",
       groupId: "group-1",
@@ -865,12 +1132,28 @@ describe("runBtwSideQuestion", () => {
         senderName: "Rosita",
         senderUsername: "rosita",
         senderE164: "+15550001",
+        opts: { runId: "btw-side-authority" },
         runtimeModel: expect.objectContaining({
           api: "openai-chatgpt-responses",
           baseUrl: "https://chatgpt.com/backend-api/codex",
         }),
       }),
     );
+    expect(mockArg(codexSideQuestionMock, 0, 0)).toHaveProperty(
+      "hostCapabilities",
+      agentHarnessHostCapabilitiesMock,
+    );
+    expect(createAgentHarnessHostCapabilitiesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attempt: expect.objectContaining({
+          admittedRunContext: expect.objectContaining({
+            operationalRunInstance: expect.objectContaining({ runId: "btw-side-authority" }),
+          }),
+          runId: "btw-side-authority",
+        }),
+      }),
+    );
+    expect(closeAgentHarnessHostCapabilitiesMock).toHaveBeenCalledOnce();
     expect(resolveModelAsyncMock).toHaveBeenCalledWith(
       "openai",
       "gpt-5.5",
@@ -883,6 +1166,13 @@ describe("runBtwSideQuestion", () => {
           inlineProviderModels: [],
         }),
       }),
+    );
+    const preparedModelRuntime = (
+      mockArg(resolveModelAsyncMock, 0, 4) as { preparedModelRuntime?: unknown }
+    ).preparedModelRuntime;
+    expect(mockArg(codexSideQuestionMock, 0, 0)).toHaveProperty(
+      "preparedModelRuntime",
+      preparedModelRuntime,
     );
     expect(
       (mockArg(codexSideQuestionMock, 0, 0) as { sessionFile?: string }).sessionFile,
@@ -913,7 +1203,7 @@ describe("runBtwSideQuestion", () => {
     };
     resolveModelWithRegistryMock.mockReturnValue(subscriptionModel);
     resolveModelAsyncMock.mockResolvedValue({ model: subscriptionModel });
-    resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
+    resolveSessionAuthSelectionMock.mockResolvedValue(undefined);
     ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
     resolveProviderEntryApiKeyProfileReferenceMock.mockReturnValue({ kind: "literal" });
     getApiKeyForModelMock.mockResolvedValue({
@@ -964,7 +1254,7 @@ describe("runBtwSideQuestion", () => {
     };
     resolveModelWithRegistryMock.mockReturnValue(platformModel);
     resolveModelAsyncMock.mockResolvedValue({ model: platformModel });
-    resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
+    resolveSessionAuthSelectionMock.mockResolvedValue(undefined);
     ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
     resolveProviderEntryApiKeyProfileReferenceMock.mockReturnValue({ kind: "literal" });
     getApiKeyForModelMock.mockResolvedValue({
@@ -1026,7 +1316,7 @@ describe("runBtwSideQuestion", () => {
       baseUrl: "https://api.openai.com/v1",
     };
     resolveModelWithRegistryMock.mockReturnValue(platformModel);
-    resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
+    resolveSessionAuthSelectionMock.mockResolvedValue(undefined);
     ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
     getApiKeyForModelMock.mockResolvedValue({
       apiKey: undefined,
@@ -1097,7 +1387,7 @@ describe("runBtwSideQuestion", () => {
       },
       order: { openai: ["openai:subscription", "openai:platform"] },
     });
-    resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
+    resolveSessionAuthSelectionMock.mockResolvedValue(undefined);
     resolveModelWithRegistryMock.mockReturnValue(platformModel);
     resolveModelAsyncMock.mockImplementation(
       async (
@@ -1174,42 +1464,25 @@ describe("runBtwSideQuestion", () => {
     );
   });
 
-  it("keeps a model-locked session on its persisted harness for BTW", async () => {
-    const codexSideQuestionMock = vi.fn().mockResolvedValue({ text: "Locked Codex answer." });
-    registerAgentHarness({
-      id: "codex",
-      label: "Codex test harness",
-      supports: () => ({ supported: true, priority: 100 }),
-      runAttempt: vi.fn(),
-      runSideQuestion: codexSideQuestionMock,
-    });
-
-    const result = await runSideQuestion({
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "openclaw" } },
-            },
-          },
-        },
+  it("uses registry ownership and closes host capabilities when a BTW hook rejects", async () => {
+    registerAgentHarness(
+      {
+        id: "spoofed",
+        label: "Spoofed BTW harness",
+        pluginId: "codex",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: vi.fn(),
+        runSideQuestion: vi.fn().mockRejectedValue(new Error("side question failed")),
       },
-      sessionEntry: createSessionEntry({
-        agentHarnessId: "codex",
-        modelSelectionLocked: true,
-      }),
-    });
+      { ownerPluginId: "actual-owner" },
+    );
 
-    expect(result).toEqual({ text: "Locked Codex answer." });
-    expect(codexSideQuestionMock).toHaveBeenCalledOnce();
-    expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledWith(
-      expect.objectContaining({ agentHarnessId: "codex" }),
+    await expect(runSideQuestion()).rejects.toThrow("side question failed");
+
+    expect(createAgentHarnessHostCapabilitiesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginId: "actual-owner" }),
     );
-    expect(ensureSelectedAgentHarnessPluginMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({ agentHarnessRuntimeOverride: expect.anything() }),
-    );
-    expect(streamSimpleMock).not.toHaveBeenCalled();
-    expect(executePreparedCliRunMock).not.toHaveBeenCalled();
+    expect(closeAgentHarnessHostCapabilitiesMock).toHaveBeenCalledOnce();
   });
 
   it("reselects the Codex hook after resolving legacy openai-codex route state", async () => {
@@ -1225,7 +1498,11 @@ describe("runBtwSideQuestion", () => {
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
     });
-    resolveSessionAuthProfileOverrideMock.mockResolvedValue("openai-codex:user@example.test");
+    resolveSessionAuthSelectionMock.mockResolvedValue({
+      profileId: "openai-codex:user@example.test",
+      source: "auto",
+      routeRequirement: "subscription",
+    });
     ensureAuthProfileStoreMock.mockReturnValue({
       version: 1,
       profiles: {
@@ -1301,12 +1578,6 @@ describe("runBtwSideQuestion", () => {
     expect(
       Object.keys(sideQuestionParams.preparedRuntimeAuth?.authProfileStore?.profiles ?? {}),
     ).toEqual(["openai-codex:user@example.test"]);
-    const authArgs = mockArg(resolveSessionAuthProfileOverrideMock, 0, 0) as {
-      provider?: string;
-      acceptedProviderIds?: string[];
-    };
-    expect(authArgs.provider).toBe("openai");
-    expect(authArgs.acceptedProviderIds).toEqual(["openai"]);
     expect(streamSimpleMock).not.toHaveBeenCalled();
     expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
   });
@@ -1347,34 +1618,6 @@ describe("runBtwSideQuestion", () => {
       messageProvider: "telegram",
       groupId: "deny-room",
       senderId: "restricted-sender",
-    });
-
-    expect(codexSideQuestionMock).toHaveBeenCalledOnce();
-    expect(mockArg(codexSideQuestionMock, 0, 0)).toMatchObject({ toolsAllow: [] });
-  });
-
-  it("prepares a narrow global policy before calling a plugin side-question hook", async () => {
-    const codexSideQuestionMock = registerCodexSideQuestionHarness();
-    mockOpenAIPlatformProfile();
-    resolveModelWithRegistryMock.mockReturnValue({
-      provider: "openai",
-      id: "gpt-5.5",
-      api: "openai-responses",
-    });
-    resolveModelAsyncMock.mockResolvedValue({
-      model: {
-        provider: "openai",
-        id: "gpt-5.5",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-      },
-    });
-
-    await runSideQuestion({
-      cfg: { tools: { allow: ["message"] } } as never,
-      provider: "openai",
-      model: "gpt-5.5",
-      sessionKey: DEFAULT_SESSION_KEY,
     });
 
     expect(codexSideQuestionMock).toHaveBeenCalledOnce();
@@ -1453,14 +1696,16 @@ describe("runBtwSideQuestion", () => {
 
     expect(result).toEqual({ text: "Copilot fallback answer." });
     expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledOnce();
-    expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledWith({
-      provider: "github-copilot",
-      modelId: "gpt-4o",
-      config: expect.any(Object),
-      agentId: "main",
-      sessionKey: DEFAULT_SESSION_KEY,
-      workspaceDir: "/tmp/workspace",
-    });
+    expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "github-copilot",
+        modelId: "gpt-4o",
+        config: expect.any(Object),
+        agentId: "main",
+        sessionKey: DEFAULT_SESSION_KEY,
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
     expect(streamSimpleMock).toHaveBeenCalledOnce();
   });
 
@@ -1479,6 +1724,8 @@ describe("runBtwSideQuestion", () => {
       } as never,
       model: "claude-opus-4-7",
       sessionKey: DEFAULT_SESSION_KEY,
+      authorityRunId: "btw-cli-authority",
+      opts: { runId: "parent-correlation" },
     });
 
     expect(result).toEqual({ text: "CLI side answer." });
@@ -1496,6 +1743,7 @@ describe("runBtwSideQuestion", () => {
     expect(prepareParams.provider).toBe("claude-cli");
     expect(prepareParams.model).toBe("claude-opus-4-7");
     expect(prepareParams.disableTools).toBe(true);
+    expect(prepareParams).toMatchObject({ runId: "btw-cli-authority" });
     expect(prepareParams.cliSessionId).toBeUndefined();
     expect(prepareParams.extraSystemPrompt).toContain("Answer only the side question");
     expect(prepareParams.prompt).toContain("<conversation_history>");
@@ -1630,13 +1878,17 @@ describe("runBtwSideQuestion", () => {
       authProfileOverrideSource: "auto",
     });
     const sessionStore = { [DEFAULT_SESSION_KEY]: sessionEntry };
-    resolveSessionAuthProfileOverrideMock.mockImplementation(
+    resolveSessionAuthSelectionMock.mockImplementation(
       async (params: { sessionEntry?: SessionEntry }) => {
         if (params.sessionEntry) {
           params.sessionEntry.authProfileOverride = "anthropic:api";
           params.sessionEntry.authProfileOverrideSource = "auto";
         }
-        return "anthropic:api";
+        return {
+          profileId: "anthropic:api",
+          source: "auto",
+          routeRequirement: "api-key",
+        };
       },
     );
     mockDoneAnswer("Generic fallback answer.");
@@ -1665,7 +1917,7 @@ describe("runBtwSideQuestion", () => {
     expect(prepareParams.provider).toBe("claude-cli");
     expect(prepareParams.executionMode).toBe("side-question");
     expect(prepareParams.authProfileId).toBe("anthropic:auto-cli");
-    expect(resolveSessionAuthProfileOverrideMock).not.toHaveBeenCalled();
+    expect(resolveSessionAuthSelectionMock).not.toHaveBeenCalled();
     expect(cleanup).toHaveBeenCalledTimes(1);
     expect(getApiKeyForModelMock).not.toHaveBeenCalled();
     expect(streamSimpleMock).not.toHaveBeenCalled();
@@ -1698,7 +1950,14 @@ describe("runBtwSideQuestion", () => {
       profileId: "anthropic:claude-cli",
     });
     requireApiKeyMock.mockReturnValueOnce("claude-cli-access");
-    resolveSessionAuthProfileOverrideMock.mockResolvedValueOnce(undefined);
+    resolveSessionAuthSelectionMock.mockResolvedValueOnce(undefined);
+    resolveModelAsyncMock.mockResolvedValueOnce({
+      model: {
+        provider: DEFAULT_PROVIDER,
+        id: DEFAULT_MODEL,
+        api: "anthropic-messages",
+      },
+    });
     mockDoneAnswer("Claude CLI answer.");
 
     const result = await runSideQuestion();
@@ -1712,10 +1971,12 @@ describe("runBtwSideQuestion", () => {
       externalCliProviderIds: ["claude-cli"],
       allowKeychainPrompt: false,
     });
-    expectRecordFields(mockArg(getApiKeyForModelMock, 0, 0), {
-      profileId: "anthropic:claude-cli",
-      store: claudeAuthStore,
-    });
+    expect(getApiKeyForModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileId: "anthropic:claude-cli",
+        store: claudeAuthStore,
+      }),
+    );
   });
 
   it("rematerializes the direct model when automatic auth rotates to a SecretRef backup", async () => {
@@ -1763,7 +2024,7 @@ describe("runBtwSideQuestion", () => {
       modelRegistry,
     });
     ensureAuthProfileStoreWithoutExternalProfilesMock.mockReturnValue(authStore);
-    resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
+    resolveSessionAuthSelectionMock.mockResolvedValue(undefined);
     getApiKeyForModelMock.mockImplementation(async (authParams: { profileId?: string } = {}) => {
       if (authParams.profileId === "anthropic:primary") {
         throw new Error("primary credential resolution failed");
@@ -1882,7 +2143,7 @@ describe("runBtwSideQuestion", () => {
       }),
     );
     ensureAuthProfileStoreMock.mockReturnValue(authStore);
-    resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
+    resolveSessionAuthSelectionMock.mockResolvedValue(undefined);
     getApiKeyForModelMock.mockImplementation(async (authParams: { profileId?: string } = {}) => {
       if (authParams.profileId === "openai:subscription") {
         throw new Error("subscription credential resolution failed");
@@ -1958,7 +2219,7 @@ describe("runBtwSideQuestion", () => {
     resolveModelWithRegistryMock.mockReturnValue(platformModel);
     resolveModelAsyncMock.mockResolvedValue({ model: platformModel });
     ensureAuthProfileStoreMock.mockReturnValue(authStore);
-    resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
+    resolveSessionAuthSelectionMock.mockResolvedValue(undefined);
     resolveProviderEntryApiKeyProfileReferenceMock.mockReturnValue({ kind: "literal" });
     getApiKeyForModelMock.mockImplementation(
       async (authParams: { profileId?: string; allowAuthProfileFallback?: boolean }) => {
@@ -2024,7 +2285,7 @@ describe("runBtwSideQuestion", () => {
   it.each([
     { label: "explicit", source: "user" as const },
     { label: "legacy source-less", source: undefined },
-  ])("keeps $label user-locked static Anthropic auth for BTW", async ({ source }) => {
+  ])("keeps $label user-pinned static Anthropic auth first for BTW", async ({ source }) => {
     const staticAuthStore = {
       version: 1 as const,
       profiles: {
@@ -2035,7 +2296,7 @@ describe("runBtwSideQuestion", () => {
         },
       },
     };
-    ensureAuthProfileStoreWithoutExternalProfilesMock.mockReturnValueOnce(staticAuthStore);
+    ensureAuthProfileStoreMock.mockReturnValueOnce(staticAuthStore);
     getApiKeyForModelMock.mockResolvedValueOnce({
       apiKey: "static-key",
       mode: "api-key",
@@ -2043,7 +2304,11 @@ describe("runBtwSideQuestion", () => {
       profileId: "anthropic:api",
     });
     requireApiKeyMock.mockReturnValueOnce("static-key");
-    resolveSessionAuthProfileOverrideMock.mockResolvedValueOnce("anthropic:api");
+    resolveSessionAuthSelectionMock.mockResolvedValueOnce({
+      profileId: "anthropic:api",
+      source: "user",
+      routeRequirement: "api-key",
+    });
     mockDoneAnswer("Static answer.");
 
     await runSideQuestion({
@@ -2062,11 +2327,11 @@ describe("runBtwSideQuestion", () => {
       }),
     });
 
-    expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
-    expect(ensureAuthProfileStoreWithoutExternalProfilesMock).toHaveBeenCalledWith(
-      DEFAULT_AGENT_DIR,
-      { allowKeychainPrompt: false },
-    );
+    expect(ensureAuthProfileStoreWithoutExternalProfilesMock).not.toHaveBeenCalled();
+    expect(ensureAuthProfileStoreMock).toHaveBeenCalledWith(DEFAULT_AGENT_DIR, {
+      externalCliProviderIds: ["claude-cli"],
+      allowKeychainPrompt: false,
+    });
     expectRecordFields(mockArg(getApiKeyForModelMock, 0, 0), {
       profileId: "anthropic:api",
       store: staticAuthStore,
@@ -2254,6 +2519,7 @@ describe("runBtwSideQuestion", () => {
 
     const result = await runBtwSideQuestion({
       cfg: {} as never,
+      agentId: "main",
       agentDir: DEFAULT_AGENT_DIR,
       provider: "amazon-bedrock",
       model: "us.anthropic.claude-sonnet-4-5-v1:0",
@@ -2459,6 +2725,37 @@ describe("runBtwSideQuestion", () => {
     });
     expect(buildSessionContextMock).toHaveBeenCalledTimes(1);
     expect(buildSessionContextMock).toHaveBeenCalledWith([userEntry, assistantEntry]);
+  });
+
+  it("rejects a supplied session key that disagrees with an incomplete SQLite marker target", async () => {
+    const markerStorePath = "/tmp/marker-sessions.sqlite";
+    listSessionEntriesCoreMock.mockReturnValue([
+      {
+        sessionKey: "agent:main:matching",
+        entry: createSessionEntry(),
+      },
+    ]);
+    loadSessionEntryMock.mockReturnValue(createSessionEntry({ sessionId: "different-session" }));
+
+    await expect(
+      runMathSideQuestion({
+        sessionEntry: createSessionEntry({
+          sessionFile: `sqlite:main:session-1:${markerStorePath}`,
+        }),
+        storePath: undefined,
+      }),
+    ).rejects.toThrow("No active session context.");
+
+    expect(listSessionEntriesCoreMock).toHaveBeenCalledWith({
+      agentId: "main",
+      storePath: markerStorePath,
+    });
+    expect(loadSessionEntryMock).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: DEFAULT_SESSION_KEY,
+      storePath: markerStorePath,
+    });
+    expect(loadTranscriptEventsMock).not.toHaveBeenCalled();
   });
 
   it("falls back when the active run snapshot leaf no longer exists", async () => {

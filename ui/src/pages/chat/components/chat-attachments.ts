@@ -1,11 +1,14 @@
 // Shared attachment controls for chat and new-session composers.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { icons } from "../../../components/icons.ts";
+import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import "../../../components/tooltip.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
-import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
+import type { BrowserAnnotationAttachment, ChatAttachment } from "../../../lib/chat/chat-types.ts";
+import { showToast } from "../../../lib/toast.ts";
 import {
   generateAttachmentId,
   getChatAttachmentDataUrl,
@@ -13,6 +16,9 @@ import {
   registerChatAttachmentPayload,
   releaseChatAttachmentPayload,
 } from "../attachment-payload-store.ts";
+import { admitAttachmentFiles } from "./chat-attachment-admission.ts";
+import { resolveAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
+import { syncChatAttachmentRailScroll } from "./chat-attachment-viewport.ts";
 
 const CHAT_ATTACHMENT_ACCEPT =
   "image/*,audio/*,video/*,application/pdf,text/*,.csv,.json,.md,.txt,.zip," +
@@ -25,14 +31,18 @@ const largePastedTextAttachments = new WeakSet<ChatAttachment>();
 const pastedTextPreviews = new WeakMap<ChatAttachment, string>();
 
 export type ChatAttachmentControlsProps = {
+  /** Decoded-size ceilings from hello policy; absent means no client-side cap. */
+  attachmentLimits?: { maxBytes: number; maxImageBytes: number };
   attachments?: ChatAttachment[];
   disabled?: boolean;
   getAttachments?: () => ChatAttachment[];
   draft?: string;
   getDraft?: () => string;
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
+  onRemoveAttachment?: (attachment: ChatAttachment) => void;
   onDraftChange?: (next: string) => void;
   onPendingReadsChange?: (delta: 1 | -1) => void;
+  onOpenImage?: (item: ImageLightboxItem) => void;
   onRequestUpdate?: () => void;
   readSignal?: AbortSignal;
 };
@@ -132,10 +142,7 @@ function encodeTextAsDataUrl(text: string): string {
   return `data:${LARGE_PASTE_TEXT_MIME_TYPE};base64,${btoa(chunks.join(""))}`;
 }
 
-function createLargePastedTextAttachment(text: string): ChatAttachment {
-  const file = new File([text], `${LARGE_PASTE_TEXT_FILE_PREFIX}${Date.now()}.txt`, {
-    type: LARGE_PASTE_TEXT_MIME_TYPE,
-  });
+function createLargePastedTextAttachment(text: string, file: File): ChatAttachment {
   const attachment = chatAttachmentFromFile(file, encodeTextAsDataUrl(text));
   largePastedTextAttachments.add(attachment);
   const preview = compactPastedTextPreview(text);
@@ -188,6 +195,32 @@ function pastedTextPreview(attachment: ChatAttachment): string {
   );
 }
 
+function renderCompactAttachmentFile(attachment: ChatAttachment) {
+  const resolved = resolveAttachmentFileIcon(
+    attachment.fileName ?? "attachment",
+    attachment.mimeType,
+  );
+  const glyph =
+    resolved.family === "video"
+      ? icons.play
+      : resolved.family === "audio"
+        ? icons.music
+        : icons.fileText;
+  return html`
+    <openclaw-tooltip .content=${attachment.fileName ?? t("chat.attachments.attachedFile")}>
+      <div class="chat-attachment-file">
+        <span class="chat-attachment-file__icon" data-family=${resolved.family}>${glyph}</span>
+        <span class="chat-attachment-file__body">
+          <span class="chat-attachment-file__name"
+            >${attachment.fileName ?? t("chat.attachments.attachedFile")}</span
+          >
+          <span class="chat-attachment-file__type">${resolved.extensionLabel}</span>
+        </span>
+      </div>
+    </openclaw-tooltip>
+  `;
+}
+
 function appendPastedTextToDraft(draft: string, text: string): string {
   if (!draft.trim()) {
     return text;
@@ -204,7 +237,14 @@ function handleLargeTextPaste(e: ClipboardEvent, props: ChatAttachmentControlsPr
     return false;
   }
   e.preventDefault();
-  const attachment = createLargePastedTextAttachment(text);
+  const file = new File([text], `${LARGE_PASTE_TEXT_FILE_PREFIX}${Date.now()}.txt`, {
+    type: LARGE_PASTE_TEXT_MIME_TYPE,
+  });
+  if (admitAttachmentFiles([file], props.attachmentLimits).length === 0) {
+    // The rejection toast named the file; the clipboard still holds the text.
+    return true;
+  }
+  const attachment = createLargePastedTextAttachment(text, file);
   props.onAttachmentsChange([...currentAttachments(props), attachment]);
   return true;
 }
@@ -243,10 +283,14 @@ function dataImageClipboardFile(
 export function chatAttachmentFromDataUrl(
   dataUrl: string,
   fileName: string,
+  limits?: ChatAttachmentControlsProps["attachmentLimits"],
 ): ChatAttachment | null {
   const baseName = fileName.replace(/\.[a-z0-9]+$/i, "") || "image";
   const parsed = dataImageClipboardFile(dataUrl, baseName);
-  return parsed ? chatAttachmentFromFile(parsed.file, parsed.dataUrl) : null;
+  if (!parsed || admitAttachmentFiles([parsed.file], limits).length === 0) {
+    return null;
+  }
+  return chatAttachmentFromFile(parsed.file, parsed.dataUrl);
 }
 
 function readAttachmentFile(
@@ -288,20 +332,41 @@ function readAttachmentFile(
   });
 }
 
-async function appendAttachmentFiles(files: readonly File[], props: ChatAttachmentControlsProps) {
-  if (!props.onAttachmentsChange || files.length === 0) {
+async function appendAttachmentFiles(
+  candidates: readonly File[],
+  props: ChatAttachmentControlsProps,
+) {
+  if (!props.onAttachmentsChange || candidates.length === 0) {
+    return;
+  }
+  const files = admitAttachmentFiles(candidates, props.attachmentLimits);
+  if (files.length === 0) {
     return;
   }
   props.onPendingReadsChange?.(1);
   try {
-    const additions = (
-      await Promise.all(files.map((file) => readAttachmentFile(file, props)))
-    ).filter((attachment): attachment is ChatAttachment => attachment !== null);
+    const results = await Promise.all(files.map((file) => readAttachmentFile(file, props)));
+    const additions = results.filter(
+      (attachment): attachment is ChatAttachment => attachment !== null,
+    );
     if (props.readSignal?.aborted) {
       for (const attachment of additions) {
         releaseChatAttachmentPayload(attachment.id);
       }
       return;
+    }
+    // Unreadable drops (folders, permission-denied files) must not vanish
+    // silently: name what was skipped so the user knows it never attached.
+    const failed = results
+      .map((attachment, index) => (attachment === null ? files[index]?.name : undefined))
+      .filter((name): name is string => Boolean(name));
+    if (failed.length > 0) {
+      showToast({
+        message: t("chat.attachments.readFailed", {
+          names: failed.slice(0, 3).join(", "),
+          more: failed.length > 3 ? ` +${failed.length - 3}` : "",
+        }),
+      });
     }
     if (additions.length === 0) {
       return;
@@ -331,6 +396,9 @@ export function handleChatAttachmentPaste(e: ClipboardEvent, props: ChatAttachme
       return;
     }
     e.preventDefault();
+    if (admitAttachmentFiles([pasted.file], props.attachmentLimits).length === 0) {
+      return;
+    }
     props.onAttachmentsChange([
       ...currentAttachments(props),
       chatAttachmentFromFile(pasted.file, pasted.dataUrl),
@@ -357,7 +425,10 @@ function showPastedTextInComposer(att: ChatAttachment, props: ChatAttachmentCont
 }
 
 function handleChatAttachmentFileSelect(e: Event, props: ChatAttachmentControlsProps) {
-  const input = e.target as HTMLInputElement;
+  const input = e.target;
+  if (!(input instanceof HTMLInputElement)) {
+    return;
+  }
   const files = [...(input.files ?? [])];
   input.value = "";
   void appendAttachmentFiles(files, props);
@@ -461,27 +532,27 @@ export function handleChatAttachmentMenuSelection(
   if (value !== "camera" && value !== "photo" && value !== "file") {
     return false;
   }
-  clickComposerInput(event.currentTarget as HTMLElement, `.agent-chat__${value}-input`);
+  const target = event.currentTarget;
+  if (target instanceof HTMLElement) {
+    clickComposerInput(target, `.agent-chat__${value}-input`);
+  }
   return true;
 }
 
-export function renderChatAttachmentMenuTrigger(disabled: boolean | undefined) {
+export function renderChatAttachmentMenuTrigger(
+  disabled: boolean | undefined,
+  hasOverrides = false,
+) {
   return html`
     <button
       slot="trigger"
       type="button"
-      class="agent-chat__input-btn agent-chat__input-btn--attach"
+      class="agent-chat__input-btn agent-chat__input-btn--attach ${hasOverrides
+        ? "agent-chat__input-btn--has-overrides"
+        : ""}"
       aria-label=${t("chat.composer.addAttachment")}
       ?disabled=${disabled}
       title=${t("chat.composer.addAttachment")}
-      @pointerdown=${(event: PointerEvent) => {
-        const composer = (event.currentTarget as HTMLElement)
-          .closest(".agent-chat__composer-shell")
-          ?.querySelector("textarea");
-        if (document.activeElement === composer) {
-          event.preventDefault();
-        }
-      }}
     >
       ${icons.plus}
     </button>
@@ -505,16 +576,100 @@ export function renderChatAttachmentMenuOptions(fileIcon = icons.folder) {
   `;
 }
 
-export function renderChatAttachmentMenu(props: ChatAttachmentControlsProps) {
+function removeBrowserAnnotationAttachment(
+  attachment: ChatAttachment,
+  props: ChatAttachmentControlsProps,
+): void {
+  if (props.onRemoveAttachment) {
+    props.onRemoveAttachment(attachment);
+    return;
+  }
+  const next = currentAttachments(props).filter((candidate) => candidate.id !== attachment.id);
+  releaseChatAttachmentPayload(attachment.id);
+  props.onAttachmentsChange?.(next);
+}
+
+function renderAttachmentImage(
+  attachment: ChatAttachment,
+  alt: string,
+  title: string,
+  props: ChatAttachmentControlsProps,
+): ReturnType<typeof html> | typeof nothing {
+  const src = getChatAttachmentPreviewUrl(attachment);
+  if (!src) {
+    return nothing;
+  }
+  if (!props.onOpenImage) {
+    return html`<img src=${src} alt=${alt} />`;
+  }
+  const open = () => props.onOpenImage?.({ src, title });
   return html`
-    <wa-dropdown
-      class="agent-chat__attach-menu"
-      placement="top-start"
-      aria-label=${t("chat.composer.addAttachment")}
-      @wa-select=${handleChatAttachmentMenuSelection}
+    <button
+      type="button"
+      class="chat-message-image-button chat-attachment-image-button"
+      aria-label=${t("chat.imageLightbox.open", { title })}
+      @click=${open}
     >
-      ${renderChatAttachmentMenuTrigger(props.disabled)} ${renderChatAttachmentMenuOptions()}
-    </wa-dropdown>
+      <img src=${src} alt=${alt} />
+    </button>
+  `;
+}
+
+function renderBrowserAnnotationAttachment(
+  attachment: ChatAttachment,
+  annotation: BrowserAnnotationAttachment,
+  props: ChatAttachmentControlsProps,
+) {
+  const identity =
+    annotation.title.trim() ||
+    annotation.displayUrl.trim() ||
+    attachment.fileName ||
+    t("chat.attachments.attachedFile");
+  const regionLabel = t(
+    annotation.markedRegionCount === 1
+      ? "chat.composer.browserAnnotationRegion"
+      : "chat.composer.browserAnnotationRegions",
+    { count: String(annotation.markedRegionCount) },
+  );
+  const removeLabel = t("chat.composer.removeBrowserAnnotation", { name: identity });
+
+  return html`
+    <div
+      class="chat-attachment-thumb chat-attachment-thumb--browser-annotation"
+      data-attachment-id=${attachment.id}
+      role="group"
+      aria-label=${`${t("chat.composer.browserAnnotation")}: ${identity}`}
+    >
+      <div class="chat-browser-annotation-card__preview">
+        ${renderAttachmentImage(
+          attachment,
+          t("chat.composer.browserAnnotationPreview"),
+          identity,
+          props,
+        )}
+      </div>
+      <div class="chat-attachment-file__body chat-browser-annotation-card__body">
+        <span
+          class="chat-attachment-file__name chat-browser-annotation-card__identity"
+          title=${identity}
+          >${identity}</span
+        >
+        <span class="chat-attachment-file__meta chat-browser-annotation-card__meta">
+          <span>${regionLabel}</span>
+        </span>
+      </div>
+      <openclaw-tooltip .content=${removeLabel}>
+        <button
+          class="chat-attachment-remove chat-browser-annotation-card__remove"
+          type="button"
+          aria-label=${removeLabel}
+          ?disabled=${props.disabled}
+          @click=${() => removeBrowserAnnotationAttachment(attachment, props)}
+        >
+          ${icons.x}
+        </button>
+      </openclaw-tooltip>
+    </div>
   `;
 }
 
@@ -524,71 +679,74 @@ export function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
     return nothing;
   }
   return html`
-    <div class="chat-attachments-preview">
-      ${attachments.map(
-        (att) => html`
-          <div
-            class=${[
-              "chat-attachment-thumb",
-              att.mimeType.startsWith("image/") ? "" : "chat-attachment-thumb--file",
-              isLargePastedTextAttachment(att) ? "chat-attachment-thumb--pasted-text" : "",
-            ]
-              .filter(Boolean)
-              .join(" ")}
-          >
-            ${att.mimeType.startsWith("image/") && getChatAttachmentPreviewUrl(att)
-              ? html`<img
-                  src=${getChatAttachmentPreviewUrl(att)!}
-                  alt=${t("chat.composer.attachmentPreview")}
-                />`
-              : isLargePastedTextAttachment(att)
-                ? html`
-                    <div class="chat-attachment-file chat-attachment-file--pasted-text">
-                      <span class="chat-attachment-file__icon">${icons.fileText}</span>
-                      <span class="chat-attachment-file__body">
-                        <span class="chat-attachment-file__name">${pastedTextPreview(att)}</span>
-                        <button
-                          class="chat-attachment-text-action"
-                          type="button"
-                          aria-label=${t("worktrees.restore")}
-                          ?disabled=${props.disabled}
-                          @click=${() => showPastedTextInComposer(att, props)}
-                        >
-                          ${t("worktrees.restore")}
-                          <span aria-hidden="true">${icons.chevronRight}</span>
-                        </button>
-                      </span>
-                    </div>
-                  `
-                : html`
-                    <openclaw-tooltip
-                      .content=${att.fileName ?? t("chat.attachments.attachedFile")}
-                    >
-                      <div class="chat-attachment-file">
-                        <span class="chat-attachment-file__icon">${icons.paperclip}</span>
-                        <span class="chat-attachment-file__name"
-                          >${att.fileName ?? t("chat.attachments.attachedFile")}</span
-                        >
-                      </div>
-                    </openclaw-tooltip>
-                  `}
-            <openclaw-tooltip .content=${t("chat.composer.removeAttachment")}>
-              <button
-                class="chat-attachment-remove"
-                type="button"
-                aria-label=${t("chat.composer.removeAttachment")}
-                ?disabled=${props.disabled}
-                @click=${() => {
-                  const next = currentAttachments(props).filter((a) => a.id !== att.id);
-                  releaseChatAttachmentPayload(att.id);
-                  props.onAttachmentsChange?.(next);
-                }}
+    <div
+      class="chat-attachments-preview"
+      ${ref(syncChatAttachmentRailScroll)}
+      @scroll=${(event: Event) => {
+        if (event.currentTarget instanceof Element) {
+          syncChatAttachmentRailScroll(event.currentTarget);
+        }
+      }}
+    >
+      ${attachments.map((att) =>
+        att.browserAnnotation
+          ? renderBrowserAnnotationAttachment(att, att.browserAnnotation, props)
+          : html`
+              <div
+                class=${[
+                  "chat-attachment-thumb",
+                  att.mimeType.startsWith("image/") ? "" : "chat-attachment-thumb--file",
+                  isLargePastedTextAttachment(att) ? "chat-attachment-thumb--pasted-text" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
               >
-                ${icons.x}
-              </button>
-            </openclaw-tooltip>
-          </div>
-        `,
+                ${att.mimeType.startsWith("image/") && getChatAttachmentPreviewUrl(att)
+                  ? renderAttachmentImage(
+                      att,
+                      att.fileName?.trim() || t("chat.composer.attachmentPreview"),
+                      att.fileName?.trim() || t("chat.imageLightbox.untitled"),
+                      props,
+                    )
+                  : isLargePastedTextAttachment(att)
+                    ? html`
+                        <div class="chat-attachment-file chat-attachment-file--pasted-text">
+                          <span class="chat-attachment-file__icon">${icons.fileText}</span>
+                          <span class="chat-attachment-file__body">
+                            <span class="chat-attachment-file__name"
+                              >${pastedTextPreview(att)}</span
+                            >
+                            <button
+                              class="chat-attachment-text-action"
+                              type="button"
+                              aria-label=${t("chat.attachments.showInTextField")}
+                              ?disabled=${props.disabled}
+                              @click=${() => showPastedTextInComposer(att, props)}
+                            >
+                              ${t("chat.attachments.showInTextField")}
+                              <span aria-hidden="true">${icons.chevronRight}</span>
+                            </button>
+                          </span>
+                        </div>
+                      `
+                    : renderCompactAttachmentFile(att)}
+                <openclaw-tooltip .content=${t("chat.composer.removeAttachment")}>
+                  <button
+                    class="chat-attachment-remove"
+                    type="button"
+                    aria-label=${t("chat.composer.removeAttachment")}
+                    ?disabled=${props.disabled}
+                    @click=${() => {
+                      const next = currentAttachments(props).filter((a) => a.id !== att.id);
+                      releaseChatAttachmentPayload(att.id);
+                      props.onAttachmentsChange?.(next);
+                    }}
+                  >
+                    ${icons.x}
+                  </button>
+                </openclaw-tooltip>
+              </div>
+            `,
       )}
     </div>
   `;

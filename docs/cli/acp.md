@@ -196,7 +196,7 @@ acpx openclaw -s codex-bridge --cwd /path/to/repo \
 
 If you want `acpx openclaw` to target a specific Gateway and session key every time, override the `openclaw` agent command in `~/.acpx/config.json`:
 
-```json
+```json validate=false
 {
   "agents": {
     "openclaw": {

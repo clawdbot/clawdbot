@@ -7,7 +7,8 @@ import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
-import ai.openclaw.app.chat.ChatPlanStep
+import ai.openclaw.app.chat.ChatProgressCard
+import ai.openclaw.app.chat.ChatQuestionDraft
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatSwarmGroup
@@ -28,7 +29,6 @@ import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
 import ai.openclaw.app.node.CameraCaptureManager
-import ai.openclaw.app.node.CanvasController
 import ai.openclaw.app.node.SmsManager
 import ai.openclaw.app.systemagent.SystemAgentChatState
 import ai.openclaw.app.ui.GatewayConnectPlan
@@ -493,13 +493,6 @@ class MainViewModel private constructor(
       .flatMapLatest { runtime -> flowOf(runtime != null) }
       .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
-  val canvasCurrentUrl: StateFlow<String?> = runtimeState(initial = null) { it.canvas.currentUrl }
-  val canvasPresentationState: StateFlow<CanvasController.PresentationState> =
-    runtimeState(initial = CanvasController.PresentationState.Unmounted) { it.canvas.presentationState }
-  val canvasA2uiHydrated: StateFlow<Boolean> = runtimeState(initial = false) { it.canvasA2uiHydrated }
-  val canvasRehydratePending: StateFlow<Boolean> = runtimeState(initial = false) { it.canvasRehydratePending }
-  val canvasRehydrateErrorText: StateFlow<String?> = runtimeState(initial = null) { it.canvasRehydrateErrorText }
-
   val gateways: StateFlow<List<GatewayEndpoint>> = runtimeState(initial = emptyList()) { it.gateways }
   val discoveryStatusText: StateFlow<String> = runtimeState(initial = "Searching…") { it.discoveryStatusText }
   val notificationForwardingEnabled: StateFlow<Boolean> = prefs.notificationForwardingEnabled
@@ -517,6 +510,8 @@ class MainViewModel private constructor(
   val isConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.isConnected }
   val gatewayControlPage: StateFlow<NodeRuntime.GatewayControlPage?> =
     runtimeState(initial = null) { it.gatewayControlPage }
+  val desktopObserveAvailable: StateFlow<Boolean> =
+    runtimeState(initial = false) { it.desktopObserveAvailable }
   val isNodeConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.nodeConnected }
   val nodeCapabilityApproval: StateFlow<GatewayNodeCapabilityApproval> =
     runtimeState(initial = GatewayNodeCapabilityApproval.Loading) { it.nodeCapabilityApproval }
@@ -596,7 +591,7 @@ class MainViewModel private constructor(
   val healthLogsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.healthLogsRefreshing }
   val healthLogsErrorText: StateFlow<String?> = runtimeState(initial = null) { it.healthLogsErrorText }
   val pendingGatewayTrust: StateFlow<NodeRuntime.GatewayTrustPrompt?> = runtimeState(initial = null) { it.pendingGatewayTrust }
-  val seamColorArgb: StateFlow<Long> = runtimeState(initial = 0xFF0EA5E9) { it.seamColorArgb }
+  val gatewayAccentArgb: StateFlow<Long?> = runtimeState(initial = null) { it.gatewayAccentArgb }
   val mainSessionKey: StateFlow<String> = runtimeState(initial = "main") { it.mainSessionKey }
 
   val cameraHud: StateFlow<CameraHudState?> = runtimeState(initial = null) { it.cameraHud }
@@ -615,7 +610,6 @@ class MainViewModel private constructor(
   val activeGatewayStableId: StateFlow<String?> = prefs.gatewayRegistry.activeStableId
   val connectedGatewayStableIds: StateFlow<List<String>> = prefs.gatewayRegistry.connectedStableIds
   val onboardingCompleted: StateFlow<Boolean> = prefs.onboardingCompleted
-  val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
   val installedAppsSharingEnabled: StateFlow<Boolean> = prefs.installedAppsSharingEnabled
   val accessibilityControlEnabled: StateFlow<Boolean> = prefs.accessibilityControlEnabled
   val speakerEnabled: StateFlow<Boolean> = prefs.speakerEnabled
@@ -656,6 +650,16 @@ class MainViewModel private constructor(
     runtimeState(initial = emptyList()) { it.talkModeConversation }
 
   val chatSessionKey: StateFlow<String> = runtimeState(initial = "main") { it.chatSessionKey }
+  internal val chatSelectionGeneration: StateFlow<Long> = runtimeState(initial = 0L) { it.chatSelectionGeneration }
+  internal val gatewayCatalogRevision: StateFlow<Long> = runtimeState(initial = 0L) { it.gatewayCatalogRevision }
+
+  internal fun prepareFullMessageRead(
+    owner: ChatComposerOwner,
+    selectionGeneration: Long,
+    catalogRevision: Long,
+    message: ChatMessage,
+  ) = runtimeRef.value?.prepareFullMessageRead(owner, selectionGeneration, catalogRevision, message)
+
   val chatSessionOwnerAgentId: StateFlow<String?> = runtimeState(initial = null) { it.chatSessionOwnerAgentId }
   val chatSessionId: StateFlow<String?> = runtimeState(initial = null) { it.chatSessionId }
   val chatMessages: StateFlow<List<ChatMessage>> = runtimeState(initial = emptyList()) { it.chatMessages }
@@ -671,8 +675,10 @@ class MainViewModel private constructor(
   val chatModelCatalog: StateFlow<List<GatewayModelSummary>> = runtimeState(initial = emptyList()) { it.chatModelCatalog }
   val chatStreamingAssistantText: StateFlow<String?> = runtimeState(initial = null) { it.chatStreamingAssistantText }
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chatPendingToolCalls }
+  val chatSubagentActivities: StateFlow<Map<String, ai.openclaw.app.chat.ChatSubagentActivity>> =
+    runtimeState(initial = emptyMap()) { it.chatSubagentActivities }
   val chatQuestions: StateFlow<List<ChatQuestionPrompt>> = runtimeState(initial = emptyList()) { it.chatQuestions }
-  val chatPlanSteps: StateFlow<List<ChatPlanStep>> = runtimeState(initial = emptyList()) { it.chatPlanSteps }
+  val chatProgressCard: StateFlow<ChatProgressCard?> = runtimeState(initial = null) { it.chatProgressCard }
   val chatSessions: StateFlow<List<ChatSessionEntry>> = runtimeState(initial = emptyList()) { it.chatSessions }
   val chatSwarmGroups: StateFlow<List<ChatSwarmGroup>> = runtimeState(initial = emptyList()) { it.chatSwarmGroups }
   val chatSessionBranches: StateFlow<List<SessionBranch>> = runtimeState(initial = emptyList()) { it.chatSessionBranches }
@@ -690,9 +696,6 @@ class MainViewModel private constructor(
   val execApprovalsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.execApprovalsRefreshing }
   val execApprovalsErrorText: StateFlow<String?> = runtimeState(initial = null) { it.execApprovalsErrorText }
   val execApprovalsNotice: StateFlow<GatewayExecApprovalNotice?> = runtimeState(initial = null) { it.execApprovalsNotice }
-
-  val canvas: CanvasController
-    get() = ensureRuntime().canvas
 
   val camera: CameraCaptureManager
     get() = ensureRuntime().camera
@@ -840,6 +843,7 @@ class MainViewModel private constructor(
             host = config.host,
             port = config.port,
             tlsEnabled = config.tls,
+            contextPath = config.contextPath,
           )
         val targetAlreadyPaired =
           prefs.gatewayRegistry.entries.value
@@ -874,6 +878,7 @@ class MainViewModel private constructor(
             host = config.host,
             port = config.port,
             tls = config.tls,
+            contextPath = config.contextPath,
           ),
         )
 
@@ -927,10 +932,6 @@ class MainViewModel private constructor(
   /** Acknowledges the one-shot request that opens onboarding at the gateway setup step. */
   fun clearGatewaySetupStartRequest() {
     _startOnboardingAtGatewaySetup.value = false
-  }
-
-  fun setCanvasDebugStatusEnabled(value: Boolean) {
-    prefs.setCanvasDebugStatusEnabled(value)
   }
 
   fun grantInstalledAppsDisclosureConsent() {
@@ -1063,6 +1064,15 @@ class MainViewModel private constructor(
 
   fun requestHomeDestination(destination: HomeDestination) {
     _requestedHomeDestination.value = destination
+  }
+
+  internal fun openConversationNotification(target: ConversationNotificationTarget) {
+    resumeNodeServiceForConnection()
+    viewModelScope.launch(Dispatchers.Default) {
+      if (ensureRuntime().openConversationNotificationTarget(target)) {
+        _requestedHomeDestination.value = HomeDestination.Chat
+      }
+    }
   }
 
   internal fun consumeChatDraft(
@@ -1369,12 +1379,6 @@ class MainViewModel private constructor(
     runtimeRef.value?.declineGatewayTrustPrompt()
   }
 
-  fun handleCanvasA2UIActionFromWebView(payloadJson: String) {
-    ensureRuntime().handleCanvasA2UIActionFromWebView(payloadJson)
-  }
-
-  fun isTrustedCanvasActionUrl(rawUrl: String?): Boolean = ensureRuntime().isTrustedCanvasActionUrl(rawUrl)
-
   internal suspend fun resolveInlineWidgetResource(
     path: String,
     failedResource: ChatWidgetResource?,
@@ -1387,22 +1391,6 @@ class MainViewModel private constructor(
     kind: GatewayMediaKind,
     playbackRendition: Boolean,
   ) = ensureRuntime().loadChatMediaArtifact(artifactId, kind, playbackRendition)
-
-  fun requestCanvasRehydrate(source: String = "screen_tab") {
-    ensureRuntime().requestCanvasRehydrate(source = source, force = true)
-  }
-
-  fun showCanvas() {
-    ensureRuntime().canvas.show()
-  }
-
-  fun hideCanvas() {
-    runtimeRef.value?.canvas?.hide()
-  }
-
-  fun refreshHomeCanvasOverviewIfConnected() {
-    ensureRuntime().refreshHomeCanvasOverviewIfConnected()
-  }
 
   fun refreshModelCatalog() {
     ensureRuntime().refreshModelCatalog()
@@ -1531,10 +1519,9 @@ class MainViewModel private constructor(
 
   fun installClawHubSkill(
     slug: String,
-    acknowledgeClawHubRisk: Boolean = false,
     version: String? = null,
   ) {
-    ensureRuntime().installClawHubSkill(slug, acknowledgeClawHubRisk, version)
+    ensureRuntime().installClawHubSkill(slug, version)
   }
 
   fun clearClawHubSkillMessage() {
@@ -1608,10 +1595,13 @@ class MainViewModel private constructor(
   suspend fun patchChatSession(
     key: String,
     ownerAgentId: String? = null,
+    expectedSessionId: String? = null,
     label: String? = null,
     clearLabel: Boolean = false,
     category: String? = null,
     clearCategory: Boolean = false,
+    color: String? = null,
+    clearColor: Boolean = false,
     pinned: Boolean? = null,
     archived: Boolean? = null,
     unread: Boolean? = null,
@@ -1619,10 +1609,13 @@ class MainViewModel private constructor(
     ensureRuntime().patchChatSession(
       key = key,
       ownerAgentId = ownerAgentId,
+      expectedSessionId = expectedSessionId,
       label = label,
       clearLabel = clearLabel,
       category = category,
       clearCategory = clearCategory,
+      color = color,
+      clearColor = clearColor,
       pinned = pinned,
       archived = archived,
       unread = unread,
@@ -1669,7 +1662,8 @@ class MainViewModel private constructor(
   suspend fun forkChatSession(
     parentKey: String,
     ownerAgentId: String? = null,
-  ): String? = ensureRuntime().forkChatSession(parentKey, ownerAgentId)
+    fromLastCompleted: Boolean = false,
+  ): String? = ensureRuntime().forkChatSession(parentKey, ownerAgentId, fromLastCompleted)
 
   suspend fun rewindChatAtEntry(entryId: String): SessionRewindResult? = ensureRuntime().rewindChatAtEntry(entryId)
 
@@ -1878,15 +1872,20 @@ class MainViewModel private constructor(
     ensureRuntime().deleteChatOutboxCommand(id)
   }
 
+  fun updateChatQuestionDraft(
+    prompt: ChatQuestionPrompt,
+    update: (ChatQuestionDraft) -> ChatQuestionDraft,
+  ) = ensureRuntime().updateChatQuestionDraft(prompt, update)
+
   fun resolveChatQuestion(
-    id: String,
+    prompt: ChatQuestionPrompt,
     answers: Map<String, List<String>>,
   ) {
-    ensureRuntime().resolveChatQuestion(id, answers)
+    ensureRuntime().resolveChatQuestion(prompt, answers)
   }
 
-  fun skipChatQuestion(id: String) {
-    ensureRuntime().skipChatQuestion(id)
+  fun skipChatQuestion(prompt: ChatQuestionPrompt) {
+    ensureRuntime().skipChatQuestion(prompt)
   }
 
   suspend fun listBackgroundTasks(agentId: String): List<BackgroundTask> = ensureRuntime().listBackgroundTasks(agentId)

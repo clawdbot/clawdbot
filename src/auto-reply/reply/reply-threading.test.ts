@@ -134,6 +134,31 @@ describe("resolveReplyToMode", () => {
     expect(resolveReplyDeliveryAccountId(emptyCfg, "whatsapp")).toBe("work");
     expect(resolveReplyDeliveryAccountId(emptyCfg, "whatsapp", "personal")).toBe("personal");
   });
+
+  it("applies canonical account policy before channel-wide threading defaults", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "irc", source: "test", plugin: createChannelTestPluginBase({ id: "irc" }) },
+      ]),
+    );
+    const cfg: OpenClawConfig = {
+      channels: {
+        irc: {
+          replyToMode: "off",
+          accounts: {
+            "Ops Team": { replyToMode: "all" },
+            support: { replyToMode: "first" },
+          },
+        },
+      },
+    };
+
+    expect(resolveReplyToMode(cfg, "irc", "ops-team", "group")).toBe("all");
+    expect(resolveReplyToMode(cfg, "irc", "OPS TEAM", "direct")).toBe("all");
+    expect(resolveReplyToMode(cfg, "irc", "support", "group")).toBe("first");
+    expect(resolveReplyToMode(cfg, "irc", "unknown", "group")).toBe("off");
+    expect(resolveReplyToMode(cfg, "irc", null, "direct")).toBe("off");
+  });
 });
 
 describe("createReplyToModeFilterForChannel", () => {
@@ -144,6 +169,19 @@ describe("createReplyToModeFilterForChannel", () => {
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry());
   });
+
+  it.each(["first", "batched"] as const)(
+    "previews the %s transport without consuming its single reply slot",
+    (mode) => {
+      const filter = createReplyToModeFilterForChannel(mode, "discord");
+      const first = { text: "discarded", replyToId: "parent" };
+      const actual = { text: "actual", replyToId: "parent" };
+
+      expect(filter.preview(first).replyToId).toBe("parent");
+      expect(filter(actual).replyToId).toBe("parent");
+      expect(filter.preview({ text: "later", replyToId: "other" }).replyToId).toBeUndefined();
+    },
+  );
 
   it("strips explicit Slack reply tags upstream when replyToMode is off", () => {
     setActivePluginRegistry(

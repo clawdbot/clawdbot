@@ -45,7 +45,7 @@ run_suspension_phase() {
     -e "GW_MODE=suspension-$stage-restart" \
     -e "GW_STATE_PATH=$SUSPENSION_STATE_PATH" \
     "$GW_NAME" \
-    node scripts/e2e/lib/gateway-network/client.mjs
+    node scripts/e2e/lib/gateway-network/client.mts
 }
 
 trap cleanup EXIT
@@ -84,7 +84,7 @@ DOCKER_COMMAND_TIMEOUT="$CLIENT_TIMEOUT" run_logged gateway-network-client docke
   -e "GW_URL=ws://$GW_NAME:$PORT" \
   -e "GW_TOKEN=$TOKEN" \
   "$IMAGE_NAME" \
-  node scripts/e2e/lib/gateway-network/client.mjs
+  node scripts/e2e/lib/gateway-network/client.mts
 
 phase_started="$SECONDS"
 echo "Running cooperative suspension lifecycle before container stop..."

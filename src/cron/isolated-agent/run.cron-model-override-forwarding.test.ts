@@ -1,6 +1,12 @@
 // Cron model override forwarding tests cover passing overrides into agent runs.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  runFallbackModelAttempt,
+  runInitialModelFallbackAttempt,
+  type TestModelFallbackRunnerParams,
+} from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import {
   clearCliSessionMock,
   clearFastTestEnv,
@@ -102,16 +108,6 @@ function captureModelFallbackRun(provider = "google", model = "gemini-2.0-flash"
   return captured;
 }
 
-function createDeferred<T = void>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function firstMockArg(mock: { mock: { calls: unknown[][] } }): Record<string, unknown> {
@@ -191,6 +187,7 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     expect(result.status).toBe("ok");
     expect(loadModelCatalogOwnerMock).toHaveBeenCalledWith({
       config: callerConfig,
+      readOnly: true,
       allowGatewaySubagentBinding: true,
     });
     expect(ensureAgentWorkspaceMock).toHaveBeenCalledWith(
@@ -234,9 +231,11 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
   it("passes the cron payload model to the embedded agent runner", async () => {
     // Use passthrough so runEmbeddedAgentMock actually gets called
     mockRunCronFallbackPassthrough();
-    runEmbeddedAgentMock.mockResolvedValue({
-      payloads: [{ text: "summary done" }],
-      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    runEmbeddedAgentMock.mockImplementation(async () => {
+      return {
+        payloads: [{ text: "summary done" }],
+        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      };
     });
 
     const result = await runCronIsolatedAgentTurn(makeParams());
@@ -245,6 +244,7 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     const embeddedCall = firstMockArg(runEmbeddedAgentMock);
     expect(embeddedCall.provider).toBe("google");
     expect(embeddedCall.model).toBe("gemini-2.0-flash");
+    expect(embeddedCall).not.toHaveProperty("taskRunId");
   });
 
   it("forwards isolated cron execution phase updates from embedded runs", async () => {
@@ -624,9 +624,9 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
       isNewSession: true,
     });
     resolveCronSessionMock.mockReturnValue(cronSession);
-    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
-      await run(provider, model);
-      const result = await run("openai", "gpt-5.5");
+    runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => {
+      await runInitialModelFallbackAttempt(params);
+      const result = await runFallbackModelAttempt(params, "openai", "gpt-5.5", "unknown");
       return {
         result,
         provider: "openai",
@@ -699,9 +699,9 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
       isNewSession: true,
     });
     resolveCronSessionMock.mockReturnValue(cronSession);
-    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
-      await run(provider, model);
-      const result = await run("openai", "gpt-5.6-sol");
+    runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => {
+      await runInitialModelFallbackAttempt(params);
+      const result = await runFallbackModelAttempt(params, "openai", "gpt-5.6-sol", "unknown");
       return {
         result,
         provider: "openai",

@@ -1,6 +1,11 @@
 // Gateway probe tests cover bootstrap auth, pairing prompts, startup retries,
 // event-loop readiness checks, and close/error reporting.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  isGatewayProtocolResponseError,
+  retainGatewayResponsePayload,
+} from "../../packages/gateway-client/src/protocol-request.js";
+import { GatewayClientRequestError as MockGatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 
 const gatewayClientState = vi.hoisted(() => ({
   options: null as Record<string, unknown> | null,
@@ -16,8 +21,9 @@ const gatewayClientState = vi.hoisted(() => ({
   } as { role?: string; scopes?: string[] } | undefined,
   helloServer: {
     version: "2026.4.24",
+    buildId: "build-test",
     connId: "conn-test",
-  },
+  } as { version: string; buildId?: string; connId: string },
   connectError: "scope upgrade pending approval (requestId: req-123)",
   connectErrorDetails: {
     code: "PAIRING_REQUIRED",
@@ -40,8 +46,15 @@ const deviceIdentityState = vi.hoisted(() => ({
     scopes: ["operator.read"],
     updatedAtMs: 1,
   } as Record<string, unknown> | null,
+  cachedOriginToken: {
+    token: "cached-origin-operator-token",
+    role: "operator",
+    scopes: ["operator.read"],
+    updatedAtMs: 1,
+  } as Record<string, unknown> | null,
   identityPaths: [] as unknown[],
   tokenParams: [] as unknown[],
+  originTokenParams: [] as unknown[],
 }));
 
 const eventLoopReadyState = vi.hoisted(() => ({
@@ -54,20 +67,6 @@ const eventLoopReadyState = vi.hoisted(() => ({
     aborted: false,
   },
 }));
-
-class MockGatewayClientRequestError extends Error {
-  readonly code: string;
-  readonly gatewayCode: string;
-  readonly details?: unknown;
-
-  constructor(error: { code?: string; message?: string; details?: unknown }) {
-    super(error.message ?? "gateway request failed");
-    this.name = "GatewayClientRequestError";
-    this.code = error.code ?? "UNAVAILABLE";
-    this.gatewayCode = this.code;
-    this.details = error.details;
-  }
-}
 
 class MockGatewayClient {
   private readonly opts: Record<string, unknown>;
@@ -96,6 +95,7 @@ class MockGatewayClient {
         phase: "pre-hello",
         socketOpened: gatewayClientState.socketOpened,
         transportValidated: gatewayClientState.transportValidated,
+        connectRequestSent: true,
         transientPreHelloCleanClose: false,
       });
     }
@@ -112,12 +112,12 @@ class MockGatewayClient {
         if (gatewayClientState.startMode === "connect-error-close") {
           const onConnectError = this.opts.onConnectError;
           if (typeof onConnectError === "function") {
-            onConnectError(
-              new MockGatewayClientRequestError({
-                message: gatewayClientState.connectError,
-                details: gatewayClientState.connectErrorDetails,
-              }),
-            );
+            const error = new MockGatewayClientRequestError({
+              message: gatewayClientState.connectError,
+              details: gatewayClientState.connectErrorDetails,
+            });
+            retainGatewayResponsePayload(error, undefined);
+            onConnectError(error);
           }
           this.emitClose();
           return;
@@ -162,6 +162,7 @@ class MockGatewayClient {
 vi.mock("./client.js", () => ({
   GatewayClient: MockGatewayClient,
   GatewayClientRequestError: MockGatewayClientRequestError,
+  isGatewayProtocolResponseError,
 }));
 
 vi.mock("../infra/device-identity.js", () => ({
@@ -181,9 +182,13 @@ vi.mock("../infra/device-identity.js", () => ({
 }));
 
 vi.mock("../infra/device-auth-store.js", () => ({
-  loadDeviceAuthToken: (params: unknown) => {
+  loadDeviceAuthTokenReadOnly: (params: unknown) => {
     deviceIdentityState.tokenParams.push(params);
     return deviceIdentityState.cachedToken;
+  },
+  loadOriginDeviceTokenReadOnly: (params: unknown) => {
+    deviceIdentityState.originTokenParams.push(params);
+    return deviceIdentityState.cachedOriginToken;
   },
 }));
 
@@ -225,8 +230,10 @@ function nextProbeUrl(label: string): string {
 
 function setDeviceRequiredProbeMode(): void {
   deviceIdentityState.cachedToken = null;
-  gatewayClientState.startMode = "close";
+  gatewayClientState.startMode = "connect-error-close";
   gatewayClientState.close = { code: 1008, reason: "device identity required" };
+  gatewayClientState.connectError = "gateway closed (1008): device identity required";
+  gatewayClientState.connectErrorDetails = null;
 }
 
 function lastGatewayClientOptions(): Record<string, unknown> | null {
@@ -293,8 +300,15 @@ describe("probeGateway", () => {
       scopes: ["operator.read"],
       updatedAtMs: 1,
     };
+    deviceIdentityState.cachedOriginToken = {
+      token: "cached-origin-operator-token",
+      role: "operator",
+      scopes: ["operator.read"],
+      updatedAtMs: 1,
+    };
     deviceIdentityState.identityPaths = [];
     deviceIdentityState.tokenParams = [];
+    deviceIdentityState.originTokenParams = [];
     gatewayClientState.startMode = "hello";
     gatewayClientState.socketOpened = true;
     gatewayClientState.transportValidated = true;
@@ -305,6 +319,11 @@ describe("probeGateway", () => {
     gatewayClientState.helloAuth = {
       role: "operator",
       scopes: ["operator.read"],
+    };
+    gatewayClientState.helloServer = {
+      version: "2026.4.24",
+      buildId: "build-test",
+      connId: "conn-test",
     };
     gatewayClientState.connectError = "scope upgrade pending approval (requestId: req-123)";
     gatewayClientState.connectErrorDetails = {
@@ -395,8 +414,24 @@ describe("probeGateway", () => {
     });
     expect(result.server).toEqual({
       version: "2026.4.24",
+      buildId: "build-test",
       connId: "conn-test",
     });
+  });
+
+  it("keeps legacy server metadata compatible when build identity is absent", async () => {
+    gatewayClientState.helloServer = {
+      version: "2026.4.24",
+      connId: "conn-test",
+    };
+
+    const result = await runTokenLightweightProbe();
+
+    expect(result.server).toEqual({
+      version: "2026.4.24",
+      connId: "conn-test",
+    });
+    expect(result.server).not.toHaveProperty("buildId");
   });
 
   it("preserves structured missing-scope details from a post-connect request", async () => {
@@ -451,16 +486,30 @@ describe("probeGateway", () => {
     });
 
     expect(gatewayClientState.options?.deviceIdentity).toEqual(deviceIdentityState.value);
+    expect(gatewayClientState.options?.deviceAuthScope).toBe("wss://gateway.example/ws");
+    expect(deviceIdentityState.originTokenParams).toEqual([
+      {
+        gatewayScope: "wss://gateway.example/ws",
+        deviceId: "test-device-identity",
+        role: "operator",
+        env: undefined,
+      },
+    ]);
+    expect(deviceIdentityState.tokenParams).toEqual([]);
   });
 
-  it("does not create or attach a device identity for first-time authenticated probes", async () => {
-    deviceIdentityState.cachedToken = null;
+  it.each([false, true])(
+    "does not attach a first-time authenticated probe identity (origin-scoped=%s)",
+    async (originScopedDeviceAuth) => {
+      deviceIdentityState.cachedToken = null;
+      deviceIdentityState.cachedOriginToken = null;
 
-    await runTokenProbe();
+      await runTokenProbe({ originScopedDeviceAuth });
 
-    expect(gatewayClientState.options?.deviceIdentity).toBeNull();
-    expect(gatewayClientState.options?.scopes).toEqual(["operator.read"]);
-  });
+      expect(gatewayClientState.options?.deviceIdentity).toBeNull();
+      expect(gatewayClientState.options?.scopes).toEqual(["operator.read"]);
+    },
+  );
 
   it("reuses cached device identity for unauthenticated loopback probes", async () => {
     await probeGateway({
@@ -471,16 +520,21 @@ describe("probeGateway", () => {
     expect(gatewayClientState.options?.deviceIdentity).toEqual(deviceIdentityState.value);
   });
 
-  it("keeps device identity disabled for first-time unauthenticated loopback probes", async () => {
-    deviceIdentityState.cachedToken = null;
+  it.each([false, true])(
+    "does not attach a first-time unauthenticated probe identity (origin-scoped=%s)",
+    async (originScopedDeviceAuth) => {
+      deviceIdentityState.cachedToken = null;
+      deviceIdentityState.cachedOriginToken = null;
 
-    await probeGateway({
-      url: "ws://127.0.0.1:18789",
-      timeoutMs: 1_000,
-    });
+      await probeGateway({
+        url: "ws://127.0.0.1:18789",
+        timeoutMs: 1_000,
+        originScopedDeviceAuth,
+      });
 
-    expect(gatewayClientState.options?.deviceIdentity).toBeNull();
-  });
+      expect(gatewayClientState.options?.deviceIdentity).toBeNull();
+    },
+  );
 
   it("skips detail RPCs for lightweight reachability probes", async () => {
     const result = await probeGateway({
@@ -646,6 +700,7 @@ describe("probeGateway", () => {
   it("prefers the structured connect error over the generic close reason", async () => {
     gatewayClientState.startMode = "connect-error-close";
     gatewayClientState.socketOpened = true;
+    gatewayClientState.close = { code: 1008, reason: "connect failed" };
 
     const result = await runTokenLightweightProbe({
       timeoutMs: 5_000,
@@ -654,9 +709,23 @@ describe("probeGateway", () => {
     expectProbeResultFields(result, {
       ok: false,
       error: "scope upgrade pending approval (requestId: req-123)",
-      close: { code: 1008, reason: "pairing required" },
+      close: { code: 1008, reason: "connect failed" },
     });
+    expectProbeAuthFields(result, { capability: "pairing_pending" });
     expect(result.connectLatencyMs).not.toBeNull();
+  });
+
+  it("keeps probe capability unknown for temporary authentication lockouts", async () => {
+    gatewayClientState.startMode = "connect-error-close";
+    gatewayClientState.connectError =
+      "unauthorized: too many failed authentication attempts (retry later)";
+    gatewayClientState.connectErrorDetails = { code: "AUTH_RATE_LIMITED" };
+    gatewayClientState.close = { code: 1008, reason: "connect failed" };
+
+    const result = await runTokenLightweightProbe({ timeoutMs: 5_000 });
+
+    expectProbeResultFields(result, { ok: false });
+    expectProbeAuthFields(result, { capability: "unknown" });
   });
 
   it("keeps latency unknown when the opened transport fails validation", async () => {
@@ -723,6 +792,7 @@ describe("probeGateway", () => {
     });
     expect(gatewayClientState.startCalls).toBe(startCalls);
     expect(lastGatewayClientOptions()).toBeNull();
+    expect(result.gatewayReached).toBeUndefined();
   });
 
   it("does not cache other policy-close reasons", async () => {
@@ -795,6 +865,7 @@ describe("probeGateway", () => {
     expect(success.ok).toBe(true);
     expect(lastGatewayClientOptions()?.url).toBe(url);
     expect(lastGatewayClientOptions()?.deviceIdentity).toEqual(deviceIdentityState.value);
+    expect(lastGatewayClientOptions()?.sharedStateMode).toBe("read-only");
 
     setDeviceRequiredProbeMode();
     gatewayClientState.options = null;

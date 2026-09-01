@@ -8,6 +8,7 @@ export type ConfigPageId =
   | "memory"
   | "talk"
   | "infrastructure"
+  | "updates"
   | "ai-agents"
   | "advanced";
 
@@ -17,7 +18,7 @@ const COMMUNICATION_SECTION_KEYS = ["messages", "tts"] as const;
 // the talk schema section (talk.ts / talk-page.ts).
 const TALK_SECTION_KEYS = ["talk"] as const;
 
-const APPEARANCE_SECTION_KEYS = ["__appearance__", "ui", "wizard"] as const;
+const APPEARANCE_SECTION_KEYS = ["__appearance__", "ui"] as const;
 
 const NOTIFICATION_SECTION_KEYS = ["__notifications__"] as const;
 
@@ -28,6 +29,8 @@ const SECURITY_SECTION_KEYS = ["security", "approvals"] as const;
 const AUTOMATION_SECTION_KEYS = ["commands", "hooks", "bindings", "cron", "plugins"] as const;
 
 const INFRASTRUCTURE_SECTION_KEYS = ["gateway", "browser", "nodeHost", "discovery", "acp"] as const;
+
+const UPDATE_SECTION_KEYS = ["update"] as const;
 
 const MCP_SECTION_KEYS = ["mcp"] as const;
 
@@ -50,6 +53,7 @@ const CONFIG_SECTION_KEYS_BY_PAGE = {
   memory: MEMORY_SECTION_KEYS,
   talk: TALK_SECTION_KEYS,
   infrastructure: INFRASTRUCTURE_SECTION_KEYS,
+  updates: UPDATE_SECTION_KEYS,
   "ai-agents": AI_AGENTS_SECTION_KEYS,
   advanced: undefined,
 } as const satisfies Record<ConfigPageId, readonly string[] | undefined>;

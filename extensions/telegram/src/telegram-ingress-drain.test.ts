@@ -3,13 +3,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { GrammyError } from "grammy";
+import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   createTelegramSpooledReplayDeferredParticipant,
   type TelegramSpooledReplayDeferredParticipant,
 } from "./bot-processing-outcome.js";
+import { resolveTelegramForumFlag } from "./bot/helpers.js";
 import { createTelegramIngressMonitor } from "./telegram-ingress-drain.js";
 import { resolveTelegramIngressNonRetryableFailure } from "./telegram-ingress-non-retryable.js";
 import {
@@ -166,6 +167,61 @@ describe("createTelegramIngressMonitor", () => {
     });
   });
 
+  it("reconciles a cached General topic when private bot topics are disabled", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
+        channelId: "telegram",
+        accountId: "default",
+        stateDir,
+      });
+      const updateId = 9;
+      const eventId = String(updateId).padStart(16, "0");
+      const update = {
+        update_id: updateId,
+        message: {
+          text: "hello",
+          from: { id: 111 },
+          chat: { id: -9003, type: "supergroup" },
+        },
+      };
+      const payload: TelegramSpooledUpdatePayload = {
+        version: 1,
+        updateId,
+        receivedAt: updateId,
+        update,
+      };
+      await resolveTelegramForumFlag({
+        chatId: -9003,
+        chatType: "supergroup",
+        isGroup: true,
+        isForum: true,
+      });
+      await queue.enqueue(eventId, payload, { laneKey: "telegram:-9003" });
+
+      const dispatch = vi.fn(async (_update, lifecycle) => {
+        expect(await queue.listClaims()).toEqual([
+          expect.objectContaining({ laneKey: "telegram:-9003:topic:1" }),
+        ]);
+        await lifecycle.onAdopted();
+        return { kind: "completed" as const };
+      });
+      const monitor = createTelegramIngressMonitor({
+        queue,
+        cfg,
+        accountId: "default",
+        botInfo: { id: 999, has_topics_enabled: false } as never,
+        dispatch,
+      });
+
+      monitor.start();
+      await monitor.waitForIdle();
+
+      expect(dispatch).toHaveBeenCalledOnce();
+      expect(await queue.listPending({ limit: "all" })).toEqual([]);
+      await monitor.stop();
+    });
+  });
+
   it("applies a late deferred retry failure with the real error", async () => {
     await withTempState(async (stateDir) => {
       const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
@@ -279,15 +335,56 @@ describe("createTelegramIngressMonitor", () => {
           expect(await queue.listPending({ limit: "all" })).toMatchObject([
             {
               id: eventId,
-              attempts: 1,
-              lastError: "Telegram ingress monitor is stopped.",
+              attempts: 0,
             },
           ]),
         );
+        expect((await queue.listPending({ limit: "all" }))[0]?.lastError).toBeUndefined();
         expect((await queue.enqueue(eventId, payload, { laneKey })).kind).not.toBe("completed");
       });
     },
   );
+
+  it("requeues an aborted deferred participant even when its late result is non-retryable", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
+        channelId: "telegram",
+        accountId: "default",
+        stateDir,
+      });
+      const eventId = "9".padStart(16, "0");
+      const payload = updatePayload(9);
+      const laneKey = telegramSpooledUpdateLaneKey(payload.update);
+      await queue.enqueue(eventId, payload, { laneKey });
+      const participant: { current?: TelegramSpooledReplayDeferredParticipant } = {};
+      const monitor = createTelegramIngressMonitor({
+        queue,
+        cfg,
+        accountId: "default",
+        dispatch: async () => {
+          participant.current =
+            createTelegramSpooledReplayDeferredParticipant("test:aborted-non-retryable") ??
+            undefined;
+        },
+      });
+
+      monitor.start();
+      await vi.waitFor(() => expect(participant.current).toBeDefined());
+      await monitor.stop();
+      participant.current?.settle({
+        kind: "failed-retryable",
+        error: new TelegramIngressPayloadError("late invalid payload"),
+      });
+
+      await vi.waitFor(async () =>
+        expect(await queue.listPending({ limit: "all" })).toMatchObject([
+          { id: eventId, attempts: 0 },
+        ]),
+      );
+      expect((await queue.listPending({ limit: "all" }))[0]?.lastError).toBeUndefined();
+      expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
+    });
+  });
 
   it("releases when dispatch settles only after its owner was aborted", async () => {
     await withTempState(async (stateDir) => {
@@ -300,6 +397,15 @@ describe("createTelegramIngressMonitor", () => {
       const payload = updatePayload(8);
       const laneKey = telegramSpooledUpdateLaneKey(payload.update);
       await queue.enqueue(eventId, payload, { laneKey });
+      const priorClaim = await queue.claim(eventId, { ownerId: "prior-owner" });
+      if (!priorClaim) {
+        throw new Error("Expected the prior Telegram ingress claim.");
+      }
+      const priorAttemptAt = Date.now() - 10_000;
+      await queue.release(priorClaim, {
+        releasedAt: priorAttemptAt,
+        lastError: "previous delivery failed",
+      });
       let finishDispatch!: () => void;
       const dispatchGate = new Promise<void>((resolve) => {
         finishDispatch = resolve;
@@ -331,7 +437,8 @@ describe("createTelegramIngressMonitor", () => {
           {
             id: eventId,
             attempts: 1,
-            lastError: "Telegram ingress monitor is stopped.",
+            lastAttemptAt: priorAttemptAt,
+            lastError: "previous delivery failed",
           },
         ]),
       );

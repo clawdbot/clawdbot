@@ -63,8 +63,7 @@ workspace memory (`MEMORY.md` and `memory/*.md`) keeps its existing behavior.
 Active Memory must remain enabled. Retrieval adds a bounded blocking step to
 eligible replies; timeout, unavailable search, and empty results all continue
 the reply without recalled transcript context. OpenClaw's built-in memory
-provider supports this protected transcript-recall path with both the builtin
-and QMD backends. Other memory providers keep their own recall behavior but do
+provider supports this protected transcript-recall path. Other memory providers keep their own recall behavior but do
 not automatically receive private transcript authorization. `openclaw doctor`
 reports an unsupported provider or missing `memory_search` tool.
 
@@ -623,17 +622,18 @@ To export those transcripts as JSONL artifacts for debugging:
 }
 ```
 
-Exported transcript artifacts go under the target agent's sessions folder, in
-a separate directory from active runtime state:
+Exported transcript artifacts go under the OpenClaw state directory, in a
+plugin-owned, per-agent directory separate from active runtime state:
 
 ```text
-agents/<agent>/sessions/active-memory/<blocking-memory-sub-agent-session-id>.jsonl
+<state-dir>/plugins/active-memory/transcripts/agents/<encoded-agent>/active-memory/<blocking-memory-sub-agent-session-id>.jsonl
 ```
 
-Change the relative artifact subdirectory with `config.transcriptDir`. Use this
-carefully: exports can accumulate quickly on busy sessions, `full` query mode
-duplicates a lot of conversation context, and these artifacts contain hidden
-prompt context plus recalled memories.
+Agent ids are URI-encoded in this path: for example, `support/agent` becomes
+`support%2Fagent`. Change the final artifact subdirectory with
+`config.transcriptDir`. Use this carefully: exports can accumulate quickly on busy
+sessions, `full` query mode duplicates a lot of conversation context, and these
+artifacts contain hidden prompt context plus recalled memories.
 
 ## Configuration
 
@@ -660,9 +660,8 @@ All active memory configuration lives under `plugins.entries.active-memory`.
 | `config.maxSummaryChars`     | `number`                                                                                             | Maximum characters in the active-memory summary (range 40-1000; default 220)                                                                                                                                                                      |
 | `config.logging`             | `boolean`                                                                                            | Emits active memory logs while tuning                                                                                                                                                                                                             |
 | `config.persistTranscripts`  | `boolean`                                                                                            | Exports blocking sub-agent transcripts as JSONL artifacts before removing their temporary SQLite session rows                                                                                                                                     |
-| `config.transcriptDir`       | `string`                                                                                             | Relative transcript-artifact directory under the agent sessions folder (default `"active-memory"`)                                                                                                                                                |
+| `config.transcriptDir`       | `string`                                                                                             | Relative artifact directory under the plugin-owned per-agent transcript directory (default `"active-memory"`)                                                                                                                                     |
 | `config.modelFallback`       | `string`                                                                                             | Optional model used only as the last step in the [model fallback chain](#model-fallback-policy)                                                                                                                                                   |
-| `config.qmd.searchMode`      | `"inherit" \| "search" \| "vsearch" \| "query"`                                                      | Overrides the QMD search mode used by the blocking sub-agent; default `"search"` (fast lexical search) — use `"inherit"` to match the main memory backend setting                                                                                 |
 
 Useful tuning fields:
 

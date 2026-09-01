@@ -2,6 +2,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   findLatestTaskFlowForOwnerKey,
+  findTaskFlowForOwnerLookup,
   getTaskFlowById,
   listTaskFlowsForOwnerKey,
 } from "./task-flow-registry.js";
@@ -47,5 +48,5 @@ export function resolveTaskFlowForLookupTokenForOwner(params: {
   if (!normalizedToken || normalizedToken !== normalizedCallerOwnerKey) {
     return undefined;
   }
-  return findLatestTaskFlowForOwner({ callerOwnerKey: normalizedCallerOwnerKey });
+  return findTaskFlowForOwnerLookup(normalizedCallerOwnerKey);
 }

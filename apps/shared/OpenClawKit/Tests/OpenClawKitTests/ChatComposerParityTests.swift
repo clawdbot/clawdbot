@@ -81,6 +81,25 @@ struct ChatReplyQuoteTests {
 
 @MainActor
 struct ChatComposerStateTests {
+    @Test func `model selection matches qualified choices after gateway readback`() {
+        let choices = [
+            OpenClawChatModelChoice(
+                modelID: "claude-opus-4-1",
+                name: "Claude Opus 4.1",
+                provider: "anthropic",
+                contextWindow: 200_000),
+        ]
+
+        #expect(OpenClawChatViewModel.modelSelectionMatches(
+            selectionID: "anthropic/claude-opus-4-1",
+            currentSelectionID: "claude-opus-4-1",
+            choices: choices))
+        #expect(!OpenClawChatViewModel.modelSelectionMatches(
+            selectionID: OpenClawChatViewModel.defaultModelSelectionID,
+            currentSelectionID: "claude-opus-4-1",
+            choices: choices))
+    }
+
     @Test func `file picker allows images and movie containers only`() {
         #expect(OpenClawChatPickerAttachmentMetadata.allowedFileContentTypes == [
             .image,

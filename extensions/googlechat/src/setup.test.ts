@@ -1,6 +1,5 @@
 // Googlechat tests cover setup plugin behavior.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import {
   createStartAccountContext,
@@ -18,6 +17,11 @@ import {
 import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
+import {
+  resolvePreferredOpenClawTmpDir,
+  tempWorkspaceSync,
+  type TempWorkspaceSync,
+} from "openclaw/plugin-sdk/temp-path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
@@ -478,21 +482,21 @@ describe("googlechat setup", () => {
 });
 
 describe("resolveGoogleChatAccount", () => {
-  const tempDirs: string[] = [];
-  const makeTempDir = (prefix: string) => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-    tempDirs.push(dir);
-    return dir;
-  };
+  const tempWorkspaces: TempWorkspaceSync[] = [];
 
   afterEach(() => {
-    for (const dir of tempDirs.splice(0)) {
-      fs.rmSync(dir, { recursive: true, force: true });
+    for (const workspace of tempWorkspaces.splice(0)) {
+      workspace.cleanup();
     }
   });
 
   it("resolves user-relative service-account files before checking availability", () => {
-    const homeDir = makeTempDir("openclaw-googlechat-home-");
+    const workspace = tempWorkspaceSync({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-googlechat-home-",
+    });
+    tempWorkspaces.push(workspace);
+    const homeDir = workspace.dir;
     fs.writeFileSync(path.join(homeDir, "service-account.json"), "{}", { mode: 0o600 });
     vi.stubEnv("OPENCLAW_HOME", homeDir);
     try {
@@ -528,7 +532,12 @@ describe("resolveGoogleChatAccount", () => {
   });
 
   it("ignores env JSON credentials when they decode to a non-object value", () => {
-    const missingFile = path.join(makeTempDir("openclaw-googlechat-missing-"), "missing.json");
+    const workspace = tempWorkspaceSync({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-googlechat-missing-",
+    });
+    tempWorkspaces.push(workspace);
+    const missingFile = path.join(workspace.dir, "missing.json");
     vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT", '["not","an","object"]');
     vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT_FILE", missingFile);
 

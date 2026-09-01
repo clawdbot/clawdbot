@@ -1,6 +1,7 @@
 import { t } from "../../i18n/index.ts";
 import {
-  buildAnnotationPrompt,
+  buildBrowserAnnotationContent,
+  type BrowserAnnotationDispatchResult,
   composeAnnotatedImage,
   dispatchBrowserAnnotation,
   paintAnnotations,
@@ -12,6 +13,7 @@ import type {
   BrowserPageMetrics,
   BrowserPanelTab,
 } from "./browser-client.ts";
+import type { BrowserTabTarget } from "./browser-target.ts";
 
 const FORWARDED_KEYS = new Set([
   "Enter",
@@ -32,6 +34,7 @@ const FORWARDED_KEYS = new Set([
 /** One rendered page snapshot plus the geometry needed to map pointer coords. */
 export type BrowserPanelView = {
   targetId: string;
+  browserTab?: BrowserTabTarget;
   dataUrl: string;
   image: HTMLImageElement;
   url: string;
@@ -135,10 +138,16 @@ export function dispatchCompositedBrowserAnnotation(
   strokes: AnnotationStroke[],
   element: BrowserInspectedNode | null,
   highlight: AnnotationRegion | null,
-): boolean {
+): BrowserAnnotationDispatchResult {
   const url = view.metrics?.url || view.url || tab?.url || "";
   const title = view.metrics?.title || tab?.title || "";
-  const text = buildAnnotationPrompt({ url, title, strokes, element });
+  const content = buildBrowserAnnotationContent({
+    url,
+    title,
+    strokes,
+    element,
+    browserTab: view.browserTab,
+  });
   const dataUrl = composeAnnotatedImage({
     image: view.image,
     width: view.image.naturalWidth,
@@ -146,5 +155,5 @@ export function dispatchCompositedBrowserAnnotation(
     strokes,
     highlight,
   });
-  return dispatchBrowserAnnotation({ text, dataUrl, fileName: "annotated-page.png" });
+  return dispatchBrowserAnnotation({ ...content, dataUrl, fileName: "annotated-page.png" });
 }

@@ -2,10 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import type { HealthSummary } from "../../../../src/gateway/health/types.js";
 import { healthHandlers } from "../../../../src/gateway/server-methods/health.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const SOURCE_PATH = "test/e2e/qa-lab/runtime/cached-health-snapshot-boundaries.ts";
@@ -112,7 +113,9 @@ export async function runHandlerBoundaryProof() {
     refresh: sharedRefresh,
     eventLoop: { status: "live" },
   });
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 
   const stale = await invokeHealthHandler({
     cached: snapshot({ ts: Date.now() - 60_001 }),
@@ -159,23 +162,26 @@ export async function runHandlerBoundaryProof() {
   });
 
   const firstResponse = first.responses[0];
+  const publicRefreshCall = publicRefresh.refreshCalls[0];
   return {
     cacheHitSameTimestamp:
       (firstResponse?.payload as { ts?: unknown } | undefined)?.ts === cached.ts,
+    // meta is wire-typed Record<string, unknown>: assert the literal boolean so a
+    // truthy non-boolean (e.g. "true") cannot satisfy the cached contract.
     cachedMeta: firstResponse?.meta?.cached === true,
     passiveRefreshBounded:
       sharedRefreshCalls.length === 1 && second.responses[0]?.meta?.cached === true,
     staleRefresh: stale.refreshCalls.length === 1 && stale.responses[0]?.meta === undefined,
     explicitProbeRefresh:
       probe.refreshCalls.length === 1 &&
-      probe.refreshCalls[0]?.probe === true &&
-      probe.refreshCalls[0]?.includeSensitive === true,
+      (probe.refreshCalls[0]?.probe ?? false) &&
+      (probe.refreshCalls[0]?.includeSensitive ?? false),
     lifecycleMismatchRefresh:
       lifecycle.refreshCalls.length === 1 && lifecycle.responses[0]?.meta === undefined,
     liveOverlayMerged:
       (firstResponse?.payload as { eventLoop?: { status?: unknown } } | undefined)?.eventLoop
         ?.status === "live",
-    publicSensitiveOmitted: publicRefresh.refreshCalls[0]?.includeSensitive === false,
+    publicSensitiveOmitted: publicRefreshCall !== undefined && !publicRefreshCall.includeSensitive,
   };
 }
 
@@ -258,9 +264,10 @@ function containsString(value: unknown, needle: string): boolean {
 
 async function runPluginToolProof(repoRoot: string) {
   const fixture = await createFixturePlugin();
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  const gatewayOwner = createQaGatewayChild();
+  let gateway: QaGatewayChild | undefined;
   try {
-    gateway = await startQaGatewayChild({
+    gateway = await gatewayOwner.start({
       repoRoot,
       useRepoCli: true,
       transportBaseUrl: "http://127.0.0.1",
@@ -277,14 +284,13 @@ async function runPluginToolProof(repoRoot: string) {
     });
     const after = (await gateway.call("health", { probe: true })) as HealthSummary;
     return {
-      pluginLoaded: before.plugins?.loaded.includes(FIXTURE_PLUGIN_ID) === true,
+      pluginLoaded: before.plugins?.loaded.includes(FIXTURE_PLUGIN_ID) ?? false,
       pluginToolCataloged: containsString(catalog, FIXTURE_TOOL_NAME),
       pluginToolInvoked: containsString(invoked, FIXTURE_RESULT),
-      healthAfterTool:
-        after.ok === true && after.plugins?.loaded.includes(FIXTURE_PLUGIN_ID) === true,
+      healthAfterTool: after.ok && Boolean(after.plugins?.loaded.includes(FIXTURE_PLUGIN_ID)),
     };
   } finally {
-    await gateway?.stop().catch(() => undefined);
+    await stopQaGatewayFixture(gatewayOwner).catch(() => undefined);
     await fixture.cleanup();
   }
 }
@@ -328,7 +334,7 @@ export async function main(argv = process.argv.slice(2)) {
   try {
     const proof = await runCachedHealthSnapshotBoundariesProof(repoRoot);
     const failures = Object.entries(proof)
-      .filter(([, passed]) => passed !== true)
+      .filter(([, passed]) => !passed)
       .map(([name]) => `${name} failed`);
     writer.appendLog(`${JSON.stringify(proof, null, 2)}\n`);
     await writer.write({

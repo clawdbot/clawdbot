@@ -21,7 +21,7 @@ import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
 import { escapeRegExp } from "../src/shared/regexp.js";
-import { checkCliBootstrapExternalImports } from "./check-cli-bootstrap-imports.mjs";
+import { checkCliBootstrapExternalImports } from "./check-cli-bootstrap-imports.mts";
 import {
   collectBundledExtensionManifestErrors,
   type BundledExtension,
@@ -31,8 +31,8 @@ import {
   collectRootPackageExcludedExtensionDirs,
   listBundledPluginPackArtifacts,
 } from "./lib/bundled-plugin-build-entries.mjs";
-import { resolveNpmJsonEntries } from "./lib/npm-json-output.mjs";
-import { collectPackUnpackedSizeErrors as collectNpmPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";
+import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
+import { collectPackUnpackedSizeErrors as collectNpmPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mts";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import {
   isLegacyPluginDependencyInstallStagePath,
@@ -40,32 +40,28 @@ import {
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   writePackageDistInventory,
 } from "./lib/package-dist-inventory.ts";
-import { collectBundledPluginPackageDependencySpecs } from "./lib/plugin-package-dependencies.mjs";
+import { collectBundledPluginPackageDependencySpecs } from "./lib/plugin-package-dependencies.mts";
 import {
   listPluginSdkDistArtifacts,
-  listPackagedPrivatePluginSdkRuntimeArtifacts,
   listUnpackagedPrivatePluginSdkDistArtifacts,
-} from "./lib/plugin-sdk-entries.mjs";
+} from "./lib/plugin-sdk-entries.mts";
+import { listStaticExtensionAssetOutputs } from "./lib/static-extension-assets.mts";
 import {
   runInstalledWorkspaceBootstrapSmoke,
   WORKSPACE_TEMPLATE_PACK_PATHS,
-} from "./lib/workspace-bootstrap-smoke.mjs";
-import { resolveNpmRunner } from "./npm-runner.mjs";
+} from "./lib/workspace-bootstrap-smoke.mts";
+import { resolveNpmRunner } from "./npm-runner.mts";
 import {
   collectInstalledPackageErrors,
   normalizeInstalledBinaryVersion,
 } from "./openclaw-npm-postpublish-verify.ts";
-import { resolvePnpmRunner } from "./pnpm-runner.mjs";
-import { listStaticExtensionAssetOutputs } from "./runtime-postbuild.mjs";
+import { resolvePnpmRunner } from "./pnpm-runner.mts";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 type ReleaseCheckExecOptions = ExecFileSyncOptions & {
   windowsVerbatimArguments?: boolean;
 };
-
-export { collectBundledExtensionManifestErrors } from "./lib/bundled-extension-manifest.ts";
-export { packageNameFromSpecifier } from "./lib/plugin-package-dependencies.mjs";
 
 export const RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV =
   "OPENCLAW_RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR";
@@ -84,14 +80,21 @@ const rootPackageExcludedExtensionDirs = collectRootPackageExcludedExtensionDirs
 const rootPackageExcludedExtensionPrefixes = [...rootPackageExcludedExtensionDirs].map(
   (extensionId) => `dist/extensions/${extensionId}/`,
 );
+// Trusted tooling can validate an older release checkout. Its SDK inventory
+// belongs to that target, including release-only compatibility entrypoints.
+const targetPluginSdkEntries = JSON.parse(
+  readFileSync(resolve("scripts/lib/plugin-sdk-entrypoints.json"), "utf8"),
+) as string[];
+const targetPrivatePluginSdkEntries = JSON.parse(
+  readFileSync(resolve("scripts/lib/plugin-sdk-private-local-only-subpaths.json"), "utf8"),
+) as string[];
 const requiredPathGroups = [
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   ["dist/index.js", "dist/index.mjs"],
   ["dist/entry.js", "dist/entry.mjs"],
-  ...listPluginSdkDistArtifacts(),
-  ...listPackagedPrivatePluginSdkRuntimeArtifacts(),
+  ...listPluginSdkDistArtifacts(targetPluginSdkEntries, targetPrivatePluginSdkEntries),
   ...listBundledPluginPackArtifacts(),
-  ...listStaticExtensionAssetOutputs().filter((relativePath) => {
+  ...listStaticExtensionAssetOutputs().filter((relativePath: string) => {
     const match = /^dist\/extensions\/([^/]+)\//u.exec(relativePath);
     return (
       !match ||
@@ -101,7 +104,6 @@ const requiredPathGroups = [
     );
   }),
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
-  "scripts/npm-runner.mjs",
   "scripts/prepare-git-hooks.mjs",
   "scripts/preinstall-package-manager-warning.mjs",
   "scripts/lib/official-external-channel-catalog.json",
@@ -113,7 +115,8 @@ const requiredPathGroups = [
   "scripts/postinstall-bundled-plugins.mjs",
   "dist/agents/compaction-planning.worker.js",
   "dist/agents/model-provider-auth.worker.js",
-  "dist/audit/audit-event-writer.worker.js",
+  "dist/agents/prepared-model-catalog.worker.js",
+  "dist/extensions/memory-core/memory-search-knn.child.js",
   "dist/config/sessions/session-accessor.sqlite-archive.worker.js",
   "dist/config/sessions/session-transcript-reconcile.worker.js",
   "dist/state/openclaw-database-verify.worker.js",
@@ -146,7 +149,10 @@ const forbiddenPrefixes = [
   "dist/plugin-sdk/compat.",
   "dist/plugin-sdk/root-alias.",
   "dist/extensionAPI.",
-  ...listUnpackagedPrivatePluginSdkDistArtifacts(),
+  ...listUnpackagedPrivatePluginSdkDistArtifacts(
+    targetPluginSdkEntries,
+    targetPrivatePluginSdkEntries,
+  ),
   "dist/qa-runtime-",
   "dist/plugin-sdk/.tsbuildinfo",
   "docs/.generated/",
@@ -200,8 +206,10 @@ export const PACKED_COMPLETION_SMOKE_ARGS = [
   "--shell",
   "zsh",
 ] as const;
-const PACKED_PLUGIN_SDK_TYPESCRIPT_SMOKE_FIXTURE = resolve(
-  "scripts/fixtures/packed-plugin-sdk-type-smoke.ts",
+// The checker owns fixture bytes; the target checkout supplies package metadata.
+const PACKED_PLUGIN_SDK_TYPESCRIPT_SMOKE_FIXTURE = new URL(
+  "./fixtures/packed-plugin-sdk-type-smoke.ts",
+  import.meta.url,
 );
 
 export function runReleaseCheckCommand(
@@ -865,7 +873,7 @@ export function writePackedBundledPluginActivationConfig(homeDir: string): void 
           },
         },
         channels: {
-          matrix: {
+          telegram: {
             enabled: true,
           },
         },
@@ -881,7 +889,7 @@ export function writePackedBundledPluginActivationConfig(homeDir: string): void 
         plugins: {
           enabled: true,
           entries: {
-            matrix: {
+            telegram: {
               enabled: true,
             },
           },
@@ -1042,7 +1050,9 @@ function runPackedBundledChannelEntrySmoke(): void {
       {
         command: process.execPath,
         args: [
-          resolve("scripts/test-built-bundled-channel-entry-smoke.mjs"),
+          "--import",
+          "tsx",
+          resolve("scripts/test-built-bundled-channel-entry-smoke.mts"),
           "--package-root",
           packageRoot,
         ],
@@ -1156,8 +1166,6 @@ export function collectForbiddenPackContentPaths(
     })
     .toSorted((left, right) => left.localeCompare(right));
 }
-
-export { collectPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";
 
 function extractTag(item: string, tag: string): string | null {
   const escapedTag = escapeRegExp(tag);
@@ -1389,14 +1397,7 @@ async function main() {
   const files = results.flatMap((entry) => entry.files ?? []);
   const paths = new Set(files.map((file) => file.path));
 
-  const missing = requiredPathGroups
-    .flatMap((group) => {
-      if (Array.isArray(group)) {
-        return group.some((path) => paths.has(path)) ? [] : [group.join(" or ")];
-      }
-      return paths.has(group) ? [] : [group];
-    })
-    .toSorted((left, right) => left.localeCompare(right));
+  const missing = collectMissingPackPaths(paths);
   const forbidden = collectForbiddenPackPaths(paths);
   const forbiddenContent = collectForbiddenPackContentPaths(paths);
   const sizeErrors = collectNpmPackUnpackedSizeErrors(results);

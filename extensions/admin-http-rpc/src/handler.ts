@@ -7,7 +7,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { dispatchGatewayMethod } from "openclaw/plugin-sdk/gateway-method-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  requestBodyErrorToText,
+  readJsonBodyWithLimit,
+  sendHttpRequestRejection,
   WEBHOOK_BODY_READ_DEFAULTS,
 } from "openclaw/plugin-sdk/webhook-request-guards";
 import { isAdminHttpRpcAllowedMethod, listAdminHttpRpcAllowedMethods } from "./methods.js";
@@ -49,6 +50,7 @@ type RequestBodyLimitFailureCode =
   | "PAYLOAD_TOO_LARGE"
   | "REQUEST_BODY_TIMEOUT"
   | "CONNECTION_CLOSED";
+
 type ReadJsonBodyResult =
   | { ok: true; value: unknown }
   | {
@@ -57,9 +59,6 @@ type ReadJsonBodyResult =
       message: string;
       closeAfterResponse?: boolean;
     };
-type ReadRawBodyResult =
-  | { ok: true; raw: string }
-  | { ok: false; code: RequestBodyLimitFailureCode; closeAfterResponse?: boolean };
 
 function createError(code: string, message: string): RpcError {
   return { code, message };
@@ -97,32 +96,6 @@ function sendError(res: ServerResponse, status: number, error: { type: string; m
   sendJson(res, status, { ok: false, error });
 }
 
-async function readJsonBody(
-  req: IncomingMessage,
-  maxBytes: number,
-  timeoutMs: number,
-): Promise<ReadJsonBodyResult> {
-  const body = await readRawBodyWithLimit(req, maxBytes, timeoutMs);
-  if (!body.ok) {
-    return {
-      ok: false,
-      status: statusForBodyErrorCode(body.code),
-      message: requestBodyErrorToText(body.code),
-      closeAfterResponse: body.closeAfterResponse,
-    };
-  }
-
-  const raw = body.raw.trim();
-  if (!raw) {
-    return { ok: false, status: 400, message: "request body must be JSON" };
-  }
-  try {
-    return { ok: true, value: JSON.parse(raw) as unknown };
-  } catch {
-    return { ok: false, status: 400, message: "request body must be valid JSON" };
-  }
-}
-
 function statusForBodyErrorCode(code: RequestBodyLimitFailureCode): number {
   switch (code) {
     case "PAYLOAD_TOO_LARGE":
@@ -135,108 +108,32 @@ function statusForBodyErrorCode(code: RequestBodyLimitFailureCode): number {
   return 400;
 }
 
-async function readRawBodyWithLimit(
-  req: IncomingMessage,
-  maxBytes: number,
-  timeoutMs: number,
-): Promise<ReadRawBodyResult> {
-  const declaredLength = readDeclaredContentLength(req);
-  if (declaredLength !== null && declaredLength > maxBytes) {
-    req.pause();
-    return { ok: false, code: "PAYLOAD_TOO_LARGE", closeAfterResponse: true };
-  }
-
-  return await new Promise((resolve) => {
-    let done = false;
-    let ended = false;
-    let totalBytes = 0;
-    const chunks: Buffer[] = [];
-
-    const cleanup = () => {
-      req.removeListener("data", onData);
-      req.removeListener("end", onEnd);
-      req.removeListener("error", onError);
-      req.removeListener("close", onClose);
-      clearTimeout(timer);
-    };
-
-    const finish = (result: ReadRawBodyResult) => {
-      if (done) {
-        return;
-      }
-      done = true;
-      cleanup();
-      resolve(result);
-    };
-
-    const failAfterResponse = (code: RequestBodyLimitFailureCode) => {
-      req.pause();
-      finish({ ok: false, code, closeAfterResponse: true });
-    };
-
-    const timer = setTimeout(() => {
-      failAfterResponse("REQUEST_BODY_TIMEOUT");
-    }, timeoutMs);
-
-    const onData = (chunk: Buffer | string) => {
-      if (done) {
-        return;
-      }
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      totalBytes += buffer.byteLength;
-      if (totalBytes > maxBytes) {
-        failAfterResponse("PAYLOAD_TOO_LARGE");
-        return;
-      }
-      chunks.push(buffer);
-    };
-
-    const onEnd = () => {
-      ended = true;
-      finish({ ok: true, raw: Buffer.concat(chunks).toString("utf8") });
-    };
-
-    const onError = () => {
-      finish({ ok: false, code: "CONNECTION_CLOSED" });
-    };
-
-    const onClose = () => {
-      if (done || ended) {
-        return;
-      }
-      finish({ ok: false, code: "CONNECTION_CLOSED" });
-    };
-
-    req.on("data", onData);
-    req.on("end", onEnd);
-    req.on("error", onError);
-    req.on("close", onClose);
+async function readAdminJsonBody(req: IncomingMessage): Promise<ReadJsonBodyResult> {
+  const body = await readJsonBodyWithLimit(req, {
+    // Admin responses are part of the client contract. The response-first profile
+    // defers destruction so the transport owner can flush the JSON error.
+    ...WEBHOOK_BODY_READ_DEFAULTS.postAuthResponseFirst,
+    emptyObjectOnEmpty: false,
   });
-}
-
-function readDeclaredContentLength(req: IncomingMessage): number | null {
-  const header = req.headers["content-length"];
-  const raw = Array.isArray(header) ? header[0] : header;
-  if (typeof raw !== "string" || !/^\d+$/.test(raw)) {
-    return null;
+  if (body.ok) {
+    return body;
   }
-  const value = Number(raw);
-  return Number.isSafeInteger(value) ? value : Number.MAX_SAFE_INTEGER;
-}
-
-function closeRequestAfterResponse(req: IncomingMessage, res: ServerResponse): void {
-  const once = (res as { once?: ServerResponse["once"] }).once;
-  if (typeof once !== "function") {
-    return;
+  if (body.code === "INVALID_JSON") {
+    return {
+      ok: false,
+      status: 400,
+      message:
+        body.error === "empty payload"
+          ? "request body must be JSON"
+          : "request body must be valid JSON",
+    };
   }
-  res.setHeader("Connection", "close");
-  once.call(res, "finish", () => {
-    // Timeout/size failures must flush JSON first; destroying before finish drops
-    // the HTTP response on real partial-body sockets.
-    if (!req.destroyed) {
-      req.destroy();
-    }
-  });
+  return {
+    ok: false,
+    status: statusForBodyErrorCode(body.code),
+    message: body.error,
+    closeAfterResponse: body.code !== "CONNECTION_CLOSED",
+  };
 }
 
 function readRpcRequestBody(body: unknown):
@@ -332,19 +229,25 @@ export async function handleAdminHttpRpcRequest(
     return true;
   }
 
-  const body = await readJsonBody(
-    req,
-    WEBHOOK_BODY_READ_DEFAULTS.postAuth.maxBytes,
-    WEBHOOK_BODY_READ_DEFAULTS.postAuth.timeoutMs,
-  );
+  const body = await readAdminJsonBody(req);
   if (!body.ok) {
     if (body.closeAfterResponse) {
-      closeRequestAfterResponse(req, res);
+      if (!res.headersSent) {
+        res.setHeader("Cache-Control", "no-store");
+      }
+      await sendHttpRequestRejection(
+        req,
+        res,
+        body.status,
+        JSON.stringify({ ok: false, error: { type: "invalid_request", message: body.message } }),
+        "application/json; charset=utf-8",
+      );
+    } else {
+      sendError(res, body.status, {
+        type: "invalid_request",
+        message: body.message,
+      });
     }
-    sendError(res, body.status, {
-      type: "invalid_request",
-      message: body.message,
-    });
     return true;
   }
 

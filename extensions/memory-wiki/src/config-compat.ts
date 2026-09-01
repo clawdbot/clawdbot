@@ -1,4 +1,5 @@
 // Memory Wiki helper module supports config compat behavior.
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../api.js";
 
 type LegacyConfigRule = {
@@ -7,14 +8,8 @@ type LegacyConfigRule = {
   match: (value: unknown) => boolean;
 };
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 function hasLegacyBridgeArtifactToggle(value: unknown): boolean {
-  return Object.hasOwn(asRecord(value) ?? {}, "readMemoryCore");
+  return Object.hasOwn(asNullableRecord(value) ?? {}, "readMemoryCore");
 }
 
 export const legacyConfigRules: LegacyConfigRule[] = [
@@ -30,23 +25,23 @@ export function migrateMemoryWikiLegacyConfig(config: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];
 } | null {
-  const rawEntry = asRecord(config.plugins?.entries?.["memory-wiki"]);
-  const rawPluginConfig = asRecord(rawEntry?.config);
-  const rawBridge = asRecord(rawPluginConfig?.bridge);
+  const rawEntry = asNullableRecord(config.plugins?.entries?.["memory-wiki"]);
+  const rawPluginConfig = asNullableRecord(rawEntry?.config);
+  const rawBridge = asNullableRecord(rawPluginConfig?.bridge);
   if (!rawBridge || !hasLegacyBridgeArtifactToggle(rawBridge)) {
     return null;
   }
 
   const nextConfig = structuredClone(config);
-  const nextPlugins = asRecord(nextConfig.plugins) ?? {};
+  const nextPlugins = asNullableRecord(nextConfig.plugins) ?? {};
   nextConfig.plugins = nextPlugins;
-  const nextEntries = asRecord(nextPlugins.entries) ?? {};
+  const nextEntries = asNullableRecord(nextPlugins.entries) ?? {};
   nextPlugins.entries = nextEntries;
-  const nextEntry = asRecord(nextEntries["memory-wiki"]) ?? {};
+  const nextEntry = asNullableRecord(nextEntries["memory-wiki"]) ?? {};
   nextEntries["memory-wiki"] = nextEntry;
-  const nextPluginConfig = asRecord(nextEntry.config) ?? {};
+  const nextPluginConfig = asNullableRecord(nextEntry.config) ?? {};
   nextEntry.config = nextPluginConfig;
-  const nextBridge = asRecord(nextPluginConfig.bridge) ?? {};
+  const nextBridge = asNullableRecord(nextPluginConfig.bridge) ?? {};
   nextPluginConfig.bridge = nextBridge;
 
   const legacyValue = nextBridge.readMemoryCore;

@@ -3,23 +3,23 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { ClawHubTrustErrorCode } from "../infra/clawhub-install-trust.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
-import { satisfiesPluginApiRange } from "../infra/clawhub.js";
 import { unscopedPackageName } from "../infra/install-safe-path.js";
 import type { NpmSpecResolution } from "../infra/install-source-utils.js";
 import { createNpmMetadataEnv, resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
 import {
-  compareOpenClawReleaseVersions,
   isExactSemverVersion,
   isPrereleaseResolutionAllowed,
   isPrereleaseSemverVersion,
   parseRegistryNpmSpec,
 } from "../infra/npm-registry-spec.js";
-import { expectedIntegrityForUpdate } from "../infra/package-update-utils.js";
-import { compareValidSemver } from "../infra/semver.js";
+import {
+  comparePackageUpdateVersions,
+  expectedIntegrityForUpdate,
+} from "../infra/package-update-utils.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
-import { CLAWHUB_INSTALL_ERROR_CODE } from "./clawhub-error-codes.js";
+import { isUnavailableClawHubTarget } from "./clawhub-error-codes.js";
 import {
   getExternalizedBundledPluginClawHubSpec,
   getExternalizedBundledPluginNpmSpec,
@@ -30,14 +30,14 @@ import {
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "./install-channel-specs.js";
-import { PLUGIN_INSTALL_ERROR_CODE } from "./install.js";
+import { isUnavailableNpmTarget } from "./install-types.js";
 import { checkMinHostVersion } from "./min-host-version.js";
 import * as officialInstallRecords from "./official-external-install-records.js";
 import {
   getOfficialExternalPluginCatalogEntry,
   resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
-import { resolvePackagePluginApiRange } from "./package-compat.js";
+import { satisfiesPluginApiRange, resolvePackagePluginApiRange } from "./package-compat.js";
 
 /** Logger surface used by plugin update flows. */
 export type PluginUpdateLogger = {
@@ -226,26 +226,20 @@ export function expectedIntegrityForNpmUpdate(params: {
   );
 }
 
-function compareNpmSemverForUpdate(left: string, right: string): number {
-  const releaseCmp = compareOpenClawReleaseVersions(left, right);
-  if (releaseCmp !== null) {
-    return releaseCmp;
-  }
-  return compareValidSemver(left, right) ?? 0;
-}
-
 export async function resolveNewerExactPinnedNpmDefaultLine(params: {
   currentVersion: string | undefined;
-  effectiveSpec: string | undefined;
+  recordedSpec: string | undefined;
   probeNpmVersion: string | undefined;
   updateChannel?: UpdateChannel;
   timeoutMs?: number;
 }): Promise<{ packageName: string; registryLine: "beta" | "latest"; version: string } | undefined> {
-  if (!params.currentVersion || !params.probeNpmVersion || !params.effectiveSpec) {
+  if (!params.currentVersion || !params.probeNpmVersion || !params.recordedSpec) {
     return undefined;
   }
-  const packageName = resolveNpmSpecPackageName(params.effectiveSpec);
-  const exactVersion = resolveExactNpmSpecVersion(params.effectiveSpec);
+  // Core alignment can produce an exact install target without changing user intent.
+  // Only the recorded selector owns pin diagnostics.
+  const packageName = resolveNpmSpecPackageName(params.recordedSpec);
+  const exactVersion = resolveExactNpmSpecVersion(params.recordedSpec);
   const probeNpmVersion = normalizeExactNpmVersion(params.probeNpmVersion);
   if (!packageName || !exactVersion || probeNpmVersion !== exactVersion) {
     return undefined;
@@ -268,7 +262,7 @@ export async function resolveNewerExactPinnedNpmDefaultLine(params: {
   ) {
     return undefined;
   }
-  return compareNpmSemverForUpdate(metadataResult.metadata.version, params.currentVersion) > 0
+  return comparePackageUpdateVersions(metadataResult.metadata.version, params.currentVersion) > 0
     ? { packageName, registryLine, version: metadataResult.metadata.version }
     : undefined;
 }
@@ -328,7 +322,7 @@ export async function resolveTrustedOfficialPrereleaseFallbackMetadataForUpdate(
   });
   const stableVersion = versions
     ?.filter((value) => !isPrereleaseSemverVersion(value))
-    .toSorted(compareNpmSemverForUpdate)
+    .toSorted(comparePackageUpdateVersions)
     .at(-1);
   if (stableVersion) {
     const stableMetadata = await resolveNpmSpecMetadata({
@@ -340,7 +334,7 @@ export async function resolveTrustedOfficialPrereleaseFallbackMetadataForUpdate(
 
   const prereleaseVersion = versions
     ?.filter(isPrereleaseSemverVersion)
-    .toSorted(compareNpmSemverForUpdate)
+    .toSorted(comparePackageUpdateVersions)
     .at(-1);
   if (!prereleaseVersion || !versions?.every(isPrereleaseSemverVersion)) {
     return undefined;
@@ -421,29 +415,15 @@ export function isNpmMetadataCompatibleWithCurrentHost(metadata: NpmSpecResoluti
 }
 
 export function isBundledVersionNewer(bundledVersion: string, installedVersion: string): boolean {
-  const releaseCmp = compareOpenClawReleaseVersions(bundledVersion, installedVersion);
-  if (releaseCmp !== null) {
-    return releaseCmp > 0;
-  }
-  return (compareValidSemver(bundledVersion, installedVersion) ?? 0) > 0;
+  return comparePackageUpdateVersions(bundledVersion, installedVersion) > 0;
 }
 
 function shouldFallbackClawHubToDefault(result: { ok: false; code?: string }): boolean {
-  return (
-    result.code === CLAWHUB_INSTALL_ERROR_CODE.PACKAGE_NOT_FOUND ||
-    result.code === CLAWHUB_INSTALL_ERROR_CODE.VERSION_NOT_FOUND
-  );
+  return isUnavailableClawHubTarget(result);
 }
 
 export function shouldFallbackBetaClawHubUpdate(result: { ok: false; code?: string }): boolean {
   return shouldFallbackClawHubToDefault(result);
-}
-
-function isUnavailableNpmTarget(result: { ok: false; code?: string; error: string }): boolean {
-  return (
-    result.code === PLUGIN_INSTALL_ERROR_CODE.NPM_PACKAGE_NOT_FOUND ||
-    /\b(ETARGET|notarget)\b|No matching version found|dist-tag|tag .*not found/i.test(result.error)
-  );
 }
 
 export function describeBetaNpmFallback(params: {

@@ -9,10 +9,6 @@ import type {
   MusicGenerationProvider,
   MusicGenerationRequest,
 } from "../../../../src/music-generation/types.js";
-import {
-  withBundledPluginEnablementCompat,
-  withBundledPluginVitestCompat,
-} from "../../../../src/plugins/bundled-compat.js";
 import { prepareMediaCapabilityProviders } from "../../../../src/plugins/capability-provider-runtime.js";
 import { installTemporaryCurrentPluginMetadataSnapshot } from "../../../../src/plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginRegistryLoadCacheKey } from "../../../../src/plugins/loader.js";
@@ -104,6 +100,11 @@ function createMusicFixture() {
     },
   };
   const config: OpenClawConfig = {
+    plugins: {
+      allow: [PLUGIN_ID],
+      entries: { [PLUGIN_ID]: { enabled: true } },
+      slots: { memory: "none" },
+    },
     agents: {
       defaults: {
         mediaModels: {
@@ -190,17 +191,8 @@ describe("music generation controls QA product proof", () => {
     );
     try {
       const pluginIds = [PLUGIN_ID];
-      const enabledConfig = withBundledPluginEnablementCompat({
-        config: fixture.config,
-        pluginIds,
-      });
-      const loadConfig = withBundledPluginVitestCompat({
-        config: enabledConfig,
-        pluginIds,
-        env: process.env,
-      });
       const cacheKey = resolvePluginRegistryLoadCacheKey({
-        ...(loadConfig ? { config: loadConfig } : {}),
+        config: fixture.config,
         onlyPluginIds: pluginIds,
         activate: false,
       });
@@ -232,7 +224,7 @@ describe("music generation controls QA product proof", () => {
       restoreActivePluginRegistrySnapshot(activeRegistry);
     }
 
-    const stateDir = await fs.realpath(tempDirs.make("openclaw-qa-music-controls-"));
+    const stateDir = tempDirs.make("openclaw-qa-music-controls-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const vocalResult = (await fixture.tool.execute("music-vocal-fallback", {
         prompt: "bright QA chorus",

@@ -3,16 +3,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 
-const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
+const emptyPluginMetadataSnapshot = {
   configFingerprint: "models-list-configured-test-empty-plugin-metadata",
-  plugins: [],
-}));
+  ...createPluginMetadataSnapshotFixture(),
+};
 
 const mocks = vi.hoisted(() => ({
   loadPreparedModelCatalogSnapshot: vi.fn(),
   normalizeProviderResolvedModelWithPlugin: vi.fn(() => undefined),
-  shouldSuppressBuiltInModelFromManifest: vi.fn(() => false),
 }));
 
 vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
@@ -21,17 +21,18 @@ vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
   }),
 }));
 
-vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
+vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
 
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalogSnapshot: mocks.loadPreparedModelCatalogSnapshot,
 }));
 
 vi.mock("../../agents/model-suppression.js", () => ({
-  shouldSuppressBuiltInModel: vi.fn(() => false),
-  shouldSuppressBuiltInModelFromManifest: mocks.shouldSuppressBuiltInModelFromManifest,
+  shouldSuppressBuiltInModelCore: vi.fn(() => false),
 }));
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
@@ -41,8 +42,10 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
 import { resolveConfiguredEntries } from "./list.configured.js";
 import { appendConfiguredModelRowSources } from "./list.row-sources.js";
 import type { ModelRow } from "./list.types.js";
+import { createModelCatalogProviderAliasCanonicalizer } from "./provider-aliases.js";
 
 afterEach(() => {
+  vi.clearAllMocks();
   vi.unstubAllEnvs();
 });
 
@@ -202,6 +205,138 @@ describe("resolveConfiguredEntries", () => {
 });
 
 describe("configured model list rows", () => {
+  it("keeps raw alias auth for self-prefixed implicit models in replace mode", async () => {
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
+    const catalogEntry = {
+      id: "glm-4.7",
+      name: "GLM 4.7",
+      provider: "zai",
+      input: ["text"] as const,
+      contextWindow: 128_000,
+    };
+    mocks.loadPreparedModelCatalogSnapshot.mockResolvedValue({
+      entries: [catalogEntry],
+      routeVariants: [catalogEntry],
+    });
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "z.ai/glm-4.7", fallbacks: ["google/gemini-stale"] },
+          models: { "openai/gpt-stale": {} },
+        },
+      },
+      models: {
+        mode: "replace" as const,
+        providers: {
+          "z.ai": {
+            baseUrl: "https://api.z.ai/v1",
+            models: [
+              {
+                id: "z.ai/glm-4.7",
+                name: "GLM 4.7",
+                reasoning: false,
+                input: ["text" as const],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 8_192,
+              },
+              {
+                id: "z.ai/glm-4.8",
+                name: "GLM 4.8",
+                reasoning: false,
+                input: ["text" as const],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 8_192,
+              },
+            ],
+          },
+        },
+      },
+    };
+    const { entries } = resolveConfiguredEntries(cfg);
+    const evaluateModelAuth = vi.fn((provider: string) => ({
+      availability: provider === "z.ai",
+      routeResolution: null,
+    }));
+    const rows: ModelRow[] = [];
+
+    await appendConfiguredModelRowSources({
+      rows,
+      entries,
+      context: {
+        cfg,
+        agentDir: "/tmp/openclaw-agent",
+        authIndex: { evaluateModelAuth },
+        canonicalizeProvider: createModelCatalogProviderAliasCanonicalizer({ cfg }).provider,
+        configuredByKey: new Map(entries.map((entry) => [entry.key, entry])),
+        discoveredKeys: new Set(),
+        filter: {},
+      },
+    });
+
+    expect(rows.map((row) => row.key)).toEqual(["zai/glm-4.7", "zai/glm-4.8"]);
+    expect(rows[0]).toMatchObject({ name: "GLM 4.7", available: true });
+    expect(rows[1]).toMatchObject({ name: "GLM 4.8", available: true });
+    expect(mocks.loadPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
+    expect(evaluateModelAuth).toHaveBeenCalledWith(
+      "z.ai",
+      expect.objectContaining({ modelId: "glm-4.7" }),
+    );
+    expect(evaluateModelAuth).toHaveBeenCalledWith(
+      "z.ai",
+      expect.objectContaining({ modelId: "glm-4.8" }),
+    );
+  });
+
+  it("drops a stale default outside models.providers in replace mode", async () => {
+    const cfg = {
+      agents: { defaults: { model: { primary: "google/gemini-stale" } } },
+      models: {
+        mode: "replace" as const,
+        providers: {
+          xiaomi: {
+            baseUrl: "https://api.xiaomi.example/v1",
+            models: [
+              {
+                id: "mimo-v2.5",
+                name: "MiMo V2.5",
+                reasoning: false,
+                input: ["text" as const],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 8_192,
+              },
+            ],
+          },
+        },
+      },
+    };
+    const { entries } = resolveConfiguredEntries(cfg);
+    const rows: ModelRow[] = [];
+
+    await appendConfiguredModelRowSources({
+      rows,
+      entries,
+      context: {
+        cfg,
+        agentDir: "/tmp/openclaw-agent",
+        authIndex: {
+          evaluateModelAuth: () => ({ availability: true, routeResolution: null }),
+        },
+        canonicalizeProvider: createModelCatalogProviderAliasCanonicalizer({ cfg }).provider,
+        configuredByKey: new Map(entries.map((entry) => [entry.key, entry])),
+        discoveredKeys: new Set(),
+        filter: {},
+      },
+    });
+
+    expect(rows).toMatchObject([
+      { key: "xiaomi/mimo-v2.5", name: "MiMo V2.5", tags: [], available: true },
+    ]);
+    expect(mocks.loadPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
+  });
+
   it("renders plugin-catalog metadata for a fallback ref instead of default placeholders", async () => {
     const catalogEntry = {
       id: "k3",
@@ -261,10 +396,10 @@ describe("configured model list rows", () => {
         cfg,
         agentDir: "/tmp/openclaw-agent",
         authIndex: { evaluateModelAuth: () => ({ availability: true, routeResolution: null }) },
+        canonicalizeProvider: createModelCatalogProviderAliasCanonicalizer({ cfg }).provider,
         configuredByKey: new Map(entries.map((entry) => [entry.key, entry])),
         discoveredKeys: new Set<string>(),
         filter: {},
-        skipRuntimeModelSuppression: true,
       },
     });
 

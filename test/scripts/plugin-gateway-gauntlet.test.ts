@@ -15,7 +15,7 @@ import {
   parseTimedMetrics,
   runMeasuredCommand,
   runMeasuredCommandLive,
-} from "../../scripts/check-plugin-gateway-gauntlet.mjs";
+} from "../../scripts/check-plugin-gateway-gauntlet.mts";
 import {
   buildGauntletPrebuildEnv,
   collectGatewayCpuObservations,
@@ -26,7 +26,9 @@ import {
   detectCommandDiagnosticFailure,
   discoverBundledPluginManifests,
   selectPluginEntries,
-} from "../../scripts/lib/plugin-gateway-gauntlet.mjs";
+} from "../../scripts/lib/plugin-gateway-gauntlet.mts";
+
+const tsxImport = import.meta.resolve("tsx");
 
 describe("plugin gateway gauntlet helpers", () => {
   let repoRoot: string;
@@ -80,7 +82,9 @@ describe("plugin gateway gauntlet helpers", () => {
     const result = spawnSync(
       process.execPath,
       [
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--import",
+        tsxImport,
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
         "--repo-root",
         repoRoot,
         "--output-dir",
@@ -146,6 +150,7 @@ describe("plugin gateway gauntlet helpers", () => {
       counts: { failed: 0, passed: 1, total: 1 },
       metrics,
       run: {
+        status: "completed",
         concurrency: 1,
         fastMode: false,
         finishedAt: "2026-05-30T00:00:01.000Z",
@@ -354,7 +359,6 @@ describe("plugin gateway gauntlet helpers", () => {
 
   it("skips source-only plugin dirs that are excluded from the built runtime", async () => {
     await writeManifest("qa-lab", "openclaw.plugin.json", JSON.stringify({ id: "qa-lab" }));
-    await writeManifest("qqbot", "openclaw.plugin.json", JSON.stringify({ id: "qqbot" }));
     await writeManifest("telegram", "openclaw.plugin.json", JSON.stringify({ id: "telegram" }));
 
     const matrix = discoverBundledPluginManifests(repoRoot);
@@ -639,7 +643,7 @@ describe("plugin gateway gauntlet helpers", () => {
   it("prebuilds only the QA runtime needed by the gauntlet", () => {
     expect(createGauntletPrebuildCommand(repoRoot)).toEqual({
       command: process.execPath,
-      args: [path.join(repoRoot, "scripts", "build-all.mjs"), "qaRuntime"],
+      args: ["--import", "tsx", path.join(repoRoot, "scripts", "build-all.mts"), "qaRuntime"],
     });
   });
 
@@ -926,7 +930,7 @@ setInterval(() => {}, 1000);
         harnessPath,
         `
 import { runMeasuredCommandLive } from ${JSON.stringify(
-          pathToFileURL(path.resolve("scripts/check-plugin-gateway-gauntlet.mjs")).href,
+          pathToFileURL(path.resolve("scripts/check-plugin-gateway-gauntlet.mts")).href,
         )};
 
 await runMeasuredCommandLive({
@@ -947,7 +951,7 @@ await runMeasuredCommandLive({
         "utf8",
       );
 
-      const harness = spawn(process.execPath, [harnessPath], {
+      const harness = spawn(process.execPath, ["--import", tsxImport, harnessPath], {
         cwd: repoRoot,
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -1019,7 +1023,7 @@ setInterval(() => {}, 1000);
 import fs from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { runMeasuredCommandLive } from ${JSON.stringify(
-          pathToFileURL(path.resolve("scripts/check-plugin-gateway-gauntlet.mjs")).href,
+          pathToFileURL(path.resolve("scripts/check-plugin-gateway-gauntlet.mts")).href,
         )};
 
 const promise = runMeasuredCommandLive({
@@ -1052,7 +1056,7 @@ process.exit(7);
         "utf8",
       );
 
-      const harness = spawn(process.execPath, [harnessPath], {
+      const harness = spawn(process.execPath, ["--import", tsxImport, harnessPath], {
         cwd: repoRoot,
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -1172,7 +1176,9 @@ process.exit(7);
     const result = spawnSync(
       process.execPath,
       [
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--import",
+        tsxImport,
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
         "--repo-root",
         repoRoot,
         "--output-dir",
@@ -1207,7 +1213,9 @@ process.exit(7);
     const result = spawnSync(
       process.execPath,
       [
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--import",
+        tsxImport,
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
         "--skip-prebuild",
         "--skip-lifecycle",
         "--skip-slash-help",
@@ -1229,7 +1237,7 @@ process.exit(7);
   it("documents gauntlet guardrail options and env defaults in help", () => {
     const result = spawnSync(
       process.execPath,
-      [path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"), "--help"],
+      ["--import", tsxImport, path.resolve("scripts/check-plugin-gateway-gauntlet.mts"), "--help"],
       {
         cwd: path.resolve("."),
         encoding: "utf8",
@@ -1263,7 +1271,9 @@ process.exit(7);
     const result = spawnSync(
       process.execPath,
       [
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--import",
+        tsxImport,
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
         "--repo-root",
         repoRoot,
         "--output-dir",
@@ -1305,7 +1315,9 @@ process.exit(7);
     const result = spawnSync(
       process.execPath,
       [
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--import",
+        tsxImport,
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
         "--repo-root",
         repoRoot,
         "--output-dir",
@@ -1393,7 +1405,9 @@ process.exit(7);
     const result = spawnSync(
       process.execPath,
       [
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--import",
+        tsxImport,
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
         "--repo-root",
         repoRoot,
         "--output-dir",
@@ -1424,7 +1438,9 @@ process.exit(7);
     const result = spawnSync(
       process.execPath,
       [
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--import",
+        tsxImport,
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
         "--repo-root",
         repoRoot,
         "--output-dir",
@@ -1506,7 +1522,9 @@ process.exit(7);
     const result = spawnSync(
       process.execPath,
       [
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--import",
+        tsxImport,
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
         "--repo-root",
         repoRoot,
         "--output-dir",
@@ -1607,7 +1625,9 @@ process.exit(7);
     const result = spawnSync(
       process.execPath,
       [
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--import",
+        tsxImport,
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
         "--repo-root",
         repoRoot,
         "--output-dir",
@@ -1655,7 +1675,9 @@ process.exit(7);
     const result = spawnSync(
       process.execPath,
       [
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--import",
+        tsxImport,
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
         "--repo-root",
         repoRoot,
         "--output-dir",
@@ -1694,6 +1716,7 @@ process.exit(7);
         counts: { failed: 1, passed: 1, total: 2 },
         metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
         run: {
+          status: "completed",
           concurrency: 1,
           fastMode: false,
           finishedAt: "2026-05-30T00:00:01.000Z",
@@ -1716,12 +1739,32 @@ process.exit(7);
     });
   });
 
+  it("fails successful QA chunks whose summary is still running", async () => {
+    await runQaSummaryFailureScenario({
+      qaSummary: {
+        counts: { failed: 0, passed: 1, total: 1 },
+        run: { status: "running" },
+        scenarios: [
+          {
+            name: "channel-chat-baseline",
+            status: "pass",
+            steps: [{ name: "reply", status: "pass" }],
+          },
+        ],
+      },
+      scenarioIds: ["channel-chat-baseline"],
+      diagnosticFailure: "qa-summary-invalid",
+      diagnosticDetail: "QA suite summary run.status must be completed, got running",
+    });
+  });
+
   it("fails successful QA chunks whose passed scenarios have no step evidence", async () => {
     await runQaSummaryFailureScenario({
       qaSummary: {
         counts: { failed: 0, passed: 1, total: 1 },
         metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
         run: {
+          status: "completed",
           concurrency: 1,
           fastMode: false,
           finishedAt: "2026-05-30T00:00:01.000Z",
@@ -1747,6 +1790,7 @@ process.exit(7);
         counts: { failed: 0, passed: 1, total: 2 },
         metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
         run: {
+          status: "completed",
           concurrency: 1,
           fastMode: false,
           finishedAt: "2026-05-30T00:00:01.000Z",

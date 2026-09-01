@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Insertable, Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { isLockOwnerDefinitelyStale } from "../../infra/stale-lock-file.js";
@@ -12,6 +13,7 @@ import {
 import type {
   ManagedWorktreeOwnerKind,
   ManagedWorktreeRecord,
+  ManagedWorktreeRunEndCleanup,
   ProvisionedFileState,
 } from "./types.js";
 
@@ -40,7 +42,41 @@ function kyselyLeaseFor(db: DatabaseSync) {
   return getNodeSqliteKysely<WorktreeLeaseDatabase>(db);
 }
 
+function parseRunEndCleanup(
+  raw: string | null | undefined,
+): ManagedWorktreeRunEndCleanup | undefined {
+  if (raw == null) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isRecord(parsed) || !Number.isInteger(parsed.at) || (parsed.at as number) < 0) {
+      return undefined;
+    }
+    const at = parsed.at as number;
+    switch (parsed.outcome) {
+      case "failed":
+        return typeof parsed.reason === "string" &&
+          parsed.reason.length > 0 &&
+          parsed.reason.length <= 500
+          ? { outcome: parsed.outcome, at, reason: parsed.reason }
+          : undefined;
+      case "removed-lossless":
+      case "retained-busy":
+      case "retained-dirty":
+      case "retained-unpushed":
+      case "retained-provisioned-drift":
+        return parsed.reason === undefined ? { outcome: parsed.outcome, at } : undefined;
+      default:
+        return undefined;
+    }
+  } catch {
+    return undefined;
+  }
+}
+
 function rowToRecord(row: WorktreeRow): ManagedWorktreeRecord {
+  const runEndCleanup = parseRunEndCleanup(row.run_end_cleanup_json);
   return {
     id: row.id,
     name: row.path.split(/[\\/]/).at(-1) ?? row.id,
@@ -55,6 +91,7 @@ function rowToRecord(row: WorktreeRow): ManagedWorktreeRecord {
     createdAt: row.created_at,
     lastActiveAt: row.last_active_at,
     ...(row.removed_at == null ? {} : { removedAt: row.removed_at }),
+    ...(runEndCleanup ? { runEndCleanup } : {}),
   };
 }
 
@@ -77,6 +114,8 @@ function recordToRow(
     removed_at: record.removedAt ?? null,
     provisioned_paths_json:
       provisionedPaths === undefined ? null : JSON.stringify(provisionedPaths),
+    run_end_cleanup_json:
+      record.runEndCleanup === undefined ? null : JSON.stringify(record.runEndCleanup),
   };
 }
 
@@ -123,20 +162,21 @@ export function listRegistryWorktrees(env: NodeJS.ProcessEnv): ManagedWorktreeRe
 
 export function listRegistryWorktreesForMigration(env: NodeJS.ProcessEnv): ManagedWorktreeRecord[] {
   return (
-    withExistingOpenClawStateDatabaseReadOnly(
-      ({ db }) => {
-        if (!tableExists(db, "worktrees")) {
-          return [];
-        }
-        const query = kyselyFor(db)
-          .selectFrom("worktrees")
-          .selectAll()
-          .orderBy("created_at", "desc")
-          .orderBy("id", "asc");
-        return executeSqliteQuerySync(db, query).rows.map(rowToRecord);
-      },
-      { env },
-    ) ?? []
+    readRegistry(env, (db) => {
+      const query = kyselyFor(db)
+        .selectFrom("worktrees")
+        .selectAll()
+        .orderBy("created_at", "desc")
+        .orderBy("id", "asc");
+      return executeSqliteQuerySync(db, query).rows.map(rowToRecord);
+    }) ?? []
+  );
+}
+
+function readRegistry<T>(env: NodeJS.ProcessEnv, read: (db: DatabaseSync) => T): T | undefined {
+  return withExistingOpenClawStateDatabaseReadOnly(
+    ({ db }) => (tableExists(db, "worktrees") ? read(db) : undefined),
+    { env },
   );
 }
 
@@ -166,13 +206,16 @@ export function getRegistryWorktreeProvisionedPaths(
 }
 
 export function hasLegacyRegistryWorktrees(env: NodeJS.ProcessEnv): boolean {
-  const db = dbFor(env);
-  const query = kyselyFor(db)
-    .selectFrom("worktrees")
-    .select("id")
-    .where("provisioned_paths_json", "is", null)
-    .limit(1);
-  return executeSqliteQuerySync(db, query).rows.length > 0;
+  return (
+    readRegistry(env, (db) => {
+      const query = kyselyFor(db)
+        .selectFrom("worktrees")
+        .select("id")
+        .where("provisioned_paths_json", "is", null)
+        .limit(1);
+      return executeSqliteQuerySync(db, query).rows.length > 0;
+    }) ?? false
+  );
 }
 
 export function discardLegacyRegistryWorktrees(env: NodeJS.ProcessEnv): number {
@@ -324,21 +367,6 @@ export function findLiveRegistryWorktreeByOwner(
   return row ? rowToRecord(row) : undefined;
 }
 
-export function findRegistryWorktreeByPath(
-  env: NodeJS.ProcessEnv,
-  worktreePath: string,
-): ManagedWorktreeRecord | undefined {
-  const db = dbFor(env);
-  const query = kyselyFor(db)
-    .selectFrom("worktrees")
-    .selectAll()
-    .where("path", "=", worktreePath)
-    .orderBy("created_at", "desc")
-    .limit(1);
-  const row = executeSqliteQuerySync(db, query).rows[0];
-  return row ? rowToRecord(row) : undefined;
-}
-
 export function insertRegistryWorktree(
   env: NodeJS.ProcessEnv,
   record: ManagedWorktreeRecord,
@@ -356,10 +384,14 @@ export function insertRegistryWorktree(
 export function updateRegistryWorktree(
   env: NodeJS.ProcessEnv,
   id: string,
-  patch: Partial<Pick<ManagedWorktreeRecord, "lastActiveAt" | "removedAt" | "snapshotRef">> & {
+  patch: Partial<
+    Pick<ManagedWorktreeRecord, "lastActiveAt" | "removedAt" | "runEndCleanup" | "snapshotRef">
+  > & {
+    repositoryIdentity?: Pick<ManagedWorktreeRecord, "repoRoot" | "repoFingerprint">;
     provisionedPaths?: readonly string[];
     provisionedState?: readonly ProvisionedFileState[];
   },
+  options: { onlyIfLive?: boolean; onlyIfActiveAt?: number } = {},
 ): void {
   const db = dbFor(env);
   const values: Partial<WorktreeRow> = {};
@@ -372,16 +404,32 @@ export function updateRegistryWorktree(
   if ("snapshotRef" in patch) {
     values.snapshot_ref = patch.snapshotRef ?? null;
   }
+  if ("runEndCleanup" in patch) {
+    values.run_end_cleanup_json =
+      patch.runEndCleanup === undefined ? null : JSON.stringify(patch.runEndCleanup);
+  }
+  if (patch.repositoryIdentity) {
+    values.repo_root = patch.repositoryIdentity.repoRoot;
+    values.repo_fingerprint = patch.repositoryIdentity.repoFingerprint;
+  }
   if (patch.provisionedState !== undefined) {
     values.provisioned_paths_json = JSON.stringify(patch.provisionedState);
   } else if (patch.provisionedPaths !== undefined) {
     values.provisioned_paths_json = JSON.stringify(patch.provisionedPaths);
   }
   runOpenClawStateWriteTransaction(() => {
-    executeSqliteQuerySync(
-      db,
-      kyselyFor(db).updateTable("worktrees").set(values).where("id", "=", id),
-    );
+    let update = kyselyFor(db).updateTable("worktrees").set(values).where("id", "=", id);
+    // Busy/retained/failed outcomes are authoritative only for the lifecycle the
+    // writer observed: the live condition blocks post-finalization overwrites, and
+    // the activity condition blocks prior-lifecycle writes after a concurrent
+    // remove-plus-restore revives the row (restore bumps last_active_at).
+    if (options.onlyIfLive) {
+      update = update.where("removed_at", "is", null);
+    }
+    if (options.onlyIfActiveAt !== undefined) {
+      update = update.where("last_active_at", "=", options.onlyIfActiveAt);
+    }
+    executeSqliteQuerySync(db, update);
   });
 }
 
@@ -400,6 +448,16 @@ export function deleteRegistryWorktree(env: NodeJS.ProcessEnv, id: string): void
 
 const WORKTREE_RUN_LEASE_SCOPE_PREFIX = "worktree-run:";
 const WORKTREE_REMOVING_LEASE_KEY = "__removing__";
+
+export class WorktreeRemovalContentionError extends Error {
+  constructor(
+    readonly kind: "busy" | "finalized",
+    message: string,
+  ) {
+    super(message);
+    this.name = "WorktreeRemovalContentionError";
+  }
+}
 
 export type RunLeaseOwnerChecks = {
   isPidDefinitelyDead?: (pid: number) => boolean;
@@ -535,7 +593,6 @@ export function claimWorktreeRemovalRow(
   params: {
     worktreeId: string;
     token: string;
-    force: boolean;
     pid: number;
     startTime: number | null;
     now: number;
@@ -547,14 +604,30 @@ export function claimWorktreeRemovalRow(
       const db = database.db;
       const k = kyselyLeaseFor(db);
       const scope = worktreeRunLeaseScope(params.worktreeId);
+      const record = executeSqliteQuerySync(
+        db,
+        k
+          .selectFrom("worktrees")
+          .select(["id", "path", "removed_at"])
+          .where("id", "=", params.worktreeId),
+      ).rows[0];
+      if (!record || record.removed_at != null) {
+        throw new WorktreeRemovalContentionError(
+          "finalized",
+          `managed worktree was removed: ${record?.path ?? params.worktreeId}`,
+        );
+      }
       const { livePids, removingToken } = collectLiveRunLeases(db, k, scope, params.checks ?? {});
-      if (!params.force && livePids.length > 0) {
-        throw new Error(`worktree is busy: locked by live pid ${livePids[0]}`);
+      if (livePids.length > 0) {
+        throw new WorktreeRemovalContentionError(
+          "busy",
+          `worktree is busy: locked by live pid ${livePids[0]}`,
+        );
       }
       // The removal claim is exclusive: a live marker owned by a different token means
       // another remover is mid-operation, so this remover must not enter it too.
       if (removingToken !== undefined && removingToken !== params.token) {
-        throw new Error("worktree removal is already in progress");
+        throw new WorktreeRemovalContentionError("busy", "worktree removal is already in progress");
       }
       const payloadJson = JSON.stringify({
         pid: params.pid,

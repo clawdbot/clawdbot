@@ -2,11 +2,12 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { completeSimple, type AssistantMessage, type Model } from "openclaw/plugin-sdk/llm";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import { formatDurationCompact } from "../src/infra/format-time/format-duration.ts";
 import {
@@ -14,10 +15,13 @@ import {
   verifyControlUiGeneratedCatalogs,
   verifyRuntimeLocaleConfig,
 } from "./control-ui-i18n-verify.ts";
+import { isStrictAffirmativeValue } from "./lib/arg-utils.mts";
 import {
   hashControlUiTranslationText,
+  loadControlUiSourceCatalog,
   loadControlUiTranslationMemory,
   materializeControlUiLocaleCatalog,
+  readControlUiSourceCatalog,
 } from "./lib/control-ui-i18n-catalog.ts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
 import { syncControlUiRawCopyBaseline } from "./lib/control-ui-i18n-raw-copy.ts";
@@ -32,10 +36,9 @@ import {
   type TranslationBatchItem,
   type TranslationMap,
 } from "./lib/control-ui-i18n-sync-plan.ts";
+import { toErrorObject as toLintErrorObject } from "./lib/error-format.mts";
 import { sleep } from "./lib/sleep.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
-
-export { shouldReuseExistingTranslation } from "./lib/control-ui-i18n-sync-plan.ts";
 
 type RunProcessParentSignalState = {
   done: boolean;
@@ -51,6 +54,9 @@ const ROOT = path.resolve(HERE, "..");
 const LOCALES_DIR = path.join(ROOT, "ui", "src", "i18n", "locales");
 const I18N_ASSETS_DIR = path.join(ROOT, "ui", "src", "i18n", ".i18n");
 const SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en.ts");
+const ACTIVITY_SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en-activity.ts");
+const SESSION_PLACEMENT_SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en-session-placement.ts");
+const PLUGIN_CONSENT_SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en-plugin-consent.ts");
 const SOURCE_LOCALE = "en";
 const MAX_BATCH_ITEMS = 20;
 const DEFAULT_BATCH_CHAR_BUDGET = 2_000;
@@ -276,18 +282,22 @@ function tmPath(entry: LocaleEntry): string {
   return path.join(I18N_ASSETS_DIR, `${entry.locale}.tm.jsonl`);
 }
 
-async function importLocaleModule<T>(filePath: string): Promise<T> {
-  const stats = await stat(filePath);
-  const href = `${pathToFileURL(filePath).href}?ts=${stats.mtimeMs}`;
-  return (await import(href)) as T;
+async function loadSourceLocaleMap(): Promise<TranslationMap> {
+  return await loadControlUiSourceCatalog(
+    SOURCE_LOCALE_PATH,
+    ACTIVITY_SOURCE_LOCALE_PATH,
+    SESSION_PLACEMENT_SOURCE_LOCALE_PATH,
+    PLUGIN_CONSENT_SOURCE_LOCALE_PATH,
+  );
 }
 
-async function loadLocaleMap(filePath: string, exportName: string): Promise<TranslationMap | null> {
-  if (!existsSync(filePath)) {
-    return null;
-  }
-  const mod = await importLocaleModule<Record<string, TranslationMap>>(filePath);
-  return mod[exportName] ?? null;
+async function readSourceLocaleRaw(): Promise<string> {
+  return await readControlUiSourceCatalog(
+    SOURCE_LOCALE_PATH,
+    ACTIVITY_SOURCE_LOCALE_PATH,
+    SESSION_PLACEMENT_SOURCE_LOCALE_PATH,
+    PLUGIN_CONSENT_SOURCE_LOCALE_PATH,
+  );
 }
 
 type PlaceholderMismatch = {
@@ -464,8 +474,7 @@ export function isProviderAuthError(error: Error): boolean {
 }
 
 function isProviderAuthOptional(): boolean {
-  const raw = process.env[ENV_AUTH_OPTIONAL]?.trim().toLowerCase();
-  return raw === "1" || raw === "true" || raw === "yes";
+  return isStrictAffirmativeValue(process.env[ENV_AUTH_OPTIONAL]);
 }
 
 function resolvePromptTimeoutMs(): number {
@@ -525,8 +534,9 @@ export function appendBoundedProcessOutput(
   if (nextText.length <= maxChars) {
     return { text: nextText, truncatedChars: capture.truncatedChars };
   }
-  const truncatedChars = capture.truncatedChars + nextText.length - maxChars;
-  return { text: nextText.slice(-maxChars), truncatedChars };
+  const text = sliceUtf16Safe(nextText, -maxChars);
+  const truncatedChars = capture.truncatedChars + nextText.length - text.length;
+  return { text, truncatedChars };
 }
 
 function formatProcessOutput(capture: ProcessOutputCapture): string {
@@ -843,8 +853,10 @@ class TranslationClient {
   private closed = false;
   private sequence: Promise<unknown> = Promise.resolve();
   private readonly model: Model;
+  private readonly systemPrompt: string;
 
-  private constructor(private readonly systemPrompt: string) {
+  private constructor(systemPrompt: string) {
+    this.systemPrompt = systemPrompt;
     this.model = resolveTranslationModel();
   }
 
@@ -1088,9 +1100,9 @@ async function syncLocale(
 ) {
   const localeLabel = formatLocaleLabel(entry.locale, context);
   const localeStartedAt = Date.now();
-  const sourceRaw = await readFile(SOURCE_LOCALE_PATH, "utf8");
+  const sourceRaw = await readSourceLocaleRaw();
   const sourceHash = sha256(sourceRaw);
-  const sourceMap = (await loadLocaleMap(SOURCE_LOCALE_PATH, "en")) ?? {};
+  const sourceMap = await loadSourceLocaleMap();
   const sourceFlat = flattenTranslations(sourceMap);
   const tm = loadControlUiTranslationMemory(tmPath(entry));
   const existingMap = materializeControlUiLocaleCatalog(sourceFlat, tm);
@@ -1347,18 +1359,4 @@ if (isCliEntrypoint()) {
     console.error(formatErrorMessage(error));
     process.exit(1);
   });
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

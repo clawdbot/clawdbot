@@ -84,7 +84,7 @@ openclaw gateway restart
 <Tabs>
   <Tab title="Direct (Arcee platform)">
     ```bash
-    openclaw onboard --non-interactive \
+    openclaw onboard --non-interactive --accept-risk --skip-health \
       --mode local \
       --auth-choice arceeai-api-key \
       --arceeai-api-key "$ARCEEAI_API_KEY"
@@ -93,7 +93,7 @@ openclaw gateway restart
 
   <Tab title="Via OpenRouter">
     ```bash
-    openclaw onboard --non-interactive \
+    openclaw onboard --non-interactive --accept-risk --skip-health \
       --mode local \
       --auth-choice arceeai-openrouter \
       --openrouter-api-key "$OPENROUTER_API_KEY"

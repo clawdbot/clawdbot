@@ -1,15 +1,6 @@
 // Runtime web-channel plugin helpers expose web-channel tools through activated plugin runtimes.
-import {
-  getDefaultLocalRoots as getDefaultLocalRootsImpl,
-  loadWebMedia as loadWebMediaImpl,
-  loadWebMediaRaw as loadWebMediaRawImpl,
-  optimizeImageToJpeg as optimizeImageToJpegImpl,
-} from "../../media/web-media.js";
-import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugin-metadata-lifecycle.js";
-import {
-  createPluginModuleLoaderCache,
-  type PluginModuleLoaderCache,
-} from "../plugin-module-loader-cache.js";
+import path from "node:path";
+import { getDefaultLocalRootsCore } from "../../media/web-media.js";
 import type { PluginOrigin } from "../plugin-origin.types.js";
 import {
   loadPluginBoundaryModule,
@@ -58,23 +49,6 @@ type WebChannelHeavyRuntimeModule = {
   extractText: (...args: unknown[]) => unknown;
 };
 
-type WebChannelRuntimeModuleKind = "heavy" | "light";
-type CachedWebChannelRuntimeModule = {
-  module: WebChannelHeavyRuntimeModule | WebChannelLightRuntimeModule;
-};
-
-const webChannelRuntimeModuleCache = new Map<
-  WebChannelRuntimeModuleKind,
-  CachedWebChannelRuntimeModule
->();
-
-const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
-
-registerPluginMetadataProcessMemoLifecycleClear(() => {
-  webChannelRuntimeModuleCache.clear();
-  moduleLoaders.clear();
-});
-
 /** Resolves the active web-channel plugin record that provides runtime APIs. */
 function resolveWebChannelPluginRecord(): WebChannelPluginRecord {
   return resolvePluginRuntimeRecordByEntryBaseNames(["light-runtime-api", "runtime-api"], () => {
@@ -97,36 +71,21 @@ function resolveWebChannelRuntimeModulePath(
   return modulePath;
 }
 
-function getCachedWebChannelRuntimeModule<T extends CachedWebChannelRuntimeModule["module"]>(
-  kind: WebChannelRuntimeModuleKind,
-  load: () => T,
-): T {
-  const cached = webChannelRuntimeModuleCache.get(kind);
-  if (cached) {
-    return cached.module as T;
-  }
-  const loaded = load();
-  webChannelRuntimeModuleCache.set(kind, { module: loaded });
-  return loaded;
-}
-
 function loadWebChannelLightModule(): WebChannelLightRuntimeModule {
-  return getCachedWebChannelRuntimeModule("light", () => {
-    const record = resolveWebChannelPluginRecord();
-    const modulePath = resolveWebChannelRuntimeModulePath(record, "light-runtime-api");
-    return loadPluginBoundaryModule<WebChannelLightRuntimeModule>(modulePath, moduleLoaders, {
-      origin: record.origin,
-    });
+  const record = resolveWebChannelPluginRecord();
+  const modulePath = resolveWebChannelRuntimeModulePath(record, "light-runtime-api");
+  return loadPluginBoundaryModule<WebChannelLightRuntimeModule>(modulePath, {
+    origin: record.origin,
+    rootDir: record.rootDir ?? path.dirname(record.source),
   });
 }
 
 function loadWebChannelHeavyModuleSync(): WebChannelHeavyRuntimeModule {
-  return getCachedWebChannelRuntimeModule("heavy", () => {
-    const record = resolveWebChannelPluginRecord();
-    const modulePath = resolveWebChannelRuntimeModulePath(record, "runtime-api");
-    return loadPluginBoundaryModule<WebChannelHeavyRuntimeModule>(modulePath, moduleLoaders, {
-      origin: record.origin,
-    });
+  const record = resolveWebChannelPluginRecord();
+  const modulePath = resolveWebChannelRuntimeModulePath(record, "runtime-api");
+  return loadPluginBoundaryModule<WebChannelHeavyRuntimeModule>(modulePath, {
+    origin: record.origin,
+    rootDir: record.rootDir ?? path.dirname(record.source),
   });
 }
 
@@ -236,20 +195,6 @@ export function resolveWebChannelAuthDir(): ReturnType<
   throw new Error("web channel plugin runtime is missing export 'resolveDefaultWebAuthDir'");
 }
 
-/** Loads web media through the core media helper. */
-export async function loadWebMedia(
-  ...args: Parameters<typeof loadWebMediaImpl>
-): ReturnType<typeof loadWebMediaImpl> {
-  return await loadWebMediaImpl(...args);
-}
-
-/** Loads raw web media through the core media helper. */
-export async function loadWebMediaRaw(
-  ...args: Parameters<typeof loadWebMediaRawImpl>
-): ReturnType<typeof loadWebMediaRawImpl> {
-  return await loadWebMediaRawImpl(...args);
-}
-
 /** Starts web-channel monitoring through the heavy runtime API. */
 export function monitorWebChannel(
   ...args: Parameters<WebChannelHeavyRuntimeModule["monitorWebChannel"]>
@@ -262,13 +207,6 @@ export async function monitorWebInbox(
   ...args: Parameters<WebChannelHeavyRuntimeModule["monitorWebInbox"]>
 ): ReturnType<WebChannelHeavyRuntimeModule["monitorWebInbox"]> {
   return (await getHeavyExport("monitorWebInbox"))(...args);
-}
-
-/** Optimizes an image to JPEG through the core media helper. */
-export async function optimizeImageToJpeg(
-  ...args: Parameters<typeof optimizeImageToJpegImpl>
-): ReturnType<typeof optimizeImageToJpegImpl> {
-  return await optimizeImageToJpegImpl(...args);
 }
 
 /** Starts QR login through the heavy runtime API. */
@@ -291,7 +229,7 @@ export const extractText = (...args: Parameters<WebChannelHeavyRuntimeModule["ex
 
 /** Returns default local media roots through the core media helper. */
 export function getDefaultLocalRoots(
-  ...args: Parameters<typeof getDefaultLocalRootsImpl>
-): ReturnType<typeof getDefaultLocalRootsImpl> {
-  return getDefaultLocalRootsImpl(...args);
+  ...args: Parameters<typeof getDefaultLocalRootsCore>
+): ReturnType<typeof getDefaultLocalRootsCore> {
+  return getDefaultLocalRootsCore(...args);
 }

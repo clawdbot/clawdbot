@@ -31,12 +31,13 @@ describe("board session shell", () => {
   it("delegates the optional Workboard chip to its lazy element", () => {
     const linked = createContainer();
     const unlinked = createContainer();
-    const provider = boardProviderForSession("agent:main:workboard-link");
+    const provider = boardProviderForSession({ sessionKey: "agent:main:workboard-link" });
     const client = {
       request: vi.fn(async () => ({ cards: [] })),
       addEventListener: vi.fn(() => () => {}),
     } as never;
     const props = {
+      active: true,
       snapshot: provider.snapshot$.value,
       activeTabId: "main",
       dock: "right" as const,
@@ -57,6 +58,7 @@ describe("board session shell", () => {
       renderBoardSessionSurface({
         ...props,
         workboardCardChip: {
+          active: true,
           basePath: "",
           client,
           sessionKey: "agent:main:workboard-link",
@@ -71,6 +73,7 @@ describe("board session shell", () => {
     );
     expect(chip?.sessionKey).toBe("agent:main:workboard-link");
     expect(chip?.client).toBe(client);
+    expect(chip?.active).toBe(true);
     expect(unlinked.querySelector("openclaw-workboard-card-chip")).toBeNull();
   });
 
@@ -214,9 +217,10 @@ describe("board session shell", () => {
 
   it.each(["left", "right", "bottom"] as const)("lays out the %s dock", (dock) => {
     const container = createContainer();
-    const provider = boardProviderForSession("agent:main:main");
+    const provider = boardProviderForSession({ sessionKey: "agent:main:main" });
     render(
       renderBoardSessionSurface({
+        active: true,
         snapshot: provider.snapshot$.value,
         activeTabId: "main",
         dock,
@@ -243,9 +247,10 @@ describe("board session shell", () => {
 
   it("renders the hidden dock as board-only", () => {
     const container = createContainer();
-    const provider = boardProviderForSession("agent:main:main");
+    const provider = boardProviderForSession({ sessionKey: "agent:main:main" });
     render(
       renderBoardSessionSurface({
+        active: true,
         snapshot: provider.snapshot$.value,
         activeTabId: "main",
         dock: "hidden",
@@ -271,8 +276,9 @@ describe("board session shell", () => {
 
   it("preserves the board while the bottom chat mounts only for that dock", () => {
     const container = createContainer();
-    const provider = boardProviderForSession("agent:main:main");
+    const provider = boardProviderForSession({ sessionKey: "agent:main:main" });
     const props = {
+      active: true,
       snapshot: provider.snapshot$.value,
       activeTabId: "main",
       dockSize: { height: 300 },
@@ -303,5 +309,18 @@ describe("board session shell", () => {
     render(renderBoardSessionSurface({ ...props, dock: "hidden" }), container);
     expect(container.querySelector("openclaw-board-view")).toBe(board);
     expect(container.querySelector("[data-test-chat]")).toBeNull();
+
+    render(renderBoardSessionSurface({ ...props, active: false, dock: "bottom" }), container);
+    const hiddenSurface = container.querySelector<HTMLElement>(".board-session-surface");
+    expect(hiddenSurface?.hidden).toBe(true);
+    expect(hiddenSurface?.hasAttribute("inert")).toBe(true);
+    expect(container.querySelector("openclaw-board-view")).toBe(board);
+    expect(board?.active).toBe(false);
+    expect(container.querySelector("[data-test-chat]")).toBeNull();
+
+    render(renderBoardSessionSurface({ ...props, dock: "right" }), container);
+    expect(container.querySelector("openclaw-board-view")).toBe(board);
+    expect(container.querySelector<HTMLElement>(".board-session-surface")?.hidden).toBe(false);
+    expect(board?.active).toBe(true);
   });
 });

@@ -4,14 +4,20 @@
  * Sends annotated inter-session messages through in-process or Gateway execution and reads the assistant reply.
  */
 import crypto from "node:crypto";
-import { callGateway } from "../../gateway/call.js";
+import { getRuntimeConfig } from "../../config/config.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
+import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { retireSessionMcpRuntimeForSessionKey } from "../agent-bundle-mcp-tools.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import { waitForAgentRunAndReadUpdatedAssistantReply } from "../run-wait.js";
+import {
+  callAgentToolGatewayRequest,
+  type AgentToolGatewayRequestCaller,
+} from "./in-process-gateway.js";
 
-type GatewayCaller = typeof callGateway;
+type GatewayCaller = AgentToolGatewayRequestCaller;
 type AgentCommandRunner = typeof import("../../commands/agent.js").agentCommandFromIngress;
 
 const defaultAgentStepDeps = {
@@ -19,12 +25,10 @@ const defaultAgentStepDeps = {
     const { agentCommandFromIngress } = await import("../../commands/agent.js");
     return await agentCommandFromIngress(...args);
   }) as AgentCommandRunner,
-  callGateway,
 };
 
 let agentStepDeps: {
   agentCommandFromIngress: AgentCommandRunner;
-  callGateway: GatewayCaller;
 } = defaultAgentStepDeps;
 
 function extractAgentCommandReply(result: unknown): string | undefined {
@@ -57,6 +61,7 @@ function extractAgentCommandReply(result: unknown): string | undefined {
 
 /** Sends one annotated message to a target session and returns the resulting assistant text. */
 export async function runAgentStep(params: {
+  agentId?: string;
   sessionKey: string;
   message: string;
   extraSystemPrompt: string;
@@ -64,10 +69,13 @@ export async function runAgentStep(params: {
   channel?: string;
   lane?: string;
   transcriptMessage?: string;
+  sourceAgentId?: string;
   sourceSessionKey?: string;
   sourceChannel?: string;
   sourceTool?: string;
+  callGateway?: GatewayCaller;
 }): Promise<string | undefined> {
+  const promptedAt = Date.now();
   const stepIdem = crypto.randomUUID();
   const inputProvenance = {
     kind: "inter_session" as const,
@@ -79,10 +87,13 @@ export async function runAgentStep(params: {
   const message = annotateInterSessionPromptText(params.message, inputProvenance);
   const lane = params.lane ?? resolveNestedAgentLaneForSession(params.sessionKey);
   const channel = params.channel ?? INTERNAL_MESSAGE_CHANNEL;
+  const gatewayCall = params.callGateway ?? callAgentToolGatewayRequest;
   if (params.transcriptMessage !== undefined) {
-    // Transcript-message mode must use the in-process command path to preserve transcript text.
+    // Intentional direct in-process exception: the public agent schema rejects transcriptMessage.
+    // Keep announce bookkeeping off the wire without expanding the model-authored RPC surface.
     const result = await agentStepDeps.agentCommandFromIngress({
       message,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
       transcriptMessage: params.transcriptMessage,
       sessionKey: params.sessionKey,
       deliver: false,
@@ -100,10 +111,11 @@ export async function runAgentStep(params: {
     });
     return extractAgentCommandReply(result);
   }
-  const response = await agentStepDeps.callGateway({
+  const response = await gatewayCall({
     method: "agent",
     params: {
       message,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
       sessionKey: params.sessionKey,
       idempotencyKey: stepIdem,
       deliver: false,
@@ -116,13 +128,27 @@ export async function runAgentStep(params: {
     timeoutMs: 10_000,
   });
 
+  if (params.sourceAgentId && params.agentId) {
+    recordSessionParticipantBestEffort({
+      identity: { type: "agent", id: params.sourceAgentId },
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      storePath: resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
+        agentId: params.agentId,
+      }),
+      promptedAt,
+    });
+  }
+
   const stepRunId = typeof response?.runId === "string" && response.runId ? response.runId : "";
   const resolvedRunId = stepRunId || stepIdem;
   // Gateway agent calls can return before the assistant reply is persisted.
   const result = await waitForAgentRunAndReadUpdatedAssistantReply({
     runId: resolvedRunId,
     sessionKey: params.sessionKey,
+    agentId: params.agentId,
     timeoutMs: Math.min(params.timeoutMs, 60_000),
+    callGateway: gatewayCall,
   });
   if (result.status === "ok" || result.status === "error") {
     await retireSessionMcpRuntimeForSessionKey({
@@ -141,7 +167,6 @@ const testing = {
   setDepsForTest(
     overrides?: Partial<{
       agentCommandFromIngress: AgentCommandRunner;
-      callGateway: GatewayCaller;
     }>,
   ) {
     agentStepDeps = overrides

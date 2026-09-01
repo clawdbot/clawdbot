@@ -24,10 +24,10 @@ Setup commands by intent:
 | Setup and onboarding         | [`openclaw`](/cli/openclaw) · [`setup`](/cli/setup) · [`onboard`](/cli/onboard) · [`configure`](/cli/configure) · [`config`](/cli/config) · [`completion`](/cli/completion) · [`doctor`](/cli/doctor) · [`dashboard`](/cli/dashboard) |
 | Reset, backup, and migration | [`backup`](/cli/backup) · [`migrate`](/cli/migrate) · [`reset`](/cli/reset) · [`uninstall`](/cli/uninstall) · [`update`](/cli/update)                                                                                                 |
 | Messaging and agents         | [`message`](/cli/message) · [`agent`](/cli/agent) · [`agents`](/cli/agents) · [`attach`](/cli/attach) · [`acp`](/cli/acp) · [`mcp`](/cli/mcp)                                                                                         |
-| Health and sessions          | [`status`](/cli/status) · [`health`](/cli/health) · [`sessions`](/cli/sessions) · [`audit`](/cli/audit)                                                                                                                               |
-| Gateway and logs             | [`gateway`](/cli/gateway) · [`logs`](/cli/logs) · [`system`](/cli/system)                                                                                                                                                             |
-| Models and inference         | [`models`](/cli/models) · [`promos`](/cli/promos) · [`infer`](/cli/infer) · `capability` (alias for [`infer`](/cli/infer)) · [`memory`](/cli/memory) · [`commitments`](/cli/commitments) · [`wiki`](/cli/wiki)                        |
-| Network and nodes            | [`directory`](/cli/directory) · [`nodes`](/cli/nodes) · [`devices`](/cli/devices) · [`node`](/cli/node) · [`worker`](/cli/worker)                                                                                                     |
+| Health and sessions          | [`status`](/cli/status) · [`health`](/cli/health) · [`triage`](/cli/triage) · [`sessions`](/cli/sessions) · [`resume`](/cli/resume) · [`audit`](/cli/audit)                                                                           |
+| Gateway and logs             | [`fleet`](/cli/fleet) · [`gateway`](/cli/gateway) · [`logs`](/cli/logs) · [`system`](/cli/system)                                                                                                                                     |
+| Models and inference         | [`models`](/cli/models) · [`promos`](/cli/promos) · [`infer`](/cli/infer) · `capability` (alias for [`infer`](/cli/infer)) · [`memory`](/cli/memory) · [`wiki`](/cli/wiki)                                                            |
+| Network and nodes            | [`connect`](/cli/connect) · [`directory`](/cli/directory) · [`nodes`](/cli/nodes) · [`devices`](/cli/devices) · [`node`](/cli/node) · [`worker`](/cli/worker)                                                                         |
 | Runtime and sandbox          | [`approvals`](/cli/approvals) · `exec-policy` (see [`approvals`](/cli/approvals)) · [`sandbox`](/cli/sandbox) · [`tui`](/cli/tui) · `chat`/`terminal` (aliases for [`tui --local`](/cli/tui)) · [`browser`](/cli/browser)             |
 | Automation                   | [`cron`](/cli/cron) · [`tasks`](/cli/tasks) · [`hooks`](/cli/hooks) · [`webhooks`](/cli/webhooks) · [`transcripts`](/cli/transcripts)                                                                                                 |
 | Discovery and docs           | [`dns`](/cli/dns) · [`docs`](/cli/docs)                                                                                                                                                                                               |
@@ -65,6 +65,26 @@ state directories and config paths remain unchanged.
   report to return.
 - Long-running commands show a progress indicator (OSC 9;4 when supported).
 
+### JSON failures
+
+Successful JSON payloads remain command-specific. When a command in JSON output
+mode fails, it exits nonzero and writes one JSON document to stdout with this
+envelope:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "type": "cli_error",
+    "message": "Description of the failure"
+  }
+}
+```
+
+A command may add domain-specific fields, such as per-item results, beside this
+envelope. Failure messages are sanitized. Human-readable diagnostics may also be
+written to stderr, so scripts should parse stdout and still check the exit status.
+
 ## Color palette
 
 OpenClaw uses a lobster palette for CLI output:
@@ -99,16 +119,32 @@ openclaw [--dev] [--profile <name>] <command>
   config
     get
     set
+    patch
     unset
     file
     schema
     validate
   completion
   doctor
+  triage
   dashboard
   backup
     create
     verify
+    restore
+    sqlite
+      create
+      list
+      verify
+      restore
+    git
+      init
+      create
+      log
+      verify
+      restore
+    enable
+    disable
   migrate
     list
     plan <provider>
@@ -132,6 +168,7 @@ openclaw [--dev] [--profile <name>] <command>
     capabilities
     resolve
     logs
+    dead-letters list|resubmit
     add
     remove
     login
@@ -183,9 +220,6 @@ openclaw [--dev] [--profile <name>] <command>
     set
     validate
     emit
-  commitments
-    list
-    dismiss
   wiki
     status
     doctor
@@ -271,6 +305,19 @@ openclaw [--dev] [--profile <name>] <command>
     stop
     restart
     run
+  fleet
+    create
+    backup
+    restore
+    doctor
+    list
+    status
+    logs
+    start
+    stop
+    restart
+    upgrade
+    rm
   daemon
     status
     install
@@ -333,8 +380,7 @@ openclaw [--dev] [--profile <name>] <command>
     invoke
     notify
     push
-    canvas snapshot|present|hide|navigate|eval
-    canvas a2ui push|reset
+    canvas present|hide|navigate
     camera list|snap|clip
     screen record
     location get
@@ -353,6 +399,7 @@ openclaw [--dev] [--profile <name>] <command>
     uninstall
     stop
     restart
+  connect
   worker
   approvals
     get
@@ -418,6 +465,7 @@ openclaw [--dev] [--profile <name>] <command>
   docs
   dns
     setup
+  resume
   tui
   chat (alias: tui --local)
   terminal (alias: tui --local)

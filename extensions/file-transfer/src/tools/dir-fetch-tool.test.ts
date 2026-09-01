@@ -61,7 +61,7 @@ async function importTool(tarBuffer: Buffer) {
         tarBase64: tarBuffer.toString("base64"),
         tarBytes: tarBuffer.byteLength,
         sha256: crypto.createHash("sha256").update(tarBuffer).digest("hex"),
-        fileCount: 1,
+        fileCount: 3,
       },
       startedAt: Date.now(),
     })),
@@ -84,9 +84,14 @@ async function executeDirFetch(module: typeof import("./dir-fetch-tool.js")) {
 describe("dir.fetch archive extraction", () => {
   it("extracts a bounded tar and returns the plugin-side manifest", async () => {
     const tarBuffer = await createTarBuffer({
-      entries: ["ok.txt"],
+      entries: ["ok.txt", "nested", ".root-note", ".hidden"],
       setup: async (sourceDir) => {
         await fs.writeFile(path.join(sourceDir, "ok.txt"), "ok");
+        await fs.mkdir(path.join(sourceDir, "nested"));
+        await fs.writeFile(path.join(sourceDir, "nested", "also-ok.txt"), "also ok");
+        await fs.writeFile(path.join(sourceDir, ".root-note"), "hidden root");
+        await fs.mkdir(path.join(sourceDir, ".hidden"));
+        await fs.writeFile(path.join(sourceDir, ".hidden", "note.txt"), "hidden member");
       },
     });
     const { appendFileTransferAudit, module, saveMediaBuffer } = await importTool(tarBuffer);
@@ -94,21 +99,39 @@ describe("dir.fetch archive extraction", () => {
     const result = await executeDirFetch(module);
 
     expect(result).toMatchObject({
+      content: [{ type: "text", text: expect.stringContaining("Fetched 4 files") }],
       details: {
         path: "/tmp/project",
-        fileCount: 1,
-        files: [
-          {
-            relPath: "ok.txt",
-            size: 2,
-            sha256: crypto.createHash("sha256").update("ok").digest("hex"),
-          },
-        ],
+        fileCount: 4,
       },
     });
-    const localPath = (result.details as { files: Array<{ localPath: string }> }).files[0]
-      ?.localPath;
+    const files = (result.details as { files: Array<{ relPath: string; localPath: string }> })
+      .files;
+    expect(files).toHaveLength(4);
+    expect(files).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          relPath: "ok.txt",
+          size: 2,
+          sha256: crypto.createHash("sha256").update("ok").digest("hex"),
+        }),
+        expect.objectContaining({
+          relPath: path.join("nested", "also-ok.txt"),
+          size: 7,
+          sha256: crypto.createHash("sha256").update("also ok").digest("hex"),
+        }),
+      ]),
+    );
+    const localPath = files.find((file) => file.relPath === "ok.txt")?.localPath;
     await expect(fs.readFile(localPath!, "utf8")).resolves.toBe("ok");
+    for (const [relPath, contents] of [
+      [".root-note", "hidden root"],
+      [path.join(".hidden", "note.txt"), "hidden member"],
+    ]) {
+      const hiddenFile = files.find((file) => file.relPath === relPath);
+      expect(hiddenFile).toBeDefined();
+      await expect(fs.readFile(hiddenFile!.localPath, "utf8")).resolves.toBe(contents);
+    }
     expect(saveMediaBuffer).toHaveBeenCalledWith(
       tarBuffer,
       "application/gzip",
@@ -121,7 +144,7 @@ describe("dir.fetch archive extraction", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "settles promptly when a Fleet-shaped archive contains a symlink",
+    "rejects a Fleet-shaped archive containing a symlink",
     async () => {
       const tarBuffer = await createTarBuffer({
         entries: ["data", "auth"],
@@ -135,20 +158,9 @@ describe("dir.fetch archive extraction", () => {
       });
       const { appendFileTransferAudit, archivePath, module } = await importTool(tarBuffer);
 
-      const settled = await Promise.race([
-        executeDirFetch(module).then(
-          () => ({ status: "resolved" as const }),
-          (error: unknown) => ({ status: "rejected" as const, error }),
-        ),
-        new Promise<{ status: "timeout" }>((resolve) => {
-          setTimeout(() => resolve({ status: "timeout" }), 2_000);
-        }),
-      ]);
-
-      expect(settled.status).toBe("rejected");
-      expect(settled.status === "rejected" ? String(settled.error) : "").toMatch(
-        /dir\.fetch UNSAFE_ARCHIVE:.*link/iu,
-      );
+      // A symlink entry used to hang extraction instead of rejecting; the test
+      // timeout bounds settling, so a hang regression fails without a wall-clock race.
+      await expect(executeDirFetch(module)).rejects.toThrow(/dir\.fetch UNSAFE_ARCHIVE:.*link/iu);
       await expect(fs.access(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
       expect(appendFileTransferAudit).toHaveBeenLastCalledWith(
         expect.objectContaining({ decision: "error", errorCode: "UNSAFE_ARCHIVE" }),

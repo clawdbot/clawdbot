@@ -28,7 +28,7 @@ async function waitForOutboundMessage(
   return await waitForQaTransportCondition(() => {
     const failureMessage = findFailureOutboundMessage(state, options);
     if (failureMessage) {
-      throw new Error(extractQaFailureReplyText(failureMessage.text) ?? failureMessage.text);
+      throw new Error(extractQaFailureReplyText(failureMessage) ?? failureMessage.text);
     }
     const match = state
       .getSnapshot()
@@ -43,7 +43,7 @@ async function waitForOutboundMessage(
     if (!match) {
       return undefined;
     }
-    const failureReply = extractQaFailureReplyText(match.text);
+    const failureReply = extractQaFailureReplyText(match);
     if (failureReply) {
       throw new Error(failureReply);
     }
@@ -78,7 +78,7 @@ function recentOutboundSummary(state: QaTransportState, limit = 5) {
     .getSnapshot()
     .messages.filter((message: QaBusMessage) => message.direction === "outbound")
     .slice(-limit)
-    .map((message: QaBusMessage) => `${message.conversation.id}:${message.text}`)
+    .map(({ accountId, conversation: { kind, id }, text }) => `${accountId}:${kind}:${id}:${text}`)
     .join(" | ");
 }
 

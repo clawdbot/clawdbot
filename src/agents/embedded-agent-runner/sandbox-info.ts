@@ -1,3 +1,4 @@
+import type { SessionEntry } from "../../config/sessions.js";
 /**
  * Builds sandbox/full-access status metadata for embedded-agent run results.
  */
@@ -73,6 +74,7 @@ export function resolveEmbeddedSandboxInfoExecPolicy(params: {
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
+  permissionMode?: SessionEntry["permissionMode"];
   sandboxAvailable?: boolean;
   execOverrides?: EmbeddedSandboxInfoExecOverrides;
 }): EmbeddedFullAccessExecPolicy {
@@ -80,6 +82,7 @@ export function resolveEmbeddedSandboxInfoExecPolicy(params: {
     cfg: params.config,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
+    sessionEntry: params.permissionMode ? { permissionMode: params.permissionMode } : undefined,
     sandboxAvailable: params.sandboxAvailable,
     elevatedRequested: true,
     execOverrides: params.execOverrides,
@@ -102,12 +105,15 @@ export function buildEmbeddedSandboxInfo(
     return undefined;
   }
   const elevatedConfigured = execElevated?.enabled === true;
-  const elevatedAllowed = Boolean(execElevated?.enabled && execElevated.allowed);
-  const fullAccess = resolveEmbeddedFullAccessState({
-    execElevated,
-    execPolicy,
-    hostPolicy,
-  });
+  const elevatedAllowed =
+    !sandbox.required && Boolean(execElevated?.enabled && execElevated.allowed);
+  const fullAccess = sandbox.required
+    ? { available: false, blockedReason: "host-policy" as const }
+    : resolveEmbeddedFullAccessState({
+        execElevated,
+        execPolicy,
+        hostPolicy,
+      });
   return {
     enabled: true,
     workspaceDir: sandbox.workspaceDir,
@@ -120,7 +126,7 @@ export function buildEmbeddedSandboxInfo(
       ? {
           elevated: {
             allowed: elevatedAllowed,
-            defaultLevel: execElevated?.defaultLevel ?? "off",
+            defaultLevel: sandbox.required ? "off" : (execElevated?.defaultLevel ?? "off"),
             fullAccessAvailable: fullAccess.available,
             ...(fullAccess.blockedReason
               ? { fullAccessBlockedReason: fullAccess.blockedReason }

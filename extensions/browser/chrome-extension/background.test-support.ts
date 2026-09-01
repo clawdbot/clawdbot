@@ -8,17 +8,17 @@ type SocketEvent = { data?: unknown };
 type SocketListener = (event: SocketEvent) => void;
 
 export type RuntimeMessageListener = (
-  message: { type: string; tabId?: number; note?: string; pairingString?: string },
+  message: {
+    type: string;
+    tabId?: number;
+    note?: string;
+    pairingString?: string;
+    accessMode?: string;
+    grant?: boolean;
+  },
   sender: unknown,
   sendResponse: (response: unknown) => void,
 ) => boolean;
-
-export type PageCaptureResult = {
-  content: string;
-  selection: string;
-  title: string;
-  url: string;
-};
 
 let configuredSockets: FakeWebSocket[] = [];
 let configuredDeferredClose = false;
@@ -76,6 +76,11 @@ export class FakeWebSocket {
 
   receive(message: unknown): void {
     this.emit("message", { data: JSON.stringify(message) });
+  }
+
+  finishClose(): void {
+    this.readyState = FakeWebSocket.CLOSED;
+    this.emit("close");
   }
 
   private emit(type: string, event: SocketEvent = {}): void {

@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 324587,
-  "reason": "multi-gateway footer subtitle plus accumulated main drift (PR #114059), then the Memory settings surface: its i18n strings plus the rendering-free memory-schema facts settings search reads at startup",
-  "updatedAt": "2026-07-26"
+  "startupJsGzipBytes": 348668,
+  "reason": "Model provider defaults consolidation, autosave, and contextual help add 235 B (0.07%) over the reconciled 348433 B main baseline; fixed 358400 B cap and existing allowances retained",
+  "updatedAt": "2026-09-01"
 }

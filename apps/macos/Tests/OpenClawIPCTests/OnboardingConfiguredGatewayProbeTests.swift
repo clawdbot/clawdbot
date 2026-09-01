@@ -234,8 +234,10 @@ private func onboardingProbeFixture(
     reply: OnboardingProbeReply = .configured) -> OnboardingProbeFixture
 {
     let session = GatewayTestWebSocketSession(taskFactory: onboardingProbeTaskFactory(reply: reply))
+    // The production endpointProvider init reads the process-global persisted
+    // identity store; mocked routes must stay off the operator's real state.
     let gateway = GatewayConnection(
-        endpointProvider: endpointProvider,
+        testEndpointProvider: endpointProvider,
         sessionBox: WebSocketSessionBox(session: session))
     return OnboardingProbeFixture(
         session: session,
@@ -421,7 +423,7 @@ struct OnboardingConfiguredGatewayProbeTests {
         let currentURL = try #require(URL(string: "ws://current.example.invalid"))
         let endpoints = OnboardingEndpointRevisionGate(staleURL: staleURL, currentURL: currentURL)
         let gateway = GatewayConnection(
-            endpointProvider: { await endpoints.snapshot() },
+            testEndpointProvider: { await endpoints.snapshot() },
             sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: {
                 GatewayTestWebSocketTask()
             })))

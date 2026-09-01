@@ -3,16 +3,22 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import { assertAuthProfileMigrationReady } from "../agents/auth-profiles/legacy-source-diagnostic.js";
+import {
+  resolveAuthProfileEligibility,
+  resolveAuthProfileOrder,
+} from "../agents/auth-profiles/order.js";
+import {
+  loadPersistedAuthProfileStore,
+  loadPersistedSharedAuthProfileStore,
+} from "../agents/auth-profiles/persisted.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import {
   readPersistedAuthProfileStoreRaw,
   writePersistedAuthProfileStateRaw,
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  saveAuthProfileStore,
-} from "../agents/auth-profiles/store.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
 import {
@@ -21,6 +27,11 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  detectSharedAuthStoreMigration,
+  migrateSharedAuthStore,
+} from "../infra/state-migrations.shared-auth-store.js";
+import { writeConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -36,8 +47,20 @@ import {
   maybeMigrateAuthProfileJsonStoresToSqlite,
   maybeRepairOpenAICodexAuthConfig,
 } from "./doctor-auth-flat-profiles.js";
+import {
+  createAuthProfileMigrationSourceReceipt,
+  type AuthProfileMigrationSourceReceipt,
+} from "./doctor-auth-migration-receipts.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import { maybeRepairCodexSessionRoutes } from "./doctor/shared/codex-route-session-repair.js";
+
+type MigrationReceiptTestApi = {
+  recordAuthProfileMigrationImported: (receipt: AuthProfileMigrationSourceReceipt) => void;
+};
+
+const { recordAuthProfileMigrationImported } = (globalThis as Record<PropertyKey, unknown>)[
+  Symbol.for("openclaw.authProfileMigrationReceiptsTestApi")
+] as MigrationReceiptTestApi;
 
 const states: OpenClawTestState[] = [];
 
@@ -72,6 +95,17 @@ async function makeTestState(): Promise<OpenClawTestState> {
   return state;
 }
 
+function requireMappedProfileId(
+  profileIdMap: ReadonlyMap<string, string>,
+  legacyId: string,
+): string {
+  const profileId = profileIdMap.get(legacyId);
+  if (!profileId) {
+    throw new Error(`missing profile id mapping for ${legacyId}`);
+  }
+  return profileId;
+}
+
 async function expectSelectedCodexAccountStatus(params: {
   cfg: OpenClawConfig;
   state: OpenClawTestState;
@@ -91,9 +125,9 @@ async function expectSelectedCodexAccountStatus(params: {
       fetchUsageSnapshot: async (context) => {
         usageProfileIds.push(context.authProfileId);
         const selectedProfile = context.authProfileId ?? "openai:peter";
-        const credential = loadPersistedAuthProfileStore(params.state.agentDir())?.profiles[
-          selectedProfile
-        ];
+        const credential =
+          loadPersistedAuthProfileStore(params.state.agentDir())?.profiles[selectedProfile] ??
+          loadPersistedSharedAuthProfileStore(params.state.env)?.profiles[selectedProfile];
         return {
           provider: "openai",
           displayName: "OpenAI",
@@ -177,6 +211,127 @@ afterEach(async () => {
 });
 
 describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
+  it("keeps JSON-era ownership through shared writes until Doctor imports the credential", async () => {
+    const state = await makeTestState();
+    const authPath = await writeLegacyAuthProfilesJson(state, {
+      version: 1,
+      profiles: {
+        "openai:json-era": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-json-era",
+        },
+      },
+    });
+    const legacyDatabasePath = path.join(state.agentDir(), "openclaw-agent.sqlite");
+    expect(fs.existsSync(legacyDatabasePath)).toBe(false);
+
+    const realExistsSync = fs.existsSync.bind(fs);
+    let legacyJsonProbes = 0;
+    const existsSpy = vi.spyOn(fs, "existsSync").mockImplementation((pathname) => {
+      if (path.resolve(String(pathname)) === path.resolve(authPath)) {
+        legacyJsonProbes += 1;
+      }
+      return realExistsSync(pathname);
+    });
+    try {
+      for (const key of ["sk-first-write", "sk-second-write"]) {
+        writePersistedAuthProfileStoreRaw({
+          version: 1,
+          profiles: {
+            "anthropic:written": {
+              type: "api_key",
+              provider: "anthropic",
+              key,
+            },
+          },
+        });
+      }
+      expect(legacyJsonProbes).toBe(1);
+    } finally {
+      existsSpy.mockRestore();
+    }
+
+    const beforeDoctor = openOpenClawStateDatabase({ env: state.env });
+    expect(
+      beforeDoctor.db
+        .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+        .get("auth.sharedStore"),
+    ).toBeUndefined();
+    expect(fs.existsSync(legacyDatabasePath)).toBe(true);
+
+    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg: {},
+      prompter: makePrompter(true),
+      env: state.env,
+      now: () => 123,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toEqual([expect.stringContaining("Migrated auth profile JSON")]);
+    expect(loadPersistedAuthProfileStore(state.agentDir())?.profiles).toMatchObject({
+      "openai:json-era": {
+        type: "api_key",
+        provider: "openai",
+        key: "sk-json-era",
+      },
+      "anthropic:written": {
+        type: "api_key",
+        provider: "anthropic",
+        key: "sk-second-write",
+      },
+    });
+    expect(fs.existsSync(authPath)).toBe(false);
+    expectMigratedArchive(authPath);
+  });
+
+  it("migrates the inherited auth owner after it leaves the explicit roster", async () => {
+    const state = await makeTestState();
+    const authPath = await writeLegacyAuthProfilesJson(
+      state,
+      {
+        version: 1,
+        profiles: {
+          "openai:retired-owner": {
+            type: "oauth",
+            provider: "openai",
+            access: "retired-owner-access",
+            refresh: "retired-owner-refresh",
+            expires: 1_900_000_000_000,
+          },
+        },
+      },
+      "retired-ops",
+    );
+
+    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg: {
+        agents: {
+          ownership: "explicit",
+          defaults: { authInheritance: { agentId: "retired-ops" } },
+          entries: { research: {}, writer: {} },
+        },
+      },
+      prompter: makePrompter(true),
+      env: state.env,
+      now: () => Date.parse("2026-08-09T12:00:00.000Z"),
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(loadPersistedAuthProfileStore(state.agentDir("retired-ops"))).toMatchObject({
+      profiles: {
+        "openai:retired-owner": {
+          type: "oauth",
+          provider: "openai",
+          access: "retired-owner-access",
+          refresh: "retired-owner-refresh",
+        },
+      },
+    });
+    expect(fs.existsSync(authPath)).toBe(false);
+    expectMigratedArchive(authPath);
+  });
+
   it("imports shared oauth.json into shared-main only and records its archive", async () => {
     const state = await makeTestState();
     const oauthPath = await state.writeJson("credentials/oauth.json", {
@@ -240,8 +395,9 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
           type: "oauth",
           provider: "openai",
           oauthRef: {
+            source: "openclaw-credentials",
             id: "0123456789abcdef0123456789abcdef",
-            provider: "openai",
+            provider: "openai-codex",
           },
         },
       },
@@ -260,16 +416,21 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
       env: state.env,
     });
 
-    expect(result.warnings).toEqual([
-      expect.stringContaining("legacy OAuth sidecar profile"),
-      expect.stringContaining("no importable auth profiles or state"),
-      expect.stringContaining("Deferred shared legacy OAuth migration"),
-    ]);
-    expect(loadPersistedAuthProfileStore(state.agentDir())).toBeNull();
-    expect(fs.existsSync(authPath)).toBe(true);
-    expect(fs.existsSync(oauthPath)).toBe(true);
-    expectNoMigratedArchive(authPath);
-    expectNoMigratedArchive(oauthPath);
+    expect(result.warnings).toEqual([expect.stringContaining("legacy OAuth sidecar profile")]);
+    expect(
+      loadPersistedAuthProfileStore(state.agentDir())?.profiles["openai:default"],
+    ).toMatchObject({
+      type: "oauth",
+      provider: "openai",
+      oauthRef: {
+        source: "openclaw-credentials",
+        provider: "openai-codex",
+      },
+    });
+    expect(fs.existsSync(authPath)).toBe(false);
+    expect(fs.existsSync(oauthPath)).toBe(false);
+    expectMigratedArchive(authPath);
+    expectMigratedArchive(oauthPath);
   });
 
   it("preserves state-only profile IDs while migrating shared OAuth", async () => {
@@ -434,60 +595,347 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
       env: state.env,
     });
 
-    expect(result.warnings).toContain(
-      "Failed to migrate shared legacy OAuth credentials; the source was left in place.",
-    );
+    // The warning must carry the underlying cause so the user can act on it.
+    expect(result.warnings).toEqual([
+      expect.stringMatching(
+        /^Failed to migrate shared legacy OAuth credentials; the source was left in place: .+/,
+      ),
+    ]);
     expect(fs.existsSync(oauthPath)).toBe(true);
     expectNoMigratedArchive(oauthPath);
     expect(readPersistedAuthProfileStoreRaw(state.agentDir())).toEqual(unreadableStore);
   });
 
-  it("imports legacy JSON auth profiles and state into the agent sqlite database", async () => {
+  it("surfaces the resume failure cause instead of a generic warning", async () => {
     const state = await makeTestState();
+    const sourcePath = await state.writeText(
+      "credentials/oauth.json",
+      `${JSON.stringify({ openai: { access: "fake", refresh: "fake", expires: 42 } })}\n`,
+    );
+    const receipt = createAuthProfileMigrationSourceReceipt({
+      sourcePath,
+      sourceBytes: fs.readFileSync(sourcePath),
+      sourceRecordCount: 1,
+      targetDatabasePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
+      // An out-of-union target table makes resumePendingAuthProfileMigrationArchives throw
+      // "invalid pending auth profile migration receipt" — the cheapest way to reproduce one of
+      // its 5 distinct throw causes without corrupting on-disk state.
+      targetTable: "bogus_table" as AuthProfileMigrationSourceReceipt["targetTable"],
+      env: state.env,
+    });
+    recordAuthProfileMigrationImported(receipt);
+
+    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg: {},
+      prompter: makePrompter(true),
+      env: state.env,
+    });
+
+    expect(result.warnings).toContainEqual(
+      expect.stringMatching(
+        /^Could not finalize an interrupted auth profile archive; legacy sources were left for recovery: .*invalid pending auth profile migration receipt.*/,
+      ),
+    );
+  });
+
+  it.each(["legacy-main", "state-db"] as const)(
+    "imports legacy JSON auth profiles and state into the %s shared database",
+    async (location) => {
+      const state = await makeTestState();
+      if (location === "state-db") {
+        writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env: state.env });
+      }
+      const authPath = await writeLegacyAuthProfilesJson(state, {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-migrated",
+          },
+        },
+        order: { openai: ["openai:default"] },
+      });
+      const statePath = await state.writeText(
+        "agents/main/agent/auth-state.json",
+        `${JSON.stringify({ version: 1, lastGood: { openai: "openai:default" } })}\n`,
+      );
+
+      const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
+        cfg: {},
+        prompter: makePrompter(true),
+        now: () => 456,
+        env: state.env,
+      });
+
+      expect(result.detected.toSorted()).toEqual([authPath, statePath].toSorted());
+      expect(result.warnings).toStrictEqual([]);
+      const loaded =
+        location === "state-db"
+          ? loadPersistedSharedAuthProfileStore(state.env)
+          : loadPersistedAuthProfileStore(state.agentDir());
+      expect(loaded).toMatchObject({
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-migrated",
+          },
+        },
+        lastGood: { openai: "openai:default" },
+      });
+      expect(fs.existsSync(authPath)).toBe(false);
+      expect(fs.existsSync(statePath)).toBe(false);
+      expectMigratedArchive(authPath);
+      expectMigratedArchive(statePath);
+      const combinedReceipt = openOpenClawStateDatabase({ env: state.env })
+        .db.prepare("SELECT report_json FROM migration_sources WHERE source_path = ?")
+        .get(authPath) as { report_json?: string } | undefined;
+      expect(JSON.parse(combinedReceipt?.report_json ?? "null")?.expectedStateSha256).toEqual(
+        expect.any(String),
+      );
+    },
+  );
+
+  it("canonicalizes standalone auth-state rotation refs onto the same openai ids as credentials (#130018)", async () => {
+    const state = await makeTestState();
+    const namedLegacy = [
+      "openai-codex:alpha",
+      "openai-codex:bravo",
+      "openai-codex:charlie",
+      "openai-codex:delta",
+      "openai-codex:echo",
+    ] as const;
     const authPath = await writeLegacyAuthProfilesJson(state, {
       version: 1,
       profiles: {
-        "openai:default": {
-          type: "api_key",
-          provider: "openai",
-          key: "sk-migrated",
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "default-access",
+          refresh: "default-refresh",
+          expires: 1_900_000_000_000,
+          accountId: "default-account",
         },
+        ...Object.fromEntries(
+          namedLegacy.map((id) => [
+            id,
+            {
+              type: "oauth",
+              provider: "openai-codex",
+              access: `${id}-access`,
+              refresh: `${id}-refresh`,
+              expires: 1_900_000_000_000,
+              accountId: `${id}-account`,
+            },
+          ]),
+        ),
       },
-      order: { openai: ["openai:default"] },
     });
     const statePath = await state.writeText(
       "agents/main/agent/auth-state.json",
-      `${JSON.stringify({ version: 1, lastGood: { openai: "openai:default" } })}\n`,
+      `${JSON.stringify({
+        version: 1,
+        order: { "openai-codex": namedLegacy },
+        lastGood: { "openai-codex": namedLegacy[0] },
+        usageStats: { [namedLegacy[0]]: { lastUsed: 123 } },
+      })}\n`,
+    );
+
+    const profileIdMap = collectOpenAICodexAuthProfileStoreIdMap({ cfg: {}, env: state.env });
+    const canonicalNamed = namedLegacy.map((id) => requireMappedProfileId(profileIdMap, id));
+    const canonicalDefault = requireMappedProfileId(profileIdMap, "openai-codex:default");
+    const firstCanonical = requireMappedProfileId(profileIdMap, namedLegacy[0]);
+    for (const canonical of [...canonicalNamed, canonicalDefault]) {
+      expect(canonical).toMatch(/^openai:(?!codex)/);
+    }
+
+    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg: {},
+      prompter: makePrompter(true),
+      env: state.env,
+      openAICodexAuthProfileIdMap: profileIdMap,
+      now: () => 789,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    const loaded = loadPersistedAuthProfileStore(state.agentDir());
+    expect(loaded).toBeDefined();
+    expect(loaded!.profiles?.[canonicalDefault]).toMatchObject({
+      provider: "openai",
+      accountId: "default-account",
+    });
+    for (const canonical of canonicalNamed) {
+      expect(loaded!.profiles?.[canonical]).toMatchObject({ provider: "openai" });
+    }
+    expect(loaded!.order?.["openai-codex"]).toBeUndefined();
+    expect(loaded!.lastGood?.["openai-codex"]).toBeUndefined();
+    expect(Object.keys(loaded!.usageStats ?? {})).toEqual(
+      expect.not.arrayContaining([expect.stringMatching(/^openai-codex/)]),
+    );
+    expect(loaded!.order?.openai ?? []).toEqual(canonicalNamed);
+    expect(loaded!.lastGood?.openai).toBe(firstCanonical);
+    expect(loaded!.usageStats?.[firstCanonical]).toMatchObject({ lastUsed: 123 });
+    expect(loaded!.order?.openai ?? []).not.toContain(canonicalDefault);
+    expect(fs.existsSync(authPath)).toBe(false);
+    expect(fs.existsSync(statePath)).toBe(false);
+    expectMigratedArchive(authPath);
+    expectMigratedArchive(statePath);
+  });
+
+  it("canonicalizes stale openai-codex rotation state on the config-backed state-only path (#130018)", async () => {
+    const state = await makeTestState();
+    const profileIdMap = new Map([["openai-codex:alpha", "openai:alpha"]]);
+    const statePath = await state.writeText(
+      "agents/main/agent/auth-state.json",
+      `${JSON.stringify({
+        version: 1,
+        order: { "openai-codex": ["openai-codex:alpha"] },
+        lastGood: { "openai-codex": "openai-codex:alpha" },
+        usageStats: { "openai-codex:alpha": { lastUsed: 123 } },
+      })}\n`,
     );
 
     const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
       cfg: {},
       prompter: makePrompter(true),
-      now: () => 456,
+      env: state.env,
+      openAICodexAuthProfileIdMap: profileIdMap,
+      now: () => 790,
     });
 
-    expect(result.detected.toSorted()).toEqual([authPath, statePath].toSorted());
-    expect(result.warnings).toStrictEqual([]);
-    expect(loadPersistedAuthProfileStore(state.agentDir())).toMatchObject({
+    expect(result.detected).toEqual([statePath]);
+    const loaded = loadPersistedAuthProfileStore(state.agentDir());
+    expect(loaded).toMatchObject({
+      profiles: {},
+      order: { openai: ["openai:alpha"] },
+      lastGood: { openai: "openai:alpha" },
+      usageStats: { "openai:alpha": { lastUsed: 123 } },
+    });
+    expect(loaded?.order?.["openai-codex"]).toBeUndefined();
+    expect(fs.existsSync(statePath)).toBe(false);
+    expectMigratedArchive(statePath);
+  });
+
+  it("keeps unpaired standalone rotation state from selecting a same-suffix credential", async () => {
+    const state = await makeTestState();
+    await state.writeAuthProfiles({
+      version: 1,
       profiles: {
+        "openai:alpha": {
+          type: "api_key",
+          provider: "openai",
+          key: "unrelated-key",
+        },
         "openai:default": {
           type: "api_key",
           provider: "openai",
-          key: "sk-migrated",
+          key: "configured-key",
         },
       },
-      lastGood: { openai: "openai:default" },
     });
-    expect(fs.existsSync(authPath)).toBe(false);
-    expect(fs.existsSync(statePath)).toBe(false);
-    expectMigratedArchive(authPath);
-    expectMigratedArchive(statePath);
-    const combinedReceipt = openOpenClawStateDatabase({ env: state.env })
-      .db.prepare("SELECT report_json FROM migration_sources WHERE source_path = ?")
-      .get(authPath) as { report_json?: string } | undefined;
-    expect(JSON.parse(combinedReceipt?.report_json ?? "null")?.expectedStateSha256).toEqual(
-      expect.any(String),
+    const statePath = await state.writeText(
+      "agents/main/agent/auth-state.json",
+      `${JSON.stringify({
+        version: 1,
+        order: { "openai-codex": ["openai-codex:alpha"] },
+        lastGood: { "openai-codex": "openai-codex:alpha" },
+        usageStats: { "openai-codex:alpha": { lastUsed: 123 } },
+      })}\n`,
     );
+    const cfg = {
+      auth: {
+        profiles: {
+          "openai:alpha": { provider: "openai", mode: "api_key" },
+          "openai:default": { provider: "openai", mode: "api_key" },
+        },
+        order: { openai: ["openai:default"] },
+      },
+    } satisfies OpenClawConfig;
+
+    await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg,
+      prompter: makePrompter(true),
+      env: state.env,
+    });
+
+    const loaded = loadPersistedAuthProfileStore(state.agentDir());
+    expect(loaded).toMatchObject({
+      order: { "openai-codex": ["openai-codex:alpha"] },
+      lastGood: { "openai-codex": "openai-codex:alpha" },
+      usageStats: { "openai-codex:alpha": { lastUsed: 123 } },
+    });
+    expect(loaded?.order?.openai).toBeUndefined();
+    expect(loaded?.lastGood?.openai).toBeUndefined();
+    expect(loaded?.usageStats?.["openai:alpha"]).toBeUndefined();
+    expect(resolveAuthProfileOrder({ cfg, store: loaded!, provider: "openai" })).toEqual([
+      "openai:default",
+    ]);
+    expect(fs.existsSync(statePath)).toBe(false);
+    expectMigratedArchive(statePath);
+  });
+
+  it("uses config collision mappings for standalone rotation state", async () => {
+    const state = await makeTestState();
+    const legacyConfig = {
+      auth: {
+        profiles: {
+          "openai:bravo": {
+            provider: "openai",
+            mode: "api_key",
+            key: "existing-key",
+          },
+          "openai-codex:bravo": {
+            provider: "openai-codex",
+            mode: "api_key",
+            key: "legacy-key",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const profileIdMap = collectOpenAICodexAuthProfileStoreIdMap({
+      cfg: legacyConfig,
+      env: state.env,
+    });
+    expect(profileIdMap.get("openai-codex:bravo")).toBe("openai:chatgpt-bravo");
+    const cfg = maybeRepairOpenAICodexAuthConfig(legacyConfig, { profileIdMap }).config;
+    await writeLegacyAuthProfilesJson(state, {
+      version: 1,
+      profiles: {
+        "openai-codex:alpha": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "alpha-access",
+          refresh: "alpha-refresh",
+          expires: 1_900_000_000_000,
+        },
+      },
+    });
+    await state.writeText(
+      "agents/main/agent/auth-state.json",
+      `${JSON.stringify({
+        version: 1,
+        order: { "openai-codex": ["openai-codex:bravo"] },
+        lastGood: { "openai-codex": "openai-codex:bravo" },
+        usageStats: { "openai-codex:bravo": { lastUsed: 123 } },
+      })}\n`,
+    );
+
+    await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg,
+      prompter: makePrompter(true),
+      env: state.env,
+      openAICodexAuthProfileIdMap: profileIdMap,
+    });
+
+    const loaded = loadPersistedAuthProfileStore(state.agentDir());
+    expect(loaded?.profiles).toMatchObject({
+      "openai:bravo": { key: "existing-key" },
+      "openai:chatgpt-bravo": { key: "legacy-key" },
+    });
+    expect(loaded?.order?.openai).toEqual(["openai:chatgpt-bravo"]);
+    expect(loaded?.lastGood?.openai).toBe("openai:chatgpt-bravo");
+    expect(loaded?.usageStats?.["openai:chatgpt-bravo"]).toMatchObject({ lastUsed: 123 });
   });
 
   it("imports a valid legacy auth sibling when auth-profiles.json is malformed", async () => {
@@ -656,7 +1104,7 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     expect(fs.existsSync(authPath)).toBe(false);
   });
 
-  it("leaves unresolved legacy OAuth sidecar refs in JSON", async () => {
+  it("migrates unresolved legacy OAuth sidecar refs so startup can proceed cold", async () => {
     const state = await makeTestState();
     const authPath = await writeLegacyAuthProfilesJson(state, {
       version: 1,
@@ -666,8 +1114,9 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
           provider: "openai",
           email: "user@example.com",
           oauthRef: {
+            source: "openclaw-credentials",
             id: "0123456789abcdef0123456789abcdef",
-            provider: "openai",
+            provider: "openai-codex",
           },
         },
       },
@@ -680,14 +1129,31 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     });
 
     expect(result.detected).toEqual([authPath]);
-    expect(result.changes).toEqual([]);
+    expect(result.changes).toEqual([expect.stringContaining("Migrated auth profile JSON")]);
     expect(result.warnings).toEqual([
-      expect.stringContaining("legacy OAuth sidecar profile"),
-      expect.stringContaining("no importable auth profiles or state"),
+      expect.stringContaining("Migrated 1 legacy OAuth sidecar profile"),
     ]);
-    expect(loadPersistedAuthProfileStore(state.agentDir())).toBeNull();
-    expect(fs.existsSync(authPath)).toBe(true);
-    expectNoMigratedArchive(authPath);
+    expect(result.warnings[0]).toContain("re-authenticate");
+    const store = loadPersistedAuthProfileStore(state.agentDir());
+    expect(store?.profiles["openai:user@example.com"]).toMatchObject({
+      type: "oauth",
+      provider: "openai",
+      email: "user@example.com",
+      oauthRef: {
+        source: "openclaw-credentials",
+        provider: "openai-codex",
+      },
+    });
+    expect(
+      resolveAuthProfileEligibility({
+        store: store!,
+        provider: "openai",
+        profileId: "openai:user@example.com",
+      }),
+    ).toEqual({ eligible: false, reasonCode: "unresolved_ref" });
+    expect(fs.existsSync(authPath)).toBe(false);
+    expectMigratedArchive(authPath);
+    expect(() => assertAuthProfileMigrationReady(state.agentDir())).not.toThrow();
   });
 
   it("imports valid profiles when one legacy OAuth sidecar ref is unresolved", async () => {
@@ -705,8 +1171,9 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
           provider: "openai",
           email: "user@example.com",
           oauthRef: {
+            source: "openclaw-credentials",
             id: "0123456789abcdef0123456789abcdef",
-            provider: "openai",
+            provider: "openai-codex",
           },
         },
       },
@@ -729,19 +1196,23 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
           provider: "openai",
           key: "sk-imported",
         },
+        "openai:user@example.com": {
+          type: "oauth",
+          provider: "openai",
+          email: "user@example.com",
+          oauthRef: {
+            source: "openclaw-credentials",
+            id: "0123456789abcdef0123456789abcdef",
+            provider: "openai-codex",
+          },
+        },
       },
-      order: { openai: ["openai:default"] },
+      order: { openai: ["openai:default", "openai:user@example.com"] },
       lastGood: { openai: "openai:default" },
     });
-    expect(fs.existsSync(authPath)).toBe(true);
-    expectNoMigratedArchive(authPath);
-    const remaining = JSON.parse(fs.readFileSync(authPath, "utf8"));
-    expect(remaining.profiles).toHaveProperty("openai:default");
-    expect(remaining.profiles).toHaveProperty("openai:user@example.com");
-    expect(remaining.order).toEqual({
-      openai: ["openai:default", "openai:user@example.com"],
-    });
-    expect(remaining.lastGood).toEqual({ openai: "openai:default" });
+    expect(fs.existsSync(authPath)).toBe(false);
+    expectMigratedArchive(authPath);
+    expect(() => assertAuthProfileMigrationReady(state.agentDir())).not.toThrow();
   });
 
   it("keeps existing SQLite credentials when importing stale JSON", async () => {
@@ -884,6 +1355,65 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     ]);
     expect(fs.existsSync(authPath)).toBe(true);
     expectNoMigratedArchive(authPath);
+  });
+
+  it("does not commit config when its migration fails before a later agent succeeds", async () => {
+    const state = await makeTestState();
+    const configAuthPath = await writeLegacyAuthProfilesJson(state, {
+      version: 1,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "config-access",
+          refresh: "config-refresh",
+          expires: 1_900_000_000_000,
+        },
+      },
+    });
+    const laterAuthPath = await writeLegacyAuthProfilesJson(
+      state,
+      {
+        version: 1,
+        profiles: {
+          "openai-codex:later": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "later-access",
+            refresh: "later-refresh",
+            expires: 1_900_000_000_000,
+          },
+        },
+      },
+      "later",
+    );
+    const cfg = {
+      auth: {
+        profiles: {
+          "openai-codex:default": { provider: "openai-codex", mode: "oauth" },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg,
+      prompter: makePrompter(true),
+      env: state.env,
+      deps: {
+        loadPersistedAuthProfileStore: (agentDir, options) =>
+          agentDir === undefined
+            ? { version: 1, profiles: {} }
+            : loadPersistedAuthProfileStore(agentDir, options),
+      },
+    });
+
+    expect(result.configOwnerMigrationApplied).toBe(false);
+    expect(result.warnings).toEqual([expect.stringContaining("SQLite verification failed")]);
+    expect(fs.existsSync(configAuthPath)).toBe(true);
+    expect(fs.existsSync(laterAuthPath)).toBe(false);
+    expect(loadPersistedAuthProfileStore(state.agentDir("later"))?.profiles).toHaveProperty(
+      "openai:later",
+    );
   });
 
   it("keeps legacy JSON when the SQLite target changes before the migration transaction", async () => {
@@ -1986,7 +2516,7 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
     });
   });
 
-  it("does not rebind unresolved sidecar accounts when another Codex account migrates", async () => {
+  it("canonicalizes unresolved sidecar accounts while keeping them cold", async () => {
     const state = await makeTestState();
     const storePath = path.join(state.sessionsDir(), "sessions.json");
     const readySessionKey = "agent:main:main";
@@ -2044,7 +2574,7 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
       authProfileIdMap: profileIdMap,
     });
 
-    expect(result.repairedSessions).toBe(1);
+    expect(result.repairedSessions).toBe(2);
     expect(
       loadSessionEntry({ storePath, sessionKey: readySessionKey, env: state.env }),
     ).toMatchObject({
@@ -2053,9 +2583,17 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
     expect(
       loadSessionEntry({ storePath, sessionKey: pendingSessionKey, env: state.env }),
     ).toMatchObject({
-      authProfileOverride: "openai-codex:pending",
+      authProfileOverride: "openai:pending",
       authProfileOverrideSource: "user",
     });
+    const coldStore = loadPersistedAuthProfileStore(state.agentDir());
+    expect(
+      resolveAuthProfileEligibility({
+        store: coldStore!,
+        provider: "openai",
+        profileId: "openai:pending",
+      }),
+    ).toEqual({ eligible: false, reasonCode: "missing_credential" });
   });
 
   it("repairs an already-migrated selected account from its verified auth archive", async () => {
@@ -2112,6 +2650,12 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
       authProfileOverride: "openai-codex:default",
     });
 
+    const detected = detectSharedAuthStoreMigration({
+      stateDir: state.stateDir,
+      doctorOnlyStateMigrations: true,
+    });
+    await migrateSharedAuthStore({ detected, stateDir: state.stateDir, env: state.env });
+
     const recoveredMap = collectOpenAICodexAuthProfileStoreIdMap({ cfg: {}, env: state.env });
     expect(recoveredMap.get("openai-codex:default")).toBe("openai:chatgpt-default");
     const repair = await maybeRepairCodexSessionRoutes({
@@ -2126,7 +2670,7 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
       authProfileOverride: "openai:chatgpt-default",
       authProfileOverrideSource: "user",
     });
-    expect(loadPersistedAuthProfileStore(state.agentDir())?.profiles).toMatchObject({
+    expect(loadPersistedSharedAuthProfileStore(state.env)?.profiles).toMatchObject({
       "openai:default": { type: "api_key" },
       "openai:chatgpt-default": { accountId: "kate-account" },
       "openai:peter": { accountId: "peter-account" },
@@ -2220,6 +2764,7 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
             provider: "openai-codex",
             accountId: "failed-different-account",
             oauthRef: {
+              source: "openclaw-credentials",
               id: "0123456789abcdef0123456789abcdef",
               provider: "openai-codex",
             },
@@ -2281,8 +2826,8 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
       shouldRepair: true,
       authProfileIdMap: profileIdMap,
     });
-    expect(repair.repairedSessions).toBe(3);
-    for (const agentId of ["main", "inherited", "dedup"]) {
+    expect(repair.repairedSessions).toBe(4);
+    for (const agentId of ["main", "failed", "inherited", "dedup"]) {
       expect(
         loadSessionEntry({
           storePath: path.join(state.sessionsDir(agentId), "sessions.json"),
@@ -2294,16 +2839,49 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
         authProfileOverrideSource: "user",
       });
     }
-    expect(
-      loadSessionEntry({
-        storePath: path.join(state.sessionsDir("failed"), "sessions.json"),
-        sessionKey: "agent:failed:main",
-        env: state.env,
-      }),
-    ).toMatchObject({
-      authProfileOverride: "openai-codex:shared",
-      authProfileOverrideSource: "user",
+    expect(loadPersistedAuthProfileStore(state.agentDir("failed"))?.profiles).toMatchObject({
+      "openai:shared": {
+        type: "oauth",
+        provider: "openai",
+        accountId: "failed-different-account",
+        oauthRef: {
+          source: "openclaw-credentials",
+          provider: "openai-codex",
+        },
+      },
     });
+  });
+
+  it("does not read a canonical session database as JSON during route preview or repair", async () => {
+    const state = await makeTestState();
+    const storePath = path.join(state.agentDir(), "openclaw-agent.sqlite");
+    const sessionKey = "agent:main:main";
+    await replaceSessionEntry(
+      { storePath, sessionKey, env: state.env },
+      { sessionId: "canonical-route-session", updatedAt: Date.now() },
+    );
+    const readFileSyncSpy = vi.spyOn(fs, "readFileSync");
+    try {
+      for (const shouldRepair of [false, true]) {
+        const result = await maybeRepairCodexSessionRoutes({
+          cfg: { session: { store: storePath } },
+          env: state.env,
+          shouldRepair,
+        });
+        expect(result).toMatchObject({
+          scannedStores: 1,
+          repairedSessions: 0,
+          warnings: [],
+          changes: [],
+        });
+      }
+      expect(readFileSyncSpy.mock.calls.map(([file]) => file)).not.toContain(storePath);
+    } finally {
+      readFileSyncSpy.mockRestore();
+    }
+    expect(loadSessionEntry({ storePath, sessionKey, env: state.env })?.sessionId).toBe(
+      "canonical-route-session",
+    );
   });
 
   it("previews noncanonical SQLite sessions without mutating or requiring canonical migration", async () => {
@@ -2350,6 +2928,62 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
           .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
           .get(sessionKey),
       ).toEqual({ entry_valid: 0 });
+    } finally {
+      verifier.close();
+    }
+  });
+
+  it("ignores retained Codex window metadata when preview and repair both skip its tombstone", async () => {
+    const state = await makeTestState();
+    const storePath = path.join(state.sessionsDir(), "sessions.json");
+    const sessionKey = "agent:main:main";
+    await replaceSessionEntry(
+      { storePath, sessionKey, env: state.env },
+      { sessionId: "retained-codex-window", updatedAt: 10 },
+    );
+    closeOpenClawAgentDatabasesForTest();
+    const sqlitePath = path.join(state.agentDir(), "openclaw-agent.sqlite");
+    const database = new DatabaseSync(sqlitePath);
+    database
+      .prepare("UPDATE session_nodes SET entry_json = '{}' WHERE session_key = ?")
+      .run(sessionKey);
+    database
+      .prepare("UPDATE session_nodes SET entry_valid = -1 WHERE session_key = ?")
+      .run(sessionKey);
+    database
+      .prepare(
+        "UPDATE session_windows SET agent_harness_id = 'codex', model_provider = 'openai-codex', model = 'gpt-5.5' WHERE session_key = ?",
+      )
+      .run(sessionKey);
+    database.close();
+
+    const preview = await maybeRepairCodexSessionRoutes({
+      cfg: {},
+      env: state.env,
+      shouldRepair: false,
+    });
+    const repair = await maybeRepairCodexSessionRoutes({
+      cfg: {},
+      env: state.env,
+      shouldRepair: true,
+    });
+
+    expect(preview).toMatchObject({ warnings: [], changes: [], repairedSessions: 0 });
+    expect(repair).toMatchObject({ warnings: [], changes: [], repairedSessions: 0 });
+    const verifier = new DatabaseSync(sqlitePath, { readOnly: true });
+    try {
+      expect(
+        verifier
+          .prepare("SELECT entry_json, entry_valid FROM session_nodes WHERE session_key = ?")
+          .get(sessionKey),
+      ).toEqual({ entry_json: "{}", entry_valid: -1 });
+      expect(
+        verifier
+          .prepare(
+            "SELECT agent_harness_id, model_provider, model FROM session_windows WHERE session_key = ?",
+          )
+          .get(sessionKey),
+      ).toEqual({ agent_harness_id: "codex", model_provider: "openai-codex", model: "gpt-5.5" });
     } finally {
       verifier.close();
     }

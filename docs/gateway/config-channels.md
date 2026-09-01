@@ -33,7 +33,7 @@ All channels support DM policies and group policies:
 | `disabled`            | Block all group/room messages                          |
 
 <Note>
-`channels.defaults.groupPolicy` sets the default when a provider's `groupPolicy` is unset.
+`channels.defaults.groupPolicy` applies only when the resolved channel policy is unset. The channel schemas listed below default the root to `allowlist`; set `channels.<channel>.groupPolicy` explicitly to choose another policy.
 Pairing codes expire after 1 hour. Pending pairing requests are capped at **3 per account** (scoped by channel and account id).
 If a provider block is missing entirely (`channels.<provider>` absent), runtime group policy falls back to `allowlist` (fail-closed) with a startup warning.
 </Note>
@@ -103,10 +103,10 @@ Use `channels.defaults` for shared group-policy, implicit-mention, and heartbeat
 
 - `channels.defaults.groupPolicy`: fallback group policy when a provider-level `groupPolicy` is unset.
 - `channels.defaults.contextVisibility`: default supplemental context visibility mode for all channels. Values: `all` (default, include all quoted/thread/history context), `allowlist` (only include context from allowlisted senders), `allowlist_quote` (same as allowlist but keep explicit quote/reply context). Per-channel override: `channels.<channel>.contextVisibility`.
-- `channels.defaults.implicitMentions`: controls which supported inbound facts count as mentions. `replyToBot`, `quotedBot`, and `threadParticipation` each default to `true`, preserving current behavior. Override per channel with `channels.<channel>.implicitMentions` or per account with `channels.<channel>.accounts.<id>.implicitMentions`; each flag resolves account -> channel -> defaults independently. The names are positive: set a flag to `false` to stop that fact from bypassing mention gating. Native explicit mentions are always allowed, and a flag has no effect when the channel does not produce that fact. See [Mention gating](/channels/groups#mention-gating-default) for the current producer matrix. These settings do not change outbound reply/thread modes or authorized command handling.
-- `channels.defaults.heartbeatVisibility.showOk`: include healthy channel statuses in heartbeat output (default `false`).
-- `channels.defaults.heartbeatVisibility.showAlerts`: include degraded/error statuses in heartbeat output (default `true`).
-- `channels.defaults.heartbeatVisibility.useIndicator`: render compact indicator-style heartbeat output (default `true`).
+- `channels.defaults.implicitMentions`: controls which supported inbound facts count as mentions. `replyToBot`, `quotedBot`, and `threadParticipation` each default to `true`, preserving current behavior. The names are positive: set a flag to `false` to stop that fact from bypassing mention gating. Among bundled channels, Mattermost, Slack, and Tlon read this policy; on those channels you can also override it per channel with `channels.<channel>.implicitMentions` or per account with `channels.<channel>.accounts.<id>.implicitMentions`, and each flag resolves account -> channel -> defaults independently. Other bundled channels that produce implicit mention facts do not currently read these settings, so on those channels the facts always count as mentions and the override has no effect. Native explicit mentions are always allowed, and a flag has no effect when the channel does not produce that fact. See [Mention gating](/channels/groups#mention-gating-default) for the current producer matrix. These settings do not change outbound reply/thread modes or authorized command handling.
+- `channels.defaults.heartbeatVisibility.showOk`: deliver legacy `HEARTBEAT_OK` acknowledgments when the monitor has nothing to report (default `false`).
+- `channels.defaults.heartbeatVisibility.showAlerts`: deliver user-facing heartbeat monitor alerts (default `true`).
+- `channels.defaults.heartbeatVisibility.useIndicator`: emit heartbeat status indicator events (default `true`).
 
 ### WhatsApp
 
@@ -114,11 +114,9 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 
 ```json5
 {
-  web: {
-    enabled: true,
-  },
   channels: {
     whatsapp: {
+      enabled: true,
       dmPolicy: "pairing", // pairing | allowlist | open | disabled
       allowFrom: ["+15555550123", "+447700900123"],
       textChunkLimit: 4000,
@@ -197,12 +195,6 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       actions: { reactions: true, sendMessage: true },
       reactionNotifications: "own", // off | own | all
       mediaMaxMb: 100,
-      retry: {
-        attempts: 3,
-        minDelayMs: 400,
-        maxDelayMs: 30000,
-        jitter: 0.1,
-      },
       network: {
         autoSelectFamily: true,
         dnsResultOrder: "ipv4first",
@@ -219,11 +211,13 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 ```
 
 - Bot token: `channels.telegram.botToken` or `channels.telegram.tokenFile` (regular file only; symlinks rejected), with `TELEGRAM_BOT_TOKEN` as fallback for the default account.
+- `channels.telegram.joinIntro` defaults to `true`. When the bot joins an allowed group or supergroup, it posts one introduction using the group title, description, and available pinned message. The Telegram Bot API cannot read pre-join group history. Set this option to `false` to disable introductions, or use `channels.telegram.accounts.<accountId>.joinIntro` for an account-specific override. Introductions happen once per room; see [group join introductions](/channels#group-join-introductions). Introductions never run in private chats.
 - `apiRoot` is the Telegram Bot API root only. Use `https://api.telegram.org` or your self-hosted/proxy root, not `https://api.telegram.org/bot<TOKEN>`; `openclaw doctor --fix` removes an accidental trailing `/bot<TOKEN>` suffix.
 - For a self-hosted Bot API server in `--local` mode, `trustedLocalFileRoots` lists host paths OpenClaw may read. Mount the server data volume on the OpenClaw host and configure either its data root or per-token directory; container paths under `/var/lib/telegram-bot-api` are mapped into those roots. Other absolute paths remain rejected.
 - Optional `channels.telegram.defaultAccount` overrides default account selection when it matches a configured account id.
 - In multi-account setups (2+ account ids), set an explicit default (`channels.telegram.defaultAccount` or `channels.telegram.accounts.default`) to avoid fallback routing; `openclaw doctor` warns when this is missing or invalid.
 - `configWrites: false` blocks Telegram-initiated config writes (supergroup ID migrations, `/config set|unset`).
+- `actions.reactions` controls both message reactions and `emoji-list`, which lists the standard and custom reactions allowed in the current chat.
 - Top-level `bindings[]` entries with `type: "acp"` configure persistent ACP bindings for forum topics (use canonical `chatId:topic:topicId` in `match.peer.id`). Field semantics are shared in [ACP Agents](/tools/acp-agents#persistent-channel-bindings).
 - Telegram stream previews use `sendMessage` + `editMessageText` (works in direct and group chats).
 - `network.dnsResultOrder` defaults to `"ipv4first"` to avoid common IPv6 fetch failures.
@@ -306,6 +300,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
           {
             guildId: "123456789012345678",
             channelId: "234567890123456789",
+            whenOccupied: true,
           },
         ],
         daveEncryption: true,
@@ -331,25 +326,28 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 ```
 
 - Token: `channels.discord.token`, with `DISCORD_BOT_TOKEN` as fallback for the default account.
+- `channels.discord.joinIntro` defaults to `true`. When the bot joins an allowed server, it posts one introduction in the system channel when permitted, or the first text channel where it can view and send messages. Recent messages are included only when the bot can read message history. Set this option to `false` to disable introductions, or use `channels.discord.accounts.<accountId>.joinIntro` for an account-specific override. Up to 100 recent messages are read when permitted, once per server; see [group join introductions](/channels#group-join-introductions). Introductions never run in direct messages.
 - Direct outbound calls that provide an explicit Discord `token` use that token for the call; account policy settings still come from the selected account in the active runtime snapshot.
 - Optional `channels.discord.defaultAccount` overrides default account selection when it matches a configured account id.
 - Use `user:<id>` (DM) or `channel:<id>` (guild channel) for delivery targets; bare numeric IDs are rejected.
+- `actions.reactions` controls `react`, `reactions`, and `emoji-list`; emoji discovery defaults to the current server unless `guildId` is provided.
 - Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged name (no `#`). Prefer guild IDs.
 - Bot-authored messages are ignored by default. `allowBots: true` enables them; use `allowBots: "mentions"` to only accept bot messages that mention the bot (own messages still filtered).
 - Channels that support bot-authored inbound messages can use shared [bot loop protection](/channels/bot-loop-protection). Set `channels.defaults.botLoopProtection` for baseline pair budgets, then override the channel or account only when one surface needs different limits.
-- `channels.discord.guilds.<id>.ignoreOtherMentions` (and channel overrides) drops messages that mention another user or role but not the bot (excluding @everyone/@here).
+- `channels.discord.guilds.<id>.ignoreOtherMentions` (and channel overrides) drops messages addressed to another identity but not the bot. This covers explicit user/role mentions (excluding @everyone/@here) and replies to another non-webhook bot; an explicit mention of the current bot still wins.
 - `channels.discord.mentionAliases` maps stable outbound `@handle` text to Discord user IDs before sending, so known teammates can be mentioned deterministically even when the transient directory cache is empty. Per-account overrides live under `channels.discord.accounts.<accountId>.mentionAliases`.
 - `maxLinesPerMessage` (default `17`) splits tall messages even when under 2000 chars.
 - `channels.discord.suppressEmbeds` defaults to `true`, so outbound URLs do not expand into Discord link previews unless disabled. Explicit `embeds` payloads still send normally; per-message tool calls can override with `suppressEmbeds`.
 - `channels.discord.threadBindings` controls Discord thread-bound routing:
-  - `enabled`: Discord override for thread-bound session features (`/focus`, `/unfocus`, `/agents`, `/session idle`, `/session max-age`, and bound delivery/routing)
-  - `idleHours`: Discord override for inactivity auto-unfocus in hours (`0` disables)
+  - `enabled`: Discord override for thread-bound session spawning, delivery, and routing; manage bindings with `/session unbind`, `/agents`, `/session idle`, and `/session max-age`
+  - `idleHours`: Discord override for inactivity auto-unbind in hours (`0` disables)
   - `maxAgeHours`: Discord override for hard max age in hours (`0` disables)
   - `spawnSessions`: switch for `sessions_spawn({ thread: true })` and ACP thread-spawn auto thread creation/binding (default: `true`)
   - `defaultSpawnContext`: native subagent context for thread-bound spawns (`"fork"` by default)
 - Top-level `bindings[]` entries with `type: "acp"` configure persistent ACP bindings for channels and threads (use channel/thread id in `match.peer.id`). Field semantics are shared in [ACP Agents](/tools/acp-agents#persistent-channel-bindings).
 - `channels.discord.agentComponents.ttlMs` controls how long sent Discord component callbacks remain registered. Default `1800000` (30 minutes), maximum `86400000` (24 hours). Per-account overrides live under `channels.discord.accounts.<accountId>.agentComponents.ttlMs`. Prefer the shortest TTL that fits the workflow.
 - `channels.discord.voice` enables Discord voice channel conversations and optional auto-join + LLM + TTS overrides. Text-only Discord configs leave voice off by default; set `channels.discord.voice.enabled=true` to opt in.
+- `channels.discord.voice.autoJoin[].whenOccupied` keeps an auto-managed voice channel disconnected until a human is present, then leaves when the last human departs. It defaults to `false`; bots do not count as occupants, and manual or ad-hoc voice sessions are not managed by this policy.
 - `channels.discord.voice.model` optionally overrides the LLM model used for Discord voice channel responses.
 - `channels.discord.voice.daveEncryption` (default `true`) and `channels.discord.voice.decryptionFailureTolerance` (default `24`) pass through to `@discordjs/voice` DAVE options.
 - `channels.discord.voice.connectTimeoutMs` controls the initial `@discordjs/voice` Ready wait for `/vc join` and auto-join attempts (default `30000`).
@@ -362,7 +360,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - `channels.discord.intents.messageContent` defaults to `true`. Set it to `false` only for mention-only operation when Discord cannot grant the privileged Message Content intent; DMs and explicit bot mentions still carry message content, while other guild messages do not. Keep `requireMention: true` on every configured guild channel in this mode.
 - `channels.discord.dangerouslyAllowNameMatching` re-enables mutable name/tag matching (break-glass compatibility mode).
 - `channels.discord.execApprovals`: Discord-native exec approval delivery and approver authorization.
-  - `enabled`: `true`, `false`, or `"auto"` (default). In auto mode, exec approvals activate when approvers can be resolved from `approvers` or `commands.ownerAllowFrom`.
+  - `enabled`: `true`, `false`, or `"auto"`. Unset or `false` disables native delivery. Set `true` or `"auto"` to activate it when approvers resolve from `approvers` or `commands.ownerAllowFrom`.
   - `approvers`: Discord user IDs allowed to approve exec requests. Falls back to `commands.ownerAllowFrom` when omitted.
   - `agentFilter`: optional agent ID allowlist. Omit to forward approvals for all agents.
   - `sessionFilter`: optional session key patterns (substring or regex).
@@ -472,21 +470,27 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 
 - **Socket mode** requires both `botToken` and `appToken` (`SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` for default account env fallback).
 - **HTTP mode** requires `botToken` plus `signingSecret` (at root or per-account).
-- **User identity** (`identity: "user"`) posts and reads as the authorizing human. It requires `userToken` plus `appToken` in Socket Mode, or `userToken` plus `signingSecret` in HTTP mode. No bot token or bot user is required. See [User identity](/channels/slack#user-identity-post-as-a-real-person) for user scopes and event subscriptions.
-- `enterpriseOrgInstall: true` opts an account into the Slack Enterprise Grid
-  org-wide event path. Startup verifies the bot token with `auth.test` and
-  fails when the configured mode does not match Slack's installation identity.
-  Enterprise DMs must be disabled or use `dmPolicy: "open"` with an effective
-  `allowFrom: ["*"]`. Channel and user policies must use stable Slack IDs;
-  mutable names and unsupported channel prefixes fail startup. V1 handles only
-  direct Socket Mode or HTTP `message` and `app_mention` events with immediate
-  replies; relay, commands, interactions, App Home, reaction event listeners,
-  pins, action tools, native approvals, bindings, deferred delivery, and
-  proactive sends are unavailable. Listener-owned acknowledgment, typing, and
-  status reactions remain available with `reactions:write`; inbound reaction
-  notifications and reaction action tools are unavailable. See
+- `channels.slack.joinIntro` defaults to `true`. When the bot joins an allowed channel, it posts one introduction using the channel name, purpose or topic, and available recent messages. Set this option to `false` to disable introductions, or use `channels.slack.accounts.<accountId>.joinIntro` for an account-specific override. Up to 100 recent messages are read, once per channel; see [group join introductions](/channels#group-join-introductions). Introductions never run in direct messages.
+- **User identity** (`postAs: "user"`) posts and reads as the authorizing human. It requires `userToken` plus `appToken` in Socket Mode, or `userToken` plus `signingSecret` in HTTP mode. No bot token or bot user is required. See [User identity](/channels/slack#user-identity-post-as-a-real-person) for user scopes and event subscriptions.
+- Slack detects Enterprise Grid org-wide installations automatically from the
+  bot token with `auth.test`; no installation-mode setting is required.
+  Enterprise DMs support `disabled`, `open`, `allowlist`, and workspace-scoped
+  `pairing`. Channel policies require `team:<team-id>:channel:<channel-id>`.
+  User policies accept either an org-wide stable user ID or
+  `team:<team-id>:user:<user-id>` for workspace scope. Mutable names and
+  unsupported channel prefixes fail startup.
+  Mention-pattern channel scopes and static route-binding peers use
+  workspace-qualified Slack targets.
+  Direct Socket Mode or HTTP messages, mentions, workspace-qualified actions,
+  deferred delivery, proactive sends, supported event listeners and
+  interactions, static route bindings, and Slack-native approvals from
+  workspace-qualified turns are supported. Relay, channel-ID-change events,
+  App Home, Agent and Assistant lifecycle events, configured ACP bindings, and
+  runtime current-conversation bindings remain unavailable. See
   [Enterprise Grid org-wide installs](/channels/slack#enterprise-grid-org-wide-installs)
   for the least-privilege manifest, setup workflow, and complete restrictions.
+- The retired `enterpriseOrgInstall` key is removed by `openclaw doctor --fix`
+  at the Slack root and account levels.
 - `botToken`, `appToken`, `signingSecret`, and `userToken` accept plaintext
   strings or SecretRef objects.
 - Slack account snapshots expose per-credential source/status fields such as
@@ -498,7 +502,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - `configWrites: false` blocks Slack-initiated config writes.
 - Optional `channels.slack.defaultAccount` overrides default account selection when it matches a configured account id.
 - `dm.groupEnabled` and `dm.groupChannels` only filter Slack group DMs (MPDMs) the app is already a member of. They cannot make the app see an existing group DM it never joined; convert the group DM to a private channel and invite the app, or have the app open a new MPDM with `conversations.open`. See [Group DMs (MPDMs) and bots](/channels/slack#group-dms-mpdms-and-bots).
-- `channels.slack.streaming.mode` is the canonical Slack stream mode key (default `"partial"`). `channels.slack.streaming.nativeTransport` controls Slack's native streaming transport (default `true`). Legacy `streamMode`, boolean `streaming`, `chunkMode`, `blockStreaming`, `blockStreamingCoalesce`, and `nativeStreaming` values are no longer read at runtime; run `openclaw doctor --fix` to migrate persisted config to `streaming.{mode,chunkMode,block.enabled,block.coalesce,nativeTransport}`.
+- `channels.slack.streaming.mode` is the canonical Slack stream mode key (default `"progress"`). `channels.slack.streaming.nativeTransport` controls Slack's native streaming transport (default `true`). Legacy `streamMode`, boolean `streaming`, `chunkMode`, `blockStreaming`, `blockStreamingCoalesce`, and `nativeStreaming` values are no longer read at runtime; run `openclaw doctor --fix` to migrate persisted config to `streaming.{mode,chunkMode,block.enabled,block.coalesce,nativeTransport}`.
 - `unfurlLinks` and `unfurlMedia` pass Slack's `chat.postMessage` link and media unfurl booleans through for bot replies. `unfurlLinks` defaults to `false` so outbound bot links do not expand inline unless enabled; `unfurlMedia` is omitted unless configured. Set either value at `channels.slack.accounts.<accountId>` to override the top-level value for one account.
 - Use `user:<id>` (DM) or `channel:<id>` for delivery targets.
 
@@ -516,7 +520,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 | messages     | enabled | Read/send/edit/delete  |
 | pins         | enabled | Pin/unpin/list         |
 | memberInfo   | enabled | Member info            |
-| emojiList    | enabled | Custom emoji list      |
+| emojiList    | enabled | List custom emoji      |
 
 ### Mattermost
 
@@ -605,7 +609,7 @@ OpenClaw spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required. Th
 
 BlueBubbles support was removed. `channels.bluebubbles` is not a supported runtime config surface on current OpenClaw. Migrate old configs to `channels.imessage`; use [BlueBubbles removal and the imsg iMessage path](/announcements/bluebubbles-imessage) for the short version and [Coming from BlueBubbles](/channels/imessage-from-bluebubbles) for the full translation table.
 
-If the Gateway is not running on the signed-in Messages Mac, keep `channels.imessage.enabled=true` and set `channels.imessage.cliPath` to an SSH wrapper that runs `imsg "$@"` on that Mac. The default local `imsg` path is macOS-only.
+If the Gateway is not running on the signed-in Messages Mac, keep `channels.imessage.enabled=true` and set `channels.imessage.cliPath` to the absolute path of a Gateway-local SSH wrapper that runs `imsg "$@"` on that Mac. Set `remoteHost` to the Messages Mac, not the Gateway host. OpenClaw auto-detects simple transparent SSH wrappers for compatibility, but complex wrappers require explicit `remoteHost`. The default local `imsg` path is macOS-only.
 
 Before relying on an SSH wrapper for production sends, verify an outbound `imsg send` through that exact wrapper. Some macOS TCC states assign Messages Automation to `/usr/libexec/sshd-keygen-wrapper`, which can make reads and probes work while sends fail with AppleEvents `-1743`; see the SSH wrapper troubleshooting section on [iMessage](/channels/imessage).
 
@@ -614,9 +618,9 @@ Before relying on an SSH wrapper for production sends, verify an outbound `imsg 
   channels: {
     imessage: {
       enabled: true,
-      cliPath: "imsg",
-      dbPath: "~/Library/Messages/chat.db",
-      remoteHost: "user@gateway-host",
+      cliPath: "/home/openclaw/.openclaw/scripts/imsg-ssh",
+      dbPath: "/Users/user/Library/Messages/chat.db",
+      remoteHost: "user@messages-mac",
       dmPolicy: "pairing",
       allowFrom: ["+15555550123", "user@example.com", "chat_id:123"],
       historyLimit: 50,
@@ -643,9 +647,10 @@ Before relying on an SSH wrapper for production sends, verify an outbound `imsg 
 - Optional `channels.imessage.defaultAccount` overrides default account selection when it matches a configured account id.
 - Requires Full Disk Access to the Messages DB.
 - Prefer `chat_id:<id>` targets. Use `imsg chats --limit 20` to list chats.
-- `cliPath` can point to an SSH wrapper; set `remoteHost` (`host` or `user@host`) for SCP attachment fetching.
+- For SSH setups, `cliPath` is an absolute path on the Gateway host. `remoteHost` (`host` or `user@host`) is the Messages Mac, and `dbPath` is interpreted on that Mac. Use an absolute remote database path rather than expanding it from the Gateway user's home.
+- A configured or auto-detected `remoteHost` enables inbound attachment fetches and outbound file staging over the existing strict SSH/SCP transport. Outbound files use an owner-only remote temporary path with best-effort cleanup after success, failure, or timeout; cleanup failure warns and can leave owner-only residue.
 - `attachmentRoots` and `remoteAttachmentRoots` restrict inbound attachment paths (default: `/Users/*/Library/Messages/Attachments`).
-- SCP uses strict host-key checking, so ensure the relay host key already exists in `~/.ssh/known_hosts`.
+- SCP uses strict host-key checking, so ensure the Messages Mac host key already exists in `~/.ssh/known_hosts`.
 - `channels.imessage.configWrites`: allow or deny iMessage-initiated config writes.
 - `channels.imessage.sendTransport`: preferred `imsg` RPC send transport for normal outbound replies. `auto` (default) uses the IMCore bridge for existing chats when it is running, then falls back to AppleScript; `bridge` requires private-API delivery; `applescript` forces the public Messages automation path.
 - `channels.imessage.actions.*`: enable private API actions that are also gated by `imsg status` / `openclaw channels status --probe`.
@@ -658,10 +663,19 @@ Before relying on an SSH wrapper for production sends, verify an outbound `imsg 
 
 ```bash
 #!/usr/bin/env bash
-exec ssh -T gateway-host imsg "$@"
+exec ssh -T messages-mac imsg "$@"
 ```
 
+With remote `imsg` v0.13.4, poll votes must use `pollOptionId`; its `poll.vote` RPC method does not resolve index or text selectors. Attachment replies to nonzero part indices are also unavailable remotely. These limits do not change local `imsg` behavior.
+
 </Accordion>
+
+### LINE
+
+LINE is plugin-backed and configured under `channels.line`.
+
+- `channels.line.joinIntro` defaults to `true`. When the bot joins an allowed group or multi-person room, it posts one introduction using the group name when available. LINE exposes no multi-person room name or topic, and its Messaging API cannot read prior messages. Set this option to `false` to disable introductions, or use `channels.line.accounts.<accountId>.joinIntro` for an account-specific override. Introductions happen once per room and never run in one-to-one user chats; see [group join introductions](/channels#group-join-introductions).
+- Full LINE configuration, webhook setup, and access policy are documented in [LINE](/channels/line).
 
 ### Matrix
 
@@ -700,6 +714,7 @@ Matrix is plugin-backed and configured under `channels.matrix`.
 - `channels.matrix.network.dangerouslyAllowPrivateNetwork` allows private/internal homeservers. `proxy` and this network opt-in are independent controls.
 - `channels.matrix.defaultAccount` selects the preferred account in multi-account setups.
 - `channels.matrix.autoJoin` defaults to `"off"`, so invited rooms and fresh DM-style invites are ignored until you set `autoJoin: "allowlist"` with `autoJoinAllowlist` or `autoJoin: "always"`.
+- `channels.matrix.joinIntro` defaults to `true`. When the bot actually joins an allowed group room, it posts one introduction using the room name, topic, and up to 100 readable recent messages. A failed history read leaves a metadata-only introduction. Set this option to `false` to disable introductions, or use `channels.matrix.accounts.<accountId>.joinIntro` for an account-specific override. Introductions happen once per room; unaccepted invites, startup room snapshots, membership updates that leave the bot joined, and direct rooms do not trigger them. See [group join introductions](/channels#group-join-introductions).
 - `channels.matrix.execApprovals`: Matrix-native exec approval delivery and approver authorization.
   - `enabled`: `true`, `false`, or `"auto"` (default). In auto mode, exec approvals activate when approvers can be resolved from `approvers` or `commands.ownerAllowFrom`.
   - `approvers`: Matrix user IDs (e.g. `@owner:example.org`) allowed to approve exec requests.
@@ -762,6 +777,8 @@ IRC is plugin-backed and configured under `channels.irc`.
 
 Run multiple accounts per channel (each with its own `accountId`):
 
+This pattern applies to channels that support `accounts`. Microsoft Teams uses only the channel-level `channels.msteams` configuration.
+
 ```json5
 {
   channels: {
@@ -784,6 +801,8 @@ Run multiple accounts per channel (each with its own `accountId`):
 - `default` is used when `accountId` is omitted (CLI + routing).
 - Env tokens only apply to the **default** account.
 - Base channel settings apply to all accounts unless overridden per account.
+- For Discord, Google Chat, iMessage, Signal, Slack, Telegram, and WhatsApp, an omitted account `groupPolicy` or `dmPolicy` inherits the channel policy. An explicit account value wins, including `allowlist` or `pairing`. With no applicable policy configured, group access stays `allowlist` and DMs use `pairing`.
+- WhatsApp also inherits shared settings from `accounts.default` before falling back to the channel root; Google Chat uses shared `accounts.default` settings below root settings. See the channel pages for these exceptions and collection-merging rules.
 - Use `bindings[].match.accountId` to route each account to a different agent.
 - If you add a non-default account via `openclaw channels add` (or channel onboarding) while still on a single-account top-level channel config, OpenClaw promotes account-scoped top-level single-account values into the channel account map first so the original account keeps working. Most channels move them into `channels.<channel>.accounts.default`; Matrix can preserve an existing matching named/default target instead.
 - Existing channel-only bindings (no `accountId`) keep matching the default account; account-scoped bindings remain optional.
@@ -791,7 +810,7 @@ Run multiple accounts per channel (each with its own `accountId`):
 
 ### Other plugin channels
 
-Many plugin channels are configured as `channels.<id>` and documented in their dedicated channel pages (for example Feishu, LINE, Nextcloud Talk, Nostr, QQ Bot, Synology Chat, Twitch, and Zalo).
+Many plugin channels are configured as `channels.<id>` and documented in their dedicated channel pages (for example Feishu, Nextcloud Talk, Nostr, QQ Bot, Synology Chat, Twitch, and Zalo).
 See the full channel index: [Channels](/channels).
 
 ### Group chat mention gating
@@ -833,7 +852,12 @@ Fix: either pick a stronger tool-calling model, remove the explicit `"message_to
     },
   },
   agents: {
-    list: [{ id: "main", groupChat: { mentionPatterns: ["@openclaw", "openclaw"] } }],
+    entries: {
+      main: {
+        default: true,
+        groupChat: { mentionPatterns: ["@openclaw", "openclaw"] },
+      },
+    },
   },
 }
 ```
@@ -859,9 +883,40 @@ Fix: either pick a stronger tool-calling model, remove the explicit `"message_to
 }
 ```
 
-Resolution: per-DM override → provider default → no limit (all retained).
+Resolution: per-DM override → provider default → no limit (all retained). On a multi-account channel, the account for the current message is checked before the channel root, so `channels.<provider>.accounts.<id>.dmHistoryLimit` overrides `channels.<provider>.dmHistoryLimit` for that account only.
 
-This resolver reads `channels.<provider>.dmHistoryLimit` and `channels.<provider>.dms.<id>.historyLimit` for any channel whose session key follows the standard `provider:direct:<id>` (or legacy `provider:dm:<id>`) shape, so it works across bundled and plugin channels alike, not just a fixed list.
+The `dms` map is the exception: an account that defines `accounts.<id>.dms` replaces the root `dms` map for that account rather than merging entry by entry. A peer listed only at the root therefore falls through to that account's `dmHistoryLimit`, not to the root per-DM value. Repeat any root entries you still want inside the account map.
+
+The embedded OpenClaw runtime applies these limits to recent turns during prompt preparation for channel-scoped DM sessions, including `per-account-channel-peer`. Shared main sessions remain unwindowed by these channel limits. Client-side compaction still summarizes older durable history; the resulting summary is preserved alongside the windowed recent turns. These limits do not delete stored messages. Native runtimes manage their own transcript history.
+
+Provider-side compaction uses the prepared transcript window. Gateway-triggered compaction resolves a linked peer from the current session's recorded primary conversation; missing or stale route facts do not select another peer's override.
+
+Channel-supplied recent-message context is a separate window. For example, Telegram looks up `dms` by native user ID and counts individual messages, while the embedded transcript window looks up the session peer and counts user turns. With `session.identityLinks`, that session peer is the linked ID. Configure both keys when you want both windows limited for a linked identity:
+
+```json5
+{
+  session: {
+    dmScope: "per-channel-peer",
+    identityLinks: { alice: ["telegram:123456789"] },
+  },
+  channels: {
+    telegram: {
+      accounts: {
+        work: {
+          dms: {
+            "123456789": { historyLimit: 2 }, // Telegram supplemental context
+            alice: { historyLimit: 2 }, // Embedded session transcript
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+These existing windows are not one strict whole-prompt cap: supplemental reply context, saved compaction summaries, and the transcript window's batching cushion can add context beyond the configured count.
+
+Session keys alone can be ambiguous when account names or linked peer IDs contain tokens such as `direct`. OpenClaw uses the observed route peer to select the correct per-DM override. When an ambiguous session has no observed peer, or its identity link has changed, the known account/channel DM default applies instead of another peer's override. Unambiguous session keys retain their existing per-DM lookup.
 
 #### Self-chat mode
 
@@ -876,12 +931,12 @@ Include your own number in `allowFrom` to enable self-chat mode (ignores native 
     },
   },
   agents: {
-    list: [
-      {
-        id: "main",
+    entries: {
+      main: {
+        default: true,
         groupChat: { mentionPatterns: ["reisponde", "@openclaw"] },
       },
-    ],
+    },
   },
 }
 ```
@@ -902,13 +957,10 @@ Include your own number in `allowFrom` to enable self-chat mode (ignores native 
     debug: false, // allow /debug
     restart: true, // allow /restart + external SIGUSR1 restart requests
     ownerAllowFrom: ["discord:123456789012345678"],
-    ownerDisplay: "raw", // raw | hash
-    ownerDisplaySecret: "${OWNER_ID_HASH_SECRET}",
     allowFrom: {
       "*": ["user1"],
       discord: ["user:123"],
     },
-    useAccessGroups: true,
   },
 }
 ```
@@ -931,9 +983,8 @@ Include your own number in `allowFrom` to enable self-chat mode (ignores native 
 - For multi-account channels, `channels.<provider>.accounts.<id>.configWrites` also gates writes that target that account (for example `/allowlist --config --account <id>` or `/config set channels.<provider>.accounts.<id>...`).
 - `restart: false` disables `/restart` and external `SIGUSR1` restart requests. Default: `true`.
 - `ownerAllowFrom` is the explicit owner allowlist for owner-only commands and owner-gated channel actions. It is separate from `allowFrom`.
-- `ownerDisplay: "hash"` hashes owner ids in the system prompt. Set `ownerDisplaySecret` to control hashing.
-- `allowFrom` is per-provider. When set, it is the **only** authorization source (channel allowlists/pairing and `useAccessGroups` are ignored).
-- `useAccessGroups: false` allows commands to bypass access-group policies when `allowFrom` is not set.
+- `allowFrom` is per-provider. When set, it is the **only** authorization source for commands and directives.
+- When `allowFrom` is unset, command authorization follows channel allowlists and pairing state. Access-group entries in channel allowlists are resolved automatically.
 - Command docs map:
   - built-in + bundled catalog: [Slash Commands](/tools/slash-commands)
   - channel-specific command surfaces: [Channels](/channels)

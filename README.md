@@ -3,7 +3,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-banner-light.png">
-    <img src="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-banner-dark.png" alt="OpenClaw — EXFOLIATE! EXFOLIATE! Your personal AI assistant, running on your own devices.">
+    <img src="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-banner-dark.png" alt="OpenClaw — EXFOLIATE! EXFOLIATE! Your AI assistant, running on your own devices.">
   </picture>
 </p>
 
@@ -15,9 +15,9 @@
   <a href="https://discord.gg/clawd"><img src="https://img.shields.io/discord/1456350064065904867?label=discord&logo=discord&logoColor=white&color=5865F2&style=flat-square" alt="Discord"></a>
 </p>
 
-OpenClaw is a personal AI assistant that runs on your devices and meets you in the channels you already use. It is designed for a single operator and connects models, tools, messaging channels, and optional companion apps through one Gateway.
+OpenClaw is an AI assistant that runs on your devices and meets you in the channels you already use. It connects models, tools, messaging channels, and optional companion apps through one Gateway, for a single operator or for a team whose members trust each other: the same gateway runs as a personal assistant on one laptop or as a shared [team deployment](https://docs.openclaw.ai/start/teams), and configuration is the only difference. The architecture case — trusted gateway, untrusted execution, deterministic policy — is in [Why OpenClaw](https://docs.openclaw.ai/start/why-openclaw).
 
-[Website](https://openclaw.ai) · [Docs](https://docs.openclaw.ai) · [Getting started](https://docs.openclaw.ai/start/getting-started) · [Showcase](https://docs.openclaw.ai/start/showcase) · [FAQ](https://docs.openclaw.ai/help/faq) · [Vision](VISION.md) · [DeepWiki](https://deepwiki.com/openclaw/openclaw)
+[Website](https://openclaw.ai) · [Docs](https://docs.openclaw.ai) · [Getting started](https://docs.openclaw.ai/start/getting-started) · [Why OpenClaw](https://docs.openclaw.ai/start/why-openclaw) · [Showcase](https://docs.openclaw.ai/start/showcase) · [FAQ](https://docs.openclaw.ai/help/faq) · [Vision](VISION.md) · [DeepWiki](https://deepwiki.com/openclaw/openclaw)
 
 ## Install
 
@@ -36,15 +36,27 @@ iwr -useb https://openclaw.ai/install.ps1 | iex
 Already manage Node.js? Install the published package instead (Node 22.22.3+, 24.15+, or 25.9+):
 
 ```bash
-npm install -g openclaw@latest
+npm install -g openclaw@latest --allow-scripts=openclaw
 ```
 
-See the [installation guide](https://docs.openclaw.ai/install) for npm 12 lifecycle-script requirements, Docker, Nix, and other deployment paths.
+That command is for npm 12 or npm 11.16+. On npm 11.15 and earlier, omit
+`--allow-scripts=openclaw`. See the
+[installation guide](https://docs.openclaw.ai/install) for the lifecycle script
+contract, Docker, Nix, and other deployment paths.
 
 ## Quick start
 
+On a fresh install, the installer scripts start onboarding automatically.
+Complete the wizard they open. If you installed the package directly with npm,
+pnpm, or Bun, run:
+
 ```bash
 openclaw onboard --install-daemon
+```
+
+After onboarding:
+
+```bash
 openclaw gateway status
 openclaw dashboard
 ```

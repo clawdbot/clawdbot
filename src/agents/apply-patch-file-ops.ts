@@ -10,6 +10,7 @@ import {
   FsSafeError,
   root as fsRoot,
 } from "../infra/fs-safe.js";
+import { writeHostFile } from "./host-file-write.js";
 import {
   type MemoryWriteProvenanceObserver,
   withMemoryWriteProvenance,
@@ -24,7 +25,10 @@ export type SandboxApplyPatchConfig = {
 };
 
 export type ApplyPatchFileOptions = {
+  signal?: AbortSignal;
   cwd: string;
+  /** Containment boundary when relative paths resolve from a nested cwd. */
+  root?: string;
   sandbox?: SandboxApplyPatchConfig;
   /** Restrict patch paths to the workspace root (cwd). Default: true. Set false to opt out. */
   workspaceOnly?: boolean;
@@ -55,7 +59,7 @@ export async function createPatchTarget(params: {
   }
 }
 
-export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOps {
+export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promise<PatchFileOps> {
   if (options.sandbox) {
     const { root, bridge } = options.sandbox;
     return withPatchMemoryWriteProvenance({
@@ -65,17 +69,32 @@ export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOp
           const buf = await bridge.readFile({ filePath, cwd: root });
           return decodeUtf8File(buf, filePath);
         },
-        writeFile: (filePath, content) => bridge.writeFile({ filePath, cwd: root, data: content }),
+        writeFile: (filePath, content) => {
+          options.signal?.throwIfAborted();
+          return bridge.writeFile({ filePath, cwd: root, data: content, signal: options.signal });
+        },
         createFileExclusive: (filePath, content) => {
           if (!bridge.createFileExclusive) {
             throw new Error(
               "Sandbox filesystem bridge does not support atomic file creation; refusing to overwrite an existing path.",
             );
           }
-          return bridge.createFileExclusive({ filePath, cwd: root, data: content });
+          options.signal?.throwIfAborted();
+          return bridge.createFileExclusive({
+            filePath,
+            cwd: root,
+            data: content,
+            signal: options.signal,
+          });
         },
-        remove: (filePath) => bridge.remove({ filePath, cwd: root, force: false }),
-        mkdirp: (dir) => bridge.mkdirp({ filePath: dir, cwd: root }),
+        remove: (filePath) => {
+          options.signal?.throwIfAborted();
+          return bridge.remove({ filePath, cwd: root, force: false, signal: options.signal });
+        },
+        mkdirp: (dir) => {
+          options.signal?.throwIfAborted();
+          return bridge.mkdirp({ filePath: dir, cwd: root, signal: options.signal });
+        },
       },
     });
   }
@@ -86,10 +105,11 @@ export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOp
       operations: {
         readFile: async (filePath) => decodeUtf8File(await fs.readFile(filePath), filePath),
         writeFile: async (filePath, content) => {
-          await fs.writeFile(filePath, content, "utf8");
+          await writeHostFile(filePath, content, options.signal);
         },
         createFileExclusive: async (filePath, content) => {
           try {
+            options.signal?.throwIfAborted();
             await fs.writeFile(filePath, content, { encoding: "utf8", flag: "wx" });
             return "created";
           } catch (error) {
@@ -99,15 +119,20 @@ export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOp
             throw error;
           }
         },
-        remove: (filePath) => fs.rm(filePath),
+        remove: (filePath) => {
+          options.signal?.throwIfAborted();
+          return fs.rm(filePath);
+        },
         mkdirp: async (dir) => {
+          options.signal?.throwIfAborted();
           await fs.mkdir(dir, { recursive: true });
         },
       },
     });
   }
 
-  const rootPromise = fsRoot(options.cwd);
+  const containmentRoot = options.root ?? options.cwd;
+  const root = await fsRoot(containmentRoot);
   // Mirror the read path: canonicalize contained symlink parents so a patch
   // that reads through a directory alias can also mutate through it. Escaping
   // aliases still fail the containment check against the canonical root.
@@ -123,8 +148,8 @@ export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOp
     } catch {
       // Keep the lexical path; the containment check below owns the failure.
     }
-    const canonicalCwd = await fs.realpath(options.cwd).catch(() => options.cwd);
-    return toRelativeSandboxPath(canonicalCwd, canonicalAbsolute, pathOptions);
+    const canonicalRoot = await fs.realpath(containmentRoot).catch(() => containmentRoot);
+    return toRelativeSandboxPath(canonicalRoot, canonicalAbsolute, pathOptions);
   };
   return withPatchMemoryWriteProvenance({
     observer: options.memoryWriteProvenance,
@@ -132,7 +157,7 @@ export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOp
       readFile: async (filePath) => {
         const opened = await openRootFileFollowingParents({
           absolutePath: filePath,
-          rootPath: options.cwd,
+          rootPath: containmentRoot,
           boundaryLabel: "workspace root",
         });
         assertBoundaryRead(opened, filePath);
@@ -144,12 +169,14 @@ export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOp
       },
       writeFile: async (filePath, content) => {
         const relative = await toCanonicalMutationRelative(filePath);
-        await (await rootPromise).write(relative, content, { encoding: "utf8" });
+        options.signal?.throwIfAborted();
+        await root.write(relative, content, { encoding: "utf8" });
       },
       createFileExclusive: async (filePath, content) => {
         const relative = await toCanonicalMutationRelative(filePath);
         try {
-          await (await rootPromise).create(relative, content, { encoding: "utf8" });
+          options.signal?.throwIfAborted();
+          await root.create(relative, content, { encoding: "utf8" });
           return "created";
         } catch (error) {
           // fs-safe opens an existing destination before its O_EXCL commit. A final
@@ -166,11 +193,12 @@ export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOp
       },
       remove: async (filePath) => {
         const relative = await toCanonicalMutationRelative(filePath);
-        await (await rootPromise).remove(relative);
+        options.signal?.throwIfAborted();
+        await root.remove(relative);
       },
       mkdirp: async (dir) => {
         const relative = await toCanonicalMutationRelative(dir, { allowRoot: true });
-        const root = await rootPromise;
+        options.signal?.throwIfAborted();
         if (relative === "" || relative === ".") {
           await root.ensureRoot();
           return;
@@ -227,5 +255,16 @@ function assertBoundaryRead(
     return;
   }
   const reason = opened.reason === "validation" ? "unsafe path" : "path not found";
-  throw new Error(`Failed boundary read for ${targetPath} (${reason})`);
+  const error = new Error(`Failed boundary read for ${targetPath} (${reason})`) as Error & {
+    code?: string;
+  };
+  const sourceCode =
+    opened.error && typeof opened.error === "object" && "code" in opened.error
+      ? opened.error.code
+      : undefined;
+  if (sourceCode === "ENOENT" || sourceCode === "ENOTDIR") {
+    // Preserve the producer's classification so provenance observers do not parse messages.
+    error.code = sourceCode;
+  }
+  throw error;
 }

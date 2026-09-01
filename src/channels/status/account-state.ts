@@ -1,3 +1,8 @@
+import { normalizeAccountId } from "../../routing/session-key.js";
+import {
+  findActiveDegradedSecretOwner,
+  SecretSurfaceUnavailableError,
+} from "../../secrets/runtime-degraded-state.js";
 import type { ChannelAccountLinkState } from "../plugins/types.adapters.js";
 import type {
   ChannelAccountSnapshot,
@@ -29,6 +34,35 @@ type ChannelAccountStateInput = {
   unconfiguredReason?: string;
   unlinkedReason?: string;
 };
+
+export function resolveUnavailableChannelAccountSnapshot(params: {
+  channelId: string;
+  accountId: string;
+  runtime?: ChannelAccountSnapshot;
+}): ChannelAccountSnapshot | undefined {
+  const owner = findActiveDegradedSecretOwner(
+    "account",
+    `${params.channelId}:${normalizeAccountId(params.accountId)}`,
+  );
+  if (!owner) {
+    return undefined;
+  }
+  // Cold owners have no operational account to resolve or probe. Stale owners
+  // retain usable credentials and are excluded by the secrets runtime lookup.
+  const lastError = new SecretSurfaceUnavailableError(owner).message;
+  return {
+    ...params.runtime,
+    accountId: params.accountId,
+    enabled: params.runtime?.enabled ?? true,
+    configured: true,
+    running: false,
+    ...(typeof params.runtime?.connected === "boolean" ? { connected: false } : {}),
+    restartPending: false,
+    lifecycle: "blocked",
+    stateReason: lastError,
+    lastError,
+  };
+}
 
 function assertNeverState(state: never): never {
   throw new Error(`Unhandled channel account state: ${String(state)}`);

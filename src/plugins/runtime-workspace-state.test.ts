@@ -1,5 +1,6 @@
 // Verifies request-scoped plugin workspace pins under concurrent registry mutation.
 import { afterEach, describe, expect, it } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
 import { withPinnedActivePluginRegistryWorkspaceDir } from "./runtime-workspace-state.js";
@@ -12,17 +13,6 @@ function setActiveWorkspace(workspaceDir: string): void {
     "gateway-bindable",
     workspaceDir,
   );
-}
-
-function createDeferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve: (() => void) | undefined;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  if (!resolve) {
-    throw new Error("Expected deferred resolver");
-  }
-  return { promise, resolve };
 }
 
 describe("runtime workspace state pin", () => {
@@ -93,7 +83,7 @@ describe("runtime workspace state pin", () => {
         new URL("./runtime-workspace-state.ts?workspace-pin-reload", import.meta.url).href
       );
 
-      expect(reloaded.getActivePluginRegistryWorkspaceDirFromState()).toBe("/workspace/a");
+      expect(reloaded.getActivePluginRegistryWorkspaceDirFromStateCore()).toBe("/workspace/a");
     });
   });
 

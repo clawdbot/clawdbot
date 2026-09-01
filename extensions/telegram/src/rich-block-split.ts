@@ -3,6 +3,7 @@
 import {
   countInputRichBlockChars,
   countInputRichBlockMedia,
+  countInputRichBlocks,
   countRichTextChars,
   normalizeRichText,
   type InputRichBlock,
@@ -11,6 +12,35 @@ import {
   type RichText,
 } from "./rich-block-model.js";
 import { splitTelegramPlainTextChunks, surrogateSafeChunkEnd } from "./rich-plain-fallback.js";
+
+const TELEGRAM_RICH_MEDIA_LIMIT = 50;
+
+type RichBlockBudget = { chars: number; blocks: number; media: number };
+type RichBlockLimits = { textLimit: number; blockLimit: number };
+
+function measureRichBlocks(blocks: readonly InputRichBlock[]): RichBlockBudget {
+  return {
+    chars: blocks.reduce((total, block) => total + countInputRichBlockChars(block), 0),
+    blocks: countInputRichBlocks(blocks),
+    media: blocks.reduce((total, block) => total + countInputRichBlockMedia(block), 0),
+  };
+}
+
+function addRichBlockBudget(left: RichBlockBudget, right: RichBlockBudget): RichBlockBudget {
+  return {
+    chars: left.chars + right.chars,
+    blocks: left.blocks + right.blocks,
+    media: left.media + right.media,
+  };
+}
+
+function exceedsRichBlockLimits(size: RichBlockBudget, limits: RichBlockLimits): boolean {
+  return (
+    size.chars > limits.textLimit ||
+    size.blocks > limits.blockLimit ||
+    size.media > TELEGRAM_RICH_MEDIA_LIMIT
+  );
+}
 
 type RichTextStyleWrap =
   | "bold"
@@ -102,8 +132,9 @@ function splitRichTextByChars(text: RichText, limit: number): RichText[] {
   return pieces;
 }
 
-function splitOversizedRichBlock(block: InputRichBlock, textLimit: number): InputRichBlock[] {
-  if (countInputRichBlockChars(block) <= textLimit) {
+function splitOversizedRichBlock(block: InputRichBlock, limits: RichBlockLimits): InputRichBlock[] {
+  const { textLimit, blockLimit } = limits;
+  if (!exceedsRichBlockLimits(measureRichBlocks([block]), limits)) {
     return [block];
   }
   if (block.type === "pre") {
@@ -119,17 +150,54 @@ function splitOversizedRichBlock(block: InputRichBlock, textLimit: number): Inpu
         : { type: "paragraph", text: piece },
     );
   }
-  if (block.type === "blockquote") {
-    // Reserve the credit's chars while splitting the body, then attach the
-    // credit to the final piece only (attribution belongs at the quote's end).
-    const creditChars = countRichTextChars(block.credit ?? "");
-    const innerLimit = Math.max(1, textLimit - creditChars);
-    const pieces = splitTelegramRichBlocks(block.blocks, { textLimit: innerLimit });
-    return pieces.map((inner, index) =>
-      index === pieces.length - 1 && block.credit !== undefined
-        ? { type: "blockquote", blocks: inner, credit: block.credit }
-        : { type: "blockquote", blocks: inner },
-    );
+  if (
+    block.type === "blockquote" ||
+    block.type === "details" ||
+    block.type === "collage" ||
+    block.type === "slideshow"
+  ) {
+    const wrapperChars =
+      block.type === "blockquote"
+        ? countRichTextChars(block.credit ?? "")
+        : block.type === "details"
+          ? countRichTextChars(block.summary)
+          : countRichTextChars(block.caption?.text ?? "") +
+            countRichTextChars(block.caption?.credit ?? "");
+    const remainingText = textLimit - wrapperChars;
+    if (
+      block.blocks.length === 0 ||
+      remainingText < 0 ||
+      (remainingText === 0 && block.blocks.some((child) => countInputRichBlockChars(child) > 0))
+    ) {
+      // Wrapper text cannot be divided without losing its owner; the existing
+      // plain fallback handles this irreducibly oversized semantic unit.
+      return [block];
+    }
+    const pieces = splitTelegramRichBlocks(block.blocks, {
+      textLimit: Math.max(1, remainingText),
+      blockLimit: Math.max(1, blockLimit - 1),
+    });
+    if (block.type === "blockquote") {
+      // Attribution belongs at the quote's end, so emit the credit only once.
+      return pieces.map((inner, index) =>
+        index === pieces.length - 1 && block.credit !== undefined
+          ? { type: "blockquote", blocks: inner, credit: block.credit }
+          : { type: "blockquote", blocks: inner },
+      );
+    }
+    if (block.type === "details") {
+      return pieces.map((inner) => ({ ...block, blocks: inner }));
+    }
+    const { caption, ...album } = block;
+    const albumPieces: InputRichBlock[] = [];
+    for (const [index, inner] of pieces.entries()) {
+      albumPieces.push(
+        index === 0 && caption !== undefined
+          ? { ...album, blocks: inner, caption }
+          : { ...album, blocks: inner },
+      );
+    }
+    return albumPieces;
   }
   if (block.type === "table") {
     // Row-splitting a table with rowspans would strand spans across messages;
@@ -151,7 +219,7 @@ function splitOversizedRichBlock(block: InputRichBlock, textLimit: number): Inpu
     let chars = countRichTextChars(caption ?? "");
     for (const row of block.cells) {
       const rowChars = row.reduce((total, cell) => total + countRichTextChars(cell.text ?? ""), 0);
-      if (rows.length > 0 && chars + rowChars > textLimit) {
+      if (rows.length > 0 && (chars + rowChars > textLimit || rows.length + 2 > blockLimit)) {
         pushPiece(rows);
         rows = [];
         chars = 0;
@@ -167,27 +235,26 @@ function splitOversizedRichBlock(block: InputRichBlock, textLimit: number): Inpu
   if (block.type === "list") {
     const pieces: InputRichBlock[] = [];
     let items: InputRichBlockListItem[] = [];
-    let chars = 0;
+    let size: RichBlockBudget = { chars: 0, blocks: 1, media: 0 };
     for (const item of block.items) {
-      const itemChars = item.blocks.reduce(
-        (total, child) => total + countInputRichBlockChars(child),
-        0,
-      );
-      if (items.length > 0 && chars + itemChars > textLimit) {
+      const measured = measureRichBlocks(item.blocks);
+      const itemSize = { ...measured, blocks: measured.blocks + 1 };
+      const nextSize = addRichBlockBudget(size, itemSize);
+      if (items.length > 0 && exceedsRichBlockLimits(nextSize, limits)) {
         pieces.push({ type: "list", items });
         items = [];
-        chars = 0;
+        size = { chars: 0, blocks: 1, media: 0 };
       }
       items.push(item);
-      chars += itemChars;
+      size = addRichBlockBudget(size, itemSize);
     }
     if (items.length > 0) {
       pieces.push({ type: "list", items });
     }
     return pieces;
   }
-  // Details, media, and remaining container blocks stay atomic; a genuinely
-  // oversized one degrades via the RICH_MESSAGE_TEXT_TOO_LONG plain fallback.
+  // Remaining atomic blocks stay intact and degrade through the existing
+  // structural-error plain fallback if Telegram rejects them.
   return [block];
 }
 
@@ -203,34 +270,26 @@ export function splitTelegramRichBlocks(
   if (blocks.length === 0) {
     return [];
   }
-  const expanded = blocks.flatMap((block) => splitOversizedRichBlock(block, textLimit));
+  const limits = { textLimit, blockLimit };
+  const expanded = blocks.flatMap((block) => splitOversizedRichBlock(block, limits));
   const chunks: InputRichBlock[][] = [];
   let current: InputRichBlock[] = [];
-  let currentChars = 0;
-  // Live-verified message cap: >50 media elements → RICH_MESSAGE_MEDIA_TOO_MANY.
-  const mediaLimit = 50;
-  let currentMedia = 0;
+  let size: RichBlockBudget = { chars: 0, blocks: 0, media: 0 };
 
   const flush = () => {
     if (current.length > 0) {
       chunks.push(current);
       current = [];
-      currentChars = 0;
-      currentMedia = 0;
+      size = { chars: 0, blocks: 0, media: 0 };
     }
   };
   for (const block of expanded) {
-    const chars = countInputRichBlockChars(block);
-    const media = countInputRichBlockMedia(block);
-    const wouldExceedBlocks = current.length >= blockLimit;
-    const wouldExceedChars = current.length > 0 && currentChars + chars > textLimit;
-    const wouldExceedMedia = current.length > 0 && currentMedia + media > mediaLimit;
-    if (wouldExceedBlocks || wouldExceedChars || wouldExceedMedia) {
+    const blockSize = measureRichBlocks([block]);
+    if (current.length > 0 && exceedsRichBlockLimits(addRichBlockBudget(size, blockSize), limits)) {
       flush();
     }
     current.push(block);
-    currentChars += chars;
-    currentMedia += media;
+    size = addRichBlockBudget(size, blockSize);
   }
   flush();
   return chunks;

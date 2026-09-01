@@ -8,6 +8,7 @@ import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.js";
 import { SESSION_MCP_RUNTIME_MANAGER_KEY } from "./agent-bundle-mcp-runtime-shared.js";
 import type {
   McpToolCatalog,
+  RequesterScopedMcpRuntimeHandle,
   SessionMcpRuntime,
   SessionMcpRuntimeManager,
 } from "./agent-bundle-mcp-types.js";
@@ -53,15 +54,15 @@ export async function getOrCreateRequesterScopedMcpRuntime(params: {
   agentAccountId?: string | null;
   messageChannel?: string | null;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
-}): Promise<SessionMcpRuntime | undefined> {
+}): Promise<RequesterScopedMcpRuntimeHandle | undefined> {
   return await getSessionMcpRuntimeManager().getOrCreateRequesterScoped(params);
 }
 
 export function rememberAdvertisedScopedMcpCatalog(
-  sessionId: string,
+  handle: RequesterScopedMcpRuntimeHandle,
   catalog: McpToolCatalog,
 ): void {
-  getSessionMcpRuntimeManager().rememberAdvertisedScopedCatalog(sessionId, catalog);
+  getSessionMcpRuntimeManager().rememberAdvertisedScopedCatalog(handle, catalog);
 }
 
 export function getAdvertisedScopedMcpCatalog(sessionId: string): McpToolCatalog | null {

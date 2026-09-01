@@ -40,7 +40,10 @@ pack_fixture_plugin "$npm_pack_dir" /tmp/demo-corrupt-plugin.tgz demo-corrupt-pl
 start_npm_fixture_registry "@openclaw/demo-corrupt-plugin" "0.0.1" /tmp/demo-corrupt-plugin.tgz "$npm_registry_dir"
 
 echo "Installing managed external plugin..."
-node "$entry" plugins install "npm:@openclaw/demo-corrupt-plugin@0.0.1" --force >/tmp/openclaw-corrupt-plugin-install.log 2>&1
+if ! openclaw_e2e_fixture_plugin_command node "$entry" -- plugins install "npm:@openclaw/demo-corrupt-plugin@0.0.1" --force >/tmp/openclaw-corrupt-plugin-install.log 2>&1; then
+  openclaw_e2e_print_log /tmp/openclaw-corrupt-plugin-install.log >&2
+  exit 1
+fi
 node "$entry" config set plugins.allow '["demo-corrupt-plugin"]' >/dev/null
 node "$entry" plugins inspect demo-corrupt-plugin --runtime --json >/tmp/openclaw-corrupt-plugin-before.json
 unset NPM_CONFIG_REGISTRY npm_config_registry
@@ -106,7 +109,7 @@ if [ "$update_status" -ne 0 ]; then
     exit "$post_core_status"
   fi
   node scripts/e2e/lib/plugin-update/probe.mjs assert-corrupt-plugin-result /tmp/openclaw-update-corrupt-plugin-post-core.json demo-corrupt-plugin
-  node scripts/e2e/lib/plugin-update/probe.mjs assert-disabled-policy-preserved "$OPENCLAW_CONFIG_PATH" demo-corrupt-plugin
+  node scripts/e2e/lib/plugin-update/probe.mjs assert-corrupt-policy-preserved "$OPENCLAW_CONFIG_PATH" demo-corrupt-plugin
   exit 0
 fi
 
@@ -117,4 +120,4 @@ if ! node scripts/e2e/lib/plugin-update/probe.mjs assert-corrupt-update /tmp/ope
   openclaw_e2e_print_log /tmp/openclaw-update-corrupt-plugin.err >&2
   exit 1
 fi
-node scripts/e2e/lib/plugin-update/probe.mjs assert-disabled-policy-preserved "$OPENCLAW_CONFIG_PATH" demo-corrupt-plugin
+node scripts/e2e/lib/plugin-update/probe.mjs assert-corrupt-policy-preserved "$OPENCLAW_CONFIG_PATH" demo-corrupt-plugin

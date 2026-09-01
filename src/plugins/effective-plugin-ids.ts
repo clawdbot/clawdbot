@@ -13,24 +13,27 @@ import {
   loadGatewayStartupPluginPlan,
   resolveConfiguredChannelPluginIds,
 } from "./channel-plugin-ids.js";
-import { normalizePluginsConfig } from "./config-state.js";
+import { normalizePluginsConfig, resolveSelectedContextEnginePluginId } from "./config-state.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
-import { defaultSlotIdForKey } from "./slots.js";
 
 function collectConfiguredChannelIds(
   config: OpenClawConfig,
   activationSourceConfig: OpenClawConfig,
   env: NodeJS.ProcessEnv,
+  discovery: PluginMetadataSnapshot["discovery"],
 ): string[] {
   const disabled = new Set([
     ...listExplicitlyDisabledChannelIdsForConfig(config),
     ...listExplicitlyDisabledChannelIdsForConfig(activationSourceConfig),
   ]);
   const ids = new Set([
-    ...listPotentialConfiguredChannelIds(config, env, { includePersistedAuthState: false }),
+    ...listPotentialConfiguredChannelIds(config, env, {
+      includePersistedAuthState: false,
+      discovery,
+    }),
     ...listExplicitConfiguredChannelIdsForConfig(activationSourceConfig),
   ]);
   return [...ids]
@@ -129,24 +132,6 @@ function collectExplicitEffectivePluginIds(config: OpenClawConfig): string[] {
   return sortUniqueStrings(ids);
 }
 
-function collectSelectedContextEnginePluginIds(config: OpenClawConfig): string[] {
-  const plugins = normalizePluginsConfig(config.plugins);
-  if (!plugins.enabled) {
-    return [];
-  }
-  const pluginId = plugins.slots.contextEngine;
-  if (!pluginId || pluginId === defaultSlotIdForKey("contextEngine")) {
-    return [];
-  }
-  if (plugins.deny.includes(pluginId)) {
-    return [];
-  }
-  if (plugins.entries[pluginId]?.enabled === false) {
-    return [];
-  }
-  return [pluginId];
-}
-
 /** Lists plugin ids that are effectively enabled for a config/discovery context. */
 export function resolveEffectivePluginIds(params: {
   config: OpenClawConfig;
@@ -172,13 +157,15 @@ export function resolveEffectivePluginIds(params: {
   });
   const effectiveConfig = autoEnabled.config;
   const ids = new Set(collectExplicitEffectivePluginIds(effectiveConfig));
-  for (const pluginId of collectSelectedContextEnginePluginIds(effectiveConfig)) {
-    ids.add(pluginId);
+  const contextEnginePluginId = resolveSelectedContextEnginePluginId(effectiveConfig);
+  if (contextEnginePluginId) {
+    ids.add(contextEnginePluginId);
   }
   const configuredChannelIds = collectConfiguredChannelIds(
     effectiveConfig,
     params.config,
     params.env,
+    prepared?.discovery,
   );
   for (const pluginId of resolveConfiguredChannelPluginIds({
     config: effectiveConfig,
@@ -186,6 +173,7 @@ export function resolveEffectivePluginIds(params: {
     workspaceDir: params.workspaceDir,
     env: params.env,
     manifestRecords: prepared?.plugins,
+    discovery: prepared?.discovery,
   })) {
     ids.add(pluginId);
   }

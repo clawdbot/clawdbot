@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../../scripts/lib/workspace-bootstrap-smoke.mjs";
+import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../../scripts/lib/workspace-bootstrap-smoke.mts";
 
 const CONTROL_UI_INDEX = "dist/control-ui/index.html";
 const CODE_MODE_WORKER_PATH = "dist/agents/code-mode.worker.js";
@@ -81,11 +81,7 @@ function withPackedPackage(
     for (const assetPath of CONTROL_UI_ASSETS) {
       writeFixtureFile(packageRoot, assetPath, "shipped Control UI asset\n");
     }
-    writeFixtureFile(
-      packageRoot,
-      "dist/openclaw-install-guard",
-      "OpenClaw package preinstall has not completed.\n",
-    );
+    writeFixtureFile(packageRoot, ".openclaw-lifecycle-pending", "pending\n");
     for (const relativePath of WORKSPACE_TEMPLATE_PACK_PATHS) {
       writeFixtureFile(packageRoot, relativePath, `# ${relativePath}\n`);
     }
@@ -93,6 +89,7 @@ function withPackedPackage(
       "scripts/postinstall-bundled-plugins.mjs",
       "scripts/lib/guard-inventory-utils.mjs",
       "scripts/lib/package-dist-imports.mjs",
+      "scripts/lib/package-lifecycle-marker.mjs",
     ]) {
       const destination = join(packageRoot, relativePath);
       mkdirSync(dirname(destination), { recursive: true });
@@ -180,23 +177,6 @@ function installPackedPackage(root: string, tarball: string) {
 }
 
 describe("packaged Control UI postinstall inventory", () => {
-  it.each(CONTROL_UI_FILES)(
-    "rejects a real npm package when postinstall would delete %s",
-    (omittedFile) => {
-      const inventory = ["dist/index.js", ...CONTROL_UI_FILES].filter(
-        (relativePath) => relativePath !== omittedFile,
-      );
-      withPackedPackage(inventory, ({ tarball }) => {
-        const result = checkPackedPackage(tarball);
-
-        expect(result.status, result.stdout).not.toBe(0);
-        expect(result.stderr).toContain(
-          `postinstall inventory omits Control UI file ${omittedFile}`,
-        );
-      });
-    },
-  );
-
   it("proves actual npm postinstall deletes an omitted dashboard from a falsely accepted package", () => {
     withPackedPackage(["dist/index.js"], ({ root, tarball }) => {
       const validation = checkPackedPackage(tarball);
@@ -207,9 +187,12 @@ describe("packaged Control UI postinstall inventory", () => {
       }
 
       expect(validation.status, validation.stdout).not.toBe(0);
-      expect(validation.stderr).toContain(
-        "postinstall inventory omits Control UI file dist/control-ui/index.html",
-      );
+      const validationErrors = validation.stderr.split(/\r?\n/u);
+      for (const relativePath of CONTROL_UI_FILES) {
+        expect
+          .soft(validationErrors)
+          .toContain(`postinstall inventory omits packaged dist file ${relativePath}`);
+      }
     });
   });
 

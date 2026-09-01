@@ -21,6 +21,10 @@ Enable the command surface explicitly:
 export OPENCLAW_EXPERIMENTAL_CLAWS=1
 ```
 
+For human-readable `claws add`, OpenClaw prints the experimental warning before
+changing state. JSON mode keeps stdout machine-readable and identifies the
+contract with `"stability": "experimental"`.
+
 The current CLI reads a local package directory, `CLAW.md`, or grouped JSON manifest.
 Publishing, searching, and installing whole Claws through ClawHub are a
 separate registry track and are not part of this command surface yet.
@@ -79,8 +83,7 @@ conflict.
 schemaVersion: 1
 agent:
   tools:
-    profile: coding
-    alsoAllow: [cron]
+    allow: [read, write, cron]
     deny: [exec]
     fs:
       workspaceOnly: true
@@ -101,11 +104,18 @@ Grouped JSON discovers the same conventional profile rather than embedding a
 second copy of the OpenClaw settings. The remaining schema fragments on this
 page use JSON, with equivalent keys available in `CLAW.md` frontmatter.
 
-The OpenClaw package profile may select any built-in tool profile registered by
-the running OpenClaw version, then refine it with `alsoAllow`, `deny`, and
-`tools.fs.workspaceOnly: true`. A Claw cannot set that field to `false` and
-weaken host filesystem confinement. `tools.allow` remains available as an
-explicit allowlist but cannot be combined with `alsoAllow`. A Claw may also set
+The OpenClaw package profile may use an explicit `tools.allow` list or select
+any built-in tool profile registered by the running OpenClaw version. The
+`coding` and `messaging` profiles include the dynamic `bundle-mcp` selector, so
+a Claw that selects either profile must also provide a bounded `tools.allow`
+intersection. Name any MCP grants as concrete generated tool names such as
+`github__list_issues`; the package cannot freeze `bundle-mcp` itself.
+
+Profiles can otherwise be refined with `alsoAllow`, `deny`, and
+`tools.fs.workspaceOnly: true`. `tools.allow` cannot be combined with
+`alsoAllow`; use a standalone allowlist, as above, when the package needs tools
+outside its selected profile. A Claw cannot set `workspaceOnly` to `false` and
+weaken host filesystem confinement. A Claw may also set
 `memory.search.enabled`, choose the portable `memory` and `sessions` sources,
 and opt into cross-conversation memory with `rememberAcrossConversations`.
 Declaring the `sessions` source requires that opt-in.
@@ -257,6 +267,39 @@ values. A collision-free declaration becomes managed, while an exact existing
 or shared declaration is referenced. Preview, provenance, status, export, and
 removal follow the same ownership policy as other Claw resources.
 
+## Author locally
+
+Create a minimal project, validate its publishable inputs, preview its complete
+OpenClaw add plan offline, and build an immutable package artifact:
+
+```bash
+openclaw claws create ./incident-triage
+openclaw claws validate ./incident-triage
+openclaw claws dev ./incident-triage
+openclaw claws build ./incident-triage --out ./incident-triage-1.0.0.tgz
+```
+
+`create` writes only `package.json` and `CLAW.md` and refuses to merge into a
+nonempty directory. Project validation requires `openclaw.claw` to point to
+the root `CLAW.md`, rejects package scripts and lifecycle hooks, discovers a
+single unambiguous project root, and reports files excluded from the package.
+
+`dev` validates and builds the same artifact that would be published, then
+runs that artifact through the canonical add planner. It does not install
+packages, contact ClawHub, start an agent turn, enable schedules, deliver
+messages, or modify OpenClaw state. Dependencies that require online preflight
+appear as blockers instead of weakening that boundary. Use `--agent-id` or
+`--workspace` to preview collision-free local destinations.
+
+`build` writes a deterministic npm-compatible `.tgz` with a `package/` root.
+Only package metadata, `CLAW.md`, optional `BOOTSTRAP.md`, the OpenClaw profile,
+and sources selected by the manifest are included. Tests, caches, ambient or
+unselected credentials, unselected files, prior artifacts, and source-control
+state remain outside the package. Selected source bytes are package content, so
+authors must not select secret-bearing files. Build refuses to overwrite an
+existing artifact, reports its SHA-256 integrity, and re-opens it through the
+canonical Claw reader before success.
+
 ## Inspect and preview
 
 Validate the source without planning local changes. For OpenClaw profile
@@ -405,6 +448,19 @@ managed state has drifted:
 openclaw claws export incident-triage --out ./incident-triage-export --json
 ```
 
+Use `--bootstrap <path>` to attach an explicitly reviewed Markdown file as the
+package-root `BOOTSTRAP.md`. Export re-emits an unchanged, still-pending package
+bootstrap automatically. A package bootstrap that drifted in the workspace
+(edited, unsafe, or unreadable) fails the export with `bootstrap_drifted`, the
+same way managed workspace files fail with `workspace_files_drifted`; pass
+`--bootstrap <path>` with a reviewed replacement to export anyway. A bootstrap
+the agent already consumed is a completed lifecycle state, so export omits
+`BOOTSTRAP.md` instead of failing. The exporter validates the completed package
+and removes the new output directory if validation fails. Bootstrap is
+package-authored prompt content: do not include credentials, tokens, private
+answers, or machine-specific paths. Export does not infer questions, render
+personal-data templates, persist answers, or add a separate setup lifecycle.
+
 The result contains `package.json`, canonical `CLAW.md`, and managed workspace
 sidecars. Managed `SOUL.md` content is emitted as the `CLAW.md` body when it is
 non-empty UTF-8 and the combined document fits the manifest limit. Otherwise,
@@ -416,6 +472,10 @@ credentials, sessions, and unowned local state are excluded.
 
 | Command                             | Purpose                                             |
 | ----------------------------------- | --------------------------------------------------- |
+| `claws create [path]`               | Create a minimal local Claw project.                |
+| `claws validate [path]`             | Validate project inputs and package contents.       |
+| `claws dev [path]`                  | Build and preview locally without mutation.         |
+| `claws build [path] --out <tgz>`    | Build a deterministic package artifact.             |
 | `claws inspect <source>`            | Validate a package directory or grouped manifest.   |
 | `claws add <source>`                | Preview or create one new agent and workspace.      |
 | `claws status [claw-or-agent]`      | Report installed state, ownership, and drift.       |
@@ -424,6 +484,12 @@ credentials, sessions, and unowned local state are excluded.
 | `claws export <agent> --out <path>` | Create a portable package from an installed agent.  |
 
 Use `--json` for experimental machine-readable output.
+
+Successful commands exit `0`. Validation errors, blocked plans, missing
+targets, and both `failed` and `partial` mutation results exit `1`. Inspect the
+JSON `status` and `error.code` fields to distinguish a failure that made no
+change from a partial result that requires `claws status`, `openclaw doctor`,
+and a new preview before retrying.
 
 ## See also
 

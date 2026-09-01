@@ -1,11 +1,9 @@
 // Network Policy module implements redact sensitive url behavior.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+
 type ConfigUiHintTags = {
   tags?: string[];
 };
-
-function normalizeLowercaseStringOrEmpty(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
 
 /** Config UI hint tag for URL-like values that may embed credentials or tokens. */
 export const SENSITIVE_URL_HINT_TAG = "url-secret";

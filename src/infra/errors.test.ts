@@ -5,9 +5,12 @@ import {
   collectErrorGraphCandidates,
   extractErrorCode,
   formatErrorMessage,
+  formatErrorMessageWithCode,
   formatUncaughtError,
   hasErrnoCode,
   isErrno,
+  isMissingPathError,
+  readErrorCause,
   readErrorName,
 } from "./errors.js";
 
@@ -33,6 +36,34 @@ describe("error helpers", () => {
     { value: null, expected: "" },
   ])("reads error names from %j", ({ value, expected }) => {
     expect(readErrorName(value)).toBe(expected);
+  });
+
+  it.each([
+    ["missing cause", {}, undefined],
+    ["undefined cause", { cause: undefined }, undefined],
+    ["null cause", { cause: null }, null],
+    ["arbitrary cause", { cause: "boom" }, "boom"],
+    ["null input", null, undefined],
+    ["primitive input", "boom", undefined],
+    ["function input", Object.assign(() => {}, { cause: "boom" }), undefined],
+  ])("reads %s directly", (_name, value, expected) => {
+    expect(readErrorCause(value)).toBe(expected);
+  });
+
+  it("preserves self-referential causes", () => {
+    const error: { cause?: unknown } = {};
+    error.cause = error;
+    expect(readErrorCause(error)).toBe(error);
+  });
+
+  it("propagates cause accessor failures", () => {
+    const failure = new Error("cause access failed");
+    const error = {
+      get cause(): never {
+        throw failure;
+      },
+    };
+    expect(() => readErrorCause(error)).toThrow(failure);
   });
 
   it("walks nested error graphs once in breadth-first order", () => {
@@ -100,6 +131,18 @@ describe("error helpers", () => {
     expect(isErrno("busy")).toBe(false);
   });
 
+  it.each(["ENOENT", "ENOTDIR", "not-found"])(
+    "classifies %s as a missing path without requiring Error identity",
+    (code) => {
+      expect(isMissingPathError({ code })).toBe(true);
+    },
+  );
+
+  it("does not classify other fs-safe or errno failures as missing paths", () => {
+    expect(isMissingPathError({ code: "path-alias" })).toBe(false);
+    expect(isMissingPathError(new Error("ENOENT"))).toBe(false);
+  });
+
   it.each([
     { value: 123n, expected: "123" },
     { value: false, expected: "false" },
@@ -114,8 +157,7 @@ describe("error helpers", () => {
       cause: rootCause,
     });
     const formatted = formatErrorMessage(httpError);
-    expect(formatted).toContain("Network request for 'sendMessage' failed!");
-    expect(formatted).toContain("ECONNRESET");
+    expect(formatted).toBe("Network request for 'sendMessage' failed! | ECONNRESET");
   });
 
   it("handles circular .cause references without infinite loop", () => {
@@ -137,8 +179,13 @@ describe("error helpers", () => {
   it("redacts sensitive tokens from formatted error messages", () => {
     const token = "sk-abcdefghijklmnopqrstuv";
     const formatted = formatErrorMessage(new Error(`Authorization: Bearer ${token}`));
+    const codeFormatted = formatErrorMessageWithCode(
+      Object.assign(new Error("request failed"), { code: `token=${token}` }),
+    );
     expect(formatted).toContain("Authorization: Bearer");
     expect(formatted).not.toContain(token);
+    expect(codeFormatted).toContain("request failed");
+    expect(codeFormatted).not.toContain(token);
   });
 
   it("redacts HTTP client config secrets from formatted error chains", () => {

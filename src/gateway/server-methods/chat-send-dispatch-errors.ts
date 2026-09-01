@@ -1,16 +1,15 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
-import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { chatAbortMarkerTimestampMs } from "../server-chat-state.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { formatForLog } from "../ws-log.js";
-import { setGatewayDedupeEntry } from "./agent-job.js";
 import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
+import type { RestartSafeChatTerminalState } from "./chat-restart-recovery.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
-import { ACTIVE_RUN_CHANGED_ERROR_REASON } from "./chat-send-pre-admission.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -25,6 +24,7 @@ type PendingDispatchLifecycleError = {
 
 /** Finalize a chat.send that throws before detached dispatch owns cleanup. */
 export async function handleChatSendSetupError(params: {
+  cacheResult?: boolean;
   admission: Pick<
     AdmittedChatSend,
     "cleanupAdmittedRun" | "lifecycleGeneration" | "restartSafeAdmission"
@@ -33,16 +33,14 @@ export async function handleChatSendSetupError(params: {
   error: unknown;
   respond: RespondFn;
   session: Pick<PreparedChatSendSession, "agentId" | "clientRunId" | "sessionKey">;
-  terminalizeRestartSafeAdmission: (state: {
-    retryable: boolean;
-    status: "failed" | "killed";
-  }) => Promise<boolean>;
+  terminalizeRestartSafeAdmission: (state: RestartSafeChatTerminalState) => Promise<boolean>;
 }): Promise<void> {
   const { cleanupAdmittedRun, lifecycleGeneration, restartSafeAdmission } = params.admission;
   const { agentId, clientRunId, sessionKey } = params.session;
+  const errorMessage = String(params.error);
   if (restartSafeAdmission) {
     const terminalized = await params
-      .terminalizeRestartSafeAdmission({ retryable: true, status: "failed" })
+      .terminalizeRestartSafeAdmission({ error: errorMessage, retryable: true, status: "failed" })
       .catch((terminalizeError: unknown) => {
         params.context.logGateway.warn(
           `failed to release restart-safe chat admission after setup error: ${formatForLog(
@@ -59,17 +57,18 @@ export async function handleChatSendSetupError(params: {
       });
     }
   }
-  cleanupAdmittedRun({ force: true });
+  cleanupAdmittedRun();
   clearAgentRunContext(clientRunId, lifecycleGeneration);
   params.context.removeChatRun(clientRunId, clientRunId, sessionKey);
-  const errorMessage = String(params.error);
   const error = errorShape(ErrorCodes.UNAVAILABLE, errorMessage);
   const payload = { runId: clientRunId, status: "error" as const, summary: errorMessage };
-  setGatewayDedupeEntry({
-    dedupe: params.context.dedupe,
-    key: `chat:${clientRunId}`,
-    entry: { ts: Date.now(), ok: false, payload, error },
-  });
+  if (params.cacheResult !== false) {
+    setGatewayDedupeEntry({
+      dedupe: params.context.dedupe,
+      key: `chat:${clientRunId}`,
+      entry: { ts: Date.now(), ok: false, payload, error },
+    });
+  }
   params.respond(false, payload, error, { runId: clientRunId, error: formatForLog(params.error) });
   broadcastChatError({
     context: params.context,
@@ -88,15 +87,13 @@ export function createChatSendDispatchErrorLifecycle(params: {
   >;
   context: GatewayRequestContext;
   isQueuedFollowupEnqueued: () => boolean;
+  isReplyDispatchRun?: () => boolean;
   persistUserTurnTranscript: () => Promise<unknown>;
   session: Pick<
     PreparedChatSendSession,
     "agentId" | "backingSessionId" | "cfg" | "clientRunId" | "now" | "rawSessionKey" | "sessionKey"
   >;
-  terminalizeRestartSafeAdmission: (state: {
-    retryable: boolean;
-    status: "failed" | "killed";
-  }) => Promise<boolean>;
+  terminalizeRestartSafeAdmission: (state: RestartSafeChatTerminalState) => Promise<boolean>;
   userTurnRecorder: Pick<UserTurnTranscriptRecorder, "hasPersisted" | "isBlocked">;
 }) {
   const {
@@ -116,11 +113,6 @@ export function createChatSendDispatchErrorLifecycle(params: {
 
   const handleError = async (err: unknown) => {
     const errorMessage = String(err);
-    const activeRunChanged =
-      err instanceof Error && err.message === ACTIVE_RUN_CHANGED_ERROR_REASON;
-    const visibleErrorMessage = activeRunChanged
-      ? "active run changed; review and retry"
-      : errorMessage;
     const queuedFollowupEnqueued = isQueuedFollowupEnqueued();
     if (queuedFollowupEnqueued) {
       context.logGateway.warn(
@@ -180,13 +172,6 @@ export function createChatSendDispatchErrorLifecycle(params: {
 
       const shouldPersistUserTurn =
         !userTurnRecorder.hasPersisted() && !userTurnRecorder.isBlocked();
-      // Cleanup releases the admitted run; retain its root until the accepted
-      // user's transcript is settled so shutdown cannot drop that turn.
-      const releaseAbortTranscriptRoot = shouldPersistUserTurn
-        ? retainGatewayRootWorkAdmissionContinuation()
-        : null;
-      cleanupAdmittedRun();
-      clearAgentRunContext(clientRunId, lifecycleGeneration);
       if (shouldPersistUserTurn) {
         try {
           await persistUserTurnTranscript();
@@ -194,8 +179,6 @@ export function createChatSendDispatchErrorLifecycle(params: {
           context.logGateway.warn(
             `webchat user transcript update failed after abort: ${formatForLog(transcriptError)}`,
           );
-        } finally {
-          releaseAbortTranscriptRoot?.();
         }
       }
       return;
@@ -206,14 +189,13 @@ export function createChatSendDispatchErrorLifecycle(params: {
     context.chatRunState.deleteAbortMarker(clientRunId);
     if (agentTerminalPersistenceOwnedAtDispatchReject && activeRunAbort.entry) {
       activeRunAbort.entry.isAbortable = () => false;
-      activeRunAbort.cleanup();
-    } else {
-      activeRunAbort.cleanup({ force: true });
     }
+    activeRunAbort.cleanup();
 
     let restartSafeDispatchFailureTerminalized = false;
     if (restartSafeAdmission && !agentTerminalPersistenceOwnedAtDispatchReject) {
       restartSafeDispatchFailureTerminalized = await terminalizeRestartSafeAdmission({
+        error: errorMessage,
         retryable: true,
         status: "failed",
       }).catch((terminalizeError: unknown) => {
@@ -245,19 +227,15 @@ export function createChatSendDispatchErrorLifecycle(params: {
     ) {
       pendingDispatchLifecycleError = {
         endedAt: Date.now(),
-        error: visibleErrorMessage,
+        error: errorMessage,
         sessionId: activeRunAbort.entry?.sessionId ?? backingSessionId ?? clientRunId,
         startedAt: activeRunAbort.entry?.startedAtMs ?? now,
       };
     }
-    if (!agentTerminalPersistenceOwnedAtDispatchReject) {
-      // The lifecycle owner may have already cached its authoritative
-      // terminal; a late dispatch error must not replace that replay result.
-      const error = activeRunChanged
-        ? errorShape(ErrorCodes.INVALID_REQUEST, visibleErrorMessage, {
-            details: { reason: ACTIVE_RUN_CHANGED_ERROR_REASON },
-          })
-        : errorShape(ErrorCodes.UNAVAILABLE, visibleErrorMessage);
+    if (!agentTerminalPersistenceOwnedAtDispatchReject || params.isReplyDispatchRun?.()) {
+      // Native lifecycle owns its replay result; dispatched runtimes leave
+      // failure projection to this owner, including transcript-write failures.
+      const error = errorShape(ErrorCodes.UNAVAILABLE, errorMessage);
       setGatewayDedupeEntry({
         dedupe: context.dedupe,
         key: `chat:${clientRunId}`,
@@ -267,7 +245,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
           payload: {
             runId: clientRunId,
             status: "error" as const,
-            summary: visibleErrorMessage,
+            summary: errorMessage,
           },
           error,
         },
@@ -277,76 +255,77 @@ export function createChatSendDispatchErrorLifecycle(params: {
         runId: clientRunId,
         sessionKey,
         agentId,
-        errorMessage: visibleErrorMessage,
+        errorMessage,
       });
     }
   };
 
-  const finalize = () => {
+  const finalize = async () => {
     const dispatchError = pendingDispatchLifecycleError;
-    // Reserve projection before cleanup retires the accepted dispatch root.
-    const releaseDispatchErrorRoot = dispatchError
-      ? retainGatewayRootWorkAdmissionContinuation()
-      : null;
-    cleanupAdmittedRun();
-    clearAgentRunContext(clientRunId, lifecycleGeneration);
-    context.removeChatRun(clientRunId, clientRunId, sessionKey);
     if (!dispatchError) {
+      cleanupAdmittedRun();
+      // Reply-dispatch lifecycle events deliberately retain these until delivery settles.
+      clearAgentRunContext(clientRunId, lifecycleGeneration);
+      if (params.isReplyDispatchRun?.()) {
+        context.chatRunState.clearRun(clientRunId);
+        context.agentRunSeq.delete(clientRunId);
+      }
+      context.removeChatRun(clientRunId, clientRunId, sessionKey);
       return;
     }
-    const persistDispatchLifecycleError = async () => {
+    // Stop exposing the rejected run before projecting its terminal state, but keep the
+    // admitted root until persistence settles so restart drain still observes this work.
+    clearAgentRunContext(clientRunId, lifecycleGeneration);
+    context.removeChatRun(clientRunId, clientRunId, sessionKey);
+    try {
       const hasActiveRun = hasTrackedActiveSessionRun({
         context,
         requestedKey: rawSessionKey,
         canonicalKey: sessionKey,
-        ...(sessionKey === "global" && agentId ? { agentId } : {}),
-        defaultAgentId: resolveDefaultAgentId(cfg),
+        ...(agentId ? { agentId } : {}),
+        defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey),
       });
-      if (hasActiveRun) {
-        return;
-      }
-      try {
-        await persistGatewaySessionLifecycleEvent({
-          sessionKey,
-          ...(sessionKey === "global" && agentId ? { agentId } : {}),
-          event: {
-            runId: clientRunId,
-            sessionId: dispatchError.sessionId,
-            lifecycleGeneration,
-            ts: dispatchError.endedAt,
-            data: {
-              phase: "error",
-              startedAt: dispatchError.startedAt,
-              endedAt: dispatchError.endedAt,
-              error: dispatchError.error,
+      if (!hasActiveRun) {
+        try {
+          await persistGatewaySessionLifecycleEvent({
+            sessionKey,
+            ...(agentId ? { agentId } : {}),
+            event: {
+              runId: clientRunId,
+              sessionId: dispatchError.sessionId,
+              lifecycleGeneration,
+              ts: dispatchError.endedAt,
+              data: {
+                phase: "error",
+                startedAt: dispatchError.startedAt,
+                endedAt: dispatchError.endedAt,
+                error: dispatchError.error,
+              },
             },
-          },
-        });
-        emitSessionsChanged(context, {
-          sessionKey,
-          ...(agentId ? { agentId } : {}),
-          reason: "chat.dispatch-error",
-        });
-      } catch (persistErr: unknown) {
-        context.logGateway.warn(
-          `webchat session lifecycle persist failed after error: ${formatForLog(persistErr)}`,
-        );
+          });
+          emitSessionsChanged(context, {
+            sessionKey,
+            ...(agentId ? { agentId } : {}),
+            reason: "chat.dispatch-error",
+          });
+        } catch (persistErr: unknown) {
+          context.logGateway.warn(
+            `webchat session lifecycle persist failed after error: ${formatForLog(persistErr)}`,
+          );
+        }
       }
-    };
-    void (async () => {
-      await persistDispatchLifecycleError();
       await persistDispatchErrorUserTurn?.().catch((transcriptErr: unknown) => {
         context.logGateway.warn(
           `webchat user transcript update failed after error: ${formatForLog(transcriptErr)}`,
         );
       });
-    })()
-      .catch((continuationErr: unknown) => {
-        context.logGateway.warn(
-          `webchat session lifecycle continuation failed: ${formatForLog(continuationErr)}`,
-        );
-      })
-      .finally(() => releaseDispatchErrorRoot?.());
+    } catch (continuationErr: unknown) {
+      context.logGateway.warn(
+        `webchat session lifecycle continuation failed: ${formatForLog(continuationErr)}`,
+      );
+    } finally {
+      cleanupAdmittedRun();
+    }
   };
 
   return { finalize, handleError };

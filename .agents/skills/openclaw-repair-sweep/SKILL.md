@@ -84,8 +84,8 @@ proof choice, `$autoreview` pre-publish review, `$crabbox` heavy/remote proof.
   recorded checkpoint.
 - Classify source trust before execution. Untrusted contributor code, tests,
   or wrappers never run locally or on a credential-hydrated host; use the
-  sanitized remote-proof path. Route heavy trusted proof to the selected
-  remote box.
+  sanitized remote-proof path. Run capable heavy trusted proof on the current
+  dedicated Linux worker; otherwise use the selected remote box.
 - Before replacing a failed or interrupted worker, preserve its claimed items,
   patches, checkout ownership, and evidence; hand them to exactly one
   replacement without duplicating or discarding unfinished work.
@@ -174,6 +174,11 @@ overrides. Rewrite an inadequate editable PR at the root-cause owner and keep
 author credit; create a replacement only when the source branch is uneditable
 or unsafe to update, and close the source only after the replacement exists.
 Red CI is normal work: inspect, fix or reject, recheck green.
+
+Never squash a contributor-owned PR after maintainers replace its ancestry.
+Create a maintainer-owned replacement PR, link the original, and credit
+contributors with their public GitHub noreply address. Merge and rebase are not
+policy escapes.
 
 ## Broken main
 

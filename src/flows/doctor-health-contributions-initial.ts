@@ -15,7 +15,6 @@ import {
   runPluginRegistryHealth,
   runReleaseConfiguredPluginInstallsHealth,
   runSandboxHealth,
-  runSessionLocksHealth,
   runSessionSnapshotsHealth,
   runSessionTranscriptHeadersHealth,
   runSessionTranscriptLabelsHealth,
@@ -60,6 +59,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:write-config-migrations",
       label: "Write config migrations",
+      required: true,
       run: runInitialConfigWriteHealth,
     }),
     createDoctorHealthContribution({
@@ -92,6 +92,18 @@ export function resolveInitialDoctorHealthContributions(params: {
       label: "Gateway auth",
       healthCheckIds: ["core/doctor/gateway-auth"],
       run: params.runGatewayAuthHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:node-hosting-preconditions",
+      label: "Node hosting preconditions",
+      healthChecks: {
+        description: "Gateway config can authenticate and onboard node and worker hosts.",
+        async detect(ctx) {
+          const { collectNodeHostingPreconditionFindings } =
+            await import("../commands/doctor-node-hosting-preconditions.js");
+          return collectNodeHostingPreconditionFindings(ctx.cfg);
+        },
+      },
     }),
     createDoctorHealthContribution({
       id: "doctor:command-owner",
@@ -321,12 +333,6 @@ export function resolveInitialDoctorHealthContributions(params: {
       label: "Telegram General-topic conversations",
       healthCheckIds: ["core/doctor/telegram-general-topic-conversations"],
       run: runTelegramGeneralTopicConversationHealth,
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:session-locks",
-      label: "Session locks",
-      healthCheckIds: ["core/doctor/session-locks"],
-      run: runSessionLocksHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:session-transcript-headers",

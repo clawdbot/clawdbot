@@ -2,15 +2,15 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../packages/normalization-core/src/string-coerce.js";
+import type {
+  ModelsAuthLoginFlowOptions,
+  ModelsAuthLoginFlowResult,
+} from "../commands/models/auth.js";
 import { createLazyRuntimeMethodBinder, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { OpenClawConfig } from "./config-contracts.js";
 import type { RuntimeEnv } from "./runtime-env.js";
 
 export type {
-  ModelsAuthLoginFlowOptions,
-  ModelsAuthLoginFlowResult,
-} from "../commands/models/auth.js";
-import type {
   ModelsAuthLoginFlowOptions,
   ModelsAuthLoginFlowResult,
 } from "../commands/models/auth.js";
@@ -45,8 +45,8 @@ const bindProviderAuthLoginFlowRuntime = createLazyRuntimeMethodBinder(
   loadProviderAuthLoginFlowRuntime,
 );
 
-export const runModelsAuthLoginFlow: ProviderAuthLoginFlowRuntime["runModelsAuthLoginFlow"] =
-  bindProviderAuthLoginFlowRuntime((runtime) => runtime.runModelsAuthLoginFlow);
+export const runModelsAuthLoginFlow: ProviderAuthLoginFlowRuntime["runModelsAuthLoginFlowCore"] =
+  bindProviderAuthLoginFlowRuntime((runtime) => runtime.runModelsAuthLoginFlowCore);
 
 function resolveCodexLoginProvider(rawProvider: string | undefined): string | null {
   const normalized = normalizeLowercaseStringOrEmpty(rawProvider ?? "codex").replace(/_/gu, "-");

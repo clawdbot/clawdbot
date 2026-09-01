@@ -1,4 +1,5 @@
-import { formatCliOutputError, type CliOutput } from "../cli-output.js";
+import type { CliOutput } from "../cli-output-contracts.js";
+import { formatCliOutputError } from "../cli-output.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 
@@ -17,13 +18,19 @@ export function createCliOutputFailoverError(params: {
     runId: params.runId,
     sessionId: params.sessionId,
   });
-  const reason = classifyFailoverReason(message, { provider: params.provider }) ?? "unknown";
-  const code =
-    params.output.terminalFailure?.reason === "max_turns"
-      ? "cli_max_turns"
-      : reason === "context_overflow"
-        ? "cli_context_overflow"
-        : undefined;
+  const terminalFailure = params.output.terminalFailure?.reason;
+  // Record terminal facts before provider hooks can throw or reclassify them;
+  // losing a max-turn stop here could replay tools in another model attempt.
+  const reason = terminalFailure
+    ? terminalFailure === "synthetic_no_response"
+      ? "format"
+      : "unknown"
+    : (classifyFailoverReason(message, { provider: params.provider }) ?? "unknown");
+  const code = terminalFailure
+    ? `cli_${terminalFailure}`
+    : reason === "context_overflow"
+      ? "cli_context_overflow"
+      : undefined;
   return new FailoverError(message, {
     reason,
     provider: params.provider,

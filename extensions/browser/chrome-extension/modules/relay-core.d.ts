@@ -2,6 +2,8 @@
 // it can load unbundled in Chrome). Kept in sync with relay-core.js.
 
 export const OPENCLAW_TAB_GROUP_TITLE: string;
+export const ACCESS_MODE_ALL: "all";
+export const ACCESS_MODE_SELECTED: "selected";
 export function parsePairingString(raw: unknown): {
   relayUrl: string;
   token: string;
@@ -18,17 +20,22 @@ export function createPairingConfigStore(storage: {
     token: string;
     gatewayUrl: string;
     authVersion?: 2;
+    accessMode: "all" | "selected";
     groupColor: string;
     pairingStatusHint: string;
   }>;
   save(
     pairing: { relayUrl: string; token: string; gatewayUrl?: string },
     groupColor: string,
+    accessMode?: "all" | "selected",
   ): Promise<void>;
+  setAccessMode(accessMode: unknown): Promise<"all" | "selected">;
   clear(): Promise<void>;
 };
 
 export function buildRelayWsProtocols(): string[];
+
+export function directLoopbackRelayPort(raw: unknown): number | null;
 
 export function reconnectDelayMs(attempt: number): number;
 

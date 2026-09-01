@@ -7,6 +7,22 @@ import org.junit.Test
 
 class ChatControllerSessionPolicyTest {
   @Test
+  fun sessionMergeRetainsTheLatestObservedDurableIdentity() {
+    val existing =
+      ChatSessionEntry(
+        key = "agent:main:phone",
+        updatedAtMs = 1L,
+        sessionId = "session-a",
+      )
+
+    val retained = mergeChatSessionEntry(existing, existing.copy(updatedAtMs = 2L, sessionId = null))
+    val replaced = mergeChatSessionEntry(retained, existing.copy(updatedAtMs = 3L, sessionId = "session-b"))
+
+    assertEquals("session-a", retained.sessionId)
+    assertEquals("session-b", replaced.sessionId)
+  }
+
+  @Test
   fun applyMainSessionKeyMovesCurrentSessionWhenStillOnDefault() {
     val state =
       applyMainSessionKey(
@@ -165,6 +181,7 @@ class ChatControllerSessionPolicyTest {
         archived = false,
         unread = true,
         lastReadAt = 10L,
+        markedUnreadAt = 15L,
         lastActivityAt = 20L,
       )
     val next = ChatSessionEntry(key = "agent:main:phone", updatedAtMs = 2L)
@@ -177,6 +194,7 @@ class ChatControllerSessionPolicyTest {
     assertEquals(false, merged.archived)
     assertEquals(true, merged.unread)
     assertEquals(10L, merged.lastReadAt)
+    assertEquals(15L, merged.markedUnreadAt)
     assertEquals(20L, merged.lastActivityAt)
   }
 

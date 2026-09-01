@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 
 function assert(condition, message) {
@@ -84,7 +85,7 @@ for (const [pluginId, expected] of Object.entries(selected)) {
   );
 }
 
-for (const pluginId of ["clickclack", "slack"]) {
+for (const pluginId of ["clickclack", "slack", "whatsapp"]) {
   const packageJson = readJson(`/app/dist/extensions/${pluginId}/package.json`);
   assert(
     packageJson.openclaw?.build?.bundledDist === false,
@@ -96,20 +97,18 @@ const declaredDependencies = {
   clickclack: ["ws"],
   slack: ["@slack/bolt", "@slack/web-api"],
   msteams: ["@microsoft/teams.apps"],
-  whatsapp: ["audio-decode", "baileys", "typebox"],
+  whatsapp: ["audio-decode", "baileys"],
 };
 for (const [pluginId, dependencies] of Object.entries(declaredDependencies)) {
   const packageJson = readJson(`/app/dist/extensions/${pluginId}/package.json`);
+  const require = createRequire(`/app/dist/extensions/${pluginId}/package.json`);
   for (const dependency of dependencies) {
     assert(
       typeof packageJson.dependencies?.[dependency] === "string",
       `${pluginId} package metadata omitted ${dependency}`,
     );
+    assertFile(require.resolve(dependency));
   }
-}
-
-for (const dependency of Object.values(declaredDependencies).flat()) {
-  assertFile(path.join("/app/node_modules", dependency, "package.json"));
 }
 
 assertFile("/app/dist/extensions/slack/skills/slack/SKILL.md");

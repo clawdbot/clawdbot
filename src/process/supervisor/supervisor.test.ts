@@ -1,9 +1,16 @@
 // Process supervisor tests cover lifecycle, restart, and termination behavior.
 import { performance } from "node:perf_hooks";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test-utils/deferred.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
-import type { ManagedRun, SpawnProcessAdapter } from "./types.js";
+import {
+  createSilentIdleArgv,
+  createStubChildAdapter,
+  createWriteStdoutArgv,
+  spawnChild,
+  type StubChildAdapter,
+} from "./supervisor.test-support.js";
+import type { ManagedRun } from "./types.js";
 
 const { createChildAdapterMock, createPtyAdapterMock } = vi.hoisted(() => ({
   createChildAdapterMock: vi.fn(),
@@ -20,95 +27,13 @@ vi.mock("./adapters/pty.js", () => ({
 
 let createProcessSupervisor: typeof import("./supervisor.js").createProcessSupervisor;
 
-type ProcessSupervisor = ReturnType<typeof createProcessSupervisor>;
-type SpawnOptions = Parameters<ProcessSupervisor["spawn"]>[0];
-type ChildSpawnOptions = Omit<Extract<SpawnOptions, { mode: "child" }>, "backendId" | "mode">;
-type ChildAdapter = SpawnProcessAdapter<NodeJS.Signals | null>;
-type StubChildAdapter = ChildAdapter & {
-  emitStdout: (chunk: string) => void;
-  emitStderr: (chunk: string) => void;
-  settle: (code: number | null, signal?: NodeJS.Signals | null) => void;
-  killMock: ReturnType<typeof vi.fn>;
-  disposeMock: ReturnType<typeof vi.fn>;
-};
-
-function createWriteStdoutArgv(output: string): string[] {
-  if (process.platform === "win32") {
-    return [process.execPath, "-e", `process.stdout.write(${JSON.stringify(output)})`];
-  }
-  return ["/usr/bin/printf", "%s", output];
-}
-
-function createSilentIdleArgv(): string[] {
-  return [process.execPath, "-e", "setInterval(() => {}, 1_000)"];
-}
-
-function createStubChildAdapter(options?: {
-  pid?: number;
-  onKill?: (signal: NodeJS.Signals | undefined, adapter: StubChildAdapter) => void;
-}): StubChildAdapter {
-  const stdoutListeners: Array<(chunk: string) => void> = [];
-  const stderrListeners: Array<(chunk: string) => void> = [];
-  let resolveWait:
-    | ((value: { code: number | null; signal: NodeJS.Signals | null }) => void)
-    | null = null;
-  const waitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-    (resolve) => {
-      resolveWait = resolve;
-    },
-  );
-  const killMock = vi.fn();
-  const disposeMock = vi.fn();
-  const adapter: StubChildAdapter = {
-    pid: options?.pid ?? 1234,
-    stdin: undefined,
-    onStdout: (listener) => {
-      stdoutListeners.push(listener);
-    },
-    onStderr: (listener) => {
-      stderrListeners.push(listener);
-    },
-    wait: async () => await waitPromise,
-    kill: (signal) => {
-      killMock(signal);
-      options?.onKill?.(signal, adapter);
-    },
-    dispose: () => {
-      disposeMock();
-    },
-    emitStdout: (chunk) => {
-      for (const listener of stdoutListeners) {
-        listener(chunk);
-      }
-    },
-    emitStderr: (chunk) => {
-      for (const listener of stderrListeners) {
-        listener(chunk);
-      }
-    },
-    settle: (code, signal = null) => {
-      resolveWait?.({ code, signal });
-      resolveWait = null;
-    },
-    killMock,
-    disposeMock,
-  };
-
-  return adapter;
-}
-
-async function spawnChild(supervisor: ProcessSupervisor, options: ChildSpawnOptions) {
-  return supervisor.spawn({
-    ...options,
-    backendId: "test",
-    mode: "child",
-  });
-}
-
 describe("process supervisor", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     ({ createProcessSupervisor } = await import("./supervisor.js"));
+  });
+
+  beforeEach(() => {
     createChildAdapterMock.mockReset();
     createPtyAdapterMock.mockReset();
     vi.useRealTimers();
@@ -119,48 +44,24 @@ describe("process supervisor", () => {
     vi.restoreAllMocks();
   });
 
-  it("spawns child runs and captures output", async () => {
+  it("passes private secret input and exact environment to the child adapter", async () => {
     const adapter = createStubChildAdapter();
-    adapter.oomScoreWrapperSelected = true;
     createChildAdapterMock.mockResolvedValue(adapter);
+    const secretInput = { fd: 3, createData: () => Buffer.from("secret") };
 
     const supervisor = createProcessSupervisor();
     const run = await spawnChild(supervisor, {
       sessionId: "s1",
       argv: createWriteStdoutArgv("ok"),
-      timeoutMs: 1_000,
-      stdinMode: "pipe-closed",
-    });
-
-    adapter.emitStdout("ok");
-    adapter.settle(0);
-
-    const exit = await run.wait();
-    expect(exit.reason).toBe("exit");
-    expect(exit.exitCode).toBe(0);
-    expect(exit.stdout).toBe("ok");
-    expect(exit.oomScoreWrapperSelected).toBe(true);
-    expect(adapter.disposeMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("passes private secret input to the child adapter", async () => {
-    const adapter = createStubChildAdapter();
-    createChildAdapterMock.mockResolvedValue(adapter);
-    const secretInput = {
-      fd: 3,
-      createData: () => Buffer.from("secret"),
-    };
-
-    const supervisor = createProcessSupervisor();
-    const run = await spawnChild(supervisor, {
-      sessionId: "s1",
-      argv: createWriteStdoutArgv("ok"),
+      exactEnv: true,
       secretInput,
     });
     adapter.settle(0);
     await run.wait();
 
-    expect(createChildAdapterMock).toHaveBeenCalledWith(expect.objectContaining({ secretInput }));
+    expect(createChildAdapterMock).toHaveBeenCalledWith(
+      expect.objectContaining({ exactEnv: true, secretInput }),
+    );
   });
 
   it("enforces no-output timeout for silent processes", async () => {
@@ -283,7 +184,7 @@ describe("process supervisor", () => {
               sessionId: "cancel-starting",
               backendId: "test",
               mode: "pty",
-              ptyCommand: "printf cancelled",
+              argv: ["/bin/sh", "-c", "printf cancelled"],
               scopeKey: "scope:cancel-starting",
             })
           : spawnChild(supervisor, {
@@ -310,6 +211,69 @@ describe("process supervisor", () => {
       });
     },
   );
+
+  it("fences new runs and drains an unscoped startup during shutdown", async () => {
+    const adapter = createStubChildAdapter({
+      onKill: (signal, current) => {
+        current.settle(null, signal ?? "SIGTERM");
+      },
+    });
+    const startup = createDeferred<StubChildAdapter>();
+    createChildAdapterMock.mockReturnValueOnce(startup.promise);
+    const supervisor = createProcessSupervisor();
+    const pendingRun = spawnChild(supervisor, {
+      runId: "shutdown-starting",
+      sessionId: "shutdown-starting",
+      argv: createSilentIdleArgv(),
+    });
+
+    const shutdown = supervisor.shutdown();
+    await expect(
+      spawnChild(supervisor, {
+        runId: "shutdown-late",
+        sessionId: "shutdown-late",
+        argv: createSilentIdleArgv(),
+      }),
+    ).rejects.toThrow("process supervisor is shut down");
+    expect(createChildAdapterMock).toHaveBeenCalledTimes(1);
+
+    startup.resolve(adapter);
+    const run = await pendingRun;
+    await expect(shutdown).resolves.toBeUndefined();
+
+    expect(adapter.killMock).toHaveBeenCalledWith("SIGTERM");
+    await expect(run.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
+  });
+
+  it("keeps shutdown fenced when live ownership extinction fails", async () => {
+    const extinction = createDeferred();
+    const adapter = createStubChildAdapter({
+      onKill: (signal, current) => {
+        current.settle(null, signal ?? "SIGTERM");
+      },
+    });
+    adapter.waitForExtinction = () => extinction.promise;
+    createChildAdapterMock.mockResolvedValueOnce(adapter);
+    const supervisor = createProcessSupervisor();
+    await spawnChild(supervisor, {
+      runId: "shutdown-failed-extinction",
+      sessionId: "shutdown-failed-extinction",
+      argv: createSilentIdleArgv(),
+    });
+
+    const shutdown = supervisor.shutdown();
+    extinction.reject(new Error("owner extinction failed"));
+
+    await expect(shutdown).rejects.toThrow("owner extinction failed");
+    await expect(
+      spawnChild(supervisor, {
+        runId: "shutdown-after-failed-extinction",
+        sessionId: "shutdown-after-failed-extinction",
+        argv: createSilentIdleArgv(),
+      }),
+    ).rejects.toThrow("process supervisor is shut down");
+    expect(createChildAdapterMock).toHaveBeenCalledOnce();
+  });
 
   it("cancels every starting scoped process without canceling a later arrival", async () => {
     const runCount = 16;
@@ -429,6 +393,7 @@ describe("process supervisor", () => {
     expect(createChildAdapterMock).toHaveBeenCalledTimes(2);
     expect(first.killMock).toHaveBeenCalledWith("SIGTERM");
     expect(replacementRun.pid).toBeUndefined();
+    expect(replacementRun.waitForExtinction).toBeUndefined();
     expect(later.killMock).not.toHaveBeenCalled();
 
     later.settle(0);

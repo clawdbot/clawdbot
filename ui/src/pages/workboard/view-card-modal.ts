@@ -105,6 +105,7 @@ export function openCreateModal(
 export function openEditModal(state: WorkboardUiState, card: WorkboardCard) {
   state.draftOpen = true;
   state.editingCardId = card.id;
+  state.editingCardBase = card;
   state.draftTitle = card.title;
   state.draftNotes = card.notes ?? "";
   state.draftStatus = card.status;

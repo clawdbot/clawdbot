@@ -1,7 +1,9 @@
 // Docs link audit tests cover documentation link validation behavior.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 
@@ -13,12 +15,100 @@ const {
   resolveRoute,
   runDocsLinkAuditCli,
   sanitizeDocsConfigForEnglishOnly,
-} = await import("../../scripts/docs-link-audit.mjs");
+} = await import("../../scripts/docs-link-audit.mts");
 
 describe("docs-link-audit", () => {
   function tempEntries(prefix: string): Set<string> {
     return new Set(fs.readdirSync(os.tmpdir()).filter((entry) => entry.startsWith(prefix)));
   }
+
+  it.each([
+    {
+      name: "component and list fences",
+      source: [
+        "<Accordion>",
+        "    ~~~md",
+        "    [example](/hidden-tilde)",
+        "    ~~~not-a-closing-fence",
+        "    [example](/hidden-after-false-close)",
+        "    ~~~",
+        "</Accordion>",
+        "",
+        "- Example",
+        "",
+        "    ````md",
+        "    ```text",
+        "    [example](/hidden-nested)",
+        "    ```",
+        "    ````",
+        "",
+        "[real](/missing-page)",
+        "[valid](/page)",
+      ],
+      broken: 1,
+    },
+    {
+      name: "legacy malformed MDX",
+      source: [
+        "<!doctype html>",
+        "~~~md",
+        "[example](/hidden-fallback)",
+        "~~~",
+        "[real](/missing-page)",
+        "[valid](/page)",
+      ],
+      broken: 1,
+    },
+    {
+      name: "indented component prose",
+      source: ["<Accordion>", "    [real](/missing-page)", "</Accordion>", "[valid](/page)"],
+      broken: 1,
+    },
+    { name: "valid prose", source: ["[valid](/page)"], broken: 0 },
+  ])("audits real CLI links after $name", ({ source, broken }) => {
+    const tempDirs: string[] = [];
+    const fixtureRoot = makeTempDir(tempDirs, "docs-link-audit-cli-");
+    const docsRoot = path.join(fixtureRoot, "docs");
+    const clawHubRoot = path.join(fixtureRoot, "clawhub");
+    const home = path.join(fixtureRoot, "home");
+    fs.mkdirSync(docsRoot);
+    fs.mkdirSync(path.join(clawHubRoot, "docs"), { recursive: true });
+    fs.mkdirSync(home);
+    fs.writeFileSync(path.join(docsRoot, "docs.json"), JSON.stringify({ navigation: [] }));
+    fs.writeFileSync(path.join(docsRoot, "page.mdx"), `${source.join("\n")}\n`);
+
+    try {
+      const result = spawnSync(
+        process.execPath,
+        [fileURLToPath(new URL("../../scripts/docs-link-audit.mjs", import.meta.url))],
+        {
+          cwd: fixtureRoot,
+          encoding: "utf8",
+          env: {
+            PATH: process.env.PATH,
+            HOME: home,
+            USERPROFILE: home,
+            TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
+            OPENCLAW_DOCS_SYNC_CLAWHUB_REPO: clawHubRoot,
+          },
+          timeout: 30_000,
+        },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(broken ? 1 : 0);
+      expect(result.stdout).toContain(`checked_internal_links=${broken + 1}\n`);
+      expect(result.stdout).toContain(`broken_links=${broken}\n`);
+      expect(result.stdout).not.toContain("/hidden-");
+      if (broken) {
+        expect(result.stdout).toContain(
+          `page.mdx:${source.findIndex((line) => line.includes("/missing-page")) + 1} :: /missing-page :: route/file not found`,
+        );
+      }
+    } finally {
+      cleanupTempDirs(tempDirs);
+    }
+  });
 
   it("normalizes route fragments away", () => {
     expect(normalizeRoute("/plugins/building-plugins#registering-agent-tools")).toBe(
@@ -254,13 +344,31 @@ describe("docs-link-audit", () => {
       )}\n`,
       "utf8",
     );
-    fs.writeFileSync(path.join(docsRoot, "help", "testing.md"), "# testing\n", "utf8");
+    fs.writeFileSync(
+      path.join(docsRoot, "help", "testing.md"),
+      [
+        "# testing",
+        "<!-- BEGIN GENERATED: example -->",
+        "visible <!-- a multiline",
+        "comment --> text",
+        "<!-- END GENERATED: example -->",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
     fs.writeFileSync(path.join(docsRoot, "zh-CN", "help", "testing.md"), "# 测试\n", "utf8");
 
     const anchorDocsDir = prepareAnchorAuditDocsDir(docsRoot);
     try {
       expect(fs.existsSync(path.join(anchorDocsDir, "help", "testing.md"))).toBe(true);
       expect(fs.existsSync(path.join(anchorDocsDir, "zh-CN"))).toBe(false);
+      const preparedMarkdown = fs.readFileSync(
+        path.join(anchorDocsDir, "help", "testing.md"),
+        "utf8",
+      );
+      expect(preparedMarkdown).not.toContain("<!--");
+      expect(preparedMarkdown).not.toContain("BEGIN GENERATED");
+      expect(preparedMarkdown.split("\n")).toHaveLength(6);
 
       const sanitizedDocsJson = JSON.parse(
         fs.readFileSync(path.join(anchorDocsDir, "docs.json"), "utf8"),
@@ -395,7 +503,7 @@ describe("docs-link-audit", () => {
       args: [
         "exec",
         "--yes",
-        "--package=mint@4.2.715",
+        "--package=mint@4.2.808",
         "--",
         "mint",
         "broken-links",
@@ -462,7 +570,7 @@ describe("docs-link-audit", () => {
         "npm",
         "exec",
         "--yes",
-        "--package=mint@4.2.715",
+        "--package=mint@4.2.808",
         "--",
         "mint",
         "broken-links",

@@ -1,18 +1,18 @@
-// Control UI chat module implements attachment payload store behavior.
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 
 type AttachmentPayload = {
+  blob?: Blob;
   dataUrl?: string;
   previewUrl?: string;
 };
 
 const payloads = new Map<string, AttachmentPayload>();
 
-function createObjectUrl(file: File): string | undefined {
+function createObjectUrl(blob: Blob): string | undefined {
   if (typeof URL === "undefined" || typeof URL.createObjectURL !== "function") {
     return undefined;
   }
-  return URL.createObjectURL(file);
+  return URL.createObjectURL(blob);
 }
 
 function revokeObjectUrl(url: string | undefined): void {
@@ -32,6 +32,7 @@ export function registerChatAttachmentPayload(params: {
   const objectUrl = createObjectUrl(params.file);
   const previewUrl = objectUrl ?? params.attachment.previewUrl;
   payloads.set(params.attachment.id, {
+    blob: params.file,
     dataUrl: params.dataUrl,
     ...(previewUrl ? { previewUrl } : {}),
   });
@@ -45,21 +46,26 @@ export function getChatAttachmentDataUrl(attachment: ChatAttachment): string | n
   return attachment.dataUrl ?? payloads.get(attachment.id)?.dataUrl ?? null;
 }
 
+// Startup handoffs share this registry; binary conversion stays with lazy persistence.
+export function getChatAttachmentBlob(attachment: ChatAttachment): Blob | null {
+  return payloads.get(attachment.id)?.blob ?? null;
+}
+
+// Stored data URLs keep previews available when this browser cannot create object URLs.
 export function getChatAttachmentPreviewUrl(attachment: ChatAttachment): string | null {
-  return (
-    attachment.previewUrl ?? payloads.get(attachment.id)?.previewUrl ?? attachment.dataUrl ?? null
-  );
+  const storedPreview = payloads.get(attachment.id)?.previewUrl;
+  return attachment.previewUrl ?? storedPreview ?? getChatAttachmentDataUrl(attachment);
 }
 
-function cloneChatAttachmentMetadata(attachment: ChatAttachment): ChatAttachment {
-  const { dataUrl: _dataUrl, ...metadata } = attachment;
-  return metadata;
-}
-
-export function cloneChatAttachmentsMetadata(
+/** Gives another mounted composer payload ownership independent of the source. */
+export function cloneChatAttachmentsForIndependentOwner(
   attachments: readonly ChatAttachment[],
 ): ChatAttachment[] {
-  return attachments.map(cloneChatAttachmentMetadata);
+  return attachments.map((attachment) => {
+    const { id: _id, previewUrl: _previewUrl, ...metadata } = attachment;
+    const dataUrl = getChatAttachmentDataUrl(attachment);
+    return { ...metadata, id: generateAttachmentId(), ...(dataUrl ? { dataUrl } : {}) };
+  });
 }
 
 export function releaseChatAttachmentPayload(id: string): void {
@@ -75,6 +81,20 @@ export function releaseChatAttachmentPayloads(attachments: readonly ChatAttachme
   for (const attachment of attachments) {
     releaseChatAttachmentPayload(attachment.id);
   }
+}
+
+/**
+ * Releases displaced attachments except ids still referenced by a retained
+ * owner (live composer, surviving fallbacks). Attachments are backups of
+ * composer state, so shared ids across owners are the norm — dropping one
+ * owner must never revoke another owner's payload.
+ */
+export function releaseDisplacedChatAttachmentPayloads(
+  displaced: readonly ChatAttachment[],
+  retained: ReadonlyArray<readonly ChatAttachment[]>,
+): void {
+  const retainedIds = new Set(retained.flat().map((attachment) => attachment.id));
+  releaseChatAttachmentPayloads(displaced.filter((attachment) => !retainedIds.has(attachment.id)));
 }
 
 export function generateAttachmentId(): string {

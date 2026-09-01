@@ -2,7 +2,7 @@ import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbou
 // Mattermost tests cover send plugin behavior.
 import { expectProvidedCfgSkipsRuntimeLoad } from "openclaw/plugin-sdk/channel-test-helpers";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 let sendMessageMattermost: typeof import("./send.js").sendMessageMattermost;
 let parseMattermostTarget: typeof import("./target-resolution.js").parseMattermostTarget;
@@ -226,16 +226,24 @@ vi.mock("../runtime.js", () => ({
   }),
 }));
 
+beforeAll(async () => {
+  ({ sendMessageMattermost } = await import("./send.js"));
+  ({ parseMattermostTarget } = await import("./target-resolution.js"));
+});
+
 describe("sendMessageMattermost", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  let defaultAccountSequence = 0;
+
+  beforeEach(() => {
     mockState.loadConfig.mockReset();
     mockState.loadConfig.mockReturnValue({});
     mockState.recordActivity.mockReset();
     mockState.resolveMattermostAccount.mockReset();
+    // Production caches are keyed by token; keep each test in its own real namespace.
+    const cacheNamespace = `mattermost-cache-${defaultAccountSequence++}`;
     mockState.resolveMattermostAccount.mockReturnValue({
       accountId: "default",
-      botToken: "bot-token",
+      botToken: cacheNamespace,
       baseUrl: "https://mattermost.example.com",
       config: {},
     });
@@ -257,8 +265,6 @@ describe("sendMessageMattermost", () => {
     mockState.fetchMattermostUserTeams.mockResolvedValue([{ id: "team-1" }]);
     mockState.fetchMattermostChannelByName.mockResolvedValue({ id: "town-square" });
     mockState.uploadMattermostFile.mockResolvedValue({ id: "file-1" });
-    ({ sendMessageMattermost } = await import("./send.js"));
-    ({ parseMattermostTarget } = await import("./target-resolution.js"));
   });
 
   it("uses provided cfg and skips runtime loadConfig", async () => {
@@ -570,6 +576,23 @@ describe("sendMessageMattermost", () => {
     expect(mockState.createMattermostPost).not.toHaveBeenCalled();
   });
 
+  it("does not fall back to the original image URL after a capped optimized upload fails", async () => {
+    mockState.loadOutboundMediaFromUrl.mockResolvedValueOnce({
+      buffer: Buffer.alloc(512),
+      fileName: "optimized.jpg",
+      contentType: "image/jpeg",
+      kind: "image",
+    });
+    mockState.uploadMattermostFile.mockRejectedValueOnce(new Error("upload unavailable"));
+    await expect(
+      sendMessageMattermost("channel:town-square", "caption", {
+        cfg: { agents: { defaults: { mediaMaxMb: 1 / 1024 } } },
+        mediaUrl: "https://example.com/original-large.png",
+      }),
+    ).rejects.toThrow("upload unavailable");
+    expect(mockState.createMattermostPost).not.toHaveBeenCalled();
+  });
+
   it("builds interactive button props when buttons are provided", async () => {
     mockState.resolveMattermostAccount.mockReturnValue({
       accountId: "default",
@@ -841,25 +864,6 @@ describe("sendMessageMattermost user-first resolution", () => {
     expect(res.channelId).toBe("dm-channel-id");
   });
 
-  it("observes cache-miss DM resolution but not cached sends", async () => {
-    const userId = "iiiiii9999999999iiiiii9999"; // 26 chars
-    const onDmChannelResolution = vi.fn();
-    mockState.resolveMattermostAccount.mockReturnValue(makeAccount("token-dm-observer-t9"));
-
-    await sendMessageMattermost(`user:${userId}`, "first", {
-      cfg: TEST_CFG,
-      onDmChannelResolution,
-    });
-    await sendMessageMattermost(`user:${userId}`, "second", {
-      cfg: TEST_CFG,
-      onDmChannelResolution,
-    });
-
-    expect(onDmChannelResolution).toHaveBeenCalledTimes(1);
-    expect(onDmChannelResolution).toHaveBeenCalledWith(expect.any(Promise));
-    expect(mockState.createMattermostDirectChannelWithRetry).toHaveBeenCalledTimes(1);
-  });
-
   it("does not apply user-first resolution for explicit channel: prefix", async () => {
     // Unique token + id — explicit channel: prefix, no probe, no DM
     const chanId = "eeeeee5555555555eeeeee5555"; // 26 chars
@@ -965,8 +969,7 @@ describe("sendMessageMattermost user-first resolution", () => {
 describe("sendMessageMattermost outbound cache bounds", () => {
   const baseUrl = "https://mattermost.example.com";
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeEach(() => {
     vi.clearAllMocks();
     mockState.resolveMattermostAccount.mockReturnValue({
       accountId: "default",
@@ -989,7 +992,6 @@ describe("sendMessageMattermost outbound cache bounds", () => {
     mockState.fetchMattermostChannelByName.mockImplementation(
       async (_client, _teamId: string, name: string) => ({ id: `channel-${name}` }),
     );
-    ({ sendMessageMattermost } = await import("./send.js"));
   });
 
   const send = async (to: string, token: string) =>

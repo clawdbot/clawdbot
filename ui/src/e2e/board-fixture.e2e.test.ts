@@ -7,6 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { ApplicationRuntime } from "../app/bootstrap.ts";
 import {
   canRunPlaywrightChromium,
   resolvePlaywrightChromiumExecutablePath,
@@ -155,6 +156,22 @@ async function readMenuColors(page: Page): Promise<{ background: string; foregro
 let browser: Browser;
 let fixtureServer: FixtureServer;
 
+async function requestPreviewGateway(
+  page: Page,
+  requests: Array<{ method: string; params?: unknown }>,
+): Promise<unknown[]> {
+  return page.evaluate((batch) => {
+    const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
+      "openclaw-app",
+    );
+    const client = app?.runtime?.context.gateway.snapshot.client;
+    if (!client) {
+      throw new Error("Preview Gateway client is unavailable");
+    }
+    return Promise.all(batch.map(({ method, params }) => client.request(method, params)));
+  }, requests);
+}
+
 describeStandaloneMockServer("standalone Control UI mock server", () => {
   beforeAll(async () => {
     fixtureServer = await startFixtureServer();
@@ -164,6 +181,171 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
   afterAll(async () => {
     await browser?.close();
     await stopFixtureServer(fixtureServer);
+  });
+
+  it("correlates concurrent caretaker replies with their original requests", async () => {
+    const page = await browser.newPage();
+    try {
+      await page.goto(new URL("/chat", fixtureServer.url).toString());
+      await page.getByRole("textbox", { name: "Message Molty" }).waitFor();
+      const replies = await requestPreviewGateway(page, [
+        { method: "openclaw.chat", params: { sessionId: "delayed", message: "hello" } },
+        { method: "openclaw.chat", params: { sessionId: "welcome" } },
+      ]);
+      expect(replies).toMatchObject([
+        { sessionId: "delayed", reply: expect.stringContaining("demo turn 0") },
+        { sessionId: "welcome", reply: expect.stringContaining("system caretaker") },
+      ]);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("keeps renamed preview groups authoritative across reads and reloads", async () => {
+    const page = await browser.newPage();
+    try {
+      await page.goto(new URL("/chat", fixtureServer.url).toString());
+      await page.getByRole("textbox", { name: "Message Molty" }).waitFor();
+      await requestPreviewGateway(page, [
+        { method: "sessions.groups.rename", params: { name: "Research", to: "Reviewed" } },
+      ]);
+      for (const reload of [false, true]) {
+        if (reload) {
+          await page.reload();
+          await page.getByRole("textbox", { name: "Message Molty" }).waitFor();
+        }
+        expect(await requestPreviewGateway(page, [{ method: "sessions.groups.list" }])).toEqual([
+          { groups: [{ name: "Reviewed", position: 0 }], sectionOrder: [] },
+        ]);
+      }
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("serves background-task transcripts through both chat entry points", async () => {
+    const page = await browser.newPage();
+    try {
+      await page.goto(new URL("/chat", fixtureServer.url).toString());
+      await page.getByRole("textbox", { name: "Message Molty" }).waitFor();
+      const sessionKey = "agent:openclaw-mock:subagent:mock-task-1";
+      const [description] = (await requestPreviewGateway(page, [
+        { method: "sessions.describe", params: { key: sessionKey } },
+      ])) as Array<{ session: { sessionId: string } }>;
+      const replies = await requestPreviewGateway(
+        page,
+        ["chat.history", "chat.startup"].map((method) => ({
+          method,
+          params: { sessionKey },
+        })),
+      );
+      for (const reply of replies) {
+        expect(reply).toMatchObject({
+          sessionId: description!.session.sessionId,
+          messages: [
+            { role: "user", content: [{ text: expect.stringContaining("Map the run-status") }] },
+            {
+              role: "assistant",
+              content: [{ text: expect.stringContaining("Tracing task events") }],
+            },
+          ],
+        });
+      }
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("keeps the main preview run active when hydrating canonical session metadata", async () => {
+    const page = await browser.newPage();
+    try {
+      await page.goto(new URL("/chat", fixtureServer.url).toString());
+      await page.getByRole("textbox", { name: "Message Molty" }).waitFor();
+      expect(
+        await requestPreviewGateway(page, [
+          { method: "chat.startup", params: { sessionKey: "agent:main:main" } },
+        ]),
+      ).toMatchObject([
+        {
+          sessionInfo: { hasActiveRun: true, status: "running", activeRunIds: ["mock-plan-run"] },
+          inFlightRun: { runId: "mock-plan-run" },
+        },
+      ]);
+      await page.getByRole("button", { name: "Stop generating" }).waitFor();
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("keeps generated search-session metadata in the canonical fixture catalog", async () => {
+    const page = await browser.newPage();
+    try {
+      await page.goto(new URL("/chat", fixtureServer.url).toString());
+      await page.getByRole("textbox", { name: "Message Molty" }).waitFor();
+      const replies = await requestPreviewGateway(
+        page,
+        ["telegram", "claude"].map((search) => ({
+          method: "sessions.list",
+          params: { search },
+        })),
+      );
+      expect(replies).toMatchObject([
+        {
+          sessions: expect.arrayContaining([
+            expect.objectContaining({ label: "Telegram investigation 001", model: "gpt-5.6-luna" }),
+          ]),
+        },
+        {
+          sessions: expect.arrayContaining([
+            expect.objectContaining({
+              label: "Model search result 001",
+              model: "claude-sonnet-4-6",
+            }),
+          ]),
+        },
+      ]);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("keeps synthetic avatar requests on the preview origin across reloads", async () => {
+    const context = await browser.newContext();
+    const previewOrigin = new URL(fixtureServer.url).origin;
+    const externalRequests: string[] = [];
+    const avatarRequests: string[] = [];
+    try {
+      // A failing regression must never reach a developer's real Gateway.
+      await context.route("**/*", (route) => {
+        const url = route.request().url();
+        if (new URL(url).origin !== previewOrigin) {
+          externalRequests.push(url);
+          return route.abort();
+        }
+        return route.continue();
+      });
+      const page = await context.newPage();
+      page.on("request", (request) => {
+        if (new URL(request.url()).pathname === "/api/users/presence-riley/avatar") {
+          avatarRequests.push(request.url());
+        }
+      });
+      await page.goto(`${previewOrigin}/chat/main?skillLibrary=collaborator&nav=collapsed`);
+      for (const reload of [false, true]) {
+        if (reload) {
+          avatarRequests.length = 0;
+          await page.reload();
+        }
+        await page.getByRole("textbox", { name: "Message Molty" }).waitFor();
+        await expect.poll(() => avatarRequests.length).toBeGreaterThan(0);
+        expect([...new Set(avatarRequests.map((url) => new URL(url).origin))]).toEqual([
+          previewOrigin,
+        ]);
+        expect(externalRequests).toEqual([]);
+      }
+    } finally {
+      await context.close();
+    }
   });
 
   for (const mode of ["dark", "light"] as const) {
@@ -185,6 +367,22 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         await openWidgetMenu(page);
         const colors = await readMenuColors(page);
         expect(colorContrast(colors.foreground, colors.background)).toBeGreaterThanOrEqual(4.5);
+
+        const widgetBackgrounds = await page
+          .locator('[data-test-id="board-widget"]')
+          .first()
+          .evaluate((widget) => {
+            const frame = widget.querySelector(".board-widget__frame");
+            if (!(frame instanceof HTMLIFrameElement)) {
+              throw new Error("board widget frame is missing");
+            }
+            return {
+              frame: getComputedStyle(frame).backgroundColor,
+              widget: getComputedStyle(widget).backgroundColor,
+            };
+          });
+        expect(widgetBackgrounds.frame).toBe(widgetBackgrounds.widget);
+        expect(widgetBackgrounds.frame).not.toBe("rgba(0, 0, 0, 0)");
 
         await expect
           .poll(() => page.frames().some((frame) => frame.url().startsWith("data:text/html")))
@@ -230,7 +428,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
       await expect
         .poll(() =>
           page
-            .locator(".chat-thread .chat-bubble")
+            .locator(".chat-pane-cache__pane--active .chat-thread .chat-bubble")
             .allTextContents()
             .then((messages) => messages.map((message) => message.trim())),
         )
@@ -240,6 +438,66 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           .getByText("Cannot read properties of undefined (reading 'toReversed')", { exact: false })
           .count(),
       ).toBe(0);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("starts with aligned build identity and an upgraded chat pane", async () => {
+    const page = await browser.newPage();
+    try {
+      await page.goto(new URL("/chat", fixtureServer.url).toString(), { waitUntil: "networkidle" });
+      await page.getByText("OpenClaw work checkout", { exact: true }).click();
+
+      await page.getByRole("button", { name: "Write a message to send." }).waitFor();
+      expect(await page.getByText("Server updated", { exact: true }).count()).toBe(0);
+      const paneState = await page
+        .locator("openclaw-chat-pane.chat-pane-cache__pane--active")
+        .evaluate(async (pane) => {
+          const chatPane = pane as HTMLElement & {
+            hasUpdated?: boolean;
+            updateComplete?: Promise<boolean>;
+          };
+          await chatPane.updateComplete;
+          const constructor = customElements.get("openclaw-chat-pane");
+          return {
+            connected: chatPane.isConnected,
+            hasUpdated: chatPane.hasUpdated,
+            registered: constructor !== undefined,
+            upgraded: constructor !== undefined && chatPane instanceof constructor,
+          };
+        });
+      expect(paneState).toEqual({
+        connected: true,
+        hasUpdated: true,
+        registered: true,
+        upgraded: true,
+      });
+      expect(await page.getByRole("button", { name: "Stop" }).count()).toBe(0);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("renders a deterministic reply after generic chat.send", async () => {
+    const page = await browser.newPage();
+    try {
+      await page.goto(new URL("/chat", fixtureServer.url).toString(), { waitUntil: "networkidle" });
+      await page.getByText("OpenClaw work checkout", { exact: true }).click();
+      await page.getByRole("button", { name: "Write a message to send." }).waitFor();
+
+      const prompt = "generic mock send probe";
+      const composer = page.locator(
+        ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",
+      );
+      await composer.fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      await page
+        .locator(".chat-thread-inner")
+        .getByText(`Mock reply: ${prompt}`, { exact: true })
+        .waitFor();
+      expect(await composer.inputValue()).toBe("");
     } finally {
       await page.close();
     }

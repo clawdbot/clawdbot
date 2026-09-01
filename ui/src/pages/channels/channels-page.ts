@@ -11,11 +11,13 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { resolveControlUiAuthHeader } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
-import { renderDocsLink } from "../../components/settings-ui.ts";
+import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveChannelPairingAuthSignature } from "../../lib/channels/index.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
+import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import {
   GatewayPageController,
   type GatewayPageChange,
@@ -27,6 +29,7 @@ import { importNostrProfile, parseValidationErrors, putNostrProfile } from "./no
 import { createNostrProfileFormState } from "./view.nostr-profile-form.ts";
 import { renderChannels } from "./view.ts";
 import type { ChannelPairingPrompt } from "./view.types.ts";
+import { runWhatsAppLogoutConfirmation } from "./whatsapp-logout.ts";
 import { ChannelWizardHost } from "./wizard-host.ts";
 
 type NostrProfileFormState = ReturnType<typeof createNostrProfileFormState> | null;
@@ -46,7 +49,7 @@ type NostrOperation = {
 function formatNostrProfileOperationError(error: unknown, prefix: string): string {
   return error instanceof DOMException && error.name === "TimeoutError"
     ? t("channels.nostr.notices.timeout")
-    : t("channels.nostr.notices.operationFailed", { prefix, error: String(error) });
+    : t("channels.nostr.notices.operationFailed", { prefix, error: formatUiError(error) });
 }
 
 class ChannelsPage extends OpenClawLightDomElement {
@@ -261,17 +264,9 @@ class ChannelsPage extends OpenClawLightDomElement {
     if (!context) {
       return;
     }
-    const saved = await context.runtimeConfig.save();
-    const saveError = context.runtimeConfig.state.lastError;
-    if (!saved) {
-      await context.runtimeConfig.refresh();
-      if (saveError && !context.runtimeConfig.state.lastError) {
-        context.runtimeConfig.state.lastError = saveError;
-      }
-      this.requestUpdate();
-      return;
+    if (await context.runtimeConfig.save()) {
+      await context.channels.refresh(true);
     }
-    await context.channels.refresh(true);
   }
 
   private async reloadChannelConfig() {
@@ -281,6 +276,23 @@ class ChannelsPage extends OpenClawLightDomElement {
     }
     await context.runtimeConfig.refresh({ discardPendingChanges: true });
     await context.channels.refresh(true);
+  }
+
+  private async confirmWhatsAppLogout() {
+    const context = this.context;
+    const channels = context.channels;
+    const scope = this.gateway.capture();
+    if (!scope || this.channelsSource !== channels) {
+      return;
+    }
+    await runWhatsAppLogoutConfirmation({
+      channels,
+      getWizardAccountId: () => this.wizardHost.whatsappAccountId,
+      isCurrent: () =>
+        this.gateway.isCurrent(scope) &&
+        this.context === context &&
+        this.channelsSource === channels,
+    });
   }
 
   private resolveNostrAccountId(): string {
@@ -411,11 +423,12 @@ class ChannelsPage extends OpenClawLightDomElement {
         this.nostrProfileFormState = {
           ...currentForm,
           saving: false,
-          error:
-            data?.error ??
+          error: formatUiExternalText(
+            data?.error,
             t("channels.nostr.notices.updateFailedStatus", {
               status: String(response.status),
             }),
+          ),
           success: null,
           fieldErrors: parseValidationErrors(data?.details),
         };
@@ -484,11 +497,12 @@ class ChannelsPage extends OpenClawLightDomElement {
         this.nostrProfileFormState = {
           ...currentForm,
           importing: false,
-          error:
-            data?.error ??
+          error: formatUiExternalText(
+            data?.error,
             t("channels.nostr.notices.importFailedStatus", {
               status: String(response.status),
             }),
+          ),
           success: null,
         };
         return;
@@ -554,7 +568,7 @@ class ChannelsPage extends OpenClawLightDomElement {
     this.setPairingFilter(channel, accountId);
     void this.updateComplete.then(() => {
       this.renderRoot.querySelector("#channels-pairing-requests")?.scrollIntoView({
-        behavior: "smooth",
+        behavior: resolveScrollBehavior(),
         block: "start",
       });
     });
@@ -636,8 +650,7 @@ class ChannelsPage extends OpenClawLightDomElement {
         <div>
           <div class="page-title">${titleForRoute("channels")}</div>
           <div class="page-subtitle">
-            ${subtitleForRoute("channels")}
-            ${renderDocsLink(CHANNELS_DOCS_URL, t("common.learnMore"))}
+            ${subtitleForRoute("channels")} ${renderLearnMoreLink(CHANNELS_DOCS_URL)}
           </div>
         </div>
       </section>
@@ -668,6 +681,7 @@ class ChannelsPage extends OpenClawLightDomElement {
           configForm: config.configForm,
           configUiHints: config.configUiHints,
           configSaving: config.configSaving,
+          configError: config.lastError,
           configFormDirty: config.configFormDirty,
           showAdvancedSettings: this.showAdvancedSettings,
           nostrProfileFormState: this.nostrProfileFormState,
@@ -684,7 +698,11 @@ class ChannelsPage extends OpenClawLightDomElement {
           onCloseDetail: () => {
             this.selectedChannel = null;
           },
-          onStartSetup: (channelId) => this.wizardHost.startSetup(channelId),
+          onStartSetup: (channelId) => {
+            if (canAdmin) {
+              this.wizardHost.startSetup(channelId);
+            }
+          },
           onWizardAnswer: (value) => this.wizardHost.answer(value),
           onWizardToggleMultiselect: (value) => this.wizardHost.toggleMultiselect(value),
           onWizardTextInput: (value) => this.wizardHost.setTextValue(value),
@@ -706,8 +724,7 @@ class ChannelsPage extends OpenClawLightDomElement {
             void context.channels.startWhatsApp(force, this.wizardHost.whatsappAccountId),
           onWhatsAppWait: () =>
             void context.channels.waitWhatsApp(this.wizardHost.whatsappAccountId),
-          onWhatsAppLogout: () =>
-            void context.channels.logoutWhatsApp(this.wizardHost.whatsappAccountId),
+          onWhatsAppLogout: () => void this.confirmWhatsAppLogout(),
           onShowAdvancedSettings: (enabled) => this.setShowAdvancedSettings(enabled),
           onConfigPatch: (path, value) => context.runtimeConfig.patchForm(path, value),
           onConfigSave: () => void this.saveChannelConfig(),

@@ -80,9 +80,11 @@ const { FakeWebSocket, isProviderAuthProfileConfiguredMock, resolveApiKeyForProv
 
     return {
       FakeWebSocket: MockWebSocket,
-      isProviderAuthProfileConfiguredMock: vi.fn(() => false),
+      isProviderAuthProfileConfiguredMock: vi.fn((_params: { agentDir?: string }) => false),
       resolveApiKeyForProviderMock: vi.fn(
-        async (): Promise<{ apiKey: string | undefined }> => ({ apiKey: undefined }),
+        async (_params: { agentDir?: string }): Promise<{ apiKey: string | undefined }> => ({
+          apiKey: undefined,
+        }),
       ),
     };
   });
@@ -236,6 +238,60 @@ describe("buildXaiRealtimeVoiceProvider", () => {
 
     await expect(bridge.connect()).rejects.toThrow("xAI credentials missing for realtime voice");
     expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
+  it("checks realtime readiness in the selected agent directory", () => {
+    isProviderAuthProfileConfiguredMock.mockImplementation(
+      ({ agentDir }) => agentDir === "/tmp/openclaw-molty-agent",
+    );
+    const provider = buildXaiRealtimeVoiceProvider();
+    const cfg = {
+      agents: {
+        list: [
+          { id: "helper", agentDir: "/tmp/openclaw-helper-agent" },
+          { id: "molty", agentDir: "/tmp/openclaw-molty-agent" },
+        ],
+      },
+    } as never;
+
+    expect(provider.isConfigured({ cfg, providerConfig: {}, agentId: "molty" })).toBe(true);
+    expect(isProviderAuthProfileConfiguredMock).toHaveBeenCalledWith({
+      provider: "xai",
+      cfg,
+      agentDir: "/tmp/openclaw-molty-agent",
+    });
+  });
+
+  it("resolves realtime auth from the selected agent directory", async () => {
+    resolveApiKeyForProviderMock.mockImplementation(async ({ agentDir }) => ({
+      apiKey: agentDir === "/tmp/openclaw-molty-agent" ? "xai-molty" : undefined,
+    }));
+    const cfg = {
+      agents: {
+        list: [
+          { id: "helper", agentDir: "/tmp/openclaw-helper-agent" },
+          { id: "molty", agentDir: "/tmp/openclaw-molty-agent" },
+        ],
+      },
+    } as never;
+    const bridge = createTestBridge({
+      cfg,
+      agentId: "molty",
+      providerConfig: {},
+    });
+
+    const { connecting, socket } = await startRealtimeBridge(bridge);
+    await connecting;
+    bridge.close();
+
+    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith({
+      provider: "xai",
+      cfg,
+      agentDir: "/tmp/openclaw-molty-agent",
+    });
+    expect((socket.args[1] as { headers?: Record<string, string> }).headers?.Authorization).toBe(
+      "Bearer xai-molty",
+    );
   });
 
   it("coalesces concurrent connects and ignores connects after readiness", async () => {
@@ -776,49 +832,103 @@ describe("buildXaiRealtimeVoiceProvider", () => {
 
   it.each([
     {
+      name: "non-array output",
+      output: { unexpected: true },
+      expectedTranscript: undefined,
+    },
+    {
+      name: "a null output item beside a valid message",
+      output: [
+        null,
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Valid terminal text" }],
+        },
+      ],
+      expectedTranscript: "Valid terminal text",
+    },
+    {
+      name: "null message content beside a valid part",
+      output: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [null, { type: "output_audio", transcript: "Valid terminal audio" }],
+        },
+      ],
+      expectedTranscript: "Valid terminal audio",
+    },
+  ])("continues after malformed terminal output: $name", async ({ output, expectedTranscript }) => {
+    const onTranscript = vi.fn();
+    const bridge = createTestBridge({ onTranscript });
+    const socket = await openRealtimeBridge(bridge);
+
+    socket.emitServer({ type: "response.created" });
+    bridge.sendUserMessage?.("Continue after malformed terminal output.");
+    socket.emitServer({ type: "response.done", response: { status: "completed", output } });
+
+    expect(parseSent(socket).slice(-2)).toEqual([
+      {
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Continue after malformed terminal output." }],
+        },
+      },
+      { type: "response.create" },
+    ]);
+    expect(onTranscript.mock.calls).toEqual(
+      expectedTranscript ? [["assistant", expectedTranscript, true]] : [],
+    );
+  });
+
+  it.each([
+    {
       name: "lets server VAD own interruption before an audio item exists",
-      hasAudio: false,
       timestamp: 1000,
       expectedActions: [],
     },
     {
-      name: "cancels and truncates active response audio on barge-in",
-      hasAudio: true,
+      name: "clamps manual barge-in to produced G.711 audio",
       manual: true,
-      timestamp: 1300,
+      audioBytes: 3_700 * 8,
+      timestamp: 4760,
       expectedActions: [
         { type: "response.cancel" },
         {
           type: "conversation.item.truncate",
           item_id: "item_1",
           content_index: 0,
-          audio_end_ms: 300,
+          audio_end_ms: 3_700,
         },
       ],
     },
     {
-      name: "truncates queued playback on server-VAD barge-in without cancelling xAI",
-      hasAudio: true,
-      timestamp: 1250,
+      name: "clamps server-VAD barge-in to produced PCM16 audio without cancelling xAI",
+      audioBytes: 3_700 * 48,
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      timestamp: 4760,
       expectedActions: [
         {
           type: "conversation.item.truncate",
           item_id: "item_1",
           content_index: 0,
-          audio_end_ms: 250,
+          audio_end_ms: 3_700,
         },
       ],
     },
     {
       name: "clears relay playback on server-VAD barge-in after marks are acknowledged",
-      hasAudio: true,
+      audioBytes: 16,
       acknowledged: true,
       timestamp: 1250,
       expectedActions: [],
     },
     {
       name: "does not truncate completed assistant audio on a later user turn",
-      hasAudio: true,
+      audioBytes: 16,
       acknowledged: true,
       completed: true,
       timestamp: 2000,
@@ -826,10 +936,10 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     },
     {
       name: "keeps completed assistant item state so relay playback cancel can truncate it",
-      hasAudio: true,
       acknowledged: true,
       completed: true,
       manual: true,
+      audioBytes: 300 * 8,
       timestamp: 1300,
       expectedActions: [
         {
@@ -842,7 +952,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     },
     {
       name: "lets server VAD interrupt a new response before it produces audio",
-      hasAudio: true,
+      audioBytes: 16,
       acknowledged: true,
       completed: true,
       startNewResponse: true,
@@ -852,11 +962,12 @@ describe("buildXaiRealtimeVoiceProvider", () => {
   ])(
     "$name",
     async ({
-      hasAudio,
       acknowledged,
       completed,
       startNewResponse,
       manual,
+      audioBytes,
+      audioFormat,
       timestamp,
       expectedActions,
     }) => {
@@ -864,19 +975,19 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       const onAudio = vi.fn();
       const onClearAudio = vi.fn();
       const bridge = createTestBridge({
-        audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+        ...(audioFormat ? { audioFormat } : {}),
         onAudio,
         onClearAudio,
       });
       const { socket } = await startRealtimeBridge(bridge);
 
       socket.emitServer({ type: "response.created", response: { id: "resp_1" } });
-      if (hasAudio) {
+      if (audioBytes !== undefined) {
         bridge.setMediaTimestamp(1000);
         socket.emitServer({
           type: "response.output_audio.delta",
           item_id: "item_1",
-          delta: Buffer.from("assistant audio").toString("base64"),
+          delta: Buffer.alloc(audioBytes).toString("base64"),
         });
       }
       if (acknowledged) {
@@ -896,7 +1007,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       }
       bridge.close();
 
-      expect(onAudio).toHaveBeenCalledTimes(hasAudio ? 1 : 0);
+      expect(onAudio).toHaveBeenCalledTimes(audioBytes === undefined ? 0 : 1);
       expect(onClearAudio).toHaveBeenCalledTimes(1);
       if (!manual) {
         expect(onClearAudio).toHaveBeenCalledWith("barge-in");
@@ -1001,6 +1112,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       call_id: "call_1",
       arguments: JSON.stringify({ question: "delegate this" }),
     });
+    socket.emitServer({ type: "response.done", response: { status: "completed" } });
 
     expect(onToolCall).toHaveBeenCalledTimes(1);
     expect(onToolCall).toHaveBeenCalledWith({
@@ -1053,6 +1165,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
         name: "lookup_weather",
         arguments: finalArguments,
       });
+      socket.emitServer({ type: "response.done", response: { status: "completed" } });
 
       expect(onToolCall).toHaveBeenCalledWith({
         itemId: "item_tool_1",
@@ -1107,6 +1220,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
         socket.emitServer(event);
       }
       socket.emitServer(invalidEvents[0]);
+      socket.emitServer({ type: "response.done", response: { status: "completed" } });
 
       expect(onToolCall).not.toHaveBeenCalled();
       expect(
@@ -1143,7 +1257,9 @@ describe("buildXaiRealtimeVoiceProvider", () => {
           },
         })),
       );
-      expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([]);
+      expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([
+        { type: "response.create" },
+      ]);
 
       socket.emitServer({ type: "response.done" });
       expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([
@@ -1184,6 +1300,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
         arguments: rawArgs,
       });
     }
+    socket.emitServer({ type: "response.done", response: { status: "completed" } });
 
     expect(onToolCall).not.toHaveBeenCalled();
     expect(
@@ -1204,6 +1321,117 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     bridge.close();
   });
 
+  it.each([
+    ["undefined", (): undefined => undefined],
+    ["function", () => () => undefined],
+    ["symbol", () => Symbol("invalid-tool-result")],
+    ["bigint", () => ({ value: 1n })],
+    [
+      "circular",
+      () => {
+        const result: { self?: unknown } = {};
+        result.self = result;
+        return result;
+      },
+    ],
+    ["omitted custom serialization", () => ({ toJSON: () => undefined })],
+  ] as const)(
+    "rejects %s realtime tool results before transport ownership changes",
+    async (_label, create) => {
+      const onError = vi.fn();
+      const bridge = createTestBridge({ onError, onToolCall: vi.fn() });
+      const socket = await openRealtimeBridge(bridge);
+      socket.emitServer({
+        type: "response.function_call_arguments.done",
+        item_id: "item_call_1",
+        name: "openclaw_agent_consult",
+        call_id: "call_1",
+        arguments: "{}",
+      });
+
+      expect(() => bridge.submitToolResult("call_1", create())).toThrow(/serializ/i);
+      expect(onError).not.toHaveBeenCalled();
+      expect(
+        parseSent(socket).filter((event) => event.type === "conversation.item.create"),
+      ).toEqual([]);
+
+      await bridge.submitToolResult("call_1", { recovered: true });
+
+      expect(parseSent(socket).slice(-2)).toEqual([
+        {
+          type: "conversation.item.create",
+          item: {
+            type: "function_call_output",
+            call_id: "call_1",
+            output: JSON.stringify({ recovered: true }),
+          },
+        },
+        { type: "response.create" },
+      ]);
+      bridge.close();
+    },
+  );
+
+  it("preserves valid realtime tool results with one canonical serialization", async () => {
+    const bridge = createTestBridge({ onToolCall: vi.fn() });
+    const socket = await openRealtimeBridge(bridge);
+    const customSerialization = vi.fn((key: string) => ({ key }));
+    const values: unknown[] = [
+      null,
+      false,
+      0,
+      "",
+      "text",
+      [1],
+      { ok: true },
+      {
+        toJSON: customSerialization,
+      },
+    ];
+
+    for (const [index, result] of values.entries()) {
+      const callId = `call_${index}`;
+      socket.emitServer({
+        type: "response.function_call_arguments.done",
+        item_id: `item_${callId}`,
+        name: "openclaw_agent_consult",
+        call_id: callId,
+        arguments: "{}",
+      });
+      await bridge.submitToolResult(callId, result, { suppressResponse: true });
+    }
+
+    const outputs = parseSent(socket)
+      .filter((event) => event.type === "conversation.item.create")
+      .map((event) => (event.item as { output: string }).output);
+    expect(outputs).toEqual([
+      "null",
+      "false",
+      "0",
+      '""',
+      '"text"',
+      "[1]",
+      '{"ok":true}',
+      '{"key":""}',
+    ]);
+    expect(customSerialization).toHaveBeenCalledExactlyOnceWith("");
+    bridge.close();
+  });
+
+  it("rejects reconnect queue overflow without reporting successful delivery", async () => {
+    const onError = vi.fn();
+    const bridge = createTestBridge({ onError });
+
+    for (let index = 0; index < 128; index += 1) {
+      await bridge.submitToolResult(`call_${index}`, { ok: true });
+    }
+
+    expect(() => bridge.submitToolResult("overflow", { ok: true })).toThrow(
+      "xAI realtime voice pending tool result queue overflow during reconnect",
+    );
+    expect(onError).toHaveBeenCalledOnce();
+  });
+
   it("waits for all parallel tool results before sending response.create", async () => {
     vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
     const bridge = createTestBridge({
@@ -1221,6 +1449,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
         arguments: JSON.stringify({ question: callId }),
       });
     }
+    socket.emitServer({ type: "response.done", response: { status: "completed" } });
 
     await bridge.submitToolResult("call_1", { text: "first" });
     expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([]);
@@ -1256,6 +1485,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     await bridge.submitToolResult("call_1", { status: "working" }, { willContinue: true });
+    await bridge.submitToolResult("call_1", undefined, { willContinue: true });
     expect(parseSent(socket).filter((event) => event.type === "conversation.item.create")).toEqual(
       [],
     );
@@ -1368,6 +1598,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
         arguments: JSON.stringify({ question: callId }),
       });
     }
+    firstSocket.emitServer({ type: "response.done", response: { status: "completed" } });
 
     firstSocket.close(1006, "connection lost");
     await vi.advanceTimersByTimeAsync(1000);
@@ -1421,13 +1652,63 @@ describe("buildXaiRealtimeVoiceProvider", () => {
         arguments: JSON.stringify({ question: "recover me" }),
       },
     });
-
     expect(onToolCall).toHaveBeenCalledWith({
       itemId: "item_replayed_call",
       callId: "call_replayed",
       name: "openclaw_agent_consult",
       args: { question: "recover me" },
     });
+    bridge.close();
+  });
+
+  it("keeps failed realtime transport sends retryable across reconnect", async () => {
+    vi.useFakeTimers();
+    resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: ["xai", "test"].join("-") });
+    const onEvent = vi.fn();
+    const bridge = createTestBridge({
+      providerConfig: { sessionResumption: true },
+      onEvent,
+      onToolCall: vi.fn(),
+    });
+    const firstSocket = await openRealtimeBridge(bridge, 0, "conv_failed_output");
+    firstSocket.emitServer({
+      type: "response.function_call_arguments.done",
+      item_id: "item_failed_output",
+      call_id: "call_failed_output",
+      name: "openclaw_agent_consult",
+      arguments: "{}",
+    });
+    const sendError = new Error("realtime transport rejected the output");
+    vi.spyOn(firstSocket, "send").mockImplementationOnce(() => {
+      throw sendError;
+    });
+
+    expect(() => bridge.submitToolResult("call_failed_output", { failed: true })).toThrow(
+      sendError,
+    );
+
+    firstSocket.close(1006, "connection lost after rejected output");
+    await vi.advanceTimersByTimeAsync(1000);
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances).toHaveLength(2));
+    const resumedSocket = requireSocket(1);
+    resumedSocket.open();
+    resumedSocket.emitServer({ type: "session.updated" });
+
+    await bridge.submitToolResult("call_failed_output", { recovered: true });
+
+    expect(
+      parseSent(resumedSocket).find((event) => event.type === "conversation.item.create"),
+    ).toEqual({
+      type: "conversation.item.create",
+      item: {
+        type: "function_call_output",
+        call_id: "call_failed_output",
+        output: JSON.stringify({ recovered: true }),
+      },
+    });
+    expect(onEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "session.reconnect.blocked" }),
+    );
     bridge.close();
   });
 
@@ -1452,6 +1733,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       name: "openclaw_agent_consult",
       arguments: JSON.stringify({ question: "recover output" }),
     });
+    firstSocket.emitServer({ type: "response.done", response: { status: "completed" } });
     await bridge.submitToolResult("call_lost_output", { text: "recovered" });
 
     firstSocket.close(1006, "output acknowledgement lost");
@@ -1485,6 +1767,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       name: "openclaw_agent_consult",
       arguments: JSON.stringify({ question: "saved output" }),
     });
+    firstSocket.emitServer({ type: "response.done", response: { status: "completed" } });
     await bridge.submitToolResult("call_saved_output", { text: "saved" });
     firstSocket.emitServer({
       type: "conversation.item.added",
@@ -1531,8 +1814,10 @@ describe("buildXaiRealtimeVoiceProvider", () => {
   it("queues tool results submitted while a resumed session is reconnecting", async () => {
     vi.useFakeTimers();
     vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
+    const onError = vi.fn();
     const bridge = createTestBridge({
       providerConfig: { apiKey: "xai-test", sessionResumption: true }, // pragma: allowlist secret
+      onError,
       onToolCall: vi.fn(),
     });
 
@@ -1547,6 +1832,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
         arguments: JSON.stringify({ question: callId }),
       });
     }
+    firstSocket.emitServer({ type: "response.done", response: { status: "completed" } });
 
     firstSocket.close(1006, "connection lost");
     await vi.advanceTimersByTimeAsync(1000);
@@ -1554,6 +1840,14 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     const secondSocket = requireSocket(1);
     expect(String(secondSocket.args[0])).toContain("conversation_id=conv_tool_queue");
     secondSocket.open();
+
+    onError.mockClear();
+    expect(() => bridge.submitToolResult("call_1", { invalid: 1n })).toThrow(/serializ/i);
+    expect(onError).toHaveBeenCalledOnce();
+    expect(() =>
+      bridge.submitToolResult("call_1", undefined, { willContinue: true }),
+    ).not.toThrow();
+    expect(onError).toHaveBeenCalledOnce();
 
     await bridge.submitToolResult("call_1", { text: "first" });
     expect(

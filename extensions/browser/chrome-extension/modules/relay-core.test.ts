@@ -7,6 +7,7 @@ import {
   nearestGroupColor,
   parsePairingString,
   reconnectDelayMs,
+  directLoopbackRelayPort,
 } from "./relay-core.js";
 
 const RELAY_SECRET = "a".repeat(64);
@@ -131,11 +132,11 @@ describe("persisted pairing storage", () => {
       },
     },
     {
-      label: "a loopback relay with an independent Gateway hint",
+      label: "an SSH-tunneled browser-node pairing with a loopback Gateway hint",
       stored: {
         relayUrl: "ws://127.0.0.1:18797/extension",
         token: RELAY_SECRET,
-        gatewayUrl: "wss://gateway.example.com/base",
+        gatewayUrl: "ws://127.0.0.1:19089",
       },
     },
     {
@@ -165,12 +166,83 @@ describe("persisted pairing storage", () => {
       set,
       remove: async () => undefined,
     }).read();
-    expect(set).toHaveBeenCalledWith({ authVersion: 2 });
+    expect(set).toHaveBeenCalledWith({ authVersion: 2, accessMode: "selected" });
     expect(config).toMatchObject({
       relayUrl: "ws://127.0.0.1:18797/extension",
       token: RELAY_SECRET,
       authVersion: 2,
+      accessMode: "selected",
     });
+  });
+
+  it("defaults a newly saved pairing to all tabs", async () => {
+    const stored: Record<string, unknown> = {};
+    const set = vi.fn(async (values: Record<string, unknown>) => {
+      Object.assign(stored, values);
+    });
+    const store = createPairingConfigStore({
+      get: async () => stored,
+      set,
+      remove: async () => undefined,
+    });
+
+    await store.save({ relayUrl: "ws://127.0.0.1:18797/extension", token: RELAY_SECRET }, "orange");
+
+    expect(stored.accessMode).toBe("all");
+    await expect(store.read()).resolves.toMatchObject({ accessMode: "all" });
+  });
+
+  it("persists an explicitly selected-tabs pairing", async () => {
+    const stored: Record<string, unknown> = {};
+    const store = createPairingConfigStore({
+      get: async () => stored,
+      set: async (values) => {
+        Object.assign(stored, values);
+      },
+      remove: async () => undefined,
+    });
+    await store.save(
+      { relayUrl: "ws://127.0.0.1:18797/extension", token: RELAY_SECRET },
+      "orange",
+      "selected",
+    );
+    await expect(store.read()).resolves.toMatchObject({ accessMode: "selected" });
+  });
+
+  it("repairs a malformed access mode without invalidating the pairing", async () => {
+    const stored: Record<string, unknown> = {
+      relayUrl: "ws://127.0.0.1:18797/extension",
+      token: RELAY_SECRET,
+      gatewayUrl: "",
+      authVersion: 2,
+      accessMode: "future-mode",
+    };
+    const remove = vi.fn(async () => undefined);
+    const set = vi.fn(async (values: Record<string, unknown>) => {
+      Object.assign(stored, values);
+    });
+    const config = await createPairingConfigStore({ get: async () => stored, set, remove }).read();
+    expect(config).toMatchObject({ accessMode: "selected", relayUrl: stored.relayUrl });
+    expect(set).toHaveBeenCalledWith({ accessMode: "selected" });
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("clears the access mode when unpairing", async () => {
+    const remove = vi.fn(async () => undefined);
+    const store = createPairingConfigStore({
+      get: async () => ({}),
+      set: async () => undefined,
+      remove,
+    });
+    await store.clear();
+    expect(remove).toHaveBeenCalledWith([
+      "relayUrl",
+      "gatewayUrl",
+      "token",
+      "authVersion",
+      "accessMode",
+      "pairingStatus",
+    ]);
   });
 
   it("rejects and clears an unsupported stored auth version", async () => {
@@ -319,5 +391,37 @@ describe("nearestGroupColor", () => {
   it("falls back to orange for invalid input", () => {
     expect(nearestGroupColor("not-a-color")).toBe("orange");
     expect(nearestGroupColor(undefined)).toBe("orange");
+  });
+});
+
+describe("directLoopbackRelayPort", () => {
+  it("accepts the canonical IPv4 listener on the direct /extension path", () => {
+    expect(directLoopbackRelayPort("ws://127.0.0.1:18799/extension")).toBe(18799);
+    expect(directLoopbackRelayPort("ws://127.0.0.1:20123/extension?profile=work")).toBe(20123);
+  });
+
+  it("rejects gateway routes, remote hosts, and malformed values", () => {
+    expect(directLoopbackRelayPort("ws://127.0.0.1:18789/browser/extension")).toBeNull();
+    expect(directLoopbackRelayPort("wss://gateway.example.com/browser/extension")).toBeNull();
+    expect(directLoopbackRelayPort("ws://10.0.0.5:18799/extension")).toBeNull();
+    expect(directLoopbackRelayPort("http://127.0.0.1:18799/extension")).toBeNull();
+    expect(directLoopbackRelayPort("not a url")).toBeNull();
+    expect(directLoopbackRelayPort(undefined)).toBeNull();
+  });
+
+  it.each([
+    "ws://localhost:18799/extension",
+    "ws://localhost.:18799/extension",
+    "ws://127.25.0.1:18799/extension",
+    "ws://[::1]:18799/extension",
+    "ws://[::ffff:7f00:1]:18799/extension",
+    "ws://user:password@127.0.0.1:18799/extension",
+    "ws://127.0.0.1:18799/extension#secret",
+    "ws://127.0.0.1:18799/extension?host=remote",
+    "ws://127.0.0.1:18799/extension?profile=one&profile=two",
+    "ws://127.0.0.1:0/extension",
+    "wss://127.0.0.1:18799/extension",
+  ])("rejects noncanonical or unsupported wake-up target %s", (url) => {
+    expect(directLoopbackRelayPort(url)).toBeNull();
   });
 });

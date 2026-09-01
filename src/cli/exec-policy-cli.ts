@@ -6,7 +6,7 @@ import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { sanitizeExecApprovalDisplayText } from "../infra/exec-approval-command-display.js";
+import { sanitizeExecApprovalDisplayText } from "../infra/exec-approval-text-sanitize.js";
 import {
   collectExecPolicyScopeSnapshots,
   SESSION_EXEC_OVERRIDES_NOTE,
@@ -103,15 +103,8 @@ type ExecPolicyShowScope = Omit<
   };
 };
 
-class ExecPolicyCliError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ExecPolicyCliError";
-  }
-}
-
 function failExecPolicy(message: string): never {
-  throw new ExecPolicyCliError(message);
+  throw new Error(message);
 }
 
 function formatExecPolicyError(err: unknown): string {

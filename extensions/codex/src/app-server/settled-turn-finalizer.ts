@@ -1,12 +1,12 @@
 import type {
-  AgentHarness,
+  AgentHarnessV2,
   AgentHarnessSettledTurnFinalizationResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
 import { runBoundedCodexAppServerTurn, type CodexBoundedTurnOptions } from "./bounded-turn.js";
 import { createAssistantMessage } from "./event-projector-assistant-message.js";
 import { isJsonObject, type CodexThreadItem } from "./protocol.js";
-import { projectSettledCodexMessages } from "./settled-turn-projection.js";
+import { CodexSettledTurnContext } from "./settled-turn-context.js";
 import {
   fingerprintCodexMirrorSourceMessage,
   readCodexMirrorSourceFingerprint,
@@ -22,7 +22,9 @@ const FINALIZER_DEVELOPER_INSTRUCTIONS =
   "support success.";
 const FINALIZER_PASSIVE_ITEM_TYPES = new Set(["agentMessage", "reasoning"]);
 
-type CodexSettledTurnFinalization = Parameters<NonNullable<AgentHarness["finalizeSettledTurn"]>>[0];
+type CodexSettledTurnFinalization = Parameters<
+  NonNullable<AgentHarnessV2["finalizeSettledTurn"]>
+>[0];
 
 export async function runCodexSettledTurnFinalization(
   operation: CodexSettledTurnFinalization,
@@ -30,13 +32,14 @@ export async function runCodexSettledTurnFinalization(
 ): Promise<AgentHarnessSettledTurnFinalizationResult> {
   const { attempt, settledAttempt } = operation;
   const finalizationContext = settledAttempt.settledTurnFinalizationContext;
-  if (finalizationContext?.source !== "openclaw-transcript") {
+  if (!(finalizationContext instanceof CodexSettledTurnContext)) {
     throw new Error("Codex settled-turn finalization context is unavailable");
   }
-  const historyItems = projectSettledCodexMessages(finalizationContext.messages);
+  const historyItems = finalizationContext.data;
   const bounded = await runBoundedCodexAppServerTurn({
     config: attempt.config,
     model: { mode: "required", id: attempt.modelId },
+    modelProvider: "openai",
     profile: attempt.authProfileId,
     timeoutMs: attempt.runTimeoutOverrideMs ?? attempt.timeoutMs,
     signal: attempt.abortSignal,
@@ -50,6 +53,7 @@ export async function runCodexSettledTurnFinalization(
     isolation: "private-stdio",
     historyItems,
     requireNoExternalCapabilities: true,
+    allowEmptyText: true,
   });
   let promptEchoSeen = false;
   let unexpectedItem: CodexThreadItem | undefined;
@@ -80,7 +84,14 @@ export async function runCodexSettledTurnFinalization(
   }
   const text = bounded.text.trim();
   if (!text || isSilentReplyText(text)) {
-    throw new Error("Codex settled-turn finalization completed without a visible answer");
+    return {
+      assistant: createAssistantMessage(attempt, "", {
+        tokenUsage: bounded.usage,
+        aborted: false,
+        promptError: null,
+      }),
+      ...(bounded.usage ? { usage: bounded.usage } : {}),
+    };
   }
 
   const mirrorIdentity = `settled-finalizer:${attempt.runId}`;
@@ -100,6 +111,9 @@ export async function runCodexSettledTurnFinalization(
     cwd: attempt.workspaceDir,
     messages: [assistant],
     idempotencyScope: `codex-settled-finalizer:${attempt.runId}`,
+    runId: attempt.runId,
+    terminalAssistantOwner: { mirrorIdentity, runId: attempt.runId },
+    prepareAssistantTranscriptMessage: attempt.prepareAssistantTranscriptMessage,
     config: attempt.config,
     skipBeforeMessageWriteHooks: true,
   });
@@ -116,13 +130,10 @@ export async function runCodexSettledTurnFinalization(
     throw new Error("Codex settled-turn final answer transcript attestation mismatch");
   }
   const persistedAssistant = persistedMessage;
-  const persistedAssistantRecord = persistedAssistant as unknown as {
-    idempotencyKey?: unknown;
-  };
+  const persistedIdempotencyKey =
+    "idempotencyKey" in persistedAssistant ? persistedAssistant.idempotencyKey : undefined;
   const assistantTranscriptIdempotencyKey =
-    typeof persistedAssistantRecord.idempotencyKey === "string"
-      ? persistedAssistantRecord.idempotencyKey.trim()
-      : "";
+    typeof persistedIdempotencyKey === "string" ? persistedIdempotencyKey.trim() : "";
   return {
     assistant: persistedAssistant,
     assistantTranscriptOwned: true,

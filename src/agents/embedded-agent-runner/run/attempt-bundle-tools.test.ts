@@ -1,4 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../../../config/plugin-auto-enable.test-helpers.js";
+import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { attachToolAllowlistIntersection } from "../../tool-policy.js";
 
 const mocks = vi.hoisted(() => ({
@@ -6,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   getOrCreateSessionMcpRuntime: vi.fn(),
   materializeBundleMcpToolsForRun: vi.fn(),
   applyFinalEffectiveToolPolicy: vi.fn(),
+  filterRuntimeCompatibleTools: vi.fn(),
 }));
 
 vi.mock("../../agent-bundle-lsp-runtime.js", () => ({
@@ -26,7 +32,7 @@ vi.mock("../../local-model-lean.js", () => ({
 }));
 
 vi.mock("../../tool-schema-projection.js", () => ({
-  filterRuntimeCompatibleTools: vi.fn((tools: unknown[]) => ({ tools, diagnostics: [] })),
+  filterRuntimeCompatibleTools: mocks.filterRuntimeCompatibleTools,
 }));
 
 vi.mock("../effective-tool-policy.js", () => ({
@@ -44,6 +50,9 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     mocks.applyFinalEffectiveToolPolicy
       .mockReset()
       .mockImplementation(({ bundledTools }: { bundledTools: unknown[] }) => bundledTools);
+    mocks.filterRuntimeCompatibleTools
+      .mockReset()
+      .mockImplementation((tools: unknown[]) => ({ tools, diagnostics: [] }));
   });
 
   function createInput(inheritedToolAllowlist: string[], toolsRaw: unknown[]) {
@@ -74,6 +83,129 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       sessionAgentId: "main",
     } as unknown as Parameters<typeof prepareEmbeddedAttemptBundleTools>[0];
   }
+
+  it.each([
+    { allow: ["chrome*"], expected: ["chrome__click"] },
+    { allow: ["ch*me*"], expected: ["chrome__click"] },
+    { allow: [" CHROME* "], expected: ["chrome__click"] },
+    { allow: ["*click"], expected: ["chrome__click", "other__click"] },
+    { allow: ["chrome__*"], expected: ["chrome__click"] },
+    { allow: ["chrome*."], expected: [] },
+    { allow: ["exec*"], expected: [], discover: false },
+    { allow: ["chrome"], expected: [], discover: false },
+    { allow: [], expected: [], discover: false },
+  ])("discovers configured MCP for $allow without widening final tools", async (testCase) => {
+    const input = createInput([], []);
+    input.attempt.config = {
+      plugins: { enabled: false },
+      mcp: { servers: { chrome: { command: "unused" }, other: { command: "unused" } } },
+    };
+    input.attempt.toolsAllow = testCase.allow;
+    input.preparedToolBase.effectiveToolsAllow = testCase.allow;
+    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
+    mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
+      tools: [{ name: "chrome__click" }, { name: "other__click" }],
+    });
+
+    const result = await prepareEmbeddedAttemptBundleTools(input);
+
+    expect(mocks.getOrCreateSessionMcpRuntime).toHaveBeenCalledTimes(
+      testCase.discover === false ? 0 : 1,
+    );
+    expect(result.uncompactedEffectiveTools.map((tool) => tool.name)).toEqual(testCase.expected);
+    expect(mocks.createBundleLspToolRuntime).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { enabled: false, override: undefined, expected: false },
+    { enabled: true, override: false, expected: false },
+    { enabled: false, override: true, expected: true },
+  ])("uses effective MCP enablement $enabled/$override", async (testCase) => {
+    const input = createInput([], []);
+    input.attempt.config = {
+      plugins: { enabled: false },
+      mcp: { servers: { chrome: { command: "unused", enabled: testCase.enabled } } },
+    };
+    input.attempt.toolsAllow = ["chrome*"];
+    if (testCase.override !== undefined) {
+      input.attempt.toolOverrides = { mcpServers: { chrome: testCase.override } };
+    }
+
+    await prepareEmbeddedAttemptBundleTools(input);
+
+    expect(mocks.getOrCreateSessionMcpRuntime).toHaveBeenCalledTimes(testCase.expected ? 1 : 0);
+  });
+
+  it.each([
+    { servers: ["chrome dev"], allow: "chrome-dev*" },
+    { servers: ["9chrome"], allow: "mcp-9chrome*" },
+    { servers: ["chrome dev", "chrome-dev"], allow: "chrome-dev-2*" },
+    { servers: ["a".repeat(31), "a".repeat(32)], allow: `${"a".repeat(28)}-2*` },
+    { servers: ["bash"], allow: "bash*" },
+  ])("uses canonical namespace allocation for $servers", async ({ servers, allow }) => {
+    const input = createInput([], []);
+    input.attempt.config = {
+      plugins: { enabled: false },
+      mcp: { servers: Object.fromEntries(servers.map((name) => [name, { command: "unused" }])) },
+    };
+    input.attempt.toolsAllow = [allow];
+
+    await prepareEmbeddedAttemptBundleTools(input);
+
+    expect(mocks.getOrCreateSessionMcpRuntime).toHaveBeenCalledOnce();
+  });
+
+  it.each(["disableTools", "raw", "restart", "reconciliation", "model"])(
+    "does not discover matching MCP when tools are disabled by %s",
+    async (mode) => {
+      const input = createInput([], []);
+      input.attempt.config = { mcp: { servers: { chrome: { command: "unused" } } } };
+      input.attempt.toolsAllow = ["chrome*"];
+      input.attempt.disableTools = mode === "disableTools";
+      input.isRawModelRun = mode === "raw";
+      input.attempt.forceRestartSafeTools = mode === "restart";
+      if (mode === "reconciliation") {
+        input.attempt.codeModeRecovery = { kind: "inspect", phase: "read-required" };
+      }
+      input.preparedToolBase.toolsEnabled = mode !== "model";
+
+      await prepareEmbeddedAttemptBundleTools(input);
+
+      expect(mocks.getOrCreateSessionMcpRuntime).not.toHaveBeenCalled();
+    },
+  );
+
+  it("allocates configured namespaces after colliding enabled plugin servers", async () => {
+    const input = createInput([], []);
+    input.attempt.config = {
+      plugins: { entries: { "native-mcp": { enabled: true } } },
+      mcp: { servers: { "chrome-dev": { command: "unused" } } },
+    };
+    input.attempt.toolsAllow = ["chrome-dev-2*"];
+    input.preparedToolBase.effectiveToolsAllow = input.attempt.toolsAllow;
+    const registry = makeRegistry([{ id: "native-mcp", channels: [] }]);
+    const record = registry.plugins[0];
+    if (!record) {
+      throw new Error("missing native plugin fixture");
+    }
+    record.format = "openclaw";
+    record.mcpServers = { "chrome dev": { command: "unused" } };
+    const snapshot = createPluginMetadataSnapshot({
+      config: input.attempt.config,
+      manifestRegistry: registry,
+    });
+    input.getCurrentAttemptPluginMetadataSnapshot = () => snapshot;
+    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
+    mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
+      tools: [{ name: "chrome-dev__click" }, { name: "chrome-dev-2__click" }],
+    });
+
+    const result = await prepareEmbeddedAttemptBundleTools(input);
+
+    expect(result.uncompactedEffectiveTools.map((tool) => tool.name)).toEqual([
+      "chrome-dev-2__click",
+    ]);
+  });
 
   it.each([
     {
@@ -210,6 +342,39 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
 
     expect(inheritedToolAllowlist).toEqual(["sessions_spawn", "server__read"]);
     expect(inheritedToolAllowlist).not.toContain("server__delete");
+  });
+
+  it("captures the post-quarantine creator cap with plugin ownership", async () => {
+    const coreTool = { name: "automations" };
+    const allowedMcpTool = { name: "mail__read" };
+    const quarantinedMcpTool = { name: "mail__broken" };
+    setPluginToolMeta(allowedMcpTool as never, { pluginId: "bundle-mcp", optional: false });
+    setPluginToolMeta(quarantinedMcpTool as never, {
+      pluginId: "bundle-mcp",
+      optional: false,
+    });
+    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
+    mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
+      tools: [allowedMcpTool, quarantinedMcpTool],
+    });
+    mocks.filterRuntimeCompatibleTools.mockImplementation((tools: Array<{ name: string }>) => ({
+      tools: tools.filter((tool) => tool.name !== "mail__broken"),
+      diagnostics: [{ toolName: "mail__broken", violations: ["unsupported"] }],
+    }));
+    const input = createInput([], [coreTool]);
+    const captureRef: { value?: { version: 1; source: "final-executable-surface" } } = {};
+    input.preparedToolBase.cronCreatorToolAllowlistCaptureRef = captureRef;
+
+    await prepareEmbeddedAttemptBundleTools(input);
+
+    expect(input.preparedToolBase.cronCreatorToolAllowlist).toEqual([
+      { name: "automations" },
+      { name: "mail__read", pluginId: "bundle-mcp" },
+    ]);
+    expect(captureRef.value).toEqual({
+      version: 1,
+      source: "final-executable-surface",
+    });
   });
 
   it("disposes prepared bundle runtimes when later policy setup fails", async () => {

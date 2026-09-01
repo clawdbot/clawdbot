@@ -5,11 +5,12 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { resolveSessionParentSessionKey } from "../../channels/plugins/session-conversation.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveResetPreservedSelection } from "../../config/sessions/reset-preserved-selection.js";
-import { loadSessionEntry, listSessionEntries } from "../../config/sessions/session-accessor.js";
+import { loadReplySessionInitializationSnapshot } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import {
@@ -65,10 +66,6 @@ function resolveFastSessionKey(params: {
 
 export function withFullRuntimeReplyConfig<T extends OpenClawConfig>(config: T): T {
   return markReplyConfigRuntimeMode(config, "full");
-}
-
-export function withPublishedRuntimeReplyConfig<T extends OpenClawConfig>(config: T): T {
-  return markReplyConfigRuntimeMode(config, "published");
 }
 
 export function resolveGetReplyConfig(params: {
@@ -191,11 +188,27 @@ export function initFastReplySessionState(params: {
     mainKey: cfg.session?.mainKey,
     agentId,
   });
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
-  const sessionStore: Record<string, SessionEntry> = Object.fromEntries(
-    listSessionEntries({ storePath }).map(({ sessionKey: entryKey, entry }) => [entryKey, entry]),
-  );
-  const existingEntry = loadSessionEntry({ storePath, sessionKey });
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
+  const relatedSessionKeys = [
+    ctx.ParentSessionKey,
+    ctx.ModelParentSessionKey,
+    ctx.CommandTargetSessionKey,
+    resolveSessionParentSessionKey(sessionKey),
+  ].filter((key): key is string => typeof key === "string");
+  const snapshot = loadReplySessionInitializationSnapshot({
+    agentId,
+    storePath,
+    sessionKey,
+    relatedSessionKeys,
+  });
+  const existingEntry = snapshot.currentEntry;
+  const sessionStore: Record<string, SessionEntry> = {};
+  for (const key of [...relatedSessionKeys, existingEntry?.parentSessionKey]) {
+    const entry = key ? snapshot.readEntry(key) : undefined;
+    if (key && entry) {
+      sessionStore[key] = entry;
+    }
+  }
   const commandSource = ctx.commandText ?? "";
   const normalizedChatType = normalizeChatType(ctx.ChatType);
   const isGroup = normalizedChatType != null && normalizedChatType !== "direct";
@@ -239,11 +252,13 @@ export function initFastReplySessionState(params: {
           spawnedWorkspaceDir: existingEntry.spawnedWorkspaceDir,
           spawnedCwd: existingEntry.spawnedCwd,
           parentSessionKey: existingEntry.parentSessionKey,
+          parentSessionId: existingEntry.parentSessionId,
           forkedFromParent: existingEntry.forkedFromParent,
           forkSource: existingEntry.forkSource,
           createdVia: existingEntry.createdVia,
           createdActor: existingEntry.createdActor,
           createdAt: existingEntry.createdAt,
+          ...(existingEntry.sandbox === "required" ? { sandbox: "required" as const } : {}),
           spawnDepth: existingEntry.spawnDepth,
           subagentRole: existingEntry.subagentRole,
           subagentControlScope: existingEntry.subagentControlScope,

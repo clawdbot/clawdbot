@@ -6,26 +6,23 @@ import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { isMockBoardEnabled, type BoardViewCallbacks } from "../../lib/board/provider.ts";
 import type { BoardFace, BoardVisibleChatDock } from "../../lib/board/settings.ts";
-import type { BoardTab } from "../../lib/board/types.ts";
-import type {
-  BoardObserverContext,
-  BoardViewSnapshot,
-  BoardWidgetFrameUrl,
-} from "../../lib/board/view-types.ts";
+import type { BoardSnapshot, BoardTab } from "../../lib/board/types.ts";
+import type { BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 
 export type BoardChatDockSize = {
   height: number;
 };
 
 export type WorkboardCardChipProps = {
+  active: boolean;
   basePath: string;
   client: GatewayBrowserClient;
   sessionKey: string;
 };
 
 type BoardSessionSurfaceProps = {
-  snapshot: BoardViewSnapshot;
-  observer?: BoardObserverContext;
+  active: boolean;
+  snapshot: BoardSnapshot;
   activeTabId: string;
   dock: BoardTab["chatDock"];
   dockSize: BoardChatDockSize;
@@ -75,6 +72,7 @@ export function renderBoardViewSwitch(props: {
   face: BoardFace;
   dock: BoardTab["chatDock"];
   canChangeDock: boolean;
+  fullscreenControl?: TemplateResult;
   onSelectMode: (mode: BoardViewMode) => void;
   onDockSideChange: (dock: BoardVisibleChatDock) => void;
 }) {
@@ -145,6 +143,7 @@ export function renderBoardViewSwitch(props: {
             </wa-dropdown>
           `
         : nothing}
+      ${mode === "chat" ? nothing : props.fullscreenControl}
     </div>
   `;
 }
@@ -155,6 +154,7 @@ function renderBoardView(props: BoardSessionSurfaceProps) {
       ${props.workboardCardChip
         ? html`
             <openclaw-workboard-card-chip
+              .active=${props.workboardCardChip.active}
               .basePath=${props.workboardCardChip.basePath}
               .client=${props.workboardCardChip.client}
               .sessionKey=${props.workboardCardChip.sessionKey}
@@ -162,11 +162,11 @@ function renderBoardView(props: BoardSessionSurfaceProps) {
           `
         : nothing}
       <openclaw-board-view
+        .active=${props.active}
         .snapshot=${props.snapshot}
         .activeTabId=${props.activeTabId}
         .widgetFrameUrl=${props.widgetFrameUrl}
         .callbacks=${props.callbacks}
-        .observer=${props.observer}
         .canMutate=${props.canMutate}
         .canGrant=${props.canGrant}
       ></openclaw-board-view>
@@ -182,9 +182,15 @@ function renderChatDock(props: BoardSessionSurfaceProps) {
 
 export function renderBoardSessionSurface(props: BoardSessionSurfaceProps) {
   return html`
-    <div class="board-session-surface board-session-surface--dock-${props.dock}">
+    <div
+      class="board-session-surface board-session-surface--dock-${props.dock}"
+      ?hidden=${!props.active}
+      ?inert=${!props.active}
+    >
       ${renderBoardView(props)}
-      ${props.dock === "bottom" ? html`${props.divider}${renderChatDock(props)}` : nothing}
+      ${props.active && props.dock === "bottom"
+        ? html`${props.divider}${renderChatDock(props)}`
+        : nothing}
     </div>
   `;
 }

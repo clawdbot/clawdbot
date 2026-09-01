@@ -10,6 +10,19 @@ import { withTempDir } from "../test-utils/temp-dir.js";
 
 type PublishOutputFileAtomically =
   typeof import("./output-file.runtime.js").publishOutputFileAtomically;
+type FsOpen = typeof import("node:fs/promises").open;
+
+const fsMocks = vi.hoisted(() => ({
+  actualOpen: undefined as FsOpen | undefined,
+  open: vi.fn<FsOpen>(),
+}));
+
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  fsMocks.actualOpen = actual.open;
+  fsMocks.open.mockImplementation(actual.open);
+  return { ...actual, open: fsMocks.open };
+});
 
 const fetchGuardMocks = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn(
@@ -120,6 +133,10 @@ describe("nodes camera helpers", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    if (!fsMocks.actualOpen) {
+      throw new Error("expected actual fs.open implementation");
+    }
+    fsMocks.open.mockImplementation(fsMocks.actualOpen);
   });
 
   it("parses camera.snap payload", () => {
@@ -137,6 +154,47 @@ describe("nodes camera helpers", () => {
     expect(() => parseCameraSnapPayload({ format: "jpg" })).toThrow(
       /invalid camera\.snap payload/i,
     );
+  });
+
+  it.each([
+    {
+      name: "malformed base64",
+      payload: { format: "jpg", base64: "not-base64!", width: 1, height: 1 },
+      expectedError: /invalid base64/i,
+    },
+    {
+      name: "insecure URL",
+      payload: { format: "jpg", url: "http://198.51.100.42/photo.jpg", width: 1, height: 1 },
+      expectedHost: "198.51.100.42",
+      expectedError: /only https/i,
+    },
+    {
+      name: "mismatched URL host",
+      payload: { format: "jpg", url: "https://198.51.100.43/photo.jpg", width: 1, height: 1 },
+      expectedHost: "198.51.100.42",
+      expectedError: /must match node host/i,
+    },
+    {
+      name: "missing URL node host",
+      payload: { format: "jpg", url: "https://198.51.100.42/photo.jpg", width: 1, height: 1 },
+      expectedError: /node remoteip/i,
+    },
+    {
+      name: "valid URL with malformed base64",
+      payload: {
+        format: "jpg",
+        url: "https://198.51.100.42/photo.jpg",
+        base64: "not-base64!",
+        width: 1,
+        height: 1,
+      },
+      expectedHost: "198.51.100.42",
+      expectedError: /invalid base64/i,
+    },
+  ])("rejects $name while parsing a camera.snap payload", (testCase) => {
+    expect(() =>
+      parseCameraSnapPayload(testCase.payload, { expectedHost: testCase.expectedHost }),
+    ).toThrow(testCase.expectedError);
   });
 
   it.each([undefined, "front", "back", "both"] as const)(
@@ -381,6 +439,7 @@ describe("nodes camera helpers", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -397,6 +456,77 @@ describe("nodes camera helpers", () => {
       expect(fetchGuardMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
         expect.objectContaining({ requireHttps: true, timeoutMs: 15 * 60_000 }),
       );
+    });
+  });
+
+  it("fully publishes url chunks after a positive short write", async () => {
+    const chunks = [Buffer.from("positive short "), Buffer.from("write")];
+    const expected = Buffer.concat(chunks);
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) {
+          controller.enqueue(chunk);
+        }
+        controller.close();
+      },
+    });
+    stubFetchResponse(new Response(stream, { status: 200 }));
+
+    await withCameraTempDir(async (dir) => {
+      const out = path.join(dir, "short-write.bin");
+      await fs.writeFile(out, "existing-camera");
+      const originalOpen = fsMocks.actualOpen;
+      if (!originalOpen) {
+        throw new Error("expected actual fs.open implementation");
+      }
+      let shortWriteObserved = false;
+      fsMocks.open.mockImplementation(async (...args) => {
+        const handle = await originalOpen(...args);
+        if (typeof args[0] !== "string" || path.dirname(args[0]) !== dir || args[1] !== "wx") {
+          return handle;
+        }
+
+        let injectShortWrite = true;
+        const injectedHandle = Object.create(handle) as typeof handle;
+        injectedHandle.close = handle.close.bind(handle);
+        injectedHandle.write = (async (
+          buffer: Uint8Array,
+          offset = 0,
+          length = buffer.byteLength - offset,
+        ) => {
+          const writeLength = injectShortWrite ? Math.max(1, Math.floor(length / 2)) : length;
+          injectShortWrite = false;
+          shortWriteObserved ||= writeLength < length;
+          return await handle.write(buffer, offset, writeLength);
+        }) as typeof handle.write;
+        injectedHandle.writeFile = (async (data: string | NodeJS.ArrayBufferView) => {
+          const buffer =
+            typeof data === "string"
+              ? Buffer.from(data)
+              : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+          let offset = 0;
+          while (offset < buffer.byteLength) {
+            const { bytesWritten } = await injectedHandle.write(
+              buffer,
+              offset,
+              buffer.byteLength - offset,
+            );
+            offset += bytesWritten;
+          }
+        }) as typeof handle.writeFile;
+        return injectedHandle;
+      });
+
+      await writeCameraPayloadToFile({
+        filePath: out,
+        payload: { url: "https://198.51.100.42/short-write.bin" },
+        expectedHost: "198.51.100.42",
+      });
+
+      expect(shortWriteObserved).toBe(true);
+      await expect(fs.readFile(out)).resolves.toEqual(expected);
+      await expect(fs.stat(out)).resolves.toMatchObject({ size: expected.byteLength });
+      expect(await fs.readdir(dir)).toEqual(["short-write.bin"]);
     });
   });
 
@@ -522,7 +652,7 @@ describe("nodes camera helpers", () => {
     expect(tracked.wasCanceled()).toBe(true);
   });
 
-  it("removes partially written file when url stream fails", async () => {
+  it("preserves an existing file when url stream fails", async () => {
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new TextEncoder().encode("partial"));
@@ -533,6 +663,10 @@ describe("nodes camera helpers", () => {
 
     await withCameraTempDir(async (dir) => {
       const out = path.join(dir, "broken.bin");
+      const sentinel = Buffer.from("existing-camera");
+      await fs.writeFile(out, sentinel);
+      await fs.chmod(out, 0o640);
+
       await expect(
         writeCameraPayloadToFile({
           filePath: out,
@@ -540,7 +674,40 @@ describe("nodes camera helpers", () => {
           expectedHost: "198.51.100.42",
         }),
       ).rejects.toThrow(/stream exploded/i);
-      await expectPathMissing(out);
+      await expect(fs.readFile(out)).resolves.toEqual(sentinel);
+      if (process.platform !== "win32") {
+        expect((await fs.stat(out)).mode & 0o777).toBe(0o640);
+      }
+      expect(await fs.readdir(dir)).toEqual(["broken.bin"]);
+    });
+  });
+
+  it("rejects a url stream that closes without data", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.close();
+      },
+    });
+    stubFetchResponse(new Response(stream, { status: 200 }));
+
+    await withCameraTempDir(async (dir) => {
+      const out = path.join(dir, "empty.bin");
+      const sentinel = Buffer.from("existing-camera");
+      await fs.writeFile(out, sentinel);
+      await fs.chmod(out, 0o640);
+
+      await expect(
+        writeCameraPayloadToFile({
+          filePath: out,
+          payload: { url: "https://198.51.100.42/empty.bin" },
+          expectedHost: "198.51.100.42",
+        }),
+      ).rejects.toThrow(/empty download/i);
+      await expect(fs.readFile(out)).resolves.toEqual(sentinel);
+      if (process.platform !== "win32") {
+        expect((await fs.stat(out)).mode & 0o777).toBe(0o640);
+      }
+      expect(await fs.readdir(dir)).toEqual(["empty.bin"]);
     });
   });
 });

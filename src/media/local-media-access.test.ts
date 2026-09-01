@@ -97,28 +97,64 @@ describe("assertLocalMediaAllowed", () => {
     }
   });
 
-  it("allows workspace-* paths when scoped localRoots include the agent workspace", async () => {
+  it("allows only the explicitly scoped workspace-* path under a broad root", async () => {
     const tmpDir = path.join(
       os.tmpdir(),
       `ocl-local-media-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     );
     const workspaceDir = path.join(tmpDir, "workspace");
     const workspaceXiaoqianDir = path.join(tmpDir, "workspace-xiaoqian");
+    const workspaceMerlinDir = path.join(tmpDir, "workspace-merlin");
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.mkdir(workspaceXiaoqianDir, { recursive: true });
+    await fs.mkdir(workspaceMerlinDir, { recursive: true });
 
     const mediaPath = path.join(workspaceXiaoqianDir, "report.html");
+    const siblingMediaPath = path.join(workspaceMerlinDir, "secret.html");
     await fs.writeFile(mediaPath, "<html>test</html>");
+    await fs.writeFile(siblingMediaPath, "<html>secret</html>");
 
     try {
-      // Simulate scoped roots that include the agent's workspace-* directory
-      await expect(
-        assertLocalMediaAllowed(mediaPath, [workspaceDir, workspaceXiaoqianDir]),
-      ).resolves.toBeUndefined();
+      const roots = [tmpDir, workspaceDir, workspaceXiaoqianDir];
+      await expect(assertLocalMediaAllowed(mediaPath, roots)).resolves.toBeUndefined();
+      await expect(assertLocalMediaAllowed(siblingMediaPath, roots)).rejects.toMatchObject({
+        code: "path-not-allowed",
+      });
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it.runIf(process.platform !== "win32")(
+    "keeps sibling isolation when the default workspace is symlinked",
+    async () => {
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "ocl-local-media-symlink-"));
+      const stateDir = path.join(tmpDir, "state");
+      const workspaceDir = path.join(stateDir, "workspace");
+      const realWorkspaceDir = path.join(tmpDir, "main-real");
+      const ownWorkspaceDir = path.join(stateDir, "workspace-xiaoqian");
+      const siblingWorkspaceDir = path.join(stateDir, "workspace-merlin");
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.mkdir(realWorkspaceDir, { recursive: true });
+      await fs.mkdir(ownWorkspaceDir, { recursive: true });
+      await fs.mkdir(siblingWorkspaceDir, { recursive: true });
+      await fs.symlink(realWorkspaceDir, workspaceDir);
+      const ownMediaPath = path.join(ownWorkspaceDir, "report.html");
+      const siblingMediaPath = path.join(siblingWorkspaceDir, "secret.html");
+      await fs.writeFile(ownMediaPath, "<html>test</html>");
+      await fs.writeFile(siblingMediaPath, "<html>secret</html>");
+
+      try {
+        const roots = [tmpDir, workspaceDir, ownWorkspaceDir];
+        await expect(assertLocalMediaAllowed(ownMediaPath, roots)).resolves.toBeUndefined();
+        await expect(assertLocalMediaAllowed(siblingMediaPath, roots)).rejects.toMatchObject({
+          code: "path-not-allowed",
+        });
+      } finally {
+        await fs.rm(tmpDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "reads through an in-root directory symlink but rejects a final symlink",

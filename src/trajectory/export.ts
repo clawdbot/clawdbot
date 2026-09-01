@@ -5,16 +5,19 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
-import { parseSessionFileEntriesWithWarnings } from "../agents/sessions/session-file-parser.js";
+import {
+  isSessionFileEntry,
+  parseSessionFileEntriesWithWarnings,
+} from "../agents/sessions/session-file-parser.js";
 import type { FileEntry, SessionEntry, SessionHeader } from "../agents/sessions/session-manager.js";
 import { resolveStateDir } from "../config/paths.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
-  listSessionEntries,
+  listSessionEntriesCore,
   loadSessionEntry,
   loadTranscriptEvents,
+  type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
-import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.types.js";
 import {
   isCanonicalSessionTranscriptEntry,
   scanSessionTranscriptTree,
@@ -107,17 +110,6 @@ function normalizeCompleteSessionTarget(
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
-}
-
-function isSessionFileEntry(value: unknown): value is FileEntry {
-  if (!isRecord(value) || typeof value.type !== "string") {
-    return false;
-  }
-  if (value.type !== "message") {
-    return true;
-  }
-  const message = value.message;
-  return isRecord(message) && typeof message.role === "string";
 }
 
 function formatSessionParseWarnings(
@@ -293,7 +285,7 @@ async function readSessionEntries(params: {
         storePath: marker.storePath,
       })
     : undefined;
-  const markerMatches = listSessionEntries({
+  const markerMatches = listSessionEntriesCore({
     agentId: marker.agentId,
     storePath: marker.storePath,
   }).filter(({ entry }) => entry.sessionId === marker.sessionId);
@@ -530,7 +522,7 @@ function isRuntimeTrajectoryEvent(value: unknown): value is TrajectoryEvent {
     value.source === "runtime" &&
     typeof value.type === "string" &&
     typeof value.ts === "string" &&
-    !Number.isNaN(Date.parse(value.ts)) &&
+    Number.isFinite(Date.parse(value.ts)) &&
     isFiniteNumber(value.seq) &&
     typeof value.sessionId === "string" &&
     (!("data" in value) || value.data === undefined || isRecord(value.data))
@@ -1072,9 +1064,43 @@ function buildArtifactsCapture(params: {
   manifest: TrajectoryBundleManifest;
   runtimeEvents: TrajectoryEvent[];
 }): JsonRecord | undefined {
-  const runtimeArtifacts = resolveLatestRuntimeEventData(params.runtimeEvents, "trace.artifacts");
-  const runtimeCompletion = resolveLatestRuntimeEventData(params.runtimeEvents, "model.completed");
-  const runtimeEnd = resolveLatestRuntimeEventData(params.runtimeEvents, "session.ended");
+  const cohortStart = params.runtimeEvents.findLastIndex(
+    (event) => event.type === "session.started",
+  );
+  const latestTimedEnd =
+    cohortStart < 0
+      ? params.runtimeEvents
+          .filter(
+            (event) => event.type === "session.ended" && isFiniteNumber(event.data?.startedAt),
+          )
+          .toSorted((left, right) => Number(left.data?.startedAt) - Number(right.data?.startedAt))
+          .at(-1)
+      : undefined;
+  const selectedEnd =
+    latestTimedEnd ??
+    (cohortStart < 0
+      ? params.runtimeEvents.findLast((event) => event.type === "session.ended")
+      : undefined);
+  const cohortRunId =
+    params.runtimeEvents[cohortStart]?.runId ??
+    selectedEnd?.runId ??
+    params.runtimeEvents.at(-1)?.runId;
+  const cohortEnd = selectedEnd
+    ? params.runtimeEvents.lastIndexOf(selectedEnd) + 1
+    : params.runtimeEvents.length;
+  const partialStart = selectedEnd
+    ? params.runtimeEvents.findLastIndex(
+        (event, index) =>
+          index < cohortEnd - 1 && event.type === "session.ended" && event.runId === cohortRunId,
+      ) + 1
+    : cohortStart;
+  // The newest start, or latest authoritative terminal in a partial tail, owns the cohort.
+  const cohort = params.runtimeEvents
+    .slice(Math.max(0, partialStart), cohortEnd)
+    .filter((event) => cohortRunId === undefined || event.runId === cohortRunId);
+  const runtimeArtifacts = resolveLatestRuntimeEventData(cohort, "trace.artifacts");
+  const runtimeCompletion = resolveLatestRuntimeEventData(cohort, "model.completed");
+  const runtimeEnd = resolveLatestRuntimeEventData(cohort, "session.ended");
   if (!runtimeArtifacts && !runtimeCompletion && !runtimeEnd) {
     return undefined;
   }
@@ -1106,6 +1132,8 @@ function buildArtifactsCapture(params: {
     promptCache: runtimeArtifacts?.promptCache ?? runtimeCompletion?.promptCache,
     compactionCount: runtimeArtifacts?.compactionCount ?? runtimeCompletion?.compactionCount,
     assistantTexts: runtimeArtifacts?.assistantTexts ?? runtimeCompletion?.assistantTexts,
+    stopReason:
+      runtimeArtifacts?.stopReason ?? runtimeCompletion?.stopReason ?? runtimeEnd?.stopReason,
     finalPromptText: runtimeArtifacts?.finalPromptText ?? runtimeCompletion?.finalPromptText,
     finalPromptTextOriginalLength:
       runtimeArtifacts?.finalPromptTextOriginalLength ??

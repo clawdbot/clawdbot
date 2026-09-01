@@ -26,7 +26,6 @@ import { createCronVitestConfig } from "./vitest/vitest.cron.config.ts";
 import { createDaemonVitestConfig } from "./vitest/vitest.daemon.config.ts";
 import { createExtensionAcpxVitestConfig } from "./vitest/vitest.extension-acpx.config.ts";
 import { createExtensionBrowserVitestConfig } from "./vitest/vitest.extension-browser.config.ts";
-import { createExtensionChannelsVitestConfig } from "./vitest/vitest.extension-channels.config.ts";
 import { createExtensionDiffsVitestConfig } from "./vitest/vitest.extension-diffs.config.ts";
 import { createExtensionDiscordVitestConfig } from "./vitest/vitest.extension-discord.config.ts";
 import { createExtensionFeishuVitestConfig } from "./vitest/vitest.extension-feishu.config.ts";
@@ -190,10 +189,18 @@ describe("resolveVitestIsolation", () => {
       find: "@openclaw/retry",
       replacement: path.join(process.cwd(), "packages", "retry", "src", "index.ts"),
     });
-  });
-
-  it("defaults shared scoped configs to the non-isolated runner", () => {
-    expect(resolveVitestIsolation({})).toBe(false);
+    expect(
+      findAlias(sharedVitestConfig.resolve.alias, "@openclaw/gateway-client/scope-upgrade"),
+    ).toEqual({
+      find: "@openclaw/gateway-client/scope-upgrade",
+      replacement: path.join(
+        process.cwd(),
+        "packages",
+        "gateway-client",
+        "src",
+        "scope-upgrade.ts",
+      ),
+    });
   });
 
   it("ignores the legacy isolation escape hatches", () => {
@@ -242,7 +249,7 @@ describe("createScopedVitestConfig", () => {
       passWithNoTests: true,
     });
 
-    expect(requireTestConfig(config).include).toEqual(["slack/**/*.test.*"]);
+    expect(requireTestConfig(config).include).toEqual(["slack/**/*.test.ts"]);
   });
 
   it("keeps broad package scoped cli directory filters aligned with repo-root include patterns", () => {
@@ -253,7 +260,7 @@ describe("createScopedVitestConfig", () => {
       passWithNoTests: true,
     });
 
-    expect(requireTestConfig(config).include).toEqual(["normalization-core/**/*.test.*"]);
+    expect(requireTestConfig(config).include).toEqual(["**/*.test.ts"]);
   });
 
   it("relativizes scoped include and exclude patterns to the configured dir", () => {
@@ -516,7 +523,6 @@ describe("scoped vitest configs", () => {
   const defaultCliConfig = createCliVitestConfig({});
   const defaultExtensionsConfig = createExtensionsVitestConfig({});
   const defaultExtensionAcpxConfig = createExtensionAcpxVitestConfig({});
-  const defaultExtensionChannelsConfig = createExtensionChannelsVitestConfig({});
   const defaultExtensionBrowserConfig = createExtensionBrowserVitestConfig({});
   const defaultExtensionDiffsConfig = createExtensionDiffsVitestConfig({});
   const defaultExtensionDiscordConfig = createExtensionDiscordVitestConfig({});
@@ -576,7 +582,6 @@ describe("scoped vitest configs", () => {
     for (const config of [
       defaultAcpConfig,
       defaultExtensionsConfig,
-      defaultExtensionChannelsConfig,
       defaultExtensionDiscordConfig,
       defaultExtensionImessageConfig,
       defaultExtensionLineConfig,
@@ -610,9 +615,13 @@ describe("scoped vitest configs", () => {
     expect(requireTestConfig(defaultCliConfig).exclude).toEqual(
       expect.arrayContaining(cliProcessTestFiles.map((file) => file.replace("src/cli/", ""))),
     );
-    expect(requireTestConfig(defaultCliProcessConfig).include).toEqual(cliProcessTestFiles);
-    expect(requireTestConfig(defaultCliProcessConfig).fileParallelism).toBe(false);
-    expect(requireTestConfig(defaultCliProcessConfig).env).toMatchObject({
+    const processTestConfig = requireTestConfig(defaultCliProcessConfig);
+    expect(processTestConfig.include).toEqual(cliProcessTestFiles);
+    for (const file of cliProcessTestFiles) {
+      expect(matchingExcludePatterns(processTestConfig.exclude ?? [], file), file).toEqual([]);
+    }
+    expect(processTestConfig.fileParallelism).toBe(false);
+    expect(processTestConfig.env).toMatchObject({
       ESBUILD_WORKER_THREADS: "0",
     });
   });
@@ -818,7 +827,6 @@ describe("scoped vitest configs", () => {
       "googlechat/**/*.test.ts",
       "nextcloud-talk/**/*.test.ts",
       "nostr/**/*.test.ts",
-      "qqbot/**/*.test.ts",
       "synology-chat/**/*.test.ts",
       "tlon/**/*.test.ts",
       "twitch/**/*.test.ts",
@@ -1129,7 +1137,17 @@ describe("scoped vitest configs", () => {
   it("normalizes ui include patterns relative to the scoped dir", () => {
     const testConfig = requireTestConfig(defaultUiConfig);
     expect(testConfig.dir).toBe(process.cwd());
-    expect(testConfig.include).toEqual(["ui/src/**/*.test.ts"]);
+    expect(testConfig.include?.every((pattern) => pattern.startsWith("ui/src/"))).toBe(true);
+    for (const [file, included] of [
+      ["ui/src/pages/chat/chat-view.test.ts", true],
+      ["ui/src/components/form-controls.browser.test.ts", true],
+      ["ui/src/components/markdown-mermaid.runtime.browser.test.ts", false],
+    ] as const) {
+      expect(
+        testConfig.include?.some((pattern) => path.matchesGlob(file, pattern)),
+        file,
+      ).toBe(included);
+    }
     expect(testConfig.exclude).toContain("ui/src/**/*.e2e.test.ts");
   });
 

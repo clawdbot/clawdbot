@@ -2,7 +2,15 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { afterEach } from "vitest";
+import { cleanupTempDirs } from "../../test/helpers/temp-dir.js";
 import type { CommandResolution, ExecutableResolution } from "./exec-command-resolution.js";
+
+const tempDirs = new Set<string>();
+
+afterEach(() => {
+  cleanupTempDirs(tempDirs);
+});
 
 // Shared exec-approval fixtures keep parser, allowlist, and wrapper tests on
 // the same mock resolution shape.
@@ -14,8 +22,12 @@ export function makePathEnv(binDir: string): NodeJS.ProcessEnv {
 }
 
 /** Create a real temp directory for exec-approval tests that need filesystem paths. */
-export function makeTempDir(): string {
-  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-approvals-")));
+export function makeExecApprovalsTempDir(): string {
+  const tempDir = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-approvals-")),
+  );
+  tempDirs.add(tempDir);
+  return tempDir;
 }
 
 /** Create an executable file in a test bin directory. */
@@ -35,6 +47,7 @@ export function makeMockExecutableResolution(params: {
   resolvedRealPath?: string;
 }): ExecutableResolution {
   return {
+    kind: "executable",
     rawExecutable: params.rawExecutable,
     resolvedPath: params.resolvedPath,
     resolvedRealPath: params.resolvedRealPath,
@@ -42,7 +55,7 @@ export function makeMockExecutableResolution(params: {
   };
 }
 
-/** Build a command resolution while preserving legacy getter accessors. */
+/** Build a command resolution for command-policy tests. */
 export function makeMockCommandResolution(params: {
   execution: ExecutableResolution;
   policy?: ExecutableResolution;
@@ -51,32 +64,15 @@ export function makeMockCommandResolution(params: {
   policyBlocked?: boolean;
   blockedWrapper?: string;
 }): CommandResolution {
-  const policy = params.policy ?? params.execution;
-  const resolution: CommandResolution = {
+  return {
+    kind: "command",
     execution: params.execution,
-    policy,
+    policy: params.policy ?? params.execution,
     effectiveArgv: params.effectiveArgv,
     wrapperChain: params.wrapperChain,
     policyBlocked: params.policyBlocked,
     blockedWrapper: params.blockedWrapper,
   };
-  return Object.defineProperties(resolution, {
-    rawExecutable: {
-      get: () => params.execution.rawExecutable,
-    },
-    resolvedPath: {
-      get: () => params.execution.resolvedPath,
-    },
-    resolvedRealPath: {
-      get: () => params.execution.resolvedRealPath,
-    },
-    executableName: {
-      get: () => params.execution.executableName,
-    },
-    policyResolution: {
-      get: () => (policy === params.execution ? undefined : policy),
-    },
-  });
 }
 
 type ShellParserParityFixtureCase = {

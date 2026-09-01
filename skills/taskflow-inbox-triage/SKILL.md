@@ -48,7 +48,7 @@ Suggested `waitJson` when blocked on Slack:
 ## Minimal runtime calls
 
 ```ts
-const taskFlow = api.runtime.tasks.flow.fromToolContext(ctx);
+const taskFlow = api.runtime.tasks.managedFlows.fromToolContext(ctx);
 
 const created = taskFlow.createManaged({
   controllerId: "my-plugin/inbox-triage",

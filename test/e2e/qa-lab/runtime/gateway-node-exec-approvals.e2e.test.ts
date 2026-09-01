@@ -2,8 +2,8 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
-import { describe, expect, it, vi } from "vitest";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -12,12 +12,20 @@ import {
   loadOrCreateDeviceIdentity,
   type DeviceIdentity,
 } from "../../../../src/infra/device-identity.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+
+const gatewayOwners: ReturnType<typeof createQaGatewayChild>[] = [];
+afterEach(async () => {
+  for (const owner of gatewayOwners.splice(0)) {
+    await stopQaGatewayFixture(owner);
+  }
+});
 
 const TEST_TIMEOUT_MS = 180_000;
 const REQUEST_TIMEOUT_MS = 20_000;
 const NODE_COMMANDS = ["system.execApprovals.get", "system.execApprovals.set"];
 
-type GatewayHandle = Awaited<ReturnType<typeof startQaGatewayChild>>;
+type GatewayHandle = QaGatewayChild;
 type GatewayEvent = { event?: string; payload?: unknown };
 type NodeInvokeFrame = {
   id: string;
@@ -45,7 +53,9 @@ describe("Gateway node exec approvals", () => {
     "relays exact policy snapshots and binds results to the current paired connection",
     { timeout: TEST_TIMEOUT_MS },
     async () => {
-      const gateway = await startQaGatewayChild({
+      const gatewayOwner = createQaGatewayChild();
+      gatewayOwners.push(gatewayOwner);
+      const gateway = await gatewayOwner.start({
         repoRoot: process.cwd(),
         useRepoCli: true,
         transportBaseUrl: "http://127.0.0.1",
@@ -85,13 +95,13 @@ describe("Gateway node exec approvals", () => {
           gateway,
           identity,
           operator,
-          onEvent: firstInbox.onEvent,
+          onEvent: (event) => firstInbox.onEvent(event),
         });
 
         replacementNode = await connectNode({
           gateway,
           identity,
-          onEvent: replacementInbox.onEvent,
+          onEvent: (event) => replacementInbox.onEvent(event),
         });
         await waitForConnectedNode(operator, identity.deviceId, gateway.logs);
 
@@ -251,7 +261,6 @@ async function connectClient(params: {
 }): Promise<GatewayClient> {
   return await new Promise<GatewayClient>((resolve, reject) => {
     let settled = false;
-    let timeout: ReturnType<typeof setTimeout>;
     const finish = (client: GatewayClient, error?: Error) => {
       if (settled) {
         return;
@@ -286,7 +295,7 @@ async function connectClient(params: {
       onConnectError: (error) => finish(client, error),
       onClose: (code, reason) => finish(client, new Error(`Gateway closed (${code}): ${reason}`)),
     });
-    timeout = setTimeout(
+    const timeout = setTimeout(
       () =>
         finish(client, new Error(`Gateway client connection timed out:\n${params.gateway.logs()}`)),
       REQUEST_TIMEOUT_MS,

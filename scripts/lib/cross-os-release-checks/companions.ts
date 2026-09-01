@@ -23,8 +23,8 @@ export function resolveCrossOsCompanionPackages(params: {
   });
   const requiredPackages = new Set(params.requiredPackages);
   return manifest.packages
-    .filter((entry) => requiredPackages.has(entry.name))
-    .map((entry) => ({
+    .filter((entry: { name: string; tarball: string }) => requiredPackages.has(entry.name))
+    .map((entry: { name: string; tarball: string }) => ({
       name: entry.name,
       tarballPath: resolve(artifactDir, entry.tarball),
     }));

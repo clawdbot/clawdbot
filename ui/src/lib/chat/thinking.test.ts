@@ -1,28 +1,12 @@
-// Control UI tests cover canonical and legacy thinking-level normalization.
 import { describe, expect, it } from "vitest";
-import { normalizeThinkLevel } from "../../../../src/auto-reply/thinking.shared.js";
-import {
-  formatThinkingOverrideLabel,
-  resolveChatThinkingSelectState,
-  resolveThinkingLevelInput,
-} from "./thinking.ts";
+import { resolveChatThinkingSelectState, resolveThinkingLevelInput } from "./thinking.ts";
 
 describe("chat thinking helpers", () => {
-  it("keeps literal Ultra distinct from the legacy ultrathink alias", () => {
-    expect(normalizeThinkLevel("ultra")).toBe("ultra");
-    expect(normalizeThinkLevel("Ultra")).toBe("ultra");
-    expect(normalizeThinkLevel("ultrathink")).toBe("high");
-    expect(formatThinkingOverrideLabel("ultra")).toBe("Ultra");
-  });
-
-  it("accepts Ultra when the gateway advertises it for the session", () => {
+  it("normalizes canonical Ultra command input", () => {
     expect(
       resolveThinkingLevelInput(
         "ultra",
         {
-          key: "agent:main:main",
-          kind: "direct",
-          updatedAt: 1,
           thinkingLevels: [{ id: "ultra", label: "Ultra" }],
         },
         undefined,
@@ -51,7 +35,12 @@ describe("chat thinking helpers", () => {
       },
     });
 
-    expect(state.currentOverride).toBe("ultra");
+    expect(state.selection).toEqual({
+      kind: "unanchored",
+      source: "override",
+      value: "ultra",
+      displayLabel: "Ultra",
+    });
     expect(state.options.map((option) => option.value)).toEqual(["max"]);
   });
 
@@ -87,41 +76,5 @@ describe("chat thinking helpers", () => {
     });
 
     expect(state.options.map((option) => option.value)).not.toContain("ultra");
-  });
-
-  it("uses identical reasoning options for a canonical default and explicit selection", () => {
-    const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].map(
-      (id) => ({ id, label: id }),
-    );
-    const defaults = {
-      modelProvider: "openai",
-      model: "gpt-5.6-sol",
-      contextTokens: null,
-      thinkingLevels,
-      thinkingOptions: thinkingLevels.map((level) => level.label),
-      thinkingDefault: "medium",
-    };
-    const inherited = resolveChatThinkingSelectState({
-      catalog: [{ provider: "openai", id: "gpt-5.6-sol", reasoning: true }],
-      defaults,
-      sessionKey: "new-session:main",
-      session: { key: "new-session:main", kind: "direct", updatedAt: null },
-      sessionsResult: null,
-    });
-    const explicit = resolveChatThinkingSelectState({
-      catalog: [{ provider: "openai", id: "gpt-5.6-sol", reasoning: true }],
-      defaults,
-      sessionKey: "new-session:main",
-      session: {
-        key: "new-session:main",
-        kind: "direct",
-        updatedAt: null,
-        modelProvider: "openai",
-        model: "gpt-5.6-sol",
-      },
-      sessionsResult: null,
-    });
-
-    expect(explicit).toEqual(inherited);
   });
 });

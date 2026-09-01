@@ -15,6 +15,11 @@ import { pages } from "./route.ts";
 type RouteModule = { header: boolean; render: () => unknown };
 
 const removedGeneralPage = pages[0] as PageDefinition<RouteId, ApplicationContext, RouteModule>;
+const updatesPage = pages.find((page) => page.id === "updates") as PageDefinition<
+  RouteId,
+  ApplicationContext,
+  RouteModule
+>;
 
 function locationFromUrl(url: string): RouteLocation {
   const parsed = new URL(url, "https://control.test");
@@ -110,5 +115,22 @@ describe("removed General route", () => {
     } finally {
       router.stop();
     }
+  });
+});
+
+describe("Updates route", () => {
+  it("loads readable config without requesting the admin-only schema", async () => {
+    const ensureLoaded = vi.fn(() => Promise.resolve());
+    const ensureSchemaLoaded = vi.fn(() => Promise.resolve());
+    const context = {
+      runtimeConfig: { ensureLoaded, ensureSchemaLoaded },
+    } as unknown as ApplicationContext;
+    const location = locationFromUrl("/settings/updates");
+
+    await updatesPage.loader?.(context, loaderOptions(location));
+    await Promise.resolve();
+
+    expect(ensureLoaded).toHaveBeenCalledOnce();
+    expect(ensureSchemaLoaded).not.toHaveBeenCalled();
   });
 });

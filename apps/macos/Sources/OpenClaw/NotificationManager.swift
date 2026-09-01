@@ -15,6 +15,10 @@ struct NotificationManager {
     }()
 
     func send(title: String, body: String, sound: String?, priority: NotificationPriority? = nil) async -> Bool {
+        guard PermissionManager.notificationCenterAvailable else {
+            self.logger.warning("notification skipped: process has no bundle identity")
+            return false
+        }
         let center = UNUserNotificationCenter.current()
         let status = await center.notificationSettings()
         if status.authorizationStatus == .notDetermined {
@@ -23,7 +27,7 @@ struct NotificationManager {
                 self.logger.warning("notification permission denied (request)")
                 return false
             }
-        } else if status.authorizationStatus != .authorized {
+        } else if !PermissionManager.isNotificationAuthorized(status: status.authorizationStatus) {
             self.logger.warning("notification permission denied status=\(status.authorizationStatus.rawValue)")
             return false
         }
@@ -62,5 +66,48 @@ struct NotificationManager {
             self.logger.error("notification send failed: \(error.localizedDescription)")
             return false
         }
+    }
+}
+
+enum TestNotificationOutcome: Encodable, Equatable {
+    case pending
+    case sent
+    case error(String)
+
+    private enum State: String, Encodable {
+        case pending
+        case sent
+        case error
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case state
+        case message
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .pending:
+            try container.encode(State.pending, forKey: .state)
+        case .sent:
+            try container.encode(State.sent, forKey: .state)
+        case let .error(message):
+            try container.encode(State.error, forKey: .state)
+            try container.encode(message, forKey: .message)
+        }
+    }
+}
+
+@MainActor
+enum TestNotificationAction {
+    static func send() async -> TestNotificationOutcome {
+        let sent = await NotificationManager().send(
+            title: "OpenClaw",
+            body: "Test notification",
+            sound: nil)
+        return sent
+            ? .sent
+            : .error("Notification could not be sent. Check System Settings → Notifications and try again.")
     }
 }

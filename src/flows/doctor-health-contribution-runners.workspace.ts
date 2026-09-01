@@ -1,4 +1,5 @@
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
+import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
@@ -53,7 +54,11 @@ export async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
-  const catalog = await loadPreparedModelCatalog({ config: ctx.cfg, readOnly: true });
+  const catalog = await loadPreparedModelCatalog({
+    config: ctx.cfg,
+    readOnly: true,
+    providerDiscoveryProviderIds: [],
+  });
   const status = getModelRefStatus({
     cfg: ctx.cfg,
     catalog,
@@ -81,7 +86,7 @@ export async function collectWorkspaceStatusPluginVersionDrift(params: {
   cfg: OpenClawConfig;
   options?: Pick<DoctorOptions, "allowExec" | "deep" | "nonInteractive">;
 }): Promise<PluginVersionDriftReport | undefined> {
-  if (params.cfg.gateway?.mode === "remote") {
+  if (params.cfg.gateway?.mode === "remote" || !(await shouldManageGatewayService())) {
     return undefined;
   }
   try {
@@ -96,7 +101,9 @@ export async function collectWorkspaceStatusPluginVersionDrift(params: {
     const hasProbedGatewayVersion =
       typeof status.gateway?.version === "string" && status.gateway.version.trim() !== "";
     if (status.pluginVersionDrift && hasProbedGatewayVersion && !status.rpc?.authWarning) {
-      return status.pluginVersionDrift;
+      const { resolvePluginVersionDriftTargets } =
+        await import("../plugins/plugin-version-drift.js");
+      return await resolvePluginVersionDriftTargets(status.pluginVersionDrift);
     }
   } catch {
     // Best-effort diagnostic: doctor should keep running if daemon status is unavailable.
@@ -186,6 +193,7 @@ export async function runMemorySearchHealthContribution(
     await maybeRepairMemoryRecallHealth({ cfg: ctx.cfg, prompter: ctx.prompter });
   }
   await noteMemorySearchHealth(ctx.cfg, {
+    env: ctx.env,
     gatewayMemoryProbe: ctx.gatewayMemoryProbe ?? { checked: false, ready: false, skipped: false },
   });
   if (ctx.options.deep === true) {
@@ -207,8 +215,6 @@ function memorySearchNoteToFinding(message: string): HealthFinding | null {
   let path = "memory.search.provider";
   if (firstLine.includes("No active memory plugin")) {
     path = "plugins.slots.memory";
-  } else if (firstLine.includes("QMD memory backend")) {
-    path = "memory.backend";
   } else if (firstLine.includes("OpenAI-compatible embeddings endpoint")) {
     path = "memory.search.remote.baseUrl";
   } else if (firstLine.includes("OpenAI-compatible embedding model")) {
@@ -229,8 +235,8 @@ export async function collectMemorySearchHealthFindings(
   const { noteMemorySearchHealth } = await import("../commands/doctor-memory-search.js");
   const notes: string[] = [];
   await noteMemorySearchHealth(ctx.cfg, {
+    env: ctx.env,
     includeWorkspaceMemoryHealth: false,
-    skipQmdBinaryProbe: true,
     skipAuthProfileResolution: true,
     gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
     noteFn: (message) => notes.push(String(message)),

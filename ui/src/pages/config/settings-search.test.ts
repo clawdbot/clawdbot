@@ -8,6 +8,23 @@ afterEach(async () => {
 });
 
 describe("findSettingsSearchBlocks", () => {
+  it("finds the task progress disclosure preference in Chat settings", () => {
+    const matches = findSettingsSearchBlocks({
+      query: "task progress",
+      schema: null,
+      value: null,
+      uiHints: {},
+    });
+
+    expect(matches).toEqual([
+      expect.objectContaining({
+        routeId: "appearance",
+        label: "Chat",
+        hash: "#settings-appearance-chat",
+      }),
+    ]);
+  });
+
   it("uses word prefixes instead of arbitrary substrings for short queries", () => {
     const matches = findSettingsSearchBlocks({
       query: "cp",
@@ -30,6 +47,59 @@ describe("findSettingsSearchBlocks", () => {
       }),
     ]);
   });
+
+  it("routes setup consent to Advanced with its disclosure open", () => {
+    expect(
+      findSettingsSearchBlocks({
+        query: "discovery access",
+        schema: {
+          type: "object",
+          properties: {
+            wizard: {
+              type: "object",
+              properties: {
+                accessMode: { type: "string", title: "Setup Discovery Access" },
+              },
+            },
+          },
+        },
+        value: {},
+        uiHints: { "wizard.accessMode": { advanced: false } },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        routeId: "advanced",
+        label: "Setup",
+        search: "?section=wizard&advanced=1",
+        hash: "#config-section-wizard",
+      }),
+    ]);
+  });
+
+  it.each(["localModelLeanAutoModel", "securityAcknowledgedAt"])(
+    "does not offer machine-owned %s in search",
+    (key) => {
+      expect(
+        findSettingsSearchBlocks({
+          query: "internal bookkeeping",
+          schema: {
+            type: "object",
+            properties: {
+              wizard: {
+                type: "object",
+                properties: {
+                  [key]: { type: "string", title: "Internal Bookkeeping" },
+                  accessMode: { type: "string" },
+                },
+              },
+            },
+          },
+          value: { wizard: { [key]: "internal bookkeeping" } },
+          uiHints: {},
+        }),
+      ).toEqual([]);
+    },
+  );
 
   it("matches schema sections to their owning settings page", () => {
     const matches = findSettingsSearchBlocks({
@@ -59,53 +129,6 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
-  it("routes a curated backend match to the anchor above the editor", () => {
-    const matches = findSettingsSearchBlocks({
-      query: "backend",
-      schema: {
-        type: "object",
-        properties: {
-          memory: {
-            type: "object",
-            properties: {
-              backend: { type: "string", title: "Backend" },
-            },
-          },
-        },
-      },
-      value: { memory: { backend: "builtin" } },
-      uiHints: { "memory.backend": { advanced: false } },
-    });
-
-    // `backend` is curated out of the schema editor, so #config-section-memory
-    // would scroll past the control the searcher matched.
-    expect(matches).toEqual([
-      expect.objectContaining({
-        routeId: "memory",
-        pathname: "/settings/memory/settings",
-        hash: "#memory-backend",
-      }),
-    ]);
-
-    expect(
-      findSettingsSearchBlocks({
-        query: "backend",
-        schema: {
-          type: "object",
-          properties: {
-            memory: {
-              type: "object",
-              properties: { backend: { type: "string", title: "Backend" } },
-            },
-          },
-        },
-        value: { memory: { backend: "builtin" } },
-        uiHints: { "memory.backend": { advanced: false } },
-        basePath: "/ui",
-      }),
-    ).toEqual([expect.objectContaining({ pathname: "/ui/settings/memory/settings" })]);
-  });
-
   it("opens every Memory schema match on the merged Settings tab", () => {
     const memorySchema = {
       type: "object",
@@ -113,7 +136,6 @@ describe("findSettingsSearchBlocks", () => {
         memory: {
           type: "object",
           properties: {
-            backend: { type: "string", title: "Backend" },
             search: {
               type: "object",
               properties: { embeddingModel: { type: "string", title: "Embedding model" } },
@@ -123,7 +145,6 @@ describe("findSettingsSearchBlocks", () => {
       },
     };
     const uiHints = {
-      "memory.backend": { advanced: false },
       "memory.search": { advanced: false },
       "memory.search.embeddingModel": { advanced: false },
     };
@@ -154,56 +175,53 @@ describe("findSettingsSearchBlocks", () => {
         hash: "#config-section-memory",
       }),
     ]);
-
-    // Curated-only: Settings still wins, with the row-specific anchor.
-    const backendOnly = findSettingsSearchBlocks({
-      query: "backend",
-      schema: memorySchema,
-      value: {},
-      uiHints,
-    });
-    expect(backendOnly).toEqual([
-      expect.objectContaining({
-        routeId: "memory",
-        pathname: "/settings/memory/settings",
-        hash: "#memory-backend",
-      }),
-    ]);
   });
 
-  it("offers memory.qmd only while qmd is the backend the page reveals", () => {
-    const memorySchema = {
+  it("finds existing update checks and channel controls on the curated Updates page", () => {
+    const updateSchema = {
       type: "object",
       properties: {
-        memory: {
+        update: {
           type: "object",
           properties: {
-            backend: { type: "string", title: "Backend" },
-            qmd: {
-              type: "object",
-              properties: { binaryPath: { type: "string", title: "QMD binary path" } },
-            },
+            channel: { type: "string", title: "Update Channel" },
+            checkOnStart: { type: "boolean", title: "Update Check on Start" },
           },
         },
       },
     };
     const uiHints = {
-      "memory.backend": { advanced: false },
-      "memory.qmd": { advanced: false },
-      "memory.qmd.binaryPath": { advanced: false },
+      "update.channel": { advanced: false },
+      "update.checkOnStart": { advanced: false },
     };
-    const find = (value: Record<string, unknown>) =>
-      findSettingsSearchBlocks({ query: "qmd binary path", schema: memorySchema, value, uiHints });
 
-    // Overview's editor omits memory.qmd under the built-in backend, so a hit
-    // there would open a page that cannot show the matched field.
-    expect(find({ memory: { backend: "builtin" } })).toEqual([]);
-    // Another plugin owns the slot: memory.backend and its sub-config are unread.
-    expect(find({ plugins: { slots: { memory: "memory-lancedb" } } })).toEqual([]);
-    expect(find({ memory: { backend: "qmd" } })).toEqual([
+    expect(
+      findSettingsSearchBlocks({
+        query: "check on start",
+        schema: updateSchema,
+        value: {},
+        uiHints,
+      }),
+    ).toEqual([expect.objectContaining({ routeId: "updates", hash: "#config-section-update" })]);
+    expect(
+      findSettingsSearchBlocks({
+        query: "check for updates",
+        schema: null,
+        value: null,
+        uiHints: {},
+      }),
+    ).toEqual([expect.objectContaining({ routeId: "updates", hash: "#config-section-update" })]);
+    expect(
+      findSettingsSearchBlocks({
+        query: "update channel",
+        schema: updateSchema,
+        value: {},
+        uiHints,
+      }),
+    ).toEqual([
       expect.objectContaining({
-        routeId: "memory",
-        pathname: "/settings/memory/settings",
+        routeId: "updates",
+        search: "?section=update",
       }),
     ]);
   });
@@ -231,6 +249,21 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
+  it("omits admin-only static and schema results for non-admin viewers", () => {
+    expect(
+      findSettingsSearchBlocks({
+        query: "security",
+        schema: {
+          type: "object",
+          properties: { security: { type: "object", title: "Security" } },
+        },
+        value: {},
+        uiHints: {},
+        canAdmin: false,
+      }),
+    ).toEqual([]);
+  });
+
   it("routes uncurated schema sections to the Advanced page", () => {
     const matches = findSettingsSearchBlocks({
       query: "secrets",
@@ -245,6 +278,7 @@ describe("findSettingsSearchBlocks", () => {
     });
 
     expect(matches).toEqual([
+      expect.objectContaining({ routeId: "secrets", label: "Secrets" }),
       expect.objectContaining({
         routeId: "advanced",
         search: "?section=secrets&advanced=1",
@@ -403,6 +437,19 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
+  it("routes team secret-store searches to the dedicated page", () => {
+    const matches = findSettingsSearchBlocks({
+      query: "team store",
+      schema: null,
+      value: null,
+      uiHints: {},
+    });
+
+    expect(matches).toEqual([
+      expect.objectContaining({ routeId: "secrets", label: "Secrets", hash: "" }),
+    ]);
+  });
+
   it("routes profile statistics searches to Usage", () => {
     const matches = findSettingsSearchBlocks({
       query: "usage statistics",
@@ -420,11 +467,11 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
-  it("finds archived workspace threads using translated filter text", async () => {
+  it("finds archived workspace sessions using translated filter text", async () => {
     await i18n.setLocale("es");
 
     const matches = findSettingsSearchBlocks({
-      query: "archivadas",
+      query: "archivada",
       schema: null,
       value: null,
       uiHints: {},

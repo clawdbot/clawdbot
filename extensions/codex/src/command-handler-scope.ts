@@ -1,4 +1,5 @@
-import { resolveAgentDir, resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-bridge.js";
 import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
@@ -84,7 +85,9 @@ export async function resolveCommandAppServerScope(
   };
 }
 
-export function conversationBindingIdentity(bindingId: string): CodexAppServerBindingIdentity {
+export function conversationBindingIdentity(
+  bindingId: string,
+): Extract<CodexAppServerBindingIdentity, { kind: "conversation" }> {
   return { kind: "conversation", bindingId };
 }
 
@@ -92,7 +95,7 @@ export function resolveCodexConversationControlScope(ctx: PluginCommandContext):
   agentId: string;
   agentDir: string;
 } {
-  const { sessionAgentId } = resolveSessionAgentIds({
+  const { sessionAgentId } = resolveSessionAgentIdsStrict({
     sessionKey: ctx.sessionKey,
     agentId: ctx.agentId,
     config: ctx.config,

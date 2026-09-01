@@ -1,6 +1,6 @@
 // Doctor visibility for channel ingress events retained after terminal failure.
 import { note } from "../../packages/terminal-core/src/note.js";
-import { countFailedChannelIngressQueueEntries } from "../channels/message/ingress-queue.js";
+import { countFailedChannelIngressQueueEntries } from "../channels/message/ingress-queue-health.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 

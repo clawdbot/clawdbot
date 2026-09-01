@@ -23,10 +23,19 @@ portable formats, byte limits, and lazy transcoding, see
 
 - `--media <path-or-url>` — attach media (image/audio/video/document); accepts local paths or URLs. Optional; caption can be empty for media-only sends.
 - `--gif-playback` — treat video media as GIF playback (WhatsApp only).
-- `--force-document` — send media as a document to avoid channel compression (Telegram, WhatsApp); applies to images, GIFs, and videos.
+- `--force-document` — preserve original image bytes on Slack, or send images, GIFs, and videos as documents on Telegram and WhatsApp, to avoid channel compression.
 - `--reply-to <id>`, `--thread-id <id>`, `--pin`, `--silent` — delivery/threading options shared with text-only sends.
 - `--dry-run` — print the resolved payload and skip sending.
 - `--json` — print the result as JSON: `{ action, channel, dryRun, handledBy, messageId?, payload }` (`payload` carries the channel-specific send result, including any media reference).
+
+## Message tool attachment metadata
+
+For `buffer` attachments, `contentType` takes precedence over `mimeType`; a data URL's
+MIME type is used only when neither is supplied. For `reply`, `sendAttachment`,
+`upload-file`, and `setGroupIcon`, top-level MIME metadata also takes precedence over
+the selected `attachments[]` entry. Hydration carries that choice as `contentType`
+and uses it to infer a missing filename. Explicit filenames are preserved. This
+metadata precedence does not change MIME detection when media bytes are loaded or staged.
 
 ## WhatsApp Web channel behavior
 

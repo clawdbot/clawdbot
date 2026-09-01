@@ -32,7 +32,7 @@ Light mode uses a warm paper palette: ivory backgrounds, warm gray borders (`#e8
 
 | Token            | Dark Value | Contrast on `--bg` | Use                                                |
 | ---------------- | ---------- | ------------------ | -------------------------------------------------- |
-| `--text`         | `#d4d4d8`  | ~12.9:1 ✅         | Body copy, labels                                  |
+| `--text`         | `#bcbcc0`  | ~10.1:1 ✅         | Body copy, labels                                  |
 | `--text-strong`  | `#f4f4f5`  | ~17.3:1 ✅         | Headings, emphasis                                 |
 | `--muted`        | `#8b8b94`  | ~5.6:1 ✅          | Placeholder, metadata                              |
 | `--muted-strong` | `#898990`  | ~5.5:1 ✅          | Secondary text, captions; prefer `--text` for body |
@@ -47,6 +47,8 @@ Light mode uses a warm paper palette: ivory backgrounds, warm gray borders (`#e8
 | `--accent-subtle` | `rgba(255,92,92,0.1)` | Badge backgrounds, tinted fills                | Not for text on dark bg (fails contrast) |
 | `--accent-glow`   | `rgba(255,92,92,0.2)` | Focus rings, glow effects                      | Not as background                        |
 | `--primary`       | `#d13c3c`             | Filled primary buttons (white text, ~4.8:1 AA) | Not interchangeable with `--accent`      |
+
+For connections bound to an authenticated Gateway profile, the profile's `ui.accent` preference overrides the gateway-wide `ui.prefs.accent` setting, which overrides `ui.seamColor`, which overrides the active theme's default accent. Connections without an authenticated profile retain the existing gateway-wide precedence. Every override updates the accent, primary, and focus token families together; `--accent-foreground` and `--primary-foreground` automatically switch between dark and white ink according to the accent's relative luminance. Clearing a profile preference restores the gateway-wide accent, configured seam color, or theme defaults without changing anyone else's appearance.
 
 ## Accent 2 (Teal)
 

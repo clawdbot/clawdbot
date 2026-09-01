@@ -12,6 +12,9 @@ const replyMediaPathsRuntimeLoader = createLazyImportLoader(
 const runtimePluginsLoader = createLazyImportLoader(
   () => import("../../agents/runtime-plugins.js"),
 );
+const preparedModelRuntimeLoader = createLazyImportLoader(
+  () => import("../../agents/prepared-model-runtime.js"),
+);
 
 export function loadRouteReplyRuntime() {
   return routeReplyRuntimeLoader.load();
@@ -35,4 +38,8 @@ export function loadReplyMediaPathsRuntime() {
 
 export function loadRuntimePlugins() {
   return runtimePluginsLoader.load();
+}
+
+export function loadPreparedModelRuntime() {
+  return preparedModelRuntimeLoader.load();
 }

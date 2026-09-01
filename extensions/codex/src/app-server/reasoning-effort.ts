@@ -1,4 +1,4 @@
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 
 const CODEX_REASONING_EFFORTS = [
   "minimal",
@@ -9,32 +9,12 @@ const CODEX_REASONING_EFFORTS = [
   "max",
   "ultra",
 ] as const;
-export type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORTS)[number];
+type CodexEnabledReasoningEffort = (typeof CODEX_REASONING_EFFORTS)[number];
+export type CodexReasoningEffort = CodexEnabledReasoningEffort | "none";
 
-const GPT_56_MAX_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
-const GPT_56_ULTRA_REASONING_EFFORTS = [...GPT_56_MAX_REASONING_EFFORTS, "ultra"] as const;
-const GPT_5_PRO_REASONING_EFFORTS = ["medium", "high", "xhigh"] as const;
-const GPT_56_ULTRA_MODEL_IDS = new Set(["gpt-5.6-sol", "gpt-5.6-terra"]);
-const GPT_56_MAX_MODEL_IDS = new Set([...GPT_56_ULTRA_MODEL_IDS, "gpt-5.6-luna"]);
-const MODERN_CODEX_MODEL_IDS = new Set([
-  ...GPT_56_MAX_MODEL_IDS,
-  "gpt-5.5",
-  "gpt-5.5-pro",
-  "gpt-5.4",
-  "gpt-5.4-pro",
-  "gpt-5.4-mini",
-  "gpt-5.3-codex-spark",
-]);
-
-function normalizeCodexReasoningEfforts(
-  efforts: readonly string[] | null | undefined,
-): CodexReasoningEffort[] {
-  if (!efforts) {
-    return [];
-  }
-  const supported = new Set(efforts.map((effort) => effort.trim().toLowerCase()));
-  return CODEX_REASONING_EFFORTS.filter((effort) => supported.has(effort));
-}
+const LEGACY_PRO_REASONING_EFFORTS = ["medium", "high", "xhigh"] as const;
+const LEGACY_PRO_MODEL_ID_RE = /^gpt-5\.[45]-pro$/u;
+const MODERN_GPT_5_MODEL_ID_RE = /^gpt-5\.(?:[3-9]|[1-9]\d)(?:$|-)/u;
 
 /** Read reasoning metadata after the Codex app-server route has been selected. */
 export function readCodexSupportedReasoningEfforts(compat: unknown): string[] | undefined {
@@ -49,10 +29,13 @@ export function readCodexSupportedReasoningEfforts(compat: unknown): string[] | 
 }
 
 function resolveSupportedReasoningEffort(params: {
-  requested: CodexReasoningEffort;
+  requested: CodexEnabledReasoningEffort;
   supportedReasoningEfforts: readonly string[];
-}): CodexReasoningEffort | undefined {
-  const supported = normalizeCodexReasoningEfforts(params.supportedReasoningEfforts);
+}): CodexEnabledReasoningEffort | undefined {
+  const declared = new Set(
+    params.supportedReasoningEfforts.map((effort) => effort.trim().toLowerCase()),
+  );
+  const supported = CODEX_REASONING_EFFORTS.filter((effort) => declared.has(effort));
   if (supported.includes(params.requested)) {
     return params.requested;
   }
@@ -67,46 +50,42 @@ function resolveSupportedReasoningEffort(params: {
   );
 }
 
-function resolveFallbackReasoningEfforts(
-  modelId: string,
-): readonly CodexReasoningEffort[] | undefined {
-  const normalized = modelId.trim().toLowerCase();
-  if (GPT_56_ULTRA_MODEL_IDS.has(normalized)) {
-    return GPT_56_ULTRA_REASONING_EFFORTS;
-  }
-  if (normalized === "gpt-5.6-luna") {
-    return GPT_56_MAX_REASONING_EFFORTS;
-  }
-  if (normalized === "gpt-5.5-pro" || normalized === "gpt-5.4-pro") {
-    return GPT_5_PRO_REASONING_EFFORTS;
-  }
-  return undefined;
-}
-
-/** Resolve a turn effort from app-server metadata, with exact-name offline fallbacks. */
+/** Resolve a turn effort from the selected model's provider-owned metadata. */
 export function resolveCodexAppServerReasoningEffort(params: {
   thinkLevel: EmbeddedRunAttemptParams["thinkLevel"] | "ultra";
   modelId: string;
   supportedReasoningEfforts?: readonly string[];
 }): CodexReasoningEffort | null {
-  if (params.thinkLevel === "off" || params.thinkLevel === "adaptive") {
+  if (params.thinkLevel === "off") {
+    return params.supportedReasoningEfforts?.includes("none") ? "none" : null;
+  }
+  if (params.thinkLevel === "adaptive") {
     return null;
   }
-  const supportedReasoningEfforts =
-    params.supportedReasoningEfforts ?? resolveFallbackReasoningEfforts(params.modelId);
-  if (supportedReasoningEfforts) {
+  if (params.supportedReasoningEfforts) {
     return (
       resolveSupportedReasoningEffort({
         requested: params.thinkLevel,
-        supportedReasoningEfforts,
+        supportedReasoningEfforts: params.supportedReasoningEfforts,
       }) ?? null
     );
   }
-  const normalizedModelId = params.modelId.trim().toLowerCase();
-  if (params.thinkLevel === "minimal") {
-    return MODERN_CODEX_MODEL_IDS.has(normalizedModelId) ? "low" : "minimal";
+  const modelId = params.modelId.trim().toLowerCase();
+  // Preserve compatibility for deprecated Pro catalog rows that predate effort
+  // metadata. New model capabilities must come from the provider catalog.
+  if (LEGACY_PRO_MODEL_ID_RE.test(modelId)) {
+    return (
+      resolveSupportedReasoningEffort({
+        requested: params.thinkLevel,
+        supportedReasoningEfforts: LEGACY_PRO_REASONING_EFFORTS,
+      }) ?? null
+    );
+  }
+  if (params.thinkLevel === "minimal" && MODERN_GPT_5_MODEL_ID_RE.test(modelId)) {
+    return "low";
   }
   if (
+    params.thinkLevel === "minimal" ||
     params.thinkLevel === "low" ||
     params.thinkLevel === "medium" ||
     params.thinkLevel === "high" ||
@@ -114,5 +93,5 @@ export function resolveCodexAppServerReasoningEffort(params: {
   ) {
     return params.thinkLevel;
   }
-  return params.thinkLevel === "max" && GPT_56_MAX_MODEL_IDS.has(normalizedModelId) ? "max" : null;
+  return null;
 }

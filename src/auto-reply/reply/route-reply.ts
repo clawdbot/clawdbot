@@ -11,6 +11,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { createChannelReplyTransform } from "../../channels/message/reply-transform.js";
 import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";
@@ -22,10 +23,14 @@ import { normalizeAccountId } from "../../routing/account-id.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
-import { getReplyPayloadMetadata, type ReplyDeliveryContext } from "../reply-payload.js";
+import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+  type ReplyDeliveryContext,
+} from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
-import { normalizeReplyPayload } from "./normalize-reply.js";
+import { normalizeReplyPayloadOutcome } from "./normalize-reply.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import {
   formatBtwTextForExternalDelivery,
@@ -36,6 +41,12 @@ import type { ResponsePrefixContext } from "./response-prefix-template.js";
 const messageRuntimeLoader = createLazyImportLoader(
   () => import("../../channels/message/runtime.js"),
 );
+
+const BLOCK_REPLY_COMPLETION_RETENTION = {
+  idPrefix: "block-reply:v1:",
+  maxAgeMs: 24 * 60 * 60_000,
+  maxEntries: 2_000,
+} as const;
 
 function loadDeliverRuntime() {
   return messageRuntimeLoader.load();
@@ -72,6 +83,8 @@ type RouteReplyParams = {
   to: string;
   /** Session key for deriving agent identity defaults (multi-agent). */
   sessionKey?: string;
+  /** Prepared owner for unscoped sessions; an agent-scoped target remains authoritative. */
+  agentId?: string;
   /** Session key for policy resolution when native-command delivery targets a different session. */
   policySessionKey?: string;
   /** Explicit conversation type for policy resolution when the policy key is generic. */
@@ -104,6 +117,8 @@ type RouteReplyParams = {
   replyKind: ReplyDispatchKind;
   /** Agent run id for hook context. */
   runId?: string;
+  /** @internal Stable producer-owned block delivery intent. */
+  deliveryIntentId?: string;
   /** Model/session context for response-prefix template interpolation. */
   responsePrefixContext?: ResponsePrefixContext;
 };
@@ -120,7 +135,9 @@ type RouteReplyResult = {
   /** Delivery disposition reason when additional caller context is useful. */
   reason?:
     | "reasoning_payload_not_external"
+    | "channel_transform"
     | "adapter_returned_no_identity"
+    | "adapter_returned_no_send"
     | "cancelled_by_message_sending_hook"
     | "cancelled_by_reply_payload_sending_hook"
     | "empty_after_message_sending_hook"
@@ -189,34 +206,35 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   const bundledPlugin = channelId && !loadedPlugin ? getBundledChannelPlugin(channelId) : undefined;
   const messaging = loadedPlugin?.messaging ?? bundledPlugin?.messaging;
   const threading = loadedPlugin?.threading ?? bundledPlugin?.threading;
-  const resolvedAgentId = params.sessionKey
-    ? resolveSessionAgentId({
-        sessionKey: params.sessionKey,
-        config: cfg,
-      })
-    : undefined;
+  const resolvedAgentId = resolveSessionAgentId({
+    sessionKey: params.sessionKey,
+    config: cfg,
+    fallbackAgentId: params.agentId,
+  });
 
   // Debug: `pnpm test src/auto-reply/reply/route-reply.test.ts`
-  const responsePrefix = resolveEffectiveMessagesConfig(
-    cfg,
-    resolvedAgentId ?? resolveSessionAgentId({ config: cfg }),
-    { channel: normalizedChannel, accountId },
-  ).responsePrefix;
-  const normalized = normalizeReplyPayload(payload, {
+  const responsePrefix = resolveEffectiveMessagesConfig(cfg, resolvedAgentId, {
+    channel: normalizedChannel,
+    accountId,
+  }).responsePrefix;
+  const transformReplyPayload = createChannelReplyTransform({ messaging, cfg, accountId });
+  const normalization = normalizeReplyPayloadOutcome(payload, {
     responsePrefix,
     responsePrefixContext: params.responsePrefixContext,
-    transformReplyPayload: messaging?.transformReplyPayload
-      ? (nextPayload) =>
-          messaging.transformReplyPayload?.({
-            payload: nextPayload,
-            cfg,
-            accountId,
-          }) ?? nextPayload
-      : undefined,
+    transformReplyPayload,
   });
-  if (!normalized) {
+  if (normalization.kind === "suppress") {
+    if (normalization.reason === "channel_transform") {
+      return {
+        ok: true,
+        delivered: false,
+        suppressed: true,
+        reason: normalization.reason,
+      };
+    }
     return { ok: true, delivered: false };
   }
+  const normalized = normalization.payload;
   const externalPayload: ReplyPayload = {
     ...normalized,
     text: formatBtwTextForExternalDelivery(normalized),
@@ -302,15 +320,16 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     replyTransport && Object.hasOwn(replyTransport, "threadId")
       ? (replyTransport.threadId ?? null)
       : (threadId ?? null);
-  const deliveryPayload = {
+  const deliveryPayload = copyReplyPayloadMetadata(normalized, {
     ...externalPayload,
     replyToId: resolvedReplyToId,
-  };
+  });
 
   try {
     // Provider docking: this is an execution boundary (we're about to send).
     // Keep the module cheap to import by loading outbound plumbing lazily.
-    const { sendDurableMessageBatch } = await loadDeliverRuntime();
+    const { durableMessageBatchMayHaveReachedRecipient, sendDurableMessageBatchCore } =
+      await loadDeliverRuntime();
     const outboundSession = buildOutboundSessionContext({
       cfg,
       agentId: resolvedAgentId,
@@ -324,7 +343,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       requesterSenderUsername: params.requesterSenderUsername,
       requesterSenderE164: params.requesterSenderE164,
     });
-    const send = await sendDurableMessageBatch({
+    const send = await sendDurableMessageBatchCore({
       cfg,
       channel: channelId,
       to,
@@ -348,6 +367,14 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       threadId: resolvedThreadId,
       session: outboundSession,
       signal: abortSignal,
+      ...(params.deliveryIntentId
+        ? {
+            deliveryIntentId: params.deliveryIntentId,
+            reusePendingDeliveryIntent: true,
+            completionRetention: BLOCK_REPLY_COMPLETION_RETENTION,
+            durability: "required" as const,
+          }
+        : {}),
       mirror:
         params.mirror !== false && params.sessionKey
           ? {
@@ -375,6 +402,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     if (
       send.status === "suppressed" &&
       (send.reason === "cancelled_by_message_sending_hook" ||
+        send.reason === "adapter_returned_no_send" ||
         send.reason === "cancelled_by_reply_payload_sending_hook" ||
         send.reason === "empty_after_message_sending_hook" ||
         send.reason === "empty_after_reply_payload_sending_hook")
@@ -386,14 +414,14 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
         reason: send.reason,
       };
     }
-    if (send.status === "suppressed" && send.reason === "adapter_returned_no_identity") {
+    if (send.status === "suppressed" && durableMessageBatchMayHaveReachedRecipient(send)) {
       // The adapter call completed but returned no identity. Treat that as
       // potentially visible so callers never retry or emit a duplicate fallback.
       return {
         ok: true,
         delivered: true,
         ambiguous: true,
-        reason: send.reason,
+        reason: "adapter_returned_no_identity",
       };
     }
     const results = send.status === "sent" ? send.results : [];

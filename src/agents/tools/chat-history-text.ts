@@ -6,6 +6,7 @@
 import { extractAssistantTextForPhase } from "../../shared/chat-message-content.js";
 import { sanitizeAssistantVisibleTextWithProfile } from "../../shared/text/assistant-visible-text.js";
 import { sanitizeUserFacingText } from "../embedded-agent-helpers/sanitize-user-facing-text.js";
+import { renderUserFacingText } from "../embedded-agent-helpers/user-facing-text.js";
 
 export function stripToolMessages(messages: unknown[]): unknown[] {
   return messages.filter((msg) => {
@@ -21,11 +22,11 @@ export function stripToolMessages(messages: unknown[]): unknown[] {
  * Sanitize text content to strip tool call markers and thinking tags.
  * This ensures user-facing text doesn't leak internal tool representations.
  */
-export function sanitizeTextContent(text: string): string {
+function sanitizeTextContent(text: string): string {
   return sanitizeAssistantVisibleTextWithProfile(text, "history");
 }
 
-export function extractAssistantText(message: unknown): string | undefined {
+export function extractStoredAssistantText(message: unknown): string | undefined {
   if (!message || typeof message !== "object") {
     return undefined;
   }
@@ -47,5 +48,9 @@ export function extractAssistantText(message: unknown): string | undefined {
   // should not have its content rewritten with error templates (#13935).
   const errorContext = stopReason === "error";
 
-  return joined ? sanitizeUserFacingText(joined, { errorContext }) : undefined;
+  return joined
+    ? errorContext
+      ? renderUserFacingText(joined, { errorContext: true })
+      : sanitizeUserFacingText(joined)
+    : undefined;
 }

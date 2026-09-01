@@ -1,29 +1,23 @@
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  isSyntheticSourceReplyTurn,
-  resolveSourceReplyDeliveryMode,
-} from "../../auto-reply/reply/source-reply-delivery-mode.js";
+import { resolveSessionStableReplyMode } from "../../auto-reply/reply/session-stable-reply-mode.js";
+import { isSyntheticSourceReplyTurn } from "../../auto-reply/reply/source-reply-delivery-mode.js";
 import {
   formatThinkingLevels,
   normalizeThinkLevel,
   normalizeVerboseLevel,
 } from "../../auto-reply/thinking.js";
 import { formatCliCommand } from "../../cli/command-format.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentExplicitRecipientSession } from "../../infra/outbound/agent-delivery.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
-import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
-import { normalizePluginsConfig } from "../../plugins/config-state.js";
-import {
-  isPluginMetadataSnapshotCompatible,
-  resolvePluginMetadataSnapshot,
-} from "../../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import {
   classifySessionKeyShape,
   isUnscopedSessionKeySentinel,
   normalizeAgentId,
   resolveAgentIdFromSessionKey,
-  scopeLegacySessionKeyToAgent,
 } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
@@ -31,24 +25,19 @@ import {
   resolveAgentHarnessSessionContextError,
 } from "../../sessions/agent-harness-session-key.js";
 import { resolveUserPath } from "../../utils.js";
-import {
-  sessionDeliveryChannel,
-  sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel, resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAgentRuntimeConfig } from "../agent-runtime-config.js";
 import {
   listAgentIds,
   resolveAgentDir,
-  resolveDefaultAgentId,
   resolveSessionAgentId,
   resolveAgentWorkspaceDir,
 } from "../agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
-import { selectAgentHarness } from "../harness/selection.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { buildConfiguredModelCatalog, resolveConfiguredModelRef } from "../model-selection.js";
+import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
 import { normalizeSpawnedRunMetadata } from "../spawned-context.js";
 import { resolveEffectiveAgentRuntime } from "../thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../timeout.js";
@@ -59,8 +48,8 @@ import {
   prependInternalEventContext,
   resolveInternalEventTranscriptBody,
 } from "./attempt-execution.shared.js";
+import { resolveExplicitAgentCommandSessionKey } from "./explicit-session-key.js";
 import { loadAcpManagerRuntime } from "./runtime-loaders.js";
-import { createAgentCommandSessionWorkingCopy } from "./session-helpers.js";
 import { resolveSession } from "./session.js";
 import type { AgentCommandOpts } from "./types.js";
 
@@ -94,29 +83,16 @@ export function normalizeExplicitOverrideInput(raw: string, kind: "provider" | "
   return trimmed;
 }
 
-export function resolveExplicitAgentCommandSessionKey(params: {
-  rawExplicitSessionKey?: string;
-  agentIdOverride?: string;
-  shouldScopeDefaultAgentKey?: boolean;
-  cfg: OpenClawConfig;
-}): string | undefined {
-  if (
-    isUnscopedSessionKeySentinel(params.rawExplicitSessionKey) &&
-    !params.agentIdOverride &&
-    !params.shouldScopeDefaultAgentKey
-  ) {
-    return params.rawExplicitSessionKey;
-  }
-  return scopeLegacySessionKeyToAgent({
-    agentId:
-      params.agentIdOverride ??
-      (params.shouldScopeDefaultAgentKey ? resolveDefaultAgentId(params.cfg) : undefined),
-    sessionKey: params.rawExplicitSessionKey,
-    mainKey: params.cfg.session?.mainKey,
-  });
-}
+export type PreparedAgentCommandRuntimeContext = Readonly<{
+  config: OpenClawConfig;
+  pluginGeneration: PreparedModelRuntimePluginGeneration;
+}>;
 
-export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: RuntimeEnv) {
+export async function prepareAgentCommandExecution(
+  opts: AgentCommandOpts,
+  runtime: RuntimeEnv,
+  runtimeContext?: PreparedAgentCommandRuntimeContext,
+) {
   const isRawModelRun = opts.modelRun === true || opts.promptMode === "none";
   const message = opts.message ?? "";
   if (!message.trim()) {
@@ -145,7 +121,7 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
     );
   }
 
-  const { cfg, pluginMetadataSnapshot } = await resolveAgentRuntimeConfig(runtime, {
+  const cfg = await resolveAgentRuntimeConfig(runtime, {
     runtimeTargetsChannelSecrets: opts.deliver === true,
     runtimeChannelSecretScope:
       opts.deliver !== true && shouldResolveExplicitRecipientSession && recipientChannel
@@ -257,11 +233,11 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
     sessionId: commandOpts.sessionId,
     sessionKey: explicitSessionKey ?? explicitRecipientSession?.sessionKey,
     agentId: agentIdOverride,
-    clone: false,
   });
   const {
     sessionId,
     sessionKey,
+    sessionEntry: sessionEntryRaw,
     storePath,
     isNewSession,
     previousSessionId,
@@ -269,24 +245,17 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
     persistedVerbose,
   } = sessionResolution;
   const harnessSessionError = sessionKey
-    ? resolveAgentHarnessSessionContextError(sessionKey, sessionResolution.sessionEntry)
+    ? resolveAgentHarnessSessionContextError(sessionKey, sessionEntryRaw)
     : undefined;
   if (harnessSessionError) {
     throw new Error(harnessSessionError);
   }
   const isOneShotModelRun = opts.modelRun === true || opts.promptMode === "none";
-  if (
-    isOneShotModelRun &&
-    sessionKey &&
-    sessionResolution.sessionEntry?.modelSelectionLocked === true
-  ) {
+  if (isOneShotModelRun && sessionKey && sessionEntryRaw?.modelSelectionLocked === true) {
     throw new Error(AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE);
   }
-  const { sessionEntry: sessionEntryRaw, sessionStore } = createAgentCommandSessionWorkingCopy({
-    sessionKey,
-    sessionEntry: sessionResolution.sessionEntry,
-    sessionStore: sessionResolution.sessionStore,
-  });
+  const sessionStore: Record<string, InternalSessionEntry> =
+    sessionKey && sessionEntryRaw ? { [sessionKey]: sessionEntryRaw } : {};
   const sessionAgentId =
     agentIdOverride ??
     resolveSessionAgentId({ sessionKey: sessionKey ?? explicitSessionKey, config: cfg });
@@ -301,24 +270,18 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
   const cwd =
     normalizeOptionalString(opts.cwd) ?? normalizeOptionalString(sessionEntryRaw?.spawnedCwd);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
-  const pluginsEnabled = normalizePluginsConfig(cfg.plugins).enabled;
+  const pluginsEnabled = cfg.plugins?.enabled !== false;
+  const preparedMetadataSnapshot = runtimeContext?.pluginGeneration.pluginMetadataSnapshot;
   const manifestMetadataSnapshot = pluginsEnabled
-    ? pluginMetadataSnapshot &&
-      pluginMetadataSnapshot.pluginIds === undefined &&
-      isPluginMetadataSnapshotCompatible({
-        snapshot: pluginMetadataSnapshot,
-        config: cfg,
-        env: process.env,
-        workspaceDir,
-      })
-      ? pluginMetadataSnapshot
-      : resolvePluginMetadataSnapshot({ config: cfg, env: process.env, workspaceDir })
+    ? (preparedMetadataSnapshot ??
+      resolvePluginMetadataSnapshot({ config: cfg, env: process.env, workspaceDir }))
     : undefined;
   const modelManifestContext = {
-    manifestPlugins: manifestMetadataSnapshot?.plugins ?? [],
+    manifestPlugins: manifestMetadataSnapshot ?? [],
   } satisfies ModelManifestNormalizationContext;
   const configuredModel = resolveConfiguredModelRef({
     cfg,
+    agentId: sessionAgentId,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
     allowPluginNormalization: pluginsEnabled,
@@ -345,42 +308,15 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
       isHeartbeat: commandOpts.bootstrapContextRunKind === "heartbeat",
     })
   ) {
-    // Lifecycle turns keep their effective delivery mode, but CLI reuse belongs
-    // to the existing session's normal source-reply policy.
-    const stableReplyContext = {
-      CommandAuthorized: false,
-      ChatType: sessionEntryRaw.chatType,
-      Provider: sessionDeliveryOrigin(sessionEntryRaw)?.provider,
-      Surface: sessionDeliveryChannel(sessionEntryRaw),
-      InputProvenance: commandOpts.inputProvenance,
-    };
-    const stableProvider = sessionEntryRaw.modelProvider ?? configuredModel.provider;
-    const stableModel = sessionEntryRaw.model ?? configuredModel.model;
-    const stableRuntime = resolveEffectiveAgentRuntime({
-      cfg,
-      provider: stableProvider,
-      modelId: stableModel,
-      agentId: sessionAgentId,
-      sessionKey,
-      sessionEntry: sessionEntryRaw,
-    });
-    const harness = selectAgentHarness({
-      provider: stableProvider,
-      modelId: stableModel,
-      config: cfg,
-      agentId: sessionAgentId,
-      sessionKey,
-      agentHarnessRuntimeOverride: stableRuntime,
-    });
-    const defaultVisibleReplies =
-      harness.deliveryDefaults?.visibleReplies ?? harness.deliveryDefaults?.sourceVisibleReplies;
     commandOpts = {
       ...commandOpts,
       cliSessionBindingFacts: {
-        sourceReplyDeliveryMode: resolveSourceReplyDeliveryMode({
+        sourceReplyDeliveryMode: resolveSessionStableReplyMode({
           cfg,
-          ctx: stableReplyContext,
-          defaultVisibleReplies,
+          ctx: { CommandAuthorized: false },
+          sessionEntry: sessionEntryRaw,
+          sessionAgentId,
+          sessionKey,
         }),
       },
     };
@@ -407,19 +343,68 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
   });
   const runLease = worktreeId ? await acquireWorktreeRunLease(worktreeId) : undefined;
   try {
+    const { resolveAcpAgentWorkspaceProvisioningForTurn } =
+      await import("../acp-workspace-provisioning.js");
+    const workspaceProvisioning = await resolveAcpAgentWorkspaceProvisioningForTurn({
+      cfg,
+      agentId: sessionAgentId,
+      workspaceDir,
+      cwd: resolvedCwd,
+      sessionKey: sessionKey ?? undefined,
+      sessionEntry: sessionEntryRaw ?? undefined,
+    });
     await ensureAgentWorkspace({
       dir: workspaceDirRaw,
       ensureBootstrapFiles: !agentCfg?.skipBootstrap,
       skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
+      provisioning: workspaceProvisioning,
     });
     const runId = opts.runId?.trim() || sessionId;
     const { getAcpSessionManager } = await loadAcpManagerRuntime();
     const acpManager = getAcpSessionManager();
-    const acpResolution = sessionKey ? acpManager.resolveSession({ cfg, sessionKey }) : null;
+    const acpResolution = sessionKey
+      ? acpManager.resolveSession({ cfg, sessionKey, agentId: sessionAgentId })
+      : null;
+    let promptMessage = message;
+    if (!isRawModelRun && (message.includes("$") || message.trimStart().startsWith("/"))) {
+      const {
+        expandExplicitSkillReferences,
+        hasSkillReferenceCandidate,
+        listSkillCommandsForWorkspace,
+        resolveEffectiveAgentSkillFilter,
+      } = await import("../../skills/discovery/chat-commands.runtime.js");
+      const hasExplicitSkillCandidate =
+        message.trimStart().startsWith("/") || hasSkillReferenceCandidate(message);
+      if (hasExplicitSkillCandidate) {
+        const skillFilter = resolveEffectiveAgentSkillFilter(cfg, sessionAgentId);
+        const commandParams = {
+          workspaceDir,
+          cfg,
+          agentId: sessionAgentId,
+          sessionEntry: sessionEntryRaw,
+          sessionKey,
+          ...(preparedMetadataSnapshot ? { pluginMetadataSnapshot: preparedMetadataSnapshot } : {}),
+          ...(skillFilter ? { skillFilter } : {}),
+        };
+        const skillCommands = listSkillCommandsForWorkspace(commandParams);
+        const allSkillCommands = skillFilter
+          ? listSkillCommandsForWorkspace({ ...commandParams, includeAllowlistHidden: true })
+          : skillCommands;
+        const expansion = expandExplicitSkillReferences({
+          text: message,
+          skillCommands,
+          allSkillCommands,
+        });
+        if (expansion.error) {
+          throw new Error(expansion.error);
+        }
+        promptMessage = expansion.body;
+      }
+    }
     const body =
       !isRawModelRun && acpResolution?.kind === "ready"
-        ? resolveAcpPromptBody(message, opts.internalEvents)
-        : prependInternalEventContext(message, opts.internalEvents);
+        ? resolveAcpPromptBody(promptMessage, opts.internalEvents)
+        : prependInternalEventContext(promptMessage, opts.internalEvents);
     const transcriptBody =
       opts.transcriptMessage ?? resolveInternalEventTranscriptBody(message, opts.internalEvents);
 
@@ -452,6 +437,7 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
       agentDir,
       pluginsEnabled,
       manifestMetadataSnapshot,
+      ...(runtimeContext ? { commandRuntimeContext: runtimeContext } : {}),
       modelManifestContext,
       runId,
       isSubagentLane,

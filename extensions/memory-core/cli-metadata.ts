@@ -14,7 +14,6 @@ export default definePluginEntry({
           acquireLocalService: api.runtime.llm?.acquireLocalService,
           openKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
             api.runtime.state.openKeyedStore<T>(options),
-          withLease: api.runtime.state.withLease.bind(api.runtime.state),
         });
       },
       {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   hashControlUiTranslationText,
   materializeControlUiLocaleCatalog,
+  mergeControlUiTranslationMaps,
 } from "../../scripts/lib/control-ui-i18n-catalog.ts";
 import {
   createControlUiLocaleSyncPlan,
@@ -55,6 +56,18 @@ function localeMeta(overrides: Partial<LocaleMeta> = {}): LocaleMeta {
 }
 
 describe("createControlUiLocaleSyncPlan", () => {
+  it("merges lazy English source catalogs without losing sibling keys", () => {
+    expect(
+      mergeControlUiTranslationMaps(
+        { activity: { title: "Activity" }, common: { ok: "OK" } },
+        { activity: { runInspector: { title: "Run inspector" } } },
+      ),
+    ).toEqual({
+      activity: { title: "Activity", runInspector: { title: "Run inspector" } },
+      common: { ok: "OK" },
+    });
+  });
+
   it("preserves provenance when a configured provider performs no translation", () => {
     const previousMeta = localeMeta();
 
@@ -260,6 +273,33 @@ describe("createControlUiLocaleSyncPlan", () => {
         }),
       )}\n`,
     );
+  });
+
+  it("refreshes recorded fallback copy when forced without a provider", () => {
+    const plan = createControlUiLocaleSyncPlan({
+      allowTranslate: false,
+      cacheKeyFor,
+      entry,
+      existingFlat: new Map([["title", "Old English"]]),
+      force: true,
+      hashText,
+      previousMeta: localeMeta({ fallbackKeys: ["title"] }),
+      sourceFlat: new Map([["title", "New English"]]),
+      sourceHash: "next-source",
+      translationMemory: new Map(),
+    });
+
+    expect(plan.newFallbackCount).toBe(0);
+    const artifacts = plan.render({
+      defaultGlossary: [],
+      generatedAt: "2026-03-03T00:00:00.000Z",
+      glossary: [],
+      model: "legacy-model",
+      provider: "legacy-provider",
+      workflow: 1,
+    });
+    expect(artifacts.nextFlat.get("title")).toBe("New English");
+    expect(JSON.parse(artifacts.meta).fallbackKeys).toEqual(["title"]);
   });
 
   it("preserves generatedAt when semantic metadata is unchanged", () => {

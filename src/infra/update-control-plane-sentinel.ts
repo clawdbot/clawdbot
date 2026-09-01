@@ -1,6 +1,7 @@
 // Persists update-control-plane sentinel files used by updater coordination.
 import fs from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import {
   markUpdateRestartSentinelFailure,
   writeRestartSentinel,
@@ -17,6 +18,17 @@ import type { UpdateRunResult } from "./update-runner.js";
 export const CONTROL_PLANE_UPDATE_SENTINEL_META_ENV = "OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META";
 export const CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
 export const CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON = "restart-health-pending";
+
+// Only a completed, verified recovery can ask the parent to restart. Signals and
+// unexpected exits never authorize activation; notification consumption is irrelevant.
+export const MANAGED_SERVICE_UPDATE_SAFE_EXIT_CODE = 80;
+
+export function resolveManagedServiceUpdateFailureExitCode(result: UpdateRunResult): number {
+  return process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1" &&
+    result.recovery?.serviceRestartSafe === true
+    ? MANAGED_SERVICE_UPDATE_SAFE_EXIT_CODE
+    : 1;
+}
 
 const CONTROL_PLANE_UPDATE_PENDING_REASONS = new Set<string>([
   CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON,
@@ -57,23 +69,22 @@ export function isPendingControlPlaneUpdateRestartSentinel(
   );
 }
 
-function normalizeText(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
 function normalizeMeta(value: unknown): UpdateRestartSentinelMeta | null {
   if (!isRecord(value)) {
     return null;
   }
-  const sessionKey = normalizeText(value.sessionKey);
-  const threadId = normalizeText(value.threadId);
-  const handoffId = normalizeText(value.handoffId);
+  const sessionKey = readNonBlankString(value.sessionKey);
+  const threadId = readNonBlankString(value.threadId);
+  const handoffId = readNonBlankString(value.handoffId);
+  const root = readNonBlankString(value.root);
   const channel = isRecord(value.deliveryContext)
-    ? normalizeText(value.deliveryContext.channel)
+    ? readNonBlankString(value.deliveryContext.channel)
     : undefined;
-  const to = isRecord(value.deliveryContext) ? normalizeText(value.deliveryContext.to) : undefined;
+  const to = isRecord(value.deliveryContext)
+    ? readNonBlankString(value.deliveryContext.to)
+    : undefined;
   const accountId = isRecord(value.deliveryContext)
-    ? normalizeText(value.deliveryContext.accountId)
+    ? readNonBlankString(value.deliveryContext.accountId)
     : undefined;
   const deliveryContext =
     channel || to || accountId
@@ -84,6 +95,7 @@ function normalizeMeta(value: unknown): UpdateRestartSentinelMeta | null {
         }
       : undefined;
   return {
+    ...(root ? { root } : {}),
     ...(sessionKey ? { sessionKey } : {}),
     ...(deliveryContext ? { deliveryContext } : {}),
     ...(threadId ? { threadId } : {}),

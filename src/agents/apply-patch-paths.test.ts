@@ -3,10 +3,12 @@
  * Ensures pre-execution policy checks see add/update/delete/move paths in
  * host and sandbox forms without requiring full parser success.
  */
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { extractApplyPatchTargetPaths } from "./apply-patch-paths.js";
+import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 
 const defaultCwd = process.cwd();
 const cwdPath = (...segments: string[]) => path.join(defaultCwd, ...segments);
@@ -223,6 +225,40 @@ describe("extractApplyPatchTargetPaths", () => {
       path.join("/tmp", "openclaw-target.ts"),
     ]);
   });
+
+  it.each(["host", "mounted sandbox"])(
+    "derives literal @ files and new descendants through the %s path owner",
+    async (runtime) => {
+      const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-patch-at-path-"));
+      try {
+        const literalParent = path.join(cwd, "@notes");
+        const siblingParent = path.join(cwd, "notes");
+        await fs.mkdir(literalParent);
+        await fs.mkdir(siblingParent);
+        await fs.writeFile(path.join(literalParent, "existing.md"), "literal");
+        await fs.writeFile(path.join(siblingParent, "existing.md"), "sibling");
+        await fs.writeFile(path.join(siblingParent, "new.md"), "sibling");
+        const patch = [
+          "*** Begin Patch",
+          "*** Delete File: @notes/existing.md",
+          "*** Add File: @notes/new.md",
+          "+literal",
+          "*** End Patch",
+        ].join("\n");
+        const options =
+          runtime === "mounted sandbox"
+            ? { cwd, sandbox: { root: cwd, bridge: createHostSandboxFsBridge(cwd) } }
+            : { cwd };
+
+        expect(extractApplyPatchTargetPaths(patch, options)).toEqual([
+          path.join(literalParent, "existing.md"),
+          path.join(literalParent, "new.md"),
+        ]);
+      } finally {
+        await fs.rm(cwd, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("defaults missing cwd to apply_patch process cwd semantics", () => {
     const patch = [

@@ -7,7 +7,7 @@ This directory is used by `fastlane deliver` for App Store Connect text metadata
 ```bash
 cd apps/ios
 APP_STORE_CONNECT_APP_ID=YOUR_APP_STORE_CONNECT_APP_ID \
-DELIVER_METADATA=1 fastlane ios metadata release_version:2026.7.2 app_store_revision:1
+DELIVER_METADATA=1 BUNDLE_GEMFILE="$PWD/Gemfile" bundle _2.6.9_ exec fastlane ios metadata release_version:2026.7.2 app_store_revision:1
 ```
 
 ## Release notes and App Review attachment
@@ -16,14 +16,14 @@ DELIVER_METADATA=1 fastlane ios metadata release_version:2026.7.2 app_store_revi
 
 ```bash
 cd apps/ios
-DELIVER_RELEASE_NOTES=1 fastlane ios metadata release_version:2026.7.2 app_store_revision:1
+DELIVER_RELEASE_NOTES=1 BUNDLE_GEMFILE="$PWD/Gemfile" bundle _2.6.9_ exec fastlane ios metadata release_version:2026.7.2 app_store_revision:1
 ```
 
 ## Optional: include screenshots
 
 ```bash
 cd apps/ios
-DELIVER_METADATA=1 DELIVER_SCREENSHOTS=1 fastlane ios metadata release_version:2026.7.2 app_store_revision:1
+DELIVER_METADATA=1 DELIVER_SCREENSHOTS=1 BUNDLE_GEMFILE="$PWD/Gemfile" bundle _2.6.9_ exec fastlane ios metadata release_version:2026.7.2 app_store_revision:1
 ```
 
 ## Auth

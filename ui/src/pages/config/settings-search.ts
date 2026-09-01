@@ -1,22 +1,22 @@
 import type { ConfigUiHints } from "../../api/types.ts";
-import { settingsSearchTextMatches, type SettingsSearchBlock } from "../../app-navigation.ts";
+import {
+  isSettingsNavigationRouteVisible,
+  settingsSearchTextMatches,
+  type SettingsSearchBlock,
+} from "../../app-navigation.ts";
 import { pathForMemoryTab } from "../../app-route-paths.ts";
 import { SECTION_META } from "../../components/config-form.meta.ts";
 import {
   matchesConfigSectionSearch,
   parseConfigSearchQuery,
 } from "../../components/config-form.search.ts";
-import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
 import { splitConfigSchemaByTier } from "../../components/config-form.tiers.ts";
 import { t } from "../../i18n/index.ts";
+import { schemaType, type JsonSchema } from "../../lib/config-form-utils.ts";
 import { configPageForSection } from "./config-sections.ts";
-import {
-  memoryVisibleSchemaKeys,
-  resolveMemoryBackend,
-  MEMORY_BACKEND_ANCHOR_ID,
-  MEMORY_CURATED_SCHEMA_KEYS,
-} from "./memory-schema.ts";
+import { memoryVisibleSchemaKeys } from "./memory-schema.ts";
 import { SETTINGS_SEARCH_TARGETS, type SettingsSearchTarget } from "./settings-targets.ts";
+import { setupVisibleSchema } from "./setup-schema.ts";
 
 type StaticSettingsBlock = SettingsSearchBlock & {
   searchText: string;
@@ -36,70 +36,27 @@ function resolveStaticSettingsBlock(block: SettingsSearchTarget): StaticSettings
   };
 }
 
-/**
- * The Memory page hides `memory.*` children the current engine/backend makes
- * inapplicable — `memory.qmd` only renders once qmd is the selected backend.
- * Matching the raw section would offer a destination whose editor omits the very
- * field that matched, so search sees only what the page can show.
- */
-function visibleMemorySchema(
-  sectionSchema: JsonSchema,
-  config: Record<string, unknown>,
-): JsonSchema {
+// Curated pages render only a subset of their section's schema; search must
+// promise exactly what the destination page can edit, or the result is a
+// dead-end.
+const CURATED_ROUTE_VISIBLE_KEYS: Partial<Record<string, () => readonly string[]>> = {
+  memory: memoryVisibleSchemaKeys,
+  updates: () => ["channel", "checkOnStart", "auto"],
+};
+
+function visibleSectionSchema(routeId: string, sectionSchema: JsonSchema): JsonSchema {
+  const visibleKeys = CURATED_ROUTE_VISIBLE_KEYS[routeId];
   const properties = sectionSchema.properties;
-  if (!properties) {
+  if (!visibleKeys || !properties) {
     return sectionSchema;
   }
-  const visible = new Set(memoryVisibleSchemaKeys(resolveMemoryBackend(config)));
+  const visible = new Set(visibleKeys());
   return {
     ...sectionSchema,
     properties: Object.fromEntries(
       Object.entries(properties).filter(([child]) => visible.has(child)),
     ),
   };
-}
-
-/**
- * Every memory schema field lives on Settings. Backend remains a curated row,
- * so its unique matches use that row's anchor instead of the editor section.
- */
-function memoryDestination(params: {
-  key: string;
-  schema: JsonSchema;
-  value: unknown;
-  hints: ConfigUiHints;
-  query: string;
-  editorHash: string;
-}): { hash: string } {
-  const properties = params.schema.properties;
-  if (!properties) {
-    return { hash: params.editorHash };
-  }
-  const sliceMatches = (keys: readonly string[]) => {
-    const sliced = Object.fromEntries(
-      Object.entries(properties).filter(([child]) => keys.includes(child)),
-    );
-    return (
-      Object.keys(sliced).length > 0 &&
-      matchesConfigSectionSearch({
-        key: params.key,
-        schema: { ...params.schema, properties: sliced },
-        value: params.value,
-        hints: params.hints,
-        query: params.query,
-        textMatcher: settingsSearchTextMatches,
-      })
-    );
-  };
-  const onlySliceMatches = (keys: readonly string[]) =>
-    sliceMatches(keys) &&
-    !sliceMatches(Object.keys(properties).filter((child) => !keys.includes(child)));
-  // memoryVisibleSchemaKeys drops `backend` when no engine renders the curated
-  // row, so a match here always has the anchor on the page to scroll to.
-  if (onlySliceMatches(MEMORY_CURATED_SCHEMA_KEYS)) {
-    return { hash: `#${MEMORY_BACKEND_ANCHOR_ID}` };
-  }
-  return { hash: params.editorHash };
 }
 
 export function findSettingsSearchBlocks(params: {
@@ -109,6 +66,7 @@ export function findSettingsSearchBlocks(params: {
   uiHints: ConfigUiHints;
   identityAvailable?: boolean;
   basePath?: string;
+  canAdmin?: boolean;
 }): SettingsSearchBlock[] {
   if (!params.query.trim()) {
     return [];
@@ -117,7 +75,9 @@ export function findSettingsSearchBlocks(params: {
   const matches: SettingsSearchBlock[] =
     criteria.tags.length === 0 && criteria.text
       ? STATIC_SETTINGS_BLOCKS.filter(
-          (block) => params.identityAvailable || !block.requiresIdentity,
+          (block) =>
+            (params.identityAvailable || !block.requiresIdentity) &&
+            isSettingsNavigationRouteVisible(block.routeId, params.canAdmin !== false),
         )
           .map(resolveStaticSettingsBlock)
           .filter((block) => settingsSearchTextMatches(block.searchText, criteria.text))
@@ -132,8 +92,13 @@ export function findSettingsSearchBlocks(params: {
   const value = params.value ?? {};
   for (const [key, rawSectionSchema] of Object.entries(schema.properties)) {
     const routeId = configPageForSection(key);
+    if (!isSettingsNavigationRouteVisible(routeId, params.canAdmin !== false)) {
+      continue;
+    }
     const sectionSchema =
-      routeId === "memory" ? visibleMemorySchema(rawSectionSchema, value) : rawSectionSchema;
+      key === "wizard"
+        ? setupVisibleSchema(rawSectionSchema)
+        : visibleSectionSchema(routeId, rawSectionSchema);
     const meta = SECTION_META[key];
     const tierSplit = splitConfigSchemaByTier({
       schema: sectionSchema,
@@ -161,17 +126,7 @@ export function findSettingsSearchBlocks(params: {
     }
     const encodedKey = encodeURIComponent(key);
     const editorHash = `#config-section-${encodedKey}`;
-    const destination =
-      routeId === "memory"
-        ? memoryDestination({
-            key,
-            schema: sectionSchema,
-            value: value[key],
-            hints: params.uiHints,
-            query: params.query,
-            editorHash,
-          })
-        : { search: "", hash: editorHash };
+    const destination = { search: "", hash: editorHash };
     matches.push(
       routeId === "memory"
         ? {
@@ -183,7 +138,7 @@ export function findSettingsSearchBlocks(params: {
         : {
             routeId,
             label: meta?.label ?? sectionSchema.title ?? key,
-            search: `?section=${encodedKey}${matchesAdvanced ? "&advanced=1" : ""}`,
+            search: `?section=${encodedKey}${matchesAdvanced || key === "wizard" ? "&advanced=1" : ""}`,
             hash: destination.hash,
           },
     );

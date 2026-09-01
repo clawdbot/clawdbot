@@ -48,6 +48,10 @@ export const HookMappingSchema = z
     sessionMode: z.union([z.literal("isolated"), z.literal("persistent")]).optional(),
     messageTemplate: z.string().optional(),
     textTemplate: z.string().optional(),
+    forEach: z
+      .string()
+      .regex(/^[^.[\]]+$/, "forEach must be a top-level payload key")
+      .optional(),
     deliver: z.boolean().optional(),
     allowUnsafeExternalContent: z.boolean().optional(),
     // Keep this open-ended so runtime channel plugins (for example feishu) can be
@@ -69,14 +73,6 @@ export const HookMappingSchema = z
   .strict()
   .optional();
 
-const InternalHookHandlerSchema = z
-  .object({
-    event: z.string(),
-    module: SafeRelativeModulePathSchema,
-    export: z.string().optional(),
-  })
-  .strict();
-
 const HookConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -90,7 +86,6 @@ const HookConfigSchema = z
 export const InternalHooksSchema = z
   .object({
     enabled: z.boolean().optional(),
-    handlers: z.array(InternalHookHandlerSchema).optional(),
     entries: z.record(z.string(), HookConfigSchema).optional(),
     load: z
       .object({

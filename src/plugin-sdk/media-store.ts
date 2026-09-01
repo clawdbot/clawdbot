@@ -4,6 +4,7 @@ export {
   readMediaBuffer,
   resolveMediaBufferPath,
   saveMediaBuffer,
+  saveMediaSource,
   saveMediaStream,
 } from "../media/store.js";
 export type { SavedMedia } from "../media/store.js";

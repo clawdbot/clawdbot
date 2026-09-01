@@ -1,0 +1,221 @@
+import { html, nothing } from "lit";
+import "./chat-outbox-recovery.ts";
+import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/index.js";
+import type { GatewaySessionRow } from "../../api/types.ts";
+import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
+import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
+import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
+import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
+import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
+import {
+  availableSidebarSlots,
+  sidebarPanelActions,
+  sidebarPanelDefinitions,
+  sidebarPanelTemplates,
+} from "./chat-pane-embedded-panels.ts";
+import { resolveChatPaneDesktopTarget } from "./chat-pane-placement.ts";
+import type { ResolvedBoardView } from "./chat-pane-shared.ts";
+import { renderSidebarRegion, sidebarRegionCallbacks } from "./chat-pane-sidebar-layout.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
+import { renderChat, type ChatProps } from "./chat-view.ts";
+import { publishChatWorkContext } from "./chat-work-context.ts";
+import { renderBackgroundTasksRail } from "./components/chat-background-tasks-render.ts";
+import type { BackgroundTasksProps } from "./components/chat-background-tasks.types.ts";
+import { detailSlotOpen, renderChatDetailSlot } from "./components/chat-detail-slot.ts";
+import { renderChatImageLightbox } from "./components/chat-image-lightbox.ts";
+import {
+  renderSessionWorkspaceRail,
+  type SessionWorkspaceProps,
+} from "./components/chat-session-workspace.ts";
+import {
+  SIDEBAR_NARROW_BREAKPOINT_PX,
+  isSidebarSlotVisible,
+  type SidebarLayout,
+  type SidebarSlotId,
+} from "./sidebar-layout.ts";
+
+type ChatPaneLayoutRenderParams = {
+  state: ChatPageHost;
+  selectedSession: GatewaySessionRow | undefined;
+  currentAgentId: string;
+  board: ResolvedBoardView;
+  sidebarLayout: SidebarLayout;
+  sessionWorkspace: SessionWorkspaceProps;
+  backgroundTasks: BackgroundTasksProps;
+  chatProps: ChatProps;
+  observerDigest: SessionObserverDigest | null;
+  observerRunId: string | null;
+  catalog: boolean;
+  agentWorkspace: string | undefined;
+  workspaceGit: boolean;
+  openPanelSlot: (slot: SidebarSlotId) => void;
+  closePanelSlot: (slot: SidebarSlotId) => void;
+};
+
+export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRender {
+  protected renderChatPaneLayout(params: ChatPaneLayoutRenderParams) {
+    const {
+      state,
+      selectedSession,
+      currentAgentId,
+      board,
+      sidebarLayout,
+      sessionWorkspace,
+      backgroundTasks,
+      chatProps,
+      observerDigest,
+      observerRunId,
+      catalog,
+      agentWorkspace,
+      workspaceGit,
+      openPanelSlot,
+      closePanelSlot,
+    } = params;
+    if (this.inputRegion === "page") {
+      const file =
+        state.sidebarContent?.kind === "file" && sidebarLayout.open && detailSlotOpen(sidebarLayout)
+          ? state.sidebarContent
+          : undefined;
+      const workspace = resolveSessionWorkspace({
+        session: selectedSession,
+        agentWorkspace,
+        worktreePath: selectedSession?.worktree
+          ? this.headerWorktreePaths.get(selectedSession.worktree.id)?.path
+          : undefined,
+      });
+      publishChatWorkContext(
+        this.context,
+        this,
+        this.presented && this.selected
+          ? {
+              sessionKey: state.sessionKey,
+              sessionId: state.currentSessionId ?? undefined,
+              agentId: currentAgentId,
+              workspace: file?.root ?? workspace.root ?? undefined,
+              file: file?.path,
+            }
+          : undefined,
+      );
+    }
+    const header = this.compact
+      ? nothing
+      : this.renderPaneHeader(
+          sessionWorkspace,
+          backgroundTasks,
+          selectedSession,
+          catalog,
+          agentWorkspace,
+          workspaceGit,
+          sidebarLayout,
+        );
+    const recovery = html`<openclaw-chat-outbox-recovery
+      .host=${state}
+      .identity=${JSON.stringify([
+        state.settings.gatewayUrl,
+        state.connected && state.client?.recoveryScopeReady ? state.client.recoveryScope : null,
+        storedChatOutboxScopeKey(resolveUiConversationIdentity(state, state.sessionKey)),
+      ])}
+      @outbox-restored=${() => {
+        this.chatState.restoreComposer();
+        state.requestUpdate?.();
+      }}
+    ></openclaw-chat-outbox-recovery>`;
+    const chat = renderChat({
+      ...chatProps,
+      browserTabPreviewsActive: this.active && this.presented,
+      historyState: catalog ? undefined : state,
+      header: !this.compact && board.face === "dashboard" ? nothing : html`${header}${recovery}`,
+    });
+    // Keep this root stable across board face changes so the guarded board runtime
+    // remains connected while Chat is active.
+    const primary = html`<div class="chat-pane-primary-column">
+      ${!this.compact && board.face === "dashboard" ? html`${header}${recovery}` : nothing}
+      ${this.compact ? chat : this.renderBoardPrimary(board, chat)}
+    </div>`;
+    const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
+    const discussionState = this.sessionDiscussionStates.get(state.sessionKey.trim());
+    const discussionAvailable = discussionState === "available" || discussionState === "open";
+    const desktopAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot);
+    const companionThread = this.sessionCompanionThreads.view(state.sessionKey, currentAgentId);
+    const browserPresented =
+      this.active && this.presented && isSidebarSlotVisible(sidebarLayout, "browser");
+    const desktopPresented =
+      this.active && this.presented && isSidebarSlotVisible(sidebarLayout, "desktop");
+    const desktopRefreshOnPresentation = !this.pendingPanelToggleRequests.has("desktop");
+    const panelDefinitions = sidebarPanelDefinitions({
+      state,
+      themeMode: this.context.theme.resolvedMode,
+      agentId: currentAgentId,
+      browserPresented,
+      browserRefreshOnPresentation: !this.pendingPanelToggleRequests.has("browser"),
+      preferredBrowserTab: [
+        ...latestBrowserTabCards(chatProps.messages, chatProps.toolMessages).values(),
+      ].at(-1),
+      desktopPresented,
+      desktopRefreshOnPresentation,
+      desktopAvailable,
+      desktopSource: resolveChatPaneDesktopTarget(selectedSession),
+      hasBoard: !this.compact && board.hasBoard,
+      chat,
+      workspace: renderSessionWorkspaceRail(sessionWorkspace, { embedded: true }),
+      tasks: renderBackgroundTasksRail(backgroundTasks, { embedded: true }),
+      detailOpen: this.presented && sidebarLayout.open === true && detailSlotOpen(sidebarLayout),
+      renderDetail: (content) =>
+        renderChatDetailSlot({
+          backgroundTasks,
+          chat: chatProps,
+          content,
+          host: state,
+          layout: sidebarLayout,
+          transcript: this.taskSidebarTranscript,
+        }),
+      digest: observerDigest,
+      activeRunId: observerRunId,
+      startedAt: selectedSession?.startedAt ?? state.chatStreamStartedAt ?? undefined,
+      lastReadAt: selectedSession?.lastReadAt,
+      pullRequests: this.sessionPullRequests,
+      companion: companionThread,
+      onCompanionSubmit: (question) => void this.submitSessionCompanionQuestion(question),
+      onCompanionDraftChange: (draft) =>
+        this.sessionCompanionThreads.setDraft(state.sessionKey, draft, currentAgentId),
+      onCompanionVisibilityChange: this.setSessionObserverVisibility,
+      connected: state.connected,
+      pendingQuestion: companionThread.pendingQuestion,
+      onClearCompanion: () => void this.clearSessionCompanion(),
+      discussion,
+      discussionAvailable,
+      discussionOpenUrl: discussion?.openUrl ?? null,
+      discussionSourceGeneration: this.connectionGeneration,
+    });
+    const availableSlots = availableSidebarSlots(panelDefinitions);
+    const panelTemplates = sidebarPanelTemplates(panelDefinitions);
+    const panelActions = sidebarPanelActions(panelDefinitions);
+    const content = renderSidebarRegion({
+      availableWidth: this.paneWidth,
+      availableSlots,
+      callbacks: sidebarRegionCallbacks({
+        state,
+        layout: sidebarLayout,
+        closePanelSlot,
+        openPanelSlot,
+        hideBoard: () => this.handleBoardDockChange("hidden"),
+        forgetDiscussionUrl: () => this.sessionDiscussionOpenUrls.delete(state.sessionKey.trim()),
+        resizePanel: (columnId, size) =>
+          this.commitSidebarPanelResize(sidebarLayout, columnId, size),
+        setPanelOpen: (open) => this.setChatSidePanelOpen(open, sidebarLayout),
+      }),
+      layout: sidebarLayout,
+      panelDefinitions,
+      panelActions,
+      narrow: this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX,
+      panelTemplates,
+      primary,
+      requestUpdate: state.requestUpdate!,
+    });
+    return html`${content}${renderChatImageLightbox(
+      state.imageLightbox,
+      state.handleCloseImage,
+    )}${this.renderResetConfirmation()}`;
+  }
+}
