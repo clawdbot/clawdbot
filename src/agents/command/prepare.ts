@@ -12,7 +12,6 @@ import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentExplicitRecipientSession } from "../../infra/outbound/agent-delivery.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
-import { normalizePluginsConfig } from "../../plugins/config-state.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import {
   classifySessionKeyShape,
@@ -271,7 +270,7 @@ export async function prepareAgentCommandExecution(
   const cwd =
     normalizeOptionalString(opts.cwd) ?? normalizeOptionalString(sessionEntryRaw?.spawnedCwd);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
-  const pluginsEnabled = normalizePluginsConfig(cfg.plugins).enabled;
+  const pluginsEnabled = cfg.plugins?.enabled !== false;
   const preparedMetadataSnapshot = runtimeContext?.pluginGeneration.pluginMetadataSnapshot;
   const manifestMetadataSnapshot = pluginsEnabled
     ? (preparedMetadataSnapshot ??

@@ -148,11 +148,13 @@ export function createAgentAdmissionController(params: {
     let latestEntry = loadSessionEntry(resolvedSessionKey, {
       agentId: admissionAgent,
       clone: false,
+      projection: "list",
     }).entry;
     if (!latestEntry && requestedSessionKey && requestedSessionKey !== resolvedSessionKey) {
       latestEntry = loadSessionEntry(requestedSessionKey, {
         agentId: admissionAgent,
         clone: false,
+        projection: "list",
       }).entry;
     }
     assertExpectedExistingSession({

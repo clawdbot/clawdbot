@@ -171,7 +171,7 @@ export function buildApiErrorObservationFields(
         },
         { providerPlugin: opts?.providerOwner ?? null },
       ),
-      providerErrorType: parsed?.type,
+      providerErrorType: redactObservationText(parsed?.type),
       providerErrorMessagePreview: truncateForObservation(
         redactedProviderMessage,
         PROVIDER_ERROR_PREVIEW_MAX_CHARS,

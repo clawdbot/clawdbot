@@ -3,13 +3,23 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ChatEventSchema } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { buildAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import {
+  createAgentAttemptLifecycleCallbacks,
+  type AgentAttemptLifecycleState,
+} from "../agents/command/attempt-callbacks.js";
+import { createAgentCommandLifecycle } from "../agents/command/lifecycle.js";
+import { createSubscribedSessionHarness } from "../agents/embedded-agent-subscribe.e2e-harness.js";
 import { buildAssistantStreamData } from "../agents/embedded-agent-subscribe.handlers.messages.stream.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../agents/internal-runtime-context.js";
+import { createAgentLifecycleTerminalBackstop } from "../auto-reply/reply/agent-lifecycle-terminal.js";
 import { formatChannelProgressDraftLine } from "../channels/streaming.js";
 import {
   emitAgentEvent as emitRuntimeAgentEvent,
@@ -4487,6 +4497,169 @@ describe("agent event handler", () => {
     };
     expect(nodePayload.errorKind).toBe("rate_limit");
     expect(nodePayload).not.toHaveProperty("message");
+    expect(payload).not.toHaveProperty("errorDetail");
+  });
+
+  it.each([
+    ["error", "direct"],
+    ["stop", "direct"],
+    ["error", "command"],
+    ["stop", "command"],
+    ["error", "reply"],
+    ["stop", "reply"],
+  ] as const)(
+    "projects subscribed provider %s terminals through %s ownership",
+    (stopReason, owner) => {
+      const runId = `run-provider-${stopReason}`;
+      const { broadcast, nodeSendToSession, handler, chatRunState } = createHarness({
+        lifecycleErrorRetryGraceMs: 0,
+      });
+      registerChatRun(chatRunState, runId, "session-provider-detail", runId);
+      const state: AgentAttemptLifecycleState = {
+        currentTurnUserMessagePersisted: true,
+        lifecycleFinishing: false,
+        lifecycleEnded: false,
+      };
+      const callbacks = createAgentAttemptLifecycleCallbacks(state);
+      const command = createAgentCommandLifecycle({
+        runId,
+        lifecycleGeneration: getAgentEventLifecycleGeneration,
+        startedAt: 1,
+        state,
+      });
+      const reply = createAgentLifecycleTerminalBackstop({
+        runId,
+        getLifecycleGeneration: getAgentEventLifecycleGeneration,
+        resolveTerminationFields: () => ({}),
+      });
+      const onAgentEvent = vi.fn((event) => {
+        if (owner === "command") {
+          void callbacks.onAgentEvent(event);
+        }
+        if (owner === "reply") {
+          reply.note(event);
+        }
+      });
+      const unlisten = onAgentRuntimeEvent(handler);
+      const { emit, subscription } = createSubscribedSessionHarness({
+        runId,
+        onAgentEvent,
+        terminalLifecyclePhase: owner === "direct" ? "end" : "finishing",
+      });
+      try {
+        const message = {
+          role: "assistant",
+          stopReason,
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          content: stopReason === "stop" ? [{ type: "text", text: "Done" }] : [],
+          errorMessage:
+            '502 {"error":{"type":"server_error","message":"Upstream unavailable x-api-key: synthetic-provider-credential"}}',
+        };
+        emit({ type: "message_end", message });
+        emit({ type: "agent_end" });
+        const terminal = {
+          metadata: {},
+          outcome: buildAgentRunTerminalOutcome({
+            status: stopReason === "error" ? "error" : "ok",
+            stopReason,
+          }),
+        };
+        if (owner === "command") {
+          if (stopReason === "error") {
+            command.emitResultError({ payloads: [], meta: { durationMs: 0 } }, true, terminal);
+          } else {
+            command.emitEnd(terminal);
+          }
+        }
+        if (owner === "reply") {
+          reply.emit(
+            stopReason === "error" ? "error" : "end",
+            stopReason === "error" ? "Provider failed" : { meta: {} },
+          );
+        }
+        const payload = chatBroadcastCalls(broadcast).at(-1)?.[1];
+        const serialized = JSON.stringify(payload);
+        const wire = JSON.parse(serialized);
+        expect(Value.Check(ChatEventSchema, wire)).toBe(true);
+        expect(sessionChatCalls(nodeSendToSession).at(-1)?.[2]).toEqual(payload);
+        if (stopReason === "error") {
+          expect(wire.errorDetail).toEqual({
+            provider: "openai",
+            model: "gpt-5.6-luna",
+            failoverReason: "server_error",
+            providerRuntimeFailureKind: "timeout",
+            providerErrorType: "server_error",
+            httpStatus: 502,
+            providerErrorMessagePreview: "Upstream unavailable x-api-key: ***",
+          });
+          const callbackTerminal = onAgentEvent.mock.calls.find(
+            ([event]) => event.stream === "lifecycle" && event.data.error,
+          )?.[0];
+          const runtimeTerminal = agentBroadcastCalls(broadcast).find(
+            ([, event]) => event.stream === "lifecycle" && event.data.phase === "error",
+          )?.[1];
+          expect(callbackTerminal.data.errorObservation).toMatchObject({
+            provider: "openai",
+            model: "gpt-5.6-luna",
+            httpStatus: 502,
+            providerErrorMessagePreview: wire.errorDetail.providerErrorMessagePreview,
+          });
+          expect(runtimeTerminal.data.errorObservation).toEqual(
+            callbackTerminal.data.errorObservation,
+          );
+          expect(serialized).not.toContain("synthetic-provider-credential");
+          expect(JSON.stringify(callbackTerminal.data.errorObservation)).not.toContain("rawError");
+        } else {
+          expect(wire.state).toBe("final");
+          expect(wire).not.toHaveProperty("errorDetail");
+        }
+      } finally {
+        subscription.unsubscribe();
+        unlisten();
+        handler.dispose();
+      }
+    },
+  );
+
+  it("bounds the chat error allowlist and omits invalid or log-only facts", () => {
+    const { broadcast, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-bounded-error",
+      lifecycleErrorRetryGraceMs: 0,
+    });
+    try {
+      emitAgentEvent(handler, "run-bounded-error", "lifecycle", {
+        phase: "error",
+        error: "Request failed",
+        errorObservation: {
+          provider: "p".repeat(301),
+          model: "m".repeat(301),
+          failoverReason: "f".repeat(301),
+          providerRuntimeFailureKind: "k".repeat(301),
+          providerErrorType: "t".repeat(301),
+          providerErrorMessagePreview: `${"x".repeat(299)}🚀tail`,
+          httpStatus: "invalid",
+          rawErrorPreview: "log-only",
+          rawErrorHash: "log-only",
+          errorBody: "log-only",
+          unexpected: "log-only",
+        },
+      });
+      const serialized = JSON.stringify(chatBroadcastCalls(broadcast).at(-1)?.[1]);
+      const payload = JSON.parse(serialized);
+      expect(serialized).not.toContain("log-only");
+      expect(payload.errorDetail).toEqual({
+        provider: "p".repeat(300),
+        model: "m".repeat(300),
+        failoverReason: "f".repeat(300),
+        providerRuntimeFailureKind: "k".repeat(300),
+        providerErrorType: "t".repeat(300),
+        providerErrorMessagePreview: "x".repeat(299),
+      });
+      expect(Value.Check(ChatEventSchema, payload)).toBe(true);
+    } finally {
+      handler.dispose();
+    }
   });
 
   it("suppresses delayed lifecycle chat errors for active chat.send runs while still cleaning up", () => {

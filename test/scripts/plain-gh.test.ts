@@ -15,6 +15,7 @@ import {
   execGhApiRead,
   execGhJson,
   execGhRead,
+  execGhReadAsync,
   execPlainGh,
   plainGhAuthenticatedEnv,
   resolvePlainGhBin,
@@ -285,7 +286,7 @@ describe("plain gh subprocess contracts", () => {
     expect(fixture.calls()).toEqual([{ route: "protected", argv: ["--version"], override: null }]);
   });
 
-  it("keeps explicit reads override-independent and parses normalized JSON", () => {
+  it("keeps explicit reads override-independent and parses normalized JSON", async () => {
     const fixture = makeFixture();
     fixture.env.OPENCLAW_GH_BIN = "/invalid-explicit-override";
     const options = { encoding: "utf8" as const, env: fixture.env };
@@ -298,8 +299,36 @@ describe("plain gh subprocess contracts", () => {
       route: "protected",
       override: null,
     });
-    expect(fixture.calls()).toHaveLength(2);
+    expect(JSON.parse(await execGhReadAsync(["--version"], options))).toMatchObject({
+      route: "protected",
+      override: null,
+      colors: { NO_COLOR: "1", FORCE_COLOR: "0", CLICOLOR: "0", CLICOLOR_FORCE: "0" },
+    });
+    expect(fixture.calls()).toHaveLength(3);
     expect(fixture.env.OPENCLAW_GH_BIN).toBe("/invalid-explicit-override");
+  });
+
+  it("preserves asynchronous read refusals and buffer limits without another route", async () => {
+    const fixture = makeFixture();
+    fixture.env.OPENCLAW_GH_BIN = fixture.override;
+    fixture.env.FAKE_GH_REJECT = "1";
+    const options = { env: fixture.env, timeout: 10_000, killSignal: "SIGKILL" as const };
+    await expect(execGhReadAsync(["--version"], options)).rejects.toMatchObject({
+      code: 23,
+      stderr: "policy denied\n",
+      stdout: "protected refusal\n",
+    });
+    delete fixture.env.FAKE_GH_REJECT;
+    fixture.env.FAKE_GH_BYTES = "4096";
+    await expect(
+      execGhReadAsync(["--version"], { ...options, maxBuffer: 1024 }),
+    ).rejects.toMatchObject({
+      code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
+    });
+    expect(fixture.calls()).toEqual([
+      { route: "protected", argv: ["--version"], override: null },
+      { route: "protected", argv: ["--version"], override: null },
+    ]);
   });
 
   it.each([execPlainGh, execGhRead])(

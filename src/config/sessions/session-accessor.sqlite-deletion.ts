@@ -8,6 +8,11 @@ import type { AgentHarnessSessionDeletionMutation } from "../../agents/harness/t
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-coordinator.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
+  commitSessionInitializationRollback,
+  getSessionInitializationRollback,
+  type SessionInitialization,
+} from "../../sessions/session-initialization.js";
+import {
   isCompetingSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
@@ -30,7 +35,10 @@ type PreparedDeletion = {
   assertIdle: () => void;
 };
 const deletions = new AsyncLocalStorage<ReadonlyMap<string, PreparedDeletion>>();
-const transactionMutations = new AsyncLocalStorage<AgentHarnessSessionDeletionMutation[]>();
+const transactionMutations = new AsyncLocalStorage<{
+  rollback: AgentHarnessSessionDeletionMutation[];
+  initializations: Set<SessionInitialization>;
+}>();
 
 type PreparedSessionWrite<T> = {
   deletedEntries: readonly DeletionEntry[];
@@ -73,7 +81,7 @@ export async function withSqliteSessionDeletions<T>(
   entries: readonly DeletionEntry[],
   run: (assertCurrent: () => void) => Promise<T>,
 ): Promise<T> {
-  const targets = [
+  const targets: AgentHarnessSessionDeletionTarget[] = [
     ...new Map(
       entries
         .filter(({ entry }) => entry.sessionId)
@@ -92,6 +100,12 @@ export async function withSqliteSessionDeletions<T>(
   const ownerStorePath =
     scope.ownerStorePath ??
     resolveSessionStorePathCore(undefined, { agentId: scope.agentId, env: scope.env });
+  for (const target of targets) {
+    target.initialization = getSessionInitializationRollback({
+      ...target,
+      storePath: ownerStorePath,
+    });
+  }
   const assertTargetIdle = (target: AgentHarnessSessionDeletionTarget) => {
     if (
       isCompetingSessionWorkAdmissionActive(ownerStorePath, [target.sessionKey, target.sessionId])
@@ -150,13 +164,16 @@ export function commitSqliteSessionDeletion(sessionKey: string, entry: SessionEn
     throw new Error(`Session changed before deletion: ${sessionKey}`);
   }
   prepared.assertIdle();
-  const rollback = transactionMutations.getStore();
-  if (!rollback) {
+  const transaction = transactionMutations.getStore();
+  if (!transaction) {
     throw new Error(`Session deletion requires its synchronous transaction: ${sessionKey}`);
   }
   for (const mutation of prepared.mutations) {
-    rollback.push(mutation);
+    transaction.rollback.push(mutation);
     mutation.commit();
+  }
+  if (prepared.target.initialization) {
+    transaction.initializations.add(prepared.target.initialization);
   }
 }
 
@@ -170,13 +187,15 @@ export function runSqliteSessionDeletionTransaction<T>(
     return runOpenClawAgentWriteTransaction(operation, options, transactionOptions);
   }
   const rollback: AgentHarnessSessionDeletionMutation[] = [];
+  const initializations = new Set<SessionInitialization>();
   let committed = false;
   try {
-    return transactionMutations.run(rollback, () =>
+    return transactionMutations.run({ rollback, initializations }, () =>
       runOpenClawAgentWriteTransaction(
         (database) => {
           deferOpenClawAgentPostCommitPublication(database, () => {
             committed = true;
+            initializations.forEach(commitSessionInitializationRollback);
           });
           return operation(database);
         },

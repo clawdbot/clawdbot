@@ -257,7 +257,7 @@ function hasActiveAgentDatabaseLease(agentId: string, env: NodeJS.ProcessEnv): b
   }
 }
 
-async function yieldToMaintenanceHeartbeat(): Promise<void> {
+async function yieldBetweenTranscriptBatches(): Promise<void> {
   await new Promise<void>((resolve) => {
     setImmediate(resolve);
   });
@@ -317,9 +317,9 @@ async function migrateTranscriptSessions(params: {
       rewrittenSessions += changedRows.length > 0 ? 1 : 0;
       afterSessionId = sessionId;
     }
-    // The persisted lease renews from the event loop. Yield after each bounded
-    // batch, then revalidate inside the next transaction before mutating state.
-    await yieldToMaintenanceHeartbeat();
+    // Keep the caller responsive between bounded batches. The next transaction
+    // revalidates maintenance ownership before mutating state.
+    await yieldBetweenTranscriptBatches();
   }
 }
 

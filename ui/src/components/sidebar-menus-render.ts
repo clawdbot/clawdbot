@@ -2,7 +2,7 @@ import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { DEFAULT_SIDEBAR_ENTRIES, serializeSidebarEntry } from "../app-navigation.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
-import { isUpdateActionable } from "../app/update-overlay-helpers.ts";
+import { isUpdateActionable } from "../app/update-schedule-projection.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
@@ -43,6 +43,9 @@ import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
 export function renderSidebarCustomizeMenuForController(controller: SidebarMenusController) {
   const { host } = controller;
   const position = controller.customizeMenuPosition;
+  if (!position) {
+    return nothing;
+  }
   const trigger = controller.customizeMenuTrigger;
   return renderSidebarCustomizeMenu({
     position,
@@ -89,6 +92,9 @@ export function renderSidebarCustomizeMenuForController(controller: SidebarMenus
 export function renderSidebarAgentMenuForController(controller: SidebarMenusController) {
   const { host } = controller;
   const position = controller.agentMenuPosition;
+  if (!position) {
+    return nothing;
+  }
   const trigger = controller.agentMenuTrigger;
   const { activeId, agent, agents, identity, identities } = host.activeChipAgent();
   return renderSidebarAgentMenu({
@@ -121,6 +127,9 @@ export function renderSidebarAgentMenuForController(controller: SidebarMenusCont
 export function renderSidebarIdentityMenuForController(controller: SidebarMenusController) {
   const { host } = controller;
   const position = controller.identityMenuPosition;
+  if (!position) {
+    return nothing;
+  }
   const trigger = controller.identityMenuTrigger;
   const selfUser = resolveCurrentSelfUser({
     snapshotUser: host.sessionDataContext?.gateway.snapshot.selfUser,
@@ -160,7 +169,7 @@ export function renderSidebarIdentityMenuForController(controller: SidebarMenusC
     profileViewer: selfUser ? { ...selfUser, watchedSessions: [] } : undefined,
     offline: host.offline,
     themeMode: host.themeMode,
-    triggerWidth: position?.width ?? 0,
+    triggerWidth: position.width,
     onTabAway: () => trigger?.focus(),
     onClose: (restoreFocus) => {
       if (controller.identityMenuPosition !== position) {
@@ -372,6 +381,9 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
 export function renderSidebarSessionGroupMenuForController(controller: SidebarMenusController) {
   const { host } = controller;
   const menu = controller.sessionGroupMenu;
+  if (!menu) {
+    return nothing;
+  }
   const groupDefaultsStatus = host.sessionDataContext?.sessions.groupsStatus() ?? "idle";
   const groupActionAccess = {
     "group-defaults": readSessionMethodAccess(host.sessionDataContext?.gateway.snapshot, {
@@ -442,6 +454,9 @@ export function renderSidebarSessionGroupMenuForController(controller: SidebarMe
 export function renderSidebarSessionSortMenuForController(controller: SidebarMenusController) {
   const { host } = controller;
   const position = controller.sessionSortMenuPosition;
+  if (!position) {
+    return nothing;
+  }
   return renderSidebarSessionSortMenu({
     position,
     trigger: controller.sessionSortMenuTrigger,
@@ -501,6 +516,9 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
 export function renderSidebarCatalogViewMenuForController(controller: SidebarMenusController) {
   const { host } = controller;
   const position = controller.catalogViewMenuPosition;
+  if (!position) {
+    return nothing;
+  }
   return renderSidebarCatalogViewMenu({
     position,
     trigger: controller.catalogViewMenuTrigger,
@@ -514,7 +532,7 @@ export function renderSidebarCatalogViewMenuForController(controller: SidebarMen
       controller.closeCatalogViewMenu({ restoreFocus: true });
     },
     onHide: () => {
-      if (!position || controller.catalogViewMenuPosition !== position) {
+      if (controller.catalogViewMenuPosition !== position) {
         return;
       }
       host.hideSessionCatalog(position.catalogId);
@@ -536,6 +554,9 @@ export function renderSidebarCatalogViewMenuForController(controller: SidebarMen
 export function renderSidebarMoreMenuForController(controller: SidebarMenusController) {
   const { host } = controller;
   const position = controller.moreMenuPosition;
+  if (!position) {
+    return nothing;
+  }
   const trigger = controller.moreMenuTrigger;
   return renderSidebarMoreMenu({
     position,

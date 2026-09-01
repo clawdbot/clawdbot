@@ -192,14 +192,17 @@ private fun RenderCommonMarkBlock(
       )
     }
     is FencedCodeBlock -> {
-      ChatCodeBlock(
-        code = current.literal.orEmpty(),
-        language = current.info?.trim()?.ifEmpty { null },
-        // Streaming: an unclosed fence grows on every delta, so keep it plain until the
-        // closing marker arrives. Finalized messages may validly end at EOF without a
-        // closing fence (CommonMark), so completeness comes from stream state, not syntax.
-        isComplete = !isStreaming || current.closingFenceLength != null,
-      )
+      if (isChatMermaidFence(current, isStreaming)) {
+        ChatMermaidBlock(current.literal.orEmpty())
+      } else {
+        ChatCodeBlock(
+          code = current.literal.orEmpty(),
+          language = current.info?.trim()?.ifEmpty { null },
+          // Streaming fences remain plain until closed. Finalized messages may validly
+          // end at EOF without a closing fence under CommonMark.
+          isComplete = !isStreaming || current.closingFenceLength != null,
+        )
+      }
     }
     is IndentedCodeBlock -> {
       ChatCodeBlock(code = current.literal.orEmpty(), language = null)

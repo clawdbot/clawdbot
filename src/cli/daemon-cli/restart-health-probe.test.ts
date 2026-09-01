@@ -1,5 +1,6 @@
 // Gateway restart probe and health-detail tests.
 import { once } from "node:events";
+import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
@@ -28,6 +29,107 @@ const actualProbe =
 describe("restart health", () => {
   beforeEach(resetRestartHealthMocks);
   afterEach(restoreRestartHealthMocks);
+
+  it("reports HTTP health and readiness independently", async () => {
+    const server = createServer((request, response) => {
+      response.statusCode = request.url === "/healthz" ? 200 : 503;
+      response.end();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+      throw new Error("expected loopback server address");
+    }
+
+    try {
+      const { waitForGatewayHttpReadiness } = await import("./restart-health-probe.js");
+      await expect(
+        waitForGatewayHttpReadiness({
+          attempts: 1,
+          deadlineAt: Date.now() + 1_000,
+          delayMs: 0,
+          port: address.port,
+        }),
+      ).resolves.toEqual({ healthz: 200, readyz: 503 });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve();
+          }
+        });
+      });
+    }
+  });
+
+  it("uses the configured TLS target for local restart reachability", async () => {
+    const configuredProbe = {
+      requestHttp: vi.fn(),
+      resolveWebSocketTarget: vi.fn(async () => ({
+        url: "wss://127.0.0.1:18789",
+        tlsFingerprint: "ab".repeat(32),
+      })),
+    };
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      error: null,
+      server: { version: "2026.8.1", connId: "tls-ready" },
+      health: null,
+    });
+
+    const { confirmGatewayReachable } = await import("./restart-health-probe.js");
+    await expect(confirmGatewayReachable({ port: 18_789, configuredProbe })).resolves.toMatchObject(
+      { reachable: true, gatewayVersion: "2026.8.1" },
+    );
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "wss://127.0.0.1:18789",
+        tlsFingerprint: "ab".repeat(32),
+      }),
+    );
+  });
+
+  it("does not exceed the start deadline when a listener never responds", async () => {
+    const server = createServer(() => {});
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected loopback server address");
+    }
+
+    try {
+      const { waitForGatewayHttpReadiness } = await import("./restart-health-probe.js");
+      const startedAt = Date.now();
+      await expect(
+        waitForGatewayHttpReadiness({
+          attempts: 10,
+          deadlineAt: startedAt + 50,
+          delayMs: 0,
+          port: address.port,
+        }),
+      ).resolves.toEqual({ healthz: null, readyz: null });
+      expect(Date.now() - startedAt).toBeLessThan(1_500);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve();
+          }
+        });
+      });
+    }
+  });
 
   it.each(["timeout", "read ECONNRESET"])(
     "preserves the real matching-version detail probe failure: %s",

@@ -505,8 +505,8 @@ function buildControlUiSessionCompanionSection(params: {
     return [];
   }
   return [
-    "## Control UI Session Companion",
-    "- Operator has a read-only rail companion for this session's status and explanations.",
+    "## Control UI Side Chat",
+    "- Operator has a read-only Side chat for this session's status and explanations.",
     "- On request, do not spawn sub-agents or burn main-thread turns merely to summarize status or re-explain recent work.",
     ...(params.sessionsSpawnAvailable
       ? ["- Reserve `sessions_spawn` for delegated work with its own deliverable."]
@@ -910,7 +910,7 @@ export function buildAgentSystemPrompt(params: {
     sessions_yield: "End turn; await subagent events",
     subagents: "Subagent status; never wait-loop",
     session_status: "Session/model/usage/time/status; model override",
-    skill_workshop: "Manage reusable-skill proposals",
+    skill_workshop: "Author reusable skills",
     image: "Analyze images",
     image_generate: "Generate/edit images",
   };

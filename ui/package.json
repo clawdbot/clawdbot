@@ -27,6 +27,7 @@
     "@openclaw/gateway-protocol": "workspace:*",
     "@openclaw/libterminal": "0.3.2",
     "@openclaw/media-core": "workspace:*",
+    "@openclaw/mermaid-renderer": "workspace:*",
     "@openclaw/model-catalog-core": "workspace:*",
     "@openclaw/net-policy": "workspace:*",
     "@openclaw/normalization-core": "workspace:*",

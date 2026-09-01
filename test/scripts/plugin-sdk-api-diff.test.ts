@@ -3,6 +3,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { withTestTimeout } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -107,12 +108,7 @@ describe("Plugin SDK API diff CLI", () => {
       expect(existsSync(temporaryRoot)).toBe(true);
       const interruptedAt = Date.now();
       child.kill("SIGTERM");
-      const exitCode = await Promise.race([
-        close,
-        new Promise<never>((_, reject) => {
-          setTimeout(() => reject(new Error("Plugin SDK API diff ignored SIGTERM")), 5_000);
-        }),
-      ]);
+      const exitCode = await withTestTimeout(close, 5_000, "Plugin SDK API diff ignored SIGTERM");
 
       expect(exitCode).toBe(143);
       expect(Date.now() - interruptedAt).toBeLessThan(5_000);

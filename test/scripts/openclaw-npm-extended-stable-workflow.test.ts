@@ -92,7 +92,7 @@ describe("minimal npm extended-stable workflow", () => {
       type: "boolean",
     });
     expect(parsed.jobs?.preflight_openclaw_npm?.["runs-on"]).toBe(
-      "${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}",
+      "${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}",
     );
   });
 
@@ -329,9 +329,6 @@ describe("minimal npm extended-stable workflow", () => {
     expect(step(preflight, "Check").if).toBeUndefined();
     const verifyReleaseContents = step(preflight, "Verify release contents");
     expect(verifyReleaseContents.if).toBeUndefined();
-    expect(verifyReleaseContents.run).toBe(
-      "pnpm release:generated:check && node --import tsx scripts/release-check.ts",
-    );
     expect(step(preflight, "Verify prepared npm tarball install").if).toBeUndefined();
 
     const save = step(preflight, "Save preflight build outputs");

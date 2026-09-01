@@ -514,7 +514,10 @@ export async function handleSendChat(
     !intent && !isInlineEditSubmission && !userMessage.startsWith("/")
       ? host.getWorkContext?.()
       : undefined;
-  const effectiveMessage = workContext ? `${workContext}\n\n${quotedMessage}` : quotedMessage;
+  // The person's words lead. Session titles are derived from the first user
+  // message, so a leading reference block would title the conversation after
+  // the snapshot instead of what was actually asked.
+  const effectiveMessage = workContext ? `${quotedMessage}\n\n${workContext}` : quotedMessage;
 
   const refreshSessions = Boolean(intent) || isChatResetCommand(message);
   // A row edit and a composer send may intentionally carry the same payload.
@@ -668,6 +671,24 @@ export async function handleSendChat(
       });
       setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
       return;
+    }
+    if (admittedDurably && submissionAction && typeof MessageChannel !== "undefined") {
+      // The outbox now owns the prompt across reloads. Return control before
+      // delivery work so the browser can accept the operator's next input.
+      await new Promise<void>((resolve) => {
+        const channel = new MessageChannel();
+        channel.port1.addEventListener(
+          "message",
+          () => {
+            channel.port1.close();
+            channel.port2.close();
+            resolve();
+          },
+          { once: true },
+        );
+        channel.port1.start();
+        channel.port2.postMessage(undefined);
+      });
     }
     const sendResult = await deliverChatQueueItem(host, queued, {
       previousDraft: cleared.previousDraft,

@@ -62,6 +62,7 @@ import {
   loadCombinedSessionStoreForGatewayCore,
   resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTargetWithStore,
+  resolveSessionsListDefaultsAgentId,
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
 } from "../session-utils.js";
@@ -73,6 +74,7 @@ import {
   resolveVisibleActiveSessionRunState,
 } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
 import {
   createSessionPlacementBatchProjector,
   readSessionPlacementFields,
@@ -211,6 +213,12 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     const cfg = context.getRuntimeConfig();
     const configuredAgentsOnly = p.configuredAgentsOnly === true;
     const identityId = gatewayClientSessionCreator(client)?.id;
+    const defaultsAgentId = resolveSessionsListDefaultsAgentId(cfg, p.agentId);
+    const modelSelectionTarget = resolveGatewayModelSelectionPolicy({
+      agentId: defaultsAgentId,
+      callerScopes: client?.connect?.scopes ?? [],
+      cfg,
+    }).target;
     const preparedModelCatalogByAgent = await measureDiagnosticsTimelineSpan(
       "gateway.sessions.list.model_catalog",
       async () => {
@@ -300,6 +308,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
               phase: "sessions.list",
             },
           );
+          result.defaults = { ...result.defaults, modelSelectionTarget };
           const { sharingTargets, membershipKeys } = await measureDiagnosticsTimelineSpan(
             "gateway.sessions.list.sharing",
             () => {
@@ -318,7 +327,6 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
               const resolvedSharingTargets = result.sessions.map((session) =>
                 resolveSessionSharingTarget({
                   cfg,
-                  projection: "list",
                   sessionKey: session.key,
                   storeCache: sharingStoreCache,
                   targetDiscoveryCache,

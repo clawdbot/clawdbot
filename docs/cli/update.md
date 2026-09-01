@@ -39,6 +39,21 @@ openclaw --update
 `openclaw --update` rewrites to `openclaw update` (useful for shells and
 launcher scripts).
 
+Failed update and repair attempts enter [triage](/cli/triage) after service
+recovery and cleanup finish. Interactive updates open the existing agent picker;
+`--yes`, `--json`, and non-interactive invocations only collect diagnostics and
+print handoff commands. With `--json`, triage output goes to stderr so stdout
+retains the original update result. A failed diagnostic collection never hides
+the update failure. Dry runs and commands rejected by the initial argument,
+external-supervisor, state-store ownership, handoff identity, or immutable-config
+checks do not collect diagnostics or start an agent.
+
+Once those checks pass, failed metadata, schema, runtime, and managed-service
+checks enter triage even when installation is blocked. This includes an update
+that cannot safely stop its parent Gateway process. Diagnosis preserves that
+refusal: it does not stop the Gateway, retry the update, or bypass safety checks. See
+[Update troubleshooting](/install/update-troubleshooting).
+
 ## Options
 
 | Flag                                             | Description                                                                                                                                                                                                                                                                                                                                   |
@@ -68,6 +83,10 @@ print progress steps.
 `--yes` also skips the optional shell-completion setup prompt. Existing
 completion profiles and caches are still repaired when needed; installing
 completion in a new shell profile remains an interactive choice.
+
+`--tag` changes only this package update. A saved `update.channel` continues to
+govern later foreground and automatic updates, even after a one-off beta
+install. Use `--channel` to change that policy.
 
 For source checkouts, `--dry-run` previews the update flow without fetching Git
 refs or checking working-tree changes. The real update checks for uncommitted
@@ -145,7 +164,10 @@ Plugin artifacts that require capability consent are not installed without an
 interactive review or explicit `--accept-capabilities`. `--yes` alone does not
 accept capability changes, and JSON mode does not prompt. An unresolved review
 preserves the previous plugin, exits non-zero, and blocks any requested Gateway
-restart.
+restart. This also applies when a bundled plugin moves to an external package or
+a missing configured plugin has no install record yet. Automatic repair can
+report a deferred replacement as a notice when a usable, enabled artifact remains
+installed; that retained artifact still undergoes payload validation.
 
 If the core package has already changed, run `openclaw update repair` in an
 interactive terminal to review plugin capabilities. After reviewing the changes,
@@ -256,9 +278,12 @@ aligned:
 
 ### Restart handoff
 
-The Gateway core auto-updater (when enabled via config) launches the CLI
-update path outside the live Gateway request handler. Control-plane
-`update.run` package-manager updates and supervised git-checkout updates use
+The Gateway core auto-updater requires a managed service restart path. It hands
+the CLI update to a detached helper before the Gateway exits. A foreground
+Gateway keeps update hints but leaves installation and activation to the
+operator: stop it, run `openclaw update`, then launch it again.
+
+Control-plane `update.run` package-manager updates and supervised git-checkout updates use
 the same managed-service handoff instead of replacing the package tree or
 rebuilding `dist/` inside the live Gateway process: the Gateway starts a
 detached helper and exits, and that helper runs `openclaw update --yes --json`
@@ -280,6 +305,13 @@ then refreshes service metadata, restarts the service, and verifies the
 restarted Gateway before reporting `Gateway: restarted and verified.`.
 Doctor repair and plugin validation run before restart; a verified restart
 does not run another Doctor from the old updater process.
+After plugin convergence, the updated CLI also runs any plugin-owned
+post-update readiness checks against an isolated state snapshot. An error keeps
+the Gateway stopped and returns the check's remediation before restart; this
+gate does not run interactive setup, download models, or change config.
+It selects readiness owners before loading their health APIs, so an unrelated
+optional Doctor check cannot interrupt the gate. Selected readiness checks
+remain mandatory, including when their required artifact is unavailable.
 Package-manager updates additionally verify the restarted Gateway reports the
 expected package version; git-checkout updates verify gateway health and
 service readiness after the rebuild.

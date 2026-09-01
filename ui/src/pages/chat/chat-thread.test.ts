@@ -655,37 +655,89 @@ describe("assistant commentary grouping", () => {
     ]);
   });
 
-  it("keeps a queued current prompt before a terminal delivered ahead of its ACK", () => {
-    const paneId = "terminal-before-send-ack";
-    const terminal = rememberLiveTerminalRun(
-      assistantMessage("Terminal reply", 1_000),
-      "run-active",
-    );
-    const sending = queuedSend("sending-current", "Current prompt", 2_000, "sending", {
-      sendAttempts: 1,
-      sendRunId: "run-active",
-    });
-    const liveItems = buildCachedChatItems(
-      createProps({ paneId, runId: "run-active", messages: [terminal], queue: [sending] }),
-    );
-    const stableItems = buildCachedChatItems(
-      createProps({
-        paneId,
-        messages: [
-          userMessage("Current prompt", 2_000, {
-            __openclaw: { idempotencyKey: "run-active:user" },
+  it.each([
+    { source: "live terminal", sendState: "sending", search: false, active: true },
+    { source: "durable reply", sendState: "sending", search: false, active: true },
+    { source: "durable reply", sendState: "waiting-reconnect", search: false, active: true },
+    { source: "durable reply", sendState: "sending", search: true, active: true },
+    { source: "durable reply", sendState: "waiting-reconnect", search: false, active: false },
+  ] as const)(
+    "keeps a $sendState prompt before its $source under clock skew with search=$search active=$active",
+    ({ source, sendState, search, active }) => {
+      const paneId = `reply-before-user:${source}:${sendState}:${search}:${active}`;
+      const terminal =
+        source === "live terminal"
+          ? rememberLiveTerminalRun(assistantMessage("Current reply", 1_000), "run-active")
+          : assistantMessage("Current reply", 1_000, {
+              __openclaw: { id: "durable-reply", seq: 6, runId: "run-active" },
+            });
+      const preceding = [
+        userMessage("Earlier prompt", 500),
+        assistantMessage("Unowned reply", 4_000),
+        assistantMessage("Unrelated reply", 300, { __openclaw: { runId: "other-run" } }),
+        assistantMessage("Imported reply", 2_500, {
+          __openclaw: {
+            importedFrom: "claude-cli",
+            cliSessionId: "external-session",
+            externalId: "external-reply",
+            runId: "run-active",
+          },
+        }),
+        assistantMessage("Unattributed run hint", 900, { runId: "run-active" }),
+      ];
+      if (search) {
+        preceding.push(
+          assistantMessage("Hidden earlier output", 950, {
+            __openclaw: { id: "hidden-output", seq: 5, runId: "run-active" },
           }),
-          terminal,
-        ],
-      }),
-    );
-    const roles = (items: ReturnType<typeof buildCachedChatItems>) =>
-      items.filter((item) => item.kind === "group").map((item) => item.role);
+        );
+      }
+      const sending = queuedSend("sending-current", "Current prompt", 2_000, sendState, {
+        sendAttempts: 1,
+        sendRunId: "run-active",
+      });
+      const liveItems = buildCachedChatItems(
+        createProps({
+          paneId,
+          runId: active ? "run-active" : null,
+          searchOpen: search,
+          searchQuery: "Current",
+          messages: [...preceding, terminal],
+          queue: [sending],
+        }),
+      );
+      const stableItems = buildCachedChatItems(
+        createProps({
+          paneId,
+          searchOpen: search,
+          searchQuery: "Current",
+          messages: [
+            ...preceding,
+            userMessage([{ type: "text", text: "Current prompt" }], 2_000, {
+              __openclaw: { idempotencyKey: "run-active:user" },
+            }),
+            terminal,
+          ],
+        }),
+      );
+      const messages = (items: ReturnType<typeof buildCachedChatItems>) =>
+        items.flatMap((item) =>
+          item.kind === "group" ? item.messages.map(({ message }) => message) : [],
+        );
 
-    expect(roles(liveItems)).toEqual(["user", "assistant"]);
-    expect(roles(stableItems)).toEqual(["user", "assistant"]);
-    resetChatThreadState(paneId);
-  });
+      resetChatThreadState(paneId);
+      const expected = [
+        ...(search ? [] : preceding),
+        expect.objectContaining({
+          role: "user",
+          content: [{ type: "text", text: "Current prompt" }],
+        }),
+        terminal,
+      ];
+      expect(messages(liveItems)).toEqual(expected);
+      expect(messages(stableItems)).toEqual(expected);
+    },
+  );
 
   it("keeps keyed commentary separate from the terminal assistant reply", () => {
     const groups = messageGroups({

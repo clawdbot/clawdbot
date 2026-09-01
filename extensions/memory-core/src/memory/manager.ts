@@ -15,10 +15,10 @@ import {
   type MemoryReadResult,
   type MemorySearchManager,
   type MemorySessionSyncTarget,
-  type MemorySource,
   type MemorySyncParams,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import { runInMemoryBackgroundContext } from "./background-context.js";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import type { EmbeddingProvider, EmbeddingProviderRequest } from "./embeddings.js";
 import { awaitPendingManagerWork } from "./manager-async-state.js";
@@ -235,11 +235,6 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         (initialIndexIdentity.status === "missing" && this.sources.has("memory"));
       const transient =
         params.purpose === "status" || params.purpose === "cli" || params.purpose === "maintenance";
-      if (!transient) {
-        this.ensureWatcher();
-        this.ensureSessionListener();
-        this.ensureIntervalSync();
-      }
       const invalidatedSources = new Set(
         (
           this.db
@@ -266,7 +261,12 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       }
       this.batch = this.resolveBatchConfig();
       if (!transient) {
-        this.ensureSessionStartupCatchup();
+        runInMemoryBackgroundContext(() => {
+          this.ensureWatcher();
+          this.ensureSessionListener();
+          this.ensureIntervalSync();
+          this.ensureSessionStartupCatchup();
+        });
       }
     } catch (err) {
       closeMemoryDatabase(this.db);
@@ -475,19 +475,12 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     }
     const sourceFilter = this.buildSourceFilter();
     const aggregateState = collectMemoryStatusAggregate({
-      db: {
-        prepare: (sql) => ({
-          all: (...args) =>
-            this.db.prepare(sql).all(...args) as Array<{
-              kind: "files" | "chunks";
-              source: MemorySource;
-              c: number;
-            }>,
-        }),
-      },
+      db: this.db,
       sources: this.sources,
       sourceFilterSql: sourceFilter.sql,
       sourceFilterParams: sourceFilter.params,
+      // Source inspection is explicit; routine query status must stay count-only.
+      includeChunkBytes: this.sourceInspections.size > 0,
     });
 
     // Status projects the effective keyword-only search mode while degraded.

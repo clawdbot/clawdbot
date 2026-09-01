@@ -569,9 +569,16 @@ describe("handleSendChat browser annotation context", () => {
         pendingSettingsPatches: { "agent:main": settingsPatch.promise },
       });
 
+      // Annotation context is prepended by the attachment path; Home work context
+      // trails the message so session titles derive from what the person asked.
+      const expected =
+        source === "home"
+          ? "Use the marked area\n\nStable browser context"
+          : "Stable browser context\n\nUse the marked area";
+
       const send = handleSendChat(host);
       await vi.waitFor(() => expect(host.chatQueue).toHaveLength(1));
-      expect(host.chatQueue[0]?.text).toBe("Stable browser context\n\nUse the marked area");
+      expect(host.chatQueue[0]?.text).toBe(expected);
 
       host.chatMessage = "New draft";
       host.chatAttachments = [replacement];
@@ -579,13 +586,8 @@ describe("handleSendChat browser annotation context", () => {
       settingsPatch.resolve(true);
       await send;
 
-      expect(findChatSendPayload(host).message).toBe(
-        "Stable browser context\n\nUse the marked area",
-      );
-      expect(host.chatQueue[0]).toMatchObject({
-        sendState: "failed",
-        text: "Stable browser context\n\nUse the marked area",
-      });
+      expect(findChatSendPayload(host).message).toBe(expected);
+      expect(host.chatQueue[0]).toMatchObject({ sendState: "failed", text: expected });
       expect(host.chatMessage).toBe("New draft");
       expect(host.chatAttachments).toEqual([replacement]);
       expect(host.chatLocalInputHistoryBySession[host.sessionKey]?.[0]?.text).toBe(
@@ -593,8 +595,8 @@ describe("handleSendChat browser annotation context", () => {
       );
       await retryQueuedChatMessage(host, host.chatQueue[0]!.id);
       expect(sendRequest.mock.calls.map(([params]) => params.message)).toEqual([
-        "Stable browser context\n\nUse the marked area",
-        "Stable browser context\n\nUse the marked area",
+        expected,
+        expected,
       ]);
     },
   );
@@ -616,7 +618,7 @@ describe("Home work context admission", () => {
       });
       await handleSendChat(host);
       expect(findChatSendPayload(host).message).toBe(
-        included ? `${text}\n\nExplain this task` : "Explain this task",
+        included ? `Explain this task\n\n${text}` : "Explain this task",
       );
       expect(host.chatLocalInputHistoryBySession[host.sessionKey]?.[0]?.text).toBe(
         "Explain this task",

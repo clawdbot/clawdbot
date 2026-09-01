@@ -118,13 +118,13 @@ export async function executeMutableUpdate(params: {
         }
       }
     } catch (err) {
-      if (err instanceof UpdateCommandAbort) {
+      if (err instanceof UpdateCommandAbort || err instanceof UpdatePreMutationError) {
         throw err;
       }
       params.stop();
-      defaultRuntime.error(`Failed to stop managed gateway service before update: ${String(err)}`);
-      defaultRuntime.exit(1);
-      throw new UpdateCommandAbort();
+      throw new Error(`Failed to stop managed gateway service before update: ${String(err)}`, {
+        cause: err,
+      });
     }
 
     if (phase === "inspect" && preManagedServiceStop?.serviceUpdateVerdict?.kind === "foreign") {
@@ -137,33 +137,36 @@ export async function executeMutableUpdate(params: {
         processEnv: process.env,
         invocationCwd: params.invocationCwd,
       });
+      if (ownedManagedUpdateContext) {
+        params.recoveryState.triageTarget.env = ownedManagedUpdateContext.env;
+      }
     } catch (err) {
       params.stop();
-      defaultRuntime.error(`Failed to capture managed gateway update state: ${String(err)}`);
       await recoverStoppedService();
-      defaultRuntime.exit(1);
-      throw new UpdateCommandAbort();
+      throw new Error(`Failed to capture managed gateway update state: ${String(err)}`, {
+        cause: err,
+      });
     }
 
     if (shouldBlockMutableUpdateFromGatewayServiceEnv({ preManagedServiceStop })) {
       params.stop();
       const updateLabel = params.updateInstallKind === "git" ? "Git updates" : "Package updates";
-      defaultRuntime.error(
+      throw new UpdatePreMutationError(
+        "managed-service-preflight",
         [
           `${updateLabel} cannot run from inside the gateway service process.`,
           "That path replaces the active OpenClaw dist tree while the live gateway may still lazy-load old chunks.",
           `Run \`${replaceCliName(formatCliCommand("openclaw update"), CLI_NAME)}\` from a shell outside the gateway service, or stop the gateway service first and then update.`,
         ].join("\n"),
       );
-      defaultRuntime.exit(1);
-      throw new UpdateCommandAbort();
     }
 
     if (preManagedServiceStop?.blockMessage) {
       params.stop();
-      defaultRuntime.error(preManagedServiceStop.blockMessage);
-      defaultRuntime.exit(1);
-      throw new UpdateCommandAbort();
+      throw new UpdatePreMutationError(
+        "managed-service-preflight",
+        preManagedServiceStop.blockMessage,
+      );
     }
   };
 
@@ -254,7 +257,16 @@ export async function executeMutableUpdate(params: {
           root: params.root,
           reason: err.reason,
           recovery: { serviceRestartSafe: true },
-          steps: [],
+          steps: [
+            {
+              name: err.reason,
+              command: err.reason,
+              cwd: params.root,
+              exitCode: 1,
+              durationMs: 0,
+              stderrTail: err.message,
+            },
+          ],
           durationMs: Date.now() - params.startedAt,
         },
         preManagedServiceStop,
@@ -264,6 +276,19 @@ export async function executeMutableUpdate(params: {
     if (err instanceof UpdateCommandAbort) {
       return null;
     }
+    // Unexpected mutation failures have no verified rollback. Carry the owner's
+    // restart verdict into diagnostics while preserving the original exception.
+    params.recoveryState.triageTarget.failureResult = {
+      status: "error",
+      mode:
+        params.updateInstallKind === "git"
+          ? "git"
+          : (params.packageInstallTarget?.manager ?? "unknown"),
+      root: params.root,
+      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      steps: [],
+      durationMs: Date.now() - params.startedAt,
+    };
     try {
       await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(preManagedServiceStop);
     } catch (resumeErr) {

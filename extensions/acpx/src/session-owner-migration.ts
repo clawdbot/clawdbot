@@ -48,6 +48,9 @@ async function legacyRecords(input: MigrationInput): Promise<{ directory: string
     .filter((name) => name.endsWith(".json"))
     .map((name) => decodeURIComponent(name.slice(0, -5)))
     .filter((id) => !id.startsWith("agent:") && !id.startsWith(".openclaw-owner-"));
+  if (ids.length === 0) {
+    return { directory, ids };
+  }
   const evidence = await input.context.inspectAcpSessionClaims?.();
   const { decodeAcpxRuntimeHandleState } = await import("acpx/runtime");
   return {

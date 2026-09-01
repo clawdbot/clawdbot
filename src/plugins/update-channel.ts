@@ -1,3 +1,4 @@
+import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { readInstalledPackageVersion } from "../infra/package-update-utils.js";
@@ -42,6 +43,7 @@ import {
   isTrustedSourceLinkedOfficialBridgeNpmInstall,
   resolveNpmSpecPackageName,
   type PluginUpdateLogger,
+  type PluginUpdateOutcome,
 } from "./update-source.js";
 
 type PluginChannelSyncSummary = {
@@ -49,10 +51,10 @@ type PluginChannelSyncSummary = {
   switchedToClawHub: string[];
   switchedToNpm: string[];
   warnings: string[];
-  errors: string[];
+  errors: Pick<PluginUpdateOutcome, "pluginId" | "message" | "code">[];
 };
 
-type PluginChannelSyncResult = {
+export type PluginChannelSyncResult = {
   config: OpenClawConfig;
   changed: boolean;
   summary: PluginChannelSyncSummary;
@@ -189,7 +191,7 @@ export async function syncPluginsForUpdateChannel(params: {
       let installSpec = preferredSource === "clawhub" ? clawhubSpec : effectiveNpmSpec;
       if (!installSpec) {
         const message = `Failed to update ${targetPluginId}: missing ${preferredSource} install spec for externalized bundled plugin.`;
-        summary.errors.push(message);
+        summary.errors.push({ pluginId: targetPluginId, message });
         logger.error?.(message);
         continue;
       }
@@ -230,7 +232,14 @@ export async function syncPluginsForUpdateChannel(params: {
           if (!(error instanceof ManagedPluginLifecycleError)) {
             throw error;
           }
-          result = { ok: false, error: error.message };
+          return {
+            result: {
+              ok: false as const,
+              error: error.message,
+              code: error.capabilityConsent ? PLUGIN_CAPABILITY_CONSENT_REQUIRED : undefined,
+            },
+            capabilityConsent,
+          };
         }
         consent.rethrowCallbackError();
         return { result, capabilityConsent };
@@ -276,7 +285,7 @@ export async function syncPluginsForUpdateChannel(params: {
                 phase: "update",
                 result,
               });
-        summary.errors.push(message);
+        summary.errors.push({ pluginId: targetPluginId, message, code: result.code });
         logger.error?.(message);
         continue;
       }

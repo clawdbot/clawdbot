@@ -623,6 +623,18 @@ For paired-node features, prefer
 `api.registerCli(..., { parentPath: ["nodes"] })` and makes commands such as
 `openclaw nodes canvas` explicit plugin-owned node features.
 
+Reuse the core node CLI owners when a plugin-owned node command needs the same
+Gateway flags, invoke envelope, terminal presentation, and authorization hints:
+
+```typescript
+import {
+  buildNodeInvokeParams,
+  getNodesTheme,
+  nodesCallOpts,
+  runNodesCommand,
+} from "openclaw/plugin-sdk/node-cli-runtime";
+```
+
 If you want a plugin command to stay lazy-loaded in the normal root CLI path,
 provide `descriptors` that cover every top-level command root exposed by that
 registrar.

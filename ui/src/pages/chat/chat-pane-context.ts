@@ -24,6 +24,7 @@ import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { applyChatAgentsList, resumePendingChatHistoryLoad } from "./chat-history.ts";
 import { ChatPaneLifecycle } from "./chat-pane-lifecycle.ts";
+import { resolvePlacementComposer } from "./chat-pane-placement.ts";
 import {
   applySelectedSessionProjection,
   resolveAssistantAttachmentAuthToken,
@@ -55,6 +56,22 @@ import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-status.ts";
 export abstract class ChatPaneContext extends ChatPaneLifecycle {
   private gatewayConnectionLifecycle?: ReturnType<typeof createGatewayConnectionLifecycle>;
   private outboxRecoveryReady = false;
+
+  protected placementComposerPresentation(
+    row: GatewaySessionRow | undefined,
+    startupPending: boolean,
+  ) {
+    return resolvePlacementComposer({
+      gatewaySnapshot: this.context.gateway.snapshot,
+      movingKey: this.headerPlacementMovingKey,
+      reclaimingKey: this.headerPlacementReclaimingKey,
+      restartingKey: this.headerPlacementRestartingKey,
+      row,
+      startupPending,
+      onRestart: () => row && void this.restartHeaderPlacement(row),
+      onReclaim: () => row && void this.reclaimHeaderPlacement(row),
+    });
+  }
 
   override disconnectedCallback() {
     this.continueInTerminalDialog = null;
@@ -88,6 +105,32 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     };
     const { moveChatPanePlacement } = await import("./chat-pane-placement.runtime.ts");
     await moveChatPanePlacement(params);
+  }
+
+  protected async restartHeaderPlacement(row: GatewaySessionRow): Promise<void> {
+    const scope = this.captureConnectionScope();
+    if (!scope) {
+      return;
+    }
+    const onRestartingChange = (restartingKey: string | null) => {
+      if (restartingKey !== null || this.headerPlacementRestartingKey === row.key) {
+        this.headerPlacementRestartingKey = restartingKey;
+      }
+    };
+    const params = {
+      client: scope.client,
+      connectionGeneration: scope.generation,
+      gatewaySnapshot: scope.context.gateway.snapshot,
+      restartingKey: this.headerPlacementRestartingKey,
+      row,
+      isCurrent: () => this.ownsHeaderOutcomeScope(scope),
+      onRestartingChange,
+      publishError: (error: unknown) => this.publishHeaderError(error, scope.headerOutcomeOwner),
+      refreshReplacement: (agentId?: string | null) => scope.sessions.refreshReplacement(agentId),
+      requestUpdate: () => this.requestUpdate(),
+    };
+    const { restartChatPanePlacement } = await import("./chat-pane-placement.runtime.ts");
+    await restartChatPanePlacement(params);
   }
 
   protected async reclaimHeaderPlacement(row: GatewaySessionRow): Promise<void> {

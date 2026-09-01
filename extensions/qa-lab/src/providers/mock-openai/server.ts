@@ -15,6 +15,7 @@ import {
 import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
 import {
   buildAssistantText,
+  readForkedContextCompletion,
   isCanonicalCompactionRetryWriteResult,
   QA_COMPACTION_RETRY_FINAL_MARKER,
 } from "./mock-openai-assistant-text.js";
@@ -150,6 +151,7 @@ import {
   buildQaLongFinalText,
   buildAssistantThenToolCallEvents,
   buildAssistantEvents,
+  buildStreamingFinalAnswerEvents,
   buildPartialFailureEvents,
   buildReasoningOnlyEvents,
   buildReasoningAndAssistantEvents,
@@ -158,6 +160,8 @@ import {
 import {
   extractLastUserText,
   extractLastMatchingUserTurn,
+  extractMockSubagentContext,
+  splitMockConversationContext,
   hasToolOutput,
   extractToolOutput,
   extractToolOutputValue,
@@ -1500,25 +1504,11 @@ async function buildResponsesPayload(
       segmentCount: 96,
       startMarker: "TELEGRAM-LONG-FINAL-3CHUNK-BEGIN",
     });
-    return buildAssistantEvents([
-      {
-        id: "msg_mock_telegram_long_final_three_chunk",
-        phase: "final_answer",
-        streamDeltas: splitMockStreamingText(text),
-        text,
-      },
-    ]);
+    return buildStreamingFinalAnswerEvents("msg_mock_telegram_long_final_three_chunk", text);
   }
   if (QA_TELEGRAM_LONG_FINAL_PROMPT_RE.test(allInputText)) {
     const text = buildQaLongFinalText();
-    return buildAssistantEvents([
-      {
-        id: "msg_mock_telegram_long_final",
-        phase: "final_answer",
-        streamDeltas: splitMockStreamingText(text),
-        text,
-      },
-    ]);
+    return buildStreamingFinalAnswerEvents("msg_mock_telegram_long_final", text);
   }
   if (QA_WHATSAPP_LONG_FINAL_PROMPT_RE.test(allInputText)) {
     const text = buildQaLongFinalText({
@@ -1527,14 +1517,7 @@ async function buildResponsesPayload(
       segmentCount: 64,
       startMarker: "WHATSAPP-LONG-FINAL-BEGIN",
     });
-    return buildAssistantEvents([
-      {
-        id: "msg_mock_whatsapp_long_final",
-        phase: "final_answer",
-        streamDeltas: splitMockStreamingText(text),
-        text,
-      },
-    ]);
+    return buildStreamingFinalAnswerEvents("msg_mock_whatsapp_long_final", text);
   }
   const whatsAppPendingHistoryReply = buildWhatsAppPendingHistoryReply(prompt, input);
   if (whatsAppPendingHistoryReply) {
@@ -1632,48 +1615,30 @@ async function buildResponsesPayload(
     QA_STREAMING_PROMPT_RE.test(allInputText) &&
     allInputText.includes(QA_TELEGRAM_STREAM_SINGLE_MARKER)
   ) {
-    return buildAssistantEvents([
-      {
-        id: "msg_mock_telegram_quiet_stream",
-        phase: "final_answer",
-        streamDeltas: splitMockStreamingText(QA_TELEGRAM_STREAM_SINGLE_MARKER),
-        text: QA_TELEGRAM_STREAM_SINGLE_MARKER,
-      },
-    ]);
+    return buildStreamingFinalAnswerEvents(
+      "msg_mock_telegram_quiet_stream",
+      QA_TELEGRAM_STREAM_SINGLE_MARKER,
+    );
   }
   if (
     QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(scenarioFamilyPrompt) &&
     scenarioFamilyReplyDirective
   ) {
-    return buildAssistantEvents([
-      {
-        id: "msg_mock_final_only_marker_stream",
-        phase: "final_answer",
-        streamDeltas: splitMockStreamingText("QA streaming preview in progress"),
-        text: scenarioFamilyReplyDirective,
-      },
-    ]);
+    return buildStreamingFinalAnswerEvents(
+      "msg_mock_final_only_marker_stream",
+      scenarioFamilyReplyDirective,
+      "QA streaming preview in progress",
+    );
   }
   if (QA_STREAMING_PROMPT_RE.test(scenarioFamilyPrompt) && scenarioFamilyReplyDirective) {
-    return buildAssistantEvents([
-      {
-        id: "msg_mock_quiet_stream",
-        phase: "final_answer",
-        streamDeltas: splitMockStreamingText(scenarioFamilyReplyDirective),
-        text: scenarioFamilyReplyDirective,
-      },
-    ]);
+    return buildStreamingFinalAnswerEvents("msg_mock_quiet_stream", scenarioFamilyReplyDirective);
   }
   if (slackProgressDirectives) {
     if (hasSlackProgressToolOutput) {
-      return buildAssistantEvents([
-        {
-          id: "msg_mock_slack_progress_final",
-          phase: "final_answer",
-          streamDeltas: splitMockStreamingText(slackProgressDirectives.finalMarker),
-          text: slackProgressDirectives.finalMarker,
-        },
-      ]);
+      return buildStreamingFinalAnswerEvents(
+        "msg_mock_slack_progress_final",
+        slackProgressDirectives.finalMarker,
+      );
     }
     if (hasDeclaredTool(body, "exec")) {
       return buildAssistantThenToolCallEvents(
@@ -1727,14 +1692,7 @@ async function buildResponsesPayload(
         },
       );
     }
-    return buildAssistantEvents([
-      {
-        id: "msg_mock_block_2",
-        phase: "final_answer",
-        streamDeltas: splitMockStreamingText(blockStreamingMarkers.second),
-        text: blockStreamingMarkers.second,
-      },
-    ]);
+    return buildStreamingFinalAnswerEvents("msg_mock_block_2", blockStreamingMarkers.second);
   }
   if (isStrandedFinalRetryFailureRequest(allInputText)) {
     return buildAssistantEvents(buildStrandedFinalRetryFailureText());
@@ -2392,17 +2350,47 @@ async function buildResponsesPayload(
   if (explicitSessionsSpawnArgs && canCallSessionsSpawn && !hasCompletedToolOutput) {
     return buildToolCallEventsWithArgs("sessions_spawn", explicitSessionsSpawnArgs);
   }
+  const forkTask = extractMockSubagentContext(input);
+  if (forkTask && /^Report the visible code from the requester transcript\./i.test(forkTask.task)) {
+    return buildAssistantEvents(buildAssistantText(input, body));
+  }
+  const forkCompletion = readForkedContextCompletion(input);
   if (
-    canCallSessionsSpawn &&
-    /forked subagent context qa check/i.test(prompt) &&
-    !hasCompletedToolOutput
+    /forked subagent context qa check/i.test(splitMockConversationContext(prompt).current) ||
+    forkCompletion
   ) {
-    return buildToolCallEventsWithArgs("sessions_spawn", {
-      task: "Report the visible code from the requester transcript.",
-      label: "qa-fork-context",
-      mode: "run",
-      context: "fork",
-    });
+    if (forkCompletion) {
+      // Completion must be delivered by the parent, not synthesized from its
+      // kickoff or spawn receipt. Never replay the inherited spawn instruction.
+      if (completedToolName === "message") {
+        return buildAssistantEvents("NO_REPLY");
+      }
+      return hasToolDefinition(toolDeclarationBody, "message") || hasCallableCodeMode
+        ? buildToolCallEventsWithArgs("message", {
+            action: "send",
+            message: forkCompletion,
+            final: true,
+          })
+        : buildAssistantEvents(forkCompletion);
+    }
+    if (!hasCompletedToolOutput && canCallSessionsSpawn) {
+      return buildToolCallEventsWithArgs("sessions_spawn", {
+        task: "Report the visible code from the requester transcript.",
+        label: "qa-fork-context",
+        mode: "run",
+        context: "fork",
+      });
+    }
+    if (
+      hasCompletedToolOutput &&
+      canCallSessionsYield &&
+      !hasToolErrorOutput(toolJson, toolOutput)
+    ) {
+      return buildToolCallEventsWithArgs("sessions_yield", {
+        message: "Waiting for the forked child to recover the visible code.",
+      });
+    }
+    return buildAssistantEvents(buildAssistantText(input, body));
   }
   if (/tool continuity check/i.test(prompt) && !hasCompletedToolOutput) {
     return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });

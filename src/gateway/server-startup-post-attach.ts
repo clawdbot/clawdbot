@@ -1283,7 +1283,8 @@ export async function startGatewayPostAttachRuntime(
         params.loadStartupPlugins!(),
       );
       await params.pluginRuntimeClaim?.waitForUnblocked();
-      if (params.pluginRuntimeClaim?.isCurrent() === false) {
+      if (params.isClosing?.() || params.pluginRuntimeClaim?.isCurrent() === false) {
+        // Shutdown only owns attached bindings; retire unadopted results here.
         loaded.retireGatewayRuntimeBindings?.();
         pluginRegistry = params.getCurrentPluginRegistry?.() ?? pluginRegistry;
         startupPluginsLoaded = true;
@@ -1298,9 +1299,7 @@ export async function startGatewayPostAttachRuntime(
         ],
         ["gatewayMethodCount", loaded.gatewayMethods.length],
       ]);
-      if (params.isClosing?.() !== true) {
-        await params.onStartupPluginsLoaded?.(loaded);
-      }
+      await params.onStartupPluginsLoaded?.(loaded);
       return loaded;
     })();
     return await startupPluginsLoadPromise;

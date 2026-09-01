@@ -50,32 +50,39 @@ function failedResult(recovery: UpdateRunResult["recovery"]): UpdateRunResult {
 
 async function finishFailedUpdate(
   result: UpdateRunResult,
-  options: { json?: boolean; stopped?: boolean } = {},
+  options: { json?: boolean; stopped?: boolean; exitCode?: number } = {},
 ): Promise<void> {
-  await finishUpdate({
-    result,
-    opts: { json: options.json },
-    showProgress: false,
-    startedAt: Date.now(),
-    preManagedServiceStop: { stopped: options.stopped ?? true, serviceEnv: {} },
-    controlPlaneUpdateSentinelMeta: undefined,
-  } as unknown as FinishUpdateParams);
+  await expect(
+    finishUpdate({
+      result,
+      opts: { json: options.json },
+      showProgress: false,
+      startedAt: Date.now(),
+      preManagedServiceStop: { stopped: options.stopped ?? true, serviceEnv: {} },
+      controlPlaneUpdateSentinelMeta: undefined,
+    } as unknown as FinishUpdateParams),
+  ).rejects.toMatchObject({
+    name: "UpdateCommandFailure",
+    exitCode: options.exitCode ?? 1,
+  });
 }
 
-async function finishSkippedUpdate(reason: string): Promise<void> {
-  await finishUpdate({
-    result: {
-      status: "skipped",
-      mode: reason === "dirty" ? "git" : "unknown",
-      reason,
-      steps: [],
-      durationMs: 1,
-    },
-    opts: {},
-    showProgress: false,
-    startedAt: Date.now(),
-    controlPlaneUpdateSentinelMeta: undefined,
-  } as unknown as FinishUpdateParams);
+async function finishSkippedUpdate(reason: string, exitCode: number): Promise<void> {
+  await expect(
+    finishUpdate({
+      result: {
+        status: "skipped",
+        mode: reason === "dirty" ? "git" : "unknown",
+        reason,
+        steps: [],
+        durationMs: 1,
+      },
+      opts: {},
+      showProgress: false,
+      startedAt: Date.now(),
+      controlPlaneUpdateSentinelMeta: undefined,
+    } as unknown as FinishUpdateParams),
+  ).rejects.toMatchObject({ name: "UpdateCommandFailure", exitCode });
 }
 
 describe("skipped update exit status", () => {
@@ -90,13 +97,13 @@ describe("skipped update exit status", () => {
     ["dirty", 1],
     ["not-git-install", 0],
   ] as const)("handles %s with exit %i", async (reason, exitCode) => {
-    await finishSkippedUpdate(reason);
+    await finishSkippedUpdate(reason, exitCode);
     if (reason === "dirty") {
       expect(defaultRuntime.error).toHaveBeenCalledWith(
         expect.stringContaining("Update blocked: local files are edited"),
       );
     }
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(exitCode);
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 });
 
@@ -118,7 +125,10 @@ describe("failed Git update recovery restart", () => {
         now += 200;
       });
 
-      await finishFailedUpdate({ ...failedResult({ serviceRestartSafe: true }), status });
+      await finishFailedUpdate(
+        { ...failedResult({ serviceRestartSafe: true }), status },
+        { exitCode: status === "skipped" ? 0 : 1 },
+      );
 
       expect(mocks.restart).toHaveBeenCalledOnce();
       expect(mocks.writeSentinel).toHaveBeenCalledOnce();
@@ -147,7 +157,7 @@ describe("failed Git update recovery restart", () => {
     vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
     await finishFailedUpdate(failedResult(undefined), { json: true, stopped: false });
     expect(mocks.restart).not.toHaveBeenCalled();
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -170,9 +180,9 @@ describe("failed Git update recovery restart", () => {
             ? { serviceRestartSafe: true }
             : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
         ),
-        { json: true, stopped },
+        { json: true, stopped, exitCode: expected },
       );
-      expect(defaultRuntime.exit).toHaveBeenCalledWith(expected);
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
       expect(mocks.restart).toHaveBeenCalledTimes(safe && !restoreFails ? 1 : 0);
       expect(mocks.writeSentinel.mock.lastCall?.[0].result.recovery?.serviceRestartSafe).toBe(safe);
     },
@@ -186,16 +196,18 @@ describe("failed Git update recovery restart", () => {
       if (restoreFails) {
         mocks.restoreWindowsAutoStart.mockRejectedValueOnce(new Error("restore failed"));
       }
-      await finishUpdate({
-        result: { status: "ok", mode: "npm", root: "/repo", steps: [], durationMs: 1 },
-        root: "/repo",
-        configSnapshot: { valid: false },
-        opts: { json: true },
-        showProgress: false,
-        startedAt: Date.now(),
-        controlPlaneUpdateSentinelMeta: undefined,
-      } as unknown as FinishUpdateParams);
-      expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+      await expect(
+        finishUpdate({
+          result: { status: "ok", mode: "npm", root: "/repo", steps: [], durationMs: 1 },
+          root: "/repo",
+          configSnapshot: { valid: false },
+          opts: { json: true },
+          showProgress: false,
+          startedAt: Date.now(),
+          controlPlaneUpdateSentinelMeta: undefined,
+        } as unknown as FinishUpdateParams),
+      ).rejects.toMatchObject({ name: "UpdateCommandFailure", exitCode: 1 });
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
       expect(mocks.restart).not.toHaveBeenCalled();
     },
   );
@@ -277,30 +289,32 @@ describe("failed package update recovery safety", () => {
   ])("keeps the replaced package stopped after %s fails", async (name) => {
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
 
-    await finishUpdate({
-      result: {
-        status: "error",
-        mode: name.startsWith("pnpm ") ? "pnpm" : "npm",
-        reason: "global-install-failed",
-        steps: [
-          { name: "global update", command: "npm", cwd: "/", durationMs: 1, exitCode: 0 },
-          {
-            name,
-            command: "verify",
-            cwd: "/",
-            durationMs: 1,
-            exitCode: 1,
-          },
-        ],
-        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-        durationMs: 1,
-      },
-      opts: {},
-      showProgress: false,
-      startedAt: Date.now(),
-      preManagedServiceStop: { stopped: true, serviceEnv: {} },
-      controlPlaneUpdateSentinelMeta: undefined,
-    } as unknown as FinishUpdateParams);
+    await expect(
+      finishUpdate({
+        result: {
+          status: "error",
+          mode: name.startsWith("pnpm ") ? "pnpm" : "npm",
+          reason: "global-install-failed",
+          steps: [
+            { name: "global update", command: "npm", cwd: "/", durationMs: 1, exitCode: 0 },
+            {
+              name,
+              command: "verify",
+              cwd: "/",
+              durationMs: 1,
+              exitCode: 1,
+            },
+          ],
+          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+          durationMs: 1,
+        },
+        opts: {},
+        showProgress: false,
+        startedAt: Date.now(),
+        preManagedServiceStop: { stopped: true, serviceEnv: {} },
+        controlPlaneUpdateSentinelMeta: undefined,
+      } as unknown as FinishUpdateParams),
+    ).rejects.toMatchObject({ name: "UpdateCommandFailure", exitCode: 1 });
 
     expect(mocks.restart).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Managed gateway remains stopped"));
@@ -309,24 +323,26 @@ describe("failed package update recovery safety", () => {
   it("does not start a Doctor-rejected candidate even after a verified swap", async () => {
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
 
-    await finishUpdate({
-      result: {
-        status: "error",
-        mode: "npm",
-        reason: "doctor-failed",
-        steps: [
-          { name: "global update", command: "npm", cwd: "/", durationMs: 1, exitCode: 0 },
-          { name: "openclaw doctor", command: "doctor", cwd: "/", durationMs: 1, exitCode: 1 },
-        ],
-        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-        durationMs: 1,
-      },
-      opts: {},
-      showProgress: false,
-      startedAt: Date.now(),
-      preManagedServiceStop: { stopped: true, serviceEnv: {} },
-      controlPlaneUpdateSentinelMeta: undefined,
-    } as unknown as FinishUpdateParams);
+    await expect(
+      finishUpdate({
+        result: {
+          status: "error",
+          mode: "npm",
+          reason: "doctor-failed",
+          steps: [
+            { name: "global update", command: "npm", cwd: "/", durationMs: 1, exitCode: 0 },
+            { name: "openclaw doctor", command: "doctor", cwd: "/", durationMs: 1, exitCode: 1 },
+          ],
+          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+          durationMs: 1,
+        },
+        opts: {},
+        showProgress: false,
+        startedAt: Date.now(),
+        preManagedServiceStop: { stopped: true, serviceEnv: {} },
+        controlPlaneUpdateSentinelMeta: undefined,
+      } as unknown as FinishUpdateParams),
+    ).rejects.toMatchObject({ name: "UpdateCommandFailure", exitCode: 1 });
 
     expect(mocks.restart).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Managed gateway remains stopped"));

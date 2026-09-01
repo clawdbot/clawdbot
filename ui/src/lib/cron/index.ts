@@ -32,9 +32,8 @@ import {
   isMissingOperatorReadScopeError,
 } from "../gateway-errors.ts";
 import { parseCronEveryMs } from "./decimal.ts";
-import { loadCronFailingCount } from "./scope.ts";
 
-export { loadCronFailingCount, loadCronScopeStats } from "./scope.ts";
+export { loadCronScopeStats } from "./scope.ts";
 
 const CRON_CHANNEL_LAST = "last";
 type CronDelivery = NonNullable<CronJob["delivery"]>;
@@ -227,9 +226,6 @@ export type CronState = {
   cronStatus: CronStatus | null;
   cronScopedTotal: number | null;
   cronScopedNextWakeAtMs: number | null;
-  // Global enabled+error job count for the stats card; null until loaded.
-  // Kept separate from cronJobs, which only holds the filtered/paged table.
-  cronFailingCount: number | null;
   cronError: string | null;
   cronForm: CronFormState;
   // True while the create panel owns the detail pane; job selection (editing)
@@ -292,7 +288,6 @@ export function createInitialCronState(
     cronStatus: null,
     cronScopedTotal: null,
     cronScopedNextWakeAtMs: null,
-    cronFailingCount: null,
     cronError: null,
     cronForm: { ...DEFAULT_CRON_FORM },
     cronCreateOpen: false,
@@ -1373,12 +1368,10 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
   return result;
 }
 
-// Every mutation reloads the same trio so the table, scheduler status, and
-// the failing-count stat card can never drift apart after add/toggle/remove.
+// Mutations reload the list and scheduler status so both canonical views stay current.
 async function reloadCronJobsSnapshot(state: CronState) {
   await loadCronJobsPage(state, { tableFilters: true });
   await loadCronStatus(state);
-  await loadCronFailingCount(state);
 }
 
 export async function toggleCronJob(

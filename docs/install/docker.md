@@ -243,10 +243,11 @@ checkouts also compile first-party plugins published separately with
 `openclaw.build.bundledDist: false`; that marker still preserves the plugin's
 external npm or ClawHub ownership and does not change either artifact contract.
 Unknown, invalid, or ambiguous ids fail the image build.
-Known dependency/source-only ids keep their existing source and dependency
-staging without gaining a compiled root dist entry. A selected plugin with
-unified build entries must compile successfully; unselected external plugin
-source and runtime output are pruned.
+This includes WhatsApp: `OPENCLAW_EXTENSIONS=whatsapp` compiles and packages its
+runtime. Ordinary source builds generate its runtime through the separate
+external-plugin build path; root npm artifacts continue to exclude it. Selected
+plugins must compile successfully; unselected external plugin source and
+runtime output are pruned.
 
 For example, these commands build separate, multi-architecture standalone
 FakeCo gateway images for ClickClack, Slack, and Microsoft Teams. ClawRouter is

@@ -104,11 +104,8 @@ export function createRunRegistry(options?: { maxExitedRecords?: number }): RunR
       return;
     }
     const ts = nowMs();
-    records.set(runId, {
-      ...current,
-      lastOutputAtMs: ts,
-      updatedAtMs: ts,
-    });
+    current.lastOutputAtMs = ts;
+    current.updatedAtMs = ts;
   };
 
   const finalize: RunRegistry["finalize"] = (runId, exit) => {

@@ -67,7 +67,7 @@ on:
         default: false
         type: boolean
       skip_package_telegram_e2e:
-        description: Defer beta Package Acceptance Telegram E2E
+        description: Defer beta Package Acceptance Telegram E2E; automatic for all-group beta checks without release soak
         required: false
         default: false
         type: boolean
@@ -169,6 +169,7 @@ jobs:
       package_required: ${{ steps.inputs.outputs.package_required }}
       docker_required: ${{ steps.inputs.outputs.docker_required }}
       install_smoke_scheduled: ${{ steps.inputs.outputs.install_smoke_scheduled }}
+      installer_smoke_update_baseline: ${{ steps.frozen_installer_smoke_baseline.outputs.value }}
       fail_fast: ${{ steps.inputs.outputs.fail_fast }}
       run_maturity_scorecard: ${{ steps.inputs.outputs.run_maturity_scorecard }}
       allow_unreleased_changelog: ${{ steps.inputs.outputs.allow_unreleased_changelog }}
@@ -568,6 +569,12 @@ jobs:
             echo "skip_package_telegram_e2e is allowed only for release_profile=beta." >&2
             exit 1
           fi
+          # Advisory Telegram confidence must not delay the bounded beta gate.
+          # Soak and explicit package reruns keep their existing Telegram selection.
+          if [[ "$release_profile" == "beta" && "$run_release_soak" == "false" &&
+                "$RELEASE_RERUN_GROUP_INPUT" == "all" ]]; then
+            skip_package_telegram_e2e=true
+          fi
           if [[ -n "$TELEGRAM_WAIVER" ]]; then
             TARGET_VERSION="$(jq -er '.version | select(type == "string")' waiver-target/package.json)" \
               RELEASE_PROFILE="$release_profile" node --input-type=module <<'NODE'
@@ -806,6 +813,29 @@ jobs:
             printf 'qa_parity_scheduled=%s\n' "$qa_parity_scheduled"
           } >> "$GITHUB_OUTPUT"
 
+      # A frozen extended-stable target must not downgrade from npm latest.
+      - name: Resolve frozen installer update baseline
+        id: frozen_installer_smoke_baseline
+        if: >-
+          steps.inputs.outputs.install_smoke_scheduled == 'true' &&
+          (startsWith(inputs.target_context_ref, 'extended-stable/') ||
+          startsWith(inputs.target_context_ref, 'refs/heads/extended-stable/'))
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
+          TARGET_SHA: ${{ steps.ref.outputs.sha }}
+        run: |
+          set -euo pipefail
+          candidate_version="$(
+            gh api "repos/${GITHUB_REPOSITORY}/contents/package.json?ref=${TARGET_SHA}" --jq .content |
+              base64 --decode |
+              jq -er '.version | select(type == "string" and length > 0)'
+          )"
+          baseline="$(node workflow/scripts/lib/release-upgrade-baseline.mjs \
+            --candidate-version "$candidate_version" \
+            --target-context-ref "$TARGET_CONTEXT_REF")"
+          echo "value=${baseline#openclaw@}" >> "$GITHUB_OUTPUT"
+
       - name: Summarize validated ref
         env:
           RELEASE_REF: ${{ inputs.ref }}
@@ -850,6 +880,9 @@ jobs:
             echo "- Matrix QA fail fast: \`${FAIL_FAST}\`"
             echo "- Maturity scorecard docs: \`${RUN_MATURITY_SCORECARD}\`"
             echo "- Package Acceptance Telegram E2E deferred: \`${SKIP_PACKAGE_TELEGRAM_E2E}\`"
+            if [[ "$SKIP_PACKAGE_TELEGRAM_E2E" == "true" ]]; then
+              echo "- Package Acceptance Telegram E2E: not run; deferred to postpublish confidence."
+            fi
             if [[ -n "$TELEGRAM_WAIVER" ]]; then
               echo "- Source and Package Acceptance Telegram E2E: waived/not run (\`${TELEGRAM_WAIVER}\`); not a pass"
             fi
@@ -911,7 +944,8 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
-          fetch-depth: 0
+          # Artifact validation reads the immutable tuple, not source history.
+          fetch-depth: ${{ needs.resolve_target.outputs.package_mode == 'artifact' && 1 || 0 }}
           filter: blob:none
 
       - name: Validate release package source metadata
@@ -1224,6 +1258,7 @@ jobs:
       allow_unreleased_changelog: ${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}
       ref: ${{ needs.resolve_target.outputs.revision }}
       run_bun_global_install_smoke: true
+      update_baseline_version: ${{ needs.resolve_target.outputs.installer_smoke_update_baseline || 'latest' }}
 
   cross_os_release_checks:
     needs: [resolve_target, prepare_release_package]

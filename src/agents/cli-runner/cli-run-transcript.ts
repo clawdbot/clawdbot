@@ -276,30 +276,30 @@ export async function persistCliRunBlock(
   }
 
   try {
-    const sessionKey = params.sessionKey?.trim() || params.sessionId;
-    const targetAgentId = params.sessionTarget?.agentId;
-    const targetStorePath = params.sessionTarget?.storePath;
-    const targetStoreOwner = resolvePersistedSessionStoreOwnerForTarget({
-      config: params.config ?? {},
-      sessionKey,
-      storePath: targetStorePath,
-    });
-    const explicitAlternateStoreAgentId =
-      targetAgentId &&
-      targetStorePath &&
-      !parseAgentSessionKey(sessionKey)?.agentId &&
-      targetStoreOwner.kind === "none"
-        ? targetAgentId
-        : undefined;
-    const agentId =
-      explicitAlternateStoreAgentId ??
-      resolveSessionAgentId({
-        agentId: targetAgentId ?? params.agentId,
-        config: params.config,
-        sessionKey,
-      });
     let sessionManager = params.sessionManager;
     if (!sessionManager) {
+      const sessionKey = params.sessionKey?.trim() || params.sessionId;
+      const targetAgentId = params.sessionTarget?.agentId;
+      const targetStorePath = params.sessionTarget?.storePath;
+      const targetStoreOwner = resolvePersistedSessionStoreOwnerForTarget({
+        config: params.config ?? {},
+        sessionKey,
+        storePath: targetStorePath,
+      });
+      const explicitAlternateStoreAgentId =
+        targetAgentId &&
+        targetStorePath &&
+        !parseAgentSessionKey(sessionKey)?.agentId &&
+        targetStoreOwner.kind === "none"
+          ? targetAgentId
+          : undefined;
+      const agentId =
+        explicitAlternateStoreAgentId ??
+        resolveSessionAgentId({
+          agentId: targetAgentId ?? params.agentId,
+          config: params.config,
+          sessionKey,
+        });
       const sessionTarget = params.sessionTarget ?? {
         agentId,
         sessionId: params.sessionId,
@@ -397,8 +397,7 @@ export async function finalizeCliContextEngineTurn(params: {
     const contextEngineHostSupport = buildGenericCliContextEngineHostSupport({
       backendId: context.backendResolved.id,
     });
-    let deferredTurnMaintenance: Promise<void> | undefined;
-    const result = await finalizeHarnessContextEngineTurn({
+    await finalizeHarnessContextEngineTurn({
       contextEngine: context.contextEngine,
       promptError: false,
       aborted:
@@ -411,6 +410,7 @@ export async function finalizeCliContextEngineTurn(params: {
       isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
       messagesSnapshot: [...prePromptMessages, ...turnMessages],
       prePromptMessageCount: prePromptMessages.length,
+      sessionManager: runParams.sessionManager,
       config: context.contextEngineConfig,
       contextEngineHostSupport,
       providerId: runParams.provider,
@@ -419,14 +419,8 @@ export async function finalizeCliContextEngineTurn(params: {
         await runHarnessContextEngineMaintenance({
           ...maintenanceParams,
           withSessionManagerRewriteLock: async (operation) => await operation(),
-          onDeferredMaintenance: (promise) => {
-            deferredTurnMaintenance = promise;
-          },
         }),
       warn: (message) => log.warn(message),
     });
-    if (result.postTurnFinalizationSucceeded && deferredTurnMaintenance) {
-      context.contextEngineDeferredTurnMaintenance = deferredTurnMaintenance;
-    }
   }
 }

@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { DesktopClient } from "./desktop-client.ts";
 
 type RfbConstructor = NonNullable<ConstructorParameters<typeof DesktopClient>[0]>;
@@ -36,6 +37,44 @@ function createFakeRfb() {
 }
 
 describe("DesktopClient", () => {
+  it.each([false, true])(
+    "opens a socket after the RFB loader only while the operation remains current (%s)",
+    async (remainsCurrent) => {
+      const { Rfb, instances } = createFakeRfb();
+      const loaded = createDeferred<RfbConstructor>();
+      const createSocket = vi.fn((url: string) => new FakeSocket(url) as unknown as WebSocket);
+      const client = new DesktopClient(undefined, createSocket, () => loaded.promise);
+      let current = true;
+      const pending = client.connect({
+        wsUrl: "ws://control.example.test/desktop/observe",
+        viewOnly: false,
+        target: document.createElement("div"),
+        isCurrent: () => current,
+      });
+      const result = pending.then(
+        (handle) => ({ handle, error: undefined }),
+        (error: unknown) => ({ handle: undefined, error }),
+      );
+      try {
+        expect(createSocket).not.toHaveBeenCalled();
+        current = remainsCurrent;
+        loaded.resolve(Rfb);
+        const outcome = await result;
+        expect(createSocket).toHaveBeenCalledTimes(remainsCurrent ? 1 : 0);
+        if (remainsCurrent) {
+          expect(outcome.error).toBeUndefined();
+          expect(instances).toHaveLength(1);
+        } else {
+          expect(outcome.error).toMatchObject({ name: "AbortError" });
+          expect(instances).toHaveLength(0);
+        }
+      } finally {
+        loaded.resolve(Rfb);
+        (await result).handle?.disconnect();
+      }
+    },
+  );
+
   it.each([
     ["http://control.example.test/chat", "ws://control.example.test/desktop/observe?token=abc"],
     ["https://control.example.test/chat", "wss://control.example.test/desktop/observe?token=abc"],
@@ -51,6 +90,7 @@ describe("DesktopClient", () => {
 
     await client.connect({
       gatewayUrl,
+      isCurrent: () => true,
       wsUrl: "/desktop/observe?token=abc",
       credentials: { password: "secret" },
       viewOnly: true,
@@ -74,6 +114,7 @@ describe("DesktopClient", () => {
 
     const handle = await client.connect({
       gatewayUrl: "ws://control.example.test",
+      isCurrent: () => true,
       wsUrl: "/desktop/observe",
       credentials: { username: "operator", password: "secret" },
       background: "rgb(8, 8, 8)",
@@ -100,6 +141,8 @@ describe("DesktopClient", () => {
       ["k", "m", "Backspace"],
     );
 
+    handle.disableInput();
+    expect(instances[0]?.viewOnly).toBe(true);
     handle.disconnect();
     expect(instances[0]?.disconnect).toHaveBeenCalledOnce();
   });
@@ -112,6 +155,7 @@ describe("DesktopClient", () => {
 
     await client.connect({
       wsUrl: "ws://control.example.test/desktop/observe",
+      isCurrent: () => true,
       viewOnly: true,
       target: document.createElement("div"),
       onDisconnect,

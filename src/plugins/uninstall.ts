@@ -1,11 +1,11 @@
 // Removes installed plugins and updates plugin index records.
-import { lstatSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { readOpenClawManagedNpmRootOverrides } from "../infra/npm-managed-root.js";
+import { pathMayExistSync } from "../infra/path-existence.js";
 import { createSafeNpmInstallEnv } from "../infra/safe-package-install.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
@@ -453,12 +453,7 @@ export function planPluginUninstall(params: UninstallPluginParams): PluginUninst
 }
 
 export function pluginUninstallTargetExists(target: string): boolean {
-  try {
-    lstatSync(target);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ENOENT";
-  }
+  return pathMayExistSync(target);
 }
 
 function isOwnedNpmRemoval(removal: PluginUninstallDirectoryRemoval): boolean {

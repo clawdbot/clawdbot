@@ -174,7 +174,7 @@ function renderSessionSection(params: {
                       aria-hidden="true"
                     ></openclaw-viewer-avatar>`
                   : nothing}
-                <span class="sidebar-recent-sessions__label-text">${label}</span>
+                <span class="sidebar-recent-sessions__label-text hover-marquee">${label}</span>
                 ${collapsed && totalRowCount > 0
                   ? html`<span class="sidebar-session-group-count">${totalRowCount}</span>`
                   : nothing}

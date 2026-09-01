@@ -18,7 +18,6 @@ export { collectRootPackageExcludedExtensionDirs };
 const TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
 /** Bundled plugin directories built with core but not packaged as standalone npm plugins. */
 export const NON_PACKAGED_BUNDLED_PLUGIN_DIRS = new Set(["qa-channel", "qa-lab"]);
-const EXCLUDED_CORE_BUNDLED_PLUGIN_DIRS = new Set(["qqbot", "whatsapp"]);
 const BUNDLED_PLUGIN_BUILD_IDS_ENV = "OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS";
 /** @internal Shared repository-script contract. */
 export const DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV = "OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS";
@@ -259,9 +258,6 @@ export function collectBundledPluginBuildEntries(params = {}) {
       continue;
     }
     if (!shouldBuildBundledDistEntry(packageJson) && !dockerSelectedBuildIds?.has(dirName)) {
-      continue;
-    }
-    if (EXCLUDED_CORE_BUNDLED_PLUGIN_DIRS.has(dirName)) {
       continue;
     }
 

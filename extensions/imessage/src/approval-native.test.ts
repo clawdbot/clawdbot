@@ -221,6 +221,10 @@ function suppressLocalSessionPrompt(
 }
 
 describe("imessage approval capability", () => {
+  it("subscribes the native runtime to system-agent approval events", () => {
+    expect(imessageApprovalCapability.nativeRuntime?.eventKinds).toContain("system-agent");
+  });
+
   it("disables native approvals when no top-level approvals config is set", () => {
     const cfg = buildConfig();
     const execRequest = buildExecRequest(DIRECT_TARGET);

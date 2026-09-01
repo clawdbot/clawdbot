@@ -57,7 +57,7 @@ env:
 jobs:
   discover:
     name: Find trusted release candidate
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 10
     outputs:
       state: ${{ steps.discover.outputs.state }}
@@ -141,7 +141,7 @@ jobs:
     name: Resolve release candidate
     needs: [discover, prepare]
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 5
     outputs:
       state: ${{ steps.result.outputs.state }}

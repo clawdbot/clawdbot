@@ -145,6 +145,30 @@ extension OnboardingAISetupModel {
         let gatewayRestartRequired: Bool?
     }
 
+    static func activationWizardResult(
+        status: String?,
+        error: String?,
+        modelActivation: [String: AnyCodable]?) -> Result<ActivateResult, Error>
+    {
+        if status == "done",
+           let modelRef = modelActivation?["modelRef"]?.value as? String,
+           !modelRef.isEmpty
+        {
+            return .success(ActivateResult(
+                ok: true,
+                modelRef: modelRef,
+                status: nil,
+                error: nil,
+                gatewayRestartRequired: modelActivation?["gatewayRestartRequired"]?.value as? Bool))
+        }
+        if status == "cancelled" {
+            return .failure(OnboardingAISetupError.activationCancelled)
+        }
+        return .failure(status == "error"
+            ? OnboardingAISetupError.activationFailed(error ?? "AI setup failed.")
+            : OnboardingAISetupError.activationOutcomeUnavailable)
+    }
+
     struct Candidate: Identifiable, Equatable {
         let kind: String
         let label: String
@@ -436,8 +460,19 @@ extension OnboardingAISetupModel {
             : 150_000
     }
 
+    static func activationFailure(_ error: Error) -> Failure {
+        if case OnboardingAISetupError.activationCancelled = error {
+            return Failure(summary: error.localizedDescription, detail: nil)
+        }
+        return self.transportFailure(error.localizedDescription)
+    }
+
     static func activationFailureIsDefinitive(_ error: Error) -> Bool {
         if case OnboardingAISetupError.activationCancelled = error {
+            return true
+        }
+        // A terminal wizard error arrives after its runner and setup admission settle.
+        if case OnboardingAISetupError.activationFailed = error {
             return true
         }
         if let response = error as? GatewayResponseError {
@@ -504,6 +539,12 @@ extension OnboardingAISetupModel {
         return Failure(
             summary: self.friendlyTransportError(detail),
             detail: detail.isEmpty ? nil : detail)
+    }
+
+    static func providerAuthCancellationUnconfirmed() -> Failure {
+        Failure(
+            summary: "OpenClaw couldn’t confirm cancellation. Setup may still be running. Try Cancel again.",
+            detail: nil)
     }
 
     /// One friendly sentence per failure bucket.

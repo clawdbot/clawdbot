@@ -1,8 +1,6 @@
 import { randomUUID } from "node:crypto";
-import {
-  withSessionPlacementForcedTerminalSettlement,
-  type LocalTurnPlacementClaim,
-} from "../../agents/session-placement-admission.js";
+import type { LocalTurnPlacementClaim } from "../../agents/session-placement-admission.js";
+import { withSessionPlacementForcedTerminalSettlement } from "../../agents/session-placement-forced-terminal-settlement.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../../sessions/session-lifecycle-admission.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";

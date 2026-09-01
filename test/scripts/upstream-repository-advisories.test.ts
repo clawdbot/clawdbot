@@ -14,8 +14,10 @@ function vulnerability(range: unknown, name: unknown = "fixture", ecosystem = "n
   return { package: { ecosystem, name }, vulnerable_version_range: range };
 }
 
+const publishedRows = new Map<string, Record<string, unknown>>();
+
 function advisory(range: unknown = "< 2.0.0", fields: Record<string, unknown> = {}) {
-  return {
+  const row = {
     ghsa_id: ADVISORY_ID,
     state: "published",
     withdrawn_at: null,
@@ -24,6 +26,8 @@ function advisory(range: unknown = "< 2.0.0", fields: Record<string, unknown> = 
     vulnerabilities: [vulnerability(range)],
     ...fields,
   };
+  if (!publishedRows.has(row.ghsa_id)) publishedRows.set(row.ghsa_id, row);
+  return row;
 }
 
 function manifest(url: URL, repository: unknown = `git+https://github.com/${REPOSITORY}.git`) {
@@ -36,6 +40,7 @@ function createSourceFetch(
     manifest?: Handler;
     repository?: Handler;
     page?: Handler;
+    reviewed?: Handler;
   } = {},
 ) {
   const calls: Array<{ url: URL; init: RequestInit | undefined }> = [];
@@ -47,6 +52,16 @@ function createSourceFetch(
     }
     if (url.origin !== "https://api.github.com") {
       throw new Error(`Unexpected request origin: ${url.origin}`);
+    }
+    if (url.pathname.startsWith("/advisories/")) {
+      if (handlers.reviewed) return handlers.reviewed(url, init);
+      const row = publishedRows.get(url.pathname.split("/").at(-1) ?? "");
+      return Response.json({
+        ...row,
+        published_at: "2026-08-01T00:00:00Z",
+        github_reviewed_at: "2026-08-02T00:00:00Z",
+        withdrawn_at: null,
+      });
     }
     if (url.pathname.endsWith("/security-advisories")) {
       return handlers.page ? handlers.page(url, init) : Response.json([]);
@@ -63,6 +78,7 @@ function scan(fetchImpl: typeof fetch, payload: Record<string, string[]> = { fix
 }
 
 beforeEach(() => {
+  publishedRows.clear();
   vi.stubEnv("GH_TOKEN", undefined);
 });
 
@@ -99,6 +115,8 @@ describe("published upstream repository advisories", () => {
       "/fixture/1.0.0",
       "/repos/fixture/packages",
       "/repos/fixture/packages/security-advisories",
+      `/advisories/${ADVISORY_ID}`,
+      `/advisories/${ADVISORY_ID}`,
     ]);
     expect(report.advisories).toMatchObject([
       { packageName: "@scope/leaf", matchedVersions: ["1.2.3"] },
@@ -113,6 +131,153 @@ describe("published upstream repository advisories", () => {
       issues: [],
     });
   });
+
+  it.each([
+    {
+      name: "fast-xml-builder",
+      id: "GHSA-45c6-75p6-83cc",
+      raw: "> 1.1.5",
+      reviewed: "= 1.1.5",
+      version: "1.3.1",
+    },
+    {
+      name: "fast-xml-parser",
+      id: "GHSA-8r6m-32jq-jx6q",
+      raw: ">= 5.9.3",
+      reviewed: ">= 5.9.3, < 5.10.1",
+      version: "5.11.0",
+    },
+    {
+      name: "hono",
+      id: "GHSA-m732-5p4w-x69g",
+      raw: "> 1.1.0",
+      reviewed: ">= 1.1.0, < 4.10.2",
+      version: "4.13.3",
+    },
+    {
+      name: "hono",
+      id: "GHSA-xh87-mx6m-69f3",
+      raw: ">= 4.12.0",
+      reviewed: ">= 4.12.0, < 4.12.2",
+      version: "4.13.3",
+    },
+  ])(
+    "reconciles the published $id range without losing raw evidence",
+    async ({ name, id, raw, reviewed, version }) => {
+      const source = createSourceFetch({
+        page: () =>
+          Response.json([
+            advisory(raw, { ghsa_id: id, vulnerabilities: [vulnerability(raw, name)] }),
+          ]),
+        reviewed: () =>
+          Response.json({
+            ghsa_id: id,
+            published_at: "2026-08-01T00:00:00Z",
+            github_reviewed_at: "2026-08-02T00:00:00Z",
+            withdrawn_at: null,
+            vulnerabilities: [vulnerability(reviewed, name)],
+          }),
+      });
+      const report = await scan(source.fetchImpl, { [name]: [version] });
+      expect(report.advisories).toEqual([]);
+      expect(report.coverage).toMatchObject({
+        status: "checked",
+        reconciliations: [
+          {
+            id,
+            packageName: name,
+            repositoryRange: raw.replaceAll(" ", ""),
+            reviewedRanges: [
+              reviewed
+                .replaceAll(", ", " ")
+                .replace(/([<>=]) /g, "$1")
+                .replace(/^=/, ""),
+            ],
+            matchedVersions: [],
+          },
+        ],
+      });
+    },
+  );
+
+  it.each([
+    { name: "unavailable", response: null },
+    { name: "wrong identity", response: { ghsa_id: "GHSA-5555-6666-7777" } },
+    { name: "unreviewed", response: { github_reviewed_at: null } },
+    { name: "unpublished", response: { published_at: null } },
+    { name: "withdrawn", response: { withdrawn_at: "2026-08-03T00:00:00Z" } },
+    { name: "wrong package", response: { vulnerabilities: [vulnerability("< 1.0.0", "another")] } },
+    {
+      name: "wrong ecosystem",
+      response: { vulnerabilities: [vulnerability("< 1.0.0", "fixture", "pip")] },
+    },
+    {
+      name: "malformed sibling",
+      response: { vulnerabilities: [vulnerability("< 1.0.0"), vulnerability("unknown")] },
+    },
+  ])("retains the raw blocker when reviewed evidence is $name", async ({ response }) => {
+    const source = createSourceFetch({
+      page: () => Response.json([advisory()]),
+      reviewed: () =>
+        response === null
+          ? new Response(null, { status: 503 })
+          : Response.json({
+              ghsa_id: ADVISORY_ID,
+              published_at: "2026-08-01T00:00:00Z",
+              github_reviewed_at: "2026-08-02T00:00:00Z",
+              withdrawn_at: null,
+              vulnerabilities: [vulnerability("< 1.0.0")],
+              ...response,
+            }),
+    });
+    const report = await scan(source.fetchImpl);
+    expect(report.advisories).toMatchObject([{ id: ADVISORY_ID, matchedVersions: ["1.0.0"] }]);
+    expect(report.coverage.status).toBe("partial");
+    expect(report.coverage.issues).toContainEqual(
+      expect.objectContaining({ subject: `fixture#${ADVISORY_ID}` }),
+    );
+  });
+
+  it.each(["integration", "personal access token"])(
+    "keeps resource denial by %s local while preserving real findings and reconciling stale ranges",
+    async (actor) => {
+      const ids = Array.from({ length: 6 }, (_, index) => `GHSA-2222-3333-444${index}`);
+      const inaccessible = ids.slice(0, 4);
+      const trueMatch = expectDefined(ids[4], "true advisory");
+      const staleMatch = expectDefined(ids[5], "stale advisory");
+      const secret = "synthetic-advisory-secret";
+      vi.stubEnv("GH_TOKEN", secret);
+      const source = createSourceFetch({
+        page: () => Response.json(ids.map((id) => advisory("< 2.0.0", { ghsa_id: id }))),
+        reviewed: (url) => {
+          const id = url.pathname.split("/").at(-1) ?? "";
+          if (inaccessible.includes(id)) {
+            return Response.json(
+              { message: `Resource not accessible by ${actor}`, diagnostic: secret },
+              { status: 403, headers: { "x-ratelimit-remaining": "100" } },
+            );
+          }
+          return Response.json({
+            ghsa_id: id,
+            published_at: "2026-08-01T00:00:00Z",
+            github_reviewed_at: "2026-08-02T00:00:00Z",
+            withdrawn_at: null,
+            vulnerabilities: [vulnerability(id === staleMatch ? "< 1.0.0" : "< 2.0.0")],
+          });
+        },
+      });
+      const report = await scan(source.fetchImpl);
+      expect(report.advisories.map(({ id }) => id)).toEqual([...inaccessible, trueMatch]);
+      expect(report.coverage.issues).toEqual(
+        inaccessible.map((id) => ({ subject: `fixture#${id}`, reason: "request-failed" })),
+      );
+      expect(report.coverage.reconciliations).toMatchObject([
+        { id: trueMatch, matchedVersions: ["1.0.0"] },
+        { id: staleMatch, matchedVersions: [] },
+      ]);
+      expect(JSON.stringify(report)).not.toContain(secret);
+    },
+  );
 
   it("sends the token only to fixed GitHub requests and refuses redirects on every request", async () => {
     vi.stubEnv("GH_TOKEN", "synthetic-upstream-test-token");
@@ -346,7 +511,9 @@ describe("published upstream repository advisories", () => {
     expect(report.advisories).toMatchObject([{ id: ADVISORY_ID, matchedVersions: ["1.0.0"] }]);
     expect(report.coverage).toMatchObject({
       status: "partial",
-      issues: [{ subject: `fixture#${ADVISORY_ID}`, reason: "invalid-range" }],
+      issues: expect.arrayContaining([
+        { subject: `fixture#${ADVISORY_ID}`, reason: "invalid-range" },
+      ]),
     });
   });
 
@@ -509,15 +676,10 @@ describe("published upstream repository advisories", () => {
       expect(requestedTimeouts.at(-1)).toBe(deadline === "run" ? 5 : 15_000);
       expect(cancel).toHaveBeenCalledTimes(deadline === "run" ? 1 : 0);
       expect(report.advisories).toHaveLength(1);
-      expect(report.coverage).toMatchObject({
-        status: "partial",
-        checkedRepositories: 0,
-        issues: [
-          {
-            subject: REPOSITORY,
-            reason: deadline === "run" ? "budget-exhausted" : "request-failed",
-          },
-        ],
+      expect(report.coverage).toMatchObject({ status: "partial", checkedRepositories: 0 });
+      expect(report.coverage.issues).toContainEqual({
+        subject: REPOSITORY,
+        reason: deadline === "run" ? "budget-exhausted" : "request-failed",
       });
     },
   );
@@ -579,27 +741,64 @@ describe("published upstream repository advisories", () => {
     { code: 429, remaining: "0", reason: "rate-limited" },
     { code: 403, remaining: "100", reason: "request-failed" },
     { code: 401, remaining: "100", reason: "request-failed" },
-  ])(
-    "stops scheduling GitHub work after HTTP $code (remaining $remaining)",
-    async ({ code, remaining, reason: expectedReason }) => {
-      const source = createSourceFetch({
-        manifest: (url) =>
-          manifest(url, `https://github.com/fixture/${url.pathname.split("/")[1]}`),
-        page: () =>
-          new Response(null, { status: code, headers: { "x-ratelimit-remaining": remaining } }),
-      });
-      const payload = Object.fromEntries(
-        Array.from({ length: 8 }, (_, index) => [`package-${index}`, ["1.0.0"]]),
-      );
-      const report = await scan(source.fetchImpl, payload);
-      expect(source.calls.filter(({ url }) => url.origin === REGISTRY)).toHaveLength(8);
-      expect(
-        source.calls.some(({ url }) =>
-          /\/repos\/fixture\/package-[4-7](?:\/|$)/u.test(url.pathname),
-        ),
-      ).toBe(false);
-      expect(report.coverage.status).toBe("partial");
-      expect(report.coverage.issues.some(({ reason }) => reason === expectedReason)).toBe(true);
+    {
+      code: 403,
+      remaining: "100",
+      reason: "request-failed",
+      body: JSON.stringify({ message: "You have exceeded a secondary rate limit." }),
     },
-  );
+    {
+      code: 403,
+      remaining: "100",
+      reason: "request-failed",
+      body: JSON.stringify({ message: "Unknown denial", diagnostic: "synthetic-advisory-secret" }),
+    },
+    { code: 403, remaining: "100", reason: "request-failed", body: "{" },
+    {
+      code: 403,
+      remaining: "100",
+      reason: "request-failed",
+      body: JSON.stringify({
+        message: "Resource not accessible by integration",
+        padding: "x".repeat(2 * 1024 * 1024),
+      }),
+    },
+    {
+      code: 403,
+      remaining: "0",
+      reason: "rate-limited",
+      body: JSON.stringify({ message: "Resource not accessible by integration" }),
+    },
+    {
+      code: 403,
+      remaining: "100",
+      reason: "request-failed",
+      body: JSON.stringify({ message: "Resource not accessible by integration" }),
+      retryAfter: "60",
+    },
+  ])("stops scheduling GitHub work after HTTP $code (remaining $remaining)", async (entry) => {
+    const { code, remaining, reason: expectedReason } = entry;
+    const source = createSourceFetch({
+      manifest: (url) => manifest(url, `https://github.com/fixture/${url.pathname.split("/")[1]}`),
+      page: () =>
+        new Response("body" in entry ? entry.body : null, {
+          status: code,
+          headers: {
+            "x-ratelimit-remaining": remaining,
+            ...("retryAfter" in entry ? { "retry-after": entry.retryAfter } : {}),
+          },
+        }),
+    });
+    const payload = Object.fromEntries(
+      Array.from({ length: 8 }, (_, index) => [`package-${index}`, ["1.0.0"]]),
+    );
+    const report = await scan(source.fetchImpl, payload);
+    expect(source.calls.filter(({ url }) => url.origin === REGISTRY)).toHaveLength(8);
+    expect(
+      source.calls.some(({ url }) => /\/repos\/fixture\/package-[4-7](?:\/|$)/u.test(url.pathname)),
+    ).toBe(false);
+    expect(report.coverage.status).toBe("partial");
+    expect(report.coverage.issues.some(({ reason }) => reason === expectedReason)).toBe(true);
+    expect(JSON.stringify(report)).not.toContain("synthetic-advisory-secret");
+  });
 });

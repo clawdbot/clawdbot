@@ -119,7 +119,6 @@ describe("ClawRouter cold prepared catalog", () => {
     });
     const result = await runPreparedModelCatalogWorkerRequest(value, {
       kind: "catalog",
-      requestId: 1,
     });
     expect(result.status).toBe("ok");
     if (result.status !== "ok" || result.kind !== "catalog") {

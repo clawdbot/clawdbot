@@ -749,15 +749,11 @@ async function resolvePendingApproval(
     }
   }
 
-  const expiresInDaysRaw =
-    opts.expiresInDays === undefined ? undefined : Number.parseInt(opts.expiresInDays, 10);
-  if (
-    expiresInDaysRaw !== undefined &&
-    (!Number.isInteger(expiresInDaysRaw) || expiresInDaysRaw < 1 || expiresInDaysRaw > 3650)
-  ) {
+  const expiresInDays = parseStrictPositiveInteger(opts.expiresInDays);
+  if (opts.expiresInDays !== undefined && (expiresInDays === undefined || expiresInDays > 3650)) {
     exitWithError("--expires-in-days must be a whole number of days between 1 and 3650.");
   }
-  if (expiresInDaysRaw !== undefined && decision !== "allow-always") {
+  if (expiresInDays !== undefined && decision !== "allow-always") {
     exitWithError("--expires-in-days only applies to allow-always.");
   }
   const result = (await callGatewayFromCli(
@@ -767,7 +763,7 @@ async function resolvePendingApproval(
       id,
       kind: current.presentation.kind,
       decision,
-      ...(expiresInDaysRaw !== undefined ? { grantExpiresInDays: expiresInDaysRaw } : {}),
+      ...(expiresInDays !== undefined ? { grantExpiresInDays: expiresInDays } : {}),
     },
     approvalCallOptions,
   )) as ApprovalResolveResult;

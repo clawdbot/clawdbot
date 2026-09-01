@@ -2,7 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { runWithFailedTrailer } from "../../scripts/lib/failed-trailer.mts";
 import {
@@ -17,6 +17,7 @@ import {
   resolveWindowsExtensionChunkSize,
   runShard,
   selectCoreOxlintStripe,
+  selectExtensionOxlintStripe,
   shouldPrepareExtensionPackageBoundaryArtifactsForShards,
   shouldRunOxlintShardsSerial,
 } from "../../scripts/run-oxlint-shards.mts";
@@ -335,6 +336,7 @@ describe("run-oxlint", () => {
     ["--tsconfig", "config/tsconfig/oxlint.core.json", "src/index.ts"],
     ["--tsconfig=config/tsconfig/oxlint.core.json", "src/index.ts"],
     ["--tsconfig", "config/tsconfig/oxlint.scripts.json", "scripts/check-changed.mts"],
+    ["--tsconfig", "test/tsconfig/tsconfig.test.root.json", "test/scripts/changed-lanes.test.ts"],
   ])("skips extension artifacts for an exact source-backed config: %s", (...args) => {
     expect(shouldPrepareExtensionPackageBoundaryArtifacts(args)).toBe(false);
   });
@@ -371,22 +373,6 @@ describe("run-oxlint", () => {
     );
     expect(shardedLintRunner).toContain("prepare-extension-package-boundary-artifacts.mts");
     expect(shardedLintRunner).toContain('OPENCLAW_OXLINT_SKIP_PREPARE: "1"');
-  });
-
-  it("prepares the worktree toolchain before the complete lint pre-step", () => {
-    const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
-      scripts: Record<string, string>;
-    };
-    const lintRunner = readFileSync("scripts/run-lint.mts", "utf8");
-
-    expect(packageJson.scripts.lint).toBe("node --import ./scripts/tsx.mjs scripts/run-lint.mts");
-    expect(lintRunner.indexOf("ensureRepoToolNodeModulesLink(")).toBeGreaterThan(-1);
-    expect(
-      lintRunner.indexOf('path.resolve("scripts", "control-ui-i18n-verify.ts")'),
-    ).toBeGreaterThan(lintRunner.indexOf("ensureRepoToolNodeModulesLink("));
-    expect(lintRunner.indexOf('path.resolve("scripts", "run-oxlint-shards.mts")')).toBeGreaterThan(
-      lintRunner.indexOf('path.resolve("scripts", "control-ui-i18n-verify.ts")'),
-    );
   });
 
   it("serializes broad oxlint shards on constrained local hosts", () => {
@@ -697,8 +683,14 @@ describe("run-oxlint", () => {
 
     expect([...parsed.only]).toEqual(["core"]);
     expect(parsed.coreStripe).toEqual({ index: 2, total: 3 });
+    expect(parsed.extensionStripe).toBeUndefined();
     expect(parsed.splitCore).toBe(true);
     expect(parsed.oxlintArgs).toEqual(["--max-warnings", "0"]);
+
+    const extension = parseShardRunnerArgs(["--only", "extensions", "--extension-stripe", "4/6"]);
+    expect([...extension.only]).toEqual(["extensions"]);
+    expect(extension.extensionStripe).toEqual({ index: 4, total: 6 });
+    expect(extension.oxlintArgs).toEqual([]);
   });
 
   it("aggregates split core targets into deterministic disjoint Programs", () => {
@@ -729,6 +721,48 @@ describe("run-oxlint", () => {
     ).toThrow("--core-stripe requires a non-empty core-only shard selection");
   });
 
+  it("partitions constrained extension programs exactly once without aggregating them", () => {
+    const entries = [
+      { name: "root.test.ts", isDirectory: () => false, isFile: () => true },
+      ...Array.from({ length: 55 }, (_, index) => ({
+        name: `plugin-${String(index).padStart(2, "0")}`,
+        isDirectory: () => true,
+        isFile: () => false,
+      })),
+    ] as never;
+    const shards = createExtensionOxlintShards({
+      cwd: "/repo",
+      platform: "linux",
+      readDir: () => entries,
+    });
+    const explicitStripeShards = createOxlintShards({
+      cwd: "/repo",
+      env: { CI: "true" },
+      hostResources: { logicalCpuCount: 8, totalMemoryBytes: 31 * 1024 ** 3 },
+      platform: "linux",
+      readDir: () => entries,
+      splitExtensions: true,
+    }).filter((shard) => shard.name.startsWith("extensions"));
+    expect(explicitStripeShards).toEqual(shards);
+    const stripes = Array.from({ length: 6 }, (_, index) =>
+      selectExtensionOxlintStripe(shards, { index: index + 1, total: 6 }),
+    );
+
+    const selected = stripes.flat();
+    expect(selected.toSorted((left, right) => left.name.localeCompare(right.name))).toEqual(
+      shards.toSorted((left, right) => left.name.localeCompare(right.name)),
+    );
+    expect(new Set(selected.map((shard) => shard.name))).toHaveProperty("size", shards.length);
+    expect(selectExtensionOxlintStripe(shards, { index: 9, total: 9 })).toEqual([]);
+    expect(selectExtensionOxlintStripe([], { index: 1, total: 6 })).toEqual([]);
+    expect(() =>
+      selectExtensionOxlintStripe(createOxlintShards({ cwd: "/repo" }), {
+        index: 1,
+        total: 2,
+      }),
+    ).toThrow("--extension-stripe requires an extension-only shard selection");
+  });
+
   it.each([
     ["--core-stripe=0/3"],
     ["--core-stripe=4/3"],
@@ -737,6 +771,15 @@ describe("run-oxlint", () => {
     ["--core-stripe", "1/3"],
   ])("rejects invalid core stripe arguments: %s", (...args) => {
     expect(() => parseShardRunnerArgs(args)).toThrow(/--core-stripe/u);
+  });
+
+  it.each([
+    ["--extension-stripe=0/6"],
+    ["--extension-stripe=7/6"],
+    ["--extension-stripe=1/0"],
+    ["--extension-stripe=wat"],
+  ])("rejects invalid extension stripe arguments: %s", (...args) => {
+    expect(() => parseShardRunnerArgs(args)).toThrow(/--extension-stripe/u);
   });
 
   it.each([["--only"], ["--only", "--split-core"], ["--only="], ["--only=-h"]])(
@@ -784,7 +827,7 @@ describe("run-oxlint", () => {
     ["--only=core", "--only=wat"],
   ])("rejects invalid shard CLI input before starting work: %s", (...args) => {
     const tempDir = createTempDir("openclaw-oxlint-selector-");
-    const result = spawnSync(process.execPath, [RUN_OXLINT_SHARDS_URL, ...args], {
+    const result = spawnSync(process.execPath, [fileURLToPath(RUN_OXLINT_SHARDS_URL), ...args], {
       cwd: tempDir,
       encoding: "utf8",
       env: {
@@ -795,6 +838,8 @@ describe("run-oxlint", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).not.toContain("[oxlint:");
+    expect(result.stderr).toMatch(/--only requires a shard name|Unknown oxlint shard selector/u);
+    expect(result.stderr.trim().split("\n").at(-1)).toBe("[oxlint] FAILED (exit 1)");
   });
 
   it("falls back to the full extension shard when Windows extension dirs are unavailable", () => {

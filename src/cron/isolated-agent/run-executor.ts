@@ -21,7 +21,7 @@ import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-a
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import { wrapUntrustedPromptDataBlock } from "../../agents/sanitize-for-prompt.js";
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
-import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
+import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { hasResolvedThinkingCatalogEntry } from "../../agents/thinking-runtime.js";
 import { withPostAdmissionExecutionOwnerBinding } from "../../audit/execution-owner-binding.js";
@@ -622,7 +622,7 @@ function createCronPromptExecutor(params: {
           // Cron intentionally reuses its durable session id as the run id; turn
           // claims stay unique via per-claim ids and the worker gate handles this
           // via credential rotation (see worker-environments/service.ts fences).
-          const result = await withLocalSessionPlacementTurnAdmission(
+          const result = await withLocalSessionPlacementTurnSettlement(
             {
               sessionId: params.cronSession.sessionEntry.sessionId,
               sessionKey: params.runSessionKey,

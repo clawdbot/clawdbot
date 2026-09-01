@@ -7,7 +7,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { resolvePluginArtifactDeclaredSurface } from "./capability-consent.js";
+import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
 import { computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -156,8 +156,6 @@ vi.mock("./package-entry-resolution.js", async (importOriginal) => {
     },
   };
 });
-
-vi.resetModules();
 
 const { syncPluginsForUpdateChannel, updateNpmInstalledPlugins } = await import("./update.js");
 
@@ -877,6 +875,24 @@ describe("updateNpmInstalledPlugins", () => {
       childEnabled: false,
     },
     {
+      label: "asks for consent when an enabled legacy record lacks artifact acceptance",
+      nextProviders: ["existing-child-provider"],
+      review: "accept",
+      priorAcceptance: "missing",
+      rejected: false,
+      ownerEnabled: true,
+      childEnabled: false,
+    },
+    {
+      label: "defers missing artifact acceptance for a disabled legacy record",
+      nextProviders: ["existing-child-provider"],
+      review: "none",
+      priorAcceptance: "missing",
+      rejected: false,
+      ownerEnabled: false,
+      childEnabled: false,
+    },
+    {
       label: "rejects an unchanged replacement when prior acceptance has no artifact integrity",
       nextProviders: ["existing-child-provider"],
       review: "none",
@@ -1028,11 +1044,15 @@ describe("updateNpmInstalledPlugins", () => {
               spec: packageName,
               installPath: installedDir,
               ...(priorAcceptance !== "unanchored" ? { integrity: "sha512-previous" } : {}),
-              acceptedSurface: previousDeclared,
-              acceptedSurfaceHash: computeDeclaredSurfaceHash(previousDeclared),
-              acceptedSurfaceAt: previousAcceptedAt,
-              ...(priorAcceptance !== "unanchored"
-                ? { acceptedSurfaceIntegrity: "sha512-previous" }
+              ...(priorAcceptance !== "missing"
+                ? {
+                    acceptedSurface: previousDeclared,
+                    acceptedSurfaceHash: computeDeclaredSurfaceHash(previousDeclared),
+                    acceptedSurfaceAt: previousAcceptedAt,
+                    ...(priorAcceptance !== "unanchored"
+                      ? { acceptedSurfaceIntegrity: "sha512-previous" }
+                      : {}),
+                  }
                 : {}),
             },
           },
@@ -1125,7 +1145,7 @@ describe("updateNpmInstalledPlugins", () => {
         packagePluginIds: { [pluginId]: [rootPluginId, `${pluginId}-addon`] },
       });
       if (omitStageReview) {
-        await expect(pendingUpdate).rejects.toThrow("did not review the staged artifact");
+        await expect(pendingUpdate).rejects.toThrow("did not expose its verified artifact");
         return;
       }
       if (review === "throw" || review === "throw-undefined") {
@@ -5633,7 +5653,12 @@ describe("syncPluginsForUpdateChannel", () => {
     expect(result.summary.switchedToNpm).toStrictEqual([]);
     expect(result.summary.warnings).toStrictEqual([]);
     expect(result.summary.errors).toEqual([
-      "Failed to update legacy-chat: Package not found on ClawHub. (ClawHub clawhub:legacy-chat@2026.5.1-beta.2).",
+      {
+        pluginId: "legacy-chat",
+        code: "package_not_found",
+        message:
+          "Failed to update legacy-chat: Package not found on ClawHub. (ClawHub clawhub:legacy-chat@2026.5.1-beta.2).",
+      },
     ]);
   });
 
@@ -5730,7 +5755,12 @@ describe("syncPluginsForUpdateChannel", () => {
     expect(result.config).toBe(config);
     expect(result.summary.warnings).toEqual(["WARNING\nSecurity scan: suspicious"]);
     expect(result.summary.errors).toEqual([
-      "Failed to update legacy-chat: ClawHub ClawPack integrity mismatch. (ClawHub clawhub:legacy-chat@2026.5.1-beta.2).",
+      {
+        pluginId: "legacy-chat",
+        code: "archive_integrity_mismatch",
+        message:
+          "Failed to update legacy-chat: ClawHub ClawPack integrity mismatch. (ClawHub clawhub:legacy-chat@2026.5.1-beta.2).",
+      },
     ]);
   });
 
@@ -5799,7 +5829,9 @@ describe("syncPluginsForUpdateChannel", () => {
 
     expect(result.changed).toBe(false);
     expect(result.config).toBe(config);
-    expect(result.summary.errors).toEqual(["Failed to update legacy-chat: package unavailable"]);
+    expect(result.summary.errors).toEqual([
+      { pluginId: "legacy-chat", message: "Failed to update legacy-chat: package unavailable" },
+    ]);
   });
 
   it("does not externalize custom local path installs that only share the old plugin id", async () => {
