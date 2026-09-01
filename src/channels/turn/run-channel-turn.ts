@@ -51,13 +51,23 @@ function assertPreparedDispatchLifecycle<TDispatchResult>(
   turn: PreparedChannelTurn<TDispatchResult>,
   turnAdoptionLifecycle: RunChannelTurnParams<unknown>["turnAdoptionLifecycle"],
 ): void {
+  // This guard exists to stop a durable ingress claim from stalling unadopted
+  // (see #110981) -- that risk only exists when the caller actually hands in
+  // a turnAdoptionLifecycle to adopt. Without one, there is no durable claim
+  // for a prepared turn to leak, so legacy adapters built against the older,
+  // lifecycle-less PreparedChannelTurn contract (e.g. released plugin builds
+  // that predate this field) keep working instead of crashing every inbound
+  // event. See openclaw/openclaw#114020 and #116453.
+  if (!turnAdoptionLifecycle) {
+    return;
+  }
   const lifecycle = turn.runDispatchLifecycle;
   if (!lifecycle) {
     throw new Error(
       "runChannelInboundEvent prepared turns must declare runDispatchLifecycle when creating runDispatch",
     );
   }
-  if (turnAdoptionLifecycle && lifecycle.turnAdoptionLifecycle !== turnAdoptionLifecycle) {
+  if (lifecycle.turnAdoptionLifecycle !== turnAdoptionLifecycle) {
     throw new Error(
       "runChannelInboundEvent prepared turn runDispatchLifecycle must own the top-level turnAdoptionLifecycle",
     );
