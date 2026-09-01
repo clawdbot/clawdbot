@@ -2085,19 +2085,29 @@ describe("package acceptance workflow", () => {
 
   it("runs plugin npm preflight trust from the exact workflow tooling checkout", () => {
     const job = workflowJob(PLUGIN_NPM_RELEASE_WORKFLOW, "preview_plugins_npm");
-    const checkout = workflowStep(job, "Checkout trusted preflight tooling");
+    const checkout = workflowStep(job, "Checkout trusted planning tooling");
     const identity = workflowStep(job, "Verify trusted preflight tooling identity");
     const target = workflowStep(job, "Validate ref is on a trusted publish branch");
 
-    expect(checkout.if).toBe("github.event_name == 'workflow_dispatch' && inputs.preflight_only");
+    expect(checkout.if).toBeUndefined();
     expect(checkout.with).toMatchObject({
       "fetch-depth": 1,
       path: ".release-tooling",
       "persist-credentials": false,
       ref: "${{ github.workflow_sha }}",
-      "sparse-checkout": "scripts/lib/record-shared.mjs\nscripts/release-tooling-identity.mjs\n",
-      "sparse-checkout-cone-mode": false,
     });
+    expect(checkout.with?.["sparse-checkout"]).toBeUndefined();
+    for (const [name, script] of [
+      ["Validate publishable plugin metadata", "plugin-npm-release-check.ts"],
+      ["Resolve plugin release plan", "plugin-npm-release-plan.ts"],
+    ]) {
+      const planner = workflowStep(job, name);
+      expect(planner.run).toContain(`node --import tsx .release-tooling/scripts/${script}`);
+      expect(planner.env?.TSX_TSCONFIG_PATH).toBe(
+        "${{ github.workspace }}/.release-tooling/tsconfig.json",
+      );
+      expect(planner["working-directory"]).toBeUndefined();
+    }
     expect(identity.if).toBe("github.event_name == 'workflow_dispatch' && inputs.preflight_only");
     expect(identity.env).toMatchObject({
       GH_TOKEN: "${{ github.token }}",

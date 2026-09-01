@@ -182,7 +182,7 @@ describe("plugin npm extended-stable workflow", () => {
     expect(previewSteps.slice(0, 7).map((candidate) => candidate.name)).toEqual([
       "Prepare Git owner",
       "Checkout",
-      "Checkout trusted preflight tooling",
+      "Checkout trusted planning tooling",
       "Resolve checked-out ref",
       "Verify trusted preflight tooling identity",
       "Validate ref is on a trusted publish branch",
