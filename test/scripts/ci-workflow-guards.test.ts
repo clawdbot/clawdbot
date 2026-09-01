@@ -9711,6 +9711,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts",
       "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/logs-lifecycle.e2e.test.ts",
       "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
+      "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
     ]);
     const realGatewayRunContract = realGatewayRuns.join("\n");
     expect(realGatewayRunContract).not.toContain("--retry");
@@ -9725,6 +9726,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "Test Control UI auth transports with a real Gateway",
       "Test Control UI usage sessions owner attribution with a real Gateway",
       "Test Control UI agent file lifecycle with a real Gateway",
+      "Test Control UI media transcript replay with a real Gateway",
     ]) {
       const captureIndex = uiE2eRealGateway.steps.findIndex(
         (step: WorkflowStep) => step.name === name,

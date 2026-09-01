@@ -2425,6 +2425,16 @@ jobs:
           --configLoader runner
           ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts
 
+      - name: Test Control UI media transcript replay with a real Gateway
+        env:
+          OPENCLAW_CAPTURE_UI_PROOF: ${{ github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof && '1' || '0' }}
+          OPENCLAW_UI_E2E_ARTIFACT_DIR: .artifacts/control-ui-e2e/real-gateway
+        run: >-
+          node scripts/run-vitest.mjs run
+          --config test/vitest/vitest.ui-e2e.config.ts
+          --configLoader runner
+          extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts
+
       - name: Upload sanitized Control UI real-Gateway proof
         if: always() && github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

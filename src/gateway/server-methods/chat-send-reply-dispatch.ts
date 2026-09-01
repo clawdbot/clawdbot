@@ -8,7 +8,6 @@ import {
 } from "../../auto-reply/reply-payload.js";
 import type { ReplyDispatcherOptions } from "../../auto-reply/reply/reply-dispatcher.js";
 import { readSessionTranscriptWatermark } from "../../config/sessions/session-accessor.js";
-import { publishTranscriptUpdate } from "../../config/sessions/session-accessor.sqlite-events.js";
 import {
   recordAssistantManagedMediaUrls,
   type PrepareAssistantTranscriptMessage,
@@ -252,12 +251,6 @@ export function createChatSendReplyDispatch(params: {
     if (!persistedContentForAppend?.length) {
       return;
     }
-    // attachment_error blocks are live UI-only failure cards. Persisting them
-    // into durable model history makes a later transcript replay cast them into
-    // the assistant-content union and crash on the missing tool-call id.
-    const persistedHistoryContent = persistedContentForAppend.filter(
-      (block) => block.type !== "attachment_error",
-    );
     const transcriptReply =
       mediaMessage?.transcriptText ??
       extractAssistantDisplayTextFromContent(assistantContent) ??
@@ -300,7 +293,7 @@ export function createChatSendReplyDispatch(params: {
       // The harness row is the canonical final assistant. Replace that exact
       // identity so media materialization cannot append a parallel reply.
       const rewritten = await rewriteAssistantTranscriptMessageByIdempotencyKey({
-        content: persistedHistoryContent,
+        content: persistedContentForAppend,
         idempotencyKey: ownedTranscriptIdempotencyKey,
         managedMediaUrls: sourceMediaUrls,
         scope: transcriptScope,
@@ -311,7 +304,6 @@ export function createChatSendReplyDispatch(params: {
         await publishAssistantTranscriptRewrite({
           scope: transcriptScope,
           rewritten: [rewritten],
-          liveMessage: { role: "assistant", content: persistedContentForAppend },
         });
         if (assistantContent?.length) {
           attachManagedOutgoingMediaToMessage({
@@ -340,7 +332,7 @@ export function createChatSendReplyDispatch(params: {
       const rewritten = await rewriteAssistantTranscriptMessageByTurnIndexAndMedia({
         afterSeq: assistantTranscriptRewriteState.afterSeq,
         assistantMessageIndex,
-        content: persistedHistoryContent,
+        content: persistedContentForAppend,
         expectedGeneration: assistantTranscriptRewriteState.generation,
         mediaUrls: sourceMediaUrls,
         scope: transcriptScope,
@@ -352,7 +344,6 @@ export function createChatSendReplyDispatch(params: {
         await publishAssistantTranscriptRewrite({
           scope: transcriptScope,
           rewritten: [rewritten],
-          liveMessage: { role: "assistant", content: persistedContentForAppend },
         });
         if (assistantContent?.length) {
           attachManagedOutgoingMediaToMessage({
@@ -385,7 +376,7 @@ export function createChatSendReplyDispatch(params: {
     const appended = await appendAssistantTranscriptMessage({
       sessionKey,
       message: transcriptReply,
-      ...(persistedHistoryContent.length ? { content: persistedHistoryContent } : {}),
+      ...(persistedContentForAppend.length ? { content: persistedContentForAppend } : {}),
       sessionId,
       storePath: latestStorePath,
       agentId,
@@ -404,18 +395,6 @@ export function createChatSendReplyDispatch(params: {
         attachManagedOutgoingMediaToMessage({
           messageId: appended.messageId,
           blocks: assistantContent,
-        });
-      }
-      if (
-        appended.messageId &&
-        transcriptScope &&
-        persistedContentForAppend.some((block) => block.type === "attachment_error")
-      ) {
-        // Keep the visible failure card on the live projection while the durable
-        // row stays filtered to replay-safe assistant blocks.
-        await publishTranscriptUpdate(transcriptScope, {
-          messageId: appended.messageId,
-          message: { role: "assistant", content: persistedContentForAppend },
         });
       }
       appendedWebchatAgentMedia = true;

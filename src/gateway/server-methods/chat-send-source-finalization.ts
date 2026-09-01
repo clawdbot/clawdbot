@@ -180,15 +180,10 @@ async function finalizeChatSendAgentReplyPayloads(
       replyAssistantContent,
       replyMediaMessage ?? null,
     );
-    // attachment_error blocks are live UI-only failure cards; keep them out of
-    // durable source-reply mirror history while the broadcast stays unfiltered.
-    const persistedHistoryContent = persistedContent?.filter(
-      (block) => block.type !== "attachment_error",
-    );
     const state: SourceReplyContentState = {
       broadcastContent: replyBroadcastContent ? [...replyBroadcastContent] : [],
-      persistedContent: persistedHistoryContent ? [...persistedHistoryContent] : [],
-      hasManagedOutgoingContent: hasManagedOutgoingAssistantContent(persistedHistoryContent ?? []),
+      persistedContent: persistedContent ? [...persistedContent] : [],
+      hasManagedOutgoingContent: hasManagedOutgoingAssistantContent(persistedContent),
       backedManagedOutgoingContent: false,
     };
     sourceReplyContentStates[replyIndex] = state;

@@ -1769,7 +1769,7 @@ src/agents/embedded-agent-runner/model.ts	5
 src/agents/embedded-agent-runner/openrouter-model-capabilities.ts	2
 src/agents/embedded-agent-runner/prepared-compaction-runtime.ts	1
 src/agents/embedded-agent-runner/prompt-cache-observability.ts	2
-src/agents/embedded-agent-runner/replay-history.ts	60
+src/agents/embedded-agent-runner/replay-history.ts	59
 src/agents/embedded-agent-runner/result-fallback-classifier.ts	2
 src/agents/embedded-agent-runner/run-entry.ts	3
 src/agents/embedded-agent-runner/run-orchestrator.ts	1
@@ -2696,7 +2696,7 @@ src/config/sessions/transcript-recent-window.ts	1
 src/config/sessions/transcript-replay.ts	1
 src/config/sessions/transcript-stream.ts	1
 src/config/sessions/transcript-tree.ts	3
-src/config/sessions/transcript.ts	16
+src/config/sessions/transcript.ts	15
 src/config/sessions/types.ts	1
 src/config/state-dir-dotenv.ts	1
 src/config/talk.ts	1
@@ -2822,7 +2822,7 @@ src/gateway/hooks.ts	1
 src/gateway/live-agent-probes.ts	1
 src/gateway/live-chat-projector.ts	1
 src/gateway/local-request-context.ts	2
-src/gateway/managed-image-attachments.ts	8
+src/gateway/managed-image-attachments.ts	5
 src/gateway/mcp-app-operations.ts	3
 src/gateway/mcp-app-reconstruction.ts	3
 src/gateway/mcp-grant-store.ts	2
@@ -2888,7 +2888,7 @@ src/gateway/server-methods/chat-send-attachments.ts	1
 src/gateway/server-methods/chat-send-reply-dispatch.ts	2
 src/gateway/server-methods/chat-send-request.ts	1
 src/gateway/server-methods/chat-server-timing.ts	1
-src/gateway/server-methods/chat-transcript-inject.ts	2
+src/gateway/server-methods/chat-transcript-inject.ts	1
 src/gateway/server-methods/chat-transcript-persistence.ts	7
 src/gateway/server-methods/chat-tts-markers.ts	1
 src/gateway/server-methods/chat.ts	2

@@ -1190,7 +1190,8 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     const transcriptMessages = [
       {
         __openclaw: { id: "msg-1" },
-        content: [
+        content: [{ type: "text", text: "Managed image" }],
+        openclawDisplayContent: [
           {
             type: "image",
             url: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
