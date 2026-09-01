@@ -5729,8 +5729,9 @@ export const en: TranslationMap = {
     },
     mermaid: {
       title: "Mermaid diagram",
-      diagram: "Diagram",
-      source: "Source",
+      options: "Diagram options",
+      diagram: "Show diagram",
+      source: "Show source",
       copySource: "Copy source",
       expand: "Expand diagram",
       rendering: "Rendering diagram…",

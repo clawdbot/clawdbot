@@ -39,9 +39,13 @@ async function mount(...sources: string[]) {
   return { container, elements };
 }
 
-function button(element: MermaidElement, label: string): HTMLButtonElement {
-  const match = [...(element.shadowRoot?.querySelectorAll("button") ?? [])].find(
-    (candidate) => candidate.textContent?.trim() === label,
+function action(element: MermaidElement, label: string) {
+  const controls = element.shadowRoot?.querySelectorAll<
+    HTMLButtonElement | HTMLElementTagNameMap["wa-dropdown-item"]
+  >("button, wa-dropdown-item");
+  const match = [...(controls ?? [])].find(
+    (candidate) =>
+      (candidate.getAttribute("aria-label") ?? candidate.textContent?.trim()) === label,
   );
   if (!match) {
     throw new Error(`Missing Mermaid action: ${label}`);
@@ -101,7 +105,8 @@ afterEach(() => {
 });
 
 describe("Mermaid Markdown presentation", () => {
-  it("preserves the exact source when switching views and copying", async () => {
+  it.each([true, false])("preserves source and reports copy success=%s", async (copied) => {
+    copySource.mockResolvedValueOnce(copied);
     const original = source("x < y & z <script>alert(1)</script>");
     const {
       elements: [element],
@@ -109,16 +114,18 @@ describe("Mermaid Markdown presentation", () => {
     const imageUrl = await waitForImage(element!);
 
     expect(renderSvg).toHaveBeenCalledWith(original, expect.objectContaining({ darkMode: false }));
-    expect(button(element!, "Expand diagram").disabled).toBe(false);
-    button(element!, "Source").click();
+    expect(action(element!, "Expand diagram").disabled).toBe(false);
+    action(element!, "Show source").click();
     await element!.updateComplete;
     expect(element!.shadowRoot?.querySelector("code")?.textContent).toBe(original);
     expect(element!.shadowRoot?.querySelector("script, img")).toBeNull();
-    button(element!, "Copy source").click();
-    await vi.waitFor(() => expect(button(element!, "Copied!")).toBeDefined());
+    action(element!, "Copy source").click();
+    await vi.waitFor(() =>
+      expect(action(element!, copied ? "Copied!" : "Copy failed")).toBeDefined(),
+    );
     expect(copySource).toHaveBeenCalledExactlyOnceWith(original);
 
-    button(element!, "Diagram").click();
+    action(element!, "Show diagram").click();
     await element!.updateComplete;
     expect(imageSource(element!)).toBe(imageUrl);
     expect(renderSvg).toHaveBeenCalledTimes(1);
@@ -147,8 +154,8 @@ describe("Mermaid Markdown presentation", () => {
       expect(element!.shadowRoot?.querySelector("code")?.textContent).toBe(original);
       expect(element!.shadowRoot?.querySelector("img, script")).toBeNull();
       expect(element!.shadowRoot?.textContent).not.toContain("internal parser detail");
-      expect(button(element!, "Expand diagram").disabled).toBe(true);
-      button(element!, "Copy source").click();
+      expect(action(element!, "Expand diagram").disabled).toBe(true);
+      action(element!, "Copy source").click();
       await vi.waitFor(() => expect(copySource).toHaveBeenCalledExactlyOnceWith(original));
       if (failure === "image") {
         expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith("blob:mermaid-1");

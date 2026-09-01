@@ -4,8 +4,10 @@ import { t } from "../i18n/index.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { resolveThemeColor } from "../lib/theme-color.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
+import { icons } from "./icons.ts";
 import { renderMermaidSvg, type MermaidTheme } from "./markdown-mermaid.runtime.ts";
 import "./image-lightbox.ts";
+import "./web-awesome.ts";
 
 const CACHE_LIMIT = 16;
 const diagrams = new Map<string, Promise<string>>();
@@ -60,6 +62,7 @@ class OpenClawMermaid extends OpenClawLitElement {
   static override styles = css`
     :host {
       display: block;
+      position: relative;
       min-width: 0;
       margin: 12px 0;
       border: 1px solid var(--border);
@@ -69,30 +72,31 @@ class OpenClawMermaid extends OpenClawLitElement {
       color: var(--text);
       font-family: var(--font-body);
     }
-    .toolbar {
+    .actions {
+      position: absolute;
+      inset-block-start: 6px;
+      inset-inline-end: 6px;
+      z-index: 1;
       display: flex;
       align-items: center;
-      flex-wrap: wrap;
-      gap: 4px;
-      padding: 6px 8px;
-      border-bottom: 1px solid var(--border);
-    }
-    .spacer {
-      flex: 1;
+      gap: 2px;
     }
     button {
-      padding: 5px 8px;
-      min-height: 32px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      padding: 0;
       border: 0;
       border-radius: var(--radius-sm, 6px);
       background: transparent;
       color: var(--muted);
       font: inherit;
-      font-size: 12px;
       cursor: default;
     }
     button:hover,
-    button[aria-pressed="true"] {
+    button[aria-expanded="true"] {
       background: var(--bg-hover);
       color: var(--text);
     }
@@ -100,12 +104,49 @@ class OpenClawMermaid extends OpenClawLitElement {
       outline: 2px solid var(--accent);
       outline-offset: -2px;
     }
-    button:disabled {
-      opacity: 0.5;
+    button svg {
+      width: 15px;
+      height: 15px;
+    }
+    .copy-button {
+      opacity: 0;
+      pointer-events: none;
+    }
+    :host(:hover) .copy-button,
+    :host(:focus-within) .copy-button {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .copy-feedback {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+    wa-dropdown::part(menu) {
+      min-width: 160px;
+      padding: var(--menu-padding);
+      border: 1px solid var(--overlay-border);
+      border-radius: var(--menu-radius);
+      background: var(--bg-elevated);
+      box-shadow: var(--overlay-shadow);
+    }
+    wa-dropdown-item {
+      min-height: var(--menu-item-height);
+      padding: 0 8px;
+      border-radius: var(--menu-item-radius);
+      color: var(--text);
+      font: 12px var(--font-body);
       cursor: default;
     }
+    wa-dropdown-item:hover,
+    wa-dropdown-item:focus-visible {
+      background: var(--bg-hover);
+    }
     .preview {
-      padding: 16px;
+      padding: 36px 16px 16px;
       overflow: auto;
     }
     img {
@@ -116,7 +157,7 @@ class OpenClawMermaid extends OpenClawLitElement {
     }
     pre {
       margin: 0;
-      padding: 16px;
+      padding: 36px 16px 16px;
       overflow: auto;
       max-height: 480px;
       font: 12px/1.6 var(--font-mono, monospace);
@@ -124,16 +165,23 @@ class OpenClawMermaid extends OpenClawLitElement {
     }
     .status {
       margin: 0;
-      padding: 12px 16px;
+      padding: 36px 16px 12px;
       font-size: 12px;
       color: var(--muted);
     }
-    @media (max-width: 640px) {
+    @media (hover: none), (pointer: coarse) {
       button {
-        min-height: 40px;
+        width: 36px;
+        height: 36px;
       }
-      .preview {
-        padding: 8px;
+      .copy-button {
+        opacity: 1;
+        pointer-events: auto;
+      }
+      .preview,
+      pre,
+      .status {
+        padding-top: 44px;
       }
     }
   `;
@@ -219,46 +267,65 @@ class OpenClawMermaid extends OpenClawLitElement {
 
   override render() {
     const sourceVisible = this.showSource || this.failed;
+    const copyLabel = t(
+      this.copyResult === undefined
+        ? "chat.mermaid.copySource"
+        : this.copyResult
+          ? "common.copied"
+          : "common.copyFailed",
+    );
     return html`
-      <div class="toolbar" role="group" aria-label=${t("chat.mermaid.title")}>
+      <div class="actions">
         <button
+          class="copy-button"
           type="button"
-          aria-pressed=${!this.showSource}
-          @click=${() => {
-            this.showSource = false;
-          }}
+          aria-label=${copyLabel}
+          title=${copyLabel}
+          @click=${() => void this.copySource()}
         >
-          ${t("chat.mermaid.diagram")}
-        </button>
-        <button
-          type="button"
-          aria-pressed=${this.showSource}
-          @click=${() => {
-            this.showSource = true;
-          }}
-        >
-          ${t("chat.mermaid.source")}
-        </button>
-        <span class="spacer"></span>
-        <button type="button" @click=${() => void this.copySource()}>
-          ${t(
-            this.copyResult === undefined
-              ? "chat.mermaid.copySource"
+          <span aria-hidden="true"
+            >${this.copyResult === undefined
+              ? icons.copy
               : this.copyResult
-                ? "common.copied"
-                : "common.copyFailed",
-          )}
+                ? icons.check
+                : icons.x}</span
+          >
         </button>
-        <button
-          type="button"
-          ?disabled=${!this.imageUrl}
-          @click=${() => {
-            this.expanded = true;
+        <wa-dropdown
+          placement="bottom-end"
+          size="s"
+          .distance=${4}
+          aria-label=${t("chat.mermaid.options")}
+          @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+            const action = event.detail.item.value;
+            if (action === "expand") {
+              this.expanded = true;
+            } else if (action === "source" || action === "diagram") {
+              this.showSource = action === "source";
+            }
           }}
         >
-          ${t("chat.mermaid.expand")}
-        </button>
+          <button
+            slot="trigger"
+            type="button"
+            aria-label=${t("chat.mermaid.options")}
+            title=${t("chat.mermaid.options")}
+          >
+            <span aria-hidden="true">${icons.moreHorizontal}</span>
+          </button>
+          <wa-dropdown-item
+            value=${sourceVisible ? "diagram" : "source"}
+            ?disabled=${sourceVisible && !this.imageUrl}
+            >${t(sourceVisible ? "chat.mermaid.diagram" : "chat.mermaid.source")}</wa-dropdown-item
+          >
+          <wa-dropdown-item value="expand" ?disabled=${!this.imageUrl}
+            >${t("chat.mermaid.expand")}</wa-dropdown-item
+          >
+        </wa-dropdown>
       </div>
+      <span class="copy-feedback" aria-live="polite"
+        >${this.copyResult === undefined ? nothing : copyLabel}</span
+      >
       ${this.failed
         ? html`<p class="status" role="status">${t("chat.mermaid.error")}</p>`
         : this.pending && !this.imageUrl
