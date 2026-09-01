@@ -657,7 +657,6 @@ extensions/matrix/src/matrix/actions/summary.ts	2
 extensions/matrix/src/matrix/actions/verification.ts	1
 extensions/matrix/src/matrix/client-bootstrap.ts	1
 extensions/matrix/src/matrix/client/config.ts	5
-extensions/matrix/src/matrix/client/file-sync-store.ts	5
 extensions/matrix/src/matrix/client/logging.ts	3
 extensions/matrix/src/matrix/client/runtime.ts	1
 extensions/matrix/src/matrix/config-update.ts	4
