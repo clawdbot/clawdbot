@@ -22,12 +22,16 @@ function fixture() {
   const owner = join(root, "owner");
   const caller = join(root, "caller");
   const bin = join(root, "bin");
-  for (const dir of [owner, caller, bin]) mkdirSync(dir);
-  // Ownership checks must stop before invoking either preflight-only tool.
+  for (const dir of [owner, caller, bin]) {
+    mkdirSync(dir);
+  }
+  // Recovery and metadata checks need these preflight commands but must never execute them.
   for (const command of ["rg", "pnpm"]) {
-    const stub = join(bin, command);
-    writeFileSync(stub, "#!/bin/sh\necho 'unexpected command in ownership fixture' >&2\nexit 99\n");
-    chmodSync(stub, 0o755);
+    writeFileSync(
+      join(bin, command),
+      `#!/bin/sh\necho 'Unexpected fixture command: ${command}' >&2\nexit 99\n`,
+      { mode: 0o755 },
+    );
   }
   const env = {
     HOME: root,
