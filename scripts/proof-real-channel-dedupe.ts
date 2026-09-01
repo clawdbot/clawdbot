@@ -11,6 +11,7 @@ import { telegramActionRuntime } from "../extensions/telegram/src/action-runtime
 import { telegramPlugin } from "../extensions/telegram/src/channel.js";
 import { createMessageTool } from "../src/agents/tools/message-tool-execution.js";
 import { buildReplyPayloads } from "../src/auto-reply/reply/agent-runner-payloads.js";
+import type { ChannelPlugin } from "../src/channels/plugins/types.plugin.js";
 import { createPluginRecord } from "../src/plugins/loader-records.js";
 import { createPluginRegistry } from "../src/plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
@@ -90,7 +91,7 @@ async function main() {
       runtime: {} as PluginRuntime,
       activateGlobalSideEffects: false,
     });
-    registryBuilder.registerChannel(record, telegramPlugin);
+    registryBuilder.registerChannel(record, telegramPlugin as ChannelPlugin);
     registryBuilder.registry.plugins.push(record);
     setActivePluginRegistry(registryBuilder.registry, "pr-128580-production-path");
 
