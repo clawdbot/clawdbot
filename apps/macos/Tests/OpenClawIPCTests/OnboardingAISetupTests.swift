@@ -778,7 +778,7 @@ private func setupAdmissionBusyResponse(id: String, confirmed: Bool = true) -> D
 private enum AISetupAccessibilityError: Error {
     case requestFailed(attribute: String, code: Int32)
     case invalidValue(attribute: String)
-    case missingWindow(windowsAttributePresent: Bool, windowCount: Int, windowsWithIdentifier: Int)
+    case missingWindow(windowsAttributePresent: Bool, windowCount: Int, windowsWithTitle: Int)
 }
 
 /// SwiftPM starts background-only, which AppKit does not permit to own windows.
@@ -789,7 +789,7 @@ private let aiSetupAccessibilityApplication: Void = {
     NSApplication.shared.finishLaunching()
 }()
 
-private nonisolated func inspectAISetupWindow(identifier: String) throws
+private nonisolated func inspectAISetupWindow(title: String) throws
 -> (labels: [String], buttons: [String: Bool]) {
     func attributeValue(_ element: AXUIElement, _ attribute: String) throws -> CFTypeRef? {
         var raw: CFTypeRef?
@@ -813,16 +813,16 @@ private nonisolated func inspectAISetupWindow(identifier: String) throws
 
     let application = AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)
     let windows = try value(application, kAXWindowsAttribute, as: [AXUIElement].self)
-    var windowsWithIdentifier = 0
+    var windowsWithTitle = 0
     guard let window = try (windows ?? []).first(where: {
-        let candidateIdentifier = try value($0, kAXIdentifierAttribute, as: String.self)
-        if candidateIdentifier != nil { windowsWithIdentifier += 1 }
-        return candidateIdentifier == identifier
+        let candidateTitle = try value($0, kAXTitleAttribute, as: String.self)
+        if candidateTitle != nil { windowsWithTitle += 1 }
+        return candidateTitle == title
     }) else {
         throw AISetupAccessibilityError.missingWindow(
             windowsAttributePresent: windows != nil,
             windowCount: windows?.count ?? 0,
-            windowsWithIdentifier: windowsWithIdentifier)
+            windowsWithTitle: windowsWithTitle)
     }
     var labels: [String] = []
     var buttons: [String: Bool] = [:]
@@ -861,11 +861,12 @@ private func inspectAISetupSheet(
         .environment(\.colorScheme, colorScheme)
         .onAppear { appeared = true })
     hosting.frame = NSRect(x: 0, y: 0, width: 500, height: 500)
-    // Keep the sheet mounted through the AX request and detach it before closing.
-    let window = NSWindow(contentRect: hosting.frame, styleMask: [], backing: .buffered, defer: false)
+    // Older AppKit exports AXTitle for titled windows but can omit AXIdentifier.
+    // Keep exact ownership through a unique title, not the active or first window.
+    let window = NSWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
     window.isReleasedWhenClosed = false
-    let identifier = UUID().uuidString
-    window.setAccessibilityIdentifier(identifier)
+    let title = "AI setup test \(UUID().uuidString)"
+    window.title = title
     window.contentView = hosting
     defer {
         window.orderOut(nil)
@@ -881,15 +882,14 @@ private func inspectAISetupSheet(
     // protocol conformance. Keep MainActor free so AppKit can answer those requests.
     let snapshot: (labels: [String], buttons: [String: Bool])
     do {
-        snapshot = try await Task.detached { try inspectAISetupWindow(identifier: identifier) }.value
+        snapshot = try await Task.detached { try inspectAISetupWindow(title: title) }.value
     } catch {
         // Record the failure without skipping callers' gated wizard-task cleanup.
         // Query AppKit only after failure so diagnostics cannot prime AX discovery.
         let appKitAXWindows = NSApp.accessibilityWindows()
         Issue.record(error, """
         Owned AI setup window: mounted=\(hosting.window === window), visible=\(window.isVisible), \
-        accessible=\(window.isAccessibilityElement()), identifierMatches=\(window
-            .accessibilityIdentifier() == identifier), \
+        accessible=\(window.isAccessibilityElement()), titleMatches=\(window.accessibilityTitle() == title), \
         appKitListed=\(NSApp.windows.contains { $0 === window }), \
         appKitAXWindowCount=\(appKitAXWindows?.count ?? 0), \
         appKitAXListed=\(appKitAXWindows?.contains { ($0 as? NSWindow) === window } ?? false), \
