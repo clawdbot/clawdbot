@@ -29,6 +29,7 @@ jobs:
         shell: pwsh
     steps:
       - name: Begin Testbox
+        id: begin_testbox
         shell: bash
         env:
           TESTBOX_ID: ${{ inputs.testbox_id }}
@@ -139,6 +140,21 @@ jobs:
           chmod 700 ~/.ssh
           chmod 600 ~/.ssh/authorized_keys
 
+          bash_path="$BASH"
+          [[ "$bash_path" = /* ]] || bash_path="$PWD/$bash_path"
+          printf 'bash_os=%s\nbash_identity=%s\nbash_home=%s\nbash_path=%s\n' \
+            "$(uname -s)" "$(id -un)" "$HOME" "$bash_path"
+          if key_info="$(ssh-keygen -E sha256 -lf "$state/ssh_public_key" 2>/dev/null)"; then
+            awk '$2 ~ /^SHA256:[A-Za-z0-9+\/]+$/ { print "testbox_key_fingerprint=" $2 }' <<<"$key_info"
+          else
+            echo "testbox_key_fingerprint=unavailable"
+          fi
+          if command -v cygpath >/dev/null 2>&1 && installed_key_path="$(cygpath -aw "$HOME/.ssh/authorized_keys" 2>/dev/null)"; then
+            printf 'installed_key_path=%s\n' "$installed_key_path" >> "$GITHUB_OUTPUT"
+          else
+            echo "bash_installed_key_windows_path=unavailable"
+          fi
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -146,13 +162,82 @@ jobs:
           submodules: false
 
       - name: Prepare Windows shell
+        env:
+          BASH_INSTALLED_KEY_PATH: ${{ steps.begin_testbox.outputs.installed_key_path }}
         run: |
           $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
           Write-Host "runner=$env:RUNNER_NAME"
           Write-Host "machine=$env:COMPUTERNAME"
+          Write-Host ("windows_identity=" + [Security.Principal.WindowsIdentity]::GetCurrent().Name)
+          Write-Host "windows_userprofile=$env:USERPROFILE"
           Write-Host ("os=" + [System.Environment]::OSVersion.VersionString)
+          Write-Host ("architecture=" + [Runtime.InteropServices.RuntimeInformation]::OSArchitecture)
           Write-Host ("powershell=" + $PSVersionTable.PSVersion.ToString())
-          git --version
+          $gitVersion = & git --version 2>$null
+          if ($LASTEXITCODE -ne 0) { throw "git version unavailable" }
+          Write-Host "git=$gitVersion"
+
+          $service = Get-CimInstance Win32_Service -Filter "Name='sshd'"
+          $sshd = "$env:WINDIR\System32\OpenSSH\sshd.exe"
+          $serviceArguments = $false
+          if ($service) {
+            Write-Host "sshd_service_identity=$($service.StartName) sshd_service_state=$($service.State)"
+            $sshd = $null
+            if ($service.PathName -match '^\s*(?:"([^"]+\.exe)"|(.+?\.exe))\s*(.*)$') {
+              $sshd = if ($Matches[1]) { $Matches[1] } else { $Matches[2] }
+              $serviceArguments = -not [string]::IsNullOrWhiteSpace($Matches[3])
+            }
+          } else { Write-Host "sshd_service=unavailable" }
+          $sshdAvailable = $sshd -and (Test-Path -LiteralPath $sshd -PathType Leaf)
+          Write-Host "sshd_executable=$sshd available=$sshdAvailable service_arguments_present=$serviceArguments"
+          foreach ($user in @('runner', 'runneradmin')) {
+            $account = Get-CimInstance Win32_UserAccount -Filter "LocalAccount=True AND Name='$user'"
+            if ($account) { Write-Host "account=$user enabled=$(-not $account.Disabled)" }
+            else { Write-Host "account=$user unavailable" }
+            # User-only context; do not invent connection addresses or replay service arguments.
+            if (-not $sshdAvailable -or $serviceArguments) {
+              Write-Host "sshd_config_user=$user unavailable (executable or service arguments)"
+              continue
+            }
+            $effectiveConfig = & $sshd -T -C "user=$user" 2>$null
+            $configExit = $LASTEXITCODE
+            Write-Host "sshd_config_user=$user context=user-only exit=$configExit"
+            if ($configExit -eq 0) {
+              $effectiveConfig | Where-Object {
+                $_ -match '^(port|authorizedkeysfile|pubkeyauthentication|authenticationmethods|allowusers|denyusers|strictmodes)\s'
+              } | ForEach-Object { Write-Host "sshd_config_user=$user $_" }
+            } else { Write-Host "sshd_config_user=$user unavailable" }
+          }
+
+          $keygen = "$env:WINDIR\System32\OpenSSH\ssh-keygen.exe"
+          $keyFiles = @('C:\ProgramData\ssh\administrators_authorized_keys', 'C:\Users\runneradmin\.ssh\authorized_keys', $env:BASH_INSTALLED_KEY_PATH)
+          foreach ($keyFile in ($keyFiles | Select-Object -Unique)) {
+            if (-not $keyFile -or -not (Test-Path -LiteralPath $keyFile -PathType Leaf)) {
+              Write-Host "public_key_file=$keyFile unavailable"
+              continue
+            }
+            Write-Host "public_key_file=$keyFile"
+            if (Test-Path -LiteralPath $keygen -PathType Leaf) {
+              $keyInfo = & $keygen -E sha256 -lf $keyFile 2>$null
+              $keyExit = $LASTEXITCODE
+              Write-Host "fingerprint_exit=$keyExit"
+              if ($keyExit -eq 0) {
+                foreach ($line in $keyInfo) {
+                  if ($line -match '^\d+\s+(SHA256:[A-Za-z0-9+/]+)\s') { Write-Host "fingerprint=$($Matches[1])" }
+                }
+              } else { Write-Host "fingerprint=unavailable" }
+            } else { Write-Host "fingerprint=unavailable (ssh-keygen missing)" }
+            try {
+              $acl = Get-Acl -LiteralPath $keyFile
+              Write-Host "owner_sid=$($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value)"
+              foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+                Write-Host "acl_sid=$($rule.IdentityReference.Value) rights=$($rule.FileSystemRights) type=$($rule.AccessControlType) inherited=$($rule.IsInherited)"
+              }
+            } catch { Write-Host "acl=unavailable" }
+          }
+          # A failed diagnostic process must not become the step's implicit exit status.
+          exit 0
 
       - name: Run Testbox
         if: always()
