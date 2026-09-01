@@ -269,9 +269,10 @@ describe("process start times", () => {
           return originalReadFileSync(filePath as never, encoding as never) as never;
         }
         const value = probe(Number(pid));
-        return (
-          value === null ? "unavailable" : `${pid} (node) S ${"0 ".repeat(18)}${value}`
-        ) as never;
+        if (value === null) {
+          throw new Error("process start time unavailable");
+        }
+        return `${pid} (node) S ${"0 ".repeat(18)}${value}` as never;
       });
 
       await withMockedPlatform(platform, async () => {
