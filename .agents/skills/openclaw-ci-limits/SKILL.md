@@ -203,10 +203,13 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   fixture memory and cleanup. This adds no runner registrations.
 - macOS Swift uses two mandatory matrix phases with `max-parallel: 2`:
   release compilation and the complete shared/app test workload. This adds one
-  registration per eligible Blacksmith native run, or at most four across the
-  two active and two pending main slots in one admission wave. Hosted manual
-  and retry paths add no Blacksmith registrations. Build caches are phase-owned;
-  only the release phase writes the shared SwiftPM dependency cache.
+  registration per eligible Blacksmith native run: up to four across the two
+  active and two pending main slots, plus one for each eligible trusted PR.
+  Counting both phases in the conservative bounds gives 183 rows per main run
+  and 277 per broad PR, or `4 × 183 + 19 × 277 = 5,995` registrations in the
+  observed five-minute arrival envelope. Hosted manual and retry paths add no
+  Blacksmith registrations. Build caches are phase-owned; only the release
+  phase writes the shared SwiftPM dependency cache.
 - Canonical PR Node tests use one precise changed-target job when possible;
   broad, deleted, unknown, or planner-failed changes fall back to the compact
   full-suite plan. Targeted plans retain the full built-artifact

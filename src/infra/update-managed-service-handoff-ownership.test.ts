@@ -303,6 +303,7 @@ childProcess.spawn = function(command, args, options) {
           "-e",
           `require("node:fs").writeFileSync(${JSON.stringify(updaterPath)},"ran");setTimeout(() => process.exit(${params.commandExitCode ?? 1}), ${params.commandDelayMs ?? 0})`,
         ],
+        triageCommandArgv: [process.execPath, "-e", "process.exit(0)", "--"],
         logPath,
         sensitivePaths: [],
       },

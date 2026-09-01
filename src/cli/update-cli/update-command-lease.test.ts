@@ -350,7 +350,14 @@ describe("update orchestration lifecycle ownership", () => {
     "%s retains strict fresh validation after releasing the lease",
     async (lane) => {
       await writeScenario(lane, { invalidConfig: true });
-      await invoke(lane);
+      if (lane === "current-process") {
+        await expect(invoke(lane)).rejects.toMatchObject({
+          name: "UpdateCommandFailure",
+          exitCode: 1,
+        });
+      } else {
+        await invoke(lane);
+      }
       const output =
         lane === "current-process"
           ? mocks.print.mock.lastCall?.[0]
@@ -362,7 +369,7 @@ describe("update orchestration lifecycle ownership", () => {
       expect(mocks.restart).not.toHaveBeenCalled();
       expect(await events()).toContain("post-acquired");
       expect((await events()).at(-1)).toBe("validate");
-      if (lane !== "resume") {
+      if (lane === "repair") {
         expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
       }
     },
@@ -402,22 +409,39 @@ describe("update orchestration lifecycle ownership", () => {
     "%s propagates a pre-plugin doctor failure before parent mutation",
     async (lane) => {
       await writeScenario(lane, { failDoctor: "pre" });
+      const resultPath = state.path("failed-post-core.json");
+      if (lane === "resume") {
+        vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", resultPath);
+      }
       await expect(invoke(lane)).rejects.toThrow("doctor fixture failure");
       expect(mocks.plugins).not.toHaveBeenCalled();
       expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
       expectDoctorDiagnostics();
       expect(await events()).toEqual(["pre-attempt", "pre-acquired"]);
+      if (lane === "resume") {
+        const result = JSON.parse(await fs.readFile(resultPath, "utf8"));
+        expect(result).toMatchObject({
+          status: "failed",
+          error: expect.stringContaining("doctor fixture failure"),
+        });
+        expect(result.error).not.toContain(state.root);
+        const probe = await runExec(process.execPath, [entrypoint, "probe"], { timeoutMs: 15_000 });
+        expect(probe.stdout).toBe("acquired");
+      }
     },
   );
 
   it("retains a final doctor failure while activating a strictly valid install", async () => {
     await writeScenario("current-process", { failDoctor: "post", hostVersion: "1.0.0" });
-    await invoke("current-process");
+    await expect(invoke("current-process")).rejects.toMatchObject({
+      name: "UpdateCommandFailure",
+      exitCode: 1,
+    });
     expect(mocks.print.mock.lastCall?.[0]).toMatchObject({
       status: "error",
       postUpdate: { plugins: { reason: "post-plugin-doctor-execution-failed" } },
     });
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
     expect(mocks.restart).toHaveBeenCalledOnce();
     expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBeUndefined();
     expectDoctorDiagnostics();
@@ -463,7 +487,14 @@ describe("update orchestration lifecycle ownership", () => {
         hostVersion: lane === "repair" ? undefined : "1.0.0",
       });
 
-      await invoke(lane);
+      if (lane === "current-process") {
+        await expect(invoke(lane)).rejects.toMatchObject({
+          name: "UpdateCommandFailure",
+          exitCode: 1,
+        });
+      } else {
+        await invoke(lane);
+      }
 
       const output =
         lane === "current-process"
@@ -473,7 +504,11 @@ describe("update orchestration lifecycle ownership", () => {
         status: "error",
         postUpdate: { plugins: { reason } },
       });
-      expect(defaultRuntime.exit).toHaveBeenCalledWith(lane === "resume" ? 0 : 1);
+      if (lane === "current-process") {
+        expect(defaultRuntime.exit).not.toHaveBeenCalled();
+      } else {
+        expect(defaultRuntime.exit).toHaveBeenCalledWith(lane === "resume" ? 0 : 1);
+      }
       expect(mocks.restart).not.toHaveBeenCalled();
       expect(await events()).toEqual([
         ...(lane === "current-process" ? [] : ["pre-attempt", "pre-acquired"]),

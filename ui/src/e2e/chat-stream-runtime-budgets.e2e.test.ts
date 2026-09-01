@@ -7,6 +7,7 @@ import {
   installMockGateway,
   requireRecord,
   requireString,
+  waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
@@ -636,6 +637,8 @@ suite.define(() => {
         // The first saved draft notifies presence subscribers. Drain that transition
         // before measuring edits to an already-present draft.
         await waitForCommittedComposerDraft(page, scopeKey, "seed", 0);
+        // Finish startup scrolling before measuring steady-state composer invalidations.
+        await waitForChatScrollIdle(page);
         await installRenderProbe(page);
         await resetRenderProbe(page);
 

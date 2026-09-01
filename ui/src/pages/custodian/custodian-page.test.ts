@@ -478,7 +478,7 @@ describe("custodian page", () => {
     expect(page.textContent).toContain("Loaded transcript row");
   });
 
-  it("keeps failed sensitive replies masked for correction and retry", async () => {
+  it("keeps a sent sensitive reply masked when its response fails", async () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce({
@@ -487,7 +487,10 @@ describe("custodian page", () => {
         sensitive: true,
         action: "none",
       })
-      .mockRejectedValueOnce(new Error("Request failed"));
+      .mockImplementationOnce((_method, _params, options?: { onSent?: () => void }) => {
+        options?.onSent?.();
+        return Promise.reject(new Error("Request failed"));
+      });
     const { context } = createContext(request);
     const { page } = await mountPage(context);
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
@@ -508,6 +511,7 @@ describe("custodian page", () => {
     await waitForFast(() => expect(page.querySelector('[role="alert"]')).not.toBeNull());
     await page.updateComplete;
     expect(input.isConnected).toBe(true);
+    expect(input.value).toBe("");
     expect(page.textContent).toContain("Sensitive reply sent");
     expect(page.innerHTML).not.toContain("test-token-placeholder");
   });

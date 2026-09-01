@@ -2175,6 +2175,55 @@ CREATE TABLE IF NOT EXISTS github_publication_requests (
 CREATE INDEX IF NOT EXISTS idx_github_publication_requests_pending
   ON github_publication_requests(status, updated_at_ms, request_id);
 
+-- Personal requests cannot be interpreted or resumed by older shared publishers.
+CREATE TABLE IF NOT EXISTS github_personal_publication_requests (
+  request_id TEXT NOT NULL PRIMARY KEY CHECK (length(request_id) = 36),
+  owner_profile_id TEXT NOT NULL CHECK (length(owner_profile_id) BETWEEN 1 AND 128),
+  connection_generation TEXT NOT NULL CHECK (length(connection_generation) = 36),
+  idempotency_key TEXT NOT NULL CHECK (length(idempotency_key) BETWEEN 1 AND 128),
+  request_digest TEXT NOT NULL CHECK (length(request_digest) = 64),
+  session_id TEXT NOT NULL CHECK (length(session_id) BETWEEN 1 AND 128),
+  session_key TEXT NOT NULL CHECK (length(session_key) BETWEEN 1 AND 1024),
+  agent_id TEXT NOT NULL CHECK (length(agent_id) BETWEEN 1 AND 128),
+  worktree_id TEXT NOT NULL CHECK (length(worktree_id) BETWEEN 1 AND 128),
+  repository_fingerprint TEXT NOT NULL CHECK (length(repository_fingerprint) BETWEEN 1 AND 256),
+  identity_source TEXT NOT NULL CHECK (identity_source = 'personal'),
+  identity_profile_id TEXT NOT NULL CHECK (length(identity_profile_id) = 36),
+  identity_account_id INTEGER NOT NULL CHECK (identity_account_id >= 1),
+  identity_login TEXT NOT NULL CHECK (length(identity_login) BETWEEN 1 AND 39),
+  title TEXT CHECK (title IS NULL OR length(title) BETWEEN 1 AND 256),
+  body TEXT CHECK (body IS NULL OR length(body) BETWEEN 1 AND 8192),
+  status TEXT NOT NULL CHECK (status IN ('requested', 'publishing', 'needs_confirmation', 'published', 'failed')),
+  gateway_instance_id TEXT CHECK (gateway_instance_id IS NULL OR length(gateway_instance_id) BETWEEN 1 AND 128),
+  execution_id TEXT CHECK (execution_id IS NULL OR length(execution_id) = 36),
+  last_effect TEXT CHECK (last_effect IS NULL OR last_effect IN ('push', 'pull_request')),
+  effect_state TEXT CHECK (effect_state IS NULL OR effect_state IN ('dispatched', 'observed')),
+  push_repository TEXT NOT NULL CHECK (length(push_repository) BETWEEN 3 AND 256),
+  repository TEXT NOT NULL CHECK (length(repository) BETWEEN 3 AND 256),
+  branch TEXT NOT NULL CHECK (length(branch) BETWEEN 1 AND 256),
+  base_branch TEXT NOT NULL CHECK (length(base_branch) BETWEEN 1 AND 256),
+  source_head_commit TEXT NOT NULL CHECK (length(source_head_commit) IN (40, 64)),
+  source_index_tree TEXT NOT NULL CHECK (length(source_index_tree) IN (40, 64)),
+  workspace_tree TEXT NOT NULL CHECK (length(workspace_tree) IN (40, 64)),
+  head_commit TEXT CHECK (head_commit IS NULL OR length(head_commit) IN (40, 64)),
+  pull_request_url TEXT CHECK (pull_request_url IS NULL OR length(pull_request_url) BETWEEN 1 AND 2048),
+  error_code TEXT CHECK (error_code IS NULL OR length(error_code) BETWEEN 1 AND 64),
+  next_action TEXT CHECK (next_action IS NULL OR length(next_action) BETWEEN 1 AND 1024),
+  created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+  updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= created_at_ms),
+  reported_at_ms INTEGER,
+  UNIQUE (owner_profile_id, session_id, idempotency_key),
+  CHECK ((status = 'publishing' AND gateway_instance_id IS NOT NULL AND execution_id IS NOT NULL) OR status <> 'publishing'),
+  CHECK ((last_effect IS NULL AND effect_state IS NULL) OR (last_effect IS NOT NULL AND effect_state IS NOT NULL)),
+  CHECK ((status = 'published' AND pull_request_url IS NOT NULL AND head_commit IS NOT NULL AND error_code IS NULL AND next_action IS NULL)
+    OR (status = 'failed' AND error_code IS NOT NULL AND next_action IS NOT NULL)
+    OR (status IN ('requested', 'publishing', 'needs_confirmation') AND error_code IS NULL AND next_action IS NULL))
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_github_personal_publication_owner_session
+  ON github_personal_publication_requests(owner_profile_id, session_id, created_at_ms);
+CREATE INDEX IF NOT EXISTS idx_github_personal_publication_pending
+  ON github_personal_publication_requests(status, updated_at_ms, request_id);
+
 -- One active, opaque admission credential per worker environment. Plaintext
 -- may be retried until delivery acknowledgement but never enters durable state.
 CREATE TABLE IF NOT EXISTS worker_environment_credentials (

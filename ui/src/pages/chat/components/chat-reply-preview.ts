@@ -4,7 +4,7 @@ import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { persistedMessageEntryId } from "../chat-thread.ts";
 import { resolveMessageGroupSenderLabel } from "./chat-message-group.ts";
-import { resolveMessageDisplayMarkdown, resolveMessageReplyText } from "./chat-message-markdown.ts";
+import { resolveMessageReplyText } from "./chat-message-markdown.ts";
 import type { MessageReplyTarget } from "./chat-message.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 
@@ -27,7 +27,7 @@ function projectResolvedReplyPreview(
   props: ReplyPreviewProps,
 ): ResolvedReplyPreview {
   const normalized = normalizeMessage(message);
-  const text = resolveMessageDisplayMarkdown(message, normalized);
+  const text = resolveMessageReplyText(message, normalized);
   if (!text) {
     return undefined;
   }

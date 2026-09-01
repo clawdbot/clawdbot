@@ -409,9 +409,10 @@ liveness, perform network requests, or infer missing provider facts. Return:
 
 Keep temporary unavailability distinct from `null`: an adapter restart is not
 proof that a previously bound conversation is unowned.
-Use `inspectSessionBindingByConversation(...)` from
-`openclaw/plugin-sdk/session-binding-runtime` when the resolver needs this
-available/unavailable distinction.
+Use `inspectConversationBinding(...)` and its `ConversationBindingInspection`
+result from `openclaw/plugin-sdk/conversation-binding-inspection-runtime` for this
+available/unavailable distinction. This public inspection helper is synchronous,
+read-only, and does not refresh binding liveness.
 
 ### Account-scoped conversation binding support
 

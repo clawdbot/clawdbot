@@ -90,13 +90,17 @@ function cleanBlocksForInsert(blocks: FeishuDocxBlock[]): {
 /** Max blocks per documentBlockChildren.create request */
 const MAX_CONVERT_RETRY_DEPTH = 8;
 
+function assertFeishuDocApiSuccess(response: { code?: number; msg?: string }) {
+  if (response.code !== 0) {
+    throw new Error(response.msg);
+  }
+}
+
 async function convertMarkdown(client: Lark.Client, markdown: string) {
   const res = await client.docx.document.convert({
     data: { content_type: "markdown", content: markdown },
   });
-  if (res.code !== 0) {
-    throw new Error(res.msg);
-  }
+  assertFeishuDocApiSuccess(res);
   return {
     blocks: res.data?.blocks ?? [],
     firstLevelBlockIds: res.data?.first_level_block_ids ?? [],
@@ -266,9 +270,7 @@ async function insertBlocks(
         ...(index !== undefined ? { index: index + offset } : {}),
       },
     });
-    if (res.code !== 0) {
-      throw new Error(res.msg);
-    }
+    assertFeishuDocApiSuccess(res);
     allInserted.push(...(res.data?.children ?? []));
   }
   return { children: allInserted, skipped };
@@ -365,9 +367,7 @@ async function clearDocumentContent(client: Lark.Client, docToken: string) {
   const existing = await client.docx.documentBlock.list({
     path: { document_id: docToken },
   });
-  if (existing.code !== 0) {
-    throw new Error(existing.msg);
-  }
+  assertFeishuDocApiSuccess(existing);
 
   const childIds =
     existing.data?.items
@@ -379,9 +379,7 @@ async function clearDocumentContent(client: Lark.Client, docToken: string) {
       path: { document_id: docToken, block_id: docToken },
       data: { start_index: 0, end_index: childIds.length },
     });
-    if (res.code !== 0) {
-      throw new Error(res.msg);
-    }
+    assertFeishuDocApiSuccess(res);
   }
 
   return childIds.length;
@@ -454,12 +452,13 @@ async function processImages(
         docToken,
       );
 
-      await client.docx.documentBlock.patch({
+      const patchRes = await client.docx.documentBlock.patch({
         path: { document_id: docToken, block_id: blockId },
         data: {
           replace_image: { token: fileToken },
         },
       });
+      assertFeishuDocApiSuccess(patchRes);
 
       processed++;
     } catch (err) {
@@ -572,9 +571,7 @@ async function uploadImageBlock(
     path: { document_id: docToken, block_id: imageBlockId },
     data: { replace_image: { token: fileToken } },
   });
-  if (patchRes.code !== 0) {
-    throw new Error(patchRes.msg);
-  }
+  assertFeishuDocApiSuccess(patchRes);
 
   return {
     success: true,
@@ -628,9 +625,7 @@ async function uploadFileBlock(
   const childrenRes = await client.docx.documentBlockChildren.get({
     path: { document_id: docToken, block_id: parentId },
   });
-  if (childrenRes.code !== 0) {
-    throw new Error(childrenRes.msg);
-  }
+  assertFeishuDocApiSuccess(childrenRes);
   const items = childrenRes.data?.items ?? [];
   const placeholderIdx = items.findIndex((item) => item.block_id === placeholderBlock.block_id);
   if (placeholderIdx >= 0) {
@@ -638,9 +633,7 @@ async function uploadFileBlock(
       path: { document_id: docToken, block_id: parentId },
       data: { start_index: placeholderIdx, end_index: placeholderIdx + 1 },
     });
-    if (deleteRes.code !== 0) {
-      throw new Error(deleteRes.msg);
-    }
+    assertFeishuDocApiSuccess(deleteRes);
   }
 
   // Upload file to Feishu drive
@@ -679,9 +672,7 @@ async function readDoc(client: Lark.Client, docToken: string) {
     client.docx.documentBlock.list({ path: { document_id: docToken } }),
   ]);
 
-  if (contentRes.code !== 0) {
-    throw new Error(contentRes.msg);
-  }
+  assertFeishuDocApiSuccess(contentRes);
 
   const blocks = blocksRes.data?.items ?? [];
   const blockCounts: Record<string, number> = {};
@@ -721,9 +712,7 @@ async function createDoc(
   const res = await client.docx.document.create({
     data: { title, folder_token: folderToken },
   });
-  if (res.code !== 0) {
-    throw new Error(res.msg);
-  }
+  assertFeishuDocApiSuccess(res);
   const doc = res.data?.document;
   const docToken = doc?.document_id;
   if (!docToken) {
@@ -742,7 +731,7 @@ async function createDoc(
       requesterPermissionSkippedReason = "trusted requester identity unavailable";
     } else {
       try {
-        await client.drive.permissionMember.create({
+        const permissionRes = await client.drive.permissionMember.create({
           path: { token: docToken },
           params: { type: "docx", need_notification: false },
           data: {
@@ -751,6 +740,7 @@ async function createDoc(
             perm: requesterPermType,
           },
         });
+        assertFeishuDocApiSuccess(permissionRes);
         requesterPermissionAdded = true;
       } catch (err) {
         requesterPermissionError = formatErrorMessage(err);
@@ -847,9 +837,7 @@ async function insertDoc(
   const blockInfo = await client.docx.documentBlock.get({
     path: { document_id: docToken, block_id: afterBlockId },
   });
-  if (blockInfo.code !== 0) {
-    throw new Error(blockInfo.msg);
-  }
+  assertFeishuDocApiSuccess(blockInfo);
 
   const parentId = blockInfo.data?.block?.parent_id ?? docToken;
 
@@ -864,9 +852,7 @@ async function insertDoc(
       path: { document_id: docToken, block_id: parentId },
       params: pageToken ? { page_token: pageToken } : {},
     });
-    if (childrenRes.code !== 0) {
-      throw new Error(childrenRes.msg);
-    }
+    assertFeishuDocApiSuccess(childrenRes);
     items.push(...(childrenRes.data?.items ?? []));
     if (childrenRes.data?.has_more !== true) {
       break;
@@ -949,9 +935,7 @@ async function createTable(
     },
   });
 
-  if (res.code !== 0) {
-    throw new Error(res.msg);
-  }
+  assertFeishuDocApiSuccess(res);
 
   const tableBlock = res.data?.children?.find((b) => b.block_type === 31);
   const cells = normalizeInsertedChildBlocks(tableBlock?.children);
@@ -980,9 +964,7 @@ async function writeTableCells(
   const tableRes = await client.docx.documentBlock.get({
     path: { document_id: docToken, block_id: tableBlockId },
   });
-  if (tableRes.code !== 0) {
-    throw new Error(tableRes.msg);
-  }
+  assertFeishuDocApiSuccess(tableRes);
 
   const tableBlock = tableRes.data?.block;
   if (tableBlock?.block_type !== 31) {
@@ -1017,9 +999,7 @@ async function writeTableCells(
       const childrenRes = await client.docx.documentBlockChildren.get({
         path: { document_id: docToken, block_id: cellId },
       });
-      if (childrenRes.code !== 0) {
-        throw new Error(childrenRes.msg);
-      }
+      assertFeishuDocApiSuccess(childrenRes);
 
       const existingChildren = childrenRes.data?.items ?? [];
       if (existingChildren.length > 0) {
@@ -1027,9 +1007,7 @@ async function writeTableCells(
           path: { document_id: docToken, block_id: cellId },
           data: { start_index: 0, end_index: existingChildren.length },
         });
-        if (delRes.code !== 0) {
-          throw new Error(delRes.msg);
-        }
+        assertFeishuDocApiSuccess(delRes);
       }
 
       const text = rowValues[c] ?? "";
@@ -1097,9 +1075,7 @@ async function updateBlock(
   const blockInfo = await client.docx.documentBlock.get({
     path: { document_id: docToken, block_id: blockId },
   });
-  if (blockInfo.code !== 0) {
-    throw new Error(blockInfo.msg);
-  }
+  assertFeishuDocApiSuccess(blockInfo);
 
   const res = await client.docx.documentBlock.patch({
     path: { document_id: docToken, block_id: blockId },
@@ -1109,9 +1085,7 @@ async function updateBlock(
       },
     },
   });
-  if (res.code !== 0) {
-    throw new Error(res.msg);
-  }
+  assertFeishuDocApiSuccess(res);
 
   return { success: true, block_id: blockId };
 }
@@ -1120,18 +1094,14 @@ async function deleteBlock(client: Lark.Client, docToken: string, blockId: strin
   const blockInfo = await client.docx.documentBlock.get({
     path: { document_id: docToken, block_id: blockId },
   });
-  if (blockInfo.code !== 0) {
-    throw new Error(blockInfo.msg);
-  }
+  assertFeishuDocApiSuccess(blockInfo);
 
   const parentId = blockInfo.data?.block?.parent_id ?? docToken;
 
   const children = await client.docx.documentBlockChildren.get({
     path: { document_id: docToken, block_id: parentId },
   });
-  if (children.code !== 0) {
-    throw new Error(children.msg);
-  }
+  assertFeishuDocApiSuccess(children);
 
   const items = children.data?.items ?? [];
   const index = items.findIndex((item) => item.block_id === blockId);
@@ -1143,9 +1113,7 @@ async function deleteBlock(client: Lark.Client, docToken: string, blockId: strin
     path: { document_id: docToken, block_id: parentId },
     data: { start_index: index, end_index: index + 1 },
   });
-  if (res.code !== 0) {
-    throw new Error(res.msg);
-  }
+  assertFeishuDocApiSuccess(res);
 
   return { success: true, deleted_block_id: blockId };
 }
@@ -1154,9 +1122,7 @@ async function listBlocks(client: Lark.Client, docToken: string) {
   const res = await client.docx.documentBlock.list({
     path: { document_id: docToken },
   });
-  if (res.code !== 0) {
-    throw new Error(res.msg);
-  }
+  assertFeishuDocApiSuccess(res);
 
   return {
     blocks: res.data?.items ?? [],
@@ -1167,9 +1133,7 @@ async function getBlock(client: Lark.Client, docToken: string, blockId: string) 
   const res = await client.docx.documentBlock.get({
     path: { document_id: docToken, block_id: blockId },
   });
-  if (res.code !== 0) {
-    throw new Error(res.msg);
-  }
+  assertFeishuDocApiSuccess(res);
 
   return {
     block: res.data?.block,
@@ -1178,9 +1142,7 @@ async function getBlock(client: Lark.Client, docToken: string, blockId: string) 
 
 async function listAppScopes(client: Lark.Client) {
   const res = await client.application.scope.list({});
-  if (res.code !== 0) {
-    throw new Error(res.msg);
-  }
+  assertFeishuDocApiSuccess(res);
 
   const scopes = res.data?.scopes ?? [];
   const granted = scopes.filter((s) => s.grant_status === 1);

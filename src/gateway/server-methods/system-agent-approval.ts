@@ -80,7 +80,7 @@ export function queueDelegatedApproval(params: {
     : { kind: "local", ...approvalAuthority };
   const pendingApproval = params.session.pendingApproval;
   if (pendingApproval && pendingApproval.proposalHash === params.proposal.hash) {
-    const closed = manager.forceDenyIfDelegatedAuthorityClosed(pendingApproval.id);
+    const closed = manager.forceDenyIfRuntimeAuthorityClosed(pendingApproval.id);
     const existing = manager.getSnapshot(pendingApproval.id);
     if (!closed && existing) {
       if (
