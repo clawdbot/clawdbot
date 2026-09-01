@@ -62,17 +62,18 @@ type IngressDiscardOutcome =
  * the same line that reports the deletion instead, the way the pre-removal runtime stop
  * already does.
  */
-function discardRemovedAccountIngressRows(params: {
-  channelId: string;
-  accountId: string;
-}): IngressDiscardOutcome {
+function discardRemovedAccountIngressRows(
+  // Forwarded whole rather than destructured and rebuilt: splitting the resolved key
+  // back into fields here is the one place a half could be substituted by mistake.
+  queueKey: {
+    channelId: string;
+    accountId: string;
+  },
+): IngressDiscardOutcome {
   try {
     return {
       ok: true,
-      purge: purgeChannelIngressQueueAccount({
-        channelId: params.channelId,
-        accountId: params.accountId,
-      }),
+      purge: purgeChannelIngressQueueAccount(queueKey),
     };
   } catch (error) {
     return { ok: false, message: formatErrorMessage(error) };

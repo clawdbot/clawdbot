@@ -4,6 +4,7 @@ import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-t
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { createChannelIngressQueue } from "../../channels/message/ingress-queue.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.js";
+import { normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { resolveChannelIngressQueueKey } from "./ingress-queue-owner.js";
 
@@ -19,7 +20,11 @@ function resolveScope(options: ChannelsDeadLettersOptions) {
   if (!channelId) {
     throw new Error("--channel is required.");
   }
-  const accountId = options.account?.trim() || "default";
+  // Normalize, do not merely trim. The removal command sends `normalizeAccountId`
+  // output into the same seam, and `resolveDurableAccountKey` is documented to receive
+  // it — so trimming here would have `--account Work` read one queue name while
+  // `channels remove --delete` purged another.
+  const accountId = normalizeAccountId(options.account);
   return {
     channelId,
     accountId,

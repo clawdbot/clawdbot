@@ -182,4 +182,47 @@ describe("channel dead-letter commands", () => {
       expect(output.deadLetters).toEqual([expect.objectContaining({ id: "event-1" })]);
     });
   });
+
+  it("normalizes the account id the way the removal command does", async () => {
+    await withTempState(async () => {
+      // Both commands feed the same seam. If this one only trimmed, `--account Work`
+      // would read the queue that `channels remove --delete` never purges.
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "@vendor/external-chat-plugin",
+            plugin: {
+              id: "external-chat",
+              meta: { aliases: [] },
+              config: { resolveDurableAccountKey: (id: string) => `stored-${id}` },
+            },
+            source: "test",
+          },
+        ]),
+      );
+      const queue = createChannelIngressQueue<{ text: string }>({
+        channelId: "@vendor/external-chat-plugin",
+        accountId: "stored-work",
+      });
+      await queue.enqueue("event-1", { text: "recover me" });
+      const claim = await queue.claim("event-1", { ownerId: "worker" });
+      if (!claim) {
+        throw new Error("Expected a claimed ingress event");
+      }
+      await queue.fail(claim, { reason: "handler-error", failedAt: 20 });
+      const runtime = createRuntime();
+
+      await channelsDeadLettersListCommand(
+        { channel: "external-chat", account: "Work", json: true },
+        runtime,
+      );
+
+      const output = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0])) as {
+        accountId: string;
+        deadLetters: Array<{ id: string }>;
+      };
+      expect(output.accountId).toBe("work");
+      expect(output.deadLetters).toEqual([expect.objectContaining({ id: "event-1" })]);
+    });
+  });
 });

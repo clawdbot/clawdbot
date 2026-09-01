@@ -100,13 +100,19 @@ export type ChannelConfigAdapter<ResolvedAccount> = {
    * runs after its runtime is stopped — so the plugin declares it.
    *
    * The host passes the NORMALIZED account id (`normalizeAccountId`), which is what
-   * `channels add` writes. A plugin whose own account listing returns raw config keys
-   * therefore agrees with the host only for already-canonical keys: WhatsApp does not
-   * pass `normalizeAccountId` to `createAccountListHelpers` the way twitch, signal and
-   * telegram do, so a hand-written config key like `Work` is stored under a hash of
-   * `Work` while removal computes a hash of `work`. Aligning that is a change to the
-   * plugin's account identity with a migration behind it, not something this seam can
-   * paper over — the seam's contract is "transform the id the host gives you".
+   * `channels add` writes, and it is the same key the config delete uses - so on a
+   * hand-written non-canonical key like `Work` the purge and the config delete miss
+   * together rather than one succeeding without the other. That account was already
+   * un-removable before this seam existed; nothing is orphaned by the pair agreeing.
+   *
+   * The direction that does lose data is narrower: a plugin whose default-account
+   * resolver returns a normalized preference while its account listing returns raw
+   * keys can open its queue under the normalized id for an account whose config key is
+   * not, and a removal naming the raw key then purges live rows while deleting no
+   * config entry. WhatsApp is in that shape, reachable only through the library entry
+   * that omits an account id. Aligning it is a change to the plugin's account identity
+   * with a migration behind it, not something this seam can paper over - the seam's
+   * contract is "transform the id the host gives you".
    */
   resolveDurableAccountKey?: (accountId: string) => string;
   isEnabled?: ChannelAdapterCallback<(account: ResolvedAccount, cfg: OpenClawConfig) => boolean>;

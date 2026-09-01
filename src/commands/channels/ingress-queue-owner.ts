@@ -19,11 +19,9 @@ type ChannelIngressQueueKey = {
  * The two halves used to be two functions, and a caller resolved one and forgot the
  * other within a day: the owner half went through the alias-aware registry key while
  * the account half did not, so an operator typing a documented alias addressed half of
- * one key and half of another. Returning the pair is what keeps them together — a
- * caller that passes the result whole cannot substitute one field. Spreading it can,
- * so the one production caller passes it directly.
- *
- * Resolves the id a channel account's durable ingress rows are stored under.
+ * one key and half of another. Returning the pair is what keeps them together: a caller
+ * that passes the result whole cannot substitute one field, while spreading it can, so
+ * both production callers pass it whole.
  *
  * The plugin runtime opens an ingress queue with the plugin's own id - see the
  * `channelId: pluginId` it forces in `openChannelIngressQueue`, whose options type
@@ -55,7 +53,6 @@ type ChannelIngressQueueKey = {
  *   (`plugins/doctor-contract-module.ts:42`) while the queue underneath is one per
  *   plugin, so re-keying it would make N lanes alias a single queue. That is a
  *   contract decision, not a call-site fix.
- 
  */
 export function resolveChannelIngressQueueKey(params: {
   channelId: string;
