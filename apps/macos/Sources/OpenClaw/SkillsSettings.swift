@@ -845,6 +845,7 @@ final class SkillsSettingsModel {
         await self.withBusy(skill.skillKey) {
             do {
                 if target == .local, AppStateStore.shared.connectionMode != .local {
+                    AppStateStore.shared.retireDiscoveryRouteOwnershipForManualEdit()
                     AppStateStore.shared.connectionMode = .local
                     self.statusMessage = "Switched to Local mode to install on this Mac"
                 }

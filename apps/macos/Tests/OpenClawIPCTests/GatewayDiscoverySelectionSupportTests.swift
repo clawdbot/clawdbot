@@ -468,6 +468,155 @@ struct GatewayDiscoverySelectionSupportTests {
         }
     }
 
+    @Test func `background startup preserves configured auth while fencing unverified owners`() async throws {
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        try await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_CONFIG_PATH": configPath,
+                "OPENCLAW_GATEWAY_TOKEN": "ambient-token",
+                "OPENCLAW_GATEWAY_PASSWORD": "ambient-password",
+            ],
+            defaults: [
+                "gateway.preferredStableID": nil,
+                "bridge.preferredStableID": nil,
+                "gateway.preferredStableIDRouteBinding.v1": nil,
+            ])
+        {
+            let root: [String: Any] = [
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "transport": "direct",
+                        "url": "wss://gateway-a.example.test",
+                        "token": "configured-token",
+                        "password": "configured-password",
+                    ],
+                ],
+            ]
+            #expect(OpenClawConfigFile.saveDict(root))
+            GatewayDiscoveryPreferences.setPreferredStableID("gateway-a")
+            AppDefaults.standard.set(
+                "legacy-raw-route",
+                forKey: "gateway.preferredStableIDRouteBinding.v1")
+            var saveCount = 0
+
+            let startup = GatewayDiscoveryPreferences.prepareStartupConfig(
+                isPreview: false,
+                saver: { _ in
+                    saveCount += 1
+                    return true
+                },
+                key: nil,
+                keyAccessAllowed: false)
+
+            #expect(!startup.migrationChanged)
+            #expect(startup.migrationPersisted)
+            #expect(saveCount == 0)
+            #expect(GatewayRemoteConfig.resolveTokenString(root: startup.root) == "configured-token")
+            let remote = try #require(
+                (startup.root["gateway"] as? [String: Any])?["remote"] as? [String: Any])
+            #expect(remote["password"] as? String == "configured-password")
+            #expect(GatewayRemoteConfig.resolveTransport(root: startup.root) == .direct)
+
+            let state = AppState(preview: true)
+            let source = await GatewayEndpointStore._testLiveSourceSnapshot(
+                state: state,
+                beforeConfigRead: {})
+            #expect(source.token == "configured-token")
+            #expect(source.password == "configured-password")
+            #expect(source.deviceAuthGatewayID == nil)
+
+            let operatorAuth = try await self.connectAuth(source: source)
+            #expect(operatorAuth?["token"] as? String == "configured-token")
+            #expect(operatorAuth?["password"] as? String == "configured-password")
+            let nodeAuth = try await self.connectNodeAuth(source: source)
+            #expect(nodeAuth?["token"] as? String == "configured-token")
+            #expect(nodeAuth?["password"] as? String == "configured-password")
+        }
+    }
+
+    @Test func `config route replacement retires stale owner before stored auth`() async throws {
+        let configPath = TestIsolation.tempConfigPath()
+        try await self.withIsolation(configPath: configPath) {
+            #expect(OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "transport": "direct",
+                        "url": "wss://gateway-a.example.test",
+                    ],
+                ],
+            ]))
+            let state = AppState(preview: true)
+            GatewayDiscoveryPreferences.setPreferredStableID("gateway-a")
+            AppDefaults.standard.set(
+                "legacy-raw-route",
+                forKey: "gateway.preferredStableIDRouteBinding.v1")
+            let oldRouteBinding = try #require(GatewayDiscoveryPreferences.deviceAuthGatewayID(
+                connectionMode: .remote,
+                remoteTransport: .direct,
+                remoteURL: "wss://gateway-a.example.test",
+                remoteTarget: ""))
+            let newRouteBinding = try #require(GatewayDiscoveryPreferences.deviceAuthGatewayID(
+                connectionMode: .remote,
+                remoteTransport: .direct,
+                remoteURL: "wss://gateway-b.example.test",
+                remoteTarget: ""))
+            let stateDir = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: stateDir) }
+
+            try await DeviceIdentityStore.withStateDirectory(stateDir) {
+                let identity = DeviceIdentityStore.loadOrCreate()
+                for role in ["operator", "node"] {
+                    _ = DeviceAuthStore.storeToken(
+                        deviceId: identity.deviceId,
+                        role: role,
+                        token: "legacy-\(role)-token")
+                    _ = DeviceAuthStore.storeToken(
+                        deviceId: identity.deviceId,
+                        role: role,
+                        token: "gateway-a-\(role)-token",
+                        gatewayID: oldRouteBinding)
+                    _ = DeviceAuthStore.storeToken(
+                        deviceId: identity.deviceId,
+                        role: role,
+                        token: "gateway-b-\(role)-token",
+                        gatewayID: newRouteBinding)
+                }
+                var source = await GatewayEndpointStore._testLiveSourceSnapshot(
+                    state: state,
+                    beforeConfigRead: {})
+                #expect(source.deviceAuthGatewayID == nil)
+                #expect(try await self.connectAuth(source: source)?["token"] == nil)
+                #expect(try await self.connectNodeAuth(source: source)?["token"] == nil)
+
+                #expect(OpenClawConfigFile.saveDict([
+                    "gateway": [
+                        "mode": "remote",
+                        "remote": [
+                            "transport": "direct",
+                            "url": "wss://gateway-b.example.test",
+                        ],
+                    ],
+                ]))
+                state._testApplyConfigFromDisk()
+
+                #expect(GatewayDiscoveryPreferences.preferredStableID() == nil)
+                source = await GatewayEndpointStore._testLiveSourceSnapshot(
+                    state: state,
+                    beforeConfigRead: {})
+                #expect(source.deviceAuthGatewayID == newRouteBinding)
+                #expect(try await self.connectAuth(source: source)?["token"] as? String ==
+                    "gateway-b-operator-token")
+                #expect(try await self.connectNodeAuth(source: source)?["token"] as? String ==
+                    "gateway-b-node-token")
+            }
+        }
+    }
+
     @Test func `legacy discovery direct config is sanitized before hydration`() async throws {
         let configPath = TestIsolation.tempConfigPath()
         try await self.withIsolation(configPath: configPath) {

@@ -152,17 +152,30 @@ enum GatewayDiscoveryPreferences {
         isPreview: Bool,
         saver: ([String: Any]) -> Bool) -> StartupConfig
     {
-        self.prepareStartupConfig(isPreview: isPreview, saver: saver, key: self.routeBindingKey)
+        self.prepareStartupConfig(
+            isPreview: isPreview,
+            saver: saver,
+            key: self.routeBindingKey,
+            keyAccessAllowed: AppLaunchRuntimePlan.current.allowsGatewayUIKeychainAccess)
     }
 
     @MainActor
     static func prepareStartupConfig(
         isPreview: Bool,
         saver: ([String: Any]) -> Bool,
-        key: SymmetricKey?) -> StartupConfig
+        key: SymmetricKey?,
+        keyAccessAllowed: Bool = true) -> StartupConfig
     {
         let loadedRoot = OpenClawConfigFile.loadDict()
         guard !isPreview else {
+            return StartupConfig(
+                root: loadedRoot,
+                migrationChanged: false,
+                migrationPersisted: true)
+        }
+        if !keyAccessAllowed {
+            // Background hosts intentionally keep the prompt-bearing Keychain
+            // cold. Defer repair; explicit config remains route-scoped authority.
             return StartupConfig(
                 root: loadedRoot,
                 migrationChanged: false,

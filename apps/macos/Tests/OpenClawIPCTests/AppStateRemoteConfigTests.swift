@@ -332,6 +332,36 @@ struct AppStateRemoteConfigTests {
     }
 
     @Test
+    func `config watcher preserves unverifiable owner when route is unchanged`() {
+        let previousGatewayPreference = captureGatewayPreference()
+        defer { restoreGatewayPreference(previousGatewayPreference) }
+        let state = AppState(preview: true)
+        let route: [String: Any] = [
+            "mode": "remote",
+            "remote": [
+                "transport": "direct",
+                "url": "wss://gateway-a.example.test",
+            ],
+        ]
+        state._testApplyConfigOverrides(["gateway": route])
+        GatewayDiscoveryPreferences.setPreferredStableID("gateway-a")
+        AppDefaults.standard.set(
+            "legacy-raw-route",
+            forKey: "gateway.preferredStableIDRouteBinding.v1")
+
+        var updatedRoute = route
+        var remote = updatedRoute["remote"] as? [String: Any] ?? [:]
+        remote["token"] = "updated-token"
+        updatedRoute["remote"] = remote
+        state._testApplyConfigOverrides(["gateway": updatedRoute])
+
+        #expect(state.remoteUrl == "wss://gateway-a.example.test")
+        #expect(state.remoteToken == "updated-token")
+        #expect(GatewayDiscoveryPreferences.preferredStableID() == "gateway-a")
+        #expect(GatewayDiscoveryPreferences.preferredRouteBindingVerifier() == "legacy-raw-route")
+    }
+
+    @Test
     func `external token edit after successful sync is not reverted`() async {
         let configPath = TestIsolation.tempConfigPath()
         await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
@@ -504,6 +534,10 @@ struct AppStateRemoteConfigTests {
                 remoteURL: state.remoteUrl,
                 remoteTarget: state.remoteTarget))
             state.clearRemoteCredentialsForDiscoverySelection(routeBinding: selectedRoute)
+            GatewayDiscoveryPreferences.setPreferredStableID("discovered-b")
+            AppDefaults.standard.set(
+                "legacy-raw-route",
+                forKey: "gateway.preferredStableIDRouteBinding.v1")
 
             #expect(OpenClawConfigFile.saveDict([
                 "gateway": [
@@ -529,6 +563,7 @@ struct AppStateRemoteConfigTests {
             #expect(persistedRemote?["password"] as? String == "file-password")
             #expect(state.remoteUrl == "wss://gateway-a.example.test")
             #expect(state.remoteToken == "file-token")
+            #expect(GatewayDiscoveryPreferences.preferredStableID() == nil)
             #expect(state.gatewayConfigConflict == nil)
             #expect(state._testGatewayConfigIsCurrentForRouting)
 

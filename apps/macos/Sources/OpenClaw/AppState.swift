@@ -1052,9 +1052,10 @@ extension AppState {
 
     private func applyConfigOverrides(_ root: [String: Any]) {
         advanceGatewayRoutingGeneration()
+        let previousRouteBinding = self.currentGatewayRouteBinding()
         let priorConflicts = self.reconcileGatewayConfigOwnership(root)
         self.applyGatewayConfigView(root)
-        self.reconcileDiscoveryRouteOwnership()
+        self.reconcileDiscoveryRouteOwnership(previousRouteBinding: previousRouteBinding)
 
         let newConflicts = self.conflictedGatewayConfigFields.subtracting(priorConflicts)
         if !newConflicts.isEmpty {
@@ -1082,10 +1083,16 @@ extension AppState {
             remoteTarget: self.remoteTarget)
     }
 
-    private func reconcileDiscoveryRouteOwnership() {
+    private func reconcileDiscoveryRouteOwnership(previousRouteBinding: String?) {
         let binding = self.currentGatewayRouteBinding()
         if self.pendingDiscoveryCredentialReset?.routeBinding != binding {
             self.pendingDiscoveryCredentialReset = nil
+        }
+        // A watcher edit has no discovery selection event to transfer owner
+        // authority. Retire it only when the authoritative route actually moved.
+        guard previousRouteBinding == binding else {
+            GatewayDiscoveryPreferences.setPreferredStableID(nil)
+            return
         }
         _ = GatewayDiscoveryPreferences.clearPreferredStableIDIfRouteBindingMismatch(binding)
     }
@@ -1433,6 +1440,7 @@ extension AppState {
         let priorDirtyFields = self.dirtyGatewayConfigFields
         let priorConflicts = self.conflictedGatewayConfigFields
         let priorCredentialReset = self.pendingDiscoveryCredentialReset
+        let previousRouteBinding = self.currentGatewayRouteBinding()
         // A discovery selection owns one route-and-auth transaction. Accepting
         // the file abandons that whole transaction so credentials cannot cross routes.
         let fields = priorCredentialReset == nil ? conflictedFields : Set(GatewayConfigField.allCases)
@@ -1451,7 +1459,7 @@ extension AppState {
             self.setGatewayConfigSyncState(.failed)
             return false
         }
-        _ = self.reconcilePreferredGatewayRouteBinding()
+        self.reconcileDiscoveryRouteOwnership(previousRouteBinding: previousRouteBinding)
         return true
     }
 
