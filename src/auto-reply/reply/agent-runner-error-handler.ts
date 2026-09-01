@@ -20,7 +20,6 @@ import {
 } from "../../agents/failover/user-copy.js";
 import { isAgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
-import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -89,9 +88,7 @@ export async function handleAgentExecutionError(params: {
     return terminal;
   };
   const resolveReplyOperationAbortAction = (abortError: unknown): ErrorAction | undefined => {
-    const reason = isAgentRunRestartAbortReason(abortError)
-      ? "restart"
-      : resolveReplyOperationAbortReason(turn.replyOperation);
+    const reason = resolveReplyOperationAbortReason(turn.replyOperation, abortError);
     if (!reason) {
       return undefined;
     }

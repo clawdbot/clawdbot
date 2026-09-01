@@ -136,14 +136,12 @@ export async function dispatchEmbeddedRunAttempt(input: {
   maxBeforeAgentFinalizeRevisions: number;
 }): Promise<{
   rawAttempt: Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
-  cancellationRequested: boolean;
   preparedAttempt: EmbeddedRunAttemptParams;
 }> {
   const { params, runtime, control } = input;
   const observeToolTerminal = createToolTerminalObserver(params.runId);
   const attemptAbortController = new AbortController();
   control.setPostCompactionAbortController(attemptAbortController);
-  let cancellationRequested = false;
   const preparedExecApprovalContinuation = prepareExecApprovalContinuationForAttempt({
     prompt: runtime.prompt,
     transcriptPrompt: params.transcriptPrompt,
@@ -243,7 +241,6 @@ export async function dispatchEmbeddedRunAttempt(input: {
     admittedRunContext,
     abortSignal: attemptAbortController.signal,
     onAbort: () => {
-      cancellationRequested = true;
       if (!params.abortSignal?.aborted) {
         params.replyOperation?.abortByUser();
       }
@@ -530,5 +527,5 @@ export async function dispatchEmbeddedRunAttempt(input: {
   if (postCompactionAbortError) {
     throw postCompactionAbortError;
   }
-  return { rawAttempt, cancellationRequested, preparedAttempt: attemptParams };
+  return { rawAttempt, preparedAttempt: attemptParams };
 }
