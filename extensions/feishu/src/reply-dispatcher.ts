@@ -163,7 +163,6 @@ type CreateFeishuReplyDispatcherParams = {
   rootId?: string;
   accountId?: string;
   identity?: OutboundIdentity;
-  mentionTargets?: MentionTarget[];
   /** Mentions required on every mention-capable text/card reply, used for bot-authored ingress. */
   requiredMentionTargets?: MentionTarget[];
   /** Epoch ms when the inbound message was created. Used to suppress typing
@@ -187,7 +186,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     rootId,
     accountId,
     identity,
-    mentionTargets,
     requiredMentionTargets,
   } = params;
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
@@ -314,7 +312,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     error?: unknown;
   };
   const closedStreamingSettlements = new Map<number, ClosedStreamingSettlement>();
-  let sentIndependentBlockText = false;
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
   let streamingGeneration = 0;
@@ -1218,7 +1215,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         replyLifecycleStateInitialized = true;
         deliveredFinalTexts.clear();
         closedStreamingSettlements.clear();
-        sentIndependentBlockText = false;
         idleRequestedForReply = false;
         visibleReplySent = false;
         skippedFinalReason = null;
@@ -1360,16 +1356,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           // messages for true progressive delivery.
           if (!useStreamingCard) {
             if (coreBlockStreamingEnabled) {
-              // Reuse normal text chunking, but notify mentions only on the first visible chunk.
-              const isFirstBlock = !sentIndependentBlockText;
-              const firstChunkMentions =
-                isFirstBlock && mentionTargets?.length ? mentionTargets : undefined;
+              // Reuse normal text chunking for progressive delivery.
               deliveredResults.push(
                 await sendChunkedTextReply({
                   text,
                   useCard: false,
                   infoKind: "block",
-                  firstChunkMentions,
                   chunkMentions: requiredMentionTargets,
                   sendChunk: async ({ chunk, mentions }) =>
                     await sendMessageFeishu({
@@ -1384,7 +1376,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                     }),
                 }),
               );
-              sentIndependentBlockText = true;
               if (hasMedia) {
                 await collectMediaDelivery(payload);
               }
@@ -1478,14 +1469,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             }),
           );
         } else {
-          const firstChunkMentions =
-            info?.kind === "final" && mentionTargets?.length ? mentionTargets : undefined;
           deliveredResults.push(
             await sendChunkedTextReply({
               text,
               useCard: false,
               infoKind: info?.kind,
-              firstChunkMentions,
               chunkMentions: requiredMentionTargets,
               sendChunk: async ({ chunk, mentions }) =>
                 await sendMessageFeishu({
