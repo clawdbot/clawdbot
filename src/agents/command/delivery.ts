@@ -929,7 +929,6 @@ export async function deliverAgentCommandResult(
     if (deliveryTarget && !deliveryStatus) {
       params.assertDeliveryCurrent?.();
       const restartAbort = createRestartOnlyAbortSignal(opts.abortSignal);
-      const outboundIdentity = resolveAgentOutboundIdentity(cfg, deliveryAgentId);
       let send: DurableSendResult;
       try {
         send = await sendDurableMessageBatch({
@@ -939,7 +938,7 @@ export async function deliverAgentCommandResult(
           accountId: resolvedAccountId,
           payloads: deliveryPayloads,
           session: outboundSession,
-          identity: outboundIdentity,
+          identity: resolveAgentOutboundIdentity(cfg, deliveryAgentId),
           replyPayloadSendingHook: {
             kind: "final",
             channel: deliveryChannel,

@@ -7,7 +7,6 @@ import type {
 } from "../../channels/plugins/types.public.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { OutboundIdentity } from "../../infra/outbound/identity.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
@@ -181,7 +180,6 @@ function latestOutboundDeliveryArgs(): {
   payloads: ReplyPayload[];
   bestEffort?: boolean;
   queuePolicy?: string;
-  identity?: OutboundIdentity;
   replyPayloadSendingHook?: ReplyPayloadSendingHookArgs;
 } {
   const args = lastMockArg(deliverOutboundPayloadsMock, "outbound delivery arguments");
@@ -197,7 +195,6 @@ function latestOutboundDeliveryArgs(): {
     payloads: ReplyPayload[];
     bestEffort?: boolean;
     queuePolicy?: string;
-    identity?: OutboundIdentity;
     replyPayloadSendingHook?: ReplyPayloadSendingHookArgs;
   };
 }
@@ -443,28 +440,29 @@ describe("deliverAgentCommandResult payload normalization", () => {
     });
   });
 
-  it("passes the active agent identity through durable delivery", async () => {
+  it.each([
+    { source: "outbound agent", outboundSession: { agentId: "worker" }, name: "Worker" },
+    { source: "session key", sessionKey: "agent:worker:slack:channel:c123", name: "Worker" },
+    { source: "sole agent", name: "Default" },
+  ])("carries the $source identity through durable final delivery", async (testCase) => {
     await deliverAgentCommandResultForTest({
       cfg: {
         agents: {
-          list: [
-            {
-              id: "tester",
-              identity: { name: "  Pulse  ", emoji: "  📟  " },
-            },
-          ],
+          entries: {
+            main: { identity: { name: " Default ", emoji: " :robot_face: " } },
+            ...(testCase.name === "Worker"
+              ? { worker: { identity: { name: " Worker ", emoji: " :robot_face: " } } }
+              : {}),
+          },
         },
-      } as OpenClawConfig,
-      outboundSession: {
-        key: "agent:tester:slack:direct:alice",
-        agentId: "tester",
-      } as never,
+      },
+      outboundSession: testCase.outboundSession,
+      opts: { sessionKey: testCase.sessionKey },
       payloads: [{ text: "final answer" }],
     });
 
-    expect(latestOutboundDeliveryArgs().identity).toMatchObject({
-      name: "Pulse",
-      emoji: "📟",
+    expect(latestOutboundDeliveryArgs()).toMatchObject({
+      identity: { name: testCase.name, emoji: ":robot_face:" },
     });
   });
 
