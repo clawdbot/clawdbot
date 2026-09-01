@@ -1245,11 +1245,9 @@ jobs:
             readFileSync("test/vitest/vitest.ui-e2e.config.ts", "utf8")
               .includes("ui-e2e-projects-contract-v1");
           // The registration envelope already charges 14 UI rows on every backend.
-          // Private source servers and resource-sensitive files retain one worker
-          // across two weighted shards beside the browser-extension row.
+          // Private source servers and resource-sensitive files retain their
+          // single-worker phase inside each weighted Control UI shard.
           const uiE2eJobCount = supportsUiE2eProjects || usesHostedRunnerProfile ? 14 : 4;
-          const uiE2eBundledShardCount = 11;
-          const uiE2eSerialShardCount = 2;
           const qaSmokeCiPartCount = usesHostedRunnerProfile ? 6 : 4;
           const supportsNativeI18n =
             hasPackageScript("native:i18n:check") &&
@@ -1531,29 +1529,7 @@ jobs:
             run_format_check: runFormatCheck,
             run_control_ui_i18n: runControlUiI18n,
             run_ui_tests: runUiTests,
-            ui_e2e_matrix: createMatrix(supportsUiE2eProjects ? [
-              ...Array.from({ length: uiE2eBundledShardCount }, (_, index) => ({
-                shard: index + 1,
-                shard_count: uiE2eJobCount,
-                task: "control-ui",
-                vitest_project: "ui-e2e-bundled",
-                vitest_shard: index + 1,
-                vitest_shard_count: uiE2eBundledShardCount,
-              })),
-              ...Array.from({ length: uiE2eSerialShardCount }, (_, index) => ({
-                shard: uiE2eBundledShardCount + index + 1,
-                shard_count: uiE2eJobCount,
-                task: "control-ui",
-                vitest_project: "ui-e2e-serial",
-                vitest_shard: index + 1,
-                vitest_shard_count: uiE2eSerialShardCount,
-              })),
-              {
-                shard: uiE2eJobCount,
-                shard_count: uiE2eJobCount,
-                task: "browser-extension",
-              },
-            ] : Array.from({ length: uiE2eJobCount }, (_, index) => {
+            ui_e2e_matrix: createMatrix(Array.from({ length: uiE2eJobCount }, (_, index) => {
               const shard = index + 1;
               return {
                 shard,
@@ -2425,18 +2401,12 @@ jobs:
         if: matrix.task == 'control-ui'
         env:
           OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: .artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
-          VITEST_PROJECT: ${{ matrix.vitest_project }}
-          VITEST_SHARD_INDEX: ${{ matrix.vitest_shard || matrix.shard }}
+          VITEST_SHARD_INDEX: ${{ matrix.shard }}
           VITEST_SHARD_COUNT: ${{ matrix.vitest_shard_count }}
         run: |
-          project_args=()
-          if [[ -n "$VITEST_PROJECT" ]]; then
-            project_args=(--project "$VITEST_PROJECT")
-          fi
           node scripts/run-vitest.mjs run \
             --config test/vitest/vitest.ui-e2e.config.ts \
             --configLoader runner \
-            "${project_args[@]}" \
             --shard "$VITEST_SHARD_INDEX/$VITEST_SHARD_COUNT"
 
       - name: Upload Control UI E2E timeout diagnostics

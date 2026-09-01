@@ -10364,27 +10364,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect(result.status, result.stdout + result.stderr).toBe(0);
       return readFileSync(commandArgs, "utf8").trim().split("\n");
     };
-    expect(
-      runCommand({
-        VITEST_PROJECT: "ui-e2e-bundled",
-        VITEST_SHARD_COUNT: "11",
-        VITEST_SHARD_INDEX: "1",
-      }),
-    ).toEqual([
-      "scripts/run-vitest.mjs",
-      "run",
-      "--config",
-      "test/vitest/vitest.ui-e2e.config.ts",
-      "--configLoader",
-      "runner",
-      "--project",
-      "ui-e2e-bundled",
-      "--shard",
-      "1/11",
-    ]);
-    expect(
-      runCommand({ VITEST_PROJECT: "", VITEST_SHARD_COUNT: "3", VITEST_SHARD_INDEX: "1" }),
-    ).toEqual([
+    expect(runCommand({ VITEST_SHARD_COUNT: "3", VITEST_SHARD_INDEX: "1" })).toEqual([
       "scripts/run-vitest.mjs",
       "run",
       "--config",
@@ -10423,25 +10403,15 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(uiE2e.strategy["max-parallel"]).toBe(14);
     expect(uiE2e.strategy.matrix).toBe("${{ fromJson(needs.preflight.outputs.ui_e2e_matrix) }}");
     const expectedUiE2eMatrix = {
-      include: [
-        ...Array.from({ length: 11 }, (_, index) => ({
-          shard: index + 1,
+      include: Array.from({ length: 14 }, (_, index) => {
+        const shard = index + 1;
+        return {
+          shard,
           shard_count: 14,
-          task: "control-ui",
-          vitest_project: "ui-e2e-bundled",
-          vitest_shard: index + 1,
-          vitest_shard_count: 11,
-        })),
-        ...Array.from({ length: 2 }, (_, index) => ({
-          shard: 12 + index,
-          shard_count: 14,
-          task: "control-ui",
-          vitest_project: "ui-e2e-serial",
-          vitest_shard: index + 1,
-          vitest_shard_count: 2,
-        })),
-        { shard: 14, shard_count: 14, task: "browser-extension" },
-      ],
+          task: shard === 14 ? "browser-extension" : "control-ui",
+          vitest_shard_count: 13,
+        };
+      }),
     };
     for (const runnerBackend of ["blacksmith", "github", "hybrid"] as const) {
       const manifest = runCiManifestFixture({
@@ -10656,12 +10626,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(scenario.env).toEqual({
       OPENCLAW_UI_E2E_DIAGNOSTIC_DIR:
         ".artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}",
-      VITEST_PROJECT: "${{ matrix.vitest_project }}",
-      VITEST_SHARD_INDEX: "${{ matrix.vitest_shard || matrix.shard }}",
+      VITEST_SHARD_INDEX: "${{ matrix.shard }}",
       VITEST_SHARD_COUNT: "${{ matrix.vitest_shard_count }}",
     });
-    expect(scenario.run).toContain('project_args=(--project "$VITEST_PROJECT")');
-    expect(scenario.run).toContain('"${project_args[@]}"');
+    expect(scenario.run).not.toContain("--project");
     const timeoutDiagnostics = expectDefined(
       uiE2e.steps.find(
         (step: WorkflowStep) => step.name === "Upload Control UI E2E timeout diagnostics",
