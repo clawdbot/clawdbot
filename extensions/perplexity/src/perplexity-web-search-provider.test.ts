@@ -533,11 +533,11 @@ describe("perplexity web search provider", () => {
         [perplexityApiKeyEnv]:
           fallbackEnvVar === perplexityApiKeyEnv && source === "env"
             ? key
-            : "pplx-ambient-distractor",
+            : "ambient-perplexity-distractor",
         [openRouterApiKeyEnv]:
           fallbackEnvVar === openRouterApiKeyEnv && source === "env"
             ? key
-            : "sk-or-ambient-distractor",
+            : "ambient-openrouter-distractor",
       },
       async () => {
         const provider = createPerplexityWebSearchProvider();
