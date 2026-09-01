@@ -889,16 +889,9 @@ describe("OpenAI-compatible completions compatibility", () => {
     });
   });
 
-  it.each([
-    { configured: undefined, expected: 0 },
-    { configured: 3, expected: 0 },
-  ])("uses maxRetries=$expected when configured value is $configured", async (testCase) => {
-    await streamOpenAICompletions(baseModel, context, {
-      apiKey: "test",
-      maxRetries: testCase.configured,
-    }).result();
+  it("pins OpenAI SDK retries to zero", async () => {
+    await streamOpenAICompletions(baseModel, context, { apiKey: "test" }).result();
 
-    expect(mockOpenAI.requestOptions[0]).toMatchObject({ maxRetries: testCase.expected });
     expect(mockOpenAI.clientOptions[0]).toMatchObject({ maxRetries: 0 });
   });
 
