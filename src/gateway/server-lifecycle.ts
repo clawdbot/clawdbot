@@ -229,6 +229,7 @@ export async function prepareGatewayLifecycle(params: {
       resolveGatewayContext: runtime.resolvePluginGatewayContext,
     }),
     gatewayMethods: listActiveGatewayMethods(pluginRuntime.baseGatewayMethods),
+    taskLanesConfig: cfgAtStart.taskLanes,
   });
   const runtimeState = runtimeStateRef.current;
   const pluginRuntimeGeneration = createGatewayPluginRuntimeGeneration({

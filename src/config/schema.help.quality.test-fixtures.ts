@@ -26,6 +26,7 @@ export const ROOT_SECTIONS = [
   "session",
   "cron",
   "transcripts",
+  "taskLanes",
   "hooks",
   "channels",
   "surfaces",

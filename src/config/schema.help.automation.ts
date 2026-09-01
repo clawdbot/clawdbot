@@ -133,6 +133,16 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Provider channel id for the live transcript source, such as a Discord voice channel or Slack huddle channel. Verify provider-specific id semantics before enabling auto-start.",
   "transcripts.autoStart[].meetingUrl":
     "Optional meeting URL for providers that join by URL instead of channel id. Use only trusted meeting links because auto-start may join and capture that meeting.",
+  taskLanes:
+    "Task-lane snapshot sources rendered in the Control UI automation view. Lane files are read-only display data; the scheduler and its run admission are unaffected by this section.",
+  "taskLanes.providers":
+    "JSON-file lane providers registered when the gateway starts. Each entry is enabled by being present; remove an entry to unregister that lane source.",
+  "taskLanes.providers[].id":
+    "Task-lane provider id, such as `release-board`. Must be lowercase and unique across providers; it appears in snapshots and diagnostics, so keep it stable.",
+  "taskLanes.providers[].rootDir":
+    "Containment root for the lane file, absolute or relative to the state directory. The provider resolves realpaths and refuses files outside this root; choose a root only the operator can write.",
+  "taskLanes.providers[].filePath":
+    "JSON lane file, absolute or relative to rootDir. Content is untrusted display data: size, lane, item, and title bounds are revalidated on every read, and artifact URLs are sanitized before rendering.",
   hooks:
     "Inbound webhook automation surface for mapping external events into wake or agent actions in OpenClaw. Keep this locked down with explicit token/session/agent controls before exposing it beyond trusted networks.",
   "hooks.enabled":
