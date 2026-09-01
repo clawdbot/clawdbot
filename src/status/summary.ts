@@ -272,14 +272,22 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
           model,
           defaultProvider: configuredForSession.provider ?? DEFAULT_PROVIDER,
         });
+        const runtimeMatchesConfiguredModel =
+          selectedModelComparisonLabel != null &&
+          configuredSessionModelComparisonLabel != null &&
+          areRuntimeModelRefsEquivalent(
+            selectedModelComparisonLabel,
+            configuredSessionModelComparisonLabel,
+            { config: cfg },
+          );
+        const contextModelProvider = runtimeMatchesConfiguredModel
+          ? configuredForSession.provider
+          : lookupModel.provider;
         const modelSelectionDiffers =
           selectedModelComparisonLabel != null &&
           configuredSessionModelComparisonLabel != null &&
           selectedModelComparisonLabel !== configuredSessionModelComparisonLabel &&
-          !areRuntimeModelRefsEquivalent(
-            selectedModelComparisonLabel,
-            configuredSessionModelComparisonLabel,
-          ) &&
+          !runtimeMatchesConfiguredModel &&
           (hasUserPinnedModelSelection(entry) || hasSessionActiveAutoModelFallback(entry));
         // Session rows show the live selected model and warn for user-pinned
         // differences as well as runtime fallback selections (#96126).
@@ -309,6 +317,7 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
             authoredContextTokens: resolveAuthoredModelContextTokens({
               cfg,
               provider: lookupModel.provider,
+              modelProvider: contextModelProvider,
               model: lookupModelId,
             }),
           }) ?? null;
