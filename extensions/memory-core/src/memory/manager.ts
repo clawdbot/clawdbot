@@ -249,7 +249,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       this.dirty =
         resolveInitialMemoryDirty({
           hasMemorySource: this.sources.has("memory"),
-          transient: params.purpose !== "default",
+          transient: this.purpose !== "default",
           hasIndexedMeta: Boolean(meta),
         }) || this.memorySourceProvenanceRepairPending;
       if (this.sources.has("sessions") && invalidatedSources.has("sessions")) {

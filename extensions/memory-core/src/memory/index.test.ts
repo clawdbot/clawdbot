@@ -1336,6 +1336,25 @@ describe("memory index", () => {
     }
   });
 
+  it("keeps an indexed default manager dirty for its initial synchronization", async () => {
+    const cfg = createCfg({
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const initial = await getFreshManager(cfg);
+    await initial.sync({ reason: "test", force: true });
+    await initial.close?.();
+
+    // A fresh default (purpose omitted) manager over an indexed store must
+    // still start dirty so agent turns run their initial synchronization; only
+    // transient (status/cli/maintenance) managers treat an indexed store clean.
+    const next = await getFreshManager(cfg);
+    try {
+      expect(next.status().dirty).toBe(true);
+    } finally {
+      await next.close?.();
+    }
+  });
+
   it("does not search stale provider rows after embeddings become unavailable", async () => {
     const oldCfg = createCfg({
       model: "semantic-embed",
