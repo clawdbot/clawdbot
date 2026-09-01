@@ -44,6 +44,39 @@ describe("plugin runtime symlink health findings", () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
+  it.runIf(process.platform !== "win32")(
+    "preserves POSIX relative runtime links across directory symlinks and ..",
+    async () => {
+      const packageRoot = path.join(tempDir, "global", "node_modules", "openclaw");
+      const runtimeRoot = path.join(tempDir, "shared", "plugin-runtime-deps");
+      const physicalRoot = path.join(tempDir, "physical");
+      const dependency = path.join(physicalRoot, "dep");
+      const link = path.join(path.dirname(packageRoot), "relative-runtime");
+      const contents = '{"name":"live-relative-runtime"}\n';
+      await fs.mkdir(packageRoot, { recursive: true });
+      await fs.mkdir(runtimeRoot, { recursive: true });
+      await fs.mkdir(path.join(physicalRoot, "current"), { recursive: true });
+      await fs.mkdir(dependency);
+      await fs.writeFile(path.join(dependency, "package.json"), contents);
+      await fs.symlink(
+        path.join(physicalRoot, "current"),
+        path.join(runtimeRoot, "current"),
+        "dir",
+      );
+      // Keep .. in the stored link: POSIX follows the directory symlink before ascending.
+      const target = `${path.relative(path.dirname(link), runtimeRoot)}/current/../dep`;
+      await fs.symlink(target, link, "dir");
+      expect(await fs.readFile(path.join(link, "package.json"), "utf8")).toBe(contents);
+
+      const findings = await collectStalePluginRuntimeSymlinkHealthFindings({ packageRoot });
+      const repair = await removeStalePluginRuntimeSymlinks(packageRoot);
+      expect({ findings, ...repair }).toEqual({ findings: [], changes: [], warnings: [] });
+      await expectSymlinkPresent(link);
+      expect(await fs.readlink(link)).toBe(target);
+      expect(await fs.readFile(path.join(link, "package.json"), "utf8")).toBe(contents);
+    },
+  );
+
   it.each(["ENOENT", "ENOTDIR"])(
     "reports and removes dangling links while preserving live shared-cache links (%s)",
     async (code) => {

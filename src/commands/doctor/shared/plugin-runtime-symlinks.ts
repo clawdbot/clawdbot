@@ -33,7 +33,7 @@ interface StalePluginRuntimeSymlink {
   readonly name: string;
   /** Symlink path under the containing node_modules directory. */
   readonly path: string;
-  /** Resolved target that no longer exists. */
+  /** Target recorded by the symlink, for diagnostic output. */
   readonly target: string;
 }
 
@@ -182,16 +182,14 @@ async function inspectCandidate(fullPath: string, fsApi: FsLike): Promise<string
   if (!target || !target.includes(PLUGIN_RUNTIME_DEPS_MARKER)) {
     return null;
   }
-  const resolvedTarget = path.isAbsolute(target)
-    ? target
-    : path.resolve(path.dirname(fullPath), target);
-  // Shared runtime caches can still serve another install or profile. A path or
-  // marker cannot authorize removal; only a genuinely dangling link is stale.
+  // Paths and cache markers cannot authorize removal. Check the alias itself:
+  // lexical ".." normalization can erase an intermediate directory symlink
+  // and make a live shared-cache target appear missing.
   try {
-    await fsApi.stat(resolvedTarget);
+    await fsApi.stat(fullPath);
     return null;
   } catch (error) {
     const code = (error as NodeJS.ErrnoException | undefined)?.code;
-    return code === "ENOENT" || code === "ENOTDIR" ? resolvedTarget : null;
+    return code === "ENOENT" || code === "ENOTDIR" ? target : null;
   }
 }
