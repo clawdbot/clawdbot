@@ -33,6 +33,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { isCanonicalSqliteRetainedHistoryPlaceholder } from "./session-canonical-key.js";
 import { collectAdmissionProtectedSessionIds } from "./session-history-eviction.js";
+import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
 export type SessionTombstoneSweepResult = {
   /** Canonical expired cron-run placeholders at scan time. */
@@ -153,6 +154,7 @@ function readProtectedSessionIds(params: {
  */
 async function sweepTombstonedCronRunRemnants(params: {
   agentId: string;
+  databaseAgentId: string;
   storePath: string;
   sqlitePath: string;
   olderThanMs: number;
@@ -162,7 +164,7 @@ async function sweepTombstonedCronRunRemnants(params: {
   const nowMs = params.nowMs ?? Date.now();
   const olderThanMs = Math.max(params.olderThanMs, 0);
   const cutoffMs = nowMs - olderThanMs;
-  const scope = { agentId: params.agentId, path: params.sqlitePath };
+  const scope = { agentId: params.databaseAgentId, path: params.sqlitePath };
   const empty: SessionTombstoneSweepResult = {
     candidates: 0,
     removedNodes: 0,
@@ -323,10 +325,14 @@ export async function sweepTombstonedCronRunRemnantsForStore(params: {
   if (params.retentionMs == null || !fs.existsSync(params.sqlitePath)) {
     return null;
   }
+  const databaseTarget = resolveSqliteTargetFromSessionStorePath(params.sqlitePath, {
+    agentId: params.agentId,
+  });
   return await sweepTombstonedCronRunRemnants({
     agentId: params.agentId,
+    databaseAgentId: databaseTarget.agentId ?? params.agentId,
     storePath: params.storePath,
-    sqlitePath: params.sqlitePath,
+    sqlitePath: databaseTarget.path,
     olderThanMs: params.retentionMs,
     dryRun: params.dryRun,
     ...(params.nowMs === undefined ? {} : { nowMs: params.nowMs }),

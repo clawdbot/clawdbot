@@ -102,9 +102,9 @@ describe("sweepTombstonedCronRunRemnants", () => {
     return sessionId;
   }
 
-  function sweep(params: { dryRun: boolean; olderThanMs?: number }) {
+  function sweep(params: { agentId?: string; dryRun: boolean; olderThanMs?: number }) {
     return sweepTombstonedCronRunRemnantsForStore({
-      agentId: "main",
+      agentId: params.agentId ?? "main",
       storePath,
       sqlitePath,
       retentionMs: params.olderThanMs ?? 15 * DAY_MS,
@@ -236,6 +236,29 @@ describe("sweepTombstonedCronRunRemnants", () => {
     expect(countRows("session_windows", "session_key", opsKey)).toBe(1);
     expect(countRows("transcript_events", "session_id", opsSessionId)).toBe(1);
     expect(archiveRows(opsSessionId)).toHaveLength(0);
+  });
+
+  it("cleans a selected non-owner agent in a main-owned shared SQLite store", async () => {
+    storePath = path.join(tempDir, "shared.sqlite");
+    const opsKey = "agent:ops:cron:job-2:run:run-2";
+    const mainSessionId = await seedCanonicalPlaceholder({});
+    const opsSessionId = await seedCanonicalPlaceholder({
+      key: opsKey,
+      sessionId: "ops-cron-session",
+    });
+
+    await expect(sweep({ agentId: "ops", dryRun: false })).resolves.toMatchObject({
+      candidates: 1,
+      removedNodes: 1,
+      sweptTranscriptStates: 1,
+    });
+    expect(countRows("session_nodes", "session_key", CRON_RUN_KEY)).toBe(1);
+    expect(countRows("session_windows", "session_key", CRON_RUN_KEY)).toBe(1);
+    expect(countRows("transcript_events", "session_id", mainSessionId)).toBe(1);
+    expect(countRows("session_nodes", "session_key", opsKey)).toBe(0);
+    expect(countRows("session_windows", "session_key", opsKey)).toBe(0);
+    expect(countRows("transcript_events", "session_id", opsSessionId)).toBe(0);
+    expect(archiveRows(opsSessionId)).toHaveLength(1);
   });
 
   it("uses the newest owned window timestamp for the retention gate", async () => {
