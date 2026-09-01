@@ -1932,23 +1932,27 @@ EOF
     expect(result.stdout).not.toContain("Upgrade complete");
   });
 
-  it("keeps dry runs from downloading the optional gum interface", () => {
-    const result = runInstallShell(`
-      source "${SCRIPT_PATH}"
-      DRY_RUN=1; INSTALL_METHOD=npm; NO_ONBOARD=1; NO_PROMPT=1
-      bootstrap_gum_temp() { printf 'unexpected-gum-bootstrap\n'; return 1; }
-      print_installer_banner() { :; }
-      print_gum_status() { printf 'unexpected-gum-status\n'; }
-      detect_os_or_die() { OS=linux; }
-      detect_openclaw_checkout() { return 1; }
-      show_install_plan() { printf 'dry-run-plan\n'; }
-      main
-    `);
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("dry-run-plan");
-    expect(result.stdout).toContain("Dry run complete (no changes made)");
-    expect(result.stdout).not.toContain("unexpected-gum");
+  it.each([
+    { name: "flag", args: "--dry-run", dryRunEnv: "0", dryRun: true },
+    { name: "environment", args: "", dryRunEnv: "1", dryRun: true },
+    { name: "normal install", args: "", dryRunEnv: "0", dryRun: false },
+  ])("keeps Gum initialization consistent with $name", ({ args, dryRunEnv, dryRun }) => {
+    const result = runInstallShell(
+      [
+        `source ${JSON.stringify(SCRIPT_PATH)}`,
+        "bootstrap_gum_temp() { printf 'gum-bootstrap\\n'; }",
+        "print_gum_status() { printf 'gum-status\\n'; }",
+        "check_existing_openclaw() { exit 73; }",
+        `parse_args --npm --no-onboard ${args}`,
+        "main",
+      ].join("\n"),
+      { OPENCLAW_DRY_RUN: dryRunEnv },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(dryRun ? 0 : 73);
+    expect(result.stdout).toContain("Install plan");
+    expect(result.stdout.includes("Dry run complete (no changes made)")).toBe(dryRun);
+    expect(result.stdout.includes("gum-bootstrap")).toBe(!dryRun);
+    expect(result.stdout.includes("gum-status")).toBe(!dryRun);
   });
 
   it.each([
@@ -3530,9 +3534,10 @@ EOF
       expect(warning.status).toBe(0);
       expect(warning.stdout).toContain(`PATH updated in ${fishRc}`);
       expect(warning.stdout).not.toContain("PATH missing user-local bin dir");
-      const fishVersion = spawnSync("fish", ["--version"], { encoding: "utf8" });
-      if (fishVersion.status === 0) {
-        const fresh = spawnSync("fish", ["-lc", "command -v openclaw"], {
+      // Resolve the executable before restricting the child shell's PATH.
+      const fishPath = runInstallShell("command -v fish");
+      if (fishPath.status === 0) {
+        const fresh = spawnSync(fishPath.stdout.trim(), ["-lc", "command -v openclaw"], {
           encoding: "utf8",
           env: { HOME: home, PATH: "/usr/bin:/bin" },
         });
