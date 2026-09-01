@@ -109,13 +109,26 @@ describe("runGuidedOnboarding quick start", () => {
         .mock.calls.filter(([message]) =>
           message.includes("https://docs.openclaw.ai/gateway/security"),
         );
-      expect(securityNotes).toHaveLength(acceptRisk || acknowledgedAt ? 0 : 1);
+      expect(securityNotes).toEqual(
+        acknowledgedAt
+          ? []
+          : [
+              [
+                "OpenClaw runs an AI agent with real access to this machine. Security guide: https://docs.openclaw.ai/gateway/security",
+                "Security disclaimer",
+              ],
+            ],
+      );
+      expect(prompter.note).not.toHaveBeenCalledWith(
+        expect.stringContaining("Recommended safer setup"),
+        expect.anything(),
+      );
     },
   );
 
   it("custom setup keeps telemetry, first-agent, access, and route prompts in order", async () => {
     const prompter = createWizardPrompter(
-      { text: vi.fn(async () => "helper") },
+      { text: vi.fn(async () => "helper"), confirm: vi.fn(async () => true) },
       { selectValues: ["custom", "full", "use"] },
     );
     const deps = setupDeps({ prompter });
@@ -123,7 +136,7 @@ describe("runGuidedOnboarding quick start", () => {
     await runGuidedOnboardingImpl({}, makeRuntime(), deps);
 
     expect(vi.mocked(prompter.select).mock.calls.map(([params]) => params.message)).toEqual([
-      "How would you like to start? Continuing accepts the security note.",
+      "How would you like to start?",
       "Help make OpenClaw better?",
       "How should I set things up?",
       "Use Claude Code?",
@@ -132,7 +145,11 @@ describe("runGuidedOnboarding quick start", () => {
     const firstAgentPrompt = vi.mocked(prompter.text).mock.invocationCallOrder[0]!;
     expect(selects[1]).toBeLessThan(firstAgentPrompt);
     expect(firstAgentPrompt).toBeLessThan(selects[2]!);
-    expect(prompter.confirm).not.toHaveBeenCalled();
+    expect(prompter.confirm).toHaveBeenCalledOnce();
+    expect(prompter.note).toHaveBeenCalledWith(
+      expect.stringContaining("Recommended safer setup"),
+      "Security disclaimer",
+    );
     expect(localOnboarding.persisted.config?.telemetry).toEqual({
       enabled: false,
       consentedAt: expect.any(String),
@@ -146,6 +163,25 @@ describe("runGuidedOnboarding quick start", () => {
     expect(deps.runSetupMemoryImportStep).toHaveBeenCalledOnce();
     expect(deps.runAppRecommendations).toHaveBeenCalledOnce();
     expect(deps.runForegroundGateway).not.toHaveBeenCalled();
+  });
+
+  it("runs in the foreground when systemd is unavailable", async () => {
+    const prompter = createWizardPrompter(undefined, { selectValues: ["quick"] });
+    const deps = setupDeps({
+      prompter,
+      applySetup: vi.fn(async () => ({
+        ...setupApplyResult(),
+        gateway: { status: "skipped" as const, reason: "systemd-unavailable" as const },
+      })),
+    });
+    const runtime = makeRuntime();
+
+    await expect(runGuidedOnboardingImpl({}, runtime, deps)).resolves.toBeUndefined();
+
+    expect(runtime.exit).not.toHaveBeenCalled();
+    expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
+    expect(deps.runForegroundGateway).toHaveBeenCalledExactlyOnceWith({ runtime });
+    expect(prompter.outro).toHaveBeenCalledOnce();
   });
 
   it("cancelling the lane choice does not acknowledge security or scan the machine", async () => {

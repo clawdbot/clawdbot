@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { getSecurityNoteMessage, getSecurityNoteTitle } from "../wizard/setup.security-note.js";
+import { getSecurityNoteTitle } from "../wizard/setup.security-note.js";
 import { requestTelemetryConsent, requireRiskAcknowledgement } from "../wizard/setup.shared.js";
 import type { OnboardOptions } from "./onboard-types.js";
 
@@ -34,8 +34,8 @@ export async function requestGuidedOnboardingConsent(params: {
   const { opts, prompter, config: existingConfig, offerQuickstart } = params;
   let quickstart = false;
   if (offerQuickstart) {
-    if (opts.acceptRisk !== true && !existingConfig.wizard?.securityAcknowledgedAt) {
-      await prompter.note(getSecurityNoteMessage(), getSecurityNoteTitle());
+    if (!existingConfig.wizard?.securityAcknowledgedAt) {
+      await prompter.note(t("wizard.guided.laneSecurityLine"), getSecurityNoteTitle());
     }
     quickstart =
       (await prompter.select({
@@ -56,8 +56,8 @@ export async function requestGuidedOnboardingConsent(params: {
       })) === "quick";
   }
   let acknowledgedConfig = await requireRiskAcknowledgement({
-    // Either lane accepts the displayed security note; cancellation never persists consent.
-    opts: offerQuickstart ? { ...opts, acceptRisk: true } : opts,
+    // Quick start acknowledges here; Custom keeps the full note and confirmation.
+    opts: quickstart ? { ...opts, acceptRisk: true } : opts,
     prompter,
     config: existingConfig,
   });

@@ -280,13 +280,16 @@ export const zh_CN = {
     },
     guided: {
       quickstartSilentFailures: "{count} 个检测到的选项未响应；将继续使用已验证的访问方式。",
-      laneQuestion: "你想如何开始？继续即表示接受安全须知。",
+      laneQuestion: "你想如何开始？",
+      laneSecurityLine:
+        "OpenClaw 运行的 AI 智能体拥有这台机器的实际访问权限。安全指南：https://docs.openclaw.ai/gateway/security",
       laneQuickLabel: "快速开始（推荐）",
       laneQuickHint: "查找此机器上的 AI 访问方式，验证后打开网页仪表板。",
       laneCustomLabel: "自定义设置",
       laneCustomHint: "逐项选择所有设置选项。",
       quickstartRoute: "正在使用 {label}。你可以稍后在仪表板或设置向导中更改。",
-      quickstartManual: "快速开始未找到可用的 AI 访问方式。请通过自定义设置连接提供商。",
+      quickstartManual:
+        '快速开始未找到可用的 AI 访问方式。将继续手动设置提供商；保留快速开始的默认设置（智能体 "main"、完全访问）。',
       quickstartDashboard: "仪表板：{url}",
       quickstartForeground: "网关正在前台运行。按 Ctrl+C 停止。",
       quickstartBackground: "如需以后让网关在后台持续运行，请运行：openclaw gateway install",

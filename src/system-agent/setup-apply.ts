@@ -625,7 +625,7 @@ export async function applySystemAgentSetup(
           }
         } else if (gateway.reason === "external") {
           lines.push(`Gateway: ${formatExternalSupervisorActionRequired("start the gateway")}`);
-        } else if (gateway.reason === "explicit" && params.installDaemon === false) {
+        } else if (params.installDaemon === false) {
           lines.push("Gateway: will run in the foreground.");
         } else {
           lines.push(

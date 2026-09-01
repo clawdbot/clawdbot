@@ -15,17 +15,21 @@ commands), see [`openclaw onboard`](/cli/onboard).
 
 ## What the wizard does
 
-Fresh local guided onboarding first shows the security notice and one choice:
-**Quick start** or **Custom setup**. Either choice accepts the notice. Quick
-start reuses detected AI access, verifies it, saves config, and opens the web
+Fresh local guided onboarding shows a one-line pointer to the
+[security guide](/gateway/security) and one choice: **Quick start** or
+**Custom setup**. Quick start records the security acknowledgment; Custom setup
+shows the full security note and asks for confirmation. Quick start reuses
+detected AI access, verifies it, saves config, and opens the web
 dashboard with a foreground Gateway. It uses agent name `main` and full access,
 leaves telemetry consent unset, and skips route confirmation, memory import,
 and app recommendations. **Ctrl+C** stops the Gateway without removing config;
 `openclaw gateway install` enables background operation later.
 
 Custom setup keeps the full guided prompts. If quick start finds no usable
-route, it switches to manual provider setup and continues the full guided flow,
-including Gateway service installation. See [Guided default](/start/wizard#guided-default).
+route, it continues with manual provider setup and the remaining guided steps,
+including Gateway service installation. The quick-start defaults for agent name
+(`main`), access mode (full access), and telemetry (consent unset) stay.
+See [Guided default](/start/wizard#guided-default).
 
 The classic wizard (`openclaw onboard --classic`) in local mode walks you through:
 

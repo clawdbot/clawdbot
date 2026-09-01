@@ -28,8 +28,9 @@ Need to install Node? See [Node setup](/install/node).
 npx openclaw@latest
 ```
 
-On a fresh install, read the security notice and choose **Quick start**. That is
-the only onboarding prompt when usable AI access is already available: OpenClaw
+On a fresh install, choose **Quick start** after a one-line pointer to the
+[security guide](/gateway/security). That is the only onboarding prompt when
+usable AI access is already available: OpenClaw
 finds an existing Claude Code or Codex CLI login or API key, verifies it with a
 real completion, saves the config, and opens the web dashboard.
 

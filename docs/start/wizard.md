@@ -89,15 +89,16 @@ conversationally. Docs: [Web tools](/tools/web).
 ## Guided default
 
 Fresh local interactive onboarding offers **Quick start** and **Custom setup**
-after the security notice. Choosing either accepts the notice. Quick start uses
-the default agent name `main` and full access, leaves telemetry consent unset,
-and skips route confirmation, memory import, and app recommendations. Custom
-setup keeps the telemetry choice, agent name, access mode, route confirmation,
-and optional setup prompts.
+after a one-line pointer to the [security guide](/gateway/security). Quick start
+records the security acknowledgment; Custom setup shows the full security note
+and asks for confirmation. Quick start uses the default agent name `main` and
+full access, leaves telemetry consent unset, and skips route confirmation,
+memory import, and app recommendations. Custom setup keeps the telemetry choice,
+agent name, access mode, route confirmation, and optional setup prompts.
 
 Quick start follows this path:
 
-1. Read the security notice and choose **Quick start**.
+1. Choose **Quick start** after the one-line security pointer.
 2. Detect configured models, API-key environment variables, supported local AI
    CLIs, and already installed tool-capable models from reachable Ollama or LM
    Studio servers on the Gateway host. This read-only pass never downloads a
@@ -114,9 +115,10 @@ Quick start follows this path:
    its base URL, optional API key, compatibility, and model ID. Custom setup
    runs in the local CLI on the Gateway host and verifies a real reply before
    saving the provider or replacing the active model.
-   Choose **Skip for now** to exit without starting OpenClaw. From manual setup
-   onward, the full guided flow resumes, including Gateway service installation
-   and optional setup.
+   Choose **Skip for now** to exit without starting OpenClaw. Manual provider
+   setup continues through the remaining guided steps, including Gateway service
+   installation and optional setup. The quick-start defaults stay: agent name
+   `main`, full access, and telemetry consent unset.
 5. Save the verified route, prepare the agent workspace, and persist Gateway
    settings.
 6. Start the Gateway in the foreground and open the browser dashboard. Press

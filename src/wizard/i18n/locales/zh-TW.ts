@@ -280,13 +280,16 @@ export const zh_TW = {
     },
     guided: {
       quickstartSilentFailures: "{count} 個偵測到的選項未回應；將繼續使用已驗證的存取方式。",
-      laneQuestion: "你想如何開始？繼續即表示接受安全須知。",
+      laneQuestion: "你想如何開始？",
+      laneSecurityLine:
+        "OpenClaw 執行的 AI 代理程式擁有這台機器的實際存取權限。安全指南：https://docs.openclaw.ai/gateway/security",
       laneQuickLabel: "快速開始（建議）",
       laneQuickHint: "尋找此機器上的 AI 存取方式，驗證後開啟網頁儀表板。",
       laneCustomLabel: "自訂設定",
       laneCustomHint: "逐項選擇所有設定選項。",
       quickstartRoute: "正在使用 {label}。你可以稍後在儀表板或設定精靈中變更。",
-      quickstartManual: "快速開始未找到可用的 AI 存取方式。請透過自訂設定連接供應商。",
+      quickstartManual:
+        '快速開始未找到可用的 AI 存取方式。將繼續手動設定供應商；保留快速開始的預設設定（代理程式 "main"、完整存取）。',
       quickstartDashboard: "儀表板：{url}",
       quickstartForeground: "閘道正在前景執行。按 Ctrl+C 停止。",
       quickstartBackground: "如需日後讓閘道在背景持續執行，請執行：openclaw gateway install",

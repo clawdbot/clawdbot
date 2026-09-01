@@ -284,14 +284,16 @@ export const en = {
     guided: {
       quickstartSilentFailures:
         "{count} detected option(s) did not respond; continuing with the verified route.",
-      laneQuestion: "How would you like to start? Continuing accepts the security note.",
+      laneQuestion: "How would you like to start?",
+      laneSecurityLine:
+        "OpenClaw runs an AI agent with real access to this machine. Security guide: https://docs.openclaw.ai/gateway/security",
       laneQuickLabel: "Quick start (recommended)",
       laneQuickHint: "Find AI access on this machine, verify it, then open the web dashboard.",
       laneCustomLabel: "Custom setup",
       laneCustomHint: "Walk through every setup option.",
       quickstartRoute: "Using {label}. You can change it later in the dashboard or setup wizard.",
       quickstartManual:
-        "Quick start found no usable AI access. Let’s connect a provider with custom setup.",
+        'Quick start found no usable AI access. Continuing with manual provider setup; quick-start defaults are kept (agent "main", full access).',
       quickstartDashboard: "Dashboard: {url}",
       quickstartForeground: "Gateway is running in the foreground. Press Ctrl+C to stop.",
       quickstartBackground:

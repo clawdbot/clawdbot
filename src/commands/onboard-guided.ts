@@ -82,14 +82,9 @@ async function openSystemAgentChat(
   acceptRisk: boolean,
   agentName?: string,
 ): Promise<void> {
-  const runChat =
+  const runChat: NonNullable<GuidedOnboardingDeps["runSystemAgentChat"]> =
     deps.runSystemAgentChat ??
-    (async (
-      setupWorkspace: string,
-      chatRuntime: RuntimeEnv,
-      riskAccepted: boolean,
-      setupAgentName?: string,
-    ) => {
+    (async (setupWorkspace, chatRuntime, riskAccepted, setupAgentName) => {
       const { runConversationalOnboarding } = await import("./onboard-interactive.js");
       await runConversationalOnboarding(
         {
@@ -599,8 +594,9 @@ async function runGuidedOnboardingFlow(
           "The agent workspace could not be prepared. Retry onboarding to finish setup.",
         );
       }
-      if (applied.gateway.status === "failed") {
-        throw new Error(applied.gateway.error);
+      const gateway = applied.gateway;
+      if (gateway.status === "failed") {
+        throw new Error(gateway.error);
       }
       const appliedSnapshot =
         localSetup?.status === "pending"
