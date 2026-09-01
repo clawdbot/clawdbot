@@ -21,15 +21,6 @@ function result(
   return { config, changes, warnings };
 }
 
-function isCanonicalServeUrl(raw: string): boolean {
-  try {
-    const url = new URL(raw);
-    return url.protocol === "wss:" && (url.port === "" || url.port === "443");
-  } catch {
-    return false;
-  }
-}
-
 export async function prepareTailscaleConfigMigration(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -74,35 +65,14 @@ export async function prepareTailscaleConfigMigration(params: {
     return result(config);
   }
 
-  // The managed startup command owns the device's default HTTPS root. Custom ports
-  // need an operator-selected target, so Doctor must not guess at them.
-  const migrationIsUnambiguous =
-    inspection.urls.length === 1 &&
-    isCanonicalServeUrl(inspection.urls[0] ?? "") &&
-    gateway.auth?.mode !== "none";
-  if (!migrationIsUnambiguous) {
-    return result(
-      config,
-      [],
-      [
-        `Legacy Tailscale Serve still targets Gateway port ${gatewayPort}, but its custom endpoint, Service, or disabled authentication cannot be migrated safely; configuration was not changed. Remove that route or configure gateway.bind="loopback" and gateway.tailscale.mode="serve" manually.`,
-      ],
-    );
-  }
-
-  const { preserveFunnel: _preserveFunnel, ...tailscale } = gateway.tailscale ?? {};
-  return {
-    config: {
-      ...config,
-      gateway: {
-        ...gateway,
-        bind: "loopback",
-        tailscale: { ...tailscale, mode: "serve" },
-      },
-    },
-    changes: [
-      `Migrated legacy Tailscale Serve on port ${gatewayPort} to managed Tailscale Serve ingress (gateway.bind="loopback", gateway.tailscale.mode="serve"); restart the Gateway to claim the route.`,
+  // Tailscale status describes the route but does not prove that OpenClaw owns
+  // it. Gateway startup deliberately fails closed when it cannot prove that
+  // ownership, so Doctor must not persist managed ingress based on shape alone.
+  return result(
+    config,
+    [],
+    [
+      `Legacy Tailscale Serve still targets Gateway port ${gatewayPort}, but Doctor cannot prove that OpenClaw owns the existing route; configuration was not changed. Remove that route or configure gateway.bind="loopback" and gateway.tailscale.mode="serve" manually.`,
     ],
-    warnings: [],
-  };
+  );
 }

@@ -36,7 +36,7 @@ function runner(stdout: string): TailscaleStatusCommandRunner {
 }
 
 describe("prepareTailscaleConfigMigration", () => {
-  it("moves the shipped LAN Serve shape to managed ingress", async () => {
+  it("does not adopt a canonical-looking route without ownership proof", async () => {
     const cfg: OpenClawConfig = {
       gateway: {
         mode: "local",
@@ -53,17 +53,9 @@ describe("prepareTailscaleConfigMigration", () => {
       runCommandWithTimeout: runner(serveStatus()),
     });
 
-    expect(result.config.gateway).toEqual({
-      mode: "local",
-      bind: "loopback",
-      port: 18789,
-      auth: { mode: "token", token: "secret", allowTailscale: true },
-      tailscale: { mode: "serve" },
-    });
-    expect(result.changes).toHaveLength(1);
-    expect(result.changes.join("\n")).toContain("managed Tailscale Serve ingress");
-    expect(result.warnings).toEqual([]);
-    expect(cfg.gateway?.bind).toBe("lan");
+    expect(result.config).toBe(cfg);
+    expect(result.changes).toEqual([]);
+    expect(result.warnings.join("\n")).toContain("cannot prove that OpenClaw owns");
   });
 
   it.each([
