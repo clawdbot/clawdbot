@@ -947,11 +947,14 @@ function placeDisabledNativeShellToolsInDirectNamespace<
   if (nativeToolSurfaceEnabled !== false) {
     return tools;
   }
-  return tools.map((tool) =>
-    CODEX_DISABLED_NATIVE_SHELL_DYNAMIC_TOOLS.has(normalizeCodexDynamicToolName(tool.name))
-      ? { ...tool, catalogMode: "direct-only" }
-      : tool,
-  );
+  for (const tool of tools) {
+    if (CODEX_DISABLED_NATIVE_SHELL_DYNAMIC_TOOLS.has(normalizeCodexDynamicToolName(tool.name))) {
+      // Runtime tools can carry non-enumerable policy metadata and prototype behavior.
+      // Preserve the prepared object identity while changing only its Codex catalog placement.
+      tool.catalogMode = "direct-only";
+    }
+  }
+  return tools;
 }
 /** Applies a normalized tool allowlist while preserving shell aliases for exec/process. */
 function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(
