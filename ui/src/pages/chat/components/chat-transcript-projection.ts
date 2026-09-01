@@ -242,6 +242,9 @@ export function projectChatTranscript(
   const messageRowKeysById = new Map<string, string>();
   const resolveReplyPreview = createReplyPreviewResolver(loadedReplySources, props);
   const sharedMessageRenderOptions = {
+    onReply: props.onSetReply
+      ? (target) => state.transcriptRenderContext.onSetReply?.(target)
+      : undefined,
     onOpenSidebar: props.onOpenSidebar,
     sessionKey: props.sessionKey,
     boardProvider: props.boardProvider,
@@ -313,9 +316,6 @@ export function projectChatTranscript(
       personActivity: props.personActivity,
       showAvatarGutter: !isDirectThread,
       contextWindow: threadContextWindow,
-      onReply: props.onSetReply
-        ? (target) => state.transcriptRenderContext.onSetReply?.(target)
-        : undefined,
       resolveReplyPreview,
       onResolveReply: props.replyMessageAccess?.request,
       onOpenReply: (replyToId: string) => state.transcriptRenderContext.onOpenReply?.(replyToId),
@@ -513,7 +513,7 @@ export function projectChatTranscript(
     for (const group of groups) {
       for (const source of group.messages) {
         const sourceMessageId = persistedMessageEntryId(source.message);
-        if (sourceMessageId && extractTextCached(source.message)?.trim()) {
+        if (sourceMessageId && resolveMessageReplyText(source.message).trim()) {
           messageRowKeysById.set(sourceMessageId, item.key);
           loadedReplySources.set(sourceMessageId, {
             message: source.message,

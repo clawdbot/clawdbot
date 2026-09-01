@@ -9250,19 +9250,16 @@ describe("right-click Reply", () => {
     const section = container.querySelector<HTMLElement>(".card.chat");
     expect(section).not.toBeNull();
 
-    const group = document.createElement("div");
-    group.className = "chat-group";
-    const bubble = document.createElement("div");
-    bubble.className = "chat-bubble";
-    bubble.dataset.messageId = "msg-1";
-    bubble.dataset.messageText = "selectable text";
+    const { bubble, group } = appendChatBubble(container, {
+      messageId: "msg-1",
+      text: "selectable text",
+    });
     bubble.textContent = "selectable text";
     const otherBubble = document.createElement("div");
     otherBubble.className = "chat-bubble";
     otherBubble.dataset.messageText = "other text";
     otherBubble.textContent = "other text";
-    group.append(bubble, otherBubble);
-    section!.querySelector(".chat-thread-inner")!.appendChild(group);
+    group.append(otherBubble);
 
     const bubbleText = expectDefined(bubble.firstChild, "bubble text node");
     const otherText = expectDefined(otherBubble.firstChild, "other bubble text node");
