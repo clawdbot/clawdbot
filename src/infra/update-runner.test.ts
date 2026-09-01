@@ -14,7 +14,7 @@ import { resolveStableNodePath } from "./stable-node-path.js";
 import type { UpdateChannel } from "./update-channels.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
 import { prepareStableGitFetch } from "./update-runner-git-fetch.js";
-import type { UpdateStepProgress } from "./update-runner-types.js";
+import type { UpdateStepProgress, UpdateStepResult } from "./update-runner-types.js";
 import {
   resolveUpdateDoctorExecutionPolicy,
   resolveUpdateInstallSurface,
@@ -1061,7 +1061,7 @@ describe("runGatewayUpdate", () => {
   it("preserves tag-excluded mirror mappings during branch refresh", async () => {
     const { localRoot, baseSha, releaseSha, releaseTag } = await createRecreatedReleaseTagFixture();
     await runRealGit(localRoot, "config", "--add", "remote.origin.fetch", "refs/*:refs/*");
-    const steps = [];
+    const steps: UpdateStepResult[] = [];
     const realRunner = createRealGitUpdateRunner();
     const runCommand = async (argv: string[], options?: { cwd?: string; timeoutMs?: number }) => {
       if (argv[3] === "config" && argv.at(-1) === "^remote\\..*\\.fetch$") {
