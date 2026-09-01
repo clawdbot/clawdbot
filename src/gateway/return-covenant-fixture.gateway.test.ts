@@ -1,3 +1,5 @@
+import { setTimeout as delay } from "node:timers/promises";
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   readReturnCovenantProcessStartFingerprint,
@@ -41,7 +43,6 @@ describe("return-covenant authenticated Gateway seam", () => {
         OPENCLAW_SKIP_CRON: "1",
         OPENCLAW_SKIP_GMAIL_WATCHER: "1",
         OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
         VITEST: "1",
       },
     });
@@ -53,8 +54,10 @@ describe("return-covenant authenticated Gateway seam", () => {
             enabled: true,
             crossSessionTargeting: "disabled",
           },
+          model: "openai/gpt-5.6-sol",
         },
       },
+      plugins: { entries: { codex: { enabled: true } } },
       session: { mainKey: "main", scope: "per-sender" },
     };
     await state.writeConfig(config);
@@ -119,20 +122,97 @@ describe("return-covenant authenticated Gateway seam", () => {
         expectedGateway: binding,
         plan,
       });
-      const phase = await request(token, {
-        operation: "phase",
-        expectedGateway: binding,
-        phaseRequest: createReturnCovenantTestRequest({
-          casePlan: plan.cases[0]!,
-          form: "typed-tool",
-          phase: "prepare",
-          plan,
-        }),
-        attestation: createReturnCovenantTestAttestation(plan),
-      });
-      expect(phase.payload).toMatchObject({
-        caseHandle: expect.stringMatching(/^case-[0-9a-f]{40}$/u),
-      });
+      const attestation = createReturnCovenantTestAttestation(plan);
+      const invokePhase = async (
+        phaseRequest: ReturnType<typeof createReturnCovenantTestRequest>,
+      ) => {
+        const response = await request(token, {
+          operation: "phase",
+          expectedGateway: binding,
+          phaseRequest,
+          attestation,
+        });
+        return asNonArrayRecord(response.payload);
+      };
+      const stringField = (value: unknown, field: string) => {
+        const resolved = asNonArrayRecord(value)[field];
+        if (typeof resolved !== "string") {
+          throw new Error(`missing ${field}`);
+        }
+        return resolved;
+      };
+      const casePlan = plan.cases[0]!;
+      for (const form of casePlan.forms) {
+        const prepared = await invokePhase(
+          createReturnCovenantTestRequest({
+            casePlan,
+            form,
+            phase: "prepare",
+            plan,
+          }),
+        );
+        const caseHandle = stringField(prepared, "caseHandle");
+        const dispatched = await invokePhase(
+          createReturnCovenantTestRequest({
+            caseHandle,
+            casePlan,
+            form,
+            phase: "dispatch",
+            plan,
+          }),
+        );
+        const acceptance = asNonArrayRecord(dispatched.acceptance);
+        const acceptanceBinding = {
+          capturedAuthorityGeneration: stringField(acceptance, "capturedAuthorityGeneration"),
+          heldResultId: stringField(acceptance, "heldResultId"),
+          receiptId: stringField(acceptance, "receiptId"),
+          resultMarker: stringField(acceptance, "resultMarker"),
+        };
+        const transitioned = await invokePhase(
+          createReturnCovenantTestRequest({
+            acceptance: acceptanceBinding,
+            caseHandle,
+            casePlan,
+            form,
+            phase: "transition",
+            plan,
+          }),
+        );
+        await invokePhase(
+          createReturnCovenantTestRequest({
+            acceptance: acceptanceBinding,
+            caseHandle,
+            casePlan,
+            form,
+            phase: "release",
+            plan,
+            transition: {
+              receiptId: stringField(transitioned.transition, "receiptId"),
+            },
+          }),
+        );
+        await delay(plan.settlementWindowMs);
+        await expect(
+          invokePhase(
+            createReturnCovenantTestRequest({
+              caseHandle,
+              casePlan,
+              form,
+              phase: "observe",
+              plan,
+            }),
+          ),
+        ).resolves.toMatchObject({ settled: true });
+        await invokePhase(
+          createReturnCovenantTestRequest({
+            caseHandle,
+            casePlan,
+            form,
+            phase: "cleanup",
+            plan,
+          }),
+        );
+      }
       await expect(
         request(token, {
           operation: "ping",

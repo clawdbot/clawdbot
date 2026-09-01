@@ -3,7 +3,7 @@ import { stableStringify } from "@openclaw/normalization-core";
 import { createContinueDelegateTool } from "../../../agents/tools/continue-delegate-tool.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { deferSessionDelivery } from "../../../infra/session-delivery-queue-storage.js";
-import { removeSystemEvents } from "../../../infra/system-events.js";
+import { peekSystemEventEntries, removeSystemEvents } from "../../../infra/system-events.js";
 import { handleContinuationSignal } from "../../reply/agent-runner-continuation-signal.js";
 import { createReplyContinuationController } from "../../reply/agent-runner-continuation.js";
 import type { FollowupRun } from "../../reply/queue.js";
@@ -217,6 +217,9 @@ export async function dispatchReturnCovenantCase(params: {
             revision: flow.revision,
             status: flow.status,
           })),
+        systemEvents: peekSystemEventEntries(state.casePlan.logicalSessionKey).map(
+          (event) => event.text,
+        ),
       })}`,
     );
   }
