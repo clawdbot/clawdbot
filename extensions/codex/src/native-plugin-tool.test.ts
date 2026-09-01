@@ -75,7 +75,11 @@ describe("native Codex plugin discovery tool", () => {
       workspaceDir: "/context/workspace",
     });
 
-    const result = await tool?.execute("list-plugins", { query: "security", limit: 1 });
+    const result = await tool?.execute("list-plugins", {
+      query: " AUDIT CODE ",
+      marketplace: " company-tools ",
+      limit: 1,
+    });
 
     expect(request).toHaveBeenCalledWith(
       expect.anything(),

@@ -37,6 +37,20 @@ export type CodexPluginMarketplaceListRequest = (
   params: v2.PluginListParams,
 ) => Promise<v2.PluginListResponse>;
 
+export function filterCodexMarketplacePlugins(
+  plugins: CodexAvailablePlugin[],
+  query: string,
+  marketplace?: string,
+): CodexAvailablePlugin[] {
+  const normalizedQuery = query.trim().toLowerCase();
+  return plugins.filter(
+    (plugin) =>
+      (!marketplace || plugin.marketplaceName === marketplace) &&
+      (!normalizedQuery ||
+        `${plugin.id} ${plugin.description ?? ""}`.toLowerCase().includes(normalizedQuery)),
+  );
+}
+
 /** Validates the same identifier segments required by Codex's stable PluginId parser. */
 export function parseCodexPluginMarketplaceId(
   value: string,

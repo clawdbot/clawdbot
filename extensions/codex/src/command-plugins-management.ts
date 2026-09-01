@@ -1,8 +1,10 @@
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   renderMessagePresentationFallbackText,
   type MessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
 // Codex plugin module implements command plugins management behavior.
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "./app-server/config.js";
 import { isOpenAiCuratedMarketplaceName } from "./app-server/plugin-inventory.js";
@@ -22,6 +24,7 @@ import {
   type CodexPluginsConfigBlock,
   type CodexPluginsManagementIO,
 } from "./command-plugin-config.js";
+import { formatCodexAvailablePlugins } from "./command-plugins-available.js";
 import {
   formatCodexPluginReadiness,
   codexPluginAppPageLinks,
@@ -54,6 +57,8 @@ type CodexPluginsManagementRuntime = {
 // /reset. A full gateway restart is NOT needed.
 const POLICY_REFRESH_HINT =
   "New Codex conversations pick this up automatically. Use /new or /reset to refresh the current one.";
+const AVAILABLE_USAGE =
+  "Usage: /codex plugins available [query] [--page <positive integer>]. Search text must be at most 100 characters; use -- before literal query text that contains options.";
 
 export async function handleCodexPluginsSubcommand(
   ctx: PluginCommandContext,
@@ -98,13 +103,32 @@ export async function handleCodexPluginsSubcommand(
   }
 
   if (normalized === "available") {
-    if (args.length > 0) {
-      return { text: "Usage: /codex plugins available" };
-    }
     if (!canMutateCodexHost(ctx)) {
       return {
         text: "Only an owner or operator.admin gateway client can list available Codex plugins.",
       };
+    }
+    let page = 1;
+    const queryParts: string[] = [];
+    for (let index = 0; index < args.length; index += 1) {
+      const arg = expectDefined(args[index], "current Codex plugin search argument");
+      if (arg === "--") {
+        queryParts.push(...args.slice(index + 1));
+        break;
+      }
+      if (arg === "--page") {
+        const parsedPage = parseStrictPositiveInteger(args[++index]);
+        if (parsedPage === undefined) {
+          return { text: AVAILABLE_USAGE };
+        }
+        page = parsedPage;
+      } else {
+        queryParts.push(arg);
+      }
+    }
+    const query = queryParts.join(" ").trim();
+    if (query.length > 100) {
+      return { text: AVAILABLE_USAGE };
     }
     if (!runtime) {
       return { text: "Codex plugin discovery is unavailable for this command." };
@@ -114,7 +138,7 @@ export async function handleCodexPluginsSubcommand(
         request: runtime.list,
         workspaceDir: await runtime.workspaceDir(),
       });
-      return { text: formatAvailablePlugins(discovered.plugins, discovered.warnings) };
+      return formatCodexAvailablePlugins(discovered.plugins, discovered.warnings, query, page);
     } catch (error) {
       return {
         text: `Could not list Codex plugins: ${formatCodexDisplayText(errorMessage(error))}`,
@@ -384,7 +408,7 @@ function buildPluginsHelp(): string {
     "Codex plugin discovery and owner-approved installation:",
     "- /codex plugins                            (alias for list)",
     "- /codex plugins list                       show explicitly configured plugins",
-    "- /codex plugins available                  list discoverable Codex marketplaces",
+    "- /codex plugins available [query] [--page <n>]  search or browse Codex plugins",
     "- /codex plugins status <configured-plugin> [page]  inspect app readiness without refreshing",
     "- /codex plugins recheck <configured-plugin>  refresh app inventory after connecting",
     "- /codex plugins install <name>@<marketplace>  install and authorize one plugin",
@@ -612,35 +636,6 @@ async function installCodexPlugin(
   return {
     text: `${formatCodexDisplayText(requestedId)} ${status}. OpenClaw app access is configured.${refreshWarning} ${POLICY_REFRESH_HINT}`,
   };
-}
-
-function formatAvailablePlugins(plugins: CodexAvailablePlugin[], warnings: string[]): string {
-  if (plugins.length === 0) {
-    return [
-      "No Codex plugins were discovered for the current workspace.",
-      ...warnings.map((warning) => `Warning: ${formatCodexDisplayText(warning)}`),
-    ].join("\n");
-  }
-  return [
-    "Discoverable Codex plugins:",
-    ...plugins.slice(0, 30).map((plugin) => {
-      const state = plugin.installed
-        ? plugin.enabled
-          ? "installed"
-          : "installed, disabled"
-        : plugin.available
-          ? "available"
-          : "unavailable";
-      const description = plugin.description
-        ? ` - ${formatCodexDisplayText(plugin.description)}`
-        : "";
-      return `- ${plugin.id} (${state})${description}`;
-    }),
-    ...(plugins.length > 30 ? ["- Additional plugins omitted."] : []),
-    ...warnings.map((warning) => `Warning: ${formatCodexDisplayText(warning)}`),
-    "To authorize one plugin, an owner or operator.admin must send:",
-    "/codex plugins install <plugin>@<marketplace>",
-  ].join("\n");
 }
 
 function errorMessage(error: unknown): string {

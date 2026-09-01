@@ -242,6 +242,8 @@ same chat where you operate the Codex harness:
 /codex plugins
 /codex plugins list
 /codex plugins available
+/codex plugins available security
+/codex plugins available --page 2
 /codex plugins install security-review@company-tools
 /codex plugins status security-review@company-tools
 /codex plugins recheck security-review@company-tools
@@ -254,10 +256,19 @@ same chat where you operate the Codex harness:
 configured plugin's key, on/off state, Codex plugin name, and marketplace
 from `plugins.entries.codex.config.codexPlugins.plugins`.
 
-`available` reads Codex's marketplace catalog using the bound workspace, so it
-can discover repository-local plugins without enabling them. The owner-scoped
-`codex_plugins` model tool is also read-only: it can recommend an exact install
-command but cannot install, enable, or add a marketplace.
+`available [query] [--page <n>]` requires an owner or `operator.admin`. It reads
+Codex's marketplace catalogs using the bound workspace, including repository-local
+plugins, without installing or enabling them. Search matches names, marketplaces,
+and descriptions case-insensitively across the full returned catalog before
+showing ten results per page. **Next page** and **Previous page** preserve your
+search; channels without buttons show the commands to send. Search text is limited
+to 100 characters. Use `--` before literal search text containing `--page`.
+
+Results retain marketplace-qualified identities and availability restrictions.
+This searches Codex catalogs, not OpenClaw's plugin registry or every ChatGPT
+connection. The owner-scoped `codex_plugins` model tool uses the same search
+matching and is also read-only: it can recommend an exact install command but
+cannot install, enable, or add a marketplace.
 
 `status <configured-plugin> [page]` requires an owner or `operator.admin`. It
 shows bundle installation, marketplace restrictions, Codex enablement, and
