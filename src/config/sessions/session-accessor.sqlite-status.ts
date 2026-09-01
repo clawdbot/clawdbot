@@ -21,8 +21,8 @@ type SessionStatusDatabase = Pick<OpenClawAgentKyselyDatabase, "session_nodes">;
 
 // Metadata readers do not own prompt snapshots. Strip those bytes before JS allocation;
 // malformed or SQLite-overdepth JSON still reaches the existing parser unchanged.
-/* kysely-allow-raw: preserve raw-row parsing while omitting unused prompt payloads. */
-export const sessionEntryMetadataJson = sql<string>`CASE WHEN json_valid(entry_json)
+export const sessionEntryMetadataJson =
+  /* kysely-allow-raw: preserve raw-row parsing while omitting unused prompt payloads. */ sql<string>`CASE WHEN json_valid(entry_json)
   THEN json_remove(entry_json, '$.skillsSnapshot', '$.systemPromptReport')
   ELSE entry_json END`.as("entry_json");
 
