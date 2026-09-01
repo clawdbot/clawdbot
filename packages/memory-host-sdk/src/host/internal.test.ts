@@ -223,6 +223,27 @@ describe("memory host SDK package internals", () => {
     ]);
   });
 
+  it.skipIf(process.platform === "win32")(
+    "skips a symlinked USER.md without dropping regular memory files",
+    async () => {
+      const workspaceDir = getTmpDir();
+      const memoryDir = path.join(workspaceDir, "memory");
+      const externalUserPath = path.join(workspaceDir, "external-user.md");
+      await fs.mkdir(memoryDir);
+      await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Memory");
+      await fs.writeFile(path.join(memoryDir, "note.md"), "# Note");
+      await fs.writeFile(externalUserPath, "# External user");
+      await fs.symlink(externalUserPath, path.join(workspaceDir, "USER.md"));
+
+      const files = await listMemoryFiles(workspaceDir);
+
+      expect(files.map((file) => path.relative(workspaceDir, file)).toSorted()).toEqual([
+        "MEMORY.md",
+        path.join("memory", "note.md"),
+      ]);
+    },
+  );
+
   it.each([
     {
       label: "primary memory file",
@@ -319,6 +340,19 @@ describe("memory host SDK package internals", () => {
     expect(isMemoryPath("dreams.md")).toBe(true);
     expect(isMemoryPath("DREAMS.md")).toBe(true);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "skips a memory file replaced by a symlink before entry construction",
+    async () => {
+      const workspaceDir = getTmpDir();
+      const externalNotePath = path.join(workspaceDir, "external-note.md");
+      const notePath = path.join(workspaceDir, "note.md");
+      await fs.writeFile(externalNotePath, "# External note");
+      await fs.symlink(externalNotePath, notePath);
+
+      await expect(buildFileEntry(notePath, workspaceDir)).resolves.toBeNull();
+    },
+  );
 
   it("builds markdown and multimodal file entries", async () => {
     const tmpDir = getTmpDir();

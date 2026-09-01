@@ -1,6 +1,6 @@
 // Memory Host SDK module implements internal behavior.
 import crypto from "node:crypto";
-import fsSync from "node:fs";
+import fsSync, { type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -180,6 +180,18 @@ function shouldDescendMemoryEntry(
   return entry.kind === "directory" && entry.name !== ".openclaw-repair";
 }
 
+async function statEligibleMemoryFile(absPath: string): Promise<Stats | null> {
+  try {
+    const stat = await fs.lstat(absPath);
+    return stat.isFile() && !stat.isSymbolicLink() ? stat : null;
+  } catch (error) {
+    if (isFileMissingError(error)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
 async function collectMemoryFilesFromDir(
   dir: string,
   files: string[],
@@ -215,20 +227,11 @@ export async function listMemoryFiles(
     shouldSkipRootMemoryAuxiliaryPath({ workspaceDir, absPath });
 
   const addMarkdownFile = async (absPath: string) => {
-    try {
-      const stat = await statRegularFile(absPath);
-      if (stat.missing) {
-        return;
-      }
-      if (!absPath.endsWith(".md")) {
-        return;
-      }
-      result.push(absPath);
-    } catch (error) {
-      if (!isFileMissingError(error)) {
-        throw error;
-      }
+    const stat = await statEligibleMemoryFile(absPath);
+    if (!stat || !absPath.endsWith(".md")) {
+      return;
     }
+    result.push(absPath);
   };
 
   const memoryFile = await resolveCanonicalRootMemoryFile(workspaceDir);
@@ -308,11 +311,10 @@ export async function buildFileEntry(
   workspaceDir: string,
   multimodal?: MemoryMultimodalSettings,
 ): Promise<MemoryFileEntry | null> {
-  const regularFile = await statRegularFile(absPath);
-  if (regularFile.missing) {
+  const stat = await statEligibleMemoryFile(absPath);
+  if (!stat) {
     return null;
   }
-  const stat = regularFile.stat;
   const normalizedPath = path.relative(workspaceDir, absPath).replace(/\\/g, "/");
   const multimodalSettings = multimodal ?? DISABLED_MULTIMODAL_SETTINGS;
   const modality = classifyMemoryMultimodalPath(absPath, multimodalSettings);
