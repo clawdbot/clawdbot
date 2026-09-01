@@ -65,6 +65,9 @@ describe("test runtime prerequisites", () => {
     ["CLI directory", ["src/cli"], "runtime"],
     ["CLI config", ["test/vitest/vitest.cli.config.ts"], "runtime"],
     ["ordinary CLI unit test", ["src/cli/command-path-policy.test.ts"], undefined],
+    ["Doctor Gateway process", ["src/commands/doctor-config-preflight.process.test.ts"], "runtime"],
+    ["commands config", ["test/vitest/vitest.commands.config.ts"], "runtime"],
+    ["ordinary Doctor unit test", ["src/commands/doctor-state-integrity.test.ts"], undefined],
     ["Active Memory Gateway", ["src/gateway/gateway-active-memory.test.ts"], "runtime"],
     ["concurrent Gateway streams", ["src/gateway/gateway-concurrent-streams.test.ts"], "runtime"],
     [
@@ -554,7 +557,9 @@ describe("scripts/test-projects changed-target routing", () => {
     ]) {
       const plan = resolveChangedTestTargetPlan([file]);
       expect(plan.mode).toBe("targets");
-      if (plan.mode !== "targets") throw new Error(`Missing recovery test owner: ${file}`);
+      if (plan.mode !== "targets") {
+        throw new Error(`Missing recovery test owner: ${file}`);
+      }
       expect(plan.targets).toContain("test/scripts/upgrade-survivor-recovery-cleanup.test.ts");
     }
   });
@@ -904,7 +909,9 @@ describe("scripts/test-projects changed-target routing", () => {
       (cwd) => {
         const targets = resolveChangedTestTargetPlan([changedPath], { cwd }).targets;
 
-        for (const exactTarget of exactTargets) expect(targets).toContain(exactTarget);
+        for (const exactTarget of exactTargets) {
+          expect(targets).toContain(exactTarget);
+        }
         expect(targets).toContain("test/scripts/direct-workflow-reference.test.ts");
         expect(targets).toContain("test/scripts/ci-workflow-guards.test.ts");
       },
