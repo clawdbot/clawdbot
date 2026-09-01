@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "../../../infra/node-sqlite.js";
 import { removeSystemEvents } from "../../../infra/system-events.js";
 import { buildPersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.message.js";
+import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import { withTestDir } from "../../../test-helpers/temp-dir.js";
 import { returnCovenantCaseScope } from "./case-setup.js";
 import {
@@ -129,16 +130,13 @@ describe("product return-covenant fixture run", () => {
     await withTestDir({ prefix: "openclaw-return-covenant-driver-" }, async (stateDir) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       setRuntimeConfigSnapshot(config);
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      openOpenClawAgentDatabase({ agentId: "main", env });
       const plan = createReturnCovenantTestPlan();
       const attestation = createReturnCovenantTestAttestation(plan);
       const clock = new TestClock();
       const gateway = new TestGateway();
-      let run = await ReturnCovenantFixtureRun.create({
-        clock,
-        config,
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-        plan,
-      });
+      let run = await ReturnCovenantFixtureRun.create({ clock, config, env, plan });
       await gateway.start();
       const invoke = (
         request: ReturnType<typeof createReturnCovenantTestRequest>,
@@ -223,7 +221,7 @@ describe("product return-covenant fixture run", () => {
               run = await ReturnCovenantFixtureRun.restore({
                 clock,
                 config,
-                env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+                env,
                 plan,
                 snapshot,
               });

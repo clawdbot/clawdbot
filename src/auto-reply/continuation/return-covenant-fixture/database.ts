@@ -510,20 +510,31 @@ export class PreparedReturnCovenantDatabaseProfiles {
       env: this.#env,
       includeIncompatibleSchemaVersions: true,
     });
-    const [directory] = directories;
-    const [database] = registered;
+    const directoryNames = directories.map((directory) => directory.name).toSorted();
+    const registeredAgentIds = registered.map((database) => database.agentId).toSorted();
     if (
-      directories.length !== 1 ||
-      !directory?.isDirectory() ||
-      directory.isSymbolicLink() ||
-      directory.name !== "proof" ||
-      registered.length !== 1 ||
-      database?.agentId !== "proof" ||
-      database.schemaVersion !== OPENCLAW_AGENT_SCHEMA_VERSION ||
-      path.resolve(database.path) !== this.#canonicalDatabasePath ||
-      !(await pathExists(this.#canonicalDatabasePath))
+      directories.some((directory) => !directory.isDirectory() || directory.isSymbolicLink()) ||
+      stableStringify(directoryNames) !== stableStringify(registeredAgentIds) ||
+      !registered.some(
+        (database) =>
+          database.agentId === "proof" &&
+          path.resolve(database.path) === this.#canonicalDatabasePath,
+      )
     ) {
       throw new Error("return-covenant final agent database is not canonical");
+    }
+    for (const database of registered) {
+      const canonicalPath = resolveOpenClawAgentSqlitePath({
+        agentId: database.agentId,
+        env: this.#env,
+      });
+      if (
+        database.schemaVersion !== OPENCLAW_AGENT_SCHEMA_VERSION ||
+        path.resolve(database.path) !== canonicalPath ||
+        !(await pathExists(canonicalPath))
+      ) {
+        throw new Error("return-covenant final agent database is not canonical");
+      }
     }
   }
 
