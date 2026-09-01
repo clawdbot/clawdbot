@@ -155,8 +155,12 @@ async function resolveConnectTarget(
   }
   let buffer: Buffer;
   try {
+    // The original fs.readFile behavior followed symlinks in the target path.
+    // Resolve intentional links before the regular-file safety check so
+    // symlinked secret-mount or one-shot target files keep working.
+    const resolvedFilePath = await fs.realpath(filePath);
     ({ buffer } = await readRegularFile({
-      filePath,
+      filePath: resolvedFilePath,
       maxBytes: MAX_TARGET_FILE_BYTES,
     }));
   } catch (error) {

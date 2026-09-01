@@ -231,6 +231,28 @@ describe("connect cli", () => {
     }
   });
 
+  it.skipIf(process.platform === "win32")(
+    "consumes a symlinked target file and keeps the backing file intact",
+    async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-connect-target-symlink-"));
+      const targetFile = path.join(root, "setup-code");
+      const backingFile = path.join(root, "backing-setup-code");
+      await fs.writeFile(backingFile, setupCode(), { mode: 0o600 });
+      await fs.symlink(backingFile, targetFile);
+      try {
+        await runConnect(["--target-file", targetFile, "--ephemeral"]);
+
+        expect(mocks.runNodeHost).toHaveBeenCalledWith(
+          expect.objectContaining({ forceWorkerRuns: true }),
+        );
+        await expect(fs.stat(targetFile)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.stat(backingFile)).resolves.toBeDefined();
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it.each([
     {
       args: ["--ephemeral", "--service"],
