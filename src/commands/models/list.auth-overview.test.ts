@@ -41,12 +41,22 @@ vi.mock("../../agents/auth-profiles/usage.js", () => ({
 
 vi.mock("../../agents/model-auth.js", () => {
   const resolveConfigKey = (
-    cfg: { models?: { providers?: Record<string, { apiKey?: string }> } } | undefined,
+    cfg: { models?: { providers?: Record<string, { apiKey?: unknown }> } } | undefined,
     provider: string,
   ) => cfg?.models?.providers?.[provider]?.apiKey;
 
+  const resolveConfiguredEnvRef = (value: unknown) =>
+    value && typeof value === "object" && "source" in value && "id" in value
+      ? value.source === "env" && typeof value.id === "string"
+        ? value.id
+        : undefined
+      : undefined;
+
   return {
-    getCustomProviderApiKey: vi.fn(resolveConfigKey),
+    getCustomProviderApiKey: vi.fn((cfg, provider) => {
+      const value = resolveConfigKey(cfg, provider);
+      return resolveConfiguredEnvRef(value) ?? (typeof value === "string" ? value : undefined);
+    }),
     resolveEnvApiKey: vi.fn((provider: string) => {
       if (provider !== "openai" || !process.env.OPENAI_API_KEY?.trim()) {
         return null;
@@ -58,11 +68,22 @@ vi.mock("../../agents/model-auth.js", () => {
     }),
     resolveUsableCustomProviderApiKey: vi.fn(
       (params: {
-        cfg?: { models?: { providers?: Record<string, { apiKey?: string }> } };
+        cfg?: { models?: { providers?: Record<string, { apiKey?: unknown }> } };
         provider: string;
       }) => {
         const apiKey = resolveConfigKey(params.cfg, params.provider);
-        if (!apiKey || apiKey === "secretref-managed" || apiKey.startsWith("oauth:")) {
+        const envRef = resolveConfiguredEnvRef(apiKey);
+        if (envRef) {
+          return process.env[envRef]?.trim()
+            ? { apiKey: process.env[envRef], source: `env: ${envRef}` }
+            : null;
+        }
+        if (
+          typeof apiKey !== "string" ||
+          !apiKey ||
+          apiKey === "secretref-managed" ||
+          apiKey.startsWith("oauth:")
+        ) {
           return null;
         }
         if (apiKey === "OPENAI_API_KEY") {
@@ -176,6 +197,42 @@ describe("resolveProviderAuthOverview", () => {
       kind: "profiles",
       detail: "/tmp/openclaw-agent-custom/auth-profiles.json",
     });
+  });
+
+  it("reports an explicit provider env SecretRef ahead of stored profiles", () => {
+    const overview = withEnv({ CUSTOM_PROVIDER_KEY: "current-provider-key" }, () =>
+      resolveProviderAuthOverview({
+        provider: "custom",
+        cfg: {
+          models: {
+            providers: {
+              custom: {
+                apiKey: { source: "env", provider: "default", id: "CUSTOM_PROVIDER_KEY" },
+                baseUrl: "https://models.example/v1",
+                models: [],
+              },
+            },
+          },
+        } as never,
+        store: {
+          version: 1,
+          profiles: {
+            "custom:models-json": {
+              type: "api_key",
+              provider: "custom",
+              key: "stale-provider-key",
+            },
+          },
+        } as never,
+        modelsPath: "/tmp/models.json",
+      }),
+    );
+
+    expect(overview.effective).toEqual({
+      kind: "env",
+      detail: expect.not.stringContaining("current-provider-key"),
+    });
+    expect(overview.profiles.count).toBe(1);
   });
 
   it("reports the main auth store for inherited profiles", () => {
