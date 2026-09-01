@@ -39,7 +39,7 @@ check(
 );
 
 const composition = registrySource.match(
-  /export const ProtocolSchemas = composeProtocolSchemaFragments\(\[([\s\S]*?)\]\s+as const\);/u,
+  /export const ProtocolSchemas(?:: ProtocolSchemaRegistry)? = composeProtocolSchemaFragments\(\[([\s\S]*?)\]\s+as const\);/u,
 );
 const composedBindings = (composition?.[1] ?? "")
   .split("\n")
