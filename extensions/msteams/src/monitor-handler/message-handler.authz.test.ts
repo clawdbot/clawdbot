@@ -734,6 +734,32 @@ describe("msteams monitor handler authz", () => {
     expect(ctxPayload.CommandAuthorized).toBe(false);
   });
 
+  it("uses the broad authorization probe for direct-message plugin commands", async () => {
+    resetThreadMocks();
+    const isControlCommandMessage = vi.fn(() => false);
+    const shouldComputeCommandAuthorized = vi.fn(() => true);
+    const { deps } = createDeps(
+      {
+        channels: {
+          msteams: {
+            dmPolicy: "open",
+            allowFrom: ["attacker-aad"],
+          },
+        },
+      } as OpenClawConfig,
+      { isControlCommandMessage, shouldComputeCommandAuthorized },
+    );
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(createAttackerPersonalActivity("msg-plugin"));
+
+    expect(shouldComputeCommandAuthorized).toHaveBeenCalledWith("hello", deps.cfg);
+    expect(isControlCommandMessage).toHaveBeenCalledWith("hello", deps.cfg);
+    const dispatched = firstSettledDispatch();
+    const ctxPayload = recordFromMockCall(dispatched?.ctxPayload);
+    expect(ctxPayload.CommandAuthorized).toBe(true);
+  });
+
   it("marks skipped channel message system events as non-owner without duplicating body text", async () => {
     resetThreadMocks();
     const { deps, enqueueSystemEvent } = createDeps({

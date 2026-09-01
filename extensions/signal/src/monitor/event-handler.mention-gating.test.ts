@@ -221,6 +221,13 @@ describe("signal mention gating", () => {
     expect(getCapturedCtx().WasMentioned).toBe(false);
   });
 
+  it("does not drop group text with inline command tokens when requireMention is off", async () => {
+    const handler = createMentionHandler({ requireMention: false });
+
+    await handler(makeGroupEvent({ message: "hello /status" }));
+    expect(getCapturedCtx().Body).toContain("hello /status");
+  });
+
   it("allows explicitly configured Signal groups by group id without a mention", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
