@@ -288,11 +288,13 @@ as untrusted.
   `(hello)` and parentheses typed by the sender are preserved.
 - LINE sends several images picked in one action as one webhook event per image,
   out of order. They are held briefly, ordered, and answered as a single turn
-  carrying every image, so the agent can reason about the set. A set that never
-  completes is delivered with whatever arrived after a few seconds rather than
-  being held indefinitely. Everything else that sender sends meanwhile - a
-  message, or another set of images - waits its turn, so their conversation is
-  answered in the order they sent it.
+  carrying every image. A set that never completes is delivered with whatever
+  arrived a few seconds after its most recent part rather than being held
+  indefinitely. Anything else arriving meanwhile - a message, or another set of
+  images - waits behind it, so replies keep the order the chat was sent in; in a
+  group that queue is the whole room, because LINE conversations are ordered per
+  chat rather than per member. How many of the images the model reads is set by
+  `tools.media.image.attachments`, which processes only the first one by default.
 
 ## Structured rich messages
 
