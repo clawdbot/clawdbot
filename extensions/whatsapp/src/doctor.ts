@@ -80,9 +80,22 @@ export function normalizeCompatibilityConfig({
     changes.push(`Moved translatable ${source.path} settings to messages ack settings.`);
   }
 
+  const finalEmoji = messages.ackReaction!.trim();
   const finalScope = messages.ackReactionScope ?? "group-mentions";
   const comparableFinalScope = finalScope === "none" ? "off" : finalScope;
   for (const source of sources) {
+    // The v2026.7.1 resolver returned explicit emoji.trim(), including "".
+    // Only an omitted emoji used the routed agent identity fallback.
+    const sourceEmoji = source.emoji?.trim();
+    if (source.emoji === undefined) {
+      changes.push(
+        `${source.path} used a route-dependent agent identity acknowledgement emoji before migration; the final messages.ackReaction is ${JSON.stringify(finalEmoji)}. Review messages.ackReaction.`,
+      );
+    } else if (sourceEmoji !== finalEmoji) {
+      changes.push(
+        `${source.path} requested acknowledgement emoji ${JSON.stringify(sourceEmoji)}, but the final messages.ackReaction is ${JSON.stringify(finalEmoji)}. Review messages.ackReaction.`,
+      );
+    }
     if (source.unrepresentableScope) {
       changes.push(
         `${source.path} migration cannot preserve both direct-message and mentioned-group acknowledgements; the final messages.ackReactionScope is ${JSON.stringify(finalScope)}. Review messages.ackReactionScope.`,

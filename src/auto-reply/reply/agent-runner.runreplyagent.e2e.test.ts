@@ -4353,15 +4353,6 @@ describe("runReplyAgent typing (heartbeat)", () => {
       },
     },
     {
-      label: "accepted child spawn",
-      pendingContinuation: false,
-      result: {
-        payloads: [],
-        meta: {},
-        acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:child" }],
-      },
-    },
-    {
       label: "yielded continuation",
       pendingContinuation: true,
       result: { payloads: [], meta: { yielded: true } },
@@ -4378,6 +4369,27 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
     await expect(run()).resolves.toBeUndefined();
     expect(onPendingContinuation).toHaveBeenCalledTimes(pendingContinuation ? 1 : 0);
+  });
+
+  it("delivers one bounded status for an accepted child continuation", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "I’m continuing this work and will send the result when it is ready." }],
+      meta: { continuationPending: true },
+      acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:child" }],
+    });
+    const onPendingContinuation = vi.fn();
+    const { run } = createMinimalRun({ opts: { onPendingContinuation } });
+
+    await expect(run()).resolves.toMatchObject({
+      text: "I’m continuing this work and will send the result when it is ready.",
+      replyToId: "msg",
+    });
+    expect(onPendingContinuation).toHaveBeenCalledOnce();
+    expect(onPendingContinuation.mock.calls[0]?.[0]).toMatchObject({
+      statusPayload: {
+        text: "I’m continuing this work and will send the result when it is ready.",
+      },
+    });
   });
 
   it("delivers an explicit yield acknowledgment after accepting a child spawn", async () => {

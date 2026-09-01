@@ -346,8 +346,8 @@ The `check-dependencies` shard runs Knip dependency, unused-file, and unused-exp
 
 ## Measured shard weights
 
-`config/ci-test-timings.json` records CI measurements for UI E2E files and compact
-Node groups. Both packers prefer these weights over their in-source cold-start
+`config/ci-test-timings.json` records CI measurements for UI and Gateway E2E files
+and compact Node groups. UI and compact packers prefer these weights over their in-source cold-start
 tables. UI E2E keys are repo-relative paths, including tests under `ui/src/pages/`,
 and every file estimate includes the measured fork, import, and setup overhead.
 Compact groups have separate Blacksmith and GitHub-hosted measurements, selected
@@ -359,19 +359,29 @@ predicts the same two-up jobs, and `COMPACT_LARGE_NODE_TEST_JOB_SECONDS` /
 `COMPACT_SMALL_NODE_TEST_JOB_SECONDS` were fitted against those contended walls.
 Switching to isolated group timings would invalidate those admission caps.
 
-The compact plan is built once in preflight. UI E2E shards build their partitions
+Gateway E2E uses the same greedy partition owner as UI E2E. Measured file durations
+include suite hooks; new files use source bytes scaled by the discovered files'
+measured seconds per byte. Without measurements, Gateway partitions use source
+bytes alone. The CLI JSON suite is split by command family so its existing cases
+can run across the four shards without an indivisible serial tail.
+
+The compact plan is built once in preflight. E2E shards build their partitions
 independently, so they must read the same committed file from the checkout. They
 never download timing artifacts or consult restored timing caches. Missing or
 invalid timing files, or `OPENCLAW_CI_TEST_TIMINGS=0`, use the cold-start estimates
 for the entire file; stale keys cannot change the discovered test inventory.
 
 With an authenticated `gh` CLI, run `pnpm ci:timings:refit` to regenerate the file
-from all attempts of the last five successful `ci.yml` push runs on `main`. The
-refit validates each run's event, branch, and head SHA before reading job logs;
-manual dispatches are rejected even when launched from `main`. Use `--runs <n>` to change
+from all attempts of the last five successful `ci.yml` push runs on `main`, plus
+the last five successful manual runs of each release-check workflow that owns
+Gateway E2E. The refit validates run metadata before reading job logs; ordinary
+manual CI dispatches are rejected because their measured target can differ from
+the workflow head. Release workflows validate their selected target before tests,
+and their temporary branch identifies tooling rather than the measured source.
+Use `--runs <n>` to change
 the sample window, `--repo <owner/repo>` to select a repository, `--out <path>` to
 write elsewhere, or `--dry-run` to print changed entries without writing.
-Measurements come only from successful UI E2E and compact jobs; compact groups
+Measurements come only from successful UI E2E, Gateway E2E, and compact jobs; compact groups
 also require an `exit 0` marker. Each entry needs at least two run samples;
 multiple attempts within one run still contribute only one sample per key and
 profile. Keys are pruned only when that profile has at least one observation in
@@ -538,6 +548,8 @@ concurrent repositories, retries, and burst overlap.
 The protected cache warmer has two platform rows: the existing Linux workload and one hosted macOS pnpm-store publisher. Its per-ref concurrency and pending-run coalescing are unchanged. Each admitted warmer run adds one hosted macOS job and no Blacksmith registrations; pull-request CI adds no writers or jobs. Native producer and consumer measurements must include cache transfer, extraction, installation, and archive size before claiming a setup-time saving.
 
 The three Mac Node parts add two hosted jobs per run on `github` and `hybrid`, with no added Blacksmith registrations there. Normal Blacksmith routing adds two registrations per qualifying attempt-1 push or trusted PR; manual runs, retries, and untrusted PRs remain hosted. The matrix concurrency cap is three. GitHub's documented Enterprise macOS concurrency allowance is 50, shared with other hosted Mac workflows; it does not guarantee immediate runner admission. No runner class or repository capacity setting changes with this split.
+
+`Release npm Cache Warm` (`release-npm-cache-warm.yml`) runs a hosted Linux job on scheduled and manual triggers to prepare an npm download seed from the latest published OpenClaw package with lifecycle scripts disabled. Its concurrency group is separate from push-triggered Vitest warming, so newer pushes cannot cancel a pending seed. Scheduled runs publish from `main`, so new release branches can restore that seed through GitHub's default-branch cache scope. Each seed starts empty and contains only the current baseline dependency graph. Cross-OS release checks first restore their candidate-specific cache, then a matching runtime/suite cache, then this shared seed. Only npm's content-addressed `_cacache` directory is archived; install prefixes, OpenClaw state, npm logs, and executable `npx` caches remain fresh. The producer and consumers use the same relative archive path and enable cross-OS archives. npm retains normal freshness and integrity checks and downloads missing platform-specific packages. This adds one hosted Linux job per scheduled or manual warmer run, no jobs on pushes, and no Blacksmith registrations.
 
 The changed-target PR plan uses one Node test registration. Broad-risk PRs retain the metadata-complete compact fallback; canonical pushes use the integration compact. The `github` planner permits up to 112 hosted compact rows, with at most 96 running concurrently; `hybrid` retains its 96-row compact cap. Separately appended changed-plugin fallback descriptors must also be counted. Hybrid rows consume Blacksmith registrations on attempt 1 and move to hosted capacity on retries. Count every emitted matrix row and nonmatrix job, including all six Android rows despite its two-job concurrency cap.
 
@@ -967,7 +979,7 @@ A lane heavier than its effective cap can still start from an empty pool, then r
 
 ### Reusable live/E2E workflow
 
-Repository E2E runs as nine independent jobs: four native Gateway shards, four
+Repository E2E runs as nine independent jobs: four duration-weighted Gateway shards, four
 duration-weighted Control UI shards, and the standalone agent-plugin Gateway
 test. Two independent producers build the selected source once per profile:
 the full private-QA build for Gateway package/type checks, and the CI artifact

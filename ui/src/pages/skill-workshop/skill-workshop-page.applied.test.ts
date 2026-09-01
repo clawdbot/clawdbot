@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { createSkillWorkshopRevisionAdmissions } from "../../app/skill-workshop-revision-admissions.ts";
 import type { SkillWorkshopProposal } from "../../lib/skill-workshop/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createSkillWorkshopState, skillWorkshopRouteData } from "./proposals.ts";
@@ -49,7 +48,6 @@ function createContext(request: ReturnType<typeof vi.fn>): ApplicationContext {
       subscribe,
     },
     sessions: { state: { result: null, loading: false } },
-    skillWorkshopRevisionAdmissions: createSkillWorkshopRevisionAdmissions(),
     runtimeConfig: {
       state: { configSnapshot: null, configLoading: false, lastError: null },
       ensureLoaded: vi.fn(async () => undefined),
