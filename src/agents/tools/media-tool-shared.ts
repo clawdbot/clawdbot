@@ -757,6 +757,8 @@ export function buildTextToolResult(
     details: {
       model: `${result.provider}/${result.model}`,
       ...extraDetails,
+      // Code Mode and Tool Search read details instead of rendered content.
+      text: result.text,
       attempts: result.attempts,
     },
   };
