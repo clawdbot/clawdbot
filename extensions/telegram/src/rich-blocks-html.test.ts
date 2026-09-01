@@ -138,6 +138,17 @@ describe("block HTML islands", () => {
     expect(inner.blocks.map((child) => child.type)).toEqual(["heading"]);
   });
 
+  it("keeps a summary nested inside a wrapper in the details body", () => {
+    const block = single("<details><div><summary>Wrapped</summary><p>Body</p></div></details>");
+    expect(block).toMatchObject({ type: "details", summary: "Details" });
+    if (block.type !== "details") {
+      return;
+    }
+    const body = JSON.stringify(block.blocks);
+    expect(body).toContain("Wrapped");
+    expect(body).toContain("Body");
+  });
+
   it("discovers details inside a top-level raw blockquote", () => {
     const block = single(
       "<blockquote><details><summary>Inner</summary>\n\n# Inner heading\n\n</details></blockquote>",
