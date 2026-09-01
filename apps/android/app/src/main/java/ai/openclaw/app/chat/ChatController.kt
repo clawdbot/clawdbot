@@ -319,6 +319,8 @@ class ChatController internal constructor(
 
     data object Superseded : HistoryRefreshResult
 
+    data object BranchInvalidated : HistoryRefreshResult
+
     data object OwnerUnavailable : HistoryRefreshResult
 
     data object Failed : HistoryRefreshResult
@@ -3984,14 +3986,21 @@ class ChatController internal constructor(
     // live chat.history response always replaces cached rows wholesale.
     primeFromCache(sessionKey, generation)
     try {
-      val historyResult =
-        fetchAndApplyHistory(
-          sessionKey,
-          generation,
-          updateSessionInfo = true,
-          runIdsToReconcile = runIdsToReconcile,
-          refreshBranches = true,
-        )
+      var historyResult: HistoryRefreshResult
+      do {
+        currentCoroutineContext().ensureActive()
+        if (!isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())) return
+        historyResult =
+          fetchAndApplyHistory(
+            sessionKey,
+            generation,
+            updateSessionInfo = true,
+            runIdsToReconcile = runIdsToReconcile,
+            refreshBranches = true,
+          )
+        // Branch evidence can fence the only recovery request without a successor load.
+        // Keep this owner, but fetch new history rather than adopting the rejected response.
+      } while (historyResult == HistoryRefreshResult.BranchInvalidated)
       if (historyResult !is HistoryRefreshResult.Applied) {
         if (
           historyResult == HistoryRefreshResult.OwnerUnavailable &&
@@ -4011,6 +4020,8 @@ class ChatController internal constructor(
       if (refreshSessions) {
         fetchSessions(limit = 50)
       }
+    } catch (err: CancellationException) {
+      throw err
     } catch (err: Throwable) {
       if (!isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())) return
       updateErrorText(err.message, historyGeneration = generation)
@@ -4089,7 +4100,7 @@ class ChatController internal constructor(
       }
     val applied =
       historyPublicationMutex.withLock {
-        if (!synchronized(gatewayScopeApplyLock) { isCurrent() }) return@withLock false
+        if (!synchronized(gatewayScopeApplyLock) { isCurrent() }) return@withLock HistoryRefreshResult.Superseded
         val previousState =
           historyBranchState?.let { captured ->
             // Continue only a committed history publication from this load. Never recapture after
@@ -4113,16 +4124,16 @@ class ChatController internal constructor(
         ) {
           // Room still checks the exact revision and parks all earlier input before publication.
           historyBranchState = commandOutbox?.reconcileBranchScope(
-            gatewayId = requestCacheScope?.gatewayId ?: return@withLock false,
+            gatewayId = requestCacheScope?.gatewayId ?: return@withLock HistoryRefreshResult.OwnerUnavailable,
             scope = branchSnapshot.outboxScope(),
             evidence = ChatOutboxBranchEvidence.History(previousState),
             activeLeafEntryId = tip,
             activeTranscriptEntryIds = history.messages.mapNotNullTo(mutableSetOf()) { it.entryId },
             lastError = OUTBOX_BRANCH_CHANGED_ERROR,
-          ) ?: return@withLock false
+          ) ?: return@withLock HistoryRefreshResult.BranchInvalidated
         }
         synchronized(gatewayScopeApplyLock) {
-          if (!isCurrent()) return@synchronized false
+          if (!isCurrent()) return@synchronized HistoryRefreshResult.Superseded
           val runIdsOwnedAfterRequest =
             synchronized(pendingRuns) {
               pendingRuns.filterNotTo(mutableSetOf()) { it in runIdsOwnedAtRequest }
@@ -4204,17 +4215,17 @@ class ChatController internal constructor(
             ?.takeIf { it.isNotEmpty() }
             ?.let { _thinkingLevel.value = it }
           enqueueTranscriptCacheWrite(requestCacheScope, requestAgentId, sessionKey, history.messages)
-          true
+          HistoryRefreshResult.Applied(historyBranchState)
         }
       }
-    if (!applied) return HistoryRefreshResult.Superseded
+    if (applied !is HistoryRefreshResult.Applied) return applied
     if (refreshBranches && branchSnapshot != null) {
       refreshSessionBranches(branchSnapshot, historyBranchState, BranchRefreshPurpose.Reconcile)
     }
     completeReconnectRecoveryIfOwned(sessionKey, generation)
     confirmDurableSendsFromHistory(requestCacheScope, history, requestAgentId)
     publishOutbox()
-    return HistoryRefreshResult.Applied(historyBranchState)
+    return applied
   }
 
   private suspend fun awaitMainSessionReadiness(
@@ -6487,9 +6498,13 @@ class ChatController internal constructor(
           armPendingRunTimeout(runId)
           return@launch
         }
-        if (currentSession && !freshSnapshotApplied && historyResult == HistoryRefreshResult.Superseded) {
-          // The newer current-session load owns reconciliation but has not applied
-          // yet. Defer expiry; its snapshot or the next watchdog decides the run.
+        if (
+          currentSession &&
+          !freshSnapshotApplied &&
+          (historyResult == HistoryRefreshResult.Superseded || historyResult == HistoryRefreshResult.BranchInvalidated)
+        ) {
+          // A newer load or branch evidence fenced this snapshot. Defer expiry;
+          // fresh history or the next watchdog must decide the run.
           armPendingRunTimeout(runId)
           return@launch
         }
@@ -6815,7 +6830,7 @@ class ChatController internal constructor(
       content = content,
       timestampMs = obj["timestamp"].asLongOrNull(),
       idempotencyKey = obj["idempotencyKey"].asStringOrNull(),
-      entryId = metadata?.get("id").asJsonStringOrNull(),
+      entryId = metadata?.get("id").asJsonStringOrNull()?.takeIf { it.isNotBlank() },
       isSyntheticDisplay = obj["openclawMessageToolMirror"].asObjectOrNull() != null || obj["openclawStreamFallback"].asObjectOrNull() != null,
       truncated =
         truncated == JsonPrimitive(true) ||

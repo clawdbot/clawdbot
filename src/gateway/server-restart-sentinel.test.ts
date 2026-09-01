@@ -1582,7 +1582,8 @@ describe("scheduleRestartSentinelWake", () => {
     });
     expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: [expect.objectContaining({ type: attachment.type })],
+        content: [],
+        displayContent: [expect.objectContaining({ type: attachment.type })],
         idempotencyKey: `${attachment.type}:task-internal:agent-loop:generated-media-transcript`,
       }),
     );
@@ -1720,16 +1721,23 @@ describe("scheduleRestartSentinelWake", () => {
     expect(opsEvents[0]).toMatchObject({ type: "session", id: sessionId });
     const messageEvent = opsEvents[1] as {
       id?: string;
-      message?: { role?: string; content?: Array<Record<string, unknown>> };
+      message?: {
+        role?: string;
+        content?: Array<Record<string, unknown>>;
+        openclawDisplayContent?: Array<Record<string, unknown>>;
+      };
     };
     expect(messageEvent.message).toMatchObject({
       role: "assistant",
-      content: [expect.objectContaining({ type: "image", artifactId: expect.any(String) })],
+      content: [],
+      openclawDisplayContent: [
+        expect.objectContaining({ type: "image", artifactId: expect.any(String) }),
+      ],
     });
-    expect(messageEvent.message?.content).not.toEqual([
+    expect(messageEvent.message?.openclawDisplayContent).not.toEqual([
       { type: "text", text: path.basename(mediaPath) },
     ]);
-    const imageBlock = messageEvent.message?.content?.[0];
+    const imageBlock = messageEvent.message?.openclawDisplayContent?.[0];
     const artifactId = imageBlock?.artifactId;
     expect(artifactId).toBeTypeOf("string");
     const parsedArtifact = managedMediaActual.parseManagedOutgoingArtifactId(String(artifactId));
@@ -1781,7 +1789,8 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "main",
-        content: [expect.objectContaining({ type: "image" })],
+        content: [],
+        displayContent: [expect.objectContaining({ type: "image" })],
         storePath: "/tmp/sessions.json",
         idempotencyKey: "image:task-internal-partial:agent-loop:generated-media-transcript",
       }),

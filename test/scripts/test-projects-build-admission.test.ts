@@ -86,6 +86,8 @@ describe("CLI runtime admission", () => {
         "test/vitest/vitest.cli-process.config.ts",
         "--exclude",
         "src/cli/update-dry-run-state.process.test.ts",
+        "--exclude",
+        "src/cli/acp-cli-exit.process.test.ts",
       ],
     ],
     [
@@ -123,7 +125,9 @@ syncBuiltinESMExports();\n`,
     try {
       await expect(waitForChildClose(child)).resolves.toEqual({ code: 0, signal: null });
     } finally {
-      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+      }
     }
   });
   posixIt.each([
@@ -144,6 +148,18 @@ syncBuiltinESMExports();\n`,
       "CLI process",
       "scripts/run-vitest.mts",
       ["run", "--config", "test/vitest/vitest.cli-process.config.ts"],
+      "runtime",
+    ],
+    [
+      "CLI process selective exclusion",
+      "scripts/run-vitest.mts",
+      [
+        "run",
+        "--config",
+        "test/vitest/vitest.cli-process.config.ts",
+        "--exclude",
+        "src/cli/update-dry-run-state.process.test.ts",
+      ],
       "runtime",
     ],
     [
@@ -268,8 +284,11 @@ syncBuiltinESMExports();\n`,
             try {
               buildPid = await waitForPidFile(pidFile, 5_000);
               expect(fs.existsSync(readersFile), `outcome=${outcome}`).toBe(false);
-              if (outcome === "SIGTERM") child.kill("SIGTERM");
-              else child.stdin.end("finish\n");
+              if (outcome === "SIGTERM") {
+                child.kill("SIGTERM");
+              } else {
+                child.stdin.end("finish\n");
+              }
               expect(await closed, `outcome=${outcome}\n${output}`).toEqual({
                 code: outcome === "SIGTERM" ? 143 : outcome,
                 signal: null,
@@ -283,7 +302,9 @@ syncBuiltinESMExports();\n`,
               ).toHaveLength(1);
               await waitForDead(buildPid, 5_000);
             } finally {
-              if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+              if (child.exitCode === null && child.signalCode === null) {
+                child.kill("SIGKILL");
+              }
               if (!buildPid && fs.existsSync(pidFile)) {
                 buildPid = await waitForPidFile(pidFile, 5_000);
               }
@@ -297,7 +318,9 @@ syncBuiltinESMExports();\n`,
               try {
                 await withTestTimeout(stopped.promise, 5_000, `outcome=${outcome}: CLI cleanup`);
               } finally {
-                if (buildPid) await waitForDead(buildPid, 5_000);
+                if (buildPid) {
+                  await waitForDead(buildPid, 5_000);
+                }
               }
             }
           } finally {
@@ -318,7 +341,9 @@ syncBuiltinESMExports();\n`,
 async function start(args: string[]) {
   process.argv = [process.execPath, "scripts/test-projects.mts", ...args];
   // Replay the command entry while retaining its immutable planner dependencies.
-  await import(`${testProjectsUrl}?case=${startCount++}`);
+  const entryUrl = `${testProjectsUrl}?case=${startCount}`;
+  startCount += 1;
+  await import(entryUrl);
 }
 
 describe("test-projects build admission", () => {
@@ -468,16 +493,23 @@ describe("test-projects build admission", () => {
   it.each(["build", "failed build", "prebuilt"])(
     "admits the built native-host integration after %s",
     async (mode) => {
-      if (mode === "prebuilt") vi.stubEnv("OPENCLAW_E2E_USE_PREBUILT_DIST", "1");
+      if (mode === "prebuilt") {
+        vi.stubEnv("OPENCLAW_E2E_USE_PREBUILT_DIST", "1");
+      }
       const preparation = createDeferred<NodeJS.ProcessEnv>();
       commands.prepareE2e.mockReturnValue(preparation.promise);
-      if (mode === "prebuilt") preparation.resolve({});
+      if (mode === "prebuilt") {
+        preparation.resolve({});
+      }
       await start([nativeHostTarget]);
       if (mode !== "prebuilt") {
         expect(commands.reader).not.toHaveBeenCalled();
         expect(commands.prepareE2e).toHaveBeenCalledOnce();
-        if (mode === "failed build") preparation.reject(new Error("build failed"));
-        else preparation.resolve({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
+        if (mode === "failed build") {
+          preparation.reject(new Error("build failed"));
+        } else {
+          preparation.resolve({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
+        }
       }
       await terminal.promise;
       expect(commands.prepare).not.toHaveBeenCalled();
@@ -499,7 +531,9 @@ describe("test-projects build admission", () => {
   it.each(["", "OPENCLAW_E2E_SKIP_BUILD", "OPENCLAW_E2E_USE_PREBUILT_DIST"])(
     "prepares an ordinary runtime reader independently of E2E flag %s",
     async (key) => {
-      if (key) vi.stubEnv(key, "1");
+      if (key) {
+        vi.stubEnv(key, "1");
+      }
       commands.prepare.mockResolvedValue(0);
       await start(["test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts"]);
       await terminal.promise;
@@ -580,7 +614,9 @@ describe("plugin batch build admission", () => {
         runGroup: reader,
       });
       try {
-        await new Promise<void>((resolve) => setImmediate(resolve));
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
         expect(reader).not.toHaveBeenCalled();
         expect(commands.prepare).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
@@ -608,7 +644,9 @@ describe("plugin batch build admission", () => {
     const { resolveExtensionBatchPlan } = await import("../../scripts/lib/extension-test-plan.mts");
     const { runExtensionBatchPlan } = await import("../../scripts/test-extension-batch.mts");
     commands.prepare.mockImplementation(async () => {
-      if (outcome === "throw") throw new Error("build spawn failed");
+      if (outcome === "throw") {
+        throw new Error("build spawn failed");
+      }
       return outcome;
     });
     const reader = vi.fn().mockResolvedValue(0);
@@ -619,8 +657,11 @@ describe("plugin batch build admission", () => {
         env: { OPENCLAW_EXTENSION_BATCH_PARALLEL: "2" },
       },
     );
-    if (outcome === "throw") await expect(running).rejects.toThrow("build spawn failed");
-    else await expect(running).resolves.toBe(outcome);
+    if (outcome === "throw") {
+      await expect(running).rejects.toThrow("build spawn failed");
+    } else {
+      await expect(running).resolves.toBe(outcome);
+    }
     expect(reader).not.toHaveBeenCalled();
     expect(commands.prepare).toHaveBeenCalledOnce();
   });

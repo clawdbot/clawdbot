@@ -745,7 +745,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
         "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_ui_tests || 'false' }}",
       OPENCLAW_CI_RUN_WINDOWS:
         "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_windows || 'false' }}",
-      OPENCLAW_CI_WORKFLOW_REVISION: "${{ github.sha }}",
+      OPENCLAW_CI_WORKFLOW_REVISION: "${{ github.workflow_sha }}",
     });
     expect(manifestEnv).not.toHaveProperty("OPENCLAW_CI_FULL_RELEASE_VALIDATION");
     expect(manifestScript).toContain("includeReleaseOnlyPluginShards: false");

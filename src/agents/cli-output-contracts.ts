@@ -3,6 +3,7 @@ import type {
   CliBackendJsonlUsage,
   CliBackendParseJsonlEvent,
 } from "../plugins/cli-backend.types.js";
+import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -64,6 +65,8 @@ export type CliOutput = {
   toolMediaUrls?: string[];
   toolAudioAsVoice?: boolean;
   toolTrustedLocalMedia?: boolean;
+  /** Child sessions accepted by the turn-scoped loopback tool capture. */
+  acceptedSessionSpawns?: AcceptedSessionSpawn[];
   yielded?: true;
   yieldAcknowledgment?: string;
 };

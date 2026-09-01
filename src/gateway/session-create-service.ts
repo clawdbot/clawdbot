@@ -374,7 +374,12 @@ export async function createGatewaySession(params: {
   /** Trusted host actor; only system-owned callers may omit operator identity. */
   operatorRoleActor?: GatewayOperatorRoleActor;
   /** Trusted in-process creation provenance; never populated from public Gateway params. */
-  creation?: { via: SessionCreatedVia; actor?: SessionCreatedActor; sandbox?: "required" };
+  creation?: {
+    via: SessionCreatedVia;
+    actor?: SessionCreatedActor;
+    sandbox?: "required";
+    skillLibrarySelections?: import("../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
+  };
   /** Exact harness namespace authorized by the scoped plugin runtime. */
   authorizedAgentHarnessId?: string;
   /** Exact plugin namespace authorized by the scoped plugin runtime. */

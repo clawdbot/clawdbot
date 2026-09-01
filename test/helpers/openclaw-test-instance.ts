@@ -16,6 +16,7 @@ import {
   type OpenClawTestState,
 } from "../../src/test-utils/openclaw-test-state.js";
 import { sleep } from "../../src/utils.js";
+import { decodeUtf8Tail } from "./bounded-child-output.js";
 
 type OpenClawTestStateOptions = NonNullable<Parameters<typeof createOpenClawTestState>[0]>;
 
@@ -107,7 +108,7 @@ function appendLogChunk(log: string[], chunk: unknown, maxBytes = LOG_TAIL_MAX_B
   const textBytes = Buffer.byteLength(text);
   if (textBytes >= limit) {
     const buffer = Buffer.from(text);
-    const tail = buffer.subarray(buffer.length - limit).toString("utf8");
+    const tail = decodeUtf8Tail(buffer.subarray(buffer.length - limit));
     chunks.splice(0, chunks.length, tail);
     chunks.byteLength = Buffer.byteLength(tail);
     chunks.truncated = true;
@@ -128,7 +129,8 @@ function appendLogChunk(log: string[], chunk: unknown, maxBytes = LOG_TAIL_MAX_B
     }
 
     const buffer = Buffer.from(first);
-    const tail = buffer.subarray(overflow).toString("utf8");
+    // Drop a split prefix instead of expanding it into replacement bytes that can stall trimming.
+    const tail = decodeUtf8Tail(buffer.subarray(overflow));
     chunks[0] = tail;
     chunks.byteLength = chunks.reduce((total, entry) => total + Buffer.byteLength(entry), 0);
     chunks.truncated = true;

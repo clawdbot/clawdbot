@@ -190,7 +190,7 @@ describe("reply turn admission", () => {
     releaseMutation.resolve();
     await mutation;
 
-    await expect(admission).rejects.toThrow(/deleted while starting work/i);
+    await expect(admission).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
   });
 
   it("uses the persisted session id when reset commits before admission", async () => {
@@ -260,7 +260,7 @@ describe("reply turn admission", () => {
     releaseMutation.resolve();
     await mutation;
 
-    await expect(admission).rejects.toThrow(/changed while starting work/i);
+    await expect(admission).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
   });
 
   it("drops queued work when reset cleanup cancels admission", async () => {

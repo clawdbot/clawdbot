@@ -244,6 +244,7 @@ describe("prepareChatSendUserTurn", () => {
         via: "operator",
         actor: { type: "human", source: "profile", id: profile.id },
         sandbox: "required",
+        skillLibrarySelections: [],
       });
     });
   });

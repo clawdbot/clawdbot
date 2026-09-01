@@ -14,6 +14,7 @@ import {
 } from "lit";
 import { McpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import { resolveScrollBehavior } from "../../../lib/scroll-behavior.ts";
+import type { AssistantMessageExpansionState } from "../chat-thread.ts";
 import {
   CHAT_TRANSCRIPT_END_THRESHOLD_PX,
   type ChatSessionScrollPosition,
@@ -53,6 +54,7 @@ import {
 } from "./chat-transcript-session.ts";
 
 export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscriptSession {
+  expandedAssistantMessages = new Map<string, AssistantMessageExpansionState>();
   private readonly controllers = new Set<ReactiveController>();
   private readonly virtualizerController: VirtualizerController<HTMLDivElement, HTMLElement>;
   private threadInnerElement: HTMLDivElement | null = null;
@@ -353,6 +355,10 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   }
 
   disconnect(): void {
+    // Clear retires bodies and pending loads; replacement invalidates guarded
+    // rows when this presentation reconnects with the same source messages.
+    this.expandedAssistantMessages.clear();
+    this.expandedAssistantMessages = new Map();
     this.scrollCommand = null;
     if (this.pendingRowMeasureFrame !== null) {
       cancelAnimationFrame(this.pendingRowMeasureFrame);

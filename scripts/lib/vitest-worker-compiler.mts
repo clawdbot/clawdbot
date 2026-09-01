@@ -3,7 +3,6 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { fsSafeNativeCopy } from "./fs-safe-native-assets.mts";
 import { createStateSchemaInlinePlugin } from "./state-schema-inline-plugin.mts";
 import {
   hashVitestWorkerArtifact,
@@ -48,7 +47,6 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     "scripts/lib/runtime-process-build-entries.mts",
     "scripts/lib/runtime-process-core-build-entries.mts",
     "scripts/lib/vitest-worker-build-entries.mts",
-    "scripts/lib/fs-safe-native-assets.mts",
     "scripts/lib/state-schema-inline-plugin.mts",
     "scripts/lib/vitest-cli-mode.mts",
   ]) {
@@ -60,22 +58,11 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
   };
   const schemaPlugin = createStateSchemaInlinePlugin(root);
   const outDir = path.join(directory, "dist");
-  const nativeCopy = fsSafeNativeCopy({ outDir });
-  // tsdown copies resources after generateBundle. Pin source bytes first so
-  // verification cannot bless missing or altered copies with a post-build scan.
-  for (const name of fs.readdirSync(nativeCopy.from, { recursive: true, encoding: "utf8" })) {
-    const source = path.join(nativeCopy.from, name);
-    if (fs.statSync(source).isFile()) {
-      const target = path.join(nativeCopy.to, path.basename(nativeCopy.from), name);
-      outputs[path.relative(outDir, target)] = hashVitestWorkerArtifact(fs.readFileSync(source));
-    }
-  }
   await build({
     config: false,
     cwd: root,
     entry,
     outDir,
-    copy: nativeCopy,
     format: "esm",
     platform: "node",
     tsconfig: path.join(root, "tsconfig.json"),
@@ -85,7 +72,10 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     outExtensions: () => ({ js: ".js" }),
     deps: {
       neverBundle: true,
-      alwaysBundle: (id) => id.startsWith("@openclaw/") || id.startsWith("openclaw/"),
+      alwaysBundle: (id) =>
+        (id.startsWith("@openclaw/") || id.startsWith("openclaw/")) &&
+        id !== "@openclaw/fs-safe" &&
+        !id.startsWith("@openclaw/fs-safe/"),
     },
     logLevel: "warn",
     plugins: [

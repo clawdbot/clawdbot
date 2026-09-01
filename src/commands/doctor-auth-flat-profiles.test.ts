@@ -15,6 +15,7 @@ import {
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import {
   readPersistedAuthProfileStoreRaw,
+  readPersistedSharedAuthProfileStoreRaw,
   writePersistedAuthProfileStateRaw,
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
@@ -211,6 +212,148 @@ afterEach(async () => {
 });
 
 describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
+  it.each(
+    (["legacy-main", "state-db"] as const).flatMap((location) =>
+      (
+        [
+          "recover",
+          "restored-source",
+          "interrupted-recovery",
+          "fingerprinted",
+          "empty-fingerprints",
+          "credential-present",
+          "partial-row",
+          "malformed-row",
+          "no-archive",
+          "declined",
+          "tampered-archive",
+          "legacy-id",
+        ] as const
+      ).map((scenario) => ({ location, scenario })),
+    ),
+  )("completed receipt recovery: $location / $scenario", async ({ location, scenario }) => {
+    const state = await makeTestState();
+    if (location === "state-db") {
+      writeConfigMachineState("auth.sharedStore", { location }, { env: state.env });
+    }
+    const credential = { type: "api_key", provider: "openai", key: "synthetic-archive-key" };
+    const profileId = scenario === "legacy-id" ? "openai-codex:default" : "openai:default";
+    const authPath = await writeLegacyAuthProfilesJson(state, {
+      version: 1,
+      profiles: { [profileId]: credential },
+    });
+    const migrate = (repair = true) =>
+      maybeMigrateAuthProfileJsonStoresToSqlite({
+        cfg: {},
+        prompter: makePrompter(repair),
+        env: state.env,
+      });
+    await migrate();
+    const db = openOpenClawStateDatabase({ env: state.env }).db;
+    const receipt = db
+      .prepare("SELECT report_json FROM migration_sources WHERE source_path = ?")
+      .get(authPath) as { report_json: string };
+    const report = JSON.parse(receipt.report_json);
+    if (scenario !== "fingerprinted") {
+      delete report.expectedProfileSha256;
+    }
+    if (scenario === "empty-fingerprints") {
+      report.expectedProfileSha256 = {};
+    }
+    db.prepare("UPDATE migration_sources SET report_json = ? WHERE source_path = ?").run(
+      JSON.stringify(report),
+      authPath,
+    );
+    const profiles: Record<string, unknown> = {
+      "anthropic:unrelated": {
+        type: "api_key",
+        provider: "anthropic",
+        key: "synthetic-unrelated-key",
+      },
+    };
+    if (scenario === "credential-present" || scenario === "legacy-id") {
+      profiles["openai:default"] = credential;
+    }
+    if (scenario === "partial-row") {
+      profiles["openai:default"] = {
+        type: "oauth",
+        provider: "openai",
+        refresh: "synthetic-current-refresh",
+      };
+    }
+    if (scenario === "malformed-row") {
+      profiles["openai:default"] = { type: "unknown", key: "synthetic-current-key" };
+    }
+    const writeTarget = () =>
+      location === "state-db"
+        ? writeConfigMachineState(
+            "authProfiles.store",
+            { version: 1, profiles },
+            { env: state.env },
+          )
+        : writePersistedAuthProfileStoreRaw({ version: 1, profiles }, state.agentDir());
+    writeTarget();
+    const archiveBytes = fs.readFileSync(report.archivePath);
+    if (scenario === "restored-source") {
+      fs.writeFileSync(authPath, archiveBytes);
+    }
+    if (scenario === "no-archive") {
+      fs.unlinkSync(report.archivePath);
+    }
+    if (scenario === "tampered-archive") {
+      fs.appendFileSync(report.archivePath, " ");
+    }
+    const before = db
+      .prepare("SELECT * FROM migration_sources WHERE source_path = ?")
+      .get(authPath);
+    if (scenario === "interrupted-recovery") {
+      const link = fs.linkSync;
+      const fault = vi.spyOn(fs, "linkSync").mockImplementation((...args) => {
+        link(...args);
+        if (args[1] === authPath) {
+          throw new Error("simulated recovery interruption");
+        }
+      });
+      try {
+        expect((await migrate()).warnings).toEqual([
+          expect.stringContaining("simulated recovery interruption"),
+        ]);
+      } finally {
+        fault.mockRestore();
+      }
+      expect(fs.readFileSync(report.archivePath)).toEqual(archiveBytes);
+    }
+    const repaired = await migrate(scenario !== "declined");
+    expect(repaired.warnings).toEqual([]);
+    const recovers =
+      scenario === "recover" ||
+      scenario === "restored-source" ||
+      scenario === "interrupted-recovery";
+    expect(readPersistedSharedAuthProfileStoreRaw(state.env)).toMatchObject({
+      profiles: recovers ? { ...profiles, "openai:default": credential } : profiles,
+    });
+    if (recovers) {
+      expect(repaired.changes).toContain(
+        "Reset an inconsistent completed auth migration receipt for retry.",
+      );
+      expect(fs.readFileSync(report.archivePath)).toEqual(archiveBytes);
+      expect((await migrate()).changes).toEqual([]);
+      // Successful recovery must itself become non-replayable after deletion.
+      writeTarget();
+      expect((await migrate()).changes).toEqual([]);
+      expect(readPersistedSharedAuthProfileStoreRaw(state.env)).toMatchObject({ profiles });
+      expect(
+        loadPersistedSharedAuthProfileStore(state.env)?.profiles["openai:default"],
+      ).toBeUndefined();
+    } else {
+      expect(
+        db.prepare("SELECT * FROM migration_sources WHERE source_path = ?").get(authPath),
+      ).toEqual(before);
+      expect(repaired.changes).toEqual([]);
+    }
+    expect(fs.existsSync(authPath)).toBe(false);
+  });
+
   it("keeps JSON-era ownership through shared writes until Doctor imports the credential", async () => {
     const state = await makeTestState();
     const authPath = await writeLegacyAuthProfilesJson(state, {

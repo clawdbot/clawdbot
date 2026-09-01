@@ -178,9 +178,15 @@ reconcile dependencies before the remote wrapper starts.
 
 ## Core commands
 
-Maintained JavaScript tooling wrappers and root package commands use tsx's
-in-process transform cache. They skip its shared disk cache before the loader
-starts, and child tooling inherits that policy. This cache policy does not clean
+Maintained JavaScript tooling wrappers and root package commands load TypeScript
+through `scripts/tsx.mjs`, using tsx's ESM entry. This preserves native loading of
+compiled ESM plugins and their import-only dependencies, including when loaded
+through `require()`. Source TypeScript imports and tsconfig path aliases remain
+available.
+
+These launchers retain tsx's in-process transform cache and Node's module cache.
+They skip tsx's shared disk cache before the loader starts, and child tooling
+inherits that policy. This cache policy does not clean
 existing temporary directories, Node or Vitest caches, or other global caches. Standalone
 `pnpm ui:build` keeps native startup and applies the same preload to its post-build
 validators; it does not require `TSX_DISABLE_CACHE` in the invoking shell. Raw
@@ -234,13 +240,12 @@ Every preparation compiles current source; checkout `dist/` is neither an input
 nor a fallback. Build errors, missing artifacts, and changes to recorded build
 inputs fail the run. Compilation includes the native subprocess fixtures before
 they impose resource limits. Third-party dependencies remain external except for
-the always-bundled OpenClaw packages. Each generation carries all seven fs-safe
-native helpers in its own private tree, using the package runtime's loader-relative
-layout. The package itself shares one native tree between runtime entries and its
-sealed worker; it does not copy a second tree beside that worker. The helpers'
-original source hashes are pinned before copying and verified alongside compiler
-output; missing or altered assets fail verification. The default stays off, and
-the existing `off`/`auto`/`require` opt-ins retain their behavior.
+the always-bundled OpenClaw packages. fs-safe remains external so its native loader
+resolves the optional platform package from fs-safe's own dependency scope, including
+nested pnpm installs. Compiled workers use that same installed package; they do not
+copy native binaries. The default stays off, and the existing `off`/`auto`/`require`
+opt-ins retain their behavior. Sealed portable worker bundles use guarded JavaScript
+only and explicitly disable native loading.
 
 Watch mode deliberately keeps the existing live-source path, including tsx for
 Node subprocesses and native TypeScript handling for Bun. It creates no prepared generation, so a new child launch
@@ -305,8 +310,8 @@ machine-readable tool output. Successful runs have no failure trailer. Signals
 forwarded during child execution and shard timeouts fail the command; whole-host
 loss or `SIGKILL` of the reporting process can prevent a final line.
 
-Local plugin lint and package-boundary compilation consume native declarations in
-`packages/plugin-sdk/dist` and seven separate plugin API trees in
+Local plugin lint consumes native SDK declarations in `packages/plugin-sdk/dist`.
+The dedicated package-boundary compiler also consumes seven plugin API trees in
 `.artifacts/extension-package-boundary/plugins`. Each declaration and compile
 owner validates its consumed source content, inherited config, selected compiler,
 and complete output inventory. Unrelated existing source or test edits retain

@@ -234,6 +234,8 @@ export async function runWorkerDescriptor(
         suppressPromptTranscript: descriptor.assignment.suppressPromptTranscript,
         modelRef: descriptor.assignment.modelRef,
         initialMessages: descriptor.assignment.initialMessages,
+        skillResources: descriptor.assignment.skillResources,
+        skillAuthoring: descriptor.assignment.skillAuthoring,
         ...(descriptor.assignment.systemPrompt === undefined
           ? {}
           : { systemPrompt: descriptor.assignment.systemPrompt }),

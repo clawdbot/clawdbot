@@ -716,6 +716,10 @@
     "./plugin-sdk/media-generation-runtime": {
       "default": "./dist/plugin-sdk/media-generation-runtime.js"
     },
+    "./plugin-sdk/conversation-binding-inspection-runtime": {
+      "types": "./dist/plugin-sdk/conversation-binding-inspection-runtime.d.ts",
+      "default": "./dist/plugin-sdk/conversation-binding-inspection-runtime.js"
+    },
     "./plugin-sdk/conversation-binding-runtime": {
       "default": "./dist/plugin-sdk/conversation-binding-runtime.js"
     },
@@ -800,6 +804,10 @@
     },
     "./plugin-sdk/cli-runtime": {
       "default": "./dist/plugin-sdk/cli-runtime.js"
+    },
+    "./plugin-sdk/node-cli-runtime": {
+      "types": "./dist/plugin-sdk/node-cli-runtime.d.ts",
+      "default": "./dist/plugin-sdk/node-cli-runtime.js"
     },
     "./plugin-sdk/cli-backend": {
       "default": "./dist/plugin-sdk/cli-backend.js"
@@ -1821,6 +1829,7 @@
     "test:all": "pnpm lint && pnpm build && pnpm test && pnpm test:e2e && pnpm test:live && pnpm test:docker:all",
     "test:auth:compat": "node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server.auth.compat-baseline.test.ts src/gateway/client.test.ts src/gateway/reconnect-gating.test.ts && node scripts/run-vitest.mjs run packages/gateway-protocol/src/connect-error-details.test.ts",
     "test:build:singleton": "node --import ./scripts/tsx.mjs scripts/test-built-plugin-singleton.mts",
+    "test:skills:downgrade": "node --import ./scripts/tsx.mjs src/skills/library/persistence-downgrade.test-support.ts",
     "test:build:status-message-runtime": "node --import ./scripts/tsx.mjs scripts/test-built-status-message-runtime.mts",
     "test:bundled": "node scripts/run-vitest.mjs run --config test/vitest/vitest.bundled.config.ts",
     "test:changed": "node --import ./scripts/tsx.mjs scripts/test-projects.mts --changed origin/main",
@@ -2006,7 +2015,7 @@
     "test:watch": "node --import ./scripts/tsx.mjs scripts/test-projects.mts --watch",
     "test:windows:ci": "pnpm test:windows:ci:1 && pnpm test:windows:ci:2",
     "test:windows:ci:1": "node --import ./scripts/tsx.mjs scripts/test-projects.mts src/state/openclaw-state-ownership.test.ts src/snapshot/local-repository.windows.test.ts src/state/openclaw-database-paths.windows.test.ts src/node-host/invoke-system-run-allowlist.test.ts src/node-host/node-worker-transfer-client.test.ts packages/terminal-core/src/display-string.test.ts src/config/sessions/session-accessor.sqlite-archive.worker.test.ts src/commands/doctor-gateway-auth-token.windows.test.ts src/infra/state-migrations.audit-logs.windows.test.ts src/commands/backup-verify.test.ts src/commands/agents.commands.list.test.ts src/gateway/gateway-cron-process-identity.windows.test.ts src/shared/runtime-import.test.ts src/shared/worker-bundle-archive.test.ts src/node-host/node-worker-bundle-installer.test.ts test/scripts/direct-run-entrypoints.test.ts test/scripts/format-generated-module.test.ts test/scripts/openclaw-cross-os-installer.windows.test.ts test/scripts/openclaw-cross-os-release-workflow.test.ts test/scripts/pnpm-runner.test.ts extensions/canvas/scripts/pnpm-runner.test.ts test/scripts/run-with-env.test.ts test/scripts/ui.test.ts test/scripts/vitest-process-group.test.ts test/scripts/vitest-worker-artifacts.test.ts src/agents/tools/media-tool-file-url.windows.test.ts extensions/memory-core/src/memory-extra-file-path.windows.test.ts src/daemon/schtasks.startup-fallback.test.ts src/plugin-sdk/node-host.test.ts test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts extensions/lobster/src/lobster-runner.test.ts src/gateway/worker-environments/workspace-quiescence.windows.test.ts",
-    "test:windows:ci:2": "node --import ./scripts/tsx.mjs scripts/test-projects.mts src/skills/runtime/refresh.windows.test.ts src/skills/runtime/refresh-watch-path.test.ts src/skills/runtime/refresh.missing-root.integration.test.ts src/infra/sqlite-snapshot.test.ts src/infra/ports.test.ts src/infra/advertised-lan-host.windows.test.ts src/infra/update-managed-service-handoff-command.test.ts src/infra/update-managed-service-handoff-lifecycle.test.ts src/infra/executable-path.test.ts src/infra/fs-safe-remove.test.ts src/infra/state-migrations.legacy-session-store.test.ts src/infra/windows-install-roots.test.ts src/infra/ssh-client.windows.test.ts src/infra/exec-allowlist-pattern.test.ts src/infra/process-env.test.ts src/infra/openclaw-cli-shim.windows.test.ts src/agents/sessions/windows-git-bash-path.test.ts test/scripts/npm-runner.test.ts test/scripts/ts-topology.test.ts test/scripts/vitest-worker-artifacts.transforms.test.ts test/scripts/ci-platform-checkout.test.ts test/scripts/install-ps1.test.ts test/scripts/write-plugin-sdk-entry-dts.test.ts src/test-utils/openclaw-test-state.test.ts src/utils.test.ts src/media/local-media-path.windows.test.ts src/media/web-media.file-url.windows.test.ts src/process/exec.windows.test.ts src/process/exec.windows.integration.test.ts src/agents/sessions/exec.real.test.ts src/process/windows-command.test.ts src/process/terminal-pty.test.ts src/process/supervisor/supervisor.anchored-shell.real.test.ts src/tui/tui.resolve-codex-bin.test.ts src/media-understanding/attachments.file-url.windows.test.ts src/cli/completion-runtime.windows.test.ts src/cli/daemon-cli/status.print.test.ts src/cli/mcp-cli.path-case.windows.test.ts src/auto-reply/usage-bar/template.windows.test.ts src/auto-reply/reply.triggers.trigger-handling.stages-inbound-media-into-sandbox-workspace.test.ts src/agents/provider-local-service.env-case.test.ts src/agents/bash-tools.exec.script-preflight.test.ts src/agents/agent-tools.read.windows.test.ts src/agents/agent-tools.read.host-operations.test.ts src/agents/sandbox/fs-paths.test.ts src/agents/sessions/tools/render-utils.test.ts src/agents/sessions/tools/path-utils.test.ts extensions/msteams/src/media-helpers.test.ts extensions/msteams/src/messenger.test.ts extensions/mxc/test/mxc-backend.test.ts extensions/mxc/test/sandbox-policy-loader.test.ts",
+    "test:windows:ci:2": "node --import ./scripts/tsx.mjs scripts/test-projects.mts src/skills/runtime/refresh.windows.test.ts src/skills/runtime/refresh-watch-path.test.ts src/skills/runtime/refresh.missing-root.integration.test.ts src/infra/sqlite-snapshot.test.ts src/infra/ports.test.ts src/infra/advertised-lan-host.windows.test.ts src/infra/update-managed-service-handoff-command.test.ts src/infra/update-managed-service-handoff-lifecycle.test.ts src/infra/executable-path.test.ts src/agents/cli-executable-identity.test.ts src/plugin-sdk/windows-spawn.test.ts src/infra/fs-safe-remove.test.ts src/infra/state-migrations.legacy-session-store.test.ts src/infra/windows-install-roots.test.ts src/infra/ssh-client.windows.test.ts src/infra/exec-allowlist-pattern.test.ts src/infra/process-env.test.ts src/infra/openclaw-cli-shim.windows.test.ts src/agents/sessions/windows-git-bash-path.test.ts test/scripts/npm-runner.test.ts test/scripts/ts-topology.test.ts test/scripts/vitest-worker-artifacts.transforms.test.ts test/scripts/ci-platform-checkout.test.ts test/scripts/install-ps1.test.ts test/scripts/write-plugin-sdk-entry-dts.test.ts src/test-utils/openclaw-test-state.test.ts src/utils.test.ts src/media/local-media-path.windows.test.ts src/media/web-media.file-url.windows.test.ts src/process/exec.windows.test.ts src/process/exec.windows.integration.test.ts src/agents/sessions/exec.real.test.ts src/process/windows-command.test.ts src/process/terminal-pty.test.ts src/process/supervisor/supervisor.anchored-shell.real.test.ts src/tui/tui.resolve-codex-bin.test.ts src/media-understanding/attachments.file-url.windows.test.ts src/cli/completion-runtime.windows.test.ts src/cli/daemon-cli/status.print.test.ts src/cli/mcp-cli.path-case.windows.test.ts src/auto-reply/usage-bar/template.windows.test.ts src/auto-reply/reply.triggers.trigger-handling.stages-inbound-media-into-sandbox-workspace.test.ts src/agents/provider-local-service.env-case.test.ts src/agents/bash-tools.exec.script-preflight.test.ts src/agents/agent-tools.read.windows.test.ts src/agents/agent-tools.read.host-operations.test.ts src/agents/sandbox/fs-paths.test.ts src/agents/sessions/tools/render-utils.test.ts src/agents/sessions/tools/path-utils.test.ts extensions/msteams/src/media-helpers.test.ts extensions/msteams/src/messenger.test.ts extensions/mxc/test/mxc-backend.test.ts extensions/mxc/test/sandbox-policy-loader.test.ts",
     "test:windows:schtasks:integration": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts CI_WINDOWS_SCHTASKS_INTEGRATION=1 OPENCLAW_E2E_SKIP_BUILD=1 OPENCLAW_E2E_VERBOSE=1 OPENCLAW_VITEST_MAX_WORKERS=1 -- node scripts/run-vitest.mjs src/daemon/schtasks.integration.e2e.test.ts",
     "tool-display:check": "node --import ./scripts/tsx.mjs scripts/tool-display.ts --check",
     "tool-display:write": "node --import ./scripts/tsx.mjs scripts/tool-display.ts --write",
@@ -2074,7 +2083,7 @@
     "@modelcontextprotocol/sdk": "1.30.0",
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
-    "@openclaw/fs-safe": "0.5.6",
+    "@openclaw/fs-safe": "0.7.0",
     "@openclaw/proxyline": "0.3.7",
     "@silvia-odwyer/photon-node": "0.3.4",
     "@trycua/cua-driver": "0.21.0",

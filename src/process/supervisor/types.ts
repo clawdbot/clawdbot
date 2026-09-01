@@ -104,6 +104,8 @@ type SpawnBaseInput = {
 type SpawnChildInput = SpawnBaseInput & {
   mode: "child";
   argv: string[];
+  /** Preserve a distinct invocation name while executing argv[0]. */
+  argv0?: string;
   /** Preserve a caller-prepared environment without environment-mutating spawn wrappers. */
   exactEnv?: true;
   windowsVerbatimArguments?: boolean;

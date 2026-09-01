@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw skills` (search/install/update/verify/list/info/check/workshop)"
+summary: "CLI reference for `openclaw skills` (search/install/update/verify/list/info/check/library/workshop)"
 read_when:
   - You want to see which skills are available and ready to run
   - You want to search ClawHub or install skills from ClawHub, Git, or local directories
@@ -199,6 +199,97 @@ clawhub --workdir "$OPENCLAW_STATE_DIR" uninstall @owner/my-skill
 
 The default [skills watcher](/tools/skills#snapshots-and-refresh) picks up the
 removal on the next agent turn. If watching is disabled, start a new session.
+
+## Personal skill library
+
+`openclaw skills library` manages the identified caller's skills on the selected
+Gateway. It uses the same owner-aware service as the Control UI and agent
+workflow; it never writes the library database or revision directories on the
+CLI host.
+
+```bash
+openclaw skills library --help
+```
+
+List your library:
+
+```bash
+openclaw skills library list --scope mine --json
+```
+
+Create a private skill from a directory containing `SKILL.md`:
+
+```bash
+openclaw skills library create ./my-skill --slug my-skill
+```
+
+Read its stable ID and current revision before editing:
+
+```bash
+openclaw skills library read <skill-id> --json
+```
+
+Update only the instructions while preserving supporting files:
+
+```bash
+openclaw skills library update <skill-id> ./SKILL.md --expected-revision <revision-hash>
+```
+
+A directory input replaces the complete bundle. A single `SKILL.md` input
+preserves the current supporting files; repeat `--delete-file <relative-path>`
+to remove files explicitly. Updates compare the revision that was read; a
+conflict requires reviewing the newer content, not a force overwrite.
+Supporting files are part of the revision, including binary assets and
+executable flags.
+
+Import a ZIP privately:
+
+```bash
+openclaw skills library import ./my-skill.zip --slug my-skill
+```
+
+Import a ClawHub skill without publishing your library:
+
+```bash
+openclaw skills library import @owner/<slug> --clawhub --slug my-skill
+```
+
+`--version <version>` selects a ClawHub version and requires `--clawhub`.
+`share`, `unshare`, `transfer`, `enable`, `disable`, `remove`, and `rollback`
+take `<skill-id> --expected-revision <hash>`. Rollback also requires
+`--revision <retained-hash>`.
+
+Attach an exact revision to an existing session:
+
+```bash
+openclaw skills library attach --session <session-key> --skill-id <skill-id> --revision <revision-hash>
+```
+
+`detach` takes the same session and skill ID. Refresh one selected skill:
+
+```bash
+openclaw skills library refresh --session <session-key> --skill-id <skill-id>
+```
+
+Omitting `--skill-id` refreshes all selected skills and requires current library
+access to each one. It never replaces the selection with the current caller's
+library. Each operation reports its effect on the next turn.
+
+Use `list --session <session-key>` to inspect selected revisions and the skills
+you can attach, without changing the session. `read --session <session-key>`
+also requires `--revision <hash>` and reads only that exact selected revision;
+it does not expose other private revisions or grant permission to edit them.
+
+Personal operations require an authenticated Gateway profile. A shared token
+or password alone does not identify a person; use the existing workspace
+commands when operating a solo Gateway without a profile. An explicitly
+selected remote Gateway never falls back to a client-local personal library.
+
+Sharing makes a skill available to teammates but does not grant edit access.
+Transfer to team ownership requires administrator authority. Saving affects
+new sessions by default; attach or refresh a selection explicitly for an
+existing session. Removal preserves already selected revisions. See
+[personal library ownership and revisions](/tools/skills#personal-skills-on-a-shared-gateway).
 
 ## Skill Workshop
 

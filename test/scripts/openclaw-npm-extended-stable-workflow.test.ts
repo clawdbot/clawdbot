@@ -92,7 +92,7 @@ describe("minimal npm extended-stable workflow", () => {
       type: "boolean",
     });
     expect(parsed.jobs?.preflight_openclaw_npm?.["runs-on"]).toBe(
-      "${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}",
+      "${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}",
     );
   });
 

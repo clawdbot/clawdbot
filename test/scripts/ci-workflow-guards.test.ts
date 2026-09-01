@@ -130,6 +130,7 @@ function evaluateWorkflowExpression(
     runAttempt: number;
     steps?: Record<string, { outputs: Record<string, string> }>;
     targetContextRef?: string;
+    targetRef?: string;
     workflowSha?: string;
   },
 ) {
@@ -177,6 +178,7 @@ function evaluateWorkflowExpression(
       dispatch_id: context.dispatchId ?? "",
       release_gate: context.releaseGate ?? false,
       target_context_ref: context.targetContextRef ?? "",
+      target_ref: context.targetRef ?? "",
     },
     matrix: context.matrix ?? {},
     runner: { environment: context.runnerEnvironment ?? "" },
@@ -215,6 +217,39 @@ function runCiGateFixture(requiredResults: string, selectedResults: string) {
 
 function quoteShell(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+function runPreflightNodeInvocation(
+  script: string,
+  options: {
+    checkoutRevision: string;
+    eventName: "pull_request" | "push" | "workflow_dispatch";
+    workflowRevision: string;
+  },
+) {
+  const root = tempDirs.make("openclaw-preflight-runtime-");
+  const binDir = path.join(root, "bin");
+  const argsPath = path.join(root, "node-args");
+  mkdirSync(binDir, { recursive: true });
+  const nodePath = path.join(binDir, "node");
+  writeFileSync(
+    nodePath,
+    '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$OPENCLAW_NODE_ARGS"\ncat >/dev/null\n',
+  );
+  chmodSync(nodePath, 0o755);
+  const result = spawnSync("bash", ["-c", script], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GITHUB_EVENT_NAME: options.eventName,
+      OPENCLAW_CI_CHECKOUT_REVISION: options.checkoutRevision,
+      OPENCLAW_CI_WORKFLOW_REVISION: options.workflowRevision,
+      OPENCLAW_NODE_ARGS: argsPath,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+    },
+  });
+  expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+  return readFileSync(argsPath, "utf8").trim().split("\n");
 }
 
 function runWorkflowShellScript(
@@ -3569,9 +3604,6 @@ NODE
     expect(source.match(/check_name: "android-build-play"/gu)).toHaveLength(1);
     expect(source).toContain('task: useCompatibleAndroidCi ? "build-play-compat" : "build-play"');
     expect(androidJob.name).toBe("${{ matrix.check_name || 'android' }}");
-    expect(androidJob["runs-on"]).toBe(
-      "${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\",\"CONTRIBUTOR\"]'), github.event.pull_request.author_association)) && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}",
-    );
     expect(runStep.env.CI_RUNNER_BACKEND).toContain(
       "vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1",
     );
@@ -3936,7 +3968,7 @@ NODE
       "macos-swift": "blacksmith-12vcpu-macos-26",
       "ios-build": "blacksmith-12vcpu-macos-26",
       "ios-screenshot-shard": "blacksmith-12vcpu-macos-26",
-      "check-test-types-hosted-core-shard": "blacksmith-8vcpu-ubuntu-2404",
+      "check-test-types-hosted-core-shard": "blacksmith-32vcpu-ubuntu-2404",
       "checks-ui": "blacksmith-8vcpu-ubuntu-2404",
       "checks-windows": "blacksmith-8vcpu-windows-2025",
     } as const;
@@ -4011,6 +4043,18 @@ NODE
         }),
         `${jobName}: returning-contributor fork`,
       ).toBe(expectedHybridForkRunners[jobName as keyof typeof expectedHostedRunners]);
+      for (const runnerBackend of ["", "blacksmith", "hybrid"] as const) {
+        expect(
+          evaluateWorkflowExpression(expression, {
+            ...canonicalPullRequest,
+            authorAssociation: "CONTRIBUTOR",
+            headRepository: "contributor/openclaw",
+            runnerBackend,
+            runAttempt: 2,
+          }),
+          `${jobName}: returning-contributor fork retry (${runnerBackend || "unset"})`,
+        ).toBe(hostedRunner);
+      }
     }
 
     const widenedHybridMatrixRows = [
@@ -4021,8 +4065,8 @@ NODE
       },
       {
         jobName: "check-shard",
-        matrix: { runner: "blacksmith-16vcpu-ubuntu-2404", task: "test-types" },
-        runner: "blacksmith-16vcpu-ubuntu-2404",
+        matrix: { runner: "blacksmith-32vcpu-ubuntu-2404", task: "test-types" },
+        runner: "blacksmith-32vcpu-ubuntu-2404",
       },
       {
         jobName: "check-shard",
@@ -4041,9 +4085,9 @@ NODE
         jobName: "check-additional-shard",
         matrix: {
           group: "runtime-topology-architecture",
-          runner: "blacksmith-8vcpu-ubuntu-2404",
+          runner: "blacksmith-32vcpu-ubuntu-2404",
         },
-        runner: "blacksmith-8vcpu-ubuntu-2404",
+        runner: "blacksmith-32vcpu-ubuntu-2404",
       },
       {
         jobName: "check-additional-shard",
@@ -5646,6 +5690,22 @@ server.listen(0, "127.0.0.1", () => {
       warmerSteps.find((step) => step.name === "Warm build cache"),
       "cache warm build",
     );
+    const boundaryRestoreStep = expectDefined(
+      warmerSteps.find((step) => step.name === "Restore native SDK boundary cache"),
+      "native SDK boundary cache restore",
+    );
+    const boundaryPrepareStep = expectDefined(
+      warmerSteps.find((step) => step.name === "Prepare native SDK boundary cache"),
+      "native SDK boundary cache preparation",
+    );
+    const boundarySaveStep = expectDefined(
+      warmerSteps.find((step) => step.name === "Save native SDK boundary cache"),
+      "native SDK boundary cache publication",
+    );
+    const boundaryCleanupStep = expectDefined(
+      warmerSteps.find((step) => step.name === "Clear native SDK boundary output before build"),
+      "native SDK boundary output cleanup",
+    );
     const warmAssertionStep = expectDefined(
       warmerSteps.find((step) => step.name === "Assert cache warming succeeded"),
       "final cache warming assertion",
@@ -5701,7 +5761,14 @@ server.listen(0, "127.0.0.1", () => {
             "node-compile-cache": String(full),
             "vitest-fs-cache": String(full),
           });
-          for (const step of [buildStep, seedStep, warmStep, warmAssertionStep]) {
+          for (const step of [
+            buildStep,
+            boundaryPrepareStep,
+            boundaryCleanupStep,
+            seedStep,
+            warmStep,
+            warmAssertionStep,
+          ]) {
             expect(evaluateWorkflowExpression(step.if, context), step.name).toBe(full);
           }
         }
@@ -5739,6 +5806,7 @@ server.listen(0, "127.0.0.1", () => {
     expect(saveSteps.map((step) => step.name)).toEqual([
       "Save Node toolchain cache",
       "Save exact dependency cache",
+      "Save native SDK boundary cache",
       "Save build-all cache",
       "Save dist build cache",
       "Save pnpm store cache",
@@ -5773,6 +5841,11 @@ server.listen(0, "127.0.0.1", () => {
           warmerSteps.indexOf(seedStep),
         );
         expect(saveStep.if).not.toMatch(/always\(|failure\(/u);
+      } else if (saveStep.name === "Save native SDK boundary cache") {
+        expect(saveStep.if).toContain(
+          "steps.extension-package-boundary-cache.outputs.cache-hit != 'true'",
+        );
+        expect(saveStep.if).not.toMatch(/always\(|failure\(|cancelled\(/u);
       } else {
         expect(warmerSteps.indexOf(saveStep), saveStep.name).toBeGreaterThan(
           warmerSteps.indexOf(warmStep),
@@ -5798,6 +5871,62 @@ server.listen(0, "127.0.0.1", () => {
     expect(distSave.if).toBe(
       "${{ matrix.platform == 'linux' && steps.setup-node-env.outputs.cache-mode == 'read-write' }}",
     );
+    expect(boundaryRestoreStep.uses).toBe(CACHE_V5);
+    expect(boundarySaveStep.uses).toBe(CACHE_SAVE_V5);
+    const boundaryRestoreInputs = expectDefined(
+      boundaryRestoreStep.with,
+      "native SDK boundary cache inputs",
+    );
+    expect(boundaryRestoreInputs.key).toBe(
+      "${{ runner.os }}-extension-package-boundary-v4-${{ github.sha }}",
+    );
+    expect(boundarySaveStep.with).toEqual({
+      path: boundaryRestoreInputs.path,
+      key: boundaryRestoreInputs.key,
+    });
+    expect(boundaryRestoreInputs["restore-keys"]).toBe(
+      "${{ runner.os }}-extension-package-boundary-v4-\n",
+    );
+    expect(boundaryPrepareStep.run).toBe(
+      "node --import ./scripts/tsx.mjs scripts/prepare-extension-package-boundary-artifacts.mts --mode=package-boundary",
+    );
+    expect(boundaryPrepareStep["continue-on-error"]).not.toBe(true);
+    expect(warmerSteps.indexOf(boundaryRestoreStep)).toBeLessThan(warmerSteps.indexOf(buildStep));
+    expect(warmerSteps.indexOf(boundaryPrepareStep)).toBeGreaterThan(
+      warmerSteps.indexOf(boundaryRestoreStep),
+    );
+    expect(warmerSteps.indexOf(boundarySaveStep)).toBeGreaterThan(
+      warmerSteps.indexOf(boundaryPrepareStep),
+    );
+    expect(warmerSteps.indexOf(boundarySaveStep)).toBeLessThan(warmerSteps.indexOf(buildStep));
+    expect(warmerSteps.indexOf(boundaryCleanupStep)).toBeGreaterThan(
+      warmerSteps.indexOf(boundarySaveStep),
+    );
+    expect(warmerSteps.indexOf(boundaryCleanupStep)).toBeLessThan(warmerSteps.indexOf(buildStep));
+    const cleanupRoot = tempDirs.make("openclaw-native-sdk-cleanup-");
+    const sdkOutput = path.join(cleanupRoot, "packages/plugin-sdk/dist/native.d.ts");
+    const sdkSource = path.join(cleanupRoot, "packages/plugin-sdk/src/core.ts");
+    const siblingOutput = path.join(cleanupRoot, "packages/normalization-core/dist/index.js");
+    const boundaryReceipt = path.join(
+      cleanupRoot,
+      ".artifacts/extension-package-boundary/plugin-sdk.json",
+    );
+    for (const file of [sdkOutput, sdkSource, siblingOutput, boundaryReceipt]) {
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, "sentinel\n");
+    }
+    const cleanupResult = runWorkflowShellScript(
+      expectDefined(boundaryCleanupStep.run, "cleanup"),
+      {
+        cwd: cleanupRoot,
+        env: process.env,
+      },
+    );
+    expect(cleanupResult.status, `${cleanupResult.stdout}${cleanupResult.stderr}`).toBe(0);
+    expect(existsSync(sdkOutput)).toBe(false);
+    expect(existsSync(sdkSource)).toBe(true);
+    expect(existsSync(siblingOutput)).toBe(true);
+    expect(existsSync(boundaryReceipt)).toBe(true);
     const storeSave = expectDefined(
       saveSteps.find((step) => step.name === "Save pnpm store cache"),
       "platform pnpm store publication",
@@ -5892,13 +6021,19 @@ server.listen(0, "127.0.0.1", () => {
     expect(workflow.jobs["checks-node-core-test-nondist-shard"]["runs-on"]).toContain(
       "blacksmith-4vcpu-ubuntu-2404",
     );
-    expect(workflow.jobs["check-shard"].strategy.matrix.include).toContainEqual({
-      check_name: "check-dependencies",
-      task: "dependencies",
-      // Concurrent Knip scans need cores and memory headroom.
+    for (const task of ["dependencies", "test-types"]) {
+      expect(workflow.jobs["check-shard"].strategy.matrix.include).toContainEqual({
+        check_name: `check-${task}`,
+        task,
+        runner: "blacksmith-32vcpu-ubuntu-2404",
+      });
+    }
+    expect(workflow.jobs["check-additional-shard"]["runs-on"]).toContain("matrix.runner");
+    expect(workflow.jobs["check-additional-shard"].strategy.matrix.include).toContainEqual({
+      check_name: "check-additional-runtime-topology-architecture",
+      group: "runtime-topology-architecture",
       runner: "blacksmith-32vcpu-ubuntu-2404",
     });
-    expect(workflow.jobs["check-additional-shard"]["runs-on"]).toContain("matrix.runner");
     expect(workflow.jobs["check-additional-shard"].strategy.matrix.include).toContainEqual({
       check_name: "check-session-accessor-boundary",
       group: "session-accessor-boundary",
@@ -5921,11 +6056,12 @@ server.listen(0, "127.0.0.1", () => {
 
   it("keeps the extension boundary sticky disk on one protected key", () => {
     const workflow = readCiWorkflow();
+    const warmer = parse(readFileSync(".github/workflows/vitest-cache-warm.yml", "utf8"));
     const additionalJob = workflow.jobs["check-additional-shard"];
     const checkShardJob = workflow.jobs["check-shard"];
+    const hostedCoreJob = workflow.jobs["check-lint-hosted-core-shard"];
 
-    // Light-run pole: cold prep + 122 plugin compiles scale with cores at
-    // similar billed core-minutes.
+    // Cold SDK preparation and plugin compilation need CPU and memory headroom.
     expect(additionalJob.strategy.matrix.include).toContainEqual({
       check_name: "check-additional-extension-package-boundary",
       group: "extension-package-boundary",
@@ -5958,6 +6094,13 @@ server.listen(0, "127.0.0.1", () => {
       ),
       "hosted lint extension package boundary cache",
     );
+    const hostedCoreCache = expectDefined(
+      hostedCoreJob.steps.find(
+        (step: WorkflowStep) =>
+          step.name === "Cache extension package boundary artifacts for hosted core lint",
+      ),
+      "hosted core extension package boundary cache",
+    );
     expect(boundaryMount.with.key).toBe("${{ github.repository }}-ext-boundary-v2");
     expect(lintMount.with.key).toBe(boundaryMount.with.key);
     for (const gate of [boundaryMount, lintMount]) {
@@ -5969,8 +6112,13 @@ server.listen(0, "127.0.0.1", () => {
     expect(boundaryCache.if).toBe(
       "needs.preflight.outputs.cache_mode != 'off' && matrix.group == 'extension-package-boundary' && steps.extension-boundary-inputs.outputs.enabled == 'true'",
     );
-    expect(hostedLintCache.uses).toBe(CACHE_V5);
-    expect(hostedLintCache.with).toEqual(boundaryCache.with);
+    expect(hostedCoreCache.if).toBe(
+      "needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.runner_profile == 'github' && !inputs.release_gate && steps.extension-boundary-inputs.outputs.enabled == 'true'",
+    );
+    for (const cache of [hostedLintCache, hostedCoreCache]) {
+      expect(cache.uses).toBe(CACHE_V5);
+      expect(cache.with).toEqual(boundaryCache.with);
+    }
     const fingerprintReference = "${{ steps.extension-boundary-inputs.outputs.fingerprint }}";
     expect(boundaryCache.with.key).toBe(
       "${{ runner.os }}-extension-package-boundary-v4-${{ steps.extension-boundary-inputs.outputs.fingerprint }}",
@@ -5981,7 +6129,7 @@ server.listen(0, "127.0.0.1", () => {
       ".artifacts/extension-package-boundary/*.json",
       ".artifacts/extension-package-boundary/compile",
     ]);
-    const fingerprintSteps = [additionalJob, checkShardJob].map((job) =>
+    const fingerprintSteps = [additionalJob, checkShardJob, hostedCoreJob].map((job) =>
       expectDefined(
         job.steps.find(
           (step: WorkflowStep) => step.name === "Compute extension boundary input fingerprint",
@@ -5995,6 +6143,38 @@ server.listen(0, "127.0.0.1", () => {
       expect(step.run).toContain('echo "enabled=false" >> "$GITHUB_OUTPUT"');
     }
     expect(fingerprintSteps[0]?.run).toBe(fingerprintSteps[1]?.run);
+    expect(fingerprintSteps[1]?.run).toBe(fingerprintSteps[2]?.run);
+    expect(fingerprintSteps[2]?.if).toBe(
+      "needs.preflight.outputs.runner_profile == 'github' && !inputs.release_gate",
+    );
+    expect(hostedCoreJob.steps.indexOf(fingerprintSteps[2])).toBeLessThan(
+      hostedCoreJob.steps.indexOf(hostedCoreCache),
+    );
+    expect(hostedCoreJob.steps.indexOf(hostedCoreCache)).toBeLessThan(
+      hostedCoreJob.steps.findIndex(
+        (step: WorkflowStep) => step.name === "Run hosted core lint stripe",
+      ),
+    );
+    expect(
+      hostedCoreJob.steps.some((step: WorkflowStep) =>
+        step.uses?.startsWith("actions/cache/save@"),
+      ),
+    ).toBe(false);
+    const warmerBoundaryRestore = expectDefined(
+      warmer.jobs.warm.steps.find(
+        (step: WorkflowStep) => step.name === "Restore native SDK boundary cache",
+      ),
+      "warmer boundary restore",
+    );
+    const warmerBoundarySave = expectDefined(
+      warmer.jobs.warm.steps.find(
+        (step: WorkflowStep) => step.name === "Save native SDK boundary cache",
+      ),
+      "warmer boundary save",
+    );
+    expect(warmerBoundaryRestore.with.path).toBe(boundaryCache.with.path);
+    expect(warmerBoundaryRestore.with["restore-keys"]).toBe(boundaryCache.with["restore-keys"]);
+    expect(warmerBoundarySave.with.path).toBe(boundaryCache.with.path);
     // Single semantic writer: protected pushes commit explicitly (not
     // on-change/if-missing, whose allocated-byte heuristic can strand a stale
     // marker); PR clones and the lint consumer stay read-only.
@@ -7012,6 +7192,101 @@ server.listen(0, "127.0.0.1", () => {
       "github.event_name == 'workflow_dispatch' && inputs.target_ref != ''",
     );
     expect(manualCheckoutStep.run).toContain("workflow_dispatch target_ref");
+  });
+
+  it("uses native preflight tooling unless a dispatch selects a different revision", () => {
+    const workflow = readCiWorkflow();
+    const steps = workflow.jobs.preflight.steps as WorkflowStep[];
+    const setupPnpm = expectDefined(
+      steps.find((step) => step.name === "Setup manifest pnpm"),
+      "manifest pnpm setup",
+    );
+    const installDependencies = expectDefined(
+      steps.find((step) => step.name === "Install manifest dependencies"),
+      "manifest dependency install",
+    );
+    const buildManifest = expectDefined(
+      steps.find((step) => step.name === "Build CI manifest"),
+      "manifest builder",
+    );
+    const checkProtocolCoverage = expectDefined(
+      steps.find((step) => step.name === "Check mobile protocol event coverage"),
+      "protocol coverage owner",
+    );
+    const workflowSha = "a".repeat(40);
+    const otherSha = "b".repeat(40);
+    const cases = [
+      ["same-revision dispatch", "workflow_dispatch", workflowSha, "", false, false],
+      [
+        "same-revision explicit target dispatch",
+        "workflow_dispatch",
+        workflowSha,
+        workflowSha,
+        false,
+        false,
+      ],
+      ["same-revision release gate", "workflow_dispatch", workflowSha, workflowSha, true, false],
+      ["push", "push", otherSha, "", false, false],
+      ["pull request", "pull_request", otherSha, "", false, false],
+      ["different-revision dispatch", "workflow_dispatch", otherSha, otherSha, false, true],
+      ["different-revision release gate", "workflow_dispatch", otherSha, otherSha, true, true],
+    ] as const;
+
+    for (const [
+      label,
+      eventName,
+      checkoutRevision,
+      targetRef,
+      releaseGate,
+      usesCompatibilityTooling,
+    ] of cases) {
+      const context = {
+        eventName,
+        releaseGate,
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        steps: { checkout_ref: { outputs: { sha: checkoutRevision } } },
+        targetRef,
+        workflowSha,
+      };
+      const evaluateStep = (step: WorkflowStep) =>
+        evaluateWorkflowExpression(`\${{ ${step.if} }}`, context);
+      expect([evaluateStep(setupPnpm), evaluateStep(installDependencies)], label).toEqual([
+        usesCompatibilityTooling,
+        usesCompatibilityTooling,
+      ]);
+      const invocationOptions = (step: WorkflowStep) => ({
+        checkoutRevision: String(
+          evaluateWorkflowExpression(step.env?.OPENCLAW_CI_CHECKOUT_REVISION, context),
+        ),
+        eventName,
+        workflowRevision: String(
+          evaluateWorkflowExpression(step.env?.OPENCLAW_CI_WORKFLOW_REVISION, context),
+        ),
+      });
+      expect(
+        runPreflightNodeInvocation(
+          expectDefined(buildManifest.run, "manifest script"),
+          invocationOptions(buildManifest),
+        ),
+        label,
+      ).toEqual(
+        usesCompatibilityTooling
+          ? ["--import", "tsx", "--input-type=module"]
+          : ["--input-type=module"],
+      );
+      expect(
+        runPreflightNodeInvocation(
+          expectDefined(checkProtocolCoverage.run, "protocol coverage script"),
+          invocationOptions(checkProtocolCoverage),
+        ),
+        label,
+      ).toEqual([
+        usesCompatibilityTooling
+          ? "scripts/check-protocol-event-coverage.mjs"
+          : "scripts/check-protocol-event-coverage.mts",
+      ]);
+    }
   });
 
   it("keeps manual candidates separate from trusted cache authority", () => {
@@ -8407,8 +8682,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       (step: WorkflowStep) => step.name === "Run check shard",
     ).run;
 
-    // Push/PR preflight is dependency-free and runs the .mts natively;
-    // dispatches (frozen targets) keep the tsx shim path.
+    // Current-source preflight runs the .mts natively; dispatches selecting
+    // another revision retain that target's tsx shim.
     expect(coverageStep.run).toContain("node scripts/check-protocol-event-coverage.mts");
     expect(coverageStep.run).toContain("node scripts/check-protocol-event-coverage.mjs");
     expect(coverageStep.if).toBe("steps.manifest.outputs.run_protocol_event_coverage == 'true'");
@@ -8471,6 +8746,22 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           runAttempt: 1,
         }),
       ).toBe(true);
+      for (const [runnerProfile, expected] of [
+        ["blacksmith", false],
+        ["github", true],
+        ["hybrid", true],
+      ] as const) {
+        expect(
+          evaluateWorkflowExpression(job.if, {
+            eventName: "pull_request",
+            frozenTarget: false,
+            hostedRunnerProfileContract: true,
+            repository: "openclaw/openclaw",
+            runnerProfile,
+            runAttempt: 1,
+          }),
+        ).toBe(expected);
+      }
     }
     expect(hostedCoreLint["runs-on"]).toBe("ubuntu-24.04");
     expect(hostedCoreLint.strategy).toEqual({
@@ -8486,6 +8777,100 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       hostedCoreLint.steps.find((step: WorkflowStep) => step.name === "Run hosted core lint stripe")
         .run,
     ).toContain("--only=core --split-core --core-stripe=${{ matrix.stripe }}/5 --threads=1");
+
+    const runLintOwner = ({
+      capability,
+      lane,
+      profile,
+      releaseGate = false,
+    }: {
+      capability: boolean;
+      lane: "check" | "core";
+      profile: "blacksmith" | "github" | "hybrid";
+      releaseGate?: boolean;
+    }) => {
+      const root = tempDirs.make("openclaw-hosted-lint-owner-");
+      const binDir = path.join(root, "bin");
+      const callsPath = path.join(root, "calls.txt");
+      mkdirSync(path.join(root, "scripts"), { recursive: true });
+      mkdirSync(binDir);
+      writeFileSync(
+        path.join(root, "scripts/run-oxlint-shards.mts"),
+        capability ? "// --extension-stripe\n" : "// legacy runner\n",
+      );
+      for (const command of ["node", "pnpm"]) {
+        writeExecutable(path.join(binDir, command), [
+          "#!/usr/bin/env bash",
+          "set -euo pipefail",
+          `printf '${command} %s\\n' "$*" >> "$LINT_CALLS"`,
+        ]);
+      }
+      writeExecutable(path.join(binDir, "nproc"), ["#!/usr/bin/env bash", "printf '32\\n'"]);
+      const coreRun = hostedCoreLint.steps
+        .find((step: WorkflowStep) => step.name === "Run hosted core lint stripe")
+        .run.replaceAll("${{ matrix.stripe }}", "1");
+      const result = spawnSync("bash", ["-c", lane === "check" ? checkShardRun : coreRun], {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          FORMAT_CHECK: "false",
+          FROZEN_TARGET: capability ? "false" : "true",
+          HISTORICAL_TARGET: capability ? "false" : "true",
+          HOSTED_RUNNER_STRIPES: profile === "blacksmith" ? "false" : "true",
+          LINT_CALLS: callsPath,
+          OPENCLAW_LOCAL_CHECK: "0",
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+          PR_BASE_SHA: "",
+          RELEASE_GATE: releaseGate ? "true" : "false",
+          RUN_CONTROL_UI_I18N: "false",
+          RUNNER_PROFILE: profile,
+          RUN_UI_TESTS: "false",
+          TASK: "lint",
+        },
+      });
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+      return existsSync(callsPath)
+        ? readFileSync(callsPath, "utf8").trim().split("\n").filter(Boolean)
+        : [];
+    };
+
+    expect(runLintOwner({ capability: true, lane: "check", profile: "github" })).toEqual([
+      "node --import tsx scripts/run-oxlint-shards.mts --only=extensions --extension-stripe=6/6 --threads=1",
+      "node --import tsx scripts/run-oxlint-shards.mts --only=scripts --threads=1",
+    ]);
+    expect(runLintOwner({ capability: true, lane: "core", profile: "github" })).toEqual([
+      "node --import tsx scripts/run-oxlint-shards.mts --only=core --split-core --core-stripe=1/5 --threads=1",
+      "node --import tsx scripts/run-oxlint-shards.mts --only=extensions --extension-stripe=1/6 --threads=1",
+    ]);
+    for (const scenario of [
+      { capability: false, lane: "check" as const, profile: "github" as const },
+      { capability: true, lane: "check" as const, profile: "hybrid" as const },
+    ]) {
+      expect(runLintOwner(scenario)).toEqual([
+        "node --import tsx scripts/run-oxlint-shards.mts --only=extensions --only=scripts --threads=1",
+      ]);
+    }
+    expect(runLintOwner({ capability: true, lane: "check", profile: "blacksmith" })).toEqual([
+      "node --import tsx scripts/run-oxlint-shards.mts --threads=8",
+    ]);
+    expect(
+      runLintOwner({ capability: true, lane: "check", profile: "github", releaseGate: true }),
+    ).toEqual(["node --import tsx scripts/run-oxlint-shards.mts --only=scripts --threads=1"]);
+    for (const scenario of [
+      { capability: false, lane: "core" as const, profile: "github" as const },
+      { capability: true, lane: "core" as const, profile: "hybrid" as const },
+      {
+        capability: true,
+        lane: "core" as const,
+        profile: "github" as const,
+        releaseGate: true,
+      },
+    ]) {
+      expect(runLintOwner(scenario)).toEqual([
+        "node --import tsx scripts/run-oxlint-shards.mts --only=core --split-core --core-stripe=1/5 --threads=1",
+      ]);
+    }
   });
 
   it("runs all baseline ratchets against the exact tested tree", () => {
@@ -10017,6 +10402,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts",
       "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/logs-lifecycle.e2e.test.ts",
       "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
+      "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
     ]);
     const realGatewayRunContract = realGatewayRuns.join("\n");
     expect(realGatewayRunContract).not.toContain("--retry");
@@ -10031,6 +10417,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "Test Control UI auth transports with a real Gateway",
       "Test Control UI usage sessions owner attribution with a real Gateway",
       "Test Control UI agent file lifecycle with a real Gateway",
+      "Test Control UI media transcript replay with a real Gateway",
     ]) {
       const captureIndex = uiE2eRealGateway.steps.findIndex(
         (step: WorkflowStep) => step.name === name,

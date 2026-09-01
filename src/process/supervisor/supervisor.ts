@@ -331,6 +331,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
               })
             : await createChildAdapter({
                 argv: input.argv,
+                argv0: input.argv0,
                 cwd: input.cwd,
                 env: input.env,
                 exactEnv: input.exactEnv,

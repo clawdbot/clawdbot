@@ -75,6 +75,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   canSend: boolean;
   disabledReason: string | null;
   disabledReasonTone?: "info" | "danger";
+  disabledReasonBusy?: boolean;
   disabledBanner?: ChatComposerDisabledBanner;
   runError?: { summary: string } | null;
   sending: boolean;
