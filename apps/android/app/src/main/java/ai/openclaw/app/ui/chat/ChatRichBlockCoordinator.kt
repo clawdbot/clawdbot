@@ -75,6 +75,7 @@ internal class ChatRichBlockCoordinator<T>(
   private var callbackId = 0L
   private var attemptId = 0L
   private var timeout: ChatRenderCancellation? = null
+  private var pumping = false
 
   fun render(
     request: ChatRichBlockRequest,
@@ -88,7 +89,9 @@ internal class ChatRichBlockCoordinator<T>(
     val pending = active?.takeIf { it.request == request } ?: queued[request]
     if (pending != null) {
       pending.callbacks[id] = completion
-    } else if (queued.size >= MAX_QUEUED_RENDERS) {
+    } else if (request.kind == ChatRichBlockKind.Mermaid && queued.size >= MAX_QUEUED_DIAGRAMS) {
+      // Diagrams expose a retry action. Preserve math's existing admission
+      // behavior so visible formulas cannot become permanent source fallbacks.
       completion(ChatRichBlockResult.TransientFailure)
     } else {
       queued[request] = PendingRender(request, linkedMapOf(id to completion))
@@ -106,20 +109,29 @@ internal class ChatRichBlockCoordinator<T>(
   }
 
   private fun pump() {
-    if (active != null) return
-    val next = queued.entries.firstOrNull() ?: return
-    queued.remove(next.key)
-    active = next.value
-    val currentAttempt = ++attemptId
-    timeout =
-      timeoutScheduler.schedule(next.key.kind.timeoutMillis) {
-        if (currentAttempt != attemptId || active == null) return@schedule
-        // Retire the document before admitting another request: a timed-out script must
-        // not repaint the next job or retain its native completion capability.
-        backend.reset()
-        finish(currentAttempt, ChatRichBlockResult.TransientFailure)
+    if (pumping) return
+    pumping = true
+    try {
+      // Host loss can fail queued work synchronously. Drain iteratively so a
+      // large transcript cannot exhaust the main-thread stack during teardown.
+      while (active == null) {
+        val next = queued.entries.firstOrNull() ?: break
+        queued.remove(next.key)
+        active = next.value
+        val currentAttempt = ++attemptId
+        timeout =
+          timeoutScheduler.schedule(next.key.kind.timeoutMillis) {
+            if (currentAttempt != attemptId || active == null) return@schedule
+            // Retire the document before admitting another request: a timed-out script must
+            // not repaint the next job or retain its native completion capability.
+            backend.reset()
+            finish(currentAttempt, ChatRichBlockResult.TransientFailure)
+          }
+        backend.render(next.value.request) { result -> finish(currentAttempt, result) }
       }
-    backend.render(next.value.request) { result -> finish(currentAttempt, result) }
+    } finally {
+      pumping = false
+    }
   }
 
   private fun finish(
@@ -144,6 +156,6 @@ internal class ChatRichBlockCoordinator<T>(
   )
 
   private companion object {
-    const val MAX_QUEUED_RENDERS = 32
+    const val MAX_QUEUED_DIAGRAMS = 32
   }
 }

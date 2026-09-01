@@ -154,19 +154,59 @@ class ChatRichBlockCoordinatorTest {
       false,
       parseChatRichBlockRenderMessage("""{"id":"8","success":false,"error":"Invalid diagram"}""", ChatRichBlockKind.Mermaid)?.success,
     )
+    assertEquals(
+      true,
+      parseChatRichBlockRenderMessage("""{"id":"8","success":false,"error":"Renderer unavailable","retryable":true}""", ChatRichBlockKind.Mermaid)?.retryable,
+    )
+    assertEquals(
+      false,
+      parseChatRichBlockRenderMessage("""{"id":"8","success":false,"error":"Invalid diagram","retryable":false}""", ChatRichBlockKind.Mermaid)?.retryable,
+    )
+    assertEquals(
+      false,
+      parseChatRichBlockRenderMessage("""{"id":"8","success":false}""", ChatRichBlockKind.Math)?.retryable,
+    )
+  }
+
+  @Test
+  fun visibleMathRequestsDrainWithoutUserRetry() {
+    val harness = RenderHarness()
+    val requests = (0 until 40).map { request("x_{$it}^2") }
+    val outcomes = mutableListOf<ChatRichBlockResult<String>>()
+    requests.forEach { harness.coordinator.render(it, outcomes::add) }
+
+    assertEquals(emptyList<ChatRichBlockResult<String>>(), outcomes)
+    requests.forEach { harness.backend.complete(ChatRichBlockResult.Success(it.source)) }
+
+    assertEquals(requests, harness.backend.requests)
+    assertEquals(requests.map { ChatRichBlockResult.Success(it.source) }, outcomes)
+  }
+
+  @Test
+  fun mathRequestsDrainAfterSynchronousRendererLoss() {
+    val harness = RenderHarness()
+    val requests = (0 until 5_000).map { request("x_{$it}") }
+    val outcomes = mutableListOf<ChatRichBlockResult<String>>()
+    requests.forEach { harness.coordinator.render(it, outcomes::add) }
+
+    harness.backend.synchronousResult = ChatRichBlockResult.TransientFailure
+    harness.backend.complete(ChatRichBlockResult.TransientFailure)
+
+    assertEquals(requests, harness.backend.requests)
+    assertEquals(requests.map { ChatRichBlockResult.TransientFailure }, outcomes)
   }
 
   @Test
   fun cancelingQueuedWorkFreesCapacityWithoutDroppingAdmittedJobs() {
     val harness = RenderHarness()
     val outcomes = mutableListOf<ChatRichBlockResult<String>>()
-    harness.coordinator.render(request("active"), outcomes::add)
-    val subscriptions = (0 until 100).map { harness.coordinator.render(request("queued-$it"), outcomes::add) }
+    harness.coordinator.render(diagramRequest("active"), outcomes::add)
+    val subscriptions = (0 until 100).map { harness.coordinator.render(diagramRequest("queued-$it"), outcomes::add) }
     val rejected = outcomes.size
     org.junit.Assert.assertTrue(rejected > 0)
     org.junit.Assert.assertTrue(outcomes.all { it == ChatRichBlockResult.TransientFailure })
     subscriptions.first().cancel()
-    harness.coordinator.render(request("replacement"), outcomes::add)
+    harness.coordinator.render(diagramRequest("replacement"), outcomes::add)
     assertEquals(rejected, outcomes.size)
     harness.backend.complete(ChatRichBlockResult.Success("active"))
     assertEquals(
@@ -199,6 +239,7 @@ class ChatRichBlockCoordinatorTest {
     val requests = mutableListOf<ChatRichBlockRequest>()
     val completions = mutableListOf<(ChatRichBlockResult<String>) -> Unit>()
     val events = mutableListOf<String>()
+    var synchronousResult: ChatRichBlockResult<String>? = null
 
     override fun reset() {
       events += "reset"
@@ -210,7 +251,8 @@ class ChatRichBlockCoordinatorTest {
     ) {
       requests.add(request)
       events += "render:${request.source}"
-      completions.add(completion)
+      val immediate = synchronousResult
+      if (immediate == null) completions.add(completion) else completion(immediate)
     }
 
     fun complete(result: ChatRichBlockResult<String>) {
@@ -268,5 +310,13 @@ class ChatRichBlockCoordinatorTest {
       textColor = 0xff000000.toInt(),
       fontSizePx = 16f,
       density = 1f,
+    )
+
+  private fun diagramRequest(source: String): ChatMermaidRequest =
+    ChatMermaidRequest(
+      source = source,
+      widthPx = 320,
+      density = 1f,
+      theme = ChatMermaidTheme("#fff", "#000", "#666", "#ccc", "#f00", false),
     )
 }

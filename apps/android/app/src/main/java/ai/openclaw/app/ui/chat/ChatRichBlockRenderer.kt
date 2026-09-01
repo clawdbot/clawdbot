@@ -89,6 +89,7 @@ internal data class ChatRichBlockRenderMessage(
   val widthCssPx: Double,
   val heightCssPx: Double,
   val svg: String?,
+  val retryable: Boolean = false,
 )
 
 internal fun parseChatRichBlockRenderMessage(
@@ -104,7 +105,16 @@ internal fun parseChatRichBlockRenderMessage(
     val id = value["id"]?.jsonPrimitive?.takeIf { it.isString }?.content ?: return@runCatching null
     if (id.isEmpty() || id.length > 32) return@runCatching null
     val success = value["success"]?.jsonPrimitive?.booleanOrNull ?: return@runCatching null
-    if (!success) return@runCatching ChatRichBlockRenderMessage(id, false, 0.0, 0.0, null)
+    if (!success) {
+      return@runCatching ChatRichBlockRenderMessage(
+        id,
+        false,
+        0.0,
+        0.0,
+        null,
+        retryable = value["retryable"]?.jsonPrimitive?.booleanOrNull == true,
+      )
+    }
     val width = value["widthCssPx"]?.jsonPrimitive?.doubleOrNull ?: return@runCatching null
     val height = value["heightCssPx"]?.jsonPrimitive?.doubleOrNull ?: return@runCatching null
     val svg =
@@ -195,17 +205,18 @@ private class ChatRichBlockWebViewBackend(
   private var ready = false
   private var nextRenderId = 0L
   private var active: ActiveRender? = null
-  private var webView = createWebView()
+  private var webView: WebView? = null
 
   init {
     application.registerActivityLifecycleCallbacks(
       object : Application.ActivityLifecycleCallbacks {
         override fun onActivityDestroyed(activity: Activity) {
           if (this@ChatRichBlockWebViewBackend.host.get() !== activity.window.decorView) return
-          (webView.parent as? ViewGroup)?.removeView(webView)
           this@ChatRichBlockWebViewBackend.host.clear()
           val interrupted = active
-          active = null
+          // Completion may synchronously admit work for the next Activity. Retire
+          // the old document first so neither its scripts nor callbacks survive.
+          reset()
           interrupted?.completion?.invoke(ChatRichBlockResult.TransientFailure)
         }
 
@@ -252,8 +263,9 @@ private class ChatRichBlockWebViewBackend(
   override fun reset() {
     active = null
     ready = false
-    releaseWebView(webView)
-    webView = createWebView()
+    val retired = webView
+    webView = null
+    retired?.let(::releaseWebView)
     attachWebView()
   }
 
@@ -336,17 +348,19 @@ private class ChatRichBlockWebViewBackend(
 
   private fun attachWebView() {
     val currentHost = host.get() ?: return
-    if (webView.parent === currentHost) return
-    (webView.parent as? ViewGroup)?.removeView(webView)
+    val view = webView ?: createWebView().also { webView = it }
+    if (view.parent === currentHost) return
+    (view.parent as? ViewGroup)?.removeView(view)
     // VisualStateCallback requires an attached visible WebView. The transparent
     // renderer stays behind activity content and never participates in transcript layout.
-    currentHost.addView(webView, 0, ViewGroup.LayoutParams(1, 1))
+    currentHost.addView(view, 0, ViewGroup.LayoutParams(1, 1))
   }
 
   private fun evaluateActiveRender() {
+    val view = webView ?: return
     val render = active ?: return
-    layoutRender(render.request.widthPx, 1)
-    webView.evaluateJavascript("window.${kind.entryPoint}(${render.request.payload(render.id)});", null)
+    layoutRender(view, render.request.widthPx, 1)
+    view.evaluateJavascript("window.${kind.entryPoint}(${render.request.payload(render.id)});", null)
   }
 
   private inner class RenderMessageBridge : WebViewCompat.WebMessageListener {
@@ -366,10 +380,10 @@ private class ChatRichBlockWebViewBackend(
         val height = bitmapDimension(result.heightCssPx, render.request.density)
         if (!result.success || width == null || height == null || width.toLong() * height > kind.maxBitmapPixels) {
           active = null
-          render.completion(ChatRichBlockResult.Failure)
+          render.completion(if (!result.success && result.retryable) ChatRichBlockResult.TransientFailure else ChatRichBlockResult.Failure)
           return@post
         }
-        layoutRender(width, height)
+        layoutRender(view, width, height)
         view.postVisualStateCallback(
           render.id.toLong(),
           object : WebView.VisualStateCallback() {
@@ -399,22 +413,23 @@ private class ChatRichBlockWebViewBackend(
   }
 
   private fun layoutRender(
+    view: WebView,
     width: Int,
     height: Int,
   ) {
     // Parent layout must preserve the size used by Blink's visual-state fence.
     // Resizing again in the callback would capture content prepared for an old viewport.
-    webView.layoutParams =
-      webView.layoutParams.apply {
+    view.layoutParams =
+      view.layoutParams.apply {
         this.width = width
         this.height = height
       }
-    webView.measure(
+    view.measure(
       View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
       View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY),
     )
-    webView.layout(0, 0, width, height)
-    webView.scrollTo(0, 0)
+    view.layout(0, 0, width, height)
+    view.scrollTo(0, 0)
   }
 
   private fun isAllowedAssetUrl(uri: Uri): Boolean =

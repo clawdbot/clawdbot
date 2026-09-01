@@ -14,6 +14,9 @@ export type MermaidTheme = {
   darkMode: boolean;
 };
 
+// Native hosts must not retain engine failures in their permanent failure cache.
+export class MermaidTransientError extends Error {}
+
 const MAX_SOURCE_LENGTH = 20_000;
 const MAX_EDGES = 200;
 const MAX_SVG_LENGTH = 1_000_000;
@@ -146,7 +149,7 @@ function sanitizeMermaidSvg(source: string, backgroundColor: string): string {
   }
   const colorParser = document.createElement("canvas").getContext("2d");
   if (!colorParser) {
-    throw new Error("Mermaid diagram colors could not be prepared.");
+    throw new MermaidTransientError("Mermaid diagram colors could not be prepared.");
   }
   for (const element of elements) {
     for (const attribute of ["marker-start", "marker-mid", "marker-end", "clip-path", "mask"]) {
@@ -223,13 +226,13 @@ function createMermaidFrame(): MermaidFrame {
     },
     render(source, config) {
       if (disposed || !frame.isConnected) {
-        return Promise.reject(new Error("Mermaid renderer is unavailable."));
+        return Promise.reject(new MermaidTransientError("Mermaid renderer is unavailable."));
       }
       return new Promise((resolve, reject) => {
         const id = ++nextId;
         pending = { id, resolve, reject };
         timeout = window.setTimeout(
-          () => instance.dispose(new Error("Mermaid diagram rendering timed out.")),
+          () => instance.dispose(new MermaidTransientError("Mermaid diagram rendering timed out.")),
           RENDER_TIMEOUT_MS,
         );
         channel.port1.postMessage({
@@ -270,7 +273,7 @@ function createMermaidFrame(): MermaidFrame {
   channel.port1.start();
   frame.addEventListener("load", () => {
     if (loaded) {
-      instance.dispose(new Error("Mermaid renderer navigated unexpectedly."));
+      instance.dispose(new MermaidTransientError("Mermaid renderer navigated unexpectedly."));
       return;
     }
     loaded = true;
@@ -299,7 +302,7 @@ function createMermaidFrame(): MermaidFrame {
   }
   frame.srcdoc = `<!doctype html>${page.documentElement.outerHTML}`;
   timeout = window.setTimeout(
-    () => instance.dispose(new Error("Mermaid renderer could not be loaded.")),
+    () => instance.dispose(new MermaidTransientError("Mermaid renderer could not be loaded.")),
     RENDER_TIMEOUT_MS,
   );
   document.body.append(frame);
@@ -316,7 +319,7 @@ export function renderMermaidSvg(source: string, theme: MermaidTheme): Promise<s
   // one serialized owner, including after a failed render or a theme change.
   const result = renderQueue.then(async () => {
     if (renderer && !renderer.frame.isConnected) {
-      renderer.dispose(new Error("Mermaid renderer was removed."));
+      renderer.dispose(new MermaidTransientError("Mermaid renderer was removed."));
     }
     renderer ??= createMermaidFrame();
     const active = renderer;
@@ -360,4 +363,6 @@ export function renderMermaidSvg(source: string, theme: MermaidTheme): Promise<s
   return result;
 }
 
-window.addEventListener("pagehide", () => renderer?.dispose(new Error("Mermaid renderer closed.")));
+window.addEventListener("pagehide", () =>
+  renderer?.dispose(new MermaidTransientError("Mermaid renderer closed.")),
+);

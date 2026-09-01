@@ -1,4 +1,4 @@
-import { renderMermaidSvg, type MermaidTheme } from "./renderer.ts";
+import { MermaidTransientError, renderMermaidSvg, type MermaidTheme } from "./renderer.ts";
 
 type NativeMermaidJob = {
   id: string;
@@ -19,7 +19,7 @@ declare global {
 
 function postResult(result: object) {
   const bridge = window.ChatMermaidBridge ?? window.webkit?.messageHandlers.ChatMermaidBridge;
-  // Only the trusted top-level local document has a native result bridge.
+  // Hosts accept native results only from this top-level local document.
   // Diagram input and Mermaid execute in the opaque child frame.
   // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Native bridges accept one JSON string, not Window.postMessage arguments.
   bridge?.postMessage(JSON.stringify(result));
@@ -54,10 +54,12 @@ async function renderNativeMermaid(job: NativeMermaidJob) {
       URL.revokeObjectURL(previousUrl);
     }
     await Promise.race([
-      image.decode(),
+      image.decode().catch((error: unknown) => {
+        throw new MermaidTransientError(error instanceof Error ? error.message : String(error));
+      }),
       new Promise<never>((_, reject) => {
         decodeTimeout = window.setTimeout(
-          () => reject(new Error("Diagram image timed out.")),
+          () => reject(new MermaidTransientError("Diagram image timed out.")),
           5_000,
         );
       }),
@@ -71,6 +73,7 @@ async function renderNativeMermaid(job: NativeMermaidJob) {
     postResult({
       id: job.id,
       success: false,
+      retryable: error instanceof MermaidTransientError,
       error: String(error instanceof Error ? error.message : error).slice(0, 1_000),
     });
   } finally {
