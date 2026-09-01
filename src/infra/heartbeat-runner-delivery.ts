@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   hasOutboundReplyContent,
@@ -15,6 +16,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resolveMirroredTranscriptText } from "../config/sessions/transcript-mirror.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { mergeSessionEntry } from "../config/sessions/types.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { formatErrorMessage } from "./errors.js";
 import {
@@ -161,6 +163,21 @@ function heartbeatRunOwnsPendingFinalDelivery(
   return typeof createdAt === "number" && createdAt >= runStartedAt;
 }
 
+function resolveHeartbeatDeliveryStateScope(params: {
+  storePath: string;
+  sessionKey: string;
+  outboundPolicySessionKey?: string;
+  targetSessionKey?: string;
+  entry?: SessionEntry;
+}): { storePath: string; sessionKey: string; entry: SessionEntry | undefined } {
+  const sessionKey =
+    params.targetSessionKey?.trim() || params.outboundPolicySessionKey?.trim() || params.sessionKey;
+  const stored =
+    loadExactSessionEntryReadOnly({ storePath: params.storePath, sessionKey })?.entry ??
+    params.entry;
+  return { storePath: params.storePath, sessionKey, entry: stored };
+}
+
 export function classifyHeartbeatAgentOutcome(params: {
   agentRun: CompletedHeartbeatAgentRun;
   hasRelayableExecCompletion: boolean;
@@ -288,7 +305,15 @@ export async function finalizeHeartbeatOutcome(params: {
 }): Promise<HeartbeatRunResult> {
   const { cfg, agentId, scheduledTasks, startedAt, wakeSource } = params.wake;
   const { delivery, entry, previousUpdatedAt } = params.prepared;
-  const { runSessionKey, sessionKey, storePath, visibility } = params.prepared;
+  const { runSessionKey, sessionKey, storePath, visibility, outboundPolicySessionKey } =
+    params.prepared;
+  const deliveryState = resolveHeartbeatDeliveryStateScope({
+    storePath,
+    sessionKey,
+    outboundPolicySessionKey,
+    targetSessionKey: delivery.targetSessionKey,
+    entry,
+  });
   const outcome = params.outcome;
   const recordOutcome = (response: HeartbeatToolResponse) =>
     persistHeartbeatOutcome({
@@ -431,9 +456,13 @@ export async function finalizeHeartbeatOutcome(params: {
   // Suppress duplicate heartbeats (same payload) within a short window.
   // This prevents "nagging" when nothing changed but the model repeats the same items.
   const prevHeartbeatText =
-    typeof entry?.lastHeartbeatText === "string" ? entry.lastHeartbeatText : "";
+    typeof deliveryState.entry?.lastHeartbeatText === "string"
+      ? deliveryState.entry.lastHeartbeatText
+      : "";
   const prevHeartbeatAt =
-    typeof entry?.lastHeartbeatSentAt === "number" ? entry.lastHeartbeatSentAt : undefined;
+    typeof deliveryState.entry?.lastHeartbeatSentAt === "number"
+      ? deliveryState.entry.lastHeartbeatSentAt
+      : undefined;
   const isDuplicateMain =
     !mediaUrls.length &&
     !hasStructuredReplyContent &&
@@ -566,11 +595,8 @@ export async function finalizeHeartbeatOutcome(params: {
   if (visibleSendSucceeded) {
     const hasHeartbeatText = Boolean(deliveryText.trim());
     await patchSessionEntryCore(
-      { storePath, sessionKey },
-      (current, context) => {
-        if (!context.existingEntry) {
-          return null;
-        }
+      { storePath: deliveryState.storePath, sessionKey: deliveryState.sessionKey },
+      (current) => {
         // Visible structured-only sends satisfy their own pending final too;
         // preserve old text dedupe markers and another run's recovery state.
         const ownsPendingFinalDelivery = heartbeatRunOwnsPendingFinalDelivery(current, startedAt);
@@ -584,7 +610,17 @@ export async function finalizeHeartbeatOutcome(params: {
           ...(ownsPendingFinalDelivery ? CLEARED_PENDING_FINAL_DELIVERY_FIELDS : {}),
         };
       },
-      { preserveActivity: true },
+      {
+        preserveActivity: true,
+        ...(deliveryState.entry
+          ? {}
+          : {
+              fallbackEntry: mergeSessionEntry(undefined, {
+                sessionId: randomUUID(),
+                updatedAt: startedAt,
+              }),
+            }),
+      },
     );
   }
 
