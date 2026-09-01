@@ -1,6 +1,10 @@
 import type { messagingApi } from "@line/bot-sdk";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  LINE_FLEX_BUBBLE_MAX_BYTES,
+  LINE_FLEX_CAROUSEL_MAX_BYTES,
+} from "./flex-templates/message.js";
 import { isHttpsUrl } from "./media-url.js";
 
 export type Action = messagingApi.Action;
@@ -144,7 +148,7 @@ function normalizeNestedContent(value: unknown, labelLimit: number, warnings?: s
   return normalized;
 }
 
-function normalizeFlexBubble(value: unknown): unknown {
+function normalizeFlexBubble(value: unknown, maxBytes = LINE_FLEX_BUBBLE_MAX_BYTES): unknown {
   if (!isRecord(value) || value.type !== "bubble") {
     return normalizeNestedContent(value, 40);
   }
@@ -157,12 +161,19 @@ function normalizeFlexBubble(value: unknown): unknown {
 
   const warning = flexWarning([...new Set(warnings)].join("\n"));
   const body = normalized.body;
-  if (isRecord(body) && Array.isArray(body.contents)) {
-    normalized.body = { ...body, contents: [...body.contents, warning] };
-  } else {
-    normalized.body = { type: "box", layout: "vertical", contents: [warning] };
-  }
-  return normalized;
+  const withWarning = {
+    ...normalized,
+    body:
+      isRecord(body) && Array.isArray(body.contents)
+        ? { ...body, contents: [...body.contents, warning] }
+        : { type: "box", layout: "vertical", contents: [warning] },
+  };
+  // Removing a short invalid URL can save fewer bytes than its optional warning.
+  // Keep the user's content deliverable within both bubble and carousel limits.
+  return Buffer.byteLength(JSON.stringify(withWarning), "utf8") <=
+    Math.min(maxBytes, LINE_FLEX_BUBBLE_MAX_BYTES)
+    ? withWarning
+    : normalized;
 }
 
 function normalizeFlexContainer(value: unknown): unknown {
@@ -173,9 +184,16 @@ function normalizeFlexContainer(value: unknown): unknown {
     return normalizeFlexBubble(value);
   }
   if (value.type === "carousel" && Array.isArray(value.contents)) {
+    let remainingBytes =
+      LINE_FLEX_CAROUSEL_MAX_BYTES - Buffer.byteLength(JSON.stringify(value), "utf8");
     return {
       ...value,
-      contents: value.contents.map((bubble) => normalizeFlexBubble(bubble)),
+      contents: value.contents.map((bubble) => {
+        const originalBytes = Buffer.byteLength(JSON.stringify(bubble), "utf8");
+        const normalized = normalizeFlexBubble(bubble, originalBytes + remainingBytes);
+        remainingBytes += originalBytes - Buffer.byteLength(JSON.stringify(normalized), "utf8");
+        return normalized;
+      }),
     };
   }
   return normalizeNestedContent(value, 40);

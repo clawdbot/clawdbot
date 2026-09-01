@@ -402,6 +402,80 @@ for (const thumbnails of [
   });
 }
 
+for (const shape of ["bubble", "carousel"] as const) {
+  const limit = shape === "bubble" ? 30_000 : 50_000;
+  const makeNearLimitCard = (): messagingApi.FlexMessage => {
+    const cards = Array.from({ length: shape === "bubble" ? 1 : 2 }, () => ({
+      type: "bubble" as const,
+      body: {
+        type: "box" as const,
+        layout: "vertical" as const,
+        contents: [
+          {
+            type: "box" as const,
+            layout: "baseline" as const,
+            contents: [
+              { type: "icon" as const, url: "http://x" },
+              { type: "text" as const, text: "Original title" },
+            ],
+          },
+          ...Array.from({ length: 20 }, (_, index) => ({
+            type: "text" as const,
+            text: `Original caption ${index}: `,
+          })),
+        ],
+      },
+      footer: {
+        type: "box" as const,
+        layout: "vertical" as const,
+        contents: [{ type: "button" as const, action }],
+      },
+    }));
+    const contents =
+      shape === "bubble"
+        ? expectDefined(cards[0], "bubble")
+        : { type: "carousel" as const, contents: cards };
+    const captions = cards.flatMap((card) =>
+      card.body.contents.filter((item) => item.type === "text"),
+    );
+    let remaining = limit - 50 - Buffer.byteLength(JSON.stringify(contents), "utf8");
+    for (const [index, text] of captions.entries()) {
+      const bytes = Math.floor(remaining / (captions.length - index));
+      text.text += "界".repeat(Math.floor(bytes / 3)) + "x".repeat(bytes % 3);
+      remaining -= bytes;
+    }
+    expect(Buffer.byteLength(JSON.stringify(contents), "utf8")).toBe(limit - 50);
+    return { type: "flex", altText: "Near-limit card", contents };
+  };
+  cases.push({
+    name: `keeps a near-limit UTF-8 ${shape} deliverable when removing invalid media`,
+    message: makeNearLimitCard,
+    verify: (message) => {
+      if (message.type !== "flex") {
+        throw new Error("Expected a Flex message");
+      }
+      expect(Buffer.byteLength(JSON.stringify(message.contents), "utf8")).toBeLessThanOrEqual(
+        limit,
+      );
+      const original = makeNearLimitCard().contents;
+      const before = original.type === "bubble" ? [original] : original.contents;
+      const after =
+        message.contents.type === "bubble" ? [message.contents] : message.contents.contents;
+      expect(after).toHaveLength(before.length);
+      for (const [index, card] of after.entries()) {
+        expect(Buffer.byteLength(JSON.stringify(card), "utf8")).toBeLessThanOrEqual(30_000);
+        expect(card.body?.contents[0]).toEqual({
+          type: "box",
+          layout: "baseline",
+          contents: [{ type: "text", text: "Original title" }],
+        });
+        expect(card.body?.contents.slice(1, 21)).toEqual(before[index]?.body?.contents.slice(1));
+        expect(card.footer).toEqual(before[index]?.footer);
+      }
+    },
+  });
+}
+
 const unchangedMessages: messagingApi.Message[] = [
   { type: "image", originalContentUrl: imageUrl, previewImageUrl: imageUrl },
   { type: "video", originalContentUrl: videoUrl, previewImageUrl: imageUrl },

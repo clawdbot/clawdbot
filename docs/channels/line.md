@@ -368,7 +368,8 @@ The LINE plugin also ships a `/card` command for Flex message presets:
 ```
 
 Card images and icons must use HTTPS. OpenClaw removes images with malformed or
-non-HTTPS URLs and adds an "Image unavailable" note to the Flex bubble. Video
+non-HTTPS URLs and adds an "Image unavailable" note when it fits within LINE's
+30 KB bubble and 50 KB carousel limits. Video
 heroes keep their required alternative content: an unusable video or preview URL
 falls back to that content, and an unusable alternative image becomes a text box.
 Invalid template thumbnails are removed; carousel thumbnails are removed together
