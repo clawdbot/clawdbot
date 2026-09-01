@@ -3077,8 +3077,6 @@ src/infra/diagnostic-semantic-run-progress.ts	1
 src/infra/diagnostic-trace-context.ts	2
 src/infra/diagnostic-trace-propagation.ts	3
 src/infra/directory-durability.ts	3
-src/infra/error-graph-internal.ts	1
-src/infra/errors.ts	3
 src/infra/exec-approval-channel-runtime.ts	9
 src/infra/exec-approval-forwarder.ts	1
 src/infra/exec-approval-policy-snapshot.ts	2
@@ -3176,7 +3174,6 @@ src/infra/restart-sentinel-store.ts	10
 src/infra/restart-sentinel.ts	1
 src/infra/restart-stale-pids.ts	3
 src/infra/retry-policy.ts	3
-src/infra/retryable-network-errors.ts	1
 src/infra/session-cost-usage-aggregation.ts	5
 src/infra/session-cost-usage-cache-runtime.ts	1
 src/infra/session-cost-usage-cache.sqlite.ts	1
