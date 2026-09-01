@@ -5,7 +5,7 @@ import type { Plugin } from "rolldown";
 import { isRecord } from "./record-shared.mjs";
 
 const SDK_PACKAGE = "@anthropic-ai/claude-agent-sdk";
-const SDK_ASSET_DIR = "extensions/anthropic/agent-sdk";
+export const CLAUDE_AGENT_SDK_ASSET_DIR = "extensions/anthropic/agent-sdk";
 const NATIVE_SDK_PACKAGE =
   /^@anthropic-ai\/claude-agent-sdk-(?:(?:darwin|win32)-(?:x64|arm64)|linux-(?:x64|arm64)(?:-musl)?)$/u;
 
@@ -61,7 +61,7 @@ export function createClaudeAgentSdkAssetPlugin(rootDir = process.cwd()): Plugin
           // An absolute external id plus this output-root path lets Rolldown rebase
           // both root hashed chunks and nested entries without relocating the SDK itself.
           if (id === sdkEntry) {
-            return `./${SDK_ASSET_DIR}/${path.basename(sdkEntry)}`;
+            return `./${CLAUDE_AGENT_SDK_ASSET_DIR}/${path.basename(sdkEntry)}`;
           }
           return typeof previousPaths === "function"
             ? previousPaths(id)
@@ -75,7 +75,7 @@ export function createClaudeAgentSdkAssetPlugin(rootDir = process.cwd()): Plugin
         this.addWatchFile(sourcePath);
         this.emitFile({
           type: "asset",
-          fileName: `${SDK_ASSET_DIR}/${file}`,
+          fileName: `${CLAUDE_AGENT_SDK_ASSET_DIR}/${file}`,
           source:
             file === "package.json"
               ? `${JSON.stringify(packagedManifest, null, 2)}\n`
