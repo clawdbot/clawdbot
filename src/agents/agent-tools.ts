@@ -25,7 +25,7 @@ import type {
   PluginHookToolRequesterContext,
 } from "../plugins/hook-types.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
-import { getPluginToolMeta } from "../plugins/tool-metadata.js";
+import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../security/dangerous-tools.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
@@ -51,6 +51,7 @@ import {
 } from "./agent-tools.ring-zero-context.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isApplyPatchAllowedForModel } from "./apply-patch-model-policy.js";
+import { hasApprovalFreeHostExecAuthority } from "./approval-free-host-exec-authority.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveProcessToolScopeKey } from "./bash-process-scope.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
@@ -611,6 +612,27 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   // Its approval floor outranks a reused full session; the wrapper below
   // prevents caller arguments from weakening either restriction.
   const scheduledExecTarget = options?.scheduledToolPolicy?.execTarget;
+  const configuredExecHost = scheduledExecTarget?.host ?? options?.exec?.host ?? execConfig.host;
+  const configuredExecAsk = scheduledExecTarget?.ask ?? effectiveExecPolicy.ask;
+  const configuredExecMode = scheduledExecTarget?.ask ? undefined : effectiveExecPolicy.mode;
+  const bypassHostApprovalFloors = Boolean(
+    scheduledExecTarget?.ask !== "always" &&
+    sessionCoreToolPolicy?.bypassHostApprovalFloors &&
+    effectiveExecPolicy.security === "full",
+  );
+  const hasCurrentApprovalFreeHostExecAuthority = () =>
+    includeShellTools &&
+    !sandbox &&
+    (configuredExecHost === undefined ||
+      configuredExecHost === "auto" ||
+      configuredExecHost === "gateway") &&
+    hasApprovalFreeHostExecAuthority({
+      agentId,
+      mode: configuredExecMode,
+      security: effectiveExecPolicy.security,
+      ask: configuredExecAsk,
+      bypassHostApprovalFloors,
+    });
   const processToolAvailabilityRef: NonNullable<ExecToolDefaults["processToolAvailabilityRef"]> =
     {};
   const coreTools = createCoreCodingTools({
@@ -1015,7 +1037,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   });
   // Host-bound ring-zero tools carry their own authority checks. Agent policy
   // must not deadlock setup, but the tools still receive schema/hook wrappers.
-  const authorizedTools = applyDelegationCapability(
+  let authorizedTools = applyDelegationCapability(
     mergeAgentRingZeroTools(ringZeroTools, subagentFiltered),
     options?.delegationCapability,
   ).filter(
@@ -1023,6 +1045,37 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       !options?.swarmCollector ||
       (tool.name !== "ask_user" && tool.name !== "sessions_send" && tool.name !== "sessions_yield"),
   );
+  const approvalFreeExecRetained =
+    hasCurrentApprovalFreeHostExecAuthority() &&
+    authorizedTools.some((tool) => tool.name === "exec");
+  authorizedTools = authorizedTools.flatMap((tool) => {
+    if (tool.requiresApprovalFreeHostExec !== true) {
+      return [tool];
+    }
+    if (approvalFreeExecRetained) {
+      const guardedTool: AnyAgentTool = {
+        ...tool,
+        execute: async (toolCallId, params, signal, onUpdate) => {
+          if (!hasCurrentApprovalFreeHostExecAuthority()) {
+            throw new Error("tool denied: approval-free host exec authority was revoked");
+          }
+          return await tool.execute(toolCallId, params, signal, onUpdate);
+        },
+      };
+      const meta = getPluginToolMeta(tool);
+      if (meta) {
+        setPluginToolMeta(guardedTool, meta);
+      }
+      return [guardedTool];
+    }
+    const fallback = tool.approvalFreeHostExecFallback;
+    const meta = getPluginToolMeta(tool);
+    if (!fallback || fallback.name !== tool.name || !meta) {
+      return [];
+    }
+    setPluginToolMeta(fallback, meta);
+    return [fallback];
+  });
   if (
     swarmStructuredOutputTool &&
     !authorizedTools.some((tool) => tool.name === swarmStructuredOutputTool.name)

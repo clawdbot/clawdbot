@@ -15,6 +15,7 @@ import type {
   OpenClawPluginToolFactory,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createSubsystemLogger, isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isBrowserMachineOutput } from "./cli-output-mode.js";
 import {
   BROWSER_REQUEST_GATEWAY_METHOD,
@@ -33,7 +34,6 @@ import {
 } from "./src/browser-tool.schema.js";
 import {
   BrowserHarnessInstallError,
-  isManagedBrowserHarnessUnavailable,
   prepareManagedBrowserUseCliRuntime,
 } from "./src/browser-use-cli-install.js";
 import {
@@ -164,10 +164,7 @@ function hasNativeBrowserConfiguration(
   if (backend === "native") {
     return true;
   }
-  const browser = config?.browser;
-  return Boolean(
-    browser && (browser.enabled === false || Object.keys(browser).some((key) => key !== "enabled")),
-  );
+  return config?.browser !== undefined;
 }
 
 function translateBrowserUseArgsForNative(value: unknown): Record<string, unknown> | undefined {
@@ -193,6 +190,7 @@ function createLazyBrowserUseCliTool(params: {
   runtime: BrowserUseCliRuntime;
   workspaceDir: string;
   nativeTool: AnyAgentTool;
+  ssrfPolicy?: SsrFPolicy;
 }): AnyAgentTool {
   let tool: AnyAgentTool | undefined;
   return {
@@ -219,12 +217,6 @@ function createLazyBrowserUseCliTool(params: {
         }
         return await params.nativeTool.execute(toolCallId, translated, signal, onUpdate);
       };
-      if (
-        params.runtime.kind === "managed" &&
-        isManagedBrowserHarnessUnavailable(params.runtime.stateDir)
-      ) {
-        return await runNativeFallback();
-      }
       tool ??= createBrowserUseCliTool(params);
       try {
         return await tool.execute(toolCallId, args, signal, onUpdate);
@@ -381,6 +373,9 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
   const useOrchestratorBrowserUseCli = process.env[BROWSER_HARNESS_ORCHESTRATOR_ENV] === "1";
   api.registerTool(((ctx: OpenClawPluginToolContext) => {
     const config = ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
+    if (config?.browser?.enabled === false) {
+      return null;
+    }
     const nativeTool = createLazyBrowserTool(createBrowserToolOptions(ctx), config);
     const hasBrowserBinding = Boolean(
       ctx.toolBindings && Object.hasOwn(ctx.toolBindings, "browser"),
@@ -399,9 +394,21 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
       ? prepareBrowserUseCliRuntime()
       : prepareManagedBrowserUseCliRuntime();
     if (!runtime) {
+      if (useOrchestratorBrowserUseCli) {
+        nativeTool.descriptorCacheMode = "live";
+      }
       return nativeTool;
     }
-    return createLazyBrowserUseCliTool({ runtime, workspaceDir: ctx.workspaceDir, nativeTool });
+    const browserUseCliTool = createLazyBrowserUseCliTool({
+      runtime,
+      workspaceDir: ctx.workspaceDir,
+      nativeTool,
+      ssrfPolicy: resolveBrowserConfig(config?.browser, config).ssrfPolicy,
+    });
+    browserUseCliTool.requiresApprovalFreeHostExec = true;
+    browserUseCliTool.approvalFreeHostExecFallback = nativeTool;
+    browserUseCliTool.descriptorCacheMode = "live";
+    return browserUseCliTool;
   }) as OpenClawPluginToolFactory);
   api.registerCli(
     async ({ program }) => {

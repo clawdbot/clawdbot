@@ -70,6 +70,14 @@ const scopedPluginTools = new WeakMap<AnyAgentTool, Map<string, AnyAgentTool>>()
 const pluginRegistryScopeIds = new WeakMap<PluginRegistry, number>();
 let nextPluginRegistryScopeId = 1;
 
+function canCachePluginToolDescriptor(tool: AnyAgentTool): boolean {
+  try {
+    return tool.descriptorCacheMode !== "live";
+  } catch {
+    return false;
+  }
+}
+
 function pluginToolScopeKey(
   entry: PluginToolRegistration,
   pluginRegistry: PluginRegistry | undefined,
@@ -1419,7 +1427,7 @@ export function resolvePluginTools(params: {
           toolName: tool.name,
         }),
       });
-      if (manifestPlugin) {
+      if (manifestPlugin && canCachePluginToolDescriptor(tool)) {
         const capturedDescriptors = capturedDescriptorsByPluginId.get(entry.pluginId) ?? [];
         capturedDescriptors.push(
           capturePluginToolDescriptor({

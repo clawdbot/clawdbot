@@ -3496,6 +3496,46 @@ describe("resolvePluginTools optional tools", () => {
 
     expectResolvedToolNames(tools, ["optional_tool"]);
   });
+
+  it("does not cache descriptors that require live construction", () => {
+    const factory = vi.fn(() => ({
+      ...makeTool("browser"),
+      descriptorCacheMode: "live" as const,
+    }));
+    setRegistry([
+      createNamedToolEntry("browser", "browser", {
+        declaredNames: ["browser"],
+        factory,
+      }),
+    ]);
+
+    resolvePluginTools(createResolveToolsParams());
+    resolvePluginTools(createResolveToolsParams());
+
+    expect(factory).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails closed when live-descriptor metadata cannot be read", () => {
+    const factory = vi.fn(() => {
+      const tool = makeTool("browser");
+      Object.defineProperty(tool, "descriptorCacheMode", {
+        get() {
+          throw new Error("untrusted descriptor cache accessor");
+        },
+      });
+      return tool;
+    });
+    setRegistry([
+      createNamedToolEntry("browser", "browser", {
+        declaredNames: ["browser"],
+        factory,
+      }),
+    ]);
+
+    expect(() => resolvePluginTools(createResolveToolsParams())).not.toThrow();
+    expect(() => resolvePluginTools(createResolveToolsParams())).not.toThrow();
+    expect(factory).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("buildPluginToolMetadataKey", () => {

@@ -19,6 +19,19 @@ const PREFLIGHT_TIMEOUT_MS = 5_000;
 const MAX_DOWNLOAD_BYTES = 32 * 1024 * 1024;
 const MAX_OUTPUT_BYTES = 64 * 1024;
 const MAX_INSTALL_ERROR_CHARS = 30_000;
+const BROWSER_HARNESS_LOCKED_REQUIREMENTS = [
+  "anyio==4.14.2",
+  "cdp-use==1.4.5",
+  "certifi==2026.7.22",
+  "fetch-use==0.4.0",
+  "h11==0.16.0",
+  "httpcore==1.0.9",
+  "httpx==0.28.1",
+  "idna==3.19",
+  "pillow==12.3.0",
+  "typing-extensions==4.16.0",
+  "websockets==15.0.1",
+] as const;
 
 type UvAsset = { name: string; sha256: string };
 type RunCommand = (argv: string[], options: CommandOptions) => Promise<SpawnResult>;
@@ -75,7 +88,6 @@ type ManagedInstallDeps = {
 };
 
 const installationPromises = new Map<string, Promise<string>>();
-const failedInstallRoots = new Set<string>();
 
 export class BrowserHarnessInstallError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -357,6 +369,7 @@ export async function ensureManagedBrowserHarness(
           "3.12",
           "--managed-python",
           "--force",
+          ...BROWSER_HARNESS_LOCKED_REQUIREMENTS.flatMap((requirement) => ["--with", requirement]),
           `browser-harness==${BROWSER_HARNESS_VERSION}`,
         ],
         {
@@ -380,11 +393,8 @@ export async function ensureManagedBrowserHarness(
     })();
   installationPromises.set(paths.rootDir, pending);
   try {
-    const executable = await pending;
-    failedInstallRoots.delete(paths.rootDir);
-    return executable;
+    return await pending;
   } catch (error) {
-    failedInstallRoots.add(paths.rootDir);
     throw new BrowserHarnessInstallError(
       `OpenClaw could not install Browser Harness ${BROWSER_HARNESS_VERSION}: ${error instanceof Error ? error.message : String(error)}`,
       { cause: error },
@@ -394,10 +404,6 @@ export async function ensureManagedBrowserHarness(
       installationPromises.delete(paths.rootDir);
     }
   }
-}
-
-export function isManagedBrowserHarnessUnavailable(stateDir = resolveStateDir()): boolean {
-  return failedInstallRoots.has(resolveManagedBrowserHarnessPaths(stateDir).rootDir);
 }
 
 export function prepareManagedBrowserUseCliRuntime(

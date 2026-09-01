@@ -15,9 +15,12 @@ the same install and Browser Harness daemon.
 
 Browser Harness controls a running Chrome-family browser. It can launch Chrome,
 but Chrome may require the user to enable remote debugging once and approve its
-"Allow remote debugging?" prompt. No OpenClaw execution approval or Browser Use
-Cloud key is required for this local default. OpenClaw disables Browser Harness
-telemetry and recordings for this managed integration.
+"Allow remote debugging?" prompt. OpenClaw selects this backend only for a
+trusted, unrestricted local Gateway run where host `exec` is effectively
+`full` / `off`, the final tool policy still allows `exec`, and the agent is not
+sandboxed. Guarded, approval-gated, sandboxed, or remote-exec runs keep the
+native browser tool. No Browser Use Cloud key is required. OpenClaw disables
+Browser Harness telemetry and recordings for this managed integration.
 
 OpenClaw's previous native browser implementation remains available. It runs a
 **dedicated Chrome/Brave/Edge/Chromium profile** through a local Gateway control
@@ -47,9 +50,17 @@ On macOS, you can explicitly copy cookies from a Chrome-family system profile in
 
 ## Quick start
 
-For the default agent path, ask the agent to use the browser. The first call
+For the default agent path, ask the agent to use the browser. The `browser` tool
+is included in fresh installs' default `coding` profile. When the run has
+unrestricted host-exec authority (for example, a `full` permission session, or
+`tools.exec.mode: "full"` plus a matching host approvals file), the first call
 installs Browser Harness and starts or reuses its normal daemon automatically.
-The `browser` tool is included in fresh installs' default `coding` profile.
+In every stricter permission mode, OpenClaw supplies the native browser tool
+instead.
+
+Use unrestricted mode only for a host and session you trust. See
+[Permission modes](/tools/permission-modes) for the effective-policy checks and
+how to inspect the host approvals file.
 
 The `openclaw browser` CLI continues to address the native backend directly:
 
@@ -104,7 +115,8 @@ Existing installations with authored native `browser.*` settings keep the
 native backend unless they explicitly set `backend: "browser-harness"`. The
 native CLI, Gateway method, profiles, Chrome extension, and sandbox browser are
 not removed. Sandboxed, tab-bound, and explicitly configured native runs also
-continue to use the native implementation.
+continue to use the native implementation. Selecting `browser-harness` changes
+the preferred backend; it does not bypass the unrestricted host-exec check.
 
 ## Agent guidance
 
@@ -125,6 +137,18 @@ stage:
 For a single agent, use `agents.entries.*.tools.alsoAllow: ["browser"]`.
 `tools.subagents.tools.allow: ["browser"]` alone is not enough because sub-agent
 policy is applied after profile filtering.
+
+Backend selection happens after the final tool policy is known. Browser Harness
+is exposed only when that policy retains both `browser` and `exec`, the session
+is unsandboxed and local to the Gateway, and effective host exec remains
+`full` / `off`. OpenClaw rechecks that authority immediately before each Harness
+call; if it changed, the call is denied before install, daemon, or browser I/O.
+The native tool remains the fallback for all other cases.
+
+Browser Harness `action="open"` applies the native browser navigation policy
+before any Harness I/O. Its unrestricted `action="exec"` can run arbitrary
+Python with the same host authority as unrestricted `exec`; it is not a
+sandbox. Do not enable unrestricted mode for an untrusted agent or session.
 
 The browser plugin ships two levels of agent guidance:
 

@@ -5,7 +5,6 @@ import { useAutoCleanupTempDirTracker } from "../test-support.js";
 import {
   BrowserHarnessInstallError,
   ensureManagedBrowserHarness,
-  isManagedBrowserHarnessUnavailable,
   prepareManagedBrowserUseCliRuntime,
   resolveManagedBrowserHarnessPaths,
 } from "./browser-use-cli-install.js";
@@ -39,6 +38,21 @@ describe("managed Browser Harness install", () => {
       }
       expect(argv).toContain("browser-harness==0.1.10");
       expect(argv).toContain("--managed-python");
+      for (const requirement of [
+        "anyio==4.14.2",
+        "cdp-use==1.4.5",
+        "certifi==2026.7.22",
+        "fetch-use==0.4.0",
+        "h11==0.16.0",
+        "httpcore==1.0.9",
+        "httpx==0.28.1",
+        "idna==3.19",
+        "pillow==12.3.0",
+        "typing-extensions==4.16.0",
+        "websockets==15.0.1",
+      ]) {
+        expect(argv).toContain(requirement);
+      }
       installed = true;
       await fs.writeFile(paths.executable, "fixture", { mode: 0o755 });
       return completed();
@@ -71,24 +85,35 @@ describe("managed Browser Harness install", () => {
     expect(installOptions.env).not.toHaveProperty("BROWSER_USE_API_KEY");
   });
 
-  it("marks a failed managed install so the plugin can retain native fallback", async () => {
+  it("retries a transient managed install failure on the next call", async () => {
     const stateDir = tempDirs.make("oc-bh-managed-failure-");
-    const runCommand = vi.fn(async (argv: string[]) =>
-      argv[1] === "--version"
-        ? { ...completed(), code: 1 }
-        : { ...completed(), code: 2, stderr: "offline" },
-    );
-
-    await expect(
+    const paths = resolveManagedBrowserHarnessPaths(stateDir);
+    let installAttempts = 0;
+    let installed = false;
+    const runCommand = vi.fn(async (argv: string[]) => {
+      if (argv[1] === "--version") {
+        return installed ? completed("0.1.10\n") : { ...completed(), code: 1 };
+      }
+      installAttempts += 1;
+      if (installAttempts === 1) {
+        return { ...completed(), code: 2, stderr: "offline" };
+      }
+      installed = true;
+      await fs.writeFile(paths.executable, "fixture", { mode: 0o755 });
+      return completed();
+    });
+    const install = () =>
       ensureManagedBrowserHarness({
         stateDir,
         deps: {
           ensureUv: async () => path.join(stateDir, "uv"),
           runCommand: runCommand as never,
         },
-      }),
-    ).rejects.toBeInstanceOf(BrowserHarnessInstallError);
-    expect(isManagedBrowserHarnessUnavailable(stateDir)).toBe(true);
+      });
+
+    await expect(install()).rejects.toBeInstanceOf(BrowserHarnessInstallError);
+    await expect(install()).resolves.toBe(paths.executable);
+    expect(installAttempts).toBe(2);
   });
 });
 
@@ -184,13 +209,22 @@ describe("Browser Use CLI tool", () => {
   it("uses Browser Harness helpers and retains screenshots", async () => {
     const { runCommand, tool, workspaceDir } = await createFixture();
 
-    await tool.execute("open-1", { action: "open", url: "https://example.com/?q='quoted'" });
+    await tool.execute("open-1", { action: "open", url: "https://8.8.8.8/?q='quoted'" });
     const openOptions = runCommand.mock.calls[0]?.[1] as unknown as { input?: string };
     expect(openOptions.input).toContain("new_tab(");
     const result = await tool.execute("shot-1", { action: "screenshot", fullPage: true });
     expect(result.content.some((block) => block.type === "image")).toBe(true);
     const files = await fs.readdir(path.join(workspaceDir, ".openclaw", "browser"));
     expect(files).toHaveLength(1);
+  });
+
+  it("rejects protected navigation before Browser Harness I/O", async () => {
+    const { runCommand, tool } = await createFixture();
+
+    await expect(
+      tool.execute("open-file", { action: "open", url: "file:///etc/passwd" }),
+    ).rejects.toThrow('Navigation blocked: unsupported protocol "file:"');
+    expect(runCommand).not.toHaveBeenCalled();
   });
 
   it("stops only an OpenClaw-owned managed daemon", async () => {

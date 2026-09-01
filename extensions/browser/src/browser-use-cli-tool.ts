@@ -10,6 +10,7 @@ import {
   type CommandOptions,
   type SpawnResult,
 } from "openclaw/plugin-sdk/process-runtime";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   ensureManagedBrowserHarness,
   resolveManagedBrowserHarnessPaths,
@@ -19,6 +20,7 @@ import {
   BrowserUseCliToolSchema,
   describeBrowserUseCliTool,
 } from "./browser-use-cli-tool.schema.js";
+import { assertBrowserNavigationAllowed } from "./browser/navigation-guard.js";
 import { writeExternalFileWithinOutputRoot } from "./browser/output-files.js";
 import { resolvePreferredOpenClawTmpDir } from "./infra/tmp-openclaw-dir.js";
 import { imageResultFromFile } from "./sdk-setup-tools.js";
@@ -231,6 +233,7 @@ export function createBrowserUseCliTool(opts: {
   workspaceDir: string;
   runCommand?: RunCommand;
   ensureManaged?: typeof ensureManagedBrowserHarness;
+  ssrfPolicy?: SsrFPolicy;
 }): AnyAgentTool {
   const runCommand = opts.runCommand ?? runCommandWithTimeout;
   const ensureManaged = opts.ensureManaged ?? ensureManagedBrowserHarness;
@@ -363,6 +366,10 @@ export function createBrowserUseCliTool(opts: {
         if (!url) {
           return textResult("action=open requires url.", { action, error: "missing_url" });
         }
+        await assertBrowserNavigationAllowed({
+          url,
+          ...(opts.ssrfPolicy ? { ssrfPolicy: opts.ssrfPolicy } : {}),
+        });
         return await run(
           action,
           {

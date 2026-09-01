@@ -13,8 +13,8 @@ Use this skill when you need the `browser` tool for anything beyond a single pag
 Read the live `browser` tool description before the first call.
 
 - If its actions are `status`, `start`, `stop`, `open`, `screenshot`, and
-  `exec`, it is the default Browser Harness backend. Use the Browser Harness
-  loop below.
+  `exec`, it is the Browser Harness backend for this unrestricted host-exec
+  run. Use the Browser Harness loop below.
 - If it offers `profiles`, `tabs`, `snapshot`, and `act`, it is OpenClaw's
   native backend. Continue with the native Operating Loop in the next section.
 
