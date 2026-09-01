@@ -303,7 +303,7 @@ export function prepareDevicePairingRequest(params: {
 }
 
 /** Refresh one compatible pending request or replace a superseded request set atomically. */
-export function reconcilePendingPairingRequests<
+function reconcilePendingPairingRequests<
   TPending extends { requestId: string },
   TIncoming,
 >(params: {

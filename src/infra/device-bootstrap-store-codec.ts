@@ -30,7 +30,7 @@ type PersistedPendingBootstrapState = Partial<DeviceBootstrapProfile> & {
   approvalRequests?: unknown;
 };
 
-export function encodePendingBootstrapState(
+function encodePendingBootstrapState(
   record: DeviceBootstrapTokenRecord,
 ): PersistedPendingBootstrapState | undefined {
   if (!record.pendingProfile && !record.pendingApprovalRequests?.length) {
@@ -44,7 +44,7 @@ export function encodePendingBootstrapState(
   };
 }
 
-export function decodePendingBootstrapState(value: unknown): {
+function decodePendingBootstrapState(value: unknown): {
   pendingProfile?: DeviceBootstrapProfile;
   pendingApprovalRequests?: DeviceBootstrapTokenRecord["pendingApprovalRequests"];
 } {
