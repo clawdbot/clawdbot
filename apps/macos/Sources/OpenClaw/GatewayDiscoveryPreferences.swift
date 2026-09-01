@@ -49,6 +49,22 @@ enum GatewayDiscoveryPreferences {
         self.preferredRouteBindingVerification(routeBinding, key: key) == .match
     }
 
+    static func authorizedDeviceAuthGatewayID(_ routeBinding: String?) -> String? {
+        self.authorizedDeviceAuthGatewayID(routeBinding, key: self.routeBindingKey)
+    }
+
+    static func authorizedDeviceAuthGatewayID(
+        _ routeBinding: String?,
+        key: SymmetricKey?) -> String?
+    {
+        switch self.preferredRouteBindingVerification(routeBinding, key: key) {
+        case .noPreference, .match:
+            routeBinding
+        case .mismatch, .unverifiable:
+            nil
+        }
+    }
+
     static func defaultRouteBindingKey() -> SymmetricKey? {
         self.routeBindingKey
     }

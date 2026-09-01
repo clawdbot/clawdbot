@@ -1,8 +1,10 @@
 import CryptoKit
 import Foundation
+import OpenClawIPC
 import Testing
 @testable import OpenClaw
 @testable import OpenClawDiscovery
+@testable import OpenClawKit
 
 private final class DiscoveryConnectRequestRecorder: @unchecked Sendable {
     private let lock = NSLock()
@@ -359,6 +361,98 @@ struct GatewayDiscoverySelectionSupportTests {
         }
     }
 
+    @Test func `stored device auth owner requires a verified discovery receipt`() async throws {
+        let configPath = TestIsolation.tempConfigPath()
+        try await self.withIsolation(configPath: configPath) {
+            let routeBinding = "remote:direct:wss://gateway-a.example.test:443"
+
+            #expect(GatewayDiscoveryPreferences.authorizedDeviceAuthGatewayID(
+                routeBinding,
+                key: nil) == routeBinding)
+
+            GatewayDiscoveryPreferences.setPreferredStableID(
+                "gateway-a",
+                routeBinding: routeBinding,
+                key: self.routeBindingKey)
+            #expect(GatewayDiscoveryPreferences.authorizedDeviceAuthGatewayID(
+                routeBinding,
+                key: self.routeBindingKey) == routeBinding)
+            #expect(GatewayDiscoveryPreferences.authorizedDeviceAuthGatewayID(
+                routeBinding,
+                key: nil) == nil)
+
+            for verifier in [
+                routeBinding,
+                "hmac-sha256:gateway-discovery-route-binding:v1:not-a-valid-tag",
+            ] {
+                AppDefaults.standard.set(
+                    verifier,
+                    forKey: "gateway.preferredStableIDRouteBinding.v1")
+                #expect(GatewayDiscoveryPreferences.authorizedDeviceAuthGatewayID(
+                    routeBinding,
+                    key: self.routeBindingKey) == nil)
+            }
+        }
+    }
+
+    @Test func `unverified discovery receipt cannot reach Node connect auth`() async throws {
+        let configPath = TestIsolation.tempConfigPath()
+        try await self.withIsolation(configPath: configPath) {
+            let gatewayURL = "wss://gateway-a.example.test"
+            #expect(OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "transport": "direct",
+                        "url": gatewayURL,
+                    ],
+                ],
+            ]))
+            let state = AppState(preview: true)
+            let routeBinding = try #require(GatewayDiscoveryPreferences.deviceAuthGatewayID(
+                connectionMode: .remote,
+                remoteTransport: .direct,
+                remoteURL: gatewayURL,
+                remoteTarget: ""))
+            GatewayDiscoveryPreferences.setPreferredStableID("gateway-a")
+            AppDefaults.standard.set(
+                routeBinding,
+                forKey: "gateway.preferredStableIDRouteBinding.v1")
+
+            let stateDir = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: stateDir) }
+
+            try await DeviceIdentityStore.withStateDirectory(stateDir) {
+                let identity = DeviceIdentityStore.loadOrCreate()
+                _ = DeviceAuthStore.storeToken(
+                    deviceId: identity.deviceId,
+                    role: "node",
+                    token: "legacy-node-token")
+                _ = DeviceAuthStore.storeToken(
+                    deviceId: identity.deviceId,
+                    role: "node",
+                    token: "gateway-a-node-token",
+                    gatewayID: routeBinding)
+
+                var source = await GatewayEndpointStore._testLiveSourceSnapshot(
+                    state: state,
+                    beforeConfigRead: {})
+                #expect(source.deviceAuthGatewayID == nil)
+                #expect(try await self.connectNodeAuth(source: source)?["token"] == nil)
+
+                GatewayDiscoveryPreferences.setPreferredStableID(nil)
+                source = await GatewayEndpointStore._testLiveSourceSnapshot(
+                    state: state,
+                    beforeConfigRead: {})
+                #expect(source.deviceAuthGatewayID == routeBinding)
+                #expect(try await self.connectNodeAuth(source: source)?["token"] as? String ==
+                    "gateway-a-node-token")
+            }
+        }
+    }
+
     @Test func `legacy raw route binding is never accepted as proof`() async {
         let configPath = TestIsolation.tempConfigPath()
         await self.withIsolation(configPath: configPath) {
@@ -548,6 +642,48 @@ struct GatewayDiscoverySelectionSupportTests {
             params: nil,
             retryTransportFailures: false)
         await connection.shutdown()
+        return recorder.auth()
+    }
+
+    private func connectNodeAuth(
+        source: GatewayEndpointStore.SourceSnapshot) async throws -> [String: Any]?
+    {
+        let recorder = DiscoveryConnectRequestRecorder()
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { _, message, sendIndex in
+                guard sendIndex == 0 else { return }
+                recorder.record(message)
+            })
+        })
+        let endpoint = GatewayConnection.EndpointSnapshot(
+            config: (
+                source.directRemoteURL ?? URL(string: "ws://127.0.0.1:18789")!,
+                source.token,
+                source.password),
+            routeAuthority: nil,
+            deviceAuthGatewayID: source.deviceAuthGatewayID)
+        let options = MacNodeModeCoordinator.connectOptions(
+            GatewayConnectOptions(
+                role: "node",
+                scopes: [],
+                caps: [],
+                commands: [],
+                permissions: [:],
+                clientId: "openclaw-macos",
+                clientMode: "node",
+                clientDisplayName: "macOS Test",
+                deviceIdentityProfile: .primary),
+            for: endpoint)
+        let gateway = GatewayNodeSession()
+        try await gateway.connect(
+            url: endpoint.config.url,
+            credentials: .init(),
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) })
+        await gateway.disconnect()
         return recorder.auth()
     }
 }

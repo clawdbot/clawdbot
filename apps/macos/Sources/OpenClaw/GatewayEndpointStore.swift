@@ -395,11 +395,13 @@ actor GatewayEndpointStore {
             tailscaleIP: nil)
         let token = deps.token()
         let password = deps.password()
-        let deviceAuthGatewayID = GatewayDiscoveryPreferences.deviceAuthGatewayID(
+        let routeBinding = GatewayDiscoveryPreferences.deviceAuthGatewayID(
             connectionMode: initialMode,
             remoteTransport: .ssh,
             remoteURL: "",
             remoteTarget: "")
+        let deviceAuthGatewayID = GatewayDiscoveryPreferences
+            .authorizedDeviceAuthGatewayID(routeBinding)
         switch initialMode {
         case .local:
             if let reason = self.localUnavailableReason {
@@ -987,17 +989,21 @@ extension GatewayEndpointStore {
         } else {
             sshRouteIdentity = nil
         }
-        let deviceAuthGatewayID = GatewayDiscoveryPreferences.deviceAuthGatewayID(
+        let routeBinding = GatewayDiscoveryPreferences.deviceAuthGatewayID(
             connectionMode: mode,
             remoteTransport: remoteResolution.transport,
             remoteURL: remoteResolution.directURL?.absoluteString
                 ?? GatewayRemoteConfig.resolveUrlString(root: root)
                 ?? "",
             remoteTarget: sshRouteIdentity?.target ?? "")
+        // Route identity is not credential authority for a discovery selection
+        // until its persisted receipt verifies against this exact route.
+        let deviceAuthGatewayID = GatewayDiscoveryPreferences
+            .authorizedDeviceAuthGatewayID(routeBinding)
         // Ambient env credentials are process-wide, not proof for this newly
         // selected Gateway. A discovery route always resolves auth from config.
         let credentialEnv = isRemote && GatewayDiscoveryPreferences
-            .preferredGatewayOwnsRoute(deviceAuthGatewayID) ? [:] : env
+            .preferredGatewayOwnsRoute(routeBinding) ? [:] : env
 
         let source = SourceSnapshot(
             routingGeneration: app.generation,
