@@ -1,3 +1,4 @@
+import { createServer } from "node:http";
 import type { AddressInfo, Server } from "node:net";
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { afterEach, describe, expect, it } from "vitest";
