@@ -16,8 +16,7 @@ export function acceptsControlUiHtmlResponse(accept: string | undefined): boolea
   if (!normalized) {
     return true;
   }
-  // The server offers UTF-8 text/html. XHTML remains an explicit browser-document
-  // signal, but wildcards must not let that alias bypass an HTML rejection.
+  // XHTML is an explicit browser signal; wildcards must negotiate the actual HTML type.
   return (
     acceptsMediaType(normalized, "text/html; charset=utf-8") ||
     hasExplicitAcceptableMediaRange(normalized, "application/xhtml+xml")
