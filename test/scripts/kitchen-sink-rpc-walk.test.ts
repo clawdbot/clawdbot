@@ -580,6 +580,7 @@ describe("kitchen-sink RPC gateway teardown", () => {
   });
 
   it("requires /readyz body.ready before accepting gateway readiness", async () => {
+    vi.useFakeTimers();
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-ready-body-"));
     try {
       const logPath = path.join(root, "gateway.log");
@@ -589,13 +590,15 @@ describe("kitchen-sink RPC gateway teardown", () => {
         .mockResolvedValueOnce(new Response('{"ready":false}', { status: 200 }))
         .mockResolvedValueOnce(new Response('{"ready":true}', { status: 200 }));
 
-      await expect(
+      const readiness = expect(
         waitForGatewayReady({ exitCode: null, signalCode: null }, 9, logPath, {
           fetchImpl,
           pollDelayMs: 1,
           timeoutMs: 100,
         }),
       ).resolves.toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      await readiness;
 
       expect(fetchImpl).toHaveBeenCalledTimes(2);
     } finally {
