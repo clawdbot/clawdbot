@@ -523,30 +523,60 @@ const swiftPMResourceBundles = [
   "SwiftMath_SwiftMath.bundle",
 ] as const;
 
-function runSwiftPMResourceBundleHarness(missingBundle?: string) {
+const mlxTTSResourceFiles = [
+  "mlx-swift_Cmlx.bundle/Contents/Info.plist",
+  "mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib",
+  "swift-crypto_Crypto.bundle/Contents/Info.plist",
+  "swift-crypto_Crypto.bundle/Contents/Resources/PrivacyInfo.xcprivacy",
+  "swift-transformers_Hub.bundle/Contents/Info.plist",
+  "swift-transformers_Hub.bundle/Contents/Resources/gpt2_tokenizer_config.json",
+  "swift-transformers_Hub.bundle/Contents/Resources/t5_tokenizer_config.json",
+] as const;
+
+function runSwiftPMResourceBundleHarness(
+  options: { missingBundle?: string; missingMetallib?: boolean; skipMLXTTS?: boolean } = {},
+) {
   const root = tempDirs.make("openclaw-package-resources-root-");
   const buildRoot = path.join(root, "build");
+  const helperBuildRoot = path.join(root, "helper build");
   const appRoot = path.join(root, "OpenClaw.app");
   const buildProducts = path.join(buildRoot, "arm64", "debug");
+  const helperBuildProducts = path.join(helperBuildRoot, "arm64", "debug");
 
   mkdirSync(path.join(appRoot, "Contents", "Resources"), { recursive: true });
   for (const bundle of swiftPMResourceBundles) {
-    if (bundle === missingBundle) {
+    if (bundle === options.missingBundle) {
       continue;
     }
     const source = path.join(buildProducts, bundle);
     mkdirSync(source, { recursive: true });
     writeFileSync(path.join(source, "marker"), bundle, "utf8");
   }
+  for (const file of mlxTTSResourceFiles) {
+    if (
+      file.startsWith(`${options.missingBundle}/`) ||
+      (options.missingMetallib && file.endsWith("/default.metallib"))
+    ) {
+      continue;
+    }
+    const source = path.join(helperBuildProducts, file);
+    mkdirSync(path.dirname(source), { recursive: true });
+    writeFileSync(source, file, "utf8");
+  }
 
   const result = runHelper(`
     set -euo pipefail
     BUILD_ROOT=${JSON.stringify(buildRoot)}
+    MLX_TTS_HELPER_BUILD_ROOT=${JSON.stringify(helperBuildRoot)}
     APP_ROOT=${JSON.stringify(appRoot)}
     PRIMARY_ARCH=arm64
     BUILD_CONFIG=debug
+    SKIP_MLX_TTS=${options.skipMLXTTS ? "1" : "0"}
     build_path_for_arch() {
       echo "$BUILD_ROOT/$1"
+    }
+    helper_build_path_for_arch() {
+      echo "$MLX_TTS_HELPER_BUILD_ROOT/$1"
     }
     ${getSwiftPMResourceBundleBlock()}
   `);
@@ -969,7 +999,6 @@ describe("package-mac-app plist stamping", () => {
 
   it("builds and bundles the MLX TTS helper for every requested architecture", () => {
     const script = readFileSync(scriptPath, "utf8");
-    const helperBlock = getMLXTTSHelperBuildBlock();
     const buildLoop = script.slice(
       script.indexOf('for arch in "${BUILD_ARCHS[@]}"; do'),
       script.indexOf('BIN_PRIMARY="$(bin_for_arch "$PRIMARY_ARCH")"'),
@@ -980,9 +1009,6 @@ describe("package-mac-app plist stamping", () => {
     );
 
     expect(buildLoop).toContain('build_mlx_tts_helper "$arch"');
-    expect(helperBlock).toContain('--package-path "$MLX_TTS_HELPER_ROOT"');
-    expect(helperBlock).toContain('--product "$MLX_TTS_HELPER_PRODUCT"');
-    expect(helperBlock).toContain('--arch "$arch"');
     expect(helperCopy).toContain(
       'cp "$(helper_bin_for_arch "$PRIMARY_ARCH")" "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"',
     );
@@ -1041,83 +1067,52 @@ describe("package-mac-app plist stamping", () => {
     },
   );
 
-  it.each([
-    { title: "keeps the default backend when Xcode's Metal shim works", shimExit: 0, xcrunExit: 0 },
-    {
-      title: "uses the native backend when xcrun can run Metal but Xcode's shim is broken",
-      shimExit: 1,
-      xcrunExit: 0,
-    },
-    {
-      title: "keeps the default backend when no working Metal compiler is installed",
-      shimExit: 1,
-      xcrunExit: 1,
-    },
-  ])("$title", ({ shimExit, xcrunExit }) => {
-    const helperBlock = getMLXTTSHelperBuildBlock();
-    const tempRoot = tempDirs.make("openclaw-package-mlx-metal-");
-    const toolsDir = path.join(tempRoot, "tools");
-    const toolchainDir = path.join(tempRoot, "xcode-toolchain");
-    const invocationPath = path.join(tempRoot, "swift-args");
+  it.each(["arm64", "x86_64"])(
+    "uses SwiftBuild for the MLX helper on %s even when Xcode's Metal shim is broken",
+    (arch) => {
+      const tempRoot = tempDirs.make("openclaw-package-mlx-metal-");
+      const metalPath = path.join(tempRoot, "metal");
+      const invocationPath = path.join(tempRoot, "swift-args");
+      writeFileSync(metalPath, "#!/bin/sh\nexit 1\n");
+      chmodSync(metalPath, 0o755);
 
-    mkdirSync(toolsDir, { recursive: true });
-    mkdirSync(toolchainDir, { recursive: true });
-
-    const tools: Array<[string, string]> = [
-      [
-        path.join(toolsDir, "xcrun"),
-        [
-          "#!/usr/bin/env bash",
-          'case "$*" in',
-          '  "--find swift") printf "%s\\n" "$MOCK_SWIFT_PATH" ;;',
-          '  "metal --version") exit "$MOCK_XCRUN_EXIT" ;;',
-          "  *) exit 1 ;;",
-          "esac",
-          "",
-        ].join("\n"),
-      ],
-      [
-        path.join(toolsDir, "swift"),
-        '#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "$MOCK_SWIFT_ARGS"\n',
-      ],
-      [path.join(toolchainDir, "swift"), "#!/usr/bin/env bash\nexit 0\n"],
-      [path.join(toolchainDir, "metal"), `#!/usr/bin/env bash\nexit ${shimExit}\n`],
-    ];
-
-    for (const [toolPath, contents] of tools) {
-      writeFileSync(toolPath, contents, "utf8");
-      chmodSync(toolPath, 0o755);
-    }
-
-    const result = runHelper(
-      `
+      const result = runHelper(`
       set -euo pipefail
-      export PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
-      export MOCK_SWIFT_PATH=${JSON.stringify(path.join(toolchainDir, "swift"))}
-      export MOCK_XCRUN_EXIT=${JSON.stringify(String(xcrunExit))}
-      export MOCK_SWIFT_ARGS=${JSON.stringify(invocationPath)}
+      PATH=/usr/bin:/bin
+      xcrun() {
+        case "$*" in
+          "--find swift") printf '%s\\n' ${JSON.stringify(path.join(tempRoot, "swift"))} ;;
+          "metal --version") return 0 ;;
+          *) return 1 ;;
+        esac
+      }
+      swift() { printf '%s\\n' "$@" > ${JSON.stringify(invocationPath)}; }
       MLX_TTS_HELPER_ROOT=${JSON.stringify(path.join(tempRoot, "helper"))}
       MLX_TTS_HELPER_PRODUCT=openclaw-mlx-tts
-      BUILD_CONFIG=debug
+      BUILD_CONFIG=release
       helper_build_path_for_arch() { printf '%s\\n' ${JSON.stringify(path.join(tempRoot, "build"))}/"$1"; }
-      ${helperBlock}
-      build_mlx_tts_helper arm64
-    `,
-      "/bin/bash",
-    );
+      ${getMLXTTSHelperBuildBlock()}
+      build_mlx_tts_helper ${arch}
+    `);
 
-    expect(result.status, result.stderr).toBe(0);
-    const swiftArgs = readFileSync(invocationPath, "utf8").trim().split("\n");
-    expect(swiftArgs[0]).toBe("build");
-    expect(swiftArgs).toContain("--package-path");
-    expect(swiftArgs).toContain("--arch");
-    expect(swiftArgs).toContain("arm64");
-    if (shimExit === 0 || xcrunExit !== 0) {
-      expect(swiftArgs).not.toContain("--build-system");
-    } else {
-      expect(swiftArgs.slice(1, 3)).toEqual(["--build-system", "native"]);
-    }
-  });
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(invocationPath, "utf8").trim().split("\n")).toEqual([
+        "build",
+        "--build-system",
+        "swiftbuild",
+        "--package-path",
+        path.join(tempRoot, "helper"),
+        "-c",
+        "release",
+        "--product",
+        "openclaw-mlx-tts",
+        "--build-path",
+        path.join(tempRoot, "build", arch),
+        "--arch",
+        arch,
+      ]);
+    },
+  );
 
   it("skips the MLX TTS helper build and copy when OPENCLAW_SKIP_MLX_TTS=1", () => {
     const script = readFileSync(scriptPath, "utf8");
@@ -1536,7 +1531,7 @@ describe("package-mac-app plist stamping", () => {
     expect(macosCi).toContain("test/scripts/mac-elevation-artifact.test.ts");
   });
 
-  it("copies generated SwiftPM bundles into packaged app resources", () => {
+  it("copies complete main and MLX helper SwiftPM bundles into packaged app resources", () => {
     const { appRoot, result } = runSwiftPMResourceBundleHarness();
 
     expect(result.status).toBe(0);
@@ -1546,6 +1541,10 @@ describe("package-mac-app plist stamping", () => {
         readFileSync(path.join(appRoot, "Contents", "Resources", bundle, "marker"), "utf8"),
       ).toBe(bundle);
       expect(existsSync(path.join(appRoot, bundle))).toBe(false);
+    }
+    for (const file of mlxTTSResourceFiles) {
+      expect(readFileSync(path.join(appRoot, "Contents", "Resources", file), "utf8")).toBe(file);
+      expect(existsSync(path.join(appRoot, file))).toBe(false);
     }
   });
 
@@ -1562,7 +1561,7 @@ describe("package-mac-app plist stamping", () => {
 
   it("fails closed when any required SwiftPM resource bundle is missing", () => {
     for (const missingBundle of swiftPMResourceBundles) {
-      const { result } = runSwiftPMResourceBundleHarness(missingBundle);
+      const { result } = runSwiftPMResourceBundleHarness({ missingBundle });
 
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("ERROR: Required SwiftPM resource bundle not found at");
@@ -1570,32 +1569,44 @@ describe("package-mac-app plist stamping", () => {
     }
   });
 
-  it("keeps generated SwiftPM bundles in the signed resources directory", () => {
+  it.each(["bundle", "compiled shaders"])(
+    "fails closed when the MLX helper %s is missing",
+    (missing) => {
+      const { result } = runSwiftPMResourceBundleHarness(
+        missing === "bundle"
+          ? { missingBundle: "mlx-swift_Cmlx.bundle" }
+          : { missingMetallib: true },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib");
+    },
+  );
+
+  it("omits incomplete MLX helper resources when the helper is skipped for a dev build", () => {
+    const { appRoot, result } = runSwiftPMResourceBundleHarness({
+      skipMLXTTS: true,
+      missingMetallib: true,
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    for (const bundle of swiftPMResourceBundles) {
+      expect(
+        readFileSync(path.join(appRoot, "Contents", "Resources", bundle, "marker"), "utf8"),
+      ).toBe(bundle);
+    }
+    for (const file of mlxTTSResourceFiles) {
+      expect(existsSync(path.join(appRoot, "Contents", "Resources", file))).toBe(false);
+    }
+  });
+
+  it("compiles app localizations into signed resources", () => {
     const script = readFileSync(scriptPath, "utf8");
-    const resourceBlock = getSwiftPMResourceBundleBlock();
 
     expect(script).toContain(
       'node --import tsx "$ROOT_DIR/scripts/apple-app-i18n.ts" compile-macos',
     );
     expect(script).toContain('--output "$APP_ROOT/Contents/Resources"');
-    expect(resourceBlock).toContain(
-      'for resource_bundle_src in "$SWIFTPM_BUILD_PRODUCTS"/*.bundle',
-    );
-    expect(resourceBlock).toContain(
-      'cp -R "$resource_bundle_src" "$APP_ROOT/Contents/Resources/$resource_bundle"',
-    );
-    for (const bundle of swiftPMResourceBundles) {
-      expect(resourceBlock).toContain(`"${bundle}"`);
-    }
-    expect(resourceBlock).toContain("ERROR: Required SwiftPM resource bundle not found");
-    expect(resourceBlock).toContain("exit 1");
-    expect(resourceBlock).not.toContain(
-      'cp -R "$resource_bundle_src" "$APP_ROOT/$resource_bundle"',
-    );
-    expect(resourceBlock).not.toContain("WARN:");
-    expect(resourceBlock).not.toContain("continuing");
-    expect(script).not.toContain("Textual resource bundle");
-    expect(script).not.toContain("ALLOW_MISSING_TEXTUAL_BUNDLE");
   });
 
   it("preserves locked Swift package resolution before building", () => {
@@ -1872,9 +1883,9 @@ describe("package-mac-app plist stamping", () => {
     );
     expect(stageScript).toContain('manifest.dependencies["@trycua/cua-driver"]');
     expect(stageScript).toContain('manifest.cuaDriverArtifacts["darwin-universal-binary"]');
-    expect(cuaManifest.dependencies["@trycua/cua-driver"]).toBe("0.21.0");
+    expect(cuaManifest.dependencies["@trycua/cua-driver"]).toBe("0.22.0");
     expect(cuaManifest.cuaDriverArtifacts["darwin-universal-binary"]?.archiveSha256).toBe(
-      "5e327e58f6ce81d5c117fe5edec5f267e87e1b921e8c5a8aa4f7f21cbcf5f273",
+      "202eb9dd2185d64fc0599079671f50efe2bf71b300a85644cf26d627bb7355e6",
     );
     expect(packageScript).toContain(
       '"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"',
