@@ -38,8 +38,10 @@ function scheduleCapabilityRevocationAfterAuthorization(params: {
   let liveCaps = ["canvas"];
   let scheduled = false;
   let resolveRevocation!: () => void;
-  const revocation = new Promise<void>((resolve) => {
+  let rejectRevocation!: (error: unknown) => void;
+  const revocation = new Promise<void>((resolve, reject) => {
     resolveRevocation = resolve;
+    rejectRevocation = reject;
   });
   Object.defineProperty(params.client.connect, "caps", {
     configurable: true,
@@ -49,8 +51,18 @@ function scheduleCapabilityRevocationAfterAuthorization(params: {
         // Model a pairing revocation that lands after the first live-surface
         // read but before the request stage reaches its final dispatch check.
         queueMicrotask(() => {
-          params.nodeRegistry.updateSurface(params.nodeId, { caps: [], commands: [] });
-          resolveRevocation();
+          try {
+            const revoked = params.nodeRegistry.updateSurface(params.nodeId, {
+              caps: [],
+              commands: [],
+            });
+            if (!revoked || revoked.caps.length !== 0) {
+              throw new Error(`failed to revoke proof node ${params.nodeId}`);
+            }
+            resolveRevocation();
+          } catch (error) {
+            rejectRevocation(error);
+          }
         });
       }
       return liveCaps;
@@ -347,7 +359,7 @@ describe("gateway plugin node capability boundary proof", () => {
               const revocation = scheduleCapabilityRevocationAfterAuthorization({
                 client: raceHttpNode,
                 nodeRegistry: raceHttpNodeRegistry,
-                nodeId: "race-http-node",
+                nodeId: "c-race-http-node",
               });
               const raceHttp = await probeHttp(raceHttpCapability);
               await revocation;
@@ -377,7 +389,7 @@ describe("gateway plugin node capability boundary proof", () => {
               const revocation = scheduleCapabilityRevocationAfterAuthorization({
                 client: raceWsNode,
                 nodeRegistry: raceWsNodeRegistry,
-                nodeId: "race-ws-node",
+                nodeId: "c-race-ws-node",
               });
               const raceWs = await requestWsStatus(
                 port,
