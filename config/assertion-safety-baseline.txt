@@ -1367,7 +1367,6 @@ extensions/whatsapp/src/connection-controller-runtime-context.ts	1
 extensions/whatsapp/src/connection-controller.ts	5
 extensions/whatsapp/src/connection-owner.ts	1
 extensions/whatsapp/src/group-config-path.ts	4
-extensions/whatsapp/src/image-preview.ts	2
 extensions/whatsapp/src/inbound-policy.ts	1
 extensions/whatsapp/src/inbound/durable-payload.ts	2
 extensions/whatsapp/src/inbound/extract.ts	10
