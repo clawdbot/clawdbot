@@ -254,6 +254,9 @@ export function renderReplyPayloadsToMessages(
       fitsOneActivity: (text) =>
         parseMentions(text).entities.length === 0 &&
         formatMSTeamsMarkdown(text, tableMode).length <= chunkLimit,
+      // The card's text is this reply's text: send it in the dialect the text path would,
+      // so a table in a reply that also offers a button does not arrive as raw pipes.
+      formatCardText: (text) => formatMSTeamsMarkdown(text, tableMode),
     });
     // The card carries this reply's text, so it is the whole message, and it is content
     // on its own: a controls-only reply would otherwise be skipped as empty.

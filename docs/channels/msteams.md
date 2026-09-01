@@ -959,7 +959,7 @@ An Adaptive Card is one Teams activity, and it carries its own text. Where a car
 - **The reply carries media.** A card and a media attachment cannot share one activity, so the media is sent and the controls become text.
 - **The reply mentions someone.** `@[Name](id)` notifies through the activity's mention entity, which a card body cannot carry.
 - **The reply is longer than one message.** Text is chunked to the channel limit; a card cannot be split.
-- **Teams has no action for any of the controls.** Teams renders `url`, `web-app`, `command` and `callback` actions. A reply whose controls are all of some other kind — an `ask_user` prompt, for example — keeps the prose its producer wrote, because a card there would repeat that prose and offer nothing to tap. Where a card exists for other reasons, those labels are listed under `Actions:` inside it.
+- **Teams has no action for any of the controls.** Teams renders `url`, `web-app`, `command` and `callback` actions. A reply whose controls are all of some other kind — an `ask_user` prompt or an exec-approval prompt, for example — keeps the prose its producer wrote with the control labels appended, because a card there would be an untappable frame whose text never reaches the activity, so notification previews would lose the reply. Where a card exists because at least one control does map, the remaining labels are listed under `Actions:` inside it.
 
 In a one-to-one chat OpenClaw streams the reply's text natively. The card then carries only what the stream did not: the controls Teams can render. Nothing is sent twice.
 

@@ -179,6 +179,8 @@ export function prepareMSTeamsReplyPayload(
      * chunked and cannot carry a mention entity, so the caller owns that judgement.
      */
     fitsOneActivity?: (text: string) => boolean;
+    /** Renders the card's text in the dialect the caller's text path would send. */
+    formatCardText?: (text: string) => string;
   },
 ): ReplyPayload {
   const presentation = normalizeMessagePresentation(payload.presentation);
@@ -192,10 +194,11 @@ export function prepareMSTeamsReplyPayload(
     presentation,
     capabilities: MSTEAMS_PRESENTATION_CAPABILITIES,
   });
-  // "fallback" prose already renders every block; a card that adds no action Teams can
-  // draw would restate it under an instruction to tap buttons that are not there, and the
-  // card's text never reaches the activity, so the prose would simply be lost.
-  if (textIsFallback && !hasMSTeamsCardAction(adapted)) {
+  // A card only earns a reply when Teams can draw at least one of its controls. Without
+  // one the user gets an untappable frame, the reply's prose stops being the activity's
+  // text - so notification previews lose it - and the labels are already appended to that
+  // prose by the text rendering below.
+  if (!hasMSTeamsCardAction(adapted)) {
     return replyWithControlsAsText();
   }
   // The gate asks whether this reply fits one activity, so it reads the reply's own text
@@ -205,8 +208,11 @@ export function prepareMSTeamsReplyPayload(
   if (rest.text && options?.fitsOneActivity && !options.fitsOneActivity(rest.text)) {
     return replyWithControlsAsText();
   }
+  const cardText = rest.text ? options?.formatCardText?.(rest.text) : undefined;
   const rendered = renderMSTeamsPresentationPayload({
-    payload: textIsFallback ? { ...rest, text: undefined } : rest,
+    payload: textIsFallback
+      ? { ...rest, text: undefined }
+      : { ...rest, ...(cardText ? { text: cardText } : {}) },
     presentation: adapted,
   });
   return rendered ?? replyWithControlsAsText();

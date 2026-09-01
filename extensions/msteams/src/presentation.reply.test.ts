@@ -4,11 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { ReplyPayload } from "../runtime-api.js";
 import { renderReplyPayloadsToMessages } from "./messenger.js";
 import { installMSTeamsRenderTestRuntime } from "./messenger.test-helpers.js";
-import {
-  prepareMSTeamsReplyPayload,
-  readMSTeamsPresentationCard,
-  renderMSTeamsPresentationPayload,
-} from "./presentation.js";
+import { prepareMSTeamsReplyPayload, readMSTeamsPresentationCard } from "./presentation.js";
 
 const PRESENTATION = {
   title: "Deploy",
@@ -263,18 +259,57 @@ describe("msteams reply presentation", () => {
     expect(messages.map((message) => message.text ?? "").join("")).toContain("Open");
   });
 
-  it("puts the same text in the card that a `message send` of the payload would", () => {
-    const table = "| Region | Runs |\n| --- | --- |\n| EU | 12 |";
-
-    // Both delivery paths hand the reply's own text to one shared card builder, so the
-    // card a reply produces and the card `message send` produces are the same card.
-    const [reply] = renderReply({ text: table, presentation: PRESENTATION });
-    const outbound = renderMSTeamsPresentationPayload({
-      payload: { text: table },
-      presentation: PRESENTATION,
+  it("sends prose when the reply has its own text but no control Teams can draw", () => {
+    // The shape an exec-approval prompt takes by default: authored prose plus `approval`
+    // buttons Teams has no card action for. A card here is an untappable frame whose text
+    // never becomes the activity's, so notification previews lose the reply entirely.
+    const messages = renderReply({
+      text: "Run `ls -la`?",
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Allow once",
+                action: {
+                  type: "approval",
+                  approvalId: "exec-1",
+                  approvalKind: "exec",
+                  decision: "allow-once",
+                },
+              },
+            ],
+          },
+        ],
+      },
     });
 
-    expect(reply?.card).toEqual(cardOf(outbound ?? {}));
+    expect(messages.every((message) => message.card === undefined)).toBe(true);
+    const text = messages.map((message) => message.text ?? "").join("");
+    expect(text).toContain("Run `ls -la`?");
+    expect(text).toContain("Allow once");
+  });
+
+  it("puts the card's text in the dialect the text path would send", () => {
+    const table = "| Region | Runs |\n| --- | --- |\n| EU | 12 |";
+    const withAction = {
+      blocks: [
+        {
+          type: "buttons" as const,
+          buttons: [{ label: "Open run", url: "https://example.com/run" }],
+        },
+      ],
+    };
+
+    // A reply that also offers a button must not lose the table rendering it would have
+    // had as plain text.
+    const [carded] = renderReply({ text: table, presentation: withAction });
+    const [plain] = renderReply({ text: table });
+
+    expect(carded?.card?.body).toEqual(
+      expect.arrayContaining([{ type: "TextBlock", text: plain?.text, wrap: true }]),
+    );
   });
 
   it("keeps the authored fallback prose when the reply also carries media", () => {
