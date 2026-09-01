@@ -315,7 +315,7 @@ function resolvePluginNpmRuntimePackagePeerMetadata(plan: {
   };
 }
 
-/** Resolve the package-local runtime build plan for one publishable plugin package. */
+/** Resolve the package-local runtime build plan for one plugin package. */
 export function resolvePluginNpmRuntimeBuildPlan(params: PluginNpmRuntimeBuildParams) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
@@ -328,7 +328,9 @@ export function resolvePluginNpmRuntimeBuildPlan(params: PluginNpmRuntimeBuildPa
   const rootPackageJson = fs.existsSync(rootPackageJsonPath)
     ? readJsonFile(rootPackageJsonPath)
     : undefined;
-  if (!isPublishablePluginPackage(packageJson)) {
+  // Compilation also serves private source-checkout plugins. Publication selection
+  // belongs to listPublishablePluginPackageDirs, not the runtime graph builder.
+  if (!Array.isArray(packageJson.openclaw?.extensions)) {
     return null;
   }
 
@@ -386,7 +388,7 @@ export type PluginNpmRuntimeBuildPlan = NonNullable<
 >;
 
 /**
- * Build package-local runtime files and static assets for one plugin package.
+ * Build isolated runtime files and static assets for publication or source-checkout use.
  * @internal Shared repository-script contract.
  */
 export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams) {

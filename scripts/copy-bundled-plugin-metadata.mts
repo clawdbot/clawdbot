@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { listExternalPluginLocalDistPackageDirs } from "./build-external-plugin-local-dist.mts";
 import {
   collectBundledPluginBuildEntries,
   NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
@@ -45,7 +46,7 @@ function shouldCopyBundledPluginMetadata(
   return env.OPENCLAW_BUILD_PRIVATE_QA === "1";
 }
 
-function rewritePackageExtensions(entries: unknown): string[] | undefined {
+function rewritePackageExtensions(entries: unknown, extension: string): string[] | undefined {
   if (!Array.isArray(entries)) {
     return undefined;
   }
@@ -54,7 +55,7 @@ function rewritePackageExtensions(entries: unknown): string[] | undefined {
     .filter((entry) => typeof entry === "string" && entry.trim().length > 0)
     .map((entry) => {
       const normalized = entry.replace(/^\.\//, "");
-      const rewritten = normalized.replace(/\.[^.]+$/u, ".js");
+      const rewritten = normalized.replace(/\.[^.]+$/u, extension);
       return `./${rewritten}`;
     });
 }
@@ -106,12 +107,12 @@ function isManifestlessBundledRuntimeSupportPackage(params: {
   return params.topLevelPublicSurfaceEntries.length > 0;
 }
 
-function rewritePackageEntry(entry: unknown): string | undefined {
+function rewritePackageEntry(entry: unknown, extension: string): string | undefined {
   if (typeof entry !== "string" || entry.trim().length === 0) {
     return undefined;
   }
   const normalized = entry.replace(/^\.\//, "");
-  const rewritten = normalized.replace(/\.[^.]+$/u, ".js");
+  const rewritten = normalized.replace(/\.[^.]+$/u, extension);
   return `./${rewritten}`;
 }
 
@@ -274,6 +275,7 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
   const buildablePluginDirs = new Set(
     collectBundledPluginBuildEntries({ cwd: repoRoot, env }).map((entry) => entry.id),
   );
+  const externalLocalDistDirs = new Set(listExternalPluginLocalDistPackageDirs({ repoRoot, env }));
   const generatedChannelConfigsByPlugin = readGeneratedBundledChannelConfigs(repoRoot);
   const sourcePluginDirs = new Set<string>();
   for (const dirent of fs.readdirSync(extensionsRoot, { withFileTypes: true })) {
@@ -364,11 +366,19 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
       continue;
     }
     if (packageJson && isRecord(packageJson.openclaw) && "extensions" in packageJson.openclaw) {
+      // Isolated local builds retain the plugin's format; Docker's unified graph
+      // still emits ESM even when the standalone package uses CommonJS.
+      const extension =
+        externalLocalDistDirs.has(`extensions/${dirent.name}`) &&
+        isRecord(packageJson.openclaw.build) &&
+        packageJson.openclaw.build.runtimeFormat === "cjs"
+          ? ".cjs"
+          : ".js";
       packageJson.openclaw = {
         ...packageJson.openclaw,
-        extensions: rewritePackageExtensions(packageJson.openclaw.extensions),
+        extensions: rewritePackageExtensions(packageJson.openclaw.extensions, extension),
         ...(typeof packageJson.openclaw.setupEntry === "string"
-          ? { setupEntry: rewritePackageEntry(packageJson.openclaw.setupEntry) }
+          ? { setupEntry: rewritePackageEntry(packageJson.openclaw.setupEntry, extension) }
           : {}),
       };
     }

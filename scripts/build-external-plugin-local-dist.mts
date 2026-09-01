@@ -4,7 +4,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
-import { DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV } from "./lib/bundled-plugin-build-entries.mjs";
+import {
+  collectBundledPluginBuildEntries,
+  collectRootPackageExcludedExtensionDirs,
+  DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV,
+  NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
+} from "./lib/bundled-plugin-build-entries.mjs";
 import { shouldBuildBundledCluster } from "./lib/optional-bundled-clusters.mjs";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import {
@@ -32,13 +37,24 @@ export function listExternalPluginLocalDistPackageDirs(
   if (env[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]?.trim()) {
     return [];
   }
-  return listPublishablePluginPackageDirs({ repoRoot }).filter((packageDir) => {
-    const packageJson = readPluginPackageJson(repoRoot, packageDir);
-    return (
-      packageJson.openclaw?.build?.bundledDist === false &&
-      shouldBuildBundledCluster(path.basename(packageDir), env, { packageJson })
-    );
-  });
+  const excludedPluginIds = collectRootPackageExcludedExtensionDirs({ cwd: repoRoot });
+  const excludedBuildableDirs = collectBundledPluginBuildEntries({ cwd: repoRoot, env })
+    .filter(({ id }) => excludedPluginIds.has(id) && !NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(id))
+    .map(({ id }) => `extensions/${id}`);
+  const candidates = new Set([
+    ...listPublishablePluginPackageDirs({ repoRoot }),
+    ...excludedBuildableDirs,
+  ]);
+  return [...candidates]
+    .filter((packageDir) => {
+      const packageJson = readPluginPackageJson(repoRoot, packageDir);
+      return (
+        (packageJson.openclaw?.build?.bundledDist === false ||
+          excludedBuildableDirs.includes(packageDir)) &&
+        shouldBuildBundledCluster(path.basename(packageDir), env, { packageJson })
+      );
+    })
+    .toSorted();
 }
 
 /** Builds isolated plugin graphs, then stages every output below its excluded root dist path. */

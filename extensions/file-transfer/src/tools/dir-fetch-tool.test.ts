@@ -177,23 +177,44 @@ describe("dir.fetch archive extraction", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "extracts canonical paths from backslash-separated archive names",
+    "extracts canonical backslash-separated names beneath the destination",
     async () => {
       const tarBuffer = await createTarBuffer({
         entries: ["dir\\note.txt"],
         setup: async (sourceDir) => {
-          await fs.writeFile(path.join(sourceDir, "dir\\note.txt"), "canonical content");
+          await fs.writeFile(path.join(sourceDir, "dir\\note.txt"), "normalized");
         },
       });
       prepareArchive(tarBuffer);
-
       const result = await executeDirFetch();
-      const files = (result.details as { files: Array<{ relPath: string; localPath: string }> })
-        .files;
-      expect(files).toMatchObject([{ relPath: path.join("dir", "note.txt") }]);
-      await expect(fs.readFile(files[0]!.localPath, "utf8")).resolves.toBe("canonical content");
+      const details = result.details as {
+        rootDir: string;
+        files: Array<{ relPath: string; localPath: string }>;
+      };
+      expect(details.files).toMatchObject([
+        {
+          relPath: path.join("dir", "note.txt"),
+          localPath: path.join(details.rootDir, "dir", "note.txt"),
+        },
+      ]);
+      await expect(fs.readFile(details.files[0]!.localPath, "utf8")).resolves.toBe("normalized");
     },
   );
+
+  it.runIf(process.platform !== "win32")("rejects backslash-hidden parent traversal", async () => {
+    const tarBuffer = await createTarBuffer({
+      entries: ["dir\\..\\escape.txt"],
+      setup: async (sourceDir) => {
+        await fs.writeFile(path.join(sourceDir, "dir\\..\\escape.txt"), "blocked");
+      },
+    });
+    const archivePath = prepareArchive(tarBuffer);
+    await expect(executeDirFetch()).rejects.toThrow(/dir\.fetch UNSAFE_ARCHIVE:/iu);
+    await expect(fs.access(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(appendFileTransferAudit).toHaveBeenLastCalledWith(
+      expect.objectContaining({ decision: "error", errorCode: "UNSAFE_ARCHIVE" }),
+    );
+  });
 
   it("maps single-entry expansion limits to TREE_TOO_LARGE", async () => {
     const tarBuffer = await createTarBuffer({

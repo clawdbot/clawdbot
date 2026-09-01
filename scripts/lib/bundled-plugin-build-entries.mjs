@@ -122,6 +122,25 @@ export function collectPluginSourceEntries(packageJson) {
   return packageEntries.length > 0 ? packageEntries : ["./index.ts"];
 }
 
+/** Select typed plugin contracts, not runtime loader sidecars or implementation helpers. */
+export function collectPluginDeclarationSourceEntries(packageJson, sourceEntries) {
+  const entryName = (entry) =>
+    entry.replace(/^\.\/(?:dist\/)?/u, "").replace(/(?:\.d)?\.[cm]?[jt]s$/u, "");
+  const publicNames = new Set(["api", "runtime-api", "contract-api"]);
+  function collectExports(value) {
+    if (typeof value === "string") {
+      publicNames.add(entryName(value));
+    } else if (value && typeof value === "object") {
+      for (const entry of Object.values(value)) {
+        collectExports(entry);
+      }
+    }
+  }
+  collectExports(packageJson?.exports);
+  collectExports(packageJson?.types ?? packageJson?.typings);
+  return sourceEntries.filter((entry) => publicNames.has(entryName(entry)));
+}
+
 /** Collect top-level public plugin surface files that should be built. */
 export function collectTopLevelPublicSurfaceEntries(pluginDir) {
   if (!fs.existsSync(pluginDir)) {
