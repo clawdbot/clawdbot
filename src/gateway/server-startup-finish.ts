@@ -170,6 +170,7 @@ export async function finishGatewayStartup(params: {
       isPendingWorkerNodeSetup: workerEnvironmentService?.hasPendingNodeEnrollmentSetup,
       gatewayMethods: runtimeState.gatewayMethods,
       events: GATEWAY_EVENTS,
+      refreshHealthAfterConnect: !minimalTestGateway,
       logGateway: log,
       logHealth,
       logWsControl,

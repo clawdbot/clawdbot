@@ -366,7 +366,9 @@ export async function sendGatewayHello(
   // Post-connect refresh only needs a cached/config snapshot for UI state;
   // live channel probes here pulled slow Discord/Telegram HTTP checks into
   // reply-adjacent websocket handshakes.
-  void refreshHealthSnapshot({ probe: false }).catch((err: unknown) =>
-    logHealth.error(`post-connect health refresh failed: ${formatError(err)}`),
-  );
+  if (context.handler.refreshHealthAfterConnect !== false) {
+    void refreshHealthSnapshot({ probe: false }).catch((err: unknown) =>
+      logHealth.error(`post-connect health refresh failed: ${formatError(err)}`),
+    );
+  }
 }

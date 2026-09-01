@@ -38,6 +38,9 @@ export function attachGatewayWsHandlers(params: GatewayWsRuntimeParams) {
     gatewayMethods: params.gatewayMethods,
     events: params.events,
     refreshHealthSnapshot: params.context.refreshHealthSnapshot,
+    ...(params.refreshHealthAfterConnect === undefined
+      ? {}
+      : { refreshHealthAfterConnect: params.refreshHealthAfterConnect }),
     logGateway: params.logGateway,
     logHealth: params.logHealth,
     logWsControl: params.logWsControl,
