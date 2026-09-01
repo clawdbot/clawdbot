@@ -16,7 +16,7 @@ import type { prepareAndDispatchEmbeddedRunAttempt } from "./attempt-dispatch-pr
 import type { normalizeEmbeddedRunAttempt } from "./attempt-normalization.js";
 import {
   hasAsyncActivity,
-  hasAttemptTerminalState,
+  hasNonToolTerminalState,
   isCurrentAttemptReplaySafe,
 } from "./attempt-terminal-evidence.js";
 import { buildEmbeddedRunBlockedResult } from "./blocked-run-result.js";
@@ -144,6 +144,11 @@ export async function recoverEmbeddedRunAttempt(input: {
   const settledEvidence = resolveSettledToolBatchEvidence(attempt);
   const midTurnBatchSettled =
     settledEvidence.allToolsProvenSettled || settledEvidence.parkedCodeModeRun;
+  // Failed results need closed lifecycle proof; the parked-run exception is
+  // only safe for a successful Code Mode result that the model can resume via wait.
+  const transportBatchSettled =
+    settledEvidence.allToolsProvenSettled ||
+    (settledEvidence.failedToolNames.size === 0 && settledEvidence.parkedCodeModeRun);
   const canContinueSettledMidTurnOverflow =
     promptErrorSource === "precheck" &&
     attempt.preflightRecovery?.source === "mid-turn" &&
@@ -162,8 +167,9 @@ export async function recoverEmbeddedRunAttempt(input: {
     !aborted &&
     !timedOut &&
     !terminalInterrupted &&
-    !hasAttemptTerminalState(attempt) &&
-    midTurnBatchSettled &&
+    !hasNonToolTerminalState(attempt) &&
+    !settledEvidence.hasUnsettledToolError &&
+    transportBatchSettled &&
     // A parked Code Mode result is persisted same-session state. Continuing is
     // how the model reaches wait; it does not resubmit the prompt or exec call.
     isSilentTransportDropAssistant(currentAttemptAssistant)
@@ -240,6 +246,7 @@ export async function recoverEmbeddedRunAttempt(input: {
 
   const requestedSelection = shouldSwitchToLiveModel({
     cfg: params.config,
+    sessionPersistence: params.sessionPersistence,
     sessionKey: runInput.resolvedSessionKey,
     agentId: params.agentId,
     defaultProvider: DEFAULT_PROVIDER,
@@ -363,7 +370,9 @@ export async function recoverEmbeddedRunAttempt(input: {
     runInput.laneController.throwIfAborted();
     recoveryState.transportDropContinuations += 1;
     sessionPromptState.markOwnedTranscriptRetry();
-    sessionPromptState.continueFromCurrentTranscript();
+    sessionPromptState.continueFromCurrentTranscript({
+      includeToolFailureInstruction: settledEvidence.failedToolNames.size > 0,
+    });
     log.warn(
       `provider transport dropped after a settled tool batch; continuing from the transcript ` +
         `attempt=${recoveryState.transportDropContinuations}/${MAX_TRANSPORT_DROP_CONTINUATIONS} ` +
@@ -445,8 +454,8 @@ export async function recoverEmbeddedRunAttempt(input: {
       advanceAuthProfile: failoverRetryController.advanceAuthProfile,
       advanceRateLimitAuthProfile: failoverRetryController.advanceRateLimitAuthProfile,
       maybeMarkAuthProfileFailure: failoverRetryController.maybeMarkAuthProfileFailure,
-      maybeBackoffBeforeOverloadFailover:
-        failoverRetryController.maybeBackoffBeforeOverloadFailover,
+      maybeRetryTransient: failoverRetryController.maybeRetryTransient,
+      getTransientRetryCount: () => failoverRetryController.transientRetryCount,
       attemptedThinking: preparedRuntime.attemptedThinking,
       thinkLevel: runtime.thinkLevel,
       getThinkLevel: () => preparedRuntime.snapshot().thinkLevel,

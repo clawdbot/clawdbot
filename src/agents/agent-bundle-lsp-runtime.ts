@@ -247,12 +247,20 @@ function lspAbortError(signal?: AbortSignal): Error {
     : createAbortError("LSP request aborted", { cause: signal?.reason });
 }
 
+function lspSessionDisposedError(): Error {
+  return new Error("LSP session disposed");
+}
+
 function sendRequest(
   session: LspSession,
   method: string,
   params?: unknown,
   signal?: AbortSignal,
 ): Promise<unknown> {
+  // Disposal closes tool requests before the child finishes its shutdown handshake.
+  if (session.disposed && method !== "shutdown") {
+    return Promise.reject(lspSessionDisposedError());
+  }
   if (session.failure) {
     return Promise.reject(session.failure);
   }
@@ -380,6 +388,8 @@ async function disposeSession(session: LspSession) {
     return;
   }
   session.disposed = true;
+  // Release abort listeners before shutdown forbids cancellation notifications.
+  session.pendingRequests.rejectAll(lspSessionDisposedError());
   activeBundleLspSessions.delete(session);
 
   if (session.initialized) {
@@ -394,7 +404,7 @@ async function disposeSession(session: LspSession) {
       // best-effort
     }
   }
-  session.pendingRequests.rejectAll(new Error("LSP session disposed"));
+  session.pendingRequests.rejectAll(lspSessionDisposedError());
   terminateLspProcessTree(session);
 }
 

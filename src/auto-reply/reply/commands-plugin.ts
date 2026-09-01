@@ -6,7 +6,6 @@
  */
 
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
@@ -17,7 +16,6 @@ import {
   PLUGIN_COMMAND_DISPATCH,
   type PluginCommandExecutionReplyOptions,
 } from "../../plugins/plugin-command-runtime.js";
-import { DEFAULT_AGENT_ID, isUnscopedSessionKeySentinel } from "../../routing/session-key.js";
 import { handleCompactCommand } from "./commands-compact.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 
@@ -30,31 +28,7 @@ export const handlePluginCommand: CommandHandler = async (
   params,
   allowTextCommands,
 ): Promise<CommandHandlerResult | null> => {
-  const { command, cfg } = params;
-  const targetSessionEntry = structuredClone(
-    params.sessionStore?.[params.sessionKey] ?? params.sessionEntry,
-  );
-  const targetAgentId =
-    params.sessionKey && !isUnscopedSessionKeySentinel(params.sessionKey)
-      ? (resolveSessionAgentId({ sessionKey: params.sessionKey, config: cfg }) ??
-        params.agentId ??
-        DEFAULT_AGENT_ID)
-      : (params.agentId ?? DEFAULT_AGENT_ID);
-  const sessionTarget = targetSessionEntry?.sessionId
-    ? {
-        agentId: targetAgentId,
-        sessionId: targetSessionEntry.sessionId,
-        sessionKey: params.sessionKey,
-        storePath: resolveSessionStorePathForScope({
-          agentId: targetAgentId,
-          sessionKey: params.sessionKey,
-          storePath:
-            params.storePath ??
-            resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId }),
-        }),
-      }
-    : undefined;
-
+  const { command, cfg, agentId: targetAgentId } = params;
   if (!allowTextCommands) {
     return null;
   }
@@ -77,6 +51,24 @@ export const handlePluginCommand: CommandHandler = async (
   if (!dispatch) {
     return null;
   }
+
+  const targetSessionEntry = structuredClone(
+    params.sessionStore?.[params.sessionKey] ?? params.sessionEntry,
+  );
+  const sessionTarget = targetSessionEntry?.sessionId
+    ? {
+        agentId: targetAgentId,
+        sessionId: targetSessionEntry.sessionId,
+        sessionKey: params.sessionKey,
+        storePath: resolveSessionStorePathForScope({
+          agentId: targetAgentId,
+          sessionKey: params.sessionKey,
+          storePath:
+            params.storePath ??
+            resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId }),
+        }),
+      }
+    : undefined;
 
   const result = await executePluginCommandDispatch(dispatch, {
     senderId: command.senderId,

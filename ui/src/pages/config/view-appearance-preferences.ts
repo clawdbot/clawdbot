@@ -6,7 +6,6 @@ import {
   normalizeChatSendShortcut,
   UI_APPEARANCE_DEFAULTS,
 } from "../../app/settings.ts";
-import { icons } from "../../components/icons.ts";
 import { getLobsterdexEntries } from "../../components/lobster-dex.ts";
 import { previewLobsterChirp } from "../../components/lobster-pet-audio.ts";
 import {
@@ -94,7 +93,6 @@ function renderSettingsMediaDeviceField(options: {
       ? [{ label: options.fallbackLabel(state.devices.length + 1), value: selectedDeviceId }]
       : []),
   ];
-  const refreshLabel = `${t("common.refresh")}: ${options.title}`;
   let accessRequested = false;
   const requestAccess = () => {
     if (accessRequested || !state.permissionRequired) {
@@ -143,15 +141,6 @@ function renderSettingsMediaDeviceField(options: {
           `,
         )}
       </select>
-      <button
-        type="button"
-        class="btn btn--sm btn--icon"
-        aria-label=${refreshLabel}
-        ?disabled=${state.loading}
-        @click=${() => options.onRefresh?.()}
-      >
-        ${state.loading ? icons.loader : icons.refresh}
-      </button>
     `,
   });
 }

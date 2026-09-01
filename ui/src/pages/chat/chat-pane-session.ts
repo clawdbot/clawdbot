@@ -5,7 +5,8 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { selectApplicationSession } from "../../app/agent-selection.ts";
+import { t } from "../../i18n/index.ts";
+import { nativeHistoryMessageIdentity } from "../../lib/chat/history-message-identity.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { clampText } from "../../lib/format.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -25,20 +26,15 @@ import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessio
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { catalogMessageId } from "./catalog-message-id.ts";
-import { loadChatBranches } from "./chat-history.ts";
+import { loadChatBranches } from "./chat-history-branches.ts";
 import {
   CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS,
   catalogRawResult,
   catalogRawString,
-  nativeHistoryMessageIdentity,
 } from "./chat-pane-shared.ts";
 import { ChatPaneTaskSuggestions } from "./chat-pane-task-suggestions.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import {
-  resolveChatAgentId,
-  saveRouteSessionSettings,
-  selectedChatSessionRow,
-} from "./chat-state-route.ts";
+import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import {
   dismissChatPullRequest,
   listDismissedChatPullRequests,
@@ -347,29 +343,6 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     return nextSessionKey;
   }
 
-  // Global chrome (persisted session settings, gateway session, agent
-  // selection) is owned by exactly one pane; the container guarantees a single
-  // active pane, so inactive split panes must never run these bindings.
-  protected applyActiveSessionBindings() {
-    const state = this.state;
-    if (
-      !state ||
-      !this.active ||
-      !this.presented ||
-      !this.sessionKey.trim() ||
-      parseCatalogSessionKey(state.sessionKey)
-    ) {
-      return;
-    }
-    const nextSessionKey = state.sessionKey;
-    saveRouteSessionSettings(state, nextSessionKey);
-    selectApplicationSession({
-      selection: this.context.agentSelection,
-      gateway: this.context.gateway,
-      sessionKey: nextSessionKey,
-    });
-  }
-
   protected openCatalogSession(key: CatalogSessionKey, state: ChatPageHost) {
     this.catalogRequestedSessionKey = this.sessionKey;
     this.catalogMessages = [];
@@ -392,6 +365,18 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       return text
         ? {
             role: "user",
+            // Missing source attribution must never fall back to the current viewer.
+            senderLabel: item.sender?.label ?? t("sessionsView.user"),
+            ...(item.sender
+              ? {
+                  __openclaw: {
+                    senderIdentity: item.sender.identity,
+                    senderId: item.sender.identity.id,
+                    senderName: item.sender.label,
+                    senderProfileAvatarUrl: item.sender.avatarUrl,
+                  },
+                }
+              : {}),
             content: text,
             ...(timestamp == null ? {} : { timestamp }),
             messageId: item.id,

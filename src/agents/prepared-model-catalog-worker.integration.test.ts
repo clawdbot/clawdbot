@@ -27,8 +27,10 @@ import {
   createPreparedModelCatalogWorkerInput,
 } from "./prepared-model-catalog-worker.js";
 import {
+  DISCOVERED_HARNESS_ID,
   PROVIDER_ID,
   HARNESS_ID,
+  MISSING_AUTH_HARNESS_ID,
   SHARED_AUTH_PROVIDER_ID,
   PLUGIN_ID,
   PROFILE_ID,
@@ -42,6 +44,8 @@ import {
   DURABLE_AUTH_KEY,
   EXTERNAL_AUTH_PROFILE_ID,
   EXTERNAL_AUTH_PATH_ENV,
+  createJwtWithExp,
+  writeCodexAuth,
   writeFixturePlugin,
 } from "./prepared-model-catalog-worker.test-support.js";
 import {
@@ -65,35 +69,12 @@ import {
 const { makeTempDir, retireAfterTest, waitForWorkers, waitForMarker } =
   usePreparedCatalogWorkerFixtures();
 
-function createJwtWithExp(exp: number, marker?: string): string {
-  const payload = Buffer.from(JSON.stringify({ exp, ...(marker ? { marker } : {}) })).toString(
-    "base64url",
-  );
-  return `header.${payload}.signature`;
-}
-
-function writeCodexAuth(codexHome: string, marker: string): void {
-  const authPath = path.join(codexHome, "auth.json");
-  fs.writeFileSync(
-    authPath,
-    JSON.stringify({
-      auth_mode: "chatgpt",
-      tokens: {
-        access_token: createJwtWithExp(Math.floor(Date.now() / 1000) + 3600, marker),
-        refresh_token: `refresh-${marker}-not-real`,
-      },
-    }),
-    "utf8",
-  );
-  const future = new Date(Date.now() + 2_000);
-  fs.utimesSync(authPath, future, future);
-}
-
 function createCatalogFixture(
   spinMs: number,
   envOverride: NodeJS.ProcessEnv = {},
   options?: {
     hydrateExternalCliProviderIds?: readonly string[];
+    builtPluginVersion?: string;
   },
 ) {
   const root = makeTempDir("openclaw-model-catalog-worker-");
@@ -104,7 +85,7 @@ function createCatalogFixture(
   const externalAuthPath = path.join(root, "external-auth.txt");
   fs.mkdirSync(agentDir, { recursive: true });
   fs.mkdirSync(workspaceDir, { recursive: true });
-  const pluginFile = writeFixturePlugin({ root, spinMs });
+  const pluginFile = writeFixturePlugin({ root, spinMs, ...options });
   fs.writeFileSync(externalAuthPath, "A", "utf8");
   const env = {
     ...process.env,
@@ -187,6 +168,9 @@ async function createStaticSnapshot(
   envOverride: NodeJS.ProcessEnv = {},
   options?: {
     hydrateExternalCliProviderIds?: readonly string[];
+    builtPluginVersion?: string;
+    prepareInboundPluginRegistry?: boolean;
+    readOnly?: boolean;
     metadataWorkspace?: "gateway" | "none" | "activation";
     provideMetadataToWorker?: boolean;
   },
@@ -200,6 +184,7 @@ async function createStaticSnapshot(
     workspaceDir,
     config,
     env,
+    ...(options?.readOnly ? { readOnly: true } : {}),
   };
   let current = true;
   const isCurrent = () => current;
@@ -228,6 +213,7 @@ async function createStaticSnapshot(
       input,
       catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
       isGenerationCurrent: isCurrent,
+      prepareInboundPluginRegistry: options?.prepareInboundPluginRegistry,
     },
     new Map(),
     30_000,
@@ -255,6 +241,51 @@ async function createReadyWorkerFixture(spinMs: number) {
 describe("prepared model catalog worker boundary", () => {
   beforeEach(() => {
     vi.stubEnv("CODEX_HOME", makeTempDir("openclaw-worker-empty-codex-"));
+  });
+
+  it.each([
+    { owner: "configured Gateway", prepareInboundPluginRegistry: true, version: "built" },
+    { owner: "standalone", prepareInboundPluginRegistry: false, version: "v1" },
+  ])("keeps the $owner artifact selection in catalog and auth workers", async (selection) => {
+    const fixture = await createStaticSnapshot(
+      0,
+      {},
+      {
+        builtPluginVersion: "built",
+        prepareInboundPluginRegistry: selection.prepareInboundPluginRegistry,
+      },
+    );
+    const catalog = await fixture.snapshot.loadFullModelCatalog!();
+    expect.soft(catalog.entries).toContainEqual(
+      expect.objectContaining({
+        provider: PROVIDER_ID,
+        id: `plugin-generation-${selection.version}`,
+      }),
+    );
+    const auth = await loadPreparedModelRuntimeAuth(fixture.snapshot, {
+      providerIds: [PROVIDER_ID],
+    });
+    expect(auth?.authStore.profiles[EXTERNAL_AUTH_PROFILE_ID]).toMatchObject({
+      access: `${selection.version}:A`,
+    });
+    expect(
+      new Set(
+        fs
+          .readFileSync(path.join(fixture.root, "discovery-artifacts.txt"), "utf8")
+          .trim()
+          .split("\n"),
+      ),
+    ).toEqual(new Set([selection.version]));
+  });
+
+  it("keeps explicit read-only full inventories discoverable without a runtime registry", async () => {
+    const fixture = await createStaticSnapshot(0, {}, { readOnly: true });
+    expect(fixture.snapshot.pluginRegistry).toBeUndefined();
+
+    const catalog = await fixture.snapshot.loadFullModelCatalog!();
+    expect(catalog.entries).toContainEqual(
+      expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
+    );
   });
 
   it("preserves prepared catalog ownership across ambient environment changes", async () => {
@@ -483,7 +514,7 @@ describe("prepared model catalog worker boundary", () => {
     );
   });
 
-  it("preserves exact configured native auth across a full catalog refresh", async () => {
+  it("pairs full catalog native routes with exact-generation auth", async () => {
     const fixture = await createStaticSnapshot(
       0,
       {},
@@ -495,8 +526,9 @@ describe("prepared model catalog worker boundary", () => {
     const syntheticAuthProbePath = path.join(fixture.root, "synthetic-auth-probes.txt");
 
     expect(fixture.snapshot.authModes[HARNESS_ID]).toBe("api_key");
+    expect(fixture.snapshot.authModes[DISCOVERED_HARNESS_ID]).toBeUndefined();
+    expect(fixture.snapshot.authModes[MISSING_AUTH_HARNESS_ID]).toBeUndefined();
     expect(fixture.snapshot.authModes[PROVIDER_ID]).toBeUndefined();
-    fs.rmSync(fixture.externalAuthPath);
     fs.writeFileSync(syntheticAuthProbePath, "", "utf8");
     await loadPreparedModelRuntimeAuth(fixture.snapshot, { providerIds: [] });
     fs.writeFileSync(syntheticAuthProbePath, "", "utf8");
@@ -506,9 +538,13 @@ describe("prepared model catalog worker boundary", () => {
 
     expect(fs.readFileSync(syntheticAuthProbePath, "utf8").trim().split("\n")).toEqual([
       HARNESS_ID,
+      DISCOVERED_HARNESS_ID,
+      MISSING_AUTH_HARNESS_ID,
     ]);
     expect(fullAuth?.authModes[HARNESS_ID]).toBe("api_key");
-    expect(fullAuth?.authModes[PROVIDER_ID]).toBeUndefined();
+    expect(fullAuth?.authModes[DISCOVERED_HARNESS_ID]).toBe("api_key");
+    expect(fullAuth?.authModes[MISSING_AUTH_HARNESS_ID]).toBeUndefined();
+    expect(fullAuth?.authModes[PROVIDER_ID]).toBe("oauth");
   });
 
   it("refreshes durable auth before provider hooks decide catalog membership", async () => {

@@ -108,6 +108,62 @@ describe("live Docker state staging", () => {
     expect(result.stderr).toContain("CLI backend executable was not provisioned:");
   });
 
+  it.each([
+    {
+      entrypoint: "scripts/test-live.mts",
+      expected: "--import tsx scripts/test-live.mts -- target",
+    },
+    { entrypoint: "scripts/test-live.mjs", expected: "scripts/test-live.mjs -- target" },
+  ])("runs the staged $entrypoint live runner", ({ entrypoint, expected }) => {
+    const root = tempDirs.make("openclaw-live-stage-entrypoint-");
+    const binDir = path.join(root, "bin");
+    const callsPath = path.join(root, "calls");
+    mkdirSync(path.join(root, path.dirname(entrypoint)), { recursive: true });
+    mkdirSync(binDir);
+    writeFileSync(path.join(root, entrypoint), "");
+    writeFileSync(
+      path.join(binDir, "node"),
+      '#!/usr/bin/env bash\nset -eu\nprintf "%s\\n" "$*" > "$CALLS_PATH"\n',
+      { mode: 0o755 },
+    );
+
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        'set -euo pipefail; cd "$1"; source "$2"; openclaw_live_run_staged_script scripts/test-live -- target',
+        "test",
+        root,
+        stageScriptPath,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, CALLS_PATH: callsPath },
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(callsPath, "utf8").trim()).toBe(expected);
+  });
+
+  it("refuses to replace a missing staged live runner", () => {
+    const root = tempDirs.make("openclaw-live-stage-entrypoint-missing-");
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        'set +e; cd "$1"; source "$2"; openclaw_live_run_staged_script scripts/test-live -- target',
+        "test",
+        root,
+        stageScriptPath,
+      ],
+      { encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("staged OpenClaw script entrypoint not found");
+  });
+
   it("keeps repo-local generated artifacts out of the source copy", () => {
     const script = readFileSync(stageScriptPath, "utf8");
 

@@ -233,14 +233,17 @@ function isDisplayHiddenProjectedMessage(message: Record<string, unknown>): bool
   return message.role === "custom" && message.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE;
 }
 
-function shouldHideProjectedHistoryMessage(message: Record<string, unknown>): boolean {
+function shouldHideProjectedHistoryMessage(
+  message: Record<string, unknown>,
+  roleContent: RoleContentMessage | null,
+  heartbeatUser: boolean,
+): boolean {
   if (isDisplayHiddenProjectedMessage(message)) {
     return true;
   }
   if (isProjectedSessionsSendForwardedMessage(message)) {
     return false;
   }
-  const roleContent = asRoleContentMessage(message);
   if (!roleContent) {
     return false;
   }
@@ -260,10 +263,7 @@ function shouldHideProjectedHistoryMessage(message: Record<string, unknown>): bo
   if (roleContent.role === "assistant" && isEmptyTextOnlyContent(message.content ?? message.text)) {
     return false;
   }
-  if (isHeartbeatUserMessage(roleContent, HEARTBEAT_PROMPT)) {
-    return true;
-  }
-  return isHeartbeatOkResponse(roleContent);
+  return heartbeatUser || isHeartbeatOkResponse(roleContent);
 }
 
 /** Identifies the hidden native input that starts a heartbeat-driven turn. */
@@ -386,13 +386,14 @@ export function filterVisibleProjectedHistoryMessages(
       continue;
     }
     const currentRoleContent = asRoleContentMessage(current);
-    const next = messages[i + 1];
+    const heartbeatUser = Boolean(
+      currentRoleContent && isHeartbeatUserMessage(currentRoleContent, HEARTBEAT_PROMPT),
+    );
+    const next = heartbeatUser ? messages[i + 1] : undefined;
     const nextRoleContent = next ? asRoleContentMessage(next) : null;
     if (
-      currentRoleContent &&
       next &&
       nextRoleContent &&
-      isHeartbeatUserMessage(currentRoleContent, HEARTBEAT_PROMPT) &&
       isHeartbeatOkResponse(nextRoleContent) &&
       !isProjectedSessionsSendForwardedMessage(next)
     ) {
@@ -401,9 +402,9 @@ export function filterVisibleProjectedHistoryMessages(
       i++;
       continue;
     }
-    if (shouldHideProjectedHistoryMessage(current)) {
+    if (shouldHideProjectedHistoryMessage(current, currentRoleContent, heartbeatUser)) {
       changed = true;
-      pendingTurnBoundary ||= isHeartbeatHistoryTurnBoundaryMessage(current);
+      pendingTurnBoundary ||= heartbeatUser && !isSessionsSendInterSessionUserMessage(current);
       continue;
     }
     if (
@@ -459,13 +460,17 @@ function extractPromptPrefixField(text: string, field: string): string | undefin
   return normalizeOptionalString(match?.[1]);
 }
 
-function resolveSessionsSendForwardedSenderLabel(message: Record<string, unknown>): string {
+function resolveSessionsSendForwardedSenderSession(
+  message: Record<string, unknown>,
+): { sessionKey?: string; agentId?: string } | undefined {
   const provenance = normalizeInputProvenance(message.provenance);
   const text = extractProjectedText(message.content ?? message.text);
   const sourceSessionKey =
     provenance?.sourceSessionKey ?? extractPromptPrefixField(text, "sourceSession");
   const agentId = parseAgentSessionKey(sourceSessionKey)?.agentId;
-  return agentId ? `Forwarded from ${agentId}` : "Forwarded agent message";
+  return sourceSessionKey
+    ? { sessionKey: sourceSessionKey, ...(agentId ? { agentId } : {}) }
+    : undefined;
 }
 
 export function projectSessionsSendInterSessionMessages(
@@ -477,10 +482,14 @@ export function projectSessionsSendInterSessionMessages(
       return message;
     }
     changed = true;
+    const senderSession = resolveSessionsSendForwardedSenderSession(message);
     const next: Record<string, unknown> = {
       ...message,
       role: "assistant",
-      senderLabel: resolveSessionsSendForwardedSenderLabel(message),
+      senderLabel: senderSession?.agentId
+        ? `Forwarded from ${senderSession.agentId}`
+        : "Forwarded agent message",
+      ...(senderSession ? { senderSession } : {}),
     };
     if ("content" in next) {
       next.content = stripInterSessionPromptPrefixFromContent(next.content);

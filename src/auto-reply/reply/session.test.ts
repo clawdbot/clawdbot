@@ -216,6 +216,36 @@ describe("resolveReplySessionPreprocessingState", () => {
     });
   }
 
+  it("resolves key-less preprocessing using the configured agent and main key", async () => {
+    const storePath = await createStorePath("openclaw-keyless-preprocessing-");
+    const configuredSessionKey = "agent:ops:work";
+    await upsertSessionEntryCore(
+      { agentId: "ops", sessionKey: configuredSessionKey, storePath },
+      { sessionId: "keyless-preprocessing", updatedAt: Date.now() },
+    );
+
+    expect(
+      resolveReplySessionPreprocessingState({
+        cfg: {
+          agents: { list: [{ id: "ops", default: true }] },
+          session: { store: storePath, mainKey: "work" },
+        },
+        ctx: finalizeInboundContext({
+          Body: "Please inspect https://example.org/sample",
+          From: "synthetic-sender",
+          To: "bot",
+          ChatType: "direct",
+          Provider: "webchat",
+          Surface: "webchat",
+        }),
+      }),
+    ).toMatchObject({
+      sessionKey: configuredSessionKey,
+      storePath,
+      sessionEntry: { sessionId: "keyless-preprocessing" },
+    });
+  });
+
   it("returns the valid durable harness owner lock before preprocessing", async () => {
     const storePath = await createStorePath("openclaw-media-preflight-valid-");
     await writeSessionStoreFast(storePath, {
@@ -3494,7 +3524,7 @@ describe("initSessionState reset authorization", () => {
 
   it.each<{
     name: string;
-    body?: "/new" | "/reset";
+    body?: string;
     source?: "text" | "native";
     feishuDirect?: boolean;
     admitted?: boolean;
@@ -3529,6 +3559,18 @@ describe("initSessionState reset authorization", () => {
       allowed: false,
     },
     { name: "non-admitted sender", admitted: false, allowed: false },
+    ...[
+      "/new Create a note",
+      "/reset",
+      "/reset Create a note",
+      "/reset soft",
+      "/reset soft Create a note",
+    ].map((body) => ({
+      name: `non-admitted sender stays silent for ${body}`,
+      body,
+      admitted: false,
+      allowed: false,
+    })),
     { name: "unrelated provider command policy", allowFrom: { telegram: [] }, allowed: true },
     { name: "explicit command deny", allowFrom: { buzz: ["other"] }, allowed: false },
     { name: "empty global command allowlist", allowFrom: { "*": [] }, allowed: false },
@@ -3727,14 +3769,17 @@ describe("initSessionState reset authorization", () => {
         if (allowed) {
           expect.soft(resets[0]).toMatchObject({ type: "reset", reason: body.slice(1) });
         }
-        expect.soft(acknowledgement).toEqual(
-          allowed
-            ? {
-                shouldContinue: false,
-                reply: { text: body === "/new" ? "✅ New session started." : "✅ Session reset." },
-              }
-            : { shouldContinue: false },
-        );
+        expect.soft(acknowledgement?.shouldContinue).toBe(false);
+        if (allowed) {
+          expect
+            .soft(acknowledgement?.reply?.text)
+            .toBe(body === "/new" ? "✅ New session started." : "✅ Session reset.");
+        } else if (scopes) {
+          expect.soft(acknowledgement?.reply?.text).toMatch(/not authorized/i);
+          expect.soft(acknowledgement?.reply?.text).toContain("operator.admin");
+        } else {
+          expect.soft(acknowledgement?.reply).toBeUndefined();
+        }
       } finally {
         resetPluginRuntimeStateForTest();
       }
@@ -5779,7 +5824,7 @@ describe("persistSessionUsageUpdate", () => {
       },
     },
     {
-      name: "prefers fresh final usage over zero compactionTokensAfter",
+      name: "preserves an ordered zero context snapshot independently of billable usage",
       seed: {
         totalTokens: 1_794_391,
         totalTokensFresh: true,
@@ -5793,10 +5838,10 @@ describe("persistSessionUsageUpdate", () => {
         lastCallUsage: { input: 20, output: 10_855, cacheRead: 1_761_324, cacheWrite: 33_047 },
         providerUsed: "claude-cli",
         contextTokensUsed: 1_048_576,
-        compactionTokensAfter: 0,
+        currentContextSnapshot: { tokens: 0 },
       },
       expected: {
-        totalTokens: 1_794_391,
+        totalTokens: 0,
         totalTokensFresh: true,
         inputTokens: 20,
         outputTokens: 10_855,
@@ -5805,16 +5850,16 @@ describe("persistSessionUsageUpdate", () => {
       },
     },
     {
-      name: "prefers fresh lastCallUsage over positive compactionTokensAfter",
+      name: "uses ordered current context rather than older last-call usage",
       seed: { totalTokens: 180_000, totalTokensFresh: true },
       update: {
         usage: { input: 100_000, output: 3_000, cacheRead: 20_000 },
         lastCallUsage: { input: 91_000, output: 1_000, cacheRead: 4_000 },
         providerUsed: "openai",
-        compactionTokensAfter: 80_000,
+        currentContextSnapshot: { tokens: 80_000 },
       },
       expected: {
-        totalTokens: 95_000,
+        totalTokens: 80_000,
         totalTokensFresh: true,
         inputTokens: 100_000,
         outputTokens: 3_000,
@@ -5822,7 +5867,7 @@ describe("persistSessionUsageUpdate", () => {
       },
     },
     {
-      name: "uses positive compactionTokensAfter when final usage has no prompt total",
+      name: "keeps ordered context separate from output-only billing usage",
       seed: {
         totalTokens: 180_000,
         totalTokensFresh: true,
@@ -5854,14 +5899,14 @@ describe("persistSessionUsageUpdate", () => {
         lastCallUsage: { output: 125 },
         providerUsed: "claude-cli",
         contextTokensUsed: undefined,
-        compactionTokensAfter: 80_000,
+        currentContextSnapshot: { tokens: 80_000 },
       },
       expected: {
         totalTokens: 80_000,
         totalTokensFresh: true,
-        inputTokens: undefined,
-        outputTokens: undefined,
-        cacheRead: undefined,
+        inputTokens: 0,
+        outputTokens: 125,
+        cacheRead: 0,
         contextBudgetStatus: undefined,
       },
     },
@@ -6079,6 +6124,73 @@ describe("persistSessionUsageUpdate", () => {
       expectDefined(stored2[sessionKey], "stored2[sessionKey] test invariant").estimatedCostUsd,
     ).toBeCloseTo(0.007725, 8);
   });
+
+  it.each([
+    { total: undefined, withTokens: true },
+    { total: 0, withTokens: true },
+    { total: 0.25, withTokens: true },
+    { total: 0, withTokens: false },
+    { total: 0.25, withTokens: false },
+  ])(
+    "replaces prior snapshot cost with current tiered run cost $total (tokens: $withTokens)",
+    async ({ total, withTokens }) => {
+      const storePath = await createStorePath("openclaw-usage-tiered-cost-");
+      await seedSessionStore(storePath, sessionKey, {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        estimatedCostUsd: 0.5,
+      });
+
+      await persistSessionUsageUpdate({
+        storePath,
+        sessionKey,
+        cfg: {
+          models: {
+            providers: {
+              fixture: {
+                baseUrl: "https://fixture.invalid",
+                models: [
+                  {
+                    id: "tiered",
+                    name: "Tiered",
+                    reasoning: false,
+                    input: ["text"],
+                    contextWindow: 1_000_000,
+                    maxTokens: 1_000,
+                    cost: {
+                      input: 1,
+                      output: 0,
+                      cacheRead: 0,
+                      cacheWrite: 0,
+                      tieredPricing: [
+                        { input: 2, output: 0, cacheRead: 0, cacheWrite: 0, range: [200_000] },
+                      ],
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        },
+        usage: {
+          ...(withTokens ? { input: 300_000, output: 200 } : {}),
+          ...(total !== undefined ? { cost: { total } } : {}),
+        },
+        providerUsed: "fixture",
+        modelUsed: "tiered",
+      });
+
+      const stored = expectDefined(readSessionStoreFast(storePath)[sessionKey], "stored session");
+      expect(stored.inputTokens).toBe(withTokens ? 300_000 : undefined);
+      expect(stored.estimatedCostUsd).toBe(total);
+      if (!withTokens) {
+        for (const key of ["outputTokens", "cacheRead", "cacheWrite", "totalTokens"] as const) {
+          expect(stored[key]).toBeUndefined();
+        }
+        expect(stored.totalTokensFresh).not.toBe(true);
+      }
+    },
+  );
 
   it("preserves the displayed session model when an internal announce uses fallback", async () => {
     const storePath = await createStorePath("openclaw-usage-internal-announce-model-");

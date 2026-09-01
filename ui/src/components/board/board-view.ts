@@ -384,11 +384,17 @@ class OpenClawBoardView extends OpenClawLightDomElement {
         1,
         (bounds.width - BOARD_GRID_GAP * (BOARD_GRID_COLUMNS - 1)) / BOARD_GRID_COLUMNS,
       );
-      const targetCell = {
+      // Resolve both the visible target and reorder against the current preview;
+      // a card moving under the pointer must not undo the drop on pointerup.
+      const items = this.previewItems ?? gesture.items;
+      const targetName = pointerElement?.closest<
+        HTMLElementTagNameMap["openclaw-board-widget-cell"]
+      >("openclaw-board-widget-cell")?.widget?.name;
+      const targetCell = layout(items).find((rect) => rect.name === targetName) ?? {
         x: Math.floor((event.clientX - bounds.left) / (columnWidth + BOARD_GRID_GAP)),
         y: Math.floor((event.clientY - bounds.top) / (BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP)),
       };
-      this.previewItems = previewDrag(gesture.items, gesture.name, targetCell).items;
+      this.previewItems = previewDrag(items, gesture.name, targetCell).items;
       return;
     }
 

@@ -119,6 +119,12 @@ deprecated models are excluded from active discovery and its offline fallback.
 Deprecated explicit refs remain resolvable for existing configurations but are
 not shown as current recommendations.
 
+Price estimates also refresh through the [hosted model catalog](/concepts/models#hosted-catalog-updates),
+using the same public OpenCode pricing feed as live discovery. Hosted updates
+activate after the next Gateway restart; the bundled snapshot remains available
+offline. Explicit model prices in your configuration or agent-local `models.json`
+keep precedence. These are advertised-price estimates, not verified invoice totals.
+
 ### Go
 
 | Property         | Value                                                                             |

@@ -465,13 +465,13 @@ describe("AcpSessionManager", () => {
         throw new Error("Expected the ACP task record to carry a childSessionKey");
       }
       expect(childSessionKey).toBe("agent:codex:acp:child-1");
-      expect(isAcpTurnActive(childSessionKey)).toBe(true);
+      expect(isAcpTurnActive({ sessionKey: childSessionKey, agentId: "codex" })).toBe(true);
 
       releaseTurn.resolve();
       await turn;
       await flushMicrotasks();
 
-      expect(isAcpTurnActive(childSessionKey)).toBe(false);
+      expect(isAcpTurnActive({ sessionKey: childSessionKey, agentId: "codex" })).toBe(false);
     });
   }, 300_000);
 
@@ -543,13 +543,13 @@ describe("AcpSessionManager", () => {
       }
       // Liveness must already cover initialization, while the turn stream has not started.
       expect(runtimeState.runTurn).not.toHaveBeenCalled();
-      expect(isAcpTurnActive(childSessionKey)).toBe(true);
+      expect(isAcpTurnActive({ sessionKey: childSessionKey, agentId: "codex" })).toBe(true);
 
       releaseInit.resolve();
       await turn;
       await flushMicrotasks();
 
-      expect(isAcpTurnActive(childSessionKey)).toBe(false);
+      expect(isAcpTurnActive({ sessionKey: childSessionKey, agentId: "codex" })).toBe(false);
     });
   }, 300_000);
 
@@ -609,7 +609,7 @@ describe("AcpSessionManager", () => {
       if (!childSessionKey) {
         throw new Error("Expected the ACP task record to carry a childSessionKey");
       }
-      expect(isAcpTurnActive(childSessionKey)).toBe(false);
+      expect(isAcpTurnActive({ sessionKey: childSessionKey, agentId: "codex" })).toBe(false);
     });
   }, 300_000);
 
@@ -1076,9 +1076,12 @@ describe("AcpSessionManager", () => {
 
     expect(closeResult.runtimeClosed).toBe(false);
     expect(closeResult.runtimeNotice).toBe("Could not initialize ACP session runtime.");
-    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith({
-      sessionKey: "agent:claude:acp:session-1",
-    });
+    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:claude:acp:session-1",
+        agentId: "claude",
+      }),
+    );
   });
 
   it("treats unsupported close controls as recoverable during discard cleanup", async () => {
@@ -1114,9 +1117,12 @@ describe("AcpSessionManager", () => {
     expect(closeResult.runtimeClosed).toBe(false);
     expect(closeResult.runtimeNotice).toContain("does not support session/close");
     expect(closeResult.metaCleared).toBe(true);
-    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith({
-      sessionKey: "agent:openclaw:acp:session-1",
-    });
+    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:openclaw:acp:session-1",
+        agentId: "openclaw",
+      }),
+    );
   });
 
   it("clears persisted resume identity when close discards persistent state", async () => {
@@ -1245,9 +1251,12 @@ describe("AcpSessionManager", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith({
-      sessionKey,
-    });
+    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        agentId: "claude",
+      }),
+    );
     expectRecordFields(mockCallArg(runtimeState.ensureSession), {
       sessionKey,
     });
@@ -1309,9 +1318,12 @@ describe("AcpSessionManager", () => {
     });
 
     expect(result.runtimeClosed).toBe(false);
-    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith({
-      sessionKey,
-    });
+    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        agentId: "claude",
+      }),
+    );
     expect(runtimeState.ensureSession).not.toHaveBeenCalled();
     expect(runtimeState.close).not.toHaveBeenCalled();
     expectRecordFields(entry.acp?.identity, {
@@ -1502,9 +1514,12 @@ describe("AcpSessionManager", () => {
 
     expect(result.runtimeClosed).toBe(false);
     expect(result.runtimeNotice).toContain("currently unavailable");
-    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith({
-      sessionKey: "agent:claude:acp:session-1",
-    });
+    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:claude:acp:session-1",
+        agentId: "claude",
+      }),
+    );
   });
 
   it("surfaces metadata clear errors during closeSession", async () => {

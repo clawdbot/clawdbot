@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import type { GatewaySessionsDefaults } from "../../../api/types.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import {
@@ -34,6 +35,7 @@ type ChatModelPickerParams = {
   disabledReason?: string;
   modelCatalogState?: ChatModelCatalogState;
   modelSelectionLocked: boolean;
+  modelSelectionTarget?: GatewaySessionsDefaults["modelSelectionTarget"];
   modelOptions: ChatModelPickerOption[];
   open?: boolean;
   targetGroups?: readonly ChatModelPickerTargetGroup[];
@@ -108,6 +110,7 @@ function highlightModelRow(menu: HTMLElement, row: HTMLButtonElement | undefined
 function updateModelShortcuts(menu: HTMLElement, rows: readonly HTMLButtonElement[]): void {
   menu.querySelectorAll<HTMLElement>("[data-chat-model-shortcut]").forEach((shortcut) => {
     shortcut.hidden = true;
+    shortcut.removeAttribute("data-shortcut");
     shortcut.removeAttribute("data-chat-model-shortcut-number");
   });
   rows.slice(0, 9).forEach((row, index) => {
@@ -116,6 +119,7 @@ function updateModelShortcuts(menu: HTMLElement, rows: readonly HTMLButtonElemen
       return;
     }
     shortcut.hidden = false;
+    shortcut.setAttribute("data-shortcut", String(index + 1));
     shortcut.setAttribute("data-chat-model-shortcut-number", String(index + 1));
   });
 }
@@ -311,6 +315,17 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
     void params.onModelSelect(value, params.sessionKey).finally(() => params.onRequestUpdate?.());
     params.onRequestUpdate?.();
   };
+  const selectionTargetLabel =
+    params.modelSelectionTarget === "session"
+      ? t("chat.modelControls.selectionTargetSession")
+      : params.modelSelectionTarget === "agent"
+        ? t("chat.modelControls.selectionTargetAgent")
+        : params.modelSelectionTarget === "global"
+          ? t("chat.modelControls.selectionTargetGlobal")
+          : undefined;
+  const sessionPinProvenanceLabel = params.sessionModelPinned
+    ? t("chat.modelControls.onlyForSession")
+    : undefined;
   const selectModel = (entry: ChatModelPickerOption, event: MouseEvent) => {
     event.stopPropagation();
     if (params.disabled || params.modelSelectionLocked || entry.disabled) {
@@ -352,6 +367,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
   return html`
     <details
       class="chat-controls__inline-select chat-controls__model-picker"
+      data-chat-autotype-shortcuts
       ?open=${params.open === true}
       @keydown=${handleModelPickerKeydown}
       @toggle=${(event: Event) => {
@@ -578,40 +594,61 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                       ${params.contextWindow
                         ? renderContextWindowControl(params.contextWindow, params.sessionKey)
                         : nothing}
-                      ${params.sessionModelPinned && params.modelOptions.length > 0
+                      ${selectionTargetLabel ||
+                      sessionPinProvenanceLabel ||
+                      (params.sessionModelPinned && params.modelOptions.length > 0)
                         ? html`<footer class="chat-controls__model-provenance">
-                            <span>${t("chat.modelControls.onlyForSession")}</span>
-                            <button
-                              class="chat-controls__model-reset"
-                              data-chat-model-reset="true"
-                              type="button"
-                              ?disabled=${params.disabled}
-                              @click=${(event: MouseEvent) => {
-                                event.stopPropagation();
-                                if (params.disabled) {
-                                  event.preventDefault();
-                                  return;
-                                }
-                                commitModel("");
-                                const resetButton = event.currentTarget;
-                                if (!(resetButton instanceof HTMLElement)) {
-                                  return;
-                                }
-                                const details = resetButton.closest<HTMLDetailsElement>("details");
-                                if (details) {
-                                  details.open = false;
-                                  if (event.detail === 0) {
-                                    details
-                                      .querySelector<HTMLElement>("summary")
-                                      ?.focus({ preventScroll: true });
-                                  }
-                                }
-                              }}
-                            >
-                              ${t("chat.modelControls.useDefaultModel", {
-                                model: params.defaultModelLabel,
-                              })}
-                            </button>
+                            ${selectionTargetLabel || sessionPinProvenanceLabel
+                              ? html`<span>
+                                  ${selectionTargetLabel
+                                    ? html`<span data-chat-model-selection-target>
+                                        ${selectionTargetLabel}
+                                      </span>`
+                                    : nothing}
+                                  ${selectionTargetLabel && sessionPinProvenanceLabel
+                                    ? html`<br />`
+                                    : nothing}
+                                  ${sessionPinProvenanceLabel
+                                    ? html`<span data-chat-model-pin-provenance>
+                                        ${sessionPinProvenanceLabel}
+                                      </span>`
+                                    : nothing}
+                                </span>`
+                              : nothing}
+                            ${params.sessionModelPinned && params.modelOptions.length > 0
+                              ? html`<button
+                                  class="chat-controls__model-reset"
+                                  data-chat-model-reset="true"
+                                  type="button"
+                                  ?disabled=${params.disabled}
+                                  @click=${(event: MouseEvent) => {
+                                    event.stopPropagation();
+                                    if (params.disabled) {
+                                      event.preventDefault();
+                                      return;
+                                    }
+                                    commitModel("");
+                                    const resetButton = event.currentTarget;
+                                    if (!(resetButton instanceof HTMLElement)) {
+                                      return;
+                                    }
+                                    const details =
+                                      resetButton.closest<HTMLDetailsElement>("details");
+                                    if (details) {
+                                      details.open = false;
+                                      if (event.detail === 0) {
+                                        details
+                                          .querySelector<HTMLElement>("summary")
+                                          ?.focus({ preventScroll: true });
+                                      }
+                                    }
+                                  }}
+                                >
+                                  ${t("chat.modelControls.useDefaultModel", {
+                                    model: params.defaultModelLabel,
+                                  })}
+                                </button>`
+                              : nothing}
                           </footer>`
                         : nothing}
                     `

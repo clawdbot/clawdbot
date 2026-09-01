@@ -329,6 +329,7 @@ describe("provider attribution", () => {
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
       providerEndpoints: [
         {
           endpointClass: "anthropic-public" as const,

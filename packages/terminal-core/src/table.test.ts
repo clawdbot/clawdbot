@@ -1,4 +1,3 @@
-// Terminal Core tests cover table behavior.
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -87,7 +86,7 @@ describe("renderTable", () => {
     expect(segment).not.toHaveBeenCalled();
   });
 
-  it.each([0, 3, 150_000])("renders all %i rows without an argument-count limit", (count) => {
+  it.each([0, 3])("renders all %i rows without an argument-count limit", (count) => {
     const out = renderTable({
       border: "ascii",
       columns: [{ key: "Key", header: "Key" }],
@@ -117,14 +116,25 @@ const output = renderTable({
   columns: [{ key: "Key", header: "Key" }],
   rows: Array.from({ length: 150_000 }, () => ({ Key: "session" })),
 });
-console.log(JSON.stringify({ rows: output.split("\\n").filter(line => line === "| session |").length }));`,
+const lines = output.trimEnd().split("\\n");
+console.log(JSON.stringify({
+  lineCount: lines.length,
+  rows: lines.filter(line => line === "| session |").length,
+  header: lines[1],
+  firstLine: lines[0],
+  lastLine: lines.at(-1),
+}));`,
       ],
       { encoding: "utf8", timeout: 30_000 },
     );
 
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({ rows: 150_000 });
+    const rendered = JSON.parse(result.stdout);
+    expect(rendered.lineCount).toBe(150_004);
+    expect(rendered.rows).toBe(150_000);
+    expect(rendered.header).toMatch(/^\| Key +\|$/u);
+    expect(rendered.lastLine).toBe(rendered.firstLine);
   });
 
   it("prefers shrinking flex columns to avoid wrapping non-flex labels", () => {
@@ -178,6 +188,18 @@ console.log(JSON.stringify({ rows: output.split("\\n").filter(line => line === "
 
     const firstLine = out.trimEnd().split("\n")[0] ?? "";
     expect(visibleWidth(firstLine)).toBe(width);
+  });
+
+  it("stops flex growth at the cap when a fractional width rounds up", () => {
+    const out = renderTable({
+      width: 20,
+      border: "ascii",
+      padding: 0,
+      columns: [{ key: "V", header: "V", minWidth: 7.999999999999999, maxWidth: 9, flex: true }],
+      rows: [{ V: "x" }],
+    });
+
+    expect(out).toBe("+---------+\n|V        |\n+---------+\n|x        |\n+---------+\n");
   });
 
   it("wraps ANSI-colored cells without corrupting escape sequences", () => {

@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { access, cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUNDLED_PLUGIN_ROOT_DIR } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
@@ -298,35 +298,75 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain('OPENCLAW_EXTENSIONS="$(cat /tmp/openclaw-selected-plugin-dirs)"');
   });
 
-  it("copies root package lifecycle scripts before pnpm install", async () => {
-    const [dockerfile, packageJsonText] = await Promise.all([
-      readFile(dockerfilePath, "utf8"),
-      readFile(join(repoRoot, "package.json"), "utf8"),
-    ]);
-    const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
-    const packageJson = JSON.parse(packageJsonText) as {
-      scripts?: Record<string, string>;
-    };
-    const installLifecycleScripts = ["preinstall", "install", "postinstall", "prepare"] as const;
-
-    for (const lifecycleScript of installLifecycleScripts) {
-      const command = packageJson.scripts?.[lifecycleScript];
-      const scriptPath = command?.match(/\bnode\s+(scripts\/[^\s]+)/)?.[1];
-      if (!scriptPath) {
-        continue;
+  it.each(["Dockerfile", "scripts/docker/cleanup-smoke/Dockerfile"])(
+    "runs root lifecycle scripts from %s dependency inputs",
+    async (dockerfileName) => {
+      const dockerfile = collapseDockerContinuations(
+        await readFile(join(repoRoot, dockerfileName), "utf8"),
+      );
+      const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
+      expect(installIndex).toBeGreaterThan(-1);
+      const fixture = await mkdtemp(join(tmpdir(), "openclaw-docker-lifecycle-"));
+      try {
+        // Stage the actual local COPY inputs, not a separately maintained import list.
+        // Workspace manifests do not contribute executable root lifecycle modules.
+        for (const [, sources, destination] of dockerfile
+          .slice(0, installIndex)
+          .matchAll(/^COPY ([^\n]+) (\.\/\S*)$/gm)) {
+          if (!sources || !destination) {
+            throw new Error("Expected local COPY sources and destination");
+          }
+          if (sources.startsWith("--")) {
+            continue;
+          }
+          for (const input of sources.split(/\s+/)) {
+            if (input !== "package.json" && !input.endsWith(".mjs")) {
+              continue;
+            }
+            const target = join(
+              fixture,
+              destination.endsWith("/") ? join(destination, basename(input)) : destination,
+            );
+            await mkdir(dirname(target), { recursive: true });
+            await cp(join(repoRoot, input), target);
+          }
+        }
+        const packageJson = JSON.parse(await readFile(join(fixture, "package.json"), "utf8")) as {
+          scripts: Record<string, string>;
+        };
+        const home = join(fixture, "home");
+        await mkdir(home);
+        for (const lifecycle of ["preinstall", "install", "postinstall", "prepare"]) {
+          const command = packageJson.scripts[lifecycle];
+          if (!command) {
+            continue;
+          }
+          const scriptPath = command.match(/^node (scripts\/[^\s]+)$/)?.[1];
+          if (!scriptPath) {
+            throw new Error(`Unsupported root lifecycle command: ${command}`);
+          }
+          expect
+            .soft(
+              () =>
+                execFileSync(process.execPath, [scriptPath], {
+                  cwd: fixture,
+                  env: {
+                    HOME: home,
+                    USERPROFILE: home,
+                    PATH: process.env.PATH,
+                    npm_config_user_agent: "pnpm/12",
+                  },
+                  stdio: "pipe",
+                }),
+              lifecycle,
+            )
+            .not.toThrow();
+        }
+      } finally {
+        await rm(fixture, { recursive: true, force: true });
       }
-
-      const copyIndex = dockerfile.indexOf(scriptPath);
-      expect(
-        copyIndex,
-        `${lifecycleScript} must copy ${scriptPath} before pnpm install`,
-      ).toBeGreaterThan(-1);
-      expect(
-        copyIndex,
-        `${lifecycleScript} must copy ${scriptPath} before pnpm install`,
-      ).toBeLessThan(installIndex);
-    }
-  });
+    },
+  );
 
   it("does not let pnpm resync the full source workspace during Docker build scripts", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");

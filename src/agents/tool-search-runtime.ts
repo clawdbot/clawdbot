@@ -12,7 +12,6 @@ import {
 import { runWithToolExecutionValidation } from "./agent-tools.execution-validation.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import type { AgentToolResult } from "./runtime/index.js";
-import { transferToolEffectReceipt } from "./tool-effect-receipt.js";
 import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
 import {
   isTrustedToolExecutionPreflightError,
@@ -312,8 +311,6 @@ function matchesCachedToolSearchIndex(
 let schemaValidatorModulePromise:
   | Promise<typeof import("../plugins/schema-validator.js")>
   | undefined;
-const catalogSchemaCacheIds = new WeakMap<object, number>();
-let nextCatalogSchemaCacheId = 0;
 
 function getCatalogSchemaCacheKey(
   entry: ToolSearchCatalogEntry,
@@ -321,17 +318,8 @@ function getCatalogSchemaCacheKey(
   schema: unknown,
 ): string {
   const prefix = `tool-${schemaName === "inputSchema" ? "input" : "output"}:${entry.id}`;
-  if (typeof schema !== "object" || schema === null) {
-    return `${prefix}:${String(schema)}`;
-  }
-  let schemaCacheId = catalogSchemaCacheIds.get(schema);
-  if (schemaCacheId === undefined) {
-    schemaCacheId = nextCatalogSchemaCacheId++;
-    catalogSchemaCacheIds.set(schema, schemaCacheId);
-  }
-  // Trusted schemas can be edited in place, so object identity alone cannot
-  // safely reuse a compiled validator after its constraints have changed.
-  return `${prefix}:${schemaCacheId}:${JSON.stringify(schema)}`;
+  // Content keys reuse rebuilt tool schemas while invalidating in-place constraint changes.
+  return `${prefix}:${JSON.stringify(schema)}`;
 }
 
 async function validateCatalogSchemaValue(
@@ -624,8 +612,6 @@ export class ToolSearchRuntime {
         await assertCatalogOutputMatchesSchema(entry, candidate);
       }
       const snapshot = snapshotToolSearchTargetTranscriptResult(candidate);
-      // Projection changes object identity; move the private terminal receipt with it.
-      transferToolEffectReceipt(candidate, snapshot);
       await assertCatalogOutputMatchesSchema(entry, snapshot);
       return snapshot;
     };

@@ -689,6 +689,7 @@ describe("worker placement restart recovery", () => {
         runActivationBarrier: async ({ activate }) => activate(),
         runMoveBarrier: async ({ begin }) => begin(),
         resolveMoveDestination: async () => undefined,
+        runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
         runReclaimBarrier: async ({ begin, reclaim }) =>
           await reclaim("/gateway/workspace", begin()),
         runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),

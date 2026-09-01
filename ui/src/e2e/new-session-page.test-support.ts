@@ -1,4 +1,3 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { errors, type Locator, type Page } from "playwright";
 import { expect } from "vitest";
@@ -17,6 +16,7 @@ import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 export { controlUiSessionPath, controlUiSessionUrl, waitForConfirmModal };
 
 const NEW_SESSION_FEATURE_METHODS = [
+  "agent.wait",
   "chat.metadata",
   "chat.startup",
   "sessions.create",
@@ -43,53 +43,7 @@ const LOCATOR_TEXT_READ_TIMEOUT_MS = 500;
 const LOCATOR_TEXT_POLL_TIMEOUT_MS = 10_000;
 
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "cloud-worker-session",
-);
-export const reconnectProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "initial-prompt-reconnect",
-);
-export const projectProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "project-registry",
-);
-export const newSessionComposerProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "new-session-slash-menu",
-);
-const environmentMetadataProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "environment-metadata",
-);
-const deviceRuntimeProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "device-runtime-gating",
-);
 
-export async function prepareProjectUiProof() {
-  if (captureUiProofEnabled) {
-    await prepareUiProof(projectProofArtifactDir);
-  }
-}
-export async function prepareNewSessionComposerUiProof() {
-  if (captureUiProofEnabled) {
-    await prepareUiProof(newSessionComposerProofArtifactDir);
-  }
-}
 export const ONE_PIXEL_PNG_B64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
 export const SESSION_LIST_DEFAULTS = {
@@ -146,6 +100,7 @@ export function createdSessionListResult(sessionKey: string) {
 }
 
 export async function expectPendingSessionPlacementStartupBeforeRuntime(
+  owner: { readonly artifactDir: string },
   page: Page,
   gateway: MockGatewayControls,
   sessionKey: string,
@@ -163,52 +118,70 @@ export async function expectPendingSessionPlacementStartupBeforeRuntime(
     .toBe(true);
   expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
   expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
-  await captureUiProof(page, "02-cloud-startup-chunk-pending.png");
+  await captureUiProof(owner, page, "02-cloud-startup-chunk-pending.png");
   return startupStatus;
 }
 
-export async function captureUiProof(page: Page, fileName: string) {
+export async function captureUiProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  fileName: string,
+) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await captureProof(page, uiProofArtifactDir, fileName);
+  await captureProof(page, path.join(owner.artifactDir, "cloud-worker-session"), fileName);
 }
 
-export async function captureProjectUiProof(page: Page, fileName: string) {
+export async function captureProjectUiProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  fileName: string,
+) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await captureProof(page, projectProofArtifactDir, fileName);
+  await captureProof(page, path.join(owner.artifactDir, "project-registry"), fileName);
 }
 
-export async function captureNewSessionComposerUiProof(page: Page, fileName: string) {
+export async function captureNewSessionComposerUiProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  fileName: string,
+) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await captureProof(page, newSessionComposerProofArtifactDir, fileName);
+  await captureProof(page, path.join(owner.artifactDir, "new-session-slash-menu"), fileName);
 }
 
-export async function captureEnvironmentMetadataUiProof(page: Page) {
+export async function captureEnvironmentMetadataUiProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+) {
   const proofName = process.env.OPENCLAW_ENVIRONMENT_METADATA_PROOF;
   if (proofName !== "before" && proofName !== "after") {
     return;
   }
-  await captureProof(page, environmentMetadataProofArtifactDir, `${proofName}.png`);
+  await captureProof(
+    page,
+    path.join(owner.artifactDir, "environment-metadata"),
+    `${proofName}.png`,
+  );
 }
 
-export async function captureDeviceRuntimeUiProof(page: Page, fileName: string) {
+export async function captureDeviceRuntimeUiProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  fileName: string,
+) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await captureProof(page, deviceRuntimeProofArtifactDir, fileName);
-}
-
-async function prepareUiProof(artifactDir: string) {
-  await mkdir(artifactDir, { recursive: true });
+  await captureProof(page, path.join(owner.artifactDir, "device-runtime-gating"), fileName);
 }
 
 async function captureProof(page: Page, artifactDir: string, fileName: string) {
-  await prepareUiProof(artifactDir);
   await page.screenshot({
     animations: "disabled",
     fullPage: true,

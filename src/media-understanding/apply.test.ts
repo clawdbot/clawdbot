@@ -2266,12 +2266,11 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toContain("legitimate content");
   });
 
-  it("forces BodyForCommands when only file blocks are added", async () => {
-    const filePath = await createTempMediaFile({
-      fileName: "notes.txt",
-      content: "file content",
-    });
-
+  it.each([
+    { content: "file content", expected: "file content" },
+    { content: "", expected: "[No extractable text]" },
+  ])("finalizes file context with content %j", async ({ content, expected }) => {
+    const filePath = await createTempMediaFile({ fileName: "notes.txt", content });
     const { ctx, result } = await applyWithDisabledMedia({
       body: "<media:document>",
       mediaPath: filePath,
@@ -2280,6 +2279,9 @@ describe("applyMediaUnderstanding", () => {
 
     expect(result.appliedFile).toBe(true);
     expect(ctx.Body).toContain('<file name="notes.txt" mime="text/plain">');
+    expect(ctx.Body).toContain(expected);
+    expect(ctx.agentText).toBe(ctx.Body);
+    expect(ctx.BodyForAgent).toBe(ctx.Body);
     expect(ctx.BodyForCommands).toBe(ctx.Body);
   });
 
@@ -2525,25 +2527,40 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).not.toContain("OWNED");
   });
 
-  it("caps cumulative skip markers and collapses overflow into one summary", async () => {
-    const olePayload = Buffer.from("Root Entry WordDocument legacy preview", "utf8");
-    const media: { path: string; contentType: string }[] = [];
-    for (let i = 0; i < 7; i += 1) {
-      const filePath = await createTempMediaFile({
-        fileName: `legacy-${i}.doc`,
-        content: olePayload,
-      });
-      media.push({ path: filePath, contentType: "application/msword" });
-    }
+  it.each([false, true])(
+    "caps skipped markers without counting empty files (empty first: %s)",
+    async (emptyFirst) => {
+      const olePayload = Buffer.from("Root Entry WordDocument legacy preview", "utf8");
+      const media: { path: string; contentType: string }[] = [];
+      if (emptyFirst) {
+        const filePath = await createTempMediaFile({ fileName: "empty.txt", content: "" });
+        media.push({ path: filePath, contentType: "text/plain" });
+      }
+      for (let i = 0; i < 7; i += 1) {
+        const filePath = await createTempMediaFile({
+          fileName: `legacy-${i}.doc`,
+          content: olePayload,
+        });
+        media.push({ path: filePath, contentType: "application/msword" });
+      }
 
-    const ctx: MsgContext = { Body: "<media:file>", media };
-    const result = await applyMediaUnderstanding({ ctx, cfg: createMediaDisabledConfig() });
+      const ctx: MsgContext = { Body: "<media:file>", media };
+      const result = await applyMediaUnderstanding({ ctx, cfg: createMediaDisabledConfig() });
 
-    expect(result.appliedFile).toBe(true);
-    const markerCount = ctx.Body?.split("[Unsupported document format").length ?? 0;
-    expect(markerCount - 1).toBe(5);
-    expect(ctx.Body).toContain("[2 more attachments skipped]");
-  });
+      expect(result.appliedFile).toBe(true);
+      if (emptyFirst) {
+        expect(ctx.Body).toContain(
+          '<file name="empty.txt" mime="text/plain">\n[No extractable text]\n</file>',
+        );
+        expect(ctx.Body).not.toContain("[Attachment could not be read]");
+      }
+      const markerCount = ctx.Body?.split("[Unsupported document format").length ?? 0;
+      expect(markerCount - 1).toBe(5);
+      expect(ctx.Body).toContain('<file name="legacy-4.doc"');
+      expect(ctx.Body).not.toContain('<file name="legacy-5.doc"');
+      expect(ctx.Body).toContain("[2 more attachments skipped]");
+    },
+  );
 
   it("shares one reason-neutral overflow budget across document and media markers", async () => {
     const olePayload = Buffer.from("Root Entry WordDocument legacy preview", "utf8");

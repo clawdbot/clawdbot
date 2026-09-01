@@ -228,16 +228,18 @@ export function expectedIntegrityForNpmUpdate(params: {
 
 export async function resolveNewerExactPinnedNpmDefaultLine(params: {
   currentVersion: string | undefined;
-  effectiveSpec: string | undefined;
+  recordedSpec: string | undefined;
   probeNpmVersion: string | undefined;
   updateChannel?: UpdateChannel;
   timeoutMs?: number;
 }): Promise<{ packageName: string; registryLine: "beta" | "latest"; version: string } | undefined> {
-  if (!params.currentVersion || !params.probeNpmVersion || !params.effectiveSpec) {
+  if (!params.currentVersion || !params.probeNpmVersion || !params.recordedSpec) {
     return undefined;
   }
-  const packageName = resolveNpmSpecPackageName(params.effectiveSpec);
-  const exactVersion = resolveExactNpmSpecVersion(params.effectiveSpec);
+  // Core alignment can produce an exact install target without changing user intent.
+  // Only the recorded selector owns pin diagnostics.
+  const packageName = resolveNpmSpecPackageName(params.recordedSpec);
+  const exactVersion = resolveExactNpmSpecVersion(params.recordedSpec);
   const probeNpmVersion = normalizeExactNpmVersion(params.probeNpmVersion);
   if (!packageName || !exactVersion || probeNpmVersion !== exactVersion) {
     return undefined;

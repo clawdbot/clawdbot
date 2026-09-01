@@ -2,10 +2,13 @@
 import fs from "node:fs";
 import Module, { createRequire } from "node:module";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPathInside } from "../infra/path-guards.js";
 
 const nodeRequire = createRequire(import.meta.url);
+// Failed ESM jobs survive require-cache eviction. Preserve an observed terminal error
+// if a retry hits that job, rather than transforming its rejected graph through Jiti.
+const nativeModuleLoadFailures = new Map<string, unknown>();
 type ResolveFilename = (
   request: string,
   parent: NodeJS.Module | undefined,
@@ -60,7 +63,7 @@ function isSourceTransformFallbackError(error: unknown, modulePath: string): boo
 
 /** Attempts native require before falling back to source transform paths. */
 export function tryNativeRequireJavaScriptModule(
-  modulePath: string,
+  moduleSpecifier: string,
   options: {
     allowWindows?: boolean;
     aliasMap?: Record<string, string> | ((specifier: string) => string | undefined);
@@ -71,14 +74,31 @@ export function tryNativeRequireJavaScriptModule(
   if (process.platform === "win32" && options.allowWindows !== true) {
     return { ok: false };
   }
+  const modulePath = toNativeRequirePath(moduleSpecifier);
   if (!isJavaScriptModulePath(modulePath)) {
     return { ok: false };
   }
+  let resolvedPath = modulePath;
   try {
-    return { ok: true, moduleExport: requireWithOptionalAliases(modulePath, options.aliasMap) };
+    const moduleExport = withNativeRequireAliases(options.aliasMap, () => {
+      // A process-wide require retains evicted graphs through its parent's children.
+      // Keep that parent scoped to this load so retired graphs can be collected.
+      const require = createRequire(import.meta.url);
+      resolvedPath = require.resolve(modulePath);
+      // Requiring the resolved target could apply a second alias to the same request.
+      return require(modulePath);
+    });
+    nativeModuleLoadFailures.delete(resolvedPath);
+    return { ok: true, moduleExport };
   } catch (error) {
     const code =
       error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
+    if (
+      nativeModuleLoadFailures.has(resolvedPath) &&
+      (code === "ERR_REQUIRE_ESM_RACE_CONDITION" || code === "ERR_INTERNAL_ASSERTION")
+    ) {
+      throw nativeModuleLoadFailures.get(resolvedPath);
+    }
     if (
       isSourceTransformFallbackError(error, modulePath) ||
       options.fallbackOnNativeError ||
@@ -87,6 +107,7 @@ export function tryNativeRequireJavaScriptModule(
     ) {
       return { ok: false };
     }
+    nativeModuleLoadFailures.set(resolvedPath, error);
     throw error;
   }
 }
@@ -97,7 +118,7 @@ export function clearPluginModuleRequireCache(
   options: { dependencyRoot?: string } = {},
 ): void {
   try {
-    const resolved = nodeRequire.resolve(modulePath);
+    const resolved = nodeRequire.resolve(toNativeRequirePath(modulePath));
     clearRequireCacheSubtree(
       resolved,
       resolveRequireCachePath(options.dependencyRoot ?? path.dirname(resolved)),
@@ -105,6 +126,15 @@ export function clearPluginModuleRequireCache(
     );
   } catch {
     // Best-effort lifecycle cleanup: unresolved paths were not loaded.
+  }
+}
+
+// Native require and cache keys use paths; ESM/source loaders keep URL specifiers.
+function toNativeRequirePath(specifier: string): string {
+  try {
+    return /^file:\/\//iu.test(specifier) ? fileURLToPath(specifier) : specifier;
+  } catch {
+    return specifier;
   }
 }
 
@@ -134,15 +164,6 @@ function clearRequireCacheSubtree(
     }
   }
   delete nodeRequire.cache[resolvedPath];
-}
-
-function requireWithOptionalAliases(
-  modulePath: string,
-  aliasMap: Record<string, string> | ((specifier: string) => string | undefined) | undefined,
-): unknown {
-  // A process-wide require retains evicted modules through its synthetic parent's children.
-  // Keep that parent scoped to this load so retired graphs can be collected.
-  return withNativeRequireAliases(aliasMap, () => createRequire(import.meta.url)(modulePath));
 }
 
 /** Runs a native require block with temporary CJS/ESM alias hooks and restores both afterward. */

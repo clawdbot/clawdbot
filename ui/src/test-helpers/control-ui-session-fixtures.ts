@@ -12,16 +12,16 @@ export type ControlUiSessionFixture = {
 };
 
 // Also serialized into the page realm; keep these builders free of module captures.
-export function createControlUiSessionRow<T extends Partial<ControlUiSessionFixture>>(
+export function createControlUiSessionRow(
   key: string,
   label: string,
   updatedAt: number,
-  options: T,
+  options?: Partial<ControlUiSessionFixture>,
 ) {
-  const archivedAt = options.archivedAt ?? (options.archived ? updatedAt : undefined);
+  const archivedAt = options?.archivedAt ?? (options?.archived ? updatedAt : undefined);
   const pinnedAt =
     archivedAt === undefined
-      ? (options.pinnedAt ?? (options.pinned ? updatedAt : undefined))
+      ? (options?.pinnedAt ?? (options?.pinned ? updatedAt : undefined))
       : undefined;
   return {
     displayName: label,
@@ -35,8 +35,8 @@ export function createControlUiSessionRow<T extends Partial<ControlUiSessionFixt
     totalTokens: 0,
     updatedAt,
     ...options,
-    contextTokens: options.contextTokens ?? null,
-    kind: options.kind ?? "direct",
+    contextTokens: options?.contextTokens ?? null,
+    kind: options?.kind ?? "direct",
     pinned: pinnedAt !== undefined,
     pinnedAt,
     archived: archivedAt !== undefined,

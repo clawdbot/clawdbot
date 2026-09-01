@@ -153,6 +153,7 @@ export type ExecToolDetails = {
       startedAt: number;
       cwd?: string;
       tail?: string;
+      followUp?: string;
     }
   | {
       status: "completed" | "failed";

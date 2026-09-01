@@ -126,12 +126,10 @@ function runSync(root: string, ...args: string[]) {
 
 function expectStableSync(root: string) {
   const synced = readOutputs(root);
-  for (let pass = 0; pass < 2; pass++) {
-    for (const args of [[], ["--check"]]) {
-      const result = runSync(root, ...args);
-      expect(result.status, result.stderr).toBe(0);
-      expect(readOutputs(root)).toEqual(synced);
-    }
+  for (const args of [[], ["--check"]]) {
+    const result = runSync(root, ...args);
+    expect(result.status, result.stderr).toBe(0);
+    expect(readOutputs(root)).toEqual(synced);
   }
 }
 

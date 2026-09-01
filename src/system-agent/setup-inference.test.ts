@@ -14,6 +14,7 @@ import {
   type AgentExecutionAuthBinding,
 } from "../agents/execution-auth-binding.js";
 import { ensureSelectedAgentHarnessPlugin } from "../agents/harness/runtime-plugin.js";
+import { prepareOwnedPluginLoadContext } from "../agents/prepared-model-runtime.plugin-context.js";
 import { detectInferenceBackends } from "../commands/onboard-inference.js";
 import type { ConfigWriteOptions } from "../config/io.js";
 import { createConfigFileSnapshot } from "../config/io.snapshot-shared.js";
@@ -21,10 +22,18 @@ import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { getRuntimeConfigWriteApplication } from "../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import {
+  getCurrentPluginMetadataSnapshot,
+  setGatewayPluginMetadataSnapshot,
+} from "../plugins/current-plugin-metadata-snapshot.js";
+import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import * as pluginEnable from "../plugins/enable.js";
 import { withoutPluginInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import { hasRetainedManagedNpmInstallMarker } from "../plugins/managed-npm-retention.js";
-import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  rebasePluginMetadataSnapshotManifestRegistry,
+  resolvePluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { capturePluginRegistryLifecycleEpoch } from "../plugins/registry-lifecycle.js";
@@ -44,6 +53,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   disposeOpenClawAgentDatabaseByPath,
 } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { WizardCancelledError, WizardNavigationError } from "../wizard/prompts.js";
 import { cleanupSystemAgentSession, createSystemAgentSession } from "./agent-turn.js";
@@ -1979,6 +1989,38 @@ describe("activateSetupInference", () => {
       wizard: { securityAcknowledgedAt: "2026-08-03T00:00:00.000Z" },
       agents: { defaults: { model: "claude-cli/claude-opus-5" } },
     });
+  });
+
+  it("locks caller cancellation before the runtime installer starts its durable effect", async () => {
+    closeOpenClawStateDatabaseForTest();
+    const stateDir = await suiteTempRootTracker.make("case");
+    await fs.mkdir(path.join(stateDir, "state"), { recursive: true });
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const events: string[] = [];
+    const ensureCodex = vi.fn(
+      async (params: {
+        cfg: OpenClawConfig;
+        beforePersistentEffect?: () => void | Promise<void>;
+      }) => {
+        await params.beforePersistentEffect?.();
+        events.push("install");
+        return { ok: true as const, cfg: params.cfg, required: true };
+      },
+    );
+
+    try {
+      const result = await activateCodexSetup({
+        beforePersistentEffect: () => {
+          events.push("lock");
+        },
+        deps: { ensureCodexRuntimePlugin: ensureCodex as never },
+      });
+
+      expect(result.ok).toBe(true);
+      expect(events.slice(0, 2)).toEqual(["lock", "install"]);
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+    }
   });
 
   it("uses the materialized runtime roster when activating from a missing config file", async () => {
@@ -4466,8 +4508,13 @@ describe("activateSetupInference", () => {
       }),
     );
     expect(refreshPluginRegistry).toHaveBeenCalledTimes(2);
-    expect(resolveRouteMetadata).toHaveBeenCalledOnce();
-    expect(resolveRouteMetadata).toHaveBeenCalledWith(
+    expect(resolveRouteMetadata).toHaveBeenCalledTimes(2);
+    expect(resolveRouteMetadata).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ allowCurrent: false }),
+    );
+    expect(resolveRouteMetadata).toHaveBeenNthCalledWith(
+      2,
       expect.objectContaining({ allowCurrent: false }),
     );
     expect(events).toEqual([
@@ -4476,6 +4523,7 @@ describe("activateSetupInference", () => {
       "refresh-plugin-registry",
       "resolve-route-metadata",
       "live-test",
+      "resolve-route-metadata",
       "persist-plugin-config",
       "refresh-plugin-registry",
     ]);
@@ -4706,6 +4754,18 @@ describe("activateSetupInference", () => {
 
   it("probes a newly loaded Codex harness inside an older Gateway registry scope", async () => {
     const oldRegistry = createEmptyPluginRegistry();
+    const configHarness = createPreRosterConfigTransformHarness();
+    const metadata = resolvePluginMetadataSnapshot({ config: materializedMainRuntimeConfig });
+    const oldMetadata = {
+      ...rebasePluginMetadataSnapshotManifestRegistry(metadata, {
+        plugins: metadata.plugins.filter((plugin) => plugin.id !== "codex"),
+        diagnostics: [],
+      }),
+      index: {
+        ...metadata.index,
+        plugins: metadata.index.plugins.filter((plugin) => plugin.pluginId !== "codex"),
+      },
+    };
     const stagedRegistry = createEmptyPluginRegistry();
     stagedRegistry.agentHarnesses.push({
       pluginId: "codex",
@@ -4719,7 +4779,26 @@ describe("activateSetupInference", () => {
         },
       },
     });
-    mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValueOnce(stagedRegistry);
+    const prepareProbeMetadata = (config: OpenClawConfig, workspaceDir: string) => {
+      const prepared = prepareOwnedPluginLoadContext(
+        {
+          config,
+          workspaceDir,
+          loadRuntimePlugins: true,
+          runtimePluginSelections: [
+            { provider: "openai", modelId: "gpt-5.6-sol", runtime: "codex" },
+          ],
+        },
+        process.env,
+        stagedRegistry,
+      );
+      expect(prepared.plugins.some((plugin) => plugin.id === "codex")).toBe(true);
+      return prepared;
+    };
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(({ config, workspaceDir }) => {
+      prepareProbeMetadata(config, workspaceDir);
+      return stagedRegistry;
+    });
     let ownerArtifactRegistry: unknown;
     const captureSystemAgentOwnerPluginArtifacts = vi.fn(() => {
       ownerArtifactRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
@@ -4728,6 +4807,7 @@ describe("activateSetupInference", () => {
     const runEmbeddedAgent = vi.fn(async (params: SuccessfulRunParams) => {
       const pluginRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
       expect(pluginRegistry).toBe(stagedRegistry);
+      prepareProbeMetadata(expectDefined(params.config, "probe config"), "/tmp/work");
       await ensureSelectedAgentHarnessPlugin({
         provider: "openai",
         modelId: "gpt-5.6-sol",
@@ -4738,24 +4818,42 @@ describe("activateSetupInference", () => {
       return successfulRun("openai", "gpt-5.6-sol", params);
     });
 
-    await withPluginRuntimeGatewayRequestScope(
-      { isWebchatConnect: () => false, pluginRegistry: oldRegistry },
-      async () => {
-        const configHarness = createPreRosterConfigTransformHarness();
-        const result = await activateCodexSetup({
-          workspace: "/tmp/work",
-          deps: {
-            readConfigFileSnapshot: configHarness.readSnapshot as never,
-            captureSystemAgentOwnerPluginArtifacts,
-            runEmbeddedAgent: runEmbeddedAgent as never,
-            transformConfigWithPendingPluginInstalls: configHarness.transform as never,
-          },
-        });
+    clearCurrentPluginMetadataSnapshot();
+    setGatewayPluginMetadataSnapshot(oldMetadata, { config: materializedMainRuntimeConfig });
+    try {
+      await withPluginRuntimeGatewayRequestScope(
+        { isWebchatConnect: () => false, pluginRegistry: oldRegistry },
+        async () => {
+          const result = await activateSetupInferenceImpl({
+            kind: "codex-cli",
+            surface: "gateway",
+            runtime,
+            workspace: "/tmp/work",
+            deps: {
+              ...withSuiteFixtures(undefined),
+              ensureCodexRuntimePlugin: mockCodexRuntimeInstall(),
+              readConfigFileSnapshot: configHarness.readSnapshot as never,
+              resolvePluginMetadataSnapshot,
+              captureSystemAgentOwnerPluginArtifacts,
+              createSystemAgentVerifiedInferenceBinding: async () =>
+                ({ ownerPluginIds: [], ownerPluginArtifacts: [] }) as never,
+              runEmbeddedAgent: runEmbeddedAgent as never,
+              transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+            },
+          });
 
-        expect(result).toMatchObject({ ok: true, modelRef: "openai/gpt-5.6-sol" });
-        expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(oldRegistry);
-      },
-    );
+          expect(result, result.ok ? undefined : result.error).toMatchObject({
+            ok: true,
+            modelRef: "openai/gpt-5.6-sol",
+          });
+          expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(oldRegistry);
+          expect(getCurrentPluginMetadataSnapshot()).toBe(oldMetadata);
+        },
+      );
+    } finally {
+      clearCurrentPluginMetadataSnapshot();
+      pluginMetadataSnapshot?.rebindForCurrentEnv();
+    }
     expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
     expect(ownerArtifactRegistry).toBe(stagedRegistry);
     expect(captureSystemAgentOwnerPluginArtifacts).toHaveBeenCalledOnce();

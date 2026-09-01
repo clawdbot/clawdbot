@@ -6,7 +6,6 @@ import type {
   getDiagnosticSessionState as GetDiagnosticSessionStateType,
   SessionState,
 } from "../../logging/diagnostic-session-state.js";
-import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type {
   ToolOutcomeObserver,
   wrapToolWithBeforeToolCallHook as WrapToolWithBeforeToolCallHookType,
@@ -22,17 +21,18 @@ import {
   makeOverflowError,
 } from "./run.overflow-compaction.fixture.js";
 import {
-  createOverflowRunParams,
   mockedCompactDirect,
   mockedIsCompactionFailureError,
   mockedIsLikelyContextOverflowError,
   mockedRunEmbeddedAttempt,
   resetSharedRunIntegrationHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
-import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
+import {
+  createSharedRunIntegrationSession,
+  loadSharedRunIntegrationHarness,
+} from "./run.shared-integration-harness.test-support.js";
 
-let state: OpenClawTestState;
-let baseParams: ReturnType<typeof createOverflowRunParams>;
+let baseParams: Awaited<ReturnType<typeof createSharedRunIntegrationSession>>["runParams"];
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 // Import after the shared harness loads so these references point at the
 // same module instances as the re-imported runner graph.
@@ -104,6 +104,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
   let queuedTasks: Promise<unknown>[];
   let pendingTasks: Set<Promise<unknown>>;
   let restoreQueueObserver: (() => void) | undefined;
+  let session: Awaited<ReturnType<typeof createSharedRunIntegrationSession>>;
   beforeAll(async () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
     // Re-import after the harness reset so we share module instances with
@@ -119,9 +120,8 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
     liveToolCallSeq = 0;
     diagnosticSessionStates.clear();
     resetSharedRunIntegrationHarnessMocks();
-    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
-    state = await createOpenClawTestState({ label: "run.compaction-loop-guard" });
-    baseParams = createOverflowRunParams(state);
+    session = await createSharedRunIntegrationSession();
+    baseParams = session.runParams;
     const queue = await import("../../process/command-queue.js");
     const enqueue = queue.enqueueCommandInLane;
     queuedTasks = [];
@@ -175,7 +175,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
         0,
       );
       expect(pendingTasks.size).toBe(0);
-      await state?.cleanup();
+      await session?.cleanup();
     } finally {
       restoreQueueObserver?.();
     }
@@ -225,7 +225,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       }),
     );
 
-    await expect(runEmbeddedAgent(baseParams)).rejects.toBeInstanceOf(
+    await expect(runEmbeddedAgent(session.runParams)).rejects.toBeInstanceOf(
       PostCompactionLoopPersistedError,
     );
 
@@ -278,7 +278,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       );
 
       run = runEmbeddedAgent({
-        ...baseParams,
+        ...session.runParams,
         runId: "run-post-compaction-abort-lane-release",
         timeoutMs: 48 * 60 * 60 * 1000,
       });
@@ -289,7 +289,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
         })
         .catch(() => {});
 
-      await attemptAbortedPromise;
+      await Promise.race([attemptAbortedPromise, run]);
       expect(attemptAborted).toBe(true);
       await vi.advanceTimersByTimeAsync(30_001);
 
@@ -475,7 +475,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
     );
 
     const result = await runEmbeddedAgent({
-      ...baseParams,
+      ...session.runParams,
       config: {
         tools: {
           loopDetection: {
@@ -543,7 +543,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       }),
     );
 
-    await expect(runEmbeddedAgent(baseParams)).rejects.toBeInstanceOf(
+    await expect(runEmbeddedAgent(session.runParams)).rejects.toBeInstanceOf(
       PostCompactionLoopPersistedError,
     );
 

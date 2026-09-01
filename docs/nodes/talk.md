@@ -38,6 +38,13 @@ their current ephemeral-token and WebRTC data-channel flow.
 
 Finalized realtime user and assistant utterances are always appended live to the active agent session, so later chat and voice turns share one history. Client-owned transports report their finalized transcripts with stable entry ids; Gateway relay and Gateway-controlled WebRTC sessions append the same events server-side. Provider sessions also receive the bounded realtime profile context used by Discord voice.
 
+OpenAI GA browser Talk keeps provider conversation order even when an assistant
+reply finishes before the user's transcription or item announcements arrive out
+of order. Text streams immediately in the call view; late predecessor metadata
+places it beside the correct reply. Stopping a call drains finalized speech,
+skips unfinished transcriptions, and records a browser console warning for
+missing transcriptions or unresolved conversation links.
+
 Google Live saves complete utterances during the call, including Gemini 3.1
 transcriptions that omit an explicit transcription-finished flag. Partial text
 stays provisional until the provider's completion boundary.
@@ -45,6 +52,8 @@ stays provisional until the provider's completion boundary.
 Voice-originated consult runs require a new, exact spoken confirmation before high-impact actions such as sending messages, controlling nodes, browser/computer actions, service changes, destructive shell commands, or publication. The gate applies to runs started through `talk.client.toolCall`, the Gateway relay, and GPT-Live sideband delegations. The confirmation applies only to the canonical final execution arguments and is consumed once; if a policy or hook rewrites the approved action, OpenClaw blocks it until the rewritten action is confirmed. Unrelated concurrent runs remain unaffected. When a call closes, OpenClaw can send a compact **Voice call changes** digest for mutating tools to the session's last non-WebChat delivery target.
 
 Transcription-only Talk emits the same Talk event envelope as realtime and STT/TTS sessions, but uses `mode: "transcription"` and `brain: "none"`. All Talk sessions broadcast events on the `talk.event` channel; clients subscribe to it for partial/final transcript updates (`transcript.delta`/`transcript.done`) and other session telemetry.
+
+Transcription providers can advertise their model choices in `talk.catalog.transcription.providers[].models`. Pass `model` to `talk.session.create` to override the configured transcription model for that session. Omitting it keeps the provider configuration, then the matching `agents.defaults.voiceModel`, then the provider's own default.
 
 Browser Video Talk is available for OpenAI Realtime WebRTC and Google Live
 provider-WebSocket sessions. OpenAI gets a single bounded JPEG when
@@ -54,10 +63,52 @@ browser at up to one frame per second, while `describe_view` reports the
 camera-stream state. In both cases, camera frames bypass the Gateway, and
 stopping Talk releases the camera and microphone tracks.
 
+Browser Talk shows startup progress while preparing the session, waiting for
+microphone access, and connecting. Talk and dictation show microphone guidance
+while the browser's capture request is pending: bring the tab to the foreground
+and allow access if prompted. The browser can keep an unanswered permission
+request pending. In Talk, **Stop voice input** cancels startup and releases any
+microphone stream granted after cancellation.
+
+Browser Talk acquires the microphone before creating the provider session, so
+time spent granting permission does not consume a short-lived connection token.
+If session creation fails, Talk releases the microphone before reporting the error.
+
+If OpenAI cannot transcribe an utterance, browser Talk shows the provider's error
+without ending the call or inventing a transcript. You can speak again; audio
+responses continue independently of input transcription.
+
 If the microphone disconnects or its permission is revoked, browser Talk ends
 the call and shows an error. Choose an available **Microphone input**, restore
 permission if needed, and start Talk again. An unexpected GPT-Live connection
 loss also ends the call with an error; automatic reconnection is not supported.
+
+## Session ownership
+
+`talk.client.create` and realtime `talk.session.create` resolve their session before
+loading profile context or starting a provider. An agent-prefixed `sessionKey`
+selects that agent. Otherwise, Talk uses `talk.agentId`, then the configured system
+agent or an unambiguous default agent. Without an owner in a multi-agent Gateway,
+set `talk.agentId` or send an agent-prefixed key.
+
+Omitting `sessionKey` selects the same owned main session as a bare `main` key;
+both enforce sharing, incognito, and operator-role restrictions. Main aliases
+honor `session.scope` and the configured [main session](/concepts/main-session) key. A shared fixed store retains
+its recorded owner for unqualified keys, and conflicting explicit ownership is rejected
+even when a main alias becomes `global`. If routing or access changes during
+startup, creation fails rather than switching sessions; retry the request.
+
+Client tool calls, Gateway-owned provider consultations, and steering retain the prepared agent,
+canonical session key, and store. Agent replies stay in the same session as voice
+transcripts, including under global scope, while the original key continues to
+identify the voice call.
+
+Keep the original `sessionKey` for client transcript, tool-call, and close requests.
+`talk.client.close` requires both that exact key and the returned `voiceSessionId`;
+an equivalent storage alias is not a replacement. A `talk.client.toolCall` acknowledgement
+returns `agentId`, `agentSessionKey`, and `runId`; use that exact target for chat
+cancellation, history, and completion events, including when the canonical key is `global`. Transcription-only sessions
+without a key remain sessionless and do not select a default chat.
 
 ## Behavior (macOS)
 
@@ -196,7 +247,7 @@ Supported keys: `voice` / `voice_id` / `voiceId`, `model` / `model_id` / `modelI
 ```
 
 OpenAI browser WebRTC and Gateway-relay Talk support native GPT-Live. Set `talk.realtime.model` to
-`gpt-live-1-codex` (recommended) or `gpt-live-1-boulder-alpha`; `gpt-live-1`
+`gpt-live-1-codex`; `gpt-live-1`
 and `gpt-live-1-mini` are not valid on this route. Browser and Gateway-relay
 WebRTC prefer a ChatGPT OAuth subscription profile and fall back to Platform
 API-key auth. OAuth creates the WebRTC call through the Codex backend using

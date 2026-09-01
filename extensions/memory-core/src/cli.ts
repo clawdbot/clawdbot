@@ -198,7 +198,7 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
   memory
     .command("status")
     .description("Show memory search index status")
-    .option("--agent <id>", "Agent id (default: default agent)")
+    .option("--agent <id>", "Agent id (default: all configured agents)")
     .option("--json", "Print JSON")
     .option("--deep", "Probe embedding provider availability")
     .option("--index", "Reindex if dirty (implies --deep)")
@@ -211,7 +211,7 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
   memory
     .command("index")
     .description("Reindex memory files")
-    .option("--agent <id>", "Agent id (default: default agent)")
+    .option("--agent <id>", "Agent id (default: all configured agents)")
     .option("--force", "Force full reindex", false)
     .option("--verbose", "Verbose logging", false)
     .action(async (opts: MemoryCommandOptions) => {

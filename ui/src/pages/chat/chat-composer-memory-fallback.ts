@@ -1,12 +1,14 @@
 import type { ChatAttachment, ChatGoalDraftMode } from "../../lib/chat/chat-types.ts";
 import { parseStoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
-import { hasUiSessionDefaults } from "../../lib/sessions/session-key.ts";
+import {
+  resolveUiConversationIdentity,
+  hasUiSessionDefaults,
+} from "../../lib/sessions/session-key.ts";
 import { releaseDisplacedChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import type { ChatComposerMemoryFallback, ChatPageHost } from "./chat-state-host.ts";
 import {
   loadChatComposerCommittedDraftRevision,
   loadChatComposerDraftRevision,
-  resolveStoredChatOutboxScope,
   storedChatOutboxScopeKey,
   type ChatComposerDraftRetry,
   type StoredChatOutboxScope,
@@ -23,7 +25,7 @@ function resolveChatComposerMemoryFallback(
   sessionKey: string,
   scopeOverride?: StoredChatOutboxScope,
 ): { fallback?: ChatComposerMemoryFallback; scopeKey: string } {
-  const scope = scopeOverride ?? resolveStoredChatOutboxScope(state, sessionKey);
+  const scope = scopeOverride ?? resolveUiConversationIdentity(state, sessionKey);
   const scopeKey = storedChatOutboxScopeKey(scope);
   const fallbackSourceKeys = new Set([scopeKey]);
   for (const key of Object.keys(state.chatComposerFallbackByScope)) {
@@ -32,7 +34,7 @@ function resolveChatComposerMemoryFallback(
       source &&
       state.chatComposerFallbackByScope[key]?.awaitingDefaults &&
       storedChatOutboxScopeKey(
-        resolveStoredChatOutboxScope(state, source.sessionKey, source.agentId),
+        resolveUiConversationIdentity(state, source.sessionKey, source.agentId),
       ) === scopeKey
     ) {
       fallbackSourceKeys.add(key);

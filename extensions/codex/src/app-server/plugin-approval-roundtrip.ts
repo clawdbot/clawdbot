@@ -59,6 +59,7 @@ type ApprovalRequestResult = {
 /** Starts a two-phase plugin approval request through the OpenClaw gateway. */
 export async function requestPluginApproval(params: {
   hostCapabilities: AgentHarnessHostCapabilities;
+  signal?: AbortSignal;
   title: string;
   description: string;
   severity: "info" | "warning";
@@ -68,6 +69,7 @@ export async function requestPluginApproval(params: {
 }): Promise<ApprovalRequestResult | undefined> {
   const timeoutMs = DEFAULT_CODEX_APPROVAL_TIMEOUT_MS;
   return params.hostCapabilities.requestApproval({
+    signal: params.signal,
     title: truncateCodexApprovalDisplayText(params.title, MAX_PLUGIN_APPROVAL_TITLE_LENGTH),
     description: truncateCodexApprovalDisplayText(
       params.description,

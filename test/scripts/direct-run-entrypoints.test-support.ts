@@ -43,7 +43,10 @@ export async function withShimFixture<T>(
   const fixtureRoot = realpathSync(mkdtempSync(path.join(fixtureParent, "openclaw-tsx-cli-shim-")));
   const checkoutRoot = path.join(fixtureRoot, "checkout");
   const wrapperPath = path.join(checkoutRoot, wrapper);
-  const implementationPath = wrapperPath.replace(/\.mjs$/u, ".mts");
+  const implementationPath = wrapperPath.replace(
+    /\.mjs$/u,
+    wrapper === "scripts/run-vitest.mjs" ? "-child.mts" : ".mts",
+  );
   const commands: Array<Promise<NodeResult>> = [];
   let outcome: { value: Awaited<T> } | { error: unknown };
   try {

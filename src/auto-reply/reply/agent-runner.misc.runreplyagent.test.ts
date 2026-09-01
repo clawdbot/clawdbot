@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import {
   abortEmbeddedAgentRun,
   isEmbeddedAgentRunActive,
@@ -17,7 +18,7 @@ import {
   type TestModelFallbackRunnerParams,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
-import { clearRuntimeConfigSnapshot } from "../../config/config.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -624,6 +625,26 @@ describe("runReplyAgent auto-compaction token update", () => {
       compactionCount: 0,
     };
     const prompt = "What is two plus two? Answer in one short sentence without tools.";
+    const config: OpenClawConfig = {
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://example.test",
+            models: [
+              {
+                id: "claude-opus-4-6",
+                name: "Test model",
+                contextTokens: 32_768,
+                reasoning: false,
+                input: ["text"],
+                maxTokens: 8_192,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    };
     registerMemoryFlushPlanResolverForTest(({ cfg, contextWindowTokens }) => {
       expect(cfg?.models?.providers?.anthropic?.models).toMatchObject([
         { id: "claude-opus-4-6", contextTokens: 32_768 },
@@ -650,7 +671,10 @@ describe("runReplyAgent auto-compaction token update", () => {
       },
     });
     runEmbeddedAgentMock.mockImplementation(
-      async (params: { trigger?: string; prompt?: string }) => {
+      async (params: { trigger?: string; prompt?: string; config?: OpenClawConfig }) => {
+        expect(params.config?.models?.providers?.anthropic?.models).toEqual(
+          config.models?.providers?.anthropic?.models,
+        );
         if (params.trigger === "memory") {
           await replaceTranscriptEvents(scope, [terminalEvent(7_039, 34)]);
           return {
@@ -663,10 +687,11 @@ describe("runReplyAgent auto-compaction token update", () => {
       },
     );
     try {
+      // Memory-flush persistence reads runtime config again; share its authoritative source
+      // with the queued turn so the selected model cannot escape into real catalog discovery.
+      setRuntimeConfigSnapshot(config, config);
       await replaceSessionEntry(scope, sessionEntry);
       await replaceTranscriptEvents(scope, [terminalEvent(10_920, 10)]);
-      // Store preparation can populate the shared test config snapshot.
-      clearRuntimeConfigSnapshot();
       const result = await createBaseRun({
         followup: { prompt },
         run: {
@@ -676,26 +701,7 @@ describe("runReplyAgent auto-compaction token update", () => {
           sessionFile: path.join(tmp, "session.jsonl"),
           workspaceDir: tmp,
           model: "claude-opus-4-6",
-          config: {
-            models: {
-              providers: {
-                anthropic: {
-                  baseUrl: "https://example.test",
-                  models: [
-                    {
-                      id: "claude-opus-4-6",
-                      name: "Test model",
-                      contextTokens: 32_768,
-                      reasoning: false,
-                      input: ["text"],
-                      maxTokens: 8_192,
-                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    },
-                  ],
-                },
-              },
-            },
-          },
+          config,
         },
         reply: {
           commandBody: prompt,
@@ -966,15 +972,20 @@ describe("runReplyAgent auto-compaction token update", () => {
       expectedCode: "aborted_for_supersession" as const,
     },
   ])(
-    "records a settled fallback cancelled by $label as aborted",
+    "records a settled fallback cancelled by $label without losing committed compaction",
     async ({ superseded, expectedCode }) => {
+      const root = tempDirs.make("openclaw-aborted-compaction-");
+      const storePath = path.join(root, "sessions.json");
       const upstreamAbort = new AbortController();
       const sessionKey = `${superseded ? "superseded" : "upstream-cancelled"}-settled-fallback`;
       const sessionEntry = {
         sessionId: "session-upstream-cancelled",
+        lifecycleRevision: "original-generation",
         updatedAt: Date.now(),
+        compactionCount: 3,
         totalTokens: 50_000,
       };
+      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
       const replyOperation = createReplyOperation({
         sessionKey,
         sessionId: sessionEntry.sessionId,
@@ -989,22 +1000,40 @@ describe("runReplyAgent auto-compaction token update", () => {
       const fallbackRelease = new Promise<void>((resolve) => {
         releaseFallback = resolve;
       });
-      runEmbeddedAgentMock.mockResolvedValueOnce({
-        payloads: [{ text: "late reply" }],
-        meta: { agentMeta: {} },
-      });
+      runEmbeddedAgentMock.mockImplementationOnce(
+        async (params: RunEmbeddedAgentInternalParams) => {
+          params.onCompactionAccounting?.({
+            kind: "durable",
+            count: 1,
+            currentContextSnapshot: { tokens: 40 },
+            target: {
+              agentId: "main",
+              sessionId: sessionEntry.sessionId,
+              sessionKey,
+              storePath,
+              lifecycleRevision: sessionEntry.lifecycleRevision,
+              activeWriterRunId: undefined,
+            },
+          });
+          return {
+            payloads: [{ text: "late reply" }],
+            meta: { agentMeta: { compactionCount: 1, compactionTokensAfter: 40 } },
+          };
+        },
+      );
       runWithModelFallbackMock.mockImplementationOnce(
         async (params: RunWithModelFallbackParams) => {
           const result = await runInitialModelFallbackAttempt(params);
           markCandidateSettled();
           await fallbackRelease;
-          return { result, provider: params.provider, model: params.model };
+          return { result, provider: params.provider, model: params.model, attempts: [] };
         },
       );
       const baseRun = createBaseRun({
         run: {
           agentId: "main",
           agentDir: path.join(rootDir, "agent"),
+          sessionId: sessionEntry.sessionId,
           sessionKey,
           reasoningLevel: "on",
         },
@@ -1013,6 +1042,7 @@ describe("runReplyAgent auto-compaction token update", () => {
           sessionEntry,
           sessionStore: { [sessionKey]: sessionEntry },
           sessionKey,
+          storePath,
           replyOperation,
         },
       });
@@ -1029,8 +1059,20 @@ describe("runReplyAgent auto-compaction token update", () => {
 
         expectReplyText(await pending, SILENT_REPLY_TOKEN);
         expect(replyOperation.result).toEqual({ kind: "aborted", code: expectedCode });
+        expect(
+          loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" }),
+        ).toMatchObject({
+          sessionId: sessionEntry.sessionId,
+          lifecycleRevision: "original-generation",
+          compactionCount: 4,
+          totalTokens: 40,
+          totalTokensFresh: true,
+        });
+        expect(peekSystemEvents(sessionKey)).toEqual([]);
       } finally {
+        releaseFallback();
         replyOperation.complete();
+        await fs.rm(root, { recursive: true, force: true });
       }
     },
   );
@@ -1083,6 +1125,26 @@ describe("runReplyAgent auto-compaction token update", () => {
     );
     expect(stored[sessionKey as keyof typeof stored]?.totalTokens).toBe(44_000);
   });
+
+  it.each([0, 0.25])(
+    "preserves cost-only total %s in reply diagnostics and persistence",
+    async (total) => {
+      const { sessionKey, stored, usageEvent } = await runBaseReplyWithAgentMeta({
+        tmpPrefix: "openclaw-usage-diagnostic-cost-only-",
+        collectDiagnostics: true,
+        agentMeta: { usage: { cost: { total } } },
+      });
+
+      expect(usageEvent).toMatchObject({ type: "model.usage", costUsd: total });
+      expect(usageEvent).not.toHaveProperty("context.used");
+      const entry = stored[sessionKey as keyof typeof stored];
+      expect(entry?.estimatedCostUsd).toBe(total);
+      for (const key of ["inputTokens", "outputTokens", "cacheRead", "cacheWrite"] as const) {
+        expect(entry?.[key]).toBeUndefined();
+      }
+      expect(entry?.totalTokensFresh).not.toBe(true);
+    },
+  );
 
   it("falls back to last-call prompt usage for live diagnostic context", async () => {
     const { usageEvent } = await runBaseReplyWithAgentMeta({
@@ -1488,49 +1550,70 @@ describe("runReplyAgent Active Memory inline debug", () => {
         },
       ],
     }));
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "Visible reply" }],
-      meta: {
-        finalPromptText:
-          "Context:\n<active_memory_plugin>\nPrefer from/to failover logs.\n</active_memory_plugin>\n\n/trace raw show me everything",
-        finalAssistantVisibleText: "Visible reply",
-        finalAssistantRawText: "<final>Visible reply</final>",
-        executionTrace: {
-          winnerProvider: "anthropic",
-          winnerModel: "claude",
-          runner: "embedded",
-          fallbackUsed: false,
-          attempts: [
-            {
-              provider: "anthropic",
-              model: "claude",
-              result: "success",
-              stage: "assistant",
-              elapsedMs: 4200,
+    runEmbeddedAgentMock.mockImplementationOnce(async (params: RunEmbeddedAgentInternalParams) => {
+      params.onCompactionAccounting?.({
+        kind: "durable",
+        count: 1,
+        currentContextSnapshot: { tokens: 1250 },
+        target: {
+          agentId: "main",
+          sessionId: sessionEntry.sessionId,
+          sessionKey,
+          storePath,
+          lifecycleRevision: sessionEntry.lifecycleRevision,
+          activeWriterRunId: undefined,
+        },
+      });
+      return {
+        payloads: [{ text: "Visible reply" }],
+        meta: {
+          finalPromptText:
+            "Context:\n<active_memory_plugin>\nPrefer from/to failover logs.\n</active_memory_plugin>\n\n/trace raw show me everything",
+          finalAssistantVisibleText: "Visible reply",
+          finalAssistantRawText: "<final>Visible reply</final>",
+          executionTrace: {
+            winnerProvider: "anthropic",
+            winnerModel: "claude",
+            runner: "embedded",
+            fallbackUsed: false,
+            attempts: [
+              {
+                provider: "anthropic",
+                model: "claude",
+                result: "success",
+                stage: "assistant",
+                elapsedMs: 4200,
+              },
+            ],
+          },
+          toolSummary: {
+            calls: 2,
+            tools: ["active-memory", "github-search"],
+            failures: 0,
+            totalToolTimeMs: 481,
+          },
+          completion: {
+            finishReason: "stop",
+            stopReason: "end_turn",
+            refusal: false,
+          },
+          agentMeta: {
+            sessionId: "session",
+            provider: "anthropic",
+            model: "claude",
+            usage: { input: 1200, output: 45, cacheRead: 800, cacheWrite: 200, total: 2245 },
+            lastCallUsage: {
+              input: 1000,
+              output: 45,
+              cacheRead: 750,
+              cacheWrite: 150,
+              total: 1945,
             },
-          ],
+            promptTokens: 1250,
+            compactionCount: 1,
+          },
         },
-        toolSummary: {
-          calls: 2,
-          tools: ["active-memory", "github-search"],
-          failures: 0,
-          totalToolTimeMs: 481,
-        },
-        completion: {
-          finishReason: "stop",
-          stopReason: "end_turn",
-          refusal: false,
-        },
-        agentMeta: {
-          sessionId: "session",
-          provider: "anthropic",
-          model: "claude",
-          usage: { input: 1200, output: 45, cacheRead: 800, cacheWrite: 200, total: 2245 },
-          lastCallUsage: { input: 1000, output: 45, cacheRead: 750, cacheWrite: 150, total: 1945 },
-          promptTokens: 1250,
-          compactionCount: 1,
-        },
-      },
+      };
     });
 
     const result = await runRawTraceCase({
@@ -2237,9 +2320,12 @@ describe("runReplyAgent fallback reasoning tags", () => {
       result: await runFallbackModelAttempt(params, "google", "gemini-2.5-pro", "unknown"),
       provider: "google",
       model: "gemini-2.5-pro",
+      attempts: [],
     }));
 
-    await createRun();
+    const result = await createRun();
+    const payloads = Array.isArray(result) ? result : [result];
+    expect(payloads.filter((payload) => payload?.text === "ok")).toHaveLength(1);
 
     const call = firstMockCallArg(
       runEmbeddedAgentMock,
@@ -2249,47 +2335,70 @@ describe("runReplyAgent fallback reasoning tags", () => {
   });
 
   it("enforces <final> during memory flush on fallback providers", async () => {
-    registerMemoryFlushPlanResolverForTest(() => ({
-      softThresholdTokens: 1_000,
-      forceFlushTranscriptBytes: 1_000_000_000,
-      reserveTokensFloor: 20_000,
-      prompt: "Pre-compaction memory flush.",
-      systemPrompt: "Flush memory into the configured memory file.",
-      relativePath: "memory/active.md",
-    }));
-    runEmbeddedAgentMock.mockImplementation(async (params: EmbeddedAgentParams) => {
-      if (params.prompt?.includes("Pre-compaction memory flush.")) {
-        return { payloads: [], meta: {} };
-      }
-      return { payloads: [{ text: "ok" }], meta: {} };
-    });
-    runWithModelFallbackMock.mockImplementation(async (params: RunWithModelFallbackParams) => ({
-      result: await runFallbackModelAttempt(params, "google-gemini-cli", "gemini-3", "unknown"),
-      provider: "google-gemini-cli",
-      model: "gemini-3",
-    }));
-    compactState.compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
-      ok: true,
-      compacted: true,
-      result: { tokensAfter: 1_000_000 },
-    });
+    const root = await fs.realpath(tempDirs.make("openclaw-memory-flush-tags-"));
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:memory-flush-tags";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 1_000_000,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+      compactionCount: 0,
+    };
+    try {
+      await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
+      registerMemoryFlushPlanResolverForTest(() => ({
+        softThresholdTokens: 1_000,
+        forceFlushTranscriptBytes: 1_000_000_000,
+        reserveTokensFloor: 20_000,
+        prompt: "Pre-compaction memory flush.",
+        systemPrompt: "Flush memory into the configured memory file.",
+        relativePath: "memory/active.md",
+      }));
+      runEmbeddedAgentMock.mockResolvedValue({ payloads: [], meta: {} });
+      runCliAgentMock.mockResolvedValueOnce({ payloads: [{ text: "ok" }], meta: {} });
+      runWithModelFallbackMock.mockImplementation(async (params: RunWithModelFallbackParams) => ({
+        result: await runFallbackModelAttempt(params, "google-gemini-cli", "gemini-3", "unknown"),
+        provider: "google-gemini-cli",
+        model: "gemini-3",
+        attempts: [],
+      }));
+      compactState.compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
+        ok: true,
+        compacted: true,
+        result: { tokensAfter: 1_000_000 },
+      });
 
-    await createRun({
-      sessionEntry: {
-        sessionId: "session",
-        updatedAt: Date.now(),
-        totalTokens: 1_000_000,
-        totalTokensFresh: true,
-        totalTokensVersion: 1 as const,
-        compactionCount: 0,
-      },
-    });
+      const result = await createBaseRun({
+        run: {
+          agentId: "main",
+          agentDir: path.join(root, "agent"),
+          sessionKey,
+          workspaceDir: root,
+          config: createCliBackendTestConfig(),
+        },
+        reply: {
+          queueKey: sessionKey,
+          sessionEntry,
+          sessionStore: { [sessionKey]: sessionEntry },
+          sessionKey,
+          storePath,
+        },
+      }).run();
 
-    const flushCall = runEmbeddedAgentMock.mock.calls.find(([params]) =>
-      (params as EmbeddedAgentParams | undefined)?.prompt?.includes("Pre-compaction memory flush."),
-    )?.[0] as EmbeddedAgentParams | undefined;
-
-    expect(flushCall?.enforceFinalTag).toBe(true);
+      const flushCall = runEmbeddedAgentMock.mock.calls.find(([params]) =>
+        (params as EmbeddedAgentParams | undefined)?.prompt?.includes(
+          "Pre-compaction memory flush.",
+        ),
+      )?.[0] as EmbeddedAgentParams | undefined;
+      expect(flushCall?.enforceFinalTag).toBe(true);
+      expect(runCliAgentMock).toHaveBeenCalledOnce();
+      const payloads = Array.isArray(result) ? result : [result];
+      expect(payloads.filter((payload) => payload?.text === "ok")).toHaveLength(1);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -2494,21 +2603,13 @@ describe("runReplyAgent response usage footer", () => {
   });
 });
 
-describe("runReplyAgent transient HTTP retry", () => {
-  it("retries once after transient 521 HTML failure and then succeeds", async () => {
-    vi.useFakeTimers();
-    const retryStarted = createDeferred();
-    runtimeErrorMock.mockImplementationOnce(() => retryStarted.resolve());
-    runEmbeddedAgentMock
-      .mockRejectedValueOnce(
-        new Error(
-          `521 <!DOCTYPE html><html lang="en-US"><head><title>Web server is down</title></head><body>Cloudflare</body></html>`,
-        ),
-      )
-      .mockResolvedValueOnce({
-        payloads: [{ text: "Recovered response" }],
-        meta: {},
-      });
+describe("runReplyAgent transient HTTP failures", () => {
+  it("does not retry a transient provider failure in the reply layer", async () => {
+    runEmbeddedAgentMock.mockRejectedValueOnce(
+      new Error(
+        `521 <!DOCTYPE html><html lang="en-US"><head><title>Web server is down</title></head><body>Cloudflare</body></html>`,
+      ),
+    );
 
     const runPromise = createBaseRun({
       context: { Provider: "telegram", MessageSid: "msg" },
@@ -2519,17 +2620,12 @@ describe("runReplyAgent transient HTTP retry", () => {
       },
     }).run();
 
-    await retryStarted.promise;
-    await vi.advanceTimersByTimeAsync(2_500);
     const result = await runPromise;
 
-    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
-    expect(runtimeErrorMock).toHaveBeenCalledWith(
-      'Transient HTTP provider error before reply (521 <!DOCTYPE html><html lang="en-US"><head><title>Web server is down</title></head><body>Cloudflare</body></html>). Retrying once in 2500ms.',
-    );
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
 
     const payload = Array.isArray(result) ? result[0] : result;
-    expect(payload?.text).toContain("Recovered response");
+    expect(payload?.text).toContain("provider internal error");
   });
 });
 

@@ -39,6 +39,7 @@ export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }> &
   display?: false;
   /** Private transcript correlation; never authorizes an execution. */
   idempotencyKey?: string;
+  provenance?: InputProvenance;
   __openclaw?: Record<string, unknown>;
 };
 
@@ -119,6 +120,14 @@ export type UserTurnTranscriptTarget = UserTurnTranscriptPersistenceTarget;
 
 export type UserTurnTranscriptAdmissionReceipt = TranscriptTurnAdmission;
 
+/** Native producer facts for the current host-admitted prompt; never a message replacement. */
+export type UserTurnTranscriptAnnotation = Readonly<{
+  mirrorIdentity: string;
+  upstreamUserText: string;
+  mirrorOrigin: string;
+  mirrorSourceFingerprint: string;
+}>;
+
 export type UserTurnTranscriptPersistResult = {
   sessionTurnMutationResult?: SessionTranscriptTurnMutationResult;
   /** True only when this call inserted the transcript message. */
@@ -159,6 +168,8 @@ export type PersistUserTurnTranscriptParams = {
 type UserTurnInputResolver = () => UserTurnInput | undefined | Promise<UserTurnInput | undefined>;
 
 export type CreateUserTurnTranscriptRecorderParams = {
+  /** Exact admitted source recorders consumed by this collected transcript message. */
+  pendingInputSources?: readonly UserTurnTranscriptRecorder[];
   sessionTurnMutation?: SessionTranscriptTurnMutation;
   input?: UserTurnInput;
   message?: PersistedUserTurnMessage;
@@ -178,6 +189,8 @@ export type UserTurnTranscriptRecorder = {
   resolveMessage: () => Promise<PersistedUserTurnMessage | undefined>;
   /** Durable input custody leaves the active transcript unchanged until execution owns it. */
   stageApproved?: (options: { runId: string; assertCurrent: () => void }) => Promise<boolean>;
+  getPendingInputMessage?: () => PersistedUserTurnMessage | undefined;
+  isPendingInputConsumed?: () => boolean;
   withPendingInput?: <T>(run: () => T) => T;
   finishPendingInput?: (disposition: "cancelled" | "interrupted") => void;
   /** Replaces generated current-turn text before runtime persistence/provider submission. */

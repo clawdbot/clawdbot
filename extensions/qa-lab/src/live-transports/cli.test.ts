@@ -66,4 +66,21 @@ describe("live transport QA contributions", () => {
       expect.objectContaining({ scenarioIds: ["telegram-canary"] }),
     );
   });
+
+  it.each(["discord", "slack", "telegram", "whatsapp"])(
+    "does not expose worker concurrency for the shared-instance %s command",
+    async (commandName) => {
+      const registration = listLiveTransportQaCliRegistrations().find(
+        (candidate) => candidate.commandName === commandName,
+      );
+      const qa = new Command().exitOverride().configureOutput({ writeErr: () => {} });
+      registration?.register(qa);
+
+      await expect(
+        qa.parseAsync(["node", "openclaw", commandName, "--concurrency", "2"]),
+      ).rejects.toThrow("unknown option '--concurrency'");
+      expect(runLiveTransportQaSuiteCommand).not.toHaveBeenCalled();
+      expect(runTelegram).not.toHaveBeenCalled();
+    },
+  );
 });

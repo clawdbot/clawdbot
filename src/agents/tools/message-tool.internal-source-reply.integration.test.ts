@@ -37,6 +37,13 @@ import { createLocalRemoteShellScriptRunner } from "../sandbox/remote-fs-bridge.
 import { createSandboxTestContext } from "../sandbox/test-fixtures.js";
 import { createMessageTool } from "./message-tool-execution.js";
 
+// Internal WebChat sends have no external channels to discover.
+const INTERNAL_SOURCE_CATALOG = {
+  version: 0,
+  channels: [],
+  getChannel: () => undefined,
+} as const;
+
 function createCurrentSourceMessageTool(
   params: {
     workspaceDir?: string;
@@ -47,6 +54,7 @@ function createCurrentSourceMessageTool(
 ) {
   return createMessageTool({
     config: { agents: { entries: { main: { default: true } } } },
+    preparedMessageToolCatalog: INTERNAL_SOURCE_CATALOG,
     currentChannelProvider: "webchat",
     sourceReplyDeliveryMode: "automatic",
     agentSessionKey: "agent:main:webchat:dm:dashboard",
@@ -276,6 +284,7 @@ describe("WebChat message tool internal source reply", () => {
         };
         const tool = createMessageTool({
           config,
+          preparedMessageToolCatalog: INTERNAL_SOURCE_CATALOG,
           currentChannelProvider: "webchat",
           agentSessionKey: sessionKey,
           runSessionKey: sessionKey,

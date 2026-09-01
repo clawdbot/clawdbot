@@ -9,7 +9,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { findLiveRegistryWorktreeByPath, getRegistryWorktree } from "./registry.js";
 import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 import {
-  initializeManagedWorktreeTestRepository,
+  useManagedWorktreeTestRepository,
   materializeManagedWorktreeFixture,
 } from "./service.test-support.js";
 
@@ -28,6 +28,7 @@ async function initializeNestedRepository(root: string, name: string): Promise<s
 }
 
 describe("ManagedWorktreeService garbage collection", () => {
+  const initializeRepository = useManagedWorktreeTestRepository();
   let root: string;
   let repo: string;
   let stateDir: string;
@@ -62,7 +63,7 @@ describe("ManagedWorktreeService garbage collection", () => {
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worktree-gc-"));
-    repo = await initializeManagedWorktreeTestRepository(root);
+    repo = await initializeRepository(root);
     stateDir = path.join(root, "state");
     env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     now = 1_700_000_000_000;
@@ -234,7 +235,7 @@ describe("ManagedWorktreeService garbage collection", () => {
   });
 
   it("continues garbage collection when one repository control path is missing", async () => {
-    const otherRepo = await initializeManagedWorktreeTestRepository(path.join(root, "other"));
+    const otherRepo = await initializeRepository(path.join(root, "other"));
     const removable = await materializeDownstreamFixture("other-removable", {
       repoRoot: otherRepo,
       ownerKind: "session",

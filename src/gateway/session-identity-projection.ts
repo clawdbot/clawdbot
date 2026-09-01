@@ -23,7 +23,7 @@ import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import type { SessionActorProfileIdentity } from "./session-utils-contracts.js";
 
-function projectParticipant(
+export function projectSessionParticipant(
   identity: SessionParticipantIdentity,
   profiles: Map<string, SessionActorProfileIdentity | undefined>,
   cfg?: OpenClawConfig,
@@ -81,7 +81,7 @@ export function projectSessionActor(
         ? { type: "profile", id }
         : { type: "legacy", actorType: actor.type, source: null, id };
   // Keep original attribution in the display; authority reads the qualified canonical actor.
-  return { type: actor.type, id, ...projectParticipant(identity, profiles, cfg) };
+  return { type: actor.type, id, ...projectSessionParticipant(identity, profiles, cfg) };
 }
 
 /** Projects an identity only when it can own a session durably. */
@@ -147,7 +147,7 @@ export function projectSessionParticipants(
   const identities = userProfileIdentityById ?? new Map();
   const participants = new Map<string, SessionParticipant>();
   for (const { identity } of entry?.participants ?? []) {
-    const participant = projectParticipant(identity, identities, cfg);
+    const participant = projectSessionParticipant(identity, identities, cfg);
     participants.set(JSON.stringify(participant.identity), participant);
   }
   return participants;

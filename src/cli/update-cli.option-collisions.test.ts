@@ -5,6 +5,7 @@ import { runRegisteredCli } from "../test-utils/command-runner.js";
 import { registerUpdateCli } from "./update-cli.js";
 
 const mocks = vi.hoisted(() => ({
+  updateCleanupCommand: vi.fn(async (_opts: unknown) => {}),
   updateCommand: vi.fn(async (_opts: unknown) => {}),
   updateFinalizeCommand: vi.fn(async (_opts: unknown) => {}),
   updateStatusCommand: vi.fn(async (_opts: unknown) => {}),
@@ -28,8 +29,13 @@ const {
 
 vi.mock("./update-cli/update-command.js", () => ({
   updateCommand: (opts: unknown) => mocks.updateCommand(opts),
+}));
+
+vi.mock("./update-cli/update-command-finalize.js", () => ({
   updateFinalizeCommand: (opts: unknown) => mocks.updateFinalizeCommand(opts),
 }));
+
+vi.mock("./update-cli/cleanup.js", () => ({ updateCleanupCommand: mocks.updateCleanupCommand }));
 
 vi.mock("./update-cli/status.js", () => ({
   updateStatusCommand: (opts: unknown) => mocks.updateStatusCommand(opts),
@@ -56,7 +62,71 @@ type UpdateFinalizeCommandOptions = {
 };
 
 describe("update cli option collisions", () => {
+  it.each(
+    Array.from({ length: 8 }, (_value, mask) => {
+      const flags = ["--dry-run", "--json", "--yes"];
+      return [
+        "update",
+        ...flags.filter((_, index) => mask & (1 << index)),
+        "cleanup",
+        ...flags.filter((_, index) => !(mask & (1 << index))),
+      ];
+    }),
+  )("supports cleanup options in either position: %j", async (...argv) => {
+    await runRegisteredCli({ register: registerUpdateCli, argv });
+    expect(mocks.updateCleanupCommand).toHaveBeenCalledWith({
+      dryRun: true,
+      json: true,
+      yes: true,
+    });
+    expect(updateCommand).not.toHaveBeenCalled();
+  });
+  it.each([
+    ...["--channel", "--tag", "--timeout"].flatMap((flag) =>
+      ["beta", "", "--", "--no-restart"].flatMap((value) => [[flag, value], [`${flag}=${value}`]]),
+    ),
+    ["--no-restart"],
+    ["--accept-capabilities"],
+  ])("rejects unrelated inherited cleanup option %s", async (...flags) => {
+    await runRegisteredCli({ register: registerUpdateCli, argv: ["update", ...flags, "cleanup"] });
+    expect(mocks.updateCleanupCommand).not.toHaveBeenCalled();
+    expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining("is not supported"));
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(updateCommand).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "--channel",
+    "--tag",
+    "--timeout",
+    "--no-restart",
+    "--accept-capabilities",
+    "--version",
+  ])("rejects update-only or version option %s after cleanup", async (flag) => {
+    const program = new Command().exitOverride().configureOutput({ writeErr: () => {} });
+    registerUpdateCli(program);
+    await expect(
+      program.parseAsync(["update", "cleanup", flag], { from: "user" }),
+    ).rejects.toMatchObject({
+      code: "commander.unknownOption",
+      exitCode: 1,
+    });
+    expect(mocks.updateCleanupCommand).not.toHaveBeenCalled();
+    expect(updateCommand).not.toHaveBeenCalled();
+  });
+
+  it("dispatches cleanup after the parent option delimiter", async () => {
+    await runRegisteredCli({ register: registerUpdateCli, argv: ["update", "--", "cleanup"] });
+    expect(mocks.updateCleanupCommand).toHaveBeenCalledWith({
+      dryRun: false,
+      json: false,
+      yes: false,
+    });
+    expect(updateCommand).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
+    mocks.updateCleanupCommand.mockClear();
     updateCommand.mockClear();
     updateFinalizeCommand.mockClear();
     updateStatusCommand.mockClear();

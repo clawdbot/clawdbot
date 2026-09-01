@@ -1,3 +1,4 @@
+import path from "node:path";
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { expect, it } from "vitest";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "../pages/new-session/cloud-profile-discovery.ts";
@@ -15,6 +16,11 @@ const deviceTargets = [
   { name: "selected", value: "device:paired-runner", target: { deviceId: "paired-runner" } },
   { name: "automatic", value: "auto-device", target: { autoDevice: true } },
 ];
+const gitRepository = {
+  branches: [{ kind: "local", name: "main" }],
+  defaultBranch: "main",
+  repositoryStatus: "git",
+};
 
 suite.define(() => {
   it("spaces destination section headings consistently", async () => {
@@ -95,6 +101,7 @@ suite.define(() => {
           profiles: [],
         },
         "sessions.create": { key: sessionKey },
+        "worktrees.branches": gitRepository,
         "sessions.list": createdSessionListResult(sessionKey),
         "sessions.dispatch": {
           ok: true,
@@ -157,7 +164,7 @@ suite.define(() => {
         locale: "en-US",
         serviceWorkers: "block",
         ...(process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-          ? { recordVideo: { dir: ".artifacts/control-ui-e2e/device-runtime-gating" } }
+          ? { recordVideo: { dir: path.join(suite.artifactDir, "device-runtime-gating") } }
           : {}),
       });
       const page = await context.newPage();
@@ -176,6 +183,7 @@ suite.define(() => {
         methodResponses: {
           "environments.list": { environments: [environment], profiles: [] },
           "sessions.create": { key: "agent:main:stale-device-capacity" },
+          "worktrees.branches": gitRepository,
         },
       });
 
@@ -219,7 +227,11 @@ suite.define(() => {
         expect(await gateway.getRequests("environments.list")).toHaveLength(
           requestsBeforeRefresh + 1,
         );
-        await captureDeviceRuntimeUiProof(page, `failed-topology-${value.replace(":", "-")}.png`);
+        await captureDeviceRuntimeUiProof(
+          suite,
+          page,
+          `failed-topology-${value.replace(":", "-")}.png`,
+        );
         expect(await start.isDisabled()).toBe(true);
         expect(await selectedDevice.isDisabled()).toBe(true);
         expect(await automaticDevice.isDisabled()).toBe(true);
@@ -331,11 +343,7 @@ suite.define(() => {
         workspaceGit: true,
         methodResponses: {
           "environments.list": catalog,
-          "worktrees.branches": {
-            branches: [{ kind: "local", name: "main" }],
-            defaultBranch: "main",
-            repositoryStatus: "git",
-          },
+          "worktrees.branches": gitRepository,
           "sessions.create": { key: sessionKey },
           "sessions.list": createdSessionListResult(sessionKey),
           "sessions.dispatch": { placement: { state: "active", generation: 1 } },
@@ -531,7 +539,7 @@ suite.define(() => {
       await where.click();
       await page.locator('[data-value="device:paired-runner"]').click();
       await expect.poll(() => where.getAttribute("data-device-id")).toBe("paired-runner");
-      await captureDeviceRuntimeUiProof(page, "01-main-agent-paired-node-selected.png");
+      await captureDeviceRuntimeUiProof(suite, page, "01-main-agent-paired-node-selected.png");
 
       const agentPicker = page.locator(".new-session-page__select--agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
@@ -543,7 +551,11 @@ suite.define(() => {
       await expect
         .poll(() => where.locator(".new-session-page__trigger-label").textContent())
         .toBe("Local");
-      await captureDeviceRuntimeUiProof(page, "02-research-agent-local-destination-restored.png");
+      await captureDeviceRuntimeUiProof(
+        suite,
+        page,
+        "02-research-agent-local-destination-restored.png",
+      );
 
       const message = "run this agent locally";
       await page.locator(".new-session-page__message").fill(message);
@@ -582,11 +594,7 @@ suite.define(() => {
             ],
             profiles: [],
           },
-          "worktrees.branches": {
-            branches: [{ kind: "local", name: "main" }],
-            defaultBranch: "main",
-            repositoryStatus: "git",
-          },
+          "worktrees.branches": gitRepository,
           "sessions.dispatch": { placement: { state: "active", generation: 1 } },
           "sessions.send": { runId: "run-device-recovery", status: "started" },
         },

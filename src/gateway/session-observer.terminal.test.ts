@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SessionObserverDeps } from "./session-observer-model.js";
 import {
   createHarness as createBaseHarness,
   event,
@@ -716,17 +717,33 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
     expect(guard?.()).toBe(false);
   });
 
-  it("drops a completed digest when the session was reset mid-flight", async () => {
+  it.each(["deleted", "reset"])("disables model work after the session is %s", async (change) => {
     useFakeTime();
-    const readSession = vi.fn(() => ({ sessionId: "session-id", updatedAt: 0 }));
+    const readSession = vi.fn<NonNullable<SessionObserverDeps["readSession"]>>(() => ({
+      sessionId: "session-id",
+      updatedAt: 0,
+    }));
     const harness = createHarness({ readSession });
     startAndAddToolNotes(harness.observer);
-    readSession.mockReturnValue({ sessionId: "session-id-reset", updatedAt: 0 });
+    readSession.mockReturnValue(
+      change === "deleted" ? undefined : { sessionId: "session-id-reset", updatedAt: 0 },
+    );
     await advanceAndFlush(12_000);
     expect(harness.completeModel).toHaveBeenCalledOnce();
-    const broadcasts = observerBroadcasts(harness);
-    expect(broadcasts).toHaveLength(0);
+    expect(observerBroadcasts(harness)).toHaveLength(0);
     expect(harness.persistDigest).not.toHaveBeenCalled();
+
+    startAndAddToolNotes(harness.observer, { count: 4 });
+    await advanceAndFlush(24_000);
+    expect(harness.completeModel).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+
+    readSession.mockReturnValue({ sessionId: "session-id-next", updatedAt: 36_000 });
+    startAndAddToolNotes(harness.observer, { runId: "run-2" });
+    await advanceAndFlush(12_000);
+    expect(harness.completeModel).toHaveBeenCalledTimes(2);
+    expect(harness.persistDigest).toHaveBeenCalledOnce();
+    expect(observerBroadcasts(harness)).toHaveLength(1);
   });
 
   it("catches up durable persistence when the live digest already carried terminal health", async () => {

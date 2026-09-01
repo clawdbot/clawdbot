@@ -8,6 +8,7 @@ import { CommanderError } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
+import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { createNewerSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
@@ -150,14 +151,11 @@ const probeGatewayConfiguredModelMock = vi.hoisted(() =>
 const readActiveGatewayLockPortMock = vi.hoisted(() =>
   vi.fn(async (): Promise<number | undefined> => undefined),
 );
-const loadGatewayTlsRuntimeMock = vi.hoisted(() =>
-  vi.fn<
-    () => Promise<{
-      enabled: boolean;
-      required: boolean;
-      fingerprintSha256?: string;
-    }>
-  >(async () => ({ enabled: false, required: false })),
+const inspectGatewayTlsCertificateMock = vi.hoisted(() =>
+  vi.fn<typeof import("../infra/tls/gateway.js").inspectGatewayTlsCertificate>(async () => ({
+    ok: false,
+    error: "gateway tls is disabled",
+  })),
 );
 const resolveControlUiLinksMock = vi.hoisted(() =>
   vi.fn(() => ({
@@ -316,7 +314,7 @@ vi.mock("../infra/gateway-lock.js", async (importOriginal) => ({
 
 vi.mock("../infra/tls/gateway.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/tls/gateway.js")>()),
-  loadGatewayTlsRuntime: loadGatewayTlsRuntimeMock,
+  inspectGatewayTlsCertificate: inspectGatewayTlsCertificateMock,
 }));
 
 vi.mock("../utils.js", async (importOriginal) => ({
@@ -596,9 +594,9 @@ describe("runCli exit behavior", () => {
     readLocalOnboardingStateMock.mockReset().mockReturnValue(undefined);
     probeGatewayConfiguredModelMock.mockResolvedValue({ kind: "configured" });
     readActiveGatewayLockPortMock.mockReset().mockResolvedValue(undefined);
-    loadGatewayTlsRuntimeMock.mockReset().mockResolvedValue({
-      enabled: false,
-      required: false,
+    inspectGatewayTlsCertificateMock.mockReset().mockResolvedValue({
+      ok: false,
+      error: "gateway tls is disabled",
     });
     resolveControlUiLinksMock.mockReturnValue({
       httpUrl: "http://127.0.0.1:18789/",
@@ -851,7 +849,8 @@ describe("runCli exit behavior", () => {
     disposeRegisteredAgentHarnessesMock.mockImplementationOnce(async () => {
       order.push("harnesses");
     });
-    stopManagedProviderLocalServicesMock.mockImplementationOnce(() => {
+    stopManagedProviderLocalServicesMock.mockImplementationOnce(async () => {
+      await Promise.resolve();
       order.push("provider-local-services");
     });
     closeProviderTransportDispatcherPoolMock.mockImplementationOnce(async () => {
@@ -2623,7 +2622,7 @@ describe("runCli exit behavior", () => {
 
   it.each([
     ["worker", { observe: false, pluginValidation: "core-only" }],
-    ["run", { skipPluginValidation: true }],
+    ["run", { observe: false, skipPluginValidation: true }],
   ])(
     "preserves node %s config ownership when startup tracing is enabled",
     async (subcommand, readOptions) => {
@@ -2639,8 +2638,10 @@ describe("runCli exit behavior", () => {
           },
         );
         expect(loadConfigMock).toHaveBeenCalledWith(readOptions);
+        flushDiagnosticsTimeline();
         expect(await fs.readFile(timelinePath, "utf8")).toContain("cli.main.argv");
       } finally {
+        flushDiagnosticsTimeline();
         await fs.rm(root, { recursive: true, force: true });
       }
     },
@@ -4053,10 +4054,9 @@ describe("runCli exit behavior", () => {
         auth: { mode: "token", token: "configured-token" },
       },
     });
-    loadGatewayTlsRuntimeMock.mockResolvedValueOnce({
-      enabled: true,
-      required: true,
-      fingerprintSha256: TLS_FINGERPRINT,
+    inspectGatewayTlsCertificateMock.mockResolvedValueOnce({
+      ok: true,
+      value: { cert: "public-certificate", fingerprintSha256: TLS_FINGERPRINT },
     });
 
     await runBareCli();

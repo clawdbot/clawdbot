@@ -216,7 +216,7 @@ merge_outcome_resume() {
     marker="<!-- openclaw-merge:$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .attempt) -->"
     # Absence never permits a second POST: the first response may have been lost.
     if comments=$(gh_plain api --hostname "$MERGE_REPO_HOST" --paginate --slurp \
-      "repos/$MERGE_REPO_NAME/issues/$pr/comments?per_page=100") &&
+      "repos/$MERGE_REPO_NAME/issues/$pr/comments?per_page=100" -H 'Cache-Control: max-age=0') &&
       comment_url=$(printf '%s\n' "$comments" | jq -er --arg marker "$marker" \
         '[.[][] | select(.body | contains($marker))] | select(length == 1) | .[0].html_url | select(type == "string" and length > 0)'); then
       echo "Completion comment observed: $comment_url"

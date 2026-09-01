@@ -757,4 +757,3 @@ messages where the provider supports those operations.
 - [Message CLI](/cli/message)
 - [Plugin SDK Overview](/plugins/sdk-overview)
 - [Plugin Architecture](/plugins/architecture-internals#message-tool-schemas)
-- [Channel Presentation Refactor Plan](/plan/ui-channels)

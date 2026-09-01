@@ -714,6 +714,7 @@ describe("runCopilotAttempt", () => {
   });
 
   it("runs generic prompt and lifecycle hooks through the standard harness helpers", async () => {
+    const params = makeParams({ sandboxSessionKey: "agent:agent-1:policy" });
     const beforePromptBuild = vi.fn(() => ({
       prependContext: "Use the current repository state.",
       appendContext: "Finish with the current test status.",
@@ -746,7 +747,7 @@ describe("runCopilotAttempt", () => {
       return createStubToolBridge();
     });
 
-    await runCopilotAttempt(makeParams(), {
+    await runCopilotAttempt(params, {
       createToolBridge,
       pool: makeFakePool(sdk),
     });
@@ -754,7 +755,11 @@ describe("runCopilotAttempt", () => {
 
     expect(beforePromptBuild).toHaveBeenCalledWith(
       expect.objectContaining({ prompt: "hello" }),
-      expect.objectContaining({ runId: "run-1", sessionId: "session-1" }),
+      expect.objectContaining({
+        runId: "run-1",
+        sessionId: "session-1",
+        sessionKey: params.sessionKey,
+      }),
     );
     const cfg = sdk.createSession.mock.calls[0]?.[0] as {
       systemMessage?: { content?: string };
@@ -773,7 +778,11 @@ describe("runCopilotAttempt", () => {
         provider: "github-copilot",
         runId: "run-1",
       }),
-      expect.objectContaining({ agentId: "agent-1", sessionId: "session-1" }),
+      expect.objectContaining({
+        agentId: "agent-1",
+        sessionId: "session-1",
+        sessionKey: params.sessionKey,
+      }),
     );
     expect(llmOutput).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -781,11 +790,11 @@ describe("runCopilotAttempt", () => {
         model: "gpt-4o",
         provider: "github-copilot",
       }),
-      expect.objectContaining({ runId: "run-1" }),
+      expect.objectContaining({ runId: "run-1", sessionKey: params.sessionKey }),
     );
     expect(agentEnd).toHaveBeenCalledWith(
       expect.objectContaining({ success: true }),
-      expect.objectContaining({ sessionId: "session-1" }),
+      expect.objectContaining({ sessionId: "session-1", sessionKey: params.sessionKey }),
     );
     expect(afterToolCall).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -793,7 +802,11 @@ describe("runCopilotAttempt", () => {
         toolCallId: "tool-call-1",
         toolName: "read",
       }),
-      expect.objectContaining({ agentId: "agent-1", sessionId: "session-1" }),
+      expect.objectContaining({
+        agentId: "agent-1",
+        sessionId: "session-1",
+        sessionKey: params.sessionKey,
+      }),
     );
   });
 

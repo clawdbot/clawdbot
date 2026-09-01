@@ -186,6 +186,20 @@ allowlist replaces the shared default, including `[]` to allow any model.
 Policy permission does not supply provider credentials or guarantee that the
 selected model is available to its runtime.
 
+Before saving a model selection, these Gateway methods check that any required
+embedded harness has an installed, activatable plugin. A missing or disabled
+plugin rejects the change and preserves the previous session selection and
+configured default. Install and enable the named harness plugin, restart the
+Gateway, then select the model again. This check does not start the runtime or
+verify provider credentials.
+
+If an existing session's harness becomes unavailable, the failed turn reports
+the owner plugin when known and its activation or loading blocker. Follow the error's
+`openclaw doctor --fix` or `openclaw plugins inspect <id> --runtime --json`
+guidance, repair the plugin, and restart the Gateway before retrying. Gateway
+health probes remain independent of model execution; use [Models status](/cli/models)
+and [Doctor](/gateway/doctor) to diagnose the configured route.
+
 Choose the model when you create a session whenever possible. The Control UI's
 **New Chat** composer includes the model picker for this reason: a fresh session
 gives the selected model a clean conversation boundary.
@@ -288,8 +302,19 @@ build stamp is ignored.
 
 The hosted file is published from the public
 [`openclaw/catalog`](https://github.com/openclaw/catalog) GitHub repository.
-Its scheduled workflow refreshes from OpenClaw's shipped plugin manifests and
-pricing sources; every catalog content change is preserved as a public commit.
+Its scheduled workflow checks OpenClaw's default-branch plugin manifests and
+public pricing sources every four hours; every catalog content change is
+preserved as a public commit. Provider-owned policies select complete price
+schedules, including context tiers, without mixing rates from different sources.
+Declared native sources read the public Cerebras, Chutes, DeepInfra, OpenCode, and Venice
+catalogs, so connected installations can receive advertised price changes without
+a new OpenClaw release. When a valid native feed no longer supplies a model's
+price, publication preserves the model metadata without an estimate; it does not
+infer retirement or substitute another source's rate. Explicit user costs still
+win. DeepInfra uses its agent projection for model metadata and its native
+`/models/list` feed for prices, including numeric discounts. Qualified schedules
+that cannot be represented as unconditional token costs stay unknown; models
+remain available. See [DeepInfra price estimates](/providers/deepinfra#price-estimates).
 
 Run `openclaw models refresh` for an immediate metadata and pricing check, or
 disable every hosted catalog request with `models.catalogRefresh.enabled:

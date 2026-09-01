@@ -190,7 +190,11 @@ describe("prepared model runtime snapshots", () => {
     );
   });
 
-  it("publishes a static turn generation without live catalog discovery", async () => {
+  it.each([
+    ["omitted options", undefined],
+    ["partial options", { retainIdleRunOwner: true }],
+    ["explicit static mode", { catalogMode: "static" as const }],
+  ])("defaults %s to static turn facts without live catalog discovery", async (_name, options) => {
     const lease = await acquireAgentRunPreparedModelRuntime(
       {
         config: {},
@@ -198,7 +202,7 @@ describe("prepared model runtime snapshots", () => {
         agentDir: state.agentDir("static-run-agent"),
         workspaceDir: "/tmp/static-run-workspace",
       },
-      { catalogMode: "static" },
+      options,
     );
 
     expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce();
@@ -223,7 +227,8 @@ describe("prepared model runtime snapshots", () => {
       retainIdleRunOwner: true,
     });
     reusedLease.release();
-    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
+    expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce();
+    expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
 
     const secondInput = {
       ...firstInput,
@@ -238,7 +243,8 @@ describe("prepared model runtime snapshots", () => {
       "prepared model runtime owner was not published",
     );
     await expect(prepareModelRuntimeSnapshot(secondInput)).resolves.toBe(secondLease.snapshot);
-    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
+    expect(mocks.prepareStaticCatalog).toHaveBeenCalledTimes(2);
+    expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
   });
 
   it("retains an exact dynamic workspace owner after gateway run admission", async () => {
@@ -275,7 +281,8 @@ describe("prepared model runtime snapshots", () => {
     });
     expect(retainedLease.snapshot).toBe(firstLease.snapshot);
     retainedLease.release();
-    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
+    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
+    expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce();
   });
 
   it("joins an in-flight dynamic owner publication", async () => {
@@ -284,10 +291,10 @@ describe("prepared model runtime snapshots", () => {
     await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
     const finishDynamicGate = createDeferred();
     let finishDynamic!: () => void;
-    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, targetDir) => {
+    mocks.prepareStaticCatalog.mockImplementationOnce(async () => {
       finishDynamic = () => finishDynamicGate.resolve();
       await finishDynamicGate.promise;
-      return { agentDir: String(targetDir), wrote: false };
+      return { entries: [] };
     });
     const input = {
       agentId: "default",
@@ -301,15 +308,16 @@ describe("prepared model runtime snapshots", () => {
     let secondPending: ReturnType<typeof acquireAgentRunPreparedModelRuntime> | undefined;
     try {
       firstPending = acquireAgentRunPreparedModelRuntime(input);
-      await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce());
       secondPending = acquireAgentRunPreparedModelRuntime(input);
       await Promise.resolve();
-      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
+      expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce();
       finishDynamic();
       const [first, second] = await Promise.all([firstPending, secondPending]);
 
       expect(second.snapshot).toBe(first.snapshot);
-      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
+      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
+      expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce();
       first.release();
       second.release();
     } finally {
@@ -519,7 +527,8 @@ describe("prepared model runtime snapshots", () => {
 
       expect(lease.snapshot.config).toBe(latestConfig);
       expect(lease.snapshot.workspaceDir).toBe("/tmp/dynamic-replacement-workspace");
-      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(3);
+      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
+      expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce();
       lease.release();
     } finally {
       finishReplacementGate.resolve();

@@ -9,16 +9,15 @@ import {
   isGenericProviderInternalError,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
+import { renderAssistantRequestFailureCopy } from "../failover/assistant-request-failure-copy.js";
 import {
-  classifyFailoverReason,
-  isBilling429MessageForProvider,
-  isBillingErrorMessage,
-  isContextOverflowError,
+  classifyFailoverSignal,
   isProviderCompletedErrorFinishReasonMessage,
   isReasoningConstraintErrorMessage,
   isTimeoutErrorMessage,
 } from "../failover/classify.js";
 import type { PreparedProviderFailoverOwner } from "../failover/provider-patterns.js";
+import type { FailoverReason } from "../failover/signal.js";
 import {
   AUTH_INVALID_TOKEN_USER_TEXT,
   formatBillingErrorMessage,
@@ -48,12 +47,44 @@ const TOOL_CALL_INPUT_PATH_RE =
 type AssistantErrorTextOptions = {
   cfg?: OpenClawConfig;
   sessionKey?: string;
+  agentId?: string;
   provider?: string;
   providerOwner?: PreparedProviderFailoverOwner;
   model?: string;
   /** Credential auth mode; OAuth/token billing copy omits API-key language (#80877). */
   authMode?: string;
 };
+type ClassifiedAssistantErrorFacts = {
+  provider?: string;
+  model?: string;
+  providerRuntimeFailureKind: ReturnType<typeof classifyProviderRuntimeFailureKind>;
+  reason: FailoverReason | null;
+  status?: number;
+};
+function classifyAssistantErrorFacts(
+  msg: AssistantMessage,
+  opts?: AssistantErrorTextOptions,
+): ClassifiedAssistantErrorFacts {
+  const signal = buildAssistantFailoverSignal(msg, {
+    provider: opts?.providerOwner?.id ?? opts?.provider,
+  });
+  // Both projections share the complete signal and explicit owner. Raw schema
+  // evidence stays distinct from the full classification used for safe copy.
+  const providerPlugin = opts?.providerOwner ?? null;
+  const classification = classifyFailoverSignal(signal, { providerPlugin });
+  return {
+    provider: opts?.provider ?? msg.provider ?? opts?.providerOwner?.id,
+    model: opts?.model ?? msg.model,
+    reason:
+      classification?.kind === "reason"
+        ? classification.reason
+        : classification
+          ? "context_overflow"
+          : null,
+    status: signal.status ?? extractErrorHttpStatus(signal.message ?? "")?.code,
+    providerRuntimeFailureKind: classifyProviderRuntimeFailureKind(signal, { providerPlugin }),
+  };
+}
 function isMissingToolCallInputError(raw: string): boolean {
   return (
     Boolean(raw) && (TOOL_CALL_INPUT_MISSING_RE.test(raw) || TOOL_CALL_INPUT_PATH_RE.test(raw))
@@ -62,28 +93,20 @@ function isMissingToolCallInputError(raw: string): boolean {
 export function formatAssistantErrorText(
   msg: AssistantMessage,
   opts?: AssistantErrorTextOptions,
+  facts?: ClassifiedAssistantErrorFacts,
 ): string | undefined {
   // Also format errors if errorMessage is present, even if stopReason isn't "error"
   const raw = (msg.errorMessage ?? "").trim();
   if (msg.stopReason !== "error" && !raw) {
     return undefined;
   }
-  if (!raw) {
-    return "LLM request failed with an unknown error.";
-  }
   const formatCopy = renderFormatErrorCopy(raw);
-  const formatStatus = extractErrorHttpStatus(raw)?.code;
-  if (
-    (formatStatus === 400 || formatStatus === 422) &&
-    formatCopy !== PROVIDER_SCHEMA_REJECTION_USER_TEXT
-  ) {
-    return formatCopy;
-  }
-  const providerOwner = opts?.providerOwner?.id ?? opts?.provider;
-  const providerRuntimeFailureKind = classifyProviderRuntimeFailureKind({
-    ...buildAssistantFailoverSignal(msg, { provider: providerOwner }),
-    message: raw,
-  });
+  const classifiedFacts = facts ?? classifyAssistantErrorFacts(msg, opts);
+  const {
+    reason: failoverReason,
+    status: formatStatus,
+    providerRuntimeFailureKind,
+  } = classifiedFacts;
   const unknownTool =
     raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
     raw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i);
@@ -92,6 +115,7 @@ export function formatAssistantErrorText(
     const rewritten = formatSandboxToolPolicyBlockedMessage({
       cfg: opts?.cfg,
       sessionKey: opts?.sessionKey,
+      agentId: opts?.agentId,
       toolName: unknownTool[1],
       audit,
     });
@@ -167,7 +191,24 @@ export function formatAssistantErrorText(
   if (providerRuntimeFailureKind === "model_not_found") {
     return MODEL_NOT_FOUND_USER_TEXT;
   }
-  if (isContextOverflowError(raw)) {
+  if (failoverReason === "billing") {
+    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
+  }
+  const transientCopy =
+    failoverReason === "rate_limit" || failoverReason === "overloaded"
+      ? renderRateLimitOrOverloadedCopy({ reason: failoverReason, raw })
+      : undefined;
+  if (transientCopy) {
+    return transientCopy;
+  }
+
+  if (
+    (formatStatus === 400 || formatStatus === 422) &&
+    formatCopy !== PROVIDER_SCHEMA_REJECTION_USER_TEXT
+  ) {
+    return formatCopy;
+  }
+  if (failoverReason === "context_overflow") {
     return (
       "Context overflow: prompt too large for the model. " +
       "Try /reset (or /new) to start a fresh session, or use a larger-context model."
@@ -212,27 +253,12 @@ export function formatAssistantErrorText(
   }
 
   const apiError = parseApiErrorInfo(raw);
-  if (apiError?.type?.toLowerCase().includes("invalid_request") && apiError.message?.trim()) {
+  if (
+    providerRuntimeFailureKind === "schema" &&
+    apiError?.type?.toLowerCase().includes("invalid_request") &&
+    apiError.message?.trim()
+  ) {
     return `LLM request rejected: ${apiError.message.trim()}`;
-  }
-
-  if (isBilling429MessageForProvider(raw, providerOwner)) {
-    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
-  }
-
-  const failoverReason = classifyFailoverReason(raw, {
-    provider: providerOwner,
-    providerPlugin: opts?.providerOwner,
-  });
-  if (failoverReason === "billing") {
-    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
-  }
-  const transientCopy =
-    failoverReason === "rate_limit" || failoverReason === "overloaded"
-      ? renderRateLimitOrOverloadedCopy({ reason: failoverReason, raw })
-      : undefined;
-  if (transientCopy) {
-    return transientCopy;
   }
 
   if (isGenericProviderInternalError(raw)) {
@@ -250,16 +276,19 @@ export function formatAssistantErrorText(
     return formatRawAssistantErrorForUi(raw);
   }
 
-  if (isTimeoutErrorMessage(raw)) {
+  if (isTimeoutErrorMessage(raw) && !(facts?.status !== undefined && facts.status >= 500)) {
     return SYNTHESIZED_TIMEOUT_ERROR_TEXT;
   }
 
-  if (isBillingErrorMessage(raw)) {
-    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
+  // Full assistant metadata can establish format rejection beyond the raw-text diagnostic.
+  if (providerRuntimeFailureKind === "schema" || failoverReason === "format") {
+    return formatCopy;
   }
 
-  if (providerRuntimeFailureKind === "schema") {
-    return formatCopy;
+  if (!raw) {
+    return failoverReason
+      ? renderAssistantRequestFailureCopy(classifiedFacts)
+      : "LLM request failed with an unknown error.";
   }
 
   if (isRawApiErrorPayload(raw) || isLikelyHttpErrorText(raw)) {
@@ -304,8 +333,9 @@ export function formatUserFacingAssistantErrorText(
   msg: AssistantMessage,
   opts?: AssistantErrorTextOptions,
 ): string {
-  const friendlyError = formatAssistantErrorText(msg, opts);
   const rawError = msg.errorMessage?.trim();
+  const facts = classifyAssistantErrorFacts(msg, opts);
+  const friendlyError = formatAssistantErrorText(msg, opts, facts);
   const rawPassthrough = isRawAssistantErrorPassthrough({ friendlyError, rawError });
   const structuredSchemaDetail = [
     parseApiErrorInfo(rawError ?? ""),
@@ -322,5 +352,8 @@ export function formatUserFacingAssistantErrorText(
           ? PROVIDER_SCHEMA_REJECTION_USER_TEXT
           : undefined
         : friendlyError;
-  return (safeFriendlyError || GENERIC_ASSISTANT_ERROR_TEXT).trim();
+  if (safeFriendlyError) {
+    return safeFriendlyError.trim();
+  }
+  return renderAssistantRequestFailureCopy(facts) ?? GENERIC_ASSISTANT_ERROR_TEXT;
 }

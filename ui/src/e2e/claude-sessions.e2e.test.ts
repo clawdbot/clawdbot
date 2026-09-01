@@ -1,7 +1,7 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -102,14 +102,20 @@ async function catalogHeaderAffordances(header: Locator) {
     const chevron = element.querySelector<HTMLElement>(".sidebar-session-group-toggle__icon");
     const grip = element.querySelector<HTMLElement>(".sidebar-session-group-drag-handle");
     const actions = element.querySelector<HTMLElement>(".sidebar-session-group-actions");
-    if (!toggle || !providerIcon || !chevron || !grip || !actions) {
+    const toolbarButton = element.ownerDocument.querySelector<HTMLElement>(
+      ".sidebar-session-toolbar__button",
+    );
+    if (!toggle || !providerIcon || !chevron || !grip || !actions || !toolbarButton) {
       throw new Error("expected complete branded catalog header affordances");
     }
+    const actionsStyle = getComputedStyle(actions);
+    const toolbarButtonStyle = getComputedStyle(toolbarButton);
     return {
       actionFocusVisible: actions.matches(":focus-visible"),
       actionFocused: document.activeElement === actions,
-      actionsOpacity: getComputedStyle(actions).opacity,
-      actionsPointerEvents: getComputedStyle(actions).pointerEvents,
+      actionsColor: actionsStyle.color,
+      actionsOpacity: actionsStyle.opacity,
+      actionsPointerEvents: actionsStyle.pointerEvents,
       chevronOpacity: getComputedStyle(chevron).opacity,
       finePointer: matchMedia("(pointer: fine)").matches,
       focusWithin: element.matches(":focus-within"),
@@ -117,6 +123,8 @@ async function catalogHeaderAffordances(header: Locator) {
       hoverCapable: matchMedia("(hover: hover)").matches,
       hovered: element.matches(":hover"),
       providerOpacity: getComputedStyle(providerIcon).opacity,
+      toolbarButtonColor: toolbarButtonStyle.color,
+      toolbarButtonOpacity: toolbarButtonStyle.opacity,
       toggleFocusVisible: toggle.matches(":focus-visible"),
       toggleFocused: document.activeElement === toggle,
     };
@@ -181,11 +189,21 @@ suite.define(() => {
           '[data-session-section="catalog:claude"] .sidebar-recent-sessions__head',
         );
         const toggle = header.locator(".sidebar-session-group-toggle");
+        const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        const artifactDir = artifactRoot
+          ? createControlUiE2eArtifactDir("claude-sessions", artifactRoot)
+          : undefined;
         await header.hover();
+        if (artifactDir) {
+          await page.locator(".sidebar-sessions").screenshot({
+            animations: "disabled",
+            path: path.join(artifactDir, "sessions-sidebar-hover.png"),
+          });
+        }
         await expect
           .poll(() => catalogHeaderAffordances(header))
           .toMatchObject({
-            actionsOpacity: "1",
+            actionsOpacity: "0.55",
             actionsPointerEvents: "auto",
             chevronOpacity: "0.75",
             finePointer: true,
@@ -193,7 +211,10 @@ suite.define(() => {
             hoverCapable: true,
             hovered: true,
             providerOpacity: "0",
+            toolbarButtonOpacity: "0.55",
           });
+        const hoverAffordances = await catalogHeaderAffordances(header);
+        expect(hoverAffordances.actionsColor).toBe(hoverAffordances.toolbarButtonColor);
 
         await toggle.click();
         await page.locator(".chat-main__conversation").hover({ position: { x: 40, y: 40 } });
@@ -218,9 +239,7 @@ suite.define(() => {
             toggleFocused: true,
           });
 
-        const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
         if (artifactDir) {
-          await fs.mkdir(artifactDir, { recursive: true });
           await header.screenshot({
             animations: "disabled",
             path: path.join(artifactDir, "catalog-header-pointer-away.png"),
@@ -290,34 +309,45 @@ suite.define(() => {
       }
 
       const touchAffordance = await page
-        .locator(
-          '[data-session-section="catalog:claude"] .sidebar-session-group-toggle__lead--branded',
-        )
-        .evaluate((lead) => {
-          const providerIcon = lead.querySelector<HTMLElement>(
+        .locator('[data-session-section="catalog:claude"] .sidebar-recent-sessions__head')
+        .evaluate((header) => {
+          const providerIcon = header.querySelector<HTMLElement>(
             ".sidebar-session-catalog-provider-icon",
           );
-          const chevron = lead.querySelector<HTMLElement>(".sidebar-session-group-toggle__icon");
-          if (!providerIcon || !chevron) {
-            throw new Error("expected branded catalog provider icon and chevron");
+          const chevron = header.querySelector<HTMLElement>(".sidebar-session-group-toggle__icon");
+          const actions = header.querySelector<HTMLElement>(".sidebar-session-group-actions");
+          const toolbarButton = header.ownerDocument.querySelector<HTMLElement>(
+            ".sidebar-session-toolbar__button",
+          );
+          if (!providerIcon || !chevron || !actions || !toolbarButton) {
+            throw new Error("expected complete touch catalog header affordances");
           }
           return {
+            actionsColor: getComputedStyle(actions).color,
+            actionsOpacity: getComputedStyle(actions).opacity,
             coarsePointer: matchMedia("(pointer: coarse)").matches,
             noHover: matchMedia("(hover: none)").matches,
             providerOpacity: getComputedStyle(providerIcon).opacity,
             chevronOpacity: getComputedStyle(chevron).opacity,
+            toolbarButtonColor: getComputedStyle(toolbarButton).color,
+            toolbarButtonOpacity: getComputedStyle(toolbarButton).opacity,
           };
         });
-      expect(touchAffordance).toEqual({
+      expect(touchAffordance).toMatchObject({
+        actionsOpacity: "0.55",
         coarsePointer: true,
         noHover: true,
         providerOpacity: "0",
         chevronOpacity: "0.75",
+        toolbarButtonOpacity: "0.55",
       });
+      expect(touchAffordance.actionsColor).toBe(touchAffordance.toolbarButtonColor);
 
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = artifactRoot
+        ? createControlUiE2eArtifactDir("claude-sessions", artifactRoot)
+        : undefined;
       if (artifactDir) {
-        await fs.mkdir(artifactDir, { recursive: true });
         await page.screenshot({
           path: path.join(artifactDir, "native-session-host-groups.png"),
           fullPage: true,
@@ -369,9 +399,11 @@ suite.define(() => {
       await connecting.waitFor();
       expect(await page.locator(".tabstrip-tab.is-connecting").count()).toBe(1);
 
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = artifactRoot
+        ? createControlUiE2eArtifactDir("claude-sessions", artifactRoot)
+        : undefined;
       if (artifactDir) {
-        await fs.mkdir(artifactDir, { recursive: true });
         await page.screenshot({ path: path.join(artifactDir, "claude-terminal-connecting.png") });
       }
 
@@ -614,7 +646,10 @@ suite.define(() => {
     await expect
       .poll(() => page.getByText("This session is on a paired device and is view-only.").count())
       .toBe(1);
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("claude-sessions", artifactRoot)
+      : undefined;
     const expectCenteredLayout = async (screenshotName: string) => {
       const [workbenchBox, threadBox, composerBox] = await Promise.all([
         catalogPane.locator(".chat-workbench").boundingBox(),
@@ -632,7 +667,6 @@ suite.define(() => {
         Math.abs(composerBox!.x + composerBox!.width / 2 - workbenchCenter),
       ).toBeLessThanOrEqual(1);
       if (artifactDir) {
-        await fs.mkdir(artifactDir, { recursive: true });
         await page.screenshot({
           path: path.join(artifactDir, screenshotName),
           fullPage: true,
@@ -660,10 +694,10 @@ suite.define(() => {
   });
 
   it("auto-pages an underfilled native transcript until it becomes scrollable", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    if (artifactDir) {
-      await fs.mkdir(artifactDir, { recursive: true });
-    }
+    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("claude-sessions", artifactRoot)
+      : undefined;
     const viewport = { width: 1280, height: 900 };
     const context = await suite.newBrowserContext({
       locale: "en-US",
@@ -813,9 +847,12 @@ suite.define(() => {
     }
   });
 
-  it("shows loaded native history before fetching and revealing an earlier page", async () => {
+  it("keeps the earlier-history action fixed while loading and reveals the fetched page", async () => {
     const page = await suite.browser.newPage({ viewport: { width: 1280, height: 800 } });
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("claude-sessions", artifactRoot)
+      : undefined;
     const historyMessage = (seq: number, prefix: string) => ({
       __openclaw: { seq },
       content: [
@@ -828,9 +865,9 @@ suite.define(() => {
       timestamp: Date.now() + seq,
     });
     const recent = Array.from({ length: 100 }, (_, index) =>
-      historyMessage(index + 41, "recent native message"),
+      historyMessage(index + 1001, "recent native message"),
     );
-    const older = Array.from({ length: 40 }, (_, index) =>
+    const older = Array.from({ length: 1000 }, (_, index) =>
       historyMessage(index + 1, "older native message"),
     );
     const gateway = await installMockGateway(page, {
@@ -840,7 +877,7 @@ suite.define(() => {
           messages: recent,
           hasMore: true,
           nextOffset: 100,
-          totalMessages: 140,
+          totalMessages: 1100,
           sessionId: "native-scrollback",
           thinkingLevel: null,
         },
@@ -851,19 +888,19 @@ suite.define(() => {
               response: {
                 messages: older,
                 hasMore: false,
-                totalMessages: 140,
+                totalMessages: 1100,
                 sessionId: "native-scrollback",
                 thinkingLevel: null,
               },
             },
             {
               // Served to the background prefetch staged after the successful
-              // older page below reports more history at offset 140.
-              match: { offset: 140 },
+              // older page below reports more history at offset 1100.
+              match: { offset: 1100 },
               response: {
                 messages: [],
                 hasMore: false,
-                totalMessages: 180,
+                totalMessages: 1140,
                 sessionId: "native-scrollback",
                 thinkingLevel: null,
               },
@@ -874,7 +911,7 @@ suite.define(() => {
     });
 
     await page.goto(`${suite.server.baseUrl}chat`);
-    await page.getByText(/^recent native message 140\n/).waitFor();
+    await page.getByText(/^recent native message 1100\n/).waitFor();
     const thread = page.locator(".chat-thread");
     await expect
       .poll(() => thread.evaluate((element) => element.scrollHeight > element.clientHeight + 100))
@@ -895,8 +932,9 @@ suite.define(() => {
       element.dispatchEvent(new Event("scroll"));
     });
     await showEarlier.waitFor();
+    const idleHistoryAction = await showEarlier.boundingBox();
+    expect(idleHistoryAction).not.toBeNull();
     if (artifactDir) {
-      await fs.mkdir(artifactDir, { recursive: true });
       await page.screenshot({
         path: path.join(artifactDir, "00-native-history-available.png"),
         fullPage: true,
@@ -909,12 +947,16 @@ suite.define(() => {
     // can't return a stale load-time or prior-page request.
     await gateway.waitForRequest("chat.history", { after: initialRequestCount });
     await page.locator('.chat-history-boundary__action[aria-busy="true"]').waitFor();
+    const loadingHistoryAction = await showEarlier.boundingBox();
     if (artifactDir) {
       await page.screenshot({
         path: path.join(artifactDir, "01-native-history-loading.png"),
         fullPage: true,
       });
     }
+    expect(loadingHistoryAction).not.toBeNull();
+    expect(loadingHistoryAction?.x).toBeCloseTo(idleHistoryAction?.x ?? 0, 0);
+    expect(loadingHistoryAction?.width).toBeCloseTo(idleHistoryAction?.width ?? 0, 0);
     await gateway.rejectDeferred("chat.history", {
       code: "UNAVAILABLE",
       message: "history unavailable",
@@ -930,8 +972,8 @@ suite.define(() => {
     await gateway.resolveDeferred("chat.history", {
       messages: older,
       hasMore: true,
-      nextOffset: 140,
-      totalMessages: 180,
+      nextOffset: 1100,
+      totalMessages: 1140,
       sessionId: "native-scrollback",
       thinkingLevel: null,
     });
@@ -945,7 +987,7 @@ suite.define(() => {
                 .length,
           ),
       )
-      .toBe(140);
+      .toBe(1100);
     const firstOlderMessage = page.getByText(/^older native message 1\n/);
     await firstOlderMessage.waitFor();
     await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(1);
@@ -956,13 +998,13 @@ suite.define(() => {
       });
     }
     // The applied page reports more history, so the pane stages the next page
-    // (offset 140) in the background without entering the loading state.
+    // (offset 1100) in the background without entering the loading state.
     await expect
       .poll(() => gateway.getRequests("chat.history").then((requests) => requests.length))
       .toBe(failedRequestCount + 2);
     const requestsAfterPrefetch = await gateway.getRequests("chat.history");
-    expect(requestsAfterPrefetch.at(-2)?.params).toMatchObject({ limit: 400, offset: 100 });
-    expect(requestsAfterPrefetch.at(-1)?.params).toMatchObject({ limit: 400, offset: 140 });
+    expect(requestsAfterPrefetch.at(-2)?.params).toMatchObject({ limit: 1000, offset: 100 });
+    expect(requestsAfterPrefetch.at(-1)?.params).toMatchObject({ limit: 1000, offset: 1100 });
     await page.evaluate(
       () =>
         new Promise<void>((resolve) => {

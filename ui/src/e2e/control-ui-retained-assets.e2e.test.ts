@@ -17,12 +17,12 @@ import {
   type ControlUiRootState,
 } from "../../../src/gateway/control-ui.ts";
 import { withEnvAsync } from "../../../src/test-utils/env.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { resolvePlaywrightChromiumExecutablePath } from "../test-helpers/control-ui-e2e.ts";
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const useWebKit = process.env.OPENCLAW_CONTROL_UI_E2E_BROWSER === "webkit";
 const browserName = useWebKit ? "webkit" : "chromium";
-const artifactDir = path.resolve(`.artifacts/control-ui-e2e/retained-assets-${browserName}`);
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 
 async function writeBuild(root: string, files: Readonly<Record<string, string>>): Promise<void> {
@@ -116,6 +116,9 @@ async function startGatewayAssetServer(root: Extract<ControlUiRootState, { kind:
 }
 
 it("keeps an old document's unvisited lazy module available across builds", async () => {
+  const artifactDir = captureUiProof
+    ? createControlUiE2eArtifactDir(`retained-assets-${browserName}`)
+    : "";
   const fixture = await mkdtemp(path.join(os.tmpdir(), "openclaw-retained-assets-e2e-"));
   const buildA = path.join(fixture, "build-a");
   const buildB = path.join(fixture, "build-b");
@@ -123,9 +126,6 @@ it("keeps an old document's unvisited lazy module available across builds", asyn
   let browser: Browser | undefined;
   let server: Awaited<ReturnType<typeof startGatewayAssetServer>> | undefined;
   try {
-    if (captureUiProof) {
-      await mkdir(artifactDir, { recursive: true });
-    }
     await writeOldDocumentBuild(buildA);
     await writeReplacementBuild(buildB);
 

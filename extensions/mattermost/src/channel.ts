@@ -50,7 +50,6 @@ import {
 } from "./channel-api.js";
 import {
   describeMattermostAccount,
-  isMattermostConfigured,
   mattermostConfigAdapter,
   mattermostMeta as meta,
   normalizeMattermostAllowEntry as normalizeAllowEntry,
@@ -61,6 +60,7 @@ import { mattermostDoctor } from "./doctor.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
 import {
   inspectMattermostAccount,
+  isMattermostConfigured,
   listMattermostAccountIds,
   resolveDefaultMattermostAccountId,
   resolveMattermostAccount,

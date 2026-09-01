@@ -7,12 +7,12 @@ import { readExperienceReviewMessageText } from "./experience-review-message-tex
 export async function observeExperienceReview(run: () => Promise<void>) {
   let session: SessionManager | undefined;
   const requests: Array<{ toolNames: string[]; outputs: unknown[] }> = [];
-  const fromEntries = SessionManager.fromEntries.bind(SessionManager);
+  const openModelContext = SessionManager.openModelContext.bind(SessionManager);
   const createEgressObserver = responsesEgress.createResponsesPromptEgressObserver;
   // Keep the actual runner and transport. Silent reviews suppress public assistant events;
   // the detached transcript and final provider request own the facts this smoke needs.
-  const sessionSpy = vi.spyOn(SessionManager, "fromEntries").mockImplementation((...args) => {
-    session = fromEntries(...args);
+  const sessionSpy = vi.spyOn(SessionManager, "openModelContext").mockImplementation((...args) => {
+    session = openModelContext(...args);
     return session;
   });
   const providerSpy = vi

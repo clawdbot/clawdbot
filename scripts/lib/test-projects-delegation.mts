@@ -28,7 +28,7 @@ export function resolveTestProjectsRunnerSpawnParams(
 
 export function spawnTestProjectsRunner(argv: string[], env: NodeJS.ProcessEnv) {
   const repoRoot = resolveRepoRoot(import.meta.url);
-  const testProjectsRunnerPath = path.join(repoRoot, "scripts", "test-projects.mts");
+  const testProjectsRunnerPath = path.join(repoRoot, "scripts", "test-projects-child.mts");
   let forwardedSignal: NodeJS.Signals | null = null;
   const spawnParams = resolveTestProjectsRunnerSpawnParams(env);
   const child = spawn(
@@ -36,10 +36,10 @@ export function spawnTestProjectsRunner(argv: string[], env: NodeJS.ProcessEnv) 
     ["--import", "tsx", testProjectsRunnerPath, ...argv],
     spawnParams,
   );
+  // The orchestrator must join its bounded native children and record their outcomes.
+  // A competing leaf-sized force timer kills it before that cleanup can complete.
   const teardown = installVitestProcessGroupCleanup({
     child,
-    forceSignal: "SIGKILL",
-    forceSignalDelayMs: 100,
     onSignal: (signal) => {
       forwardedSignal ??= signal;
     },

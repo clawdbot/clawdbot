@@ -40,8 +40,8 @@ describe.skipIf(process.platform !== "darwin")("Mac worker bundled filesystem pr
     for (const bundle of bundles) {
       await bundle[Symbol.asyncDispose]();
     }
-    // Seed genuine assets even before the producer repair lands; negative fixtures
-    // must remove them explicitly rather than depend on today's build omission.
+    // Keep the template populated even if the producer omits assets; each probe
+    // selects its native path independently.
     fs.cpSync(path.join(dependency, "dist/native"), path.join(compiled, "dist/native"), {
       recursive: true,
     });
@@ -52,8 +52,10 @@ describe.skipIf(process.platform !== "darwin")("Mac worker bundled filesystem pr
     const directory = fixtures.make("openclaw-worker-fs-proof-");
     const runtime = path.join(directory, "runtime");
     const packageRoot = path.join(runtime, "lib/node_modules/openclaw");
-    fs.cpSync(compiled, packageRoot, { recursive: true });
-    fs.rmSync(path.join(packageRoot, "dist/native"), { recursive: true });
+    fs.cpSync(compiled, packageRoot, {
+      recursive: true,
+      filter: (source) => source !== path.join(compiled, "dist/native"),
+    });
     const home = path.join(directory, "home");
     fs.mkdirSync(home);
     const dependencyRoot = path.join(packageRoot, "node_modules/@openclaw/fs-safe");
@@ -170,7 +172,7 @@ registerHooks({
 
   it("accepts completed SDK write/create bytes and exactly the bundled native cache path", () => {
     const { packageRoot, home, native } = fixture();
-    // Disposable fixture only: the build's native-asset producer is a separate repair.
+    // This probe supplies the bundled payload; the other probes choose missing or misplaced paths.
     fs.cpSync(path.join(dependency, "dist/native"), path.join(packageRoot, "dist/native"), {
       recursive: true,
     });

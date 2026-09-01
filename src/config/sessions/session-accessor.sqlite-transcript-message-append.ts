@@ -12,6 +12,7 @@ import {
   consumeSessionPendingInput,
   resolveSessionPendingInputAppend,
 } from "./session-accessor.sqlite-pending-inputs.js";
+import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-read.js";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
 import { resolveTranscriptMessageAppendParent } from "./session-accessor.sqlite-transcript-parent.js";
@@ -19,7 +20,6 @@ import {
   appendTranscriptEventInTransaction,
   ensureTranscriptHeader,
   readMessageIdempotencyKey,
-  readTranscriptIdentityByEventId,
   readTranscriptMessageByEventId,
   readTranscriptMessageByScopedIdempotencyKey,
   redactTranscriptMessageForStorage,
@@ -143,9 +143,12 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     message: finalMessage,
   };
   const appended = appendTranscriptEventInTransaction(database, resolved, event, {
-    dedupeByMessageIdempotency:
-      options.idempotencyLookup !== "caller-checked" &&
-      options.idempotencyLookup !== "scan-assistant",
+    idempotencyKeyMode:
+      options.idempotencyLookup === "caller-checked"
+        ? "relocate-owner"
+        : options.idempotencyLookup === "scan-assistant"
+          ? "preserve-owner"
+          : "dedupe",
   });
   if (!appended && idempotencyKey && options.idempotencyLookup !== "caller-checked") {
     const existing = readTranscriptMessageByScopedIdempotencyKey(

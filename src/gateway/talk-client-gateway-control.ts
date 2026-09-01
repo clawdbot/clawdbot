@@ -2,6 +2,11 @@ import { randomUUID } from "node:crypto";
 import { normalizeTalkSection } from "../config/talk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
+import {
+  GatewayDrainingError,
+  runOutsideGatewayRootWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { BoundedSerialQueue } from "../shared/bounded-serial-queue.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { consultRealtimeVoiceAgent } from "../talk/agent-consult-runtime.js";
@@ -41,8 +46,10 @@ import type { TalkEvent } from "../talk/talk-events.js";
 import { registerChatAbortController } from "./chat-abort.js";
 import { ADMIN_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
+import { resolveOwnedActiveTalkRunTarget } from "./server-methods/talk-client-run-ownership.js";
 import { formatError } from "./server-utils.js";
 import { registerTalkConnectionCleanup } from "./talk-session-registry.js";
+import type { PreparedTalkSessionTarget } from "./talk-session-target.types.js";
 
 type GatewayControlOwner = {
   adoptProvider: (closeProvider: () => Promise<void>) => Promise<void>;
@@ -56,7 +63,7 @@ type GatewayControlOwner = {
   connId: string;
   control: RealtimeVoiceGatewayControl;
   runAgentConsult: RealtimeVoiceAgentConsultRunner;
-  sessionKey: string;
+  sessionTarget: PreparedTalkSessionTarget;
   voiceSessionId: string;
 };
 
@@ -240,8 +247,7 @@ export function boundTalkClientRealtimeInitialItems(
 export function createTalkClientAgentConsultRunner(params: {
   config: OpenClawConfig;
   context: Pick<GatewayRequestContext, "chatAbortControllers" | "logGateway">;
-  agentId: string;
-  sessionKey: string;
+  sessionTarget: PreparedTalkSessionTarget;
   ownerConnId?: string;
   authority?: TalkAgentConsultAuthority;
   getVoiceSessionId: () => string | undefined;
@@ -250,6 +256,7 @@ export function createTalkClientAgentConsultRunner(params: {
   surface?: string;
   registerRun?: (params: { runId: string }) => void;
 }) {
+  const { agentId, sessionKey, canonicalKey, storePath } = params.sessionTarget;
   const authority = params.authority ?? resolveTalkAgentConsultAuthority(undefined);
   let agentRuntime: ReturnType<typeof createPluginRuntime>["agent"] | undefined;
   const runArgs = async (args: unknown, signal?: AbortSignal) => {
@@ -261,75 +268,82 @@ export function createTalkClientAgentConsultRunner(params: {
     // Relays own admission before their lazy record registration. Browser callbacks
     // must validate the durable call before accepting a new run.
     if (!params.registerRun) {
-      assertClientVoiceSessionOpen({
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        voiceSessionId,
-      });
+      assertClientVoiceSessionOpen({ agentId, sessionKey, voiceSessionId });
     }
     const confirmationGrant = parsedArgs.confirmationId
       ? authorizeClientVoiceConfirmation({
-          agentId: params.agentId,
+          agentId,
           voiceSessionId,
           confirmationId: parsedArgs.confirmationId,
         })
       : undefined;
-    agentRuntime ??= createTalkClientAgentRuntime({
+    const runtime = (agentRuntime ??= createTalkClientAgentRuntime({
       config: params.config,
-      agentId: params.agentId,
+      agentId,
       ...(params.ownerConnId ? { rawSourceRef: params.ownerConnId } : {}),
-    });
+    }));
     const talkConfig = normalizeTalkSection(params.config.talk);
-    return await consultRealtimeVoiceAgent({
-      cfg: params.config,
-      agentRuntime,
-      logger: params.context.logGateway,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      messageProvider: "webchat",
-      lane: "talk",
-      runIdPrefix: params.runIdPrefix ?? "talk-realtime-consult",
-      args: parsedArgs,
-      transcript: params.initialItems,
-      surface: params.surface ?? "a browser Talk session",
-      userLabel: "User",
-      questionSourceLabel: "user",
-      thinkLevel: talkConfig?.consultThinkingLevel,
-      fastMode: talkConfig?.consultFastMode,
-      ...authority,
-      abortSignal: signal,
-      onRunStarted: ({ runId, sessionId, timeoutMs }) => {
-        if (params.registerRun) {
-          params.registerRun({ runId });
-        } else {
-          registerClientVoiceConsultRun({
-            agentId: params.agentId,
-            sessionKey: params.sessionKey,
-            voiceSessionId,
-            runId,
-            config: params.config,
-          });
-        }
-        if (confirmationGrant) {
-          bindAuthorizedClientVoiceConfirmation({ grant: confirmationGrant, runId });
-        }
-        if (!params.ownerConnId) {
-          return undefined;
-        }
-        const registration = registerChatAbortController({
-          chatAbortControllers: params.context.chatAbortControllers,
-          runId,
-          sessionId,
-          sessionKey: params.sessionKey,
-          agentId: params.agentId,
-          timeoutMs,
-          ownerConnId: params.ownerConnId,
-          controlUiVisible: false,
-          kind: "chat-send",
-        });
-        return { abortSignal: registration.controller.signal, cleanup: registration.cleanup };
-      },
-    });
+    // A voice turn outlives offer setup and must drain under its own root,
+    // while new turns still respect suspension and restart admission.
+    const admission = runOutsideGatewayRootWorkAdmission(tryBeginGatewayRootWorkAdmission);
+    if (!admission) {
+      throw new GatewayDrainingError();
+    }
+    return await admission
+      .run(() =>
+        consultRealtimeVoiceAgent({
+          cfg: params.config,
+          agentRuntime: runtime,
+          logger: params.context.logGateway,
+          agentId,
+          sessionKey: canonicalKey,
+          storePath,
+          messageProvider: "webchat",
+          lane: "talk",
+          runIdPrefix: params.runIdPrefix ?? "talk-realtime-consult",
+          args: parsedArgs,
+          transcript: params.initialItems,
+          surface: params.surface ?? "a browser Talk session",
+          userLabel: "User",
+          questionSourceLabel: "user",
+          thinkLevel: talkConfig?.consultThinkingLevel,
+          fastMode: talkConfig?.consultFastMode,
+          ...authority,
+          abortSignal: signal,
+          onRunStarted: ({ runId, sessionId, timeoutMs }) => {
+            if (params.registerRun) {
+              params.registerRun({ runId });
+            } else {
+              registerClientVoiceConsultRun({
+                agentId,
+                sessionKey,
+                voiceSessionId,
+                runId,
+                config: params.config,
+              });
+            }
+            if (confirmationGrant) {
+              bindAuthorizedClientVoiceConfirmation({ grant: confirmationGrant, runId });
+            }
+            if (!params.ownerConnId) {
+              return undefined;
+            }
+            const registration = registerChatAbortController({
+              chatAbortControllers: params.context.chatAbortControllers,
+              runId,
+              sessionId,
+              sessionKey: canonicalKey,
+              agentId,
+              timeoutMs,
+              ownerConnId: params.ownerConnId,
+              controlUiVisible: false,
+              kind: "chat-send",
+            });
+            return { abortSignal: registration.controller.signal, cleanup: registration.cleanup };
+          },
+        }),
+      )
+      .finally(admission.release);
   };
   return {
     runArgs,
@@ -341,9 +355,12 @@ export function createTalkClientAgentConsultRunner(params: {
 export function createTalkClientGatewayControlOwner(params: {
   voiceSessionId: string;
   providerId?: string;
-  sessionKey: string;
+  sessionTarget: PreparedTalkSessionTarget;
   connId: string;
-  context: Pick<GatewayRequestContext, "broadcastToConnIds" | "logGateway">;
+  context: Pick<
+    GatewayRequestContext,
+    "broadcastToConnIds" | "logGateway" | "chatAbortControllers"
+  >;
   assertConnectionOpen?: () => void;
   runAgentConsult: (args: unknown, signal: AbortSignal) => Promise<{ text: string }>;
   appendTranscript: (entry: {
@@ -353,11 +370,7 @@ export function createTalkClientGatewayControlOwner(params: {
   }) => Promise<void>;
   flushTranscript: () => Promise<void>;
   closeLogicalSession: () => Promise<void>;
-  controlAgentRun?: (params: {
-    sessionKey: string;
-    text: string;
-    mode?: unknown;
-  }) => Promise<RealtimeVoiceAgentControlResult>;
+  controlAgentRun?: typeof controlRealtimeVoiceAgentRun;
 }): GatewayControlOwner {
   let bridge: RealtimeVoiceBridge | undefined;
   let closeProvider: (() => Promise<void>) | undefined;
@@ -405,8 +418,20 @@ export function createTalkClientGatewayControlOwner(params: {
 
   const applyControl = async (args: unknown) => {
     const parsed = parseRealtimeVoiceAgentControlToolArgs(args);
+    const runTarget = resolveOwnedActiveTalkRunTarget({
+      context: params.context,
+      clientConnId: params.connId,
+      sessionTarget: params.sessionTarget,
+      assertCurrent: () => {
+        owner.assertOpen();
+        if (owners.get(params.voiceSessionId) !== owner) {
+          throw new Error("Realtime voice session is not active");
+        }
+      },
+    });
     const result = await (params.controlAgentRun ?? controlRealtimeVoiceAgentRun)({
-      sessionKey: params.sessionKey,
+      sessionKey: params.sessionTarget.canonicalKey,
+      runTarget,
       text: parsed.text,
       mode: parsed.mode,
     });
@@ -521,7 +546,7 @@ export function createTalkClientGatewayControlOwner(params: {
 
   const owner: GatewayControlOwner = {
     connId: params.connId,
-    sessionKey: params.sessionKey,
+    sessionTarget: params.sessionTarget,
     voiceSessionId: params.voiceSessionId,
     assertOpen: () => {
       signal.throwIfAborted();
@@ -686,7 +711,8 @@ export async function closeTalkClientGatewayControlSession(params: {
     return false;
   }
   const owned = matching.filter(
-    (owner) => owner.sessionKey === params.sessionKey.trim() && owner.connId === params.connId,
+    (owner) =>
+      owner.sessionTarget.sessionKey === params.sessionKey.trim() && owner.connId === params.connId,
   );
   if (owned.length === 0) {
     throw new Error("Gateway-controlled voice session is not owned by this client");

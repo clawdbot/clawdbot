@@ -369,16 +369,16 @@ describe("parseSlashCommand", () => {
     expect(requireArray(steer.aliases, "steer aliases")).toEqual(["tell"]);
   });
 
-  it("builds runtime commands from command entries so docks, plugins, and direct skills appear", () => {
+  it("builds runtime commands from native, plugin, and direct skill entries", () => {
     applyRemoteEntries([
       {
-        name: "dock-discord",
-        textAliases: ["/dock-discord", "/dock_discord"],
-        description: "Switch to discord for replies.",
+        name: "inspect-session",
+        textAliases: ["/inspect-session", "/inspect_session"],
+        description: "Inspect the active session.",
         source: "native",
         scope: "both",
         acceptsArgs: false,
-        category: "docks",
+        category: "tools",
       },
       {
         name: "dreaming",
@@ -399,8 +399,8 @@ describe("parseSlashCommand", () => {
       },
     ]);
 
-    expectRecordFields(requireCommandByName("dock-discord"), "dock-discord command", {
-      aliases: ["dock_discord"],
+    expectRecordFields(requireCommandByName("inspect-session"), "inspect-session command", {
+      aliases: ["inspect_session"],
       category: "tools",
       executeLocal: false,
     });
@@ -414,7 +414,7 @@ describe("parseSlashCommand", () => {
       source: "skill",
       skillModelVisible: true,
     });
-    expectParsedSlash("/dock_discord", { name: "dock-discord" }, "");
+    expectParsedSlash("/inspect_session", { name: "inspect-session" }, "");
     expect(getSkillCommandCompletions("dra").map((command) => command.name)).toEqual(["draft"]);
   });
 

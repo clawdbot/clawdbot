@@ -35,6 +35,7 @@
     "README.md",
     "THIRD_PARTY_NOTICES.md",
     "dist/",
+    ".openclaw-lifecycle-pending",
     "!dist/.buildstamp",
     "!dist/.runtime-postbuildstamp",
     "!dist/**/*.app",
@@ -387,9 +388,12 @@
     "scripts/lib/official-external-provider-catalog.json",
     "scripts/lib/guard-inventory-utils.mjs",
     "scripts/lib/package-dist-imports.mjs",
+    "scripts/lib/package-lifecycle-marker.mjs",
     "scripts/lib/recommended-tool-installs.json",
     "scripts/postinstall-bundled-plugins.mjs",
-    "scripts/windows-cmd-helpers.mjs"
+    "scripts/windows-cmd-helpers.mjs",
+    "!dist/plugin-sdk/model-catalog-pricing.d.ts",
+    "!dist/plugin-sdk/blob-runtime.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -422,6 +426,9 @@
     },
     "./plugin-sdk/model-ref-parse": {
       "default": "./dist/plugin-sdk/model-ref-parse.js"
+    },
+    "./plugin-sdk/model-catalog-pricing": {
+      "default": "./dist/plugin-sdk/model-catalog-pricing.js"
     },
     "./plugin-sdk/outbound-echo-runtime": {
       "default": "./dist/plugin-sdk/outbound-echo-runtime.js"
@@ -472,6 +479,9 @@
     "./plugin-sdk/archive": {
       "types": "./dist/plugin-sdk/archive.d.ts",
       "default": "./dist/plugin-sdk/archive.js"
+    },
+    "./plugin-sdk/blob-runtime": {
+      "default": "./dist/plugin-sdk/blob-runtime.js"
     },
     "./plugin-sdk/root-walk": {
       "types": "./dist/plugin-sdk/root-walk.d.ts",
@@ -705,10 +715,6 @@
     },
     "./plugin-sdk/media-generation-runtime": {
       "default": "./dist/plugin-sdk/media-generation-runtime.js"
-    },
-    "./plugin-sdk/conversation-binding-inspection-runtime": {
-      "types": "./dist/plugin-sdk/conversation-binding-inspection-runtime.d.ts",
-      "default": "./dist/plugin-sdk/conversation-binding-inspection-runtime.js"
     },
     "./plugin-sdk/conversation-binding-runtime": {
       "default": "./dist/plugin-sdk/conversation-binding-runtime.js"
@@ -1691,7 +1697,7 @@
     "lint:templates:fix": "pnpm dlx --config.resolution-mode=highest markdownlint-cli2 --config config/markdownlint-templates.jsonc --fix",
     "lint:extensions:no-deprecated-channel-access": "node --import ./scripts/tsx.mjs scripts/check-no-deprecated-channel-access.ts",
     "lint:extensions:telegram-grammy-types": "node --import ./scripts/tsx.mjs scripts/check-telegram-grammy-types-imports.mts",
-    "lint:extensions": "node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.extensions.json extensions",
+    "lint:extensions": "node scripts/run-oxlint.mjs --tsconfig extensions/tsconfig.json extensions",
     "lint:extensions:no-guarded-wildcard-reexports": "node --import ./scripts/tsx.mjs scripts/check-extension-wildcard-reexports.mts",
     "lint:extensions:no-normalization-core-bypass": "node --import ./scripts/tsx.mjs scripts/check-extension-plugin-sdk-boundary.mts --mode=normalization-core-bypass",
     "lint:extensions:no-plugin-sdk-wildcard-reexports": "node --import ./scripts/tsx.mjs scripts/check-plugin-sdk-wildcard-reexports.mts",
@@ -1902,14 +1908,14 @@
     "test:docker:published-upgrade-survivor": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_DOCKER_ALL_LANES=published-upgrade-survivor -- node scripts/test-docker-all.mjs",
     "test:docker:qr": "bash scripts/e2e/qr-import-docker.sh",
     "test:docker:rerun": "node --import ./scripts/tsx.mjs scripts/docker-e2e-rerun.mts",
-    "test:docker:root-managed-vps-upgrade": "env OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=1 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@2026.5.7} OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT=${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s} bash scripts/e2e/upgrade-survivor-docker.sh",
+    "test:docker:root-managed-vps-upgrade": "env OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=1 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest} OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT=${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s} bash scripts/e2e/upgrade-survivor-docker.sh",
     "test:docker:selected-plugins": "bash scripts/e2e/docker-selected-plugins.sh",
     "test:docker:session-runtime-context": "bash scripts/e2e/session-runtime-context-docker.sh",
     "test:docker:skill-install": "bash scripts/e2e/skill-install-docker.sh",
     "test:docker:timings": "node --import ./scripts/tsx.mjs scripts/docker-e2e-timings.mts",
     "test:docker:update-channel-switch": "bash scripts/e2e/update-channel-switch-docker.sh",
     "test:docker:update-corrupt-plugin": "bash scripts/e2e/update-corrupt-plugin-docker.sh",
-    "test:docker:update-migration": "env OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@2026.4.23} OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-plugin-deps-cleanup} bash scripts/e2e/upgrade-survivor-docker.sh",
+    "test:docker:update-migration": "env OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest} OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-plugin-deps-cleanup} bash scripts/e2e/upgrade-survivor-docker.sh",
     "test:docker:update-restart-auth": "env OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT=${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s} bash scripts/e2e/upgrade-survivor-docker.sh",
     "test:docker:update-run-package-self-upgrade": "bash scripts/e2e/update-run-package-self-upgrade-docker.sh",
     "test:docker:upgrade-survivor": "bash scripts/e2e/upgrade-survivor-docker.sh",
@@ -1918,7 +1924,7 @@
     "test:type-suppression-inventory:report": "node --import ./scripts/tsx.mjs scripts/type-suppression-inventory.ts",
     "test:e2e": "pnpm test:e2e:gateway && pnpm test:e2e:agent-plugin-gateway && pnpm test:ui:e2e",
     "test:e2e:agent-plugin-gateway": "node --import ./scripts/tsx.mjs scripts/agent-plugin-gateway-e2e.ts",
-    "test:e2e:browser-extension": "pnpm build && node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers -- node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers OPENCLAW_BROWSER_EXTENSION_E2E=1 OPENCLAW_E2E_WORKERS=1 -- node scripts/run-vitest.mjs extensions/browser/chrome-extension/bootstrap.chromium.test.ts",
+    "test:e2e:browser-extension": "pnpm build:ci-artifacts && node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers -- node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers OPENCLAW_BROWSER_EXTENSION_E2E=1 OPENCLAW_E2E_WORKERS=1 -- node scripts/run-vitest.mjs extensions/browser/chrome-extension/bootstrap.chromium.test.ts",
     "test:e2e:gateway": "node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts",
     "test:e2e:openshell": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_E2E_OPENSHELL=1 -- node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts extensions/openshell/src/backend.e2e.test.ts",
     "test:e2e:status-corrupt-plugin-deps": "bash scripts/e2e/status-corrupt-plugin-deps.sh",
@@ -1950,7 +1956,10 @@
     "test:live:media:music": "node --import ./scripts/tsx.mjs test/e2e/qa-lab/media/hosted-media-provider-live.ts music",
     "test:live:media:video": "node --import ./scripts/tsx.mjs test/e2e/qa-lab/media/hosted-media-provider-live.ts video",
     "test:live:models-profiles": "node --import ./scripts/tsx.mjs scripts/test-live.mts -- src/agents/models.profiles.live.test.ts",
-    "test:macos:ci": "node --import ./scripts/tsx.mjs scripts/test-projects.mts test/scripts/ci-platform-checkout.test.ts test/scripts/macos-native-test-launch.test.ts src/daemon/launchd.test.ts src/daemon/runtime-paths.test.ts src/daemon/runtime-binary.test.ts src/gateway/worker-environments/workspace-rsync-path.test.ts src/infra/brew.test.ts src/infra/stable-node-path.test.ts src/process/supervisor/adapters/child.service-lifecycle.test.ts test/scripts/vitest-process-group.test.ts test/scripts/package-mac-app.test.ts test/scripts/restart-mac.test.ts test/scripts/mac-node-worker.test.ts test/scripts/verify-mac-node-worker-fs.test.ts test/scripts/package-mac-dist.test.ts test/scripts/create-dmg.test.ts test/scripts/codesign-mac-app.test.ts test/scripts/notarize-mac-artifact.test.ts test/scripts/mac-elevation-host.test.ts",
+    "test:macos:ci": "pnpm test:macos:ci:1 && pnpm test:macos:ci:2 && pnpm test:macos:ci:3",
+    "test:macos:ci:1": "node --import ./scripts/tsx.mjs scripts/test-projects.mts test/scripts/mac-elevation-host.test.ts",
+    "test:macos:ci:2": "node --import ./scripts/tsx.mjs scripts/test-projects.mts test/scripts/vitest-process-group.test.ts test/scripts/package-mac-app.test.ts test/scripts/restart-mac.test.ts test/scripts/mac-node-worker.test.ts test/scripts/package-mac-dist.test.ts test/scripts/codesign-mac-app.test.ts test/scripts/notarize-mac-artifact.test.ts test/scripts/mac-elevation-artifact.test.ts",
+    "test:macos:ci:3": "node --import ./scripts/tsx.mjs scripts/test-projects.mts test/scripts/ci-platform-checkout.test.ts test/scripts/macos-native-test-launch.test.ts src/daemon/launchd.test.ts src/daemon/runtime-paths.test.ts src/daemon/runtime-binary.test.ts src/gateway/worker-environments/workspace-rsync-path.test.ts src/infra/brew.test.ts src/infra/stable-node-path.test.ts src/process/supervisor/adapters/child.service-lifecycle.test.ts test/scripts/verify-mac-node-worker-fs.test.ts test/scripts/create-dmg.test.ts",
     "test:max": "node --import ./scripts/tsx.mjs scripts/test-projects-max.mts",
     "test:parallels:linux": "bash scripts/e2e/parallels-linux-smoke.sh",
     "test:parallels:macos": "bash scripts/e2e/parallels-macos-smoke.sh",
@@ -1996,8 +2005,8 @@
     "test:voicecall:closedloop": "node --import ./scripts/tsx.mjs scripts/test-voicecall-closedloop.mts",
     "test:watch": "node --import ./scripts/tsx.mjs scripts/test-projects.mts --watch",
     "test:windows:ci": "pnpm test:windows:ci:1 && pnpm test:windows:ci:2",
-    "test:windows:ci:1": "node --import ./scripts/tsx.mjs scripts/test-projects.mts test/scripts/ci-platform-checkout.test.ts src/state/openclaw-state-ownership.test.ts src/snapshot/local-repository.windows.test.ts src/state/openclaw-database-paths.windows.test.ts src/node-host/invoke-system-run-allowlist.test.ts src/node-host/node-worker-transfer-client.test.ts packages/terminal-core/src/display-string.test.ts src/config/sessions/session-accessor.sqlite-archive.worker.test.ts src/commands/doctor-gateway-auth-token.windows.test.ts src/infra/state-migrations.audit-logs.windows.test.ts src/commands/backup-verify.test.ts src/commands/agents.commands.list.test.ts src/shared/runtime-import.test.ts src/shared/worker-bundle-archive.test.ts src/node-host/node-worker-bundle-installer.test.ts test/scripts/direct-run-entrypoints.test.ts test/scripts/format-generated-module.test.ts test/scripts/install-ps1.test.ts test/scripts/openclaw-cross-os-installer.windows.test.ts test/scripts/openclaw-cross-os-release-workflow.test.ts test/scripts/pnpm-runner.test.ts test/scripts/run-with-env.test.ts test/scripts/ui.test.ts test/scripts/vitest-process-group.test.ts src/agents/tools/media-tool-file-url.windows.test.ts extensions/memory-core/src/memory-extra-file-path.windows.test.ts src/daemon/schtasks.startup-fallback.test.ts src/plugin-sdk/node-host.test.ts test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts extensions/lobster/src/lobster-runner.test.ts src/gateway/worker-environments/workspace-quiescence.windows.test.ts",
-    "test:windows:ci:2": "node --import ./scripts/tsx.mjs scripts/test-projects.mts src/infra/sqlite-snapshot.test.ts src/infra/ports.test.ts src/infra/advertised-lan-host.windows.test.ts src/infra/update-managed-service-handoff-command.test.ts src/infra/update-managed-service-handoff-lifecycle.test.ts src/infra/executable-path.test.ts src/infra/fs-safe-remove.test.ts src/infra/state-migrations.legacy-session-store.test.ts src/infra/windows-install-roots.test.ts src/infra/ssh-client.windows.test.ts src/infra/exec-allowlist-pattern.test.ts src/infra/process-env.test.ts src/infra/openclaw-cli-shim.windows.test.ts src/agents/sessions/windows-git-bash-path.test.ts test/scripts/npm-runner.test.ts test/scripts/ts-topology.test.ts src/test-utils/openclaw-test-state.test.ts src/utils.test.ts src/media/local-media-path.windows.test.ts src/media/web-media.file-url.windows.test.ts src/process/exec.windows.test.ts src/process/exec.windows.integration.test.ts src/agents/sessions/exec.real.test.ts src/process/windows-command.test.ts src/process/terminal-pty.test.ts src/process/supervisor/supervisor.anchored-shell.real.test.ts src/tui/tui.resolve-codex-bin.test.ts src/media-understanding/attachments.file-url.windows.test.ts src/cli/daemon-cli/status.print.test.ts src/cli/mcp-cli.path-case.windows.test.ts src/auto-reply/usage-bar/template.windows.test.ts src/auto-reply/reply.triggers.trigger-handling.stages-inbound-media-into-sandbox-workspace.test.ts src/agents/provider-local-service.env-case.test.ts src/agents/bash-tools.exec.script-preflight.test.ts src/agents/agent-tools.read.windows.test.ts src/agents/agent-tools.read.host-operations.test.ts src/agents/sandbox/fs-paths.test.ts src/agents/sessions/tools/render-utils.test.ts src/agents/sessions/tools/path-utils.test.ts extensions/msteams/src/media-helpers.test.ts extensions/msteams/src/messenger.test.ts extensions/mxc/test/mxc-backend.test.ts extensions/mxc/test/sandbox-policy-loader.test.ts",
+    "test:windows:ci:1": "node --import ./scripts/tsx.mjs scripts/test-projects.mts src/state/openclaw-state-ownership.test.ts src/snapshot/local-repository.windows.test.ts src/state/openclaw-database-paths.windows.test.ts src/node-host/invoke-system-run-allowlist.test.ts src/node-host/node-worker-transfer-client.test.ts packages/terminal-core/src/display-string.test.ts src/config/sessions/session-accessor.sqlite-archive.worker.test.ts src/commands/doctor-gateway-auth-token.windows.test.ts src/infra/state-migrations.audit-logs.windows.test.ts src/commands/backup-verify.test.ts src/commands/agents.commands.list.test.ts src/gateway/gateway-cron-process-identity.windows.test.ts src/shared/runtime-import.test.ts src/shared/worker-bundle-archive.test.ts src/node-host/node-worker-bundle-installer.test.ts test/scripts/direct-run-entrypoints.test.ts test/scripts/format-generated-module.test.ts test/scripts/openclaw-cross-os-installer.windows.test.ts test/scripts/openclaw-cross-os-release-workflow.test.ts test/scripts/pnpm-runner.test.ts extensions/canvas/scripts/pnpm-runner.test.ts test/scripts/run-with-env.test.ts test/scripts/ui.test.ts test/scripts/vitest-process-group.test.ts test/scripts/vitest-worker-artifacts.test.ts src/agents/tools/media-tool-file-url.windows.test.ts extensions/memory-core/src/memory-extra-file-path.windows.test.ts src/daemon/schtasks.startup-fallback.test.ts src/plugin-sdk/node-host.test.ts test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts extensions/lobster/src/lobster-runner.test.ts src/gateway/worker-environments/workspace-quiescence.windows.test.ts",
+    "test:windows:ci:2": "node --import ./scripts/tsx.mjs scripts/test-projects.mts src/skills/runtime/refresh.windows.test.ts src/skills/runtime/refresh-watch-path.test.ts src/skills/runtime/refresh.missing-root.integration.test.ts src/infra/sqlite-snapshot.test.ts src/infra/ports.test.ts src/infra/advertised-lan-host.windows.test.ts src/infra/update-managed-service-handoff-command.test.ts src/infra/update-managed-service-handoff-lifecycle.test.ts src/infra/executable-path.test.ts src/infra/fs-safe-remove.test.ts src/infra/state-migrations.legacy-session-store.test.ts src/infra/windows-install-roots.test.ts src/infra/ssh-client.windows.test.ts src/infra/exec-allowlist-pattern.test.ts src/infra/process-env.test.ts src/infra/openclaw-cli-shim.windows.test.ts src/agents/sessions/windows-git-bash-path.test.ts test/scripts/npm-runner.test.ts test/scripts/ts-topology.test.ts test/scripts/vitest-worker-artifacts.transforms.test.ts test/scripts/ci-platform-checkout.test.ts test/scripts/install-ps1.test.ts test/scripts/write-plugin-sdk-entry-dts.test.ts src/test-utils/openclaw-test-state.test.ts src/utils.test.ts src/media/local-media-path.windows.test.ts src/media/web-media.file-url.windows.test.ts src/process/exec.windows.test.ts src/process/exec.windows.integration.test.ts src/agents/sessions/exec.real.test.ts src/process/windows-command.test.ts src/process/terminal-pty.test.ts src/process/supervisor/supervisor.anchored-shell.real.test.ts src/tui/tui.resolve-codex-bin.test.ts src/media-understanding/attachments.file-url.windows.test.ts src/cli/completion-runtime.windows.test.ts src/cli/daemon-cli/status.print.test.ts src/cli/mcp-cli.path-case.windows.test.ts src/auto-reply/usage-bar/template.windows.test.ts src/auto-reply/reply.triggers.trigger-handling.stages-inbound-media-into-sandbox-workspace.test.ts src/agents/provider-local-service.env-case.test.ts src/agents/bash-tools.exec.script-preflight.test.ts src/agents/agent-tools.read.windows.test.ts src/agents/agent-tools.read.host-operations.test.ts src/agents/sandbox/fs-paths.test.ts src/agents/sessions/tools/render-utils.test.ts src/agents/sessions/tools/path-utils.test.ts extensions/msteams/src/media-helpers.test.ts extensions/msteams/src/messenger.test.ts extensions/mxc/test/mxc-backend.test.ts extensions/mxc/test/sandbox-policy-loader.test.ts",
     "test:windows:schtasks:integration": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts CI_WINDOWS_SCHTASKS_INTEGRATION=1 OPENCLAW_E2E_SKIP_BUILD=1 OPENCLAW_E2E_VERBOSE=1 OPENCLAW_VITEST_MAX_WORKERS=1 -- node scripts/run-vitest.mjs src/daemon/schtasks.integration.e2e.test.ts",
     "tool-display:check": "node --import ./scripts/tsx.mjs scripts/tool-display.ts --check",
     "tool-display:write": "node --import ./scripts/tsx.mjs scripts/tool-display.ts --write",
@@ -2051,7 +2060,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.4.0",
-    "@anthropic-ai/claude-agent-sdk": "0.3.239",
+    "@anthropic-ai/claude-agent-sdk": "0.3.241",
     "@anthropic-ai/sdk": "0.120.0",
     "@clack/core": "1.4.3",
     "@clack/prompts": "1.7.0",
@@ -2081,7 +2090,7 @@
     "execa": "10.0.1",
     "express": "5.2.1",
     "file-type": "22.0.2",
-    "grammy": "1.45.1",
+    "grammy": "1.46.0",
     "highlight.js": "11.12.0",
     "hosted-git-info": "10.1.1",
     "iconv-lite": "0.7.3",
@@ -2108,11 +2117,11 @@
     "tar": "7.5.22",
     "tree-sitter-bash": "0.25.1",
     "tslog": "4.11.0",
-    "typebox": "1.3.16",
+    "typebox": "1.3.17",
     "typescript": "6.0.3",
     "undici": "8.10.0",
     "web-push": "3.6.7",
-    "web-tree-sitter": "0.26.12",
+    "web-tree-sitter": "0.26.13",
     "ws": "8.21.3",
     "yaml": "2.9.0",
     "zod": "4.4.3"
@@ -2153,6 +2162,7 @@
     "oxfmt": "0.60.0",
     "oxlint": "1.79.0",
     "oxlint-tsgolint": "7.0.2001",
+    "pako": "3.0.1",
     "playwright": "1.62.1",
     "postcss": "8.5.26",
     "postcss-lit": "1.4.1",

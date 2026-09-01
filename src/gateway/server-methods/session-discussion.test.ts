@@ -25,7 +25,8 @@ vi.mock("../../auto-reply/reply/conversation-label-generator.js", () => ({
   generateConversationLabelWithFallback: mocks.generateConversationLabelWithFallback,
 }));
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  updateSessionEntry: mocks.updateSessionEntry,
+  patchSessionEntryCore: mocks.updateSessionEntry,
+  loadSessionEntry: () => mocks.loadSessionTarget()?.entry,
 }));
 vi.mock("../dashboard-session-title.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../dashboard-session-title.js")>();

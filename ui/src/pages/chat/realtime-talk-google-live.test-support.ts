@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { GoogleLiveRealtimeTalkTransport } from "./realtime-talk-google-live.ts";
+import { prepareRealtimeTalkTestInput } from "./realtime-talk-input.test-support.ts";
 import type {
   RealtimeTalkJsonPcmWebSocketSessionResult,
   RealtimeTalkTransportContext,
@@ -191,7 +192,7 @@ export function createClient(): RealtimeTalkTransportContext["client"] {
   return client;
 }
 
-export function createTransport(
+export async function createTransport(
   callbacks: RealtimeTalkTransportContext["callbacks"] = {},
   client = createClient(),
   inputDeviceId?: string,
@@ -201,10 +202,10 @@ export function createTransport(
       "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained",
     ),
     {
+      input: await prepareRealtimeTalkTestInput(inputDeviceId),
       callbacks,
       client,
       sessionKey: "main",
-      inputDeviceId,
     },
   );
 }

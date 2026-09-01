@@ -41,6 +41,9 @@ describe("chat composer steering queue", () => {
 
     const rows = container.querySelectorAll(".chat-queue__item");
     expect(rows).toHaveLength(1);
+    expect(container.querySelector(".chat-queue__global-state")?.textContent?.trim()).toBe(
+      "Queue paused. Retry or discard the earlier unconfirmed message in the conversation.",
+    );
     expect(rows[0]?.getAttribute("data-chat-queue-item")).toBe("reset");
     expect(rows[0]?.querySelector(".chat-queue__badge")?.textContent?.trim()).toBe(
       t("chat.queue.states.needsReview"),

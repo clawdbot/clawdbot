@@ -59,6 +59,7 @@ type OpenClawReleaseClawHubRuntimeStateArgs = {
   waitForClawHub: boolean;
   forceSkipClawHub: boolean;
   normalRunId?: string;
+  normalPublicationStaged?: boolean;
   bootstrapRunId?: string;
   bootstrapCompleted: boolean;
 };
@@ -202,7 +203,9 @@ export function buildOpenClawReleaseClawHubRuntimeState(
     args.bootstrapCompleted &&
     (normalRunId === undefined || args.waitForClawHub);
   const shouldSkipClawHubPackages =
-    args.forceSkipClawHub || !(shouldIncludeNormalRun || shouldVerifyClawHubPackages);
+    args.forceSkipClawHub ||
+    (normalRunId !== undefined && args.normalPublicationStaged === true) ||
+    !(shouldIncludeNormalRun || shouldVerifyClawHubPackages);
 
   const verifierArgs = shouldSkipClawHubPackages ? ["--skip-clawhub"] : [];
   if (shouldIncludeNormalRun) {
@@ -213,7 +216,9 @@ export function buildOpenClawReleaseClawHubRuntimeState(
   }
 
   let normalProofLine = "- plugin ClawHub publish: no normal OIDC candidates";
-  if (normalRunId !== undefined && args.waitForClawHub) {
+  if (normalRunId !== undefined && args.normalPublicationStaged === true) {
+    normalProofLine = `- plugin ClawHub submission: ${runUrl(repository, normalRunId)}; public artifact verification follows successful release-parent completion`;
+  } else if (normalRunId !== undefined && args.waitForClawHub) {
     normalProofLine = `- plugin ClawHub publish: ${runUrl(repository, normalRunId)}`;
   } else if (normalRunId !== undefined) {
     normalProofLine = `- plugin ClawHub publish: dispatched separately, not awaited by this proof: ${runUrl(repository, normalRunId)}`;

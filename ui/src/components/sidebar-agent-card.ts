@@ -27,16 +27,7 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
   onMenuPointerEnter?: (trigger: HTMLElement, event: PointerEvent) => void;
   @property({ attribute: false }) onMenuPointerLeave?: () => void;
 
-  private readonly avatarLoader = new AuthenticatedAvatarRouteLoader(() => {
-    if (this.isConnected) {
-      this.requestUpdate();
-    }
-  });
-
-  override disconnectedCallback() {
-    this.avatarLoader.reset();
-    super.disconnectedCallback();
-  }
+  private readonly avatarLoader = new AuthenticatedAvatarRouteLoader(this);
 
   override render() {
     return this.avatarLoader.withActiveRoutes(() => this.renderContent());

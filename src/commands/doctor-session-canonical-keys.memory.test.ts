@@ -81,9 +81,16 @@ describe("canonical SQLite session repair memory", () => {
     );
     await esbuild({
       bundle: true,
-      entryPoints: [fileURLToPath(canonicalMemoryTestSupportModuleUrl)],
+      entryPoints: { child: fileURLToPath(canonicalMemoryTestSupportModuleUrl) },
       format: "esm",
-      outfile: childPath,
+      // Keep generated source overhead out of the entry-data heap budget;
+      // preserve function/class names used by runtime dispatch and diagnostics.
+      minify: true,
+      keepNames: true,
+      outdir: bundleDir,
+      outExtension: { ".js": ".mjs" },
+      // Preserve lazy runtime imports so unused provider SDKs do not consume the child heap.
+      splitting: true,
       packages: "external",
       platform: "node",
       target: "node22",

@@ -9,6 +9,13 @@ import type {
   FlexText,
 } from "./types.js";
 
+function horizontalRow(
+  contents: FlexComponent[],
+  options: Pick<FlexBox, "margin" | "alignItems"> = {},
+): FlexBox {
+  return { type: "box", layout: "horizontal", contents, ...options };
+}
+
 /**
  * Create a media player card for Sonos, Spotify, Apple Music, etc.
  *
@@ -59,30 +66,30 @@ export function createMediaPlayerCard(params: {
   const statusItems: FlexComponent[] = [];
 
   if (isPlaying !== undefined) {
-    statusItems.push({
-      type: "box",
-      layout: "horizontal",
-      contents: [
-        {
-          type: "box",
-          layout: "vertical",
-          contents: [],
-          width: "8px",
-          height: "8px",
-          backgroundColor: isPlaying ? "#06C755" : "#CCCCCC",
-          cornerRadius: "4px",
-        } as FlexBox,
-        {
-          type: "text",
-          text: isPlaying ? "Now Playing" : "Paused",
-          size: "xs",
-          color: isPlaying ? "#06C755" : "#888888",
-          weight: "bold",
-          margin: "sm",
-        } as FlexText,
-      ],
-      alignItems: "center",
-    } as FlexBox);
+    statusItems.push(
+      horizontalRow(
+        [
+          {
+            type: "box",
+            layout: "vertical",
+            contents: [],
+            width: "8px",
+            height: "8px",
+            backgroundColor: isPlaying ? "#06C755" : "#CCCCCC",
+            cornerRadius: "4px",
+          } as FlexBox,
+          {
+            type: "text",
+            text: isPlaying ? "Now Playing" : "Paused",
+            size: "xs",
+            color: isPlaying ? "#06C755" : "#888888",
+            weight: "bold",
+            margin: "sm",
+          } as FlexText,
+        ],
+        { alignItems: "center" },
+      ),
+    );
   }
 
   if (source) {
@@ -115,13 +122,7 @@ export function createMediaPlayerCard(params: {
   ];
 
   if (statusItems.length > 0) {
-    bodyContents.push({
-      type: "box",
-      layout: "horizontal",
-      contents: statusItems,
-      margin: "lg",
-      alignItems: "center",
-    } as FlexBox);
+    bodyContents.push(horizontalRow(statusItems, { margin: "lg", alignItems: "center" }));
   }
 
   const bubble: FlexBubble = {
@@ -151,80 +152,56 @@ export function createMediaPlayerCard(params: {
   if (controls || extraActions?.length) {
     const footerContents: FlexComponent[] = [];
 
-    // Main playback controls with refined styling
     if (controls) {
       const controlButtons: FlexComponent[] = [];
 
-      if (controls.previous) {
-        controlButtons.push({
+      for (const [key, label, style] of [
+        ["previous", "⏮", "secondary"],
+        ["play", "▶", isPlaying ? "secondary" : "primary"],
+        ["pause", "⏸", isPlaying ? "primary" : "secondary"],
+        ["next", "⏭", "secondary"],
+      ] as const) {
+        const control = controls[key];
+        if (!control) {
+          continue;
+        }
+        const button: FlexButton = {
           type: "button",
-          action: postbackAction("⏮", controls.previous.data),
-          style: "secondary",
+          action: postbackAction(label, control.data),
+          style,
           flex: 1,
           height: "sm",
-        } as FlexButton);
-      }
-
-      if (controls.play) {
-        controlButtons.push({
-          type: "button",
-          action: postbackAction("▶", controls.play.data),
-          style: isPlaying ? "secondary" : "primary",
-          flex: 1,
-          height: "sm",
-          margin: controls.previous ? "md" : undefined,
-        } as FlexButton);
-      }
-
-      if (controls.pause) {
-        controlButtons.push({
-          type: "button",
-          action: postbackAction("⏸", controls.pause.data),
-          style: isPlaying ? "primary" : "secondary",
-          flex: 1,
-          height: "sm",
-          margin: controlButtons.length > 0 ? "md" : undefined,
-        } as FlexButton);
-      }
-
-      if (controls.next) {
-        controlButtons.push({
-          type: "button",
-          action: postbackAction("⏭", controls.next.data),
-          style: "secondary",
-          flex: 1,
-          height: "sm",
-          margin: controlButtons.length > 0 ? "md" : undefined,
-        } as FlexButton);
+        };
+        // Previous omits margin; the other controls retain an own property even when unset.
+        if (key !== "previous") {
+          button.margin = controlButtons.length > 0 ? "md" : undefined;
+        }
+        controlButtons.push(button);
       }
 
       if (controlButtons.length > 0) {
-        footerContents.push({
-          type: "box",
-          layout: "horizontal",
-          contents: controlButtons,
-        } as FlexBox);
+        footerContents.push(horizontalRow(controlButtons));
       }
     }
 
     // Extra actions
     if (extraActions?.length) {
-      footerContents.push({
-        type: "box",
-        layout: "horizontal",
-        contents: extraActions.slice(0, 2).map(
-          (action, index) =>
-            ({
-              type: "button",
-              action: postbackAction(truncateLineActionLabel(action.label, 15), action.data),
-              style: "secondary",
-              flex: 1,
-              height: "sm",
-              margin: index > 0 ? "md" : undefined,
-            }) as FlexButton,
+      footerContents.push(
+        horizontalRow(
+          extraActions.slice(0, 2).map(
+            (action, index) =>
+              ({
+                type: "button",
+                action: postbackAction(truncateLineActionLabel(action.label, 15), action.data),
+                style: "secondary",
+                flex: 1,
+                height: "sm",
+                margin: index > 0 ? "md" : undefined,
+              }) as FlexButton,
+          ),
+          { margin: "md" },
         ),
-        margin: "md",
-      } as FlexBox);
+      );
     }
 
     if (footerContents.length > 0) {
@@ -298,54 +275,34 @@ export function createAppleTvRemoteCard(params: {
     flex: 1,
   });
 
-  const dpadRows: FlexComponent[] = [
-    {
-      type: "box",
-      layout: "horizontal",
-      contents: [{ type: "filler" }, makeButton("↑", actionData.up), { type: "filler" }],
-    } as FlexBox,
-    {
-      type: "box",
-      layout: "horizontal",
-      contents: [
+  const controlRows: FlexComponent[] = [
+    horizontalRow([{ type: "filler" }, makeButton("↑", actionData.up), { type: "filler" }]),
+    horizontalRow(
+      [
         makeButton("←", actionData.left),
         makeButton("OK", actionData.select, "primary"),
         makeButton("→", actionData.right),
       ],
+      { margin: "md" },
+    ),
+    horizontalRow([{ type: "filler" }, makeButton("↓", actionData.down), { type: "filler" }], {
       margin: "md",
-    } as FlexBox,
-    {
-      type: "box",
-      layout: "horizontal",
-      contents: [{ type: "filler" }, makeButton("↓", actionData.down), { type: "filler" }],
+    }),
+    horizontalRow([makeButton("Menu", actionData.menu), makeButton("Home", actionData.home)], {
+      margin: "lg",
+    }),
+    horizontalRow([makeButton("Play", actionData.play), makeButton("Pause", actionData.pause)], {
       margin: "md",
-    } as FlexBox,
+    }),
+    horizontalRow(
+      [
+        makeButton("Vol +", actionData.volumeUp),
+        makeButton("Mute", actionData.mute),
+        makeButton("Vol -", actionData.volumeDown),
+      ],
+      { margin: "md" },
+    ),
   ];
-
-  const menuRow: FlexComponent = {
-    type: "box",
-    layout: "horizontal",
-    contents: [makeButton("Menu", actionData.menu), makeButton("Home", actionData.home)],
-    margin: "lg",
-  } as FlexBox;
-
-  const playbackRow: FlexComponent = {
-    type: "box",
-    layout: "horizontal",
-    contents: [makeButton("Play", actionData.play), makeButton("Pause", actionData.pause)],
-    margin: "md",
-  } as FlexBox;
-
-  const volumeRow: FlexComponent = {
-    type: "box",
-    layout: "horizontal",
-    contents: [
-      makeButton("Vol +", actionData.volumeUp),
-      makeButton("Mute", actionData.mute),
-      makeButton("Vol -", actionData.volumeDown),
-    ],
-    margin: "md",
-  } as FlexBox;
 
   return {
     type: "bubble",
@@ -364,10 +321,7 @@ export function createAppleTvRemoteCard(params: {
           margin: "lg",
           color: "#EEEEEE",
         },
-        ...dpadRows,
-        menuRow,
-        playbackRow,
-        volumeRow,
+        ...controlRows,
       ],
       paddingAll: "xl",
       backgroundColor: "#FFFFFF",
@@ -398,10 +352,8 @@ export function createDeviceControlCard(params: {
 
   // Device header with status indicator
   const headerContents: FlexComponent[] = [
-    {
-      type: "box",
-      layout: "horizontal",
-      contents: [
+    horizontalRow(
+      [
         // Status dot
         {
           type: "box",
@@ -423,8 +375,8 @@ export function createDeviceControlCard(params: {
           margin: "md",
         } as FlexText,
       ],
-      alignItems: "center",
-    } as FlexBox,
+      { alignItems: "center" },
+    ),
   ];
 
   if (deviceType) {
@@ -507,12 +459,7 @@ export function createDeviceControlCard(params: {
         });
       }
 
-      rows.push({
-        type: "box",
-        layout: "horizontal",
-        contents: rowButtons,
-        margin: i > 0 ? "md" : undefined,
-      } as FlexBox);
+      rows.push(horizontalRow(rowButtons, { margin: i > 0 ? "md" : undefined }));
     }
 
     bubble.footer = {

@@ -83,7 +83,10 @@ import {
   normalizeCodeModeExecBeforeHookParams,
   reconcileCodeModeExecBeforeHookParams,
 } from "./code-mode-control-tools.js";
-import { attachInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
+import {
+  appendToolLoopWarning,
+  attachInternalToolExecutionPreparer,
+} from "./runtime/internal-hooks.js";
 import { buildToolMutationState } from "./tool-mutation.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import {
@@ -218,8 +221,7 @@ export function recordAdjustedParamsForToolCall(
   if (!cloneResult.ok) {
     return;
   }
-  const adjustedParamsKey = buildAdjustedParamsKey({ runId, toolCallId });
-  adjustedParamsByToolCallId.set(adjustedParamsKey, cloneResult.value);
+  adjustedParamsByToolCallId.set(buildAdjustedParamsKey({ runId, toolCallId }), cloneResult.value);
   pruneMapToMaxSize(adjustedParamsByToolCallId, MAX_TRACKED_ADJUSTED_PARAMS);
 }
 
@@ -286,10 +288,6 @@ export function buildBlockedToolResult(params: {
   preExecutionBlockedToolResults.add(result);
   return result;
 }
-
-// Build the private (trusted-listener-only) tool content payload for a tool
-// execution diagnostic event. Raw args/results never ride the public event bus;
-// consumers (e.g. diagnostics-otel) bound and redact before export.
 
 export function wrapToolWithBeforeToolCallHook(
   tool: AnyAgentTool,
@@ -526,6 +524,7 @@ export function wrapToolWithBeforeToolCallHook(
       }
       // Host capabilities can close while hooks, approval, validation, or
       // steering awaits. Recheck at the final synchronous source boundary.
+      signal?.throwIfAborted();
       runAgentToolSourceExecutionGuard(tool);
       onImplementationStart?.();
       recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
@@ -599,11 +598,10 @@ export function wrapToolWithBeforeToolCallHook(
               toolCallId,
             });
           }
-          const terminalEvent = resolveToolResultTerminalDiagnostic(result, durationMs);
           emitTrustedDiagnosticEventWithPrivateData(
             {
               ...eventBase,
-              ...terminalEvent,
+              ...resolveToolResultTerminalDiagnostic(result, durationMs),
             },
             buildToolContentPrivateData(toolContentPolicy, {
               input: executeParams,
@@ -612,7 +610,8 @@ export function wrapToolWithBeforeToolCallHook(
             }),
           );
         }
-        return result;
+        // Keep loop hashes and diagnostics on the raw outcome; this note is model feedback only.
+        return outcome.loopWarning ? appendToolLoopWarning(result, outcome.loopWarning) : result;
       } catch (err) {
         if (hookOptions.emitDiagnostics) {
           emitTrustedDiagnosticEventWithPrivateData(

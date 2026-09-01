@@ -34,6 +34,7 @@ import type {
   SkillWorkshopRunOptions,
 } from "../../../skills/workshop/types.js";
 import type { AdmittedRunContext, PreparedAgentRunAdmission } from "../../admitted-run-context.js";
+import type { ModelFallbackAvailability } from "../../agent-scope.js";
 import type { ExecApprovalContinuationPromptRange } from "../../bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../../bootstrap-mode.js";
@@ -106,6 +107,8 @@ export type RunEmbeddedAgentParams = {
   promptCacheKey?: string;
   /** Session-like key for sandbox and tool-policy resolution. Defaults to sessionKey. */
   sandboxSessionKey?: string;
+  /** Explicit sandbox and tool-policy owner when the policy session key is unscoped. */
+  sandboxAgentId?: string;
   agentId?: string;
   messageChannel?: string;
   messageProvider?: string;
@@ -267,6 +270,8 @@ export type RunEmbeddedAgentParams = {
   modelThinkingCapability?: PreparedModelThinkingCapability;
   /** Effective model fallback chain for this session attempt. Undefined uses config defaults. */
   modelFallbacksOverride?: string[];
+  /** Prepared fallback availability fact shared by selection and failure reporting. */
+  modelFallbackAvailability?: ModelFallbackAvailability;
   /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
   agentHarnessId?: string;
   /** True when the pinned non-default harness owns model selection for this session. */
@@ -473,6 +478,7 @@ export type RunEmbeddedAgentParams = {
 export type EmbeddedForegroundPromptContext = Pick<
   RunEmbeddedAgentParams,
   | "agentDir"
+  | "sandboxAgentId"
   | "promptCacheKey"
   | "reasoningLevel"
   | "messageChannel"

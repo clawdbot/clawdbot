@@ -1,20 +1,15 @@
 import { getSafeSessionStorage } from "../../local-storage.ts";
-import { hasUiSessionDefaults } from "../sessions/session-key.ts";
+import { resolveUiConversationIdentity, hasUiSessionDefaults } from "../sessions/session-key.ts";
 import {
   observeOutboxRecoveryOwner,
   outboxPayloadMatchesOwner,
 } from "./outbox-payload-store.runtime.ts";
 import { normalizeStoredSession } from "./outbox-store-codec.ts";
-import {
-  nextDraftRevision,
-  rememberedDraftAttempt,
-  rememberedDraftRevision,
-} from "./outbox-store-draft-state.ts";
+import { nextDraftRevision, readDraftRevisionState } from "./outbox-store-draft-state.ts";
 import {
   notifyStoredChatOutboxChanges,
   readStoredOutboxStore,
   resolvePendingComposerSessions,
-  resolveStoredChatOutboxScope,
   storedChatOutboxScopeKey,
   storageTargetForGateway,
   writeStoredOutboxStore,
@@ -62,7 +57,7 @@ export function captureChatOutboxRecoveryDestination(
   const store = readStoredOutboxStore(storage, target);
   resolvePendingComposerSessions(store, state);
   const storeSessionKey = storedChatOutboxScopeKey(
-    resolveStoredChatOutboxScope(state, scope.sessionKey, scope.agentId),
+    resolveUiConversationIdentity(state, scope.sessionKey, scope.agentId),
   );
   const session = store.sessions[storeSessionKey] ?? null;
   return {
@@ -70,11 +65,8 @@ export function captureChatOutboxRecoveryDestination(
     gatewayOwner: target.gatewayOwner,
     recoveryScope: observeOutboxRecoveryOwner(state),
     session: JSON.stringify(session),
-    revision: Math.max(
-      session?.draftRevision ?? 0,
-      rememberedDraftRevision(storage, target.key, storeSessionKey),
-      rememberedDraftAttempt(storage, target.key, storeSessionKey),
-    ),
+    revision: readDraftRevisionState(storage, target.key, storeSessionKey, session?.draftRevision)
+      .latestAttempt,
   };
 }
 
@@ -102,7 +94,7 @@ export function restoreChatOutboxRecovery(
     ) {
       return "conflict";
     }
-    const scope = resolveStoredChatOutboxScope(
+    const scope = resolveUiConversationIdentity(
       state,
       destination.scope.sessionKey,
       destination.scope.agentId,

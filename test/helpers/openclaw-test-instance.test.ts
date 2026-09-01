@@ -1,4 +1,5 @@
 // OpenClaw test instance tests cover spawned test instance lifecycle.
+import { AsyncLocalStorage, createHook } from "node:async_hooks";
 import { spawn } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import fs from "node:fs/promises";
@@ -190,6 +191,14 @@ const env = Object.fromEntries(["HOME", "OPENCLAW_CONFIG_PATH", "OPENCLAW_GATEWA
 appendFileSync(tracePath, JSON.stringify({ argv, config: JSON.parse(readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8")), cwd: process.cwd(), env, pid: process.pid, port }) + "\\n");
 const kind = (process.env.OPENCLAW_FAKE_GATEWAY_SEQUENCE || "ready").split(",")[attempt - 1] || "ready";
 process.stdout.write("fake gateway attempt " + attempt + "\\n");
+if (kind === "cli") {
+  process.stderr.write("cli diagnostic\\n");
+  if (argv[0] === "wait") {
+    setInterval(() => {}, 1_000);
+    await new Promise(() => {});
+  }
+  process.exit(Number(argv[0]));
+}
 const refusal = ${JSON.stringify(MIGRATION_CONVERGENCE_REFUSAL)};
 if (kind === "refuse") { process.stderr.write(refusal + " fixture\\n"); process.exit(1); }
 if (kind === "late-refuse") {
@@ -284,6 +293,61 @@ function createGatewayProcessState(
 }
 
 describe("openclaw test instance", () => {
+  it.each([
+    { mode: "0", prepare: false },
+    { mode: "7", prepare: false },
+    { mode: "wait", prepare: false },
+    { mode: "0", prepare: true },
+  ])("releases the CLI deadline after $mode (prepare=$prepare)", async ({ mode, prepare }) => {
+    const control = prepare ? await createGatewayControl() : undefined;
+    await control?.release();
+    const preparation = control ? { url: control.url, holdPreparation: true } : undefined;
+    const { instance, readAttempts } = await createFakeGateway("cli", 1_000, 1_500, preparation);
+    const scope = new AsyncLocalStorage<boolean>();
+    const timers = new Map<number, NodeJS.Timeout>();
+    const hook = createHook({
+      init(id, type, _trigger, resource) {
+        if (type === "Timeout" && scope.getStore()) {
+          // Node's Timeout async resource is the cancellable timer handle.
+          timers.set(id, resource as NodeJS.Timeout);
+        }
+      },
+      destroy(id) {
+        timers.delete(id);
+      },
+    });
+    hook.enable();
+    try {
+      const timeoutMs = mode === "wait" ? 1_000 : 30_000;
+      const command = trackOperation(scope.run(true, () => instance.cli([mode], { timeoutMs })));
+      if (mode === "wait") {
+        await expect(command).rejects.toThrow(`command timed out after ${timeoutMs}ms`);
+      } else {
+        await expect(command).resolves.toEqual({
+          code: Number(mode),
+          signal: null,
+          stdout: "fake gateway attempt 1\n",
+          stderr: "cli diagnostic\n",
+        });
+      }
+      const attempts = await readAttempts();
+      expect(attempts).toHaveLength(1);
+      expect(isProcessAlive(attempts[0]!.pid)).toBe(false);
+      // Deliver Node's queued destroy hooks; elapsed wall time is not the oracle.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(timers.size, "completed CLI invocation retained a deadline").toBe(0);
+    } finally {
+      hook.disable();
+      scope.disable();
+      // Retain the failing assertion while releasing only this invocation's timers.
+      for (const timer of timers.values()) {
+        clearTimeout(timer);
+      }
+    }
+  });
+
   it("joins concurrent starts until the real readiness response arrives", async () => {
     const control = await createGatewayControl();
     const { instance } = await createFakeGateway("held-ready", 1_000, 1_500, control);
@@ -777,45 +841,122 @@ describe("openclaw test instance", () => {
     },
   );
 
-  it("force-kills Windows gateway descendants before retry cleanup settles", async () => {
+  it.each([true, false])(
+    "joins Windows gateway closure before retry cleanup (inherited pipes=%s)",
+    async (inheritedPipes) => {
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      const kill = vi.fn(() => true);
+      // SAFETY: The stub supplies every process and pipe member consumed by the stopper.
+      const child = {
+        exitCode: 1,
+        kill,
+        pid: 12345,
+        signalCode: null,
+        stderr,
+        stdout,
+      } as unknown as Parameters<typeof testing.stopGatewayProcess>[0];
+      const closePipes = () => {
+        stdout.destroy();
+        stderr.destroy();
+      };
+      const runTaskkill = vi.fn(() => {
+        closePipes();
+        return { status: 0 };
+      });
+      if (!inheritedPipes) {
+        setImmediate(closePipes);
+      }
+
+      await expect(
+        testing.stopGatewayProcess(child, Date.now() + 500, 250, {
+          forceWindowsTree: true,
+          platform: "win32",
+          runTaskkill,
+        }),
+      ).resolves.toBe(true);
+
+      if (inheritedPipes) {
+        expect(runTaskkill).toHaveBeenCalledOnce();
+        expect(runTaskkill).toHaveBeenCalledWith(
+          path.win32.join("C:\\Windows", "System32", "taskkill.exe"),
+          ["/PID", "12345", "/T", "/F"],
+          {
+            killSignal: "SIGKILL",
+            stdio: "ignore",
+            timeout: 10_000,
+          },
+        );
+      } else {
+        expect(runTaskkill).not.toHaveBeenCalled();
+      }
+      expect(kill).not.toHaveBeenCalled();
+      expect(stdout.closed).toBe(true);
+      expect(stderr.closed).toBe(true);
+    },
+  );
+
+  it.each([
+    { label: "joined closure", taskkillStatus: 0, closePipes: true, stopped: true },
+    { label: "held pipe", taskkillStatus: 0, closePipes: false, stopped: false },
+    { label: "unverified tree", taskkillStatus: 1, closePipes: true, stopped: false },
+  ])("observes Windows $label after blocking termination", async (scenario) => {
     const stdout = new PassThrough();
     const stderr = new PassThrough();
-    const kill = vi.fn(() => true);
-    const child = {
-      exitCode: 1,
-      kill,
+    const processState = createGatewayProcessState();
+    // SAFETY: The stub supplies every process and pipe member consumed by the stopper.
+    const child = Object.assign(processState, {
       pid: 12345,
-      signalCode: null,
-      stderr,
+      kill: vi.fn(() => true),
       stdout,
-    } as unknown as Parameters<typeof testing.stopGatewayProcess>[0];
+      stderr,
+    }) as unknown as Parameters<typeof testing.stopGatewayProcess>[0];
+    const observed = createDeferred();
+    const now = Date.now.bind(Date);
+    let offset = 0;
+    let scheduled = false;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + offset);
     const runTaskkill = vi.fn(() => {
-      stdout.destroy();
-      stderr.destroy();
-      return { status: 0 };
+      // A synchronous taskkill consumes wall time before Node can deliver exit/close.
+      offset += 1_000;
+      if (!scheduled) {
+        scheduled = true;
+        setImmediate(() => {
+          processState.exitCode = 0;
+          stdout.destroy();
+          if (scenario.closePipes) {
+            stderr.destroy();
+          }
+          observed.resolve();
+        });
+      }
+      return { status: scenario.taskkillStatus };
     });
-
-    await expect(
-      testing.stopGatewayProcess(child, Date.now() + 500, 250, {
-        forceWindowsTree: true,
+    try {
+      const stopped = await testing.stopGatewayProcess(child, Date.now() + 500, 250, {
         platform: "win32",
         runTaskkill,
-      }),
-    ).resolves.toBe(true);
-
-    expect(runTaskkill).toHaveBeenCalledOnce();
-    expect(runTaskkill).toHaveBeenCalledWith(
-      path.win32.join("C:\\Windows", "System32", "taskkill.exe"),
-      ["/PID", "12345", "/T", "/F"],
-      {
-        killSignal: "SIGKILL",
-        stdio: "ignore",
-        timeout: 10_000,
-      },
-    );
-    expect(kill).not.toHaveBeenCalled();
-    expect(stdout.closed).toBe(true);
-    expect(stderr.closed).toBe(true);
+      });
+      expect(stopped).toBe(scenario.stopped);
+      expect(runTaskkill).toHaveBeenCalledTimes(scenario.taskkillStatus === 0 ? 1 : 2);
+      if (!scenario.closePipes) {
+        expect(stderr.closed).toBe(false);
+      }
+      if (stopped) {
+        expect(child.exitCode).toBe(0);
+        expect(stdout.closed && stderr.closed).toBe(true);
+      }
+    } finally {
+      if (scheduled) {
+        await observed.promise;
+      }
+      const closed = Promise.all(
+        [stdout, stderr].map((pipe) => (pipe.closed ? Promise.resolve() : once(pipe, "close"))),
+      );
+      stdout.destroy();
+      stderr.destroy();
+      await closed.finally(() => clock.mockRestore());
+    }
   });
 
   it("keeps only bounded child output tails in helper logs", () => {
@@ -833,12 +974,6 @@ describe("openclaw test instance", () => {
     expect(logs).toContain("recent stderr");
     expect(logs).not.toContain("old stdout");
     expect(logs).not.toContain("old stderr");
-  });
-
-  it("treats signaled gateway children as exited", () => {
-    expect(testing.hasChildExited({ exitCode: null, signalCode: "SIGTERM" })).toBe(true);
-    expect(testing.hasChildExited({ exitCode: 0, signalCode: null })).toBe(true);
-    expect(testing.hasChildExited({ exitCode: null, signalCode: null })).toBe(false);
   });
 
   it("fails startup waits immediately after signaled gateway exits", async () => {

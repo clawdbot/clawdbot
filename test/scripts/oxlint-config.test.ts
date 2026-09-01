@@ -246,6 +246,122 @@ describe("oxlint config", () => {
     );
   });
 
+  it("keeps plugin tests in a bounded type-aware project without losing their types", () => {
+    const tempRoot = fs.realpathSync(createTempDir("openclaw-oxlint-extension-project-"));
+    for (const file of [
+      ".oxlintrc.json",
+      "tsconfig.json",
+      "extensions/tsconfig.package-boundary.base.json",
+      "extensions/tsconfig.package-boundary.paths.json",
+      "extensions/tsconfig.json",
+    ]) {
+      // A missing discovery config must fail on the selected project, not fixture setup.
+      if (fs.existsSync(file)) {
+        const target = path.join(tempRoot, file);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.copyFileSync(file, target);
+      }
+    }
+    fs.symlinkSync(path.resolve("node_modules"), path.join(tempRoot, "node_modules"), "junction");
+    const fixtures = {
+      "src/imported.ts": "export function work(): Promise<void> { return Promise.resolve(); }",
+      "src/unrelated.ts": "export const unrelated = 1;",
+      "src/contracts.d.ts": "declare function fromCore(): Promise<void>;",
+      "ui/contracts.d.ts": "declare function fromUi(): Promise<void>;",
+      "packages/contracts.d.ts": "declare function fromPackage(): Promise<void>;",
+      "extensions/contracts.d.ts": "declare function fromPlugin(): Promise<void>;",
+      "extensions/sample/tsconfig.json": JSON.stringify({
+        extends: "../tsconfig.package-boundary.base.json",
+      }),
+      "extensions/sample/src/runtime.ts": "export const stable = 1;",
+      "extensions/sample/src/owner.test.ts": [
+        'import { work } from "../../../src/imported.js";',
+        "work(); fromCore(); fromUi(); fromPackage(); fromPlugin();",
+      ].join("\n"),
+      "extensions/sample/src/test-support/helper.ts":
+        'export { work } from "../../../../src/imported.js";',
+    };
+    for (const [file, source] of Object.entries(fixtures)) {
+      const target = path.join(tempRoot, file);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, source);
+    }
+    const selected = [
+      "extensions/sample/src/runtime.ts",
+      "extensions/sample/src/owner.test.ts",
+      "extensions/sample/src/test-support/helper.ts",
+    ];
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.resolve("node_modules/oxlint/bin/oxlint"),
+        "--config",
+        ".oxlintrc.json",
+        "--type-aware",
+        "--format",
+        "json",
+        "--threads=1",
+        ...selected,
+      ],
+      {
+        cwd: tempRoot,
+        encoding: "utf8",
+        timeout: 10_000,
+        env: {
+          ...process.env,
+          OXC_LOG: "debug",
+          GOMAXPROCS: "2",
+          OXLINT_TSGOLINT_PATH: path.resolve(
+            "node_modules/.bin",
+            process.platform === "win32" ? "tsgolint.CMD" : "tsgolint",
+          ),
+        },
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(1);
+    const report = JSON.parse(result.stdout) as {
+      number_of_files: number;
+      diagnostics: Array<{ code: string }>;
+    };
+    expect(report.number_of_files).toBe(selected.length);
+    expect(
+      report.diagnostics.map((diagnostic) => diagnostic.code),
+      result.stdout,
+    ).toEqual(Array.from({ length: 5 }, () => "typescript(no-floating-promises)"));
+    for (const file of selected) {
+      const config = file.endsWith("/runtime.ts")
+        ? "extensions/sample/tsconfig.json"
+        : "extensions/tsconfig.json";
+      expect(result.stderr.replaceAll("\\", "/")).toContain(
+        `Got tsconfig for file ${path.join(tempRoot, file).replaceAll("\\", "/")}: ${path.join(tempRoot, config).replaceAll("\\", "/")}`,
+      );
+    }
+    const project = spawnSync(
+      process.execPath,
+      [
+        path.resolve("node_modules/@typescript/native-preview/bin/tsgo"),
+        "--showConfig",
+        "--project",
+        "extensions/tsconfig.json",
+      ],
+      { cwd: tempRoot, encoding: "utf8", timeout: 10_000 },
+    );
+    expect(project.error).toBeUndefined();
+    expect(project.status, project.stdout + project.stderr).toBe(0);
+    const parsedProject = JSON.parse(project.stdout) as { files: string[] };
+    expect(parsedProject.files).not.toContain("../src/unrelated.ts");
+    expect(parsedProject.files).toEqual(
+      expect.arrayContaining([
+        "../src/contracts.d.ts",
+        "../ui/contracts.d.ts",
+        "../packages/contracts.d.ts",
+        "./contracts.d.ts",
+        ...selected.map((file) => `./${file.slice("extensions/".length)}`),
+      ]),
+    );
+  });
+
   it("includes bundled extensions in type-aware lint coverage", () => {
     const tsconfig = readJson("config/tsconfig/oxlint.json") as OxlintTsconfig;
 
@@ -267,13 +383,6 @@ describe("oxlint config", () => {
     expect(tsconfig.include).toContain("**/*.mts");
     expect(tsconfig.exclude ?? []).not.toContain("**/*.ts");
     expect(tsconfig.exclude ?? []).not.toContain("**/*.mts");
-  });
-
-  it("has a discoverable test tsconfig for type-aware linting", () => {
-    const tsconfig = readJson("test/tsconfig.json") as OxlintTsconfig;
-
-    expect(tsconfig.include).toContain("**/*.ts");
-    expect(tsconfig.exclude ?? []).not.toContain("**/*.ts");
   });
 
   it("does not ignore the bundled extensions tree", () => {

@@ -148,14 +148,14 @@ describe("pw-session refLocator", () => {
     expect(mocks.locator).toHaveBeenCalledWith("aria-ref=e1");
   });
 
-  it("uses backend-marked DOM locators for ax refs", () => {
+  it.each(["e1", "ax12"])("uses backend-marked DOM locators for %s refs", (ref) => {
     const { page, mocks } = fakePage();
     const state = ensurePageState(page);
-    state.roleRefs = { ax12: { role: "button", name: "OK", domMarker: true } };
+    state.roleRefs = { [ref]: { role: "button", name: "OK", domMarker: true } };
 
-    refLocator(page, "ax12");
+    refLocator(page, ref);
 
-    expect(mocks.locator).toHaveBeenCalledWith(`[${BROWSER_REF_MARKER_ATTRIBUTE}="ax12"]`);
+    expect(mocks.locator).toHaveBeenCalledWith(`[${BROWSER_REF_MARKER_ATTRIBUTE}="${ref}"]`);
   });
 
   it("rejects unknown ax refs instead of timing out on aria-ref locators", () => {
@@ -799,7 +799,7 @@ describe("pw-session ensurePageState", () => {
 
     const consoleEntry = state.console.at(-1);
     const errorEntry = state.errors.at(-1);
-    const request = state.requests.at(-1);
+    const request = [...state.requests.values()].at(-1);
     for (const value of [
       consoleEntry?.type,
       consoleEntry?.text,
@@ -829,7 +829,7 @@ describe("pw-session ensurePageState", () => {
     expect(state2).not.toBe(state1);
     expect(state2.console).toStrictEqual([]);
     expect(state2.errors).toStrictEqual([]);
-    expect(state2.requests).toStrictEqual([]);
+    expect(state2.requests).toStrictEqual(new Map());
   });
 
   it.each([

@@ -12,6 +12,9 @@ minimumReleaseAgeStrict: true
 minimumReleaseAgeExclude:
   - "@openai/codex"
   - "@openai/codex-*"
+  # Bot API 10.3 types replace OpenClaw's temporary rich-message bridge.
+  - "@grammyjs/types@5.0.0"
+  - "grammy@1.46.0"
 
 nodeLinker: hoisted
 # GWTs share node_modules; script commands must not reconcile that shared install.
@@ -19,6 +22,9 @@ verifyDepsBeforeRun: false
 blockExoticSubdeps: true
 
 overrides:
+  # Memory LanceDB supplies vectors; WhatsApp prepares thumbnails with Rastermill.
+  "@lancedb/lancedb>@huggingface/transformers": "-"
+  "baileys>sharp": "-"
   "@agentclientprotocol/codex-acp@1.6.2>@openai/codex": 0.151.0
   "@codemirror/commands@6.11.0>@codemirror/view": 6.43.9
   "@anthropic-ai/sdk": 0.120.0
@@ -29,7 +35,7 @@ overrides:
   "@aws-sdk/xml-builder": 3.972.40
   "@hono/node-server": 2.1.1
   axios: 1.19.0
-  fast-uri: 4.1.2
+  fast-uri: 4.1.3
   follow-redirects: 1.16.0
   defu: 6.1.7
   fast-xml-parser: 5.11.0
@@ -46,9 +52,8 @@ overrides:
   minimatch: 10.2.6
   path-to-regexp: 8.4.2
   qs: 6.15.3
-  sharp: 0.35.3
   node-domexception: "npm:@nolyfill/domexception@1.0.28"
-  typebox: 1.3.16
+  typebox: 1.3.17
   tar: 7.5.22
   tough-cookie: 6.0.2
   "tsdown>rolldown-plugin-dts": 0.28.2
@@ -69,9 +74,7 @@ allowBuilds:
   "@discordjs/opus": false
   esbuild: true
   koffi: false
-  onnxruntime-node: false
   protobufjs: true
-  sharp: true
   tree-sitter-bash: false
   openclaw: true
   "@openclaw/proxyline": true
@@ -80,6 +83,7 @@ allowBuilds:
   rastermill: true
   node-pty: true
 
+# The transient npm lock generator also needs the peer marked optional.
 packageExtensions:
   baileys:
     peerDependenciesMeta:
@@ -87,5 +91,7 @@ packageExtensions:
         optional: true
 
 patchedDependencies:
+  "@awesome.me/webawesome@3.12.0": patches/@awesome.me__webawesome@3.12.0.patch
   "@vitest/runner@4.1.11": patches/@vitest__runner@4.1.11.patch
   "vitest@4.1.11": patches/vitest@4.1.11.patch
+  "matrix-js-sdk@42.2.0": patches/matrix-js-sdk@42.2.0.patch

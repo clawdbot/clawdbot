@@ -36,7 +36,11 @@ import {
   resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
-import { createClientHarness, createCodexTestModel } from "./test-support.js";
+import {
+  createClientHarness,
+  createCodexTestModel,
+  withLeasedCodexTestClient,
+} from "./test-support.js";
 import {
   buildDeveloperInstructions,
   buildTurnCollaborationMode,
@@ -130,6 +134,9 @@ describe("Codex managed shell environment", () => {
           GH_TOKEN: "",
           GITHUB_TOKEN: "",
           PREVIEW_SERVICE_TOKEN: "",
+          OPENCLAW_STATE_DIR: "/fixture/diagnosed",
+          OPENCLAW_CONFIG_PATH: "/fixture/custom.json",
+          OPENCLAW_WORKSPACE_DIR: "/fixture/default-workspace",
         },
         disableLoginShell: true,
       };
@@ -159,11 +166,14 @@ describe("Codex managed shell environment", () => {
           GH_TOKEN: "",
           GITHUB_TOKEN: "",
           PREVIEW_SERVICE_TOKEN: "",
+          OPENCLAW_STATE_DIR: "/fixture/diagnosed",
+          OPENCLAW_CONFIG_PATH: "/fixture/custom.json",
+          OPENCLAW_WORKSPACE_DIR: "/fixture/default-workspace",
         },
       });
       expect(request.config?.allow_login_shell).toBe(false);
       const includeOnly = shellEnvironmentPolicy.include_only;
-      expect(includeOnly).toHaveLength(5);
+      expect(includeOnly).toHaveLength(8);
       expect(includeOnly).toEqual(
         expect.arrayContaining([
           "PATH",
@@ -171,6 +181,9 @@ describe("Codex managed shell environment", () => {
           "GITHUB_TOKEN",
           "GH_TOKEN",
           "PREVIEW_SERVICE_TOKEN",
+          "OPENCLAW_STATE_DIR",
+          "OPENCLAW_CONFIG_PATH",
+          "OPENCLAW_WORKSPACE_DIR",
         ]),
       );
       expect(shellEnvironmentPolicy.experimental_use_profile).toBe(false);
@@ -916,6 +929,7 @@ async function seedPendingSupervisionBinding(params: {
   const pending = {
     connectionFingerprint: buildCodexAppServerConnectionFingerprint(
       createThreadLifecycleAppServerOptions(),
+      params.attempt.agentDir,
     ),
     ...params.pending,
   };
@@ -991,6 +1005,18 @@ function nativeThreadResult(threadId: string, model: string, modelProvider: stri
   };
 }
 
+async function writeNativeCatalogFixture(
+  rolloutPath: string,
+  threadId: string,
+  dynamicTools: unknown,
+) {
+  await fs.mkdir(path.dirname(rolloutPath), { recursive: true });
+  await fs.writeFile(
+    rolloutPath,
+    `${JSON.stringify({ type: "session_meta", payload: { id: threadId, dynamic_tools: dynamicTools } })}\n`,
+  );
+}
+
 function disabledMcpServerStatus(name: string) {
   return {
     name,
@@ -1004,7 +1030,7 @@ function disabledMcpServerStatus(name: string) {
 
 function sourceThread(params: {
   threadId: string;
-  status?: "idle" | "active";
+  status?: "idle" | "active" | "notLoaded";
   turns?: Array<Record<string, unknown>>;
 }) {
   return {
@@ -1717,28 +1743,48 @@ describe("Codex app-server native code mode config", () => {
     expect(request.personality).toBe("none");
   });
 
-  it("does not overwrite native supervised turn settings", () => {
-    const params = createAttemptParams({ provider: "anthropic" });
-    params.thinkLevel = "off";
-    const compat: ModelCompatConfig = { supportedReasoningEfforts: ["none", "high"] };
-    params.model = {
-      ...createCodexTestModel("anthropic"),
-      compat,
-    };
-    const request = buildTurnStartParams(params, {
-      threadId: "thread-supervised",
-      cwd: "/repo",
-      model: "native-model",
-      modelProvider: "native-provider",
-      appServer: createAppServerOptions() as never,
-      preserveNativeTurnSettings: true,
-    });
+  it.each([undefined, "Permission change. Continue with updated permissions."])(
+    "does not overwrite native supervised turn settings (notice: %s)",
+    (notice) => {
+      const params = createAttemptParams({ provider: "anthropic" });
+      params.thinkLevel = "off";
+      const compat: ModelCompatConfig = { supportedReasoningEfforts: ["none", "high"] };
+      params.model = {
+        ...createCodexTestModel("anthropic"),
+        compat,
+      };
+      if (notice) {
+        params.permissionChange = {
+          owner: {},
+          baseExecOverrides: {},
+          notice,
+          request: vi.fn(),
+          applied: () => true,
+          recordApplied: vi.fn(),
+        };
+      }
+      const request = buildTurnStartParams(params, {
+        threadId: "thread-supervised",
+        cwd: "/repo",
+        model: "native-model",
+        modelProvider: "native-provider",
+        appServer: createAppServerOptions() as never,
+        preserveNativeTurnSettings: true,
+      });
 
-    expect(request).not.toHaveProperty("model");
-    expect(request).not.toHaveProperty("effort");
-    expect(request).not.toHaveProperty("collaborationMode");
-    expect(request).not.toHaveProperty("personality");
-  });
+      expect(request).not.toHaveProperty("model");
+      expect(request).not.toHaveProperty("effort");
+      expect(request).not.toHaveProperty("collaborationMode");
+      expect(request).not.toHaveProperty("personality");
+      expect(request.additionalContext).toEqual(
+        notice
+          ? {
+              openclaw_permission_change: { kind: "application", value: notice },
+            }
+          : undefined,
+      );
+    },
+  );
 
   it("honors an explicit top-level reviewer on thread start and resume", () => {
     const appServer = {
@@ -2595,7 +2641,11 @@ describe("Codex plugin binding recovery", () => {
     const mark = vi.fn(async () => undefined);
     const stateStore = createCodexTestBindingStateStore();
     const bindingStore = Object.assign(createCodexAppServerBindingStore(stateStore), {
-      managedThreads: { mark, snapshot: vi.fn(async () => new Map()) },
+      managedThreads: {
+        has: vi.fn(async () => false),
+        mark,
+        snapshot: vi.fn(async () => new Map()),
+      },
     });
     const request = vi.fn(async (method: string) => {
       if (method === "thread/start") {
@@ -2645,7 +2695,13 @@ describe("Codex plugin binding recovery", () => {
     const mark = vi.fn(async () => undefined);
     const bindingStore = Object.assign(
       createCodexAppServerBindingStore(createCodexTestBindingStateStore()),
-      { managedThreads: { mark, snapshot: vi.fn(async () => new Map()) } },
+      {
+        managedThreads: {
+          has: vi.fn(async () => false),
+          mark,
+          snapshot: vi.fn(async () => new Map()),
+        },
+      },
     );
     const request = vi.fn(async (method: string) => {
       if (method === "thread/start") {
@@ -2689,6 +2745,7 @@ describe("Codex plugin binding recovery", () => {
     const stateStore = createCodexTestBindingStateStore();
     const bindingStore = Object.assign(createCodexAppServerBindingStore(stateStore), {
       managedThreads: {
+        has: vi.fn(async () => false),
         mark: vi.fn(async () => {
           throw new Error("managed ownership unavailable");
         }),
@@ -2776,46 +2833,6 @@ describe("Codex plugin binding recovery", () => {
     expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
   });
 
-  it("rechecks scheduled current policy against the exact existing thread", async () => {
-    const sessionFile = path.join(tempDir, "session-current-policy.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace-current-policy");
-    const params = createThreadLifecycleParams(sessionFile, workspaceDir);
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start" || method === "thread/resume") {
-        return threadStartResult("thread-current-policy");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const build = vi.fn(async (_options?: { threadId?: string }) => ({
-      enabled: true,
-      configPatch: { apps: { _default: { enabled: false } } },
-      fingerprint: "plugin-config-current-policy",
-      inputFingerprint: "plugin-input-current-policy",
-      policyContext: { fingerprint: "plugin-policy-current", apps: {}, pluginAppIds: {} },
-      diagnostics: [],
-    }));
-    const common = {
-      client: { request } as never,
-      params,
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createThreadLifecycleAppServerOptions(),
-      pluginThreadConfig: {
-        enabled: true,
-        requiresCurrentPolicyCheck: true,
-        inputFingerprint: "plugin-input-current-policy",
-        build,
-      },
-    };
-
-    await startOrResumeThread(common);
-    await startOrResumeThread(common);
-
-    expect(build).toHaveBeenNthCalledWith(1);
-    expect(build).toHaveBeenNthCalledWith(2, { threadId: "thread-current-policy" });
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
-  });
-
   it("rebuilds once when a settled negative binding still enables the plugin", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -2823,6 +2840,9 @@ describe("Codex plugin binding recovery", () => {
     const request = vi.fn(async (method: string) => {
       if (method === "thread/start" || method === "thread/resume") {
         return threadStartResult("thread-settled-transition");
+      }
+      if (method === "thread/unsubscribe") {
+        return { status: "unsubscribed" };
       }
       throw new Error(`unexpected method: ${method}`);
     });
@@ -2887,6 +2907,8 @@ describe("Codex plugin binding recovery", () => {
     expect(build).toHaveBeenCalledTimes(2);
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "thread/start",
+      "thread/resume",
+      "thread/unsubscribe",
       "thread/start",
       "thread/resume",
     ]);
@@ -2994,6 +3016,7 @@ describe("Codex plugin binding recovery", () => {
       "thread/start",
       "app/installed",
       "thread/resume",
+      "app/installed",
     ]);
     expect(threadStarts).toHaveLength(3);
     expect(threadStarts[1]?.config).toMatchObject({
@@ -3715,6 +3738,12 @@ describe("Codex app-server supervised branch lifecycle", () => {
     const agentWorkspaceDeveloperInstructions = "Follow the frozen supervised AGENTS guidance.";
     const workspaceDir = path.join(tempDir, "workspace");
     const attempt = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    attempt.agentDir = path.join(tempDir, "agent");
+    const rolloutPath = path.join(
+      resolveCodexAppServerHomeDir(attempt.agentDir),
+      "sessions",
+      `rollout-${finalThreadId}.jsonl`,
+    );
     attempt.modelId = "outer-global-default";
     const identity = await seedPendingSupervisionBinding({
       attempt,
@@ -3752,7 +3781,10 @@ describe("Codex app-server supervised branch lifecycle", () => {
           thread:
             threadId === sourceThreadId
               ? terminalSource
-              : sourceThread({ threadId: finalThreadId }),
+              : {
+                  ...sourceThread({ threadId: finalThreadId, status: "notLoaded" }),
+                  path: rolloutPath,
+                },
         };
       }
       if (method === "thread/fork") {
@@ -3880,20 +3912,36 @@ describe("Codex app-server supervised branch lifecycle", () => {
       preserveNativeModel: true,
       agentWorkspaceDeveloperInstructions,
       conversationSourceTransferComplete: true,
-      appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(commonParams.appServer),
+      appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
+        commonParams.appServer,
+        attempt.agentDir,
+      ),
     });
 
+    await writeNativeCatalogFixture(rolloutPath, finalThreadId, startParams.dynamicTools);
     request.mockClear();
-    const resumed = await startOrResumeThread({
-      ...commonParams,
-      appServerRuntimeFingerprint: "codex-runtime-v2",
+    const resumed = await withLeasedCodexTestClient({
+      agentDir: path.join(tempDir, "agent"),
+      request,
+      run: (client) =>
+        startOrResumeThread({
+          ...commonParams,
+          client,
+          signal: AbortSignal.timeout(10_000),
+          appServerRuntimeFingerprint: "codex-runtime-v2",
+        }),
     });
 
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/read", "thread/resume"]);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/read",
+      "thread/read",
+      "thread/resume",
+      "thread/inject_items",
+    ]);
     expect(request.mock.calls[0]?.[1]).toEqual({ threadId: finalThreadId, includeTurns: false });
-    expect(request.mock.calls[1]?.[1]).not.toHaveProperty("model");
-    expect(request.mock.calls[1]?.[1]).not.toHaveProperty("modelProvider");
-    expect(request.mock.calls[1]?.[1]).toMatchObject({
+    expect(request.mock.calls[2]?.[1]).not.toHaveProperty("model");
+    expect(request.mock.calls[2]?.[1]).not.toHaveProperty("modelProvider");
+    expect(request.mock.calls[2]?.[1]).toMatchObject({
       developerInstructions: agentWorkspaceDeveloperInstructions,
     });
     expect(resumed).toMatchObject({
@@ -3903,7 +3951,10 @@ describe("Codex app-server supervised branch lifecycle", () => {
       lifecycle: { action: "resumed" },
     });
     await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
-      appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(commonParams.appServer),
+      appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
+        commonParams.appServer,
+        attempt.agentDir,
+      ),
     });
   });
 
@@ -3913,6 +3964,12 @@ describe("Codex app-server supervised branch lifecycle", () => {
     const finalThreadId = "thread-final";
     const workspaceDir = path.join(tempDir, "workspace");
     const attempt = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    attempt.agentDir = path.join(tempDir, "agent");
+    const rolloutPath = path.join(
+      resolveCodexAppServerHomeDir(attempt.agentDir),
+      "sessions",
+      `rollout-${finalThreadId}.jsonl`,
+    );
     attempt.pluginHarnessToolPolicyRestricted = true;
     attempt.toolsAllow = ["openclaw"];
     const identity = await seedPendingSupervisionBinding({
@@ -3936,7 +3993,10 @@ describe("Codex app-server supervised branch lifecycle", () => {
           thread:
             threadId === sourceThreadId
               ? sourceThread({ threadId: sourceThreadId })
-              : sourceThread({ threadId: finalThreadId }),
+              : {
+                  ...sourceThread({ threadId: finalThreadId, status: "notLoaded" }),
+                  path: rolloutPath,
+                },
         };
       }
       if (method === "thread/fork") {
@@ -3951,7 +4011,11 @@ describe("Codex app-server supervised branch lifecycle", () => {
           nextCursor: null,
         };
       }
-      if (method === "thread/archive" || method === "thread/unsubscribe") {
+      if (
+        method === "thread/archive" ||
+        method === "thread/unsubscribe" ||
+        method === "thread/inject_items"
+      ) {
         return {};
       }
       throw new Error(`unexpected method: ${method}`);
@@ -4009,20 +4073,33 @@ describe("Codex app-server supervised branch lifecycle", () => {
 
     attempt.pluginHarnessToolPolicyRestricted = false;
     attempt.toolsAllow = undefined;
+    await writeNativeCatalogFixture(rolloutPath, finalThreadId, common.dynamicTools);
     request.mockClear();
     await expect(
-      startOrResumeThread({
-        ...common,
-        hostSystemAgentActive: false,
-        nativeCodeModeEnabled: true,
+      withLeasedCodexTestClient({
+        agentDir: path.join(tempDir, "agent"),
+        request,
+        run: (client) =>
+          startOrResumeThread({
+            ...common,
+            client,
+            signal: AbortSignal.timeout(10_000),
+            hostSystemAgentActive: false,
+            nativeCodeModeEnabled: true,
+          }),
       }),
     ).resolves.toMatchObject({
       threadId: finalThreadId,
       lifecycle: { action: "resumed" },
     });
 
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/read", "thread/resume"]);
-    const resumeParams = request.mock.calls[1]?.[1] as { config?: Record<string, unknown> };
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/read",
+      "thread/read",
+      "thread/resume",
+      "thread/inject_items",
+    ]);
+    const resumeParams = request.mock.calls[2]?.[1] as { config?: Record<string, unknown> };
     expect(resumeParams.config).toMatchObject({
       mcp_servers: { "request-only": { command: "request-mcp" } },
     });

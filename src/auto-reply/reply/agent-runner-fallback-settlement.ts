@@ -4,15 +4,10 @@ import {
   PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
   renderControlUiAgentFailureCopy,
 } from "../../agents/failover/user-copy.js";
-import {
-  createAgentRunRestartAbortError,
-  isAgentRunRestartAbortReason,
-} from "../../agents/run-termination.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { buildContextOverflowRecoveryText } from "./agent-runner-context-recovery.js";
 import { resolveSourceReplyPolicy } from "./agent-runner-core.js";
 import { markAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
@@ -23,10 +18,7 @@ import type {
 } from "./agent-runner-fallback-cycle.types.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { classifyPrivateMessageToolFinal } from "./private-message-tool-final.js";
-import {
-  isReplyOperationRestartAbort,
-  isReplyOperationUserAbort,
-} from "./reply-operation-abort.js";
+import { resolveReplyOperationAbortReason } from "./reply-operation-abort.js";
 
 /** Settles abort, lifecycle, and terminal failure state after fallback execution. */
 export async function settleAgentFallbackCycle(params: {
@@ -51,16 +43,11 @@ export async function settleAgentFallbackCycle(params: {
   if (turn.isRestartRecoveryArmed?.()) {
     turn.replyOperation?.abortForRestart();
   }
-  if (isReplyOperationRestartAbort(turn.replyOperation)) {
-    settledLifecycleTerminal?.emit("end", runResult, terminalMetadata);
-    throw isAgentRunRestartAbortReason(cycle.runAbortSignal?.reason)
-      ? cycle.runAbortSignal?.reason
-      : createAgentRunRestartAbortError();
-  }
-  if (isReplyOperationUserAbort(turn.replyOperation)) {
+  const abortReason = resolveReplyOperationAbortReason(turn.replyOperation);
+  if (abortReason) {
     settledLifecycleTerminal?.emit("end", runResult, terminalMetadata);
     await drainPendingToolTasks({ tasks: turn.pendingToolTasks, onTimeout: logVerbose });
-    return { kind: "final", payload: { text: SILENT_REPLY_TOKEN } };
+    return { kind: "aborted", reason: abortReason };
   }
   cycle.commitTerminalOutcome();
   const fallbackAttempts = Array.isArray(fallbackResult.attempts)

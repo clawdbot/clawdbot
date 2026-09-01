@@ -7,6 +7,7 @@ import { Readable } from "node:stream";
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createZipCentralDirectoryArchive } from "../test-utils/zip-central-directory-fixture.js";
+import type { PluginInstallArtifactConsentHandler } from "./install-types.js";
 
 const parseClawHubPluginSpecMock = vi.fn();
 const fetchClawHubPackageDetailMock = vi.fn();
@@ -538,6 +539,49 @@ describe("installPluginFromClawHub", () => {
     expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { baseUrl: "https://clawhub.ai", channel: "official" },
+    { baseUrl: "https://clawhub.ai", channel: "community" },
+    { baseUrl: "https://plugins.example.test", channel: "official" },
+  ])(
+    "passes verified source facts to consent for $baseUrl/$channel",
+    async ({ baseUrl, channel }) => {
+      if (channel === "community") {
+        mockCommunityClawHubPackageDetail();
+      }
+      const onBeforePluginArtifactCommit = vi.fn();
+      installPluginFromArchiveMock.mockImplementationOnce(
+        async (params: { onBeforePluginArtifactCommit: PluginInstallArtifactConsentHandler }) => {
+          await params.onBeforePluginArtifactCommit({
+            pluginId: "demo",
+            stagedArtifactDir: "/tmp/openclaw/plugins/demo",
+            mode: "install",
+          });
+          return { ok: true, pluginId: "demo", targetDir: "/tmp/openclaw/plugins/demo" };
+        },
+      );
+      const result = await installPluginFromClawHub({
+        spec: "clawhub:demo",
+        baseUrl,
+        onBeforePluginArtifactCommit,
+      });
+      expect(result.ok).toBe(true);
+      expect(onBeforePluginArtifactCommit).toHaveBeenCalledWith({
+        pluginId: "demo",
+        stagedArtifactDir: "/tmp/openclaw/plugins/demo",
+        mode: "install",
+        sourceRecord: {
+          source: "clawhub",
+          spec: "clawhub:demo",
+          clawhubUrl: baseUrl,
+          clawhubPackage: "demo",
+          clawhubChannel: channel,
+          integrity: DEMO_ARCHIVE_INTEGRITY,
+        },
+      });
+    },
+  );
+
   it("accepts a matching catalog archive integrity pin", async () => {
     const result = await installPluginFromClawHub({
       spec: "clawhub:demo",
@@ -550,10 +594,12 @@ describe("installPluginFromClawHub", () => {
 
   it("rejects a catalog archive integrity mismatch before extraction", async () => {
     const expectedIntegrity = `sha256-${Buffer.from("1".repeat(64), "hex").toString("base64")}`;
+    const onBeforePluginArtifactCommit = vi.fn();
 
     const result = await installPluginFromClawHub({
       spec: "clawhub:demo",
       expectedIntegrity,
+      onBeforePluginArtifactCommit,
     });
 
     expectInstallFailureFields(
@@ -562,6 +608,7 @@ describe("installPluginFromClawHub", () => {
       `ClawHub archive integrity mismatch for "demo@2026.3.22": expected ${expectedIntegrity}, got ${DEMO_ARCHIVE_INTEGRITY}.`,
     );
     expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
+    expect(onBeforePluginArtifactCommit).not.toHaveBeenCalled();
     expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
   });
 

@@ -70,7 +70,7 @@ function createPendingView(): ExecApprovalPendingView {
     agentId: "main",
     warningText: null,
     commandAnalysis: null,
-    commandText: "echo hi",
+    commandText: `<tag> & &amp; "double" 'single'`,
     commandPreview: null,
     cwd: "/tmp",
     envKeys: [],
@@ -233,6 +233,8 @@ describe("googleChatApprovalNativeRuntime", () => {
     });
 
     expect(JSON.stringify(pendingPayload)).toContain("cardsV2");
+    const commandText = getTextParagraphText(pendingPayload, "Command");
+    expect(commandText).toBe(`&lt;tag&gt; &amp; &amp;amp; "double" 'single'`);
     expect(JSON.stringify(pendingPayload.cardsV2)).toContain(
       "https://chat-app.example.test/googlechat",
     );
@@ -335,6 +337,13 @@ describe("googleChatApprovalNativeRuntime", () => {
       accountId: "default",
       context: { account },
       entry,
+      request: {
+        id: "approval-1",
+        request: { command: "echo hi" },
+        createdAtMs: 0,
+        expiresAtMs: view.expiresAtMs,
+      },
+      approvalKind: "exec",
       payload: final.payload,
       phase: "resolved",
     });

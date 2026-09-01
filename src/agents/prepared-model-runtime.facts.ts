@@ -95,6 +95,7 @@ function prepareAgentFacts(
   catalogMode: PreparedModelRuntimeCatalogMode,
   ambientCredentials: Readonly<AgentCredentialMap>,
   additionalProviderIds: readonly string[] = [],
+  includeCredentialProviders = catalogMode === "live",
 ): PreparedModelRuntimeAgentBaseFacts {
   const env = input.env ?? process.env;
   const preparedStore = loadPreparedModelRuntimeAuthStore(input);
@@ -135,7 +136,7 @@ function prepareAgentFacts(
         ...collectPreparedModelRuntimeProviderIds(
           input.config,
           credentials,
-          catalogMode === "live",
+          includeCredentialProviders,
           rawConfiguredModelRefs,
           input.agentId,
         ),
@@ -155,6 +156,7 @@ export async function prepareWorkspaceBuildGroup(
   options: {
     providerDiscoveryProviderIds?: readonly string[];
     preferBuiltPluginArtifacts?: boolean;
+    includeCredentialProviders?: boolean;
   } = {},
   loadInboundPluginRegistry?: PreparedInboundRegistryLoader,
   reusablePluginGeneration?: PreparedModelRuntimePluginGeneration,
@@ -208,7 +210,7 @@ export async function prepareWorkspaceBuildGroup(
   );
   const prepare = async () => {
     const matchesStaticModelId = createStaticModelIdMatcher({
-      manifestPlugins: pluginMetadataSnapshot.plugins,
+      manifestPlugins: pluginMetadataSnapshot,
     });
     const mediaCapabilityProviders = reuseRuntimeFacts
       ? reusablePluginGeneration.mediaCapabilityProviders
@@ -346,6 +348,7 @@ export async function prepareWorkspaceBuildGroup(
         catalogMode,
         ambientCredentials,
         options.providerDiscoveryProviderIds,
+        options.includeCredentialProviders,
       ),
     );
     const agentFactsMs = performance.now() - agentFactsStartedAt;
@@ -370,7 +373,7 @@ export async function prepareWorkspaceBuildGroup(
       reusablePluginGeneration?.configuredCatalogEntries ??
       buildConfiguredModelCatalog({
         cfg: input.config,
-        manifestPlugins: pluginMetadataSnapshot.plugins,
+        manifestPlugins: pluginMetadataSnapshot,
         ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
       });
     const agentFacts: PreparedModelRuntimeAgentFacts[] = [];
@@ -453,7 +456,6 @@ export async function prepareWorkspaceBuildGroup(
   };
   return await withPluginRuntimeGenerationScope(
     {
-      config: input.config,
       metadataSnapshot: pluginMetadataSnapshot,
       pluginRegistry: runtimePluginRegistry,
     },
@@ -649,29 +651,36 @@ export async function prepareAgentCatalogSource(
           providerDiscoveryTimeoutMs: MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS,
         }),
   };
-  if (!persist) {
-    const source = await planOpenClawModelsJsonSource(input.config, input.agentDir, {
-      ...options,
-      ...(sourceOptions.authStore ? { authStore: sourceOptions.authStore } : {}),
-      ...(catalogMode === "live" ? { onProviderCatalogOutcome: recordProviderOutcome } : {}),
-    });
+  const prepareSource = async () => {
+    if (!persist) {
+      const source = await planOpenClawModelsJsonSource(input.config, input.agentDir, {
+        ...options,
+        ...(sourceOptions.authStore ? { authStore: sourceOptions.authStore } : {}),
+        ...(catalogMode === "live" ? { onProviderCatalogOutcome: recordProviderOutcome } : {}),
+      });
+      return {
+        modelsJsonContents: source.modelsJsonContents,
+        pluginCatalogs: source.pluginCatalogs,
+        providerOutcomes: resultOutcomes(),
+      };
+    }
+    if (!input.readOnly) {
+      await ensureOpenClawModelsJson(input.config, input.agentDir, {
+        ...options,
+        ...(catalogMode === "live" ? { onProviderCatalogOutcome: recordProviderOutcome } : {}),
+      });
+    }
+    // Capture immediately after the serialized write. Another owner may share this directory and
+    // publish a different workspace generation before full-catalog parsing begins.
     return {
-      modelsJsonContents: source.modelsJsonContents,
-      pluginCatalogs: source.pluginCatalogs,
+      modelsJsonContents: captureModelsJsonContents(input.agentDir),
+      pluginCatalogs: loadPersistedPluginModelCatalogsReadOnly(input.agentDir),
       providerOutcomes: resultOutcomes(),
     };
-  }
-  if (!input.readOnly) {
-    await ensureOpenClawModelsJson(input.config, input.agentDir, {
-      ...options,
-      ...(catalogMode === "live" ? { onProviderCatalogOutcome: recordProviderOutcome } : {}),
-    });
-  }
-  // Capture immediately after the serialized write. Another owner may share this directory and
-  // publish a different workspace generation before full-catalog parsing begins.
-  return {
-    modelsJsonContents: captureModelsJsonContents(input.agentDir),
-    pluginCatalogs: loadPersistedPluginModelCatalogsReadOnly(input.agentDir),
-    providerOutcomes: resultOutcomes(),
   };
+  const { pluginMetadataSnapshot: metadataSnapshot, pluginRegistry } = pluginGeneration;
+  // Read-only inventories can request live discovery without preparing a runtime registry.
+  return pluginRegistry
+    ? withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, prepareSource)
+    : prepareSource();
 }

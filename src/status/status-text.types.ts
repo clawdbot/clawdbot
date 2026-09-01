@@ -15,6 +15,8 @@ import type { MediaUnderstandingDecision } from "../media-understanding/types.js
 // caller so status rendering can stay presentation-focused and side-effect-light.
 export type BuildStatusTextParams = {
   cfg: OpenClawConfig;
+  /** Prepared owner for bare session keys shared by multiple agents. */
+  agentId?: string;
   sessionEntry?: SessionEntry;
   sessionKey: string;
   parentSessionKey?: string;

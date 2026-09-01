@@ -12,7 +12,7 @@ import type { TextContent } from "../../llm/types.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../glob-pattern.js";
 import type { AgentMessage } from "../runtime/index.js";
-import { SessionManager } from "../sessions/index.js";
+import type { SessionManager } from "../sessions/index.js";
 import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
 import {
   calculateMaxToolResultCharsWithCap,
@@ -29,10 +29,6 @@ import {
   sliceToolResultTextToBudget,
 } from "./tool-result-text-budget.js";
 import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
-import {
-  resolveRuntimeTranscriptReadTarget,
-  type RuntimeTranscriptScope,
-} from "./transcript-runtime-state.js";
 
 export {
   DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
@@ -1352,39 +1348,10 @@ export function truncateOversizedToolResultsInSessionManager(params: {
   sessionId?: string;
   sessionKey?: string;
   agentId?: string;
+  storePath?: string;
 }): { truncated: boolean; truncatedCount: number; reason?: string } {
   try {
     return truncateOversizedToolResultsInExistingSessionManager(params);
-  } catch (err) {
-    const errMsg = formatErrorMessage(err);
-    log.warn(`[tool-result-truncation] Failed to truncate: ${errMsg}`);
-    return { truncated: false, truncatedCount: 0, reason: errMsg };
-  }
-}
-
-export async function truncateOversizedToolResultsInActiveTarget(params: {
-  scope: RuntimeTranscriptScope;
-  contextWindowTokens: number;
-  maxCharsOverride?: number;
-  aggregateMaxCharsOverride?: number;
-  protectTrailingToolResults?: boolean;
-  projectionState?: ToolResultPromptProjectionState;
-}): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
-  try {
-    const target = await resolveRuntimeTranscriptReadTarget(params.scope);
-    const sessionManager = SessionManager.open(target);
-    return truncateOversizedToolResultsInExistingSessionManager({
-      sessionManager,
-      contextWindowTokens: params.contextWindowTokens,
-      maxCharsOverride: params.maxCharsOverride,
-      aggregateMaxCharsOverride: params.aggregateMaxCharsOverride,
-      protectTrailingToolResults: params.protectTrailingToolResults,
-      projectionState: params.projectionState,
-      sessionId: target.sessionId,
-      sessionKey: target.sessionKey,
-      agentId: target.agentId,
-      storePath: target.storePath,
-    });
   } catch (err) {
     const errMsg = formatErrorMessage(err);
     log.warn(`[tool-result-truncation] Failed to truncate: ${errMsg}`);

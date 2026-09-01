@@ -7,6 +7,7 @@ import {
   nearestGroupColor,
   parsePairingString,
   reconnectDelayMs,
+  directLoopbackRelayPort,
 } from "./relay-core.js";
 
 const RELAY_SECRET = "a".repeat(64);
@@ -390,5 +391,37 @@ describe("nearestGroupColor", () => {
   it("falls back to orange for invalid input", () => {
     expect(nearestGroupColor("not-a-color")).toBe("orange");
     expect(nearestGroupColor(undefined)).toBe("orange");
+  });
+});
+
+describe("directLoopbackRelayPort", () => {
+  it("accepts the canonical IPv4 listener on the direct /extension path", () => {
+    expect(directLoopbackRelayPort("ws://127.0.0.1:18799/extension")).toBe(18799);
+    expect(directLoopbackRelayPort("ws://127.0.0.1:20123/extension?profile=work")).toBe(20123);
+  });
+
+  it("rejects gateway routes, remote hosts, and malformed values", () => {
+    expect(directLoopbackRelayPort("ws://127.0.0.1:18789/browser/extension")).toBeNull();
+    expect(directLoopbackRelayPort("wss://gateway.example.com/browser/extension")).toBeNull();
+    expect(directLoopbackRelayPort("ws://10.0.0.5:18799/extension")).toBeNull();
+    expect(directLoopbackRelayPort("http://127.0.0.1:18799/extension")).toBeNull();
+    expect(directLoopbackRelayPort("not a url")).toBeNull();
+    expect(directLoopbackRelayPort(undefined)).toBeNull();
+  });
+
+  it.each([
+    "ws://localhost:18799/extension",
+    "ws://localhost.:18799/extension",
+    "ws://127.25.0.1:18799/extension",
+    "ws://[::1]:18799/extension",
+    "ws://[::ffff:7f00:1]:18799/extension",
+    "ws://user:password@127.0.0.1:18799/extension",
+    "ws://127.0.0.1:18799/extension#secret",
+    "ws://127.0.0.1:18799/extension?host=remote",
+    "ws://127.0.0.1:18799/extension?profile=one&profile=two",
+    "ws://127.0.0.1:0/extension",
+    "wss://127.0.0.1:18799/extension",
+  ])("rejects noncanonical or unsupported wake-up target %s", (url) => {
+    expect(directLoopbackRelayPort(url)).toBeNull();
   });
 });
