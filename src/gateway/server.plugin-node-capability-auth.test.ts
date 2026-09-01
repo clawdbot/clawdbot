@@ -596,16 +596,15 @@ describe("gateway plugin node capability auth", () => {
           );
           expect(operatorWsStatus).toBe(101);
           proof.operator = { http: operatorAllowed.status, ws: operatorWsStatus };
-          console.log(
-            "plugin-node-capability-proof",
-            JSON.stringify(
+          process.stdout.write(
+            `plugin-node-capability-proof ${JSON.stringify(
               {
                 boundary: "Gateway Canvas plugin route authorization before HTTP/WS dispatch",
                 ...proof,
               },
               null,
               2,
-            ),
+            )}\n`,
           );
 
           clients.add(
