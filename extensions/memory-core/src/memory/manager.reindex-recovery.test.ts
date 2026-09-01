@@ -24,6 +24,7 @@ type ReindexHarness = {
   cache: { enabled: boolean; maxEntries?: number };
   writeMeta: (meta: MemoryIndexMeta) => void;
   providerKey: string | null;
+  provider: null;
   dirty: boolean;
   memoryFullRetryDirty: boolean;
   sessionsDirty: boolean;
@@ -221,7 +222,24 @@ describe("memory manager reindex recovery", () => {
   });
 
   it("leaves even an oversized published cache untouched when a full rebuild fails", async () => {
-    const memoryManager = await openManager(createCfg({ sources: ["memory"], cacheEnabled: true }));
+    const { memoryManager, harness, before } = await createOversizedPublishedCache();
+    harness.writeMeta = () => {
+      throw new Error("failed shadow metadata");
+    };
+
+    await expect(memoryManager.sync({ reason: "cli", force: true })).rejects.toThrow(
+      "failed shadow metadata",
+    );
+
+    expect(harness.db.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all()).toEqual(
+      before,
+    );
+  });
+
+  async function createOversizedPublishedCache() {
+    const memoryManager = await openManager(
+      createCfg({ sources: ["memory", "sessions"], cacheEnabled: true }),
+    );
     await fs.writeFile(path.join(memoryDir, "alpha.md"), "published alpha");
     await memoryManager.sync({ reason: "cli", force: true });
     const harness = memoryManager as unknown as ReindexHarness;
@@ -234,16 +252,50 @@ describe("memory manager reindex recovery", () => {
     insert.run("old-b");
     harness.cache.maxEntries = 1;
     const before = harness.db.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all();
-    harness.writeMeta = () => {
-      throw new Error("failed shadow metadata");
-    };
+    expect(before).toHaveLength(3);
+    const newest = harness.db
+      .prepare("SELECT * FROM memory_embedding_cache ORDER BY updated_at DESC LIMIT 1")
+      .all();
+    return { memoryManager, harness, before, newest };
+  }
 
-    await expect(memoryManager.sync({ reason: "cli", force: true })).rejects.toThrow(
-      "failed shadow metadata",
+  it.each([
+    { force: false, outcome: "bounds the published cache" },
+    { force: true, outcome: "preserves the published cache" },
+  ])("$outcome on unavailable-provider preflight (force=$force)", async ({ force }) => {
+    const { memoryManager, harness, before, newest } = await createOversizedPublishedCache();
+    // Model runtime provider loss after successful initialization; keep the
+    // real sync admission, provider preflight, and SQLite cache cleanup intact.
+    harness.provider = null;
+
+    await expect(memoryManager.sync({ reason: "cli", force })).rejects.toThrow(
+      /Memory sync unavailable: embedding provider "openai" is configured but unavailable\./,
     );
 
     expect(harness.db.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all()).toEqual(
-      before,
+      force ? before : newest,
+    );
+  });
+
+  it.each([false, true])("bounds unresolved targeted sync cache when force=%s", async (force) => {
+    const { memoryManager, harness, newest } = await createOversizedPublishedCache();
+    const publishedChunks = harness.db
+      .prepare("SELECT * FROM memory_index_chunks ORDER BY id")
+      .all();
+
+    await memoryManager.sync({
+      reason: "queued-sessions",
+      force,
+      sessions: [
+        { agentId: "main", sessionId: "missing-session", sessionKey: "agent:main:missing-session" },
+      ],
+    });
+
+    expect(harness.db.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all()).toEqual(
+      newest,
+    );
+    expect(harness.db.prepare("SELECT * FROM memory_index_chunks ORDER BY id").all()).toEqual(
+      publishedChunks,
     );
   });
 

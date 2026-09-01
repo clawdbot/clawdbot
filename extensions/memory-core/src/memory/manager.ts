@@ -479,6 +479,8 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       sources: this.sources,
       sourceFilterSql: sourceFilter.sql,
       sourceFilterParams: sourceFilter.params,
+      // Source inspection is explicit; routine query status must stay count-only.
+      includeChunkBytes: this.sourceInspections.size > 0,
     });
 
     // Status projects the effective keyword-only search mode while degraded.

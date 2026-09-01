@@ -155,124 +155,124 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
   }
 
   protected async runSync(params?: MemorySyncParams) {
-    // Guard: if an embedding provider is configured but currently unavailable,
-    // abort sync to prevent silently degrading an existing semantic vector index
-    // to fts-only and wiping existing semantic vectors.
-    // This only protects existing semantic indexes; fresh or already-fts-only
-    // indexes can safely sync without an embedding provider.
-    this.assertFtsOnlySyncAllowed();
-
-    const syncProvider = this.syncProviderGeneration
-      ? this.syncProviderGeneration.provider
-      : this.provider;
-
-    const progress = params?.progress ? this.createSyncProgress(params.progress) : undefined;
-    if (progress) {
-      progress.report({
-        completed: progress.completed,
-        total: progress.total,
-        label: "Loading vector extension…",
-      });
-    }
-    // Keyword-only generations never write vectors, so they must not wait for
-    // the vector extension before text and FTS indexing can proceed.
-    const vectorReady = syncProvider ? await this.ensureVectorReady() : false;
-    const meta = this.readMeta();
-    // Resolve and index a targeted session against one corpus snapshot. A reset
-    // between separate enumerations could otherwise replace the chosen identity.
-    const targetSessionSync = this.hasRequestedTargetSessionSync(params)
-      ? await this.resolveTargetSessionSyncPlan({
-          sessions: params?.sessions,
-          archiveFiles: params?.archiveFiles,
-        })
-      : null;
-    const targetArchiveFiles = targetSessionSync?.targetArchiveFiles ?? null;
-    const hasTargetArchiveFiles = targetArchiveFiles !== null;
-    if (this.hasRequestedTargetSessionSync(params) && !hasTargetArchiveFiles) {
-      return;
-    }
-    if (params?.reason === "cli" && !params.force && !hasTargetArchiveFiles) {
-      await this.markSessionStartupCatchupDirtyFiles();
-    }
-    const syncProviderKey = this.syncProviderGeneration
-      ? this.syncProviderGeneration.providerKey
-      : this.providerKey;
-    const syncProviderIdentities =
-      this.syncProviderGeneration?.identities ?? this.resolveProviderIndexIdentities();
-    const indexIdentity = resolveMemoryIndexIdentityState({
-      meta,
-      // Also detects provider→FTS-only transitions so orphaned old-model FTS rows are cleaned up.
-      provider: syncProvider ? { id: syncProvider.id, model: syncProvider.model } : null,
-      providerKey: syncProviderKey ?? undefined,
-      providerAliases: syncProviderIdentities.slice(1),
-      configuredSources: resolveConfiguredSourcesForMeta(this.sources),
-      configuredScopeHash: resolveConfiguredScopeHash({
-        workspaceDir: this.workspaceDir,
-        extraPaths: this.settings.extraPaths,
-        multimodal: {
-          enabled: this.settings.multimodal.enabled,
-          modalities: this.settings.multimodal.modalities,
-          maxFileBytes: this.settings.multimodal.maxFileBytes,
-        },
-      }),
-      chunkTokens: this.settings.chunking.tokens,
-      chunkOverlap: this.settings.chunking.overlap,
-      vectorReady,
-      hasIndexedChunks: this.hasIndexedChunks(),
-      ftsTokenizer: this.settings.store.fts.tokenizer,
-    });
-    const hasIndexedChunks = this.hasIndexedChunks();
-    const needsInitialIndex = indexIdentity.status !== "valid" && !hasIndexedChunks;
-    // Missing metadata cannot prove whether existing chunks were semantic.
-    // Wait for the configured provider before replacing them with a rebuilt index,
-    // unless every existing chunk is FTS-only — in that case rebuilding as
-    // FTS-only is safe even without a provider because no semantic data is lost.
-    // Gate the chunk-model scan: only compute when identity is missing,
-    // chunks exist, and the provider is unavailable (no target session files
-    // is already checked by needsMissingIdentityReindex below).
-    const needsFtsOnlyClassification =
-      indexIdentity.status === "missing" &&
-      hasIndexedChunks &&
-      syncProvider === null &&
-      Boolean(this.settings.provider) &&
-      this.settings.provider !== "none";
-    const hasOnlyFtsChunks = needsFtsOnlyClassification && !this.hasSemanticChunks();
-    const canRebuildMissingIdentity =
-      syncProvider !== null ||
-      !this.settings.provider ||
-      this.settings.provider === "none" ||
-      hasOnlyFtsChunks;
-    const needsMissingIdentityReindex =
-      indexIdentity.status === "missing" && !hasTargetArchiveFiles && canRebuildMissingIdentity;
-    const needsExplicitIdentityReindex =
-      params?.reason === "cli" && indexIdentity.status !== "valid" && !hasTargetArchiveFiles;
-    // Source hashes do not reflect chunk boundaries, so an implementation
-    // upgrade must rebuild the shadow index instead of attempting dirty sync.
-    const needsChunkingVersionReindex =
-      meta !== null && meta.chunkingVersion !== MEMORY_CHUNKING_VERSION && !hasTargetArchiveFiles;
-    const canRunRetryFullReindex =
-      indexIdentity.status !== "missing" || needsInitialIndex || canRebuildMissingIdentity;
-    const needsFullReindex =
-      (params?.force && !hasTargetArchiveFiles) ||
-      needsInitialIndex ||
-      needsMissingIdentityReindex ||
-      needsExplicitIdentityReindex ||
-      needsChunkingVersionReindex ||
-      (this.memoryFullRetryDirty && canRunRetryFullReindex) ||
-      (this.sessionsFullRetryDirty && indexIdentity.status !== "valid" && canRunRetryFullReindex);
-    const needsFullSessionReindex = needsFullReindex || this.sessionsFullRetryDirty;
-    if (indexIdentity.status !== "valid" && !needsFullReindex) {
-      this.dirty = true;
-      const sessionsDirty = markMemoryTargetArchiveFilesDirty({
-        sessionsDirtyFiles: this.sessionsDirtyFiles,
-        targetArchiveFiles,
-      });
-      if (sessionsDirty) {
-        this.sessionsDirty = true;
-      }
-      return;
-    }
+    const hasTargetSessionRequest = this.hasRequestedTargetSessionSync(params);
+    let needsFullReindex = Boolean(params?.force && !hasTargetSessionRequest);
     try {
+      // An unavailable configured provider must not replace semantic vectors
+      // with FTS-only rows; fresh and already-FTS-only indexes remain safe.
+      this.assertFtsOnlySyncAllowed();
+
+      const syncProvider = this.syncProviderGeneration
+        ? this.syncProviderGeneration.provider
+        : this.provider;
+
+      const progress = params?.progress ? this.createSyncProgress(params.progress) : undefined;
+      if (progress) {
+        progress.report({
+          completed: progress.completed,
+          total: progress.total,
+          label: "Loading vector extension…",
+        });
+      }
+      // Keyword-only generations never write vectors, so they must not wait for
+      // the vector extension before text and FTS indexing can proceed.
+      const vectorReady = syncProvider ? await this.ensureVectorReady() : false;
+      const meta = this.readMeta();
+      // Resolve and index a targeted session against one corpus snapshot. A reset
+      // between separate enumerations could otherwise replace the chosen identity.
+      const targetSessionSync = hasTargetSessionRequest
+        ? await this.resolveTargetSessionSyncPlan({
+            sessions: params?.sessions,
+            archiveFiles: params?.archiveFiles,
+          })
+        : null;
+      const targetArchiveFiles = targetSessionSync?.targetArchiveFiles ?? null;
+      const hasTargetArchiveFiles = targetArchiveFiles !== null;
+      if (hasTargetSessionRequest && !hasTargetArchiveFiles) {
+        return;
+      }
+      if (params?.reason === "cli" && !params.force && !hasTargetArchiveFiles) {
+        await this.markSessionStartupCatchupDirtyFiles();
+      }
+      const syncProviderKey = this.syncProviderGeneration
+        ? this.syncProviderGeneration.providerKey
+        : this.providerKey;
+      const syncProviderIdentities =
+        this.syncProviderGeneration?.identities ?? this.resolveProviderIndexIdentities();
+      const indexIdentity = resolveMemoryIndexIdentityState({
+        meta,
+        // Also detects provider→FTS-only transitions so orphaned old-model FTS rows are cleaned up.
+        provider: syncProvider ? { id: syncProvider.id, model: syncProvider.model } : null,
+        providerKey: syncProviderKey ?? undefined,
+        providerAliases: syncProviderIdentities.slice(1),
+        configuredSources: resolveConfiguredSourcesForMeta(this.sources),
+        configuredScopeHash: resolveConfiguredScopeHash({
+          workspaceDir: this.workspaceDir,
+          extraPaths: this.settings.extraPaths,
+          multimodal: {
+            enabled: this.settings.multimodal.enabled,
+            modalities: this.settings.multimodal.modalities,
+            maxFileBytes: this.settings.multimodal.maxFileBytes,
+          },
+        }),
+        chunkTokens: this.settings.chunking.tokens,
+        chunkOverlap: this.settings.chunking.overlap,
+        vectorReady,
+        hasIndexedChunks: this.hasIndexedChunks(),
+        ftsTokenizer: this.settings.store.fts.tokenizer,
+      });
+      const hasIndexedChunks = this.hasIndexedChunks();
+      const needsInitialIndex = indexIdentity.status !== "valid" && !hasIndexedChunks;
+      // Missing metadata cannot prove whether existing chunks were semantic.
+      // Wait for the configured provider before replacing them with a rebuilt index,
+      // unless every existing chunk is FTS-only — in that case rebuilding as
+      // FTS-only is safe even without a provider because no semantic data is lost.
+      // Gate the chunk-model scan: only compute when identity is missing,
+      // chunks exist, and the provider is unavailable (no target session files
+      // is already checked by needsMissingIdentityReindex below).
+      const needsFtsOnlyClassification =
+        indexIdentity.status === "missing" &&
+        hasIndexedChunks &&
+        syncProvider === null &&
+        Boolean(this.settings.provider) &&
+        this.settings.provider !== "none";
+      const hasOnlyFtsChunks = needsFtsOnlyClassification && !this.hasSemanticChunks();
+      const canRebuildMissingIdentity =
+        syncProvider !== null ||
+        !this.settings.provider ||
+        this.settings.provider === "none" ||
+        hasOnlyFtsChunks;
+      const needsMissingIdentityReindex =
+        indexIdentity.status === "missing" && !hasTargetArchiveFiles && canRebuildMissingIdentity;
+      const needsExplicitIdentityReindex =
+        params?.reason === "cli" && indexIdentity.status !== "valid" && !hasTargetArchiveFiles;
+      // Source hashes do not reflect chunk boundaries, so an implementation
+      // upgrade must rebuild the shadow index instead of attempting dirty sync.
+      const needsChunkingVersionReindex =
+        meta !== null && meta.chunkingVersion !== MEMORY_CHUNKING_VERSION && !hasTargetArchiveFiles;
+      const canRunRetryFullReindex =
+        indexIdentity.status !== "missing" || needsInitialIndex || canRebuildMissingIdentity;
+      needsFullReindex = Boolean(
+        (params?.force && !hasTargetArchiveFiles) ||
+        needsInitialIndex ||
+        needsMissingIdentityReindex ||
+        needsExplicitIdentityReindex ||
+        needsChunkingVersionReindex ||
+        (this.memoryFullRetryDirty && canRunRetryFullReindex) ||
+        (this.sessionsFullRetryDirty && indexIdentity.status !== "valid" && canRunRetryFullReindex),
+      );
+      const needsFullSessionReindex = needsFullReindex || this.sessionsFullRetryDirty;
+      if (indexIdentity.status !== "valid" && !needsFullReindex) {
+        this.dirty = true;
+        const sessionsDirty = markMemoryTargetArchiveFilesDirty({
+          sessionsDirtyFiles: this.sessionsDirtyFiles,
+          targetArchiveFiles,
+        });
+        if (sessionsDirty) {
+          this.sessionsDirty = true;
+        }
+        return;
+      }
       if (!needsFullSessionReindex) {
         const targetedSessionSync = await runMemoryTargetedSessionSync({
           hasSessionSource: this.sources.has("sessions"),
@@ -376,8 +376,8 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         throw err;
       }
     } finally {
-      // Incremental work may have committed before failure. Full rebuilds prune
-      // only their shadow, so failure never mutates the published cache.
+      // Ordinary sync exits retain live cleanup, including preflight/no-op exits.
+      // Full rebuild failures (including forced preflight) leave the primary alone.
       if (!needsFullReindex) {
         this.pruneEmbeddingCacheIfNeeded();
       }
