@@ -35,9 +35,9 @@
           }
         },
         "install": {
-          "npmSpec": "@wecom/wecom-openclaw-plugin@2026.5.7",
+          "npmSpec": "@wecom/wecom-openclaw-plugin@2026.7.2",
           "defaultChoice": "npm",
-          "expectedIntegrity": "sha512-TCkP9as00WfEhgFWG8YL/rcmaWGIshAki2HQh83nTRccGfVBCoGjrEboTTqq3yDmK9koWTV11zi8u8A4dNtvug=="
+          "expectedIntegrity": "sha512-7kqdBIOF3SgDDoBoFtO6jxnxofbYSgbKdxZDNabD0y0jg2xKcVqlXZOOJ9+XQho/QOtIFrnRH2IRnPukFEYwJg=="
         }
       }
     },
@@ -76,9 +76,9 @@
           }
         },
         "install": {
-          "npmSpec": "openclaw-plugin-yuanbao@2.15.0",
+          "npmSpec": "openclaw-plugin-yuanbao@2.18.2",
           "defaultChoice": "npm",
-          "expectedIntegrity": "sha512-3GD+mf3EjTSUTOAREjTHAyp/deXdpgqB+q+xE0b19Qtat4ADhUV1mHDwFkVCRqTCBY5ATFKtKcipoDejqFj/+w=="
+          "expectedIntegrity": "sha512-cL85zWLePhi/GWRsXL8ogS4tejNuCE/J0V/OYhDFJzElF2TmndVCUAXaJdssgv/ULJ9sBaic88wAzRllIgZIwA=="
         }
       }
     },
@@ -91,6 +91,9 @@
         "plugin": {
           "id": "openclaw-qqbot",
           "label": "QQ Bot"
+        },
+        "setupFeatures": {
+          "configPromotion": "preserve-root"
         },
         "contracts": {
           "tools": ["qqbot_platform_api", "qqbot_remind"]

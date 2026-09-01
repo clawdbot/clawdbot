@@ -3,9 +3,11 @@ import { createServer } from "node:http";
 import { Command } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { CONFIG_AUDIT_STORE_LABEL } from "../../config/io.audit.js";
-import type { ConfigFileSnapshot } from "../../config/types.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
+import { createNewerSqliteSchemaVersionError } from "../../infra/sqlite-user-version.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
+import { OpenClawDatabaseSchemaPreflightError } from "../../state/openclaw-database-preflight.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "../../state/openclaw-state-db-schema-migration-required.js";
 import {
   captureEnv,
@@ -74,7 +76,9 @@ const loadShellEnvFallback = vi.fn((_opts?: unknown) => {
   callOrder.push("shell-env");
 });
 const clearShellEnvAppliedKeys = vi.fn((_keys: readonly string[]) => undefined);
-const resolveShellEnvExpectedKeys = vi.fn((_env?: NodeJS.ProcessEnv) => ["OPENCLAW_GATEWAY_TOKEN"]);
+const resolveShellEnvExpectedKeys = vi.fn((_env?: NodeJS.ProcessEnv, _config?: OpenClawConfig) => [
+  "OPENCLAW_GATEWAY_TOKEN",
+]);
 const resolveShellEnvFallbackTimeoutMs = vi.fn((_env?: NodeJS.ProcessEnv) => 15_000);
 const shouldDeferShellEnvFallback = vi.fn((_env?: NodeJS.ProcessEnv) => false);
 const shouldEnableShellEnvFallback = vi.fn((_env?: NodeJS.ProcessEnv) => false);
@@ -174,7 +178,8 @@ vi.mock("../../commands/doctor/shared/pristine-startup-state.js", () => ({
     pristineStartupMigrationPlan.state(env),
 }));
 
-vi.mock("../../config/paths.js", () => ({
+vi.mock("../../config/paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/paths.js")>()),
   CONFIG_PATH: "/tmp/openclaw-test-missing-config.json",
   normalizeStateDirEnv: (env?: NodeJS.ProcessEnv) => normalizeStateDirEnv(env),
   pinRuntimePaths: (env?: NodeJS.ProcessEnv) => pinRuntimePaths(env),
@@ -198,7 +203,8 @@ vi.mock("../../infra/dotenv-global.js", () => ({
 }));
 
 vi.mock("../../config/shell-env-expected-keys.js", () => ({
-  resolveShellEnvExpectedKeys: (env?: NodeJS.ProcessEnv) => resolveShellEnvExpectedKeys(env),
+  resolveShellEnvExpectedKeys: (...args: Parameters<typeof resolveShellEnvExpectedKeys>) =>
+    resolveShellEnvExpectedKeys(...args),
 }));
 
 vi.mock("../../infra/shell-env.js", () => ({
@@ -683,6 +689,10 @@ describe("gateway run option collisions", () => {
         logger: expect.any(Object),
         timeoutMs: 1234,
       });
+      expect(resolveShellEnvExpectedKeys).toHaveBeenCalledWith(
+        expect.objectContaining({ OPENCLAW_GATEWAY_TOKEN: "config-token" }),
+        finalConfig,
+      );
       expect(readConfigFileSnapshotWithPluginMetadata).toHaveBeenCalledWith(
         expect.objectContaining({
           lowerPrecedenceEnv: { OPENCLAW_GATEWAY_TOKEN: "shell-token" },
@@ -901,7 +911,7 @@ describe("gateway run option collisions", () => {
     );
   });
 
-  it("admits only the stable-authored retired keys to gateway migration preflight", async () => {
+  it("admits deterministic legacy repairs to gateway preflight and rejects unrelated drift", async () => {
     const selectedStateDir = "/tmp/openclaw-stable-upgrade-state";
     await withEnvAsync({ OPENCLAW_STATE_DIR: undefined }, async () => {
       const stableConfig = {
@@ -915,6 +925,7 @@ describe("gateway run option collisions", () => {
         },
         env: { vars: { OPENCLAW_STATE_DIR: selectedStateDir } },
         gateway: { mode: "local" },
+        session: { idleMinutes: 45 },
       };
       configState.snapshot = {
         config: stableConfig,
@@ -923,6 +934,7 @@ describe("gateway run option collisions", () => {
         issues: [
           { path: "meta", message: "retired" },
           { path: "agents.defaults.heartbeat", message: "retired" },
+          { path: "session.idleMinutes", message: "retired" },
         ],
         legacyIssues: [{ path: "", message: "retired" }],
         parsed: stableConfig,
@@ -944,9 +956,10 @@ describe("gateway run option collisions", () => {
       expect(process.env.OPENCLAW_STATE_DIR).toBe(selectedStateDir);
 
       const repairedConfig = {
-        agents: { entries: { main: {} } },
+        agents: { defaults: {}, entries: { main: {} } },
         env: stableConfig.env,
         gateway: { mode: "local" as const },
+        session: { reset: { mode: "idle", idleMinutes: 45 } },
         meta: {
           lastTouchedVersion: VERSION,
           migrations: { modelPolicyAllowlist: true },
@@ -1757,6 +1770,7 @@ describe("gateway run option collisions", () => {
           OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "REMOVED_KEY,SECRET_REF_KEY",
           REMOVED_KEY: "stale-service-value",
           SECRET_REF_KEY: "file-backed-value",
+          OPENAI_API_KEY: "operator-owned-provider-key",
           OPERATOR_KEY: "operator-value",
         },
         async () => {
@@ -1765,6 +1779,7 @@ describe("gateway run option collisions", () => {
           await selectGatewayRunEnvironment({ opts: {}, runtime: defaultRuntime });
           expect(process.env.REMOVED_KEY).toBeUndefined();
           expect(process.env.SECRET_REF_KEY).toBe("file-backed-value");
+          expect(process.env.OPENAI_API_KEY).toBe("operator-owned-provider-key");
           expect(process.env.OPERATOR_KEY).toBe("operator-value");
           await prepareGatewayRunBootstrap({ opts: {}, runtime: defaultRuntime });
         },
@@ -1773,6 +1788,8 @@ describe("gateway run option collisions", () => {
   });
 
   it("re-inspects crash-loop breaker state for each boot iteration", async () => {
+    let firstBootRecovery: (() => boolean) | undefined;
+    bootLifecycle.record.mockReturnValueOnce("boot-1").mockReturnValueOnce("boot-2");
     runGatewayLoop.mockImplementationOnce(
       async ({
         beginBoot,
@@ -1783,6 +1800,7 @@ describe("gateway run option collisions", () => {
       }) => {
         await beginBoot?.(1000);
         await start({ startupStartedAt: 1000 });
+        firstBootRecovery = gatewayStartOptions(0).tryRecoverChannelAutostartSuppression;
         await beginBoot?.(2000);
         await start({ startupStartedAt: 2000 });
       },
@@ -1820,6 +1838,16 @@ describe("gateway run option collisions", () => {
       bootLifecycle.manualChannelStartHint,
     );
     expect(gatewayStartOptions(1).channelAutostartSuppression).toBeUndefined();
+    bootLifecycle.decisions.push({
+      tripped: false,
+      uncleanBoots: 0,
+      windowMs: 300_000,
+      shouldWriteStabilityBundle: false,
+      recovered: true,
+    });
+    expect(firstBootRecovery?.()).toBe(false);
+    expect(bootLifecycle.inspect).toHaveBeenCalledTimes(2);
+    expect(bootLifecycle.recover).not.toHaveBeenCalled();
     expect(gatewayLogMessages.some((message) => message.includes("breaker recovered"))).toBe(true);
   });
 
@@ -1941,6 +1969,52 @@ describe("gateway run option collisions", () => {
     );
 
     expect(parkCurrentLaunchAgentForMaintenance).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { phase: "server", kind: "state" },
+    { phase: "server", kind: "agent" },
+    { phase: "server", kind: "wrapped-reader" },
+    { phase: "bootstrap", kind: "reader" },
+    { phase: "configuration", kind: "wrapped-reader" },
+  ] as const)("stops newer-schema retries from $phase ($kind)", async ({ phase, kind }) => {
+    const readerError = createNewerSqliteSchemaVersionError(
+      "test database",
+      "/tmp/newer.sqlite",
+      999,
+      998,
+    );
+    const error =
+      kind === "state" || kind === "agent"
+        ? new OpenClawDatabaseSchemaPreflightError([
+            { kind, path: "/tmp/newer.sqlite", foundVersion: 999, supportedVersion: 998 },
+          ])
+        : kind === "reader"
+          ? readerError
+          : new Error("Failed to open plugin state", { cause: readerError });
+    if (phase === "bootstrap") {
+      beforeRun.mockRejectedValueOnce(error);
+    } else if (phase === "configuration") {
+      refreshManagedProxy.mockRejectedValueOnce(error);
+    } else {
+      startGatewayServer.mockRejectedValueOnce(error);
+    }
+    parkCurrentLaunchAgentForMaintenance.mockResolvedValueOnce(true);
+    const restoreHooks = installGatewayRunRuntimeHooks({ refreshManagedProxy });
+    try {
+      await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
+        "__exit__:78",
+      );
+    } finally {
+      restoreHooks();
+    }
+
+    expect(parkCurrentLaunchAgentForMaintenance).toHaveBeenCalledOnce();
+    expect(offerInvalidConfigRecovery).not.toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain("newer");
+    expect(runtimeErrors.join("\n")).toContain("build that supports");
+    expect(runtimeErrors.join("\n")).not.toContain("doctor --fix");
+    expect(startGatewayServer).toHaveBeenCalledTimes(phase === "server" ? 1 : 0);
   });
 
   it.each([

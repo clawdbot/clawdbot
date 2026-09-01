@@ -4,9 +4,8 @@ import {
   errorShape,
   type ErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { UserTurnInput } from "../../sessions/user-turn-transcript.types.js";
 import type { GatewayClient } from "./shared-types.js";
-
-type GatewayClientSender = { id: string; name?: string };
 
 export function isGatewayClientProfilePending(client: GatewayClient | null): boolean {
   return Boolean(client?.authenticatedGitHubIdentitySync && !client.authenticatedUserProfile);
@@ -25,7 +24,7 @@ export function authenticatedProfileUnavailableError(): ErrorShape {
 }
 
 export function gatewayClientSenderFields(client: GatewayClient | null): {
-  sender?: GatewayClientSender;
+  sender?: NonNullable<UserTurnInput["sender"]>;
 } {
   if (client?.internal?.senderAttribution) {
     return { sender: client.internal.senderAttribution };
@@ -35,6 +34,9 @@ export function gatewayClientSenderFields(client: GatewayClient | null): {
     return {
       sender: {
         id: profile.profileId,
+        ...(!client?.internal?.syntheticClient
+          ? { identity: { type: "profile" as const, id: profile.profileId } }
+          : {}),
         ...(profile.displayName ? { name: profile.displayName } : {}),
       },
     };

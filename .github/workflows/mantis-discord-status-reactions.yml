@@ -98,7 +98,7 @@ jobs:
       candidate_revision: ${{ steps.validate.outputs['candidate-revision'] }}
     steps:
       - name: Checkout harness ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -121,10 +121,13 @@ jobs:
     environment: qa-live-shared
     steps:
       - name: Checkout harness ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
+
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -137,7 +140,7 @@ jobs:
         run: pnpm build
 
       - name: Setup Go for Crabbox CLI
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.x"
           cache: false
@@ -148,7 +151,7 @@ jobs:
           set -euo pipefail
           install_dir="${RUNNER_TEMP}/crabbox"
           mkdir -p "$install_dir" "$HOME/.local/bin"
-          timeout --signal=TERM --kill-after=10s 120s git clone --depth 1 https://github.com/openclaw/crabbox.git "$install_dir/src"
+          python3 -I -S "$CI_GIT_OWNER" --git 120 clone --depth 1 https://github.com/openclaw/crabbox.git "$install_dir/src"
           go build -C "$install_dir/src" -o "$HOME/.local/bin/crabbox" ./cmd/crabbox
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/crabbox" --version
@@ -164,8 +167,8 @@ jobs:
 
           worktree_root=".artifacts/qa-e2e/mantis/discord-status-reactions-worktrees"
           mkdir -p "$worktree_root"
-          git worktree add --detach "$worktree_root/baseline" "$BASELINE_SHA"
-          git worktree add --detach "$worktree_root/candidate" "$CANDIDATE_SHA"
+          python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 worktree add --detach "$worktree_root/baseline" "$BASELINE_SHA"
+          python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 worktree add --detach "$worktree_root/candidate" "$CANDIDATE_SHA"
 
           for lane in baseline candidate; do
             lane_dir="$worktree_root/${lane}"
@@ -369,14 +372,15 @@ jobs:
             --arg baseline_sha "${{ needs.validate_refs.outputs.baseline_revision }}" \
             --arg candidate_sha "${{ needs.validate_refs.outputs.candidate_revision }}" \
             '{
-              schemaVersion: 1,
+              schemaVersion: 2,
               id: "discord-status-reactions",
               title: "Mantis Discord Status Reactions QA",
               summary: "Mantis reran Discord status reactions against the known queued-only baseline and the candidate ref. The baseline reproduced the bug, while the candidate showed the expected queued -> thinking -> done reaction sequence.",
               scenario: "discord-status-reactions-tool-only",
               comparison: {
-                baseline: { sha: $baseline_sha, expected: "queued-only", status: $baseline_status, reproduced: ($baseline_status == "fail") },
-                candidate: { sha: $candidate_sha, expected: "queued -> thinking -> done", status: $candidate_status, fixed: ($candidate_status == "pass") },
+                baseline: { sha: $baseline_sha, expected: "queued-only", expectationMet: ($baseline_status == "fail"), status: $baseline_status, reproduced: ($baseline_status == "fail") },
+                candidate: { sha: $candidate_sha, expected: "queued -> thinking -> done", expectationMet: ($candidate_status == "pass"), status: $candidate_status, fixed: ($candidate_status == "pass") },
+                outcome: (if (($baseline_status == "fail") and ($candidate_status == "pass")) then "pass" else "fail" end),
                 pass: (($baseline_status == "fail") and ($candidate_status == "pass"))
               },
               artifacts: [

@@ -19,12 +19,37 @@ export type GatewayMethodContext = Parameters<
   Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]
 >[0];
 type GatewayRespond = GatewayMethodContext["respond"];
+type WorkboardGatewayResultHandler = (context: GatewayMethodContext) => unknown;
+type WorkboardGatewayScope = NonNullable<
+  NonNullable<Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2]>["scope"]
+>;
 
 export function respondError(respond: GatewayRespond, error: unknown) {
   respond(false, undefined, {
     code: "workboard_error",
     message: formatErrorMessage(error),
   });
+}
+
+export function registerWorkboardResultMethods(
+  api: OpenClawPluginApi,
+  methods: ReadonlyArray<
+    readonly [method: string, scope: WorkboardGatewayScope, handler: WorkboardGatewayResultHandler]
+  >,
+): void {
+  for (const [method, scope, handler] of methods) {
+    api.registerGatewayMethod(
+      method,
+      async (context) => {
+        try {
+          context.respond(true, await handler(context));
+        } catch (error) {
+          respondError(context.respond, error);
+        }
+      },
+      { scope },
+    );
+  }
 }
 
 export function readId(params: Record<string, unknown>): string {

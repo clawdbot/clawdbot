@@ -1,7 +1,11 @@
 // Policy plugin channel, model, MCP, and network evidence.
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { asNonArrayRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { ocPathSegment, readBooleanPath } from "./policy-state-helpers.js";
+import {
+  collectPolicyConfiguredAgents,
+  ocPathSegment,
+  readBooleanPath,
+} from "./policy-state-helpers.js";
 import { RESERVED_CHANNEL_CONFIG_KEYS } from "./policy-state-types.js";
 import type {
   PolicyChannelEvidence,
@@ -236,19 +240,12 @@ function collectModelRefsFromAgentAllowlist(
     );
   }
 
-  const list = agents.list;
-  if (!Array.isArray(list)) {
-    return;
-  }
-  for (const [index, agent] of list.entries()) {
+  for (const configured of collectPolicyConfiguredAgents(agents)) {
+    const agent = configured.value;
     if (!isRecord(agent) || !isRecord(agent.models)) {
       continue;
     }
-    collectModelRefsFromModelMap(
-      refs,
-      agent.models,
-      `oc://openclaw.config/agents/list/#${index}/models`,
-    );
+    collectModelRefsFromModelMap(refs, agent.models, `${configured.sourceBase}/models`);
   }
 }
 

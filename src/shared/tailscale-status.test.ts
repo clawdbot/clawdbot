@@ -84,19 +84,15 @@ describe("shared/tailscale-status", () => {
   });
 
   it("returns null for non-zero exits, blank output, or invalid json", async () => {
-    const run = vi
-      .fn()
-      .mockResolvedValueOnce({ code: null, stdout: "boom" })
-      .mockResolvedValueOnce({ code: 1, stdout: "boom" })
-      .mockResolvedValueOnce({ code: 0, stdout: "   " });
-
-    await expect(resolveTailnetHostWithRunner(run)).resolves.toBeNull();
-
-    const invalid = vi.fn().mockResolvedValue({
-      code: 0,
-      stdout: "not-json",
-    });
-    await expect(resolveTailnetHostWithRunner(invalid)).resolves.toBeNull();
+    for (const result of [
+      { code: null, stdout: "boom" },
+      { code: 1, stdout: "boom" },
+      { code: 0, stdout: "   " },
+      { code: 0, stdout: "not-json" },
+    ]) {
+      const run = vi.fn().mockResolvedValue(result);
+      await expect(resolveTailnetHostWithRunner(run)).resolves.toBeNull();
+    }
   });
 
   it("finds persistent HTTPS Serve routes that proxy the gateway root", async () => {

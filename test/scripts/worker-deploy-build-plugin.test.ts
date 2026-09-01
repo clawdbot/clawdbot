@@ -35,6 +35,20 @@ describe("worker deploy build plugin", () => {
     expect(transformed).not.toContain("was not composed by the build");
   });
 
+  it("binds the lazy Playwright accessor to bundled modules", () => {
+    const runtimePath = path.resolve("extensions/browser/src/browser/playwright-core.runtime.ts");
+    const source = fs.readFileSync(runtimePath, "utf8");
+    const plugin = createWorkerDeployBuildPlugin();
+
+    const transformed = plugin.transform.call({ error: fail }, source, runtimePath);
+
+    expect(transformed).toContain('import * as playwrightCore from "playwright-core";');
+    expect(transformed).toContain('import { getUserAgent } from "playwright-core/lib/coreBundle";');
+    expect(transformed).toContain("return playwrightCore;");
+    expect(transformed).not.toContain("createRequire");
+    expect(transformed).not.toContain('require("playwright-core")');
+  });
+
   it("bundles the undici dispatcher dependency without a worker runtime require", () => {
     const dispatcherPath = path.resolve("src/infra/net/undici-dispatcher-options.ts");
     const source = fs.readFileSync(dispatcherPath, "utf8");
@@ -48,6 +62,26 @@ describe("worker deploy build plugin", () => {
     expect(transformed).not.toContain('import { createRequire } from "node:module";');
     expect(transformed).not.toContain("const requireUndici = createRequire(import.meta.url);");
     expect(transformed).not.toContain('requireUndici("undici")');
+  });
+
+  it("shares the package native fs-safe assets with the runtime build", () => {
+    const nativePath = path.resolve("node_modules/@openclaw/fs-safe/dist/native.js");
+    const source = fs.readFileSync(nativePath, "utf8");
+    const plugin = createWorkerDeployBuildPlugin();
+
+    const transformed = plugin.transform.call({ error: fail }, source, nativePath);
+
+    expect(transformed).toContain('new URL("../../dist/native/", import.meta.url)');
+    expect(transformed).not.toContain('new URL("../dist/native/", import.meta.url)');
+  });
+
+  it("fails closed when the fs-safe native lookup shape changes", () => {
+    const nativePath = path.resolve("node_modules/@openclaw/fs-safe/dist/native.js");
+    const plugin = createWorkerDeployBuildPlugin();
+
+    expect(() =>
+      plugin.transform.call({ error: fail }, "changed upstream source", nativePath),
+    ).toThrow("fs-safe native asset lookup changed");
   });
 
   it("fails closed when the undici dispatcher bootstrap shape changes", () => {
@@ -90,6 +124,14 @@ describe("worker deploy build plugin", () => {
     const linkedRoot = path.join(tempRoot, "node_modules", "playwright-core");
     fs.mkdirSync(path.dirname(linkedRoot), { recursive: true });
     fs.symlinkSync(sourceRoot, linkedRoot, process.platform === "win32" ? "junction" : "dir");
+    const fsSafeSourceRoot = path.resolve("node_modules/@openclaw/fs-safe");
+    const linkedFsSafeRoot = path.join(tempRoot, "node_modules", "@openclaw", "fs-safe");
+    fs.mkdirSync(path.dirname(linkedFsSafeRoot), { recursive: true });
+    fs.symlinkSync(
+      fsSafeSourceRoot,
+      linkedFsSafeRoot,
+      process.platform === "win32" ? "junction" : "dir",
+    );
     const plugin = createWorkerDeployBuildPlugin(tempRoot);
     const resolvedId = fs.realpathSync(path.join(linkedRoot, "lib/coreBundle.js"));
 

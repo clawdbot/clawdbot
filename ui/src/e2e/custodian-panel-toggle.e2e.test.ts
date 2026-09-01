@@ -1,8 +1,8 @@
 // Control UI tests cover the global Ask OpenClaw panel toggle and persisted session identity.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -15,12 +15,10 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-const artifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "custodian-panel-toggle",
-);
+let artifactDir: string;
+beforeEach(() => {
+  artifactDir = createControlUiE2eArtifactDir("custodian-panel-toggle");
+});
 
 const CUSTODIAN_SESSION_STORAGE_KEY = "openclaw.custodian.session.v1";
 const MOCK_SESSION_ID = "e2e-custodian-panel";
@@ -52,7 +50,6 @@ describeControlUiE2e("Control UI Ask OpenClaw panel toggle mocked Gateway E2E", 
     if (!chromiumAvailable) {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
     }
-    await mkdir(artifactDir, { recursive: true });
     server = await startControlUiE2eServer();
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
   });
@@ -102,8 +99,10 @@ describeControlUiE2e("Control UI Ask OpenClaw panel toggle mocked Gateway E2E", 
       const response = await page.goto(`${server.baseUrl}chat`);
       expect(response?.status()).toBe(200);
 
-      // The lobster footer button renders only while openclaw.chat is advertised.
-      const footerToggle = page.locator(".sidebar-footer-bar__custodian");
+      // Ask OpenClaw lives in the Inbox header and renders only while
+      // openclaw.chat is advertised.
+      await page.locator(".sidebar-issues-button").click();
+      const footerToggle = page.locator(".sidebar-issues-panel__ask");
       await footerToggle.waitFor();
       await page.screenshot({
         animations: "disabled",
@@ -112,7 +111,7 @@ describeControlUiE2e("Control UI Ask OpenClaw panel toggle mocked Gateway E2E", 
 
       // Opening the panel renders the durable machine-wide history from the Gateway.
       await footerToggle.click();
-      const panel = page.locator("openclaw-custodian-panel");
+      const panel = page.locator("openclaw-assistant-panel");
       await panel.getByText("Channel repaired.").waitFor();
       const chatRequest = await gateway.waitForRequest("openclaw.chat");
       const firstSessionId = (chatRequest.params as { sessionId?: string }).sessionId;
@@ -122,14 +121,14 @@ describeControlUiE2e("Control UI Ask OpenClaw panel toggle mocked Gateway E2E", 
         path: path.join(artifactDir, "02-panel-open-history.png"),
       });
 
-      // The same button closes it again.
+      // The same Inbox action closes it again.
       await footerToggle.click();
       await panel.getByText("Channel repaired.").waitFor({ state: "hidden" });
 
       // The command palette exposes the same toggle from anywhere. Its action
-      // dispatches the identical toggle event the footer button uses (pinned by
+      // dispatches the identical toggle event the Inbox action uses (pinned by
       // the palette unit test), so this asserts the gated entry exists and
-      // reopens through the footer path — the palette click-through composition
+      // reopens through the Inbox path — the palette click-through composition
       // proved timing-flaky on loaded CI runners without adding coverage.
       await page.locator(".shell-chrome-controls__search").click();
       await page.getByPlaceholder("Search chats and commands…").fill("Ask OpenClaw");
@@ -140,7 +139,8 @@ describeControlUiE2e("Control UI Ask OpenClaw panel toggle mocked Gateway E2E", 
         path: path.join(artifactDir, "03-palette-item.png"),
       });
       await page.keyboard.press("Escape");
-      await footerToggle.click();
+      await page.locator(".sidebar-issues-button").click();
+      await page.locator(".sidebar-issues-panel__ask").click();
       await panel.getByText("Channel repaired.").waitFor();
 
       // The server-confirmed session id persists and is reused after a full reload.
@@ -155,7 +155,7 @@ describeControlUiE2e("Control UI Ask OpenClaw panel toggle mocked Gateway E2E", 
       // The reload replaces the page context and restarts the request ring, so
       // the plain wait matches only post-reload openclaw.chat traffic.
       await page.reload();
-      await page.locator("openclaw-custodian-panel").getByText("Channel repaired.").waitFor();
+      await page.locator("openclaw-assistant-panel").getByText("Channel repaired.").waitFor();
       const reloadedRequest = await gateway.waitForRequest("openclaw.chat");
       expect((reloadedRequest.params as { sessionId?: string }).sessionId).toBe(MOCK_SESSION_ID);
       await page.screenshot({

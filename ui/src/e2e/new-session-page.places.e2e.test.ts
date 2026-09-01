@@ -1,7 +1,9 @@
+import path from "node:path";
 import { expect, it } from "vitest";
 import {
   PICKED,
   WORKSPACE,
+  captureNewSessionComposerUiProof,
   captureProjectUiProof,
   captureUiProofEnabled,
   controlUiSessionPath,
@@ -9,8 +11,6 @@ import {
   createdSessionListResult,
   installMockGateway,
   pollLocatorText,
-  prepareProjectUiProof,
-  projectProofArtifactDir,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -21,6 +21,14 @@ suite.define(() => {
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
+      ...(captureUiProofEnabled
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "new-session-slash-menu"),
+              size: { height: 900, width: 1280 },
+            },
+          }
+        : {}),
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -49,6 +57,14 @@ suite.define(() => {
       await page.getByRole("heading", { name: "Main" }).waitFor();
       const message = page.locator(".new-session-page__message");
       await message.waitFor();
+      await message.fill("/");
+      const slashMenu = page.locator("#chat-new-session-slash-menu-listbox");
+      await pollLocatorText(slashMenu).toContain("/status");
+      expect(await slashMenu.textContent()).not.toContain("/clear");
+      await captureNewSessionComposerUiProof(suite, page, "slash-menu-open.png");
+      if (captureUiProofEnabled) {
+        await page.waitForTimeout(750);
+      }
       await message.fill("fix the flaky draft test");
 
       // Owner boundary: the New Session page (new-session-page.ts:228) keeps
@@ -90,7 +106,6 @@ suite.define(() => {
   });
 
   it("drafts a session with a browsed folder and creates it on first message", async () => {
-    await prepareProjectUiProof();
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -98,7 +113,7 @@ suite.define(() => {
       ...(captureUiProofEnabled
         ? {
             recordVideo: {
-              dir: projectProofArtifactDir,
+              dir: path.join(suite.artifactDir, "project-registry"),
               size: { height: 900, width: 1280 },
             },
           }
@@ -183,7 +198,20 @@ suite.define(() => {
       expect(commandPaletteBox).not.toBeNull();
       expect(incognitoBox?.y).toBeCloseTo(commandPaletteBox?.y ?? 0, 0);
       expect(incognitoBox?.x ?? 0).toBeGreaterThan((commandPaletteBox?.x ?? 0) + 100);
-      expect(await page.locator('.new-session-page__composer [role="switch"]').count()).toBe(0);
+      expect(
+        await page
+          .locator(".new-session-page__composer")
+          .getByRole("switch", { name: "Incognito" })
+          .count(),
+      ).toBe(0);
+      const fastMode = page.locator(".new-session-page__composer [data-chat-speed-toggle]");
+      expect(await fastMode.count()).toBe(1);
+      expect(await fastMode.getAttribute("aria-checked")).toBe("false");
+      expect(
+        await fastMode.evaluate((element) =>
+          element.classList.contains("chat-controls__speed-toggle"),
+        ),
+      ).toBe(true);
       expect(await incognitoToggle.getAttribute("aria-checked")).toBe("false");
       await incognitoToggle.click();
       await expect.poll(() => incognitoToggle.getAttribute("aria-checked")).toBe("true");
@@ -202,6 +230,9 @@ suite.define(() => {
       const footerBox = await page
         .locator(".new-session-page__composer .agent-chat__composer-footer")
         .boundingBox();
+      const actionsBox = await page
+        .locator(".new-session-page__composer .agent-chat__composer-actions")
+        .boundingBox();
       const attachmentButton = page.getByRole("button", { name: "Add attachment" });
       const attachmentBox = await attachmentButton.boundingBox();
       expect(heroBox).not.toBeNull();
@@ -210,6 +241,7 @@ suite.define(() => {
       expect(modelBox).not.toBeNull();
       expect(modelWrapperBox).not.toBeNull();
       expect(footerBox).not.toBeNull();
+      expect(actionsBox).not.toBeNull();
       expect(attachmentBox).not.toBeNull();
       expect((heroBox?.y ?? 0) + (heroBox?.height ?? 0)).toBeLessThanOrEqual(
         (triggersBox?.y ?? 0) + 1,
@@ -240,20 +272,89 @@ suite.define(() => {
         (footerBox?.x ?? 0) + (footerBox?.width ?? 0) / 2,
       );
       expect(
-        (footerBox?.x ?? 0) +
-          (footerBox?.width ?? 0) -
-          ((modelWrapperBox?.x ?? 0) + (modelWrapperBox?.width ?? 0)),
+        (actionsBox?.x ?? 0) - ((modelWrapperBox?.x ?? 0) + (modelWrapperBox?.width ?? 0)),
       ).toBeLessThanOrEqual(12);
+      expect((modelWrapperBox?.x ?? 0) + (modelWrapperBox?.width ?? 0)).toBeLessThanOrEqual(
+        actionsBox?.x ?? 0,
+      );
+      expect((actionsBox?.x ?? 0) + (actionsBox?.width ?? 0)).toBeLessThanOrEqual(
+        (footerBox?.x ?? 0) + (footerBox?.width ?? 0) + 1,
+      );
       expect(triggersBox?.x).toBeCloseTo(composerBox?.x ?? 0, 0);
       expect(triggersBox?.width).toBeCloseTo(composerBox?.width ?? 0, 0);
       expect(composerBox?.width).toBeCloseTo(48 * 16, 0);
       expect(await page.locator(".new-session-page__message").getAttribute("rows")).toBe("1");
-      await captureProjectUiProof(page, "new-session-control-layout.png");
+      await captureProjectUiProof(suite, page, "new-session-control-layout.png");
+
+      await page.setViewportSize({ width: 393, height: 852 });
+      const mobileModelSettings = page.locator(
+        '.new-session-page__composer [data-chat-model-select="true"]',
+      );
+      const mobilePermission = page.locator(
+        '.new-session-page__composer [data-chat-permission-select="true"]',
+      );
+      const mobilePermissionIcon = mobilePermission.locator(".chat-controls__permission-icon svg");
+      const permissionIconCenterError = async () => {
+        const [triggerBox, iconBox] = await Promise.all([
+          mobilePermission.boundingBox(),
+          mobilePermissionIcon.boundingBox(),
+        ]);
+        if (!triggerBox || !iconBox) {
+          return Number.POSITIVE_INFINITY;
+        }
+        const x = iconBox.x + iconBox.width / 2 - (triggerBox.x + triggerBox.width / 2);
+        const y = iconBox.y + iconBox.height / 2 - (triggerBox.y + triggerBox.height / 2);
+        return Math.max(Math.abs(x), Math.abs(y));
+      };
+      await expect.poll(() => mobileModelSettings.isVisible()).toBe(true);
+      await expect.poll(permissionIconCenterError).toBeLessThanOrEqual(1);
+      const [mobileFooterBox, mobileModelSettingsBox] = await Promise.all([
+        page.locator(".new-session-page__composer .agent-chat__composer-footer").boundingBox(),
+        mobileModelSettings.boundingBox(),
+      ]);
+      expect(mobileFooterBox).not.toBeNull();
+      expect(mobileModelSettingsBox).not.toBeNull();
+      if (!mobileFooterBox || !mobileModelSettingsBox) {
+        throw new Error("expected mobile new-session composer controls");
+      }
+      expect(mobileModelSettingsBox.width).toBeGreaterThanOrEqual(44);
+      expect(mobileModelSettingsBox.height).toBeGreaterThanOrEqual(44);
+      expect(mobileModelSettingsBox.x).toBeGreaterThanOrEqual(mobileFooterBox.x);
+      expect(mobileModelSettingsBox.x + mobileModelSettingsBox.width).toBeLessThanOrEqual(
+        mobileFooterBox.x + mobileFooterBox.width,
+      );
+      await captureProjectUiProof(suite, page, "mobile-new-session-idle.png");
+      await mobilePermission.click();
+      await page.locator('[data-chat-permission-option="workspace"]').click();
+      await expect
+        .poll(() => mobilePermission.getAttribute("data-chat-select-value"))
+        .toBe("workspace");
+      await mobilePermission.click();
+      await expect
+        .poll(() => page.locator(".chat-controls__permission-option").first().isVisible())
+        .toBe(true);
+      await captureProjectUiProof(suite, page, "mobile-new-session-permissions-open.png");
+      await page.keyboard.press("Escape");
+      await mobileModelSettings.click();
+      await expect.poll(() => page.locator(".chat-controls__model-menu").isVisible()).toBe(true);
+      await captureProjectUiProof(suite, page, "mobile-new-session-model-open.png");
+      expect(
+        await page
+          .locator(".chat-controls__model-menu")
+          .getByText(/Effort|Fast mode/)
+          .count(),
+      ).toBe(0);
+      await page.keyboard.press("Escape");
+      await page.locator('[data-chat-thinking-select="true"]').click();
+      await expect.poll(() => page.locator(".chat-controls__effort-menu").isVisible()).toBe(true);
+      await captureProjectUiProof(suite, page, "mobile-new-session-effort-open.png");
+      await page.keyboard.press("Escape");
+      await page.setViewportSize({ width: 1280, height: 900 });
 
       const agentPicker = page.locator(".new-session-page__select--agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
       await pollLocatorText(agentPicker.locator(".agent-select__menu-title")).toBe("Agents");
-      await captureProjectUiProof(page, "new-session-agent-menu-label.png");
+      await captureProjectUiProof(suite, page, "new-session-agent-menu-label.png");
       await page.keyboard.press("Escape");
 
       const whereSelect = page.locator("wa-popover.new-session-page__where-popover");
@@ -262,7 +363,7 @@ suite.define(() => {
       await pollLocatorText(whereSelect.locator(".new-session-page__menu-title").first()).toBe(
         "Environments",
       );
-      await captureProjectUiProof(page, "new-session-environment-menu-label.png");
+      await captureProjectUiProof(suite, page, "new-session-environment-menu-label.png");
       await page.keyboard.press("Escape");
 
       const projectSelect = page.locator("wa-popover.new-session-page__project-popover");
@@ -278,7 +379,7 @@ suite.define(() => {
       await pollLocatorText(projectSelect.locator(".new-session-page__menu-title").first()).toBe(
         "Projects",
       );
-      await captureProjectUiProof(page, "new-session-project-menu-label.png");
+      await captureProjectUiProof(suite, page, "new-session-project-menu-label.png");
       await projectSelect.getByRole("button", { name: "Browse folders" }).click();
       await page.locator(".new-session-page__browser-entry", { hasText: "packages" }).click();
       await expect
@@ -302,7 +403,7 @@ suite.define(() => {
       await pollLocatorText(detailSelect.locator(".new-session-page__menu-title").first()).toBe(
         "Branches",
       );
-      await captureProjectUiProof(page, "new-session-branch-menu-label.png");
+      await captureProjectUiProof(suite, page, "new-session-branch-menu-label.png");
       const worktreeItem = detailSelect.getByRole("button", { name: "Worktree" });
       await expect.poll(() => worktreeItem.getAttribute("aria-pressed")).toBe("false");
       expect(await worktreeItem.isEnabled()).toBe(true);
@@ -349,14 +450,13 @@ suite.define(() => {
   });
 
   it("selects a registered project and submits its id at write scope", async () => {
-    await prepareProjectUiProof();
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       ...(captureUiProofEnabled
         ? {
             recordVideo: {
-              dir: projectProofArtifactDir,
+              dir: path.join(suite.artifactDir, "project-registry"),
               size: { height: 900, width: 1280 },
             },
             viewport: { height: 900, width: 1280 },
@@ -427,7 +527,7 @@ suite.define(() => {
         .locator("wa-popover.new-session-page__detail-popover")
         .getByRole("button", { name: "Worktree" })
         .click();
-      await captureProjectUiProof(page, "project-selected.png");
+      await captureProjectUiProof(suite, page, "project-selected.png");
       await page.keyboard.press("Escape");
       await page.locator(".new-session-page__message").fill("inspect the project");
       await page.getByRole("button", { name: "Start session" }).click();

@@ -10,7 +10,10 @@ import {
   runWithConcurrency,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MemoryManagerSessionSyncOps } from "./manager-session-sync-ops.js";
-import { resolveMemorySessionSyncPlan } from "./manager-session-sync-state.js";
+import {
+  isMemorySessionIndexable,
+  resolveMemorySessionSyncPlan,
+} from "./manager-session-sync-state.js";
 import {
   loadMemorySourceFileState,
   resolveMemorySourceFileEntries,
@@ -293,6 +296,13 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         this.advanceSyncProgress(params.progress);
         return null;
       }
+      if (!isMemorySessionIndexable(entry)) {
+        // Archived runs may reveal their internal origin only while parsing.
+        // Remove earlier index artifacts before excluding that transcript.
+        deleteIndexedSessionPath(entry.path);
+        this.advanceSyncProgress(params.progress);
+        return null;
+      }
       const existingHash = resolveMemorySourceExistingHash({
         db: this.db,
         source: "sessions",
@@ -303,7 +313,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         this.advanceSyncProgress(params.progress);
         return null;
       }
-      return entry;
+      return { ...entry, sessionId: corpusEntryForPath(absPath).sessionId };
     };
 
     if (params.deferIndex) {

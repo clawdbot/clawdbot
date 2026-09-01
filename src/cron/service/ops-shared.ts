@@ -25,6 +25,7 @@ export function markManualCronJobActive(
   const jobId = job.id;
   state.activeManualRunJobIds.add(jobId);
   return markCronJobActive(jobId, {
+    payloadKind: job.payload.kind,
     preserveAcrossGenerationAdvance: !runsDetachedFromMainSession(job),
   });
 }
@@ -59,7 +60,7 @@ export function maybeNotifyManualIsolatedSetupTimeout(
 
 export async function ensureLoadedForRead(state: CronServiceState) {
   await ensureLoaded(state, { skipRecompute: true });
-  if (!state.store) {
+  if (!state.store || state.schedulerStarted) {
     return;
   }
   // Read repair is row-owned and never advances a past-due slot (#16156).

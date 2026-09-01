@@ -74,16 +74,7 @@ export class AgentSelect extends OpenClawLightDomElement {
   @property({ attribute: false }) onSelect: (value: string) => void = () => {};
   @property({ attribute: false }) onCreateAgent: (() => void) | null = null;
 
-  private readonly avatarLoader = new AuthenticatedAvatarRouteLoader(() => {
-    if (this.isConnected) {
-      this.requestUpdate();
-    }
-  });
-
-  override disconnectedCallback() {
-    this.avatarLoader.reset();
-    super.disconnectedCallback();
-  }
+  private readonly avatarLoader = new AuthenticatedAvatarRouteLoader(this);
 
   protected override willUpdate(changed: PropertyValues<this>) {
     if (changed.has("disabled") && this.disabled) {
@@ -111,7 +102,7 @@ export class AgentSelect extends OpenClawLightDomElement {
       event.preventDefault();
       return;
     }
-    const item = event.detail.item as HTMLElement & { checked?: boolean; value?: string };
+    const item = event.detail.item as HTMLElement & { value?: string };
     if (item.hasAttribute("data-create-agent")) {
       this.onCreateAgent?.();
       return;
@@ -122,7 +113,6 @@ export class AgentSelect extends OpenClawLightDomElement {
     }
     if (value === this.value) {
       event.preventDefault();
-      item.checked = true;
       const dropdown = event.currentTarget as HTMLElement & { open: boolean };
       dropdown.querySelector<HTMLElement>('[slot="trigger"]')?.focus({ preventScroll: true });
       dropdown.open = false;
@@ -206,16 +196,19 @@ export class AgentSelect extends OpenClawLightDomElement {
               ?data-selected=${selected}
               aria-label=${accessibleLabel}
               .value=${option.value}
-              type="checkbox"
-              .checked=${selected}
               ?disabled=${this.disabled || option.disabled}
               ${ref((element) => syncDropdownItemRadio(element, selected))}
             >
               <span slot="icon">${this.renderAvatar(option)}</span>
               ${renderAgentSelectCopy(option)}
-              ${option.badge
-                ? html`<span slot="details" class="agent-select__badge">${option.badge}</span>`
-                : nothing}
+              <span slot="details" class="agent-select__option-state" aria-hidden="true">
+                ${option.badge
+                  ? html`<span class="agent-select__badge">${option.badge}</span>`
+                  : nothing}
+                ${selected
+                  ? html`<span class="agent-select__option-check">${icons.check}</span>`
+                  : nothing}
+              </span>
             </wa-dropdown-item>
           `;
         })}

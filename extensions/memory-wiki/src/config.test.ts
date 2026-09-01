@@ -5,6 +5,7 @@ import {
   validateJsonSchemaValue,
   type JsonSchemaObject,
 } from "openclaw/plugin-sdk/json-schema-runtime";
+import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import {
@@ -39,6 +40,35 @@ describe("resolveMemoryWikiConfig", () => {
     expect(config.context.includeCompiledDigestPrompt).toBe(false);
   });
 
+  it.each([
+    { scope: "global" as const, segments: ["wiki", "main"] },
+    { scope: "agent" as const, segments: ["wiki"] },
+  ])("keeps default $scope vaults inside the configured state directory", ({ scope, segments }) => {
+    const stateDir = "/tmp/openclaw-isolated-state";
+    const config = resolveMemoryWikiConfig(
+      { vault: { scope } },
+      {
+        homedir: "/Users/tester",
+        env: { HOME: "/Users/tester", OPENCLAW_STATE_DIR: stateDir },
+      },
+    );
+
+    expect(config.vault.path).toBe(path.join(stateDir, ...segments));
+  });
+
+  it("uses the configured state directory for schema-resolved defaults", () => {
+    const stateDir = "/tmp/openclaw-schema-state";
+
+    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+      const parsed = memoryWikiConfigSchema.safeParse?.(undefined);
+
+      expect(parsed).toMatchObject({
+        success: true,
+        data: { vault: { path: path.join(stateDir, "wiki", "main") } },
+      });
+    });
+  });
+
   it("expands ~/ paths and preserves explicit modes", () => {
     const config = resolveMemoryWikiConfig(
       {
@@ -48,7 +78,10 @@ describe("resolveMemoryWikiConfig", () => {
           renderMode: "obsidian",
         },
       },
-      { homedir: "/Users/tester" },
+      {
+        homedir: "/Users/tester",
+        env: { HOME: "/Users/tester", OPENCLAW_STATE_DIR: "/tmp/openclaw-isolated-state" },
+      },
     );
 
     expect(config.vaultMode).toBe("bridge");

@@ -5,6 +5,7 @@ import {
   type MessagingToolSend,
   type MessagingToolSourceReplyPayload,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveCodexTtsProvenanceTransfer } from "openclaw/plugin-sdk/codex-mcp-projection";
 import {
   attemptTerminal,
   type AttemptFailureSource,
@@ -29,6 +30,8 @@ export type CodexAppServerToolTelemetry = {
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
   heartbeatToolResponse?: HeartbeatToolResponse;
   toolMediaUrls?: string[];
+  toolAutoDeliveryMediaUrls?: string[];
+  coreTtsToolResults?: object[];
   toolAudioAsVoice?: boolean;
   successfulCronAdds?: number;
 } & Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">;
@@ -56,6 +59,7 @@ type CodexAttemptResultInput = {
   assistantProjection: Pick<
     CodexAssistantProjection,
     | "collectAssistantTexts"
+    | "collectAsyncMessages"
     | "collectCommentaryMessages"
     | "createAssistantMessage"
     | "createAssistantMirrorMessage"
@@ -85,6 +89,7 @@ export function buildCodexAttemptResult(
   // tool lacking a terminal item so audit consumers never retain an open action.
   input.nativeToolLifecycleProjection.finalizeActive();
   const assistantTexts = input.assistantProjection.collectAssistantTexts();
+  const asyncMessages = input.assistantProjection.collectAsyncMessages();
   const commentaryMessages = input.assistantProjection.collectCommentaryMessages();
   const reasoningText = input.reasoningProjection.reasoningText();
   const planText = input.reasoningProjection.planText();
@@ -152,7 +157,7 @@ export function buildCodexAttemptResult(
     turnId: input.turnId,
     upstreamUserText: input.upstreamUserText,
     reasoningText,
-    planText,
+    asyncMessages,
     commentaryMessages,
     toolMessages: input.toolTranscriptProjection.transcriptMessages,
     lastAssistant,
@@ -179,7 +184,13 @@ export function buildCodexAttemptResult(
     ) ||
     input.generatedMediaProjection.hasGeneratedMedia() ||
     input.toolProgressProjection.hasPotentialSideEffects;
-  return {
+  const sentMediaUrls = new Set(
+    input.toolTelemetry.messagingToolSentMediaUrls.map((url) => url.trim()),
+  );
+  const toolAutoDeliveryMediaUrls = input.toolTelemetry.toolAutoDeliveryMediaUrls?.filter(
+    (url) => !sentMediaUrls.has(url.trim()),
+  );
+  const result = {
     terminal: attemptTerminal.normalize({
       aborted: input.aborted,
       promptError,
@@ -235,4 +246,9 @@ export function buildCodexAttemptResult(
     yieldDetected: input.yieldDetected || false,
     didSendDeterministicApprovalPrompt: input.guardianReviewCount > 0 ? false : undefined,
   };
+  const transferTtsProvenance = resolveCodexTtsProvenanceTransfer(input.runParams.hostCapabilities);
+  for (const toolResult of input.toolTelemetry.coreTtsToolResults ?? []) {
+    transferTtsProvenance?.(toolResult, result, toolAutoDeliveryMediaUrls ?? []);
+  }
+  return result;
 }

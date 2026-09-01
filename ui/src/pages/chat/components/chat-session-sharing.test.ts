@@ -353,9 +353,9 @@ describe("chat session sharing menu", () => {
       }),
     );
 
-    expect(root.querySelector(".chat-pane__sharing-status--error")?.textContent).toContain(
-      "Visibility update rejected",
-    );
+    const error = root.querySelector(".chat-pane__sharing-status--error");
+    expect(error?.textContent).toContain("Visibility update rejected");
+    expect(error?.getAttribute("role")).toBe("alert");
     expect(root.querySelectorAll(".chat-pane__sharing-title")).toHaveLength(
       membersAvailable ? 2 : 1,
     );

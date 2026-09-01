@@ -29,6 +29,7 @@ const checks: Array<{ file: string; snippets: string[] }> = [
   {
     file: "v2/ThreadItem.ts",
     snippets: [
+      "delivery: AgentMessageDelivery | null",
       'type: "contextCompaction"',
       'type: "dynamicToolCall"',
       'type: "commandExecution"',
@@ -78,7 +79,7 @@ const checks: Array<{ file: string; snippets: string[] }> = [
   },
   {
     file: "v2/AppsReadParams.ts",
-    snippets: ["appIds: Array<string>", "includeTools?: boolean"],
+    snippets: ["appIds: Array<string>", "threadId?: string | null", "includeTools?: boolean"],
   },
   {
     file: "v2/AppsReadResponse.ts",
@@ -128,6 +129,14 @@ const checks: Array<{ file: string; snippets: string[] }> = [
       "filePath: AbsolutePathBuf",
       "overriddenMetadata: OverriddenMetadata | null",
     ],
+  },
+  {
+    file: "v2/ConfigLayerSource.ts",
+    snippets: ['type: "packagedDefaults"', "file: AbsolutePathBuf"],
+  },
+  {
+    file: "v2/ConfigReadParams.ts",
+    snippets: ["includeLayers?: boolean", "cwd?: string | null"],
   },
   {
     file: "v2/InstalledApp.ts",
@@ -198,10 +207,43 @@ const checks: Array<{ file: string; snippets: string[] }> = [
   {
     file: "v2/ThreadStartParams.ts",
     snippets: [
+      "projectId?: string | null",
       "permissions?: string | null",
       "dynamicTools?: Array<DynamicToolSpec> | null",
       "experimentalRawEvents",
     ],
+  },
+  {
+    file: "v2/Thread.ts",
+    snippets: ["projectId: string | null"],
+  },
+  {
+    file: "v2/Model.ts",
+    snippets: ["multiAgentVersion: MultiAgentVersion | null"],
+  },
+  {
+    file: "v2/CodexErrorInfo.ts",
+    snippets: ['"misalignmentPolicyViolation"'],
+  },
+  {
+    file: "v2/McpResourceReadParams.ts",
+    snippets: [
+      "threadId?: string | null",
+      "originCallId?: string | null",
+      "connectorId?: string | null",
+    ],
+  },
+  {
+    file: "v2/McpResourceReadResponse.ts",
+    snippets: ["originCallId: string | null"],
+  },
+  {
+    file: "v2/StrictReviewRequiredNotification.ts",
+    snippets: ["threadId: string", "turnId: string", "startedAtMs: number"],
+  },
+  {
+    file: "v2/AgentMessageDelivery.ts",
+    snippets: ['"async"'],
   },
   {
     file: "v2/TurnStartParams.ts",
@@ -291,6 +333,7 @@ import type {
   CodexErrorNotification,
   CodexGetAccountResponse,
   CodexModelListResponse,
+  CodexServerNotification,
   CodexThreadForkParams,
   CodexThreadForkResponse,
   CodexThreadResumeParams,
@@ -317,8 +360,11 @@ import type { ConfigWriteResponse } from ${JSON.stringify(generatedImport("v2/Co
 import type { DynamicToolCallParams } from ${JSON.stringify(generatedImport("v2/DynamicToolCallParams.ts"))};
 import type { DynamicToolSpec } from ${JSON.stringify(generatedImport("v2/DynamicToolSpec.ts"))};
 import type { ErrorNotification } from ${JSON.stringify(generatedImport("v2/ErrorNotification.ts"))};
+import type { ConfigReadParams } from ${JSON.stringify(generatedImport("v2/ConfigReadParams.ts"))};
 import type { GetAccountResponse } from ${JSON.stringify(generatedImport("v2/GetAccountResponse.ts"))};
 import type { MarketplaceLoadErrorInfo } from ${JSON.stringify(generatedImport("v2/MarketplaceLoadErrorInfo.ts"))};
+import type { McpResourceReadParams } from ${JSON.stringify(generatedImport("v2/McpResourceReadParams.ts"))};
+import type { McpResourceReadResponse } from ${JSON.stringify(generatedImport("v2/McpResourceReadResponse.ts"))};
 import type { ModelListResponse } from ${JSON.stringify(generatedImport("v2/ModelListResponse.ts"))};
 import type { PluginInstalledParams } from ${JSON.stringify(generatedImport("v2/PluginInstalledParams.ts"))};
 import type { PluginInstalledResponse } from ${JSON.stringify(generatedImport("v2/PluginInstalledResponse.ts"))};
@@ -336,6 +382,7 @@ import type { ThreadResumeParams } from ${JSON.stringify(generatedImport("v2/Thr
 import type { ThreadResumeResponse } from ${JSON.stringify(generatedImport("v2/ThreadResumeResponse.ts"))};
 import type { ThreadStartParams } from ${JSON.stringify(generatedImport("v2/ThreadStartParams.ts"))};
 import type { ThreadStartResponse } from ${JSON.stringify(generatedImport("v2/ThreadStartResponse.ts"))};
+import type { StrictReviewRequiredNotification } from ${JSON.stringify(generatedImport("v2/StrictReviewRequiredNotification.ts"))};
 import type { TurnEnvironmentParams } from ${JSON.stringify(generatedImport("v2/TurnEnvironmentParams.ts"))};
 import type { TurnInterruptParams } from ${JSON.stringify(generatedImport("v2/TurnInterruptParams.ts"))};
 import type { TurnStartParams } from ${JSON.stringify(generatedImport("v2/TurnStartParams.ts"))};
@@ -383,6 +430,10 @@ declare const openClawTurnInterruptParams: CodexAppServerRequestParams<"turn/int
 const generatedTurnInterruptParams: TurnInterruptParams = openClawTurnInterruptParams;
 declare const openClawTurnStartParams: CodexTurnStartParams;
 const generatedTurnStartParams: TurnStartParams = openClawTurnStartParams;
+declare const openClawMcpResourceReadParams: CodexAppServerRequestParams<"mcpServer/resource/read">;
+const generatedMcpResourceReadParams: McpResourceReadParams = openClawMcpResourceReadParams;
+declare const openClawConfigReadParams: CodexAppServerRequestParams<"config/read">;
+const generatedConfigReadParams: ConfigReadParams = openClawConfigReadParams;
 
 declare const generatedAppsInstalledResponse: AppsInstalledResponse;
 const openClawAppsInstalledResponse: CodexAppServerRequestResult<"app/installed"> =
@@ -437,6 +488,18 @@ declare const generatedGetAccountResponse: GetAccountResponse;
 const openClawGetAccountResponse: CodexGetAccountResponse = generatedGetAccountResponse;
 declare const generatedModelListResponse: ModelListResponse;
 const openClawModelListResponse: CodexModelListResponse = generatedModelListResponse;
+declare const generatedMcpResourceReadResponse: McpResourceReadResponse;
+const openClawMcpResourceReadResponse: CodexAppServerRequestResult<"mcpServer/resource/read"> =
+  generatedMcpResourceReadResponse;
+declare const generatedStrictReviewRequiredNotification: StrictReviewRequiredNotification;
+type OpenClawStrictReviewRequiredNotification = Extract<
+  CodexServerNotification,
+  { method: "autoApprovalReview/strictReviewRequired" }
+>;
+const openClawStrictReviewRequiredNotification: OpenClawStrictReviewRequiredNotification = {
+  method: "autoApprovalReview/strictReviewRequired",
+  params: generatedStrictReviewRequiredNotification,
+};
 declare const generatedThreadDeleteResponse: ThreadDeleteResponse;
 const openClawThreadDeleteResponse: CodexAppServerRequestResult<"thread/delete"> =
   generatedThreadDeleteResponse;

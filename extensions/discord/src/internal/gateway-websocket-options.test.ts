@@ -27,7 +27,7 @@ describe("GatewayPlugin websocket options", () => {
     ({ GatewayPlugin } = await import("./gateway.js"));
   });
 
-  it("bounds inbound gateway websocket payloads", () => {
+  it("bounds inbound gateway websocket payloads and the opening handshake", () => {
     const gateway = new GatewayPlugin({
       autoInteractions: false,
       url: "wss://gateway.example.test",
@@ -38,7 +38,7 @@ describe("GatewayPlugin websocket options", () => {
     expect(webSocketCtorCalls).toHaveLength(1);
     expect(webSocketCtorCalls[0]).toEqual({
       url: "wss://gateway.example.test/?v=10&encoding=json",
-      options: { maxPayload: 16 * 1024 * 1024 },
+      options: { maxPayload: 16 * 1024 * 1024, handshakeTimeout: 30_000 },
     });
   });
 });

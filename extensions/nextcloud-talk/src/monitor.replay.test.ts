@@ -35,8 +35,8 @@ async function invokeWebhookRequestListener(params: {
     method: "POST",
     url: params.path,
     headers: params.headers,
-    socket: { remoteAddress: params.remoteAddress },
-  }) as unknown as IncomingMessage;
+  });
+  Object.defineProperty(req.socket, "remoteAddress", { value: params.remoteAddress });
 
   return await new Promise<{ body: string; status: number }>((resolve) => {
     let status = 0;
@@ -64,7 +64,7 @@ async function invokeWebhookServerRequest(params: {
   headers: Record<string, string>;
   maxBodyBytes: number;
 }) {
-  const { server } = createNextcloudTalkWebhookServer({
+  const { server, stop } = createNextcloudTalkWebhookServer({
     host: "127.0.0.1",
     port: 0,
     path: "/nextcloud-body-limit",
@@ -72,19 +72,23 @@ async function invokeWebhookServerRequest(params: {
     maxBodyBytes: params.maxBodyBytes,
     onMessage: vi.fn(),
   });
-  const listener = server.listeners("request")[0] as
-    | ((req: IncomingMessage, res: ServerResponse) => void)
-    | undefined;
-  if (!listener) {
-    throw new Error("expected Nextcloud Talk request listener");
+  try {
+    const listener = server.listeners("request")[0] as
+      | ((req: IncomingMessage, res: ServerResponse) => void)
+      | undefined;
+    if (!listener) {
+      throw new Error("expected Nextcloud Talk request listener");
+    }
+    return await invokeWebhookRequestListener({
+      listener,
+      path: "/nextcloud-body-limit",
+      body: params.body,
+      headers: params.headers,
+      remoteAddress: "127.0.0.1",
+    });
+  } finally {
+    await stop();
   }
-  return await invokeWebhookRequestListener({
-    listener,
-    path: "/nextcloud-body-limit",
-    body: params.body,
-    headers: params.headers,
-    remoteAddress: "127.0.0.1",
-  });
 }
 
 describe("createNextcloudTalkWebhookServer auth order", () => {
@@ -386,7 +390,7 @@ describe("createNextcloudTalkWebhookServer auth rate limiting", () => {
 
   it("keeps unattributed trusted proxies in separate socket buckets", async () => {
     const path = "/nextcloud-auth-rate-limit-proxy-fallback";
-    const { server } = createNextcloudTalkWebhookServer({
+    const { server, stop } = createNextcloudTalkWebhookServer({
       host: "127.0.0.1",
       port: 0,
       path,
@@ -395,33 +399,37 @@ describe("createNextcloudTalkWebhookServer auth rate limiting", () => {
       trustedProxies: ["127.0.0.0/8"],
       onMessage: vi.fn(),
     });
-    const listener = server.listeners("request")[0] as
-      | ((req: IncomingMessage, res: ServerResponse) => void)
-      | undefined;
-    if (!listener) {
-      throw new Error("expected Nextcloud Talk request listener");
+    try {
+      const listener = server.listeners("request")[0] as
+        | ((req: IncomingMessage, res: ServerResponse) => void)
+        | undefined;
+      if (!listener) {
+        throw new Error("expected Nextcloud Talk request listener");
+      }
+      const { body, headers } = createSignedCreateMessageRequest();
+      const invalidHeaders = {
+        ...headers,
+        "x-nextcloud-talk-signature": "invalid-signature",
+      };
+      const invoke = (remoteAddress: string, requestHeaders: Record<string, string>) =>
+        invokeWebhookRequestListener({
+          listener,
+          path,
+          body,
+          headers: requestHeaders,
+          remoteAddress,
+        });
+
+      const firstAttack = await invoke("127.0.0.2", invalidHeaders);
+      const blockedAttack = await invoke("127.0.0.2", invalidHeaders);
+      const legitimateDelivery = await invoke("127.0.0.3", headers);
+
+      expect(firstAttack.status).toBe(401);
+      expect(blockedAttack.status).toBe(429);
+      expect(legitimateDelivery.status).toBe(200);
+    } finally {
+      await stop();
     }
-    const { body, headers } = createSignedCreateMessageRequest();
-    const invalidHeaders = {
-      ...headers,
-      "x-nextcloud-talk-signature": "invalid-signature",
-    };
-    const invoke = (remoteAddress: string, requestHeaders: Record<string, string>) =>
-      invokeWebhookRequestListener({
-        listener,
-        path,
-        body,
-        headers: requestHeaders,
-        remoteAddress,
-      });
-
-    const firstAttack = await invoke("127.0.0.2", invalidHeaders);
-    const blockedAttack = await invoke("127.0.0.2", invalidHeaders);
-    const legitimateDelivery = await invoke("127.0.0.3", headers);
-
-    expect(firstAttack.status).toBe(401);
-    expect(blockedAttack.status).toBe(429);
-    expect(legitimateDelivery.status).toBe(200);
   });
 
   it("does not rate limit valid signed webhook bursts from the same source", async () => {

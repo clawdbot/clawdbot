@@ -2,27 +2,52 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
 import { WorkerMachineOptionsSchema } from "../../../packages/gateway-protocol/src/schema/environments.js";
+import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import {
   WorkerProviderError,
   type WorkerDesktopEndpoint,
-  type WorkerExecutionMode,
   type WorkerLease,
   type WorkerLeaseStatus,
   type WorkerProvider,
   type WorkerMachineOption,
   type WorkerSshEndpoint,
 } from "../../plugins/types.js";
+import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import { normalizeWorkerDesktopEndpoint, normalizeWorkerSshEndpoint } from "./store.js";
 
-export function requireProviderProvisionTimeoutMs(
+export function requireInheritedWorkerProfileAuthorization(
+  profileId: string,
+  providerId: string,
+  settings: unknown,
+  configuredProviderId: string | undefined,
+  serviceError: (code: "profile_not_found" | "invalid_profile", message: string) => Error,
+): void {
+  if (
+    providerId === DEVICE_WORKER_PROVIDER_ID &&
+    isRecord(settings) &&
+    typeof settings.device === "string" &&
+    profileId === `device:${settings.device}`
+  ) {
+    return;
+  }
+  if (!configuredProviderId) {
+    throw serviceError("profile_not_found", `Unknown worker profile: ${profileId}`);
+  }
+  if (normalizeCapabilityProviderId(configuredProviderId) !== providerId) {
+    throw serviceError("invalid_profile", "Inherited worker provider identity changed");
+  }
+}
+
+export function requireProviderOperationTimeoutMs(
+  operation: "provision" | "destroy",
   timeoutMs: number | undefined,
 ): number | undefined {
   if (timeoutMs === undefined) {
     return undefined;
   }
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_TIMER_TIMEOUT_MS) {
-    throw new WorkerProviderError(
-      `Worker provider provision timeout must be an integer from 1 through ${MAX_TIMER_TIMEOUT_MS}ms`,
+    throw new Error(
+      `Worker provider ${operation} timeout must be an integer from 1 through ${MAX_TIMER_TIMEOUT_MS}ms`,
     );
   }
   return timeoutMs;
@@ -86,24 +111,45 @@ export function requireWorkerLeaseStatus(value: unknown): WorkerLeaseStatus {
   return { status };
 }
 
-export function resolveWorkerTransportModeError(
+export function resolveWorkerLeaseTransportError(
   provider: WorkerProvider,
-  transportMode: WorkerExecutionMode,
+  transport: "node" | "ssh",
+  executionMode?: unknown,
 ): WorkerProviderError | undefined {
   const modes = provider.supportedExecutionModes;
-  const executionMode: WorkerExecutionMode | undefined = modes?.length === 1 ? modes[0] : undefined;
-  return !executionMode || executionMode === transportMode
-    ? undefined
-    : new WorkerProviderError(
-        `${executionMode} providers must return a ${executionMode === "worker-turn" ? "node" : "SSH"} lease`,
-      );
+  if (
+    executionMode !== undefined &&
+    executionMode !== "worker-turn" &&
+    executionMode !== "remote-exec"
+  ) {
+    return new WorkerProviderError("Worker environment has an invalid placement execution mode");
+  }
+  if (
+    transport === "ssh" &&
+    (executionMode === "worker-turn" || (modes !== undefined && !modes.includes("remote-exec")))
+  ) {
+    return new WorkerProviderError("worker-turn providers must return a node lease");
+  }
+  if (executionMode !== undefined && !modes?.includes(executionMode)) {
+    return new WorkerProviderError(
+      `Worker provider ${provider.id} does not advertise ${executionMode} for its ${transport} lease`,
+    );
+  }
+  return undefined;
 }
 
-export function resolveWorkerLeaseModeError(
-  provider: WorkerProvider,
-  lease: WorkerLease,
-): WorkerProviderError | undefined {
-  return resolveWorkerTransportModeError(provider, lease.node ? "worker-turn" : "remote-exec");
+export function requireWorkerAllocation(
+  value: unknown,
+): Awaited<ReturnType<WorkerProvider["resolveAllocation"]>> {
+  if (
+    !isRecord(value) ||
+    typeof value.leaseId !== "string" ||
+    !value.leaseId.trim() ||
+    typeof value.sharedHost !== "boolean"
+  ) {
+    throw new Error("Worker provider returned an invalid allocation identity");
+  }
+  return { leaseId: value.leaseId.trim(), sharedHost: value.sharedHost };
 }
 
 export function requireWorkerLease(value: unknown): WorkerLease {

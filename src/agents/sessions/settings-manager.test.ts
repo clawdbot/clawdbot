@@ -26,6 +26,19 @@ class InspectableSettingsStorage implements SettingsStorage {
 }
 
 describe("SettingsManager scoped persistence", () => {
+  it("loads settings from a backend that supplies the pure read contract", () => {
+    const manager = SettingsManager.fromStorage({
+      readSettingsScope: (scope) => JSON.stringify({ theme: scope }),
+      withLock: () => {
+        throw new Error("This backend only supports pure reads");
+      },
+    });
+    expect(manager.drainErrors()).toEqual([]);
+    expect(manager.getGlobalSettings()).toEqual({ theme: "global" });
+    expect(manager.getProjectSettings()).toEqual({ theme: "project" });
+    expect(manager.getTheme()).toBe("project");
+  });
+
   it("preserves external sibling changes while writing global and project scopes", async () => {
     const storage = new InspectableSettingsStorage();
     storage.set("global", {

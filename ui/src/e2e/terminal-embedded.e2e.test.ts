@@ -1,4 +1,6 @@
+import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -12,8 +14,9 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
-const deadSessionScreenshotPath = process.env.OPENCLAW_TERMINAL_DEAD_SESSION_SCREENSHOT?.trim();
-const deadSessionVideoDir = process.env.OPENCLAW_TERMINAL_DEAD_SESSION_VIDEO_DIR?.trim();
+const requestedDeadSessionScreenshotPath =
+  process.env.OPENCLAW_TERMINAL_DEAD_SESSION_SCREENSHOT?.trim();
+const requestedDeadSessionVideoDir = process.env.OPENCLAW_TERMINAL_DEAD_SESSION_VIDEO_DIR?.trim();
 
 suite.define(() => {
   it("returns from an unavailable focused terminal", async () => {
@@ -258,23 +261,27 @@ suite.define(() => {
         cols: expect.any(Number),
         rows: expect.any(Number),
       });
-      const colorQueries = "\u001b]10;?\u001b\\\u001b]11;?\u001b\\";
+      const colorQueries = "\u001b]10;?\u001b\\\u001b]11;?\u001b\\\u001b]12;?\u001b\\";
       await gateway.emitGatewayEvent("terminal.data", {
         sessionId: "terminal-e2e",
         seq: colorQueries.length,
         data: colorQueries,
       });
-      await expect.poll(async () => (await gateway.getRequests("terminal.input")).length).toBe(2);
-      expect((await gateway.getRequests("terminal.input")).map(({ params }) => params)).toEqual([
-        {
+      await expect.poll(async () => (await gateway.getRequests("terminal.input")).length).toBe(3);
+      const themeColors = await page.evaluate(() => {
+        const styles = getComputedStyle(document.documentElement);
+        return ["--text", "--bg", "--accent"].map((property) =>
+          styles.getPropertyValue(property).trim(),
+        );
+      });
+      expect((await gateway.getRequests("terminal.input")).map(({ params }) => params)).toEqual(
+        themeColors.map((color, index) => ({
           sessionId: "terminal-e2e",
-          data: "\u001b]10;rgb:1b1b/1e1e/2626\u001b\\",
-        },
-        {
-          sessionId: "terminal-e2e",
-          data: "\u001b]11;rgb:f7f7/f8f8/fafa\u001b\\",
-        },
-      ]);
+          data: `\u001b]${index + 10};rgb:${[1, 3, 5]
+            .map((offset) => color.slice(offset, offset + 2).repeat(2))
+            .join("/")}\u001b\\`,
+        })),
+      );
       expect(await page.locator("openclaw-login-gate").count()).toBe(0);
       expect(await page.locator("openclaw-terminal-panel").count()).toBe(1);
       const closeControlMetrics = await page
@@ -329,6 +336,27 @@ suite.define(() => {
   });
 
   it("restores a persisted session with no gateway PTY as exited", async () => {
+    const screenshotDir = requestedDeadSessionScreenshotPath
+      ? createControlUiE2eArtifactDir(
+          "terminal-dead-session",
+          path.dirname(requestedDeadSessionScreenshotPath),
+        )
+      : undefined;
+    const deadSessionScreenshotPath =
+      screenshotDir && requestedDeadSessionScreenshotPath
+        ? path.join(screenshotDir, path.basename(requestedDeadSessionScreenshotPath))
+        : undefined;
+    const deadSessionVideoDir = requestedDeadSessionVideoDir
+      ? screenshotDir &&
+        requestedDeadSessionScreenshotPath &&
+        path.resolve(requestedDeadSessionVideoDir) ===
+          path.resolve(path.dirname(requestedDeadSessionScreenshotPath))
+        ? screenshotDir
+        : createControlUiE2eArtifactDir("terminal-dead-session", requestedDeadSessionVideoDir)
+      : undefined;
+    if (deadSessionScreenshotPath) {
+      console.info(`[control-ui-e2e] screenshot: ${deadSessionScreenshotPath}`);
+    }
     await suite.withPage(
       {
         serviceWorkers: "block",

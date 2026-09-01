@@ -28,11 +28,6 @@ import {
 import { findNormalizedProviderValue, parseModelRef } from "./model-selection-normalize.js";
 import { resolvePersistedOverrideModelRef } from "./model-selection-persisted.js";
 import {
-  resolveAllowedModelRefCore as resolveAllowedModelRefInternal,
-  resolveConfiguredModelFallbacks,
-} from "./model-selection-resolve.js";
-import {
-  buildAllowedModelSetWithFallbacks,
   buildConfiguredModelCatalog,
   buildModelAliasIndex,
   inferUniqueProviderFromConfiguredModels,
@@ -44,9 +39,11 @@ import {
   resolveModelRefFromString,
   type ModelAliasIndex,
 } from "./model-selection-shared.js";
+export { resolveAllowedModelRefCore as resolveAllowedModelRef } from "./model-selection-resolve.js";
+export { buildAllowedModelSet } from "./model-selection-shared.js";
 export {
   resolveThinkingDefault,
-  resolveThinkingDefaultWithRuntimeCatalog,
+  resolveThinkingDefaultWithRuntimeCatalogCore,
 } from "./model-thinking-default.js";
 
 export type { ModelAliasIndex, ModelManifestNormalizationContext, ModelRef };
@@ -231,18 +228,19 @@ function appendAuthProfileSuffix(modelRef: string, profile: string | undefined):
  * or not a known alias, returns it unchanged.
  */
 function resolveModelThroughAliases(value: string, aliasIndex: ModelAliasIndex): string {
+  const { model, profile } = splitTrailingAuthProfile(value);
   // Already a provider/model ref — no alias resolution needed.
-  if (value.includes("/")) {
-    return value;
+  if (model.includes("/")) {
+    return appendAuthProfileSuffix(model, profile);
   }
   // Check if the value is a known alias; if so, resolve to provider/model.
   // Unknown bare strings are returned as-is (don't guess the provider).
-  const aliasKey = normalizeLowercaseStringOrEmpty(value);
+  const aliasKey = normalizeLowercaseStringOrEmpty(model);
   const aliasMatch = aliasIndex.byAlias.get(aliasKey);
   if (aliasMatch) {
-    return `${aliasMatch.ref.provider}/${aliasMatch.ref.model}`;
+    return appendAuthProfileSuffix(`${aliasMatch.ref.provider}/${aliasMatch.ref.model}`, profile);
   }
-  return value;
+  return appendAuthProfileSuffix(model, profile);
 }
 
 export function resolveSubagentSpawnModelSelection(params: {
@@ -264,7 +262,7 @@ export function resolveSubagentSpawnModelSelection(params: {
     return configured;
   }
   const raw =
-    normalizeModelSelection(resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model)) ??
+    resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model) ??
     `${runtimeDefault.provider}/${runtimeDefault.model}`;
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
@@ -303,51 +301,6 @@ export function resolveConfiguredSubagentSpawnModelSelection(params: {
     defaultProvider,
   });
   return resolveModelThroughAliases(raw, aliasIndex);
-}
-
-export function buildAllowedModelSet(
-  params: {
-    cfg: OpenClawConfig;
-    catalog: ModelCatalogEntry[];
-    defaultProvider: string;
-    defaultModel?: string;
-    agentId?: string;
-  } & ModelManifestNormalizationContext,
-): {
-  allowAny: boolean;
-  allowedCatalog: ModelCatalogEntry[];
-  allowedKeys: Set<string>;
-  automaticFallbackKeys: Set<string>;
-} {
-  return buildAllowedModelSetWithFallbacks({
-    cfg: params.cfg,
-    catalog: params.catalog,
-    defaultProvider: params.defaultProvider,
-    defaultModel: params.defaultModel,
-    agentId: params.agentId,
-    fallbackModels: resolveConfiguredModelFallbacks({
-      cfg: params.cfg,
-      agentId: params.agentId,
-    }),
-    manifestPlugins: params.manifestPlugins,
-  });
-}
-
-export function resolveAllowedModelRef(
-  params: {
-    cfg: OpenClawConfig;
-    catalog: ModelCatalogEntry[];
-    raw: string;
-    defaultProvider: string;
-    defaultModel?: string;
-    agentId?: string;
-  } & ModelManifestNormalizationContext,
-):
-  | { ref: ModelRef; key: string }
-  | {
-      error: string;
-    } {
-  return resolveAllowedModelRefInternal(params);
 }
 
 /** Default reasoning level when session/directive do not set it: "on" if model supports reasoning, else "off". */

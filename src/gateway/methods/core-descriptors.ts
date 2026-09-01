@@ -36,10 +36,15 @@ type CoreGatewayMethodSpecRow = readonly [
 
 const PROFILE_DEPENDENT_CORE_METHODS = new Set([
   "agent.wait",
+  // talk.config projects the caller's profile accent; without this gate a
+  // client asking during the post-hello GitHub identity sync window would get
+  // the gateway-wide accent instead. Profile-less clients pass through.
+  "talk.config",
   "ui.command",
   "users.linkEmail",
   "users.setAvatar",
   "users.setDisplayName",
+  "users.setRole",
 ]);
 const PROFILE_DEPENDENT_CORE_PREFIXES = [
   "artifacts.",
@@ -112,6 +117,8 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["exec.approval.request", null, "operator.approvals", "<=2026.7"],
   ["exec.approval.waitDecision", null, "operator.approvals", "<=2026.7"],
   ["exec.approval.resolve", null, "operator.approvals", "<=2026.7"],
+  ["exec.approval.grants.list", null, "operator.approvals", "2026.8"],
+  ["exec.approval.grants.revoke", null, "operator.approvals", "2026.8"],
   ["question.request", null, "operator.questions", "2026.7"],
   ["question.waitAnswer", null, "operator.questions", "2026.7"],
   ["question.resolve", null, "operator.questions", "2026.7"],
@@ -131,6 +138,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   // Failed activation candidates are non-mutating probes. Keep this admin-only
   // without the shared three-write budget so the automatic ladder can finish.
   ["openclaw.setup.activate", "system-agent", "operator.admin", "<=2026.7"],
+  ["openclaw.setup.activate.start", "system-agent", "operator.admin", "2026.8"],
   ["openclaw.setup.auth.start", "system-agent", "operator.admin", "<=2026.7"],
   ["openclaw.setup.prepare.start", "system-agent", "operator.admin", "<=2026.7"],
   ["wizard.start", "wizard", "operator.admin", "<=2026.7"],
@@ -187,6 +195,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["users.linkEmail", "users", "operator.admin", "<=2026.7"],
   ["users.setDisplayName", "users", "operator.write", "<=2026.7"],
   ["users.setAvatar", "users", "operator.write", "<=2026.7"],
+  ["users.setRole", "users", "operator.admin", "2026.8"],
   ["tasks.list", "tasks", "operator.read", "<=2026.7"],
   ["tasks.get", "tasks", "operator.read", "<=2026.7"],
   ["tasks.cancel", "tasks", "operator.write", "<=2026.7"],
@@ -256,7 +265,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["secrets.resolve", null, "operator.admin", "<=2026.7"],
   ["voicewake.routing.get", "voicewake-routing", "operator.read", "<=2026.7"],
   ["sessions.list", "sessions-read", "operator.read", "<=2026.7", { startup: true }],
-  ["sessions.subscribe", "sessions-subscriptions", "operator.read", "<=2026.7"],
+  ["sessions.subscribe", "sessions-subscriptions", "operator.read", "<=2026.7", { startup: true }],
   ["sessions.messages.subscribe", "sessions-subscriptions", "operator.read", "<=2026.7"],
   ["sessions.messages.unsubscribe", "sessions-subscriptions", "operator.read", "<=2026.7"],
   ["sessions.viewers.set", "sessions-subscriptions", "operator.read", "2026.7"],
@@ -279,6 +288,8 @@ const CORE_GATEWAY_METHOD_SPECS = [
   // in shared/session-method-scopes.ts. The admin-only sticky configured-default
   // persistence guard lives in server-methods/sessions-mutations.ts.
   ["sessions.patch", "sessions-mutations", "dynamic", "<=2026.7"],
+  ["sessions.goal.update", "sessions-goal", "operator.write", "2026.8"],
+  ["sessions.goal.clear", "sessions-goal", "operator.write", "2026.8"],
   ["sessions.pluginPatch", "sessions-mutations", "operator.admin", "<=2026.7"],
   ["sessions.cleanup", "sessions-read", "operator.admin", "<=2026.7"],
   ["sessions.reset", "sessions-mutations", "operator.admin", "<=2026.7"],
@@ -342,10 +353,10 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["cron.status", "cron", "operator.read", "<=2026.7"],
   ["cron.scratch.get", "cron", "operator.admin", "2026.7"],
   ["cron.scratch.set", "cron", "operator.admin", "2026.7"],
-  ["cron.add", "cron", "operator.admin", "<=2026.7"],
-  ["cron.update", "cron", "operator.admin", "<=2026.7"],
-  ["cron.remove", "cron", "operator.admin", "<=2026.7"],
-  ["cron.run", "cron", "operator.admin", "<=2026.7"],
+  ["cron.add", "cron", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
+  ["cron.update", "cron", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
+  ["cron.remove", "cron", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
+  ["cron.run", "cron", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
   ["cron.runs", "cron", "operator.read", "<=2026.7"],
   ["gateway.identity.get", "system", "operator.read", "<=2026.7"],
   // Deprecated read-only compatibility preview; new restart flows request the
@@ -373,7 +384,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["chat.startup", "chat", "operator.read", "<=2026.7", { startup: true }],
   ["chat.metadata", "chat", "operator.read", "<=2026.7", { startup: true }],
   ["chat.message.get", "chat", "operator.read", "<=2026.7", { startup: true }],
-  ["chat.abort", "chat", "operator.write", "<=2026.7"],
+  ["chat.abort", "chat-abort", "operator.write", "<=2026.7"],
   ["chat.send", "chat", "operator.write", "<=2026.7", { startup: true }],
   // Operator terminal: admin-only PTY surface. Appended to the advertised block
   // so existing advertised method indices stay stable for older clients.
@@ -411,6 +422,8 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["push.web.subscribe", "push", "operator.write", "<=2026.7", { advertise: false }],
   ["push.web.unsubscribe", "push", "operator.write", "<=2026.7", { advertise: false }],
   ["push.web.test", "push", "operator.write", "<=2026.7", { advertise: false }],
+  ["push.web.preferences.get", "push", "operator.read", "2026.8"],
+  ["push.web.preferences.set", "push", "operator.write", "2026.8"],
   ["config.openFile", "config", "operator.admin", "<=2026.7", { advertise: false }],
   ["connect", "connect", "operator.admin", "<=2026.7", { advertise: false }],
   ["chat.inject", "chat", "operator.admin", "<=2026.7", { advertise: false }],
@@ -627,6 +640,10 @@ const CORE_GATEWAY_METHOD_SPECS = [
     { controlPlaneWrite: true },
   ],
   ["diagnostics.lanes", "diagnostics", "operator.read", "2026.8"],
+  // Evidence-aware member projection is additive so legacy method indices and
+  // its required `addedBy` response contract remain unchanged.
+  ["session.members.listEvidence", "sessions-sharing", "operator.read", "2026.8"],
+  ["plugins.inspect", "plugins", "operator.read", "2026.8"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;

@@ -8,25 +8,95 @@ read_when:
 title: "Linux app"
 ---
 
-The Gateway is fully supported on Linux and requires Node. Bun can still be used
-as a dependency installer or package-script runner, but it cannot run OpenClaw
-because it does not provide `node:sqlite`.
+The Gateway is fully supported on Linux. Node is the primary, default, and
+recommended runtime; Bun 1.4+ builds with WAL-reset-safe `node:sqlite` can run
+OpenClaw as an explicit opt-in. Use `pnpm` rather than Bun for dependency
+installation.
 
 ## Desktop companion
 
-The OpenClaw Linux companion is a Tauri desktop app for a local Gateway. It:
+The OpenClaw Linux companion is a Tauri desktop app for local and remote
+Gateways. It:
 
-- installs the OpenClaw CLI and managed Node runtime when they are missing; release builds install the stable channel automatically, while development builds ask for the channel first
+- walks new users through choosing a local Gateway, a discovered remote Gateway,
+  a manually entered Gateway URL, or an SSH tunnel
+- installs the OpenClaw CLI and Node in a private managed runtime when local
+  setup needs them, rather than requiring a global CLI install; release builds
+  install the stable channel automatically, while development builds ask for
+  the channel first
 - attaches to a healthy Gateway before attempting service changes
 - delegates install, start, stop, and restart operations to the CLI-managed systemd user service
 - discovers nearby Bonjour Gateways and opens each Control UI in a route-scoped window, so several
   Gateway dashboards can stay connected and be used simultaneously
 - opens the Gateway-served Control UI with its resolved authentication URL
-- opens the Control UI in onboarding mode after its first-run install, which
-  offers to import detected Claude Code, Codex, or Hermes memories into the
-  agent workspace (the same import stays available later under
-  Settings → Import Memory)
+- opens Model Setup for an unconfigured local or remote Gateway, automatically
+  tests available AI credentials, and verifies an existing model before
+  opening the dashboard
+- continues into guided onboarding after connecting a new model; onboarding can
+  import detected Claude Code, Codex, or Hermes memories into the agent workspace
+  (the same import stays available later under Settings → Import Memory)
 - remains available from the system tray when its window is closed
+
+### First-run setup
+
+Choose **Get started** on the welcome screen, then choose where your assistant
+should live:
+
+- **On this computer** installs any missing local prerequisites and starts the
+  Gateway as a systemd user service.
+- **On another computer** connects to an existing Gateway. Select a discovered
+  Gateway, enter its address under **Gateway URL**, or choose **SSH tunnel**
+  and enter an SSH target such as `user@gateway-host`. The Gateway port defaults
+  to `18789`.
+
+If the remote Gateway requires authentication, expand **Gateway authentication**
+and enter its token or password. Use one credential type, matching the remote
+Gateway's configuration. Remote setup does not install or start a local Gateway
+service; the remote host owns its model, provider credentials, and agent state.
+
+Use HTTPS or `wss://` for public direct connections. Plain HTTP or `ws://`
+should be limited to loopback, trusted private networks, and Tailnet hosts.
+When the saved configuration includes `gateway.remote.tlsFingerprint`, select
+**SSH tunnel** instead of a direct connection. The embedded browser cannot
+enforce a certificate pin, so the app rejects direct connections before loading
+the remote dashboard or exposing its credentials. Saved remote token and
+password values can use environment- or file-backed SecretRefs; exec and
+shared-store references must be resolved on their owning Gateway host.
+SSH uses your existing OpenSSH authentication and host-key verification. See
+[Remote access](/gateway/remote) for secure Gateway configuration.
+
+After the connection succeeds, Model Setup checks for existing AI credentials,
+offers provider sign-in or API-key entry when needed, and requires a successful
+model response before opening the agent. An already configured Gateway opens
+its normal dashboard after verification; newly configured access continues into
+guided onboarding.
+
+Model Setup can resume an activation across a Gateway restart or app reopen
+while its temporary recovery record is valid. Recovery stays bound to the same
+Gateway, agent, and authentication. When the known activation target still
+matches the selected model, OpenClaw verifies that exact model before continuing
+guided onboarding rather than activating the provider again. For an unresolved
+result, use **Verify & use selected model** to explicitly verify and adopt a
+displayed model, or wait for the setup attempt's bounded window to end before
+choosing **Check again**.
+Recovery is not guaranteed after that record expires, browser storage becomes
+unavailable or is cleared, or the Gateway, agent, or authentication changes.
+
+Ollama automatic discovery uses eligible models already loaded in memory, not
+all models installed on disk. To use an idle installed model, choose **Choose
+connection** on its Ollama card, then **Local only**. See [Ollama](/providers/ollama).
+
+For OpenAI, choose **ChatGPT Login** to use a ChatGPT or Codex subscription, or
+**OpenAI API Key** for API billing. Browser sign-in completes on the Gateway
+host. If that host is remote or its localhost callback cannot be reached,
+choose **ChatGPT Device Pairing** from the additional sign-in options instead;
+device pairing works without a localhost callback. See
+[OpenAI](/providers/openai) and [OAuth](/concepts/oauth).
+
+When the desktop app starts with a supported provider API key in its environment,
+the Gateway service keeps that dedicated inference credential in an owner-only
+environment file. Provider admin keys, GitHub tokens, and unrelated environment
+variables are not copied into the service.
 
 ### Host sleep
 
@@ -41,7 +111,8 @@ the shell does not grant microphone capture to the WebKitGTK WebView, so
 `getUserMedia` is expected to fail there. Until that lands, open the Gateway's
 Control UI in a regular browser for [Talk mode](/nodes/talk).
 
-Stable releases built from `main` ship `.deb` and AppImage bundles as assets on the
+Stable releases built from `main` or their matching `release/YYYY.M.PATCH` branch
+ship `.deb` and AppImage bundles as assets on the
 [GitHub release](https://github.com/openclaw/openclaw/releases) for the tag,
 named `OpenClaw-<version>-amd64.deb` and `OpenClaw-<version>-amd64.AppImage`,
 with a `SHA256SUMS.linux-app.txt` checksum file next to them. Download the
@@ -118,7 +189,8 @@ plain-text reply below the composer. Press `Esc` to dismiss the bar and its repl
 
 ## CLI and SSH alternative
 
-The CLI remains the simplest option for a headless server, a VPS, or a remote Gateway:
+The CLI remains the simplest option for a headless server or VPS. Use a manual
+SSH tunnel when connecting without the Linux desktop companion:
 
 1. Install Node 26 (recommended), or another supported release: Node 22.22.3+, Node 24.15+, or Node 25.9+.
 2. On npm 12 or npm 11.16+, run `npm i -g openclaw@latest --allow-scripts=openclaw`. On npm 11.15 and earlier, omit `--allow-scripts=openclaw`.
@@ -283,6 +355,6 @@ resource controls (systemd `MemoryMax=`, container memory limits).
 - [Install overview](/install)
 - [Linux server](/vps)
 - [ChromeOS (Crostini)](/platforms/chromeos)
-- [Raspberry Pi](/platforms/raspberry-pi)
+- [Raspberry Pi](/install/raspberry-pi)
 - [Gateway runbook](/gateway)
 - [Gateway configuration](/gateway/configuration)

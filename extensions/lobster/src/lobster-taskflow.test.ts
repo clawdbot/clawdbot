@@ -1,4 +1,5 @@
 // Lobster tests cover lobster taskflow plugin behavior.
+import { createRuntimeTaskFlow } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { LobsterRunner } from "./lobster-runner.js";
 import { resumeManagedLobsterFlow, runManagedLobsterFlow } from "./lobster-taskflow.js";
@@ -25,6 +26,7 @@ function createRunFlowParams(
 ): Parameters<typeof runManagedLobsterFlow>[0] {
   return {
     taskFlow,
+    config: {},
     runner,
     runnerParams: {
       action: "run",
@@ -44,6 +46,7 @@ function createResumeFlowParams(
 ): Parameters<typeof resumeManagedLobsterFlow>[0] {
   return {
     taskFlow,
+    config: {},
     runner,
     flowId: "flow-1",
     expectedRevision: 4,
@@ -82,9 +85,17 @@ describe("runManagedLobsterFlow", () => {
     });
   });
 
-  it("moves the flow to waiting when Lobster requests approval", async () => {
+  it("serializes cyclic and supported approval items before waiting", async () => {
     const taskFlow = createFakeTaskFlow();
     const createdAt = new Date("2026-04-05T21:00:00.000Z");
+    const selfArray: unknown[] = [];
+    selfArray.push(selfArray);
+    const objectArrayCycle: Record<string, unknown> = {};
+    objectArrayCycle.items = [objectArrayCycle];
+    const shared = { id: "shared" };
+    const protoEntry: Record<string, unknown> = JSON.parse(
+      '{"__proto__":{"polluted":true},"kept":"value"}',
+    );
     const runner = createRunner({
       ok: true,
       status: "needs_approval",
@@ -92,7 +103,24 @@ describe("runManagedLobsterFlow", () => {
       requiresApproval: {
         type: "approval_request",
         prompt: "Approve this?",
-        items: [{ id: "item-1", createdAt, count: 2n, skip: undefined }],
+        items: [
+          {
+            selfArray,
+            objectArrayCycle,
+            repeated: [shared, shared],
+            createdAt,
+            infinity: Number.POSITIVE_INFINITY,
+            count: 2n,
+            omitted: {
+              kept: true,
+              undefinedValue: undefined,
+              function: () => true,
+              symbol: Symbol("skip"),
+            },
+            protoEntry,
+            arrayValues: [undefined, () => true, Symbol("skip"), Number.NaN],
+          },
+        ],
         resumeToken: "resume-1",
       },
     });
@@ -107,7 +135,19 @@ describe("runManagedLobsterFlow", () => {
       waitJson: {
         kind: "lobster_approval",
         prompt: "Approve this?",
-        items: [{ id: "item-1", createdAt: createdAt.toISOString(), count: "2" }],
+        items: [
+          {
+            selfArray: ["[Circular]"],
+            objectArrayCycle: { items: ["[Circular]"] },
+            repeated: [{ id: "shared" }, { id: "shared" }],
+            createdAt: createdAt.toISOString(),
+            infinity: "Infinity",
+            count: "2",
+            omitted: { kept: true },
+            protoEntry: { kept: "value" },
+            arrayValues: [null, null, null, "NaN"],
+          },
+        ],
         resumeToken: "resume-1",
       },
     });
@@ -196,6 +236,23 @@ describe("resumeManagedLobsterFlow", () => {
     expect(runner.run).not.toHaveBeenCalled();
   });
 
+  it("fails the resumed flow when the runner throws", async () => {
+    const taskFlow = createFakeTaskFlow();
+    const runner: LobsterRunner = {
+      run: vi.fn().mockRejectedValue(new Error("crashed")),
+    };
+
+    const result = expectManagedFlowFailure(
+      await resumeManagedLobsterFlow(createResumeFlowParams(taskFlow, runner)),
+    );
+
+    expect(result.error.message).toBe("crashed");
+    expect(taskFlow.fail).toHaveBeenCalledWith({
+      flowId: "flow-1",
+      expectedRevision: 5,
+    });
+  });
+
   it("returns to waiting when the resumed Lobster run needs approval again", async () => {
     const taskFlow = createFakeTaskFlow();
     const runner = createRunner({
@@ -225,4 +282,71 @@ describe("resumeManagedLobsterFlow", () => {
       },
     });
   });
+});
+
+describe("cancelled managed Lobster flows", () => {
+  it.each(["run", "resume"])(
+    "persists a cancelled TaskFlow for a rejected Lobster %s",
+    async (action) => {
+      const taskFlow = createRuntimeTaskFlow().bindSession({
+        sessionKey: `agent:main:lobster-cancel-${action}`,
+      });
+      const runner = createRunner({
+        ok: true,
+        status: "cancelled",
+        output: [],
+        requiresApproval: null,
+      });
+      let result;
+      if (action === "run") {
+        result = await runManagedLobsterFlow(createRunFlowParams(taskFlow, runner));
+      } else {
+        const waitingFlow = taskFlow.createManaged({
+          controllerId: "tests/lobster",
+          goal: "Resume Lobster workflow",
+          status: "waiting",
+        });
+        result = await resumeManagedLobsterFlow({
+          ...createResumeFlowParams(taskFlow, runner),
+          flowId: waitingFlow.flowId,
+          expectedRevision: waitingFlow.revision,
+        });
+      }
+
+      if (!result.ok) {
+        throw result.error;
+      }
+      expect(taskFlow.get(result.flow.flowId)?.status).toBe("cancelled");
+    },
+  );
+
+  it.each(["unsettled", "rejected"])(
+    "does not finish or fail when TaskFlow cancellation is %s",
+    async (outcome) => {
+      const cancel =
+        outcome === "unsettled"
+          ? vi.fn().mockResolvedValue({
+              found: true,
+              cancelled: false,
+              reason: "One or more child tasks are still active.",
+              tasks: [],
+            })
+          : vi.fn().mockRejectedValue(new Error("cancel transport error"));
+      const taskFlow = createFakeTaskFlow({ cancel });
+      const runner = createRunner({
+        ok: true,
+        status: "cancelled",
+        output: [],
+        requiresApproval: null,
+      });
+
+      const result = expectManagedFlowFailure(
+        await resumeManagedLobsterFlow(createResumeFlowParams(taskFlow, runner)),
+      );
+
+      expect(result.error.message).toMatch(/cancellation failed|cancel transport error/u);
+      expect(taskFlow.finish).not.toHaveBeenCalled();
+      expect(taskFlow.fail).not.toHaveBeenCalled();
+    },
+  );
 });

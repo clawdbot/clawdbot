@@ -95,6 +95,7 @@ function shouldSkipNonVisibleTurnRetry(params: {
   return Boolean(
     params.aborted ||
     params.timedOut ||
+    params.attempt.terminal.kind === "failed" ||
     params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
@@ -240,19 +241,42 @@ export function resolveSettledToolBatchEvidence(attempt: IncompleteTurnAttempt) 
         : [];
     }),
   );
-  const allToolsProvenSettled =
-    attempt.itemLifecycle.startedCount > 0 &&
-    attempt.itemLifecycle.completedCount === attempt.itemLifecycle.startedCount &&
-    attempt.itemLifecycle.activeCount === 0 &&
+  // Transcript proof: every call in the batch has its result persisted. Nested
+  // code-mode work (exec status "waiting") keeps lifecycle items active while
+  // the outer result is already recorded, so this is the weaker of the two.
+  const allToolCallsRecorded =
     requestedToolCalls.length > 0 &&
     requestedToolCalls.every(
       ({ id, name }) =>
         id !== null && name !== null && settledToolResults.get(id)?.toolName === name,
     );
+  const allToolsProvenSettled =
+    allToolCallsRecorded &&
+    attempt.itemLifecycle.startedCount > 0 &&
+    attempt.itemLifecycle.completedCount === attempt.itemLifecycle.startedCount &&
+    attempt.itemLifecycle.activeCount === 0;
+  // Producer-recorded fact from the tool completion handler: one of this batch's
+  // exec results parked a Code Mode run, which is the only legitimate reason a
+  // fully recorded batch still shows active lifecycle items.
+  const parkedCodeModeRun =
+    allToolCallsRecorded &&
+    requestedToolCalls.some(({ id }) =>
+      attempt.toolMetas.some(
+        (entry) => entry.toolCallId === id && entry.codeModeSuspended === true,
+      ),
+    );
   const failedToolNames = new Set(
     requestedToolCalls.flatMap(({ id, name }) =>
       id !== null && name !== null && settledToolResults.get(id)?.isError === true ? [name] : [],
     ),
+  );
+  // ToolErrorSummary has no call id: its owner must match a failed result in the
+  // proven terminal batch, or a stale/unrelated error could authorize continuation.
+  const hasUnsettledToolError = Boolean(
+    attempt.lastToolError &&
+    (assistant?.stopReason !== "toolUse" ||
+      !allToolsProvenSettled ||
+      !failedToolNames.has(attempt.lastToolError.toolName)),
   );
   const intentionalTermination =
     allToolsProvenSettled &&
@@ -266,7 +290,15 @@ export function resolveSettledToolBatchEvidence(attempt: IncompleteTurnAttempt) 
       );
       return metadata?.terminate === true && metadata.isError !== true;
     });
-  return { assistant, allToolsProvenSettled, failedToolNames, intentionalTermination };
+  return {
+    assistant,
+    allToolCallsRecorded,
+    allToolsProvenSettled,
+    parkedCodeModeRun,
+    failedToolNames,
+    hasUnsettledToolError,
+    intentionalTermination,
+  };
 }
 
 /** Builds one fresh continuation after settled tools ended without a visible final answer. */
@@ -283,8 +315,13 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   attempt: IncompleteTurnAttempt;
 }): string | null {
   const { attempt } = params;
-  const { assistant, allToolsProvenSettled, failedToolNames, intentionalTermination } =
-    resolveSettledToolBatchEvidence(attempt);
+  const {
+    assistant,
+    allToolsProvenSettled,
+    failedToolNames,
+    hasUnsettledToolError,
+    intentionalTermination,
+  } = resolveSettledToolBatchEvidence(attempt);
   const terminal = attempt.terminal;
   const idlePromptTimeout =
     terminal.kind === "timeout" &&
@@ -305,16 +342,9 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
       attempt,
     }),
   );
-  // ToolErrorSummary has no call id: its owner must match a failed result in the
-  // proven terminal batch, or a stale/unrelated error could authorize finalization.
-  const hasUnsettledToolError = Boolean(
-    attempt.lastToolError &&
-    (assistant?.stopReason !== "toolUse" ||
-      !allToolsProvenSettled ||
-      !failedToolNames.has(attempt.lastToolError.toolName)),
-  );
   if (
     params.payloadCount !== 0 ||
+    (!params.allowEmptyStopContinuation && hasOnlySilentAssistantReply(attempt.assistantTexts)) ||
     params.hasTerminalToolPresentation ||
     params.aborted ||
     ((params.timedOut || terminal.kind === "timeout") && !idlePromptTimeout) ||
@@ -330,7 +360,7 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   ) {
     return null;
   }
-  if (hasCompletedMessagingToolDeliveryEvidence(attempt)) {
+  if (attempt.hasToolMediaBlockReply || hasCompletedMessagingToolDeliveryEvidence(attempt)) {
     return null;
   }
   if (

@@ -1,7 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { validateExplicitMessageAccountSelection } from "./message-account-selection.js";
+
+afterEach(() => {
+  setActiveDegradedSecretOwners([]);
+  vi.restoreAllMocks();
+});
 
 describe("validateExplicitMessageAccountSelection", () => {
   const cfg = {} as OpenClawConfig;
@@ -37,6 +43,48 @@ describe("validateExplicitMessageAccountSelection", () => {
         plugin,
       }),
     ).toThrow('Unknown account "missing"');
+  });
+
+  it("rejects only an unavailable active account before resolving its credentials", () => {
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "account",
+        ownerId: "feishu:ops",
+        state: "unavailable",
+        paths: ["channels.feishu.accounts.ops.appSecret"],
+        refKeys: ["env:default:MISSING_FEISHU_SECRET"],
+        reason: "secret reference was not found",
+      },
+    ]);
+    const resolveAccount = vi.spyOn(plugin.config, "resolveAccount");
+
+    expect(() =>
+      validateExplicitMessageAccountSelection({
+        cfg,
+        channel: "feishu",
+        accountId: "OPS",
+        plugin,
+      }),
+    ).toThrowError(expect.objectContaining({ code: "SECRET_SURFACE_UNAVAILABLE" }));
+    expect(resolveAccount).not.toHaveBeenCalled();
+
+    expect(
+      validateExplicitMessageAccountSelection({
+        cfg,
+        channel: "feishu",
+        accountId: "OPS",
+        plugin,
+        checkResolvedAccount: false,
+      }),
+    ).toBe("ops");
+    expect(
+      validateExplicitMessageAccountSelection({
+        cfg,
+        channel: "feishu",
+        accountId: "default",
+        plugin,
+      }),
+    ).toBe("default");
   });
 });
 

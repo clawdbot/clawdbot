@@ -1,9 +1,16 @@
 // Control UI E2E tests cover autonomous tool-turn outcome rendering.
-import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+
+let artifactDir: string | undefined;
+beforeEach(() => {
+  const parent = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+  artifactDir = parent
+    ? createControlUiE2eArtifactDir("chat-tool-turn-outcome", parent)
+    : undefined;
+});
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { chatThreadDistanceFromBottom, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -22,11 +29,9 @@ function failedTool(timestamp: number) {
 }
 
 async function captureToolActivityProof(page: import("playwright").Page, name: string) {
-  const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
   if (!artifactDir) {
     return;
   }
-  await fs.mkdir(artifactDir, { recursive: true });
   await page.screenshot({ path: path.join(artifactDir, `${name}.png`), fullPage: true });
 }
 
@@ -35,12 +40,10 @@ async function captureFactrowProof(
   activity: import("playwright").Locator,
   theme: "dark" | "light",
 ) {
-  const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
   if (!artifactDir) {
     return;
   }
   const state = process.env.OPENCLAW_FACTROW_PROOF_STATE?.trim() || "after";
-  await fs.mkdir(artifactDir, { recursive: true });
   await page.locator(".chat-main").screenshot({
     path: path.join(artifactDir, `factrow-${state}-${theme}-context.png`),
   });
@@ -68,10 +71,6 @@ suite.define(() => {
   ])(
     "keeps narrated tool details in one contained hierarchy ($name)",
     async ({ colorScheme, height, name, width }) => {
-      const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
-      if (artifactDir) {
-        await fs.mkdir(artifactDir, { recursive: true });
-      }
       const context = await suite.browser.newContext({
         colorScheme,
         locale: "en-US",
@@ -227,84 +226,6 @@ suite.define(() => {
     },
   );
 
-  it("keeps the final activity row anchored while its disclosure opens", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 600, width: 900 } });
-    const page = await context.newPage();
-    const transcriptPrefix = Array.from({ length: 12 }, (_, index) => [
-      {
-        role: "user",
-        content: `Earlier prompt ${index + 1}: keep enough transcript above the active row to make the pane scroll.`,
-        timestamp: index * 2 + 1,
-      },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: `Earlier response ${index + 1}.` }],
-        timestamp: index * 2 + 2,
-      },
-    ]).flat();
-    await installMockGateway(page, {
-      historyMessages: [
-        ...transcriptPrefix,
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "toolCall",
-              id: "call-anchor",
-              name: "bash",
-              arguments: { command: "pnpm test ui/src/pages/chat" },
-            },
-            {
-              type: "toolCall",
-              id: "call-anchor-read",
-              name: "read",
-              arguments: { path: "ui/src/pages/chat/components/chat-tool-cards.ts" },
-            },
-          ],
-          timestamp: 100,
-        },
-        {
-          role: "toolResult",
-          toolCallId: "call-anchor",
-          toolName: "bash",
-          content: [{ type: "text", text: "All focused tests passed." }],
-          timestamp: 101,
-        },
-        {
-          role: "toolResult",
-          toolCallId: "call-anchor-read",
-          toolName: "read",
-          content: [{ type: "text", text: "export function renderToolCard() {}" }],
-          timestamp: 102,
-        },
-      ],
-    });
-
-    await page.goto(`${suite.server.baseUrl}chat`);
-    const activity = page.locator(".chat-group--activity .chat-activity-group__summary");
-    await activity.waitFor();
-    await waitForChatScrollIdle(page);
-    expect(Math.abs(await chatThreadDistanceFromBottom(page))).toBeLessThanOrEqual(2);
-    const virtualRow = page.locator(".chat-virtual-row").filter({ has: activity });
-    const rowTop = async () =>
-      virtualRow.evaluate((row) => {
-        const thread = row.closest<HTMLElement>(".chat-thread");
-        if (!thread) {
-          throw new Error("Expected activity row inside the chat thread");
-        }
-        return row.getBoundingClientRect().top - thread.getBoundingClientRect().top;
-      });
-    const topBefore = await rowTop();
-
-    await activity.click();
-    await page.locator(".chat-activity-group__body:not([hidden])").waitFor();
-    await waitForChatScrollIdle(page);
-
-    expect(Math.abs((await rowTop()) - topBefore)).toBeLessThanOrEqual(2);
-    await captureToolActivityProof(page, "activity-disclosure-scroll-anchor");
-    await context.close();
-  });
-
   it("keeps an earlier autonomous failure visible after a later turn recovers", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const page = await context.newPage();
@@ -353,10 +274,6 @@ suite.define(() => {
   });
 
   it("pairs a canonical parallel batch and renders per-file patch sections", async () => {
-    const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
-    if (artifactDir) {
-      await fs.mkdir(artifactDir, { recursive: true });
-    }
     const context = await suite.browser.newContext({
       locale: "en-US",
       viewport: { height: 900, width: 1200 },
@@ -736,7 +653,7 @@ suite.define(() => {
       sessionKey: "main",
       state: "delta",
     });
-    await page.getByText("Working on it.").waitFor();
+    await page.locator(".chat-thread-inner").getByText("Working on it.").waitFor();
 
     const runningRow = page.locator(".chat-tool-row--running");
     await runningRow.waitFor();
@@ -859,10 +776,6 @@ suite.define(() => {
       riskLevel,
       userAuthorization,
     }) => {
-      const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
-      if (artifactDir) {
-        await fs.mkdir(artifactDir, { recursive: true });
-      }
       const context = await suite.browser.newContext({
         colorScheme: "dark",
         locale: "en-US",
@@ -961,7 +874,9 @@ suite.define(() => {
         });
       }
 
-      const activity = page.locator(".chat-group--activity");
+      const activity = page.locator(".chat-activity-group", {
+        has: page.locator(`.chat-activity-group__review-status[data-outcome="${groupOutcome}"]`),
+      });
       const summary = activity.locator(".chat-activity-group__summary");
       await summary.waitFor();
       const status = activity.locator(

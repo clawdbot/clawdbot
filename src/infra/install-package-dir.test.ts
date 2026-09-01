@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout, type CommandOptions, type SpawnResult } from "../process/exec.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { npmCommandFailureCases } from "../test-utils/npm-spec-install-test-helpers.js";
 import {
   installPackageDir,
   requestDeferredPackageDirInstall,
@@ -179,37 +180,6 @@ describe("installPackageDir", () => {
   const fixtureRootTracker = createSuiteTempRootTracker({
     prefix: "openclaw-install-package-dir-",
   });
-  const emptyNpmFailureCases = [
-    {
-      label: "exit code",
-      npmResult: {
-        stdout: "",
-        stderr: "",
-        code: 1,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      },
-      expectedDetail: "exit code 1",
-    },
-    {
-      label: "signal",
-      npmResult: {
-        stdout: "",
-        stderr: "",
-        code: null,
-        signal: "SIGKILL",
-        killed: true,
-        termination: "signal",
-      },
-      expectedDetail: "signal SIGKILL",
-    },
-  ] satisfies Array<{
-    label: string;
-    npmResult: SpawnResult;
-    expectedDetail: string;
-  }>;
-
   async function installWithNpmResult(npmResult: SpawnResult) {
     await fixtureRootTracker.setup();
     const fixtureRoot = await fixtureRootTracker.make("case");
@@ -278,6 +248,37 @@ describe("installPackageDir", () => {
     ).resolves.toHaveLength(0);
     await expect(
       listMatchingDirs(installBaseDir, ".openclaw-install-backups"),
+    ).resolves.toHaveLength(0);
+  });
+
+  it("restores edits detected after the existing install moves to backup", async () => {
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("case");
+    const { installBaseDir, sourceDir, targetDir } =
+      await createExistingInstallFixture(fixtureRoot);
+
+    const result = await installPackageDir({
+      sourceDir,
+      targetDir,
+      mode: "update",
+      timeoutMs: 1_000,
+      copyErrorPrefix: "failed to copy plugin",
+      hasDeps: false,
+      depsLogMessage: "Installing deps…",
+      afterBackup: async (backupDir) => {
+        await fs.writeFile(path.join(backupDir, "local.txt"), "keep me");
+        return { ok: false, error: "existing install changed" };
+      },
+    });
+
+    expect(result).toEqual({ ok: false, error: "existing install changed" });
+    await expect(fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).resolves.toBe("old");
+    await expect(fs.readFile(path.join(targetDir, "local.txt"), "utf8")).resolves.toBe("keep me");
+    await expect(
+      listMatchingDirs(installBaseDir, ".openclaw-install-stage-"),
+    ).resolves.toHaveLength(0);
+    await expect(
+      fs.readdir(path.join(installBaseDir, ".openclaw-install-backups")),
     ).resolves.toHaveLength(0);
   });
 
@@ -803,8 +804,8 @@ describe("installPackageDir", () => {
     }
   });
 
-  it.each(emptyNpmFailureCases)(
-    "includes $label when npm dependency install fails without output",
+  it.each(npmCommandFailureCases)(
+    "preserves $label when npm dependency install fails",
     async ({ npmResult, expectedDetail }) => {
       const result = await installWithNpmResult(npmResult);
 

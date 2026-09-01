@@ -1,6 +1,7 @@
 // Gateway auxiliary method handlers.
 // Wires reload, secrets, exec approval, and plugin approval RPC handlers.
 import { randomUUID } from "node:crypto";
+import { getRuntimeConfig } from "../config/io.js";
 import {
   type AgentRunDelegatedAuthority,
   registerAgentRunDelegatedAuthorityClosedHandler,
@@ -25,6 +26,7 @@ import {
 import { createLazyPromise } from "../shared/lazy-runtime.js";
 import type { AgentRuntimeDelegatedAuthority } from "./agent-runtime-identity-token.js";
 import { resolveApprovalSessionAudienceWithFallback } from "./approval-session-audience.js";
+import { createApprovalWebPushDelivery } from "./approval-web-push.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import {
   createExecApprovalIosPushDelivery,
@@ -35,6 +37,7 @@ import {
   type OperatorApprovalLifecycleEvent,
 } from "./exec-approval-manager.js";
 import { createLazyHandler } from "./lazy-handler.js";
+import type { CronStandingGrantMintSpec } from "./operator-approval-standing-grants.js";
 import {
   closeOrphanedOperatorApprovals,
   pruneTerminalOperatorApprovals,
@@ -66,6 +69,10 @@ export function createGatewayAuxHandlers(
     onApprovalLifecycle?: (event: OperatorApprovalLifecycleEvent) => void;
     onAgentRunAuthorityClosed?: (authority: AgentRunDelegatedAuthority) => void;
     validateAgentRuntimeDelegatedAuthority?: (authority: AgentRuntimeDelegatedAuthority) => boolean;
+    /** Abort-wins guard: a tombstoned run must not mint standing authority. */
+    hasRunAbortMarker?: (runId: string) => boolean;
+    /** Config-driven default expiry stamp for freshly minted standing grants. */
+    resolveGrantDefaultExpiresAtMs?: (nowMs: number) => number | null;
     chatAbortControllers?: Map<string, ChatAbortControllerEntry>;
     registerWorkerTurnClaimClosedHandler?: (
       handler: (claim: WorkerSessionTurnClaim) => void,
@@ -85,12 +92,17 @@ export function createGatewayAuxHandlers(
   const createApprovalManager = <TPayload>(
     approvalKind: "exec" | "plugin" | "system-agent",
     resolveAllowedDecisions: (request: TPayload) => readonly ExecApprovalDecision[],
+    resolveStandingGrantMint?: (request: TPayload) => CronStandingGrantMintSpec | null,
   ) =>
     new ExecApprovalManager<TPayload>({
       approvalKind,
       persistence: approvalPersistence,
       resolveAudienceSessionKeys: resolveApprovalSessionAudienceWithFallback,
       resolveAllowedDecisions,
+      ...(resolveStandingGrantMint ? { resolveStandingGrantMint } : {}),
+      ...(params.resolveGrantDefaultExpiresAtMs
+        ? { resolveStandingGrantExpiresAtMs: params.resolveGrantDefaultExpiresAtMs }
+        : {}),
       onLifecycle: params.onApprovalLifecycle,
       // Timeout expiry is gateway-clock truth: publish the terminal like a
       // resolve so reviewer surfaces need not infer it from their own clocks.
@@ -111,8 +123,36 @@ export function createGatewayAuxHandlers(
   const execApprovalManager = createApprovalManager<ExecApprovalRequestPayload>(
     "exec",
     resolveExecApprovalRequestAllowedDecisions,
+    (request) => {
+      const source = request.cronExecutionSource;
+      const operationBinding = request.cronOperationBinding?.trim();
+      const agentId = request.agentId?.trim();
+      if (!source || !operationBinding || !agentId) {
+        return null;
+      }
+      // Abort-wins: the abort owner tombstones the run before sweeping its
+      // approvals, so a raced allow-always must not mint standing authority.
+      if (request.runId && params.hasRunAbortMarker?.(request.runId) === true) {
+        return null;
+      }
+      return {
+        agentId,
+        cronJobId: source.jobId,
+        jobConfigRevision: source.jobConfigRevision,
+        operationBinding,
+      };
+    },
   );
   const execApprovalForwarder = createExecApprovalForwarder();
+  const approvalWebPushDelivery = createApprovalWebPushDelivery({
+    getRuntimeConfig,
+    log: params.log,
+  });
+  // Startup already terminalized prior-runtime approvals above. Replay any
+  // durable request targets so their actionable browser prompts are replaced.
+  void approvalWebPushDelivery.recoverTerminalDeliveries().catch((error: unknown) => {
+    params.log.error?.(`approval Web Push restart recovery failed: ${String(error)}`);
+  });
   const execApprovalIosPushDelivery = createExecApprovalIosPushDelivery({ log: params.log });
   const loadExecApprovalHandlers = createLazyPromise(
     () =>
@@ -124,12 +164,26 @@ export function createGatewayAuxHandlers(
       ),
     { cacheRejections: true },
   );
+  const reloadSecrets = createGatewaySecretsReloader(params);
+  const loadSecretsModule = createLazyPromise(() => import("./server-methods/secrets.js"), {
+    cacheRejections: true,
+  });
+  const loadSecretStoreWriteService = createLazyPromise(
+    async () => {
+      const { createSecretStoreWriteService } = await loadSecretsModule();
+      return createSecretStoreWriteService({ reloadSecrets, log: params.log });
+    },
+    { cacheRejections: true },
+  );
   const questionManager = new QuestionManager();
   const loadQuestionHandlers = createLazyPromise(
-    () =>
-      import("./server-methods/question.js").then(({ createQuestionHandlers }) =>
-        createQuestionHandlers(questionManager),
-      ),
+    async () => {
+      const [{ createQuestionHandlers }, storeWriteService] = await Promise.all([
+        import("./server-methods/question.js"),
+        loadSecretStoreWriteService(),
+      ]);
+      return createQuestionHandlers(questionManager, storeWriteService);
+    },
     { cacheRejections: true },
   );
   const pluginApprovalManager = createApprovalManager<PluginApprovalRequestPayload>(
@@ -171,10 +225,11 @@ export function createGatewayAuxHandlers(
     }
   };
   const unregisterApprovalAuthorityClosedObserver = registerAgentRunDelegatedAuthorityClosedHandler(
-    (authority) => {
+    (authority, approvalReason) => {
       try {
         cancelAgentRuntimeBoundApprovals({
           authority,
+          reason: approvalReason,
           manager: execApprovalManager,
           publish: (record, liveRecord) =>
             publishAuthorityClosure({ kind: "exec", record, liveRecord }),
@@ -185,6 +240,7 @@ export function createGatewayAuxHandlers(
       try {
         cancelAgentRuntimeBoundApprovals({
           authority,
+          reason: approvalReason,
           manager: pluginApprovalManager,
           publish: (record, liveRecord) =>
             publishAuthorityClosure({ kind: "plugin", record, liveRecord }),
@@ -192,7 +248,10 @@ export function createGatewayAuxHandlers(
       } catch (error) {
         params.log.error?.(`plugin approvals: authority-close settlement failed: ${String(error)}`);
       }
-      params.onAgentRunAuthorityClosed?.(authority);
+      questionManager.cancelClosedAuthorities();
+      if (!approvalReason) {
+        params.onAgentRunAuthorityClosed?.(authority);
+      }
     },
   );
   const unregisterWorkerTurnClaimClosedObserver = params.registerWorkerTurnClaimClosedHandler?.(
@@ -217,13 +276,17 @@ export function createGatewayAuxHandlers(
       } catch (error) {
         params.log.error?.(`plugin approvals: worker-claim settlement failed: ${String(error)}`);
       }
+      questionManager.cancelClosedAuthorities();
     },
   );
   const unregisterApprovalAuthorityObserver = () => {
     unregisterWorkerTurnClaimClosedObserver?.();
     unregisterApprovalAuthorityClosedObserver();
   };
-  const cancelRunBoundApprovals = (runId: string, context: GatewayRequestContext): number => {
+  const cancelRunBoundApprovals = (
+    target: string | AgentRunDelegatedAuthority,
+    context: GatewayRequestContext,
+  ): number => {
     const publish = (
       kind: ChannelApprovalKind,
       record: Parameters<typeof publishAppliedApprovalResolution>[0]["record"],
@@ -243,11 +306,27 @@ export function createGatewayAuxHandlers(
         );
       });
     };
-    return cancelUnboundRunApprovals({
-      runId,
-      manager: execApprovalManager,
-      publish: (record, liveRecord) => publish("exec", record, liveRecord),
-    });
+    if (typeof target === "string") {
+      return cancelUnboundRunApprovals({
+        runId: target,
+        manager: execApprovalManager,
+        publish: (record, liveRecord) => publish("exec", record, liveRecord),
+      });
+    }
+    return (
+      cancelAgentRuntimeBoundApprovals({
+        authority: target,
+        reason: "permission-change",
+        manager: execApprovalManager,
+        publish: (record, liveRecord) => publish("exec", record, liveRecord),
+      }) +
+      cancelAgentRuntimeBoundApprovals({
+        authority: target,
+        reason: "permission-change",
+        manager: pluginApprovalManager,
+        publish: (record, liveRecord) => publish("plugin", record, liveRecord),
+      })
+    );
   };
   const systemAgentApprovalManager = createApprovalManager<SystemAgentApprovalRequestPayload>(
     "system-agent",
@@ -278,41 +357,43 @@ export function createGatewayAuxHandlers(
     { cacheRejections: true },
   );
   const loadSecretsHandlers = createLazyPromise(
-    () =>
-      import("./server-methods/secrets.js").then(({ createSecretsHandlers }) =>
-        createSecretsHandlers({
-          reloadSecrets: createGatewaySecretsReloader(params),
-          log: params.log,
-          resolveSecrets: async ({
-            allowedPaths,
-            commandName,
-            forcedActivePaths,
-            optionalActivePaths,
-            providerOverrides,
-            targetIds,
-          }) => {
-            const { assignments, diagnostics, inactiveRefPaths } =
-              await resolveCommandSecretsFromActiveRuntimeSnapshot({
-                commandName,
-                targetIds: new Set(targetIds),
-                ...(allowedPaths ? { allowedPaths: new Set(allowedPaths) } : {}),
-                ...(forcedActivePaths ? { forcedActivePaths: new Set(forcedActivePaths) } : {}),
-                ...(optionalActivePaths
-                  ? { optionalActivePaths: new Set(optionalActivePaths) }
-                  : {}),
-                ...(providerOverrides ? { providerOverrides } : {}),
-              });
-            if (assignments.length === 0) {
-              return {
-                assignments: [] as CommandSecretAssignment[],
-                diagnostics,
-                inactiveRefPaths,
-              };
-            }
-            return { assignments, diagnostics, inactiveRefPaths };
-          },
-        }),
-      ),
+    async () => {
+      const [{ createSecretsHandlers }, storeWriteService] = await Promise.all([
+        loadSecretsModule(),
+        loadSecretStoreWriteService(),
+      ]);
+      return createSecretsHandlers({
+        reloadSecrets,
+        storeWriteService,
+        log: params.log,
+        resolveSecrets: async ({
+          allowedPaths,
+          commandName,
+          forcedActivePaths,
+          optionalActivePaths,
+          providerOverrides,
+          targetIds,
+        }) => {
+          const { assignments, diagnostics, inactiveRefPaths } =
+            await resolveCommandSecretsFromActiveRuntimeSnapshot({
+              commandName,
+              targetIds: new Set(targetIds),
+              ...(allowedPaths ? { allowedPaths: new Set(allowedPaths) } : {}),
+              ...(forcedActivePaths ? { forcedActivePaths: new Set(forcedActivePaths) } : {}),
+              ...(optionalActivePaths ? { optionalActivePaths: new Set(optionalActivePaths) } : {}),
+              ...(providerOverrides ? { providerOverrides } : {}),
+            });
+          if (assignments.length === 0) {
+            return {
+              assignments: [] as CommandSecretAssignment[],
+              diagnostics,
+              inactiveRefPaths,
+            };
+          }
+          return { assignments, diagnostics, inactiveRefPaths };
+        },
+      });
+    },
     { cacheRejections: true },
   );
 
@@ -320,6 +401,7 @@ export function createGatewayAuxHandlers(
     execApprovalManager,
     cancelRunBoundApprovals,
     forwardPluginApprovalRequest: execApprovalForwarder.handlePluginApprovalRequested,
+    approvalWebPushDelivery,
     pluginApprovalIosPushDelivery,
     pluginApprovalManager,
     systemAgentApprovalManager,
@@ -335,6 +417,14 @@ export function createGatewayAuxHandlers(
         loadExecApprovalHandlers,
       ),
       "exec.approval.resolve": createLazyHandler("exec.approval.resolve", loadExecApprovalHandlers),
+      "exec.approval.grants.list": createLazyHandler(
+        "exec.approval.grants.list",
+        loadExecApprovalHandlers,
+      ),
+      "exec.approval.grants.revoke": createLazyHandler(
+        "exec.approval.grants.revoke",
+        loadExecApprovalHandlers,
+      ),
       "plugin.approval.list": createLazyHandler("plugin.approval.list", loadPluginApprovalHandlers),
       "plugin.approval.request": createLazyHandler(
         "plugin.approval.request",

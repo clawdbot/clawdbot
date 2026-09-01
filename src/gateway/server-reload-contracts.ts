@@ -4,8 +4,7 @@ import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { GatewayRestartEmitter } from "../infra/restart.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
-import type { ChannelKind } from "./config-reload-plan.js";
-import type { GatewayReloadPlan } from "./config-reload.js";
+import type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
 import type { GatewayCronReconciliation } from "./server-cron-reconciled.js";
 import type { GatewayCronState } from "./server-cron.js";
 import type { GatewayConfigReloaderHandle } from "./server-runtime-handles.js";
@@ -132,6 +131,21 @@ export class GatewayConfigReloadSupersededError extends Error {
   }
 }
 
+export function createReloadCancellationError(superseded: boolean) {
+  return superseded
+    ? new GatewayConfigReloadSupersededError()
+    : new GatewayHotReloadCancelledError();
+}
+
+export function assertReloadPublicationCurrent(
+  publicationCurrent: boolean,
+  restartStopped: boolean,
+): void {
+  if (!publicationCurrent || restartStopped) {
+    throw createReloadCancellationError(!publicationCurrent);
+  }
+}
+
 export type GatewayPluginReloadResult = {
   restartChannels: ReadonlySet<ChannelKind>;
   activeChannels: ReadonlySet<ChannelKind>;
@@ -151,6 +165,7 @@ export type GatewayReloadHandlerParams = {
   getPluginMetadataSnapshot?: () => PluginMetadataSnapshot | undefined;
   startChannel: GatewayChannelManager["startChannel"];
   stopChannel: GatewayChannelManager["stopChannel"];
+  pruneInactiveChannelAccountState: (activeChannelIds: ReadonlySet<ChannelKind>) => void;
   getChannelAutostartSuppression?: GatewayChannelManager["getAutostartSuppression"];
   stopPostReadySidecars?: () => Promise<void> | void;
   reloadPlugins: (params: {
@@ -187,7 +202,7 @@ export type GatewayReloadHandlerParams = {
 
 export type ManagedGatewayConfigReloaderParams = Omit<
   GatewayReloadHandlerParams,
-  "assertRestartReady" | "createHealthMonitor" | "logReload"
+  "assertRestartReady" | "createHealthMonitor" | "logReload" | "pruneInactiveChannelAccountState"
 > & {
   configRevisionProjector: import("./config-revision-token.js").GatewayConfigRevisionProjector;
   minimalTestGateway: boolean;
@@ -204,7 +219,9 @@ export type ManagedGatewayConfigReloaderParams = Omit<
   promoteSnapshot: typeof import("../config/config.js").promoteConfigSnapshotToLastKnownGood;
   subscribeToWrites: typeof import("../config/config.js").registerConfigWriteListener;
   logReload: GatewayReloadLog & { error: (msg: string) => void };
-  channelManager: GatewayChannelManager;
+  channelManager: GatewayChannelManager & {
+    pruneInactiveChannelAccountState: GatewayReloadHandlerParams["pruneInactiveChannelAccountState"];
+  };
   activateRuntimeSecrets: ActivateRuntimeSecrets;
   /** Applies one immutable effective config/compare snapshot before reload planning. */
   prepareConfigCandidate?: (params: {

@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sanitizeEnvVars } from "../agents/sandbox/sanitize-env-vars.js";
+import * as installedPluginIndex from "../plugins/installed-plugin-index.js";
 import { resolveLocalProviderAuthEvidence } from "./provider-auth-evidence.js";
 import {
   getProviderEnvVars,
@@ -128,7 +129,8 @@ function useRegistrySetupPlugin(id: string, origin: string, provider: MockSetupP
   useRegistryPlugins(setupPlugin(id, origin, provider));
 }
 
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: pluginRegistryMocks.getCurrentPluginMetadataSnapshot,
 }));
 
@@ -739,7 +741,7 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
   });
 
-  it("resolves alias, env, and evidence lookup maps from one metadata snapshot", () => {
+  it("resolves auth maps with policy work bounded to contributing plugins", () => {
     useInstalledPlugins(
       {
         id: "external-fireworks",
@@ -771,11 +773,30 @@ describe("provider env vars dynamic manifest metadata", () => {
           "legacy-cloud-plan": "legacy-cloud",
         },
       },
+      { id: "channel-only", origin: "bundled", providers: [] },
+      {
+        id: "metadata-only",
+        origin: "bundled",
+        setup: {
+          requiresRuntime: false,
+          providers: [{ id: "metadata-only", envVars: ["METADATA_ONLY_API_KEY"] }],
+        },
+      },
     );
 
-    const lookupMaps = resolveProviderAuthLookupMaps({ config: {} });
+    const policy = vi.spyOn(installedPluginIndex, "isInstalledPluginEnabled");
+    let lookupMaps: ReturnType<typeof resolveProviderAuthLookupMaps>;
+    try {
+      lookupMaps = resolveProviderAuthLookupMaps({ config: {} });
+      expect(policy.mock.calls.length).toBeLessThanOrEqual(2);
+      expect(policy.mock.calls.map(([, pluginId]) => pluginId)).not.toContain("channel-only");
+      expect(policy.mock.calls.map(([, pluginId]) => pluginId)).not.toContain("metadata-only");
+    } finally {
+      policy.mockRestore();
+    }
 
     expect(lookupMaps.aliasMap["fireworks-plan"]).toBe("fireworks");
+    expect(lookupMaps.envCandidateMap["metadata-only"]).toEqual(["METADATA_ONLY_API_KEY"]);
     expect(lookupMaps.envCandidateMap["fireworks-plan"]).toEqual(["FIREWORKS_ALT_API_KEY"]);
     expect(lookupMaps.authEvidenceMap["fireworks-plan"]).toEqual([
       {
@@ -793,21 +814,38 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
   });
 
-  it("excludes disabled plugin setup fallback refs from runtime auth lookup maps", () => {
-    useInstalledPlugins({
-      id: "disabled-setup-owner",
-      origin: "global",
-      enabled: false,
-      providers: ["disabled-cloud"],
-      providerAuthAliases: {
-        "disabled-cloud-plan": "disabled-cloud",
+  it("updates runtime auth evidence and fallback refs without dropping disabled credential hints", () => {
+    const plugin = setupPlugin(
+      "disabled-setup-owner",
+      "global",
+      {
+        id: "disabled-cloud",
+        envVars: ["DISABLED_CLOUD_API_KEY"],
+        authEvidence: [{ type: "local-file-with-env", credentialMarker: "cloud-local" }],
       },
-    });
+      {
+        enabled: false,
+        providers: ["disabled-cloud"],
+        providerAuthAliases: {
+          "disabled-cloud-plan": "disabled-cloud",
+        },
+      },
+    );
 
-    const lookupMaps = resolveProviderAuthLookupMaps({ config: {} });
-
-    expect(lookupMaps.setupProviderFallbackRefs).toEqual([]);
-    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
+    pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(metadataSnapshot(plugin));
+    const config = { plugins: { entries: { "disabled-setup-owner": { enabled: false } } } };
+    for (const enabled of [false, true, false]) {
+      config.plugins.entries["disabled-setup-owner"].enabled = enabled;
+      const lookupMaps = resolveProviderAuthLookupMaps({ config });
+      expect(lookupMaps.setupProviderFallbackRefs).toEqual(
+        enabled ? ["disabled-cloud", "disabled-cloud-plan"] : [],
+      );
+      expect(lookupMaps.authEvidenceMap["disabled-cloud-plan"]).toEqual(
+        enabled ? plugin.setup?.providers?.[0]?.authEvidence : undefined,
+      );
+      expect(lookupMaps.envCandidateMap["disabled-cloud-plan"]).toEqual(["DISABLED_CLOUD_API_KEY"]);
+    }
+    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
   it("does not reuse a load-path current snapshot for default provider env lookups without parameters", () => {

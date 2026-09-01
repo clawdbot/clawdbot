@@ -5,6 +5,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import {
   resolvePreparedRunAdmission,
+  resolveAdmittedRunActiveAssertion,
   type AdmittedRunContext,
 } from "../../agents/admitted-run-context.js";
 import {
@@ -14,6 +15,8 @@ import {
 } from "../../agents/agent-runtime-id.js";
 import {
   buildUsageAgentMetaFields,
+  resolveFinalAssistantRawText,
+  resolveFinalAssistantVisibleText,
   resolveReportedModelRef,
 } from "../../agents/embedded-agent-runner/run/helpers.js";
 import {
@@ -29,12 +32,14 @@ import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/di
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import {
   windowWorkerReplayMessages,
+  fitWorkerReplayImages,
   type WorkerReplayMessageWindowUnavailable,
 } from "../../worker/replay-message-window.js";
 import {
   toWorkerTranscriptMessage,
   type WorkerProviderReplayUnavailable,
 } from "../../worker/transcript-message.js";
+import { parseWorkerRuntimeResult } from "../../worker/worker-process-protocol.js";
 import type { WorkerRuntimeResult } from "../../worker/worker.runtime.js";
 import {
   measureAgentRuntimeIdentityTokenBytes,
@@ -43,7 +48,7 @@ import {
 } from "../agent-runtime-identity-token.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
-import { bindWorkerTurnExecutionIdentity } from "./placement-turn-claim-events.js";
+import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
 
 type WorkerInitialMessagePlan =
   | { kind: "complete"; messages: WorkerTranscriptMessage[] }
@@ -102,21 +107,30 @@ export async function prepareWorkerAgentRuntimeIdentity(
     admittedRunContext: params.turn.admittedRunContext,
     preparedRunAdmission: params.turn.preparedRunAdmission,
   });
-  const runtimeIdentity = buildWorkerAgentRuntimeIdentity({ ...params, admittedRunContext });
-  // Worker session RPC carries no raw identity token. Bind provenance to the exact
-  // host claim before launch so child lineage cannot become bearer authority.
-  if (runtimeIdentity.executionIdentityToken) {
-    bindWorkerTurnExecutionIdentity(
-      params.placements,
-      params.turnClaim,
-      runtimeIdentity.executionIdentityToken,
-      admittedRunContext.operationalRunInstance,
-      { agentId: params.agentId, sessionKey: params.sessionKey },
-    );
+  const assertActive = resolveAdmittedRunActiveAssertion(
+    admittedRunContext,
+    params.turn.abortSignal,
+  );
+  if (!assertActive) {
+    throw new Error("Worker turn has no active admitted execution authority");
   }
+  assertActive();
+  const runtimeIdentity = buildWorkerAgentRuntimeIdentity({ ...params, admittedRunContext });
+  // Stop closes the operational run before its placement claim finishes draining.
+  // Worker tools must retain both owners even when audit collection is disabled.
+  bindWorkerTurnOwner(
+    params.placements,
+    params.turnClaim,
+    runtimeIdentity.executionIdentityToken,
+    admittedRunContext.operationalRunInstance,
+    { agentId: params.agentId, sessionKey: params.sessionKey },
+    assertActive,
+    params.turn.prepareAssistantTranscriptMessage,
+  );
   return {
     operationalRunInstance: admittedRunContext.operationalRunInstance,
     runtimeIdentity,
+    assertActive,
   };
 }
 
@@ -153,14 +167,10 @@ export function windowInitialMessages(messages: AgentMessage[]): WorkerInitialMe
   return { kind: "complete", messages: projected };
 }
 
-// Node hosts append their own bounded websocket endpoint after sizing; reserve
-// its 4 KiB URL, TLS pin, keys, and JSON escaping before admitting replay bytes.
-const WORKER_LAUNCH_ENDPOINT_OVERHEAD_BYTES = 4_608;
-
 type WorkerLaunchFit =
   | { kind: "launch"; plan: WorkerLaunchPlan }
   | {
-      kind: "local-fallback";
+      kind: "provider-replay-unavailable";
       reason: "provider-replay-launch-payload-limit";
       bytes: number;
       limitBytes: number;
@@ -171,11 +181,13 @@ export async function fitLaunchDescriptorWithRuntimeIdentity(params: {
   build: (identityToken: string, messages: WorkerTranscriptMessage[]) => WorkerLaunchPlan;
   messages: WorkerTranscriptMessage[];
   runtimeIdentity: AgentRuntimeIdentityTokenParams;
+  measure: (plan: WorkerLaunchPlan) => number;
 }): Promise<WorkerLaunchFit> {
   const tokenBytes = measureAgentRuntimeIdentityTokenBytes(params.runtimeIdentity);
   const plan = fitLaunchDescriptor(
     (messages) => params.build("x".repeat(tokenBytes), messages),
     params.messages,
+    params.measure,
   );
   if (plan.kind !== "launch") {
     return plan;
@@ -196,12 +208,13 @@ export async function fitLaunchDescriptorWithRuntimeIdentity(params: {
 function fitLaunchDescriptor(
   build: (initialMessages: WorkerTranscriptMessage[]) => WorkerLaunchPlan,
   messages: WorkerTranscriptMessage[],
+  measure: (plan: WorkerLaunchPlan) => number,
 ): WorkerLaunchFit {
-  let initialMessages = messages;
+  let initialMessages =
+    fitWorkerReplayImages(messages, (candidate) => measure(build(candidate))) ?? messages;
   while (true) {
     const plan = build(initialMessages);
-    const bytes =
-      Buffer.byteLength(JSON.stringify(plan), "utf8") + WORKER_LAUNCH_ENDPOINT_OVERHEAD_BYTES;
+    const bytes = measure(plan);
     if (bytes <= WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES) {
       return { kind: "launch", plan };
     }
@@ -210,7 +223,7 @@ function fitLaunchDescriptor(
     );
     if (replayIndex === 0) {
       return {
-        kind: "local-fallback",
+        kind: "provider-replay-unavailable",
         reason: "provider-replay-launch-payload-limit",
         bytes,
         limitBytes: WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
@@ -230,50 +243,23 @@ function fitLaunchDescriptor(
   }
 }
 
-export function parseRuntimeResult(stdout: string): WorkerRuntimeResult {
+type StartedWorkerRuntimeResult = Exclude<WorkerRuntimeResult, { status: "not-started" }>;
+
+export function parseRuntimeResult(stdout: string): StartedWorkerRuntimeResult {
   let value: unknown;
   try {
     value = JSON.parse(stdout.trim()) as unknown;
   } catch (error) {
     throw new Error("Worker process returned invalid output", { cause: error });
   }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const result = parseWorkerRuntimeResult(value);
+  if (!result) {
     throw new Error("Worker process returned invalid output");
   }
-  const result = value as Record<string, unknown>;
-  if (
-    result.status === "failed" &&
-    result.reason === "turn-failed" &&
-    (result.transcriptLeafId === null || typeof result.transcriptLeafId === "string") &&
-    typeof result.transcriptNextSeq === "number" &&
-    Number.isSafeInteger(result.transcriptNextSeq) &&
-    result.transcriptNextSeq >= 1 &&
-    Object.keys(result).every((key) =>
-      ["status", "reason", "transcriptLeafId", "transcriptNextSeq"].includes(key),
-    )
-  ) {
-    return result as WorkerRuntimeResult;
+  if (result.status === "not-started") {
+    throw new Error(result.errorText);
   }
-  if (
-    result.status === "completed" &&
-    (result.transcriptLeafId === null || typeof result.transcriptLeafId === "string") &&
-    typeof result.transcriptNextSeq === "number" &&
-    Number.isSafeInteger(result.transcriptNextSeq) &&
-    result.transcriptNextSeq >= 1 &&
-    Object.keys(result).every((key) =>
-      ["status", "transcriptLeafId", "transcriptNextSeq"].includes(key),
-    )
-  ) {
-    return result as WorkerRuntimeResult;
-  }
-  if (
-    result.status === "fenced" &&
-    (result.reason === "credential-replaced" || result.reason === "owner-epoch-mismatch") &&
-    Object.keys(result).every((key) => ["status", "reason"].includes(key))
-  ) {
-    return result as WorkerRuntimeResult;
-  }
-  throw new Error("Worker process returned invalid output");
+  return result;
 }
 
 export function assistantText(message: AgentMessage): string {
@@ -283,9 +269,15 @@ export function assistantText(message: AgentMessage): string {
   return message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
 }
 
-export function buildWorkerAgentMeta(params: {
+export function buildWorkerTurnResult(params: {
   messages: AgentMessage[];
   modelRef: { provider: string; model: string };
+  terminal: Extract<AgentMessage, { role: "assistant" }>;
+  durationMs: number;
+  sessionId: string;
+  sessionFile: SessionPlacementTurnParams["sessionFile"];
+  text: string;
+  workspaceConflictSummary?: string;
 }) {
   const usageAccumulator = createUsageAccumulator();
   const assistants = params.messages.filter(
@@ -310,12 +302,27 @@ export function buildWorkerAgentMeta(params: {
     ...params.modelRef,
     assistant: lastAssistant,
   });
+  const replyText =
+    params.workspaceConflictSummary === undefined
+      ? params.text
+      : params.text
+        ? `${params.text}\n\n${params.workspaceConflictSummary}`
+        : params.workspaceConflictSummary;
   return {
-    provider: reportedModelRef.provider,
-    model: reportedModelRef.model,
-    usage: usageMeta.usage,
-    lastCallUsage: usageMeta.lastCallUsage,
-    promptTokens: usageMeta.promptTokens,
+    ...(replyText ? { payloads: [{ text: replyText }] } : {}),
+    meta: {
+      durationMs: params.durationMs,
+      agentMeta: {
+        sessionId: params.sessionId,
+        sessionFile: params.sessionFile,
+        provider: reportedModelRef.provider,
+        model: reportedModelRef.model,
+        ...usageMeta,
+      },
+      stopReason: params.terminal.stopReason,
+      finalAssistantVisibleText: resolveFinalAssistantVisibleText(params.terminal),
+      finalAssistantRawText: resolveFinalAssistantRawText(params.terminal),
+    },
   };
 }
 
@@ -339,9 +346,6 @@ export function assertSupportedTurn(params: SessionPlacementTurnParams): {
   provider: string;
   model: string;
 } {
-  if (params.images?.length || params.imageOrder?.length) {
-    throw new Error("Cloud worker turns do not yet support current-turn image input");
-  }
   if (params.clientTools?.length) {
     throw new Error("Cloud worker turns do not support client-provided tools");
   }

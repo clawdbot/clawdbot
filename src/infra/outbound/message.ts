@@ -18,6 +18,7 @@ import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
 import { normalizePollInput } from "../../polls.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import type { DeliveryQueueCompletionRetention } from "../delivery-queue-sqlite.js";
 import { formatErrorMessage } from "../errors.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
@@ -114,14 +115,22 @@ type MessageSendParams = {
   deliveryCompletion?: DurableDeliveryCompletion;
   /** @internal Retry the same pending producer intent only before platform I/O begins. */
   reusePendingDeliveryIntent?: boolean;
+  /** @internal The caller resends proven-not-sent payloads itself, so recovery must not. */
+  deliveryRetryOwner?: "caller";
   /** @internal Retain completion proof for replay-safe producer intents. */
   completionRetention?: DeliveryQueueCompletionRetention;
   /** @internal Override provider unknown-send reconciliation independently from queue durability. */
   requireUnknownSendReconciliation?: boolean;
   /** @internal Runs after queue persistence and before platform I/O. */
   onDeliveryIntent?: (intent: DurableMessageSendIntent) => void;
+  /** @internal Revalidates authority once per durable queue execution, before adapter fanout. */
+  onDeliveryAttempt?: () => Promise<void>;
   /** @internal Runs on identified platform evidence before queue acknowledgement. */
   onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
+  /** @internal Revalidates caller authority immediately before recipient-visible I/O. */
+  onPlatformSendDispatch?: () => Promise<void>;
+  /** @internal Keep ephemeral-authority sends out of replayable recovery. */
+  skipQueue?: boolean;
   mirror?: OutboundMirror;
   /** @internal Reports the effective payload only after an identified direct send. */
   onDeliveredPayload?: (payload: NormalizedOutboundPayload) => void;
@@ -300,9 +309,14 @@ async function callMessageGateway<T>(params: {
   gateway?: OutboundMessageGatewayOptionsInput;
   method: string;
   params: Record<string, unknown>;
+  onPlatformSendDispatch?: () => Promise<void>;
 }): Promise<T> {
   const { callGatewayLeastPrivilege } = await loadMessageGatewayRuntime();
   const gateway = resolveGatewayOptions(params.gateway);
+  // Mint before the local dispatch fence so revocation during RPC is enforced
+  // by the Gateway's live operational-run validator, not token freshness.
+  const agentRuntimeIdentityToken = await params.gateway?.resolveAgentRuntimeIdentityToken?.();
+  await params.onPlatformSendDispatch?.();
   return await callGatewayLeastPrivilege<T>({
     url: gateway.url,
     token: gateway.token,
@@ -312,6 +326,7 @@ async function callMessageGateway<T>(params: {
     clientName: gateway.clientName,
     clientDisplayName: gateway.clientDisplayName,
     mode: gateway.mode,
+    agentRuntimeIdentityToken,
   });
 }
 
@@ -443,9 +458,15 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       deliveryIntentId: params.deliveryIntentId,
       deliveryCompletion: params.deliveryCompletion,
       reusePendingDeliveryIntent: params.reusePendingDeliveryIntent,
+      deliveryRetryOwner: params.deliveryRetryOwner,
       completionRetention: params.completionRetention,
       ...(params.onDeliveryIntent ? { onDeliveryIntent: params.onDeliveryIntent } : {}),
+      ...(params.onDeliveryAttempt ? { onDeliveryAttempt: params.onDeliveryAttempt } : {}),
       ...(params.onDeliveryResult ? { onDeliveryResult: params.onDeliveryResult } : {}),
+      ...(params.onPlatformSendDispatch
+        ? { onPlatformSendDispatch: params.onPlatformSendDispatch }
+        : {}),
+      skipQueue: params.skipQueue,
       ...(params.onDeliveredPayload ? { onDeliveredPayload: params.onDeliveredPayload } : {}),
       mirror: params.mirror
         ? {
@@ -456,7 +477,9 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
           }
         : undefined,
     });
-    if (!params.bestEffort && (send.status === "failed" || send.status === "partial_failed")) {
+    const shouldThrowFailure =
+      !params.bestEffort && params.gateway?.clientName !== GATEWAY_CLIENT_NAMES.CLI;
+    if (shouldThrowFailure && (send.status === "failed" || send.status === "partial_failed")) {
       throw send.error;
     }
     const results = send.status === "sent" || send.status === "partial_failed" ? send.results : [];
@@ -482,6 +505,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
   const result = await callMessageGateway<{ messageId: string }>({
     gateway: params.gateway,
     method: "send",
+    onPlatformSendDispatch: params.onPlatformSendDispatch,
     params: {
       to: params.to,
       message: params.content,

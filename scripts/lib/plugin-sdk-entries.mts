@@ -46,6 +46,7 @@ export const publicPluginSdkSubpaths = publicPluginSdkEntrypoints;
 const nonProductionPluginSdkSubpathSet = new Set([
   "agent-runtime-test-contracts",
   "channel-contract-testing",
+  "channel-ingress-test-runtime",
   "channel-target-testing",
   "channel-test-helpers",
   "plugin-test-api",
@@ -74,11 +75,6 @@ const nonProductionPluginSdkSubpathSet = new Set([
 export const productionPluginSdkEntrypoints = pluginSdkEntrypoints.filter(
   (entry) => !nonProductionPluginSdkSubpathSet.has(entry),
 );
-
-/** List flat plugin SDK declaration outputs for the selected entrypoints. */
-export function listPluginSdkDeclarationOutputs(entries = productionPluginSdkEntrypoints) {
-  return entries.map((entry) => `dist/plugin-sdk/${entry}.d.ts`);
-}
 
 const productionPluginSdkEntrypointSet = new Set(productionPluginSdkEntrypoints);
 
@@ -159,7 +155,7 @@ export function buildPluginSdkPackageExports() {
 }
 
 /**
- * List public plugin SDK dist artifacts expected in package output.
+ * List all packaged plugin SDK dist artifacts, including production-private runtime JS.
  * @internal Shared repository-script contract.
  */
 export function listPluginSdkDistArtifacts() {
@@ -172,10 +168,6 @@ export function listPluginSdkDistArtifacts() {
   ];
 }
 
-/**
- * List private local-only plugin SDK dist artifacts expected after local builds.
- * @internal Shared repository-script contract.
- */
 /** List private runtime facade artifacts required inside package output. */
 export function listPackagedPrivatePluginSdkRuntimeArtifacts() {
   return packagedPrivatePluginSdkRuntimeEntrypoints.map((entry) => `dist/plugin-sdk/${entry}.js`);
@@ -184,7 +176,7 @@ export function listPackagedPrivatePluginSdkRuntimeArtifacts() {
 /** List private artifacts that must stay out of package output. */
 export function listUnpackagedPrivatePluginSdkDistArtifacts() {
   return [
-    ...listPluginSdkDeclarationOutputs(privateLocalOnlyPluginSdkEntrypoints),
+    ...privateLocalOnlyPluginSdkEntrypoints.map((entry) => `dist/plugin-sdk/${entry}.d.ts`),
     ...nonProductionPrivatePluginSdkEntrypoints.map((entry) => `dist/plugin-sdk/${entry}.js`),
   ];
 }

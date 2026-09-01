@@ -5,6 +5,7 @@ export TERM=xterm-256color
 export NO_COLOR=1
 
 source scripts/lib/openclaw-e2e-instance.sh
+source scripts/e2e/lib/prepublish-plugin-registry.sh
 
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
 openclaw_e2e_install_trash_shim
@@ -24,11 +25,13 @@ LOG_DIR="$scenario_tmp/logs"
 mkdir -p "$LOG_DIR"
 INSTALL_LOG="$LOG_DIR/install.log"
 ONBOARD_LOG="$LOG_DIR/onboard.log"
+CODEX_INSTALL_LOG="$LOG_DIR/codex-install.log"
 OPENAI_LOG="$LOG_DIR/openai.log"
 AGENT_LOG="$LOG_DIR/agent.log"
 MOCK_REQUEST_LOG="$scenario_tmp/openai-requests.jsonl"
 export SUCCESS_MARKER MOCK_REQUEST_LOG
 
+plugin_registry_pid=""
 mock_pid=""
 wizard_pid=""
 input_fifo_dir=""
@@ -36,6 +39,7 @@ cleanup() {
   { exec 3>&-; } 2>/dev/null || true
   openclaw_e2e_stop_process "${wizard_pid:-}"
   openclaw_e2e_stop_process "${mock_pid:-}"
+  openclaw_e2e_stop_process "${plugin_registry_pid:-}"
   if [ -n "${input_fifo_dir:-}" ]; then
     rm -rf "$input_fifo_dir"
   fi
@@ -49,11 +53,12 @@ dump_debug_logs() {
   openclaw_e2e_dump_logs \
     "$INSTALL_LOG" \
     "$ONBOARD_LOG" \
+    "$CODEX_INSTALL_LOG" \
     "$OPENAI_LOG" \
     "$MOCK_REQUEST_LOG" \
     "$AGENT_LOG"
 }
-trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
+openclaw_e2e_enable_failure_diagnostics
 
 send() {
   local payload="$1"
@@ -87,6 +92,7 @@ wait_for_log() {
 
 openclaw_e2e_install_package "$INSTALL_LOG"
 echo "Installed the OpenClaw package."
+openclaw_prepublish_plugin_registry_start_mounted "$scenario_tmp/registry" plugin_registry_pid '["@openclaw/codex"]'
 command -v openclaw >/dev/null
 package_root="$(openclaw_e2e_package_root)"
 entry="$(openclaw_e2e_package_entrypoint "$package_root")"
@@ -105,6 +111,8 @@ exec 3>"$input_fifo"
 
 wait_for_log "Continue?" 60
 send $'y\r' 0.4
+wait_for_log "Help make OpenClaw better?" 60
+send $'\r' 0.4
 wait_for_log "What should we call your first agent?" 60
 send $'\r' 0.4
 wait_for_log "to search" 60
@@ -118,6 +126,19 @@ input_fifo_dir=""
 echo "Interactive typed onboarding completed."
 
 node scripts/e2e/lib/release-scenarios/assertions.mjs assert-session-memory-hook-enabled
+
+# Explicit older packages keep automatic setup; successful help establishes consent support.
+plugin_install_help="$(openclaw plugins install --help)"
+fixture_consent="$(printf '%s' "$plugin_install_help" | node scripts/e2e/lib/package-compat.mjs fixture-consent)"
+if [ -n "$fixture_consent" ]; then
+  codex_install_args=(codex)
+  if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+    candidate_version="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:?missing candidate version}"
+    codex_install_args=("npm:@openclaw/codex@$candidate_version" --pin)
+  fi
+  openclaw_e2e_fixture_plugin_command openclaw -- plugins install "${codex_install_args[@]}" \
+    >"$CODEX_INSTALL_LOG" 2>&1
+fi
 
 openclaw onboard \
   --non-interactive \

@@ -263,6 +263,89 @@ describe("discoverDeepInfraModels (chat-only shim)", () => {
     });
   });
 
+  it("preserves bundled reasoning and compat while keeping live model facts authoritative", async () => {
+    const rows = [
+      makeAgentModelEntry({
+        id: "deepseek-ai/DeepSeek-V4-Pro",
+        metadata: {
+          context_length: 96000,
+          max_tokens: 4096,
+          pricing: { input_tokens: 4, output_tokens: 8, cache_read_tokens: 0.4 },
+          tags: ["chat"],
+        },
+      }),
+      makeAgentModelEntry({
+        id: "stepfun-ai/Step-3.7-Flash",
+        metadata: {
+          context_length: 192000,
+          max_tokens: 16384,
+          pricing: { input_tokens: 0.2, output_tokens: 1.15 },
+          tags: ["chat", "vlm", "vision"],
+        },
+      }),
+      makeAgentModelEntry({
+        id: "deepseek-ai/DeepSeek-V3.2",
+        metadata: {
+          context_length: 64000,
+          max_tokens: 8192,
+          pricing: { input_tokens: 1, output_tokens: 2 },
+          tags: ["chat", "reasoning"],
+        },
+      }),
+      makeAgentModelEntry({
+        id: "unlisted/no-reasoning",
+        metadata: { context_length: 32000, max_tokens: 2048, pricing: {}, tags: ["chat"] },
+      }),
+      makeAgentModelEntry({
+        id: "unlisted/with-reasoning",
+        metadata: {
+          context_length: 48000,
+          max_tokens: 4096,
+          pricing: {},
+          tags: ["chat", "reasoning_effort"],
+        },
+      }),
+    ];
+    const mockFetch = vi.fn().mockResolvedValue(jsonResponse({ data: rows }));
+    DEEPINFRA_MODEL_CATALOG.push(DEEPINFRA_MODEL_CATALOG[0]!);
+
+    try {
+      await withFetchPathTest(mockFetch, { DEEPINFRA_API_KEY: "sk-test" }, async () => {
+        const models = await discoverDeepInfraModels();
+
+        expect(models.slice(0, rows.length)).toMatchObject([
+          {
+            id: "deepseek-ai/DeepSeek-V4-Pro",
+            reasoning: true,
+            input: ["text"],
+            contextWindow: 96000,
+            maxTokens: 4096,
+            cost: { input: 4, output: 8, cacheRead: 0.4, cacheWrite: 0 },
+            compat: {
+              codeMode: "capable",
+              supportsUsageInStreaming: true,
+              thinkingFormat: "deepseek",
+            },
+          },
+          {
+            id: "stepfun-ai/Step-3.7-Flash",
+            reasoning: true,
+            input: ["text", "image"],
+            contextWindow: 192000,
+            maxTokens: 16384,
+            cost: { input: 0.2, output: 1.15, cacheRead: 0, cacheWrite: 0 },
+          },
+          { id: "deepseek-ai/DeepSeek-V3.2", reasoning: false },
+          { id: "unlisted/no-reasoning", reasoning: false },
+          { id: "unlisted/with-reasoning", reasoning: true },
+        ]);
+        expect(new Set(models.map((model) => model.id)).size).toBe(models.length);
+      });
+    } finally {
+      DEEPINFRA_MODEL_CATALOG.pop();
+    }
+  });
+
   it("skips entries with no metadata or no surface tag, and deduplicates ids", async () => {
     const mockFetch = vi.fn().mockResolvedValue(
       jsonResponse({

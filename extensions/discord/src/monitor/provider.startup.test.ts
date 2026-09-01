@@ -399,6 +399,7 @@ describe("registerDiscordMonitorListeners", () => {
     expect(registeredListenerTypes()).toEqual([
       "interaction",
       "message",
+      "GUILD_CREATE",
       "thread-update",
       "thread-delete",
     ]);
@@ -443,6 +444,7 @@ describe("registerDiscordMonitorListeners", () => {
     expect(registeredListenerTypes()).toEqual([
       "interaction",
       "message",
+      "GUILD_CREATE",
       "thread-update",
       "thread-delete",
       "presence",

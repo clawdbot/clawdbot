@@ -35,6 +35,7 @@ import {
 } from "../shared/device-pairing-access.js";
 import { formatCliCommand } from "./command-format.js";
 import { callGatewayFromCliWithTransport } from "./gateway-rpc.js";
+import { formatConnectionFlagReminder } from "./nodes-cli/cli-utils.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
 
 type DevicesRpcOpts = {
@@ -144,16 +145,6 @@ function buildNodeApproveCommand(opts: DevicesRpcOpts, requestId: string): strin
   return formatCliCommand(args.map(quoteCliArg).join(" "));
 }
 
-function formatNodeConnectionFlagReminder(opts: DevicesRpcOpts): string | null {
-  const flags = [
-    normalizeOptionalString(opts.url) ? "--url" : null,
-    normalizeOptionalString(opts.token) ? "--token" : null,
-  ].filter((flag) => flag !== null);
-  return flags.length > 0
-    ? `Reuse the same connection option${flags.length === 1 ? "" : "s"} when rerunning: ${flags.join(", ")}.`
-    : null;
-}
-
 function stringsMatch(left: unknown, right: unknown): boolean {
   const normalizedLeft = normalizeOptionalString(left);
   const normalizedRight = normalizeOptionalString(right);
@@ -186,7 +177,7 @@ function buildPendingNodeApprovalNotice(
       normalizeOptionalString(device.displayName) ??
       device.deviceId,
     command: buildNodeApproveCommand(opts, requestId),
-    connectionReminder: formatNodeConnectionFlagReminder(opts),
+    connectionReminder: formatConnectionFlagReminder(opts),
   };
 }
 

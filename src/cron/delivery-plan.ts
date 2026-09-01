@@ -7,6 +7,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { CronFailureDestinationConfig } from "../config/types.cron.js";
 import { resolveTargetPrefixedChannel } from "../infra/outbound/channel-target-prefix.js";
+import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import { shouldDefaultCronDeliveryToAnnounce } from "./delivery-defaults.js";
 import type { CronDelivery, CronDeliveryMode, CronJob, CronMessageChannel } from "./types.js";
 
@@ -34,7 +35,7 @@ function normalizeChannel(value: unknown): CronMessageChannel | undefined {
   if (!trimmed) {
     return undefined;
   }
-  return trimmed as CronMessageChannel;
+  return normalizeMessageChannel(trimmed) as CronMessageChannel;
 }
 
 function normalizeThreadIdentity(value: unknown): string | undefined {
@@ -189,10 +190,10 @@ export function resolveFailureDestination(
         : undefined);
     const overrideAccountId = normalizeOptionalString(routeOverride.accountId);
     const overrideMode = normalizeFailureMode(routeOverride.mode);
-    const hasChannelField = "channel" in routeOverride;
-    const hasToField = "to" in routeOverride;
-    const hasAccountIdField = "accountId" in routeOverride;
-    const hasModeField = "mode" in routeOverride;
+    const hasChannelField = Object.hasOwn(routeOverride, "channel");
+    const hasToField = Object.hasOwn(routeOverride, "to");
+    const hasAccountIdField = Object.hasOwn(routeOverride, "accountId");
+    const hasModeField = Object.hasOwn(routeOverride, "mode");
 
     const hasExplicitTo = hasToField && overrideTo !== undefined;
     const globalChannel = resolveAnnounceChannel({ channel, to });

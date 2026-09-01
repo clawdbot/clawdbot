@@ -1,16 +1,14 @@
 // Xai plugin module implements web search shared behavior.
-import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
-import { postTrustedWebToolsJson, wrapWebContent } from "openclaw/plugin-sdk/provider-web-search";
+import { wrapWebContent } from "openclaw/plugin-sdk/provider-web-search";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { XAI_DEFAULT_MODEL_ID } from "../model-definitions.js";
 import { normalizeXaiModelId } from "../model-id.js";
 import {
-  buildXaiResponsesToolBody,
+  requestXaiResponsesTool,
   requireXaiResponseTextCitationsAndInline,
   resolveXaiResponsesEndpoint,
 } from "./responses-tool-shared.js";
 import type { XaiWebSearchResponse } from "./web-search-response.types.js";
-export { extractXaiWebSearchContent } from "./responses-tool-shared.js";
 export type { XaiWebSearchResponse } from "./web-search-response.types.js";
 
 const XAI_DEFAULT_WEB_SEARCH_MODEL = XAI_DEFAULT_MODEL_ID;
@@ -38,6 +36,7 @@ export function buildXaiWebSearchPayload(params: {
   citations: string[];
   inlineCitations?: XaiWebSearchResponse["inline_citations"];
   truncated?: boolean;
+  source?: "web_search" | "x_search";
 }): Record<string, unknown> {
   return {
     query: params.query,
@@ -46,7 +45,7 @@ export function buildXaiWebSearchPayload(params: {
     tookMs: params.tookMs,
     externalContent: {
       untrusted: true,
-      source: "web_search",
+      source: params.source ?? "web_search",
       provider: params.provider,
       wrapped: true,
     },
@@ -108,32 +107,21 @@ export async function requestXaiWebSearch(params: {
   signal?: AbortSignal;
 }): Promise<XaiWebSearchResult> {
   params.signal?.throwIfAborted();
-  return await postTrustedWebToolsJson(
+  return await requestXaiResponsesTool(
     {
-      url: params.endpoint,
-      timeoutSeconds: params.timeoutSeconds,
-      apiKey: params.apiKey,
-      ...(params.signal ? { signal: params.signal } : {}),
-      body: buildXaiResponsesToolBody({
-        model: params.model,
-        inputText: params.query,
-        tools: [{ type: "web_search" }],
-        reasoningEffort: params.model === XAI_DEFAULT_WEB_SEARCH_MODEL ? "low" : undefined,
-      }),
-      errorLabel: "xAI",
+      ...params,
+      inputText: params.query,
+      tools: [{ type: "web_search" }],
+      reasoningEffort: params.model === XAI_DEFAULT_WEB_SEARCH_MODEL ? "low" : undefined,
+      errorLabel: "xAI web search failed",
     },
-    async (response) => {
-      const data = (await readProviderJsonObjectResponse(
-        response,
-        "xAI web search failed",
-      )) as XaiWebSearchResponse;
-      return requireXaiResponseTextCitationsAndInline(
+    (data) =>
+      requireXaiResponseTextCitationsAndInline(
         data,
         "xAI web search failed",
         params.inlineCitations,
         XAI_WEB_SEARCH_MAX_CONTENT_CHARS,
-      );
-    },
+      ),
   ).catch((error: unknown) => {
     if (params.signal?.aborted && error === params.signal.reason) {
       throw error;

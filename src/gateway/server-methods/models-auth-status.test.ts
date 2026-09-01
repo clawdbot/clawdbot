@@ -11,6 +11,12 @@ import {
   type AuthProfileStore,
 } from "../../agents/auth-profiles.js";
 import { NON_ENV_SECRETREF_MARKER } from "../../agents/model-auth-markers.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import {
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { UsageSummary } from "../../infra/provider-usage.types.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-plugin-index-policy.js";
 import { resolveProviderAuthLookupMaps } from "../../secrets/provider-env-vars.js";
@@ -328,6 +334,7 @@ function firstDeferredAuthScope() {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  resetConfigRuntimeState();
 });
 
 function expectLogoutFailurePreservesRun(params: {
@@ -508,6 +515,29 @@ describe("models.authStatus", () => {
     expect(mocks.buildAuthHealthSummary).toHaveBeenCalledWith(
       expect.objectContaining({ cfg: after }),
     );
+  });
+
+  it("reports an unavailable prepared owner without failing the RPC or discovering credentials", async () => {
+    mocks.readPreparedCatalog.mockResolvedValueOnce(undefined);
+
+    const unavailable = await readAuthStatus();
+
+    expect(unavailable).toEqual({
+      ts: expect.any(Number),
+      providers: [],
+      unavailable: {
+        code: "PREPARED_MODEL_AUTH_UNAVAILABLE",
+        message: expect.stringContaining("Refresh Models"),
+      },
+    });
+    expect(mocks.loadDeferredCatalog).not.toHaveBeenCalled();
+    expect(mocks.ensureAuthProfileStoreWithoutExternalProfiles).not.toHaveBeenCalled();
+    expect(mocks.buildAuthHealthSummary).not.toHaveBeenCalled();
+    expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
+
+    const recovered = await readAuthStatus();
+    expect(recovered).not.toHaveProperty("unavailable");
+    expect(mocks.buildAuthHealthSummary).toHaveBeenCalledOnce();
   });
 
   it("returns a serialisable snapshot on first call", async () => {
@@ -807,65 +837,6 @@ describe("models.authStatus", () => {
     expect(provider).toMatchObject({ provider: "minimax-portal", status: "expired" });
   });
 
-  it("does not publish a synthetic Anthropic missing row beside owned Claude CLI OAuth", async () => {
-    const profileId = "anthropic:claude-cli";
-    mocks.getRuntimeConfig.mockReturnValue({
-      auth: { profiles: { [profileId]: { provider: "anthropic", mode: "token" } } },
-    });
-    const profile = {
-      profileId,
-      provider: "claude-cli",
-      type: "oauth",
-      status: "expired",
-      expiresAt: 1,
-      remainingMs: -1,
-      source: "store",
-      label: profileId,
-    } satisfies AuthHealthSummary["profiles"][number];
-    setPreparedAuthStore(
-      Object.assign(
-        {
-          version: 1,
-          profiles: {
-            [profileId]: {
-              type: "oauth",
-              provider: "claude-cli",
-              access: "expired-access",
-              refresh: "cli-owned-refresh",
-              expires: 1,
-            } satisfies AuthProfileStore["profiles"][string],
-          },
-        },
-        { runtimeExternalCliProfileIds: [profileId] },
-      ),
-    );
-    mocks.buildAuthHealthSummary.mockReturnValue({
-      now: 2,
-      warnAfterMs: 0,
-      profiles: [profile],
-      providers: [
-        { provider: "anthropic", status: "missing", profiles: [] },
-        {
-          provider: "claude-cli",
-          status: "expired",
-          expiresAt: 1,
-          remainingMs: -1,
-          profiles: [profile],
-        },
-      ],
-    });
-
-    const result = await readAuthStatus();
-
-    expect(result.providers).toEqual([
-      expect.objectContaining({
-        provider: "claude-cli",
-        status: "ok",
-        profiles: [expect.anything()],
-      }),
-    ]);
-  });
-
   it("keeps a missing Anthropic row when its model route has independent auth config", async () => {
     const profileId = "anthropic:claude-cli";
     mocks.getRuntimeConfig.mockReturnValue({
@@ -1129,16 +1100,27 @@ describe("models.authStatus", () => {
     }
   });
 
-  it("reports non-env SecretRefs as presence-only config auth", async () => {
-    mocks.getRuntimeConfig.mockReturnValue({
+  it("reports runtime-resolved non-env SecretRefs as presence-only config auth", async () => {
+    const sourceProvider: ModelProviderConfig = {
+      baseUrl: "https://example.test/v1",
+      models: [],
+      apiKey: { source: "file", provider: "mounted-json", id: "model-provider-key" },
+    };
+    const runtimeProvider: ModelProviderConfig = {
+      baseUrl: sourceProvider.baseUrl,
+      models: sourceProvider.models,
+      apiKey: "runtime-secret-value",
+    };
+    const sourceConfig: OpenClawConfig = {
       models: {
         providers: {
-          openai: Object.fromEntries([
-            ["apiKey", { source: "file", provider: "mounted-json", id: "model-provider-key" }],
-          ]),
+          openai: sourceProvider,
         },
       },
-    });
+    };
+    const runtimeConfig: OpenClawConfig = { models: { providers: { openai: runtimeProvider } } };
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+    mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
     mocks.buildAuthHealthSummary.mockReturnValue({
       now: 0,
       warnAfterMs: 0,

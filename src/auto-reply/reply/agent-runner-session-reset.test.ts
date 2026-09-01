@@ -128,6 +128,7 @@ describe("resetReplyRunSession", () => {
       updatedAt: 1,
       sessionFile: path.join(rootDir, "session.jsonl"),
       lifecycleRunId: "run-before-reset",
+      lastRunId: "run-before-reset",
       agentHarnessId: "codex",
       claudeCliSessionId: "native-before-boundary",
       modelProvider: "qwencode",
@@ -161,6 +162,11 @@ describe("resetReplyRunSession", () => {
         reason: "rate limit",
       },
       compactionCount: 4,
+      transcriptByteCompactionLatch: {
+        activeBytes: 60_000,
+        sessionId: "session",
+        maxBytes: 50_000,
+      },
       memoryFlush: { kind: "failed", compactionCount: 3, failureCount: 2 },
       systemPromptReport: {
         source: "run",
@@ -202,6 +208,7 @@ describe("resetReplyRunSession", () => {
     expect(activeSessionEntry?.sessionId).toBe("session");
     expect(activeSessionEntry?.lifecycleRevision).toBe("00000000-0000-0000-0000-000000000123");
     expect(activeSessionEntry?.lifecycleRunId).toBeUndefined();
+    expect(activeSessionEntry?.lastRunId).toBeUndefined();
     expect(followupRun.run.sessionId).toBe(activeSessionEntry?.sessionId);
     expect(activeSessionEntry?.modelProvider).toBeUndefined();
     expect(activeSessionEntry?.agentHarnessId).toBeUndefined();
@@ -212,6 +219,7 @@ describe("resetReplyRunSession", () => {
     expect(activeSessionEntry?.contextBudgetStatus).toBeUndefined();
     expect(activeSessionEntry?.fallbackNotice).toBeUndefined();
     expect(activeSessionEntry?.compactionCount).toBe(0);
+    expect(activeSessionEntry?.transcriptByteCompactionLatch).toBeUndefined();
     expect(activeSessionEntry?.memoryFlush).toBeUndefined();
     expect(activeSessionEntry?.systemPromptReport).toBeUndefined();
     expect(activeSessionEntry?.compactionCount).toBe(0);

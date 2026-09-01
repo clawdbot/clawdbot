@@ -4,6 +4,7 @@
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -50,20 +51,19 @@ const HANDOFF_PENDING_SENTINEL = {
 };
 
 async function openUpdateConfirmation(page: Page): Promise<void> {
-  await page
-    .locator('[data-attention-kind="updateAvailable"] .sidebar-attention__open:visible')
-    .click();
-  await page
-    .locator(".custodian__alert-card")
-    .getByRole("button", { name: "Update and restart", exact: true })
-    .click();
+  await page.locator(".sidebar-issues-button").click();
+  const updateIssue = page.locator(
+    'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
+  );
+  await updateIssue.locator("summary").click();
+  await updateIssue.locator(".sidebar-update-card__action").click();
 }
 
 suite.define(() => {
   it.each(["light", "dark"] as const)(
     "narrates a dev-channel update through to its recorded success (%s)",
     async (colorScheme) => {
-      const artifactDir = path.resolve(`.artifacts/control-ui-e2e/update-lifecycle-${colorScheme}`);
+      const artifactDir = createControlUiE2eArtifactDir(`update-lifecycle-${colorScheme}`);
       await suite.withPage(
         {
           colorScheme,
@@ -150,9 +150,7 @@ suite.define(() => {
   it.each(["light", "dark"] as const)(
     "names the recorded cause when the install fails (%s)",
     async (colorScheme) => {
-      const artifactDir = path.resolve(
-        `.artifacts/control-ui-e2e/update-failure-cause-${colorScheme}`,
-      );
+      const artifactDir = createControlUiE2eArtifactDir(`update-failure-cause-${colorScheme}`);
       await suite.withPage(
         {
           colorScheme,

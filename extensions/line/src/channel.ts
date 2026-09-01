@@ -6,6 +6,7 @@ import {
 import {
   buildChannelOutboundSessionRoute,
   createChatChannelPlugin,
+  type ChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
@@ -13,7 +14,6 @@ import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/director
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveLineAccount } from "./accounts.js";
 import { lineBindingsAdapter } from "./bindings.js";
-import type { ChannelPlugin, ResolvedLineAccount } from "./channel-api.js";
 import { lineChannelPluginCommon } from "./channel-shared.js";
 import { lineConfigAdapter } from "./config-adapter.js";
 import { lineGatewayAdapter } from "./gateway.js";
@@ -25,6 +25,7 @@ import { getLineRuntime } from "./runtime.js";
 import { lineSetupContract } from "./setup-core.js";
 import { lineSetupWizard } from "./setup-surface.js";
 import { lineStatusAdapter } from "./status.js";
+import type { ResolvedLineAccount } from "./types.js";
 
 const loadLineChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
 
@@ -112,6 +113,17 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
     setupContract: lineSetupContract,
     status: lineStatusAdapter,
     gateway: lineGatewayAdapter,
+    heartbeat: {
+      sendTyping: async ({ cfg, to, accountId }) => {
+        const chatId = normalizeLineMessagingTarget(to);
+        // LINE's loading indicator accepts user IDs only; group and room requests fail.
+        if (!chatId || inferLineTargetChatType(chatId) !== "direct") {
+          return;
+        }
+        const { showLoadingAnimation } = await loadLineChannelRuntime();
+        await showLoadingAnimation(chatId, { cfg, accountId: accountId ?? undefined });
+      },
+    },
     message: lineMessageAdapter,
     actions: lineMessageActions,
     bindings: lineBindingsAdapter,

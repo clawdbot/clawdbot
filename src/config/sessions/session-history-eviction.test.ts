@@ -21,6 +21,7 @@ vi.mock("../../logging/subsystem.js", async () => {
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import {
+  closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -61,6 +62,7 @@ describe("SQLite historical session disk budget", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await enforceSqliteSessionHistoryDiskBudget({
       storePath,
       mode: "warn",
@@ -90,6 +92,13 @@ describe("SQLite historical session disk budget", () => {
     });
     setSessionUpdatedAt("newer-history", 20);
     settlePhysicalUsage();
+    database().db.exec("ANALYZE; PRAGMA analysis_limit = 37;");
+    expect(
+      database()
+        .db.prepare("SELECT stat FROM sqlite_stat1 WHERE idx = ?")
+        .get("idx_agent_session_windows_updated_at"),
+    ).toEqual({ stat: expect.stringMatching(/^3\b/u) });
+    settlePhysicalUsage();
     const before = await measureSessionPhysicalDiskUsage(storePath);
 
     const result = await enforceSqliteSessionHistoryDiskBudget({
@@ -111,6 +120,12 @@ describe("SQLite historical session disk budget", () => {
     expect(sessionExists("live-history")).toBe(true);
     expect(readArchiveNames("oldest-history")).toHaveLength(1);
     expect(readArchiveNames("newer-history")).toHaveLength(0);
+    expect(
+      database()
+        .db.prepare("SELECT stat FROM sqlite_stat1 WHERE idx = ?")
+        .get("idx_agent_session_windows_updated_at"),
+    ).toEqual({ stat: expect.stringMatching(/^3\b/u) });
+    expect(database().db.prepare("PRAGMA analysis_limit").get()).toEqual({ analysis_limit: 37 });
   });
 
   it("remeasures incompressible archive publication before declaring high water", async () => {
@@ -208,6 +223,14 @@ describe("SQLite historical session disk budget", () => {
     settlePhysicalUsage();
     const before = await measureSessionPhysicalDiskUsage(storePath);
 
+    const databasePath = database().path;
+    const rm = fs.promises.rm.bind(fs.promises);
+    const removeArchive = vi.spyOn(fs.promises, "rm").mockImplementation(async (...args) => {
+      if (args[0] === archivePath) {
+        expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+      }
+      return await rm(...args);
+    });
     const result = await enforceSqliteSessionHistoryDiskBudget({
       storePath,
       mode: "enforce",
@@ -219,6 +242,7 @@ describe("SQLite historical session disk budget", () => {
 
     expect(result).toMatchObject({ removedEntries: 0, removedFiles: 1 });
     expect(fs.existsSync(archivePath ?? "")).toBe(false);
+    expect(removeArchive).toHaveBeenCalledWith(archivePath);
     expect(
       database()
         .db.prepare("SELECT 1 FROM session_transcript_archives WHERE session_id = ?")
@@ -392,6 +416,36 @@ describe("SQLite historical session disk budget", () => {
         expect.objectContaining({ storePath }),
       );
     });
+  });
+
+  it("inspects history after the archive probe loses its cached handle", async () => {
+    await createHistoricalTranscript({
+      content: "inspect retained history",
+      nextSessionId: "inspect-live",
+      sessionId: "inspect-old",
+      sessionKey: "agent:main:inspect-history",
+      updatedAt: 1,
+    });
+    const databasePath = database().path;
+    const diskBudget = await import("./disk-budget.js");
+    const probe = diskBudget.hasRetainedSessionTranscriptArchives;
+    const probeSpy = vi
+      .spyOn(diskBudget, "hasRetainedSessionTranscriptArchives")
+      .mockImplementation(async (pathname) => {
+        const retained = await probe(pathname);
+        expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+        return retained;
+      });
+
+    await expect(
+      inspectSqliteSessionHistoryDiskBudget({
+        storePath,
+        mode: "enforce",
+        maintenance: { maxDiskBytes: 1, highWaterBytes: 0 },
+      }),
+    ).resolves.toMatchObject({ wouldMutate: true });
+    expect(probeSpy).toHaveBeenCalledOnce();
+    expect(sessionExists("inspect-old")).toBe(true);
   });
 
   it("warn mode reports physical overage without extracting or deleting history", async () => {

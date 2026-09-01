@@ -4,7 +4,6 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
-  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -43,6 +42,7 @@ import {
   writeRunSummary,
 } from "../../scripts/test-docker-all.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { copyDockerSchedulerHarness } from "./docker-all-harness.test-support.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createPrepublishPluginRegistryArtifact } = vi.hoisted(() => ({
@@ -228,6 +228,7 @@ function runCandidatePrep(fixture: ReturnType<typeof candidateFixture>) {
         OPENCLAW_DOCKER_ALL_LOG_DIR: path.join(fixture.root, "logs"),
         OPENCLAW_DOCKER_ALL_TIMINGS: "0",
         OPENCLAW_DOCKER_E2E_REPO_ROOT: fixture.root,
+        OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR: fixture.root,
       },
     },
   );
@@ -295,6 +296,45 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
     await delay(5);
   }
   throw new Error("condition was not met before timeout");
+}
+
+async function runReadyTimedCommand<T>(
+  start: () => Promise<T>,
+  ready: () => boolean,
+  timeoutMs: number,
+): Promise<T> {
+  const scheduleTimeout = globalThis.setTimeout;
+  let fireDeadline = () => {};
+  let deadlineMs: number | undefined;
+  // Hold only the command deadline until real child handlers are ready. Kill
+  // grace and process-group cleanup continue to use real timers and signals.
+  const timerSpy = vi
+    .spyOn(globalThis, "setTimeout")
+    .mockImplementationOnce((callback, ms, ...args) => {
+      const timer = scheduleTimeout(callback, ms, ...args);
+      clearTimeout(timer);
+      deadlineMs = ms;
+      fireDeadline = () => {
+        fireDeadline = () => {};
+        callback(...args);
+      };
+      return timer;
+    });
+  let command: Promise<T>;
+  try {
+    command = start();
+  } finally {
+    timerSpy.mockRestore();
+  }
+  try {
+    expect(deadlineMs).toBe(timeoutMs);
+    await waitFor(ready);
+    fireDeadline();
+    return await command;
+  } finally {
+    fireDeadline();
+    await command;
+  }
 }
 
 async function waitForChildClose(child: ReturnType<typeof spawn>, timeoutMs = 5_000) {
@@ -607,41 +647,7 @@ describe("scripts/test-docker-all scheduler", () => {
     const artifactRoot = path.resolve(".artifacts");
     mkdirSync(artifactRoot, { recursive: true });
     const root = tempDirs.make("openclaw-docker-plan-isolated-harness-", artifactRoot);
-    const scriptsDir = path.join(root, "scripts");
-    const libDir = path.join(scriptsDir, "lib");
-    const upgradeSurvivorDir = path.join(scriptsDir, "e2e/lib/upgrade-survivor");
-    mkdirSync(libDir, { recursive: true });
-    mkdirSync(upgradeSurvivorDir, { recursive: true });
-    copyFileSync("package.json", path.join(root, "package.json"));
-    copyFileSync("scripts/test-docker-all.mjs", path.join(scriptsDir, "test-docker-all.mjs"));
-    copyFileSync("scripts/test-docker-all.mts", path.join(scriptsDir, "test-docker-all.mts"));
-    copyFileSync("scripts/lib/tsx-cli-shim.mjs", path.join(libDir, "tsx-cli-shim.mjs"));
-    copyFileSync(
-      "scripts/prepublish-plugin-registry-artifact.mjs",
-      path.join(scriptsDir, "prepublish-plugin-registry-artifact.mjs"),
-    );
-    copyFileSync(
-      "scripts/windows-cmd-helpers.mjs",
-      path.join(scriptsDir, "windows-cmd-helpers.mjs"),
-    );
-    for (const fileName of [
-      "docker-e2e-plan.mts",
-      "docker-e2e-scenarios.mts",
-      "official-external-channel-catalog.json",
-      "release-version.mjs",
-      "sleep.mjs",
-    ]) {
-      copyFileSync(path.join("scripts/lib", fileName), path.join(libDir, fileName));
-    }
-    copyFileSync(
-      "scripts/e2e/lib/upgrade-survivor/config-recipe.mts",
-      path.join(upgradeSurvivorDir, "config-recipe.mts"),
-    );
-    cpSync(
-      "scripts/e2e/lib/upgrade-survivor/config-recipe",
-      path.join(upgradeSurvivorDir, "config-recipe"),
-      { recursive: true },
-    );
+    const scriptsDir = copyDockerSchedulerHarness(root);
 
     const result = spawnSync(
       process.execPath,
@@ -1227,10 +1233,10 @@ postgres Created
     expect(resolveDockerPreflightPlatform("x64")).toBe("linux/amd64");
     expect(resolveDockerPreflightPlatform("arm64")).toBe("linux/arm64");
     expect(dockerPreflightSmokeCommand("x64")).toBe(
-      "docker run --rm --platform 'linux/amd64' alpine:3.20 true",
+      "docker run --rm --platform 'linux/amd64' alpine:3.24 true",
     );
     expect(dockerPreflightSmokeCommand("arm64")).toBe(
-      "docker run --rm --platform 'linux/arm64' alpine:3.20 true",
+      "docker run --rm --platform 'linux/arm64' alpine:3.24 true",
     );
   });
 
@@ -1317,10 +1323,17 @@ postgres Created
   });
 
   posixIt("kills timed-out shell command groups when the leader exits first", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-docker-all-timeout-"));
+    const root = createTempDir("openclaw-docker-all-timeout-");
     const scriptPath = path.join(root, "leader-exits.mjs");
     const grandchildPidPath = path.join(root, "grandchild.pid");
+    const readyPath = path.join(root, "ready");
     let grandchildPid = 0;
+    const childScript = [
+      "const fs = require('node:fs');",
+      "process.on('SIGTERM', () => {});",
+      `fs.writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
+      "setInterval(() => {}, 1000);",
+    ].join("\n");
 
     writeFileSync(
       scriptPath,
@@ -1328,93 +1341,71 @@ postgres Created
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 
-const grandchild = spawn(process.execPath, [
-  "-e",
-  "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
-], { stdio: "ignore" });
-fs.writeFileSync(process.argv[2], String(grandchild.pid));
+const grandchild = spawn(process.execPath, ["-e", ${JSON.stringify(childScript)}], { stdio: "ignore" });
 process.on("SIGTERM", () => process.exit(0));
+fs.writeFileSync(process.argv[2], String(grandchild.pid));
 setInterval(() => {}, 1000);
 `,
       "utf8",
     );
 
     try {
-      const runPromise = runShellCommand({
-        command: `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(
-          scriptPath,
-        )} ${JSON.stringify(grandchildPidPath)}`,
-        env: process.env,
-        label: "timeout-leader-exits",
-        timeoutKillGraceMs: 25,
-        timeoutMs: 250,
-      });
+      const result = await runReadyTimedCommand(
+        () =>
+          runShellCommand({
+            command: `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(scriptPath)} ${JSON.stringify(grandchildPidPath)}`,
+            env: process.env,
+            label: "timeout-leader-exits",
+            timeoutKillGraceMs: 25,
+            timeoutMs: 250,
+          }),
+        () => {
+          grandchildPid = readCompletePidFile(grandchildPidPath) ?? 0;
+          if (!grandchildPid || !existsSync(readyPath)) {
+            return false;
+          }
+          expect(isProcessAlive(grandchildPid)).toBe(true);
+          return true;
+        },
+        250,
+      );
 
-      await waitFor(() => {
-        grandchildPid = readCompletePidFile(grandchildPidPath) ?? 0;
-        return grandchildPid > 0;
-      });
-      expect(isProcessAlive(grandchildPid)).toBe(true);
-
-      await expect(runPromise).resolves.toMatchObject({ timedOut: true });
+      expect(result).toMatchObject({ timedOut: true });
       await waitFor(() => !isProcessAlive(grandchildPid));
     } finally {
       if (grandchildPid && isProcessAlive(grandchildPid)) {
         process.kill(grandchildPid, "SIGKILL");
       }
-      rmSync(root, { force: true, recursive: true });
     }
   });
 
-  posixIt("clamps oversized shell command kill grace before scheduling", async () => {
-    const root = createTempDir("openclaw-docker-all-oversized-grace-");
-    const scriptPath = path.join(root, "leader-exits.mjs");
-    const donePath = path.join(root, "done");
-    const readyPath = path.join(root, "ready");
-    const childScript = [
-      "const fs = require('node:fs');",
-      `fs.writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
-      "process.on('SIGTERM', () => {",
-      `  setTimeout(() => { fs.writeFileSync(${JSON.stringify(donePath)}, 'done'); process.exit(0); }, 75);`,
-      "});",
-      "setInterval(() => {}, 1000);",
-    ].join("\n");
-
-    writeFileSync(
-      scriptPath,
-      `
-import { spawn } from "node:child_process";
-
-spawn(process.execPath, ["-e", ${JSON.stringify(childScript)}], { stdio: "ignore" });
-process.on("SIGTERM", () => process.exit(0));
-setInterval(() => {}, 1000);
-`,
-      "utf8",
-    );
-
-    const result = await runShellCommand({
-      command: `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(scriptPath)}`,
-      env: process.env,
-      label: "oversized-timeout-grace",
-      timeoutKillGraceMs: Number.MAX_SAFE_INTEGER,
-      timeoutMs: 500,
-    });
-
-    expect(result).toMatchObject({ timedOut: true });
-    expect(readFileSync(donePath, "utf8")).toBe("done");
-  });
-
-  posixIt("lets timed-out shell command descendants exit during kill grace", async () => {
+  posixIt.each([
+    {
+      title: "clamps oversized shell command kill grace before scheduling",
+      run: runShellCommand,
+      grace: Number.MAX_SAFE_INTEGER,
+    },
+    {
+      title: "lets timed-out shell command descendants exit during kill grace",
+      run: runShellCommand,
+      grace: 500,
+    },
+    {
+      title: "lets timed-out shell capture descendants exit during kill grace",
+      run: runShellCaptureCommand,
+      grace: 500,
+    },
+  ])("$title", async ({ run, grace }) => {
     const root = createTempDir("openclaw-docker-all-grace-");
     const scriptPath = path.join(root, "leader-exits.mjs");
     const donePath = path.join(root, "done");
     const readyPath = path.join(root, "ready");
     const childScript = [
       "const fs = require('node:fs');",
-      `fs.writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
       "process.on('SIGTERM', () => {",
       `  setTimeout(() => { fs.writeFileSync(${JSON.stringify(donePath)}, 'done'); process.exit(0); }, 75);`,
       "});",
+      `fs.writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
       "setInterval(() => {}, 1000);",
     ].join("\n");
 
@@ -1430,56 +1421,18 @@ setInterval(() => {}, 1000);
       "utf8",
     );
 
-    const runPromise = runShellCommand({
-      command: `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(scriptPath)}`,
-      env: process.env,
-      label: "timeout-grace",
-      timeoutKillGraceMs: 500,
-      timeoutMs: 500,
-    });
-
-    await waitFor(() => existsSync(readyPath));
-    const result = await runPromise;
-    expect(result).toMatchObject({ timedOut: true });
-    expect(readFileSync(donePath, "utf8")).toBe("done");
-  });
-
-  posixIt("lets timed-out shell capture descendants exit during kill grace", async () => {
-    const root = createTempDir("openclaw-docker-all-capture-grace-");
-    const scriptPath = path.join(root, "leader-exits.mjs");
-    const donePath = path.join(root, "done");
-    const readyPath = path.join(root, "ready");
-    const childScript = [
-      "const fs = require('node:fs');",
-      `fs.writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
-      "process.on('SIGTERM', () => {",
-      `  setTimeout(() => { fs.writeFileSync(${JSON.stringify(donePath)}, 'done'); process.exit(0); }, 75);`,
-      "});",
-      "setInterval(() => {}, 1000);",
-    ].join("\n");
-
-    writeFileSync(
-      scriptPath,
-      `
-import { spawn } from "node:child_process";
-
-spawn(process.execPath, ["-e", ${JSON.stringify(childScript)}], { stdio: "ignore" });
-process.on("SIGTERM", () => process.exit(0));
-setInterval(() => {}, 1000);
-`,
-      "utf8",
+    const result = await runReadyTimedCommand(
+      async () =>
+        run({
+          command: `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(scriptPath)}`,
+          env: process.env,
+          label: "timeout-grace",
+          timeoutKillGraceMs: grace,
+          timeoutMs: 500,
+        }),
+      () => existsSync(readyPath),
+      500,
     );
-
-    const runPromise = runShellCaptureCommand({
-      command: `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(scriptPath)}`,
-      env: process.env,
-      label: "capture-timeout-grace",
-      timeoutKillGraceMs: 500,
-      timeoutMs: 500,
-    });
-
-    await waitFor(() => existsSync(readyPath));
-    const result = await runPromise;
     expect(result).toMatchObject({ timedOut: true });
     expect(readFileSync(donePath, "utf8")).toBe("done");
   });

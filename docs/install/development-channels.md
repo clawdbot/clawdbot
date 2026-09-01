@@ -18,7 +18,7 @@ OpenClaw ships four update channels:
   applies automatically.
 - **beta**: npm dist-tag `beta`. Falls back to `latest` when `beta` is missing
   or older than the current stable release.
-- **dev**: moving head of `main` (git). npm dist-tag `dev` when published. `main`
+- **dev**: moving head of `main` (git), including when switching from a package install. `main`
   is for experimentation and active development; it may contain incomplete
   features or breaking changes. Do not run it for production gateways.
 
@@ -38,12 +38,19 @@ openclaw update --channel dev
 `--channel` persists the choice to `update.channel` in config and drives both
 install paths:
 
-| Channel           | npm/package installs                                                                                                                                                                   | git installs                                                                                                                                                       |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `stable`          | dist-tag `latest`                                                                                                                                                                      | latest stable git tag (excludes `-alpha.N`, `-beta.N`, `-rc.N`, `-dev.N`, `-next.N`, `-preview.N`, `-canary.N`, `-nightly.N`, and other named prerelease suffixes) |
-| `extended-stable` | resolves the public npm `extended-stable` selector, verifies the exact selected package, and installs that exact version. Fails closed with no fallback to `latest`, `beta`, or `dev`. | unsupported: OpenClaw leaves the checkout unchanged and asks you to use a package installation                                                                     |
-| `beta`            | dist-tag `beta`, falling back to `latest` when `beta` is missing or older                                                                                                              | latest beta git tag, falling back to the latest stable git tag when beta is missing or older                                                                       |
-| `dev`             | dist-tag `dev` (rare; most dev users run git installs)                                                                                                                                 | fetches, rebases the checkout on the upstream `main` branch, builds, and reinstalls the global CLI                                                                 |
+| Channel           | npm/package installs                                                                                                                                                                   | git installs                                                                                       |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `stable`          | dist-tag `latest`                                                                                                                                                                      | switches to the npm package at `latest`                                                            |
+| `extended-stable` | resolves the public npm `extended-stable` selector, verifies the exact selected package, and installs that exact version. Fails closed with no fallback to `latest`, `beta`, or `dev`. | unsupported: OpenClaw leaves the checkout unchanged and asks you to use a package installation     |
+| `beta`            | dist-tag `beta`, falling back to `latest` when `beta` is missing or older                                                                                                              | switches to the npm package at `beta`, falling back to `latest` when beta is missing or older      |
+| `dev`             | switches to a Git checkout, builds it, and reinstalls the global CLI                                                                                                                   | fetches, rebases the checkout on the upstream `main` branch, builds, and reinstalls the global CLI |
+
+An explicit `--channel stable` or `--channel beta` switches a Git installation
+to a package installation. A bare `openclaw update` in a Git checkout with a
+previously stored stable or beta channel instead selects the corresponding Git tag.
+For managed Gateways, successful switches refresh the service to the verified
+installation before checking readiness. A refused switch or verified rollback
+recovers the previous service; unverified recovery leaves it stopped for inspection.
 
 For `dev` git installs, the default checkout is `~/openclaw` (or
 `$OPENCLAW_HOME/openclaw` when `OPENCLAW_HOME` is set); override with
@@ -82,6 +89,9 @@ Notes:
 - `--tag` applies to **package (npm) installs only**; git installs ignore it.
 - The tag is not persisted; the next `openclaw update` uses the configured
   channel.
+- A package install with stored `update.channel: "dev"` still honors a one-off
+  `--tag` without switching to Git. An explicit `--channel dev` takes precedence
+  over `--tag` and selects the Git checkout flow.
 - The `--tag main` shorthand is rejected for package installs because the
   workspace checkout is not a self-contained package artifact. Use
   `openclaw update --channel dev` (package installs switch to a git checkout)
@@ -120,7 +130,9 @@ Switching channels with `openclaw update` also syncs plugin sources:
   packages.
 - `extended-stable` resolves eligible official npm plugins with bare/default
   or `latest` intent to the exact installed core version. It does not query
-  plugin `@extended-stable` tags at runtime.
+  plugin `@extended-stable` tags at runtime. Version-bound runtime plugins use
+  the base release cohort for correction versions (for example, `YYYY.M.P-2`
+  uses plugin `YYYY.M.P`).
 - npm-installed plugins are updated after the core update completes.
 
 ## Checking current status

@@ -7,7 +7,7 @@ import {
 } from "./control-ui-session-prs-landing.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 
-const LOCAL_GIT_CACHE_MS = 10_000;
+const LOCAL_GIT_CACHE_MS = 75_000;
 const LOCAL_GIT_CACHE_LIMIT = 100;
 
 /** GitHub repo + branch resolved from a session's git checkout. */
@@ -51,8 +51,8 @@ function createLocalGitCache<T>() {
   };
 }
 
-// Process-local and bounded: ten seconds keeps sidebar checkout/tree facts
-// responsive; removing this freshness window respawns Git for every row.
+// Outlive the 60-second subscription poll so unchanged rows do not respawn
+// Git every cycle; explicit structural refreshes still bypass both caches.
 const cachedGitContext = createLocalGitCache<SessionPullRequestGitContext | null>();
 const cachedBranchFacts = createLocalGitCache<SessionPullRequestBranchFacts | undefined>();
 

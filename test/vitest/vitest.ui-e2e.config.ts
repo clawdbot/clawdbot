@@ -6,9 +6,11 @@ import { UiE2eSequencer } from "./vitest.ui-e2e.sequencer.ts";
 
 const uiE2eIncludePatterns = ["ui/src/**/*.e2e.test.ts"];
 const uiE2eRealGatewayTestFiles = [
+  "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
   "ui/src/e2e/control-ui-auth-transports.e2e.test.ts",
   "ui/src/e2e/logs-lifecycle.e2e.test.ts",
   "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
+  "ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts",
 ];
 
 function createUiE2eVitestConfig(
@@ -46,6 +48,8 @@ function createUiE2eVitestConfig(
       isolate: true,
       name: "ui-e2e",
       pool: "forks",
+      // Refit needs native file totals; verbose still reports cases to the output watchdog.
+      reporters: [...baseTest.reporters, "default"],
       runner: undefined,
       sequence: { ...baseSequence, sequencer: UiE2eSequencer },
       setupFiles: ["test/vitest/vitest.ui-e2e.setup.ts"],

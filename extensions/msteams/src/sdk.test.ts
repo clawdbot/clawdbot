@@ -74,19 +74,6 @@ describe("createMSTeamsApp", () => {
     expect(app.tokenManager).toBeDefined();
   });
 
-  it("creates app with secret credentials", async () => {
-    const creds: MSTeamsCredentials = {
-      type: "secret",
-
-      appId: "test-app-id",
-      appPassword: "test-secret",
-      tenantId: "test-tenant",
-    };
-
-    const app = await createMSTeamsApp(creds);
-    expect(app).toBeDefined();
-  });
-
   it("keeps private QA App options absent in production", async () => {
     const app = await createMSTeamsApp({
       type: "secret",
@@ -229,31 +216,58 @@ describe("createMSTeamsApp", () => {
     expect(readSecretFile).toHaveBeenCalledWith("/path/to/cert.pem", "Microsoft Teams certificate");
   });
 
-  it("throws when certificate file is missing", async () => {
-    readSecretFile.mockRejectedValue(new Error("ENOENT: no such file"));
+  it.each([
+    {
+      label: "certificate",
+      credentials: {
+        type: "federated" as const,
+        appId: "test-app-id",
+        tenantId: "test-tenant",
+        certificatePath: "/path/to/cert.pem",
+      },
+      expected: { clientId: "test-app-id", token: expect.any(Function) },
+    },
+    {
+      label: "managed identity",
+      credentials: {
+        type: "federated" as const,
+        appId: "test-app-id",
+        tenantId: "test-tenant",
+        useManagedIdentity: true,
+      },
+      expected: {
+        clientId: "test-app-id",
+        managedIdentityClientId: "system",
+        managedIdentityType: "system",
+      },
+    },
+  ])("prevents ambient CLIENT_SECRET from overriding $label authentication", async (mode) => {
+    vi.stubEnv("CLIENT_SECRET", "ambient-secret-must-not-win");
 
-    const creds: MSTeamsFederatedCredentials = {
-      type: "federated",
-      appId: "test-app-id",
-      tenantId: "test-tenant",
-      certificatePath: "/bad/path.pem",
-    };
+    const app = await createMSTeamsApp(mode.credentials);
+    const credentials = (app as unknown as { credentials?: Record<string, unknown> }).credentials;
 
-    await expect(createMSTeamsApp(creds)).rejects.toThrow("Failed to read certificate file");
+    expect(credentials).toMatchObject(mode.expected);
+    expect(credentials).not.toHaveProperty("clientSecret");
   });
 
-  it("creates app with managed identity credentials", async () => {
+  it("throws when certificate file is missing", async () => {
+    const certificatePath = "/private/msteams-race-sensitive-certificate.pem";
+    readSecretFile.mockRejectedValue(new Error(`ENOENT: no such file, open '${certificatePath}'`));
+
     const creds: MSTeamsFederatedCredentials = {
       type: "federated",
-
       appId: "test-app-id",
       tenantId: "test-tenant",
-
-      useManagedIdentity: true,
+      certificatePath,
     };
 
-    const app = await createMSTeamsApp(creds);
-    expect(app).toBeDefined();
+    const error = await createMSTeamsApp(creds).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    if (error instanceof Error) {
+      expect(error.message).toContain("Failed to read certificate file");
+      expect(error.message).not.toContain(certificatePath);
+    }
   });
 
   it("creates app with user-assigned managed identity", async () => {

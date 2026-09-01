@@ -294,6 +294,9 @@ describe("messageCommand", () => {
 
   it("scopes unqualified broadcast secrets to channels accepting the explicit account", async () => {
     const slackPlugin = createAccountPlugin("slack", ["shared"]);
+    slackPlugin.config.isEnabled = vi.fn(() => {
+      throw new Error("runtime enablement must not receive inspection metadata");
+    });
     const telegramPlugin = createAccountPlugin("telegram", ["default"]);
     setActivePluginRegistry(
       createTestRegistry([
@@ -329,6 +332,7 @@ describe("messageCommand", () => {
       candidateChannels: ["slack", "telegram"],
       secretChannels: ["slack"],
     });
+    expect(slackPlugin.config.isEnabled).not.toHaveBeenCalled();
   });
 
   it("keeps unresolved SecretRefs for a legacy single-account broadcast plugin", async () => {
@@ -604,6 +608,108 @@ describe("messageCommand", () => {
         channelId: "general",
       },
     });
+    expect(json).not.toHaveProperty("ok");
+  });
+
+  it.each([
+    {
+      status: "suppressed" as const,
+      suppressionReason: "cancelled_by_message_sending_hook" as const,
+      expected: "Message send suppressed: cancelled_by_message_sending_hook.",
+    },
+    {
+      status: "failed" as const,
+      error: "provider rejected the message",
+      expected: "provider rejected the message",
+    },
+    {
+      status: "partial_failed" as const,
+      error: "second attachment rejected",
+      messageId: "first-part-1",
+      expected: "second attachment rejected",
+    },
+  ])(
+    "reports $status sends truthfully in JSON output",
+    async ({ status, suppressionReason, error, messageId, expected }) => {
+      const sendResult = {
+        channel: "discord",
+        to: "channel:general",
+        via: "direct" as const,
+        mediaUrl: null,
+        deliveryStatus: status,
+        ...(suppressionReason ? { suppressionReason } : {}),
+        ...(error ? { error } : {}),
+        ...(messageId ? { result: { channel: "discord", messageId } } : {}),
+        ...(status === "partial_failed" ? { sentBeforeError: true as const } : {}),
+      };
+      runMessageActionMock.mockResolvedValueOnce({
+        kind: "send",
+        channel: "discord",
+        action: "send",
+        to: "channel:general",
+        handledBy: "core",
+        payload: sendResult,
+        sendResult,
+        dryRun: false,
+      });
+
+      await runMessageCommand({ channel: "discord", target: "channel:general" });
+
+      const json = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0]));
+      expect(json).toMatchObject({
+        ok: false,
+        deliveryStatus: status,
+        error: { type: "cli_error", message: expected },
+      });
+      expect(json.payload).toEqual(sendResult);
+      if (messageId) {
+        expect(json.messageId).toBe(messageId);
+        expect(json.sentBeforeError).toBe(true);
+      }
+    },
+  );
+
+  it.each([
+    [
+      "disabled reaction",
+      "react",
+      { ok: false, hint: "Reactions are disabled." },
+      "Reactions are disabled.",
+    ],
+    [
+      "rejected added reaction",
+      "react",
+      { ok: false, warning: "Unavailable", added: "✅" },
+      "Unavailable",
+    ],
+    [
+      "rejected delete",
+      "delete",
+      { ok: false, deleted: false, warning: "Not deleted" },
+      "Not deleted",
+    ],
+    ["rejected poll", "poll", { ok: false, error: "Poll rejected" }, "Poll rejected"],
+    ["rejected send", "send", { ok: false, error: "Message rejected" }, "Message rejected"],
+  ] as const)("reports %s truthfully in JSON output", async (_name, action, payload, expected) => {
+    runMessageActionMock.mockResolvedValueOnce({
+      kind: action === "send" || action === "poll" ? action : "action",
+      channel: "telegram",
+      action,
+      to: "123456",
+      handledBy: "plugin",
+      payload,
+      dryRun: false,
+    } as MessageActionResult);
+
+    await runMessageCommand({ action });
+
+    const json = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0]));
+    expect(json).toMatchObject({
+      ok: false,
+      error: { type: "cli_error", message: expected },
+    });
+    expect(json.payload).toEqual(payload);
+    expect(json).not.toHaveProperty("deliveryStatus");
   });
 
   it("rejects unknown message actions before dispatch", async () => {

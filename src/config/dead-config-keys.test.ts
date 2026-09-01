@@ -335,12 +335,6 @@ describe("dead config keys", () => {
       "ackReaction",
     ],
     [
-      "Discord subagent progress",
-      { channels: { discord: { subagentProgress: true } } },
-      "channels.discord",
-      "subagentProgress",
-    ],
-    [
       "iMessage coalesce",
       { channels: { imessage: { coalesceSameSenderDms: true } } },
       "channels.imessage",

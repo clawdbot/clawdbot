@@ -1,5 +1,6 @@
 import { asOptionalRecord as asResultRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import {
@@ -47,6 +48,7 @@ import {
   isCurrentSourceReplyActionName,
   isDeliveredCurrentSourceReply,
   isDeliveredCurrentSourceReplyAction,
+  isThreadPlacementSourceReplyActionName,
   reconcileTerminalSourceReplyDelivery,
 } from "./source-reply-mirror.js";
 
@@ -72,12 +74,19 @@ export function annotateSourceDelivery<T extends MessageActionResult>(
 ): T {
   // Current-source identity comes from the authorized route and delivery receipt,
   // not the reply mode; automatic runs also use this marker to avoid false fallbacks.
-  // Reply-type actions and polls are visible source replies too: leaving them
-  // unmarked made dispatch send the no-visible-reply fallback after a delivered
-  // reply or poll.
-  const isReplyActionResult =
+  // Reply-type actions, thread replies, and polls are visible source replies too:
+  // leaving them unmarked makes dispatch send the no-visible-reply fallback after
+  // the channel has already delivered a visible result.
+  const isMessageIdReplyActionResult =
     result.kind === "action" && isCurrentSourceReplyActionName(result.action);
-  if (result.kind !== "send" && result.kind !== "poll" && !isReplyActionResult) {
+  const isThreadPlacementReplyActionResult =
+    result.kind === "action" && isThreadPlacementSourceReplyActionName(result.action);
+  if (
+    result.kind !== "send" &&
+    result.kind !== "poll" &&
+    !isMessageIdReplyActionResult &&
+    !isThreadPlacementReplyActionResult
+  ) {
     return result;
   }
   const authorization = params.input.messageActionAuthorization;
@@ -85,7 +94,12 @@ export function annotateSourceDelivery<T extends MessageActionResult>(
     return result;
   }
   const mirrorParams = {
-    action: isReplyActionResult ? result.action : result.kind === "poll" ? "poll" : "send",
+    action:
+      isMessageIdReplyActionResult || isThreadPlacementReplyActionResult
+        ? result.action
+        : result.kind === "poll"
+          ? "poll"
+          : "send",
     channel: params.channel,
     actionParams: params.actionParams,
     cfg: params.cfg,
@@ -99,7 +113,7 @@ export function annotateSourceDelivery<T extends MessageActionResult>(
     replyToIsExplicit: params.replyToIsExplicit,
   };
   if (
-    isReplyActionResult
+    isMessageIdReplyActionResult
       ? !isDeliveredCurrentSourceReplyAction(mirrorParams)
       : !isDeliveredCurrentSourceReply(mirrorParams)
   ) {
@@ -211,6 +225,21 @@ function isConfirmedGatewayMessageActionRejection(error: unknown): boolean {
     typeof details === "object" &&
     (details as { method?: unknown }).method === "message.action"
   );
+}
+
+export function projectGatewayQueuedDeliveryResult(error: unknown) {
+  if (!(error instanceof Error) || error.name !== "GatewayClientRequestError") {
+    return undefined;
+  }
+  const details = asResultRecord(asResultRecord(error)?.details);
+  if (details?.code !== GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED) {
+    return undefined;
+  }
+  return {
+    status: "delivery_queued",
+    delivered: false as const,
+    message: `Message not delivered: ${error.message}. The gateway queued it and will retry automatically. Do not resend it.`,
+  };
 }
 
 async function resolveGatewayActionIdempotencyKey(idempotencyKey?: string): Promise<string> {
@@ -596,7 +625,9 @@ export async function executeMessagePlugin(
   // gateway or local dispatch to keep both execution modes on the same topic.
   const targetForThreading =
     normalizeOptionalString(params.to) ?? normalizeOptionalString(params.channelId) ?? "";
-  if (targetForThreading) {
+  // File downloads authorize caller-supplied resource scope. Ambient threading
+  // must not silently narrow a channel-only request to the current thread.
+  if (targetForThreading && action !== "download-file") {
     resolveAndApplyOutboundThreadId(params, {
       cfg,
       to: targetForThreading,

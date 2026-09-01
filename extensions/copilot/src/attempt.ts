@@ -48,7 +48,6 @@ export async function runCopilotAttempt(
         now,
         promptError: undefined,
         sdkSessionId: undefined,
-        sessionIdUsed: input.sessionId,
       }),
     );
   }
@@ -65,7 +64,6 @@ export async function runCopilotAttempt(
         now,
         promptError: createPromptError("model_not_supported", toCopilotError(error).message, error),
         sdkSessionId: undefined,
-        sessionIdUsed: input.sessionId,
       }),
     );
   }
@@ -82,7 +80,6 @@ export async function runCopilotAttempt(
           "[copilot-attempt] settled tool finalization requires the existing Copilot SDK session",
         ),
         sdkSessionId: undefined,
-        sessionIdUsed: input.sessionId,
       }),
     );
   }

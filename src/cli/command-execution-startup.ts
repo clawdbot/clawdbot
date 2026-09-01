@@ -18,6 +18,7 @@ export function resolveCliExecutionStartupContext(params: {
   argv: string[];
   commandPath?: string[];
   jsonOutputMode: boolean;
+  machineOutputMode?: boolean;
   env?: NodeJS.ProcessEnv;
 }) {
   const invocation = resolveCliArgvInvocation(params.argv);
@@ -31,6 +32,7 @@ export function resolveCliExecutionStartupContext(params: {
       argv: params.argv,
       commandPath,
       jsonOutputMode: params.jsonOutputMode,
+      machineOutputMode: params.machineOutputMode,
       env: params.env,
     }),
   };

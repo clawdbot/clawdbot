@@ -464,6 +464,7 @@ describe("runCliAgentWithLifecycle", () => {
       await runCliAgentWithLifecycle({
         runId: "run-before-restart",
         lifecycleGeneration,
+        startedAt: 1_000,
         provider: "claude-cli",
         runParams: {
           sessionId: "session-1",
@@ -488,6 +489,7 @@ describe("runCliAgentWithLifecycle", () => {
       lifecycleEvents.every((event) => event.lifecycleGeneration === lifecycleGeneration),
     ).toBe(true);
     expect(lifecycleEvents.every((event) => event.agentId === "support")).toBe(true);
+    expect(lifecycleEvents.every((event) => event.data?.startedAt === 1_000)).toBe(true);
   });
 
   it("preserves restart ownership when the CLI resolves after cancellation", async () => {

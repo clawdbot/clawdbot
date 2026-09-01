@@ -1,7 +1,8 @@
-import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
+import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
+import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import {
-  buildStaticOpencodeGoProviderConfig,
+  buildOpencodeGoLiveProviderConfig,
   listOpencodeGoModelCatalogEntries,
 } from "./provider-catalog.js";
 
@@ -13,8 +14,8 @@ const describeLive = LIVE ? describe : describe.skip;
 
 type ModelsResponse = { data?: Array<{ id?: unknown; object?: unknown }> };
 
-describeLive("OpenCode Go live catalog drift", () => {
-  it("classifies every live id as active, deprecated, or preview", async () => {
+describeLive("OpenCode Go live dynamic catalog", () => {
+  it("discovers the active advertised models with trusted upstream metadata", async () => {
     const response = await fetch(OPENCODE_GO_MODELS_URL, {
       headers: {
         accept: "application/json",
@@ -30,45 +31,45 @@ describeLive("OpenCode Go live catalog drift", () => {
       .filter((id): id is string => typeof id === "string" && id.trim().length > 0)
       .map((id) => id.trim().toLowerCase())
       .toSorted();
+    const live = await buildOpencodeGoLiveProviderConfig({
+      apiKey: OPENCODE_API_KEY,
+      discoveryApiKey: OPENCODE_API_KEY,
+    });
+    const discoveredIds = live.models.map((model) => model.id).toSorted();
     const trustedRows = listOpencodeGoModelCatalogEntries();
-    const trustedIds = new Set(trustedRows.map((row) => row.id));
-    const activeIds = buildStaticOpencodeGoProviderConfig().models.map((model) => model.id);
+    const activeIds = new Set(
+      trustedRows.filter((row) => !row.status).map((row) => row.id.toLowerCase()),
+    );
 
-    expect(liveIds.filter((id) => !trustedIds.has(id))).toEqual([]);
-    expect(new Set(activeIds).size).toBe(activeIds.length);
-    expect(activeIds.toSorted()).toEqual([
-      "deepseek-v4-flash",
-      "deepseek-v4-pro",
-      "glm-5.1",
-      "glm-5.2",
-      "gpt-5.6-luna",
-      "grok-4.5",
-      "hy3",
-      "kimi-k2.6",
-      "kimi-k2.7-code",
-      "kimi-k3",
-      "mimo-v2.5",
-      "mimo-v2.5-pro",
-      "minimax-m2.7",
-      "minimax-m3",
-      "qwen3.6-plus",
-      "qwen3.7-max",
-      "qwen3.7-plus",
-      "qwen3.8-max",
-    ]);
-    expect(
-      trustedRows
-        .filter((row) => row.status === "deprecated")
-        .map((row) => row.id)
-        .toSorted(),
-    ).toEqual([
-      "glm-5",
-      "kimi-k2.5",
-      "mimo-v2-omni",
-      "mimo-v2-pro",
-      "minimax-m2.5",
-      "qwen3.5-plus",
-    ]);
-    expect(trustedRows.find((row) => row.id === "hy3-preview")?.status).toBe("preview");
+    expect(discoveredIds.length).toBeGreaterThan(0);
+    expect(new Set(discoveredIds).size).toBe(discoveredIds.length);
+    expect(discoveredIds).toEqual([...new Set(liveIds)].filter((id) => activeIds.has(id)));
   }, 30_000);
+
+  it("runs a discovered Go model with the account credential", async () => {
+    const provider = await buildOpencodeGoLiveProviderConfig({ apiKey: OPENCODE_API_KEY });
+    const row = provider.models.find((model) => model.id === "gpt-5.6-luna");
+    if (!row || row.api !== "openai-responses" || !row.contextWindow) {
+      throw new Error("OpenCode Go catalog lacks the GPT 5.6 Luna Responses route");
+    }
+    const input = row.input.filter((kind) => kind === "text" || kind === "image");
+    expect(input).toEqual(row.input);
+    const model: Model<"openai-responses"> = {
+      ...row,
+      api: row.api,
+      contextWindow: row.contextWindow,
+      provider: "opencode-go",
+      baseUrl: row.baseUrl ?? provider.baseUrl,
+      input,
+    };
+    const result = await completeSimple(
+      model,
+      { messages: [{ role: "user", content: "Reply with exactly: ok", timestamp: Date.now() }] },
+      { apiKey: OPENCODE_API_KEY, maxTokens: 128 },
+    );
+    if (result.stopReason === "error") {
+      throw new Error(result.errorMessage || "OpenCode Go inference returned an error");
+    }
+    expect(extractNonEmptyAssistantText(result.content)).toMatch(/^ok[.!]?$/i);
+  }, 120_000);
 });

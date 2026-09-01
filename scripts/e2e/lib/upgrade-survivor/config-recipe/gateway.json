@@ -2,6 +2,9 @@
   "mode": "local",
   "port": 18789,
   "bind": "loopback",
+  "reload": {
+    "mode": "off"
+  },
   "auth": {
     "mode": "token",
     "token": {

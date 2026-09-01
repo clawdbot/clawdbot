@@ -376,6 +376,46 @@ describe("resolvePluginWebSearchProviders", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
+  it("preserves Moonshot region and model setup without activating the plugin", async () => {
+    loadInstalledPluginManifestRegistryMock.mockReturnValueOnce({
+      plugins: [createWebSearchManifestRecord({ id: "moonshot", providerId: "kimi" })],
+      diagnostics: [],
+    });
+    const config = { plugins: { allow: ["moonshot"] } };
+    const providers = resolvePluginWebSearchProviders({ config, mode: "setup", activate: false });
+    const provider = providers[0];
+    if (!provider?.runSetup) {
+      throw new Error("Expected Moonshot web-search setup from the public artifact");
+    }
+    const select = vi.fn(async (params: { initialValue?: unknown }) => params.initialValue);
+
+    const next = await provider.runSetup({
+      config,
+      runtime: {} as never,
+      prompter: { select } as never,
+    });
+
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+    expect(select.mock.calls.map(([params]) => requireRecord(params).message)).toEqual([
+      "Kimi API region",
+      "Kimi web search model",
+    ]);
+    expect(next).toMatchObject({
+      plugins: {
+        entries: {
+          moonshot: {
+            config: {
+              webSearch: {
+                baseUrl: "https://api.moonshot.ai/v1",
+                model: "kimi-k2.6",
+              },
+            },
+          },
+        },
+      },
+    });
+  });
+
   it("loads plugin web-search providers from the auto-enabled config snapshot", () => {
     const rawConfig = createBraveAllowConfig();
     const autoEnabledConfig = {

@@ -33,6 +33,7 @@ function buildProviderMetadataOwners(
     setupProviders: empty,
     commandAliases: empty,
     contracts: empty,
+    modelIdNormalizationPolicies: new Map(),
     providerEndpoints: endpoints,
     providerRequests: requests,
   };
@@ -49,6 +50,7 @@ describe("provider request config", () => {
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
       providerEndpoints: [],
       providerRequests: new Map([["prepared", { family: "prepared-family" }]]),
     };

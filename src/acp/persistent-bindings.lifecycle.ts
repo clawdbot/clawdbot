@@ -60,9 +60,14 @@ export async function ensureConfiguredAcpBindingSession(params: {
 }): Promise<{ ok: true; sessionKey: string } | { ok: false; sessionKey: string; error: string }> {
   const sessionKey = buildConfiguredAcpSessionKey(params.spec);
   const acpManager = getAcpSessionManager();
+  const runtimeOptions = {
+    ...(params.spec.model ? { model: params.spec.model } : {}),
+    ...(params.spec.thinking ? { thinking: params.spec.thinking } : {}),
+  };
   try {
     const resolution = acpManager.resolveSession({
       cfg: params.cfg,
+      agentId: params.spec.agentId,
       sessionKey,
     });
     if (
@@ -73,16 +78,20 @@ export async function ensureConfiguredAcpBindingSession(params: {
         meta: resolution.meta,
       })
     ) {
-      // Model drift is live-configurable; preserve the bound conversation and patch it in place.
-      if (
-        params.spec.model &&
-        normalizeText(resolution.meta.runtimeOptions?.model) !== params.spec.model
-      ) {
-        await acpManager.updateSessionRuntimeOptions({
-          cfg: params.cfg,
-          sessionKey,
-          patch: { model: params.spec.model },
-        });
+      // Apply before persisting: rejected controls must not overwrite accepted options.
+      // Model precedes effort; omission retains the selection because ACP has no unset.
+      let currentOptions = resolution.meta.runtimeOptions;
+      for (const key of ["model", "thinking"] as const) {
+        const value = runtimeOptions[key];
+        if (value !== undefined && normalizeText(currentOptions?.[key]) !== value) {
+          currentOptions = await acpManager.setSessionConfigOption({
+            cfg: params.cfg,
+            agentId: params.spec.agentId,
+            sessionKey,
+            key,
+            value,
+          });
+        }
       }
       return {
         ok: true,
@@ -93,6 +102,7 @@ export async function ensureConfiguredAcpBindingSession(params: {
     if (resolution.kind !== "none") {
       await acpManager.closeSession({
         cfg: params.cfg,
+        agentId: params.spec.agentId,
         sessionKey,
         reason: "config-binding-reconfigure",
         clearMeta: false,
@@ -103,10 +113,11 @@ export async function ensureConfiguredAcpBindingSession(params: {
 
     await acpManager.initializeSession({
       cfg: params.cfg,
+      agentId: params.spec.agentId,
       sessionKey,
       agent: params.spec.acpAgentId ?? params.spec.agentId,
       mode: params.spec.mode,
-      runtimeOptions: params.spec.model ? { model: params.spec.model } : undefined,
+      runtimeOptions,
       cwd: params.spec.cwd,
       backendId: params.spec.backend,
     });

@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import type { MintedWorkerCredential } from "./credential.js";
 import type {
   WorkerDispatchEnvironmentService,
@@ -20,6 +21,7 @@ import { createWorkerPlacementRunnerAvailabilityReader } from "./placement-proje
 import { completeReclaimedWorkspaceTeardown } from "./placement-teardown.js";
 import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
 import type { WorkerTunnelHandle } from "./tunnel.js";
+import type { WorkerWorkspaceRecoveryFailureReport } from "./workspace-conflicts.js";
 import {
   createWorkerWorkspaceOperationCoordinator,
   type WorkerWorkspaceOperationCoordinator,
@@ -28,8 +30,18 @@ import {
 export function createHarness(
   placementStore: PlacementStore,
   options: {
+    runReclaimPreparation?: Parameters<
+      typeof createWorkerPlacementDispatchService
+    >[0]["runReclaimPreparation"];
+    runReclaimBarrier?: Parameters<
+      typeof createWorkerPlacementDispatchService
+    >[0]["runReclaimBarrier"];
+    runFailedReclaimBarrier?: Parameters<
+      typeof createWorkerPlacementDispatchService
+    >[0]["runFailedReclaimBarrier"];
     failAt?: DispatchStage;
     destroyFails?: boolean;
+    destroyFailureCount?: number;
     claimOnDrain?: boolean;
     reconcileFails?: boolean;
     reconcileFailureCount?: number;
@@ -51,6 +63,7 @@ export function createHarness(
     terminalizedReclaimError?: Error;
     environmentGeneration?: number;
     failMoveAfterBegin?: boolean;
+    runMoveBarrier?: Parameters<typeof createWorkerPlacementDispatchService>[0]["runMoveBarrier"];
     recoveryBarrierError?: Error;
     prepareAcceptedWorkspacePublication?: Parameters<
       typeof createWorkerPlacementDispatchService
@@ -60,15 +73,25 @@ export function createHarness(
     >[0]["publishAcceptedWorkspace"];
     beforeMoveBegin?: (abandoned: { runId: string } | undefined) => Promise<void>;
     afterMoveBegin?: () => void;
+    afterDestroy?: () => Promise<void> | void;
+    afterReconcile?: () => Promise<void> | void;
+    afterStopTunnel?: () => Promise<void> | void;
     deviceRunnerAvailable?: boolean;
+    isCurrentNodePlacement?: Parameters<
+      typeof createWorkerPlacementDispatchService
+    >[0]["isCurrentNodePlacement"];
   } = {},
 ) {
   const reconciledManifestRef = MANIFEST_REF.replaceAll("b", "c");
+  let remainingDestroyFailures = options.destroyFailureCount ?? 0;
   let remainingReconcileFailures = options.reconcileFailureCount ?? 0;
   let remainingLeaseFailures = options.leaseFailureCount ?? 0;
   let verifyCalls = 0;
   const log: string[] = [];
   const reportWorkspaceResultConflict = vi.fn(async () => {});
+  const reportWorkspaceResultRecoveryFailure = vi.fn(
+    async (_recovery: WorkerWorkspaceRecoveryFailureReport) => {},
+  );
   const fail = (stage: DispatchStage) => {
     log.push(stage);
     if (options.failAt === stage) {
@@ -105,13 +128,6 @@ export function createHarness(
       }
       return begun;
     },
-    preparePlacementMove: async (params, prepareNew) => {
-      const begun = await placementStore.preparePlacementMove(params, prepareNew);
-      if (!begun.joined) {
-        log.push("placement:draining");
-      }
-      return begun;
-    },
     cancelPlacementMove: (params) => placementStore.cancelPlacementMove(params),
     completePlacementMoveSourceToLocal: (params) => {
       log.push("placement:local");
@@ -127,6 +143,7 @@ export function createHarness(
     recordPlacementMoveError: (params) => placementStore.recordPlacementMoveError(params),
     markWorkspaceResultPending: (claim) => placementStore.markWorkspaceResultPending(claim),
     acceptWorkspaceResult: (claim) => placementStore.acceptWorkspaceResult(claim),
+    handoffWorkspaceResultRecovery: (claim) => placementStore.handoffWorkspaceResultRecovery(claim),
     cancelWorkspaceResultAndReleaseTurn: (claim) =>
       placementStore.cancelWorkspaceResultAndReleaseTurn(claim),
     completeWorkspaceResultAndReleaseTurn: (claim) =>
@@ -195,6 +212,7 @@ export function createHarness(
   const tunnelHandle = (ownerEpoch: number): WorkerTunnelHandle => ({
     environmentId: ready.environmentId,
     ownerEpoch,
+    measureLaunchTurn: vi.fn(),
     launchTurn: vi.fn(),
     quiesceWorkspace: vi.fn(async () => {
       log.push("workspace:quiesce");
@@ -254,6 +272,7 @@ export function createHarness(
       if (options.reconcileConflictPaths?.length && request.stagedResult) {
         request.stagedResult.record(request.stagedResult.ref);
       }
+      await options.afterReconcile?.();
       return {
         manifestRef: reconciledManifestRef,
         changed: options.reconcileChanged ?? true,
@@ -318,6 +337,7 @@ export function createHarness(
     expiresAtMs: 10_000,
   };
   const environments: WorkerDispatchEnvironmentService = {
+    supportsProviderExecutionMode: vi.fn(() => true),
     create: vi.fn(async () => {
       fail("create");
       return currentEnvironment ?? ready;
@@ -341,10 +361,14 @@ export function createHarness(
     }),
     stopTunnel: vi.fn(async () => {
       log.push("teardown:stop");
+      await options.afterStopTunnel?.();
     }),
     destroy: vi.fn(async () => {
       log.push("teardown:destroy");
-      if (options.destroyFails) {
+      if (options.destroyFails || remainingDestroyFailures > 0) {
+        if (remainingDestroyFailures > 0) {
+          remainingDestroyFailures -= 1;
+        }
         if (options.destroyFailureState) {
           currentEnvironment = {
             ...attached,
@@ -356,15 +380,21 @@ export function createHarness(
       }
       const destroyed = destroyedEnvironment((currentEnvironment?.ownerEpoch ?? 1) + 1);
       currentEnvironment = destroyed;
+      await options.afterDestroy?.();
       return destroyed;
     }),
     reconcileOnce: vi.fn(async () => {
+      log.push("environment:reconcile");
+    }),
+    reconcileEnvironment: vi.fn(async () => {
       log.push("environment:reconcile");
     }),
   };
   const service = createWorkerPlacementDispatchService({
     placements,
     environments,
+    runReclaimPreparation:
+      options.runReclaimPreparation ?? (async ({ run, authorize }) => await run(authorize)),
     runnerAvailability: createWorkerPlacementRunnerAvailabilityReader({
       environments,
       hasCurrentDeviceRunner: () => options.deviceRunnerAvailable === true,
@@ -394,41 +424,75 @@ export function createHarness(
       fail("activation");
       return activate();
     },
-    runMoveBarrier: async ({ authorize, begin }) => {
-      authorize?.();
-      const begun = await begin(async (runId) => {
-        if (options.beforeMoveBegin) {
-          await options.beforeMoveBegin({ runId });
-          authorize?.();
+    runMoveBarrier:
+      options.runMoveBarrier ??
+      (async ({ authorize, begin }) => {
+        authorize?.();
+        const begun = await begin(async (runId) => {
+          if (options.beforeMoveBegin) {
+            await options.beforeMoveBegin({ runId });
+            authorize?.();
+          }
+        });
+        options.afterMoveBegin?.();
+        if (options.failMoveAfterBegin) {
+          throw new Error("move barrier interrupted");
         }
-      });
-      options.afterMoveBegin?.();
-      if (options.failMoveAfterBegin) {
-        throw new Error("move barrier interrupted");
-      }
-      return begun;
-    },
+        return begun;
+      }),
     resolveMoveDestination: async (_identity, target) =>
       target.kind === "gateway"
         ? undefined
         : {
             profileId: target.kind === "profile" ? target.profileId : `device:${target.deviceId}`,
             executionMode: REQUEST.executionMode,
-            ...(target.kind === "device" ? { deviceId: target.deviceId } : {}),
+            ...(target.kind === "device"
+              ? {
+                  deviceId: target.deviceId,
+                  devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+                }
+              : {}),
           },
-    runReclaimBarrier: async ({ authorize, begin, reclaim }) => {
-      authorize?.();
-      return await reclaim(options.workspacePath ?? "/gateway/workspace", begin());
-    },
-    runFailedReclaimBarrier: async ({ authorize, reclaim }) => {
-      authorize?.();
-      return await reclaim();
-    },
+    resolveDevicePlacementRequirement: async ({ executionMode }) =>
+      executionMode === "remote-exec"
+        ? {
+            requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+            consumesWorkerSlot: false,
+          }
+        : { requiredNodeCommands: [], consumesWorkerSlot: true },
+    isCurrentNodePlacement: options.isCurrentNodePlacement ?? (() => true),
+    runReclaimBarrier:
+      options.runReclaimBarrier ??
+      (async ({ sessionId, sessionKey, authorize, beforeDrain, begin, reclaim }) =>
+        await runExclusiveSessionLifecycleMutation({
+          scope: options.workspacePath ?? "/gateway/workspace",
+          identities: [sessionId, sessionKey],
+          run: async () => {
+            authorize?.();
+            beforeDrain?.();
+            const placement = begin();
+            return placement.state === "reclaimed"
+              ? placement
+              : await reclaim(options.workspacePath ?? "/gateway/workspace", placement, authorize);
+          },
+        })),
+    runFailedReclaimBarrier:
+      options.runFailedReclaimBarrier ??
+      (async ({ sessionId, sessionKey, authorize, reclaim }) =>
+        await runExclusiveSessionLifecycleMutation({
+          scope: options.workspacePath ?? "/gateway/workspace",
+          identities: [sessionId, sessionKey],
+          run: async () => {
+            authorize?.();
+            return await reclaim(authorize);
+          },
+        })),
     resolveWorkspacePath: async () => {
       fail("workspace");
       return options.workspacePath ?? "/gateway/workspace";
     },
     reportWorkspaceResultConflict,
+    reportWorkspaceResultRecoveryFailure,
     resolveWorkspaceResultConflict: vi.fn(async () => options.priorWorkspaceResultConflict),
     ...(options.prepareAcceptedWorkspacePublication
       ? { prepareAcceptedWorkspacePublication: options.prepareAcceptedWorkspacePublication }
@@ -442,7 +506,8 @@ export function createHarness(
     reconciledManifestRef,
     placements: {
       current: () => placementStore.get(REQUEST.sessionId),
-      seedProvisioning: () => seedProvisioningPlacement(placementStore, environmentId),
+      seedProvisioning: (executionMode?: "worker-turn" | "remote-exec") =>
+        seedProvisioningPlacement(placementStore, environmentId, executionMode),
       seedStarting: () => seedStartingPlacement(placementStore, environmentId),
       seedActive: (ownerEpoch: number, executionMode?: "worker-turn" | "remote-exec") =>
         seedActivePlacement(placementStore, { environmentId, ownerEpoch, executionMode }),
@@ -461,6 +526,7 @@ export function createHarness(
     },
     environments,
     reportWorkspaceResultConflict,
+    reportWorkspaceResultRecoveryFailure,
     markEnvironmentDestroyed: () => {
       currentEnvironment = destroyedEnvironment((currentEnvironment?.ownerEpoch ?? 1) + 1);
     },
@@ -479,7 +545,7 @@ export function createHarness(
       currentEnvironment = { ...attached, ownerEpoch };
     },
     markEnvironmentNodeDeviceId: (nodeDeviceId: string) => {
-      currentEnvironment = { ...attached, providerId: "device", nodeDeviceId };
+      currentEnvironment = { ...attached, providerId: "device", nodeDeviceId, sshEndpoint: null };
     },
     markEnvironmentAttachments: (attachedSessionIds: string[]) => {
       currentEnvironment = { ...attached, attachedSessionIds };

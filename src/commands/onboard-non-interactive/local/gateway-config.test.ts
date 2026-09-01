@@ -331,15 +331,18 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
 
   it("fails when --gateway-token-ref-env points to a missing env var", () => {
     const runtime = createRuntime();
+    const message =
+      'Environment variable "MISSING_GATEWAY_TOKEN_ENV" is missing or empty. Export it first, then rerun openclaw onboard --non-interactive.';
 
     const result = applyGatewayConfig({
-      opts: { gatewayTokenRefEnv: "MISSING_GATEWAY_TOKEN_ENV" } as OnboardOptions,
+      opts: { gatewayTokenRefEnv: "MISSING_GATEWAY_TOKEN_ENV", json: true } as OnboardOptions,
       runtime,
     });
 
     expect(result).toBeNull();
-    expect(runtime.error).toHaveBeenCalledWith(
-      'Environment variable "MISSING_GATEWAY_TOKEN_ENV" is missing or empty. Export it first, then rerun openclaw onboard --non-interactive.',
+    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(message);
+    expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
+      JSON.stringify({ ok: false, phase: "options", message }, null, 2),
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(randomToken).not.toHaveBeenCalled();
@@ -365,5 +368,61 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     });
 
     expect(result?.nextConfig.gateway?.auth).toEqual({ mode: "password" });
+  });
+
+  it("rejects --gateway-bind custom when no gateway.customBindHost is configured", () => {
+    const runtime = createRuntime();
+
+    const result = applyGatewayConfig({
+      opts: { gatewayBind: "custom" } as OnboardOptions,
+      runtime,
+    });
+
+    expect(result).toBeNull();
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("--gateway-bind custom requires gateway.customBindHost"),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("rejects --gateway-bind custom when gateway.customBindHost is not a dotted-decimal IPv4", () => {
+    const runtime = createRuntime();
+
+    const result = applyGatewayConfig({
+      nextConfig: { gateway: { customBindHost: "not-an-ip" } } as OpenClawConfig,
+      opts: { gatewayBind: "custom" } as OnboardOptions,
+      runtime,
+    });
+
+    expect(result).toBeNull();
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Invalid IPv4 address"));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("accepts --gateway-bind custom when gateway.customBindHost is already configured", () => {
+    const runtime = createRuntime();
+
+    const result = applyGatewayConfig({
+      nextConfig: { gateway: { customBindHost: "192.168.1.100" } } as OpenClawConfig,
+      opts: { gatewayBind: "custom" } as OnboardOptions,
+      runtime,
+    });
+
+    expect(result?.nextConfig.gateway?.bind).toBe("custom");
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("keeps loopback normalization ahead of the custom bind guard when Tailscale is enabled", () => {
+    const runtime = createRuntime();
+
+    const result = applyGatewayConfig({
+      opts: { gatewayBind: "custom", tailscale: "serve" } as OnboardOptions,
+      runtime,
+    });
+
+    expect(result?.nextConfig.gateway?.bind).toBe("loopback");
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 });

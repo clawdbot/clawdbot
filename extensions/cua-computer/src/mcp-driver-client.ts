@@ -17,6 +17,7 @@ const MCP_SHUTDOWN_TIMEOUT_MS = 2_000;
 const MAX_MCP_LINE_BYTES = 256 * 1024 * 1024;
 const MAX_PENDING_REQUESTS = 64;
 const MAX_STDERR_BYTES = 32 * 1024;
+const MCP_DESKTOP_TARGET = { kind: "desktop", display_id: "primary" } as const;
 
 const ACTION_RESULT_TOOLS = new Set([
   "click",
@@ -479,12 +480,9 @@ function sessionState(value: CuaToolResult): import("@trycua/cua-driver").Sessio
 
 class McpCuaDriverSession implements CuaDriverSession {
   readonly generation = randomUUID();
-  private readonly windowPublicSession = `openclaw-window-${randomUUID()}`;
-  private readonly desktopPublicSession = `openclaw-desktop-${randomUUID()}`;
-  private windowStartPromise: Promise<void> | undefined;
-  private desktopStartPromise: Promise<void> | undefined;
-  private windowStarted = false;
-  private desktopStarted = false;
+  private readonly publicSession = `openclaw-${randomUUID()}`;
+  private startPromise: Promise<void> | undefined;
+  private started = false;
   private disposed = false;
 
   constructor(private readonly client: CuaMcpProxyClient) {}
@@ -496,44 +494,38 @@ class McpCuaDriverSession implements CuaDriverSession {
   resetAvailabilityCache(): void {}
 
   async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal) {
-    await this.ensureStarted("window", signal);
-    return await this.client.callTool(name, { ...args, session: this.windowPublicSession }, signal);
+    return await this.sessionTool(name, args, signal);
   }
 
-  async callDesktopTool(name: string, args: Record<string, unknown>, signal?: AbortSignal) {
-    return await this.desktopTool(name, args, signal);
+  async getCursorPosition(signal?: AbortSignal) {
+    return await this.sessionTool("get_cursor_position", {}, signal);
   }
 
   async escalateScope(_reason: EscalationReason, signal?: AbortSignal) {
-    await this.ensureStarted("desktop", signal);
-    const result = await this.client.callTool(
-      "get_session_state",
-      { session: this.desktopPublicSession },
-      signal,
-    );
+    const result = await this.sessionTool("get_session_state", {}, signal);
     return sessionState(result);
   }
 
   async getDesktopState(signal?: AbortSignal) {
-    return await this.desktopTool("get_desktop_state", {}, signal);
+    return await this.sessionTool("get_desktop_state", {}, signal);
   }
 
   async getScreenSize(signal?: AbortSignal) {
-    return await this.desktopTool("get_screen_size", {}, signal);
+    return await this.sessionTool("get_screen_size", {}, signal);
   }
 
   async click(
     input: { x: number; y: number; button: ClickButton; count: number },
     signal?: AbortSignal,
   ) {
-    return await this.desktopTool(
+    return await this.sessionTool(
       "click",
       {
         x: input.x,
         y: input.y,
         button: ["left", "right", "middle"][input.button],
         count: input.count,
-        scope: "desktop",
+        target: MCP_DESKTOP_TARGET,
       },
       signal,
     );
@@ -543,7 +535,7 @@ class McpCuaDriverSession implements CuaDriverSession {
     input: { fromX: number; fromY: number; toX: number; toY: number; durationMs?: bigint },
     signal?: AbortSignal,
   ) {
-    return await this.desktopTool(
+    return await this.sessionTool(
       "drag",
       {
         from_x: input.fromX,
@@ -551,16 +543,16 @@ class McpCuaDriverSession implements CuaDriverSession {
         to_x: input.toX,
         to_y: input.toY,
         ...(input.durationMs === undefined ? {} : { duration_ms: Number(input.durationMs) }),
-        scope: "desktop",
+        target: MCP_DESKTOP_TARGET,
       },
       signal,
     );
   }
 
   async moveCursor(input: { x: number; y: number }, signal?: AbortSignal) {
-    return await this.desktopTool(
+    return await this.sessionTool(
       "move_cursor",
-      { x: input.x, y: input.y, scope: "desktop" },
+      { x: input.x, y: input.y, target: MCP_DESKTOP_TARGET },
       signal,
     );
   }
@@ -569,7 +561,7 @@ class McpCuaDriverSession implements CuaDriverSession {
     input: { x: number; y: number; direction: ScrollDirection; amount: bigint },
     signal?: AbortSignal,
   ) {
-    return await this.desktopTool(
+    return await this.sessionTool(
       "scroll",
       {
         x: input.x,
@@ -577,20 +569,20 @@ class McpCuaDriverSession implements CuaDriverSession {
         direction: ["up", "down", "left", "right"][input.direction],
         by: "line",
         amount: Number(input.amount),
-        scope: "desktop",
+        target: MCP_DESKTOP_TARGET,
       },
       signal,
     );
   }
 
   async typeText(text: string, signal?: AbortSignal) {
-    return await this.desktopTool("type_text", { text, scope: "desktop" }, signal);
+    return await this.sessionTool("type_text", { text, target: MCP_DESKTOP_TARGET }, signal);
   }
 
   async pressKey(input: { key: string; modifiers: string[] }, signal?: AbortSignal) {
-    return await this.desktopTool(
+    return await this.sessionTool(
       "press_key",
-      { key: input.key, modifiers: input.modifiers, scope: "desktop" },
+      { key: input.key, modifiers: input.modifiers, target: MCP_DESKTOP_TARGET },
       signal,
     );
   }
@@ -601,29 +593,16 @@ class McpCuaDriverSession implements CuaDriverSession {
     }
     this.disposed = true;
     let failure: unknown;
-    const startResults = await Promise.allSettled([
-      this.windowStartPromise,
-      this.desktopStartPromise,
-    ]);
-    for (const result of startResults) {
-      if (result.status === "rejected") {
-        failure ??= result.reason;
-      }
+    try {
+      await this.startPromise;
+    } catch (error) {
+      failure = error;
     }
-    if (this.client.isAvailable()) {
-      if (this.windowStarted) {
-        try {
-          await this.client.callTool("end_session", { session: this.windowPublicSession });
-        } catch (error) {
-          failure ??= error;
-        }
-      }
-      if (this.desktopStarted) {
-        try {
-          await this.client.callTool("end_session", { session: this.desktopPublicSession });
-        } catch (error) {
-          failure ??= error;
-        }
+    if (this.client.isAvailable() && this.started) {
+      try {
+        await this.client.callTool("end_session", { session: this.publicSession });
+      } catch (error) {
+        failure ??= error;
       }
     }
     try {
@@ -638,49 +617,40 @@ class McpCuaDriverSession implements CuaDriverSession {
     }
   }
 
-  private async desktopTool(
+  private async sessionTool(
     name: string,
     args: Record<string, unknown>,
     signal?: AbortSignal,
   ): Promise<CuaToolResult> {
-    await this.ensureStarted("desktop", signal);
-    return await this.client.callTool(
-      name,
-      { ...args, session: this.desktopPublicSession },
-      signal,
-    );
+    await this.ensureStarted(signal);
+    return await this.client.callTool(name, { ...args, session: this.publicSession }, signal);
   }
 
-  private async ensureStarted(scope: "window" | "desktop", signal?: AbortSignal): Promise<void> {
+  private async ensureStarted(signal?: AbortSignal): Promise<void> {
     if (this.disposed) {
       throw driverUnavailable("cua-computer is stopping");
     }
-    const isWindow = scope === "window";
-    const startedKey = isWindow ? "windowStarted" : "desktopStarted";
-    const startPromiseKey = isWindow ? "windowStartPromise" : "desktopStartPromise";
-    const current = this[startPromiseKey];
-    if (!current) {
-      const publicSession = isWindow ? this.windowPublicSession : this.desktopPublicSession;
+    if (!this.startPromise) {
       const start = this.client
-        .callTool("start_session", { session: publicSession, capture_scope: scope }, signal)
+        .callTool("start_session", { session: this.publicSession }, signal)
         .then((result) => {
           if (result.isError) {
             throw driverProtocolError(result.text || "CUA MCP start_session failed");
           }
-          this[startedKey] = true;
+          this.started = true;
         });
-      this[startPromiseKey] = start;
+      this.startPromise = start;
       try {
         await start;
       } catch (error) {
-        if (this[startPromiseKey] === start) {
-          this[startPromiseKey] = undefined;
+        if (this.startPromise === start) {
+          this.startPromise = undefined;
         }
         throw error;
       }
       return;
     }
-    await current;
+    await this.startPromise;
   }
 }
 

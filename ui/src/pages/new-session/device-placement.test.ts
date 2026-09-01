@@ -31,7 +31,7 @@ describe("device placement projection", () => {
       environment: node({}),
       selectable: true,
       reason: undefined,
-      facts: ["Worker slots 1/2", "macOS", "Camera"],
+      facts: ["macOS", "Camera"],
     },
     {
       name: "saturated host",
@@ -39,7 +39,6 @@ describe("device placement projection", () => {
       selectable: false,
       reason: "No worker slots are available. Wait for a slot or pick another device.",
       facts: [
-        "Worker slots 0/2",
         "No worker slots are available. Wait for a slot or pick another device.",
         "macOS",
         "Camera",
@@ -88,13 +87,12 @@ describe("device placement projection", () => {
         "Update required: run openclaw update, then reconnect. For a headless node, run openclaw node restart.",
       facts: [
         "Update required: run openclaw update, then reconnect. For a headless node, run openclaw node restart.",
-        "Worker slots 1/2",
         "macOS",
         "Camera",
       ],
     },
   ])("projects $name with one canonical eligibility decision", (testCase) => {
-    expect(projectDevicePlacements([testCase.environment])).toEqual([
+    expect(projectDevicePlacements([testCase.environment])).toMatchObject([
       {
         deviceId: "runner",
         label: "Build runner",
@@ -126,5 +124,57 @@ describe("device placement projection", () => {
       { deviceId: "beta-device", subtitle: "beta-dev" },
       { deviceId: "unique", subtitle: undefined },
     ]);
+  });
+
+  it.each([
+    {
+      name: "remote execution remains available when every worker slot is occupied",
+      requirement: {
+        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        consumesWorkerSlot: false,
+      },
+      environment: {
+        workerSlots: { total: 2, available: 0 },
+        invocableCommands: ["codex.exec-server.stdio.v1"],
+      },
+      selectable: true,
+    },
+    {
+      name: "worker turns remain unavailable when every worker slot is occupied",
+      requirement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+      environment: { workerSlots: { total: 2, available: 0 } },
+      selectable: false,
+      reason: /worker slots/i,
+    },
+    {
+      name: "declaring a command does not grant Gateway invocation authority",
+      requirement: {
+        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        consumesWorkerSlot: false,
+      },
+      environment: {
+        capabilities: ["codex.exec-server.stdio.v1"],
+        invocableCommands: [],
+      },
+      selectable: false,
+      reason: /enable|approv/i,
+    },
+    {
+      name: "missing command authority fails closed even when worker slots are free",
+      requirement: {
+        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        consumesWorkerSlot: false,
+      },
+      environment: { invocableCommands: ["camera.snap"] },
+      selectable: false,
+      reason: /enable|approv/i,
+    },
+  ])("$name", ({ requirement, environment, selectable, reason }) => {
+    const [device] = projectDevicePlacements([node(environment)], requirement);
+
+    expect(device?.selectable).toBe(selectable);
+    if (reason) {
+      expect(device?.disabledReason).toMatch(reason);
+    }
   });
 });

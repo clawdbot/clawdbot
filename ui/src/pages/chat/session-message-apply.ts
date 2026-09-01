@@ -12,8 +12,17 @@ import {
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
 } from "./history-merge.ts";
-import { persistedSteerTargetRunId, rolloverChatStream } from "./stream-causal-boundary.ts";
-import { prunePersistedAssistantStreamSegments } from "./stream-segment-pruning.ts";
+import {
+  latestPersistedSteerBoundary,
+  latestStreamBoundaryRunId,
+  persistedSteerTargetRunId,
+  rolloverChatStream,
+} from "./stream-causal-boundary.ts";
+import { maybeResetToolStreamRun } from "./stream-reconciliation.ts";
+import {
+  prunePersistedAssistantStreamSegments,
+  reconcilePersistedAssistantStream,
+} from "./stream-segment-pruning.ts";
 
 type SessionMessageApplySource =
   | { kind: "history-delta" }
@@ -46,7 +55,7 @@ function finishingChatRunId(
   if (producerRunId) {
     return producerRunId === runId ? runId : null;
   }
-  const projected = getChatSessionProjection(state, state.chatMessages, scope).runs[runId]?.message;
+  const projected = getChatSessionProjection(state, scope).runs[runId]?.message;
   const projectedText = extractText(projected)?.trim();
   return projectedText && projectedText === extractText(message)?.trim() ? runId : null;
 }
@@ -118,9 +127,9 @@ export function applySessionMessagePayload(
       ...(incoming.id ? { id: incoming.id } : {}),
       ...(incoming.idempotencyKey ? { idempotencyKey: incoming.idempotencyKey } : {}),
       ...(incoming.sequence !== null ? { seq: incoming.sequence } : {}),
+      ...(producerRunId ? { runId: producerRunId } : {}),
     },
   };
-  const previousMessageCount = state.chatMessages.length;
   const projection = reduceChatSessionProjection(
     state,
     {
@@ -132,16 +141,26 @@ export function applySessionMessagePayload(
   );
   if (incoming.role === "assistant" && projection.messages.includes(message)) {
     prunePersistedAssistantStreamSegments(state, message);
+    if (assistantOwnerRunId && runActive === false) {
+      state.chatStream = null;
+      state.chatStreamStartedAt = null;
+      maybeResetToolStreamRun(state, assistantOwnerRunId);
+    }
+    reconcilePersistedAssistantStream(state);
   }
   const steerTargetRunId = persistedSteerTargetRunId(message);
   const currentRunId = state.chatRunId;
+  const persistedSteerBoundary = steerTargetRunId
+    ? latestPersistedSteerBoundary(projection.messages, steerTargetRunId)
+    : null;
   if (
     incoming.role === "user" &&
-    runActive === true &&
+    (runActive === true || (runActive === undefined && currentRunId === steerTargetRunId)) &&
     incoming.runId &&
     steerTargetRunId &&
     (!currentRunId || currentRunId === steerTargetRunId || currentRunId === incoming.runId) &&
-    projection.messages.length > previousMessageCount
+    persistedSteerBoundary?.runId === incoming.runId &&
+    latestStreamBoundaryRunId(state) !== incoming.runId
   ) {
     state.chatRunId = steerTargetRunId;
     rolloverChatStream(state, {

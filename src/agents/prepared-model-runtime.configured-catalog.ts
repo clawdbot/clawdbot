@@ -1,4 +1,4 @@
-import type { ConfiguredModelRef } from "@openclaw/model-catalog-core/configured-model-refs";
+import type { ModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
@@ -11,7 +11,7 @@ import {
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
 type ConfiguredCatalogAgentFacts = {
-  configuredModelRefs: readonly ConfiguredModelRef[];
+  configuredModelRefs: readonly ModelCatalogRef[];
   runtimeCapabilityModels: readonly PreparedRuntimeCapabilityModel[];
 };
 
@@ -50,16 +50,7 @@ function createConfiguredModelCatalogSnapshot(params: {
   for (const configured of params.configuredRuntimeModels) {
     addEntry(toStaticCatalogEntry(configured.model));
   }
-  for (const { value } of params.agentFacts.configuredModelRefs) {
-    const separator = value.indexOf("/");
-    if (separator <= 0 || separator >= value.length - 1) {
-      continue;
-    }
-    const provider = normalizeProviderId(value.slice(0, separator));
-    const modelId = value.slice(separator + 1).trim();
-    if (!provider || !modelId) {
-      continue;
-    }
+  for (const { provider, modelId } of params.agentFacts.configuredModelRefs) {
     const model = params.templateModelRegistry.find(provider, modelId);
     if (model) {
       addEntry(toStaticCatalogEntry(model));

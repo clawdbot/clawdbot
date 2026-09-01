@@ -6,7 +6,10 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveClaudeThinkingProfile } from "../plugins/provider-claude-thinking.js";
 import { resolveEffectiveThinkingProfile } from "../plugins/provider-thinking.js";
-import type { ProviderThinkingProfile } from "../plugins/provider-thinking.types.js";
+import type {
+  ProviderThinkingPolicySource,
+  ProviderThinkingProfile,
+} from "../plugins/provider-thinking.types.js";
 import {
   BASE_THINKING_LEVELS,
   normalizeThinkLevel,
@@ -103,11 +106,13 @@ function resolveThinkingPolicyContext(params: {
     ? normalizeProviderId(thinkingPolicyProvider ?? providerRaw)
     : "";
   return {
+    catalogEntry: candidate,
     normalizedProvider,
     modelId,
     modelKey,
     api: candidate?.api,
     reasoning: params.configuredReasoning ?? candidate?.configuredReasoning ?? candidate?.reasoning,
+    thinkingLevelMap: candidate?.thinkingLevelMap,
     ...(candidate?.params ? { params: candidate.params } : {}),
     compat: candidate?.compat,
   };
@@ -169,28 +174,37 @@ function appendProfileLevel(profile: ResolvedThinkingProfile, id: ThinkLevel) {
   profile.levels = profile.levels.toSorted((a, b) => a.rank - b.rank);
 }
 
-const CATALOG_ADVANCED_THINKING_LEVELS = new Set<ThinkLevel>(["adaptive", "xhigh", "max"]);
-
 function appendCatalogAdvancedThinkingLevels(
   profile: ResolvedThinkingProfile,
   compat: ThinkingCatalogEntry["compat"],
+  thinkingLevelMap: ThinkingCatalogEntry["thinkingLevelMap"],
   agentRuntime?: string | null,
 ) {
-  const efforts = compat?.supportedReasoningEfforts;
-  if (!Array.isArray(efforts)) {
-    return;
+  if (thinkingLevelMap) {
+    for (const level of ["xhigh", "max"] as const) {
+      if (thinkingLevelMap[level] !== undefined && thinkingLevelMap[level] !== null) {
+        appendProfileLevel(profile, level);
+      }
+    }
+    profile.levels = profile.levels.filter(
+      ({ id }) => id === "adaptive" || id === "ultra" || thinkingLevelMap[id] !== null,
+    );
   }
-  let supportsMax = false;
-  for (const effort of efforts) {
+  let supportsMax = profile.levels.some(({ id }) => id === "max");
+  for (const effort of compat?.supportedReasoningEfforts ?? []) {
     const level = normalizeThinkLevel(effort);
-    if (level && CATALOG_ADVANCED_THINKING_LEVELS.has(level)) {
+    if (
+      level === "ultra" ||
+      ((level === "adaptive" || level === "xhigh" || level === "max") &&
+        (level === "adaptive" || thinkingLevelMap?.[level] !== null))
+    ) {
       appendProfileLevel(profile, level);
       supportsMax ||= level === "max";
     }
   }
   const runtime = normalizeOptionalLowercaseString(agentRuntime);
   if (supportsMax && (runtime === "openclaw" || runtime === "auto")) {
-    // Ultra is OpenClaw's orchestration tier; provider requests use Max.
+    // Max-only catalogs synthesize Ultra only for OpenClaw; other runtimes must advertise it.
     appendProfileLevel(profile, "ultra");
   }
 }
@@ -202,7 +216,7 @@ export function resolveThinkingProfile(params: {
   catalog?: ThinkingCatalogEntry[];
   agentRuntime?: string | null;
   configuredReasoning?: boolean;
-  providerPolicySource?: "active" | "active-or-bundled";
+  providerPolicySource?: ProviderThinkingPolicySource;
 }): ResolvedThinkingProfile {
   const context = resolveThinkingPolicyContext(params);
   if (!context.normalizedProvider) {
@@ -220,13 +234,18 @@ export function resolveThinkingProfile(params: {
   const providerProfileParams = {
     provider: context.normalizedProvider,
     context: providerContext,
+    ...(context.catalogEntry ? { catalogEntry: context.catalogEntry } : {}),
   };
   const providerProfile =
-    params.providerPolicySource === "active"
+    typeof params.providerPolicySource === "object"
       ? resolveEffectiveThinkingProfile(providerProfileParams, {
-          allowPublicArtifactFallback: false,
+          registry: params.providerPolicySource,
         })
-      : resolveEffectiveThinkingProfile(providerProfileParams);
+      : params.providerPolicySource === "active"
+        ? resolveEffectiveThinkingProfile(providerProfileParams, {
+            allowPublicArtifactFallback: false,
+          })
+        : resolveEffectiveThinkingProfile(providerProfileParams);
   // Any anthropic-messages catalog row routes through the canonical Claude
   // resolver: Claude families get the proper profile (incl. xhigh/adaptive/max);
   // non-Claude models on the anthropic-messages transport collapse to the Claude
@@ -253,7 +272,12 @@ export function resolveThinkingProfile(params: {
   }
 
   const profile = buildBaseThinkingProfile();
-  appendCatalogAdvancedThinkingLevels(profile, context.compat, params.agentRuntime);
+  appendCatalogAdvancedThinkingLevels(
+    profile,
+    context.compat,
+    context.thinkingLevelMap,
+    params.agentRuntime,
+  );
   return profile;
 }
 
@@ -386,7 +410,7 @@ export function resolveSupportedThinkingLevel(params: {
   catalog?: ThinkingCatalogEntry[];
   agentRuntime?: string | null;
   configuredReasoning?: boolean;
-  providerPolicySource?: "active" | "active-or-bundled";
+  providerPolicySource?: ProviderThinkingPolicySource;
 }): ThinkLevel {
   const profile = resolveThinkingProfile({
     provider: params.provider,

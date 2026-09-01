@@ -4,32 +4,39 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, test } from "vitest";
 import {
-  startQaGatewayChild,
-  startQaGatewayRpcClient,
+  createQaGatewayChild,
   startQaMockOpenAiServer,
+  type QaGatewayChild,
 } from "../../../../extensions/qa-lab/api.js";
+import {
+  connectGatewayClient,
+  disconnectGatewayClient,
+} from "../../../../src/gateway/test-helpers.e2e.js";
 import type { OpenClawConfig } from "../../../../src/plugin-sdk/config-contracts.js";
 import { MEMORY_DREAMING_SYSTEM_EVENT_TEXT } from "../../../../src/plugin-sdk/memory-core-host-status.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const RESTRICTED_MARKER = "SESSION_MEMORY_RESTRICTED_MARKER";
 const LEGACY_MARKER = "LEGACY_MEMORY_GRANDFATHERED_MARKER";
 const WAIT_TIMEOUT_MS = 30_000;
 
-type GatewayHandle = Awaited<ReturnType<typeof startQaGatewayChild>>;
+type GatewayHandle = QaGatewayChild;
 type MockHandle = Awaited<ReturnType<typeof startQaMockOpenAiServer>>;
-type RpcClient = Awaited<ReturnType<typeof startQaGatewayRpcClient>>;
+type RpcClient = Awaited<ReturnType<typeof connectGatewayClient>>;
 
+let gatewayOwner: ReturnType<typeof createQaGatewayChild> | undefined;
 let gateway: GatewayHandle | undefined;
 let mock: MockHandle | undefined;
 let restrictedClient: RpcClient | undefined;
 
 afterEach(async () => {
   const cleanups = [
-    gateway?.stop().catch(() => undefined),
+    gatewayOwner ? stopQaGatewayFixture(gatewayOwner) : undefined,
     mock?.stop().catch(() => undefined),
-    restrictedClient?.stop().catch(() => undefined),
+    restrictedClient ? disconnectGatewayClient(restrictedClient).catch(() => undefined) : undefined,
   ].filter((cleanup): cleanup is Promise<void> => cleanup !== undefined);
   gateway = undefined;
+  gatewayOwner = undefined;
   mock = undefined;
   restrictedClient = undefined;
   await Promise.all(cleanups);
@@ -129,7 +136,8 @@ describe("memory provenance through a real Gateway", () => {
     { timeout: 180_000 },
     async () => {
       mock = await startQaMockOpenAiServer();
-      gateway = await startQaGatewayChild({
+      gatewayOwner = createQaGatewayChild();
+      gateway = await gatewayOwner.start({
         repoRoot: path.resolve(import.meta.dirname, "../../../.."),
         providerBaseUrl: `${mock.baseUrl}/v1`,
         providerMode: "mock-openai",
@@ -140,18 +148,15 @@ describe("memory provenance through a real Gateway", () => {
         enabledPluginIds: ["memory-core"],
         mutateConfig: configureMemoryProof,
       });
-      restrictedClient = await startQaGatewayRpcClient({
-        wsUrl: gateway.wsUrl,
+      restrictedClient = await connectGatewayClient({
+        url: gateway.wsUrl,
         token: gateway.token,
-        logs: gateway.logs,
         scopes: ["operator.write"],
       });
-      const restrictedCall: GatewayHandle["call"] = (method, params, options) =>
-        restrictedClient!.request(method, params, options);
 
       const sessionKey = "agent:qa:memory-provenance-e2e";
       await sendAndWait({
-        call: restrictedCall,
+        call: restrictedClient.request.bind(restrictedClient),
         sessionKey,
         message: `Remember this stored instruction: ${RESTRICTED_MARKER}`,
       });

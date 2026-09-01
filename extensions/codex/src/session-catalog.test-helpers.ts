@@ -1,14 +1,18 @@
-// Shared fixtures for the split Codex session catalog suites.
+// Register narrow mocks before any production imports evaluate the catalog graph.
+// oxfmt-ignore
+import {
+  commandRpcMocks,
+  pinnedConnectionMocks,
+  transcriptMirrorMocks,
+  nodeHostMocks,
+} from "./session-catalog.test-mocks.js";
 import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  resolveAgentDir,
-  resolveDefaultAgentDir,
-  resolveSessionAgentIds,
-} from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentDir, resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   validateJsonSchemaValue,
@@ -19,7 +23,7 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { SessionCatalogProvider as RegisteredSessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
-import { vi } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 import {
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerLocalHomeDir,
@@ -38,7 +42,6 @@ import { listPairedNode } from "./session-catalog-node-continue.js";
 import { catalogError, parseCatalogPage } from "./session-catalog-parsing.js";
 import {
   CODEX_TERMINAL_RESUME_COMMAND,
-  requireCatalogEligibleThread,
   type CodexTerminalConfigSources,
 } from "./session-catalog-terminal.js";
 import type {
@@ -61,8 +64,28 @@ export const CODEX_NODE_CONTINUE_COMMANDS = [
   CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
   CODEX_CLI_SESSION_RESUME_COMMAND,
 ] as const;
-export const originalPath = process.env.PATH;
+const originalPath = process.env.PATH;
 export const tempDirs: string[] = [];
+
+beforeEach(() => {
+  nodeHostMocks.runNodePtyCommand.mockClear();
+  nodeHostMocks.userShellPaths.clear();
+  commandRpcMocks.codexControlRequest.mockReset();
+  pinnedConnectionMocks.getClient.mockReset();
+  pinnedConnectionMocks.getClient.mockResolvedValue(pinnedConnectionMocks.client);
+  pinnedConnectionMocks.releaseClient.mockReset();
+  pinnedConnectionMocks.request.mockReset();
+  transcriptMirrorMocks.importCodexThreadHistoryToTranscript.mockReset();
+  transcriptMirrorMocks.importCodexThreadHistoryToTranscript.mockResolvedValue({
+    importedMessages: 0,
+    omittedMessages: 0,
+  });
+});
+
+afterEach(async () => {
+  process.env.PATH = originalPath;
+  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+});
 
 const archiveLocalCodexSession = codexSessionCatalogRuntime.archiveLocal;
 const continueLocalCodexSessionRuntime = codexSessionCatalogRuntime.continueLocal;
@@ -75,7 +98,7 @@ export function createCodexSessionCatalogControl(
 ): CodexSessionCatalogControl {
   const config = params.getRuntimeConfig() ?? {};
   return createCodexSessionCatalogControlFactory(params).forRequest(
-    resolveSessionAgentIds({ config }).sessionAgentId,
+    resolveSessionAgentIdsStrict({ config }).sessionAgentId,
   );
 }
 
@@ -116,7 +139,8 @@ export function continueLocalCodexSession(
 ) {
   return continueLocalCodexSessionRuntime({
     ...params,
-    agentId: params.agentId ?? resolveSessionAgentIds({ config: params.config }).sessionAgentId,
+    agentId:
+      params.agentId ?? resolveSessionAgentIdsStrict({ config: params.config }).sessionAgentId,
   });
 }
 
@@ -280,6 +304,7 @@ export function idleThread(overrides: Partial<CodexThread> = {}): CodexThread {
     id: "thread-1",
     name: "Continue native task",
     cwd: "/workspace/project",
+    projectId: null,
     status: { type: "idle" },
     ...overrides,
   };
@@ -292,6 +317,7 @@ export function createControl(overrides: Partial<CodexSessionCatalogControl> = {
   const control = {
     connectionFingerprint: "catalog-connection",
     withPinnedConnection,
+    requireEligibleThread: vi.fn(async (threadId: string) => idleThread({ id: threadId })),
     listPage: vi.fn(async () => ({ sessions: [] })),
     listDescendantPage: vi.fn(async () => ({ data: [] })),
     listTurnPage: vi.fn(async () => ({ data: [] })),
@@ -520,7 +546,8 @@ export function archiveTestSession(params: {
 }) {
   const archiveConfig = params.config ?? config;
   return archiveLocalCodexSession({
-    agentId: params.agentId ?? resolveSessionAgentIds({ config: archiveConfig }).sessionAgentId,
+    agentId:
+      params.agentId ?? resolveSessionAgentIdsStrict({ config: archiveConfig }).sessionAgentId,
     bindingStore: params.bindingStore ?? createCodexTestBindingStore(),
     config: archiveConfig,
     control: params.control,
@@ -543,12 +570,16 @@ export function createGatewayApi(runtime: PluginRuntime, apiConfig: OpenClawConf
 }
 
 export {
+  commandRpcMocks,
+  pinnedConnectionMocks,
+  transcriptMirrorMocks,
+  nodeHostMocks,
   fs,
   fsSync,
   os,
   path,
   resolveAgentDir,
-  resolveSessionAgentIds,
+  resolveSessionAgentIdsStrict,
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerLocalHomeDir,
   resolveCodexAppServerUserHomeDir,
@@ -563,7 +594,6 @@ export {
   catalogError,
   parseCatalogPage,
   CODEX_TERMINAL_RESUME_COMMAND,
-  requireCatalogEligibleThread,
   CODEX_LOCAL_SESSION_HOST_ID,
   createCodexSessionCatalogControlFactory,
   createCodexSessionCatalogNodeInvokePolicies,

@@ -30,8 +30,12 @@ export async function httpRequest(
   const record = requireObject(params, "http/request params");
   const requestId = requireString(record.requestId, "requestId");
   const url = requireString(record.url, "url");
+  const redirectPolicy = record.redirectPolicy ?? "follow";
+  if (redirectPolicy !== "follow" && redirectPolicy !== "stop") {
+    throw new Error("http/request redirectPolicy must be follow or stop");
+  }
   assertSandboxHttpRequestTargetAllowed(url);
-  const request = {
+  const request: SandboxHttpRequest = {
     method: requireString(record.method, "method"),
     url,
     headers: readHttpHeaders(record.headers),
@@ -40,6 +44,7 @@ export async function httpRequest(
       typeof record.timeoutMs === "number" && record.timeoutMs > 0
         ? Math.floor(record.timeoutMs)
         : undefined,
+    redirectPolicy,
     streamResponse: record.streamResponse === true,
   };
   if (request.streamResponse) {
@@ -58,6 +63,7 @@ type SandboxHttpRequest = {
   headers: HttpHeader[];
   bodyBase64?: string;
   timeoutMs?: number;
+  redirectPolicy: "follow" | "stop";
   streamResponse: boolean;
 };
 
@@ -403,9 +409,43 @@ def assert_url_allowed(url):
     PINNED_ADDRESSES[hostname] = sorted(addresses)
 
 class GuardedRedirectHandler(urllib.request.HTTPRedirectHandler):
+    # Python 3.9 lacks the 308 dispatch alias; use the same guarded redirect path.
+    http_error_308 = urllib.request.HTTPRedirectHandler.http_error_302
+
+    def __init__(self, redirect_policy):
+        self.redirect_policy = redirect_policy
+
     def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if self.redirect_policy == "stop":
+            return None
         assert_url_allowed(newurl)
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+        method = req.get_method()
+        drop_body = code == 303 or (code in (301, 302) and method == "POST")
+        next_headers = dict(req.headers)
+        if drop_body:
+            if method != "HEAD":
+                method = "GET"
+            for name in ("content-type", "content-length", "content-encoding", "transfer-encoding"):
+                next_headers.pop(name.capitalize(), None)
+        redirected = urllib.request.Request(
+            newurl,
+            data=None if drop_body else req.data,
+            headers=next_headers,
+            method=method,
+            origin_req_host=req.origin_req_host,
+            unverifiable=True,
+        )
+        previous = urllib.parse.urlsplit(req.full_url)
+        target = urllib.parse.urlsplit(newurl)
+        previous_port = previous.port or (443 if previous.scheme == "https" else 80)
+        target_port = target.port or (443 if target.scheme == "https" else 80)
+        if (previous.scheme, previous.hostname, previous_port) != (
+            target.scheme, target.hostname, target_port
+        ):
+            # Match Codex's route-aware client: cross-origin hops never inherit secrets.
+            for name in ("authorization", "cookie", "proxy-authorization", "www-authenticate", "cookie2"):
+                redirected.remove_header(name.capitalize())
+        return redirected
 
 def pinned_getaddrinfo(original_getaddrinfo):
     def getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
@@ -461,7 +501,8 @@ def main():
     timeout = None
     if isinstance(timeout_ms, (int, float)) and timeout_ms > 0:
         timeout = timeout_ms / 1000
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), GuardedRedirectHandler)
+    redirect_handler = GuardedRedirectHandler(input_data.get("redirectPolicy", "follow"))
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), redirect_handler)
     original_getaddrinfo = socket.getaddrinfo
     socket.getaddrinfo = pinned_getaddrinfo(original_getaddrinfo)
     try:

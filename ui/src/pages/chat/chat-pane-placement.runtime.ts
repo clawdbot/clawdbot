@@ -3,21 +3,28 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import {
-  requestCloudWorkerStop,
-  resolveCloudWorkerStopAction,
-} from "../../components/cloud-worker-stop.ts";
+import type { ApplicationPlacementStartup } from "../../app/session-placement-startup.ts";
+import { requestCloudWorkerStop } from "../../components/cloud-worker-stop.runtime.ts";
+import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { t } from "../../i18n/index.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { requestPlaceCatalog } from "../new-session/cloud-target.ts";
-import { projectDevicePlacements } from "../new-session/device-placement.ts";
+import {
+  projectDevicePlacements,
+  type DevicePlacementRequirement,
+} from "../new-session/device-placement.ts";
+import { draftCloudProfileSupportsExecutionMode } from "../new-session/discovery.ts";
 
-async function loadPlacementMoveCatalog(client: GatewayBrowserClient, includeProfiles: boolean) {
+async function loadPlacementMoveCatalog(
+  client: GatewayBrowserClient,
+  includeProfiles: boolean,
+  requirement?: DevicePlacementRequirement,
+) {
   const catalog = await requestPlaceCatalog(client);
   return {
     profiles: includeProfiles ? catalog.profiles : [],
-    devices: projectDevicePlacements(catalog.environments),
+    devices: projectDevicePlacements(catalog.environments, requirement),
   };
 }
 
@@ -68,17 +75,26 @@ export async function moveChatPanePlacement(params: {
   } else {
     const { showSessionPlacementMoveDialog } =
       await import("../../components/session-placement-move-dialog.ts");
+    const runtime = params.row.agentRuntime;
     target = await showSessionPlacementMoveDialog({
       sessionLabel: params.row.label || params.row.key,
       activeRun: params.row.hasActiveRun === true,
       deviceDisabledReason:
-        params.row.agentRuntime?.devicePlacementSupported === false
-          ? t("newSession.deviceRuntimeUnsupported")
-          : undefined,
+        runtime && !runtime.devicePlacement ? t("newSession.deviceRuntimeUnsupported") : undefined,
+      profileDisabledReason: (profile) => {
+        if (runtime?.cloudPlacementSupported === false) {
+          return t("newSession.cloudRuntimeUnsupported", { runtime: runtime.id });
+        }
+        return runtime?.cloudPlacementExecutionMode &&
+          !draftCloudProfileSupportsExecutionMode(profile, runtime.cloudPlacementExecutionMode)
+          ? t("newSession.cloudProfileRuntimeUnsupported", { runtime: runtime.id })
+          : undefined;
+      },
       loadCatalog: async () =>
         await loadPlacementMoveCatalog(
           client,
           hasOperatorAdminAccess(params.gatewaySnapshot.hello?.auth ?? null),
+          runtime?.devicePlacement,
         ),
     });
   }
@@ -121,6 +137,7 @@ export async function reclaimChatPanePlacement(params: {
   connectionGeneration: number;
   gatewaySnapshot: ApplicationGatewaySnapshot;
   reclaimingKey: string | null;
+  placementStartup: ApplicationPlacementStartup;
   row: GatewaySessionRow;
   isCurrent: (client: GatewayBrowserClient, generation: number) => boolean;
   onReclaimingChange: (reclaimingKey: string | null) => void;
@@ -178,10 +195,14 @@ export async function reclaimChatPanePlacement(params: {
   const agentId = parseAgentSessionKey(params.row.key)?.agentId;
   params.onReclaimingChange(params.row.key);
   try {
-    await requestCloudWorkerStop(client, {
-      key: params.row.key,
-      ...(agentId ? { agentId } : {}),
-    });
+    await requestCloudWorkerStop(
+      client,
+      {
+        key: params.row.key,
+        ...(agentId ? { agentId } : {}),
+      },
+      params.placementStartup,
+    );
     if (params.isCurrent(client, connectionGeneration)) {
       await params.refreshReplacement(agentId);
     }

@@ -6,7 +6,7 @@
       "name": "openclaw_direct",
       "tools": [
         {
-          "description": "Accept heartbeat result for post-turn handling. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only; manage recurring tasks with cron.",
+          "description": "Accept heartbeat result for post-turn handling. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
@@ -31,7 +31,7 @@
                 "type": "string"
               },
               "scratch": {
-                "description": "Complete replacement for heartbeat monitor prose. Recurring schedules belong in automations, not scratch.",
+                "description": "Complete replacement for heartbeat monitor prose; not a recurring schedule.",
                 "type": "string"
               },
               "summary": {

@@ -1,4 +1,5 @@
 // Builds approval prompt view models from request and resolution events.
+import { summarizeApprovalScope } from "./approval-scope.js";
 import { normalizeApprovalRequest } from "./approval-types.js";
 import type {
   ApprovalMetadataView,
@@ -35,6 +36,9 @@ function buildExecMetadata(request: ExecApprovalRequest): ApprovalMetadataView[]
   if (Array.isArray(request.request.envKeys) && request.request.envKeys.length > 0) {
     metadata.push({ label: "Env Overrides", value: request.request.envKeys.join(", ") });
   }
+  if (request.request.scope) {
+    metadata.push({ label: "Scope", value: summarizeApprovalScope(request.request.scope) });
+  }
   return metadata;
 }
 
@@ -53,6 +57,9 @@ function buildPluginMetadata(request: PluginApprovalRequest): ApprovalMetadataVi
   }
   if (request.request.agentId) {
     metadata.push({ label: "Agent", value: request.request.agentId });
+  }
+  if (request.request.scope) {
+    metadata.push({ label: "Scope", value: summarizeApprovalScope(request.request.scope) });
   }
   return metadata;
 }
@@ -79,6 +86,7 @@ function buildExecViewBase<TPhase extends ApprovalPhase>(
     envKeys: request.request.envKeys ?? undefined,
     host: request.request.host ?? null,
     nodeId: request.request.nodeId ?? null,
+    ...(request.request.scope ? { scope: request.request.scope } : {}),
     sessionKey: request.request.sessionKey ?? null,
   };
 }
@@ -96,6 +104,7 @@ function buildPluginViewBase<TPhase extends ApprovalPhase>(
     metadata: buildPluginMetadata(request),
     agentId: request.request.agentId ?? null,
     pluginId: request.request.pluginId ?? null,
+    ...(request.request.scope ? { scope: request.request.scope } : {}),
     toolName: request.request.toolName ?? null,
     severity: request.request.severity ?? "warning",
   };

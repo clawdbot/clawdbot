@@ -4,79 +4,65 @@
  */
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
+import {
+  calculateUsageCost,
+  normalizeModelCostConfig,
+  normalizeResolvedPricing,
+  type ModelCostConfig,
+  type RawModelCostConfig,
+} from "@openclaw/llm-core";
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeBuiltInProviderModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   listAgentEntries,
   resolveAgentDir,
   tryResolveDefaultAgentId,
 } from "../agents/agent-scope-config.js";
-import { modelKey, normalizeModelRef, normalizeProviderId } from "../agents/model-selection.js";
+import { normalizeProviderMapKeys } from "../agents/models-config.merge.js";
 import type { NormalizedUsage } from "../agents/usage.js";
+import { mergeModelCost } from "../config/model-cost.js";
 import { resolveStateDir } from "../config/paths.js";
+import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
   modelCatalogPricingFingerprint,
-  resolveCatalogModelPricing,
-  resolveHostedModelPricing,
+  resolveModelPricing,
+  resolveModelPricingContext,
 } from "../model-catalog/pricing.js";
-import {
-  normalizeModelCostConfig,
-  normalizeResolvedPricing,
-  type ModelCostConfig,
-  type PricingTier,
-  type RawModelCostConfig,
-} from "./usage-format-pricing.js";
 export { formatTokenCount } from "./token-format.js";
-export type { ModelCostConfig } from "./usage-format-pricing.js";
+export type { ModelCostConfig } from "@openclaw/llm-core";
 
-type UsageTotals = {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  total?: number;
-};
-
+type ModelKeyNormalizer = (provider: string, model: string) => string;
 type ModelsJsonCostCache = {
-  path: string;
   providers: Record<string, ModelProviderConfig> | undefined;
-  normalizedEntries: Map<string, ModelCostConfig> | null;
-  rawEntries: Map<string, ModelCostConfig> | null;
-};
-
-type ProviderCostIndexCacheEntry = {
-  normalizedEntries?: ProviderCostIndex;
-  rawEntries?: ProviderCostIndex;
+  entries: WeakMap<ModelKeyNormalizer, Map<string, RawModelCostConfig>>;
 };
 
 type ProviderCostIndexSource = {
-  fingerprint: string;
   model: NonNullable<ModelProviderConfig["models"]>[number];
   providerKey: string;
-  rawCost: RawModelCostConfig;
+  modelId: string;
 };
 
 type ProviderCostIndex = {
-  entries: Map<string, ModelCostConfig>;
-  sources: Map<string, ProviderCostIndexSource>;
-  structureFingerprint: string;
+  entries: Map<string, RawModelCostConfig>;
+  sources: Map<string, ProviderCostIndexSource["model"][]>;
+  structure: ProviderCostIndexSource[];
 };
 
-const EMPTY_PROVIDER_COST_INDEX = new Map<string, ModelCostConfig>();
+const EMPTY_PROVIDER_COST_INDEX = new Map<string, RawModelCostConfig>();
 const MODELS_JSON_COST_CACHE_LIMIT = 128;
-const MODEL_KEY_CACHE_LIMIT = 4096;
 
 let modelsJsonCostCacheByAgentDir = new Map<string, ModelsJsonCostCache>();
-let providerCostIndexByConfig = new WeakMap<
-  Record<string, ModelProviderConfig>,
-  ProviderCostIndexCacheEntry
+let providerCostIndexByNormalizer = new WeakMap<
+  ModelKeyNormalizer,
+  WeakMap<Record<string, ModelProviderConfig>, ProviderCostIndex>
 >();
-let modelKeyCache = new Map<string, string | null>();
-let sortedPricingTiersByInput = new WeakMap<PricingTier[], PricingTier[]>();
 
 /** Formats a USD amount for usage summaries, keeping tiny costs visible. */
 export function formatUsd(value?: number): string | undefined {
@@ -89,191 +75,101 @@ export function formatUsd(value?: number): string | undefined {
   return `$${value.toFixed(4)}`;
 }
 
-function toResolvedModelKey(params: {
-  provider?: string;
-  model?: string;
-  allowPluginNormalization?: boolean;
-}): string | null {
-  const cacheKey = [
-    "resolved",
-    params.allowPluginNormalization === false ? "raw" : "default",
-    params.provider ?? "",
-    params.model ?? "",
-  ].join("\0");
-  if (modelKeyCache.has(cacheKey)) {
-    return modelKeyCache.get(cacheKey) ?? null;
-  }
-  const provider = normalizeOptionalString(params.provider);
-  const model = normalizeOptionalString(params.model);
-  if (!provider || !model) {
-    cacheModelKey(cacheKey, null);
-    return null;
-  }
-  const normalized = normalizeModelRef(provider, model, {
-    allowManifestNormalization: params.allowPluginNormalization === false ? false : undefined,
-    allowPluginNormalization: params.allowPluginNormalization,
-  });
-  const key = modelKey(normalized.provider, normalized.model);
-  cacheModelKey(cacheKey, key);
-  return key;
-}
-
-function toDirectModelKey(params: { provider?: string; model?: string }): string | null {
-  const cacheKey = ["direct", params.provider ?? "", params.model ?? ""].join("\0");
-  if (modelKeyCache.has(cacheKey)) {
-    return modelKeyCache.get(cacheKey) ?? null;
-  }
-  const provider = normalizeProviderId(normalizeOptionalString(params.provider) ?? "");
-  const model = normalizeOptionalString(params.model);
-  if (!provider || !model) {
-    cacheModelKey(cacheKey, null);
-    return null;
-  }
-  const key = modelKey(provider, model);
-  cacheModelKey(cacheKey, key);
-  return key;
-}
-
-function cacheModelKey(cacheKey: string, key: string | null): void {
-  if (modelKeyCache.size >= MODEL_KEY_CACHE_LIMIT) {
-    modelKeyCache.clear();
-  }
-  modelKeyCache.set(cacheKey, key);
-}
-
-function shouldUseNormalizedCostLookup(params: { provider?: string; model?: string }): boolean {
-  const provider = normalizeProviderId(normalizeOptionalString(params.provider) ?? "");
-  const model = normalizeOptionalString(params.model) ?? "";
-  if (!provider || !model) {
-    return false;
-  }
-  return provider === "anthropic" || provider === "openrouter" || provider === "vercel-ai-gateway";
+function normalizeRawModelKey(provider: string, model: string): string {
+  const providerId = normalizeProviderId(provider);
+  // Built-in aliases remain valid; a provider-shaped prefix alone is model data.
+  return buildModelCatalogRef(
+    providerId,
+    normalizeBuiltInProviderModelId(providerId, model.trim()),
+  );
 }
 
 function isRawModelCostConfig(value: unknown): value is RawModelCostConfig {
   return value !== null && typeof value === "object";
 }
 
-function buildProviderCostStructureFingerprint(
-  providers: Record<string, ModelProviderConfig> | undefined,
-): string {
-  if (!providers) {
-    return "";
-  }
-  return Object.entries(providers)
-    .toSorted(([a], [b]) => a.localeCompare(b))
-    .flatMap(([providerKey, providerConfig]) =>
-      (providerConfig?.models ?? []).map(
-        (model) =>
-          `${providerKey}\0${model.id}\0${isRawModelCostConfig(model.cost) ? "cost" : "metadata"}`,
-      ),
-    )
-    .join("\0");
+function collectProviderCostSources(
+  providers: Record<string, ModelProviderConfig>,
+): ProviderCostIndexSource[] {
+  return Object.entries(normalizeProviderMapKeys(providers)).flatMap(([providerKey, provider]) =>
+    (provider?.models ?? []).map((model) => ({ providerKey, model, modelId: model.id })),
+  );
 }
 
 function buildProviderCostIndexBundle(
-  providers: Record<string, ModelProviderConfig> | undefined,
-  options?: { allowManifestNormalization?: boolean; allowPluginNormalization?: boolean },
+  structure: ProviderCostIndexSource[],
+  normalizeKey: ModelKeyNormalizer,
 ): ProviderCostIndex {
-  const entries = new Map<string, ModelCostConfig>();
-  const sources = new Map<string, ProviderCostIndexSource>();
-  const structureFingerprint = buildProviderCostStructureFingerprint(providers);
-  if (!providers) {
-    return { entries, sources, structureFingerprint };
+  const sources: ProviderCostIndex["sources"] = new Map();
+  for (const { providerKey, model, modelId } of structure) {
+    const key = normalizeKey(providerKey, modelId);
+    const rows = sources.get(key) ?? [];
+    rows.push(model);
+    sources.set(key, rows);
   }
-  for (const [providerKey, providerConfig] of Object.entries(providers)) {
-    const normalizedProvider = normalizeProviderId(providerKey);
-    for (const model of providerConfig?.models ?? []) {
-      const normalized = normalizeModelRef(normalizedProvider, model.id, {
-        allowManifestNormalization:
-          options?.allowManifestNormalization ??
-          (options?.allowPluginNormalization === false ? false : undefined),
-        allowPluginNormalization: options?.allowPluginNormalization,
-      });
-      const key = modelKey(normalized.provider, normalized.model);
-      if (!isRawModelCostConfig(model.cost)) {
-        continue;
-      }
-      const rawCost = model.cost;
-      entries.set(key, normalizeModelCostConfig(rawCost));
-      sources.set(key, {
-        fingerprint: buildModelCostFingerprint(rawCost),
-        model,
-        providerKey,
-        rawCost,
-      });
-    }
-  }
-  return { entries, sources, structureFingerprint };
+  return { entries: new Map(), sources, structure };
 }
 
-function buildProviderCostIndex(
-  providers: Record<string, ModelProviderConfig> | undefined,
-  options?: { allowManifestNormalization?: boolean; allowPluginNormalization?: boolean },
-): Map<string, ModelCostConfig> {
-  return buildProviderCostIndexBundle(providers, options).entries;
+function refreshProviderCostIndexEntry(index: ProviderCostIndex, key: string): void {
+  // Retain every row, including metadata-only rows, so edits cannot resurrect
+  // a later duplicate's price or turn a removed cost into an authored pin.
+  let cost: RawModelCostConfig | undefined;
+  for (const model of index.sources.get(key) ?? []) {
+    if (isRawModelCostConfig(model.cost)) {
+      cost = mergeModelCost(model.cost, cost);
+    }
+  }
+  if (cost) {
+    index.entries.set(key, cost);
+  } else {
+    index.entries.delete(key);
+  }
 }
 
 function getProviderCostIndex(
   providers: Record<string, ModelProviderConfig> | undefined,
-  options?: { allowManifestNormalization?: boolean; allowPluginNormalization?: boolean },
-): Map<string, ModelCostConfig> {
+  normalizeKey: ModelKeyNormalizer = normalizeRawModelKey,
+  key?: string,
+): Map<string, RawModelCostConfig> {
   if (!providers) {
     return EMPTY_PROVIDER_COST_INDEX;
   }
-  const isRawLookup =
-    options?.allowPluginNormalization === false &&
-    (options.allowManifestNormalization === false ||
-      options.allowManifestNormalization === undefined);
-  const isDefaultNormalizedLookup =
-    options?.allowPluginNormalization !== false &&
-    options?.allowManifestNormalization === undefined;
-  if (!isRawLookup && !isDefaultNormalizedLookup) {
-    return buildProviderCostIndex(providers, options);
-  }
-
-  let cache = providerCostIndexByConfig.get(providers);
+  // Captured policy owns normalized keys; provider config identity alone is insufficient.
+  let cache = providerCostIndexByNormalizer.get(normalizeKey);
   if (!cache) {
-    cache = {};
-    providerCostIndexByConfig.set(providers, cache);
+    cache = new WeakMap();
+    providerCostIndexByNormalizer.set(normalizeKey, cache);
   }
-  if (isRawLookup) {
-    cache.rawEntries ??= buildProviderCostIndexBundle(providers, {
-      allowManifestNormalization: false,
-      allowPluginNormalization: false,
-    });
-    const rawOptions = {
-      allowManifestNormalization: false,
-      allowPluginNormalization: false,
-    };
-    if (refreshProviderCostIndexMutations(cache.rawEntries, providers, rawOptions) === "rebuild") {
-      cache.rawEntries = buildProviderCostIndexBundle(providers, rawOptions);
-    }
-    if (
-      cache.rawEntries.structureFingerprint !== buildProviderCostStructureFingerprint(providers)
-    ) {
-      cache.rawEntries = buildProviderCostIndexBundle(providers, rawOptions);
-    }
-    return cache.rawEntries.entries;
-  }
-  cache.normalizedEntries ??= buildProviderCostIndexBundle(providers);
-  if (refreshProviderCostIndexMutations(cache.normalizedEntries, providers) === "rebuild") {
-    cache.normalizedEntries = buildProviderCostIndexBundle(providers);
-  }
+  let index = cache.get(providers);
+  const structure = collectProviderCostSources(providers);
+  // Identity and order matter even when duplicate rows have the same id.
+  // Prices stay live on their source rows; only membership/id changes rebuild keys.
   if (
-    cache.normalizedEntries.structureFingerprint !==
-    buildProviderCostStructureFingerprint(providers)
+    !index ||
+    index.structure.length !== structure.length ||
+    index.structure.some((source, position) => {
+      const current = structure[position];
+      return (
+        !current ||
+        source.model !== current.model ||
+        source.modelId !== current.modelId ||
+        source.providerKey !== current.providerKey
+      );
+    })
   ) {
-    cache.normalizedEntries = buildProviderCostIndexBundle(providers);
+    index = buildProviderCostIndexBundle(structure, normalizeKey);
+    cache.set(providers, index);
   }
-  return cache.normalizedEntries.entries;
+  for (const entryKey of key === undefined ? index.sources.keys() : [key]) {
+    refreshProviderCostIndexEntry(index, entryKey);
+  }
+  return index.entries;
 }
 
 function loadModelsJsonCostIndex(options?: {
   agentDir?: string;
-  allowPluginNormalization?: boolean;
-}): Map<string, ModelCostConfig> {
-  const useRawEntries = options?.allowPluginNormalization === false;
+  normalizeKey?: ModelKeyNormalizer;
+}): Map<string, RawModelCostConfig> {
   const agentDir = options?.agentDir;
   if (!agentDir) {
     return EMPTY_PROVIDER_COST_INDEX;
@@ -289,24 +185,20 @@ function loadModelsJsonCostIndex(options?: {
         return EMPTY_PROVIDER_COST_INDEX;
       }
       modelsJsonCostCache = {
-        path: modelsPath,
         providers: parsed?.providers,
-        normalizedEntries: null,
-        rawEntries: null,
+        entries: new WeakMap(),
       };
       pruneMapToMaxSize(modelsJsonCostCacheByAgentDir, MODELS_JSON_COST_CACHE_LIMIT - 1);
       modelsJsonCostCacheByAgentDir.set(agentDir, modelsJsonCostCache);
     }
 
-    if (useRawEntries) {
-      modelsJsonCostCache.rawEntries ??= getProviderCostIndex(modelsJsonCostCache.providers, {
-        allowPluginNormalization: false,
-      });
-      return modelsJsonCostCache.rawEntries;
+    const normalizeKey = options?.normalizeKey ?? normalizeRawModelKey;
+    let entries = modelsJsonCostCache.entries.get(normalizeKey);
+    if (!entries) {
+      entries = getProviderCostIndex(modelsJsonCostCache.providers, normalizeKey);
+      modelsJsonCostCache.entries.set(normalizeKey, entries);
     }
-
-    modelsJsonCostCache.normalizedEntries ??= getProviderCostIndex(modelsJsonCostCache.providers);
-    return modelsJsonCostCache.normalizedEntries;
+    return entries;
   } catch {
     return EMPTY_PROVIDER_COST_INDEX;
   }
@@ -323,21 +215,6 @@ function resolveCostAgentDir(config?: OpenClawConfig, agentDir?: string): string
   // Config-less and pricing-only lookups are shipped APIs for the historical
   // main models.json. Full runtime configs resolve their roster default above.
   return path.join(resolveStateDir(), "agents", "main", "agent");
-}
-
-function findConfiguredProviderCost(params: {
-  provider?: string;
-  model?: string;
-  config?: OpenClawConfig;
-  allowPluginNormalization?: boolean;
-}): ModelCostConfig | undefined {
-  const key = toResolvedModelKey(params);
-  if (!key) {
-    return undefined;
-  }
-  return getProviderCostFromIndex(params.config?.models?.providers, key, {
-    allowPluginNormalization: params.allowPluginNormalization,
-  });
 }
 
 function stableCostFingerprintValue(value: unknown): string {
@@ -358,163 +235,9 @@ function stableCostFingerprintValue(value: unknown): string {
     .join(",")}}`;
 }
 
-function buildModelCostFingerprint(cost: RawModelCostConfig): string {
-  const tierFingerprint = Array.isArray(cost.tieredPricing)
-    ? cost.tieredPricing.flatMap((tier) => {
-        const range = Array.isArray(tier.range) ? tier.range : [];
-        return [tier.input, tier.output, tier.cacheRead, tier.cacheWrite, ...range];
-      })
-    : [];
-  return [cost.input, cost.output, cost.cacheRead, cost.cacheWrite, ...tierFingerprint].join("|");
-}
-
-function isProviderCostSourceCurrent(
-  providers: Record<string, ModelProviderConfig>,
-  source: ProviderCostIndexSource,
-  key: string,
-  options?: { allowManifestNormalization?: boolean; allowPluginNormalization?: boolean },
-): boolean {
-  const providerConfig = providers[source.providerKey];
-  if (!providerConfig?.models?.includes(source.model)) {
-    return false;
-  }
-  const normalized = normalizeModelRef(normalizeProviderId(source.providerKey), source.model.id, {
-    allowManifestNormalization:
-      options?.allowManifestNormalization ??
-      (options?.allowPluginNormalization === false ? false : undefined),
-    allowPluginNormalization: options?.allowPluginNormalization,
-  });
-  return modelKey(normalized.provider, normalized.model) === key;
-}
-
-function refreshProviderCostIndexEntry(
-  index: ProviderCostIndex,
-  key: string,
-  providers?: Record<string, ModelProviderConfig>,
-  options?: { allowManifestNormalization?: boolean; allowPluginNormalization?: boolean },
-): "current" | "rebuild" {
-  const source = index.sources.get(key);
-  if (!source) {
-    return "current";
-  }
-  if (providers && !isProviderCostSourceCurrent(providers, source, key, options)) {
-    return "rebuild";
-  }
-  if (!isRawModelCostConfig(source.model.cost)) {
-    return "rebuild";
-  }
-  if (source.model.cost !== source.rawCost) {
-    source.rawCost = source.model.cost;
-  }
-  const fingerprint = buildModelCostFingerprint(source.rawCost);
-  if (source.fingerprint === fingerprint) {
-    return "current";
-  }
-  source.fingerprint = fingerprint;
-  index.entries.set(key, normalizeModelCostConfig(source.rawCost));
-  return "current";
-}
-
-function refreshProviderCostIndexMutations(
-  index: ProviderCostIndex,
-  providers?: Record<string, ModelProviderConfig>,
-  options?: { allowManifestNormalization?: boolean; allowPluginNormalization?: boolean },
-): "current" | "rebuild" {
-  for (const key of index.sources.keys()) {
-    if (refreshProviderCostIndexEntry(index, key, providers, options) === "rebuild") {
-      return "rebuild";
-    }
-  }
-  return "current";
-}
-
-function hasProviderCostSourceForKey(
-  providers: Record<string, ModelProviderConfig>,
-  key: string,
-  options?: { allowManifestNormalization?: boolean; allowPluginNormalization?: boolean },
-): boolean {
-  for (const [providerKey, providerConfig] of Object.entries(providers)) {
-    const normalizedProvider = normalizeProviderId(providerKey);
-    for (const model of providerConfig?.models ?? []) {
-      if (!isRawModelCostConfig(model.cost)) {
-        continue;
-      }
-      const normalized = normalizeModelRef(normalizedProvider, model.id, {
-        allowManifestNormalization:
-          options?.allowManifestNormalization ??
-          (options?.allowPluginNormalization === false ? false : undefined),
-        allowPluginNormalization: options?.allowPluginNormalization,
-      });
-      if (modelKey(normalized.provider, normalized.model) === key) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-function getProviderCostFromIndex(
-  providers: Record<string, ModelProviderConfig> | undefined,
-  key: string,
-  options?: { allowManifestNormalization?: boolean; allowPluginNormalization?: boolean },
-): ModelCostConfig | undefined {
-  if (!providers) {
-    return undefined;
-  }
-  const isRawLookup =
-    options?.allowPluginNormalization === false &&
-    (options.allowManifestNormalization === false ||
-      options.allowManifestNormalization === undefined);
-  const isDefaultNormalizedLookup =
-    options?.allowPluginNormalization !== false &&
-    options?.allowManifestNormalization === undefined;
-  if (!isRawLookup && !isDefaultNormalizedLookup) {
-    return buildProviderCostIndex(providers, options).get(key);
-  }
-
-  let cache = providerCostIndexByConfig.get(providers);
-  if (!cache) {
-    cache = {};
-    providerCostIndexByConfig.set(providers, cache);
-  }
-  const index = isRawLookup
-    ? (cache.rawEntries ??= buildProviderCostIndexBundle(providers, {
-        allowManifestNormalization: false,
-        allowPluginNormalization: false,
-      }))
-    : (cache.normalizedEntries ??= buildProviderCostIndexBundle(providers));
-  const sourceMissingWithStructuralChange =
-    !index.sources.has(key) &&
-    index.structureFingerprint !== buildProviderCostStructureFingerprint(providers);
-  const sourceMissingWithNewCost =
-    !index.sources.has(key) && hasProviderCostSourceForKey(providers, key, options);
-  if (
-    refreshProviderCostIndexEntry(index, key, providers, options) === "rebuild" ||
-    sourceMissingWithStructuralChange ||
-    sourceMissingWithNewCost
-  ) {
-    const rebuilt = buildProviderCostIndexBundle(
-      providers,
-      isRawLookup
-        ? {
-            allowManifestNormalization: false,
-            allowPluginNormalization: false,
-          }
-        : undefined,
-    );
-    if (isRawLookup) {
-      cache.rawEntries = rebuilt;
-    } else {
-      cache.normalizedEntries = rebuilt;
-    }
-    return rebuilt.entries.get(key);
-  }
-  return index.entries.get(key);
-}
-
 function serializeCostIndex(
-  entries: Map<string, ModelCostConfig>,
-): Array<[string, ModelCostConfig]> {
+  entries: Map<string, RawModelCostConfig>,
+): Array<[string, RawModelCostConfig]> {
   return Array.from(entries.entries()).toSorted(([a], [b]) => a.localeCompare(b));
 }
 
@@ -527,28 +250,32 @@ export function resolveModelCostConfigFingerprint(
   agentDir?: string,
 ): string {
   const resolvedAgentDir = resolveCostAgentDir(config, agentDir);
+  const sourceConfig = config ? projectConfigOntoRuntimeSourceSnapshot(config) : undefined;
+  const pricingContext = resolveModelPricingContext(config);
   const serialized = stableCostFingerprintValue({
-    configuredRaw: serializeCostIndex(
-      getProviderCostIndex(config?.models?.providers, { allowPluginNormalization: false }),
+    configuredRaw: serializeCostIndex(getProviderCostIndex(sourceConfig?.models?.providers)),
+    configuredNormalized: serializeCostIndex(
+      getProviderCostIndex(sourceConfig?.models?.providers, pricingContext.normalizeKey),
     ),
-    configuredNormalized: serializeCostIndex(getProviderCostIndex(config?.models?.providers)),
     modelsJsonRaw: serializeCostIndex(
       loadModelsJsonCostIndex({
         agentDir: resolvedAgentDir,
-        allowPluginNormalization: false,
       }),
     ),
     modelsJsonNormalized: serializeCostIndex(
-      loadModelsJsonCostIndex({ agentDir: resolvedAgentDir }),
+      loadModelsJsonCostIndex({
+        agentDir: resolvedAgentDir,
+        normalizeKey: pricingContext.normalizeKey,
+      }),
     ),
-    catalogPricing: modelCatalogPricingFingerprint(config),
+    catalogPricing: modelCatalogPricingFingerprint(pricingContext),
   });
   return createHash("sha256").update(serialized).digest("hex");
 }
 
 /**
- * Resolves pricing for a provider/model pair from local models.json, configured models, then gateway cache.
- * Direct keys win before plugin normalization so configured pricing does not trigger provider discovery.
+ * Resolves local models.json first, then authored overrides over effective catalog prices.
+ * Complete direct prices need no plugin normalization or provider discovery.
  */
 export function resolveModelCostConfig(params: {
   provider?: string;
@@ -557,130 +284,73 @@ export function resolveModelCostConfig(params: {
   agentDir?: string;
   allowPluginNormalization?: boolean;
 }): ModelCostConfig | undefined {
-  const rawKey = toDirectModelKey(params);
-  if (!rawKey) {
+  const provider = normalizeProviderId(normalizeOptionalString(params.provider) ?? "");
+  const model = normalizeOptionalString(params.model);
+  if (!provider || !model) {
     return undefined;
   }
+  const rawKey = normalizeRawModelKey(provider, model);
   const agentDir = resolveCostAgentDir(params.config, params.agentDir);
   // Favor direct configured keys first so local pricing/status lookups stay
   // synchronous and do not drag plugin/provider discovery into the hot path.
-  const rawModelsJsonCost = loadModelsJsonCostIndex({
-    agentDir,
-    allowPluginNormalization: false,
-  }).get(rawKey);
+  const rawModelsJsonCost = loadModelsJsonCostIndex({ agentDir }).get(rawKey);
   if (rawModelsJsonCost) {
-    return rawModelsJsonCost;
+    return normalizeModelCostConfig(rawModelsJsonCost);
   }
 
-  const rawConfiguredCost = findConfiguredProviderCost({
-    ...params,
-    allowPluginNormalization: false,
-  });
-  if (rawConfiguredCost) {
-    return rawConfiguredCost;
-  }
-
-  if (params.allowPluginNormalization === false) {
-    return undefined;
-  }
-
-  if (shouldUseNormalizedCostLookup(params)) {
-    const key = toResolvedModelKey(params);
-    if (key && key !== rawKey) {
-      const modelsJsonCost = loadModelsJsonCostIndex({ agentDir }).get(key);
-      if (modelsJsonCost) {
-        return modelsJsonCost;
-      }
-
-      const configuredCost = findConfiguredProviderCost(params);
-      if (configuredCost) {
-        return configuredCost;
-      }
-    }
-  }
-
-  const catalogPricing = resolveCatalogModelPricing({
-    config: params.config,
-    provider: params.provider ?? "",
-    model: params.model ?? "",
-  });
-  if (catalogPricing) {
-    return normalizeResolvedPricing(catalogPricing);
-  }
-
-  const hostedPricing = resolveHostedModelPricing({
-    config: params.config,
-    provider: params.provider ?? "",
-    model: params.model ?? "",
-  });
-  return hostedPricing ? normalizeResolvedPricing(hostedPricing) : undefined;
-}
-
-const toNumber = (value: number | undefined): number =>
-  typeof value === "number" && Number.isFinite(value) ? value : 0;
-
-function selectPricingTier(tiers: PricingTier[], input: number): PricingTier | undefined {
-  const sortedTiers = getSortedPricingTiers(tiers);
-  if (sortedTiers.length === 0) {
-    return undefined;
-  }
-  if (input <= 0) {
-    return sortedTiers[0];
-  }
-
-  for (const tier of sortedTiers) {
-    const [start, end] = tier.range;
-    if (input >= start && input < end) {
-      return tier;
-    }
-  }
-
-  for (let index = sortedTiers.length - 1; index >= 0; index -= 1) {
-    const tier = expectDefined(sortedTiers[index], "sorted tiers entry at index");
-    if (input >= tier.range[0]) {
-      return tier;
-    }
-  }
-
-  return sortedTiers[0];
-}
-
-function getSortedPricingTiers(tiers: PricingTier[]): PricingTier[] {
-  const cached = sortedPricingTiersByInput.get(tiers);
-  if (cached) {
-    return cached;
-  }
-  const sorted = tiers.toSorted((a, b) => a.range[0] - b.range[0]);
-  sortedPricingTiersByInput.set(tiers, sorted);
-  return sorted;
-}
-
-function computeTieredCost(
-  tiers: PricingTier[],
-  input: number,
-  output: number,
-  cacheRead: number,
-  cacheWrite: number,
-): number {
-  const tier = selectPricingTier(tiers, input);
-  if (!tier) {
-    return 0;
-  }
-
-  return (
-    input * tier.input +
-    output * tier.output +
-    cacheRead * tier.cacheRead +
-    cacheWrite * tier.cacheWrite
+  // Materialized catalog defaults are not authored overrides. Preserve raw
+  // partial fields and empty tiers until merging with the inherited schedule.
+  const sourceConfig = params.config
+    ? projectConfigOntoRuntimeSourceSnapshot(params.config)
+    : undefined;
+  let configuredCost = getProviderCostIndex(sourceConfig?.models?.providers, undefined, rawKey).get(
+    rawKey,
   );
+  let pricingContext: ReturnType<typeof resolveModelPricingContext> | undefined;
+  if (params.allowPluginNormalization !== false && !configuredCost) {
+    pricingContext = resolveModelPricingContext(params.config);
+    const key = pricingContext.normalizeKey(provider, model);
+    const modelsJsonCost = loadModelsJsonCostIndex({
+      agentDir,
+      normalizeKey: pricingContext.normalizeKey,
+    }).get(key);
+    if (modelsJsonCost) {
+      return normalizeModelCostConfig(modelsJsonCost);
+    }
+    configuredCost = getProviderCostIndex(
+      sourceConfig?.models?.providers,
+      pricingContext.normalizeKey,
+      key,
+    ).get(key);
+  }
+
+  if (
+    configuredCost &&
+    configuredCost.input !== undefined &&
+    configuredCost.output !== undefined &&
+    configuredCost.cacheRead !== undefined &&
+    configuredCost.cacheWrite !== undefined
+  ) {
+    return normalizeModelCostConfig(configuredCost);
+  }
+  // Display-only lookups reuse prepared prices without discovering plugins;
+  // ordinary lookups inherit current catalog rates, never materialized defaults.
+  if (params.allowPluginNormalization !== false) {
+    pricingContext ??= resolveModelPricingContext(params.config);
+  }
+  const inheritedCost = pricingContext
+    ? resolveModelPricing(pricingContext, pricingContext.normalizeKey(provider, model))
+    : getProviderCostIndex(params.config?.models?.providers, undefined, rawKey).get(rawKey);
+  const merged = mergeModelCost(
+    inheritedCost ? normalizeResolvedPricing(inheritedCost) : undefined,
+    configuredCost,
+  );
+  return merged ? normalizeResolvedPricing(merged) : undefined;
 }
 
-/**
- * Estimates USD usage cost from normalized token totals.
- * Tiered pricing selects one whole-request tier by input size; it does not blend tiers.
- */
+/** Estimates one call's USD cost; tier selection includes cached prompt tokens. */
 export function estimateUsageCost(params: {
-  usage?: NormalizedUsage | UsageTotals | null;
+  usage?: NormalizedUsage | null;
   cost?: ModelCostConfig;
 }): number | undefined {
   const usage = params.usage;
@@ -688,31 +358,30 @@ export function estimateUsageCost(params: {
   if (!usage || !cost) {
     return undefined;
   }
-  const input = toNumber(usage.input);
-  const output = toNumber(usage.output);
-  const cacheRead = toNumber(usage.cacheRead);
-  const cacheWrite = toNumber(usage.cacheWrite);
+  const total = calculateUsageCost(usage, cost).total;
+  return Number.isFinite(total) ? total : undefined;
+}
 
-  let total: number;
-  if (cost.tieredPricing && cost.tieredPricing.length > 0) {
-    total = computeTieredCost(cost.tieredPricing, input, output, cacheRead, cacheWrite);
-  } else {
-    total =
-      input * cost.input +
-      output * cost.output +
-      cacheRead * cost.cacheRead +
-      cacheWrite * cost.cacheWrite;
+/** Preserve summed per-call costs; aggregate tokens cannot reconstruct request tiers. */
+export function estimateAggregateUsageCost(params: {
+  usage?: NormalizedUsage | null;
+  cost?: ModelCostConfig;
+}): number | undefined {
+  const usage = params.usage;
+  if (usage?.cost !== undefined) {
+    return usage.cost.total;
   }
-
-  if (!Number.isFinite(total)) {
-    return undefined;
-  }
-  return total / 1_000_000;
+  const hasBillableBuckets =
+    usage &&
+    [usage.input, usage.output, usage.cacheRead, usage.cacheWrite].some(
+      (value) => value !== undefined,
+    );
+  return !hasBillableBuckets || params.cost?.tieredPricing?.length
+    ? undefined
+    : estimateUsageCost(params);
 }
 
 export function resetUsageFormatCachesForTest(): void {
   modelsJsonCostCacheByAgentDir = new Map();
-  providerCostIndexByConfig = new WeakMap();
-  modelKeyCache = new Map();
-  sortedPricingTiersByInput = new WeakMap();
+  providerCostIndexByNormalizer = new WeakMap();
 }

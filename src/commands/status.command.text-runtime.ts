@@ -3,6 +3,7 @@
 
 export { formatCliCommand } from "../cli/command-format.js";
 export { info } from "../globals.js";
+export { formatUsageReportLines } from "../infra/provider-usage.format.js";
 export { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 export { formatGitInstallLabel } from "../infra/update-check.js";
 export {
@@ -40,6 +41,7 @@ export {
   formatDuration,
   formatKTokens,
   formatPromptCacheCompact,
+  formatStatusConfigDiagnosticEntries,
   formatTokensCompact,
   shortenText,
 } from "./status.format.js";

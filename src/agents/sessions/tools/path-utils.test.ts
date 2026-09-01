@@ -1,8 +1,12 @@
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
-import { resolveToCwd } from "./path-utils.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { getReadPathVariants, resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("resolveToCwd", () => {
   const cwd = path.resolve("workspace");
@@ -21,6 +25,15 @@ describe("resolveToCwd", () => {
   it("resolves valid file URLs to their filesystem path", () => {
     const target = path.resolve(cwd, "notes.txt");
     expect(resolveToCwd(pathToFileURL(target).href, cwd)).toBe(target);
+  });
+
+  it("keeps lexical backend paths independent of local literal @ names", async () => {
+    const tempCwd = tempDirs.make("openclaw-at-path-");
+    await fs.writeFile(path.join(tempCwd, "@literal.txt"), "literal", "utf8");
+
+    expect(resolveLocalPathToCwd("@literal.txt", tempCwd)).toBe(path.join(tempCwd, "@literal.txt"));
+    expect(resolveLocalPathToCwd("@missing.txt", tempCwd)).toBe(path.join(tempCwd, "missing.txt"));
+    expect(resolveToCwd("@literal.txt", tempCwd)).toBe(path.join(tempCwd, "literal.txt"));
   });
 
   it("keeps malformed file URLs on the ordinary relative-path path", () => {
@@ -42,4 +55,16 @@ describe("resolveToCwd", () => {
       expect(resolveToCwd("~\\notes.txt", cwd)).toBe(path.resolve(cwd, "~\\notes.txt"));
     },
   );
+});
+
+describe("getReadPathVariants", () => {
+  it("keeps the parent path unchanged for every filename fallback", () => {
+    const cwd = path.resolve("workspace");
+    const parent = path.join(cwd, "cafe\u0301 d'accord 9.30 PM\u202Farchive");
+    const filePath = path.join(parent, "re\u0301sume\u0301 9.30 PM d'accord.txt");
+    const variants = getReadPathVariants(filePath);
+
+    expect(variants.length).toBeGreaterThan(0);
+    expect(new Set(variants.map((variant) => path.dirname(variant)))).toEqual(new Set([parent]));
+  });
 });

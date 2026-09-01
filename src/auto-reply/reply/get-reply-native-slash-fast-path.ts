@@ -1,8 +1,9 @@
 // Handles native slash commands before full get-reply pipeline execution.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import {
   resolveModelRefFromString,
-  resolveThinkingDefaultWithRuntimeCatalog,
+  resolveThinkingDefaultWithRuntimeCatalogCore,
   type ModelAliasIndex,
 } from "../../agents/model-selection.js";
 import { loadPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
@@ -111,7 +112,7 @@ async function resolveNativeSlashDefaultThinkingLevel(params: {
   agentDir: string;
   workspaceDir: string;
 }): Promise<ThinkLevel> {
-  return resolveThinkingDefaultWithRuntimeCatalog({
+  return resolveThinkingDefaultWithRuntimeCatalogCore({
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
@@ -143,7 +144,8 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
   opts?: GetReplyOptions;
   skillFilter?: string[];
 }): Promise<
-  { handled: true; reply: ReplyPayload | ReplyPayload[] | undefined } | { handled: false }
+  | { handled: true; reply: ReplyPayload | ReplyPayload[] | undefined }
+  | { handled: false; queueModeOverride?: QueueMode }
 > {
   if (!shouldRunNativeSlashCommandFastPath(params.ctx)) {
     return { handled: false };
@@ -304,6 +306,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
       reply: markCommandReplyForDelivery(
         await buildStatusReply({
           cfg: params.cfg,
+          agentId: params.agentId,
           command,
           sessionEntry: targetSessionEntry,
           sessionKey: sessionState.sessionKey,
@@ -497,5 +500,13 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
       reply: markCommandReplyForDelivery(inlineActionResult.reply),
     };
   }
-  return { handled: false };
+  return {
+    handled: false,
+    ...((inlineActionResult.queueModeOverride ?? commandResult.queueModeOverride)
+      ? {
+          queueModeOverride:
+            inlineActionResult.queueModeOverride ?? commandResult.queueModeOverride,
+        }
+      : {}),
+  };
 }

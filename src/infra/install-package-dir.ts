@@ -2,9 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
-import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { pathExists } from "./fs-safe.js";
 import { assertCanonicalPathWithinBase } from "./install-safe-path.js";
+import { formatNpmCommandFailureOutput } from "./install-source-utils.js";
 import { tryReadJson, writeJson } from "./json-files.js";
 import { movePathWithCopyFallback } from "./replace-file.js";
 import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-package-install.js";
@@ -56,20 +57,6 @@ async function sanitizeManifestForNpmInstall(targetDir: string): Promise<void> {
     manifest.devDependencies = Object.fromEntries(filteredEntries);
   }
   await writeJson(manifestPath, manifest, { trailingNewline: true });
-}
-
-function formatNpmDependencyInstallFailure(result: SpawnResult): string {
-  const detail = result.stderr.trim() || result.stdout.trim();
-  if (detail) {
-    return detail;
-  }
-  if (result.code !== null) {
-    return `exit code ${result.code} (no output from npm)`;
-  }
-  if (result.signal) {
-    return `signal ${result.signal} (no output from npm)`;
-  }
-  return `termination ${result.termination} (no output from npm)`;
 }
 
 async function hideProjectNpmConfigForInstall(targetDir: string): Promise<HiddenProjectConfigFile> {
@@ -232,6 +219,7 @@ export async function installPackageDir<
   depsLogMessage: string;
   afterCopy?: (installedDir: string) => void | Promise<void>;
   afterInstall?: (installedDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
+  afterBackup?: (backupDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
 }): Promise<InstallPackageDirSuccess | InstallPackageDirFailure | TAfterInstallFailure> {
   const deferCommit = isPackageDirInstallCommitDeferred(params);
   params.logger?.info?.(`Installing to ${params.targetDir}…`);
@@ -271,27 +259,36 @@ export async function installPackageDir<
   );
   const fail = async (error: string, cause?: unknown) => {
     const installBaseChanged = isInstallBaseChangedError(cause);
+    let restoreError: string | undefined;
     if (installBaseChanged) {
       params.logger?.warn?.(INSTALL_BASE_CHANGED_ABORT_WARNING);
     } else {
-      await restoreBackup();
+      restoreError = await restoreBackup();
       if (stageDir) {
         await cleanupInstallTempDir(stageDir);
         stageDir = null;
       }
     }
-    return { ok: false as const, error };
+    return {
+      ok: false as const,
+      error: restoreError ? `${error}; could not restore existing install: ${restoreError}` : error,
+    };
   };
-  const restoreBackup = async () => {
+  const restoreBackup = async (): Promise<string | undefined> => {
     if (!backupDir) {
-      return;
+      return undefined;
     }
-    await movePathWithCopyFallback({
-      from: backupDir,
-      sourceHardlinks,
-      to: canonicalTargetDir,
-    }).catch(() => undefined);
-    backupDir = null;
+    try {
+      await movePathWithCopyFallback({
+        from: backupDir,
+        sourceHardlinks,
+        to: canonicalTargetDir,
+      });
+      backupDir = null;
+      return undefined;
+    } catch (error) {
+      return String(error);
+    }
   };
 
   try {
@@ -342,7 +339,7 @@ export async function installPackageDir<
         }
       })();
       if (npmRes.code !== 0) {
-        return await fail(`npm install failed: ${formatNpmDependencyInstallFailure(npmRes)}`);
+        return await fail(`npm install failed: ${formatNpmCommandFailureOutput(npmRes)}`);
       }
     } catch (error) {
       return await fail(`npm install failed: ${String(error)}`, error);
@@ -381,6 +378,20 @@ export async function installPackageDir<
       });
     } catch (err) {
       return await fail(`${params.copyErrorPrefix}: ${String(err)}`, err);
+    }
+  }
+
+  if (backupDir && params.afterBackup) {
+    // Validate the moved original, not its former path: new path-based writes now
+    // reach the replacement, while a refusal can still restore the original tree.
+    try {
+      const backupResult = await params.afterBackup(backupDir);
+      if (!backupResult.ok) {
+        const failed = await fail(backupResult.error);
+        return { ...backupResult, error: failed.error };
+      }
+    } catch (err) {
+      return await fail(`backup validation failed: ${String(err)}`, err);
     }
   }
 
@@ -471,6 +482,7 @@ export async function installPackageDirWithManifestDeps<
   manifestDependencies?: Record<string, unknown>;
   afterCopy?: (installedDir: string) => void | Promise<void>;
   afterInstall?: (installedDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
+  afterBackup?: (backupDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
 }): Promise<InstallPackageDirSuccess | InstallPackageDirFailure | TAfterInstallFailure> {
   const hasDeps = Object.keys(params.manifestDependencies ?? {}).length > 0;
   return installPackageDir<TAfterInstallFailure>({

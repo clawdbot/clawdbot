@@ -585,22 +585,39 @@ describe("Docker channel promotion", () => {
     "uses suffixed per-arch sources for Docker Hub manifests and VCR verification",
     () => {
       const workflow = readWorkflow(".github/workflows/docker-release.yml");
+      const vcrWorkflow = readWorkflow(".github/workflows/vercel-container-registry-publish.yml");
       const root = mkdtempSync(path.join(tmpdir(), "openclaw-docker-release-sources-"));
       try {
         const dockerCalls = path.join(root, "docker-calls");
+        const nodeCalls = path.join(root, "node-calls");
         const outputPath = path.join(root, "github-output");
-        const digestValue = `sha256:${"a".repeat(64)}`;
+        const defaultDigest = `sha256:${"a".repeat(64)}`;
+        const slimDigest = `sha256:${"b".repeat(64)}`;
+        const browserDigest = `sha256:${"c".repeat(64)}`;
         writeFileSync(outputPath, "", "utf8");
         writeFileSync(
           path.join(root, "docker"),
-          `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> "$DOCKER_CALLS"\nprintf '%s\\n' '{"digest":"${digestValue}"}'\n`,
+          `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$DOCKER_CALLS"
+case "$4" in
+  *-browser) digest="${browserDigest}" ;;
+  *-slim) digest="${slimDigest}" ;;
+  *) digest="${defaultDigest}" ;;
+esac
+printf '{"digest":"%s"}\\n' "$digest"
+`,
           "utf8",
         );
-        writeFileSync(path.join(root, "node"), "#!/usr/bin/env bash\nexit 0\n", "utf8");
+        writeFileSync(
+          path.join(root, "node"),
+          '#!/usr/bin/env bash\nprintf \'%s\\n\' "$@" >> "$NODE_CALLS"\n',
+          "utf8",
+        );
         chmodSync(path.join(root, "docker"), 0o755);
         chmodSync(path.join(root, "node"), 0o755);
         // Keep the fake tools together on PATH without shadowing jq.
         writeFileSync(path.join(root, "docker-calls"), "", "utf8");
+        writeFileSync(nodeCalls, "", "utf8");
 
         const manifest = runWorkflowStep(
           requireStep(requireJob(workflow, "create-manifest"), "Create and push manifest"),
@@ -640,6 +657,7 @@ describe("Docker channel promotion", () => {
             GITHUB_OUTPUT: outputPath,
             IMAGE_TAG_SUFFIX: "-r20260820",
             INCLUDE_BROWSER: "true",
+            NODE_CALLS: nodeCalls,
             PATH: `${root}:${process.env.PATH ?? ""}`,
             VERSION: "2026.7.1-2",
           },
@@ -649,6 +667,71 @@ describe("Docker channel promotion", () => {
         expect(vcrCalls).toContain("ghcr.io/openclaw/openclaw:2026.7.1-2-r20260820 ");
         expect(vcrCalls).toContain("ghcr.io/openclaw/openclaw:2026.7.1-2-r20260820-slim");
         expect(vcrCalls).toContain("ghcr.io/openclaw/openclaw:2026.7.1-2-r20260820-browser");
+
+        const sourceDigests = [
+          `default=${defaultDigest}`,
+          `slim=${slimDigest}`,
+          `browser=${browserDigest}`,
+        ];
+        const githubOutput = readFileSync(outputPath, "utf8");
+        expect(githubOutput.trim().split("\n")).toEqual(["value<<EOF", ...sourceDigests, "EOF"]);
+        expect(githubOutput).not.toContain("ghcr.io");
+        expect(githubOutput).not.toContain("openclaw/openclaw");
+
+        const immutableRefs = sourceDigests.map((entry) =>
+          entry.replace("=", "=ghcr.io/openclaw/openclaw@"),
+        );
+        expect(readFileSync(nodeCalls, "utf8").trim().split("\n")).toEqual([
+          "scripts/verify-docker-attestations.mjs",
+          "--platform",
+          "linux/amd64",
+          "--platform",
+          "linux/arm64",
+          ...immutableRefs.map((entry) => entry.split("=")[1]),
+        ]);
+
+        writeFileSync(nodeCalls, "", "utf8");
+        const consumer = runWorkflowStep(
+          requireStep(
+            requireJob(vcrWorkflow, "publish"),
+            "Copy and verify immutable release images",
+          ),
+          {
+            INCLUDE_BROWSER: "true",
+            NODE_CALLS: nodeCalls,
+            PATH: `${root}:${process.env.PATH ?? ""}`,
+            SOURCE_DIGESTS: sourceDigests.join("\n"),
+            SOURCE_IMAGE: "ghcr.io/openclaw/openclaw",
+            TARGET_IMAGE: "vcr.vercel.com/openclaw-foundation/openclaw/openclaw",
+            VERSION: "2026.7.1-2",
+          },
+        );
+        expect(consumer.status, consumer.stderr).toBe(0);
+        expect(readFileSync(nodeCalls, "utf8").trim().split("\n")).toEqual([
+          "scripts/vercel-container-registry-publish.mjs",
+          "--version",
+          "2026.7.1-2",
+          ...immutableRefs.flatMap((ref) => ["--source-ref", ref]),
+          "--target-image",
+          "vcr.vercel.com/openclaw-foundation/openclaw/openclaw",
+          "--include-browser",
+        ]);
+
+        const recoveryValidation = requireStep(
+          requireJob(vcrWorkflow, "validate_recovery"),
+          "Require a main-branch recovery dispatch",
+        );
+        const deniedRecovery = runWorkflowStep(recoveryValidation, {
+          WORKFLOW_REF: "refs/heads/recovery-test",
+        });
+        expect(deniedRecovery.status).toBe(1);
+        expect(deniedRecovery.stderr).toContain(
+          "::error::Vercel registry recovery must be dispatched from main; got refs/heads/recovery-test.",
+        );
+        const mainRecovery = runWorkflowStep(recoveryValidation, {
+          WORKFLOW_REF: "refs/heads/main",
+        });
+        expect(mainRecovery.status, mainRecovery.stderr).toBe(0);
       } finally {
         rmSync(root, { force: true, recursive: true });
       }

@@ -98,14 +98,16 @@ describe("E2E temp state dirs", () => {
       const helperUrl = pathToFileURL(path.resolve("scripts/e2e/lib/temp-state-dir.ts")).href;
       writeFileSync(
         scriptPath,
-        `import { writeFileSync } from "node:fs";
+        `import { renameSync, writeFileSync } from "node:fs";
 import { createE2eStateDir } from ${JSON.stringify(helperUrl)};
 
 const state = await createE2eStateDir("openclaw-e2e-temp-state-signal-", {
   OPENCLAW_STATE_DIR: "",
 });
 state.registerExitCleanup();
-writeFileSync(${JSON.stringify(statePathFile)}, state.stateDir);
+// Publish atomically so the polling parent cannot observe an empty state-path file.
+writeFileSync(${JSON.stringify(`${statePathFile}.tmp`)}, state.stateDir);
+renameSync(${JSON.stringify(`${statePathFile}.tmp`)}, ${JSON.stringify(statePathFile)});
 setInterval(() => {}, 1000);
 `,
       );

@@ -304,6 +304,8 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   UntrustedStructuredContext?: UntrustedStructuredContextEntry[];
   /** System-attached provenance for the current inbound message. */
   InputProvenance?: InputProvenance;
+  /** Internal wake cause, independent of transport, transcript provenance, and execution authority. */
+  InternalTurnSource?: "heartbeat" | "cron" | "exec";
   /** Explicit owner allowlist overrides (trusted, configuration-derived). */
   OwnerAllowFrom?: Array<string | number>;
   SenderName?: string;
@@ -312,11 +314,14 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   SessionCreation?: {
     via: import("../config/sessions/session-entry-provenance.js").SessionCreatedVia;
     actor?: import("../config/sessions/session-entry-provenance.js").SessionCreatedActor;
+    sandbox?: "required";
   };
   SenderUsername?: string;
   SenderTag?: string;
   SenderE164?: string;
   SenderIsBot?: boolean;
+  /** Channel-ingress fact: sender is the operator's own account (from-me). */
+  SenderIsSelf?: boolean;
   Timestamp?: number;
   LocationLat?: number;
   LocationLon?: number;
@@ -413,6 +418,10 @@ export type MsgContext = Partial<CanonicalInboundText> & {
    * Correlation interceptors must fail closed when this proof is absent.
    */
   InboundAccessAuthorized?: boolean;
+  /** Internal marker that channel ingress authoritatively observed route-context facts. */
+  ConversationRouteContextObserved?: boolean;
+  /** Canonical peer used by route selection; delivery targets may use a different namespace. */
+  ConversationRoutePeerId?: string;
   /**
    * Internal flag for channels that emit message_received through a channel-specific
    * privacy gate before entering the shared reply dispatcher.

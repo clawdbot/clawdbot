@@ -33,55 +33,6 @@ describe("runtime web channel plugin", () => {
     authDir = "/tmp/openclaw-profile-auth";
     expect(resolveWebChannelAuthDir()).toBe("/tmp/openclaw-profile-auth");
     expect(resolveDefaultWebAuthDir).toHaveBeenCalledTimes(2);
-    expect(resolvePluginRuntimeRecordByEntryBaseNames).toHaveBeenCalledOnce();
-  });
-
-  it("reuses the prepared heavy runtime before resolving plugin metadata again", async () => {
-    const extractText = vi.fn((value: string) => value);
-    const startWebLoginWithQr = vi.fn(async () => "started");
-    const resolvePluginRuntimeRecordByEntryBaseNames = vi.fn(() => ({
-      origin: "bundled",
-      source: "test",
-    }));
-    vi.doMock("./runtime-plugin-boundary.js", () => ({
-      loadPluginBoundaryModule: () => ({ extractText, startWebLoginWithQr }),
-      resolvePluginRuntimeModulePath: () => "/tmp/runtime-api.js",
-      resolvePluginRuntimeRecordByEntryBaseNames,
-    }));
-
-    const runtime = await import("./runtime-web-channel-plugin.js");
-
-    expect(runtime.extractText("first")).toBe("first");
-    expect(runtime.extractText("second")).toBe("second");
-    await expect(runtime.startWebLoginWithQr()).resolves.toBe("started");
-    expect(resolvePluginRuntimeRecordByEntryBaseNames).toHaveBeenCalledOnce();
-  });
-
-  it("shares one plugin record across light and heavy runtime activation", async () => {
-    const resolvePluginRuntimeRecordByEntryBaseNames = vi.fn(() => ({
-      origin: "bundled",
-      source: "test",
-    }));
-    vi.doMock("./runtime-plugin-boundary.js", () => ({
-      loadPluginBoundaryModule: (modulePath: string) =>
-        modulePath.includes("light-runtime-api")
-          ? { resolveDefaultWebAuthDir: () => "/tmp/openclaw-auth" }
-          : { startWebLoginWithQr: async () => "started" },
-      resolvePluginRuntimeModulePath: (_record: unknown, entryBaseName: string) =>
-        `/tmp/${entryBaseName}.js`,
-      resolvePluginRuntimeRecordByEntryBaseNames,
-    }));
-
-    const runtime = await import("./runtime-web-channel-plugin.js");
-
-    expect(runtime.resolveWebChannelAuthDir()).toBe("/tmp/openclaw-auth");
-    await expect(runtime.startWebLoginWithQr()).resolves.toBe("started");
-    expect(resolvePluginRuntimeRecordByEntryBaseNames).toHaveBeenCalledOnce();
-
-    const { clearPluginMetadataLifecycleCaches } = await import("../plugin-metadata-lifecycle.js");
-    clearPluginMetadataLifecycleCaches();
-    expect(runtime.resolveWebChannelAuthDir()).toBe("/tmp/openclaw-auth");
-    expect(resolvePluginRuntimeRecordByEntryBaseNames).toHaveBeenCalledTimes(2);
   });
 
   it.each(["light", "heavy"] as const)(

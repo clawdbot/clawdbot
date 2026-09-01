@@ -68,6 +68,7 @@ function backgroundTasks(selectedTask: TaskSummary): BackgroundTasksProps {
     loading: false,
     error: null,
     tasks: [selectedTask],
+    activeCount: selectedTask.status === "queued" || selectedTask.status === "running" ? 1 : 0,
     subagentActivity: {
       rows: [],
       overflowWorking: 0,
@@ -99,7 +100,6 @@ function renderDetail(host: TaskDetailHost, content: SidebarContent, layout: Sid
     backgroundTasks: backgroundTasks(task("running")),
     chat: { paneId: "pane-1" } as ChatProps,
     content,
-    fullMessageLoader: null,
     host: host as ChatPageHost,
     layout,
     transcript: {} as ChatTranscriptController,
@@ -176,7 +176,7 @@ describe("task detail transcript state", () => {
     ).toEqual({ status: "loading" });
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: "agent:main:subagent:child",
-      limit: 100,
+      limit: 800,
     });
 
     pending.resolve(history("Child transcript loaded."));

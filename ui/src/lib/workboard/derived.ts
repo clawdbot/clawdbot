@@ -117,14 +117,15 @@ export function workboardCardMatchesHealthKey(
   sessions: readonly GatewaySessionRow[],
   task?: WorkboardTaskSummary,
 ): boolean {
-  const lifecycle = getWorkboardLifecycle(card, sessions, task);
   switch (key) {
     case "running":
-      return card.status === "running" || lifecycle.state === "running";
+      return card.status === key || getWorkboardLifecycle(card, sessions, task).state === key;
     case "blocked":
       return card.status === "blocked";
     case "stale":
-      return Boolean(card.metadata?.stale || lifecycle.state === "stale");
+      return Boolean(
+        card.metadata?.stale || getWorkboardLifecycle(card, sessions, task).state === key,
+      );
     case "readyUnassigned":
       return card.status === "ready" && !card.agentId?.trim() && !card.metadata?.claim;
     case "missingProof":
@@ -145,7 +146,6 @@ export function filterWorkboardCardsForPreset(params: {
   const defaultAgentId = params.defaultAgentId?.trim();
   return params.cards.filter((card) => {
     const task = params.tasksByCardId.get(card.id);
-    const lifecycle = getWorkboardLifecycle(card, params.sessions, task);
     switch (params.preset) {
       case "all":
         return true;
@@ -156,13 +156,12 @@ export function filterWorkboardCardsForPreset(params: {
       case "ready":
         return card.status === "ready";
       case "running":
-        return card.status === "running" || lifecycle.state === "running";
+      case "stale":
+        return workboardCardMatchesHealthKey(card, params.preset, params.sessions, task);
       case "blocked":
         return card.status === "blocked";
       case "review":
         return card.status === "review";
-      case "stale":
-        return Boolean(card.metadata?.stale) || lifecycle.state === "stale";
       case "missing_proof":
         return card.status === "done" && !hasWorkboardProofEvidence(card);
       case "recently_done":

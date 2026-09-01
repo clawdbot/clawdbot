@@ -9,14 +9,15 @@ import {
   normalizeChannelDmPolicy,
   type ChannelDmPolicy,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import { resolveConfiguredFromCredentialStatuses } from "openclaw/plugin-sdk/channel-status";
+import type {
+  DiscordAccountConfig,
+  DiscordActionConfig,
+  OpenClawConfig,
+} from "openclaw/plugin-sdk/config-contracts";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  resolveConfiguredFromCredentialStatuses,
-  type DiscordAccountConfig,
-  type DiscordActionConfig,
-  type OpenClawConfig,
-} from "./runtime-api.js";
+import { resolveDiscordAccountAvailability } from "./account-token-inspect.js";
 import { selectDiscordRuntimeConfig } from "./runtime-config.js";
 import { resolveDiscordToken, type DiscordCredentialStatus } from "./token.js";
 
@@ -132,61 +133,26 @@ export function resolveDiscordMaxLinesPerMessage(params: {
   }).config.maxLinesPerMessage;
 }
 
-function resolveDiscordAccountTokenOwner(params: {
-  cfg: OpenClawConfig;
-  token: string;
-}): string | undefined {
-  const token = params.token.trim();
-  if (!token) {
-    return undefined;
-  }
-  let owner: { accountId: string; priority: number; index: number } | undefined;
-  const accountIds = listDiscordAccountIds(params.cfg);
-  for (const [index, accountId] of accountIds.entries()) {
-    const account = resolveDiscordAccount({ cfg: params.cfg, accountId });
-    const accountToken = account.token.trim();
-    if (!account.enabled || accountToken !== token) {
-      continue;
-    }
-    const priority = account.tokenSource === "config" ? 2 : account.tokenSource === "env" ? 1 : 0;
-    if (!owner || priority > owner.priority) {
-      owner = { accountId: account.accountId, priority, index };
-      continue;
-    }
-    if (priority === owner.priority && index < owner.index) {
-      owner = { accountId: account.accountId, priority, index };
-    }
-  }
-  return owner?.accountId;
-}
-
-function resolveDiscordDuplicateTokenOwner(params: {
-  cfg: OpenClawConfig;
-  account: ResolvedDiscordAccount;
-}): string | undefined {
-  const owner = resolveDiscordAccountTokenOwner({
-    cfg: params.cfg,
-    token: params.account.token,
+function inspectDiscordRuntimeAvailability(account: ResolvedDiscordAccount, cfg: OpenClawConfig) {
+  return resolveDiscordAccountAvailability({
+    account,
+    resolveAccounts: () =>
+      listDiscordAccountIds(cfg).map((accountId) => resolveDiscordAccount({ cfg, accountId })),
   });
-  return owner && owner !== params.account.accountId ? owner : undefined;
 }
 
 export function isDiscordAccountEnabledForRuntime(
   account: ResolvedDiscordAccount,
   cfg: OpenClawConfig,
 ): boolean {
-  return account.enabled && !resolveDiscordDuplicateTokenOwner({ cfg, account });
+  return inspectDiscordRuntimeAvailability(account, cfg).enabled;
 }
 
 export function resolveDiscordAccountDisabledReason(
   account: ResolvedDiscordAccount,
   cfg: OpenClawConfig,
 ): string {
-  if (!account.enabled) {
-    return "disabled";
-  }
-  const owner = resolveDiscordDuplicateTokenOwner({ cfg, account });
-  return owner ? `duplicate bot token; using account "${owner}"` : "disabled";
+  return inspectDiscordRuntimeAvailability(account, cfg).stateReason ?? "disabled";
 }
 
 export function listEnabledDiscordAccounts(cfg: OpenClawConfig): ResolvedDiscordAccount[] {

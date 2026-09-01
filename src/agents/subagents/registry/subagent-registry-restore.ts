@@ -17,7 +17,7 @@ import { applySubagentLaunchAuthorization } from "../spawn/subagent-launch-autho
 import { retrySubagentCleanup } from "../spawn/subagent-spawn-cleanup.js";
 import { readGatewayRunId } from "../spawn/subagent-spawn-gateway.js";
 import { resolveSwarmConfig } from "../swarm/swarm-config.js";
-import { enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
+import { bindSwarmRunReservation, enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
 import type { SubagentRegistryDeps } from "./subagent-registry-deps.js";
 import {
   reconcileOrphanedRestoredRuns,
@@ -157,7 +157,7 @@ export function createSubagentRegistryRestorer(config: {
       resolveSubagentRequesterAgentId(cfg, entry);
     for (const entry of runs.values()) {
       const requesterTurnRunId = entry.requesterTurnRunId?.trim();
-      if (!requesterTurnRunId) {
+      if (!requesterTurnRunId || entry.expectsCompletionMessage !== true) {
         continue;
       }
       const requesterIdentity = `${resolveRequesterAgentId(entry) ?? "unknown"}\0${entry.requesterSessionKey}`;
@@ -273,7 +273,7 @@ export function createSubagentRegistryRestorer(config: {
                 launchTerminationConfirmed = true;
                 throw error;
               }
-            });
+            }, "subagents:restore-launch");
           },
           onStartFailure: (error) => {
             if (error instanceof GatewayDrainingError) {
@@ -289,6 +289,14 @@ export function createSubagentRegistryRestorer(config: {
               cleanupSessionEntry?.lifecycleRevision,
             );
           },
+        });
+        bindSwarmRunReservation(entry.schedulerSlotId ?? runId, entry, () => {
+          if (runs.get(entry.runId) === entry) {
+            emitSessionLifecycleEvent({
+              sessionKey: entry.childSessionKey,
+              reason: "run-capacity",
+            });
+          }
         });
         continue;
       }
@@ -430,7 +438,7 @@ export function createSubagentRegistryRestorer(config: {
           return cleanupSettled && ownsCleanup();
         }
         return await cleanupCollectorLaunchResources(entry, { isCurrent: ownsCleanup });
-      }).catch((cleanupError: unknown) => {
+      }, "subagents:restore-cleanup").catch((cleanupError: unknown) => {
         warn("failed to clean restored collector after launch failure", {
           runId,
           childSessionKey: entry.childSessionKey,

@@ -1,6 +1,7 @@
 // Runtime implementations for `openclaw plugins` subcommands. Heavy plugin modules stay
 // lazy-loaded so the base CLI can start without activating the plugin registry.
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   collectConfiguredRuntimePluginIds,
@@ -20,6 +21,9 @@ import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trac
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomeInString } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
+import { ExpectedCliError, formatCliJsonFailure } from "./failure-output.js";
+import { exitCliAfterOutput } from "./one-shot-exit.js";
+import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
 import type {
   PluginDoctorOptions,
   PluginMarketplaceEntriesOptions,
@@ -29,7 +33,7 @@ import type {
 } from "./plugins-cli.js";
 
 type PluginInstallActionOptions = {
-  acknowledgeClawHubRisk?: boolean;
+  acceptCapabilities?: boolean;
   dangerouslyForceUnsafeInstall?: boolean;
   force?: boolean;
   link?: boolean;
@@ -179,15 +183,21 @@ function collectConfiguredRuntimePluginWarnings(params: {
 }
 
 /** Enable a plugin in config and refresh the registry snapshot for the changed policy. */
-export async function runPluginsEnableCommand(idInput: string): Promise<void> {
+export async function runPluginsEnableCommand(
+  idInput: string,
+  opts: { acceptCapabilities?: boolean } = {},
+): Promise<void> {
   assertConfigWriteAllowedInCurrentMode();
   return await withPluginLifecycleLease(
     {},
-    async () => await runPluginsEnableCommandUnlocked(idInput),
+    async () => await runPluginsEnableCommandUnlocked(idInput, opts),
   );
 }
 
-async function runPluginsEnableCommandUnlocked(idInput: string): Promise<void> {
+async function runPluginsEnableCommandUnlocked(
+  idInput: string,
+  opts: { acceptCapabilities?: boolean },
+): Promise<void> {
   let id = idInput;
   assertConfigWriteAllowedInCurrentMode();
 
@@ -198,7 +208,8 @@ async function runPluginsEnableCommandUnlocked(idInput: string): Promise<void> {
   const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
   const report = buildPluginRegistrySnapshotReport({ config: cfg });
   id = normalizePluginId(id);
-  if (!report.plugins.some((plugin) => plugin.id === id)) {
+  const plugin = report.plugins.find((entry) => entry.id === id);
+  if (!plugin) {
     return reportMissingPlugin(id);
   }
   const enableResult = enableExplicitlySelectedPluginInConfig(cfg, id, {
@@ -210,6 +221,28 @@ async function runPluginsEnableCommandUnlocked(idInput: string): Promise<void> {
       `Plugin "${id}" could not be enabled (${enableResult.reason ?? "unknown reason"}).`,
     );
     return defaultRuntime.exit(1);
+  }
+  if (!plugin.enabled || opts.acceptCapabilities) {
+    const { resolvePluginCapabilityConsent } = await import("../plugins/capability-consent.js");
+    const { ManagedPluginLifecycleError } =
+      await import("../plugins/management-lifecycle-error.js");
+    const consent = resolvePluginCapabilityConsentCliOptions({
+      acceptCapabilities: opts.acceptCapabilities,
+      action: "enable",
+    });
+    try {
+      await resolvePluginCapabilityConsent({
+        config: cfg,
+        pluginId: id,
+        ...consent,
+      });
+    } catch (error) {
+      if (!(error instanceof ManagedPluginLifecycleError) || !error.capabilityConsent) {
+        throw error;
+      }
+      defaultRuntime.error(error.message);
+      return defaultRuntime.exit(1);
+    }
   }
 
   const { applySlotSelectionForPlugin } = await loadPluginSlotSelection();
@@ -309,18 +342,53 @@ export async function runPluginsInstallAction(
 
 /** Inspect or refresh the persisted plugin registry index. */
 export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Promise<void> {
-  const { inspectPluginRegistry, refreshPluginRegistry } =
-    await import("../plugins/plugin-registry.js");
+  const { inspectPluginRegistry } = await import("../plugins/plugin-registry.js");
+
+  const formatDifferences = (
+    differences: Awaited<ReturnType<typeof inspectPluginRegistry>>["differences"],
+  ) => {
+    const formatSource = (source: string | null) =>
+      source ? sanitizeTerminalText(shortenHomeInString(source)) : "missing";
+    return differences.map(
+      (difference) =>
+        `${sanitizeTerminalText(difference.pluginId)}: persisted ${formatSource(difference.persistedSource)}; derived ${formatSource(difference.derivedSource)}`,
+    );
+  };
 
   if (opts.refresh) {
+    const { refreshPluginRegistry } = await import("../plugins/plugin-registry-refresh.js");
     return await withPluginLifecycleLease({}, async () => {
+      const config = getRuntimeConfig();
       const index = await refreshPluginRegistry({
-        config: getRuntimeConfig(),
+        config,
         reason: "manual",
       });
+      const inspection = await inspectPluginRegistry({ config });
+      if (inspection.state !== "fresh") {
+        const differenceLines = formatDifferences(inspection.differences);
+        const message = [
+          "Plugin registry refresh could not verify the persisted replacement.",
+          ...differenceLines.map((difference) => `- ${difference}`),
+          "Stop plugin package changes, then run `openclaw plugins registry --refresh` again.",
+        ].join("\n");
+        if (opts.json) {
+          defaultRuntime.writeJson({
+            ...formatCliJsonFailure(message),
+            refreshed: false,
+            state: inspection.state,
+            refreshReasons: inspection.refreshReasons,
+            differences: inspection.differences,
+          });
+          exitCliAfterOutput(defaultRuntime, 1);
+        }
+        throw new Error(message);
+      }
       if (opts.json) {
         defaultRuntime.writeJson({
           refreshed: true,
+          state: inspection.state,
+          refreshReasons: inspection.refreshReasons,
+          differences: inspection.differences,
           registry: index,
         });
         return;
@@ -336,6 +404,7 @@ export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Pr
     defaultRuntime.writeJson({
       state: inspection.state,
       refreshReasons: inspection.refreshReasons,
+      differences: inspection.differences,
       persisted: inspection.persisted,
       current: inspection.current,
     });
@@ -355,6 +424,7 @@ export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Pr
   ];
   if (inspection.refreshReasons.length > 0) {
     lines.push(`${theme.muted("Refresh reasons:")} ${inspection.refreshReasons.join(", ")}`);
+    lines.push(...formatDifferences(inspection.differences).map((difference) => `- ${difference}`));
     lines.push(`${theme.muted("Repair:")} ${theme.command("openclaw plugins registry --refresh")}`);
   }
   defaultRuntime.log(lines.join("\n"));
@@ -396,11 +466,14 @@ export async function runPluginsDoctorCommand(opts: PluginDoctorOptions = {}): P
     ...collectConfiguredRuntimePluginWarnings({ cfg: sourceCfg, plugins: report.plugins }),
   ]);
   const hasInstallTreeIssues =
-    errors.length > 0 || diags.length > 0 || shadowed.length > 0 || compatibility.length > 0;
+    [errors, diags, shadowed].some(({ length }) => length > 0) ||
+    compatibility.some(({ severity }) => severity === "warn");
+  const doctorOk = !hasInstallTreeIssues && pluginConfigWarnings.size === 0;
+  process.exitCode = doctorOk ? 0 : 1;
 
   if (opts.json) {
     defaultRuntime.writeJson({
-      ok: !hasInstallTreeIssues && pluginConfigWarnings.size === 0,
+      ok: doctorOk,
       pluginErrors: errors.map((entry) => ({
         id: entry.id,
         ...(entry.failurePhase ? { failurePhase: entry.failurePhase } : {}),
@@ -446,11 +519,11 @@ export async function runPluginsDoctorCommand(opts: PluginDoctorOptions = {}): P
     return;
   }
 
-  if (!hasInstallTreeIssues && pluginConfigWarnings.size === 0) {
-    defaultRuntime.log(
-      "Plugin discovery, module loading, compatibility, and configuration checks passed. " +
-        'Run "openclaw health" to check the running Gateway, including runtime quarantines and fallbacks.',
-    );
+  const healthyMessage =
+    "Plugin discovery, module loading, compatibility, and configuration checks passed. " +
+    'Run "openclaw health" to check the running Gateway, including runtime quarantines and fallbacks.';
+  if (!hasInstallTreeIssues && pluginConfigWarnings.size === 0 && compatibility.length === 0) {
+    defaultRuntime.log(healthyMessage);
     return;
   }
 
@@ -511,14 +584,13 @@ export async function runPluginsDoctorCommand(opts: PluginDoctorOptions = {}): P
     if (lines.length > 0) {
       lines.push("");
     }
-    lines.push(theme.warn("Plugin configuration:"));
-    lines.push(...pluginConfigWarnings);
+    lines.push(theme.warn("Plugin configuration:"), ...pluginConfigWarnings);
   }
-  if (!hasInstallTreeIssues && pluginConfigWarnings.size > 0) {
-    if (lines.length > 0) {
-      lines.push("");
-    }
-    lines.push("No plugin install-tree issues detected; configuration warnings remain.");
+  if (!hasInstallTreeIssues) {
+    const summary = pluginConfigWarnings.size
+      ? "No plugin install-tree issues detected; configuration warnings remain."
+      : healthyMessage;
+    lines.push("", summary);
   }
   const docs = formatDocsLink("/plugin", "docs.openclaw.ai/plugin");
   lines.push("");
@@ -965,18 +1037,17 @@ export async function runPluginMarketplaceListCommand(
     logger: opts.json ? quietPluginJsonLogger : createPluginInstallLogger(),
   });
   if (!result.ok) {
-    defaultRuntime.error(result.error);
-    return defaultRuntime.exit(1);
+    const message = result.error;
+    throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
   }
 
   if (opts.json) {
-    defaultRuntime.writeJson({
+    return defaultRuntime.writeJson({
       source: result.sourceLabel,
       name: result.manifest.name,
       version: result.manifest.version,
       plugins: result.manifest.plugins,
     });
-    return;
   }
 
   if (result.manifest.plugins.length === 0) {

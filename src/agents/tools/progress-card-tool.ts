@@ -1,12 +1,12 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import {
+  PROGRESS_CARD_MAX_STEPS,
   ProgressCardStepSchema,
   type ProgressCardPutResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
   normalizeProgressCardInput,
-  PROGRESS_CARD_MAX_STEPS,
   ProgressCardInputError,
 } from "../../session-cards/progress-card-input.js";
 import type { AnyAgentTool } from "./common.js";

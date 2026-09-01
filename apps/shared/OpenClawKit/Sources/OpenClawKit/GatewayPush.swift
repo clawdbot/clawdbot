@@ -2,6 +2,9 @@ import OpenClawProtocol
 
 public enum GatewayServerCapability: String, CaseIterable, Sendable {
     case chatSendRoutingContract = "chat-send-routing-contract"
+    case sessionUnreadAckContract = "session-unread-ack-contract"
+    case sessionSettingsContract = "session-settings-contract"
+    case sessionSettingsCAS = "session-settings-cas-v1"
     case systemAgentSetupModelRef = "openclaw-setup-model-ref"
 }
 
@@ -16,6 +19,13 @@ extension HelloOk {
     public func supportsServerCapability(_ capability: GatewayServerCapability) -> Bool {
         let values = features["capabilities"]?.value as? [AnyCodable] ?? []
         return values.contains { ($0.value as? String) == capability.rawValue }
+    }
+
+    /// The hello grant is authoritative for this socket. Persisted device-token
+    /// scopes may be broader after reconnect or narrower after a downgrade.
+    public func advertisedOperatorScopes() -> Set<String>? {
+        guard let values = auth["scopes"]?.value as? [AnyCodable] else { return nil }
+        return Set(values.compactMap { $0.value as? String })
     }
 }
 

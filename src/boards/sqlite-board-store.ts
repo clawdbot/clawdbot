@@ -16,7 +16,6 @@ import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-
 import {
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
-  resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
@@ -579,6 +578,13 @@ export class SqliteBoardStore implements BoardStore {
           instanceId,
         );
         upsertTabs(transactionDatabase, previous, next);
+        const widget = next.widgets.find((candidate) => candidate.name === name)!;
+        if (!widget.contentOwner) {
+          throw new BoardValidationError(
+            "invalid_operation",
+            `board widget ${name} content ownership is unavailable`,
+          );
+        }
         const row = previous.widgetRows.find((candidate) => candidate.name === name)!;
         const manifest = parseManifest(row.manifest);
         const declared = manifest.declared;
@@ -591,6 +597,12 @@ export class SqliteBoardStore implements BoardStore {
               grant_state: decision,
               granted_sha: decision === "granted" ? row.sha256 : null,
               manifest: serializeManifest(
+                {
+                  contentOwner: widget.contentOwner,
+                  ...(widget.registeredContentKind
+                    ? { registeredContentKind: widget.registeredContentKind }
+                    : {}),
+                },
                 declared,
                 decision,
                 manifest.mcpAppInteractive !== undefined && manifest.mcpAppInstanceId
@@ -698,9 +710,7 @@ export class SqliteBoardStore implements BoardStore {
       ),
     );
     for (const agentId of agentIds) {
-      const canonicalPath =
-        this.resolve(`agent:${agentId}:main`).path ??
-        resolveOpenClawAgentSqlitePath({ agentId, env: this.options.env });
+      const resolved = this.resolve(`agent:${agentId}:main`);
       const result = withOpenClawAgentDatabaseReadOnly(
         (database) => {
           if (!boardTablesPresent(database)) {
@@ -712,7 +722,7 @@ export class SqliteBoardStore implements BoardStore {
             db.selectFrom("board_tabs").select("session_key").distinct(),
           ).rows;
         },
-        { agentId, path: canonicalPath, env: this.options.env },
+        { ...resolved, env: this.options.env },
       );
       if (result.found) {
         for (const row of result.value) {

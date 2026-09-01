@@ -7,9 +7,16 @@ import { playwright } from "@vitest/browser-playwright";
 import { chromium } from "playwright";
 import { defineConfig, defineProject } from "vitest/config";
 import {
+  intersectIncludePatterns,
+  loadPatternListFromEnv,
+  relativizeScopedPatterns,
+} from "../test/vitest/vitest.pattern-file.ts";
+import { loadVitestExperimentalConfig } from "../test/vitest/vitest.performance-config.ts";
+import {
   jsdomOptimizedDeps,
   nonIsolatedRunnerPath,
   resolveDefaultVitestPool,
+  sharedVitestConfig,
 } from "../test/vitest/vitest.shared.config.ts";
 import { uiIsolatedTestFiles } from "../test/vitest/vitest.ui-isolated-paths.mjs";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
@@ -70,6 +77,10 @@ const workspaceSourceAliases = [
     replacement: path.resolve(repoRoot, "packages/session-url-contract/src/parse.ts"),
   },
   {
+    find: "@openclaw/session-url-contract/share-build",
+    replacement: path.resolve(repoRoot, "packages/session-url-contract/src/share-build.ts"),
+  },
+  {
     find: "@openclaw/session-url-contract",
     replacement: path.resolve(repoRoot, "packages/session-url-contract/src/index.ts"),
   },
@@ -86,7 +97,17 @@ const workspaceSourceAliases = [
     replacement: path.resolve(repoRoot, "packages/net-policy/src/index.ts"),
   },
 ];
+const requestedIncludes = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE");
+function includeUiTests(patterns: string[]): string[] {
+  const selected = intersectIncludePatterns(
+    patterns.map((pattern) => `ui/${pattern}`),
+    requestedIncludes,
+  );
+  return selected ? relativizeScopedPatterns(selected, "ui") : patterns;
+}
+
 const sharedUiTestConfig = {
+  ...loadVitestExperimentalConfig(process.env, process.platform, here),
   isolate: false,
   pool: resolveDefaultVitestPool(),
   // Real-Chromium layout tests exceed Vitest's 5s default on 4vcpu CI runners;
@@ -97,12 +118,17 @@ const sharedUiTestConfig = {
 const nodeDrivenBrowserLayoutTests = [
   "src/ui/chat/sidebar-session-picker.browser.test.ts",
   "src/pages/chat/chat-responsive.browser.test.ts",
+  "src/pages/chat/chat-working-indicator.browser.test.ts",
+  "src/pages/chat/chat-composer-undo-redo.browser.test.ts",
+  "src/pages/chat/components/chat-swarm-progress.browser.test.ts",
   "src/components/form-controls.browser.test.ts",
+  "src/components/sidebar-footer-layout.browser.test.ts",
   "src/pages/sessions/view.browser.test.ts",
   "src/styles/corner-shape.browser.test.ts",
   "src/styles/cursor-policy.browser.test.ts",
   "src/styles/chat-file-link-presentation.browser.test.ts",
   "src/styles/chat-github-link-presentation.browser.test.ts",
+  "src/styles/shimmer.browser.test.ts",
   "src/styles/sr-only.browser.test.ts",
 ] as const;
 const mockRegistryUnitTests = [
@@ -144,11 +170,14 @@ function resolveChromiumLaunchOptions(): { executablePath: string } | undefined 
 const chromiumLaunchOptions = resolveChromiumLaunchOptions();
 
 export default defineConfig({
+  root: here,
   resolve: {
     alias: workspaceSourceAliases,
   },
   test: {
     ...sharedUiTestConfig,
+    maxWorkers: sharedVitestConfig.test.maxWorkers,
+    reporters: sharedVitestConfig.test.reporters,
     projects: [
       defineProject({
         plugins: [controlUiLocaleModulesPlugin()],
@@ -165,7 +194,7 @@ export default defineConfig({
           // The cleanup runner retires that state per file; without it the lane
           // fails whichever sibling the size sequencer happens to pack together.
           runner: nonIsolatedRunnerPath,
-          include: ["src/**/*.test.ts"],
+          include: includeUiTests(["src/**/*.test.ts"]),
           exclude: [
             "src/**/*.browser.test.ts",
             "src/**/*.e2e.test.ts",
@@ -188,7 +217,7 @@ export default defineConfig({
           isolate: true,
           deps: jsdomOptimizedDeps,
           name: "unit-mock-registry",
-          include: [...mockRegistryUnitTests],
+          include: includeUiTests([...mockRegistryUnitTests]),
           environment: "jsdom",
           setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
         },
@@ -205,7 +234,7 @@ export default defineConfig({
           // No cleanup runner: this project also carries the Playwright-driven
           // layout tests, whose browser lives in module scope. Resetting the
           // module graph between files churns that browser and flakes them.
-          include: ["src/**/*.node.test.ts", ...nodeDrivenBrowserLayoutTests],
+          include: includeUiTests(["src/**/*.node.test.ts", ...nodeDrivenBrowserLayoutTests]),
           environment: "jsdom",
           setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
         },
@@ -220,7 +249,7 @@ export default defineConfig({
           name: "browser",
           // No cleanup runner: it imports node:fs and repo server modules, which
           // cannot load in browser mode. Browser files own their own teardown.
-          include: ["src/**/*.browser.test.ts"],
+          include: includeUiTests(["src/**/*.browser.test.ts"]),
           exclude: [...nodeDrivenBrowserLayoutTests],
           setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
           browser: {

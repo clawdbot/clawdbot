@@ -170,6 +170,25 @@ function buildExecResolvedResult() {
   });
 }
 
+function buildExecExpiredResult() {
+  return slackApprovalNativeRuntime.presentation.buildExpiredResult({
+    ...APPROVAL_CONTEXT,
+    request: {
+      id: "req-1",
+      request: { command: "echo hi" },
+      ...APPROVAL_TIMING,
+    },
+    view: {
+      approvalKind: "exec",
+      approvalId: "req-1",
+      phase: "expired",
+      commandText: "echo hi",
+      metadata: [],
+    } as never,
+    entry: APPROVAL_ENTRY,
+  });
+}
+
 function buildPluginResolvedResult() {
   return slackApprovalNativeRuntime.presentation.buildResolvedResult({
     ...APPROVAL_CONTEXT,
@@ -375,6 +394,10 @@ describe("slackApprovalNativeRuntime", () => {
       metadata: [
         { label: "Severity", value: "Warning" },
         { label: "Plugin", value: "computer-use" },
+        {
+          label: "Scope",
+          value: "Send to 3 recipients via email (external): alice@example.com, +2 more",
+        },
       ],
       decisions: ["allow-once", "allow-always", "deny"],
     });
@@ -385,6 +408,12 @@ describe("slackApprovalNativeRuntime", () => {
     );
     expect(payload.text).toContain("Share screen with Computer Use");
     expect(payload.text).toContain("*Approval ID:* plugin:req-1");
+    expect(payload.text).toContain(
+      "*Scope:* Send to 3 recipients via email (external): alice@example.com, +2 more",
+    );
+    expect(readMrkdwnTexts(payload.blocks)).toContain(
+      "*Scope:* Send to 3 recipients via email (external): alice@example.com, +2 more",
+    );
     expect(payload.text).not.toContain("*Command*");
     const actionsBlock = findSlackActionsBlock(
       payload.blocks as Array<{ type?: string; elements?: unknown[] }>,
@@ -414,6 +443,33 @@ describe("slackApprovalNativeRuntime", () => {
     expect(
       (payload.blocks as Array<{ type?: string }>).some((block) => block.type === "actions"),
     ).toBe(false);
+  });
+
+  it("renders expired exec approvals without interactive controls", async () => {
+    const result = await buildExecExpiredResult();
+
+    expect(result).toEqual({
+      kind: "update",
+      payload: {
+        text: "*Exec approval expired*\nThis approval request expired before it was resolved.\n\n*Command*\n```\necho hi\n```",
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: "*Exec approval expired*\nThis approval request expired before it was resolved.",
+            },
+          },
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: "*Command*\n```\necho hi\n```",
+            },
+          },
+        ],
+      },
+    });
   });
 
   it("renders plugin resolved and expired updates without command text", async () => {

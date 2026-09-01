@@ -1,9 +1,11 @@
 // Transcript event tests cover transcript event parsing and compaction.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  attachSessionTranscriptRunId,
   emitSessionTranscriptUpdate,
   onInternalSessionTranscriptUpdate,
   onSessionTranscriptUpdate,
+  readSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
 } from "./transcript-events.js";
 
@@ -16,6 +18,34 @@ afterEach(() => {
 });
 
 describe("transcript events", () => {
+  it.each(["assistant", "toolResult"])("persists normalized run ownership on %s rows", (role) => {
+    const message = { role, content: [], __openclaw: { seq: 2 } };
+
+    expect(attachSessionTranscriptRunId(message, "  run-owned  ")).toEqual({
+      ...message,
+      __openclaw: { seq: 2, runId: "run-owned" },
+    });
+    expect(attachSessionTranscriptRunId(message, "  ")).toBe(message);
+  });
+
+  it("does not assign output run ownership to user rows", () => {
+    const message = { role: "user", content: "prompt" };
+
+    expect(attachSessionTranscriptRunId(message, "run-owned")).toBe(message);
+  });
+
+  it.each([
+    [
+      "attached assistant row",
+      { role: "assistant", __openclaw: { runId: "run-owned" } },
+      "run-owned",
+    ],
+    ["blank attached run id", { role: "assistant", __openclaw: { runId: "  " } }, undefined],
+    ["row without the marker", { role: "assistant", content: [] }, undefined],
+  ])("reads back stored run ownership from %s", (_name, message, expected) => {
+    expect(readSessionTranscriptRunId(message)).toBe(expected);
+  });
+
   it("emits trimmed archive file updates only to internal listeners", () => {
     const listener = vi.fn();
     cleanup.push(onInternalSessionTranscriptUpdate(listener));

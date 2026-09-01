@@ -15,7 +15,6 @@ import {
   failTaskRunByRunId,
   setDetachedTaskDeliveryStatusByRunId,
 } from "../../../tasks/detached-task-runtime.js";
-import { resolveRequiredCompletionDeliveryFailureTerminalResult } from "../../../tasks/task-completion-contract.js";
 import type { TaskDeliveryStatus } from "../../../tasks/task-registry.types.js";
 import {
   buildAnnounceIdFromChildRun,
@@ -24,7 +23,6 @@ import {
 import { isSilentAgentReplyText } from "../../embedded-agent-runner/message-visibility.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import type { SubagentRunOutcome } from "../announce/subagent-announce-output.js";
-import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
 import {
   clearDeliveryState,
   ensureCompletionState,
@@ -37,7 +35,11 @@ import type {
   SubagentLifecycleCommonContext,
   SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle-context.js";
-import type { PendingFinalDeliveryPayload, SubagentRunRecord } from "./subagent-registry.types.js";
+import type {
+  PendingFinalDeliveryPayload,
+  RequesterSettleWakeState,
+  SubagentRunRecord,
+} from "./subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 
@@ -85,6 +87,16 @@ export const recordAnnounceDeliveryResult = (
   if (typeof delivery.enqueuedAt === "number") {
     deliveryState.enqueuedAt ??= delivery.enqueuedAt;
   }
+  if (!delivery.delivered && delivery.disposition !== "intentional_non_delivery") {
+    if (
+      delivery.reason === "steer_dropped" ||
+      delivery.phases?.some((phase) => phase.reason === "steer_dropped")
+    ) {
+      deliveryState.lastDropReason = "steer_dropped";
+    } else if (delivery.path === "none") {
+      deliveryState.lastDropReason = "sink_unavailable";
+    }
+  }
   if (delivery.delivered) {
     const deliveredAt =
       typeof delivery.deliveredAt === "number" ? delivery.deliveredAt : Date.now();
@@ -121,6 +133,21 @@ export const recordAnnounceDeliveryResult = (
   }
   deliveryState.disposition =
     delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable");
+};
+
+export const markRequesterSettleWakePending = (
+  entry: SubagentRunRecord,
+  options?: { retireAfterSettle?: boolean },
+) => {
+  const existing = entry.requesterSettleWake;
+  entry.requesterSettleWake = {
+    ...structuredClone(existing),
+    status: existing?.status ?? "pending",
+    attemptCount: existing?.attemptCount ?? 0,
+    ...(existing?.retireAfterSettle === true || options?.retireAfterSettle === true
+      ? { retireAfterSettle: true }
+      : {}),
+  } satisfies RequesterSettleWakeState;
 };
 
 export const hasPriorRequesterDeliveryMirror = async (
@@ -279,42 +306,6 @@ export const safeFinalizeSubagentTaskRun = (
       outcomeStatus: args.outcome.status,
     });
     return [];
-  }
-};
-
-export const safeMarkRequiredCompletionDeliveryBlocked = (
-  params: SubagentLifecycleOptions,
-  args: {
-    entry: SubagentRunRecord;
-    reason?: string;
-  },
-) => {
-  if (
-    args.entry.expectsCompletionMessage !== true ||
-    args.entry.execution.outcome?.status !== "ok"
-  ) {
-    return;
-  }
-  const endedAt = args.entry.execution.endedAt ?? Date.now();
-  const terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(args.reason);
-  const target = resolveSubagentTaskTarget(params, args.entry);
-  try {
-    completeTaskRunByRunId({
-      runId: target.runId,
-      runtime: "subagent",
-      sessionKey: target.sessionKey,
-      endedAt,
-      lastEventAt: Date.now(),
-      progressSummary: resolveSubagentCompletionResultText(args.entry),
-      terminalSummary: terminalResult.terminalSummary,
-      terminalOutcome: terminalResult.terminalOutcome,
-    });
-  } catch (err) {
-    params.warn("failed to mark subagent completion delivery blocked", {
-      error: buildSafeLifecycleErrorMeta(err),
-      runId: maskLifecycleIdentifier(args.entry.runId, "run"),
-      childSessionKey: maskLifecycleIdentifier(args.entry.childSessionKey, "session"),
-    });
   }
 };
 

@@ -275,6 +275,33 @@ describe("createControlUiLocaleSyncPlan", () => {
     );
   });
 
+  it("refreshes recorded fallback copy when forced without a provider", () => {
+    const plan = createControlUiLocaleSyncPlan({
+      allowTranslate: false,
+      cacheKeyFor,
+      entry,
+      existingFlat: new Map([["title", "Old English"]]),
+      force: true,
+      hashText,
+      previousMeta: localeMeta({ fallbackKeys: ["title"] }),
+      sourceFlat: new Map([["title", "New English"]]),
+      sourceHash: "next-source",
+      translationMemory: new Map(),
+    });
+
+    expect(plan.newFallbackCount).toBe(0);
+    const artifacts = plan.render({
+      defaultGlossary: [],
+      generatedAt: "2026-03-03T00:00:00.000Z",
+      glossary: [],
+      model: "legacy-model",
+      provider: "legacy-provider",
+      workflow: 1,
+    });
+    expect(artifacts.nextFlat.get("title")).toBe("New English");
+    expect(JSON.parse(artifacts.meta).fallbackKeys).toEqual(["title"]);
+  });
+
   it("preserves generatedAt when semantic metadata is unchanged", () => {
     const sourceFlat = flattenTranslations({ title: "Titre" });
     const previousMeta = localeMeta({

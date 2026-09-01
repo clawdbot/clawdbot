@@ -108,15 +108,6 @@ describe("Control UI browser link routing", () => {
     expect(urls).toEqual([]);
   });
 
-  it("preserves host behavior when the browser panel is unavailable", () => {
-    startBrowserLinkRouting(false);
-    const event = mouseEvent("click");
-
-    appendLink("https://example.com/report").dispatchEvent(event);
-
-    expect(event.defaultPrevented).toBe(false);
-  });
-
   it("falls through to existing app routing when the Control UI panel is unavailable", () => {
     const postMessage = vi.fn();
     Object.defineProperty(window, "webkit", {

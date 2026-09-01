@@ -9,12 +9,13 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
 import {
+  beginGatewayRestartSignalAdmission,
   GatewayDrainingError,
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import { stop } from "./service/ops-lifecycle.js";
+import { start, stop } from "./service/ops-lifecycle.js";
 import { run } from "./service/ops-run.js";
 import { createCronServiceState } from "./service/state.js";
 import { onTimer } from "./service/timer.test-support.js";
@@ -29,6 +30,58 @@ describe("cron service cross-tick admission lifecycle", () => {
   afterEach(() => {
     resetGatewayWorkAdmission();
     vi.useRealTimers();
+  });
+
+  it("retires a suspended timer across a scheduler stop and restart", async () => {
+    const store = fixtures.makeStorePath();
+    let nowMs = Date.parse("2026-02-06T10:08:00.000Z");
+    const job = createDueIsolatedJob({
+      id: "retired-scheduler-timer",
+      nowMs,
+      nextRunAtMs: nowMs + 1_000,
+    });
+    await cronStoreModule.saveCronStore(store.storePath, {
+      version: 1,
+      jobs: [job],
+    });
+
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => nowMs,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+    await start(state);
+    const restartSignal = beginGatewayRestartSignalAdmission();
+    expect(restartSignal).not.toBeNull();
+    const retiredTimer = onTimer(state);
+
+    try {
+      stop(state);
+      await start(state);
+      const restartedTimer = state.timer;
+      nowMs += 1_000;
+
+      expect(restartSignal?.rollback()).toBe(true);
+      await retiredTimer;
+
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      expect(state.timer).toBe(restartedTimer);
+      expect(state.queuedRunReservationsByJobId.size).toBe(0);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      const persisted = await cronStoreModule.loadCronStore(store.storePath);
+      expect(persisted.jobs[0]?.state).toMatchObject({ nextRunAtMs: nowMs });
+      expect(persisted.jobs[0]?.state.queuedAtMs).toBeUndefined();
+      expect(persisted.jobs[0]?.state.runningAtMs).toBeUndefined();
+    } finally {
+      restartSignal?.rollback();
+      stop(state);
+      await retiredTimer;
+    }
   });
 
   it("gives a waiter-delayed partial-batch wake an independent Gateway root", async () => {

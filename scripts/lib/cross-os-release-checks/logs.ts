@@ -1,4 +1,5 @@
-import { closeSync, openSync, readSync, statSync } from "node:fs";
+import { closeSync, openSync, statSync } from "node:fs";
+import { readFileWindowFullySync } from "../../../src/infra/file-read.ts";
 import { CROSS_OS_AGENT_LOG_FALLBACK_TAIL_BYTES } from "./config.ts";
 
 export function readLogFileSize(logPath: string) {
@@ -54,7 +55,7 @@ export function readLogTextWindow(
   const fd = openSync(logPath, "r");
   try {
     const buffer = Buffer.alloc(length);
-    const bytesRead = readSync(fd, buffer, 0, length, start);
+    const bytesRead = readFileWindowFullySync(fd, buffer, start);
     return buffer.subarray(0, bytesRead).toString("utf8");
   } finally {
     closeSync(fd);
