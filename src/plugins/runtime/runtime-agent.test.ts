@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { createGatewaySession } from "../../gateway/session-create-service.js";
 import {
@@ -966,6 +967,34 @@ describe("plugin runtime session work admission", () => {
     await mutation;
 
     await expect(work).rejects.toThrow(`Session "${sessionKey}" is archived`);
+  });
+
+  it("rejects a session replaced while work waits for lifecycle admission", async () => {
+    const runtime = createRuntimeAgent();
+    const mutationStarted = createDeferred();
+    const releaseMutation = createDeferred();
+    const mutation = runExclusiveSessionLifecycleMutation({
+      scope: storePath,
+      identities: [sessionKey, sessionId],
+      prepare: async () => {
+        mutationStarted.resolve();
+        await releaseMutation.promise;
+      },
+      run: async () => {
+        await runtime.session.upsertSessionEntry({
+          storePath,
+          sessionKey,
+          entry: { sessionId: "replacement-session", updatedAt: Date.now() },
+        });
+      },
+    });
+    await mutationStarted.promise;
+
+    const work = runtime.session.runWithWorkAdmission({ storePath, sessionKey }, async () => {});
+    releaseMutation.resolve();
+    await mutation;
+
+    await expect(work).rejects.toSatisfy(isSessionWorkStartInvalidatedError);
   });
 
   it("admits fresh work and protects session creation inside the callback", async () => {

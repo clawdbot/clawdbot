@@ -1,7 +1,6 @@
 // Retry policy: backoff, attempt floor + age gate for dead-letter.
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { describe, expect, it } from "vitest";
-import { SESSION_WORK_START_INVALIDATED_ERROR_CODE } from "../../config/sessions/work-start-error.js";
 import {
   DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
@@ -169,7 +168,7 @@ describe("ingress retry policy", () => {
     const maxAttempts = 3;
     const message = 'Session "agent:main:telegram:direct:1" changed while starting work. Retry.';
     const conflict = Object.assign(new Error(message), {
-      code: SESSION_WORK_START_INVALIDATED_ERROR_CODE,
+      code: "SESSION_WORK_START_INVALIDATED",
     });
     const wrapped = Object.assign(new Error("BotError in middleware"), {
       error: new Error("telegram spooled update processing failed", { cause: conflict }),

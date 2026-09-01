@@ -13,7 +13,6 @@ import {
   resolveSessionWorkStartError,
   SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE,
   SessionRestartRecoveryTombstoneError,
-  SessionWorkStartInvalidatedError,
 } from "../../config/sessions/lifecycle.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
