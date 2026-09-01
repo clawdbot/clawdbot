@@ -18,7 +18,8 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
-import { loadChatHistory, type ChatHistoryResult } from "./chat-history.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { flushChatQueueForEvent } from "./chat-send-actions.ts";
 import {
   flushChatQueueAfterIdleSessionReconciliation,

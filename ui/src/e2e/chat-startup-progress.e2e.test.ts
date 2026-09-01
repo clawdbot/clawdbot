@@ -1,17 +1,19 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
-const proofDir = path.resolve(".artifacts/control-ui-e2e/duplicate-session-naming");
+let proofDir: string;
+beforeEach(() => {
+  if (capture) {
+    proofDir = createControlUiE2eArtifactDir("duplicate-session-naming");
+  }
+});
 const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 suite.define(() => {
   it("preserves tool and approval activity received before the send ACK", async () => {
-    if (capture) {
-      await mkdir(proofDir, { recursive: true });
-    }
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -76,9 +78,6 @@ suite.define(() => {
   });
 
   it("retains current startup progress through delayed history", async () => {
-    if (capture) {
-      await mkdir(proofDir, { recursive: true });
-    }
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",

@@ -350,9 +350,6 @@ describe("parallel web search provider", () => {
       docs: "https://docs.openclaw.ai/tools/parallel-search",
     });
   });
-  it("identifies the plugin via a versioned User-Agent header", () => {
-    expect(testing.USER_AGENT).toMatch(/^openclaw-parallel\/\d+\.\d+\.\d+/);
-  });
   it("treats objective as optional and omits it from the request when absent", async () => {
     enqueueJson();
     const result = await paidTool().execute({ search_queries: ["openclaw"] });
@@ -460,7 +457,7 @@ describe("parallel web search provider", () => {
     });
     const headers = (call.init.headers ?? {}) as Record<string, string>;
     expect(headers["x-api-key"]).toBe("par-secret");
-    expect(headers["User-Agent"]).toMatch(/^openclaw-parallel\//);
+    expect(headers["User-Agent"]).toMatch(/^openclaw-parallel\/\d+\.\d+\.\d+/);
     expect(result).toMatchObject({
       provider: "parallel",
       searchId: "search_test",

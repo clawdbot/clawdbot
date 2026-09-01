@@ -114,10 +114,10 @@ export function createUnitVitestConfigWithOptions(
 ) {
   const isolate = resolveVitestIsolation(env);
   const argv = options.argv ?? process.argv;
-  const unitFastTestFiles = getUnitFastTestFiles();
   const envIncludePatterns = loadIncludePatternsFromEnv(env);
   const defaultIncludePatterns = options.includePatterns ?? unitTestIncludePatterns;
   const cliIncludePatterns = narrowIncludePatternsForCli(defaultIncludePatterns, argv);
+  const unitFastTestFiles = getUnitFastTestFiles(envIncludePatterns ?? cliIncludePatterns);
   const coverageIncludePatterns =
     isCoverageEnabledFromArgv(argv) &&
     options.includePatterns === undefined &&

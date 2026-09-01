@@ -59,7 +59,7 @@ interface ModelChangeEntry extends SessionTreeEntryBase {
   modelId: string;
 }
 
-export interface CompactionEntry<T = unknown> extends SessionTreeEntryBase {
+interface CompactionEntry<T = unknown> extends SessionTreeEntryBase {
   type: "compaction";
   summary: string;
   firstKeptEntryId: string;
@@ -70,7 +70,7 @@ export interface CompactionEntry<T = unknown> extends SessionTreeEntryBase {
 
 type ResetReason = "new" | "reset" | "idle" | "daily" | "cron-stale";
 
-export interface ResetEntry extends SessionTreeEntryBase {
+interface ResetEntry extends SessionTreeEntryBase {
   type: "reset";
   reason: ResetReason;
   firstKeptEntryId?: string;

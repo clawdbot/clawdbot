@@ -24,10 +24,8 @@ import {
 } from "./gateway-process-argv.js";
 import { tryAcquireExclusiveSqliteCoordinator } from "./node-sqlite.js";
 import { acquireGatewayLifecycleCoordinator } from "./state-database-coordinator.js";
-import {
-  readWindowsProcessArgsSync,
-  readWindowsProcessStartTimeSync,
-} from "./windows-port-pids.js";
+import { readWindowsProcessArgsSync } from "./windows-port-pids.js";
+import { readWindowsProcessStartTimeSync } from "./windows-process-start.js";
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_POLL_INTERVAL_MS = 100;

@@ -186,6 +186,8 @@ export async function persistActivatedSetupInference(input: {
   let manualAuthReceipt: ManualAuthPersistenceReceipt | undefined;
   if (hasPreparedAuthProfiles && plan.manualAuth) {
     throwIfSetupInferenceCancelled(params);
+    await params.beforePersistentEffect?.();
+    throwIfSetupInferenceCancelled(params);
     const initialCandidate = stageCandidate(cfg, "runtime");
     const initialRoute = await projectRoute(initialCandidate);
     const resolvedRoute = await resolveRoute(initialCandidate);

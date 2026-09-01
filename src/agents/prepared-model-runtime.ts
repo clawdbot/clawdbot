@@ -313,12 +313,13 @@ export async function acquireAgentRunPreparedModelRuntime(
 export async function acquireReadOnlyPreparedModelRuntime(
   rawInput: PreparedModelRuntimeInput,
   abortSignal?: AbortSignal,
+  catalogMode: PreparedModelRuntimeCatalogMode = "live",
 ): Promise<PreparedModelRuntimeLease> {
   return await acquirePreparedModelRuntimeLeaseFromOwners(
     { ...rawInput, readOnly: true },
     "ephemeral",
     preparedModelRuntimeLeaseContext,
-    { abortSignal },
+    { abortSignal, catalogMode },
   );
 }
 

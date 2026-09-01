@@ -123,7 +123,8 @@ export function enqueueSystemEventEntry(
   text: string,
   options: SystemEventOptions,
 ): SystemEvent | null {
-  return enqueueOwnedSystemEventEntry(text, options);
+  const event = enqueueOwnedSystemEventEntry(text, options);
+  return event ? cloneSystemEvent(event) : null;
 }
 
 function enqueueOwnedSystemEventEntry(
@@ -170,11 +171,11 @@ function enqueueOwnedSystemEventEntry(
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();
   }
-  return cloneSystemEvent(event);
+  return event;
 }
 
 export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
-  return enqueueSystemEventEntry(text, options) !== null;
+  return enqueueOwnedSystemEventEntry(text, options) !== null;
 }
 
 /** Enqueues one occurrence and returns one-use removal ownership for its UUID. */
@@ -192,12 +193,17 @@ export function enqueueSystemEventWithReceipt(
 }
 
 export function drainSystemEventEntries(sessionKey: string): SystemEvent[] {
+  return drainSystemEventsWith(sessionKey, cloneSystemEvent);
+}
+
+function drainSystemEventsWith<T>(sessionKey: string, project: (event: SystemEvent) => T): T[] {
   const key = requireSessionKey(sessionKey);
   const entry = getSessionQueue(key);
   if (!entry || entry.queue.length === 0) {
     return [];
   }
-  const out = entry.queue.map(cloneSystemEvent);
+  const out = entry.queue.map(project);
+  // Reentrant consumers may hold this array; clear it in place before removing the queue.
   entry.queue.length = 0;
   entry.lastContextKey = null;
   queues.delete(key);
@@ -258,7 +264,7 @@ function replaceSystemEventEntry(text: string, options: SystemEventOptions): Sys
     entry.queue.shift();
   }
   entry.lastContextKey = normalizedContextKey;
-  return cloneSystemEvent(event);
+  return event;
 }
 
 function isDuplicateSystemEvent(
@@ -359,7 +365,7 @@ export function consumeSelectedSystemEventEntries(
 }
 
 export function drainSystemEvents(sessionKey: string): string[] {
-  return drainSystemEventEntries(sessionKey).map((event) => event.text);
+  return drainSystemEventsWith(sessionKey, (event) => event.text);
 }
 
 export function peekSystemEventEntries(sessionKey: string): SystemEvent[] {
@@ -367,7 +373,7 @@ export function peekSystemEventEntries(sessionKey: string): SystemEvent[] {
 }
 
 export function peekSystemEvents(sessionKey: string): string[] {
-  return peekSystemEventEntries(sessionKey).map((event) => event.text);
+  return getSessionQueue(sessionKey)?.queue.map((event) => event.text) ?? [];
 }
 
 export function hasSystemEvents(sessionKey: string) {

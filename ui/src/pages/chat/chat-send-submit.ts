@@ -1,6 +1,6 @@
 import type { ChatSendIntent } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { shouldForwardModelCommandToServer } from "../../../../src/auto-reply/commands-registry.shared.js";
-import { normalizeChatFollowUpModeOverride, setLastActiveSessionKey } from "../../app/settings.ts";
+import { normalizeChatFollowUpModeOverride } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
@@ -192,12 +192,8 @@ async function sendDetachedCommandMessage(
     setChatError(host, formatTerminalChatSendAckError(sendAck, "detached"));
   }
   if (ok) {
-    const submittedScopeIsVisible = submittedCommandScopeIsVisible(host, opts.recovery);
     if (submittedCommandConnectionIsCurrent(host, opts.recovery)) {
       clearOwnedCommandComposerFallback(host, opts.recovery);
-    }
-    if (submittedScopeIsVisible) {
-      setLastActiveSessionKey(host, host.sessionKey);
     }
     if (!commandComposerFallbackRetainsAttachments(host, opts.recovery)) {
       releaseChatAttachmentPayloads(excludeComposerAttachments(host, opts.attachments));
@@ -510,8 +506,15 @@ export async function handleSendChat(
   const replyToId = isInlineEditSubmission
     ? inlineEdit.replyToId
     : replyTarget?.sourceMessageId?.trim() || undefined;
-  const effectiveMessage =
+  const quotedMessage =
     replyTarget && !replyToId && !intent ? prependReplyQuote(message, replyTarget) : message;
+  // Ambient work context is only for a new model message, never a command, Goal,
+  // or queued-row edit (which already contains its original frozen context).
+  const workContext =
+    !intent && !isInlineEditSubmission && !userMessage.startsWith("/")
+      ? host.getWorkContext?.()
+      : undefined;
+  const effectiveMessage = workContext ? `${workContext}\n\n${quotedMessage}` : quotedMessage;
 
   const refreshSessions = Boolean(intent) || isChatResetCommand(message);
   // A row edit and a composer send may intentionally carry the same payload.

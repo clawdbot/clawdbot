@@ -1092,11 +1092,13 @@ describe("updateNpmInstalledPlugins", () => {
 
       const callbackFailure =
         review === "throw-undefined" ? undefined : new Error("consent guard cancelled");
+      const beforePersistentEffect = vi.fn();
       let reviewed = false;
       const onCapabilityConsent: UpdateInstalledPluginParams["onCapabilityConsent"] =
         review === "none"
           ? undefined
           : async (details) => {
+              expect(beforePersistentEffect).not.toHaveBeenCalled();
               reviewed = true;
               if (review === "throw" || review === "throw-undefined") {
                 // oxlint-disable-next-line typescript/only-throw-error -- JavaScript callbacks may throw undefined; preserve that exact failure.
@@ -1118,6 +1120,7 @@ describe("updateNpmInstalledPlugins", () => {
             };
       const pendingUpdate = updatePlugin(config, pluginId, {
         onCapabilityConsent,
+        beforePersistentEffect,
         disableOnFailure,
         packagePluginIds: { [pluginId]: [rootPluginId, `${pluginId}-addon`] },
       });
@@ -1155,6 +1158,7 @@ describe("updateNpmInstalledPlugins", () => {
       }
 
       const install = result.config.plugins?.installs?.[pluginId];
+      expect(beforePersistentEffect).toHaveBeenCalledTimes(reviewRetryStage ? 2 : 1);
       expect(result.outcomes).toEqual([expect.objectContaining({ pluginId, status: "updated" })]);
       if (!ownerEnabled && !childEnabled) {
         expect(result.config.plugins?.entries).toEqual(config.plugins.entries);
@@ -1447,40 +1451,50 @@ describe("updateNpmInstalledPlugins", () => {
     },
   );
 
-  it("retains the default fallback for a targeted official beta update", async () => {
-    installPluginFromNpmSpecMock
-      .mockResolvedValueOnce({
-        ok: false,
-        code: "npm_package_not_found",
-        error: "No matching version found for @openclaw/codex@beta",
-      })
-      .mockResolvedValueOnce(
-        createSuccessfulNpmUpdateResult({
-          pluginId: "codex",
-          targetDir: "/tmp/codex",
-          version: "2026.5.3",
-          npmResolution: {
-            name: "@openclaw/codex",
+  it.each([undefined, "2026.8.1-beta.3"])(
+    "retains the visible fallback for a targeted official beta update (core=%s)",
+    async (coreVersion) => {
+      const requestedSpec = `@openclaw/codex@${coreVersion ?? "beta"}`;
+      installPluginFromNpmSpecMock
+        .mockResolvedValueOnce({
+          ok: false,
+          code: "npm_package_not_found",
+          error: `No matching version found for ${requestedSpec}`,
+        })
+        .mockResolvedValueOnce(
+          createSuccessfulNpmUpdateResult({
+            pluginId: "codex",
+            targetDir: "/tmp/codex",
             version: "2026.5.3",
-            resolvedSpec: "@openclaw/codex@2026.5.3",
-          },
-        }),
-      );
-    const config = createNpmInstallConfig({
-      pluginId: "codex",
-      spec: "@openclaw/codex",
-      installPath: "/tmp/codex",
-      resolvedName: "@openclaw/codex",
-    });
+            npmResolution: {
+              name: "@openclaw/codex",
+              version: "2026.5.3",
+              resolvedSpec: "@openclaw/codex@2026.5.3",
+            },
+          }),
+        );
+      const config = createNpmInstallConfig({
+        pluginId: "codex",
+        spec: "@openclaw/codex",
+        installPath: "/tmp/codex",
+        resolvedName: "@openclaw/codex",
+      });
 
-    const result = await updatePlugin(config, "codex", {
-      officialPluginUpdateChannel: "beta",
-    });
+      const result = await updatePlugin(config, "codex", {
+        officialPluginUpdateChannel: "beta",
+        coreVersion,
+      });
 
-    expect(npmInstallCall(0)?.spec).toBe("@openclaw/codex@beta");
-    expect(npmInstallCall(1)?.spec).toBe("@openclaw/codex");
-    expect(result.config.plugins?.installs?.codex?.spec).toBe("@openclaw/codex");
-  });
+      expect(npmInstallCall(0)?.spec).toBe(requestedSpec);
+      expect(result.outcomes[0]?.channelFallback).toMatchObject({
+        requestedSpec,
+        usedSpec: "@openclaw/codex",
+        reason: "unavailable",
+      });
+      expect(npmInstallCall(1)?.spec).toBe("@openclaw/codex");
+      expect(result.config.plugins?.installs?.codex?.spec).toBe("@openclaw/codex");
+    },
+  );
 
   it("pins unchanged official npm records during official sync", async () => {
     const { config } = createNpmUpdateFixture({
@@ -1880,6 +1894,70 @@ describe("updateNpmInstalledPlugins", () => {
             `Pass \`openclaw plugins update ${overrideSpec}\` to follow that registry line.`,
         },
       ]);
+    },
+  );
+
+  it.each([
+    {
+      updateChannel: "beta" as const,
+      coreVersion: "2026.8.1-beta.3",
+      newerVersion: "2026.8.1-beta.4",
+      dryRun: false,
+    },
+    {
+      updateChannel: "beta" as const,
+      coreVersion: "2026.8.1-beta.3",
+      newerVersion: "2026.8.1-beta.4",
+      dryRun: true,
+    },
+    {
+      updateChannel: "extended-stable" as const,
+      coreVersion: "2026.7.33",
+      newerVersion: "2026.7.34",
+      dryRun: false,
+    },
+    {
+      updateChannel: "extended-stable" as const,
+      coreVersion: "2026.7.33",
+      newerVersion: "2026.7.34",
+      dryRun: true,
+    },
+  ])(
+    "reports core-aligned floating $updateChannel updates as current (dryRun=$dryRun)",
+    async ({ updateChannel, coreVersion, newerVersion, dryRun }) => {
+      const { config } = createNpmUpdateFixture({
+        pluginId: "acpx",
+        packageName: "@openclaw/acpx",
+        installedVersion: coreVersion,
+        registryVersion: dryRun ? newerVersion : coreVersion,
+        registryIntegrity: "sha512-same",
+        registryShasum: "same",
+        integrity: "sha512-same",
+        shasum: "same",
+        installerVersion: coreVersion,
+        installerResolvedSpec: `@openclaw/acpx@${coreVersion}`,
+      });
+      if (!dryRun) {
+        mockNpmViewMetadata({ name: "@openclaw/acpx", version: newerVersion });
+      }
+
+      const result = await updatePlugin(config, "acpx", {
+        dryRun,
+        officialPluginUpdateChannel: updateChannel,
+        coreVersion,
+      });
+
+      expect(result.outcomes).toEqual([
+        {
+          pluginId: "acpx",
+          status: "unchanged",
+          currentVersion: coreVersion,
+          nextVersion: coreVersion,
+          message: `acpx is up to date (${coreVersion}).`,
+        },
+      ]);
+      expect(result.config.plugins?.installs?.acpx?.spec).toBe("@openclaw/acpx");
+      expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(dryRun ? 0 : 1);
     },
   );
 
@@ -3804,31 +3882,41 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
-  it("targets the exact core version for official extended-stable updates and preserves intent", async () => {
-    const { config } = createNpmUpdateFixture({
-      pluginId: "acpx",
-      packageName: "@openclaw/acpx",
-      installedVersion: "2026.7.21",
-      registryVersion: "2026.7.33",
-      installerVersion: "2026.7.33",
-      installerResolvedSpec: "@openclaw/acpx@2026.7.33",
-    });
-    const result = await updatePlugin(config, "acpx", {
-      syncOfficialPluginInstalls: true,
-      officialPluginUpdateChannel: "extended-stable",
-      coreVersion: "2026.7.33",
-    });
+  it.each([
+    { channel: "extended-stable" as const, coreVersion: "2026.7.33", recordSpec: "@openclaw/acpx" },
+    {
+      channel: "beta" as const,
+      coreVersion: "2026.8.1-beta.3",
+      recordSpec: "@openclaw/acpx@2026.8.1-beta.3",
+    },
+  ])(
+    "targets the installed core for official $channel updates",
+    async ({ channel, coreVersion, recordSpec }) => {
+      const { config } = createNpmUpdateFixture({
+        pluginId: "acpx",
+        packageName: "@openclaw/acpx",
+        installedVersion: "2026.7.21",
+        registryVersion: coreVersion,
+        installerVersion: coreVersion,
+        installerResolvedSpec: `@openclaw/acpx@${coreVersion}`,
+      });
+      const result = await updatePlugin(config, "acpx", {
+        syncOfficialPluginInstalls: true,
+        officialPluginUpdateChannel: channel,
+        coreVersion,
+      });
 
-    expectNpmUpdateCall({
-      spec: "@openclaw/acpx@2026.7.33",
-      expectedPluginId: "acpx",
-    });
-    expectRecordFields(result.config.plugins?.installs?.acpx, {
-      spec: "@openclaw/acpx",
-      version: "2026.7.33",
-      resolvedSpec: "@openclaw/acpx@2026.7.33",
-    });
-  });
+      expectNpmUpdateCall({
+        spec: `@openclaw/acpx@${coreVersion}`,
+        expectedPluginId: "acpx",
+      });
+      expectRecordFields(result.config.plugins?.installs?.acpx, {
+        spec: recordSpec,
+        version: coreVersion,
+        resolvedSpec: `@openclaw/acpx@${coreVersion}`,
+      });
+    },
+  );
 
   it("preserves an explicit official pin during extended-stable updates", async () => {
     const { config } = createNpmUpdateFixture({

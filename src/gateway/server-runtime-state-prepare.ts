@@ -6,7 +6,7 @@ import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
+import { loadGatewayTlsServerRuntime } from "../infra/tls/gateway.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { runtimeForLogger } from "../logging/subsystem.js";
 import { isGatewayDraining } from "../process/command-queue.js";
@@ -405,7 +405,7 @@ export async function prepareGatewayKernelState(params: {
   const runtimeStateRef: { current: GatewayServerLiveState | null } = { current: null };
   const cronStartState = { handled: false };
   const gatewayTls = await startupTrace.measure("tls.runtime", () =>
-    loadGatewayTlsRuntime(cfgAtStart.gateway?.tls, log.child("tls")),
+    loadGatewayTlsServerRuntime(cfgAtStart.gateway?.tls, log.child("tls")),
   );
   const serverStartedAt = Date.now();
   const readinessEventLoopHealth = createGatewayEventLoopHealthMonitor();
@@ -444,6 +444,7 @@ export async function prepareGatewayKernelState(params: {
     ...(opts.tryRecoverChannelAutostartSuppression
       ? { tryRecoverAutostartSuppression: opts.tryRecoverChannelAutostartSuppression }
       : {}),
+    isClosing: () => lifecycle.closePreludeStarted,
   });
   channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
   const sidecarStartup = opts.sidecarStartup ?? "start";

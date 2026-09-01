@@ -16,7 +16,7 @@ import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-de
 import { composeTranscriptDisplay } from "../../chat/transcript-display-position.js";
 import {
   isSessionTranscriptProjectionUnavailableError,
-  listSessionPendingInputConsumptions,
+  listSessionPendingInputReceipts,
   resolveTranscriptSessionKeyBySessionId,
 } from "../../config/sessions/session-accessor.js";
 import {
@@ -234,13 +234,13 @@ async function handleChatHistoryRequest({
     respond(false, undefined, requestedAgent.error);
     return;
   }
-  const requestedAgentId = requestedAgent.agentId;
-  const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
   const { cfg, storePath, store, entry, canonicalKey } = measureDiagnosticsTimelineSpanSync(
     `gateway.${method}.session_entry`,
     () =>
       loadGatewaySessionEntryReadOnly(sessionKey, {
-        ...sessionLoadOptions,
+        agentId: requestedAgent.agentId,
+        // Exact reads own their nested JSON; history only projects that snapshot.
+        clone: false,
         includeStoreChildEntries: true,
       }),
     {
@@ -337,14 +337,19 @@ async function handleChatHistoryRequest({
         )
       : { items: [], total: 0 };
   // Receipts belong to the currently selected physical session, never archived history.
-  const inputConsumptions = inputRunIds
+  const inputReceipts = inputRunIds
     ? !messageId && sessionId && sessionId === entry?.sessionId
-      ? listSessionPendingInputConsumptions(
+      ? listSessionPendingInputReceipts(
           { agentId: sessionAgentId, sessionKey: canonicalKey, sessionId, storePath },
           { runIds: inputRunIds },
         )
       : []
     : undefined;
+  const inputConsumptions = inputReceipts?.flatMap((receipt) =>
+    receipt.state === "consumed"
+      ? [{ runId: receipt.runId, consumedByEventId: receipt.consumedByEventId }]
+      : [],
+  );
   let historyPage: Awaited<ReturnType<typeof readChatHistoryPage>>;
   try {
     historyPage = cursor
@@ -591,7 +596,7 @@ async function handleChatHistoryRequest({
       messages: delta.messages,
       deltaCursor: delta.deltaCursor,
       pendingInputs,
-      ...(inputConsumptions ? { inputConsumptions } : {}),
+      ...(inputReceipts ? { inputReceipts, inputConsumptions } : {}),
       sessionInfo,
       ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
       ...(startupMetadata ? { metadata: startupMetadata } : {}),
@@ -608,7 +613,7 @@ async function handleChatHistoryRequest({
     sessionId,
     messages: composeTranscriptDisplay(capped),
     pendingInputs,
-    ...(inputConsumptions ? { inputConsumptions } : {}),
+    ...(inputReceipts ? { inputReceipts, inputConsumptions } : {}),
     ...(historyPage.deltaCursor ? { deltaCursor: historyPage.deltaCursor } : {}),
     ...(historyPage.responseOffset !== undefined ? { offset: historyPage.responseOffset } : {}),
     ...(hasMore ? { nextOffset } : {}),

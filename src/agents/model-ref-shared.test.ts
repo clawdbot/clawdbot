@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
   normalizeConfiguredProviderCatalogModelId,
   normalizeStaticProviderModelId,
@@ -92,54 +93,18 @@ describe("normalizeStaticProviderModelId", () => {
     // Runtime callers use the current metadata snapshot by default, so plugin
     // normalization policy applies even without an explicit manifest list.
     setCurrentPluginMetadataSnapshot(
-      {
-        policyHash: "test-policy",
-        index: {
-          version: 1,
-          hostContractVersion: "test",
-          compatRegistryVersion: "test",
-          migrationVersion: 1,
-          policyHash: "test-policy",
-          generatedAtMs: 0,
-          installRecords: {},
-          plugins: [],
-          diagnostics: [],
-        },
+      createPluginMetadataSnapshotFixture({
         plugins: [
           {
+            id: "custom-normalizer",
             modelIdNormalization: {
               providers: {
-                custom: {
-                  aliases: { latest: "custom/modern-model" },
-                },
+                custom: { aliases: { latest: "custom/modern-model" } },
               },
             },
           },
         ],
-        registryDiagnostics: [],
-        manifestRegistry: { plugins: [] },
-        diagnostics: [],
-        byPluginId: new Map(),
-        normalizePluginId: (pluginId: string) => pluginId,
-        owners: {
-          channels: new Map(),
-          channelConfigs: new Map(),
-          providers: new Map(),
-          modelCatalogProviders: new Map(),
-          cliBackends: new Map(),
-          setupProviders: new Map(),
-          commandAliases: new Map(),
-          contracts: new Map(),
-        },
-        metrics: {
-          registrySnapshotMs: 0,
-          manifestRegistryMs: 0,
-          ownerMapsMs: 0,
-          totalMs: 0,
-          indexPluginCount: 0,
-          manifestPluginCount: 1,
-        },
-      } as never,
+      }),
       { config: {} },
     );
 

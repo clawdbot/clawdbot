@@ -1,8 +1,8 @@
 // Control UI tests cover the Models settings page against a mocked Gateway.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type Locator } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -19,9 +19,16 @@ const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? descri
 
 const NOW = Date.now();
 const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
-const artifactDir = path.resolve(".artifacts/control-ui-e2e/model-providers");
-const utilityHelpArtifactDir = path.resolve(".artifacts/control-ui-e2e/utility-model-help");
-const readinessArtifactDir = path.resolve(".artifacts/control-ui-e2e/models-provider-readiness");
+let artifactDir: string;
+let utilityHelpArtifactDir: string;
+let readinessArtifactDir: string;
+beforeEach(() => {
+  if (recordVisuals) {
+    artifactDir = createControlUiE2eArtifactDir("model-providers");
+    utilityHelpArtifactDir = path.join(artifactDir, "utility-model-help");
+    readinessArtifactDir = path.join(artifactDir, "models-provider-readiness");
+  }
+});
 const redactedConfigValue = "[redacted]";
 const openaiInputValue = ["e2e", "test", "key"].join("-");
 const googleInputValue = ["e2e", "google", "key"].join("-");
@@ -61,11 +68,6 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
     }
     server = await startControlUiE2eServer();
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-    if (recordVisuals) {
-      await mkdir(artifactDir, { recursive: true });
-      await mkdir(utilityHelpArtifactDir, { recursive: true });
-      await mkdir(readinessArtifactDir, { recursive: true });
-    }
   });
 
   afterAll(async () => {

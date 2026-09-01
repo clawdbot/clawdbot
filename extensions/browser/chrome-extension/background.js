@@ -194,7 +194,14 @@ async function syncTabsToRelay() {
     return;
   }
   const generations = [...attachments].filter(([, record]) => !record.retired);
-  const accessible = await tabAccessPolicy.listAccessibleTabs();
+  let accessible;
+  let inventoryRevision;
+  // A handoff can overtake even a completed read before this caller resumes.
+  // Publish and retire attachments only from the current inventory generation.
+  do {
+    inventoryRevision = tabAccessPolicy.discoveryRevision;
+    accessible = await tabAccessPolicy.listAccessibleTabs();
+  } while (inventoryRevision !== tabAccessPolicy.discoveryRevision);
   if (
     relayWs !== socket ||
     relayAuthenticatedSocket !== socket ||
@@ -342,7 +349,12 @@ function failRelayAuthentication(ws, error) {
 }
 
 async function sendHello(socket) {
-  const accessible = await tabAccessPolicy.listAccessibleTabs();
+  let accessible;
+  let inventoryRevision;
+  do {
+    inventoryRevision = tabAccessPolicy.discoveryRevision;
+    accessible = await tabAccessPolicy.listAccessibleTabs();
+  } while (inventoryRevision !== tabAccessPolicy.discoveryRevision);
   const uaMatch = /Chrom(?:e|ium)\/[\d.]+/.exec(navigator.userAgent);
   send(
     {

@@ -171,6 +171,11 @@ export type CronServiceDeps = {
     opts: HeartbeatWakeRequest,
     retry?: Extract<HeartbeatRunResult, { status: "skipped" }>,
   ) => void;
+  /** Waits for the terminal result of a cron-owned coalesced heartbeat wake. */
+  requestHeartbeatAndWait?: (
+    opts: HeartbeatWakeRequest,
+    lifecycle: { abortSignal?: AbortSignal },
+  ) => Promise<HeartbeatRunResult>;
   runHeartbeatOnce?: (opts?: {
     source?: HeartbeatWakeRequest["source"];
     intent?: HeartbeatWakeRequest["intent"];

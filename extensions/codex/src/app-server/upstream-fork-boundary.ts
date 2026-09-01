@@ -3,7 +3,7 @@ import {
   type SessionTranscriptMessageEntry,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
-import type { CodexThreadItem, CodexTurn } from "./protocol.js";
+import type { CodexTurn } from "./protocol.js";
 import { projectCodexUserItemText } from "./transcript-history-projection.js";
 import {
   fingerprintCodexMirrorSourceMessage,
@@ -32,10 +32,6 @@ type CodexUpstreamForkBoundaryResult =
 
 const TURN_PAGE_LIMIT = 100;
 
-type UserInput = {
-  type?: unknown;
-};
-
 function failure(
   code: CodexUpstreamForkBoundaryFailureCode,
   message: string,
@@ -43,11 +39,7 @@ function failure(
   return { ok: false, code, message };
 }
 
-function asInputs(item: CodexThreadItem): UserInput[] {
-  return Array.isArray(item.content) ? (item.content as UserInput[]) : [];
-}
-
-function localMessageText(content: unknown): string | undefined {
+function textOnlyMessage(content: unknown): string | undefined {
   if (typeof content === "string") {
     return content;
   }
@@ -85,17 +77,21 @@ function resolveCodexUpstreamForkBoundaryFromTurns(params: {
       const isSteer = userMessagesInTurn > 0;
       userMessagesInTurn += 1;
       // Display placeholders are not evidence of attachment identity.
-      if (asInputs(item).some((input) => input.type !== "text")) {
+      const nativeText = textOnlyMessage(item.content);
+      if (nativeText === undefined) {
         return failure(
           "drift-mismatch",
           "A message before the fork point contains images or attachments that cannot be verified across OpenClaw and Codex. Fork from a text-only span instead.",
         );
       }
-      const text = projectCodexUserItemText(item);
+      const local = params.localPrefix[localIndex];
+      const upstreamText = local && readUpstreamUserText(local.message);
+      // Harness evidence binds the complete submitted text, not the trimmed/truncated
+      // display projection that legacy imported mirrors retain.
+      const text = upstreamText ? nativeText : projectCodexUserItemText(item);
       if (!text) {
         continue;
       }
-      const local = params.localPrefix[localIndex];
       const identity = local && readMirrorIdentity(local.message);
       // Imports retain a bounded tail. Locate its recorded start, then verify every
       // retained user in order; repeated text must never choose an earlier native turn.
@@ -105,10 +101,9 @@ function resolveCodexUpstreamForkBoundaryFromTurns(params: {
         continue;
       }
       matchedPrefix = true;
-      const localText = localMessageText(
+      const localText = textOnlyMessage(
         local && "content" in local.message ? local.message.content : undefined,
       );
-      const upstreamText = local && readUpstreamUserText(local.message);
       // Harness prompts carry the sent text separately from the display text.
       // Its existing attestation must still bind both, or a local edit could pass drift checks.
       const upstreamPromptVerified =
@@ -116,14 +111,11 @@ function resolveCodexUpstreamForkBoundaryFromTurns(params: {
         (local?.message.role === "user" &&
           readCodexMirrorSourceFingerprint(local.message) ===
             fingerprintCodexMirrorSourceMessage(local.message));
-      const expectedText = upstreamText
-        ? projectCodexUserItemText({ content: [{ type: "text", text: upstreamText }] })
-        : localText;
       if (
         !matchesIdentity ||
         !upstreamPromptVerified ||
         localText === undefined ||
-        text !== expectedText
+        text !== (upstreamText ?? localText)
       ) {
         return failure(
           "drift-mismatch",
@@ -237,7 +229,7 @@ export async function resolveCodexUpstreamForkBoundary(params: {
     return resolved.ok
       ? {
           ...resolved,
-          editorText: localMessageText(target && "content" in target ? target.content : undefined),
+          editorText: textOnlyMessage(target && "content" in target ? target.content : undefined),
         }
       : resolved;
   } catch {

@@ -258,7 +258,7 @@ suite.define(() => {
           Number(await page.locator(".agent-chat__voice-activity").getAttribute("data-level")),
         )
         .toBeGreaterThan(0);
-      await captureComposerProof(page, "01-voice-live-listening.png");
+      await captureComposerProof(suite, page, "01-voice-live-listening.png");
 
       // Enter-sends while voice is active; the deferred chat.send keeps the
       // run abortable so both stop controls render side by side.
@@ -296,16 +296,16 @@ suite.define(() => {
       ).toBe(false);
       expect(await stopVoice.locator(".agent-chat__voice-activity").count()).toBe(1);
       expect(await page.locator(".chat-send-btn--stop").count()).toBe(1);
-      await captureComposerProof(page, "02-voice-plus-run-stop.png");
+      await captureComposerProof(suite, page, "02-voice-plus-run-stop.png");
 
       await page.emulateMedia({ colorScheme: "dark" });
       await expect
         .poll(() => page.evaluate(() => document.documentElement.dataset.themeMode))
         .toBe("dark");
-      await captureComposerProof(page, "03-voice-plus-run-stop-dark.png");
+      await captureComposerProof(suite, page, "03-voice-plus-run-stop-dark.png");
 
       await stopVoice.hover();
-      await captureComposerProof(page, "04-voice-live-hover-stop-glyph.png");
+      await captureComposerProof(suite, page, "04-voice-live-hover-stop-glyph.png");
 
       // Stopping voice must leave the run (and its stop control) untouched.
       await stopVoice.click();
@@ -333,7 +333,7 @@ suite.define(() => {
 
       await page.setViewportSize({ width: 1366, height: 900 });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await captureVideoTalkProof(page, "01-before-video-talk.png");
+      await captureVideoTalkProof(suite, page, "01-before-video-talk.png");
 
       await page.getByRole("button", { name: "Start voice input" }).click();
       const request = await gateway.waitForRequest("talk.client.create");
@@ -382,7 +382,7 @@ suite.define(() => {
         item_id: "unintelligible-input",
         error: { message: "The audio could not be transcribed." },
       });
-      await captureMicrophoneLossProof(page, "input-transcription-error.png");
+      await captureMicrophoneLossProof(suite, page, "input-transcription-error.png");
       const transcriptionError = page.getByRole("alert").filter({
         hasText: "The audio could not be transcribed.",
       });
@@ -409,7 +409,7 @@ suite.define(() => {
       console.info(
         `[video-talk-e2e] preview=live,width:${dimensions.width},height:${dimensions.height}`,
       );
-      await captureVideoTalkProof(page, "02-live-camera-preview.png");
+      await captureVideoTalkProof(suite, page, "02-live-camera-preview.png");
 
       await dispatchOpenAiTalkEvent(page, {
         type: "response.done",
@@ -476,7 +476,7 @@ suite.define(() => {
       );
       expect(trackStates).toHaveLength(2);
       expect(trackStates?.every((state) => state === "ended")).toBe(true);
-      await captureVideoTalkProof(page, "04-after-video-talk-stop.png");
+      await captureVideoTalkProof(suite, page, "04-after-video-talk-stop.png");
       console.info("[video-talk-e2e] stop=preview-removed,tracks:ended+ended");
     });
   });
@@ -604,7 +604,7 @@ suite.define(() => {
         "talk.catalog",
         "talk.client.create",
       ]);
-      await captureVideoTalkProof(page, "05-gemini-live-camera-preview.png");
+      await captureVideoTalkProof(suite, page, "05-gemini-live-camera-preview.png");
       console.info(
         "[video-talk-e2e] gemini=realtimeInput.video+functionResponse,gateway_frame_requests:0",
       );
@@ -673,7 +673,7 @@ suite.define(() => {
       await expect
         .poll(() => page.getByRole("button", { name: "Turn camera on" }).isVisible())
         .toBe(true);
-      await captureVideoTalkProof(page, "03-camera-permission-blocked.png");
+      await captureVideoTalkProof(suite, page, "03-camera-permission-blocked.png");
       console.info("[video-talk-e2e] camera_denial=actionable,no-audio-fallback");
     });
   });
@@ -834,7 +834,7 @@ suite.define(() => {
       await expect
         .poll(() => gateway.getRequests("talk.session.close").then((requests) => requests.length))
         .toBe(1);
-      await captureComposerProof(page, "relay-input-backpressure-error.png");
+      await captureComposerProof(suite, page, "relay-input-backpressure-error.png");
     });
   });
 

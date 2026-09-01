@@ -559,6 +559,7 @@ async function executeAgentTurnInternal(
   });
   const deferredLifecycle = createDeferredEmbeddedRunLifecycleManager({
     runId,
+    agentId: params.followupRun.run.agentId,
     sessionId: params.followupRun.run.sessionId,
     sessionKey: params.sessionKey,
     sessionFile: params.followupRun.run.sessionFile,

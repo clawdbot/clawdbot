@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   existsSync,
   chmodSync,
@@ -205,6 +205,87 @@ function reviewState(worktree: string) {
 }
 
 describePosix("scripts/pr worktree containment", () => {
+  it("refreshes warm and cold PRs concurrently while another Git transaction owns shared main", async () => {
+    const fixture = createFixture();
+    git(fixture.root, "worktree", "add", "--detach", ".worktrees/pr-42", fixture.mainSha);
+    git(fixture.root, "update-ref", "refs/heads/main", fixture.siblingSha);
+    const fetchHead = join(fixture.root, ".git", "FETCH_HEAD");
+    const previousFetch = readFileSync(fetchHead, "utf8");
+    const writer = spawn("git", ["update-ref", "--stdin"], { cwd: fixture.root });
+    let writerOutput = "";
+    writer.stderr.on("data", (chunk) => {
+      writerOutput += chunk;
+    });
+    const closed = new Promise<number | null>((resolve, reject) => {
+      writer.once("error", reject);
+      writer.once("close", resolve);
+    });
+    const prepared = new Promise<void>((resolve) => {
+      writer.stdout.on("data", (chunk) => {
+        writerOutput += chunk;
+        if (writerOutput.includes("prepare: ok\n")) resolve();
+      });
+    });
+    writer.stdin.write(
+      `start\nupdate refs/remotes/origin/main ${fixture.siblingSha} ${fixture.mainSha}\nprepare\n`,
+    );
+    try {
+      await Promise.race([
+        prepared,
+        closed.then((code) => {
+          throw new Error(
+            `Shared ref transaction exited before preparation: ${code}\n${writerOutput}`,
+          );
+        }),
+      ]);
+      const results = await Promise.all(
+        [42, 43].map(
+          (pr) =>
+            new Promise<{ code: number | null; output: string }>((resolve, reject) => {
+              const child = spawn(
+                "bash",
+                [
+                  "-c",
+                  'set -euo pipefail\nsource "$1"\nsource "$2"\nsource "$3"\nscript_parent_dir="$4"\ngh_plain() { :; }\nmark_pr_operation_side_effects_started() { :; }\nreview_checkout_main "$5"',
+                  "pr-concurrency",
+                  commonScript,
+                  worktreeScript,
+                  reviewScript,
+                  fixture.root,
+                  String(pr),
+                ],
+                { cwd: fixture.root, stdio: ["ignore", "pipe", "pipe"] },
+              );
+              let output = "";
+              child.stdout.on("data", (chunk) => {
+                output += chunk;
+              });
+              child.stderr.on("data", (chunk) => {
+                output += chunk;
+              });
+              child.once("error", reject);
+              child.once("close", (code) => {
+                resolve({ code, output });
+              });
+            }),
+        ),
+      );
+      for (const result of results) expect.soft(result.code, result.output).toBe(0);
+      expect(writer.exitCode).toBeNull();
+      expect(readFileSync(fetchHead, "utf8")).toBe(previousFetch);
+      expect(git(fixture.root, "rev-parse", "refs/remotes/origin/main")).toBe(fixture.mainSha);
+      for (const pr of [42, 43]) {
+        const worktree = join(fixture.root, ".worktrees", `pr-${pr}`);
+        expect(git(worktree, "rev-parse", "HEAD")).toBe(fixture.siblingSha);
+        expect(git(worktree, "status", "--porcelain", "--untracked-files=no")).toBe("");
+      }
+      expectCanonicalCheckoutUnchanged(fixture);
+    } finally {
+      writer.stdin.end("abort\n");
+      await closed;
+    }
+  });
+
   for (const caller of ["enter_worktree 42 true || exit $?", "review_init 42"] as const) {
     it.each([
       {

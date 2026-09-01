@@ -39,6 +39,7 @@ import type { GatewayPortalService } from "../portals/portal-service.js";
 import type { QuestionManager } from "../question-manager.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
 import type {
+  ChannelAccountStartOutcome,
   ChannelRuntimeSnapshot,
   StartChannelOptions,
 } from "../server-channel-runtime.types.js";
@@ -357,7 +358,7 @@ type GatewayResidentBridgeContext = {
     channel: import("../../channels/plugins/types.public.js").ChannelId,
     accountId?: string,
     opts?: StartChannelOptions,
-  ) => Promise<void>;
+  ) => Promise<ReadonlyMap<string, ChannelAccountStartOutcome>>;
   stopChannel: (
     channel: import("../../channels/plugins/types.public.js").ChannelId,
     accountId?: string,
@@ -398,8 +399,14 @@ export type GatewayRequestOptions = {
 
 /** Commit-time guard captured by the pre-dispatch session participation check. */
 export type SessionMutationAuthorization = {
+  talkSessionTarget?: import("../talk-session-target.types.js").PreparedTalkSessionTarget;
   assertCurrent: () => void;
-  assertTargetCurrent: (target: { sessionKey: string; agentId?: string }) => void;
+  assertTargetCurrent: (target: {
+    sessionKey: string;
+    agentId?: string;
+    /** Internal ensure result: may materialize a previously id-less Talk target, never replace it. */
+    ensuredSessionId?: string;
+  }) => void;
 };
 
 /** Normalized method invocation options passed to registered handlers. */

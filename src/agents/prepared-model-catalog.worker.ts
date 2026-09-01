@@ -66,7 +66,6 @@ function refreshAuthStore(params: {
   });
   return withPluginRuntimeGenerationScope(
     {
-      config: params.config,
       metadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
       pluginRegistry: params.pluginGeneration.pluginRegistry,
     },
@@ -167,7 +166,6 @@ export async function runPreparedModelCatalogWorkerRequest(
     replaceRuntimeAuthProfileStoreSnapshots([{ agentDir: value.input.agentDir, store: authStore }]);
     const ambientCredentials = withPluginRuntimeGenerationScope(
       {
-        config: value.input.config,
         metadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
         pluginRegistry: prepared.pluginGeneration.pluginRegistry,
       },

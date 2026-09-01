@@ -402,36 +402,41 @@ export async function getStatusSummary(
   const agentList = listGatewayAgentsBasic(cfg);
   const heartbeatAgents: HeartbeatStatus[] = agentList.agents.map((agent) => {
     const summary = resolveHeartbeatSummaryForAgent(cfg, agent.id);
-    const heartbeatSession = resolveHeartbeatSessionKey(
-      cfg,
-      agent.id,
-      summary.session === undefined ? undefined : { session: summary.session },
-    );
-    // Status must not create, register, or migrate an absent session database.
-    const entry = loadExactSessionEntryReadOnly({
-      agentId: agent.id,
-      storePath: heartbeatSession.storePath,
-      sessionKey: heartbeatSession.sessionKey,
-    })?.entry;
-    const route = deliveryContextFromSession(entry);
-    const heartbeat = {
-      ...cfg.agents?.defaults?.heartbeat,
-      ...resolveAgentConfig(cfg, agent.id)?.heartbeat,
-    };
-    // Owner status uses the runner's synchronous stage-1 decision.
-    // The shared probe requires positive direct proof before reporting ready.
-    const hasDeliveryRoute =
-      summary.target === "last"
-        ? Boolean(route?.channel && route.to)
-        : summary.target === "owner"
-          ? hasResolvableHeartbeatOwnerRoute({ cfg, agentId: agent.id, entry, heartbeat })
-          : true;
+    let waitingForRoute = false;
+    if (summary.enabled && (summary.target === "last" || summary.target === "owner")) {
+      const heartbeatSession = resolveHeartbeatSessionKey(
+        cfg,
+        agent.id,
+        summary.session === undefined ? undefined : { session: summary.session },
+      );
+      // Only these enabled targets consume the session route. Keep the probe
+      // read-only so status cannot create, register, or migrate an absent store.
+      const entry = loadExactSessionEntryReadOnly({
+        agentId: agent.id,
+        storePath: heartbeatSession.storePath,
+        sessionKey: heartbeatSession.sessionKey,
+      })?.entry;
+      const route = deliveryContextFromSession(entry);
+      // Owner status uses the runner's synchronous stage-1 decision.
+      waitingForRoute =
+        summary.target === "last"
+          ? !(route?.channel && route.to)
+          : !hasResolvableHeartbeatOwnerRoute({
+              cfg,
+              agentId: agent.id,
+              entry,
+              heartbeat: {
+                ...cfg.agents?.defaults?.heartbeat,
+                ...resolveAgentConfig(cfg, agent.id)?.heartbeat,
+              },
+            });
+    }
     return {
       agentId: agent.id,
       enabled: summary.enabled,
       every: summary.every,
       everyMs: summary.everyMs,
-      waitingForRoute: summary.enabled && !hasDeliveryRoute,
+      waitingForRoute,
     } satisfies HeartbeatStatus;
   });
   const channelSummary = needsChannelPlugins
@@ -467,22 +472,22 @@ export async function getStatusSummary(
 
   const sessionDetails = includeSensitive ? await prepareSessionStatusDetails(cfg, now) : undefined;
 
-  const sessionStores = readStatusSessionStores(cfg, agentList.agents);
+  const sessionStores = readStatusSessionStores(
+    cfg,
+    agentList.agents,
+    includeSensitive ? RECENT_SESSION_LIMIT : 0,
+  );
   const byAgent = await Promise.all(
-    sessionStores.byAgent.map(async ({ agent, path, sessions }) => ({
+    sessionStores.byAgent.map(async ({ agent, path, count, recent }) => ({
       agentId: agent.id,
       path: includeSensitive ? path : "[redacted]",
-      count: sessions.length,
-      recent: sessionDetails
-        ? await sessionDetails.buildSessionRows(
-            selectRecentSessionCandidates(sessions, RECENT_SESSION_LIMIT),
-          )
-        : [],
+      count,
+      recent: sessionDetails ? await sessionDetails.buildSessionRows(recent) : [],
     })),
   );
   const recent = sessionDetails
     ? await sessionDetails.buildSessionRows(
-        selectRecentSessionCandidates(sessionStores.sessions, RECENT_SESSION_LIMIT),
+        selectRecentSessionCandidates(sessionStores.recent, RECENT_SESSION_LIMIT),
       )
     : [];
   const hostDesktopStatus =
@@ -532,7 +537,7 @@ export async function getStatusSummary(
     ...(taskAuditRetainedLost.count > 0 ? { taskAuditRetainedLost } : {}),
     sessions: {
       paths: includeSensitive ? sessionStores.paths : [],
-      count: sessionStores.sessions.length,
+      count: sessionStores.count,
       defaults: sessionDetails?.defaults ?? { model: null, contextTokens: null },
       recent,
       byAgent,

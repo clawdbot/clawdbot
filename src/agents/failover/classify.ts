@@ -52,7 +52,6 @@ import {
 } from "./provider-patterns.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./signal.js";
 export {
-  isBilling429MessageForProvider,
   isGenericUnknownStreamErrorMessage,
   isTransientHttpError,
   isUnclassifiedNoBodyHttpSignal,
@@ -339,10 +338,13 @@ export function classifyFailoverSignal(
   }
   // Message/detail semantics stay ahead of generic structured types so an
   // invalid-request wrapper cannot hide billing, context, or provider policy.
+  const codeReason = classifyFailoverReasonFromCode(signal.code);
   const effectiveMessageClassification = providerPluginReason
     ? toPluginClassification(providerPluginReason)
-    : (messageOrDetailClassification ?? errorTypeClassification);
-  const codeReason = classifyFailoverReasonFromCode(signal.code);
+    : mergeMessageAndDetailClassification(
+        messageOrDetailClassification ?? errorTypeClassification,
+        codeReason ? toReasonClassification(codeReason) : null,
+      );
   if (codeReason === "auth_permanent") {
     return toReasonClassification(codeReason);
   }

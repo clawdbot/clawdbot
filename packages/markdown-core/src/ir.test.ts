@@ -218,3 +218,60 @@ describe("sliceMarkdownIR surrogate pair boundaries", () => {
     expect(sliced.text).toBe("");
   });
 });
+
+describe("Markdown final code content", () => {
+  it.each([
+    {
+      name: "terminal inline code",
+      markdown: "Copy `name `",
+      expected: {
+        text: "Copy name ",
+        styles: [{ start: 5, end: 10, style: "code" }],
+        links: [],
+      },
+    },
+    {
+      name: "terminal inline code in a link label",
+      markdown: "[`name `](https://example.com)",
+      expected: {
+        text: "name ",
+        styles: [{ start: 0, end: 5, style: "code" }],
+        links: [{ start: 0, end: 5, href: "https://example.com" }],
+      },
+    },
+    {
+      name: "standalone one-space inline code",
+      markdown: "` `",
+      expected: {
+        text: " ",
+        styles: [{ start: 0, end: 1, style: "code" }],
+        links: [],
+      },
+    },
+    {
+      name: "inline code followed by prose",
+      markdown: "Copy `name ` next",
+      expected: {
+        text: "Copy name  next",
+        styles: [{ start: 5, end: 10, style: "code" }],
+        links: [],
+      },
+    },
+    {
+      name: "ordinary trailing prose whitespace",
+      markdown: "Copy name   ",
+      expected: { text: "Copy name", styles: [], links: [] },
+    },
+    {
+      name: "fenced code trailing whitespace",
+      markdown: "```\nname \n```",
+      expected: {
+        text: "name \n",
+        styles: [{ start: 0, end: 6, style: "code_block" }],
+        links: [],
+      },
+    },
+  ])("preserves final code payload: $name", ({ markdown, expected }) => {
+    expect(markdownToIR(markdown)).toEqual(expected);
+  });
+});

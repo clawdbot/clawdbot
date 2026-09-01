@@ -9,22 +9,16 @@ import {
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
-const proofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "connect-machine",
-);
 
 async function captureProof(page: import("playwright").Page, fileName: string) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(proofArtifactDir, { recursive: true });
+  await mkdir(path.join(suite.artifactDir, "connect-machine"), { recursive: true });
   await page.screenshot({
     animations: "disabled",
     fullPage: true,
-    path: path.join(proofArtifactDir, fileName),
+    path: path.join(path.join(suite.artifactDir, "connect-machine"), fileName),
   });
 }
 
@@ -37,7 +31,7 @@ suite.define(() => {
       ...(captureUiProofEnabled
         ? {
             recordVideo: {
-              dir: proofArtifactDir,
+              dir: path.join(suite.artifactDir, "connect-machine"),
               size: { height: 900, width: 1280 },
             },
           }

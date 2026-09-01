@@ -2,8 +2,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { activeHistory, createState } from "./chat-history.inflight.test-support.ts";
-import { loadChatHistory, type ChatHistoryResult } from "./chat-history.ts";
+import { loadChatHistory } from "./chat-history.ts";
 
 describe("chat history startup progress", () => {
   it.each([

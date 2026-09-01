@@ -202,6 +202,7 @@ describe("runtime tasks", () => {
 
     expect(runtimeTaskMocks.cancelSessionMock).toHaveBeenCalledWith({
       cfg: {},
+      agentId: "main",
       sessionKey: "agent:main:subagent:child",
       reason: "task-cancel",
       expectedRunId: "runtime-task-cancel",
@@ -393,6 +394,7 @@ describe("runtime tasks", () => {
     expect(opsCancel.cancelled).toBe(true);
     expect(runtimeTaskMocks.cancelSessionMock).toHaveBeenCalledWith({
       cfg: {},
+      agentId: "ops",
       sessionKey: "agent:ops:acp:child",
       reason: "task-cancel",
       expectedRunId: "ops-global-run",

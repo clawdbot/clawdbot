@@ -111,8 +111,7 @@ export type WorkerDesktopEndpoint = {
 /** Placement execution modes a worker provider can carry. */
 export type WorkerExecutionMode = "worker-turn" | "remote-exec";
 
-/** Operation-bound artifact access without a node identity or enrollment credential. */
-export type WorkerNodeRuntimePreparation = {
+type WorkerNodeBootstrapAccess = {
   /** Immutable node distribution prepared by the Gateway for this provision operation. */
   nodeBootstrap: {
     url: string;
@@ -123,12 +122,25 @@ export type WorkerNodeRuntimePreparation = {
     enabledPluginIds: readonly string[];
     tlsFingerprint?: string;
   };
-  /** Closing the provision operation revokes artifact access. */
+  /** Runtime/enrollment closure, including shutdown; provision's separate signal identifies explicit Stop. */
   signal?: AbortSignal;
 };
 
+/** Operation-bound immutable artifacts without a node identity or enrollment credential. */
+export type WorkerNodeRuntimePreparation = WorkerNodeBootstrapAccess & {
+  workerBundle: {
+    url: string;
+    token: string;
+    sha256: string;
+    bytes: number;
+    tlsFingerprint?: string;
+    /** Core-owned location within the installed node package, outside dist and enrollment state. */
+    packageRelativePath: string;
+  };
+};
+
 /** Replay-safe node enrollment prepared only after a provider has allocated its machine. */
-export type WorkerNodeEnrollment = WorkerNodeRuntimePreparation & {
+export type WorkerNodeEnrollment = WorkerNodeBootstrapAccess & {
   openclawVersion: string;
   displayName: string;
   waitForDeviceId: () => Promise<string>;
@@ -236,6 +248,8 @@ export type WorkerProvider = {
     profile: WorkerProfile,
     operationId: string,
     options?: {
+      /** Cancel this attempt; settle its active commands before rejecting. Cleanup proves release separately. */
+      signal?: AbortSignal;
       executionMode?: WorkerExecutionMode;
       machineClass?: string;
       prepareNodeRuntime?: () => Promise<WorkerNodeRuntimePreparation>;
@@ -267,6 +281,16 @@ export type WorkerProvider = {
    */
   resolveSshIdentity?: (request: WorkerSshIdentityRequest) => Promise<WorkerSshIdentity>;
   renew?: (leaseId: string) => Promise<void>;
+  /**
+   * Bounded cleanup for configured profiles, including when no leases remain. Core schedules
+   * one pass at a time without blocking allocation. Check authority before external effects
+   * and after awaits before persistence; settle only after all owned commands have stopped.
+   */
+  maintain?: (context: {
+    profiles: readonly WorkerProfile[];
+    signal: AbortSignal;
+    assertCurrent: () => void;
+  }) => Promise<void>;
   /** Idempotent; resolves only after the provider can prove teardown. */
   destroy: (lease: { leaseId: string; profile: WorkerProfile }) => Promise<void>;
   /** Maximum core wait for teardown, including provider-owned checkpointing and cleanup. */

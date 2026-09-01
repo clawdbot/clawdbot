@@ -3,11 +3,12 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import {
   CHAT_HISTORY_MAX_ENTRIES,
-  CHAT_INPUT_CONSUMPTION_MAX_RUN_IDS,
+  CHAT_INPUT_RECEIPT_MAX_RUN_IDS,
   CHAT_INPUT_RUN_ID_MAX_CHARS,
 } from "./chat-history-constants.js";
 import { closedObject } from "./closed-object.js";
 import { ChatSendSessionKeyString, InputProvenanceSchema, NonEmptyString } from "./primitives.js";
+import { SessionPermissionModeSchema, SessionToolOverridesSchema } from "./sessions-row.js";
 
 /** Cursor-based request for the gateway log tail endpoint. */
 export const LogsTailParamsSchema = closedObject({
@@ -38,7 +39,7 @@ export const ChatHistoryParamsSchema = closedObject({
   inputRunIds: Type.Optional(
     Type.Array(Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }), {
       minItems: 1,
-      maxItems: CHAT_INPUT_CONSUMPTION_MAX_RUN_IDS,
+      maxItems: CHAT_INPUT_RECEIPT_MAX_RUN_IDS,
       uniqueItems: true,
     }),
   ),
@@ -64,13 +65,30 @@ export const ChatPendingInputsPageSchema = closedObject({
 });
 export type ChatPendingInputsPage = Static<typeof ChatPendingInputsPageSchema>;
 
-/** Exact source receipts, separate from pending input and canonical message identity. */
+/** Exact accepted-input custody, independent of display pagination and message identity. */
+export const ChatInputReceiptsSchema = Type.Array(
+  Type.Union([
+    closedObject({
+      runId: Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }),
+      state: Type.Literal("pending"),
+    }),
+    closedObject({
+      runId: Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }),
+      state: Type.Literal("consumed"),
+      consumedByEventId: NonEmptyString,
+    }),
+  ]),
+  { maxItems: CHAT_INPUT_RECEIPT_MAX_RUN_IDS },
+);
+export type ChatInputReceipts = Static<typeof ChatInputReceiptsSchema>;
+
+/** Consumed-only compatibility projection for existing v4 clients. */
 export const ChatInputConsumptionsSchema = Type.Array(
   closedObject({
     runId: Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }),
     consumedByEventId: NonEmptyString,
   }),
-  { maxItems: CHAT_INPUT_CONSUMPTION_MAX_RUN_IDS },
+  { maxItems: CHAT_INPUT_RECEIPT_MAX_RUN_IDS },
 );
 export type ChatInputConsumptions = Static<typeof ChatInputConsumptionsSchema>;
 
@@ -88,6 +106,7 @@ export const ChatHistoryDeltaResultSchema = closedObject({
   inFlightRun: Type.Optional(Type.Unknown()),
   metadata: Type.Optional(Type.Unknown()),
   pendingInputs: Type.Optional(ChatPendingInputsPageSchema),
+  inputReceipts: Type.Optional(ChatInputReceiptsSchema),
   inputConsumptions: Type.Optional(ChatInputConsumptionsSchema),
 });
 
@@ -227,6 +246,8 @@ export const ChatSendParamsSchema = closedObject({
   // the Gateway steers the session's direct run or starts a turn when idle.
   expectedLeafEntryId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   expectedSessionRoutingContract: Type.Optional(NonEmptyString),
+  expectedPermissionMode: Type.Optional(Type.Union([SessionPermissionModeSchema, Type.Null()])),
+  expectedToolOverrides: Type.Optional(Type.Union([SessionToolOverridesSchema, Type.Null()])),
   idempotencyKey: NonEmptyString,
 });
 

@@ -14,7 +14,7 @@ export function isLocalAssistantAttachmentSource(source: string): boolean {
   );
 }
 
-function isCanonicalInboundMediaSource(source: string): boolean {
+export function isCanonicalInboundMediaSource(source: string): boolean {
   // Match the raw one-segment form first; URL parsing would erase dot segments.
   const match = /^media:\/\/inbound\/([^/?#]+)$/i.exec(source.trim());
   if (!match?.[1]) {

@@ -33,6 +33,8 @@ import {
 import {
   areOutboundPayloadsIntentionallySuppressed,
   isOutboundDeliveryError,
+  isOutboundDeliveryAdmissionClosedError,
+  OutboundDeliveryAdmissionClosedError,
   type OutboundDeliveryResult,
   type OutboundPayloadDeliveryOutcome,
 } from "./deliver-types.js";
@@ -68,6 +70,7 @@ import {
   loadUnfinishedDeliveries,
   stageDeliveryFailureSettlement,
   reserveDeliveryAttempt,
+  restoreDeliveryAttemptBeforeDispatch,
   type QueuedDelivery,
 } from "./delivery-queue-storage.js";
 import type { DeliveryFailureSettlement } from "./delivery-queue-types.js";
@@ -700,9 +703,10 @@ async function drainQueuedEntry(opts: {
   deliver: DeliverFn;
   log: RecoveryLogger;
   stateDir?: string;
+  shouldContinue?: () => boolean;
   onRecovered?: (entry: QueuedDelivery) => void;
   onFailed?: (entry: QueuedDelivery, errMsg: string) => void;
-}): Promise<"recovered" | "failed" | "moved-to-failed" | "already-gone"> {
+}): Promise<"recovered" | "failed" | "moved-to-failed" | "already-gone" | "stopped"> {
   const { entry } = opts;
   const maxRetries = resolveMaxRetries(entry);
   const attemptBudgetExhausted = resolveAttemptCount(entry) >= maxRetries;
@@ -880,8 +884,15 @@ async function drainQueuedEntry(opts: {
             opts.stateDir,
           )
         : undefined;
+    const deliveryParams = buildRecoveryDeliverParams(
+      entry,
+      opts.cfg,
+      opts.stateDir,
+      producerClaimId,
+    );
+    let dispatchAdmitted = false;
     const result = await opts.deliver({
-      ...buildRecoveryDeliverParams(entry, opts.cfg, opts.stateDir, producerClaimId),
+      ...deliveryParams,
       onPayloadDeliveryOutcome: collectPayloadOutcome,
       onMessageSentEvent: (event, sourceIndex) => messageSentEvents.push({ sourceIndex, event }),
       onPlatformSendStart: async () => {
@@ -895,6 +906,18 @@ async function drainQueuedEntry(opts: {
           stateDir: opts.stateDir,
           ...(producerClaimId ? { producerClaimId } : {}),
         });
+      },
+      onPlatformSendDispatch: async () => {
+        await deliveryParams.onPlatformSendDispatch?.();
+        if (dispatchAdmitted) {
+          return;
+        }
+        if (opts.shouldContinue?.() === false) {
+          throw new OutboundDeliveryAdmissionClosedError();
+        }
+        // One admitted attempt owns its complete adapter fanout. Later parts
+        // must settle even when shutdown starts after the first dispatch.
+        dispatchAdmitted = true;
       },
     });
     const results = isOutboundDeliveryResultArray(result) ? result : [];
@@ -1044,6 +1067,15 @@ async function drainQueuedEntry(opts: {
     opts.onRecovered?.(entry);
     return "recovered";
   } catch (err) {
+    if (isOutboundDeliveryAdmissionClosedError(err)) {
+      restoreDeliveryAttemptBeforeDispatch(
+        entry,
+        reservation.attemptCount,
+        opts.stateDir,
+        producerClaimId,
+      );
+      return "stopped";
+    }
     const errMsg = formatErrorMessage(err);
     opts.onFailed?.(entry, errMsg);
     if (isOutboundDeliveryError(err) && err.results.length > 0) {
@@ -1148,11 +1180,13 @@ type QueuedRecoveryContext =
       summary: DeliveryRecoverySummary;
       deadline: number;
       onDeadlineExceeded: () => void;
+      shouldContinue?: () => boolean;
     }
   | {
       kind: "drain";
       logLabel: string;
       selectEntry: (entry: QueuedDelivery, now: number) => DeliveryRecoveryDrainDecision;
+      shouldContinue?: () => boolean;
     };
 
 /** Startup and reconnect share custody, admission, retry, and settlement ordering. */
@@ -1161,6 +1195,9 @@ async function processQueuedRecovery(
   context: QueuedRecoveryContext,
 ): Promise<"continue" | "stop"> {
   const { entry, log } = opts;
+  if (context.shouldContinue?.() === false) {
+    return "stop";
+  }
   const label =
     context.kind === "startup" ? `Delivery ${entry.id}` : `${context.logLabel}: entry ${entry.id}`;
   if (entry.settlement) {
@@ -1242,8 +1279,14 @@ async function processQueuedRecovery(
     }
     return "stop";
   }
-  await drainQueuedEntry({
+  // Pacing is the final await before a new durable attempt is admitted. A
+  // lifecycle fence here leaves the untouched row and retry metadata intact.
+  if (context.shouldContinue?.() === false) {
+    return "stop";
+  }
+  const result = await drainQueuedEntry({
     ...opts,
+    ...(context.shouldContinue ? { shouldContinue: context.shouldContinue } : {}),
     onRecovered: (recovered) => {
       if (context.kind === "startup") {
         context.summary.recovered += 1;
@@ -1267,7 +1310,7 @@ async function processQueuedRecovery(
       }
     },
   });
-  return "continue";
+  return result === "stopped" ? "stop" : "continue";
 }
 
 export async function drainPendingDeliveriesCore(opts: {
@@ -1278,6 +1321,7 @@ export async function drainPendingDeliveriesCore(opts: {
   stateDir?: string;
   deliver: DeliverFn;
   selectEntry: (entry: QueuedDelivery, now: number) => DeliveryRecoveryDrainDecision;
+  shouldContinue?: () => boolean;
 }): Promise<void> {
   const drained = await recoveryCoordinator.withDrain(opts.drainKey, async () => {
     const now = Date.now();
@@ -1299,6 +1343,7 @@ export async function drainPendingDeliveriesCore(opts: {
             kind: "drain",
             logLabel: opts.logLabel,
             selectEntry: opts.selectEntry,
+            ...(opts.shouldContinue ? { shouldContinue: opts.shouldContinue } : {}),
           },
         ),
     });
@@ -1320,6 +1365,7 @@ export async function recoverPendingDeliveries(opts: {
   stateDir?: string;
   /** Maximum wall-clock time for recovery in ms. Remaining entries are deferred to next startup. Default: 60 000. */
   maxRecoveryMs?: number;
+  shouldContinue?: () => boolean;
 }): Promise<DeliveryRecoverySummary> {
   const pending = await loadUnfinishedDeliveries(opts.stateDir);
   if (pending.length === 0) {
@@ -1353,6 +1399,7 @@ export async function recoverPendingDeliveries(opts: {
           summary,
           deadline,
           onDeadlineExceeded,
+          ...(opts.shouldContinue ? { shouldContinue: opts.shouldContinue } : {}),
         },
       ),
   });

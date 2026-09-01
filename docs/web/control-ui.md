@@ -124,18 +124,24 @@ On the first identified connection, the Control UI uploads existing browser-loca
 
 When a remote project session starts before its repository finishes cloning, chat shows workspace preparation progress. If preparation fails, opening or reloading chat restores the session's failure summary. Correct the reported problem, then send a new message in the same session to retry preparation.
 
-Inputs accepted through `sessions_send` or the Gateway `agent` method while a
-cloud turn is running remain visible with a waiting notice until their own turn
-starts. They are stored separately from the active model transcript. If
+Accepted browser messages, including initial prompts waiting for workspace
+preparation and follow-ups during a run, remain visible with a waiting notice
+until their own turn starts. Inputs accepted through `sessions_send` or the
+Gateway `agent` method use the same display. They are stored separately from the active model transcript. If
 cancellation or a Gateway restart interrupts that wait,
-the input stays readable with its recorded disposition and is never resent
-automatically. Copy it into the composer to start a new attempt. **Earlier
-accepted inputs** pages through retained inputs; **Latest accepted inputs**
-returns to the newest page. Long accepted input uses the normal full-message
-reader without becoming a transcript reply, fork, or rewind target.
+the message stays readable with its recorded disposition and is never resent
+automatically. Copy it into the composer to start a new attempt. **Show earlier
+messages** pages through messages that are still waiting or were stopped before
+processing; **Show latest messages** returns to the newest page. A long message
+uses the normal full-message reader without becoming a transcript reply, fork,
+or rewind target.
 
-Ordinary browser follow-ups still use the existing chat queue, including collect
-mode; they do not yet have this durable pending-input custody.
+Browser drafts and unsent messages remain in the local queue. Once the Gateway
+accepts an ordinary browser message, it owns the approved input in durable
+custody. Collect mode consumes the accepted sources with their combined
+transcript entry. Acceptance does not imply that a transcript row already
+exists; the accepted input replaces its local pending copy and later becomes
+one canonical message, including its attachments.
 
 ## Personal identity
 
@@ -191,6 +197,12 @@ For Gateway setup, say `configure gateway` to choose the port, bind address, tok
 Say `import memory` to copy detected local memory into the existing default agent workspace. This flow does not change config or import credentials or skills, needs no Gateway restart, and distinguishes confirmed imports, nothing to import, provider failures, and failures where some files may already have been copied. Finish onboarding first if the default workspace does not exist. See [Import assistant memory](#import-assistant-memory) for the broader page that can target another agent or replace existing imports, and [`openclaw setup`](/cli/openclaw) for the operation and approval contract.
 
 Outside onboarding, this page can show at most one dismissible event chip per visit. It stays silent for routine Gateway traffic and reacts only to health snapshots that report a disabled configuration reloader, a configured channel disconnect/degradation, a failed channel probe, or unavailable channel credentials. A newer event replaces the pending chip only when it is more severe; dismissing or using the chip silences event prompts for that visit. Clicking the chip sends its diagnosis question as a real `openclaw.chat` message, so the transcript records the request and OpenClaw performs the diagnosis. Onboarding never shows these event chips.
+
+## Home dock
+
+Use the **Home** button in the sidebar footer to open the selected agent's main conversation alongside your current page. Home and Ask OpenClaw share the dock. When the same Home conversation is already open as the page, the dock stays hidden rather than showing it twice.
+
+Home can include a bounded, quoted work-context reference with your message. That reference belongs to the page's agent and session, not merely the Home conversation receiving it, and stays current when session titles or visible files change. It is reference data, not permission to access another conversation; you can remove it before sending.
 
 ## Manage plugins
 
@@ -319,7 +331,7 @@ Once the session is created, chat opens immediately. Remote startup uses the sam
 
 If remote startup fails before the first message is sent, chat retains the submitted text, attachments, selected destination, and a bounded error in the same browser tab and Gateway credential scope. Reloading shows the paused submission without provisioning another worker. **Retry** uses the already-created session and the original profile and machine class, device, or Auto selection; it waits for active placement before sending. The session keeps its model and reasoning settings, including any later changes you make in that session. This tab-local startup recovery uses the tab's existing session-storage lifetime, separately from the ordinary browser draft limits below. Incognito startup recovery remains in memory only. A disconnect hides the retained content until the same credential scope is verified again, but does not release its first-turn hold: later input stays in the composer instead of entering the ordinary offline queue. Sessions without an unresolved initial turn keep normal offline queuing.
 
-If the Gateway explicitly rejects the first send, **Retry** creates a new send attempt on that same session and destination. If delivery is uncertain, **Check delivery** only looks for the original user message in available history. It never resends the prompt, provisions a worker, or treats missing history as proof that delivery failed. An exact matching user-message receipt resolves the retained submission without implying that the run has finished. Otherwise, the prompt and attachments remain accessible and normal sending stays disabled. Inspect the conversation, or copy the retained prompt if you choose to start a separate attempt. This recovery does not promise exactly-once delivery across Gateway restarts. If browser storage rejects a recovery update, keep the current page open to preserve its in-memory input.
+If the Gateway explicitly rejects the first send, **Retry** creates a new send attempt on that same session and destination. If delivery is uncertain, **Check delivery** looks for the original user message or an exact Gateway receipt showing that the input was retained or consumed. It never resends the prompt, provisions a worker, or treats missing history as proof that delivery failed. A matching receipt clears the browser startup hold without implying that the run has finished. Retained inputs keep their Gateway-owned status, including interrupted or cancelled inputs, without another optimistic message. Without a receipt, the prompt and attachments remain accessible and normal sending stays disabled. Inspect the conversation, or copy the retained prompt if you choose to start a separate attempt. This recovery does not promise exactly-once delivery across Gateway restarts. If browser storage rejects a recovery update, keep the current page open to preserve its in-memory input.
 
 When an interrupted remote-placement draft needs deletion, cleanup reclaims the placement by session key, archives it with its expected session identity, then uses the write-scoped archived-only delete contract. Cleanup errors remain visible. Restoring paused or unconfirmed recovery does not itself request deletion.
 
@@ -595,7 +607,7 @@ Chat error banners, including cloud runner failures, show short messages in full
 
 <AccordionGroup>
   <Accordion title="Send and history semantics">
-    - `chat.send` is **non-blocking**: it acks immediately with `{ runId, status: "started" }` and the response streams via `chat` events. Trusted Control UI clients may also receive optional ACK timing metadata for local diagnostics.
+    - `chat.send` is **non-blocking**: it acknowledges admission with `{ runId, status: "started" }` and the response streams via `chat` events. An optional `messageSeq` identifies an already committed transcript position; it is omitted when input remains only in accepted custody. Trusted Control UI clients may also receive optional ACK timing metadata for local diagnostics.
     - Chat uploads accept images plus non-video files. Images keep the native image path; other files are stored as managed media and shown in history as attachment links.
     - Re-sending with the same `idempotencyKey` returns `{ status: "in_flight" }` while running, and `{ status: "ok" }` after completion.
     - `chat.history` responses are size-bounded for UI safety. When transcript entries are too large, Gateway may truncate long text fields, omit heavy metadata blocks, and replace oversized messages with a placeholder (`[chat.history omitted: message too large]`).
@@ -629,6 +641,7 @@ Chat error banners, including cloud runner failures, show short messages in full
     - The active split pane drives the sidebar selection and URL. Its title bar adds split and close controls; dividers resize columns and stacked panes, and the browser stores the layout locally across reloads.
     - On narrow screens, split view keeps the layout but renders only the active pane, including its header with the close control.
     - If you send a message while a model picker change for the same session is still saving, the composer waits for that session patch before calling `chat.send` so the send uses the selected model.
+    - On the New Session page, press **Cmd+Enter** on macOS or **Ctrl+Enter** elsewhere to create and start the draft in a background session without leaving the page. The selected local, cloud-profile, or paired-device placement is preserved. With the **Modifier+Enter** send preference, use **Cmd/Ctrl+Shift+Enter** for background start; Cmd/Ctrl+Enter remains ordinary submit. Explicit Draft visibility keeps its create-only behavior. A completion notice offers to open the new session.
     - Typing `/new` creates and switches to the same fresh dashboard session as New Chat, except when `session.dmScope: "main"` is configured and the current parent is the agent's main session; then it resets the main session in place. Typing `/reset` keeps the Gateway's explicit in-place reset for the current session.
     - The chat model picker requests the Gateway's configured model view. If `agents.defaults.modelPolicy.allow` is non-empty, that policy drives the picker, including `provider/*` entries that keep provider-scoped catalogs dynamic. Otherwise the picker shows configured entries plus providers with usable auth; aliases and settings under `agents.defaults.models` do not restrict it. The full catalog stays available through the debug `models.list` RPC with `view: "all"`.
     - Chat and New Session block sending when the Gateway reports missing provider credentials or a confirmed authentication failure. Missing credentials point to **Model Setup**; authentication failures ask you to review the credential or sign-in. Temporary credential cooldowns and unknown model availability do not block sending or show an authentication banner; run errors remain visible in the transcript. Unavailable model choices stay disabled in the picker.

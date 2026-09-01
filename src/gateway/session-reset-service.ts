@@ -11,10 +11,14 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
+import { isAcpOwnerRepairRequired } from "../acp/control-plane/manager.runtime-owner.js";
 import { tryPrepareFreshManagerRuntimeSession } from "../acp/control-plane/manager.runtime-resume-state.js";
+import { resolveAcpSessionTarget } from "../acp/control-plane/manager.utils.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
+import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
 import {
   readAcpSessionMeta,
+  listAcpSessionEntries,
   upsertAcpSessionMeta,
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
@@ -98,6 +102,7 @@ import {
 } from "../sessions/session-state-events.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { listTasksForRelatedSessionKey } from "../tasks/task-registry-query.js";
 import {
   forgetActiveSessionForShutdown,
   noteActiveSessionForShutdown,
@@ -105,7 +110,6 @@ import {
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
-import { findDirectChildSessionsForParent } from "./session-child-sessions.js";
 import {
   type PreparedGatewaySessionLifecycle,
   type PrepareGatewaySessionLifecycle,
@@ -255,7 +259,7 @@ export function emitGatewaySessionEndPluginHook(params: {
   });
   void runWithGatewayIndependentRootWorkContinuation(async () => {
     await hookRunner.runSessionEnd(payload.event, payload.context);
-  }).catch((err: unknown) => {
+  }, "hooks:session-end").catch((err: unknown) => {
     logVerbose(`session_end hook failed: ${String(err)}`);
   });
 }
@@ -300,7 +304,7 @@ export function emitGatewaySessionStartPluginHook(params: {
   });
   void runWithGatewayIndependentRootWorkContinuation(async () => {
     await hookRunner.runSessionStart(payload.event, payload.context);
-  }).catch((err: unknown) => {
+  }, "hooks:session-start").catch((err: unknown) => {
     logVerbose(`session_start hook failed: ${String(err)}`);
   });
 }
@@ -388,6 +392,7 @@ async function ensureSessionRuntimeCleanup(params: {
   await stopSubagentsForRequester({
     cfg: params.cfg,
     requesterSessionKey: params.target.canonicalKey,
+    requesterAgentId: params.target.agentId,
   });
   if (!params.sessionId) {
     params.assertCurrent?.();
@@ -558,6 +563,7 @@ async function closeAcpRuntimeForSession(params: {
       await acpManager.cancelSession({
         cfg: params.cfg,
         sessionKey: acpSessionKey,
+        agentId: params.agentId,
         reason: params.reason,
       });
     },
@@ -571,6 +577,9 @@ async function closeAcpRuntimeForSession(params: {
       ErrorCodes.UNAVAILABLE,
       `Session ${params.sessionKey} is still active; try again in a moment.`,
     );
+  }
+  if (cancelOutcome.status === "error" && isAcpOwnerRepairRequired(cancelOutcome.error)) {
+    return errorShape(ErrorCodes.UNAVAILABLE, String(cancelOutcome.error));
   }
   if (cancelOutcome.status === "error") {
     logVerbose(
@@ -587,6 +596,7 @@ async function closeAcpRuntimeForSession(params: {
       await acpManager.closeSession({
         cfg: params.cfg,
         sessionKey: acpSessionKey,
+        agentId: params.agentId,
         reason: params.reason,
         discardPersistentState: true,
         requireAcpSession: false,
@@ -603,6 +613,9 @@ async function closeAcpRuntimeForSession(params: {
       ErrorCodes.UNAVAILABLE,
       `Session ${params.sessionKey} is still active; try again in a moment.`,
     );
+  }
+  if (closeOutcome.status === "error" && isAcpOwnerRepairRequired(closeOutcome.error)) {
+    return errorShape(ErrorCodes.UNAVAILABLE, String(closeOutcome.error));
   }
   if (closeOutcome.status === "error") {
     logVerbose(
@@ -693,12 +706,12 @@ async function ensureFreshAcpResetState(params: {
     return undefined;
   }
   params.assertCurrent?.();
-  // The helper records skipped/failed preparation; only lifecycle staleness aborts here.
+  // Ownership repair failures must reach the caller before metadata is cleared.
   await tryPrepareFreshManagerRuntimeSession({
     deps: { getRuntimeBackend: getAcpRuntimeBackend },
     cfg: params.cfg,
     meta: latestMeta,
-    sessionKey: params.sessionKey,
+    ...resolveAcpSessionTarget(params),
     logPrefix: `sessions.${params.reason}`,
   });
   if (params.shouldApply && !params.shouldApply()) {
@@ -731,29 +744,54 @@ async function ensureFreshAcpResetState(params: {
 async function closeChildAcpRuntimesForParent(params: {
   cfg: OpenClawConfig;
   parentKey: string;
+  parentAgentId?: string;
   reason: "session-reset" | "session-delete";
   assertCurrent?: () => void;
   shouldCleanup?: () => boolean;
 }): Promise<void> {
-  // Enumerate across every agent session store, not just the parent's: ACP
-  // spawns create child keys under the target agent (`agent:<targetAgentId>:acp:…`)
-  // whose entries live in that agent's store, which is a different file from the
-  // parent's under the default per-agent layout. The combined gateway store
-  // aggregates all agent stores under canonical keys (same source the dashboard
-  // session list uses).
-  let children: Array<{ sessionKey: string }>;
+  // ACP children may belong to another agent. Keep each canonical owner while
+  // enumerating metadata; combining stores by bare key would collapse owners.
+  let children: Array<{ sessionKey: string; agentId?: string }>;
   try {
     if (params.shouldCleanup && !params.shouldCleanup()) {
       return;
     }
     params.assertCurrent?.();
-    children = findDirectChildSessionsForParent({
-      cfg: params.cfg,
-      parentKey: params.parentKey,
-    }).flatMap(({ sessionKey }) => {
-      const acpMeta = readAcpSessionMeta({ sessionKey });
-      return acpMeta ? [{ sessionKey }] : [];
-    });
+    children = (await listAcpSessionEntries({ cfg: params.cfg })).filter(
+      ({ entry, sessionKey, agentId }) => {
+        if (entry?.spawnedBy !== params.parentKey && entry?.parentSessionKey !== params.parentKey) {
+          return false;
+        }
+        const requesterOwners = new Set(
+          listTasksForRelatedSessionKey(sessionKey)
+            .filter(
+              (task) =>
+                task.runtime === "acp" &&
+                task.childSessionKey === sessionKey &&
+                task.agentId === agentId &&
+                (task.requesterSessionKey === params.parentKey ||
+                  task.ownerKey === params.parentKey),
+            )
+            .flatMap((task) => (task.requesterAgentId ? [task.requesterAgentId] : [])),
+        );
+        try {
+          if (requesterOwners.size > 1) {
+            throw new Error("ACP parent ownership is ambiguous");
+          }
+          const parent = resolveAcpSessionTarget({
+            cfg: params.cfg,
+            sessionKey: params.parentKey,
+            agentId: requesterOwners.values().next().value,
+          });
+          return parent.agentId === params.parentAgentId;
+        } catch (error) {
+          logVerbose(
+            `sessions.${params.reason}: retained ACP child ${sessionKey} because parent ownership could not be proven: ${String(error)}`,
+          );
+          return false;
+        }
+      },
+    );
   } catch (error) {
     logVerbose(
       `sessions.${params.reason}: failed to enumerate sessions for child ACP cleanup: ${String(error)}`,
@@ -772,10 +810,11 @@ async function closeChildAcpRuntimesForParent(params: {
   }
   params.assertCurrent?.();
   await Promise.allSettled(
-    children.map(({ sessionKey }) =>
+    children.map(({ sessionKey, agentId }) =>
       closeAcpRuntimeForSession({
         cfg: params.cfg,
         sessionKey,
+        agentId,
         reason: params.reason,
         assertCurrent: params.assertCurrent,
         shouldCleanup: params.shouldCleanup,
@@ -843,6 +882,7 @@ export async function cleanupSessionBeforeMutation(params: {
   await closeChildAcpRuntimesForParent({
     cfg: params.cfg,
     parentKey: params.target.canonicalKey ?? params.canonicalKey ?? params.key,
+    parentAgentId: params.target.agentId,
     reason: params.reason,
     assertCurrent: params.assertCurrent,
   });
@@ -1427,6 +1467,7 @@ export async function performGatewaySessionReset(params: {
       await closeChildAcpRuntimesForParent({
         cfg,
         parentKey: target.canonicalKey ?? canonicalKey ?? params.key,
+        parentAgentId: target.agentId,
         reason: "session-reset",
       });
       if (entry?.sessionId) {
@@ -1752,7 +1793,7 @@ export async function performGatewaySessionReset(params: {
               // Bind captured ACP state before acknowledging the committed reset so the
               // new session never observes an unreadable old-session row.
               writeAcpSessionMetaForMigration({
-                sessionKey: committedAcpResetState.sessionKey,
+                sessionKey: buildAcpDatabaseSessionKey(committedAcpResetState.sessionKey, agentId),
                 sessionId: mutation.nextEntry.sessionId,
                 lifecycleRevision: mutation.nextEntry.lifecycleRevision,
                 meta: committedAcpResetState.meta,
@@ -1772,6 +1813,7 @@ export async function performGatewaySessionReset(params: {
               cfg,
               meta: committedAcpResetState.meta,
               sessionKey: committedAcpResetState.sessionKey,
+              agentId,
               logPrefix: "sessions.session-reset",
             });
           }
