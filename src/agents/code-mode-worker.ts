@@ -4,24 +4,14 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { WorkerTaskError, WorkerTaskPool } from "../infra/worker-task-pool.js";
+import { createLazyPromise } from "../shared/lazy-promise.js";
 import { EMPTY_CODE_MODE_OUTPUT } from "./code-mode-json.js";
 import type { CodeModeFailureCode, CodeModeWorkerResult } from "./code-mode-runtime.js";
 
-let quickJsWasmModulePromise: Promise<WebAssembly.Module> | undefined;
-
-function getQuickJsWasmModule(): Promise<WebAssembly.Module> {
-  quickJsWasmModulePromise ??= Promise.resolve()
-    .then(() => createRequire(import.meta.url).resolve("quickjs-wasi/quickjs.wasm"))
-    .then((wasmPath) => readFile(wasmPath))
-    .then((bytes) => WebAssembly.compile(bytes))
-    .catch((error: unknown) => {
-      // Failed initialization is transient host state, not a process-wide
-      // verdict; later runs must retry without bypassing their watchdog.
-      quickJsWasmModulePromise = undefined;
-      throw error;
-    });
-  return quickJsWasmModulePromise;
-}
+const getQuickJsWasmModule = createLazyPromise(async () => {
+  const wasmPath = createRequire(import.meta.url).resolve("quickjs-wasi/quickjs.wasm");
+  return WebAssembly.compile(await readFile(wasmPath));
+});
 
 function codeModeWorkerUrl(): URL {
   return resolveRuntimeWorkerUrl({
@@ -112,8 +102,8 @@ export async function runCodeModeWorker(
         // A committed resume consumes this snapshot. Failure already closes
         // the run, so transferring ownership avoids copying its entire heap.
         transferList: (input) =>
-          isRecord(input) && input.snapshotBytes instanceof Uint8Array
-            ? [input.snapshotBytes.buffer as ArrayBuffer] // SAFETY: QuickJS allocates a dedicated ArrayBuffer.
+          isRecord(input) && isRecord(input.snapshot) && input.snapshot.memory instanceof Uint8Array
+            ? [input.snapshot.memory.buffer as ArrayBuffer] // SAFETY: QuickJS.snapshot owns a dedicated ArrayBuffer.
             : [],
       },
     );

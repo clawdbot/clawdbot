@@ -87,7 +87,7 @@ function workerResume(
     .runCodeModeWorker(
       {
         kind: "resume",
-        snapshotBytes: waiting.snapshotBytes,
+        snapshot: waiting.snapshot,
         config,
         settledRequests,
       },

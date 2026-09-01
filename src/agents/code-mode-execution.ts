@@ -18,7 +18,6 @@ import {
   codeModeFailureCode,
   codeModeFailureMessage,
   createCodeModeApiFilesForRun,
-  enforceSnapshotPayloadLimits,
   toToolSearchConfig,
   type CodeModeConfig,
   type CodeModeLanguage,
@@ -307,10 +306,6 @@ async function settleCodeModeResult(params: {
     }
     let releaseReservation: (() => void) | undefined;
     try {
-      enforceSnapshotPayloadLimits({
-        snapshotBytes: result.snapshotBytes,
-        config: params.config,
-      });
       if (!params.reservedActiveRunSlot) {
         releaseReservation = reserveActiveRunSlot();
       }
@@ -361,7 +356,7 @@ async function settleCodeModeResult(params: {
           pending,
           replaySafe: params.replaySafe,
           settlementMode: result.settlementMode,
-          snapshotBytes: result.snapshotBytes,
+          snapshot: result.snapshot,
           parentToolCallId: params.parentToolCallId,
           ctx: params.ctx,
           config: params.config,
@@ -383,7 +378,7 @@ async function settleCodeModeResult(params: {
       result = await runCodeModeWorker(
         {
           kind: "resume",
-          snapshotBytes: result.snapshotBytes,
+          snapshot: result.snapshot,
           config: {
             ...params.config,
             timeoutMs: resumeBudgetMs,
@@ -437,12 +432,6 @@ async function settleCodeModeResult(params: {
     }
     let releaseReservation: (() => void) | undefined;
     try {
-      // A resumed guest can grow its next snapshot before the shared deadline
-      // expires; validate that new payload before reserving or parking it.
-      enforceSnapshotPayloadLimits({
-        snapshotBytes: result.snapshotBytes,
-        config: params.config,
-      });
       // Reserve before launching fresh work; transferred snapshots must
       // obey the same process-wide active-run cap as initial suspensions.
       if (!params.reservedActiveRunSlot) {
@@ -475,7 +464,7 @@ async function settleCodeModeResult(params: {
         pending,
         replaySafe: params.replaySafe && pendingReplaySafe,
         settlementMode: result.settlementMode,
-        snapshotBytes: result.snapshotBytes,
+        snapshot: result.snapshot,
         parentToolCallId: params.parentToolCallId,
         ctx: params.ctx,
         config: params.config,
@@ -604,7 +593,7 @@ export async function runWait(params: {
     const result = await runCodeModeWorker(
       {
         kind: "resume",
-        snapshotBytes: state.snapshotBytes,
+        snapshot: state.snapshot,
         config: {
           ...state.config,
           timeoutMs: resumeBudgetMs,

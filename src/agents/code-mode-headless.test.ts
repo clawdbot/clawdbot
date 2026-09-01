@@ -71,6 +71,46 @@ describe("headless Code Mode", () => {
     expect(second.execute).toHaveBeenCalledOnce();
   });
 
+  it("preserves output and cancels earlier tools when a headless resume exceeds the snapshot cap", async () => {
+    const pendingStarted = createDeferred<AbortSignal | undefined>();
+    const pending = fakeTool("headless_snapshot_pending", async (_toolCallId, _input, signal) => {
+      pendingStarted.resolve(signal);
+      await new Promise<void>((resolve) => {
+        signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+      return jsonResult({ canceled: true });
+    });
+    const fixture = fakeTool("headless_snapshot_fixture", async () => {
+      await pendingStarted.promise;
+      return jsonResult({ ok: true });
+    });
+    const fresh = fakeTool("headless_snapshot_fresh", async () => jsonResult({ ok: true }));
+    const result = expectFailed(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessCodeModeHarness([pending, fixture, fresh]),
+        code: `void headless_snapshot_pending({});
+          text("accepted first");
+          await headless_snapshot_fixture({});
+          const retained = new Uint8Array(16 * 1024 * 1024);
+          retained[0] = 7;
+          text("accepted inline");
+          await headless_snapshot_fresh({});
+          return retained[0];`,
+      }),
+    );
+
+    expect(result.code).toBe("snapshot_limit_exceeded");
+    expect(result.toolCallCount).toBe(2);
+    expect(result.output).toEqual([
+      { type: "text", text: "accepted first" },
+      { type: "text", text: "accepted inline" },
+    ]);
+    expect(pending.execute).toHaveBeenCalledOnce();
+    expect(fixture.execute).toHaveBeenCalledOnce();
+    expect(fresh.execute).not.toHaveBeenCalled();
+    expect((await pendingStarted.promise)?.aborted).toBe(true);
+  });
+
   it("keeps the headless race winner when the later-started tool settles first", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const events: string[] = [];

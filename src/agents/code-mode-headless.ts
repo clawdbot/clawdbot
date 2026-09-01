@@ -17,7 +17,6 @@ import {
   codeModeFailureCode,
   codeModeFailureMessage,
   createCodeModeApiFilesForRun,
-  enforceSnapshotPayloadLimits,
   readPositiveInteger,
   resolveCodeModeHeadlessConfig,
   toToolSearchConfig,
@@ -279,7 +278,6 @@ export async function runCodeModeScriptHeadless(params: {
         });
       }
 
-      enforceSnapshotPayloadLimits({ snapshotBytes: result.snapshotBytes, config });
       cancelPendingBridgeStatesById(pending, result.canceledRequestIds);
       const pendingIds = new Set(pending.map((entry) => entry.id));
       const newRequests = result.pendingRequests.filter((request) => !pendingIds.has(request.id));
@@ -340,7 +338,7 @@ export async function runCodeModeScriptHeadless(params: {
       result = await runHeadlessWorkerLeg({
         input: {
           kind: "resume",
-          snapshotBytes: result.snapshotBytes,
+          snapshot: result.snapshot,
           settledRequests,
           pendingRequests: pending.map(({ id, method, args }) => ({ id, method, args })),
         },

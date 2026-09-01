@@ -2,7 +2,7 @@
  * QuickJS worker for Code Mode guest execution and suspended VM snapshots.
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { EvalFlags, JSException, QuickJS, type JSValueHandle } from "quickjs-wasi";
+import { EvalFlags, JSException, QuickJS, type JSValueHandle, type Snapshot } from "quickjs-wasi";
 import { serveWorkerTasks } from "../infra/worker-task-pool.js";
 import { CODE_MODE_CONTROLLER_SOURCE } from "./code-mode-controller-source.js";
 import {
@@ -186,7 +186,7 @@ async function createVm(input: CodeModeWorkerPayload, bridge: BridgeState): Prom
   };
   const vm =
     input.kind === "resume"
-      ? await QuickJS.restore(QuickJS.deserializeSnapshot(input.snapshotBytes), options)
+      ? await QuickJS.restore(input.snapshot, options)
       : await QuickJS.create(options);
   try {
     const callbacks = [
@@ -333,13 +333,16 @@ function waitingResult(params: {
   output: unknown[];
   config: CodeModeConfig;
 }): CodeModeWorkerResult {
-  const snapshotBytes = QuickJS.serializeSnapshot(params.vm.snapshot());
-  if (snapshotBytes.byteLength > params.config.maxSnapshotBytes) {
+  const snapshot = params.vm.snapshot();
+  // Preserve the encoded-size cap, but serialize only metadata: the snapshot
+  // already owns transferable memory, so the storage codec would copy it again.
+  const metadata = QuickJS.serializeSnapshot({ ...snapshot, memory: new Uint8Array() });
+  if (snapshot.memory.byteLength + metadata.byteLength > params.config.maxSnapshotBytes) {
     throw new CodeModeWorkerFailure("snapshot_limit_exceeded", "code mode snapshot limit exceeded");
   }
   return {
     status: "waiting",
-    snapshotBytes,
+    snapshot,
     pendingRequests: params.bridge.pendingRequests,
     canceledRequestIds: params.bridge.canceledRequestIds,
     settlementMode: params.settlementMode,
@@ -502,12 +505,14 @@ async function main(input: unknown): Promise<CodeModeWorkerThreadResult> {
         config,
       );
     }
-    if (input.kind === "resume" && input.snapshotBytes instanceof Uint8Array) {
+    // SAFETY: This process's QuickJS workers produce snapshots; the host returns them unchanged.
+    const snapshot = input.snapshot as Snapshot | undefined;
+    if (input.kind === "resume" && snapshot?.memory instanceof Uint8Array) {
       return captureWorkerResult(
         await run({
           kind: "resume",
           wasmModule: input.wasmModule,
-          snapshotBytes: input.snapshotBytes,
+          snapshot,
           config,
           settledRequests: Array.isArray(input.settledRequests)
             ? (input.settledRequests as SettledBridgeRequest[])
@@ -541,6 +546,6 @@ async function main(input: unknown): Promise<CodeModeWorkerThreadResult> {
 
 serveWorkerTasks(main, {
   transferList: (result) =>
-    // SAFETY: QuickJS.serializeSnapshot allocates a dedicated, transferable ArrayBuffer.
-    result.status === "waiting" ? [result.snapshotBytes.buffer as ArrayBuffer] : [],
+    // SAFETY: QuickJS.snapshot allocates a dedicated, transferable ArrayBuffer.
+    result.status === "waiting" ? [result.snapshot.memory.buffer as ArrayBuffer] : [],
 });

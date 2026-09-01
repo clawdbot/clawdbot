@@ -1,4 +1,5 @@
 import type { Result } from "@openclaw/normalization-core/result";
+import type { Snapshot } from "quickjs-wasi";
 import type { CodeModeJsonSource, CodeModeOutputSource } from "./code-mode-json.js";
 import type { CodeModeApiVirtualFile } from "./code-mode-namespaces.js";
 
@@ -63,7 +64,7 @@ type CodeModeWorkerInput =
     }
   | {
       kind: "resume";
-      snapshotBytes: Uint8Array;
+      snapshot: Snapshot;
       config: CodeModeConfig;
       settledRequests: SettledBridgeRequest[];
       pendingRequests?: PendingBridgeRequest[];
@@ -87,7 +88,7 @@ type CodeModeWorkerOutcome<Output, Value> =
     }
   | {
       status: "waiting";
-      snapshotBytes: Uint8Array;
+      snapshot: Snapshot;
       pendingRequests: PendingBridgeRequest[];
       canceledRequestIds: string[];
       settlementMode: CodeModeSettlementMode;
