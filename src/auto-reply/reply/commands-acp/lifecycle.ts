@@ -508,6 +508,7 @@ export async function handleAcpCloseAction(
           agentId,
           reason: "manual-close",
           allowBackendUnavailable: true,
+          discardPersistentState: true,
           clearMeta: true,
         });
         runtimeNotice = closed.runtimeNotice ? ` (${closed.runtimeNotice})` : "";
