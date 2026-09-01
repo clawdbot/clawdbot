@@ -49,9 +49,31 @@ type SystemPresenceUpdate = {
 // The gateway owns a private key; caller-supplied string identities remain peers.
 const SELF_KEY = Symbol("system-presence-self");
 const entries = new Map<string | symbol, SystemPresence>();
+const freshnessAt = new WeakMap<SystemPresence, { monotonic: number; wall: number }>();
 const TTL_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_ENTRIES = 200;
 const SELF_INSTANCE_ID = randomUUID();
+const uptimeOrigin = os.uptime() * 1000 - performance.now();
+
+function freshnessNow(): number {
+  // System uptime includes suspend without following wall-clock adjustments.
+  return Math.max(performance.now(), os.uptime() * 1000 - uptimeOrigin);
+}
+
+function setPresence(key: string | symbol, presence: SystemPresence) {
+  const previous = entries.get(key);
+  const monotonic = freshnessNow();
+  const previousFreshness = previous ? freshnessAt.get(previous) : undefined;
+  // Keep logical wall freshness monotonic across rollback/recovery while public ts follows heartbeat time.
+  const wall = Math.max(
+    presence.ts,
+    previousFreshness
+      ? previousFreshness.wall + Math.max(0, monotonic - previousFreshness.monotonic)
+      : performance.timeOrigin + monotonic,
+  );
+  entries.set(key, presence);
+  freshnessAt.set(presence, { monotonic, wall });
+}
 
 function normalizePresenceKey(key: string | undefined): string | undefined {
   return normalizeOptionalLowercaseString(key);
@@ -116,13 +138,13 @@ function initSelfPresence() {
     text,
     ts: Date.now(),
   };
-  entries.set(SELF_KEY, selfEntry);
+  setPresence(SELF_KEY, selfEntry);
 }
 
 function touchSelfPresence() {
   const existing = entries.get(SELF_KEY);
   if (existing) {
-    entries.set(SELF_KEY, { ...existing, ts: Date.now() });
+    setPresence(SELF_KEY, { ...existing, ts: Date.now() });
   } else {
     initSelfPresence();
   }
@@ -231,7 +253,7 @@ export function updateSystemPresence(payload: SystemPresencePayload): SystemPres
     text: payload.text || parsed.text || existing.text,
     ts: Date.now(),
   };
-  entries.set(key, merged);
+  setPresence(key, merged);
   const trackKeys = ["host", "ip", "version", "mode", "reason"] as const;
   type TrackKey = (typeof trackKeys)[number];
   const changes: Partial<Pick<SystemPresence, TrackKey>> = {};
@@ -271,7 +293,7 @@ export function upsertPresence(key: string, presence: Partial<SystemPresence>) {
         presence.mode ?? existing.mode ?? "unknown"
       }`,
   };
-  entries.set(normalizedKey, merged);
+  setPresence(normalizedKey, merged);
 }
 
 /** Renews an existing connection-owned presence row without recreating expired metadata. */
@@ -284,24 +306,35 @@ export function touchPresence(key: string): boolean {
   if (!existing) {
     return false;
   }
-  entries.set(normalizedKey, { ...existing, ts: Date.now() });
+  setPresence(normalizedKey, { ...existing, ts: Date.now() });
   return true;
 }
 
 export function listSystemPresence(): SystemPresence[] {
   touchSelfPresence();
-  // prune expired
-  const now = Date.now();
+  const wallNow = Date.now();
+  const monotonicNow = freshnessNow();
   for (const [k, v] of entries) {
-    if (k !== SELF_KEY && now - v.ts > TTL_MS) {
+    const freshness = freshnessAt.get(v);
+    // Wall time covers forward jumps; continuous time covers rollback and suspend.
+    if (
+      k !== SELF_KEY &&
+      (freshness === undefined ||
+        wallNow - freshness.wall > TTL_MS ||
+        monotonicNow - freshness.monotonic > TTL_MS)
+    ) {
       entries.delete(k);
     }
   }
-  // enforce max size (LRU by ts)
+  // Enforce max size by the same monotonic freshness used for expiry.
   if (entries.size > MAX_ENTRIES) {
     const sorted = [...entries.entries()]
       .filter(([key]) => key !== SELF_KEY)
-      .toSorted((a, b) => a[1].ts - b[1].ts);
+      .toSorted(
+        (a, b) =>
+          (freshnessAt.get(a[1])?.monotonic ?? Number.NEGATIVE_INFINITY) -
+          (freshnessAt.get(b[1])?.monotonic ?? Number.NEGATIVE_INFINITY),
+      );
     const toDrop = entries.size - MAX_ENTRIES;
     for (const [key] of sorted.slice(0, toDrop)) {
       entries.delete(key);
