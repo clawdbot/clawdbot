@@ -304,9 +304,10 @@ export async function finalizeChatSendDispatchedReplies(params: {
       : assistantContent,
     mediaMessage,
   );
-  const persistedContentForAppend = hasAssistantDisplayMediaContent(persistedAssistantContent)
-    ? persistedAssistantContent
-    : undefined;
+  const persistedContentForAppend =
+    persistedAssistantContent && hasAssistantDisplayMediaContent(persistedAssistantContent)
+      ? persistedAssistantContent.filter((block) => block.type !== "attachment_error")
+      : undefined;
   const broadcastAssistantContent = hasAssistantDisplayMediaContent(assistantContent)
     ? assistantContent
     : hasAssistantDisplayMediaContent(mediaMessage?.content)
@@ -326,11 +327,16 @@ export async function finalizeChatSendDispatchedReplies(params: {
   const payloadOwnsAssistantTranscript = rawFinalPayloads.some(
     (payload) => getReplyPayloadMetadata(payload)?.assistantTranscriptOwned === true,
   );
+  // When managed media prep failed and only failure cards were filtered out,
+  // there is no durable text worth persisting; drop the media fallback text so
+  // the raw source URL never re-enters model history.
+  const effectiveTranscriptReply =
+    managedMediaPrepareFailed && !persistedContentForAppend?.length ? "" : transcriptReply;
   const shouldAppendAssistantTranscript = Boolean(
     ((!params.runtimeOwnsTranscript && !payloadOwnsAssistantTranscript) ||
       useTranscriptMirrorOwner) &&
     canAppendAssistantTranscript &&
-    (transcriptReply || persistedContentForAppend?.length),
+    (effectiveTranscriptReply || persistedContentForAppend?.length),
   );
   await persistUserTurnTranscript();
   if (!deliveryAuthorized()) {
@@ -343,7 +349,7 @@ export async function finalizeChatSendDispatchedReplies(params: {
   if (shouldAppendAssistantTranscript) {
     const appended = await appendAssistantTranscriptMessage({
       sessionKey: transcriptSessionKey,
-      message: transcriptReply,
+      message: effectiveTranscriptReply,
       ...(persistedContentForAppend?.length ? { content: persistedContentForAppend } : {}),
       sessionId,
       storePath: latestStorePath,
