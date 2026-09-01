@@ -164,6 +164,23 @@ describe("createChildAdapter", () => {
     expect(killMock).toHaveBeenCalledWith("SIGKILL");
   });
 
+  it("skips the Linux OOM wrapper so a shim argv0 reaches the final exec", async () => {
+    setPlatform("linux");
+    const { child } = createStubChild();
+    spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
+    await createChildAdapter({
+      argv: ["/opt/mise/libexec/mise", "x", "claude", "-p"],
+      argv0: "/home/me/.local/share/mise/shims/claude",
+      stdinMode: "pipe-open",
+    });
+
+    const spawnArgs = firstSpawnWithFallbackParams(spawnWithFallbackMock);
+    expect(spawnArgs.argv[0]).toBe("/opt/mise/libexec/mise");
+    expect(spawnArgs.options?.argv0).toBe("/home/me/.local/share/mise/shims/claude");
+    // The OOM wrapper's `sh -c` would overwrite argv0, so it must be bypassed.
+    expect(spawnArgs.argv[1]).not.toBe("-c");
+  });
+
   it("creates owned worker trees in a dedicated POSIX process group without fallback", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "service-managed";
     const { child, disconnectMock, sendMock } = createStubChild();

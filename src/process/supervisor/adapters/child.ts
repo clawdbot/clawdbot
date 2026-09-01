@@ -119,9 +119,12 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
     env: baseEnv,
     windowsVerbatimArguments: params.windowsVerbatimArguments,
   });
-  const preparedSpawn = params.exactEnv
-    ? { command: invocation.command, args: invocation.args, env: baseEnv, wrapped: false }
-    : prepareOomScoreAdjustedSpawn(invocation.command, invocation.args, { env: baseEnv });
+  // A shim argv0 must survive to the final exec; the Linux OOM wrapper's
+  // `sh -c ... exec "$0"` would overwrite it with the canonical target name.
+  const preparedSpawn =
+    params.exactEnv || params.argv0
+      ? { command: invocation.command, args: invocation.args, env: baseEnv, wrapped: false }
+      : prepareOomScoreAdjustedSpawn(invocation.command, invocation.args, { env: baseEnv });
 
   const stdinMode = params.stdinMode ?? (params.input !== undefined ? "pipe-closed" : "inherit");
 
