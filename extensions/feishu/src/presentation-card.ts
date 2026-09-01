@@ -1,3 +1,4 @@
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 // Feishu plugin module implements presentation card behavior.
 import {
   legacyInteractiveReplyToPresentation,
@@ -18,6 +19,29 @@ import {
 
 type NormalizedMessagePresentation = NonNullable<ReturnType<typeof normalizeMessagePresentation>>;
 type FeishuPresentationTextFormat = "plain" | "markdown";
+
+/** What Feishu can draw natively. Both delivery paths adapt against this one
+ *  declaration, so a reply resolves the same blocks the outbound adapter reports. */
+export const FEISHU_PRESENTATION_CAPABILITIES = {
+  supported: true,
+  buttons: true,
+  selects: false,
+  context: true,
+  divider: true,
+  limits: {
+    actions: {
+      maxActions: 20,
+      maxActionsPerRow: 5,
+      maxLabelLength: 40,
+      maxValueBytes: 1024,
+    },
+    text: {
+      maxLength: 4000,
+      encoding: "characters",
+      markdownDialect: "markdown",
+    },
+  },
+} satisfies NonNullable<ChannelOutboundAdapter["presentationCapabilities"]>;
 
 const FEISHU_CARD_MAX_BYTES = 30 * 1024;
 const FEISHU_CARD_MAX_ELEMENTS = 200;

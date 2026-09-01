@@ -40,9 +40,11 @@ import {
   type FeishuReplyDeliverySource,
 } from "./reply-delivery-result.js";
 import { streamingStartBackoffUntilByAccount } from "./reply-dispatcher-state.js";
+import { resolveFeishuReplyPresentation } from "./reply-presentation.js";
 import { getFeishuRuntime } from "./runtime.js";
 import {
   chunkFeishuCardMarkdown,
+  sendCardFeishu,
   sendMessageFeishu,
   sendStructuredCardFeishu,
   type CardHeaderConfig,
@@ -1269,8 +1271,16 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         skippedFinalReason = null;
         skippedFinalAssistantMessageIndex = undefined;
       }
+      // Core resolves a presentation into channel controls inside the outbound
+      // send pipeline only, so this path resolves it before deciding what the
+      // reply is made of. Otherwise the controls never reach Feishu.
+      const replyPresentation =
+        info?.kind === "final" ? resolveFeishuReplyPresentation(payload) : undefined;
+      const presentationCard = replyPresentation?.kind === "card" ? replyPresentation : undefined;
+      const resolvedText =
+        replyPresentation?.kind === "text" ? replyPresentation.text : payload.text;
       const payloadText =
-        payload.isReasoning && payload.text ? formatReasoningMessage(payload.text) : payload.text;
+        payload.isReasoning && resolvedText ? formatReasoningMessage(resolvedText) : resolvedText;
       const reply = resolveSendableOutboundReplyParts({ ...payload, text: payloadText });
       const text =
         info?.kind === "final"
@@ -1320,7 +1330,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         info?.kind === "final" && hasText && skipTextForDuplicateFinal
           ? claimClosedStreamingResult(undefined, text)
           : undefined;
-      if (!shouldDeliverText && !hasMedia) {
+      if (!shouldDeliverText && !hasMedia && !presentationCard) {
         if (priorClosedStreamingSettlement?.error !== undefined) {
           throw toFeishuError(priorClosedStreamingSettlement.error);
         }
@@ -1351,6 +1361,44 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
       if (shouldDiscardStreamingPreview) {
         await discardStreamingPreview();
+      }
+
+      if (presentationCard) {
+        // The card carries the same words plus the controls, so it replaces the
+        // text body instead of following it, exactly as the outbound send path
+        // delivers a presentation.
+        if (deliveredFinalTexts.has(presentationCard.content)) {
+          return mergeFeishuReplyDeliveryResults(deliveredResults, presentationCard.content);
+        }
+        if (streaming?.isActive() || streamingStartPromise) {
+          await discardStreamingPreview();
+        }
+        // Media leads for the same reason it does on the outbound path: the card
+        // is the final unit of the reply.
+        if (hasMedia) {
+          await collectMediaDelivery(payload);
+        }
+        deliveredResults.push(
+          createFeishuReplyDeliveryResult({
+            results: [
+              await sendCardFeishu({
+                cfg,
+                to: sendTarget,
+                card: presentationCard.card,
+                replyToMessageId: sendReplyToMessageId,
+                replyInThread: effectiveReplyInThread,
+                allowTopLevelReplyFallback,
+                accountId,
+              }),
+            ],
+            visibleReplySent: true,
+            content: presentationCard.content,
+            kind: "card",
+          }),
+        );
+        markVisibleReplySent();
+        deliveredFinalTexts.add(presentationCard.content);
+        return mergeFeishuReplyDeliveryResults(deliveredResults, presentationCard.content);
       }
 
       if (shouldDeliverText) {

@@ -25,6 +25,7 @@ const getFeishuRuntimeMock = vi.hoisted(() => vi.fn());
 const getGlobalHookRunnerMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
 const sendStructuredCardFeishuMock = vi.hoisted(() => vi.fn());
+const sendCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
@@ -95,6 +96,7 @@ vi.mock("./send.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./send.js")>()),
   sendMessageFeishu: sendMessageFeishuMock,
   sendStructuredCardFeishu: sendStructuredCardFeishuMock,
+  sendCardFeishu: sendCardFeishuMock,
 }));
 vi.mock("./media.js", () => ({
   sendMediaFeishu: sendMediaFeishuMock,
@@ -191,6 +193,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     streamingInstances.length = 0;
     sendMediaFeishuMock.mockResolvedValue(undefined);
     sendStructuredCardFeishuMock.mockResolvedValue(undefined);
+    sendCardFeishuMock.mockResolvedValue({ messageId: "om_card" });
     getGlobalHookRunnerMock.mockReturnValue(null);
 
     resolveFeishuAccountMock.mockReturnValue({
@@ -864,6 +867,126 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(firstMockArg(sendStructuredCardFeishuMock, "structured card params")).not.toHaveProperty(
       "mentions",
     );
+  });
+
+  const approvalPresentation = {
+    title: "Plugin bind approval required",
+    blocks: [
+      { type: "text" as const, text: "Allow Codex to bind this conversation?" },
+      {
+        type: "buttons" as const,
+        buttons: [
+          { label: "Allow once", action: { type: "command" as const, command: "/plugin allow" } },
+          { label: "Deny", action: { type: "command" as const, command: "/plugin deny" } },
+        ],
+      },
+    ],
+  };
+
+  it("delivers a reply's buttons as a native card", async () => {
+    useNonStreamingAutoAccount();
+    const { options } = createDispatcherHarness();
+
+    const delivery = await options.deliver(
+      { text: "Plugin bind approval required", presentation: approvalPresentation },
+      { kind: "final" },
+    );
+
+    expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    const serialized = JSON.stringify(
+      (firstMockArg(sendCardFeishuMock, "presentation card") as { card?: unknown }).card,
+    );
+    expect(serialized).toContain("Allow once");
+    expect(serialized).toContain("Deny");
+    expect(serialized).toContain("Allow Codex to bind this conversation?");
+    expect(delivery?.visibleReplySent).toBe(true);
+  });
+
+  it("delivers a controls-only reply instead of sending nothing", async () => {
+    useNonStreamingAutoAccount();
+    const { options } = createDispatcherHarness();
+
+    const delivery = await options.deliver(
+      {
+        interactive: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                { label: "Allow once", value: "allow-once" },
+                { label: "Deny", value: "deny" },
+              ],
+            },
+          ],
+        },
+      },
+      { kind: "final" },
+    );
+
+    expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+    expect(
+      JSON.stringify(
+        (firstMockArg(sendCardFeishuMock, "controls-only card") as { card?: unknown }).card,
+      ),
+    ).toContain("allow-once");
+    expect(delivery?.visibleReplySent).toBe(true);
+  });
+
+  it("keeps a status-style fallback reply as its authored text", async () => {
+    useNonStreamingAutoAccount();
+    const { options } = createDispatcherHarness();
+
+    await options.deliver(
+      {
+        text: "Status: uptime 3h",
+        presentationTextMode: "fallback",
+        presentation: {
+          title: "Status",
+          blocks: [
+            {
+              type: "table",
+              caption: "Runtime",
+              headers: ["Fact", "Value"],
+              rows: [["Uptime", "3h"]],
+            },
+          ],
+        },
+      },
+      { kind: "final" },
+    );
+
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Status: uptime 3h" }),
+    );
+  });
+
+  it("sends one card when the same presentation final arrives twice", async () => {
+    useNonStreamingAutoAccount();
+    const { options } = createDispatcherHarness();
+    const payload = { text: "Approve?", presentation: approvalPresentation };
+
+    await options.deliver(payload, { kind: "final" });
+    await options.deliver(payload, { kind: "final" });
+
+    expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("discards an active streaming preview before a presentation card", async () => {
+    const { result, options } = createDispatcherHarness();
+
+    result.replyOptions.onPartialReply?.({ text: "partial preview" });
+    await options.deliver(
+      { text: "Plugin bind approval required", presentation: approvalPresentation },
+      { kind: "final" },
+    );
+    await options.onIdle?.();
+
+    expect(requireStreamingInstance(0).discard).toHaveBeenCalledTimes(1);
+    expect(requireStreamingInstance(0).close).not.toHaveBeenCalled();
+    expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
   });
 
   it("suppresses internal block payload delivery", async () => {
