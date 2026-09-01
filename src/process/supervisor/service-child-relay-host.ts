@@ -126,6 +126,7 @@ function createOutputRelay(stream?: Readable) {
 export async function createServiceChildRelayAdapter(params: {
   command: string;
   args: string[];
+  argv0?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   stdinMode: "inherit" | "pipe-open" | "pipe-closed";
@@ -420,6 +421,7 @@ export async function createServiceChildRelayAdapter(params: {
     generation,
     command: params.command,
     args: params.args,
+    argv0: params.argv0,
     cwd: params.cwd,
     env: params.env ? toStringEnv(params.env) : undefined,
     stdinMode: params.stdinMode,
