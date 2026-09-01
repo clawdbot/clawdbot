@@ -343,6 +343,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/fetch-runtime` | Private-local after July 2026; Wrapped fetch, proxy, EnvHttpProxyAgent option, and pinned lookup helpers |
     | `plugin-sdk/proxy-capture` | Debug proxy capture configuration, SQLite-backed capture storage, HTTP/WebSocket capture events, and capture lifecycle helpers |
     | `plugin-sdk/runtime-fetch` | Private-local after July 2026; Dispatcher-aware runtime fetch without proxy/guarded-fetch imports |
+    | `plugin-sdk/blob-runtime` | Private official-plugin runtime; Exact Buffer views for synchronous Blob construction |
     | `plugin-sdk/inline-image-data-url-runtime` | Private-local after July 2026; Inline image data URL sanitizer and signature sniffing helpers without the broad media runtime surface |
     | `plugin-sdk/response-limit-runtime` | Private-local after July 2026; Byte-, idle-, and deadline-bounded response-body readers without the broad media runtime surface |
     | `plugin-sdk/session-binding-runtime` | Private-local after July 2026; Current conversation binding state without configured binding routing or pairing stores |
