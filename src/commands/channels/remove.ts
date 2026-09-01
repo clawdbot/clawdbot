@@ -56,22 +56,12 @@ type IngressDiscardOutcome =
  * Names the plugin whose ingress queue holds this channel's rows, or reports that the
  * queue is shared with the plugin's other channels.
  *
- * The runtime opens every plugin ingress queue under the PLUGIN's id, not the channel id
- * (`openChannelIngressQueue` forces `channelId: pluginId`, and its options type omits
- * `channelId` so a plugin cannot supply one). Those differ whenever an installed plugin's
- * package id is not the channel it serves, so the owner has to be looked up; the channel
- * id alone would address a queue nothing ever wrote to.
- *
- * A manifest may declare several channels for one plugin, and the stored rows record no
- * channel of their own, so there the queue is shared and one account's removal cannot
- * tell its rows from a sibling channel's. Decline instead of guessing: keeping rows is
- * what happens today, while discarding another channel's unanswered events is not
- * recoverable.
- *
- * The manifests are the source because the runtime channel registry that also knows this
- * is populated at Gateway startup (`setActivePluginRegistry`) and this command runs in
- * its own process, so reading that registry here would always come back empty - the same
- * source `channels logs` uses to map channels to plugins.
+ * The runtime keys every plugin ingress queue on the plugin id, not the channel id
+ * (`openChannelIngressQueue` forces `channelId: pluginId`), and one manifest may declare
+ * several channels whose rows then share a queue while recording no channel of their own.
+ * Manifests are the source because the runtime channel registry that also knows this is
+ * populated at Gateway startup and this command runs in its own process - the same source
+ * `channels logs` uses to map channels to plugins.
  */
 function resolveIngressQueueOwner(
   channelId: string,
@@ -95,7 +85,7 @@ function resolveIngressQueueOwner(
  * outcome of the removal: the config write has already landed, so the account is gone
  * whatever happens here, and a state store that refuses a write for reasons unrelated
  * to this account would otherwise surface a completed deletion as a failed command.
- * Report the shortfall in the deletion's own line, as the pre-removal runtime stop does.
+ * Report the shortfall alongside the deletion instead of throwing.
  */
 function discardRemovedAccountIngressRows(params: {
   channelId: string;

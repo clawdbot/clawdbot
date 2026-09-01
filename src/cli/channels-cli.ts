@@ -361,7 +361,11 @@ export async function registerChannelsCli(
     .description("Disable or delete a channel account")
     .option("--channel <name>", `Channel (${channelNames})`)
     .option("--account <id>", "Account id (default when omitted)")
-    .option("--delete", "Delete config entries and stored inbound events (no prompt)", false)
+    .option(
+      "--delete",
+      "Delete config entries, and stored inbound events it can (no prompt)",
+      false,
+    )
     .action(async (opts, command) => {
       await runChannelsCommand(async () => {
         const { channelsRemoveCommand } = await loadChannelsCommands();
