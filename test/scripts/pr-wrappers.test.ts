@@ -37,6 +37,10 @@ function isolatedWrapperEnv(root: string) {
   const home = join(root, "home");
   mkdirSync(home, { recursive: true });
   return {
+    GIT_AUTHOR_NAME: "OpenClaw Test",
+    GIT_AUTHOR_EMAIL: "test@example.invalid",
+    GIT_COMMITTER_NAME: "OpenClaw Test",
+    GIT_COMMITTER_EMAIL: "test@example.invalid",
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
     HOME: home,
@@ -91,15 +95,14 @@ function makeMismatchedWrapperRepo({
   copyPrWrapperSources(canonical);
   // Marker stub committed to main (the origin/main anchor), so tests can tell
   // an anchor-substituted canonical run apart from a local wrapper run.
-  if (!realModules)
+  if (!realModules) {
     writeFileSync(
       join(canonical, "scripts", "pr-lib", "gates.sh"),
       `ci_dispatch() { ${dispatchBody} }\n`,
     );
+  }
   chmodSync(join(canonical, "scripts", "pr"), 0o755);
 
-  git(canonical, ["config", "user.name", "OpenClaw Test"]);
-  git(canonical, ["config", "user.email", "test@example.invalid"]);
   git(canonical, ["config", "commit.gpgSign", "false"]);
   git(canonical, ["config", "core.hooksPath", "/dev/null"]);
   git(canonical, ["remote", "add", "origin", origin]);
@@ -109,8 +112,6 @@ function makeMismatchedWrapperRepo({
   git(canonical, ["worktree", "add", "-b", "feature", linkedPath, "main"]);
 
   const linked = realpathSync(linkedPath);
-  git(linked, ["config", "user.name", "OpenClaw Test"]);
-  git(linked, ["config", "user.email", "test@example.invalid"]);
   git(linked, ["config", "commit.gpgSign", "false"]);
   expect(git(linked, ["rev-parse", "refs/remotes/origin/main"]).stdout.trim()).toBe(
     git(canonical, ["rev-parse", "main"]).stdout.trim(),
@@ -1028,8 +1029,6 @@ exit 99
     const git = (cwd: string, args: string[]) =>
       spawnSync("git", args, { cwd, env, encoding: "utf8", stdio: "pipe" });
     expect(git(repo, ["init", "-b", "main"]).status).toBe(0);
-    expect(git(repo, ["config", "user.name", "OpenClaw Test"]).status).toBe(0);
-    expect(git(repo, ["config", "user.email", "test@example.invalid"]).status).toBe(0);
     expect(git(repo, ["add", "."]).status).toBe(0);
     expect(git(repo, ["commit", "-m", "test: canonical wrapper"]).status).toBe(0);
     expect(git(repo, ["worktree", "add", "-b", "feature", linked]).status).toBe(0);
@@ -1111,8 +1110,6 @@ exit 99
     const git = (cwd: string, args: string[]) =>
       spawnSync("git", args, { cwd, env, encoding: "utf8", stdio: "pipe" });
     expect(git(repo, ["init", "-b", "main"]).status).toBe(0);
-    expect(git(repo, ["config", "user.name", "OpenClaw Test"]).status).toBe(0);
-    expect(git(repo, ["config", "user.email", "test@example.invalid"]).status).toBe(0);
     expect(git(repo, ["add", "."]).status).toBe(0);
     expect(git(repo, ["commit", "-m", "test: canonical wrapper"]).status).toBe(0);
     // The linked worktree keeps main's wrapper; origin/main anchors trust.
