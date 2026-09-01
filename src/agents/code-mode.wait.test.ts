@@ -114,7 +114,13 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     const suspended = resultDetails(
       await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
         "code-call-pending-bridge",
-        { restartSafe: true, code: "return await fake_pending_bridge({});" },
+        {
+          code: `
+            const pending = fake_pending_bridge({});
+            await yield_control("pause");
+            return await pending;
+          `,
+        },
       ),
     );
     expect(suspended.status).toBe("waiting");
@@ -123,7 +129,10 @@ describe("Code Mode wait, scope, and suspended runs", () => {
       testing.activeRuns.get(suspended.runId as string),
       "parked Code Mode state",
     );
-    const pending = expectDefined(state.pending[0], "pending bridge state");
+    const pending = expectDefined(
+      state.pending.find((entry) => entry.method === "callValue"),
+      "pending bridge state",
+    );
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(pending.settled).toBeUndefined();
 
