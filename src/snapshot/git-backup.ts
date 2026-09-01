@@ -460,7 +460,7 @@ export async function readGitBackupLog(params: {
       "--quiet",
       headRef,
     ]);
-    if (headExists.code === 1) {
+    if (headExists.code === 1 && headRef.startsWith("refs/heads/")) {
       return [];
     }
     if (headExists.code !== 0) {

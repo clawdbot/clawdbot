@@ -590,6 +590,15 @@ describe("Git-backed SQLite snapshots", () => {
     await expect(readGitBackupLog({ repositoryPath, limit: 10 })).rejects.toThrow(/git show-ref/u);
   });
 
+  it("does not treat a missing non-branch symbolic HEAD as an unborn branch", async () => {
+    const root = await tempRoot();
+    const repositoryPath = path.join(root, "missing-symbolic-ref-repository");
+    await requireGit(root, ["init", repositoryPath]);
+    await requireGit(repositoryPath, ["symbolic-ref", "HEAD", "refs/tags/missing"]);
+
+    await expect(readGitBackupLog({ repositoryPath, limit: 10 })).rejects.toThrow(/git show-ref/u);
+  });
+
   it("refuses adopted non-backup ancestry and records local push degradation", async () => {
     const root = await tempRoot();
     const { stateDir } = createStateDatabaseFixture(root);
