@@ -153,10 +153,12 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "auth.order": "Ordered auth profile IDs per provider (used for automatic failover).",
   "agents.defaults.workspace":
     "Default workspace path exposed to agent runtime tools for filesystem context and repo-aware behavior. Set this explicitly when running from wrappers so path resolution stays deterministic.",
+  "agents.defaults.skipBootstrap":
+    'Skips automatic creation of workspace bootstrap files. Existing files can still be injected into the system prompt; set agents.defaults.contextInjection to "never" to disable workspace bootstrap and context-file injection.',
   "agents.defaults.skipOptionalBootstrapFiles":
     "Optional bootstrap files that should not be created in agent workspaces. Valid values: SOUL.md, USER.md, IDENTITY.md (HEARTBEAT.md is accepted but a no-op).",
   "agents.defaults.contextInjection":
-    'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
+    'Controls when workspace bootstrap files are injected into the system prompt: "always" injects on every turn (default), "continuation-skip" skips safe continuation turns after a completed assistant response, and "never" disables workspace bootstrap and context-file injection on every turn.',
   "agents.defaults.bootstrapMaxChars":
     "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
   "agents.defaults.bootstrapTotalMaxChars":
