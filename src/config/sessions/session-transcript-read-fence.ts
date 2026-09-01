@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { sql } from "kysely";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -37,7 +38,7 @@ function resolveSessionTranscriptReadFence(session: {
 }
 
 export function resolveSqliteSessionTranscriptReadFence(params: {
-  database: OpenClawAgentDatabase;
+  database: Pick<OpenClawAgentDatabase, "db" | "path">;
   agentId: string;
   sessionId: string;
   sessionKey?: string;
@@ -84,7 +85,10 @@ export function resolveSqliteSessionTranscriptReadFence(params: {
         "identity.parent_id",
         "active.message_position",
         "rewrite.generation",
-        "event.event_json",
+        /* kysely-allow-raw: validate the admission role without acquiring its private payload. */
+        sql<string>`json_extract(event.event_json, '$.type')`.as("event_type"),
+        /* kysely-allow-raw: admission validation needs the exact role, not the message body. */
+        sql<string>`json_extract(event.event_json, '$.message.role')`.as("message_role"),
       ])
       .where("identity.session_id", "=", params.sessionId)
       .where("identity.event_id", "=", receipt.entryId)
@@ -105,8 +109,7 @@ export function resolveSqliteSessionTranscriptReadFence(params: {
       `Current-turn transcript admission identity changed: ${receipt.entryId}`,
     );
   }
-  const event = JSON.parse(boundary.event_json) as { type?: unknown; message?: { role?: unknown } };
-  if (event.type !== "message" || event.message?.role !== "user") {
+  if (boundary.event_type !== "message" || boundary.message_role !== "user") {
     throw new SessionTranscriptReadFenceError(
       `Current-turn transcript admission is not a user message: ${receipt.entryId}`,
     );

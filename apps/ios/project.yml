@@ -17,7 +17,7 @@ packages:
     path: ../swabble
   WebRTC:
     url: https://github.com/stasel/WebRTC.git
-    exactVersion: 151.0.0
+    exactVersion: 152.0.0
 
 schemes:
   OpenClaw:
@@ -395,6 +395,8 @@ targets:
       - path: Tests
         excludes:
           - Logic
+      - path: ../macos/Tests/OpenClawIPCTests/GatewayWebSocketTestSupport.swift
+        group: Tests
       - path: WatchApp/Sources/WatchDeferredPayloadOrdering.swift
         group: WatchApp/Sources
     dependencies:

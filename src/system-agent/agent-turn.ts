@@ -225,7 +225,7 @@ async function mirrorSystemAgentToolStateFromEvents(params: {
   directiveRef: { current?: SystemAgentTurnDirective };
 }): Promise<() => void> {
   const [
-    { onAgentEvent },
+    { onAgentEventForRun },
     { extractToolResultText },
     { resolveSystemAgentProposalTransition, resolveSystemAgentDirectiveTransition },
   ] = await Promise.all([
@@ -233,7 +233,7 @@ async function mirrorSystemAgentToolStateFromEvents(params: {
     import("../agents/embedded-agent-tool-results.js"),
     import("../agents/tools/system-agent-tool.js"),
   ]);
-  return onAgentEvent((evt) => {
+  return onAgentEventForRun(params.runId, (evt) => {
     if (evt.runId !== params.runId || evt.stream !== "tool" || evt.data.phase !== "result") {
       return;
     }

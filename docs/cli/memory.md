@@ -80,11 +80,11 @@ openclaw memory search [query] [--query <text>] [--agent <id>] [--max-results <n
 - `--max-results <n>`: cap result count (positive integer).
 - `--min-score <n>`: filter out matches below this score.
 
-If the index remains dirty after the bounded search-time refresh, human output
-warns that matches may be incomplete. With `--json`, the response adds
-`stale: true`, plus `warning` and `action` fields describing how to rebuild the
-index. Treat an empty `results` array as authoritative only when `stale` is
-absent.
+Routine indexing can continue after search returns and does not add a warning.
+If automatic indexing failed, or the index identity is incompatible, human
+output warns that matches may be incomplete. With `--json`, the response adds
+`stale: true`, plus `warning` and `action` fields. Treat an empty `results`
+array as authoritative only when `stale` is absent.
 
 ## `memory forget`
 
@@ -125,6 +125,12 @@ types combine with **OR**: a session matching any selector is selected, subject
 to `--since`. Selectors match recorded identifiers, not names or text in
 messages. A participant selector selects the whole session, including other
 participants' contributions.
+
+`--participant` intentionally matches raw actor IDs across identity namespaces;
+it is not a profile-only selector. The report's `participantMatches` shows the
+typed identities matching each requested ID, including ambiguous matches.
+Review these identities and the selected whole sessions in `--dry-run --json`
+before deleting. Profile merges do not silently reinterpret a raw selector.
 
 Explicit IDs and keys resolve against live sessions and retained archives in
 the configured `session.store`, including custom and shared stores. Matching

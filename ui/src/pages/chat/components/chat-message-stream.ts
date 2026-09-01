@@ -82,26 +82,9 @@ export function renderStreamGroupParts(
             },
             part.key,
             {
+              ...opts,
               isStreaming: part.isStreaming,
               showReasoning: false,
-              sessionKey: opts.sessionKey,
-              boardProvider: opts.boardProvider,
-              agentId: opts.agentId,
-              runActive: opts.runActive,
-              onRequestUpdate: opts.onRequestUpdate,
-              canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
-              resourceBasePath: opts.resourceBasePath,
-              localMediaPreviewRoots: opts.localMediaPreviewRoots,
-              connectionEpoch: opts.connectionEpoch,
-              assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
-              resolveArtifactDownload: opts.resolveArtifactDownload,
-              onRequestOpenImage: opts.onRequestOpenImage,
-              onOpenImage: opts.onOpenImage,
-              onAssistantAttachmentLoaded: opts.onAssistantAttachmentLoaded,
-              embedSandboxMode: opts.embedSandboxMode,
-              allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
-              fetchLinkFavicon: opts.fetchLinkFavicon,
-              onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
             },
             opts.onOpenSidebar,
           ),
@@ -162,7 +145,12 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
  */
 export function renderWorkGroupSummary(
   item: { key: string; durationMs: number | null },
-  opts: { expanded: boolean; onToggle: () => void; presentation?: "standalone" | "continuation" },
+  opts: {
+    expanded: boolean;
+    onToggle: () => void;
+    presentation?: "standalone" | "continuation";
+    browserTabPreviews?: unknown;
+  },
 ) {
   const duration = formatDurationCompact(item.durationMs);
   const label = duration ? t("chat.workRun.workedFor", { duration }) : t("chat.workRun.worked");
@@ -186,6 +174,7 @@ export function renderWorkGroupSummary(
         <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
       </button>
       <div class="chat-work-group__separator" aria-hidden="true"></div>
+      ${opts.expanded ? nothing : (opts.browserTabPreviews ?? nothing)}
     </div>
   `;
   return opts.presentation === "continuation"

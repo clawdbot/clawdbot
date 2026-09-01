@@ -36,6 +36,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     questionManager,
     cancelRunBoundApprovals,
     forwardPluginApprovalRequest,
+    approvalWebPushDelivery,
     pluginApprovalIosPushDelivery,
     pluginApprovalManager,
     systemAgentApprovalManager,
@@ -124,6 +125,8 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       runtimeState,
       sessionCompanion,
       getRuntimeConfig,
+      isConfigReloadSettled: () =>
+        !lifecycle.closePreludeStarted && runtimeState.configReloader.isConfigReloadSettled(),
       getGatewayMethodRegistry: getAttachedGatewayMethodRegistry,
       gatewayTlsFingerprint: gatewayTls.enabled ? gatewayTls.fingerprintSha256 : undefined,
       sessionObserver,
@@ -136,6 +139,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       questionManager,
       cancelRunBoundApprovals,
       forwardPluginApprovalRequest,
+      approvalWebPushDelivery,
       pluginApprovalIosPushDelivery,
       pluginApprovalManager,
       systemAgentApprovalManager,
@@ -258,6 +262,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     gatewayInstanceRuntime.isAvailable() ? gatewayRequestContext : undefined;
   gatewayRequestContext.approvalEvents = gatewayInstanceRuntime.approvalEvents;
   gatewayRequestContext.recoveryRuntime = gatewayInstanceRuntime.recovery;
+  gatewayRequestContext.createAgentTurnFacade = gatewayInstanceRuntime.createAgentTurnFacade;
   return { ...runtime, chatMetadataLifecycle, gatewayRequestContext, gatewayInstanceRuntime };
 }
 

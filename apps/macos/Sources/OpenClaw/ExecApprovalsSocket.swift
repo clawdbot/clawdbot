@@ -245,104 +245,6 @@ func execHostTimestampIsFresh(
     return true
 }
 
-enum ExecApprovalsSocketClient {
-    private struct TimeoutError: LocalizedError {
-        var message: String
-        var errorDescription: String? {
-            self.message
-        }
-    }
-
-    static func requestDecision(
-        socketPath: String,
-        token: String,
-        request: ExecApprovalPromptRequest,
-        timeoutMs: Int = 15000) async -> ExecApprovalDecision?
-    {
-        let trimmedPath = socketPath.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedPath.isEmpty, !trimmedToken.isEmpty else { return nil }
-        do {
-            return try await AsyncTimeout.withTimeoutMs(
-                timeoutMs: timeoutMs,
-                onTimeout: {
-                    TimeoutError(message: "exec approvals socket timeout")
-                },
-                operation: {
-                    try await Task.detached {
-                        try self.requestDecisionSync(
-                            socketPath: trimmedPath,
-                            token: trimmedToken,
-                            request: request,
-                            timeoutMs: timeoutMs)
-                    }.value
-                })
-        } catch {
-            return nil
-        }
-    }
-
-    private static func requestDecisionSync(
-        socketPath: String,
-        token: String,
-        request: ExecApprovalPromptRequest,
-        timeoutMs: Int) throws -> ExecApprovalDecision?
-    {
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else {
-            throw NSError(domain: "ExecApprovals", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "socket create failed",
-            ])
-        }
-        defer { close(fd) }
-        try configureSocketTimeouts(fd, timeoutMs: timeoutMs)
-
-        var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
-        let maxLen = MemoryLayout.size(ofValue: addr.sun_path)
-        if socketPath.utf8.count >= maxLen {
-            throw NSError(domain: "ExecApprovals", code: 2, userInfo: [
-                NSLocalizedDescriptionKey: "socket path too long",
-            ])
-        }
-        socketPath.withCString { cstr in
-            withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
-                let raw = UnsafeMutableRawPointer(ptr).assumingMemoryBound(to: Int8.self)
-                strncpy(raw, cstr, maxLen - 1)
-            }
-        }
-        let size = socklen_t(MemoryLayout.size(ofValue: addr))
-        let result = withUnsafePointer(to: &addr) { ptr in
-            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { rebound in
-                connect(fd, rebound, size)
-            }
-        }
-        if result != 0 {
-            throw NSError(domain: "ExecApprovals", code: 3, userInfo: [
-                NSLocalizedDescriptionKey: "socket connect failed",
-            ])
-        }
-
-        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: false)
-
-        let message = ExecApprovalSocketRequest(
-            type: "request",
-            token: token,
-            id: UUID().uuidString,
-            request: request)
-        let data = try JSONEncoder().encode(message)
-        var payload = data
-        payload.append(0x0A)
-        try handle.write(contentsOf: payload)
-
-        guard let line = try readLineFromSocket(fd, maxBytes: 256_000),
-              let lineData = line.data(using: .utf8)
-        else { return nil }
-        let response = try JSONDecoder().decode(ExecApprovalSocketDecision.self, from: lineData)
-        return response.decision
-    }
-}
-
 @MainActor
 final class ExecApprovalsPromptServer {
     static let shared = ExecApprovalsPromptServer()
@@ -441,13 +343,9 @@ final class ExecApprovalsPromptServer {
                     await server.stop().value
                     return
                 }
-                guard ready else {
-                    await server.stop().value
-                    continue
-                }
                 // The accept loop can fail after signaling readiness but before
                 // this task resumes. Do not install an already-dead listener.
-                guard server.isListening else {
+                guard ready, server.isListening else {
                     await server.stop().value
                     continue
                 }
@@ -494,105 +392,6 @@ final class ExecApprovalsPromptServer {
         self.server?.failForTesting()
     }
 
-    static func _testPrecancelledSocketStart(
-        socketPath: String) async -> (ready: Bool, preservedExistingListener: Bool)
-    {
-        let sentinel = ExecApprovalsSocketServer(
-            socketPath: socketPath,
-            token: "sentinel-token",
-            onPrompt: { _ in nil },
-            onExec: { request in
-                await ExecHostExecutor.handle(request)
-            },
-            onUnexpectedStop: { _ in })
-        guard await sentinel.start() else {
-            sentinel.stop()
-            return (false, false)
-        }
-
-        let socketServer = ExecApprovalsSocketServer(
-            socketPath: socketPath,
-            token: "test-token",
-            onPrompt: { _ in nil },
-            onExec: { request in
-                await ExecHostExecutor.handle(request)
-            },
-            onUnexpectedStop: { _ in })
-        let startup = Task.detached {
-            withUnsafeCurrentTask { task in
-                task?.cancel()
-            }
-            return await socketServer.start()
-        }
-        let ready = await startup.value
-        socketServer.stop()
-        let preservedExistingListener = sentinel.isListening &&
-            (try? ExecApprovalsSocketPathGuard.pathKind(at: socketPath)) == .socket
-        sentinel.stop()
-        return (ready, preservedExistingListener)
-    }
-
-    static func _testSocketLeaseHandoff(
-        socketPath: String) async -> (
-        replacementBlockedWhileOwned: Bool,
-        replacementStartedAfterRelease: Bool,
-        replacementHasDistinctIdentity: Bool,
-        replacementPreserved: Bool)
-    {
-        let first = ExecApprovalsSocketServer(
-            socketPath: socketPath,
-            token: "first-token",
-            onPrompt: { _ in nil },
-            onExec: { request in
-                await ExecHostExecutor.handle(request)
-            },
-            onUnexpectedStop: { _ in })
-        guard await first.start() else {
-            first.stop()
-            return (false, false, false, false)
-        }
-        let firstIdentity = try? ExecApprovalsSocketPathGuard.socketIdentity(at: socketPath)
-
-        let replacement = ExecApprovalsSocketServer(
-            socketPath: socketPath,
-            token: "replacement-token",
-            onPrompt: { _ in nil },
-            onExec: { request in
-                await ExecHostExecutor.handle(request)
-            },
-            onUnexpectedStop: { _ in })
-        let replacementBlockedWhileOwned = await !replacement.start()
-        await first.stop().value
-        let replacementStartedAfterRelease = await replacement.start()
-        let replacementIdentity = try? ExecApprovalsSocketPathGuard.socketIdentity(at: socketPath)
-        let currentIdentity = try? ExecApprovalsSocketPathGuard.socketIdentity(at: socketPath)
-        let result = (
-            replacementBlockedWhileOwned: replacementBlockedWhileOwned,
-            replacementStartedAfterRelease: replacementStartedAfterRelease,
-            replacementHasDistinctIdentity: firstIdentity != nil &&
-                replacementIdentity != nil &&
-                firstIdentity != replacementIdentity,
-            replacementPreserved: replacement.isListening && currentIdentity == replacementIdentity)
-        replacement.stop()
-        return result
-    }
-
-    static func _testExecHostTimestampFailureReason(_ timestamp: Int) async -> String? {
-        let server = ExecApprovalsSocketServer(
-            socketPath: "",
-            token: "test-token",
-            onPrompt: { _ in nil },
-            onExec: { _ in
-                ExecHostResponse(
-                    type: "exec-res",
-                    id: "unexpected-execution",
-                    ok: true,
-                    payload: nil,
-                    error: nil)
-            },
-            onUnexpectedStop: { _ in })
-        return await server.testExecHostTimestampFailureReason(timestamp)
-    }
     #endif
 }
 

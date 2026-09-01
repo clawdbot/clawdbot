@@ -37,9 +37,9 @@ struct OnboardingMascotMoodTests {
         #expect(self.mood(.init(page: .ai)) == .curious)
         #expect(self.mood(.init(page: .ai, aiPhase: .testing, aiBusy: true)) == .thinking)
         #expect(self.mood(.init(page: .ai, aiFailed: true)) == .sad)
-        #expect(self.mood(.init(page: .ai, aiPhase: .connected)) == .celebrating)
+        #expect(self.mood(.init(page: .ai, aiPhase: .connected(.custodianOnboarding))) == .celebrating)
         #expect(
-            self.mood(.init(page: .ai, aiPhase: .connected, aiFailed: true)) == .celebrating,
+            self.mood(.init(page: .ai, aiPhase: .connected(.dashboard), aiFailed: true)) == .celebrating,
             "a live connection outranks stale failures")
     }
 

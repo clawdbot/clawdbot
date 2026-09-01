@@ -1,16 +1,18 @@
 import { t } from "../../i18n/index.ts";
 import type { DraftEnvironment } from "./discovery.ts";
-import { environmentMenuFacts } from "./place-facts.ts";
+import { environmentMenuFacts, MAX_PLACE_MENU_FACTS } from "./place-facts.ts";
 import { disambiguate } from "./place-labels.ts";
 
-export type DevicePlacementOption = Readonly<{
-  deviceId: string;
-  label: string;
-  subtitle?: string;
-  facts: readonly string[];
-  selectable: boolean;
-  disabledReason?: string;
-}>;
+export type DevicePlacementOption = Readonly<
+  {
+    deviceId: string;
+    label: string;
+    subtitle?: string;
+    facts: readonly string[];
+    selectable: boolean;
+    disabledReason?: string;
+  } & Pick<DraftEnvironment, "workerSlots" | "capabilities" | "invocableCommands">
+>;
 
 export type DevicePlacementRequirement = Readonly<{
   requiredNodeCommands: readonly string[];
@@ -75,17 +77,21 @@ export function projectDevicePlacements(
       });
       const priorityFacts =
         (environment.issues?.length ?? 0) > 0 || environment.status !== "available" ? 1 : 0;
-      const slotFacts = environment.workerSlots ? 1 : 0;
-      const insertion = priorityFacts + slotFacts;
       const visibleFacts =
         disabledReason && !facts.includes(disabledReason)
-          ? [...facts.slice(0, insertion), disabledReason, ...facts.slice(insertion)].slice(0, 4)
+          ? [...facts.slice(0, priorityFacts), disabledReason, ...facts.slice(priorityFacts)].slice(
+              0,
+              MAX_PLACE_MENU_FACTS,
+            )
           : facts;
       return [
         {
           deviceId,
           label: environment.label ?? deviceId,
           facts: placementDisabledReason ? [placementDisabledReason] : visibleFacts,
+          workerSlots: environment.workerSlots,
+          capabilities: environment.capabilities,
+          invocableCommands: environment.invocableCommands,
           selectable: disabledReason === undefined,
           ...(disabledReason ? { disabledReason } : {}),
         },

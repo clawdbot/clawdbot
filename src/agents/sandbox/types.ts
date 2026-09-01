@@ -35,6 +35,11 @@ export type SandboxToolPolicyResolved = {
 
 export type SandboxWorkspaceAccess = "none" | "ro" | "rw";
 
+/** Prepared resource ownership; only proven profiles retain cross-session workspaces. */
+export type SandboxIsolationSubject =
+  | { kind: "profile"; profileId: string }
+  | { kind: "session"; sessionKey: string };
+
 export type SandboxBrowserConfig = {
   enabled: boolean;
   image: string;

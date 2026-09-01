@@ -73,41 +73,39 @@ function toJsonLike(value: unknown, seen = new WeakSet<object>()): JsonLike {
   if (value === null) {
     return null;
   }
-  switch (typeof value) {
-    case "boolean":
-    case "string":
-      return value;
-    case "number":
-      return Number.isFinite(value) ? value : String(value);
-    case "bigint":
-      return value.toString();
-    case "undefined":
-    case "function":
-    case "symbol":
-      return null;
-    case "object": {
-      if (value instanceof Date) {
-        return value.toISOString();
-      }
-      if (Array.isArray(value)) {
-        return value.map((item) => toJsonLike(item, seen));
-      }
-      if (seen.has(value)) {
-        return "[Circular]";
-      }
-      seen.add(value);
-      const jsonObject: Record<string, JsonLike> = {};
-      for (const [key, entry] of Object.entries(value)) {
-        if (entry === undefined || typeof entry === "function" || typeof entry === "symbol") {
-          continue;
-        }
-        jsonObject[key] = toJsonLike(entry, seen);
-      }
-      seen.delete(value);
-      return jsonObject;
-    }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : String(value);
   }
-  return null;
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  if (typeof value === "boolean" || typeof value === "string") {
+    return value;
+  }
+  if (typeof value !== "object") {
+    return null;
+  }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (seen.has(value)) {
+    return "[Circular]";
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    const jsonArray = value.map((item) => toJsonLike(item, seen));
+    seen.delete(value);
+    return jsonArray;
+  }
+  const jsonObject: Record<string, JsonLike> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (entry === undefined || typeof entry === "function" || typeof entry === "symbol") {
+      continue;
+    }
+    jsonObject[key] = toJsonLike(entry, seen);
+  }
+  seen.delete(value);
+  return jsonObject;
 }
 
 function buildApprovalWaitState(envelope: Extract<LobsterEnvelope, { ok: true }>): JsonLike {
@@ -127,7 +125,6 @@ async function executeManagedLobsterFlow(
     "taskFlow" | "config" | "runner" | "runnerParams" | "waitingStep"
   >,
   flow: FlowRecord,
-  failureFlowId = flow.flowId,
 ): Promise<ManagedLobsterFlowResult> {
   try {
     const envelope = await params.runner.run(params.runnerParams);
@@ -165,7 +162,7 @@ async function executeManagedLobsterFlow(
     const err = error instanceof Error ? error : new Error(String(error));
     try {
       const mutation = params.taskFlow.fail({
-        flowId: failureFlowId,
+        flowId: flow.flowId,
         expectedRevision: flow.revision,
       });
       return { ok: false, flow, mutation, error: err };
@@ -210,5 +207,5 @@ export async function resumeManagedLobsterFlow(
       error: new Error(`TaskFlow resume failed: ${resumed.code}`),
     };
   }
-  return await executeManagedLobsterFlow(params, resumed.flow, params.flowId);
+  return await executeManagedLobsterFlow(params, resumed.flow);
 }

@@ -66,8 +66,12 @@ function normalizeMaxChars(value: number | undefined, fallback: number): number 
     : fallback;
 }
 
-export function messageFingerprint(message: unknown): string {
+export function messageFingerprint(message: unknown): string | undefined {
   const msgObj = asOptionalRecord(message);
+  // Hook-only display facts disappear between turns and cannot anchor a conversation cursor.
+  if (msgObj?.excludeFromContext === true) {
+    return undefined;
+  }
   if (!msgObj) {
     return `${typeof message}:${String(message)}`;
   }

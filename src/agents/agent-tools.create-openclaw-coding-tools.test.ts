@@ -1086,6 +1086,41 @@ describe("createOpenClawCodingTools", () => {
     expect(latestCreateOpenClawToolsOptions().fsPolicy).toEqual({ workspaceOnly: true });
   });
 
+  it.each([
+    {
+      name: "allowed read policy",
+      config: { tools: { allow: ["message", "read"] } },
+      sandboxTools: { allow: ["message", "read"], deny: [] },
+      expected: true,
+    },
+    {
+      name: "global read denial",
+      config: { tools: { allow: ["message"], deny: ["read"] } },
+      sandboxTools: { allow: ["message", "read"], deny: [] },
+      expected: false,
+    },
+    {
+      name: "sandbox read denial",
+      config: { tools: { allow: ["message", "read"] } },
+      sandboxTools: { allow: ["message"], deny: ["read"] },
+      expected: false,
+    },
+  ])("prepares sandbox workspace media authorization for $name", (testCase) => {
+    vi.mocked(createOpenClawTools).mockClear();
+    createOpenClawCodingTools({
+      config: testCase.config,
+      sandbox: createAgentToolsSandboxContext({
+        workspaceDir: "/tmp/sandbox",
+        fsBridge: createHostSandboxFsBridge("/tmp/sandbox"),
+        tools: testCase.sandboxTools,
+      }),
+    });
+
+    expect(latestCreateOpenClawToolsOptions().sandboxWorkspaceMediaReadAllowed).toBe(
+      testCase.expected,
+    );
+  });
+
   it("allows workspace-only reads from declared sandbox bind mounts", async () => {
     const workspaceDir = tempDirs.make("openclaw-sandbox-workspace-");
     const bindRoot = tempDirs.make("openclaw-sandbox-bind-");

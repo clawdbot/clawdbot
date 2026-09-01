@@ -14,7 +14,7 @@ import { buildBuzzTarget, isConfiguredBuzzChannel, parseBuzzTarget } from "./tar
 import {
   assertBuzzAccountAvailable,
   resolveBuzzAccount,
-  resolveDefaultBuzzAccountId,
+  resolveBuzzAccountConfig,
   type ResolvedBuzzAccount,
 } from "./types.js";
 
@@ -74,7 +74,11 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
     .filter(([, config]) => config.enabled !== false)
     .map(([channelId]) => parseBuzzTarget(channelId));
   if (channelIds.length === 0) {
-    throw new Error("Buzz requires at least one channels.buzz.groups entry");
+    const { configPath } = resolveBuzzAccountConfig({
+      cfg: ctx.cfg,
+      accountId: account.accountId,
+    });
+    throw new Error(`Buzz requires at least one enabled ${configPath}.groups entry`);
   }
   const configuredChannelIds = new Set(channelIds);
   const profileName = resolveBuzzProfileName({ cfg: ctx.cfg, account, channelIds });
@@ -244,8 +248,8 @@ export const buzzOutboundAdapter = {
     replyToId?: string | number | null;
   }) => {
     const runtime = getBuzzRuntime();
-    const resolvedAccountId = accountId ?? resolveDefaultBuzzAccountId(cfg);
-    const account = resolveBuzzAccount({ cfg, accountId: resolvedAccountId });
+    const account = resolveBuzzAccount({ cfg, accountId });
+    const resolvedAccountId = account.accountId;
     assertBuzzAccountAvailable(account);
     if (!account.enabled) {
       throw new Error(`Buzz is disabled for account ${resolvedAccountId}`);
@@ -285,13 +289,19 @@ export async function sendBuzzTyping(params: {
   accountId?: string | null;
   threadId?: string | number | null;
 }): Promise<void> {
-  const resolvedAccountId = params.accountId ?? resolveDefaultBuzzAccountId(params.cfg);
-  const bus = activeBuses.get(resolvedAccountId);
+  const account = resolveBuzzAccountConfig(params);
+  if (!account.config.enabled) {
+    return;
+  }
+  const bus = activeBuses.get(account.accountId);
   if (!bus) {
     return;
   }
   await bus.sendTyping({
     channelId: parseBuzzTarget(params.to),
-    threadId: params.threadId == null ? undefined : String(params.threadId),
+    threadId:
+      account.config.replyToMode === "off" || params.threadId == null
+        ? undefined
+        : String(params.threadId),
   });
 }

@@ -73,6 +73,7 @@ function createSnapshot(params: {
     workspaceDir: params.workspaceDir,
     configFingerprint: "",
     index,
+    registryIndex: index,
     registryDiagnostics: params.registryDiagnostics ?? [],
     manifestRegistry: { plugins, diagnostics: [] },
     plugins,
@@ -88,6 +89,7 @@ function createSnapshot(params: {
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
     },
     metrics: {
       registrySnapshotMs: 0,

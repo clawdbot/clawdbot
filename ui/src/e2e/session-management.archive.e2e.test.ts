@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import {
   activateSelfRemovingControl,
@@ -10,9 +11,7 @@ import {
   createSessionManagementE2eSuite,
   installMockGateway,
   requireRecord,
-  sessionRow,
   sessionsListResponse,
-  uiProofArtifactDir,
   waitForConfirmModal,
   waitForPatch,
 } from "./session-management.test-support.ts";
@@ -22,7 +21,7 @@ const suite = createSessionManagementE2eSuite();
 async function confirmDelete(page: import("playwright").Page, proofName?: string) {
   const dialog = await waitForConfirmModal(page);
   if (proofName) {
-    await captureUiProof(page, proofName);
+    await captureUiProof(suite, page, proofName);
   }
   await dialog.getByRole("button", { name: "Delete", exact: true }).click();
 }
@@ -33,7 +32,7 @@ suite.define(() => {
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
-      ...(captureUiProofEnabled ? { recordVideo: { dir: uiProofArtifactDir } } : {}),
+      ...(captureUiProofEnabled ? { recordVideo: { dir: suite.artifactDir } } : {}),
     });
     const page = await context.newPage();
     const main = sessionRow("agent:main:main", "Main", 1);
@@ -54,7 +53,7 @@ suite.define(() => {
       const notice = pane.locator(".agent-chat__disabled-banner");
       await row.waitFor({ state: "visible" });
       await pane.getByText("Work completed.", { exact: true }).waitFor();
-      await captureUiProof(page, "agent-archive-before.png");
+      await captureUiProof(suite, page, "agent-archive-before.png");
 
       // The agent's deferred self-archive reaches clients as a committed patch,
       // without running the sidebar menu's optimistic mutation path.
@@ -67,12 +66,12 @@ suite.define(() => {
         reason: "patch",
       });
       await notice.waitFor({ state: "visible" });
-      await captureUiProof(page, "agent-archive-received.png");
+      await captureUiProof(suite, page, "agent-archive-received.png");
       await row.waitFor({ state: "detached", timeout: 10_000 });
       expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(target.key));
       await pane.getByText("Work completed.", { exact: true }).waitFor();
       expect(await gateway.getRequests("sessions.patch")).toEqual([]);
-      await captureUiProof(page, "agent-archive-after.png");
+      await captureUiProof(suite, page, "agent-archive-after.png");
 
       await page.getByRole("button", { name: "Filter & sort" }).click();
       await page
@@ -136,7 +135,7 @@ suite.define(() => {
       const sidebar = page.locator("openclaw-app-sidebar");
       const archivedRow = sidebar.locator(`[data-session-key="${archived.key}"]`);
       await archivedRow.waitFor({ state: "visible" });
-      await captureUiProof(page, "filtered-roster-forced-refresh-before.png");
+      await captureUiProof(suite, page, "filtered-roster-forced-refresh-before.png");
 
       const archivedRequests = async () =>
         (await gateway.getRequests("sessions.list")).filter(
@@ -163,7 +162,7 @@ suite.define(() => {
 
       await expect.poll(archivedRequests).toHaveLength(initialRequests + 2);
       await archivedRow.waitFor({ state: "detached" });
-      await captureUiProof(page, "filtered-roster-forced-refresh-after.png");
+      await captureUiProof(suite, page, "filtered-roster-forced-refresh-after.png");
     } finally {
       await context.close();
     }
@@ -346,7 +345,7 @@ suite.define(() => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       recordVideo: captureUiProofEnabled
-        ? { dir: uiProofArtifactDir, size: { height: 900, width: 1280 } }
+        ? { dir: suite.artifactDir, size: { height: 900, width: 1280 } }
         : undefined,
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -359,6 +358,7 @@ suite.define(() => {
       historyMessages: [
         { role: "assistant", content: [{ type: "text", text: "Research thread content" }] },
       ],
+      mainSessionKey: "agent:main:main",
       methodResponses: {
         "sessions.list": sessionsListResponse([
           sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
@@ -374,7 +374,7 @@ suite.define(() => {
       const row = page.locator(`[data-session-key="${sessionKey}"]`);
       await row.waitFor({ state: "visible", timeout: 10_000 });
       await page.getByText("Research thread content").waitFor({ state: "visible" });
-      await captureUiProof(page, "archive-current-thread-before.png");
+      await captureUiProof(suite, page, "archive-current-thread-before.png");
       await row.hover();
       await row.getByRole("button", { name: "Open session menu" }).click();
       await activateSelfRemovingControl(page.getByRole("menuitem", { name: "Archive session" }));
@@ -383,17 +383,17 @@ suite.define(() => {
       await expect.poll(() => row.count()).toBe(0);
       expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
       await page.getByText("Research thread content").waitFor({ state: "visible" });
-      await captureUiProof(page, "archive-current-thread-pending.png");
+      await captureUiProof(suite, page, "archive-current-thread-pending.png");
 
       await gateway.resolveDeferred("sessions.patch");
       await expect.poll(() => row.count()).toBe(0);
       expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
       await page.getByText("Research thread content").waitFor({ state: "visible" });
-      await captureUiProof(page, "archive-current-thread-complete.png");
+      await captureUiProof(suite, page, "archive-current-thread-complete.png");
     } finally {
       await context.close();
       if (proofVideo) {
-        await proofVideo.saveAs(path.join(uiProofArtifactDir, "archive-current-thread.webm"));
+        await proofVideo.saveAs(path.join(suite.artifactDir, "archive-current-thread.webm"));
       }
     }
   });
@@ -451,7 +451,7 @@ suite.define(() => {
       expect(
         await batchMenu.getByRole("menuitem", { name: `Delete ${batchKeys.length}…` }).isDisabled(),
       ).toBe(true);
-      await captureUiProof(page, "sidebar-multi-select-archive-menu.png");
+      await captureUiProof(suite, page, "sidebar-multi-select-archive-menu.png");
       await page.keyboard.press("A");
 
       const patchMany = await gateway.waitForRequest("sessions.patchMany");
@@ -477,7 +477,7 @@ suite.define(() => {
       await expect
         .poll(() => page.locator(".app-toast").textContent())
         .toContain("Archived 3 sessions");
-      await captureUiProof(page, "sidebar-multi-select-archive-settled.png");
+      await captureUiProof(suite, page, "sidebar-multi-select-archive-settled.png");
       await page.waitForTimeout(500);
       expect((await gateway.getRequests("sessions.list")).length).toBe(listCountBeforeBatch + 1);
     } finally {
@@ -766,7 +766,7 @@ suite.define(() => {
       await expect.poll(() => progressCard.count()).toBe(0);
       const archiveEvent = activePane.locator(".chat-notice", { hasText: "Archived by Mira" });
       await archiveEvent.waitFor({ state: "visible", timeout: 10_000 });
-      await captureUiProof(page, "archive-attribution-notice-after.png");
+      await captureUiProof(suite, page, "archive-attribution-notice-after.png");
       await expect
         .poll(() => activePane.locator(".chat-bubble", { hasText: "Archived by Mira" }).count())
         .toBe(0);
@@ -950,6 +950,7 @@ suite.define(() => {
         agentId: "main",
         reason: "delete",
         sessionKey: deletedKey,
+        sessionId: `session:${deletedKey}`,
       });
 
       await expect
@@ -984,7 +985,7 @@ suite.define(() => {
       const settledRequestCount = (await gateway.getRequests("sessions.list")).length;
       await expectRequestCountStable(gateway, "sessions.list", settledRequestCount);
       expect(routeErrors).toEqual([]);
-      await captureUiProof(page, "deleted-active-session-fallback.png");
+      await captureUiProof(suite, page, "deleted-active-session-fallback.png");
     } finally {
       await context.close();
     }

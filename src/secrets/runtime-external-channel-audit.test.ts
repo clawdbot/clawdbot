@@ -14,11 +14,11 @@ import { activateSecretsRuntimeSnapshot } from "./runtime.js";
 
 const {
   getBootstrapChannelSecretsMock,
-  loadBundledPluginPublicArtifactModuleSyncMock,
+  loadBundledPublicArtifactMock,
   loadPluginMetadataSnapshotMock,
 } = vi.hoisted(() => ({
   getBootstrapChannelSecretsMock: vi.fn(),
-  loadBundledPluginPublicArtifactModuleSyncMock: vi.fn(),
+  loadBundledPublicArtifactMock: vi.fn(),
   loadPluginMetadataSnapshotMock: vi.fn(),
 }));
 
@@ -36,7 +36,7 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
 }));
 
 vi.mock("../plugins/public-surface-loader.js", () => ({
-  loadBundledPluginPublicArtifactModuleSync: loadBundledPluginPublicArtifactModuleSyncMock,
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync: loadBundledPublicArtifactMock,
 }));
 
 vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
@@ -99,14 +99,15 @@ function externalChannelOrigins(records: readonly PluginManifestRecord[]) {
 }
 
 function mockBundledPublicArtifactMiss() {
-  loadBundledPluginPublicArtifactModuleSyncMock.mockImplementation(
-    (params: { dirName: string; artifactBasename: string }) => {
-      if (params.dirName === "googlechat" && params.artifactBasename === "secret-contract-api.js") {
+  loadBundledPublicArtifactMock.mockImplementation(
+    (params: { dirName: string; artifactCandidates: string[] }) => {
+      if (
+        params.dirName === "googlechat" &&
+        params.artifactCandidates[0] === "secret-contract-api.js"
+      ) {
         return createGoogleChatSecretContractApi();
       }
-      throw new Error(
-        `Unable to resolve bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
-      );
+      return null;
     },
   );
 }
@@ -202,13 +203,13 @@ function expectMetadataBackedContractsWereUsed(
     expect(loadPluginMetadataSnapshotMock).toHaveBeenCalled();
   }
   for (const channelId of channelIds) {
-    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
+    expect(loadBundledPublicArtifactMock).toHaveBeenCalledWith({
       dirName: channelId,
-      artifactBasename: "secret-contract-api.js",
+      artifactCandidates: ["secret-contract-api.js"],
     });
-    expect(loadBundledPluginPublicArtifactModuleSyncMock).not.toHaveBeenCalledWith({
+    expect(loadBundledPublicArtifactMock).not.toHaveBeenCalledWith({
       dirName: channelId,
-      artifactBasename: "contract-api.js",
+      artifactCandidates: ["contract-api.js"],
     });
   }
 }
@@ -223,7 +224,7 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
   beforeEach(() => {
     getBootstrapChannelSecretsMock.mockReset();
     getBootstrapChannelSecretsMock.mockReturnValue(undefined);
-    loadBundledPluginPublicArtifactModuleSyncMock.mockReset();
+    loadBundledPublicArtifactMock.mockReset();
     mockBundledPublicArtifactMiss();
     loadPluginMetadataSnapshotMock.mockReset();
   });

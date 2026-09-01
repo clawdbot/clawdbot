@@ -12,6 +12,7 @@ import type {
   TranscriptsStartResult,
 } from "../../transcripts/provider-types.js";
 import { sanitizeTranscriptSourceLocator } from "../../transcripts/source-locator.js";
+import { transcriptSessionSelector } from "../../transcripts/store-artifacts.js";
 import type { TranscriptsStore } from "../../transcripts/store.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
 import { truncateUtf16Safe } from "../../utils.js";
@@ -60,7 +61,7 @@ export function isTranscriptSessionStarting(sessionId: string): boolean {
   return startingSessionIds.has(sessionId);
 }
 
-export async function persistTranscriptSummary(params: {
+export async function readTranscriptSummary(params: {
   config: ReturnType<typeof resolveTranscriptsConfig>;
   store: TranscriptsStore;
   session: TranscriptSessionDescriptor;
@@ -68,7 +69,13 @@ export async function persistTranscriptSummary(params: {
   const utterances = await params.store.readUtterancesForSession(params.session, {
     maxUtterances: params.config.maxUtterances,
   });
-  const summary = summarizeTranscripts({ session: params.session, utterances });
+  return summarizeTranscripts({ session: params.session, utterances });
+}
+
+export async function persistTranscriptSummary(
+  params: Parameters<typeof readTranscriptSummary>[0],
+) {
+  const summary = await readTranscriptSummary(params);
   const intendedSummaryPath = await params.store.writeSummary(summary, params.session);
   return { summary, intendedSummaryPath };
 }
@@ -299,9 +306,14 @@ export function resolveTranscriptSourceOwnership(params: {
   return { source: providerSource };
 }
 
-export function toolText(text: string, details?: Record<string, unknown>) {
+export function toolText(text: string, details?: Record<string, unknown> & { selector?: string }) {
   return {
-    content: [{ type: "text" as const, text }],
+    content: [
+      {
+        type: "text" as const,
+        text: details?.selector ? `${text}\nSelector: ${details.selector}` : text,
+      },
+    ],
     details: details ?? {},
   };
 }
@@ -457,6 +469,7 @@ export async function startTranscripts(params: {
       await finalizeTranscriptCapture({ ...params, entry });
       return toolText(`Transcripts ended during startup: ${session.sessionId}`, {
         sessionId: session.sessionId,
+        selector: transcriptSessionSelector(session),
         active: false,
         stoppedAt: entry.session.stoppedAt,
       });
@@ -468,6 +481,7 @@ export async function startTranscripts(params: {
       {
         sessionId: session.sessionId,
         startedAt: session.startedAt,
+        selector: transcriptSessionSelector(session),
         providerId: provider.id,
         ...(effectiveAccount ? { accountId: effectiveAccount } : {}),
       },

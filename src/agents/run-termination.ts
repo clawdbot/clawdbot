@@ -1,4 +1,4 @@
-import { isFailoverError, isTimeoutError } from "./failover-error.js";
+import { isFailoverError, isTimeoutError } from "./failover/error.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 
 /**

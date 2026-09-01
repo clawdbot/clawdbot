@@ -57,6 +57,7 @@ jobs:
               "apps/macos/",
               "apps/shared/OpenClawKit/",
               ".github/workflows/shared-openclawkit-periphery.yml",
+              "scripts/install-periphery.sh",
               "scripts/periphery-intersection.mjs",
               "scripts/ios-configure-signing.sh",
               "scripts/ios-write-swift-filelist.mjs",
@@ -109,8 +110,9 @@ jobs:
 
       - name: Install iOS scan tooling
         run: |
-          brew update
-          brew install periphery
+          periphery_dir="$RUNNER_TEMP/openclaw-periphery"
+          ./scripts/install-periphery.sh "$periphery_dir"
+          echo "$periphery_dir" >> "$GITHUB_PATH"
           swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
           # Homebrew's xcodegen bottle can arrive corrupted on runner images;
           # use the repo's pinned, checksummed release installer like ci.yml.
@@ -199,8 +201,9 @@ jobs:
 
       - name: Install Periphery
         run: |
-          brew update
-          brew install periphery
+          periphery_dir="$RUNNER_TEMP/openclaw-periphery"
+          ./scripts/install-periphery.sh "$periphery_dir"
+          echo "$periphery_dir" >> "$GITHUB_PATH"
 
       - name: Scan shared kit
         run: |

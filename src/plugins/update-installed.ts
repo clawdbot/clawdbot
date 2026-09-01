@@ -1,3 +1,4 @@
+import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
@@ -105,6 +106,7 @@ export async function updateNpmInstalledPlugins(params: {
   specOverrides?: Record<string, string>;
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  beforePersistentEffect?: () => void | Promise<void>;
   packagePluginIds?: Readonly<Record<string, readonly string[]>>;
 }): Promise<PluginUpdateSummary> {
   const logger = params.logger ?? {};
@@ -431,7 +433,6 @@ export async function updateNpmInstalledPlugins(params: {
             pluginId,
             record,
             currentVersion,
-            effectiveSpec,
             recordSpec,
             resolution: metadataResult.metadata,
             updateChannel,
@@ -474,6 +475,7 @@ export async function updateNpmInstalledPlugins(params: {
       packagePluginIds: params.packagePluginIds?.[pluginId],
       expectedIntegrity,
       onCapabilityConsent: consentCallbacks.onCapabilityConsent,
+      beforePersistentEffect: params.beforePersistentEffect,
     });
     const runAttempt = () =>
       runPluginUpdateAttempt(
@@ -510,7 +512,12 @@ export async function updateNpmInstalledPlugins(params: {
     if (attempt.kind === "exception") {
       if (attempt.error instanceof ManagedPluginLifecycleError && attempt.error.capabilityConsent) {
         // Staging was rolled back; pending consent must not disable the previous installation.
-        outcomes.push({ pluginId, status: "error", message: attempt.error.message });
+        outcomes.push({
+          pluginId,
+          status: "error",
+          code: PLUGIN_CAPABILITY_CONSENT_REQUIRED,
+          message: attempt.error.message,
+        });
         continue;
       }
       recordFailure(pluginId, attempt.message);

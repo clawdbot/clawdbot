@@ -170,6 +170,7 @@ function createExtensionRelayFixture(name = "chrome") {
     lastTargetId: "shared-tab",
   });
   const relay = {
+    ownership: "owned",
     port: 18799,
     token: "persistent-relay-test-key",
     allowLegacyAuth: true,

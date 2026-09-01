@@ -131,6 +131,12 @@ The generic `web_search` tool with Tavily as provider supports `query` and `coun
 
 ## Advanced configuration
 
+Tavily `web_search` and `tavily_search` use `tools.web.search.cacheTtlMinutes`
+for OpenClaw's local result cache (default: 15 minutes). Set it to `0` to bypass
+cache reads and writes. A shorter TTL limits reuse of existing entries; a
+longer TTL does not extend their original expiry. This setting does not control
+the separate `tavily_extract` cache.
+
 <AccordionGroup>
   <Accordion title="API key resolution order">
     The Tavily client looks up its API key in this order:

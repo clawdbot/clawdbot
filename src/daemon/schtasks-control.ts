@@ -24,7 +24,6 @@ import {
 } from "./schtasks-process.js";
 import {
   assertSchtasksAvailable,
-  hasScheduledTaskRunningEvidence,
   isRegisteredScheduledTask,
   isScheduledTaskDefinitelyNotRunning,
   isStartupEntryInstalled,
@@ -179,8 +178,13 @@ export async function runScheduledTaskOrThrow(params: {
   ) {
     return "scheduled-task";
   }
-  await launchFallbackTaskScript(params.env);
-  return "direct-fallback";
+  if (!shouldManageGatewayListenerPort(params.env)) {
+    await launchFallbackTaskScript(params.env);
+    return "direct-fallback";
+  }
+  throw new Error(
+    `Scheduled Task ${params.taskName} did not start within ${SCHEDULED_TASK_FALLBACK_TIMEOUT_MS / 1000}s after schtasks /Run; refusing a direct fallback because the queued task could still start.`,
+  );
 }
 
 function parseScheduledTaskXmlEnabled(output: string): boolean | null {
@@ -327,6 +331,7 @@ export async function startScheduledTask({
 }
 
 export async function restartRegisteredScheduledTask(params: {
+  preserveDefinition?: boolean;
   env: GatewayServiceEnv;
   stdout: NodeJS.WritableStream;
   mode: { kind: "standard" } | { kind: "fallback-takeover" };
@@ -382,34 +387,37 @@ export async function restartRegisteredScheduledTask(params: {
     scriptPath: resolveTaskScriptPath(params.env),
     ...(params.onRunMutation ? { onMutation: params.onRunMutation } : {}),
   });
-  const startupEntryInstalled = await isStartupEntryInstalled(params.env);
-  const hasRunningEvidence = startupEntryInstalled
-    ? activation === "scheduled-task" && (await waitForScheduledTaskRunningEvidence(params.env))
-    : await hasScheduledTaskRunningEvidence(params.env);
   // A direct launch is the replacement fallback; keep it available at the next login.
-  if (
-    params.mode.kind === "fallback-takeover" &&
-    startupEntryInstalled &&
+  const shouldRemoveStartup =
     activation === "scheduled-task" &&
-    !hasRunningEvidence
+    !params.preserveDefinition &&
+    (await isStartupEntryInstalled(params.env));
+  if (
+    activation === "scheduled-task" &&
+    (params.mode.kind === "fallback-takeover" || shouldRemoveStartup)
   ) {
-    await execSchtasks(["/End", "/TN", taskName]);
-    const failedRuntime = await resolveFallbackRuntime(params.env, undefined, "control").catch(
-      () => null,
-    );
-    if (failedRuntime?.status === "running" && failedRuntime.pid) {
-      await terminateGatewayProcessTree(failedRuntime.pid, 300);
+    // Captured takeover owns the settling wait even if Startup vanished or its profile changed.
+    const hasRunningEvidence = await waitForScheduledTaskRunningEvidence(params.env);
+    if (params.mode.kind === "fallback-takeover" && !hasRunningEvidence) {
+      await execSchtasks(["/End", "/TN", taskName]);
+      const failedRuntime = await resolveFallbackRuntime(params.env, undefined, "control").catch(
+        () => null,
+      );
+      if (failedRuntime?.status === "running" && failedRuntime.pid) {
+        await terminateGatewayProcessTree(failedRuntime.pid, 300);
+      }
+      throw new Error("Replacement Windows Scheduled Task did not produce running evidence.");
     }
-    throw new Error("Replacement Windows Scheduled Task did not produce running evidence.");
-  }
-  if (startupEntryInstalled && hasRunningEvidence) {
-    await removeStartupEntries(params.env, params.stdout);
+    if (shouldRemoveStartup && hasRunningEvidence) {
+      await removeStartupEntries(params.env, params.stdout);
+    }
   }
   params.stdout.write(`${formatLine("Restarted Scheduled Task", taskName)}\n`);
   return { outcome: "completed" };
 }
 
 export async function restartScheduledTask({
+  preserveDefinition,
   stdout,
   env,
   onMutation,
@@ -422,6 +430,7 @@ export async function restartScheduledTask({
     );
   }
   return restartRegisteredScheduledTask({
+    preserveDefinition,
     env: effectiveEnv,
     stdout,
     mode: { kind: "standard" },

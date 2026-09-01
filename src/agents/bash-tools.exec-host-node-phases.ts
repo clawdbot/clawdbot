@@ -225,19 +225,8 @@ function hasNodeAllowAlwaysCommandApproval(params: {
   return expectedPatterns.every((pattern) => matchingEntries.has(pattern));
 }
 
-/** Returns true when local policy allows direct node invoke without prepare/approval. */
-export function shouldSkipNodeApprovalPrepare(params: {
-  hostSecurity: ExecSecurity;
-  hostAsk: ExecAsk;
-  strictInlineEval?: boolean;
-}): boolean {
-  return (
-    params.hostSecurity === "full" && params.hostAsk === "off" && params.strictInlineEval !== true
-  );
-}
-
 /** Formats a raw `node.invoke system.run` response as an exec tool result. */
-export function formatNodeRunToolResult(params: {
+function formatNodeRunToolResult(params: {
   raw: unknown;
   startedAt: number;
   cwd: string | undefined;
@@ -423,25 +412,19 @@ export function buildNodeSystemRunInvoke(params: {
   };
 }
 
-/** Invokes `system.run` directly when approval policy is fully bypassed. */
-export async function invokeNodeSystemRunDirect(params: {
+/** Dispatches an authorized run and renders its transport or execution outcome. */
+export async function dispatchNodeSystemRun(params: {
   request: ExecuteNodeHostCommandParams;
   target: NodeExecutionTarget;
+  invoke: Record<string, unknown>;
+  scopes?: Parameters<typeof invokeNodeSystemRun>[0]["scopes"];
 }): Promise<AgentToolResult<ExecToolDetails>> {
   const startedAt = Date.now();
-  const invoke = buildNodeSystemRunInvoke({
-    target: params.target,
-    command: params.target.argv,
-    rawCommand: params.request.command,
-    cwd: params.request.workdir,
-    agentId: params.request.agentId,
-    sessionKey: params.request.sessionKey,
-    notifyOnExit: params.request.notifyOnExit,
-  });
   params.request.signal?.throwIfAborted();
   const result = await invokeNodeSystemRun({
     invokeWaitMs: params.target.invokeWaitMs,
-    invoke,
+    invoke: params.invoke,
+    scopes: params.scopes,
     signal: params.request.signal,
   });
   if (!result.ok) {
@@ -479,6 +462,8 @@ export async function prepareNodeSystemRun(params: {
       command: "system.run.prepare",
       params: {
         command: params.target.argv,
+        security: params.request.security,
+        ask: params.request.ask,
         rawCommand: params.request.command,
         ...(params.request.workdir != null ? { cwd: params.request.workdir } : {}),
         ...(params.target.env !== undefined ? { env: params.target.env } : {}),
@@ -612,6 +597,8 @@ export async function analyzeNodeApprovalRequirement(params: {
   if (
     (params.hostAsk === "always" ||
       params.hostSecurity === "allowlist" ||
+      params.prepared.execPolicy?.security === "allowlist" ||
+      params.prepared.execPolicy?.ask === "always" ||
       params.request.autoReview === true) &&
     analysisOk
   ) {

@@ -1,8 +1,9 @@
-import { mkdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext } from "playwright";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -17,7 +18,12 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "image-lightbox");
+let proofDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    proofDir = createControlUiE2eArtifactDir("image-lightbox");
+  }
+});
 
 let server: ControlUiE2eServer;
 let browser: Browser;
@@ -57,9 +63,6 @@ describeControlUiE2e("Control UI image lightbox", () => {
     const banner = await readFile(path.join(process.cwd(), "docs/assets/openclaw-banner-dark.png"));
     const bannerBase64 = banner.toString("base64");
     const dataUrl = `data:image/png;base64,${bannerBase64}`;
-    if (captureUiProofEnabled) {
-      await mkdir(proofDir, { recursive: true });
-    }
     const context = await newContext({
       locale: "en-US",
       recordVideo: captureUiProofEnabled
@@ -130,6 +133,49 @@ describeControlUiE2e("Control UI image lightbox", () => {
       const openOriginal = page.getByRole("link", { name: "Open in new tab" });
       await openOriginal.waitFor({ state: "visible" });
       await expect.poll(() => openOriginal.getAttribute("href")).toMatch(/^blob:/);
+      const readControlContrast = () =>
+        page.locator("openclaw-image-lightbox").evaluate((lightbox) => {
+          const root = lightbox.shadowRoot!;
+          return [".open-original", ".close", '[aria-label="Zoom in"]'].map((selector) => {
+            const style = getComputedStyle(root.querySelector(selector)!);
+            return {
+              backdropFilter: style.backdropFilter,
+              backgroundColor: style.backgroundColor,
+              borderWidth: style.borderWidth,
+              color: style.color,
+            };
+          });
+        });
+      for (const [theme, backgroundColor] of [
+        ["dark", "rgba(255, 255, 255, 0.16)"],
+        ["light", "rgba(12, 16, 24, 0.64)"],
+      ] as const) {
+        await page.evaluate(
+          (mode) => document.documentElement.setAttribute("data-theme-mode", mode),
+          theme,
+        );
+        await expect.poll(readControlContrast).toEqual([
+          expect.objectContaining({
+            backdropFilter: expect.stringContaining("blur(16px)"),
+            backgroundColor,
+            borderWidth: "0px",
+            color: "rgb(255, 255, 255)",
+          }),
+          expect.objectContaining({
+            backdropFilter: expect.stringContaining("blur(16px)"),
+            backgroundColor,
+            borderWidth: "0px",
+            color: "rgb(255, 255, 255)",
+          }),
+          expect.objectContaining({
+            backdropFilter: expect.stringContaining("blur(16px)"),
+            backgroundColor,
+            borderWidth: "0px",
+            color: "rgb(255, 255, 255)",
+          }),
+        ]);
+      }
+      await page.evaluate(() => document.documentElement.setAttribute("data-theme-mode", "dark"));
       const focusIsInsideLightbox = () =>
         page.locator("openclaw-image-lightbox").evaluate((lightbox) => {
           let active: Element | null = document.activeElement;

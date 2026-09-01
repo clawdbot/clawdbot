@@ -699,6 +699,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     publishAppliedConfigHash,
     publishDeferredAppliedConfigHash,
     hasOutstandingGatewayRestart,
+    hasConfigCandidatePending,
     beginGatewayRestartLifecycle,
     pauseGatewayRestartForConfigCandidate,
     publishAcceptedRestartTarget,

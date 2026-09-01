@@ -33,7 +33,7 @@ extension OpenClawChatViewModel {
 
     /// Session lists publish canonical agent keys even when the UI presents `main`.
     /// Keep visible model metadata on the same exact-then-alias read path.
-    func currentSessionEntry() -> OpenClawChatSessionEntry? {
+    public func currentSessionEntry() -> OpenClawChatSessionEntry? {
         self.sessions.first(where: { $0.key == self.sessionKey }) ??
             self.sessions.first(where: {
                 self.matchesCurrentSessionKey(incoming: $0.key, current: self.sessionKey)

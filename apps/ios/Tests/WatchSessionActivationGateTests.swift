@@ -1,5 +1,7 @@
 import Foundation
+import OpenClawKit
 import Testing
+@preconcurrency import WatchConnectivity
 @testable import OpenClaw
 
 struct WatchSessionActivationGateTests {
@@ -150,8 +152,140 @@ struct WatchSessionActivationGateTests {
             "acknowledgment: WatchMessageAcknowledgment? = nil) -> Bool"))
         #expect(receiverSource.contains("guard activationState == .activated else { return }"))
         let callbackRegistration = try #require(
-            serviceSource.range(of: "self.transport.setAppCommandHandler"))
+            serviceSource.range(of: "self.transport.setInboundEventHandler"))
         let activation = try #require(serviceSource.range(of: "self.transport.activate()"))
         #expect(callbackRegistration.lowerBound < activation.lowerBound)
+    }
+}
+
+@MainActor
+struct WatchMessagingInboundTransportTests {
+    private final class Recorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [String] = []
+
+        func append(_ value: String) {
+            self.lock.withLock { self.values.append(value) }
+        }
+
+        func snapshot() -> [String] {
+            self.lock.withLock { self.values }
+        }
+    }
+
+    @Test func `inbound payload families cross every delegate boundary once`() async throws {
+        let transport = WatchConnectivityTransport()
+        let service = WatchMessagingService(transport: transport)
+        let events = Recorder()
+        let order = Recorder()
+        service.setReplyHandler { event in
+            order.append("callback")
+            events.append("reply|\(event.replyId)|\(event.transport)")
+        }
+        service.setExecApprovalResolveHandler { event in
+            order.append("callback")
+            events.append("resolve|\(event.approvalId)|\(event.transport)")
+        }
+        service.setExecApprovalSnapshotRequestHandler { event in
+            order.append("callback")
+            events.append("approvalSnapshot|\(event.requestId)|\(event.transport)")
+        }
+        service.setAppSnapshotRequestHandler { event in
+            order.append("callback")
+            events.append("appSnapshot|\(event.requestId)|\(event.transport)")
+        }
+        service.setAppCommandHandler { event in
+            order.append("callback")
+            events.append("appCommand|\(event.commandId)|\(event.transport)")
+        }
+
+        let opaqueApprovalID = "approval.e\u{301}/opaque"
+        let cases: [([String: Any], String, String)] = [
+            ([
+                "type": OpenClawWatchPayloadType.reply.rawValue,
+                "replyId": "reply/opaque",
+                "actionId": "approve",
+            ], "reply", "reply/opaque"),
+            ([
+                "type": OpenClawWatchPayloadType.execApprovalResolve.rawValue,
+                "replyId": "resolve/opaque",
+                "approvalId": opaqueApprovalID,
+                "decision": OpenClawWatchExecApprovalDecision.allowOnce.rawValue,
+            ], "resolve", opaqueApprovalID),
+            ([
+                "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
+                "requestId": "approval-snapshot/opaque",
+                "heldApprovals": [],
+            ], "approvalSnapshot", "approval-snapshot/opaque"),
+            ([
+                "type": OpenClawWatchPayloadType.appSnapshotRequest.rawValue,
+                "requestId": "app-snapshot/opaque",
+            ], "appSnapshot", "app-snapshot/opaque"),
+            ([
+                "type": OpenClawWatchPayloadType.appCommand.rawValue,
+                "command": OpenClawWatchAppCommand.refresh.rawValue,
+                "commandId": "app-command/opaque",
+            ], "appCommand", "app-command/opaque"),
+        ]
+
+        for ingress in 0..<3 {
+            let transportLabel = ingress == 2 ? "transferUserInfo" : "sendMessage"
+            for item in cases {
+                let before = events.snapshot().count
+                switch ingress {
+                case 0:
+                    transport.session(WCSession.default, didReceiveMessage: item.0)
+                case 1:
+                    var reply: [String: Any]?
+                    order.append("reply-pending")
+                    transport.session(
+                        WCSession.default,
+                        didReceiveMessage: item.0,
+                        replyHandler: {
+                            reply = $0
+                            order.append("reply")
+                        })
+                    #expect(reply?.count == 1)
+                    #expect(reply?["ok"] as? Bool == true)
+                default:
+                    transport.session(WCSession.default, didReceiveUserInfo: item.0)
+                }
+                try await Self.waitForCount(before + 1, in: events)
+                #expect(events.snapshot().last == "\(item.1)|\(item.2)|\(transportLabel)")
+                #expect(events.snapshot().count == before + 1)
+                if ingress == 1 {
+                    #expect(Array(order.snapshot().suffix(3)) == ["reply-pending", "reply", "callback"])
+                }
+            }
+        }
+
+        let countBeforeInvalid = events.snapshot().count
+        for payload: [String: Any] in [
+            [:],
+            ["type": "watch.unknown"],
+            ["type": OpenClawWatchPayloadType.reply.rawValue],
+        ] {
+            transport.session(WCSession.default, didReceiveMessage: payload)
+            transport.session(WCSession.default, didReceiveUserInfo: payload)
+            var reply: [String: Any]?
+            transport.session(
+                WCSession.default,
+                didReceiveMessage: payload,
+                replyHandler: { reply = $0 })
+            #expect(reply?.count == 2)
+            #expect(reply?["ok"] as? Bool == false)
+            #expect(reply?["error"] as? String == "unsupported_payload")
+        }
+        transport.session(WCSession.default, didReceiveMessage: cases[0].0)
+        try await Self.waitForCount(countBeforeInvalid + 1, in: events)
+        #expect(events.snapshot().count == countBeforeInvalid + 1)
+    }
+
+    private static func waitForCount(_ count: Int, in recorder: Recorder) async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while recorder.snapshot().count < count, ContinuousClock.now < deadline {
+            await Task.yield()
+        }
+        try #require(recorder.snapshot().count == count)
     }
 }

@@ -21,6 +21,7 @@ import type { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
 import { normalizeCodexResponseTokenUsage } from "./event-projector-usage.js";
+import { readCodexAppServerConfigOptions } from "./launch-args.js";
 import { readModelListResult } from "./models.js";
 import { readCodexNotificationTurnId } from "./notification-correlation.js";
 import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
@@ -403,17 +404,13 @@ function buildPrivateCodexAppServerStartOptions(
 ): ReturnType<typeof resolveCodexAppServerRuntimeOptions>["start"] {
   // Provider identity and model catalogs must survive isolation; hooks, MCP,
   // sandbox policy, and other process overrides must not cross that boundary.
-  const providerArgs = start.args.flatMap((arg, index) => {
-    const override =
-      arg === "-c" || arg === "--config"
-        ? start.args[index + 1]
-        : arg.startsWith("--config=")
-          ? arg.slice("--config=".length)
-          : undefined;
-    return override && /^\s*(?:openai_base_url|model_catalog_json)\s*=/u.test(override)
-      ? ["-c", override]
-      : [];
-  });
+  const providerArgs = readCodexAppServerConfigOptions(start.args).flatMap(({ name, value }) =>
+    (name === "-c" || name === "--config") &&
+    value &&
+    /^\s*(?:openai_base_url|model_catalog_json)\s*=/u.test(value)
+      ? ["-c", value]
+      : [],
+  );
   const privateEnv = Object.fromEntries(
     Object.entries(start.env ?? {}).filter(
       ([name]) => name.trim().toUpperCase() !== CODEX_APP_SERVER_ARGS_ENV_KEY,
@@ -475,7 +472,7 @@ async function resolveCodexBoundedTurnModel(params: {
 }): Promise<{ catalogId: string; runtimeModelId: string }> {
   const result = await params.client.request<unknown>(
     "model/list",
-    { limit: null, cursor: null, includeHidden: false },
+    { limit: null, cursor: null, includeHidden: params.selection.mode === "required" },
     { timeoutMs: Math.min(params.timeoutMs, 5_000), signal: params.signal },
   );
   const listed = readModelListResult(result).models;

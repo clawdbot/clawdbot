@@ -10,7 +10,6 @@ import "../../components/tooltip.ts";
 import "../../components/web-awesome.ts";
 import { t } from "../../i18n/index.ts";
 import "../../styles/usage.css";
-import { getUsageCacheRefreshTitle } from "./cache-status.ts";
 import type { ProviderUsageSummary } from "./data-types.ts";
 import { extractQueryTerms, filterSessionsByQuery } from "./helpers.ts";
 import {
@@ -46,9 +45,9 @@ import {
   renderUsageInsights,
 } from "./view-overview.ts";
 
-function renderUsageLoadingStatus(label: unknown, title?: string) {
+function renderUsageLoadingStatus(label: unknown) {
   return html`
-    <span class="settings-status settings-status--accent" title=${title ?? nothing}>
+    <span class="settings-status settings-status--accent">
       <span class="usage-loading-spinner" aria-hidden="true"></span>
       ${label}
     </span>
@@ -355,7 +354,6 @@ export function renderUsage(props: UsageProps) {
     !data.error &&
     data.sessions.length === 0 &&
     (data.totals?.totalTokens ?? 0) === 0;
-  const cacheStatusTitle = getUsageCacheRefreshTitle(data.cacheStatus);
   const hasMissingCost =
     (insightTotals?.missingCostEntries ?? 0) > 0 ||
     (insightTotals
@@ -461,9 +459,7 @@ export function renderUsage(props: UsageProps) {
           <div class="settings-section__header">
             <h2 class="settings-section__heading">${t("usage.filters.title")}</h2>
             <div class="settings-section__actions">
-              ${data.loading || cacheStatusTitle
-                ? renderUsageLoadingStatus(t("usage.loading.badge"), cacheStatusTitle ?? "")
-                : nothing}
+              ${data.loading ? renderUsageLoadingStatus(t("usage.loading.badge")) : nothing}
               ${isEmpty
                 ? html`<span class="usage-query-hint">${t("usage.empty.hint")}</span>`
                 : nothing}
@@ -518,28 +514,25 @@ export function renderUsage(props: UsageProps) {
                         );
                         break;
                       case "json":
-                        downloadTextFile(
-                          `openclaw-usage-${exportStamp}.json`,
-                          JSON.stringify(
-                            {
-                              totals: displayTotals,
-                              sessions: filteredSessions,
-                              daily: filteredDaily,
-                              aggregates: activeAggregates,
-                            },
-                            null,
-                            2,
-                          ),
-                          "application/json",
-                        );
+                        displayActions.onExportJson({
+                          totals: displayTotals,
+                          sessions: filteredSessions,
+                          daily: filteredDaily,
+                          aggregates: activeAggregates,
+                        });
                         break;
                       case undefined:
                         break;
                     }
                   }}
                 >
-                  <button slot="trigger" type="button" class="btn btn--sm">
-                    ${t("usage.export.label")} ▾
+                  <button
+                    slot="trigger"
+                    type="button"
+                    class="btn btn--sm"
+                    aria-busy=${data.exporting}
+                  >
+                    ${data.exporting ? t("common.loading") : t("usage.export.label")} ▾
                   </button>
                   <wa-dropdown-item value="sessions-csv" ?disabled=${filteredSessions.length === 0}>
                     ${t("usage.export.sessionsCsv")}
@@ -549,7 +542,9 @@ export function renderUsage(props: UsageProps) {
                   </wa-dropdown-item>
                   <wa-dropdown-item
                     value="json"
-                    ?disabled=${filteredSessions.length === 0 && filteredDaily.length === 0}
+                    ?disabled=${data.exporting ||
+                    data.loading ||
+                    (filteredSessions.length === 0 && filteredDaily.length === 0)}
                   >
                     ${t("usage.export.json")}
                   </wa-dropdown-item>
@@ -759,10 +754,18 @@ export function renderUsage(props: UsageProps) {
             ${data.error
               ? html`<div class="callout danger usage-callout">${data.error}</div>`
               : nothing}
-            ${cacheStatusTitle
+            ${data.cacheRefresh !== "complete"
               ? html`
-                  <div class="callout warning usage-callout usage-cache-warning">
-                    ${t("usage.cacheStatus.warning")} ${cacheStatusTitle}
+                  <div
+                    class="callout warning usage-callout usage-cache-warning"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    ${t(
+                      data.cacheRefresh === "exhausted"
+                        ? "usage.cacheStatus.paused"
+                        : "usage.cacheStatus.warning",
+                    )}
                   </div>
                 `
               : nothing}
@@ -869,6 +872,8 @@ export function renderUsage(props: UsageProps) {
                         detailActions.onLogFilterHasToolsChange,
                         detailActions.onLogFilterQueryChange,
                         detailActions.onLogFilterClear,
+                        detail.context,
+                        detailActions.onRetryContextWeight,
                         display.contextExpanded,
                         detailActions.onToggleContextExpanded,
                         filterActions.onClearSessions,

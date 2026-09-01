@@ -25,6 +25,8 @@ type UpsertAuthProfileCall = {
   agentDir?: string;
   credential?: {
     provider?: string;
+    token?: string;
+    tokenRef?: unknown;
     type?: string;
   };
   profileId?: string;
@@ -49,6 +51,7 @@ const mocks = vi.hoisted(() => ({
   resolveAgentDir: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentWorkspaceDir: vi.fn(),
+  isCliProvider: vi.fn(),
   upsertAuthProfile: vi.fn(),
   upsertAuthProfileAfterLoginWithLock: vi.fn(),
   upsertAuthProfileWithLock: vi.fn(),
@@ -65,6 +68,18 @@ const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
   resolvePluginSetupProviderCore: vi.fn(),
   resolvePluginSetupRegistry: vi.fn(),
+  readSecretStoreValue: vi.fn(() => ({
+    ok: false as const,
+    error: { code: "SECRET_STORE_NOT_FOUND", message: "missing" },
+  })),
+  writeSecretStoreEntry: vi.fn(),
+  deleteSecretStoreEntry: vi.fn(),
+}));
+
+vi.mock("../../secrets/store/secret-store.js", () => ({
+  readSecretStoreValue: mocks.readSecretStoreValue,
+  writeSecretStoreEntry: mocks.writeSecretStoreEntry,
+  deleteSecretStoreEntry: mocks.deleteSecretStoreEntry,
 }));
 
 vi.mock("../../agents/auth-profiles/profiles.js", () => ({
@@ -124,6 +139,10 @@ vi.mock("../../agents/agent-scope.js", async (importOriginal) => {
 
 vi.mock("../../agents/workspace.js", () => ({
   resolveDefaultAgentWorkspaceDir: mocks.resolveDefaultAgentWorkspaceDir,
+}));
+
+vi.mock("../../agents/model-selection-cli.js", () => ({
+  isCliProvider: mocks.isCliProvider,
 }));
 
 vi.mock("../../plugins/providers.runtime.js", () => ({
@@ -372,6 +391,7 @@ describe("modelsAuthLoginCommand", () => {
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw/workspace");
     mocks.resolveDefaultAgentWorkspaceDir.mockReturnValue("/tmp/openclaw/workspace");
     mocks.isRemoteEnvironment.mockReturnValue(false);
+    mocks.isCliProvider.mockReturnValue(false);
     mocks.resolvePluginSetupProviderCore.mockReturnValue(undefined);
     mocks.resolvePluginSetupRegistry.mockReturnValue({
       providers: [],
@@ -476,6 +496,85 @@ describe("modelsAuthLoginCommand", () => {
       params: { refresh: true, agentId: "main" },
       timeoutMs: 3000,
     });
+  });
+
+  it("persists a provider-minted Copilot token through the protected store", async () => {
+    const runtime = createRuntime();
+    runProviderAuth.mockResolvedValueOnce({
+      profiles: [
+        {
+          profileId: "github-copilot:github",
+          credential: {
+            type: "token",
+            provider: "github-copilot",
+            token: "synthetic-device-token",
+          },
+          secretStorage: {
+            kind: "store",
+            namePrefix: "GITHUB_COPILOT_TOKEN",
+          },
+        },
+      ],
+    });
+    mocks.resolvePluginProvidersCore.mockReturnValue([
+      createProvider({
+        id: "github-copilot",
+        label: "GitHub Copilot",
+        run: runProviderAuth as ProviderPlugin["auth"][number]["run"],
+      }),
+    ]);
+
+    await modelsAuthLoginCommand({ provider: "github-copilot" }, runtime);
+
+    expect(mocks.writeSecretStoreEntry).toHaveBeenCalledWith(
+      expect.objectContaining({ value: "synthetic-device-token" }),
+    );
+    const upsertCall = readMockCallArg(
+      mocks.upsertAuthProfileAfterLoginWithLock,
+    ) as UpsertAuthProfileCall;
+    expect(upsertCall.credential).not.toHaveProperty("token");
+    expect(upsertCall.credential?.tokenRef).toEqual({
+      source: "store",
+      provider: "default",
+      id: expect.stringMatching(/^GITHUB_COPILOT_TOKEN_[A-F0-9]{24}$/),
+    });
+  });
+
+  it("keeps the prior auth profile when protected storage is unavailable", async () => {
+    const runtime = createRuntime();
+    runProviderAuth.mockResolvedValueOnce({
+      profiles: [
+        {
+          profileId: "github-copilot:github",
+          credential: {
+            type: "token",
+            provider: "github-copilot",
+            token: "synthetic-device-token",
+          },
+          secretStorage: {
+            kind: "store",
+            namePrefix: "GITHUB_COPILOT_TOKEN",
+          },
+        },
+      ],
+    });
+    mocks.resolvePluginProvidersCore.mockReturnValue([
+      createProvider({
+        id: "github-copilot",
+        label: "GitHub Copilot",
+        run: runProviderAuth as ProviderPlugin["auth"][number]["run"],
+      }),
+    ]);
+    mocks.writeSecretStoreEntry.mockImplementationOnce(() => {
+      throw new Error("read-only database");
+    });
+
+    await expect(modelsAuthLoginCommand({ provider: "github-copilot" }, runtime)).rejects.toThrow(
+      "Could not write the protected secret store",
+    );
+
+    expect(mocks.upsertAuthProfileAfterLoginWithLock).not.toHaveBeenCalled();
+    expect(mocks.promoteAuthProfileInOrder).not.toHaveBeenCalled();
   });
 
   it("keeps login successful when the running gateway cannot refresh auth state", async () => {
@@ -1239,6 +1338,44 @@ describe("modelsAuthLoginCommand", () => {
 
     await expect(modelsAuthLoginCommand({ provider: "anthropic" }, runtime)).rejects.toThrow(
       'Unknown provider "anthropic". Loaded providers: openai. Verify plugins via `openclaw plugins list --json`.',
+    );
+  });
+
+  it("opens the provider picker when a CLI backend has no provider auth method", async () => {
+    const runtime = createRuntime();
+    const prompter = {
+      note: vi.fn(async () => {}),
+      select: vi.fn(async () => "openai"),
+    };
+    mocks.createClackPrompter.mockReturnValue(prompter);
+    mocks.isCliProvider.mockImplementation((provider: string) => provider === "claude-cli");
+    const openaiProvider = createProvider({
+      id: "openai",
+      label: "OpenAI Codex",
+      run: runProviderAuth as ProviderPlugin["auth"][number]["run"],
+    });
+    mocks.resolvePluginProvidersCore.mockImplementation(
+      (params: ResolvePluginProvidersCall | undefined) =>
+        params?.providerRefs?.includes("claude-cli") ? [] : [openaiProvider],
+    );
+
+    await modelsAuthLoginCommand({ provider: "claude-cli" }, runtime);
+
+    expect(prompter.note).toHaveBeenCalledWith(
+      'Provider "claude-cli" uses its own CLI login. Select a provider with an OpenClaw auth flow.',
+      "Provider auth",
+    );
+    expect(prompter.select).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Select a provider" }),
+    );
+    expect(runProviderAuth).toHaveBeenCalledOnce();
+    expect(mocks.resolvePluginProvidersCore).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ providerRefs: ["claude-cli"], activate: true }),
+    );
+    expect(mocks.resolvePluginProvidersCore).toHaveBeenNthCalledWith(
+      2,
+      expect.not.objectContaining({ providerRefs: expect.anything() }),
     );
   });
 

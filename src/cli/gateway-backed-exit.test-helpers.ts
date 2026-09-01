@@ -109,12 +109,15 @@ export async function startNodePairingGateway(
   issuedDeviceToken?: string,
 ): Promise<{
   calls: string[];
+  readonly connectionCount: number;
   url: string;
 }> {
   const calls: string[] = [];
+  let connectionCount = 0;
   const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   activeServers.add(wss);
   wss.on("connection", (ws) => {
+    connectionCount += 1;
     sendMinimalGatewayConnectChallenge(ws);
     ws.on("message", (data) => {
       const frame = parseMinimalGatewayRequestFrame(data);
@@ -127,7 +130,7 @@ export async function startNodePairingGateway(
           ws,
           frame.id,
           buildMinimalGatewayHelloOkPayload({
-            methods: ["node.pair.list", "node.pair.approve"],
+            methods: ["node.pair.list", "node.pair.approve", "node.list"],
             auth: {
               role: "operator",
               scopes: ["operator.admin"],
@@ -148,6 +151,10 @@ export async function startNodePairingGateway(
         });
         return;
       }
+      if (frame.method === "node.list") {
+        sendMinimalGatewayResponse(ws, frame.id, { nodes: [] });
+        return;
+      }
       if (frame.method === "node.pair.approve") {
         sendMinimalGatewayResponse(ws, frame.id, { approved: true });
       }
@@ -155,7 +162,13 @@ export async function startNodePairingGateway(
   });
   await once(wss, "listening");
   const address = wss.address() as AddressInfo;
-  return { calls, url: `ws://127.0.0.1:${address.port}` };
+  return {
+    calls,
+    get connectionCount() {
+      return connectionCount;
+    },
+    url: `ws://127.0.0.1:${address.port}`,
+  };
 }
 
 export async function startGatewayStabilityRpcServer(
@@ -222,6 +235,37 @@ export async function startGatewayStabilityRpcServer(
     throw new Error("test host has no non-loopback private IPv4 address");
   }
   return { authTokens, calls, url: `ws://${host}:${address.port}` };
+}
+
+export async function startStateDirStatusGateway(target: {
+  stateDir: string;
+  configPath: string;
+}): Promise<{ url: string }> {
+  const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  activeServers.add(wss);
+  wss.on("connection", (ws) => {
+    sendMinimalGatewayConnectChallenge(ws);
+    ws.on("message", (data) => {
+      const frame = parseMinimalGatewayRequestFrame(data);
+      if (frame.type !== "req" || !frame.id) {
+        return;
+      }
+      if (frame.method === "connect") {
+        sendMinimalGatewayResponse(
+          ws,
+          frame.id,
+          buildMinimalGatewayHelloOkPayload({ methods: ["status"], snapshot: target }),
+        );
+        return;
+      }
+      if (frame.method === "status") {
+        sendMinimalGatewayResponse(ws, frame.id, { status: "ok" });
+      }
+    });
+  });
+  await once(wss, "listening");
+  const address = wss.address() as AddressInfo;
+  return { url: `ws://127.0.0.1:${address.port}` };
 }
 
 /** Mock Gateway that answers one agent turn with the requested terminal status. */

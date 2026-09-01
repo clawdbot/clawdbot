@@ -136,12 +136,6 @@ const parseUtcOffsetToMinutes = (raw: unknown): number | undefined => {
   const sign = match[1] === "+" ? 1 : -1;
   const hours = Number(match[2]);
   const minutes = Number(match[3] ?? "0");
-  if (!Number.isInteger(hours) || !Number.isInteger(minutes)) {
-    return undefined;
-  }
-  if (hours > 14 || (hours === 14 && minutes !== 0)) {
-    return undefined;
-  }
   const totalMinutes = sign * (hours * 60 + minutes);
   if (totalMinutes < -12 * 60 || totalMinutes > 14 * 60) {
     return undefined;
@@ -182,19 +176,12 @@ export const resolveDateInterpretation = (params: {
     if (utcOffsetMinutes !== undefined) {
       return { ok: true, value: { mode: "utc-offset", utcOffsetMinutes } };
     }
-    // Explicit but unparseable utcOffset must not fall through to UTC day
-    // buckets. Omitted or blank offset remains UTC for compatibility.
-    // Removing this would return a successful cost query for an unrelated range.
-    const explicitOffset = params.utcOffset;
+    // Only omission or blank text requests UTC; malformed offsets must not select another day.
     if (
-      explicitOffset !== undefined &&
-      explicitOffset !== null &&
-      !(typeof explicitOffset === "string" && explicitOffset.trim() === "")
+      params.utcOffset != null &&
+      (typeof params.utcOffset !== "string" || params.utcOffset.trim() !== "")
     ) {
-      return {
-        ok: false,
-        error: "invalid utcOffset: expected a valid UTC offset (UTC±H, UTC±HH, or UTC±HH:MM)",
-      };
+      return { ok: false, error: "invalid utcOffset: expected UTC-12:00 through UTC+14:00" };
     }
   }
   // Backward compatibility: when mode is missing (or invalid), keep current UTC interpretation.

@@ -223,6 +223,11 @@ export function loadCodexBundleMcpThreadConfigCore(
   const userStaticServerNames = Object.keys(userStaticServers).toSorted((left, right) =>
     left.localeCompare(right),
   );
+  if (params.preparationOnly && Object.keys(bundleMcp.prepareDataDirsByServer ?? {}).length) {
+    throw new Error(
+      "Native fork preparation cannot provision plugin data directories. Complete plugin setup before retrying.",
+    );
+  }
   const preparedDataDirs = prepareOwnedBundleMcpDataDirs({
     config: effectiveConfig,
     prepareDataDirsByServer: bundleMcp.prepareDataDirsByServer ?? {},

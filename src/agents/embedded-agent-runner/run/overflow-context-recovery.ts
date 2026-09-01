@@ -1,6 +1,5 @@
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { ContextEngine } from "../../../context-engine/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../../agent-compaction-constants.js";
@@ -9,6 +8,7 @@ import {
   extractObservedOverflowTokenCount,
   isCompactionFailureError,
   isLikelyContextOverflowError,
+  isProviderRequestSizeCeilingError,
 } from "../../embedded-agent-helpers.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { log } from "../logger.js";
@@ -20,7 +20,7 @@ import type { ToolResultPromptProjectionState } from "../session-prompt-state.js
 import {
   resolveLiveToolResultMaxChars,
   sessionLikelyHasOversizedToolResults,
-  truncateOversizedToolResultsInActiveTarget,
+  truncateOversizedToolResultsInSessionManager,
 } from "../tool-result-truncation.js";
 import {
   compactEmbeddedRunForRecovery,
@@ -32,7 +32,19 @@ import {
   resetNoRealConversationTokenSnapshot,
 } from "./session-bootstrap.js";
 
-type CompactResult = Awaited<ReturnType<ContextEngine["compact"]>>;
+function renderOverflowResetGuidance(
+  attempt: EmbeddedRunCompactionRecoveryInput["attempt"],
+): string {
+  const replayMetadata = attempt.currentAttemptReplayMetadata ?? attempt.replayMetadata;
+  const sideEffectCaution = replayMetadata.hadPotentialSideEffects
+    ? " Completed tool actions were not replayed; verify their effects before retrying."
+    : "";
+  return (
+    "Context overflow: prompt too large for the model. " +
+    "Try /reset (or /new) to start a fresh session, or use a larger-context model." +
+    sideEffectCaution
+  );
+}
 
 type EmbeddedRunOverflowRecoveryOutcome =
   | { action: "none" }
@@ -94,6 +106,8 @@ export async function recoverEmbeddedRunOverflow(
     return { action: "none" };
   }
 
+  input.assertRecoveryActive();
+  const contextTokenBudget = input.contextTokenBudget;
   const terminal = projectAgentRunAttemptTerminal(input.attempt.terminal);
   const providerPromptRejection =
     contextOverflowError.source === "assistantError" || terminal.promptErrorSource === "prompt"
@@ -105,6 +119,28 @@ export async function recoverEmbeddedRunOverflow(
   const errorText = contextOverflowError.text;
   const observedOverflowTokens = extractObservedOverflowTokenCount(errorText);
   const preflightRecovery = input.attempt.preflightRecovery;
+  const truncateToolResults = () => {
+    const { sessionManager, assertActive } = input.prepareRecoverySession();
+    if (!sessionManager) {
+      return {
+        truncated: false,
+        truncatedCount: 0,
+        reason: "detached recovery has no caller-owned transcript",
+      };
+    }
+    const target = sessionManager.getSessionTarget();
+    assertActive();
+    const result = truncateOversizedToolResultsInSessionManager({
+      sessionManager,
+      contextWindowTokens: contextTokenBudget,
+      maxCharsOverride: resolveLiveToolResultMaxChars({ contextWindowTokens: contextTokenBudget }),
+      protectTrailingToolResults: preflightRecovery?.route === "compact_then_truncate",
+      projectionState: input.toolResultPromptProjectionState,
+      ...target,
+    });
+    assertActive();
+    return result;
+  };
   const preflightPromptBudget =
     terminal.promptErrorSource === "precheck" &&
     preflightRecovery?.source === "mid-turn" &&
@@ -137,6 +173,25 @@ export async function recoverEmbeddedRunOverflow(
   );
 
   const isCompactionFailure = isCompactionFailureError(errorText);
+
+  // Compaction here budgets against the model's context window, so it cannot make the request fit
+  // under the provider's own ceiling, and every retry re-sends a payload already rejected. Stop
+  // the run instead of compacting, adopting a successor transcript, or truncating and retrying:
+  // declining would return this to the same-model rate-limit retry that reported the refusal.
+  if (isProviderRequestSizeCeilingError(errorText)) {
+    log.warn(
+      `[context-overflow-recovery] provider request-size ceiling for ${input.provider}/${input.modelId}; ` +
+        `livenessState=blocked suggestedAction=reset_or_new kind=${isCompactionFailure ? "compaction_failure" : "context_overflow"} ` +
+        `compaction=skipped retry=skipped`,
+    );
+    return {
+      action: "surface",
+      kind: isCompactionFailure ? "compaction_failure" : "context_overflow",
+      errorText,
+      userText: renderOverflowResetGuidance(input.attempt),
+    };
+  }
+
   // A parked code-mode run is bound to the session it started in and `wait`
   // rejects any other session, so a compaction that adopts a successor cannot
   // redeem parked nested work. The compaction itself stays committed (hooks and
@@ -174,45 +229,34 @@ export async function recoverEmbeddedRunOverflow(
     log.warn(
       `context overflow detected (attempt ${input.state.overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${input.provider}/${input.modelId}`,
     );
-    let compactResult: CompactResult;
-    let previousSessionId: string | undefined;
-    await input.runOwnsCompactionBeforeHook("overflow recovery");
-    try {
-      const compaction = await compactEmbeddedRunForRecovery(input, {
-        tokenBudget: preflightPromptBudget ?? input.contextTokenBudget,
-        trigger: "overflow",
-        diagId: overflowDiagId,
-        attempt: input.state.overflowCompactionAttempts,
-        maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
-        currentTokenCount: overflowTokenCountForCompaction,
-      });
-      compactResult = compaction.result;
-      const sessionAfterCompaction = input.getActiveSession();
-      const stillOwnsCompactionTarget =
-        sessionAfterCompaction.id === activeSession.id &&
-        sessionAfterCompaction.file === activeSession.file;
-      if (!stillOwnsCompactionTarget) {
-        compactResult = {
-          ok: false,
-          compacted: false,
-          reason: "active session changed during overflow compaction",
-        };
-      } else if (compactResult.ok && compactResult.compacted) {
-        previousSessionId = await input.adoptCompactionTranscript(compactResult);
-        const adoptedSession = input.getActiveSession();
-        // Key off the recorded parked-run fact, not lifecycle counters: a local
-        // yield_control parks the exec without any nested lifecycle item.
-        parkedWorkBlocksContinuation =
-          previousSessionId !== undefined &&
-          preflightRecovery?.source === "mid-turn" &&
-          input.attempt.toolMetas.some((entry) => entry.codeModeSuspended === true);
-        if (parkedWorkBlocksContinuation) {
-          log.warn(
-            `[context-overflow-recovery] compaction rotated ${previousSessionId} -> ${adoptedSession.id} ` +
-              `while nested tool work was parked; not continuing mid-turn for ${input.provider}/${input.modelId}`,
-          );
-        }
+    const compaction = await compactEmbeddedRunForRecovery(input, {
+      tokenBudget: preflightPromptBudget ?? input.contextTokenBudget,
+      trigger: "overflow",
+      diagId: overflowDiagId,
+      attempt: input.state.overflowCompactionAttempts,
+      maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
+      currentTokenCount: overflowTokenCountForCompaction,
+    });
+    const { result: compactResult, previousSessionId } = compaction;
+    input.assertRecoveryActive();
+    if (compactResult.ok && compactResult.compacted) {
+      const adoptedSession = input.getActiveSession();
+      // A parked Code Mode run cannot follow a rotated session. The compaction
+      // stays committed, but only a same-session mid-turn continuation is safe.
+      parkedWorkBlocksContinuation =
+        previousSessionId !== undefined &&
+        preflightRecovery?.source === "mid-turn" &&
+        input.attempt.toolMetas.some((entry) => entry.codeModeSuspended === true);
+      if (parkedWorkBlocksContinuation) {
+        log.warn(
+          `[context-overflow-recovery] compaction rotated ${previousSessionId} -> ${adoptedSession.id} ` +
+            `while nested tool work was parked; not continuing mid-turn for ${input.provider}/${input.modelId}`,
+        );
+      }
+      if (input.contextEngine.maintain) {
+        const transcript = input.prepareRecoverySession();
         await runContextEngineMaintenance({
+          ...transcript,
           contextEngine: input.contextEngine,
           sessionId: adoptedSession.id,
           sessionKey: runParams.sessionKey,
@@ -224,25 +268,24 @@ export async function recoverEmbeddedRunOverflow(
           config: runParams.config,
           agentId: input.sessionAgentId,
           contextEngineAgentId: input.contextEngineAgentId,
+          abortSignal: runParams.abortSignal,
         });
+        input.assertRecoveryActive();
       }
-    } catch (compactErr) {
-      log.warn(
-        `contextEngine.compact() threw during overflow recovery for ${input.provider}/${input.modelId}: ${String(compactErr)}`,
-      );
-      compactResult = { ok: false, compacted: false, reason: String(compactErr) };
     }
     await input.runOwnsCompactionAfterHook("overflow recovery", compactResult, previousSessionId);
+    input.assertRecoveryActive();
 
     if (preflightRecovery && isNoRealConversationCompactionNoop(compactResult)) {
       input.state.lastCompactionTokensAfter = undefined;
       input.state.lastContextBudgetStatus = undefined;
+      const transcript = input.prepareRecoverySession();
       await resetNoRealConversationTokenSnapshot({
-        config: runParams.config,
-        sessionKey: runParams.sessionKey,
-        agentId: input.sessionAgentId,
+        sessionTarget: transcript.sessionManager?.getSessionTarget(),
         sessionPersistence: runParams.sessionPersistence,
+        assertActive: transcript.assertActive,
       });
+      input.assertRecoveryActive();
       log.info(
         `[context-overflow-precheck] stale token state had no real conversation messages for ` +
           `${input.provider}/${input.modelId}; resetting the context snapshot and retrying prompt`,
@@ -254,28 +297,8 @@ export async function recoverEmbeddedRunOverflow(
     }
 
     if (compactResult.compacted) {
-      const tokensAfter = compactResult.result?.tokensAfter;
-      if (typeof tokensAfter === "number" && Number.isFinite(tokensAfter) && tokensAfter >= 0) {
-        input.state.lastCompactionTokensAfter = Math.floor(tokensAfter);
-      }
       if (preflightRecovery?.route === "compact_then_truncate") {
-        const sessionAfterCompaction = input.getActiveSession();
-        // Recovery must preserve stored rows and branch from the frozen provider projection.
-        // Rewriting in place erases audit history and can persist bytes the provider never saw.
-        const truncResult = await truncateOversizedToolResultsInActiveTarget({
-          scope: {
-            sessionId: sessionAfterCompaction.id,
-            sessionKey: runParams.sessionKey ?? sessionAfterCompaction.id,
-            sessionFile: sessionAfterCompaction.file,
-            agentId: input.sessionAgentId,
-          },
-          contextWindowTokens: input.contextTokenBudget,
-          maxCharsOverride: resolveLiveToolResultMaxChars({
-            contextWindowTokens: input.contextTokenBudget,
-          }),
-          protectTrailingToolResults: true,
-          projectionState: input.toolResultPromptProjectionState,
-        });
+        const truncResult = truncateToolResults();
         if (truncResult.truncated) {
           log.info(
             `[context-overflow-precheck] post-compaction tool-result truncation succeeded for ${input.provider}/${input.modelId}; truncated ${truncResult.truncatedCount} tool result(s)`,
@@ -286,7 +309,9 @@ export async function recoverEmbeddedRunOverflow(
           );
         }
       }
-      input.state.autoCompactionCount += 1;
+      input.assertRecoveryActive();
+      input.runParams.onAutoCompactionSucceeded?.(input.state.autoCompactionCount);
+      input.assertRecoveryActive();
       input.armPostCompactionGuard();
       if (parkedWorkBlocksContinuation) {
         log.warn(
@@ -300,7 +325,8 @@ export async function recoverEmbeddedRunOverflow(
         if (preflightRecovery?.source === "mid-turn") {
           input.prepareCurrentTranscriptRetry();
         } else {
-          await input.prepareCompactedTranscriptRetry();
+          await input.prepareCompactedTranscriptRetry(input.assertRecoveryActive);
+          input.assertRecoveryActive();
         }
         return { action: "retry" };
       }
@@ -328,21 +354,7 @@ export async function recoverEmbeddedRunOverflow(
         `[context-overflow-recovery] Attempting tool result truncation for ${input.provider}/${input.modelId} ` +
           `(contextWindow=${input.contextTokenBudget} tokens)`,
       );
-      const session = input.getActiveSession();
-      // Recovery must preserve stored rows and branch from the frozen provider projection.
-      // Rewriting in place erases audit history and can persist bytes the provider never saw.
-      const truncResult = await truncateOversizedToolResultsInActiveTarget({
-        scope: {
-          sessionId: session.id,
-          sessionKey: runParams.sessionKey ?? session.id,
-          sessionFile: session.file,
-          agentId: input.sessionAgentId,
-        },
-        contextWindowTokens: input.contextTokenBudget,
-        maxCharsOverride: toolResultMaxChars,
-        protectTrailingToolResults: preflightRecovery?.route === "compact_then_truncate",
-        projectionState: input.toolResultPromptProjectionState,
-      });
+      const truncResult = truncateToolResults();
       if (truncResult.truncated) {
         input.markOwnedTranscriptRetry();
         log.info(
@@ -371,15 +383,7 @@ export async function recoverEmbeddedRunOverflow(
     );
   }
   const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
-  const currentReplayMetadata =
-    input.attempt.currentAttemptReplayMetadata ?? input.attempt.replayMetadata;
-  const sideEffectCaution = currentReplayMetadata.hadPotentialSideEffects
-    ? " Completed tool actions were not replayed; verify their effects before retrying."
-    : "";
-  const userText =
-    "Context overflow: prompt too large for the model. " +
-    "Try /reset (or /new) to start a fresh session, or use a larger-context model." +
-    sideEffectCaution;
+  const userText = renderOverflowResetGuidance(input.attempt);
   log.warn(
     `[context-overflow-recovery] exhausted provider overflow recovery for ${input.provider}/${input.modelId}; ` +
       `livenessState=blocked suggestedAction=reset_or_new kind=${kind}`,

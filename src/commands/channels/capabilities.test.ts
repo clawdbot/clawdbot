@@ -256,7 +256,11 @@ describe("channelsCapabilitiesCommand", () => {
     expect(mocks.refreshPluginRegistryAfterConfigMutation).not.toHaveBeenCalled();
   });
 
-  it("rejects malformed timeouts before capability probes", async () => {
+  it.each([
+    { expected: 'Received: "10s"', label: "unparseable", timeout: "10s" },
+    { expected: "Invalid --timeout", label: "empty", timeout: "" },
+    { expected: "Invalid --timeout", label: "whitespace", timeout: " \t " },
+  ])("rejects a $label timeout before capability probes", async ({ expected, timeout }) => {
     const probeAccount = vi.fn(async () => ({ ok: true }));
     const plugin = buildPlugin({
       id: "slack",
@@ -275,8 +279,8 @@ describe("channelsCapabilitiesCommand", () => {
     });
 
     await expect(
-      channelsCapabilitiesCommand({ channel: "slack", timeout: "10s" }, runtime),
-    ).rejects.toThrow('Received: "10s"');
+      channelsCapabilitiesCommand({ channel: "slack", timeout }, runtime),
+    ).rejects.toThrow(expected);
     expect(probeAccount).not.toHaveBeenCalled();
   });
 

@@ -1,13 +1,13 @@
 // Control UI tests cover the settings profile page against a mocked Gateway.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, type Page } from "playwright/test";
-import { it } from "vitest";
+import { beforeEach, it } from "vitest";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../../packages/gateway-protocol/src/index.ts";
 import {
   buildControlUiCspHeader,
   computeInlineScriptHashes,
 } from "../../../src/gateway/control-ui-csp.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -19,7 +19,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "profile-identity");
+let proofDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    proofDir = createControlUiE2eArtifactDir("profile-identity");
+  }
+});
 const basePath = "/wilfred";
 const profilePath = `${basePath}/settings/profile`;
 
@@ -27,7 +32,6 @@ async function screenshot(page: Page, name: string) {
   if (!captureUiProof) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
   await page.locator("#settings-profile-identity").screenshot({
     animations: "disabled",
     path: path.join(proofDir, name),
@@ -102,9 +106,6 @@ suite.define(() => {
   });
 
   it("shows sign-in verification separately from explicit Git co-author credit", async () => {
-    if (captureUiProof) {
-      await mkdir(proofDir, { recursive: true });
-    }
     await suite.withPage(
       {
         ...(captureUiProof
@@ -188,6 +189,23 @@ suite.define(() => {
     );
   });
 
+  it("credits a verified GitHub account by default with no stored preference", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
+      await openProfilePage(page, {
+        "users.self": { profile: linkedGitHubProfile },
+        "users.prefs.get": { status: "ok", entries: {} },
+      });
+
+      const coauthorRow = page.locator("#settings-profile-identity .settings-row").filter({
+        has: page.locator(".settings-row__title", { hasText: "Git co-author credit" }),
+      });
+      const toggle = coauthorRow.getByRole("switch", { name: "Git co-author credit" });
+      await expect(toggle).toBeEnabled();
+      await expect(toggle).toBeChecked();
+      await screenshot(page, "13-git-coauthor-default-on.png");
+    });
+  });
+
   it("renders the protected assistant avatar through an authenticated blob fetch", async () => {
     await suite.withPage(
       {
@@ -253,7 +271,6 @@ suite.define(() => {
           ]),
         );
         if (captureUiProof) {
-          await mkdir(proofDir, { recursive: true });
           await page.locator(".profile-hero").screenshot({
             animations: "disabled",
             path: path.join(proofDir, "06-authenticated-assistant-avatar.png"),
@@ -264,9 +281,6 @@ suite.define(() => {
   });
 
   it("shares one authenticated avatar between the sidebar and profile preview", async () => {
-    if (captureUiProof) {
-      await mkdir(proofDir, { recursive: true });
-    }
     await suite.withPage(
       {
         ...(captureUiProof
@@ -632,7 +646,7 @@ suite.define(() => {
         await expect(chooser).toHaveAccessibleName("Choose image");
         await chooser.focus();
         await expect(chooser).toBeFocused();
-        await screenshot(page, "11-avatar-keyboard-focus.png");
+        await screenshot(page, `11-avatar-keyboard-focus-${revision}.png`);
         const [fileChooser] = await Promise.all([
           page.waitForEvent("filechooser"),
           chooser.press("Enter"),
@@ -648,7 +662,7 @@ suite.define(() => {
         await expect
           .poll(async () => (await gateway.getRequests("users.setAvatar")).length)
           .toBe(requestCountBefore + 1);
-        await screenshot(page, "12-avatar-action-disabled.png");
+        await screenshot(page, `12-avatar-action-disabled-${revision}.png`);
         await expect(chooser).toBeDisabled();
         await expect
           .poll(() => chooser.evaluate((element) => getComputedStyle(element).opacity))

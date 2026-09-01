@@ -41,7 +41,7 @@ function sessionsList(
     path: "",
     sessions: [
       {
-        key: "main",
+        key: "agent:main:main",
         kind: "direct",
         model: model.id,
         modelProvider: model.provider,
@@ -398,7 +398,7 @@ suite.define(() => {
           { id: "gpt-5.6", provider: "openai" },
         ),
       );
-      await gateway.emitGatewayEvent("sessions.changed", { sessionKey: "main" });
+      await gateway.emitGatewayEvent("sessions.changed", { sessionKey: "agent:main:main" });
       await expect.poll(async () => (await gateway.getRequests("tools.effective")).length).toBe(2);
       await expect.poll(() => menu.getByText("Loading tools…").isVisible()).toBe(true);
       await gateway.resolveDeferred("tools.effective", effectiveToolsResponse());
@@ -531,6 +531,9 @@ suite.define(() => {
         deferredMethods: ["tools.effective"],
         heldMethods: ["sessions.list"],
         methodResponses: {
+          // Keep the session projection unavailable until the held list arrives.
+          "chat.startup": { messages: [], sessionId: "session:agent:main:main" },
+          "sessions.describe": { session: null },
           "config.get": configResponse({
             github: { url: "https://mcp.example.test", enabled: true },
           }),

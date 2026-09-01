@@ -426,6 +426,7 @@ export type CodexTurn = {
 
 export type CodexThread = {
   id: string;
+  forkedFromId?: string | null;
   sessionId?: string;
   path?: string | null;
   projectId: string | null;
@@ -653,6 +654,8 @@ export declare namespace v2 {
 }
 
 type CodexAppServerRequestParamsOverride = {
+  "thread/backgroundTerminals/list": { threadId: string; limit?: number };
+  "thread/backgroundTerminals/terminate": { threadId: string; processId: string };
   "app/installed": CodexAppsInstalledParams;
   "app/list": CodexAppsListParams;
   "app/read": CodexAppsReadParams;
@@ -685,6 +688,8 @@ type CodexAppServerRequestParamsOverride = {
 };
 
 type CodexAppServerRequestResultMap = {
+  "thread/backgroundTerminals/list": { data: { processId: string }[] };
+  "thread/backgroundTerminals/terminate": { terminated: boolean };
   initialize: CodexInitializeResponse;
   "account/rateLimits/read": JsonValue;
   "account/read": CodexGetAccountResponse;

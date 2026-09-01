@@ -30,6 +30,7 @@ function createFakeGh() {
   const realGh = join(tempDir, "real-gh");
   const calls = join(tempDir, "calls.log");
   const dispatched = join(tempDir, "dispatched");
+  const pollingPreload = join(tempDir, "immediate-poll.mjs");
   mkdirSync(binDir);
   const fakeGhScript = `#!/usr/bin/env bash
 set -euo pipefail
@@ -68,7 +69,14 @@ esac
   writeFileSync(realGh, fakeGhScript);
   chmodSync(pathGh, 0o755);
   chmodSync(realGh, 0o755);
-  return { binDir, calls, dispatched, realGh };
+  // The GitHub fixture is synchronous; keep poll scheduling without real backoff waits.
+  writeFileSync(
+    pollingPreload,
+    `const realSetTimeout = globalThis.setTimeout;
+globalThis.setTimeout = (callback, _delay, ...args) => realSetTimeout(callback, 0, ...args);
+`,
+  );
+  return { binDir, calls, dispatched, pollingPreload, realGh };
 }
 
 function runDispatch(
@@ -77,6 +85,7 @@ function runDispatch(
     backend?: "ci" | "crabbox";
     checkOnLaterPage?: boolean;
     mode?: "head-change";
+    runTitle?: string;
     wrongCheck?: boolean;
   } = {},
 ) {
@@ -84,7 +93,7 @@ function runDispatch(
   const runList = {
     workflow_runs: [
       {
-        display_title: crabbox ? `PR Crabbox gate #12345 / ${headSha}` : "CI",
+        display_title: crabbox ? (options.runTitle ?? `PR Crabbox gate #12345 / ${headSha}`) : "CI",
         head_branch: crabbox ? "main" : "contributor/fix-hosted-gates",
         head_sha: crabbox ? workflowSha : headSha,
         html_url: runUrl,
@@ -142,6 +151,8 @@ function runDispatch(
   return spawnSync(
     process.execPath,
     [
+      "--import",
+      fakeGh.pollingPreload,
       dispatchScript,
       "12345",
       "contributor/fix-hosted-gates",
@@ -196,6 +207,17 @@ describePosix("scripts/pr ci-dispatch", () => {
       `gh\tapi --paginate --slurp repos/openclaw/openclaw/commits/${headSha}/check-runs?filter=latest&per_page=100`,
     );
   });
+
+  it.each(["PR Crabbox gate", "PR Crabbox gate #12345"])(
+    "does not accept a generic or truncated Crabbox run title: %s",
+    (runTitle) => {
+      const result = runDispatch(createFakeGh(), { backend: "crabbox", runTitle });
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(result.stdout).toContain("run_url=pending");
+      expect(result.stdout).not.toContain('"backend":"crabbox"');
+    },
+    40_000,
+  );
 
   it("rejects caller-supplied proof handles", () => {
     const fakeGh = createFakeGh();

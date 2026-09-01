@@ -8,15 +8,22 @@ read_when:
 
 # Session search
 
-`sessions_search` searches the user and assistant text in your own past sessions. Each result
+`sessions_search` searches the user and assistant text in visible past sessions. Each result
 includes a `sessionKey`, timestamp, role, and a short matching excerpt. Pass the returned
 `sessionKey` to `sessions_history` when you need the surrounding conversation.
 
 ## Visibility and output
 
-Search uses the same session visibility rules as `sessions_history`. Results outside the caller's
-visible session tree are removed before result limits are applied. Sandboxed agents remain limited
-to sessions they spawned when spawned-session visibility is enabled.
+Search uses the same configured session visibility rules as `sessions_history`. The default
+`tools.sessions.visibility: "agent"` permits unsandboxed callers to search all sessions belonging to
+their agent, including other users' conversations in shared-agent deployments. Set explicit `tree`
+or `self`, or use separate agents, when callers need a narrower trust boundary. Per-peer DM routing
+separates conversation context but does not restrict session-tool visibility.
+
+Results outside the caller's effective visibility scope are removed before result limits are
+applied. Sandboxed agents remain limited to sessions they spawned when spawned-session visibility
+is enabled. Incognito sessions remain excluded; ordinary cross-agent access requires `all` plus
+agent-to-agent policy.
 
 Excerpts are redacted before they return to the model. Results are also bounded by count, excerpt
 length, and total response size.

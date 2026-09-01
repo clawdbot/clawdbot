@@ -9,7 +9,10 @@ import type {
   UsersSetAvatarResult,
   UsersSetDisplayNameResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
-import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../../../packages/gateway-protocol/src/index.ts";
+import {
+  GIT_COAUTHOR_PREFERENCE_KEY,
+  isGitCoauthorCreditEnabled,
+} from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import {
@@ -26,6 +29,7 @@ import {
   renderLearnMoreLink,
   renderSettingsEmpty,
   renderSettingsGroup,
+  renderSettingsLoadingSkeleton,
   renderSettingsNavRow,
   renderSettingsPage,
   renderSettingsSection,
@@ -55,7 +59,7 @@ export class ProfilePage extends OpenClawLightDomElement {
   @state() private selfUser: AuthenticatedUser | null = null;
   @state() private ownProfile: UserProfile | null = null;
   @state() private displayName = "";
-  @state() private gitCoauthorEnabled = false;
+  @state() private gitCoauthorEnabled = true;
   @state() private identityLoading = false;
   @state() private identityBusy: "display-name" | "avatar" | "git-coauthor" | null = null;
   @state() private identityError: string | null = null;
@@ -66,11 +70,7 @@ export class ProfilePage extends OpenClawLightDomElement {
   private canWrite = false;
   private heroAvatarAuthCandidates: string[] = [];
   private heroAvatarAuthReady = false;
-  private readonly heroAvatarLoader = new AuthenticatedAvatarRouteLoader(() => {
-    if (this.isConnected) {
-      this.requestUpdate();
-    }
-  });
+  private readonly heroAvatarLoader = new AuthenticatedAvatarRouteLoader(this);
   private identityRequestId = 0;
   private subscriptions: Array<() => void> = [];
 
@@ -90,7 +90,6 @@ export class ProfilePage extends OpenClawLightDomElement {
     }
     this.subscriptions = [];
     this.identityRequestId += 1;
-    this.heroAvatarLoader.reset();
     this.heroAvatarAuthCandidates = [];
     this.heroAvatarAuthReady = false;
     this.client = null;
@@ -140,7 +139,7 @@ export class ProfilePage extends OpenClawLightDomElement {
       this.identityRequestId += 1;
       this.ownProfile = null;
       this.displayName = "";
-      this.gitCoauthorEnabled = false;
+      this.gitCoauthorEnabled = true;
       this.identityLoading = false;
       this.identityBusy = null;
       this.identityError = null;
@@ -183,7 +182,7 @@ export class ProfilePage extends OpenClawLightDomElement {
       }
       this.ownProfile = profile;
       this.displayName = hasUnsavedDisplayName ? displayNameDraft : (profile.displayName ?? "");
-      this.gitCoauthorEnabled = false;
+      this.gitCoauthorEnabled = true;
       if (profile.githubIdentity) {
         const preferences = await client.request<UsersPrefsGetResult>("users.prefs.get", {
           keys: [GIT_COAUTHOR_PREFERENCE_KEY],
@@ -192,7 +191,8 @@ export class ProfilePage extends OpenClawLightDomElement {
           return;
         }
         this.gitCoauthorEnabled =
-          preferences.status === "ok" && preferences.entries[GIT_COAUTHOR_PREFERENCE_KEY] === true;
+          preferences.status === "ok" &&
+          isGitCoauthorCreditEnabled(preferences.entries[GIT_COAUTHOR_PREFERENCE_KEY]);
       }
     } catch (error) {
       if (requestId === this.identityRequestId) {
@@ -364,20 +364,20 @@ export class ProfilePage extends OpenClawLightDomElement {
     if (!this.ownProfile) {
       // users.self is the idempotent gateway-owned profile ensure path. Retrying
       // keeps profile ids and authenticated email linkage authoritative server-side.
-      const emptyState = this.identityLoading
-        ? t("profilePage.identity.loading")
-        : this.identityError
-          ? this.identityError
-          : html`<div class="profile-identity-empty">
-              <span>${t("profilePage.identity.notSet")}</span>
-              <button type="button" class="btn btn--sm" @click=${() => void this.loadIdentity()}>
-                ${t("profilePage.identity.setIdentity")}
-              </button>
-            </div>`;
+      const emptyState = this.identityError
+        ? this.identityError
+        : html`<div class="profile-identity-empty">
+            <span>${t("profilePage.identity.notSet")}</span>
+            <button type="button" class="btn btn--sm" @click=${() => void this.loadIdentity()}>
+              ${t("profilePage.identity.setIdentity")}
+            </button>
+          </div>`;
       return html`<div id=${PROFILE_SETTINGS_TARGET_IDS.identity}>
         ${renderSettingsSection(
           { title: t("profilePage.identity.title") },
-          renderSettingsEmpty(emptyState),
+          this.identityLoading
+            ? renderSettingsLoadingSkeleton({ label: t("profilePage.identity.loading"), rows: 2 })
+            : renderSettingsEmpty(emptyState),
         )}
       </div>`;
     }

@@ -5,18 +5,20 @@ import { requireActivePluginChannelRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
+import type { StartChannelOptions } from "./server-channel-runtime.types.js";
 import type { GatewayReloadHandlerParams } from "./server-reload-contracts.js";
 import { collectChannelOperationFailures } from "./server-reload-utils.js";
 
-function startGatewayChannelFromActiveRegistry(
+async function startGatewayChannelFromActiveRegistry(
   params: Pick<GatewayReloadHandlerParams, "startChannel">,
   channel: ChannelKind,
   accountId?: string,
+  options: Pick<StartChannelOptions, "skipUnavailableAccounts"> = {},
 ): Promise<void> {
-  return withPluginRuntimeRegistryScope(requireActivePluginChannelRegistry(), () =>
+  await withPluginRuntimeRegistryScope(requireActivePluginChannelRegistry(), () =>
     // Reload and rollback replace snapshots, not the operator's stopped intent.
     runOutsideGatewayRootWorkAdmission(() =>
-      params.startChannel(channel, accountId, { preserveManualStop: true }),
+      params.startChannel(channel, accountId, { preserveManualStop: true, ...options }),
     ),
   );
 }
@@ -162,7 +164,9 @@ export async function restartGatewayChannels(options: {
         await params.stopChannel(channel, accountId, { manual: false });
       }
       if (!suppressed && !isLifecycleReloadAborted()) {
-        await startGatewayChannelFromActiveRegistry(params, channel, accountId);
+        await startGatewayChannelFromActiveRegistry(params, channel, accountId, {
+          skipUnavailableAccounts: true,
+        });
       }
     } catch (err) {
       accountFailures.push(`${channel}[${accountId}]`);
@@ -186,7 +190,9 @@ export async function restartGatewayChannels(options: {
         await params.stopChannel(channel, undefined, { manual: false });
       }
       if (!suppressed && !isLifecycleReloadAborted()) {
-        await startGatewayChannelFromActiveRegistry(params, channel);
+        await startGatewayChannelFromActiveRegistry(params, channel, undefined, {
+          skipUnavailableAccounts: true,
+        });
       }
     },
     onFailure: (channel, err) => {

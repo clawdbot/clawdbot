@@ -125,6 +125,11 @@ Claude Code subprocess. A changed model, system prompt, or tool policy starts a
 new query; persisted Claude session IDs still provide
 conversation continuity when the gateway or subprocess restarts.
 
+For local SDK-backed turns, prompt-build hook context stays private: Claude
+receives it as a native hook attachment, while OpenClaw history preserves the original user message. The
+native session retains the context for resume; imported visible history and
+cross-provider fallback preludes do not copy private hook attachments.
+
 Keep Claude Code updated, especially if the SDK reports an incompatible
 installed executable:
 
@@ -185,13 +190,14 @@ register a small wrapper backend plugin.
   - `none`: never send a session id.
 - `claude-cli` defaults to `liveSession: "claude-stdio"`, `output: "jsonl"`, and `input: "stdin"`. The owning Anthropic plugin keeps one official Agent SDK query and Claude Code subprocess warm for compatible consecutive agent turns. If the gateway restarts or the idle process exits, OpenClaw resumes from the stored Claude session id. Stored session ids are verified against a readable project transcript before resume; a missing transcript clears the binding (logged as `reason=transcript-missing`) instead of silently starting a fresh session under `--resume`.
 - Stored CLI sessions are provider-owned continuity. Automatic reset is disabled by default; `/reset` and explicit daily or idle `session.reset` policies still cut them.
-- Fresh CLI sessions normally reseed only from OpenClaw's compaction summary plus the post-compaction tail. To recover short sessions invalidated before compaction, a backend can opt in with `reseedFromRawTranscriptWhenUncompacted: true`. Raw transcript reseed stays bounded and limited to safe invalidations, such as a missing CLI transcript, an orphaned tool-use tail, message-policy/system-prompt/cwd/MCP changes, or a session-expired retry; auth profile or credential-epoch changes never reseed raw transcript history.
+- Fresh CLI sessions normally reseed from OpenClaw's latest compaction summary, the messages retained by that compaction, and subsequent turns on the active branch. OpenClaw reads this history from the canonical session SQLite database; it does not require an OpenClaw JSONL transcript file. To recover short sessions invalidated before compaction, a backend can opt in with `reseedFromRawTranscriptWhenUncompacted: true`. Raw transcript reseed stays bounded and limited to safe invalidations, such as a missing CLI transcript, an orphaned tool-use tail, message-policy/system-prompt/cwd/MCP changes, or a session-expired retry; auth profile or credential-epoch changes never reseed raw transcript history.
+- Helper runs with a caller-owned in-memory transcript use that history for hooks and fresh-session reseeding, including meaningful history before compaction. Empty memory stays empty even when the run carries another session's storage identity. Context-engine maintenance rewrites that same memory before the helper returns, even when the engine requests background maintenance. Durable transcripts retain their background maintenance path. An explicitly owned native CLI binding can still resume; resumed turns send the current prompt without injecting the memory history again.
 
 Serialization: `serialize: true` keeps same-lane runs ordered (most CLIs serialize on one provider lane). OpenClaw also drops stored CLI session reuse when the selected auth identity changes, including a changed auth profile id, static API key, static token, or OAuth account identity when the CLI exposes one; OAuth access/refresh token rotation alone does not cut the session. If a CLI has no stable OAuth account id, OpenClaw lets that CLI enforce its own resume permissions.
 
 ## Fallback prelude from claude-cli sessions
 
-When a `claude-cli` attempt fails over to a non-CLI candidate in [`agents.defaults.model.fallbacks`](/concepts/model-failover), OpenClaw seeds the next attempt with a context prelude harvested from Claude Code's local JSONL transcript (under `~/.claude/projects/`, keyed per workspace). Without this seed the fallback provider starts cold, since OpenClaw's own session transcript is empty for `claude-cli` runs.
+When a `claude-cli` attempt fails over to a non-CLI candidate in [`agents.defaults.model.fallbacks`](/concepts/model-failover), OpenClaw seeds the next attempt with a context prelude harvested from Claude Code's local JSONL transcript (under `~/.claude/projects/`, keyed per workspace). This supplies CLI-owned context that may not be present in OpenClaw's SQLite session transcript.
 
 - The prelude prefers the latest `/compact` summary or `compact_boundary` marker, then appends the most recent post-boundary turns up to a char budget. Pre-boundary turns are dropped because the summary already represents them.
 - Tool blocks are coalesced to compact `(tool call: name)` and `(tool result: …)` hints to keep the prompt budget honest; an oversized summary is truncated and labeled `(truncated)`.
@@ -251,8 +257,9 @@ The bundled Anthropic plugin registers for `claude-cli`:
 | `systemPromptMode`    | `append`                                                                                                                                                                                                      |
 
 On Claude Code 2.1.98 or newer, the bundled backend adds
-`--exclude-dynamic-system-prompt-sections` after its bounded Gateway-startup
-version probe. Older, unknown, or failed probes keep the established argv.
+`--exclude-dynamic-system-prompt-sections` after a bounded version probe on the
+first CLI execution. Concurrent executions share the probe; API catalog discovery
+does not start it. Older, unknown, or failed probes keep the established argv.
 
 The bundled Google plugin registers for `google-gemini-cli`:
 
@@ -301,6 +308,8 @@ Some CLI backends run an agent that compacts its own transcript, so OpenClaw mus
 
 `claude-cli` has no harness endpoint (Claude Code compacts internally), so it declares `ownsNativeCompaction: true`. Automatic OpenClaw compaction defers to Claude Code, while an explicit `/compact` resumes the bound Claude Code session and sends its native `/compact` command. OpenClaw passes the run's effective context budget through Claude Code's documented [`CLAUDE_CODE_AUTO_COMPACT_WINDOW`](https://code.claude.com/docs/en/env-vars), keeping native auto-compaction aligned with configured Anthropic `contextTokens` limits. Native-harness sessions such as Codex keep routing to their harness compaction endpoint instead.
 
+`google-gemini-cli` also owns automatic compaction and persists its compressed session for resume. OpenClaw defers to Gemini CLI rather than running a second summarizer. Explicit `/compact` is unsupported for this backend because it does not declare a manual compaction capability.
+
 ```typescript
 api.registerCliBackend({
   id: "my-cli",
@@ -334,6 +343,25 @@ When bundle MCP is enabled, OpenClaw:
 - binds tool access to the Gateway-selected session, account, and channel context instead of trusting child-process headers;
 - loads enabled bundle-MCP servers for the current workspace and merges them with any existing backend MCP config/settings shape;
 - rewrites the launch config using the backend-owned integration mode from the owning plugin.
+
+`tools.allow` and `tools.deny` also constrain configured native MCP servers.
+OpenClaw lists each server through its session-scoped runtime, assigns the same
+provider-safe `<safe-server>__<safe-tool>` identities used by embedded tools,
+and applies the complete layered policy before process spawn or Codex
+`thread/start`/`thread/resume`. It then projects exact raw names into each
+backend's enforcement contract: Claude receives server omission plus bare
+`--disallowedTools` entries, Codex receives `enabled_tools` and
+`disabled_tools`, and Gemini receives `includeTools` and `excludeTools`.
+Configured server filters and session overrides remain additional
+restrictions. These backend fields are generated implementation details; keep
+operator policy in OpenClaw configuration.
+
+For example, `agents.entries.research.tools.allow: ["docs__read_docs"]`
+exposes only that tool from the safe `docs` namespace, while
+`deny: ["docs__delete_*"]` removes matching siblings. An empty intersection
+omits the affected MCP server. A server whose restrictive catalog cannot be
+established is also omitted and reported instead of being passed through
+unfiltered.
 
 Restricted runs such as cron jobs with `toolsAllow` require an exact
 backend-owned translation. The bundled `claude-cli` backend disables Claude's
@@ -371,6 +399,17 @@ Claude CLI backends scale this cap with the resolved Claude context window inste
 - Structured outputs depend on the CLI's own JSON format.
 
 ## Troubleshooting
+
+When a local Claude Agent SDK subprocess fails, its run error includes a bounded,
+redacted stderr diagnostic when available. Check the run error or `openclaw logs`
+for the underlying launch, permission, or runtime failure. Successful turns do not
+forward stderr into logs. Each live process has its own diagnostic buffer. Since
+stderr has no turn identifiers, a warm process's failure can include earlier turns;
+the error labels that output as process-wide rather than attributing it to the failing turn.
+Oversized incomplete lines are omitted so truncation cannot expose credential
+fragments. Native stdout and MCP input are not included in these diagnostics.
+Stderr is supplemental display text only; it does not change the native error's
+retry, authentication, timeout, or fallback classification.
 
 | Symptom               | Fix                                                                                            |
 | --------------------- | ---------------------------------------------------------------------------------------------- |

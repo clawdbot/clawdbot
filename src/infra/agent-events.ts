@@ -12,6 +12,7 @@ import {
   resetAgentRunRegistryForTest,
   rotateAgentRunRegistryLifecycleGeneration,
 } from "./agent-run-registry.js";
+import { recordAgentRunOutputTokens } from "./agent-run-usage.js";
 
 /** Approval event phase for request/resolution transitions. */
 type AgentApprovalEventPhase = "requested" | "resolved";
@@ -82,9 +83,15 @@ export type AgentEventRuntimePayload = AgentEventPayload & {
   readonly projectSessionMessages?: boolean;
 };
 
+type AgentEventListener = (evt: AgentEventRuntimePayload) => void;
+type AgentEventListeners = Map<AgentEventListener, number>;
+
 type AgentEventState = {
   seqByRun: Map<string, number>;
-  listeners: Set<(evt: AgentEventRuntimePayload) => void>;
+  listeners: AgentEventListeners;
+  runListeners: Map<string, AgentEventListeners>;
+  nextListenerId: number;
+  listenerRevision: number;
   auditListeners: Set<(evt: AgentEventPayload) => void>;
   lifecycleRotationHandlers?: Map<string, (lifecycleGeneration: string) => void>;
 };
@@ -100,7 +107,10 @@ type AgentEventExecutionContext = {
 function getAgentEventState(): AgentEventState {
   return resolveGlobalSingleton<AgentEventState>(AGENT_EVENT_STATE_KEY, () => ({
     seqByRun: new Map<string, number>(),
-    listeners: new Set<(evt: AgentEventRuntimePayload) => void>(),
+    listeners: new Map(),
+    runListeners: new Map(),
+    nextListenerId: 0,
+    listenerRevision: 0,
     auditListeners: new Set<(evt: AgentEventPayload) => void>(),
   }));
 }
@@ -329,14 +339,64 @@ function enrichAgentEvent(
   return enriched;
 }
 
+function* iterateAgentEventListeners(
+  state: AgentEventState,
+  enriched: AgentEventRuntimePayload,
+): Generator<AgentEventListener, void> {
+  let lastId = -1;
+  let revision = -1;
+  let runId: string | undefined;
+  let pending: Array<[AgentEventListener, number]> = [];
+  let index = 0;
+  while (true) {
+    const currentRunId = enriched.runId;
+    // Recheck even after the last yield: the original live Set sees additions,
+    // deletions, and re-additions made by a callback. Each nested emit owns its cursor.
+    if (revision !== state.listenerRevision || runId !== currentRunId) {
+      revision = state.listenerRevision;
+      runId = currentRunId;
+      pending = [...state.listeners, ...(state.runListeners.get(runId) ?? [])]
+        .filter(([, id]) => id > lastId)
+        .toSorted(([, left], [, right]) => left - right);
+      index = 0;
+    }
+    const next = pending[index++];
+    if (!next) {
+      return;
+    }
+    lastId = next[1];
+    yield next[0];
+  }
+}
+
 /** Emits an event only when its run ownership is still current. */
 export function emitAgentEventIfCurrent(event: Omit<AgentEventPayload, "seq" | "ts">): boolean {
   const enriched = enrichAgentEvent(event);
   if (!enriched) {
     return false;
   }
-  notifyListeners(getAgentEventState().listeners, enriched);
+  notifyListeners(iterateAgentEventListeners(getAgentEventState(), enriched), enriched);
   return true;
+}
+
+/** Adds one completed model call, returning its accepted run total for local callbacks. */
+export function emitAgentRunOutputTokens(params: {
+  runId: string;
+  lifecycleGeneration: string;
+  outputTokens: number;
+  sessionKey?: string;
+}): { outputTokens: number } | undefined {
+  return recordAgentRunOutputTokens({
+    ...params,
+    emit: (data) =>
+      emitAgentEventIfCurrent({
+        runId: params.runId,
+        lifecycleGeneration: params.lifecycleGeneration,
+        sessionKey: params.sessionKey,
+        stream: "usage",
+        data,
+      }),
+  });
 }
 
 /** Emits an agent event after assigning per-run sequence, timestamp, and context metadata. */
@@ -350,7 +410,7 @@ export function emitAgentEventForOwner(
 ) {
   const enriched = enrichAgentEvent(event, claimId);
   if (enriched) {
-    notifyListeners(getAgentEventState().listeners, enriched);
+    notifyListeners(iterateAgentEventListeners(getAgentEventState(), enriched), enriched);
   }
 }
 
@@ -371,13 +431,44 @@ export function emitAgentAuditEvent(event: Omit<AgentEventPayload, "seq" | "ts">
 
 /** Subscribes to sequenced agent events; returns an unsubscribe callback. */
 export function onAgentEvent(listener: (evt: AgentEventPayload) => void) {
-  const state = getAgentEventState();
-  return registerListener(state.listeners, listener);
+  return registerAgentEventListener(listener);
 }
 
 /** Subscribes Gateway internals that consume non-public ownership and routing metadata. */
 export function onAgentRuntimeEvent(listener: (evt: AgentEventRuntimePayload) => void) {
-  return registerListener(getAgentEventState().listeners, listener);
+  return registerAgentEventListener(listener);
+}
+
+/**
+ * Subscribes to one run's sequenced agent events; returns an unsubscribe callback.
+ * Prefer this over `onAgentEvent` for a listener that discards other runs: those
+ * listeners otherwise run on every concurrent run's events.
+ */
+export function onAgentEventForRun(runId: string, listener: (evt: AgentEventPayload) => void) {
+  return registerAgentEventListener(listener, runId);
+}
+
+function registerAgentEventListener(listener: AgentEventListener, runId?: string) {
+  const state = getAgentEventState();
+  const bucket: AgentEventListeners =
+    runId === undefined ? state.listeners : (state.runListeners.get(runId) ?? new Map());
+  if (!bucket.has(listener)) {
+    bucket.set(listener, state.nextListenerId++);
+    if (runId !== undefined) {
+      state.runListeners.set(runId, bucket);
+    }
+    state.listenerRevision++;
+  }
+  return () => {
+    if (bucket.delete(listener)) {
+      state.listenerRevision++;
+    }
+    // Only reclaim the bucket this handle registered into; a later subscriber
+    // for the same run may already have installed a replacement.
+    if (runId !== undefined && bucket.size === 0 && state.runListeners.get(runId) === bucket) {
+      state.runListeners.delete(runId);
+    }
+  };
 }
 
 /** Subscribes to private audit-only agent events; returns an unsubscribe callback. */
@@ -392,6 +483,12 @@ export function resetAgentEventsForTest(options?: { preserveListeners?: boolean 
   resetAgentRunRegistryForTest();
   if (!options?.preserveListeners) {
     state.listeners.clear();
+    for (const bucket of state.runListeners.values()) {
+      bucket.clear();
+    }
+    state.runListeners.clear();
     state.auditListeners.clear();
+    // Do not reuse IDs: an active dispatch resumes strictly after its last yield.
+    state.listenerRevision++;
   }
 }

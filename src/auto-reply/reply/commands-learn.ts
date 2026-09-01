@@ -56,12 +56,13 @@ function workshopIsAvailable(params: HandleCommandsParams): boolean {
     ctx: params.ctx,
     sessionKey: params.sessionKey,
   });
-  if (
-    resolveSandboxRuntimeStatus({
-      cfg: params.cfg,
-      sessionKey: policySessionKey,
-    }).sandboxed
-  ) {
+  const sandboxRuntime = resolveSandboxRuntimeStatus({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    classificationSessionKey: policySessionKey,
+  });
+  if (sandboxRuntime.sandboxed) {
     return false;
   }
 
@@ -94,7 +95,7 @@ function workshopIsAvailable(params: HandleCommandsParams): boolean {
         modelId: params.model,
         config: params.cfg,
         agentId: params.agentId,
-        sessionKey: policySessionKey,
+        sessionKey: params.sessionKey,
       });
       if (!agentHarnessExposesOpenClawTools(harness.id)) {
         return false;
@@ -110,8 +111,9 @@ function workshopIsAvailable(params: HandleCommandsParams): boolean {
     }
     const capabilityProfile = resolveConversationCapabilityProfile({
       config: params.cfg,
-      agentId: params.agentId,
-      sessionKey: policySessionKey ?? params.sessionKey,
+      agentId: sandboxRuntime.classificationAgentId,
+      sessionKey: sandboxRuntime.classificationSessionKey,
+      runSessionKey: params.sessionKey,
       workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       runtimeToolAllowlist: params.opts?.toolsAllow,

@@ -62,10 +62,12 @@ import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
   REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
+  resolveMediaToolSandboxConfig,
   resolveMediaToolInboundRoots,
   resolveMediaToolReferenceAccess,
   resolveRemoteMediaSsrfPolicy,
   resolvePromptAndModelOverride,
+  type MediaToolSandbox,
 } from "./media-tool-shared.js";
 import {
   buildToolModelConfigFromCandidates,
@@ -77,8 +79,6 @@ import {
   createSandboxBridgeReadFile,
   runWithImageModelFallback,
   type AnyAgentTool,
-  type SandboxedBridgeMediaPathConfig,
-  type SandboxFsBridge,
   type ToolFsPolicy,
 } from "./tool-runtime.helpers.js";
 
@@ -659,10 +659,7 @@ function resolveImageToolTimeoutMs(params: {
   );
 }
 
-type ImageSandboxConfig = {
-  root: string;
-  bridge: SandboxFsBridge;
-};
+type ImageSandboxConfig = MediaToolSandbox;
 
 async function runImagePrompt(params: {
   cfg?: OpenClawConfig;
@@ -686,17 +683,29 @@ async function runImagePrompt(params: {
   const providerCfg: OpenClawConfig = effectiveCfg ?? {};
   const preparedProviders =
     params.preparedModelRuntime?.mediaCapabilityProviders?.mediaUnderstandingProviders;
-  const providerRegistry = imageToolProviderDeps.buildProviderRegistry(
-    undefined,
-    providerCfg,
-    preparedProviders,
-  );
 
   const result = await runWithImageModelFallback({
     cfg: effectiveCfg,
     modelOverride: params.modelOverride,
     abortSignal: params.signal,
     run: async (provider, modelId) => {
+      // The fallback candidate owns runtime loading; an unrelated media plugin must not
+      // block a selected image provider before its request timeout can start.
+      const selectedProvider = preparedProviders
+        ? findCapabilityProviderById({
+            providers: preparedProviders,
+            providerId: provider,
+            normalizeProviderId: normalizeMediaProviderId,
+          })
+        : imageToolProviderDeps.resolveRegisteredMediaUnderstandingProvider({
+            providerId: provider,
+            cfg: providerCfg,
+          });
+      const providerRegistry = imageToolProviderDeps.buildProviderRegistry(
+        selectedProvider ? { [provider]: selectedProvider } : undefined,
+        providerCfg,
+        preparedProviders ?? [],
+      );
       const timeoutMs = resolveImageToolTimeoutMs({
         cfg: providerCfg,
         provider,
@@ -983,14 +992,10 @@ export function createImageTool(options?: {
       }
       const imageCompression =
         imageRoute.kind === "fallback" ? imageRoute.imageCompression : undefined;
-      const sandboxConfig: SandboxedBridgeMediaPathConfig | null =
-        options?.sandbox && options?.sandbox.root.trim()
-          ? {
-              root: options.sandbox.root.trim(),
-              bridge: options.sandbox.bridge,
-              workspaceOnly: options.fsPolicy?.workspaceOnly === true,
-            }
-          : null;
+      const sandboxConfig = resolveMediaToolSandboxConfig(
+        options?.sandbox,
+        options?.fsPolicy?.workspaceOnly,
+      );
 
       // MARK: - Load and resolve each image
       const loadedImages: LoadedImageForTool[] = [];

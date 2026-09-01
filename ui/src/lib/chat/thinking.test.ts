@@ -1,21 +1,8 @@
-// Control UI tests cover canonical and legacy thinking-level normalization.
 import { describe, expect, it } from "vitest";
-import { normalizeThinkLevel } from "../../../../src/auto-reply/thinking.shared.js";
-import {
-  formatThinkingOverrideLabel,
-  resolveChatThinkingSelectState,
-  resolveThinkingLevelInput,
-} from "./thinking.ts";
+import { resolveChatThinkingSelectState, resolveThinkingLevelInput } from "./thinking.ts";
 
 describe("chat thinking helpers", () => {
-  it("keeps literal Ultra distinct from the legacy ultrathink alias", () => {
-    expect(normalizeThinkLevel("ultra")).toBe("ultra");
-    expect(normalizeThinkLevel("Ultra")).toBe("ultra");
-    expect(normalizeThinkLevel("ultrathink")).toBe("high");
-    expect(formatThinkingOverrideLabel("ultra")).toBe("Ultra");
-  });
-
-  it("accepts Ultra when the gateway advertises it for the session", () => {
+  it("normalizes canonical Ultra command input", () => {
     expect(
       resolveThinkingLevelInput(
         "ultra",

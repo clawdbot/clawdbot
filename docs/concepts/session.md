@@ -28,6 +28,11 @@ DM channels, with group activity and background work flowing into it — see
 | Cron jobs       | Fresh session per run         |
 | Webhooks        | Isolated per hook             |
 
+With `session.scope: "global"`, the selected agent still owns its session.
+The shared key `global` does not merge different agents' conversations:
+commands, skills, replies, and background task notifications retain the
+agent selected by the route or explicit request.
+
 ## DM isolation
 
 By default, all DMs share one session for continuity, which is fine for
@@ -62,14 +67,18 @@ If the same person contacts you from multiple channels, use
 they share a session.
 </Tip>
 
-### Dock linked channels
-
-Dock commands move the current direct-chat session's reply route to another
-linked channel without starting a new session. See
-[Channel docking](/concepts/channel-docking) for examples, config, and
-troubleshooting.
-
 Verify your setup with `openclaw security audit`.
+
+## Retired channel docking
+
+Channel docking and manual cross-channel reply focus have been removed. The
+`/dock-*` commands no longer move a session's reply destination to another
+channel.
+
+Use `session.identityLinks` to associate a person's identities for DM session
+routing, or [thread-bound sessions](/tools/subagents#thread-bound-sessions) to
+keep a supported conversation attached to a subagent. These are separate
+features; neither restores manual cross-channel docking.
 
 ## Group and room routing
 
@@ -198,7 +207,7 @@ to start a replacement session.
 
 ## Where state lives
 
-- **Runtime session rows:** `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
+- **Runtime session rows and transcripts:** `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` by default
 - **Archived transcript files:** `~/.openclaw/agents/<agentId>/sessions/`
 - **Legacy row migration source:** `~/.openclaw/agents/<agentId>/sessions/sessions.json`
 
@@ -210,15 +219,18 @@ timestamps:
 - `updatedAt`: last store-row mutation; useful for listing and pruning, but not
   authoritative for daily/idle reset freshness.
 
-During migration from older installs, gateway startup and `openclaw doctor
---fix` import legacy `sessions.json` rows and hot transcript JSONL history into
-SQLite automatically. Rows without `sessionStartedAt` are resolved from the
+To import legacy `sessions.json` rows and hot transcript JSONL history from an
+older installation, stop the Gateway, back up its state, and run
+`openclaw doctor --fix` before restarting it. Gateway and local CLI startup use
+SQLite without importing, restoring, or rewriting legacy session files.
+If startup finds a legacy store, it refuses readiness and prints the Doctor
+command for the active profile instead of silently starting with empty history.
+During Doctor import, rows without `sessionStartedAt` are resolved from the
 legacy transcript JSONL session header when available. If an older row also
 lacks `lastInteractionAt`, idle freshness falls back to that session start time,
 not to later bookkeeping writes. Use `openclaw doctor --session-sqlite inspect
 --session-sqlite-all-agents` and the [Doctor migration
-sequence](/cli/doctor#session-sqlite-migration) when you want explicit
-inspection or validation evidence.
+sequence](/cli/doctor#session-sqlite-migration) for inspection and validation.
 
 ## Session maintenance
 

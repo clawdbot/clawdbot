@@ -197,8 +197,8 @@ describe("Codex supervision actions", () => {
         control: createEligibleControl(),
         threadId: "thread-1",
       }),
-    ).rejects.toThrow("OpenClaw session is already bound to Codex thread thread-1");
-    expect(entries).toEqual([]);
+    ).rejects.toThrow("guarded rollback did not complete");
+    expect(entries[0]?.entry.initializationPending).toBe(true);
   });
 
   it("does not infer a terminal boundary from completedAt without a terminal status", async () => {
@@ -230,7 +230,8 @@ describe("Codex supervision actions", () => {
     await expect(
       bindingStore.read(
         sessionBindingIdentity({
-          sessionId: "openclaw-session-1",
+          sessionId: runtime.agent.session.getSessionEntry({ sessionKey: result.sessionKey })!
+            .sessionId,
           sessionKey: result.sessionKey,
           config,
         }),
@@ -242,7 +243,8 @@ describe("Codex supervision actions", () => {
     });
     const binding = await bindingStore.read(
       sessionBindingIdentity({
-        sessionId: "openclaw-session-1",
+        sessionId: runtime.agent.session.getSessionEntry({ sessionKey: result.sessionKey })!
+          .sessionId,
         sessionKey: result.sessionKey,
         config,
       }),
@@ -463,94 +465,10 @@ describe("Codex supervision actions", () => {
         control,
         threadId: "thread-1",
       }),
-    ).rejects.toThrow("failed to bind OpenClaw session to Codex thread thread-1");
+    ).rejects.toThrow("Codex session binding changed during initialization");
     expect(entries).toEqual([]);
     expect(createSessionEntry).toHaveBeenCalledOnce();
     expect(transcriptMirrorMocks.importCodexThreadHistoryToTranscript).toHaveBeenCalledOnce();
-    expect(control.archiveThread).not.toHaveBeenCalled();
-  });
-
-  it("clears a committed pending binding when session finalization fails", async () => {
-    const { runtime } = createRuntime({ failAfterCreate: () => true });
-    const { api } = createGatewayApi(runtime);
-    const bindingStore = createCodexTestBindingStore();
-    const control = createEligibleControl();
-
-    await expect(
-      continueLocalCodexSession({
-        api,
-        bindingStore,
-        config,
-        control,
-        threadId: "thread-1",
-      }),
-    ).rejects.toThrow("session finalization failed after binding commit");
-    await expect(
-      bindingStore.read(
-        sessionBindingIdentity({
-          sessionId: "openclaw-session-1",
-          sessionKey: supervisionSessionKey("thread-1"),
-          config,
-        }),
-      ),
-    ).resolves.toBeUndefined();
-    expect(control.archiveThread).not.toHaveBeenCalled();
-  });
-
-  it("preserves successor cleanup state when failed finalization loses its binding CAS", async () => {
-    const { runtime } = createRuntime({ failAfterCreate: () => true });
-    const { api } = createGatewayApi(runtime);
-    const inner = createCodexTestBindingStore();
-    const successorThreadId = "thread-successor-probe";
-    let replaced = false;
-    const bindingStore: CodexAppServerBindingStore = {
-      ...inner,
-      mutate: async (identity, mutation) => {
-        if (!replaced && mutation.kind === "clear") {
-          const current = await inner.read(identity);
-          const pending = current?.pendingSupervisionBranch;
-          if (!pending) {
-            throw new Error("missing pending supervision binding before cleanup");
-          }
-          replaced = true;
-          const patched = await inner.mutate(identity, {
-            kind: "patch-pending-supervision-branch",
-            expected: pending,
-            pending: { ...pending, cleanupThreadIds: [successorThreadId] },
-          });
-          if (!patched) {
-            throw new Error("failed to install successor supervision cleanup state");
-          }
-        }
-        return await inner.mutate(identity, mutation);
-      },
-    };
-    const control = createEligibleControl();
-
-    await expect(
-      continueLocalCodexSession({
-        api,
-        bindingStore,
-        config,
-        control,
-        threadId: "thread-1",
-      }),
-    ).rejects.toThrow("session finalization failed after binding commit");
-    await expect(
-      bindingStore.read(
-        sessionBindingIdentity({
-          sessionId: "openclaw-session-1",
-          sessionKey: supervisionSessionKey("thread-1"),
-          config,
-        }),
-      ),
-    ).resolves.toMatchObject({
-      threadId: "thread-1",
-      pendingSupervisionBranch: {
-        sourceThreadId: "thread-1",
-        cleanupThreadIds: [successorThreadId],
-      },
-    });
     expect(control.archiveThread).not.toHaveBeenCalled();
   });
 });

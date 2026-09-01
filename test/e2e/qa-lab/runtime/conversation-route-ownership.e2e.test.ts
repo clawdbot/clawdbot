@@ -6,7 +6,8 @@ import {
   createQaChannelTransport,
   startQaBusServer,
 } from "../../../../extensions/qa-lab/api.js";
-import { startQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
+import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const CHANNEL_ID = "qa-channel";
 const PRIMARY_AGENT_ID = "main";
@@ -16,8 +17,9 @@ const SIBLING_ACCOUNT_ID = "finance";
 const PRIMARY_PEER_ID = "primary-peer";
 const SIBLING_PEER_ID = "finance-peer";
 
-type GatewayHarness = Awaited<ReturnType<typeof startQaLiveLaneGateway>>;
+type GatewayHarness = Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>>;
 
+let gatewayOwner: ReturnType<typeof createQaLiveLaneGateway> | undefined;
 let harness: GatewayHarness | undefined;
 let bus: Awaited<ReturnType<typeof startQaBusServer>> | undefined;
 
@@ -124,11 +126,14 @@ async function sendConversation(params: {
 afterEach(async () => {
   const cleanupErrors: unknown[] = [];
   try {
-    await harness?.stop();
+    if (gatewayOwner) {
+      await stopQaGatewayFixture(gatewayOwner);
+    }
   } catch (error) {
     cleanupErrors.push(error);
   } finally {
     harness = undefined;
+    gatewayOwner = undefined;
   }
   try {
     await bus?.stop();
@@ -150,7 +155,8 @@ describe("conversation route ownership clean-machine proof", () => {
       const state = createQaBusState();
       const transport = createQaChannelTransport(state);
       bus = await startQaBusServer({ state });
-      harness = await startQaLiveLaneGateway({
+      gatewayOwner = createQaLiveLaneGateway();
+      harness = await gatewayOwner.start({
         repoRoot: process.cwd(),
         providerMode: "mock-openai",
         primaryModel: "mock-openai/gpt-5.6-luna",

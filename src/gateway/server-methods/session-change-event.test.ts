@@ -124,6 +124,26 @@ describe("sessions.changed coalescing", () => {
     });
   });
 
+  it.each([false, true])("never samples a replacement for a delete (trailing: %s)", (trailing) => {
+    const context = createContext();
+    const sessionKey = "agent:main:chat";
+    if (trailing) {
+      emitSessionsChanged(context, { reason: "update", sessionKey });
+    }
+    mocks.loadRow.mockClear();
+    const deletion = { reason: "delete", sessionKey, sessionId: "generation-a", agentId: "main" };
+    emitSessionsChanged(context, deletion);
+    mocks.rowLabel = "replacement-b";
+    vi.advanceTimersByTime(100);
+    const payload = vi.mocked(context.broadcastToConnIds).mock.calls.at(-1)?.[1];
+    expect(payload).toEqual({
+      ...deletion,
+      agentId: "main",
+      ts: expect.any(Number),
+    });
+    expect(mocks.loadRow).not.toHaveBeenCalled();
+  });
+
   it("keeps different session keys independent", () => {
     const context = createContext();
 

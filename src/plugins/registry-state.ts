@@ -2,7 +2,7 @@ import type { PluginDiagnostic } from "./manifest-types.js";
 import { createModelCatalogRegistrationHandlers } from "./model-catalog-registration.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { bindPluginRegistryRuntime } from "./registry-runtime-binding.js";
-import type { PluginRegistryParams } from "./registry-types.js";
+import type { PluginRecord, PluginRegistryParams } from "./registry-types.js";
 import type { PluginHookName } from "./types.js";
 
 export type PluginTypedHookPolicy = {
@@ -70,6 +70,12 @@ export function createPluginRegistryState(registryParams: PluginRegistryParams) 
   const pushDiagnostic = (diagnostic: PluginDiagnostic) => {
     registry.diagnostics.push(diagnostic);
   };
+  const reportRegistrationError = (record: PluginRecord, message: string) => {
+    pushDiagnostic({ level: "error", pluginId: record.id, source: record.source, message });
+  };
+  const reportRegistrationWarning = (record: PluginRecord, message: string) => {
+    pushDiagnostic({ level: "warn", pluginId: record.id, source: record.source, message });
+  };
   const modelCatalogRegistrars = createModelCatalogRegistrationHandlers({
     registry,
     pushDiagnostic,
@@ -84,6 +90,8 @@ export function createPluginRegistryState(registryParams: PluginRegistryParams) 
     pluginsWithChannelRegistrationConflict: new Set<string>(),
     pluginSideEffectGuards: new Map<string, Set<PluginSideEffectGuard>>(),
     pushDiagnostic,
+    reportRegistrationError,
+    reportRegistrationWarning,
     ...modelCatalogRegistrars,
   };
 }

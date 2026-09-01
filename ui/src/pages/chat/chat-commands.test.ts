@@ -4,7 +4,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import {
   invalidateChatMetadataStore,
-  rememberChatMetadata,
+  beginChatMetadataPublication,
 } from "../../lib/chat/chat-metadata-store.ts";
 import {
   SLASH_COMMANDS,
@@ -276,7 +276,7 @@ describe("refreshSlashCommands", () => {
   it("reads commands from the chat metadata store without requesting commands.list", async () => {
     const request = vi.fn();
     const client = { request } as never;
-    rememberChatMetadata(client, "main", {
+    beginChatMetadataPublication(client, { agentId: "main" }).publish({
       commands: [remoteCommand("metadata-command", "Loaded from chat metadata.")],
     });
 
@@ -299,7 +299,7 @@ describe("refreshSlashCommands", () => {
 
       await refreshSlashCommands({ client, agentId: "main" });
       vi.advanceTimersByTime(60_001);
-      rememberChatMetadata(client, "main", {
+      beginChatMetadataPublication(client, { agentId: "main" }).publish({
         commands: [remoteCommand("metadata-command", "Loaded from chat metadata.")],
       });
 
@@ -322,7 +322,7 @@ describe("refreshSlashCommands", () => {
     const metadata = {
       commands: [remoteCommand("metadata-command", "Loaded from chat metadata.")],
     };
-    rememberChatMetadata(client, "main", metadata);
+    beginChatMetadataPublication(client, { agentId: "main" }).publish(metadata);
     applyRemoteSlashCommandsResult({ client, agentId: "main", result: metadata });
 
     invalidateChatMetadataStore(client);
@@ -498,6 +498,17 @@ describe("conversation reset confirmation", () => {
       ...connectedSessionAccess(),
       connectionEpoch: 1,
       sessionKey: "main",
+      hello: {
+        ...connectedSessionAccess().hello,
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "main",
+            mainKey: "main",
+            mainSessionKey: "agent:main:main",
+            scope: "per-sender",
+          },
+        },
+      },
       confirmConversationReset: vi.fn(async () => await confirmation),
     };
 

@@ -29,13 +29,14 @@ import { DEFAULT_AGENTS_FILENAME, loadWorkspaceBootstrapFiles } from "../agents/
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AssistantMessage, AssistantMessageEventStreamLike } from "../llm/types.js";
 import { createWorkerBrowserToolRuntime, type WorkerBrowserRuntime } from "./browser-runtime.js";
+import { createWorkerComputerTool } from "./computer-runtime.js";
 import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
 import {
   createWorkerTranscriptRuntime,
   toAgentMessage,
   toWorkerInferenceContext,
 } from "./embedded-agent-transcript.runtime.js";
-import type { WorkerBrowserLaunchDescriptor } from "./launch-descriptor.js";
+import type { WorkerBrowserLaunchDescriptor, WorkerLaunchPlan } from "./launch-descriptor.js";
 import {
   WORKER_LOCAL_TOOL_NAMES,
   WORKER_REQUIRED_LOCAL_TOOL_NAMES,
@@ -82,7 +83,7 @@ type RunWorkerEmbeddedTurnParams = {
   sessionId: string;
   sessionKey: string;
   runId: string;
-  prompt: string;
+  prompt: WorkerLaunchPlan["assignment"]["prompt"];
   modelRef: WorkerInferenceModelRef;
   inference: WorkerEmbeddedInferenceClient;
   transcript: WorkerEmbeddedTranscriptClient;
@@ -96,6 +97,7 @@ type RunWorkerEmbeddedTurnParams = {
   permissionMode?: import("../../packages/gateway-protocol/src/schema/sessions-row.js").SessionPermissionMode;
   browser?: WorkerBrowserLaunchDescriptor;
   browserRuntime?: WorkerBrowserRuntime;
+  computer?: Omit<Parameters<typeof createWorkerComputerTool>[0], "runId" | "registerRunCleanup">;
   signal?: AbortSignal;
 };
 
@@ -105,6 +107,9 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
   const browserAuthorized = params.allowedToolNames.includes("browser");
   if (browserAuthorized !== (params.browser !== undefined)) {
     throw new Error("Worker Browser authority and launch descriptor must be provided together.");
+  }
+  if (params.allowedToolNames.includes("computer") !== (params.computer !== undefined)) {
+    throw new Error("Worker computer authority and launch descriptor must be provided together.");
   }
   if (params.operationalRunInstance.runId !== params.runId) {
     throw new Error("worker operational run instance disagrees with the admitted turn");
@@ -213,10 +218,29 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
   const toolSignal = params.signal
     ? AbortSignal.any([params.signal, turnLifetime.signal])
     : turnLifetime.signal;
+  let computerCleanup: ((reason: string) => Promise<void>) | undefined;
+  const disposeComputer = async () => {
+    const cleanup = computerCleanup;
+    computerCleanup = undefined;
+    await cleanup?.("Worker turn finished");
+  };
   const { session } = await (async () => {
     try {
+      const computerTool = params.computer
+        ? createWorkerComputerTool({
+            ...params.computer,
+            runId: params.runId,
+            registerRunCleanup: (cleanup) => {
+              computerCleanup = cleanup;
+            },
+          })
+        : undefined;
       const unboundLocalTools = finalizeAgentTools({
-        tools: browserRuntime ? [...coreTools, browserRuntime.tool] : coreTools,
+        tools: [
+          ...coreTools,
+          ...(browserRuntime ? [browserRuntime.tool] : []),
+          ...(computerTool ? [computerTool] : []),
+        ],
         modelProvider: params.modelRef.provider,
         modelId: params.modelRef.model,
         hookContext: {
@@ -285,7 +309,11 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       });
     } catch (error) {
       turnLifetime.abort();
-      await browserRuntime?.dispose();
+      try {
+        await disposeComputer();
+      } finally {
+        await browserRuntime?.dispose();
+      }
       throw error;
     }
   })();
@@ -319,7 +347,8 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     }
     await session.agent.prompt({
       role: "user",
-      content: [{ type: "text", text: params.prompt }],
+      content:
+        typeof params.prompt === "string" ? [{ type: "text", text: params.prompt }] : params.prompt,
       timestamp: Date.now(),
     });
     await session.agent.waitForIdle();
@@ -347,6 +376,18 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
 
   let finalTranscriptFailure: Error | undefined;
   try {
+    // Provider executions must close while the Gateway still admits this turn.
+    // The terminal ACK fences every later desktop RPC, including cleanup.
+    turnLifetime.abort();
+    try {
+      await disposeComputer();
+    } catch (error) {
+      runFailure ??= toWorkerAgentError(error, "Worker computer cleanup failed.");
+      liveRuntime.enqueueRunFailure({
+        aborted: params.signal?.aborted === true,
+        error: runFailure,
+      });
+    }
     try {
       await transcriptRuntime.withSessionWriteSettlement(() => undefined);
     } catch (error) {

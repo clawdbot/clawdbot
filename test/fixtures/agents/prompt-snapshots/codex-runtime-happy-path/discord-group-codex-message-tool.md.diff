@@ -1,5 +1,5 @@
---- telegram-direct-codex-message-tool.md	sha256=5b4b164ad416cb871634c615e6e1abfbfa509da37945ea1215e43d4f6998029b
-+++ discord-group-codex-message-tool.md	sha256=e165bae0dd776c27549f7196ff1b0fd1fb20a998ebe0d8da9f4a4d1e04324ba5
+--- telegram-direct-codex-message-tool.md	sha256=b12f733bdbba6657a559b2c2550ab9b139444224de38675123ee45148e74d5ca
++++ discord-group-codex-message-tool.md	sha256=0f16c3e037677c58a52e123893fbef715be92d764de7eb79131b58fd7fba8781
 @@ -1,1 +1,1 @@
 -# Telegram Direct Codex Message Tool Turn
 +# Discord Group Codex Message Tool Turn
@@ -16,44 +16,44 @@
 @@ -30,1 +30,1 @@
 -  "toolSnapshot": "codex-dynamic-tools.telegram-direct.json",
 +  "toolSnapshot": "codex-dynamic-tools.discord-group.json",
-@@ -132,1 +132,1 @@
+@@ -134,1 +134,1 @@
 -  "threadId": "thread-telegram-direct-codex-message-tool"
 +  "threadId": "thread-discord-group-codex-message-tool"
-@@ -143,1 +143,1 @@
+@@ -145,1 +145,1 @@
 -      "value": "{\"sender\":{\"id\":\"1000001\",\"name\":\"Pash\",\"username\":\"pash\"}}"
 +      "value": "{\"sender\":{\"id\":\"424242\",\"name\":\"Pash\",\"username\":\"pash\"}}"
-@@ -170,1 +170,1 @@
+@@ -172,1 +172,1 @@
 -  "threadId": "thread-telegram-direct-codex-message-tool"
 +  "threadId": "thread-discord-group-codex-message-tool"
-@@ -207,1 +207,1 @@
+@@ -209,1 +209,1 @@
 -    "dynamicToolsFrom": "codex-dynamic-tools.telegram-direct.json",
 +    "dynamicToolsFrom": "codex-dynamic-tools.discord-group.json",
-@@ -235,2 +235,2 @@
--    "chars": 55447,
--    "roughTokens": 13862
-+    "chars": 55755,
-+    "roughTokens": 13939
-@@ -239,2 +239,2 @@
--    "chars": 3518,
--    "roughTokens": 880
-+    "chars": 4627,
-+    "roughTokens": 1157
-@@ -243,2 +243,2 @@
--    "chars": 27464,
--    "roughTokens": 6866
-+    "chars": 28944,
-+    "roughTokens": 7236
-@@ -247,2 +247,2 @@
--    "chars": 82913,
--    "roughTokens": 20729
-+    "chars": 84701,
-+    "roughTokens": 21176
-@@ -251,2 +251,2 @@
+@@ -237,2 +237,2 @@
+-    "chars": 56379,
+-    "roughTokens": 14095
++    "chars": 56959,
++    "roughTokens": 14240
+@@ -241,2 +241,2 @@
+-    "chars": 3224,
+-    "roughTokens": 806
++    "chars": 4333,
++    "roughTokens": 1084
+@@ -245,2 +245,2 @@
+-    "chars": 27170,
+-    "roughTokens": 6793
++    "chars": 28650,
++    "roughTokens": 7163
+@@ -249,2 +249,2 @@
+-    "chars": 83551,
+-    "roughTokens": 20888
++    "chars": 85611,
++    "roughTokens": 21403
+@@ -253,2 +253,2 @@
 -    "chars": 863,
 -    "roughTokens": 216
 +    "chars": 1234,
 +    "roughTokens": 309
-@@ -461,4 +461,4 @@
+@@ -462,4 +462,4 @@
 -  "channel": "telegram",
 -  "provider": "telegram",
 -  "surface": "telegram",
@@ -62,21 +62,21 @@
 +  "provider": "discord",
 +  "surface": "discord",
 +  "chat_type": "group"
-@@ -469,1 +469,3 @@
+@@ -470,1 +470,3 @@
 -You are in a Telegram direct conversation. Normal final replies are private and are not automatically sent to this conversation. To post visible output here, use the message tool with action=send; the target defaults to this conversation. If no visible direct response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the conversation.
 +You are in a Discord group chat. Normal final replies are private and are not automatically sent to this group chat. To post visible output here, use the message tool with action=send; the target defaults to this group chat. Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available. Write like a human. Avoid Markdown tables. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \n sequences; use real line breaks sparingly. If addressed to someone else, stay silent unless invited or correcting key facts. Discord: wrap bare URLs like <https://example.com> to suppress embeds. When subagent or session-spawn tools are available and a directly requested group-chat task will require several tool calls, prefer delegating bounded side investigations early so the channel gets a responsive path forward. Keep the critical path local, avoid subagents for simple one-step work, and only surface concise group-visible updates when they add value. If no visible group response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to this group chat. Be extremely selective: reply only when directly addressed or clearly helpful.
 +
 +Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). Address the specific sender noted in the message context.
-@@ -525,1 +527,1 @@
+@@ -526,1 +528,1 @@
 -{"chat_id":"user:1000001","message_id":"tg-msg-0001","sender":{"id":"1000001","name":"Pash","username":"pash"}}
 +{"chat_id":"channel:987654321","message_id":"discord-msg-0001","conversation_label":"OpenClaw/#agent-sandbox","sender":{"id":"424242","name":"Pash","username":"pash"},"group_subject":"OpenClaw maintainers","group_channel":"#agent-sandbox","group_space":"OpenClaw","is_group_chat":true,"was_mentioned":true,"history_count":2}
-@@ -528,1 +530,5 @@
+@@ -529,1 +531,5 @@
 -Can you check whether the nightly build finished and tell me what happened?
 +Chat history since last reply: ⟦openclaw:ctx⟧
 +Peter: I pushed the Discord-side message-tool bridge.
 +Pash: @OpenClaw please verify the Codex happy path too.
 +
 +can you audit whether this prompt path has conflicting silence instructions?
-@@ -533,1 +539,1 @@
+@@ -534,1 +540,1 @@
 -Full JSON: `codex-dynamic-tools.telegram-direct.json`
 +Full tool overrides: `codex-dynamic-tools.discord-group.json` (base: `codex-dynamic-tools.telegram-direct.json`)

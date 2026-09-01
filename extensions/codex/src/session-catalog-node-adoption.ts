@@ -270,7 +270,7 @@ export async function createOrReuseNodeAdoptedSession(params: {
       key: nodeAdoptionSessionKey(params.hostId, params.record.threadId),
       agentId: params.agentId,
       recoverMatchingInitialEntry: true,
-      ...(params.record.name?.trim() ? { label: params.record.name.trim() } : {}),
+      displayName: params.record.name ?? undefined,
       ...(params.record.cwd?.trim() ? { spawnedCwd: params.record.cwd.trim() } : {}),
       initialEntry: {
         agentHarnessId: "codex",

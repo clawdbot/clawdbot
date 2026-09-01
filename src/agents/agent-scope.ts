@@ -55,9 +55,6 @@ export {
   tryResolveSoleAgentId,
   tryResolveDefaultAgentId,
   AgentSelectionRequiredError,
-  type AgentSelectionContext,
-  type AgentWorkspaceProvisioning,
-  type ResolvedAgentConfig,
 } from "./agent-scope-config.js";
 
 const AUTO_FALLBACK_PRIMARY_PROBE_INTERVAL_MS = 5 * 60 * 1000;
@@ -303,7 +300,7 @@ export function clearAutoFallbackPrimaryProbeSelection(
 
 export { resolveAgentIdFromSessionKey };
 
-export function resolveSessionAgentIds(params: {
+export function resolveSessionAgentIdsStrict(params: {
   sessionKey?: string;
   config?: OpenClawConfig;
   agentId?: string | undefined;
@@ -360,14 +357,18 @@ export function resolveSessionAgentIds(params: {
   return { defaultAgentId, sessionAgentId };
 }
 
-export function resolveSessionAgentId(params: {
+export const resolveSessionAgentIds = resolveSessionAgentIdsStrict;
+
+export function resolveSessionAgentIdStrict(params: {
   sessionKey?: string;
   config?: OpenClawConfig;
   agentId?: string;
   fallbackAgentId?: string;
 }): string {
-  return resolveSessionAgentIds(params).sessionAgentId;
+  return resolveSessionAgentIdsStrict(params).sessionAgentId;
 }
+
+export const resolveSessionAgentId = resolveSessionAgentIdStrict;
 
 export function resolveAgentExecutionContract(
   cfg: OpenClawConfig | undefined,
@@ -419,6 +420,18 @@ function updateAgentModelPrimary(
 
 export type AgentModelPrimaryWriteTarget = "agent" | "defaults";
 
+export function resolveAgentModelPrimaryWriteTarget(
+  cfg: OpenClawConfig,
+  agentId: string,
+  options: { target?: AgentModelPrimaryWriteTarget; forceAgent?: boolean } = {},
+): AgentModelPrimaryWriteTarget {
+  const id = normalizeAgentId(agentId);
+  const target = options.target ?? (options.forceAgent ? "agent" : undefined);
+  return target !== "defaults" && (target === "agent" || resolveAgentExplicitModelPrimary(cfg, id))
+    ? "agent"
+    : "defaults";
+}
+
 export function setAgentEffectiveModelPrimary(
   cfg: OpenClawConfig,
   agentId: string,
@@ -427,9 +440,10 @@ export function setAgentEffectiveModelPrimary(
 ): AgentModelPrimaryWriteTarget {
   const id = normalizeAgentId(agentId);
   const target = options.target ?? (options.forceAgent ? "agent" : undefined);
+  const resolvedTarget = resolveAgentModelPrimaryWriteTarget(cfg, id, options);
   // An explicit agent target pins the write even without an existing model,
   // so a per-agent override never rewrites the shared default route.
-  if (target !== "defaults" && (target === "agent" || resolveAgentExplicitModelPrimary(cfg, id))) {
+  if (resolvedTarget === "agent") {
     const entry = resolveMutableAgentEntry(cfg, id);
     if (entry) {
       entry.model = updateAgentModelPrimary(entry.model, primary);
@@ -485,7 +499,7 @@ function resolveFirstModelFallbacksOverride(
   return undefined;
 }
 
-export type SubagentModelConfigSelectionSource = "subagent" | "agent" | "default-subagent";
+type SubagentModelConfigSelectionSource = "subagent" | "agent" | "default-subagent";
 
 export type SubagentModelConfigSelectionResult = {
   raw: AgentModelConfig;
@@ -538,7 +552,7 @@ export function resolveSubagentModelFallbacksOverride(
   return undefined;
 }
 
-function resolveSubagentSpawnModelFallbacksOverride(
+export function resolveSubagentSpawnModelFallbacksOverride(
   cfg: OpenClawConfig,
   agentId: string,
 ): string[] | undefined {
@@ -570,14 +584,92 @@ export function resolveRunModelFallbacksOverride(params: {
   return agentId ? resolveAgentModelFallbacksOverride(params.cfg, agentId) : undefined;
 }
 
-export function hasConfiguredModelFallbacks(params: {
-  cfg: OpenClawConfig | undefined;
-  agentId?: string | null;
+export type ModelFallbackAvailability =
+  // `source` records whether an explicit fallbacks override owns the ladder or the
+  // models were inherited from defaults; the run-override projection depends on it.
+  | { kind: "active"; models: string[]; source: "explicit" | "inherited" }
+  | { kind: "none_configured"; source: "explicit" | "inherited" }
+  | { kind: "disabled_by_model_override" }
+  | { kind: "disabled_by_model_selection_lock" };
+
+function modelFallbackAvailabilityFromModels(
+  models: string[],
+  source: "explicit" | "inherited",
+): ModelFallbackAvailability {
+  return models.length > 0
+    ? { kind: "active", models, source }
+    : { kind: "none_configured", source };
+}
+
+/**
+ * Projects availability onto the candidate-resolver override contract. Inherited
+ * availability must project to `undefined`: the resolver then owns the ladder — it
+ * re-derives the same configured fallbacks and appends the configured primary as the
+ * final candidate (see model-fallback-candidates.ts). Collapsing inherited state into
+ * an explicit list silently drops that last hop.
+ */
+export function modelFallbackOverrideFromAvailability(
+  availability: ModelFallbackAvailability,
+): string[] | undefined {
+  switch (availability.kind) {
+    case "active":
+      return availability.source === "inherited" ? undefined : availability.models;
+    case "none_configured":
+      return availability.source === "inherited" ? undefined : [];
+    default:
+      return [];
+  }
+}
+
+/**
+ * Resolves fallback availability once for the run scope. A pinned model override disables the
+ * configured ladder; splitting that fact from its models would report fallbacks that cannot run.
+ */
+export function resolveModelFallbackAvailability(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
   sessionKey?: string | null;
-}): boolean {
-  const fallbacksOverride = resolveRunModelFallbacksOverride(params);
-  const defaultFallbacks = resolveAgentModelFallbackValues(params.cfg?.agents?.defaults?.model);
-  return (fallbacksOverride ?? defaultFallbacks).length > 0;
+  hasSessionModelOverride: boolean;
+  modelOverrideSource?: "auto" | "user";
+  hasAutoFallbackProvenance?: boolean;
+  modelSelectionLocked?: boolean;
+  modelFallbacksOverride?: string[];
+}): ModelFallbackAvailability {
+  if (params.modelSelectionLocked) {
+    return { kind: "disabled_by_model_selection_lock" };
+  }
+  if (params.modelFallbacksOverride !== undefined) {
+    return modelFallbackAvailabilityFromModels(params.modelFallbacksOverride, "explicit");
+  }
+  const agentFallbacksOverride = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
+  if (!params.hasSessionModelOverride) {
+    if (agentFallbacksOverride !== undefined) {
+      return modelFallbackAvailabilityFromModels(agentFallbacksOverride, "explicit");
+    }
+    return modelFallbackAvailabilityFromModels(
+      resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model),
+      "inherited",
+    );
+  }
+  const canUseConfiguredFallbacks =
+    params.modelOverrideSource === "auto" ||
+    (params.modelOverrideSource === undefined && params.hasAutoFallbackProvenance === true);
+  if (!canUseConfiguredFallbacks) {
+    return { kind: "disabled_by_model_override" };
+  }
+  const subagentFallbacksOverride = isSubagentSessionKey(params.sessionKey)
+    ? resolveSubagentSpawnModelFallbacksOverride(params.cfg, params.agentId)
+    : undefined;
+  if (subagentFallbacksOverride !== undefined) {
+    return modelFallbackAvailabilityFromModels(subagentFallbacksOverride, "explicit");
+  }
+  // Auto-provenance routes have always consumed a resolved list (no configured-primary
+  // append), so inheriting from defaults still projects as an explicit ladder here.
+  const defaultFallbacks = resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
+  return modelFallbackAvailabilityFromModels(
+    agentFallbacksOverride ?? defaultFallbacks,
+    "explicit",
+  );
 }
 
 export function resolveEffectiveModelFallbacks(params: {
@@ -588,24 +680,7 @@ export function resolveEffectiveModelFallbacks(params: {
   modelOverrideSource?: "auto" | "user";
   hasAutoFallbackProvenance?: boolean;
 }): string[] | undefined {
-  const agentFallbacksOverride = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
-  if (!params.hasSessionModelOverride) {
-    return agentFallbacksOverride;
-  }
-  const canUseConfiguredFallbacks =
-    params.modelOverrideSource === "auto" ||
-    (params.modelOverrideSource === undefined && params.hasAutoFallbackProvenance === true);
-  if (!canUseConfiguredFallbacks) {
-    return [];
-  }
-  const subagentFallbacksOverride = isSubagentSessionKey(params.sessionKey)
-    ? resolveSubagentSpawnModelFallbacksOverride(params.cfg, params.agentId)
-    : undefined;
-  if (subagentFallbacksOverride !== undefined) {
-    return subagentFallbacksOverride;
-  }
-  const defaultFallbacks = resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
-  return agentFallbacksOverride ?? defaultFallbacks;
+  return modelFallbackOverrideFromAvailability(resolveModelFallbackAvailability(params));
 }
 
 export function resolveAgentIdByWorkspacePath(

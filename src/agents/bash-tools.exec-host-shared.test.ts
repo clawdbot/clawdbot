@@ -12,6 +12,7 @@ import {
 } from "./bash-tools.exec-approval-followup-state.js";
 import {
   buildExecApprovalPendingToolResult,
+  buildHeadlessExecApprovalDeniedMessage,
   createExecApprovalRequestRoute,
   resolveExecApprovalWaitOutcome,
   resolveExecHostApprovalContext,
@@ -766,5 +767,37 @@ describe("buildExecApprovalPendingToolResult", () => {
     expect(text).not.toContain("/approve");
     expect(text).not.toContain("Pending command:");
     expect(text).not.toContain("Approver DMs were sent");
+  });
+});
+
+describe("buildHeadlessExecApprovalDeniedMessage", () => {
+  it("points gateway automation runs at card-capable approval clients, not the TUI", () => {
+    const text = buildHeadlessExecApprovalDeniedMessage({
+      trigger: "cron",
+      host: "gateway",
+      security: "allowlist",
+      ask: "on-miss",
+      askFallback: "deny",
+    });
+
+    expect(text).toContain("Automation runs cannot wait for interactive exec approval");
+    expect(text).toContain("Control UI or a macOS/iOS/Android app");
+    expect(text).toContain("standing grant");
+    expect(text).not.toContain("TUI,");
+    expect(text).not.toContain("terminal UI");
+  });
+
+  it("offers the interactive rerun surfaces for non-automation headless runs", () => {
+    const text = buildHeadlessExecApprovalDeniedMessage({
+      host: "node",
+      security: "allowlist",
+      ask: "on-miss",
+      askFallback: "deny",
+    });
+
+    expect(text).toContain("Headless runs cannot wait for interactive exec approval");
+    expect(text).toContain("rerun interactively");
+    expect(text).toContain("Control UI, TUI, or a chat channel with exec approvals");
+    expect(text).not.toContain("standing grant");
   });
 });

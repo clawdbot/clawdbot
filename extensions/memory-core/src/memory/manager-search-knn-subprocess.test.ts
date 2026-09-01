@@ -303,7 +303,18 @@ describe("memory vector KNN subprocess boundary", () => {
         databasePath: "fixture:early-exit",
         request: request(1),
       }),
-    ).rejects.toThrow("exited before returning a result");
+    ).rejects.toThrow(
+      "exited before returning a result (code 7, signal none): fixture KNN failure",
+    );
+    await expect(
+      runVectorKnnInSubprocess({
+        databasePath: "fixture:oversized-stderr",
+        request: request(1),
+      }),
+    ).rejects.toMatchObject({
+      code: "protocol",
+      message: "memory vector KNN child stderr exceeded its limit",
+    });
   });
 
   it("fails vector recall closed when the subprocess is unavailable", async () => {

@@ -14,6 +14,7 @@ import type {
 } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { chatInputOwnerForContext, type ChatInputRegion } from "../../app/chat-input-owner.ts";
 import { applicationContext } from "../../app/context.ts";
 import { observeNativeGateway } from "../../app/native-editor-locality.runtime.ts";
 import type {
@@ -63,6 +64,7 @@ import { ChatStateController } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
+import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
 import type { ChatSessionSharingState } from "./components/chat-session-sharing.ts";
 import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
@@ -77,10 +79,26 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   // The first Lit update must render even while hidden; later hidden work parks.
   // Disconnect releases the waiter so reconnect can schedule in its new lifecycle.
   private hiddenUpdateResume: (() => void) | undefined;
-  private readonly handleVisibilityChange = () =>
-    document.visibilityState === "hidden" && this.state?.chatStreamRenderFrame != null
-      ? requestChatPageUpdate(this.state)
-      : this.hiddenUpdateResume?.();
+  private readonly handleVisibilityChange = () => {
+    if (document.visibilityState !== "hidden") {
+      this.hiddenUpdateResume?.();
+      return;
+    }
+    const state = this.state;
+    if (!state) {
+      return;
+    }
+    const liveDraft = getChatComposerState(this.paneId).composerTextarea?.value;
+    const draftChanged = liveDraft !== undefined && liveDraft !== state.chatMessage;
+    if (draftChanged) {
+      // Page suspension can interrupt IME before compositionend; commit the
+      // live textarea while visibility change can still reach browser storage.
+      state.handleChatDraftChange(liveDraft);
+    }
+    if (draftChanged || state.chatStreamRenderFrame != null) {
+      requestChatPageUpdate(state);
+    }
+  };
   override connectedCallback() {
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
     super.connectedCallback();
@@ -110,11 +128,13 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @property({ attribute: false }) presentationId = "single";
   @property({ attribute: false }) chatMessagesBySession?: ChatMessageCache;
   @property({ attribute: false }) sessionSnapshotStore?: SessionSnapshotStore;
-  // Empty means "no route/layout opinion yet": the pane boots on the page
-  // state's default session and must not canonicalize or write global session
-  // bindings until the container supplies a real key (classic mode renders
-  // before route data resolves).
+  // Empty means unresolved route data: boot on the page state's default session
+  // without canonicalizing until the container supplies a real key.
   @property({ attribute: false }) sessionKey = "";
+  @property({ attribute: false }) agentId?: string;
+  @property({ attribute: false }) inputRegion: ChatInputRegion = "page";
+  @property({ attribute: false }) compact = false;
+  @property({ attribute: false }) workContext?: string;
   // Route ownership settles after retained-pane preview; dashboard activity follows
   // the pane the user can already see so its warmed runtime paints immediately.
   @property({ attribute: false }) visuallyPresented = true;
@@ -141,8 +161,15 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected ownsHeaderOutcome(owner: string): boolean {
     return this.presented && owner === this.headerOutcomeOwner;
   }
-  get active(): boolean {
+  protected get selected(): boolean {
     return this.activeValue;
+  }
+  get active(): boolean {
+    // The selected split pane stays selected while another region owns input.
+    return (
+      this.activeValue &&
+      (!this.context || chatInputOwnerForContext(this.context).current === this.inputRegion)
+    );
   }
   set active(value: boolean) {
     const previous = this.activeValue;
@@ -151,7 +178,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     }
     this.activeValue = value;
     this.requestUpdate("active", previous);
-    this.activeChanged(value);
+    this.activeChanged(this.active);
   }
   protected activeChanged(_active: boolean): void {}
   // Call wherever connectionGeneration itself advances (reconnect, capability
@@ -179,6 +206,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     paneId: string,
     sessionKey: string,
     replacementSessionKey: string,
+    preserveDraft?: boolean,
   ) => void;
   @property({ attribute: false }) paneTitle = "";
   @property({ attribute: false }) narrow = false;
@@ -243,7 +271,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @litState() protected paneWidth = Number.POSITIVE_INFINITY;
   protected paneResizeObserver: ResizeObserver | null = null;
   protected connectedClient: GatewayBrowserClient | null = null;
-  protected boardProviderLease: (BoardProviderLease & { sessionKey: string }) | undefined;
+  protected boardProviderLease: (BoardProviderLease & { cacheKey: string }) | undefined;
   protected boardProviderLifecycleConnected = false;
   protected connectionGeneration = 0;
   // Owns the abort signal handed to header-scoped destructive confirm dialogs.
@@ -372,7 +400,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
 
   protected resetConfirmation:
     | {
-        sessionKey: string;
+        scopeKey: string;
         promise: Promise<boolean>;
         resolve: (confirmed: boolean) => void;
       }
@@ -470,6 +498,11 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     super();
     observeNativeGateway(this);
     void new SubscriptionsController(this)
+      .watch(
+        () => this.context && chatInputOwnerForContext(this.context),
+        (owner, notify) => owner.subscribe(notify),
+        () => this.activeChanged(this.active),
+      )
       .watch(
         () => this.context?.overlays,
         (overlays, notify) =>

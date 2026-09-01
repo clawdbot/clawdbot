@@ -230,15 +230,19 @@ describe("resolveCopilotProvider", () => {
     });
   });
 
-  it("does not synthesize SDK apiKey auth when request auth already prepared headers", () => {
+  it.each([
+    { mode: "header", headers: { "x-api-key": "header-secret" } },
+    { mode: "bearer", headers: { Authorization: "Bearer header-secret" } },
+    { mode: "none", headers: undefined },
+  ])("does not synthesize SDK auth for prepared $mode request auth", ({ mode, headers }) => {
     const result = resolveCopilotProvider({
       model: {
         provider: "custom-header-proxy",
         api: "openai-responses",
         id: "proxy-model",
         baseUrl: "https://proxy.example/v1",
-        headers: { "x-api-key": "header-secret" },
-        requestAuthMode: "header",
+        headers,
+        requestAuthMode: mode,
       },
       resolvedApiKey: "header-secret",
     });
@@ -249,7 +253,7 @@ describe("resolveCopilotProvider", () => {
       baseUrl: "https://proxy.example/v1",
       modelId: "proxy-model",
       wireModel: "proxy-model",
-      headers: { "x-api-key": "header-secret" },
+      ...(headers ? { headers } : {}),
     });
   });
 

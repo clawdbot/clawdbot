@@ -22,6 +22,8 @@ const SKIPPED_DIRS = new Set([
   "node_modules",
 ]);
 const TEXT_FILE_PATTERN = /\.(?:[cm]?[jt]sx?|json|mdx?|ya?ml)$/u;
+const MEMORY_HOST_SOURCE_BRIDGE_TOKEN = "src/memory-host-sdk/";
+const MEMORY_HOST_CORE_REFERENCE_TOKEN = "../../../src/";
 type CliOptions = {
   json: boolean;
   summary: boolean;
@@ -185,10 +187,10 @@ function collectWorkspaceTextFilesFromGit(): string[] | null {
     .filter(isExistingTextFile);
 }
 
-function collectWorkspaceTextFilesMatchingGit(pattern: string): string[] | null {
+function collectWorkspaceTextFilesMatchingGit(patternArgs: readonly string[]): string[] | null {
   const result = spawnSync(
     "git",
-    ["grep", "--untracked", "-l", "-E", pattern, "--", ...SOURCE_ROOTS],
+    ["grep", "--untracked", "-l", ...patternArgs, "--", ...SOURCE_ROOTS],
     {
       cwd: REPO_ROOT,
       encoding: "utf8",
@@ -215,8 +217,26 @@ function repoRelative(file: string): string {
   return relative(REPO_ROOT, file).replaceAll("\\", "/");
 }
 
-function collectWorkspaceTextFileSources(): WorkspaceTextFile[] {
-  return collectWorkspaceTextFiles().map((file) => ({
+function collectWorkspaceTextFileSources(
+  records?: readonly PluginCompatRecord[],
+): WorkspaceTextFile[] {
+  const tokens = records?.flatMap((record) =>
+    record.status === "deprecated"
+      ? extractCompatTokens(record)
+      : record.status === "removal-pending"
+        ? extractCompatSurfaceTokens(record)
+        : [],
+  );
+  // Keep every file either collector can use; Git failure retains the exhaustive scan.
+  const matches = tokens
+    ? collectWorkspaceTextFilesMatchingGit([
+        "-F",
+        ...[...tokens, MEMORY_HOST_SOURCE_BRIDGE_TOKEN, MEMORY_HOST_CORE_REFERENCE_TOKEN].flatMap(
+          (token) => ["-e", token],
+        ),
+      ])
+    : null;
+  return (matches ?? collectWorkspaceTextFiles()).map((file) => ({
     file,
     relativeFile: repoRelative(file),
     source: readFileSync(file, "utf8"),
@@ -224,9 +244,10 @@ function collectWorkspaceTextFileSources(): WorkspaceTextFile[] {
 }
 
 function collectSummaryWorkspaceTextFileSources(): WorkspaceTextFile[] {
-  const pluginSdkFiles = collectWorkspaceTextFilesMatchingGit(
+  const pluginSdkFiles = collectWorkspaceTextFilesMatchingGit([
+    "-E",
     String.raw`openclaw/plugin-sdk/[a-z0-9][a-z0-9-]*`,
-  );
+  ]);
   if (!pluginSdkFiles) {
     return collectWorkspaceTextFileSources();
   }
@@ -366,11 +387,12 @@ export function isPluginCompatEligibleForRemoval(
 }
 
 function collectCompatDebt(
+  records: readonly PluginCompatRecord[],
   files: readonly WorkspaceTextFile[],
   today = new Date(),
   options: { includeReferenceFiles?: boolean } = {},
 ): CompatDebtRecord[] {
-  return listPluginCompatRecords()
+  return records
     .filter((record) => record.status === "deprecated")
     .map((record) => {
       const tokens = extractCompatTokens(record);
@@ -403,10 +425,11 @@ function collectCompatDebt(
 }
 
 function collectRemovalPendingDebt(
+  records: readonly PluginCompatRecord[],
   files: readonly WorkspaceTextFile[],
   today = new Date(),
 ): RemovalPendingDebtRecord[] {
-  return listPluginCompatRecords()
+  return records
     .filter((record) => record.status === "removal-pending")
     .map((record) => {
       const references = collectReferenceFiles(files, extractCompatSurfaceTokens(record));
@@ -443,10 +466,10 @@ function collectMemoryHostBoundary(
     if (!relativeFile.startsWith("packages/memory-host-sdk/src/")) {
       continue;
     }
-    if (source.includes("src/memory-host-sdk/")) {
+    if (source.includes(MEMORY_HOST_SOURCE_BRIDGE_TOKEN)) {
       sourceBridgeFiles.push(relativeFile);
     }
-    if (source.includes("../../../../src/") || source.includes("../../../src/")) {
+    if (source.includes(MEMORY_HOST_CORE_REFERENCE_TOKEN)) {
       packageCoreReferenceFiles.add(relativeFile);
     }
   }
@@ -456,10 +479,6 @@ function collectMemoryHostBoundary(
     sourceBridgeFiles: sourceBridgeFiles.toSorted(),
     packageCoreReferenceFiles: [...packageCoreReferenceFiles].toSorted(),
   };
-}
-
-function matchesOwner(owner: string | undefined, value: string | undefined): boolean {
-  return owner === undefined || value === owner;
 }
 
 function countByOwner(records: readonly CompatDebtRecord[]): Record<string, number> {
@@ -533,15 +552,16 @@ function buildSummary(report: BoundaryReport, owner?: string): BoundaryReportSum
 }
 
 function buildReport(options: Partial<Pick<CliOptions, "owner" | "summary">> = {}): BoundaryReport {
+  const records = listPluginCompatRecords().filter(
+    (record) => options.owner === undefined || record.owner === options.owner,
+  );
   const files = options.summary
     ? collectSummaryWorkspaceTextFileSources()
-    : collectWorkspaceTextFileSources();
-  const compatRecords = collectCompatDebt(files, new Date(), {
+    : collectWorkspaceTextFileSources(records);
+  const compatRecords = collectCompatDebt(records, files, new Date(), {
     includeReferenceFiles: !options.summary,
-  }).filter((record) => matchesOwner(options.owner, record.owner));
-  const removalPending = collectRemovalPendingDebt(files).filter((record) =>
-    matchesOwner(options.owner, record.owner),
-  );
+  });
+  const removalPending = collectRemovalPendingDebt(records, files);
   return {
     generatedAt: new Date().toISOString(),
     compat: {

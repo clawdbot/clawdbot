@@ -107,8 +107,8 @@ function resolveConfigWidePluginMetadataSnapshotImpl(
   const selectedPlugins = new Map(
     manifestRegistry.plugins.map((plugin) => [normalizePluginPolicyId(plugin.id), plugin]),
   );
-  // Merge the inventory with the manifests so later scopes cannot lose a
-  // secondary workspace or resurrect a plugin rejected for ambiguous ownership.
+  // Merge only the runtime inventory; registryIndex retains the original persistence scope.
+  // Later scopes must not lose secondary plugins or resurrect ambiguous owners.
   const indexPlugins = new Map(
     snapshots.flatMap((snapshot) =>
       snapshot.index.plugins.flatMap((record) => {

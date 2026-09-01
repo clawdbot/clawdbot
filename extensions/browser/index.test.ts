@@ -341,6 +341,10 @@ describe("browser plugin", () => {
       "act",
       "close",
       "console",
+      "requests",
+      "errors",
+      "text",
+      "emulate",
       "dialog",
       "download",
       "focus",
@@ -399,7 +403,17 @@ describe("browser plugin", () => {
     const actions = (properties.action as { enum?: string[] }).enum;
     const actKinds = (properties.kind as { enum?: string[] }).enum;
 
-    expect(actions).not.toEqual(expect.arrayContaining(["pdf", "download", "waitfordownload"]));
+    for (const action of [
+      "pdf",
+      "download",
+      "waitfordownload",
+      "requests",
+      "errors",
+      "text",
+      "emulate",
+    ]) {
+      expect(actions).not.toContain(action);
+    }
     expect(actions).toEqual(expect.arrayContaining(["snapshot", "screenshot"]));
     expect(actKinds).not.toContain("batch");
     expect((properties.actions as { description?: string }).description).toBeUndefined();

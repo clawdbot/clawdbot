@@ -10,10 +10,8 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  createGatewayMethodRegistry,
-  createPluginGatewayMethodDescriptor,
-} from "./methods/registry.js";
+import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
+import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { sessionMutationHandlers } from "./server-methods/sessions-mutations.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
@@ -357,7 +355,8 @@ describe("gateway method authorization", () => {
           sessionId: "session-draft-replacement",
           updatedAt: 2,
           visibility: "draft",
-          createdActor: { type: "human", id: "owner" },
+          createdVia: "operator",
+          createdActor: { type: "human", source: "profile", id: "owner" },
         },
       );
       await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
@@ -390,7 +389,8 @@ describe("gateway method authorization", () => {
           sessionId: "session-lifecycle-authorization-target",
           updatedAt: 1,
           visibility: "read-only",
-          createdActor: { type: "human", id: "owner" },
+          createdVia: "operator",
+          createdActor: { type: "human", source: "profile", id: "owner" },
         },
       );
 
@@ -935,10 +935,19 @@ describe("sessions.patchMany orchestration", () => {
 
   it("isolates archive preparation authorization per target and continues in input order", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      for (let index = 0; index < 3; index += 1) {
+      const targets = [0, 1, 2].map((index) => ({
+        key: `agent:main:archive-auth-${index}`,
+        expectedSessionId: `session-archive-auth-${index}`,
+        expectedLifecycleRevision: `revision-archive-auth-${index}`,
+      }));
+      for (const target of targets) {
         await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: `agent:main:archive-auth-${index}` },
-          { sessionId: `session-archive-auth-${index}`, updatedAt: 1 },
+          { agentId: "main", sessionKey: target.key },
+          {
+            sessionId: target.expectedSessionId,
+            lifecycleRevision: target.expectedLifecycleRevision,
+            updatedAt: 1,
+          },
         );
       }
       const respond = vi.fn();
@@ -955,13 +964,7 @@ describe("sessions.patchMany orchestration", () => {
       });
 
       await sessionMutationHandlers["sessions.patchMany"]!({
-        params: {
-          targets: [0, 1, 2].map((index) => ({
-            key: `agent:main:archive-auth-${index}`,
-            expectedSessionId: `session-archive-auth-${index}`,
-          })),
-          patch: { archived: true },
-        },
+        params: { targets, patch: { archived: true } },
         respond,
         context: context(),
         client: { connect: { scopes: ["operator.write"] } },
@@ -969,13 +972,9 @@ describe("sessions.patchMany orchestration", () => {
       } as never);
 
       expect(assertCurrent).not.toHaveBeenCalled();
-      expect(assertTargetCurrent.mock.calls.map(([target]) => target.sessionKey)).toEqual([
-        "agent:main:archive-auth-0",
-        "agent:main:archive-auth-1",
-        "agent:main:archive-auth-2",
-        "agent:main:archive-auth-0",
-        "agent:main:archive-auth-2",
-      ]);
+      expect([
+        ...new Set(assertTargetCurrent.mock.calls.map(([target]) => target.sessionKey)),
+      ]).toEqual(targets.map(({ key }) => key));
       expect(respond).toHaveBeenCalledWith(
         true,
         {
@@ -994,15 +993,18 @@ describe("sessions.patchMany orchestration", () => {
         },
         undefined,
       );
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: "agent:main:archive-auth-0" }),
-      ).toHaveProperty("archivedAt");
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: "agent:main:archive-auth-1" }),
-      ).not.toHaveProperty("archivedAt");
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: "agent:main:archive-auth-2" }),
-      ).toHaveProperty("archivedAt");
+      for (const [index, target] of targets.entries()) {
+        const entry = loadSessionEntry({ agentId: "main", sessionKey: target.key });
+        expect(entry).toMatchObject({
+          sessionId: target.expectedSessionId,
+          lifecycleRevision: target.expectedLifecycleRevision,
+        });
+        if (index === 1) {
+          expect(entry).not.toHaveProperty("archivedAt");
+        } else {
+          expect(entry).toHaveProperty("archivedAt");
+        }
+      }
     });
   });
 

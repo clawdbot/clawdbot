@@ -63,6 +63,7 @@ type ChatTurnRouterOptions = {
 };
 
 type CaptureRuntime = RuntimeEnv & { read: () => string };
+type PersistentApplyGuard = () => void;
 
 function createCaptureRuntime(): CaptureRuntime {
   const lines: string[] = [];
@@ -177,6 +178,7 @@ export class ChatTurnRouter {
   async resolveOperatorApproval(
     decision: "allow-once" | "allow-always" | "deny" | null,
     proposalHash: string,
+    beforePersistentApply?: PersistentApplyGuard,
   ): Promise<SystemAgentChatReply | null> {
     return await resolveOperatorApprovalDecision({
       decision,
@@ -185,11 +187,11 @@ export class ChatTurnRouter {
       clear: () => this.clearPendingProposals(),
       apply: async (operation) => {
         this.proposalResolution = "approved";
-        return await this.applyApprovedPersistentOperation(operation);
+        return await this.applyApprovedPersistentOperation(operation, beforePersistentApply);
       },
       denied: () => {
         this.proposalResolution = "declined";
-        return { text: "Denied. No change.", action: "none" as const };
+        return { text: "Denied. No change.", action: "none" as const, applied: false };
       },
     });
   }
@@ -312,12 +314,13 @@ export class ChatTurnRouter {
 
   private async applyApprovedPersistentOperation(
     operation: SystemAgentOperation,
+    beforePersistentApply?: PersistentApplyGuard,
   ): Promise<SystemAgentChatReply> {
     if (!isPersistentSystemAgentOperation(operation)) {
       throw new Error("OpenClaw host received a non-persistent approved operation.");
     }
     const capture = createCaptureRuntime();
-    const result = await this.executeOperation(operation, capture, true);
+    const result = await this.executeOperation(operation, capture, true, beforePersistentApply);
     const verify = result?.applied ? await this.callbacks.verifyConfigAfterWrite() : null;
     const followUp = this.armFollowUp(result?.followUp);
     const baseText = [capture.read() || "Applied. Audit entry written.", verify, followUp]
@@ -332,9 +335,10 @@ export class ChatTurnRouter {
       return {
         text: [
           baseText,
-          "Your agent is hatching — handing you over now. You can always find me in Settings → Ask OpenClaw.",
+          `Your agent is hatching — handing you over now. ${this.agentHandoffReturnHint()}`,
         ].join("\n\n"),
         action: "open-tui",
+        applied: true,
         agentDraft: "hatch",
         handoff: {
           kind: "open-tui",
@@ -344,7 +348,7 @@ export class ChatTurnRouter {
         },
       };
     }
-    return { text: baseText, action: "none" };
+    return { text: baseText, action: "none", applied: result?.applied === true };
   }
 
   async resolveAssistantTurn(
@@ -479,7 +483,7 @@ export class ChatTurnRouter {
     if (recordedOperation.kind === "open-tui") {
       this.clearPendingProposals();
       return {
-        text: "Opening your normal agent TUI. Use /openclaw there to come back.",
+        text: `Opening a chat with your agent. ${this.agentHandoffReturnHint()}`,
         action: "open-tui",
         handoff: recordedOperation,
       };
@@ -578,15 +582,17 @@ export class ChatTurnRouter {
     operation: SystemAgentOperation,
     capture: CaptureRuntime,
     approved: boolean,
+    beforePersistentApply?: PersistentApplyGuard,
   ): Promise<SystemAgentOperationResult | undefined> {
     try {
       const execute = this.dependencies.executeOperation ?? executeSystemAgentOperation;
+      if (approved) {
+        await this.callbacks.requirePersistentApplyInference(capture);
+      }
       return await execute(operation, capture, {
         approved,
         deps: this.commandDeps(),
-        beforePersistentApply: async () => {
-          await this.callbacks.requirePersistentApplyInference(capture);
-        },
+        beforePersistentApply,
         onVerifiedInferenceChanged: this.callbacks.rebindVerifiedInference,
       });
     } catch (error) {
@@ -633,6 +639,13 @@ export class ChatTurnRouter {
       ...this.options.deps,
       ...(this.options.surface ? { setupSurface: this.options.surface } : {}),
     };
+  }
+
+  private agentHandoffReturnHint(): string {
+    // Only the TUI uses /openclaw for navigation; web chat runs rescue in place.
+    return this.options.surface === "gateway"
+      ? "You can return through Settings → Ask OpenClaw."
+      : "Use /openclaw to come back.";
   }
 
   private clearPendingProposals(): void {

@@ -2,6 +2,9 @@ import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/sc
 import type { SessionRestartRecoveryState } from "./restart-recovery-types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
+/** `null` requires a revision-less row; omitting the field skips the revision fence. */
+export type SessionLifecycleRevisionExpectation = string | null;
+
 /** Authoritative lifecycle snapshot required for an atomic transcript admission. */
 export type SessionTranscriptTurnExpectedState = {
   /** Rejects a run-owned turn after another admitted run takes writer ownership. */

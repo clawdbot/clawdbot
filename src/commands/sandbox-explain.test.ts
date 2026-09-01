@@ -316,7 +316,7 @@ describe("sandbox explain command", () => {
             sessionId: session.key,
             updatedAt: Date.now(),
             sandbox: "required",
-            createdActor: { type: "human", id: session.principalId },
+            createdActor: { type: "human", source: "profile", id: session.principalId },
           },
         );
       }

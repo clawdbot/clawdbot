@@ -6,6 +6,8 @@ import {
   captureGatewayRootWorkAdmissionContinuationScope,
   GatewayDrainingError,
   getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
+  getGatewayRestartDrainSignal,
   getGatewaySuspendAdmissionPhase,
   isGatewayRestartDrainError,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -28,6 +30,7 @@ afterEach(resetGatewayWorkAdmission);
 
 it("classifies draining errors only while an authoritative restart signal or drain is active", () => {
   const error = new GatewayDrainingError();
+  const firstDrainSignal = getGatewayRestartDrainSignal();
 
   expect(isGatewayRestartDrainError(error)).toBe(false);
   expect(isGatewayRestartDrainError(new Error("GatewayDrainingError"))).toBe(false);
@@ -44,6 +47,14 @@ it("classifies draining errors only while an authoritative restart signal or dra
 
   markGatewayRestartDraining();
   expect(isGatewayRestartDrainError(error)).toBe(true);
+  expect(firstDrainSignal.aborted).toBe(true);
+
+  resetGatewayWorkAdmission();
+  const nextDrainSignal = getGatewayRestartDrainSignal();
+  expect(nextDrainSignal).not.toBe(firstDrainSignal);
+  expect(nextDrainSignal.aborted).toBe(false);
+  markGatewayRestartDraining();
+  expect(nextDrainSignal.aborted).toBe(true);
 });
 
 it("counts one nested root chain once and excludes the preparing caller", async () => {
@@ -210,7 +221,7 @@ it("lets an admitted root cross only the reversible suspension fence", async () 
 });
 
 it("synchronously reserves a tracked continuation across a closed suspension fence", async () => {
-  const root = tryBeginGatewayRootWorkAdmission();
+  const root = tryBeginGatewayRootWorkAdmission("ws:agent");
   expect(root).not.toBeNull();
   let releaseContinuation = () => {};
   let continuation: Promise<void> | undefined;
@@ -222,16 +233,35 @@ it("synchronously reserves a tracked continuation across a closed suspension fen
         await new Promise<void>((resolve) => {
           releaseContinuation = resolve;
         }),
+      "runtime:detached",
     );
     expect(getActiveGatewayRootWorkCount()).toBe(2);
+    expect(getActiveGatewayRootWorkHolders()).toEqual(["runtime:detached", "ws:agent"]);
     expect(suspension?.rollback()).toBe(true);
   });
 
   root?.release();
   expect(getActiveGatewayRootWorkCount()).toBe(1);
+  expect(getActiveGatewayRootWorkHolders()).toEqual(["runtime:detached"]);
   releaseContinuation();
   await continuation;
   expect(getActiveGatewayRootWorkCount()).toBe(0);
+});
+
+it("uses the supplied origin when a continuation has no live parent", async () => {
+  let releaseContinuation = () => {};
+  const continuation = runWithGatewayIndependentRootWorkContinuation(
+    async () =>
+      await new Promise<void>((resolve) => {
+        releaseContinuation = resolve;
+      }),
+    "runtime:detached",
+  );
+
+  expect(getActiveGatewayRootWorkHolders()).toEqual(["runtime:detached"]);
+  releaseContinuation();
+  await continuation;
+  expect(getActiveGatewayRootWorkHolders()).toEqual([]);
 });
 
 it("retains an admitted request root across its handler return", async () => {

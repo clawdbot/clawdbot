@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -175,23 +175,23 @@ describe("shared state write transaction corruption recovery", () => {
     const walBytesBeforeEviction = fs.statSync(walPath).size;
     const { DatabaseSync } = requireNodeSqlite();
     const peer = new DatabaseSync(cached.path);
+    const close = vi.spyOn(cached.walMaintenance, "close");
 
     try {
       peer.exec("BEGIN;");
       peer.prepare("SELECT count(*) FROM diagnostic_events").get();
-      const evictionStartedAt = performance.now();
       expect(
         openClawStateDatabaseCache.evictOpenClawStateDatabaseAfterCorruption(
           cached,
           sqliteError("database disk image is malformed", 11),
         ),
       ).toBe(true);
-      const evictionElapsedMs = performance.now() - evictionStartedAt;
 
       expect(
         openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(cached.path),
       ).toBeUndefined();
-      expect(evictionElapsedMs).toBeLessThan(250);
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(close).toHaveBeenCalledWith({ checkpointMode: "PASSIVE" });
       expect(fs.statSync(walPath).size).toBe(walBytesBeforeEviction);
       expect(peer.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
       expect(

@@ -62,6 +62,13 @@ const resolvePlaybackTranscodeMock = vi.fn(
 );
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+beforeEach(() => {
+  resolvePlaybackModeForSourceMock.mockReset();
+  resolvePlaybackModeForSourceMock.mockImplementation(async ({ mimeType }) =>
+    mimeType === "audio/x-caf" ? "transcode" : "native",
+  );
+});
+
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: getRuntimeConfigMock,
 }));
@@ -92,14 +99,8 @@ vi.mock("../media/media-probe.js", () => ({
 
 vi.mock("../media/playback-transcode.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media/playback-transcode.js")>();
-  const testApi = (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.playbackTranscodeTestApi")
-  ] as {
-    PLAYBACK_TRANSCODE_POLICY: Record<"audio" | "video", unknown>;
-    resolvePlaybackMode(mimeType: string, policy: unknown): "native" | "transcode" | undefined;
-  };
-  resolvePlaybackModeForSourceMock.mockImplementation(async (params) =>
-    testApi.resolvePlaybackMode(params.mimeType, testApi.PLAYBACK_TRANSCODE_POLICY[params.kind]),
+  resolvePlaybackModeForSourceMock.mockImplementation(async ({ mimeType }) =>
+    mimeType === "audio/x-caf" ? "transcode" : "native",
   );
   return {
     ...actual,
@@ -1613,7 +1614,7 @@ describe("createManagedOutgoingImageBlocks", () => {
     });
   });
 
-  it("does not publish a record when playback inspection fails", async () => {
+  it("returns a visible failure without publishing a record when playback inspection fails", async () => {
     const sourcePath = path.join(stateDir, "workspace", "voice.mp3");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(sourcePath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
@@ -1630,7 +1631,17 @@ describe("createManagedOutgoingImageBlocks", () => {
       continueOnPrepareError: true,
     });
 
-    expect(blocks).toEqual([]);
+    expect(blocks).toEqual([
+      {
+        type: "attachment_error",
+        attachment: {
+          code: "delivery-failed",
+          kind: "audio",
+          label: "voice.mp3",
+          mimeType: "audio/mpeg",
+        },
+      },
+    ]);
     expect(listManagedImageRecordEntries({ stateDir })).toEqual([]);
     await expectPathMissing(path.join(stateDir, "media", "outgoing", "originals"));
   });
@@ -1959,7 +1970,7 @@ describe("createManagedOutgoingImageBlocks", () => {
     expect(requireBlock(blocks, 1).type).toBe("text");
   });
 
-  it("skips broken attachments when continueOnPrepareError is enabled", async () => {
+  it("returns a named failure block when continueOnPrepareError is enabled", async () => {
     const onPrepareError = vi.fn();
     const blocks = await createManagedOutgoingImageBlocks({
       sessionKey: "agent:main:main",
@@ -1970,8 +1981,16 @@ describe("createManagedOutgoingImageBlocks", () => {
       onPrepareError,
     });
 
-    expect(blocks).toHaveLength(1);
+    expect(blocks).toHaveLength(2);
     expect(requireBlock(blocks).type).toBe("image");
+    expect(requireBlock(blocks, 1)).toMatchObject({
+      type: "attachment_error",
+      attachment: {
+        code: "delivery-failed",
+        kind: "image",
+        label: "missing.png",
+      },
+    });
     expect(onPrepareError).toHaveBeenCalledTimes(1);
     const firstPrepareError = onPrepareError.mock.calls[0]?.[0];
     expect(firstPrepareError).toBeInstanceOf(Error);
@@ -1980,7 +1999,7 @@ describe("createManagedOutgoingImageBlocks", () => {
     );
   });
 
-  it("skips malformed media data URLs when continueOnPrepareError is enabled", async () => {
+  it("returns an error block for malformed media data URLs and keeps later media", async () => {
     const onPrepareError = vi.fn();
     const blocks = await createManagedOutgoingImageBlocks({
       sessionKey: "agent:main:main",
@@ -1990,8 +2009,12 @@ describe("createManagedOutgoingImageBlocks", () => {
       onPrepareError,
     });
 
-    expect(blocks).toHaveLength(1);
-    expect(requireBlock(blocks).type).toBe("image");
+    expect(blocks).toHaveLength(2);
+    expect(requireBlock(blocks)).toMatchObject({
+      type: "attachment_error",
+      attachment: { code: "delivery-failed", kind: "audio" },
+    });
+    expect(requireBlock(blocks, 1).type).toBe("image");
     expect(onPrepareError).toHaveBeenCalledOnce();
   });
 
@@ -2010,7 +2033,16 @@ describe("createManagedOutgoingImageBlocks", () => {
       onPrepareError,
     });
 
-    expect(blocks).toEqual([]);
+    expect(blocks).toEqual([
+      {
+        type: "attachment_error",
+        attachment: {
+          code: "delivery-failed",
+          kind: "document",
+          label: "mystery.blob",
+        },
+      },
+    ]);
     expect(onPrepareError).toHaveBeenCalledOnce();
     expect(onPrepareError.mock.calls[0]?.[0]).toMatchObject({
       message: expect.stringMatching(/could not be prepared/u),
@@ -2021,7 +2053,6 @@ describe("createManagedOutgoingImageBlocks", () => {
     {
       fileName: "config.xml",
       mimeType: "application/xml",
-      expectedMimeType: "text/xml",
       body: "<config/>",
     },
     { fileName: "vector.svg", mimeType: "image/svg+xml", body: "<svg/>" },
@@ -2054,7 +2085,17 @@ describe("createManagedOutgoingImageBlocks", () => {
       onPrepareError,
     });
 
-    expect(blocks).toEqual([]);
+    expect(blocks).toEqual([
+      {
+        type: "attachment_error",
+        attachment: {
+          code: "delivery-failed",
+          kind: "document",
+          label: fixture.fileName,
+          mimeType: fixture.mimeType,
+        },
+      },
+    ]);
     expect(onPrepareError).toHaveBeenCalledOnce();
     expect(listManagedImageRecordEntries({ stateDir })).toEqual([]);
     const originalsDir = path.join(stateDir, "media", MANAGED_OUTGOING_ORIGINALS_SUBDIR);

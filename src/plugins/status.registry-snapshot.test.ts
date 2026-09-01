@@ -555,16 +555,22 @@ describe("buildPluginRegistrySnapshotReport", () => {
       expect(report.workspaceDir).toBe(workspaceDir);
       expect(report.workspaceScope).toBe(workspaceScope);
       expect(report.registrySource).toBe(state === "persisted" ? "persisted" : "derived");
+      const expectedRegistryDiagnostic = {
+        level: state === "missing" ? "info" : "warn",
+        code: `persisted-registry-${state}`,
+        message: expect.any(String),
+        ...(state === "stale-source" && {
+          differences: [
+            {
+              pluginId: fixture.pluginId,
+              persistedSource: fixture.runtimeSource,
+              derivedSource: fixture.runtimeSource,
+            },
+          ],
+        }),
+      };
       expect(report.registryDiagnostics).toEqual(
-        state === "persisted"
-          ? []
-          : [
-              {
-                level: state === "missing" ? "info" : "warn",
-                code: `persisted-registry-${state}`,
-                message: expect.any(String),
-              },
-            ],
+        state === "persisted" ? [] : [expectedRegistryDiagnostic],
       );
       expect(report.diagnostics).toEqual(
         workspaceScope === "selected"

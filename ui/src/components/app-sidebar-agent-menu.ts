@@ -305,6 +305,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
   return html`
     <wa-dropdown
       class="sidebar-customize-menu sidebar-agent-menu"
+      data-chat-autotype-exempt
       .open=${true}
       placement="bottom-start"
       .distance=${0}

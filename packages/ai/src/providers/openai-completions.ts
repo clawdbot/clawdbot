@@ -24,6 +24,7 @@ import {
   resolveOpenAIClientBaseUrl,
 } from "../transports/openai-transport-shared.js";
 import {
+  assignTransportErrorDetails,
   transportAbortError,
   withProviderResponseHook,
 } from "../transports/transport-stream-shared.js";
@@ -43,7 +44,6 @@ import {
 } from "../utils/assistant-text-phase.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
-import { projectProviderError } from "../utils/provider-error.js";
 import {
   createFirstStreamEventAbortController,
   getFirstStreamEventTimeoutHandler,
@@ -132,7 +132,7 @@ export const streamOpenAICompletions: StreamFunction<
       const requestOptions = {
         signal: firstEventAbort.signal,
         ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
-        maxRetries: options?.maxRetries ?? 0,
+        maxRetries: 0,
       };
       const { data: openaiStream, response } = await client.chat.completions
         .create(
@@ -241,8 +241,7 @@ export const streamOpenAICompletions: StreamFunction<
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
     } catch (error) {
-      const terminal = projectProviderError(error, options?.signal);
-      Object.assign(output, terminal);
+      const terminal = assignTransportErrorDetails(output, error, options?.signal);
       finalizeOpenAICompletionsToolCalls(output, { allowSilentToolCallPromotion: false });
       clearPendingCommentaryText(provisionalCommentaryTags);
       tagUnresolvedTextAsCommentary(output);
@@ -344,6 +343,7 @@ function createClient(
     baseURL: resolveOpenAIClientBaseUrl(model, baseUrl),
     dangerouslyAllowBrowser: true,
     defaultHeaders,
+    maxRetries: 0,
     // OpenAI supports custom fetch, so sentinels stay opaque until guarded egress.
     fetch: getAiTransportHost().buildModelFetch(model),
   });

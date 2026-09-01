@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { stripAnsi } from "../../../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../../../packages/terminal-core/src/safe-text.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -91,12 +92,14 @@ export async function installCandidate(params: {
   preferNpm?: boolean;
   repairReason?: InstallCandidateRepairReason;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<{
   records: Record<string, PluginInstallRecord>;
   changes: string[];
   notices: string[];
   warnings: string[];
   failedPluginId?: string;
+  code?: string;
 }> {
   const consent = capturePluginCapabilityConsentHandlerErrors(params.onCapabilityConsent);
   try {
@@ -117,6 +120,7 @@ export async function installCandidate(params: {
       notices: [],
       warnings: [sanitizeTerminalText(error.message)],
       failedPluginId: params.candidate.pluginId,
+      ...(error.capabilityConsent ? { code: PLUGIN_CAPABILITY_CONSENT_REQUIRED } : {}),
     };
   }
 }
@@ -131,6 +135,13 @@ async function installCandidatePackage(
   // A channel fallback changes which artifact the operator gets, so it must stay
   // visible on the success path instead of being dropped with the attempt log.
   const channelNotices: string[] = [];
+  // A stale version-bound runtime repair must preserve an operator's exact npm
+  // pin: persisting the floating catalog spec would downgrade it and trigger
+  // `installs_unpinned_npm_specs` in the deep security audit.
+  const pinResolvedSpecForStaleRepair =
+    params.repairReason === "stale-version-bound-runtime" &&
+    parseRegistryNpmSpec(params.records[candidate.pluginId]?.spec ?? "")?.selectorKind ===
+      "exact-version";
   const clawhubSpecs = candidate.clawhubSpec
     ? resolveClawHubInstallSpecsForUpdateChannel({
         spec: candidate.clawhubSpec,
@@ -159,6 +170,7 @@ async function installCandidatePackage(
       previousRecords: params.records,
       expectedIntegrity: candidate.expectedIntegrity,
       onCapabilityConsent: params.onCapabilityConsent,
+      beforePersistentEffect: params.beforePersistentEffect,
     });
   const npmDir = resolveDefaultPluginNpmDir(params.env);
   const existingClawHubPackagePath = clawhubInstallSpec
@@ -192,7 +204,7 @@ async function installCandidatePackage(
       records: params.records,
       npmInstallSpec,
       npmRecordSpec: npmSpecs?.recordSpec ?? npmInstallSpec,
-      pinResolvedRegistrySpec: false,
+      pinResolvedRegistrySpec: pinResolvedSpecForStaleRepair,
       packagePath: existingNpmPackagePath,
       version: existingNpmPackageVersion,
     });
@@ -343,7 +355,7 @@ async function installCandidatePackage(
         spec: resolveNpmInstallRecordSpec({
           requestedSpec: npmSpecs?.recordSpec ?? npmInstallSpec,
           resolution: result.npmResolution,
-          pinResolvedRegistrySpec: false,
+          pinResolvedRegistrySpec: pinResolvedSpecForStaleRepair,
         }),
         installPath: result.targetDir,
         version: result.version,
@@ -447,6 +459,8 @@ async function adoptExistingNpmPackage(params: {
         params.candidate.pluginId,
         {
           source: "npm",
+          // Adoption discovers local bytes; only a registry reinstall can establish official trust.
+          sourcePath: params.packagePath,
           spec: resolveNpmInstallRecordSpec({
             requestedSpec: params.npmRecordSpec,
             resolution: npmResolution,

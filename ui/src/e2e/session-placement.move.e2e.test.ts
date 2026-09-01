@@ -1,10 +1,10 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
-import { beforeAll, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
+  controlUiSessionUrl,
   installMockGateway,
   requireString,
 } from "./chat-flow.test-support.ts";
@@ -12,25 +12,21 @@ import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "session-placement-move");
 const runnerOfflineProofName = process.env.OPENCLAW_RUNNER_OFFLINE_SCREENSHOT;
-const runnerOfflineProofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "runner-offline",
-);
 
 async function capture(page: Page, name: string): Promise<void> {
   if (captureProof) {
-    await page.screenshot({ path: path.join(proofDir, name) });
+    await page.screenshot({
+      path: path.join(suite.artifactDir, "session-placement-move", name),
+    });
   }
 }
 
 async function captureRunnerOffline(page: Page): Promise<void> {
   if (runnerOfflineProofName) {
-    await mkdir(runnerOfflineProofDir, { recursive: true });
-    await page.screenshot({ path: path.join(runnerOfflineProofDir, runnerOfflineProofName) });
+    await page.screenshot({
+      path: path.join(suite.artifactDir, "runner-offline", runnerOfflineProofName),
+    });
   }
 }
 
@@ -39,7 +35,14 @@ function contextOptions() {
     locale: "en-US",
     serviceWorkers: "block" as const,
     viewport: { height: 900, width: 1280 },
-    ...(captureProof ? { recordVideo: { dir: proofDir, size: { height: 900, width: 1280 } } } : {}),
+    ...(captureProof
+      ? {
+          recordVideo: {
+            dir: path.join(suite.artifactDir, "session-placement-move"),
+            size: { height: 900, width: 1280 },
+          },
+        }
+      : {}),
   };
 }
 
@@ -50,6 +53,7 @@ function activeSession(placementMove?: {
 }) {
   return {
     key: "agent:main:placement-move",
+    sessionId: "session-placement-move",
     kind: "direct" as const,
     label: "Move proof",
     updatedAt: 2,
@@ -71,12 +75,6 @@ function activeSession(placementMove?: {
 }
 
 suite.define(() => {
-  beforeAll(async () => {
-    if (captureProof) {
-      await mkdir(proofDir, { recursive: true });
-    }
-  });
-
   it("shows authoritative device targets to writers and moves through the exact-source RPC", async () => {
     const context = await suite.newBrowserContext(contextOptions());
     const page = await context.newPage();
@@ -126,7 +124,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:placement-move"));
       await gateway.deferNext("sessions.move");
       await page.getByRole("button", { name: "Runs on Cloud" }).click();
       await page.getByText("Move session…", { exact: true }).click();
@@ -185,7 +183,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:placement-move"));
       await page.locator(".chat-pane__placement-chip").waitFor();
       await page.getByRole("button", { name: "Device offline" }).waitFor();
       await page.locator(".chat-pane__placement-chip").click();
@@ -314,7 +312,7 @@ suite.define(() => {
       });
 
       try {
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await page.getByRole("button", { name: "Device offline" }).waitFor();
         await page.getByRole("button", { name: "Open split view" }).click();
         const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
@@ -532,11 +530,12 @@ suite.define(() => {
         },
       },
       sessionInfo: available,
+      sessions: [parent, available],
       sessionKey: "agent:main:placement-move",
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:placement-move"));
       await gateway.waitForRequest("chat.startup");
       await page.getByRole("button", { name: "Runs on device" }).waitFor();
       await expect
@@ -679,7 +678,7 @@ suite.define(() => {
       });
 
       try {
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:placement-move"));
         await gateway.deferNext("sessions.move");
         await page.getByRole("button", { name: "Runs on Cloud" }).click();
         await page.getByText("Move session…", { exact: true }).click();
@@ -738,7 +737,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:placement-move"));
       await page.getByRole("button", { name: "Move failed" }).click();
       await page.getByText("Destination device is offline.", { exact: true }).waitFor();
       await page.getByText("Move session…", { exact: true }).waitFor();

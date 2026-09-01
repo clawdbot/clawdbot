@@ -650,6 +650,16 @@ class MainViewModel private constructor(
     runtimeState(initial = emptyList()) { it.talkModeConversation }
 
   val chatSessionKey: StateFlow<String> = runtimeState(initial = "main") { it.chatSessionKey }
+  internal val chatSelectionGeneration: StateFlow<Long> = runtimeState(initial = 0L) { it.chatSelectionGeneration }
+  internal val gatewayCatalogRevision: StateFlow<Long> = runtimeState(initial = 0L) { it.gatewayCatalogRevision }
+
+  internal fun prepareFullMessageRead(
+    owner: ChatComposerOwner,
+    selectionGeneration: Long,
+    catalogRevision: Long,
+    message: ChatMessage,
+  ) = runtimeRef.value?.prepareFullMessageRead(owner, selectionGeneration, catalogRevision, message)
+
   val chatSessionOwnerAgentId: StateFlow<String?> = runtimeState(initial = null) { it.chatSessionOwnerAgentId }
   val chatSessionId: StateFlow<String?> = runtimeState(initial = null) { it.chatSessionId }
   val chatMessages: StateFlow<List<ChatMessage>> = runtimeState(initial = emptyList()) { it.chatMessages }
@@ -1509,10 +1519,9 @@ class MainViewModel private constructor(
 
   fun installClawHubSkill(
     slug: String,
-    acknowledgeClawHubRisk: Boolean = false,
     version: String? = null,
   ) {
-    ensureRuntime().installClawHubSkill(slug, acknowledgeClawHubRisk, version)
+    ensureRuntime().installClawHubSkill(slug, version)
   }
 
   fun clearClawHubSkillMessage() {
@@ -1591,6 +1600,8 @@ class MainViewModel private constructor(
     clearLabel: Boolean = false,
     category: String? = null,
     clearCategory: Boolean = false,
+    color: String? = null,
+    clearColor: Boolean = false,
     pinned: Boolean? = null,
     archived: Boolean? = null,
     unread: Boolean? = null,
@@ -1603,6 +1614,8 @@ class MainViewModel private constructor(
       clearLabel = clearLabel,
       category = category,
       clearCategory = clearCategory,
+      color = color,
+      clearColor = clearColor,
       pinned = pinned,
       archived = archived,
       unread = unread,

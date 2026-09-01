@@ -533,11 +533,11 @@ describe("resolveFollowupDeliveryDecision", () => {
     ).toEqual({ kind: "suppress", reason: "send-policy" });
   });
 
-  it("suppresses a settled result whose accepted abort still requires accounting", () => {
-    const execution = createSettledExecution("late reply");
-    if (execution.outcome.kind === "settled") {
-      execution.outcome.abortReason = "user";
-    }
+  it("does not deliver completed compaction facts from an aborted turn", () => {
+    const execution: AgentTurnExecutionResult = {
+      runId: "run-1",
+      outcome: { kind: "aborted", reason: "user", compaction: { count: 1, durable: [] } },
+    };
 
     expect(
       resolveFollowupDeliveryDecision({

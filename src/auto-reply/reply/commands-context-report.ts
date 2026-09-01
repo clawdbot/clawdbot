@@ -2,7 +2,10 @@
 import { estimateTokensFromChars } from "@openclaw/normalization-core/cjk-chars";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
-import { analyzeBootstrapBudget } from "../../agents/bootstrap-budget.js";
+import {
+  analyzeBootstrapBudget,
+  buildBootstrapInjectionStats,
+} from "../../agents/bootstrap-budget.js";
 import { isRealConversationMessage } from "../../agents/compaction-real-conversation.js";
 import {
   resolveBootstrapMaxChars,
@@ -144,6 +147,7 @@ async function resolveContextReport(
   const { systemPrompt, tools, skillsPrompt, bootstrapFiles, injectedFiles, sandboxRuntime } =
     await resolveCommandsSystemPromptBundle(params);
 
+  const injectedWorkspaceFiles = buildBootstrapInjectionStats({ bootstrapFiles, injectedFiles });
   return buildSystemPromptReport({
     source: "estimate",
     generatedAt: Date.now(),
@@ -156,8 +160,7 @@ async function resolveContextReport(
     bootstrapTotalMaxChars,
     sandbox: { mode: sandboxRuntime.mode, sandboxed: sandboxRuntime.sandboxed },
     systemPrompt,
-    bootstrapFiles,
-    injectedFiles,
+    injectedWorkspaceFiles,
     skillsPrompt,
     tools,
   });

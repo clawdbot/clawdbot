@@ -2,6 +2,7 @@
  * Active-requester wake and steering for subagent announcements.
  */
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
+import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import { sessionDeliveryChannel } from "../../../utils/delivery-context.shared.js";
 import type { EmbeddedAgentQueueMessageOptions } from "../../embedded-agent-runner/run-state.js";
 import type { EmbeddedAgentQueueMessageOutcome } from "../../embedded-agent-runner/runs.js";
@@ -186,6 +187,7 @@ export async function maybeSteerSubagentAnnounce(params: {
   requesterSessionKey: string;
   requesterAgentId?: string;
   steerMessage: string;
+  createUserTurnTranscriptRecorder?: (sessionId: string) => UserTurnTranscriptRecorder;
   signal?: AbortSignal;
   isSourceSessionEffectsAllowed?: () => boolean;
 }): Promise<
@@ -230,6 +232,9 @@ export async function maybeSteerSubagentAnnounce(params: {
     steeringMode: "all",
     ...(queueSettings.debounceMs !== undefined ? { debounceMs: queueSettings.debounceMs } : {}),
     waitForTranscriptCommit: true,
+    ...(params.createUserTurnTranscriptRecorder
+      ? { userTurnTranscriptRecorder: params.createUserTurnTranscriptRecorder(sessionId) }
+      : {}),
   };
   const queueOutcome = await resolveActiveWakeWithRetries(
     sessionId,

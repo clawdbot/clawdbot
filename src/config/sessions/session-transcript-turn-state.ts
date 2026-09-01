@@ -3,6 +3,7 @@ import {
   sameRestartRecoveryTerminalRunIds,
 } from "./restart-recovery-state.js";
 import type {
+  SessionLifecycleRevisionExpectation,
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
 } from "./session-transcript-turn-lifecycle.types.js";
@@ -11,7 +12,7 @@ import type { InternalSessionEntry as SessionEntry } from "./types.js";
 export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionEntry }>(
   selected: T | undefined,
   expected: {
-    expectedLifecycleRevision?: string;
+    expectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
     expectedWriterRunId?: SessionTranscriptTurnExpectedState["expectedWriterRunId"];
     expectedSessionState?: SessionTranscriptTurnExpectedState;
     expectedSessionId: string;
@@ -22,7 +23,7 @@ export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionE
     selected &&
     selected.entry.sessionId === expected.expectedSessionId &&
     (expected.expectedLifecycleRevision === undefined ||
-      selected.entry.lifecycleRevision === expected.expectedLifecycleRevision) &&
+      selected.entry.lifecycleRevision === (expected.expectedLifecycleRevision ?? undefined)) &&
     (expected.expectedWriterRunId === undefined ||
       selected.entry.activeWriterRunId === expected.expectedWriterRunId) &&
     (expectedState === undefined ||

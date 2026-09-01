@@ -30,6 +30,7 @@ export type GatewayServiceControlArgs = {
   stdout: NodeJS.WritableStream;
   env?: GatewayServiceEnv;
   disable?: boolean;
+  preserveDefinition?: boolean;
   warn?: (message: string) => void;
   onMutation?: (mutation: GatewayLifecycleMutation) => void;
 };
@@ -82,6 +83,7 @@ export type GatewayServiceEnvArgs = {
 /** Options for read-only service inspection that should fail soft under a deadline. */
 export type GatewayServiceReadOptions = {
   timeoutMs?: number;
+  requireEffective?: boolean;
 };
 
 export type GatewayServiceEnvironmentValueSource = "inline" | "file" | "inline-and-file";
@@ -90,6 +92,60 @@ export type GatewayServiceLoadState =
   | { status: "loaded" }
   | { status: "not-loaded" }
   | { status: "unknown"; detail: string };
+
+const SERVICE_DEFINITION_ARTIFACTS = {
+  "service-directory":
+    "service directory (~/.config/systemd/user) or its nearest existing ancestor",
+  "state-directory": "service state directory or its nearest existing ancestor",
+  "definition-directory": "loaded service definition directory",
+  "service-file": "service file",
+} as const;
+
+const SERVICE_DEFINITION_REASONS = {
+  "unsafe-permissions":
+    "is group/world-writable. Inspect ownership and permissions locally. If the path is yours and not intentionally shared, remove group/other write access with chmod go-w <path>, then retry. Use 0700 for private directories; ask the deployment owner about shared paths. Do not use recursive chmod or sudo to bypass this check.",
+  "invalid-artifact":
+    "has an unexpected file type. Inspect the service directories and files locally; have their owner repair the layout before retrying. Changing permissions alone will not repair it.",
+  symlink:
+    "is a symbolic link. Ask the deployment owner to replace the managed file through the deployment process; OpenClaw will not rewrite the link or its target.",
+  "foreign-owner":
+    "belongs to another account. Ask the privileged deployment owner to repair or replace it; do not take ownership or use --force to bypass this check.",
+  "sealed-mount":
+    "cannot be replaced on its mount. Ask the deployment owner to update the mounted artifact or deployment; chmod and --force cannot make it replaceable.",
+  "system-owned":
+    "is owned by a system service. Ask the privileged deployment owner to update it; do not create a competing user service.",
+  "system-ownership-unverified":
+    "has unverifiable system-service ownership. Restore system service-manager and filesystem inspection access from the service account, then retry; do not create a competing user service.",
+  "inspection-failed":
+    "cannot be safely inspected. Inspect service definition access and native service-manager availability from the service account, then retry. Do not share config or environment contents.",
+} as const;
+
+export type ServiceDefinitionMutationArtifact = keyof typeof SERVICE_DEFINITION_ARTIFACTS;
+export type ServiceDefinitionMutationCapability =
+  | { kind: "writable" }
+  | {
+      kind: "sealed" | "unknown";
+      reason: keyof typeof SERVICE_DEFINITION_REASONS;
+      artifact?: ServiceDefinitionMutationArtifact;
+    };
+
+export function assertServiceDefinitionWritable(capability: ServiceDefinitionMutationCapability) {
+  if (capability.kind === "writable") {
+    return;
+  }
+  // Only allowlisted facts reach callers: paths, native errors, and extra fields can contain secrets.
+  const reason = Object.hasOwn(SERVICE_DEFINITION_REASONS, capability.reason)
+    ? capability.reason
+    : "inspection-failed";
+  const artifact =
+    capability.artifact && Object.hasOwn(SERVICE_DEFINITION_ARTIFACTS, capability.artifact)
+      ? SERVICE_DEFINITION_ARTIFACTS[capability.artifact]
+      : "service definition";
+  // Update recovery recognizes these prefixes to preserve a protected definition.
+  const code =
+    capability.kind === "sealed" ? "SERVICE_DEFINITION_SEALED" : "SERVICE_DEFINITION_UNKNOWN";
+  throw new Error(`${code}: [${reason}] The ${artifact} ${SERVICE_DEFINITION_REASONS[reason]}`);
+}
 
 export type GatewayServiceCommandSnapshot = {
   programArguments: string[];
@@ -106,6 +162,7 @@ export type GatewayServiceManagedOverrides = {
 /** Effective platform service command and, when externally owned, its managed base definition. */
 export type GatewayServiceCommandConfig = GatewayServiceCommandSnapshot & {
   sourcePath?: string;
+  definitionPaths?: string[];
   managedDefinition?: GatewayServiceCommandSnapshot;
   managedOverrides?: GatewayServiceManagedOverrides;
   reloadPending?: true;
@@ -220,6 +277,7 @@ export type GatewayServiceState = {
   running: boolean;
   env: GatewayServiceEnv;
   command: GatewayServiceCommandConfig | null;
+  definitionMutationCapability?: ServiceDefinitionMutationCapability;
   runtime?: GatewayServiceRuntime;
 };
 

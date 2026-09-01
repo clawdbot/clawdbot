@@ -1564,6 +1564,7 @@ openclaw-chat-sidebar-region,
   display: flex;
   flex: 1;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
 }
 
@@ -1872,12 +1873,6 @@ openclaw-session-discussion {
 
 :is(.file-view, .code-highlight) .tok-strong {
   font-weight: 600;
-}
-
-.file-view__loading {
-  position: absolute;
-  inset: 12px;
-  pointer-events: none;
 }
 
 .file-view__save-notice {

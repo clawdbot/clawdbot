@@ -1397,9 +1397,8 @@ async function runLane(
     if (result.status === 0 || attempt >= maxAttempts) {
       break;
     }
-    const retryable =
-      result.timedOut || (await laneLogMatchesRetryPattern(logFile, lane.retryPatterns));
-    if (!retryable) {
+    // An exhausted lane deadline alone does not diagnose a transient failure.
+    if (!(await laneLogMatchesRetryPattern(logFile, lane.retryPatterns))) {
       break;
     }
   }

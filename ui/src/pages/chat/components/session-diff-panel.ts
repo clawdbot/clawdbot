@@ -12,6 +12,7 @@ import {
   observeNativeGateway,
 } from "../../../app/native-editor-locality.runtime.ts";
 import { icons } from "../../../components/icons.ts";
+import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import { t } from "../../../i18n/index.ts";
 import "../../../components/tooltip.ts";
 import {
@@ -197,7 +198,7 @@ class SessionDiffPanel extends OpenClawLightDomElement {
   });
 
   private get loading(): boolean {
-    return this.diffTask.status === TaskStatus.PENDING;
+    return this.loader !== null && this.diffTask.status === TaskStatus.PENDING;
   }
 
   private refresh(): Promise<void> {
@@ -564,14 +565,17 @@ class SessionDiffPanel extends OpenClawLightDomElement {
     </button>`;
   }
 
-  private renderBody(): TemplateResult {
+  private renderBody(): TemplateResult | typeof nothing {
     if (this.diffTask.status === TaskStatus.ERROR) {
       const error = this.diffTask.error;
       return html`<div class="callout danger">${formatUiError(error)}</div>`;
     }
+    if (this.loading) {
+      return renderPanelLoadingSkeleton("review", t("chat.sessionDiff.loading"));
+    }
     const value = this.diffTask.value;
     if (!value) {
-      return html`<div class="session-diff__note">${t("chat.sessionDiff.loading")}</div>`;
+      return nothing;
     }
     const { result, views } = value;
     if (result.unavailableReason === "not_git") {

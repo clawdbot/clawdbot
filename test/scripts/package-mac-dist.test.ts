@@ -1,12 +1,99 @@
 // Package Mac Dist tests cover package mac dist script behavior.
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const tempDirs: string[] = [];
 const scriptPath = "scripts/package-mac-dist.sh";
+
+function makeDistributionFixture(layout: "native" | "xcode", missingArch?: string) {
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-dist-symbols-"));
+  tempDirs.push(root);
+  const scripts = path.join(root, "scripts");
+  const tools = path.join(root, "tools");
+  mkdirSync(path.join(scripts, "lib"), { recursive: true });
+  mkdirSync(tools);
+  for (const file of ["package-mac-dist.sh", "lib/plistbuddy.sh", "lib/swift-toolchain.sh"]) {
+    copyFileSync(path.join("scripts", file), path.join(scripts, file));
+  }
+  const executable = (file: string, body: string) => {
+    writeFileSync(file, `#!/usr/bin/env bash\nset -euo pipefail\n${body}\n`, { mode: 0o755 });
+  };
+  executable(path.join(scripts, "package-mac-app.sh"), "exit 0");
+  executable(path.join(tools, "swift"), "echo 'Apple Swift version 6.3'");
+  executable(path.join(tools, "xcrun"), "echo 'Xcode 26.4'");
+  executable(path.join(tools, "node"), "echo 2608000290");
+  const contents = path.join(root, "dist", "OpenClaw.app", "Contents");
+  mkdirSync(contents, { recursive: true });
+  writeFileSync(
+    path.join(contents, "Info.plist"),
+    `<plist version="1.0"><dict>
+<key>CFBundleShortVersionString</key><string>2026.8.2</string>
+<key>CFBundleVersion</key><string>2608000290</string>
+<key>CFBundleIdentifier</key><string>ai.openclaw.mac</string>
+<key>SUFeedURL</key><string>https://example.com/appcast.xml</string>
+</dict></plist>`,
+  );
+  const source = path.join(root, "main.c");
+  writeFileSync(source, "int main(void) { return 0; }\n");
+  const expectedUUIDs: string[] = [];
+  for (const arch of ["arm64", "x86_64"]) {
+    const build = path.join(root, "apps", "macos", ".build", arch);
+    const products = path.join(
+      build,
+      layout === "xcode" ? "out/Products/Release" : `${arch}-apple-macosx/release`,
+    );
+    mkdirSync(products, { recursive: true });
+    symlinkSync(path.relative(build, products), path.join(build, "release"));
+    if (arch === missingArch) {
+      continue;
+    }
+    const binary = path.join(products, "OpenClaw");
+    const symbols = `${binary}.dSYM`;
+    for (const args of [
+      ["clang", "-arch", arch, "-g", source, "-o", binary],
+      ["dsymutil", binary, "-o", symbols],
+    ]) {
+      const result = spawnSync("xcrun", args, { encoding: "utf8" });
+      expect(result.status, result.stderr).toBe(0);
+    }
+    const uuid = spawnSync("xcrun", ["dwarfdump", "--uuid", binary], { encoding: "utf8" });
+    expect(uuid.status, uuid.stderr).toBe(0);
+    expectedUUIDs.push(uuid.stdout.trim().split(" ").slice(0, 3).join(" "));
+  }
+  return {
+    root,
+    expectedUUIDs,
+    run: () =>
+      spawnSync("bash", [path.join(scripts, "package-mac-dist.sh")], {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: `${tools}:/usr/bin:/bin`,
+          APP_VERSION: "2026.8.2",
+          APP_BUILD: "2608000290",
+          BUILD_CONFIG: "release",
+          BUILD_ARCHS: "all",
+          SKIP_NOTARIZE: "1",
+          SKIP_DMG: "1",
+          SKIP_DSYM: "0",
+        },
+      }),
+  };
+}
 
 function makePlist(): string {
   const dir = mkdtempSync(path.join(tmpdir(), "openclaw-dist-plist-"));
@@ -404,7 +491,6 @@ describe("package-mac-dist plist validation", () => {
     const dsymBlock = script.slice(script.indexOf('if [[ "$SKIP_DSYM" != "1" ]]'));
 
     expect(dsymBlock).toContain('for arch in "${DSYM_ARCHS[@]}"');
-    expect(dsymBlock).toContain('if [[ ! -d "$BUILD_ROOT/$arch" ]]; then');
     expect(dsymBlock).toContain('MISSING_DSYM_ARCHS+=("$arch")');
     expect(dsymBlock).toContain("Error: dSYM not found for architecture(s):");
     expect(dsymBlock).not.toContain('find "$BUILD_ROOT/arm64"');
@@ -441,4 +527,41 @@ describe("package-mac-dist plist validation", () => {
       expect(result.stderr).toContain("Does Not Exist");
     },
   );
+});
+
+describe.runIf(process.platform === "darwin")("package-mac-dist symbol archives", () => {
+  it.each(["native", "xcode"] as const)(
+    "archives matching universal symbols from the %s build output",
+    (layout) => {
+      const fixture = makeDistributionFixture(layout);
+      const result = fixture.run();
+      expect(result.status, result.stderr).toBe(0);
+      const archive = path.join(fixture.root, "dist", "OpenClaw-2026.8.2.dSYM.zip");
+      const extracted = path.join(fixture.root, "extracted");
+      const unpack = spawnSync("ditto", ["-x", "-k", archive, extracted], { encoding: "utf8" });
+      expect(unpack.status, unpack.stderr).toBe(0);
+      const uuid = spawnSync(
+        "xcrun",
+        ["dwarfdump", "--uuid", path.join(extracted, "OpenClaw.dSYM")],
+        { encoding: "utf8" },
+      );
+      expect(uuid.status, uuid.stderr).toBe(0);
+      expect(
+        uuid.stdout
+          .trim()
+          .split("\n")
+          .map((line) => line.split(" ").slice(0, 3).join(" "))
+          .sort(),
+      ).toEqual(fixture.expectedUUIDs.sort());
+      expect(existsSync(path.join(fixture.root, "dist", "OpenClaw.dSYM"))).toBe(false);
+    },
+  );
+
+  it("refuses a universal archive when one architecture has no symbols", () => {
+    const fixture = makeDistributionFixture("xcode", "x86_64");
+    const result = fixture.run();
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("dSYM not found for architecture(s): x86_64");
+    expect(existsSync(path.join(fixture.root, "dist", "OpenClaw-2026.8.2.dSYM.zip"))).toBe(false);
+  });
 });

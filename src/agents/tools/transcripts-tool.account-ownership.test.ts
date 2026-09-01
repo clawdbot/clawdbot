@@ -456,7 +456,7 @@ describe("transcripts tool account ownership", () => {
     );
     expect(result.details).toMatchObject({ accountId: meetingAccountId });
     const text = result.content.find((entry) => entry.type === "text")?.text;
-    expect(text?.split("\n")).toHaveLength(2);
+    expect(text?.split("\n")).toHaveLength(3);
     expect(text).not.toContain("x".repeat(65));
     expect(text).toContain('Account: "meeting\\n');
   });

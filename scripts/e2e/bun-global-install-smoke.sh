@@ -52,7 +52,7 @@ cleanup() {
   fi
 }
 
-dump_failure_logs() {
+dump_debug_logs() {
   local status="$1"
   echo "bun global install smoke failed with exit code $status" >&2
   openclaw_e2e_dump_logs \
@@ -77,6 +77,19 @@ prepare_ai_candidate() {
   if [ -z "$PACK_DIR" ]; then
     PACK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-bun-pack.XXXXXX")"
   fi
+  root_manifest="$PACK_DIR/openclaw-package.json"
+  tar -xOf "$PACKAGE_TGZ" package/package.json >"$root_manifest"
+  if ! tar -tzf "$PACKAGE_TGZ" package/node_modules/@openclaw/ai/package.json >/dev/null 2>&1; then
+    if node -e '
+const manifest = require(process.argv[1]);
+process.exit(manifest.dependencies?.["@openclaw/ai"] ? 0 : 1);
+' "$root_manifest"; then
+      echo "OpenClaw tarball declares @openclaw/ai but does not bundle it" >&2
+      exit 1
+    fi
+    echo "==> Candidate has no bundled @openclaw/ai dependency"
+    return
+  fi
   echo "==> Extract bundled candidate @openclaw/ai package"
   ai_package_dir="$PACK_DIR/ai-candidate"
   mkdir -p "$ai_package_dir"
@@ -84,9 +97,7 @@ prepare_ai_candidate() {
     -C "$ai_package_dir" \
     --strip-components=4 \
     package/node_modules/@openclaw/ai
-  root_manifest="$PACK_DIR/openclaw-package.json"
   ai_manifest="$ai_package_dir/package.json"
-  tar -xOf "$PACKAGE_TGZ" package/package.json >"$root_manifest"
   node scripts/e2e/lib/bun-global-install/assertions.mjs \
     assert-release-versions \
     "$root_manifest" \
@@ -102,7 +113,7 @@ prepare_ai_candidate() {
 }
 
 trap cleanup EXIT
-trap 'status=$?; dump_failure_logs "$status"; exit "$status"' ERR
+openclaw_e2e_enable_failure_diagnostics
 
 run_with_timeout() {
   local timeout_ms="$1"
@@ -249,11 +260,13 @@ main() {
     "$XDG_CACHE_HOME" \
     "$OPENCLAW_STATE_DIR"
   export PATH="$BUN_INSTALL/bin:$(dirname "$(command -v node)"):$PATH"
-  # Release publishes @openclaw/ai first. Pin the local tarball install to
-  # exact candidate bytes instead of allowing public-registry resolution.
-  node --input-type=module - \
-    "$BUN_INSTALL/install/global/package.json" \
-    "$AI_PACKAGE_TGZ" <<'NODE'
+  # Current root tarballs bundle @openclaw/ai, while older release tarballs do
+  # not declare it. Pin only the bundled dependency; inventing an override for
+  # the older package changes the artifact under test.
+  if [ -n "$AI_PACKAGE_TGZ" ]; then
+    node --input-type=module - \
+      "$BUN_INSTALL/install/global/package.json" \
+      "$AI_PACKAGE_TGZ" <<'NODE'
 import fs from "node:fs";
 
 const [, , packageJsonPath, aiPackageTarball] = process.argv;
@@ -262,6 +275,7 @@ fs.writeFileSync(
   `${JSON.stringify({ private: true, overrides: { "@openclaw/ai": `file:${aiPackageTarball}` } })}\n`,
 );
 NODE
+  fi
 
   INSTALL_LOG="$SMOKE_DIR/install.log"
   UNTRUSTED_LOG="$SMOKE_DIR/untrusted.log"

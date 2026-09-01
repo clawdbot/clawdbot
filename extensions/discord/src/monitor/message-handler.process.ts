@@ -76,6 +76,7 @@ type DiscordProviderDeliveryInfo = {
   kind: ReplyDispatchKind;
   bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
   onPlatformSendDispatch: () => Promise<void>;
+  assertPlatformSendAuthorized: () => void;
 };
 
 export async function processDiscordMessage(
@@ -330,6 +331,7 @@ async function processDiscordMessageInner(
         kind: "block",
         bindPendingFinalDelivery: info.bindPendingFinalDelivery,
         onPlatformSendDispatch: info.onPlatformSendDispatch,
+        assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
       });
       if (result.visibleReplySent) {
         replyReference.markSent();
@@ -486,6 +488,7 @@ async function processDiscordMessageInner(
             kind: info.kind,
             bindPendingFinalDelivery: info.bindPendingFinalDelivery,
             onPlatformSendDispatch: info.onPlatformSendDispatch,
+            assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
           });
           return deliveryResult.visibleReplySent;
         },
@@ -536,6 +539,7 @@ async function processDiscordMessageInner(
       kind: info.kind,
       bindPendingFinalDelivery: info.bindPendingFinalDelivery,
       onPlatformSendDispatch: info.onPlatformSendDispatch,
+      assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
     });
     if (!result.visibleReplySent) {
       return result;
@@ -695,6 +699,7 @@ async function processDiscordMessageInner(
         deliverDiscordPayload(payload, {
           ...info,
           onPlatformSendDispatch: () => Promise.resolve(),
+          assertPlatformSendAuthorized: () => undefined,
         }),
       onDiscordDeliveryError,
     );

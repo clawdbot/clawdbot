@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import {
   serializeSidebarEntry,
@@ -9,12 +10,16 @@ import {
 import { isRouteId, isSessionRouteId } from "../app-route-paths.ts";
 import { resolveControlUiAuthToken } from "../app/control-ui-auth.ts";
 import { isNativeWebChromeHost } from "../app/native-web-chrome.ts";
+import { isHomePanelAvailable } from "../app/panel-availability.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../lib/avatar.ts";
-import { sessionHasBoard } from "../lib/board/provider.ts";
+import {
+  formatKeyboardShortcutCombo,
+  KEYBOARD_SHORTCUT_COMBOS,
+} from "../lib/keyboard-shortcut-contract.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import {
   isPresenceViewerIdle,
@@ -40,6 +45,7 @@ import type { SidebarWorkboardBoard } from "./app-sidebar-workboard.ts";
 import { icons } from "./icons.ts";
 import { redactLoginFailureError } from "./login-gate.ts";
 import { renderNewSessionLink } from "./new-session-link.ts";
+import { HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import {
   renderSessionAttentionIcon,
   renderSessionRunSpinner,
@@ -171,8 +177,11 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
     areUiSessionKeysEquivalent(host.getRouteSessionKey(), mainKey);
   const hasComposerDraft = host.hasSessionDraft(mainKey);
   const running = mainRow ? isSessionRunActive(mainRow) : false;
+  const queued = running && mainRow?.status === "queued";
   const unread = mainRow?.unread === true && !active;
-  const activeRunLabel = running ? t("sessionsView.activeRun") : "";
+  const activeRunLabel = running
+    ? t(queued ? "sessionsView.statusQueued" : "sessionsView.activeRun")
+    : "";
   const unreadLabel = unread ? t("sessionsView.unread") : "";
   const homeDescription =
     attentionLabel || (activeRunLabel && unreadLabel)
@@ -213,21 +222,10 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
         ? html`<openclaw-tooltip .content=${attentionLabel}>${homeGlyph}</openclaw-tooltip>`
         : homeGlyph}
       <span class="nav-item__text">${t("nav.home")}</span>
-      ${sessionHasBoard(mainKey)
-        ? html`<openclaw-tooltip .content=${t("sessionsView.dashboardAvailable")}>
-            <span
-              class="session-row-badge"
-              role="img"
-              aria-label=${t("sessionsView.dashboardAvailable")}
-              >${icons.layoutDashboard}</span
-            >
-          </openclaw-tooltip>`
-        : nothing}
       ${running || outboxAttentionCount > 0 || hasComposerDraft
         ? html`<span class="nav-item__state sidebar-home-session-states">
-            ${running ? renderSessionRunSpinner() : nothing}
+            ${running ? renderSessionRunSpinner(true, queued) : nothing}
             ${renderSessionRowBadges({
-              hasAutomation: false,
               outboxAttentionCount,
               hasComposerDraft,
             })}
@@ -267,7 +265,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
   });
   const users = projectOnlinePresenceViewers(
     host.sessionData.presencePayload,
-    selfUser?.id,
+    selfUser,
     host.sessionData.presenceInstanceId,
   );
   if (users.length === 0) {
@@ -308,35 +306,32 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
       ${collapsed
         ? nothing
         : html`<div class="sidebar-online__list">
-            ${repeat(
-              users,
-              (user) => user.id,
-              (user) => {
-                return html`<div class="sidebar-online__row">
-                  <button
-                    class="sidebar-online__person ${isPresenceViewerIdle(user)
-                      ? "sidebar-online__person--away"
-                      : ""}"
-                    type="button"
-                    data-online-user-id=${user.id}
-                    aria-haspopup="dialog"
-                    aria-expanded="false"
-                    aria-label=${t("presence.card.details", { name: presenceViewerLabel(user) })}
+            ${repeat(users, presenceUserKey, (user) => {
+              return html`<div class="sidebar-online__row">
+                <button
+                  class="sidebar-online__person ${isPresenceViewerIdle(user)
+                    ? "sidebar-online__person--away"
+                    : ""}"
+                  type="button"
+                  data-online-user-id=${user.id}
+                  data-online-user-key=${presenceUserKey(user)}
+                  aria-haspopup="dialog"
+                  aria-expanded="false"
+                  aria-label=${t("presence.card.details", { name: presenceViewerLabel(user) })}
+                >
+                  <openclaw-viewer-avatar
+                    .user=${user}
+                    .markAsViewer=${false}
+                    variant="footer"
+                    aria-hidden="true"
+                  ></openclaw-viewer-avatar>
+                  <span class="sidebar-online__person-name">${presenceViewerLabel(user)}</span>
+                  <span class="sidebar-online__person-action" aria-hidden="true"
+                    >${icons.chevronRight}</span
                   >
-                    <openclaw-viewer-avatar
-                      .user=${user}
-                      .markAsViewer=${false}
-                      variant="footer"
-                      aria-hidden="true"
-                    ></openclaw-viewer-avatar>
-                    <span class="sidebar-online__person-name">${presenceViewerLabel(user)}</span>
-                    <span class="sidebar-online__person-action" aria-hidden="true"
-                      >${icons.chevronRight}</span
-                    >
-                  </button>
-                </div>`;
-              },
-            )}
+                </button>
+              </div>`;
+            })}
           </div>`}
     </section>
   `;
@@ -392,7 +387,22 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
             onRetry: () => host.onRetryConnect?.(),
           })
         : nothing}
-      <span class="sidebar-footer-actions">${renderAppSidebarAttention(host)}</span>
+      <span class="sidebar-footer-actions">
+        ${isHomePanelAvailable(host.sessionDataContext?.gateway)
+          ? html`<openclaw-tooltip
+              .content=${`${t("assistantPanel.toggle")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.homePanel)})`}
+              ><button
+                type="button"
+                class="sidebar-brand__icon sidebar-footer-bar__home"
+                aria-label=${t("assistantPanel.toggle")}
+                @click=${() => window.dispatchEvent(new CustomEvent(HOME_PANEL_TOGGLE_EVENT))}
+              >
+                ${icons.home}
+              </button></openclaw-tooltip
+            >`
+          : nothing}
+        ${renderAppSidebarAttention(host)}
+      </span>
     </div>
   `;
 }

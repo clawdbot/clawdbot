@@ -54,10 +54,9 @@ export async function invokeNodeWorkerPortalStream(params: {
     gatewayCloudflareAccess: params.gatewayCloudflareAccess,
     attachPath: command.attachPath,
     expectedAttachPath: NODE_PORTAL_ATTACH_PATH,
-    port: command.port,
+    target: { port: command.port },
     metadata: { ok: true },
     streamName: "portal",
     signal: params.signal,
-    connectAfterGatewayAttach: true,
   });
 }

@@ -8,7 +8,7 @@ import { Bot } from "grammy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { listSessionEntries } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it } from "vitest";
-import { defaultTelegramBotDeps } from "./bot-deps.js";
+import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramCallbackMessageRuntime } from "./bot-handlers.callback-router-controls.js";
 import { createTelegramCallbackRouter } from "./bot-handlers.callback-router.js";
 import type { TelegramHandlerAuthorization } from "./bot-handlers.inbound-authorization.js";
@@ -142,7 +142,9 @@ describe("Telegram model callback loopback", () => {
       const bot = new Bot(TOKEN, { botInfo: telegramBotInfoForTest, client: { apiRoot } });
       const telegramDeps = {
         ...defaultTelegramBotDeps,
-        buildModelsProviderData: async () => {
+        buildModelsProviderData: async (): ReturnType<
+          TelegramBotDeps["buildModelsProviderData"]
+        > => {
           callbackSteps.push("catalog");
           return {
             byProvider: new Map([
@@ -152,6 +154,16 @@ describe("Telegram model callback loopback", () => {
             providers: ["anthropic", PROVIDER],
             resolvedDefault: { provider: "anthropic", model: "claude-opus-4-6" },
             modelNames: new Map<string, string>(),
+            modelCatalog: [
+              {
+                provider: PROVIDER,
+                id: MODEL,
+                name: MODEL,
+                api: "ollama",
+                contextWindow: 32_768,
+                reasoning: true,
+              },
+            ],
           };
         },
         getRuntimeConfig: () => config,

@@ -13,6 +13,7 @@ import {
   type ThinkLevel,
 } from "../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ProviderThinkingPolicySource } from "../plugins/provider-thinking.types.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { legacyModelKey, modelKey, normalizeProviderId } from "./model-ref-shared.js";
 import { normalizeModelSelection } from "./model-selection-resolve.js";
@@ -62,7 +63,7 @@ export function resolveConfiguredThinkingDefaultCore(params: {
 
 export function resolveThinkingDefaultCore(
   params: ThinkingDefaultParams & {
-    providerPolicySource?: "active" | "active-or-bundled";
+    providerPolicySource?: ProviderThinkingPolicySource;
   },
 ): ThinkLevel {
   const normalizedProvider = normalizeProviderId(params.provider);

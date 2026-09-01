@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as pdfExtractModule from "../../media/pdf-extract.js";
 import * as preparedModelRuntime from "../prepared-model-runtime.js";
+import { createEmptyPluginMetadataSnapshot } from "../test-helpers/embedded-agent-runner-e2e-mocks.js";
 import { createPdfToolInfraStub, withTempPdfAgentDir } from "./pdf-tool.test-support.js";
 
 const completeMock = vi.hoisted(() => vi.fn());
@@ -73,6 +74,11 @@ describe("PDF tool prepared-runtime cancellation", () => {
           // Cancellation releases this late lease before its stores can be used.
           createStores: () => ({ authStorage: {}, modelRegistry }),
         } as never,
+        pluginGeneration: {
+          configuredCatalogEntries: [],
+          inlineProviderModels: [],
+          pluginMetadataSnapshot: createEmptyPluginMetadataSnapshot(),
+        },
         release,
       });
       await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());

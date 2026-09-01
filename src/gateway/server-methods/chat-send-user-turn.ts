@@ -4,6 +4,7 @@ import type { RuntimeMsgContext as MsgContext } from "../../auto-reply/templatin
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
+import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
 import { INTERNAL_MESSAGE_CHANNEL, isOperatorUiClient } from "../../utils/message-channel.js";
 import {
@@ -13,6 +14,7 @@ import {
   persistInboundImagesForTranscript,
 } from "../chat-attachments.js";
 import { resolveCreatorSandbox } from "../operator-role-policy.js";
+import { resolveGatewayInputParticipant } from "../session-input-participant.js";
 import { isAcpBridgeClient } from "./chat-origin-routing.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { prepareChatSendAttachments } from "./chat-send-attachments.js";
@@ -256,6 +258,10 @@ export function prepareChatSendUserTurn(params: {
   const mediaPathOffloadsIncludeImages = attachments.mediaPathOffloadTypes.some((type) =>
     type.startsWith("image/"),
   );
+  const participant = resolveGatewayInputParticipant(client, request.systemInputProvenance);
+  if (participant) {
+    prepareSessionParticipantInput(messageContext.ctx, participant, userTurn.baseInput.timestamp);
+  }
   return {
     ...messageContext,
     pluginBoundMediaPromise,

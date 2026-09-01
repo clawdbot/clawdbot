@@ -91,7 +91,11 @@ describe("session-compaction-checkpoints", () => {
     });
     const sourceStamp = {
       createdVia: "operator" as const,
-      createdActor: { type: "human" as const, id: "checkpoint-source-owner" },
+      createdActor: {
+        type: "human" as const,
+        source: "profile" as const,
+        id: "checkpoint-source-owner",
+      },
       createdAt: 123,
       sandbox: "required" as const,
     };
@@ -162,7 +166,7 @@ describe("session-compaction-checkpoints", () => {
       checkpointId: checkpoint.checkpointId,
       creation: {
         via: "operator",
-        actor: { type: "human", id: "checkpoint-branch-owner" },
+        actor: { type: "human", source: "profile", id: "checkpoint-branch-owner" },
         sandbox: "required",
       },
     });
@@ -179,7 +183,7 @@ describe("session-compaction-checkpoints", () => {
     }
     expect(branched.entry).toMatchObject({
       createdVia: "operator",
-      createdActor: { type: "human", id: "checkpoint-branch-owner" },
+      createdActor: { type: "human", source: "profile", id: "checkpoint-branch-owner" },
       sandbox: "required",
     });
     expect(branched.entry.createdAt).not.toBe(sourceStamp.createdAt);

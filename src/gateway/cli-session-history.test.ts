@@ -5,6 +5,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  formatCliImageTurnContext,
+  hashCliImageTurnEntryId,
+} from "../agents/cli-image-turn-correlation.js";
 import { hashCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { redactTranscriptMessage } from "../agents/transcript-redact.js";
@@ -484,6 +488,445 @@ describe("cli session history", () => {
         kind: "internal_system",
         sourceTool: "cli_harness_context",
       });
+    });
+  });
+
+  it("preserves CLI-injected image mentions until merge-time correlation", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const workspaceMention = "@/Users/demo/workspace/.openclaw-cli-images/cafe01.png";
+      const tmpMention = "@/tmp/openclaw/openclaw-cli-images/cafe02.jpg";
+      await fs.writeFile(
+        filePath,
+        [
+          {
+            type: "user",
+            uuid: "image-user",
+            timestamp: "2026-03-26T16:29:54.800Z",
+            message: {
+              role: "user",
+              content: `look at this\n\n${workspaceMention}\n${tmpMention}`,
+            },
+          },
+          {
+            type: "user",
+            uuid: "image-only-user",
+            timestamp: "2026-03-26T16:29:55.800Z",
+            message: { role: "user", content: workspaceMention },
+          },
+          {
+            type: "user",
+            uuid: "plain-mention-user",
+            timestamp: "2026-03-26T16:29:56.800Z",
+            message: { role: "user", content: "check\n@/Users/demo/photos/pic.png" },
+          },
+        ]
+          .map((line) => JSON.stringify(line))
+          .join("\n"),
+        "utf-8",
+      );
+
+      const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
+
+      expect(messages).toHaveLength(3);
+      expectFields(messages[0], {
+        role: "user",
+        content: `look at this\n\n${workspaceMention}\n${tmpMention}`,
+      });
+      expectFields(messages[1], { role: "user", content: workspaceMention });
+      expectFields(messages[2], { role: "user", content: "check\n@/Users/demo/photos/pic.png" });
+    });
+  });
+
+  it("preserves image mentions inside text blocks before history merge", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const mention = "@/Users/demo/workspace/.openclaw-cli-images/cafe03.png";
+      await fs.writeFile(
+        filePath,
+        [
+          {
+            type: "user",
+            uuid: "block-user",
+            timestamp: "2026-03-26T16:29:54.800Z",
+            message: {
+              role: "user",
+              content: [
+                { type: "text", text: `caption\n\n${mention}` },
+                { type: "text", text: mention },
+                { type: "image", source: { type: "base64", media_type: "image/png", data: "aa" } },
+              ],
+            },
+          },
+          {
+            type: "user",
+            uuid: "mention-only-block-user",
+            timestamp: "2026-03-26T16:29:55.800Z",
+            message: {
+              role: "user",
+              content: [{ type: "text", text: mention }],
+            },
+          },
+        ]
+          .map((line) => JSON.stringify(line))
+          .join("\n"),
+        "utf-8",
+      );
+
+      const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
+
+      expect(messages).toHaveLength(2);
+      const blocks = readRecord(messages[0]).content as Array<Record<string, unknown>>;
+      expect(blocks).toHaveLength(3);
+      expectFields(blocks[0], { type: "text", text: `caption\n\n${mention}` });
+      expectFields(blocks[1], { type: "text", text: mention });
+      expectFields(blocks[2], { type: "image" });
+      const mentionOnlyBlocks = readRecord(messages[1]).content as Array<Record<string, unknown>>;
+      expect(mentionOnlyBlocks).toHaveLength(1);
+      expectFields(mentionOnlyBlocks[0], { type: "text", text: mention });
+    });
+  });
+
+  it("dedupes imported user rows whose text differs only by image mentions", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const localEntryId = "local-image-user";
+      await fs.writeFile(
+        filePath,
+        JSON.stringify({
+          type: "user",
+          uuid: "image-user",
+          timestamp: "2026-03-26T16:29:54.800Z",
+          message: {
+            role: "user",
+            content: `look at this\n\n${formatCliImageTurnContext(hashCliImageTurnEntryId(localEntryId))}\n\n@/Users/demo/workspace/.openclaw-cli-images/cafe04.png`,
+          },
+        }),
+        "utf-8",
+      );
+      const localMessages = [
+        {
+          role: "user",
+          content: "look at this",
+          timestamp: Date.parse("2026-03-26T16:29:54.800Z"),
+          __openclaw: {
+            id: localEntryId,
+            media: [{ kind: "image", contentType: "image/png", path: "/media/inbound/cafe04.png" }],
+          },
+        },
+      ];
+
+      const merged = augmentBoundClaudeHistory({
+        homeDir,
+        sessionId,
+        provider: "claude-cli",
+        localMessages,
+      });
+
+      expect(merged).toHaveLength(1);
+      expectFields(merged[0], { role: "user", content: "look at this" });
+    });
+  });
+
+  it.each([
+    ["timestamps correlate", Date.parse("2026-03-26T16:29:54.500Z"), "2026-03-26T16:29:54.800Z"],
+    ["local media timestamp is missing", undefined, "2026-03-26T16:29:54.800Z"],
+    ["imported timestamp is missing", Date.parse("2026-03-26T16:29:54.500Z"), undefined],
+  ])(
+    "dedupes exactly correlated captioned rows when %s",
+    async (_label, localTimestamp, importedTimestamp) => {
+      await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+        const localEntryId = "local-captioned-image";
+        const mention = "@/Users/demo/workspace/.openclaw-cli-images/cafe05.png";
+        await fs.writeFile(
+          filePath,
+          JSON.stringify({
+            type: "user",
+            uuid: "image-only-user",
+            ...(importedTimestamp === undefined ? {} : { timestamp: importedTimestamp }),
+            message: {
+              role: "user",
+              content: `look at this\n\n${formatCliImageTurnContext(hashCliImageTurnEntryId(localEntryId))}\n\n${mention}`,
+            },
+          }),
+          "utf-8",
+        );
+        const localMessages = [
+          {
+            role: "user",
+            content: "look at this",
+            ...(localTimestamp === undefined ? {} : { timestamp: localTimestamp }),
+            __openclaw: {
+              id: localEntryId,
+              media: [
+                { kind: "image", contentType: "image/png", path: "/media/inbound/cafe05.png" },
+              ],
+            },
+          },
+        ];
+
+        const merged = augmentBoundClaudeHistory({
+          homeDir,
+          sessionId,
+          provider: "claude-cli",
+          localMessages,
+        });
+
+        expect(merged).toHaveLength(1);
+        expect(readRecord(readRecord(merged[0])["__openclaw"]).media).toHaveLength(1);
+      });
+    },
+  );
+
+  it.each([1, 2])(
+    "consumes each local media-bearing turn only once with %i matching local rows",
+    (localCount) => {
+      const timestamp = Date.parse("2026-03-26T16:29:54.500Z");
+      const localEntryId = "local-repeated-image";
+      const importedMessages = ["first-image-user", "second-image-user", "third-image-user"]
+        .slice(0, localCount + 1)
+        .map((externalId, index) => ({
+          role: "user",
+          content: `look at this\n\n${formatCliImageTurnContext(hashCliImageTurnEntryId(localEntryId))}\n\n@/Users/demo/workspace/.openclaw-cli-images/cafe0${index + 5}.png`,
+          timestamp: timestamp + index * 60_000,
+          __openclaw: {
+            importedFrom: "claude-cli",
+            cliSessionId: "session-1",
+            externalId,
+          },
+        }));
+      const localMessages = Array.from({ length: localCount }, () => ({
+        role: "user",
+        content: "look at this",
+        timestamp,
+        __openclaw: {
+          id: localEntryId,
+          media: [{ kind: "image", contentType: "image/png", path: "/media/inbound/cafe05.png" }],
+        },
+      }));
+
+      const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+
+      expect(merged).toEqual([...localMessages, importedMessages[localCount]]);
+      expect(merged[0]).toBe(localMessages[0]);
+      expect(merged.at(-1)).toBe(importedMessages[localCount]);
+    },
+  );
+
+  it("retains mention-only imports near unrelated local image turns", () => {
+    const timestamp = Date.parse("2026-03-26T16:29:54.500Z");
+    const importedMessage = {
+      role: "user",
+      content: "@/Users/demo/workspace/.openclaw-cli-images/cafe06.png",
+      timestamp: timestamp + 60_000,
+      __openclaw: {
+        importedFrom: "claude-cli",
+        cliSessionId: "session-1",
+        externalId: "orphaned-image-user",
+      },
+    };
+    const localMessage = {
+      role: "user",
+      content: "",
+      timestamp,
+      __openclaw: {
+        media: [{ kind: "image", contentType: "image/png", path: "/media/inbound/other.png" }],
+      },
+    };
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [localMessage],
+      importedMessages: [importedMessage],
+    });
+
+    expect(merged).toEqual([localMessage, importedMessage]);
+  });
+
+  it("retains legacy captioned imports near matching local image turns", () => {
+    const timestamp = Date.parse("2026-03-26T16:29:54.500Z");
+    const importedMessage = {
+      role: "user",
+      content: "look at this\n\n@/Users/demo/workspace/.openclaw-cli-images/cafe06.png",
+      timestamp: timestamp + 60_000,
+      __openclaw: {
+        importedFrom: "claude-cli",
+        cliSessionId: "session-1",
+        externalId: "legacy-captioned-image-user",
+      },
+    };
+    const localMessage = {
+      role: "user",
+      content: "look at this",
+      timestamp,
+      __openclaw: {
+        id: "local-captioned-image",
+        media: [{ kind: "image", contentType: "image/png", path: "/media/inbound/cafe06.png" }],
+      },
+    };
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [localMessage],
+      importedMessages: [importedMessage],
+    });
+
+    expect(merged).toEqual([localMessage, importedMessage]);
+  });
+
+  it("matches same-caption image imports to their exact local turns", () => {
+    const timestamp = Date.parse("2026-03-26T16:29:54.500Z");
+    const localEntryId = "local-image-b";
+    const orphanedImport = {
+      role: "user",
+      content: `look at this\n\n${formatCliImageTurnContext(hashCliImageTurnEntryId("local-image-a"))}\n\n@/tmp/openclaw/openclaw-cli-images/${"a".repeat(64)}.png`,
+      timestamp,
+      __openclaw: {
+        importedFrom: "claude-cli",
+        cliSessionId: "session-1",
+        externalId: "image-a",
+      },
+    };
+    const matchedImport = {
+      role: "user",
+      content: `look at this\n\n${formatCliImageTurnContext(hashCliImageTurnEntryId(localEntryId))}\n\n@/tmp/openclaw/openclaw-cli-images/${"b".repeat(64)}.png`,
+      timestamp: timestamp + 60_000,
+      __openclaw: {
+        importedFrom: "claude-cli",
+        cliSessionId: "session-1",
+        externalId: "image-b",
+      },
+    };
+    const localMessage = {
+      role: "user",
+      content: "look at this",
+      timestamp: timestamp + 60_000,
+      __openclaw: {
+        id: localEntryId,
+        media: [{ kind: "image", contentType: "image/png", path: "/media/inbound/b.png" }],
+      },
+    };
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [localMessage],
+      importedMessages: [orphanedImport, matchedImport],
+    });
+
+    expect(merged).toEqual([orphanedImport, localMessage]);
+  });
+
+  it("dedupes cache-only imports against their exact local turns", () => {
+    const localEntryId = "local-image-only";
+    const localMessage = {
+      role: "user",
+      content: "",
+      timestamp: Date.parse("2026-03-26T16:29:54.500Z"),
+      __openclaw: {
+        id: localEntryId,
+        media: [{ kind: "image", contentType: "image/png", path: "/media/inbound/a.png" }],
+      },
+    };
+    const importedMessage = {
+      role: "user",
+      content: `${formatCliImageTurnContext(hashCliImageTurnEntryId(localEntryId))}\n\n@/tmp/openclaw/openclaw-cli-images/${"a".repeat(64)}.png`,
+      timestamp: Date.parse("2026-03-26T16:29:54.800Z"),
+      __openclaw: {
+        importedFrom: "claude-cli",
+        cliSessionId: "session-1",
+        externalId: "image-only",
+      },
+    };
+
+    expect(
+      mergeImportedChatHistoryMessages({
+        localMessages: [localMessage],
+        importedMessages: [importedMessage],
+      }),
+    ).toEqual([localMessage]);
+  });
+
+  it("retains mention-only imported rows when no local media-bearing turn survives", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const mention = "@/Users/demo/workspace/.openclaw-cli-images/cafe06.png";
+      await fs.writeFile(
+        filePath,
+        [
+          {
+            type: "user",
+            uuid: "image-only-user",
+            timestamp: "2026-03-26T16:29:54.800Z",
+            message: { role: "user", content: mention },
+          },
+          {
+            type: "assistant",
+            uuid: "assistant-1",
+            timestamp: "2026-03-26T16:29:55.800Z",
+            message: { role: "assistant", content: "nice photo" },
+          },
+        ]
+          .map((line) => JSON.stringify(line))
+          .join("\n"),
+        "utf-8",
+      );
+
+      const merged = augmentBoundClaudeHistory({
+        homeDir,
+        sessionId,
+        provider: "claude-cli",
+        localMessages: [],
+      });
+
+      expect(merged).toHaveLength(2);
+      expectFields(merged[0], { role: "user", content: mention });
+      expectFields(merged[1], { role: "assistant", content: "nice photo" });
+    });
+  });
+
+  it("retains captioned image mentions when no local media-bearing turn survives", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const content = "look at this\n\n@/Users/demo/workspace/.openclaw-cli-images/cafe07.png";
+      const importedContent = `look at this\n\n${formatCliImageTurnContext(hashCliImageTurnEntryId("missing-local-turn"))}\n\n@/Users/demo/workspace/.openclaw-cli-images/cafe07.png`;
+      await fs.writeFile(
+        filePath,
+        [
+          {
+            type: "user",
+            uuid: "captioned-image-user",
+            timestamp: "2026-03-26T16:29:54.800Z",
+            message: { role: "user", content: importedContent },
+          },
+          {
+            type: "assistant",
+            uuid: "assistant-1",
+            timestamp: "2026-03-26T16:29:55.800Z",
+            message: { role: "assistant", content: "nice photo" },
+          },
+        ]
+          .map((line) => JSON.stringify(line))
+          .join("\n"),
+        "utf-8",
+      );
+
+      const merged = augmentBoundClaudeHistory({
+        homeDir,
+        sessionId,
+        provider: "claude-cli",
+        localMessages: [],
+      });
+
+      expect(merged).toHaveLength(2);
+      expectFields(merged[0], { role: "user", content });
+      expectFields(merged[1], { role: "assistant", content: "nice photo" });
+
+      const captionOnlyLocal = augmentBoundClaudeHistory({
+        homeDir,
+        sessionId,
+        provider: "claude-cli",
+        localMessages: [
+          {
+            role: "user",
+            content: "look at this",
+            timestamp: Date.parse("2026-03-26T16:29:54.800Z"),
+          },
+        ],
+      });
+      expect(captionOnlyLocal).toHaveLength(3);
+      expect(captionOnlyLocal).toContainEqual(expect.objectContaining({ content }));
     });
   });
 

@@ -56,18 +56,20 @@ import {
   type TaskSystemAuditCode,
   type TaskSystemAuditSeverity,
 } from "../tasks/task-system-audit.types.js";
+import { formatTaskStatusCell, TASK_STATUS_CELL_WIDTH } from "./task-status-cell.js";
 import {
   buildTaskSystemAuditJsonPayload,
   buildTaskSystemAuditFindings,
   type TaskSystemAuditFinding,
 } from "./tasks-audit-system.js";
 import { runSessionRegistryMaintenance } from "./tasks-session-registry-maintenance.js";
+import { formatTextCell } from "./text-format.js";
 
 const RUNTIME_PAD = 8;
-const STATUS_PAD = 10;
 const DELIVERY_PAD = 14;
 const ID_PAD = 10;
 const RUN_PAD = 10;
+const CHILD_SESSION_PAD = 36;
 const info = theme.info;
 
 function formatTaskLookupMiss(lookup: string): string {
@@ -133,50 +135,22 @@ function configureTaskMaintenanceFromConfig(): void {
 }
 
 function truncate(value: string, maxChars: number) {
-  if (value.length <= maxChars) {
-    return value;
-  }
-  return maxChars <= 0
-    ? ""
-    : truncateWithMarker(value, maxChars, { marker: "…", reserve: 1, trimEnd: false });
+  return truncateWithMarker(value, maxChars, { marker: "…", reserve: 1, trimEnd: false });
 }
 
-function shortToken(value: string | undefined, maxChars = ID_PAD): string {
+function formatTokenCell(value: string | undefined, width = ID_PAD): string {
   const sanitized = sanitizeTerminalText(normalizeOptionalString(value) ?? "").trim();
-  if (!sanitized) {
-    return "n/a";
-  }
-  return truncate(sanitized, maxChars);
-}
-
-function formatTaskStatusCell(status: string, rich: boolean) {
-  const padded = status.padEnd(STATUS_PAD);
-  if (!rich) {
-    return padded;
-  }
-  if (status === "succeeded") {
-    return theme.success(padded);
-  }
-  if (status === "failed" || status === "lost" || status === "timed_out") {
-    return theme.error(padded);
-  }
-  if (status === "running") {
-    return theme.accentBright(padded);
-  }
-  if (status === "blocked") {
-    return theme.warn(padded);
-  }
-  return theme.muted(padded);
+  return formatTextCell(sanitized || "n/a", width);
 }
 
 function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
   const header = [
     "Task".padEnd(ID_PAD),
     "Kind".padEnd(RUNTIME_PAD),
-    "Status".padEnd(STATUS_PAD),
+    "Status".padEnd(TASK_STATUS_CELL_WIDTH),
     "Delivery".padEnd(DELIVERY_PAD),
     "Run".padEnd(RUN_PAD),
-    "Child Session",
+    "Child Session".padEnd(CHILD_SESSION_PAD),
     "Summary",
   ].join(" ");
   const lines = [rich ? theme.heading(header) : header];
@@ -188,12 +162,12 @@ function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
       80,
     );
     const line = [
-      shortToken(task.taskId).padEnd(ID_PAD),
+      formatTokenCell(task.taskId),
       task.runtime.padEnd(RUNTIME_PAD),
       formatTaskStatusCell(formatTaskStatus(task), rich),
       task.deliveryStatus.padEnd(DELIVERY_PAD),
-      shortToken(task.runId, RUN_PAD).padEnd(RUN_PAD),
-      shortToken(task.childSessionKey, 36).padEnd(36),
+      formatTokenCell(task.runId, RUN_PAD),
+      formatTokenCell(task.childSessionKey, CHILD_SESSION_PAD),
       summary,
     ].join(" ");
     lines.push(line.trimEnd());
@@ -232,7 +206,7 @@ function formatAuditRows(findings: TaskSystemAuditFinding[], rich: boolean) {
     "Severity".padEnd(8),
     "Code".padEnd(22),
     "Item".padEnd(ID_PAD),
-    "Status".padEnd(STATUS_PAD),
+    "Status".padEnd(TASK_STATUS_CELL_WIDTH),
     "Age".padEnd(8),
     "Detail",
   ].join(" ");
@@ -251,7 +225,7 @@ function formatAuditRows(findings: TaskSystemAuditFinding[], rich: boolean) {
         scope.padEnd(8),
         severityCell,
         finding.code.padEnd(22),
-        shortToken(finding.token).padEnd(ID_PAD),
+        formatTokenCell(finding.token),
         status,
         formatAgeMs(finding.ageMs).padEnd(8),
         truncate(sanitizeTerminalText(finding.detail), 88),

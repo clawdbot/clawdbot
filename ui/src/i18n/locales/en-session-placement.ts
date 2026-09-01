@@ -5,6 +5,12 @@ import { en } from "./en.ts";
 // surfaces so device recovery does not tax every Control UI startup.
 const enSessionPlacement = {
   sessionsView: {
+    placementFactService: "Service",
+    placementFactProfile: "Profile",
+    placementFactMachine: "Machine",
+    placementFactState: "State",
+    placementFactDisk: "Disk",
+    placementDiskFree: "{free} free",
     runsOnDevice: "Runs on device",
     deviceOffline: "Device offline",
     waitingForDevice: "Waiting for device to reconnect; retry after it returns.",

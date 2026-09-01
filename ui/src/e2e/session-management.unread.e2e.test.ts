@@ -1,6 +1,7 @@
 import path from "node:path";
 import { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol";
 import { expect, it } from "vitest";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import {
   captureUiProof,
@@ -10,9 +11,7 @@ import {
   createSessionManagementE2eSuite,
   installMockGateway,
   requireRecord,
-  sessionRow,
   sessionsListResponse,
-  uiProofArtifactDir,
   waitForPatch,
 } from "./session-management.test-support.ts";
 
@@ -28,7 +27,7 @@ suite.define(() => {
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
       recordVideo: captureUiProofEnabled
-        ? { dir: uiProofArtifactDir, size: { height: 900, width: 1280 } }
+        ? { dir: suite.artifactDir, size: { height: 900, width: 1280 } }
         : undefined,
     });
     const page = await context.newPage();
@@ -51,7 +50,7 @@ suite.define(() => {
       const otherRow = page.locator(`[data-session-key="${otherKey}"]`);
       await activeRow.waitFor({ state: "visible", timeout: 10_000 });
       await otherRow.waitFor({ state: "visible" });
-      await captureUiProof(page, "manual-unread-before.png");
+      await captureUiProof(suite, page, "manual-unread-before.png");
 
       await activeRow.click({ button: "right" });
       await page.getByRole("menuitem", { name: "Mark as unread" }).click();
@@ -63,7 +62,7 @@ suite.define(() => {
 
       await activeRow.locator(".session-unread-dot").waitFor();
       await expectRequestCountStable(gateway, "sessions.patch", 1);
-      await captureUiProof(page, "manual-unread-marked.png");
+      await captureUiProof(suite, page, "manual-unread-marked.png");
 
       const marker = 1_800_000_000_001;
       await gateway.emitGatewayEvent("sessions.changed", {
@@ -80,7 +79,7 @@ suite.define(() => {
       });
       await activeRow.locator(".session-run-spinner").waitFor();
       await expectRequestCountStable(gateway, "sessions.patch", 1);
-      await captureUiProof(page, "manual-unread-running.png");
+      await captureUiProof(suite, page, "manual-unread-running.png");
 
       await gateway.emitGatewayEvent("sessions.changed", {
         reason: "run",
@@ -96,7 +95,7 @@ suite.define(() => {
       });
       await activeRow.locator(".session-unread-dot").waitFor();
       await expectRequestCountStable(gateway, "sessions.patch", 1);
-      await captureUiProof(page, "manual-unread-complete.png");
+      await captureUiProof(suite, page, "manual-unread-complete.png");
 
       await otherRow.getByRole("link").click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(otherKey));
@@ -113,11 +112,11 @@ suite.define(() => {
         unread: false,
       });
       expect(requireRecord(acknowledge.params)).not.toHaveProperty("readIntent");
-      await captureUiProof(page, "manual-unread-reopened.png");
+      await captureUiProof(suite, page, "manual-unread-reopened.png");
     } finally {
       await context.close();
       if (proofVideo) {
-        await proofVideo.saveAs(path.join(uiProofArtifactDir, "manual-unread-running.webm"));
+        await proofVideo.saveAs(path.join(suite.artifactDir, "manual-unread-running.webm"));
       }
     }
   });

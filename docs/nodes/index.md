@@ -7,11 +7,10 @@ read_when:
   - Presenting a hosted widget on a Mac
   - Adding new node commands or CLI helpers
 title: "Nodes"
+doc-schema-version: 1
 ---
 
 A **node** is a companion device (macOS/iOS/watchOS/Android/headless) that connects to the Gateway with `role: "node"` and exposes a command surface (e.g. `camera.*`, `device.*`, `notifications.*`, `system.*`) via `node.invoke`. Most nodes use the Gateway WebSocket on the operator port. The optional direct Apple Watch node uses signed HTTPS polling on that same port because watchOS blocks generic low-level networking for ordinary apps. Protocol details: [Gateway protocol](/gateway/protocol).
-
-Legacy transport: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL; historical only for current nodes).
 
 macOS can also run in **node mode**: the menu bar app connects to the Gateway's
 WS server as one node (so `openclaw nodes …` works against this Mac). The app
@@ -366,13 +365,22 @@ By default, selecting a row opens the normal Chat pane and reads its persisted t
 through bounded, cursor-paginated
 `thread/turns/list` calls with full item projection. Use the row menu, the viewer header, or the **Open Codex/Claude sessions in** preference to start `codex resume <thread-id>` in the operator terminal on the computer that owns the session. The paired-node terminal path is an allowlisted PTY relay owned by the Codex plugin, not arbitrary node command execution.
 
-The relay does not provide the full OpenClaw harness continuation and archive ownership contracts. **Continue** and **Archive** are therefore unavailable for remote rows. On the Gateway computer, stored and idle
-rows can start a distinct model-locked Chat branch. Either can be archived only
-after the operator confirms that no other Codex client is using it; a stored
-row's live activity remains unknown. Active rows cannot branch or archive.
+The terminal relay is separate from paired-node Chat continuation. A connected
+node that advertises and permits both catalog commands plus
+`codex.cli.session.resume` can continue a stored or idle interactive thread for
+an operator with `operator.admin`. The Chat mirrors bounded visible history;
+later messages run native Codex CLI resume against the exact thread on that
+node and return the final text, without a streaming App Server harness bridge.
+Nodes without the required commands remain readable without Chat continuation.
+Paired-node **Archive** is unavailable.
+
+On the Gateway computer, stored and idle rows can start a distinct model-locked
+Chat branch. Either can be archived only after the operator confirms that no
+other Codex client is using it; a stored row's live activity remains unknown.
+Active rows cannot branch or archive.
 
 See [Supervise Codex sessions](/plugins/codex-supervision) for setup,
-pagination, local continuation, and the metadata security boundary.
+pagination, local and paired-node continuation, and the metadata security boundary.
 
 ### Claude sessions and transcripts
 
@@ -452,7 +460,8 @@ node does not advertise this command yet, so its rows remain view-only.
 
 ### Host OpenClaw sessions
 
-A headless node host can separately opt into full OpenClaw session hosting:
+The macOS menu bar app and the headless node host can opt into full OpenClaw
+session hosting with the same node-local setting:
 
 ```json5
 {
@@ -462,7 +471,17 @@ A headless node host can separately opt into full OpenClaw session hosting:
 }
 ```
 
-Restart the node host after enabling this setting. On the first session dispatch
+<Warning>
+Only enable session hosting on a machine you trust as shared Gateway infrastructure. Hosting consent applies to the device, not to an individual person's ownership of it. Existing session authorization still controls who may dispatch work.
+</Warning>
+
+Restart the app or node host after enabling this setting. The macOS app owns
+one paired node identity and uses the shared node runtime for session hosting;
+do not start a second CLI node for the same Mac. Its native camera, screen, and
+desktop capabilities remain on that identity. If the shared runtime cannot
+start, native capabilities remain available, but session hosting is unavailable.
+
+On the first session dispatch
 for a Gateway build, the node downloads one sealed worker artifact from that
 paired Gateway, verifies its exact content hash, and publishes it atomically
 under the Gateway-namespaced node-host bundle root. The artifact already
@@ -945,7 +964,7 @@ Notes:
 - `system.run` returns stdout/stderr/exit code in the payload.
 - Shell execution now goes through the `exec` tool with `host=node`; `nodes` remains the direct-RPC surface for explicit node commands.
 - `nodes invoke` does not expose `system.run` or `system.run.prepare`; those stay on the exec path only.
-- The exec path prepares a canonical `systemRunPlan` before approval. Once an approval is granted, the gateway forwards that stored plan, not any later caller-edited command/cwd/session fields.
+- The exec path reads the node policy and prepares a canonical `systemRunPlan`. Full/off execution resolves working-directory aliases without adding approval-only script checks. When caller or node policy requires approval binding, stricter path and script checks remain in place. Once an approval is granted, the gateway forwards that stored plan, not any later caller-edited command/cwd/session fields.
 - `system.notify` respects notification permission state on the macOS app; supports `--priority <passive|active|timeSensitive>` and `--delivery <system|overlay|auto>`.
 - Unrecognized node `platform` / `deviceFamily` metadata uses a conservative default allowlist that excludes `system.run` and `system.which`. If you intentionally need those commands for an unknown platform, add them explicitly via `gateway.nodes.commands.allow`.
 - A `system.run` request supports `cwd`, an `env` map, `timeoutMs`, and `needsScreenRecording` — these are fields of the request payload carried on the exec path (see above), not `nodes invoke` CLI flags.
@@ -1000,7 +1019,7 @@ Notes:
 - Client instance metadata, signed device identity, and pairing auth use separate state records; see [Headless identity state](#headless-identity-state).
 - Exec approvals are enforced locally via
   `~/.openclaw/state/openclaw.sqlite#exec_approvals_config` (see [Exec approvals](/tools/exec-approvals)).
-- On macOS, the headless node host executes `system.run` locally by default. Set `OPENCLAW_NODE_EXEC_HOST=app` to route `system.run` through the companion app exec host; add `OPENCLAW_NODE_EXEC_FALLBACK=0` to require the app host and fail closed if it is unavailable.
+- On macOS, the headless node host executes `system.run` locally by default. Set `OPENCLAW_NODE_EXEC_HOST=app` to require the companion app exec host, with no local fallback. `OPENCLAW_NODE_EXEC_FALLBACK` does not change current routing.
 - Add `--tls` / `--tls-fingerprint` when the Gateway WS uses TLS.
 
 ## Mac node mode
