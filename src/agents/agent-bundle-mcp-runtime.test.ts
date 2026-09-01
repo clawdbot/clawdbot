@@ -3380,6 +3380,73 @@ process.on("SIGINT", shutdown);`,
     await manager.disposeAll();
   });
 
+  it("does not evict a requester runtime while its resolution chain is active", async () => {
+    let nowMs = 100_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    const resolverTesting = await import("./mcp-connection-resolver.js");
+    let resolveRequester: (() => void) | undefined;
+    let requesterResolutionStarted: (() => void) | undefined;
+    const requesterStarted = new Promise<void>((resolve) => {
+      requesterResolutionStarted = resolve;
+    });
+    const releaseRequester = new Promise<void>((resolve) => {
+      resolveRequester = resolve;
+    });
+    let resolveCount = 0;
+    const disposed: string[] = [];
+    resolverTesting.testing.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async () => {
+          resolveCount += 1;
+          if (resolveCount === 2) {
+            requesterResolutionStarted?.();
+            await releaseRequester;
+          }
+          return { url: "https://mcp.example.test/user" };
+        },
+      },
+    ]);
+    resolverTesting.testing.setMcpConnectionRevalidateMsForTest(1);
+    const createRuntime: RuntimeFactory = (params) => ({
+      ...makeManagedRuntime(params),
+      dispose: async () => {
+        disposed.push(params.sessionId);
+      },
+    });
+    const manager = testing.createSessionMcpRuntimeManager({
+      createRuntime,
+      now: () => nowMs,
+      enableIdleSweepTimer: false,
+    });
+    const params = makeRequesterParams(
+      "session-deferred-sweep-race",
+      { mcp: { servers: { "user-mail": { transport: "streamable-http" } } } },
+      "sender-a",
+    );
+
+    try {
+      const initial = await manager.getOrCreateRequesterScoped(params);
+      expect(initial?.runtime).toBeDefined();
+
+      nowMs += 2;
+      const requesterRun = manager.getOrCreateRequesterScoped(params);
+      await requesterStarted;
+
+      nowMs += 10 * 60 * 1000;
+      expect(await manager.sweepIdleRuntimes()).toBe(0);
+      expect(disposed).toEqual([]);
+      expect(manager.listRuntimeKeys()).toHaveLength(1);
+
+      resolveRequester?.();
+      await expect(requesterRun).resolves.toMatchObject({ runtime: initial?.runtime });
+      expect(manager.listRuntimeKeys()).toHaveLength(1);
+    } finally {
+      resolveRequester?.();
+      clock.mockRestore();
+    }
+  });
+
   it("retires global session runtimes by session key", async () => {
     await getOrCreateSessionMcpRuntime({
       sessionId: "session-retire-key",

@@ -208,6 +208,12 @@ export function createSessionMcpRuntimeManagerLifecycle(
       if (nowMs - runtime.lastUsedAt < DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS) {
         continue;
       }
+      // A requester resolve/install is serialized on this key but runs outside
+      // the runtime lease. Keep its current transport alive until that chain
+      // records the refreshed runtime, rather than racing it with disposal.
+      if (store.requesterWorkChains.has(runtimeKey) || store.createInFlight.has(runtimeKey)) {
+        continue;
+      }
       store.runtimesBySessionId.delete(runtimeKey);
       store.connectionMetaByRuntimeKey.delete(runtimeKey);
       expired.push(runtime);
