@@ -2,6 +2,7 @@ import {
   observeAgentRunApprovalWait,
   type AgentRunApprovalWait,
 } from "./agent-run-approval-wait.js";
+import { awaitCodeModeDeadline } from "./code-mode-deadline.js";
 import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
 import {
   createCodeModeCatalogProjection,
@@ -51,6 +52,7 @@ import {
   type CodeModeRunOwner,
 } from "./code-mode-state.js";
 import { runCodeModeWorker } from "./code-mode-worker.js";
+import { prepareSource } from "./code-mode-source.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
 import type { ToolResultBudget } from "./tool-result-limits.js";
