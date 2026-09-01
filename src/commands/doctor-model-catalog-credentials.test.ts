@@ -279,4 +279,36 @@ describe("doctor model catalog credential migration", () => {
       key: "child-secret",
     });
   });
+
+  it("never persists unresolved env-template placeholders as API keys", async () => {
+    const state = createState();
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          braced: provider("${CUSTOM_API_KEY}"),
+          shorthand: provider("$OTHER_API_KEY"),
+          literal: provider("sk-real-secret"),
+        },
+      },
+    };
+
+    const result = await maybeMigrateModelCatalogCredentials(migrationParams(state, cfg));
+
+    expect(result).toMatchObject({ detected: 1, migrated: 1, warnings: [] });
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = state.stateDir;
+    let profiles: Record<string, unknown>;
+    try {
+      profiles = loadPersistedAuthProfileStore(undefined)?.profiles ?? {};
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+    }
+    expect(profiles["literal:default"]).toMatchObject({ key: "sk-real-secret" });
+    expect(profiles["braced:default"]).toBeUndefined();
+    expect(profiles["shorthand:default"]).toBeUndefined();
+  });
 });

@@ -22,6 +22,7 @@ import {
 } from "../agents/plugin-model-catalog.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { parseEnvTemplateSecretRef } from "../config/types.secrets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { listAgentModelsJsonPaths } from "../secrets/storage-scan.js";
 import { shortenHomePath } from "../utils.js";
@@ -67,6 +68,7 @@ function collectCredentials(
     const credential = { provider, key };
     if (
       !key.trim() ||
+      parseEnvTemplateSecretRef(key) !== null ||
       isNonSecretApiKeyMarker(key) ||
       store.profiles[key] !== undefined ||
       findMatchingProfileId(store, credential, blockedStores) !== undefined
