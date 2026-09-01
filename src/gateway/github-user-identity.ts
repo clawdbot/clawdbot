@@ -4,7 +4,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import { resolveCachedGitHubIdentity } from "../state/user-profile-github-identity.js";
 import { classifyTailscaleLogin } from "../state/user-profiles-tailscale-login.js";
-import { syncGitHubIdentity } from "../state/user-profiles.js";
+import { ensureProfileForEmail, syncGitHubIdentity } from "../state/user-profiles.js";
 import { normalizeGitHubLogin } from "../utils/github-login.js";
 import type { GatewayAuthResult } from "./auth.js";
 import {
@@ -27,6 +27,9 @@ const ACCESS_IDENTITY_MAX_BYTES = 64 * 1024;
 const JWT_SEGMENT_PATTERN = /^[A-Za-z0-9_-]+$/u;
 
 type ResolvedGitHubUserIdentity = { accountId: number; login: string; name?: string };
+type ResolvedCloudflareAccessIdentity =
+  | { kind: "github"; accountId: number; initialDisplayName?: string }
+  | { kind: "email-only" };
 type AuthenticatedGitHubIdentitySyncResult = { profileId: string; updatedAt: number };
 export type AuthenticatedGitHubIdentitySync = () => Promise<AuthenticatedGitHubIdentitySyncResult>;
 
@@ -75,7 +78,7 @@ function cloudflareAccessIssuer(assertion: string): URL {
 async function resolveCloudflareAccessIdentity(
   assertion: string,
   authenticatedPrincipal: string,
-): Promise<{ accountId: number; initialDisplayName?: string }> {
+): Promise<ResolvedCloudflareAccessIdentity> {
   const issuer = cloudflareAccessIssuer(assertion);
   let payload: unknown;
   try {
@@ -101,15 +104,22 @@ async function resolveCloudflareAccessIdentity(
   if (!email || email.toLowerCase() !== authenticatedPrincipal.trim().toLowerCase()) {
     throw new Error("Cloudflare Access identity principal did not match");
   }
+  const initialDisplayName =
+    typeof payload.name === "string" && payload.name.trim() ? payload.name : undefined;
   if (!isRecord(payload.idp) || payload.idp.type !== "github") {
-    throw new Error("Cloudflare Access identity is not GitHub-backed");
+    // A non-GitHub IdP has no GitHub account id to enrich; resolve a durable
+    // email-backed profile instead of failing so the connection is never left
+    // pending on GitHub enrichment the IdP cannot provide.
+    return { kind: "email-only" };
   }
   if (typeof payload.id !== "number" || !Number.isSafeInteger(payload.id) || payload.id <= 0) {
     throw new Error("Cloudflare Access GitHub account id is invalid");
   }
-  const initialDisplayName =
-    typeof payload.name === "string" && payload.name.trim() ? payload.name : undefined;
-  return { accountId: payload.id, ...(initialDisplayName ? { initialDisplayName } : {}) };
+  return {
+    kind: "github",
+    accountId: payload.id,
+    ...(initialDisplayName ? { initialDisplayName } : {}),
+  };
 }
 
 async function resolveGitHubUserIdentityByLogin(
@@ -237,6 +247,10 @@ export function createAuthenticatedGitHubIdentitySync(params: {
       access.assertion,
       access.principal,
     );
+    if (accessIdentity.kind === "email-only") {
+      const profile = ensureProfileForEmail(access.principal);
+      return { profileId: profile.id, updatedAt: profile.updatedAt };
+    }
     if (params.preferCachedIdentity) {
       const cached = resolveCachedGitHubIdentity({
         accountId: accessIdentity.accountId,

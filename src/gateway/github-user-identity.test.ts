@@ -471,14 +471,6 @@ describe("authenticated GitHub identity sync", () => {
       }),
     },
     {
-      name: "non-GitHub IdP",
-      access: githubResponse({
-        id: 58493,
-        email: "ada@example.com",
-        idp: { type: "google" },
-      }),
-    },
-    {
       name: "invalid account id",
       access: githubResponse({
         id: "58493",
@@ -493,6 +485,33 @@ describe("authenticated GitHub identity sync", () => {
       const sync = cloudflareSync({});
       await expect(sync?.()).rejects.toThrow();
       expect(getUserProfileListItem(profile.id).githubIdentity).toBeNull();
+    });
+  });
+
+  it("resolves a non-GitHub IdP to an email-backed profile without GitHub enrichment", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+        githubResponse({
+          id: 58493,
+          email: "ada@example.com",
+          name: "Ada Google",
+          idp: { id: "google-oauth", type: "google" },
+        }),
+      );
+
+      const sync = cloudflareSync({});
+      const result = await sync?.();
+
+      expect(result).toMatchObject({ profileId: expect.any(String) });
+      expect(getUserProfileListItem(result!.profileId)).toMatchObject({
+        emails: ["ada@example.com"],
+      });
+      expect(getUserProfileListItem(result!.profileId).githubIdentity).toBeNull();
+      // Only the Access identity lookup runs; no GitHub API call follows.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0]?.[0]).toBe(
+        "https://team.cloudflareaccess.com/cdn-cgi/access/get-identity",
+      );
     });
   });
 
