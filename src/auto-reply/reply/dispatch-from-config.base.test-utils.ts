@@ -1829,6 +1829,35 @@ describe("dispatchReplyFromConfig", () => {
     expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
       expect.objectContaining({ outcome: "completed" }),
     );
+    expect(diagnosticMocks.logMessageQueued).toHaveBeenCalledTimes(2);
+    expect(diagnosticMocks.logSessionStateChange.mock.calls).toEqual([
+      [
+        expect.objectContaining({
+          sessionId: "failed-session-rotated",
+          state: "processing",
+        }),
+      ],
+      [
+        expect.objectContaining({
+          sessionId: "failed-session-rotated",
+          state: "idle",
+          reason: "session_refresh",
+        }),
+      ],
+      [
+        expect.objectContaining({
+          sessionId: "fresh-rotated-session",
+          state: "processing",
+        }),
+      ],
+      [
+        expect.objectContaining({
+          sessionId: "fresh-rotated-session",
+          state: "idle",
+          reason: "message_completed",
+        }),
+      ],
+    ]);
 
     const followingDispatcher = createDispatcher();
     await expect(
