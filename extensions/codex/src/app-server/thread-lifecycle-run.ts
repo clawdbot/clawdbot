@@ -594,7 +594,7 @@ export async function startOrResumeThread(
             threadId: binding.threadId,
           },
         );
-        await clearCurrentBinding("rotating a stale thread binding");
+        await clearCurrentBinding("changing the dynamic tool loading mode");
         binding = undefined;
       }
     }
