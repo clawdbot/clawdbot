@@ -1,6 +1,8 @@
 // Amazon Bedrock Mantle tests cover discovery plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const SONNET_5_PROMOTIONAL_PRICING_NOW_MS = Date.UTC(2026, 7, 31);
+
 const discoveryDebugSpy = vi.hoisted(() => vi.fn());
 const discoveryLoggerState = vi.hoisted(() => ({ debugEnabled: true }));
 vi.mock("openclaw/plugin-sdk/core", async (importOriginal) => {
@@ -727,6 +729,7 @@ describe("bedrock mantle discovery", () => {
   // ---------------------------------------------------------------------------
 
   it("resolves implicit provider when bearer token is set", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(SONNET_5_PROMOTIONAL_PRICING_NOW_MS);
     const mockFetch = vi.fn().mockResolvedValue(
       modelDiscoveryResponse({
         data: [{ id: "anthropic.claude-sonnet-4-6", object: "model" }],
