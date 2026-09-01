@@ -37,7 +37,7 @@ import {
 } from "../hooks.js";
 import { sendJson } from "../http-common.js";
 import { readPreparedGatewayIngressAttribution } from "../ingress-attribution.js";
-import { resolveRequestClientIp } from "../net.js";
+import { resolveRequestClientIpFromHeaders } from "../net.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -209,7 +209,7 @@ export function createHooksRequestHandler(
     }
     const clientIpConfig = getClientIpConfig?.();
     const clientIp =
-      resolveRequestClientIp(
+      resolveRequestClientIpFromHeaders(
         req,
         clientIpConfig?.trustedProxies,
         clientIpConfig?.allowRealIpFallback === true,

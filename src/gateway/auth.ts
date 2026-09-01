@@ -23,7 +23,7 @@ import {
   isLocalDirectRequest,
   isLoopbackAddress,
   resolveLocalInterfaceAddressMatch,
-  resolveRequestClientIp,
+  resolveRequestClientIpFromHeaders,
   isTrustedProxyAddress,
 } from "./net.js";
 import { checkBrowserOrigin } from "./origin-check.js";
@@ -120,7 +120,7 @@ function resolveGatewayAuthRequestContext(
       : params.ingressAttribution;
   const fallbackIp =
     attributed?.clientIp ??
-    resolveRequestClientIp(req, trustedProxies, params.allowRealIpFallback === true) ??
+    resolveRequestClientIpFromHeaders(req, trustedProxies, params.allowRealIpFallback === true) ??
     req?.socket?.remoteAddress;
   const localDirect = attributed
     ? attributed.kind === "direct-local"
