@@ -1821,6 +1821,9 @@ describe("dispatchReplyFromConfig", () => {
     expect(fastAbortCalls).toBe(2);
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "visible recovery reply" });
     expect(replyRunRegistry.isActive(sessionKey)).toBe(false);
+    expect(messageAuditEvents()).toEqual([
+      expect.objectContaining({ status: "succeeded", outcome: "completed" }),
+    ]);
 
     const followingDispatcher = createDispatcher();
     await expect(
