@@ -809,12 +809,14 @@ export async function buildProductionControlUiE2e(outDir: string, buildId: strin
       cwd: uiRoot,
       encoding: "utf8",
       env,
+      // Forward build activity while spawnSync waits; retain stderr for failures.
+      stdio: ["ignore", "inherit", "pipe"],
       maxBuffer: 10 * 1024 * 1024,
     },
   );
   if (result.status !== 0) {
     throw new Error(
-      `Production Control UI build failed (exit ${result.status ?? "unknown"}):\n${result.stderr || result.stdout}`,
+      `Production Control UI build failed (exit ${result.status ?? "unknown"}):\n${result.stderr || result.error?.message || "See streamed build output above."}`,
     );
   }
 }
@@ -827,7 +829,7 @@ async function runProductionControlUiBuild(outDir: string): Promise<void> {
   await build({
     ...controlUiViteConfig({ outDir }),
     configFile: false,
-    logLevel: "error",
+    logLevel: "info",
     root: path.join(resolveRepoRoot(), "ui"),
   });
 }
@@ -871,7 +873,10 @@ export async function startBundledControlUiE2eServer(outDir: string): Promise<Co
     import("vite"),
     import("../../vite.config.ts"),
   ]);
-  await build(createBundledControlUiE2eConfig(controlUiViteConfig, outDir));
+  await build({
+    ...createBundledControlUiE2eConfig(controlUiViteConfig, outDir),
+    logLevel: "info",
+  });
   return startBuiltControlUiE2eServer(outDir);
 }
 
