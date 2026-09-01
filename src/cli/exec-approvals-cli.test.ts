@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { Command } from "commander";
@@ -1031,6 +1032,70 @@ describe("exec approvals CLI", () => {
       agents: {},
     });
     expect(loggedOutput()).toContain("Writing local approvals.");
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("rejects a multi-line allowlist add pattern instead of storing one unmatchable entry", async () => {
+    const updateExecApprovals = vi.mocked(execApprovals.updateExecApprovals);
+    updateExecApprovals.mockClear();
+
+    await expect(
+      runApprovalsCommand([
+        "approvals",
+        "allowlist",
+        "add",
+        "/usr/bin/uname\n/usr/bin/uname\n/usr/bin/uname",
+      ]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors.some((line) => line.includes("single line"))).toBe(true);
+    expect(updateExecApprovals).not.toHaveBeenCalled();
+  });
+
+  it("removes a stored absolute home path given its ~/ spelling", async () => {
+    const home = os.homedir();
+    localSnapshot.file = {
+      version: 1,
+      agents: {
+        "*": {
+          allowlist: [{ pattern: path.join(home, "bin", "ollama"), lastUsedAt: Date.now() }],
+        },
+      },
+    };
+
+    await runApprovalsCommand(["approvals", "allowlist", "remove", "~/bin/ollama"]);
+
+    const saved = requireRecord(localSnapshot.file, "saved approvals");
+    expectFields(saved, "saved approvals", {
+      version: 1,
+      agents: {},
+    });
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("removes a stored ~/ pattern given its absolute spelling", async () => {
+    const home = os.homedir();
+    localSnapshot.file = {
+      version: 1,
+      agents: {
+        "*": {
+          allowlist: [{ pattern: "~/bin/ollama", lastUsedAt: Date.now() }],
+        },
+      },
+    };
+
+    await runApprovalsCommand([
+      "approvals",
+      "allowlist",
+      "remove",
+      path.join(home, "bin", "ollama"),
+    ]);
+
+    const saved = requireRecord(localSnapshot.file, "saved approvals");
+    expectFields(saved, "saved approvals", {
+      version: 1,
+      agents: {},
+    });
     expect(runtimeErrors).toHaveLength(0);
   });
 

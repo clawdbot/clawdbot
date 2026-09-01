@@ -836,9 +836,18 @@ final class ExecApprovalsSettingsModel {
     @discardableResult
     func addEntry(_ pattern: String) -> Bool {
         guard !self.isDefaultsScope else { return false }
-        let result = ExecApprovalsStore.addAllowlistEntry(
+        // A paste can carry several lines; each line is its own single-line
+        // pattern, so multi-line input never persists as one unmatchable entry.
+        let lines = pattern
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard !lines.isEmpty else {
+            return self.finishMutation(.failure(.invalidPattern(.empty)))
+        }
+        let result = ExecApprovalsStore.addAllowlistEntries(
             agentId: self.selectedAgentId,
-            pattern: pattern)
+            entries: lines.map { ExecAllowlistEntry(pattern: $0) })
         return self.finishMutation(result, showLoading: true)
     }
 

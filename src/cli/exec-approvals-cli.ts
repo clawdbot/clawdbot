@@ -1,5 +1,7 @@
 // CLI for reading and mutating exec approval allowlists locally, via gateway, or via node.
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { expectDefined } from "@openclaw/normalization-core";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
@@ -1091,6 +1093,19 @@ function normalizeAllowlistEntry(entry: { pattern?: string } | null): string | n
   return pattern ? pattern : null;
 }
 
+// Stored patterns keep whatever spelling `add` received (absolute or `~/`), so
+// remove accepts either spelling; otherwise cleanup fails with "Pattern not found".
+function removePatternCandidates(pattern: string): Set<string> {
+  const home = os.homedir();
+  const candidates = new Set([pattern]);
+  if (pattern.startsWith("~/")) {
+    candidates.add(path.join(home, pattern.slice(2)));
+  } else if (home && pattern.startsWith(`${home}${path.sep}`)) {
+    candidates.add(`~/${pattern.slice(home.length + 1)}`);
+  }
+  return candidates;
+}
+
 function ensureAgent(file: ExecApprovalsFile, agentKey: string): ExecApprovalsAgent {
   const agents = file.agents ?? {};
   const entry = agents[agentKey] ?? {};
@@ -1409,6 +1424,11 @@ export function registerExecApprovalsCli(program: Command) {
     name: "add",
     description: "Add a glob pattern to an allowlist",
     mutate: ({ trimmedPattern, file, agent, agentKey, allowlistEntries }) => {
+      // One pattern is one first-token matcher; a multi-line value would persist
+      // as a single unmatchable entry (a silent no-op grant).
+      if (/[\r\n]/.test(trimmedPattern)) {
+        exitWithError("Pattern must be a single line. Run add once per pattern.");
+      }
       if (allowlistEntries.some((entry) => normalizeAllowlistEntry(entry) === trimmedPattern)) {
         defaultRuntime.log("Already allowlisted.");
         return false;
@@ -1425,8 +1445,9 @@ export function registerExecApprovalsCli(program: Command) {
     name: "remove",
     description: "Remove a glob pattern from an allowlist",
     mutate: ({ trimmedPattern, file, agent, agentKey, allowlistEntries }) => {
+      const candidates = removePatternCandidates(trimmedPattern);
       const nextEntries = allowlistEntries.filter(
-        (entry) => normalizeAllowlistEntry(entry) !== trimmedPattern,
+        (entry) => !candidates.has(normalizeAllowlistEntry(entry) ?? ""),
       );
       if (nextEntries.length === allowlistEntries.length) {
         defaultRuntime.log("Pattern not found.");

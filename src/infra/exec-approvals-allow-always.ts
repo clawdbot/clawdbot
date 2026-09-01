@@ -207,7 +207,9 @@ function applyAllowlistEntryUpdate(params: {
   const existing = agents[target] ?? {};
   const allowlist = Array.isArray(existing.allowlist) ? existing.allowlist : [];
   const trimmed = params.pattern.trim();
-  if (!trimmed) {
+  // One pattern is one first-token matcher; an embedded newline can never match
+  // an executable path, so it would persist as a silent no-op grant.
+  if (!trimmed || /[\r\n]/.test(trimmed)) {
     return null;
   }
   const argPattern = params.options?.argPattern === "" ? undefined : params.options?.argPattern;

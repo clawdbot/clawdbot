@@ -60,6 +60,7 @@ enum ExecApprovalDecision: String, Codable, Equatable {
 enum ExecAllowlistPatternValidationReason: String, Codable, Equatable, Sendable {
     case empty
     case missingPathComponent
+    case multiline
 
     var message: String {
         switch self {
@@ -67,6 +68,8 @@ enum ExecAllowlistPatternValidationReason: String, Codable, Equatable, Sendable 
             "Pattern cannot be empty."
         case .missingPathComponent:
             "Path patterns only. Include '/', '~', or '\\\\'."
+        case .multiline:
+            "One pattern per line."
         }
     }
 }
@@ -165,6 +168,9 @@ enum ExecApprovalHelpers {
     static func validateAllowlistPattern(_ pattern: String?) -> ExecAllowlistPatternValidation {
         let trimmed = pattern?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !trimmed.isEmpty else { return .invalid(.empty) }
+        // One pattern is one first-token matcher. An embedded newline can never
+        // match an executable path, so it would persist as a silent no-op grant.
+        guard !trimmed.contains(where: \.isNewline) else { return .invalid(.multiline) }
         return .valid(trimmed)
     }
 
