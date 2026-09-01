@@ -1,10 +1,10 @@
 // Connect CLI tests cover accepted targets and handoff to the canonical node runtime.
 import fs from "node:fs/promises";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { NodeHostConfig } from "../node-host/config.js";
 import { encodePairingSetupCode } from "../pairing/setup-code.js";
@@ -54,6 +54,8 @@ async function runConnect(args: string[]): Promise<void> {
   registerConnectCli(program);
   await program.parseAsync(["connect", ...args], { from: "user" });
 }
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("connect cli", () => {
   beforeEach(() => {
@@ -161,25 +163,22 @@ describe("connect cli", () => {
   );
 
   it("consumes an environment-managed target file before connecting", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-connect-target-"));
+    const root = tempDirs.make("openclaw-connect-target-");
     const targetFile = path.join(root, "setup-code");
     await fs.writeFile(targetFile, setupCode(), { mode: 0o600 });
-    try {
-      await runConnect(["--target-file", targetFile, "--ephemeral"]);
 
-      expect(mocks.runNodeHost).toHaveBeenCalledWith(
-        expect.objectContaining({ forceWorkerRuns: true }),
-      );
-      await expect(fs.stat(targetFile)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
+    await runConnect(["--target-file", targetFile, "--ephemeral"]);
+
+    expect(mocks.runNodeHost).toHaveBeenCalledWith(
+      expect.objectContaining({ forceWorkerRuns: true }),
+    );
+    await expect(fs.stat(targetFile)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it.skipIf(process.platform === "win32")(
     "rejects a socket target without removing it",
     async () => {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-connect-target-socket-"));
+      const root = tempDirs.make("openclaw-connect-target-socket-");
       const targetFile = path.join(root, "setup-code.sock");
       const server = net.createServer();
       await new Promise<void>((resolve, reject) => {
@@ -200,7 +199,6 @@ describe("connect cli", () => {
         await new Promise<void>((resolve, reject) => {
           server.close((error) => (error ? reject(error) : resolve()));
         });
-        await fs.rm(root, { recursive: true, force: true });
       }
     },
   );
@@ -217,40 +215,33 @@ describe("connect cli", () => {
       message: "max 65536 bytes",
     },
   ])("rejects an $name target file without removing it", async ({ contents, message }) => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-connect-target-invalid-"));
+    const root = tempDirs.make("openclaw-connect-target-invalid-");
     const targetFile = path.join(root, "setup-code");
     await fs.writeFile(targetFile, contents, { mode: 0o600 });
-    try {
-      await runConnect(["--target-file", targetFile, "--ephemeral"]);
 
-      expect(mocks.runtime.error).toHaveBeenCalledWith(expect.stringContaining(message));
-      expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
-      expect(mocks.runNodeHost).not.toHaveBeenCalled();
-      await expect(fs.readFile(targetFile)).resolves.toEqual(contents);
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
+    await runConnect(["--target-file", targetFile, "--ephemeral"]);
+
+    expect(mocks.runtime.error).toHaveBeenCalledWith(expect.stringContaining(message));
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.runNodeHost).not.toHaveBeenCalled();
+    await expect(fs.readFile(targetFile)).resolves.toEqual(contents);
   });
 
   it.skipIf(process.platform === "win32")(
     "consumes a symlinked target file and keeps the backing file intact",
     async () => {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-connect-target-symlink-"));
+      const root = tempDirs.make("openclaw-connect-target-symlink-");
       const targetFile = path.join(root, "setup-code");
       const backingFile = path.join(root, "backing-setup-code");
       await fs.writeFile(backingFile, setupCode(), { mode: 0o600 });
       await fs.symlink(backingFile, targetFile);
-      try {
-        await runConnect(["--target-file", targetFile, "--ephemeral"]);
+      await runConnect(["--target-file", targetFile, "--ephemeral"]);
 
-        expect(mocks.runNodeHost).toHaveBeenCalledWith(
-          expect.objectContaining({ forceWorkerRuns: true }),
-        );
-        await expect(fs.stat(targetFile)).rejects.toMatchObject({ code: "ENOENT" });
-        await expect(fs.stat(backingFile)).resolves.toBeDefined();
-      } finally {
-        await fs.rm(root, { recursive: true, force: true });
-      }
+      expect(mocks.runNodeHost).toHaveBeenCalledWith(
+        expect.objectContaining({ forceWorkerRuns: true }),
+      );
+      await expect(fs.stat(targetFile)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.stat(backingFile)).resolves.toBeDefined();
     },
   );
 
