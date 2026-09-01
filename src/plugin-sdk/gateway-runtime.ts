@@ -1,9 +1,5 @@
 // Public gateway/client helpers for plugins that talk to the host gateway surface.
-import { callGatewayFromCli as callGatewayFromCliCore } from "../cli/gateway-rpc.js";
-
-// Plugin CLI callbacks consume JSON records; typed internal callers specialize the core helper.
-export const callGatewayFromCli = callGatewayFromCliCore<Record<string, unknown>>;
-export { addGatewayClientOptions } from "../cli/gateway-rpc.js";
+export { addGatewayClientOptions, callGatewayFromCli } from "../cli/gateway-rpc.js";
 export type { GatewayRpcOpts } from "../cli/gateway-rpc.js";
 export { isGatewayClientRequestError, isGatewayTransportError } from "../gateway/call.js";
 // Plugin CLIs echo gateway URLs/close reasons into operator-visible errors;

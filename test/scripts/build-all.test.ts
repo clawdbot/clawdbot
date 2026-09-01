@@ -1211,13 +1211,11 @@ describe("resolveBuildStepCacheState", () => {
     const buildHelpers = [
       "scripts/lib/runtime-process-build-entries.mts",
       "scripts/lib/vitest-worker-artifacts.mts",
-      "scripts/lib/fs-safe-native-assets.mts",
     ];
     const fixtures = [
       ["package.json", "{}"],
       ["scripts/lib/runtime-process-build-entries.mts", "export const entries = {};"],
       ["scripts/lib/vitest-worker-artifacts.mts", "export const declarations = {};"],
-      ["scripts/lib/fs-safe-native-assets.mts", "export const copy = {};"],
       ["src/index.ts", "export const core = 1;"],
       ["extensions/example/index.ts", "export const extension = 1;"],
       ["packages/ai/src/index.ts", "export const ai = 1;"],

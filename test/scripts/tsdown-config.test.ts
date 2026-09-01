@@ -1,6 +1,5 @@
 // Tsdown config tests protect package artifact build contracts.
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
@@ -14,6 +13,7 @@ import {
 } from "../../scripts/lib/tsdown-config-groups.mts";
 import { WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID } from "../../scripts/lib/worker-deploy-build-plugin.mts";
 import buildConfigs from "../../tsdown.config.ts";
+import { copyFsSafePackageFixture } from "./fs-safe-package.test-support.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const configs = Array.isArray(buildConfigs) ? buildConfigs : [buildConfigs];
@@ -41,19 +41,6 @@ const isWorkerRsyncReceiverConfig = (config: TsdownConfig) =>
   );
 const isWorkerBuildConfig = (config: TsdownConfig) =>
   isWorkerDeployConfig(config) || isWorkerRsyncReceiverConfig(config);
-
-function nativeAssetInventory(directory: string) {
-  return fs
-    .readdirSync(directory, { recursive: true, encoding: "utf8" })
-    .filter((file) => fs.statSync(path.join(directory, file)).isFile())
-    .toSorted()
-    .map((file) => ({
-      file,
-      sha256: createHash("sha256")
-        .update(fs.readFileSync(path.join(directory, file)))
-        .digest("hex"),
-    }));
-}
 
 const FS_SAFE_CALLER_PROBE = `
 import assert from "node:assert/strict";
@@ -313,38 +300,36 @@ describe("tsdown config", () => {
   });
 
   it.each(["runtime", "worker"])(
-    "preserves native fs-safe assets and policy in relocated %s output",
+    "preserves fs-safe package ownership and policy in relocated %s output",
     async (target) => {
       const temporaryRoot = fs.realpathSync(createTempDir("openclaw-tsdown-fs-safe-"));
       const sourceRoot = path.join(temporaryRoot, "build");
       const relocatedRoot = path.join(temporaryRoot, "relocated");
+      fs.mkdirSync(sourceRoot);
+      fs.writeFileSync(path.join(sourceRoot, "package.json"), '{"type":"module"}');
+      const worker = target === "worker";
       const require = createRequire(import.meta.url);
-      const nativeSource = path.join(
-        path.dirname(require.resolve("@openclaw/fs-safe/package.json")),
-        "dist/native",
-      );
+      const { nativePackages } = worker
+        ? { nativePackages: [] }
+        : copyFsSafePackageFixture(sourceRoot);
+      if (!worker) expect(nativePackages.length).toBeGreaterThan(0);
       const sdkSource = path.resolve("src/plugin-sdk/memory-core-host-engine-fs.ts");
-      const observerSource = path.join(temporaryRoot, "observer.ts");
+      const observerSource = path.join(sourceRoot, "observer.ts");
       fs.writeFileSync(
         observerSource,
         [
+          ...(worker
+            ? [`import ${JSON.stringify(path.resolve("src/worker/worker-deploy-runtime.ts"))};`]
+            : []),
           `export { root } from ${JSON.stringify(sdkSource)};`,
-          `export { configureFsSafeNative, getFsSafeNativeConfig } from ${JSON.stringify(require.resolve("@openclaw/fs-safe/config"))};`,
-          `export { FsSafeError } from ${JSON.stringify(require.resolve("@openclaw/fs-safe/errors"))};`,
+          `export { configureFsSafeNative, getFsSafeNativeConfig } from ${JSON.stringify(worker ? require.resolve("@openclaw/fs-safe/config") : "@openclaw/fs-safe/config")};`,
+          `export { FsSafeError } from ${JSON.stringify(worker ? require.resolve("@openclaw/fs-safe/errors") : "@openclaw/fs-safe/errors")};`,
         ].join("\n"),
       );
-      const worker = target === "worker";
       const selected = configs.find(
         worker ? isWorkerDeployConfig : (config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP,
       );
       expect(selected).toBeDefined();
-      if (worker) {
-        expect(selected?.copy).toBeUndefined();
-      } else {
-        expect(selected?.copy).toBeDefined();
-      }
-      // Deliberately not named dist: the dependency's URL is relative to the
-      // emitted loader, including the worker's extra directory component.
       const bundles = await build({
         ...selected,
         config: false,
@@ -356,19 +341,12 @@ describe("tsdown config", () => {
         logLevel: "silent",
       });
       try {
-        if (worker) {
-          // The runtime graph owns the package's single native tree; this
-          // isolated worker build only proves that its loader shares it.
-          fs.cpSync(nativeSource, path.join(sourceRoot, "dist/native"), { recursive: true });
-        }
-        fs.writeFileSync(path.join(sourceRoot, "package.json"), '{"type":"module"}');
         fs.renameSync(sourceRoot, relocatedRoot);
         const entry = path.join(
           relocatedRoot,
           worker ? "output/worker/worker.mjs" : "output/plugin-sdk/memory-core-host-engine-fs.js",
         );
         const observer = worker ? entry : path.join(relocatedRoot, "output/observer.js");
-        const nativeOutput = path.join(relocatedRoot, "dist/native");
         const probe = async (
           name: string,
           mode: string,
@@ -377,78 +355,78 @@ describe("tsdown config", () => {
         ) => {
           const rootDir = path.join(relocatedRoot, name);
           fs.mkdirSync(rootDir);
-          const result = await new Promise<{
-            error: Error | null;
-            status: number | null;
-            stdout: string;
-            stderr: string;
-          }>((resolve) => {
-            const child = execFile(
-              process.execPath,
-              [
-                "--input-type=module",
-                "--eval",
-                FS_SAFE_CALLER_PROBE,
-                entry,
-                observer,
-                rootDir,
-                mode,
-                outcome,
-              ],
-              {
-                cwd: relocatedRoot,
-                encoding: "utf8",
-                timeout: 30_000,
-                env: {
-                  PATH: process.env.PATH,
-                  SystemRoot: process.env.SystemRoot,
-                  WINDIR: process.env.WINDIR,
-                  HOME: temporaryRoot,
-                  USERPROFILE: temporaryRoot,
-                  TMPDIR: temporaryRoot,
-                  TMP: temporaryRoot,
-                  TEMP: temporaryRoot,
-                  ...override,
+          const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
+            (resolve) => {
+              execFile(
+                process.execPath,
+                [
+                  "--input-type=module",
+                  "--eval",
+                  FS_SAFE_CALLER_PROBE,
+                  entry,
+                  observer,
+                  rootDir,
+                  mode,
+                  outcome,
+                ],
+                {
+                  cwd: relocatedRoot,
+                  encoding: "utf8",
+                  timeout: 30_000,
+                  env: {
+                    PATH: process.env.PATH,
+                    SystemRoot: process.env.SystemRoot,
+                    WINDIR: process.env.WINDIR,
+                    HOME: temporaryRoot,
+                    USERPROFILE: temporaryRoot,
+                    TMPDIR: temporaryRoot,
+                    TMP: temporaryRoot,
+                    TEMP: temporaryRoot,
+                    ...override,
+                  },
                 },
-              },
-              (error, stdout, stderr) => resolve({ error, status: child.exitCode, stdout, stderr }),
-            );
-          });
-          expect(result.error, name).toBeNull();
-          expect(result.status, `${name}\n${result.stdout}\n${result.stderr}`).toBe(0);
+                (error, stdout, stderr) => resolve({ error, stdout, stderr }),
+              );
+            },
+          );
+          expect(result.error, `${name}\n${result.stdout}\n${result.stderr}`).toBeNull();
         };
-        const joinProbes = async (probes: Promise<void>[]) => {
-          // Every child must close before assets are removed or bundles disposed,
-          // including when a sibling probe fails.
+        // Join every caller before removing its dependency tree, even after a failure.
+        const join = async (probes: Promise<void>[]) => {
           const results = await Promise.allSettled(probes);
-          const failures = results.flatMap((result) =>
+          const errors = results.flatMap((result) =>
             result.status === "rejected" ? [result.reason] : [],
           );
-          if (failures.length) {
-            throw new AggregateError(failures, "Native fs-safe probes failed");
-          }
+          if (errors.length) throw new AggregateError(errors, "fs-safe package probes failed");
         };
-        await joinProbes([
-          ...["FS_SAFE_NATIVE_MODE", "OPENCLAW_FS_SAFE_NATIVE_MODE"].map((key) =>
-            probe(key, "require", "native", { [key]: "require" }),
-          ),
-          probe("shared-config", "configured", "native"),
-          probe("default", "off", "fallback"),
-        ]);
-        const assets = nativeAssetInventory(nativeSource);
-        expect(assets).toHaveLength(7);
-        expect(nativeAssetInventory(nativeOutput)).toEqual(assets);
-        fs.rmSync(nativeOutput, { recursive: true });
-        await joinProbes([
-          probe("missing", "require", "missing", { FS_SAFE_NATIVE_MODE: "require" }),
-          ...["off", "auto"].map((mode) =>
-            probe(mode, mode, "fallback", { FS_SAFE_NATIVE_MODE: mode }),
-          ),
-        ]);
-      } finally {
-        for (const bundle of bundles) {
-          await bundle[Symbol.asyncDispose]();
+        if (worker) {
+          await join([
+            probe("default", "off", "fallback"),
+            ...["FS_SAFE_NATIVE_MODE", "OPENCLAW_FS_SAFE_NATIVE_MODE"].map((key) =>
+              probe(key, "off", "fallback", { [key]: "require" }),
+            ),
+          ]);
+        } else {
+          await join([
+            ...["FS_SAFE_NATIVE_MODE", "OPENCLAW_FS_SAFE_NATIVE_MODE"].map((key) =>
+              probe(key, "require", "native", { [key]: "require" }),
+            ),
+            probe("shared-config", "configured", "native"),
+            probe("default", "off", "fallback"),
+          ]);
+          for (const nativePackage of nativePackages)
+            fs.rmSync(path.join(relocatedRoot, path.relative(sourceRoot, nativePackage.root)), {
+              recursive: true,
+            });
+          await join([
+            probe("missing", "require", "missing", { FS_SAFE_NATIVE_MODE: "require" }),
+            ...["off", "auto"].map((mode) =>
+              probe(mode, mode, "fallback", { FS_SAFE_NATIVE_MODE: mode }),
+            ),
+          ]);
         }
+      } finally {
+        for (const bundle of bundles) await bundle[Symbol.asyncDispose]();
       }
     },
   );
@@ -484,6 +462,7 @@ describe("tsdown config", () => {
         "@larksuiteoapi/node-sdk",
         "@matrix-org/matrix-sdk-crypto-nodejs",
         "@openclaw/ai",
+        "@openclaw/fs-safe",
         "@vitest/expect",
         "jimp",
         "matrix-js-sdk",

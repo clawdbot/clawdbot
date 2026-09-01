@@ -12,6 +12,15 @@ minimumReleaseAgeStrict: true
 minimumReleaseAgeExclude:
   - "@openai/codex"
   - "@openai/codex-*"
+  # fs-safe 0.7.0 validates original ZIP names; remove after 2026-09-07.
+  - "@openclaw/fs-safe@0.7.0"
+  - "@openclaw/fs-safe-darwin-arm64@0.7.0"
+  - "@openclaw/fs-safe-darwin-x64@0.7.0"
+  - "@openclaw/fs-safe-linux-arm64-gnu@0.7.0"
+  - "@openclaw/fs-safe-linux-arm64-musl@0.7.0"
+  - "@openclaw/fs-safe-linux-x64-gnu@0.7.0"
+  - "@openclaw/fs-safe-linux-x64-musl@0.7.0"
+  - "@openclaw/fs-safe-win32-x64-msvc@0.7.0"
   # Bot API 10.3 types replace OpenClaw's temporary rich-message bridge.
   - "@grammyjs/types@5.0.0"
   - "grammy@1.46.0"
@@ -63,7 +72,6 @@ overrides:
   uuid: 14.0.2
 
 allowBuilds:
-  "@openclaw/fs-safe": true
   "@google/genai": true
   "@lydell/node-pty": true
   "@matrix-org/matrix-sdk-crypto-nodejs": true

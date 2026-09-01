@@ -9,7 +9,11 @@ import type {
 import { defaultRuntime } from "../runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { inheritOptionFromParent } from "./command-options.js";
-import { addGatewayClientOptions, callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
+import {
+  addGatewayClientOptions,
+  callGatewayFromCliWithTransport,
+  type GatewayRpcOpts,
+} from "./gateway-rpc.js";
 import { collectOption } from "./program/helpers.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 import { readLibraryInput, uploadLibraryZip } from "./skills-library-input.js";
@@ -78,7 +82,12 @@ export function registerSkillsLibraryCli(skills: Command): void {
   const mutate = (command: Command, params: SkillsLibraryMutateParams) =>
     execute(
       command,
-      (opts) => callGatewayFromCli<SkillsLibraryReceipt>("skills.library.mutate", opts, params),
+      (opts) =>
+        callGatewayFromCliWithTransport<SkillsLibraryReceipt>(
+          "skills.library.mutate",
+          opts,
+          params,
+        ),
       receiptText,
     );
 
@@ -93,7 +102,7 @@ export function registerSkillsLibraryCli(skills: Command): void {
       execute(
         command,
         (rpc) =>
-          callGatewayFromCli<SkillsLibraryListResult>("skills.library.list", rpc, {
+          callGatewayFromCliWithTransport<SkillsLibraryListResult>("skills.library.list", rpc, {
             scope: opts.scope,
             ...(opts.session ? { sessionKey: opts.session } : {}),
           }),
@@ -140,11 +149,15 @@ export function registerSkillsLibraryCli(skills: Command): void {
           if (opts.session && !opts.revision) {
             throw new Error("--session requires --revision to read an exact selected pin.");
           }
-          return callGatewayFromCli<SkillsLibraryReadResult>("skills.library.read", rpc, {
-            skillId,
-            ...(opts.revision ? { revision: opts.revision } : {}),
-            ...(opts.session ? { sessionKey: opts.session } : {}),
-          });
+          return callGatewayFromCliWithTransport<SkillsLibraryReadResult>(
+            "skills.library.read",
+            rpc,
+            {
+              skillId,
+              ...(opts.revision ? { revision: opts.revision } : {}),
+              ...(opts.session ? { sessionKey: opts.session } : {}),
+            },
+          );
         },
         (result) =>
           [
@@ -174,7 +187,7 @@ export function registerSkillsLibraryCli(skills: Command): void {
       execute(
         command,
         async (rpc) =>
-          callGatewayFromCli<SkillsLibraryReceipt>("skills.library.save", rpc, {
+          callGatewayFromCliWithTransport<SkillsLibraryReceipt>("skills.library.save", rpc, {
             slug: opts.slug,
             expectedRevision: null,
             ...(await readLibraryInput(input)),
@@ -203,7 +216,7 @@ export function registerSkillsLibraryCli(skills: Command): void {
       execute(
         command,
         async (rpc) => {
-          const current = await callGatewayFromCli<SkillsLibraryReadResult>(
+          const current = await callGatewayFromCliWithTransport<SkillsLibraryReadResult>(
             "skills.library.read",
             rpc,
             { skillId },
@@ -215,7 +228,7 @@ export function registerSkillsLibraryCli(skills: Command): void {
               throw new Error(`Supporting file not found: ${deleted}`);
             }
           }
-          return callGatewayFromCli<SkillsLibraryReceipt>("skills.library.save", rpc, {
+          return callGatewayFromCliWithTransport<SkillsLibraryReceipt>("skills.library.save", rpc, {
             skillId,
             expectedRevision: opts.expectedRevision,
             slug: opts.slug ?? current.entry.slug,
@@ -240,19 +253,23 @@ export function registerSkillsLibraryCli(skills: Command): void {
             throw new Error("--version requires --clawhub.");
           }
           if (opts.clawhub) {
-            return callGatewayFromCli<SkillsLibraryReceipt>("skills.library.import", rpc, {
-              slug: opts.slug,
-              source: {
-                kind: "clawhub",
-                slug: source,
-                ...(opts.version ? { version: opts.version } : {}),
+            return callGatewayFromCliWithTransport<SkillsLibraryReceipt>(
+              "skills.library.import",
+              rpc,
+              {
+                slug: opts.slug,
+                source: {
+                  kind: "clawhub",
+                  slug: source,
+                  ...(opts.version ? { version: opts.version } : {}),
+                },
               },
-            });
+            );
           }
           if (source.toLowerCase().endsWith(".zip")) {
             return uploadLibraryZip(source, opts.slug, rpc);
           }
-          return callGatewayFromCli<SkillsLibraryReceipt>("skills.library.save", rpc, {
+          return callGatewayFromCliWithTransport<SkillsLibraryReceipt>("skills.library.save", rpc, {
             slug: opts.slug,
             expectedRevision: null,
             ...(await readLibraryInput(source)),
@@ -310,12 +327,16 @@ export function registerSkillsLibraryCli(skills: Command): void {
       execute(
         cmd,
         (rpc) =>
-          callGatewayFromCli<SkillsLibraryActivateResult>("skills.library.activate", rpc, {
-            action,
-            sessionKey: opts.session,
-            ...(opts.skillId ? { skillId: opts.skillId } : {}),
-            ...(opts.revision ? { revision: opts.revision } : {}),
-          }),
+          callGatewayFromCliWithTransport<SkillsLibraryActivateResult>(
+            "skills.library.activate",
+            rpc,
+            {
+              action,
+              sessionKey: opts.session,
+              ...(opts.skillId ? { skillId: opts.skillId } : {}),
+              ...(opts.revision ? { revision: opts.revision } : {}),
+            },
+          ),
         (result) =>
           `Queued for next turn: ${result.sessionKey}\n${result.selections.map((selection) => `${selection.skillId}  ${selection.name}  ${selection.revision}`).join("\n")}\n`,
       ),

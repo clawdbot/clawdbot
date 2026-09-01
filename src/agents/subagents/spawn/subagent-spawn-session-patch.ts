@@ -151,21 +151,21 @@ export async function createInitialSubagentSession(params: {
     ...(params.outputSchema ? { swarmOutputSchema: params.outputSchema } : {}),
     ...(params.incognito ? { incognito: true } : {}),
   };
-  const parentTarget = resolveGatewaySessionStoreTarget({
-    cfg: params.cfg,
-    key: params.requesterInternalKey,
-  });
-  const parentEntry = loadSessionEntry({
-    storePath: parentTarget.storePath,
-    sessionKey: parentTarget.canonicalKey,
-  });
-  // Spawn owns a fresh child lifecycle. Cleanup freezes both fields before
-  // launch so it cannot delete a reset successor that reuses the session id.
-  const childSessionIdentity = {
-    sessionId: randomUUID(),
-    lifecycleRevision: randomUUID(),
-  };
   try {
+    const parentTarget = resolveGatewaySessionStoreTarget({
+      cfg: params.cfg,
+      key: params.requesterInternalKey,
+    });
+    const parentEntry = loadSessionEntry({
+      storePath: parentTarget.storePath,
+      sessionKey: parentTarget.canonicalKey,
+    });
+    // Spawn owns a fresh child lifecycle. Cleanup freezes both fields before
+    // launch so it cannot delete a reset successor that reuses the session id.
+    const childSessionIdentity = {
+      sessionId: randomUUID(),
+      lifecycleRevision: randomUUID(),
+    };
     const target = params.incognito
       ? {
           agentId: params.targetAgentId,

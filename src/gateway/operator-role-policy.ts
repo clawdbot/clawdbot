@@ -71,6 +71,9 @@ export function resolveOperatorRolePolicyForProfile(
   profileId: string | undefined,
   cfg: OpenClawConfig,
 ): GatewayOperatorRoleDefinition | undefined {
+  if (!cfg.gateway?.roles) {
+    return undefined;
+  }
   return resolveOperatorRolePolicyForAssignment(
     profileId,
     profileId ? readOperatorRoleAssignment(profileId) : null,

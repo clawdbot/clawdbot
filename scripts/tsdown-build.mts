@@ -136,7 +136,6 @@ export const TSDOWN_UNIFIED_CACHE_INPUTS = [
   "tsdown.config.ts",
   "scripts/lib/runtime-process-build-entries.mts",
   "scripts/lib/vitest-worker-artifacts.mts",
-  "scripts/lib/fs-safe-native-assets.mts",
   {
     // Unified entry types can import scripts, test helpers and root declarations.
     // Restricting this to runtime folders leaves those transitive edits unstamped.

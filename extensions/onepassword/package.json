@@ -5,7 +5,7 @@
   "description": "1Password SecretRef resolver and audited agent secrets broker for OpenClaw",
   "type": "module",
   "dependencies": {
-    "@openclaw/fs-safe": "0.5.6"
+    "@openclaw/fs-safe": "0.7.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

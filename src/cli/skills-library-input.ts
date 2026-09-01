@@ -9,7 +9,7 @@ import {
   type SkillsLibraryReceipt,
   type SkillsLibraryUploadResult,
 } from "../../packages/gateway-protocol/src/index.js";
-import { callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
+import { callGatewayFromCliWithTransport, type GatewayRpcOpts } from "./gateway-rpc.js";
 
 export async function readLibraryInput(input: string): Promise<{
   content: string;
@@ -82,7 +82,11 @@ export async function uploadLibraryZip(
   }
   const bytes = await fs.readFile(input);
   const call = (params: unknown) =>
-    callGatewayFromCli<SkillsLibraryUploadResult>("skills.library.upload", opts, params);
+    callGatewayFromCliWithTransport<SkillsLibraryUploadResult>(
+      "skills.library.upload",
+      opts,
+      params,
+    );
   const begin = await call({
     action: "begin",
     slug,

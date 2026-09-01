@@ -62,7 +62,7 @@ export function resolveGatewayRpcOptionsWithLocalPort<
   };
 }
 
-export async function callGatewayFromCli<T = Record<string, unknown>>(
+export async function callGatewayFromCli(
   method: string,
   opts: GatewayRpcOpts,
   params?: unknown,
@@ -77,7 +77,7 @@ export async function callGatewayFromCli<T = Record<string, unknown>>(
     sharedStateMode?: "read-only";
   },
 ) {
-  return await callGatewayFromCliWithTransport<T>(method, opts, params, extra);
+  return await callGatewayFromCliWithTransport(method, opts, params, extra);
 }
 
 /** Resolve whether CLI Gateway options select the implicit local Gateway. */

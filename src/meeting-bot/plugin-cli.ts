@@ -17,7 +17,7 @@ type MeetingCliDescriptions = {
 };
 
 type MeetingCliOptions = {
-  callGateway: typeof callGatewayFromCli<Record<string, unknown>>;
+  callGateway: typeof callGatewayFromCli;
   commandName: string;
   config: MeetingPluginConfig;
   descriptions: MeetingCliDescriptions;

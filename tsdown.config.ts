@@ -8,7 +8,6 @@ import {
   collectChannelConfigDoctorBuildEntries,
   NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
-import { fsSafeNativeCopy } from "./scripts/lib/fs-safe-native-assets.mts";
 import {
   buildPluginSdkEntrySources,
   pluginSdkEntrypoints,
@@ -299,6 +298,8 @@ const rootDependencyOptions = withExternalPackageSubpaths({
     "@larksuiteoapi/node-sdk",
     "@matrix-org/matrix-sdk-crypto-nodejs",
     "@openclaw/ai",
+    // Its native loader resolves optional platform packages from the package scope.
+    "@openclaw/fs-safe",
     "@slack/bolt",
     "@slack/web-api",
     "@vitest/expect",
@@ -325,8 +326,6 @@ function shouldNeverBundleDeclarationDependency(id: string): boolean {
 function shouldAlwaysBundleDependency(id: string): boolean {
   return (
     id === "openclaw/plugin-sdk/ssrf-runtime-internal" ||
-    id === "@openclaw/fs-safe" ||
-    id.startsWith("@openclaw/fs-safe/") ||
     id === "@openclaw/normalization-core" ||
     id.startsWith("@openclaw/normalization-core/") ||
     id === "@openclaw/retry" ||
@@ -760,7 +759,6 @@ const configs = [
       // and bundled hooks in one graph so runtime singletons are emitted once.
       entry: unifiedDistEntries,
       deps: unifiedDeps,
-      copy: fsSafeNativeCopy,
       plugins: [createStateSchemaInlinePlugin()],
     },
     false,
