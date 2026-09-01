@@ -512,67 +512,22 @@ describe("failover-error", () => {
     ).toBe("format");
   });
 
-  it("treats HTTP 422 as format error", () => {
-    expect(
-      resolveFailoverReasonFromError({
-        status: 422,
-        message: "check open ai req parameter error",
-      }),
-    ).toBe("format");
+  it.each([
+    ["check open ai req parameter error", "format"],
+    ["insufficient credits", "billing"],
+  ])("classifies HTTP 422 message %s as %s", (message, reason) => {
+    expect(resolveFailoverReasonFromError({ status: 422, message })).toBe(reason);
   });
 
-  it("treats 422 with billing message as billing instead of format", () => {
+  it.each([
+    ["402", "Monthly spend limit reached. Please visit your billing settings.", "rate_limit"],
+    ["HTTP 402", "rate limit exceeded", "rate_limit"],
+    ["HTTP 402", "Your usage limit has been reached. Please upgrade your plan.", "billing"],
+  ])("keeps %s wrappers aligned with status-split payloads: %s", (prefix, message, reason) => {
     expect(
-      resolveFailoverReasonFromError({
-        status: 422,
-        message: "insufficient credits",
-      }),
-    ).toBe("billing");
-  });
-
-  it("keeps raw 402 wrappers aligned with status-split temporary spend limits", () => {
-    const message = "Monthly spend limit reached. Please visit your billing settings.";
-    expect(
-      resolveFailoverReasonFromError({
-        message: `402 Payment Required: ${message}`,
-      }),
-    ).toBe("rate_limit");
-    expect(
-      resolveFailoverReasonFromError({
-        status: 402,
-        message,
-      }),
-    ).toBe("rate_limit");
-  });
-
-  it("keeps explicit 402 rate-limit wrappers aligned with status-split payloads", () => {
-    const message = "rate limit exceeded";
-    expect(
-      resolveFailoverReasonFromError({
-        message: `HTTP 402 Payment Required: ${message}`,
-      }),
-    ).toBe("rate_limit");
-    expect(
-      resolveFailoverReasonFromError({
-        status: 402,
-        message,
-      }),
-    ).toBe("rate_limit");
-  });
-
-  it("keeps plan-upgrade 402 wrappers aligned with status-split billing payloads", () => {
-    const message = "Your usage limit has been reached. Please upgrade your plan.";
-    expect(
-      resolveFailoverReasonFromError({
-        message: `HTTP 402 Payment Required: ${message}`,
-      }),
-    ).toBe("billing");
-    expect(
-      resolveFailoverReasonFromError({
-        status: 402,
-        message,
-      }),
-    ).toBe("billing");
+      resolveFailoverReasonFromError({ message: `${prefix} Payment Required: ${message}` }),
+    ).toBe(reason);
+    expect(resolveFailoverReasonFromError({ status: 402, message })).toBe(reason);
   });
 
   it("infers timeout from common node error codes", () => {

@@ -437,6 +437,11 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
   resolvedVerboseLevel: VerboseLevel | undefined;
   cfg?: OpenClawConfig;
 }): ReplyPayload | undefined {
+  // Direct preflight diagnostics are not provider failures; preserve their
+  // identity for the caller's generic settlement and disclosure policy.
+  if (isAgentHarnessPreflightError(params.err)) {
+    return undefined;
+  }
   const message = formatErrorMessage(params.err);
   const failoverFacts = resolveReplyFailoverFacts(params.err, message);
   const fallbackAttempts = readFallbackAttempts(params.err);

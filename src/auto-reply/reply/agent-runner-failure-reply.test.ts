@@ -9,6 +9,7 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
   buildEmptyInteractiveReplyPayload,
   buildExternalRunFailureReply,
+  buildKnownAgentRunFailureReplyPayload,
   buildPreflightCompactionFailureText,
   resolveExternalRunFailureTextForConversation,
 } from "./agent-runner-failure-reply.js";
@@ -48,19 +49,26 @@ describe("buildEmptyInteractiveReplyPayload", () => {
 });
 
 describe("buildExternalRunFailureReply", () => {
-  it.each(["auth", "overload", "HTTP"])(
+  it.each(["401 unauthorized", "529 overloaded", "503 service unavailable", "402 billing"])(
     "keeps preflight %s diagnostics behind verbose opt-in",
     (failure) => {
-      const message = `${failure === "HTTP" ? "503 service unavailable" : failure}; reconnect before continuing. diagnostic-canary ${"x".repeat(1500)}`;
+      const message = `${failure}; reconnect before continuing. diagnostic-canary ${"x".repeat(1500)}`;
       const input = {
         message,
         error: new AgentHarnessPreflightError(message, {
           cause: new FailoverError("provider diagnostic", {
-            reason: failure === "auth" ? "auth" : "overloaded",
-            status: failure === "auth" ? 401 : 529,
+            reason: failure.startsWith("401") ? "auth" : "overloaded",
+            status: failure.startsWith("401") ? 401 : 529,
           }),
         }),
       };
+      expect(
+        buildKnownAgentRunFailureReplyPayload({
+          err: input.error,
+          sessionCtx: { Provider: "discord", Surface: "discord", ChatType: "group" },
+          resolvedVerboseLevel: "off",
+        }),
+      ).toBeUndefined();
       expect(buildExternalRunFailureReply(input)).toEqual({
         text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
         isGenericRunnerFailure: true,
