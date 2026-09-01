@@ -8,6 +8,7 @@ import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { logWarn } from "../../../logger.js";
 import { getSharedGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import { getCommandLaneActiveTaskIds } from "../../../process/command-queue.js";
 import { isCronSessionKey } from "../../../sessions/session-key-utils.js";
 import {
   type DeliveryContext,
@@ -15,6 +16,7 @@ import {
 } from "../../../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../../utils/message-channel.js";
 import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
+import { resolveSessionLane } from "../../embedded-agent-runner/lanes.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import {
   getLatestSubagentRunByChildSessionKey,
@@ -47,6 +49,16 @@ const REQUESTER_SETTLE_WAKE_MAX_AMBIGUOUS_REPLAYS = 3;
 const REQUESTER_SETTLE_WAKE_MAX_DEFERRALS = 10;
 const REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS = [30_000, 120_000] as const;
 const activeRequesterSettleWakeBatches = new Set<string>();
+/**
+ * Highest requester-lane task id observed at each wake's previous dispatch.
+ * The dispatch deadline is non-cancelling, so a timed-out wake attempt can
+ * leave its embedded run alive on the requester lane; retrying into that lane
+ * would stack ghost runs behind each other. Task ids are process-monotonic,
+ * so an active id at or below the last-dispatch ceiling proves the prior
+ * attempt's work (or older) still occupies the lane. In-memory only, matching
+ * the lane's own process lifetime.
+ */
+const requesterSettleWakeLaneCeilings = new Map<string, number>();
 
 function buildRequesterSettleWakeMessage(params: {
   findings?: string;
@@ -423,6 +435,15 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
       return false;
     }
 
+    const requesterLane = resolveSessionLane(requesterSessionKey);
+    const requesterLaneHoldsPriorDispatch = (): boolean => {
+      const laneCeiling = requesterSettleWakeLaneCeilings.get(wakeKeyBase);
+      return (
+        laneCeiling !== undefined &&
+        getCommandLaneActiveTaskIds(requesterLane).some((taskId) => taskId <= laneCeiling)
+      );
+    };
+
     let attemptIndex: number;
     if (state.status === "dispatching") {
       // Restart after admission replays the same idempotency key. The gateway
@@ -442,6 +463,19 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
         });
         return false;
       }
+      // The previous attempt's dispatch deadline expired without cancelling
+      // its embedded run, so a task at or below the last-dispatch ceiling is
+      // that ghost (or older work) still occupying the requester lane. Defer
+      // instead of stacking another run behind it.
+      if (requesterLaneHoldsPriorDispatch()) {
+        deferRequesterSettleWakeBatch({
+          batchRunIds,
+          state,
+          transitionBatch: params.transitionBatch,
+          completeBatch,
+        });
+        return false;
+      }
       attemptIndex = state.attemptCount;
       state = {
         status: "dispatching",
@@ -453,6 +487,10 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
       };
       params.transitionBatch(batchRunIds, state);
     }
+    requesterSettleWakeLaneCeilings.set(
+      wakeKeyBase,
+      Math.max(0, ...getCommandLaneActiveTaskIds(requesterLane)),
+    );
 
     let delivery: Awaited<ReturnType<typeof deliverSubagentAnnouncement>>;
     try {
