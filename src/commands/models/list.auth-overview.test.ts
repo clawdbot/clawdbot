@@ -46,11 +46,13 @@ vi.mock("../../agents/model-auth.js", () => {
   ) => cfg?.models?.providers?.[provider]?.apiKey;
 
   const resolveConfiguredEnvRef = (value: unknown) =>
-    value && typeof value === "object" && "source" in value && "id" in value
-      ? value.source === "env" && typeof value.id === "string"
-        ? value.id
-        : undefined
-      : undefined;
+    typeof value === "string"
+      ? /^\$\{([A-Z_][A-Z0-9_]*)\}$/u.exec(value)?.[1]
+      : value && typeof value === "object" && "source" in value && "id" in value
+        ? value.source === "env" && typeof value.id === "string"
+          ? value.id
+          : undefined
+        : undefined;
 
   return {
     getCustomProviderApiKey: vi.fn((cfg, provider) => {
@@ -207,7 +209,18 @@ describe("resolveProviderAuthOverview", () => {
           models: {
             providers: {
               custom: {
-                apiKey: { source: "env", provider: "default", id: "CUSTOM_PROVIDER_KEY" },
+                apiKey: "current-provider-key",
+                baseUrl: "https://models.example/v1",
+                models: [],
+              },
+            },
+          },
+        } as never,
+        sourceConfig: {
+          models: {
+            providers: {
+              custom: {
+                apiKey: "${CUSTOM_PROVIDER_KEY}",
                 baseUrl: "https://models.example/v1",
                 models: [],
               },
