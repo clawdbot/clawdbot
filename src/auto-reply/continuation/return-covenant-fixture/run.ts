@@ -66,7 +66,7 @@ export class ReturnCovenantFixtureRun {
   #cleanupRun: ReturnCovenantRunCleanupReceipt | undefined;
   #closed = false;
   #finalizeRequested = false;
-
+  #normalCleanupComplete = false;
   private constructor(context: ReturnCovenantFixtureContext) {
     this.#context = context;
     resetHeartbeatWakeStateForTests();
@@ -244,10 +244,14 @@ export class ReturnCovenantFixtureRun {
     this.#disposeHeartbeatHandler();
     resetHeartbeatWakeStateForTests();
     resetSystemEventsForTest();
-    await this.#context.profiles.close({ preserveActive: options.preserveProfiles });
+    const profileCloseMode = options.preserveProfiles
+      ? "preserve-active"
+      : this.#normalCleanupComplete
+        ? "retain-canonical"
+        : undefined;
+    await this.#context.profiles.close(profileCloseMode);
     closeReturnCovenantGlobalStore();
   }
-
   async buildCleanupClaims(): Promise<Record<string, unknown>> {
     const startedAt = new Date(this.#context.clock.wallNow()).toISOString();
     const retained = await retainedReturnCovenantResources({
@@ -447,9 +451,11 @@ export class ReturnCovenantFixtureRun {
       );
     }
     await cleanupReturnCovenantCase({ context: this.#context, state });
-    await this.#context.profiles.deactivate({
+    await this.#context.profiles.completeActiveCase({
       caseId: state.casePlan.id,
       form: state.form,
+      retainCanonical:
+        this.#completed.size === this.#context.plan.cases.length * 2 - 1 && this.#states.size === 1,
     });
     state.closed = true;
     const key = returnCovenantExecutionKey(state.casePlan.id, state.form);
@@ -554,6 +560,7 @@ export class ReturnCovenantFixtureRun {
       runtimeConfigSha256: this.#context.plan.target.runtimeConfigSha256,
       runtimeArtifactManifestSha256: this.#context.plan.target.runtimeArtifactManifestSha256,
     };
+    this.#normalCleanupComplete = true;
     return { cleanupRun: this.#cleanupRun };
   }
 

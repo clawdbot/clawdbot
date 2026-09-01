@@ -138,6 +138,7 @@ export class ReturnCovenantRetentionInspector {
       requestValue: params.requestValue,
     });
     this.#consumed = true;
+    await params.context.profiles.assertCanonicalObservationStore();
     const retained = await retainedReturnCovenantResources({ context: params.context });
     if (Object.values(retained).some((count) => count !== 0)) {
       throw new ReturnCovenantProtocolError(

@@ -1,13 +1,14 @@
-import { mkdir, rename, rm, stat } from "node:fs/promises";
+import { mkdir, readdir, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { stableStringify } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  listSessionEntriesCore,
-  upsertSessionEntryCore,
-} from "../../../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../../infra/node-sqlite.js";
 import { resolveSqliteDatabaseFilePaths } from "../../../infra/sqlite-files.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../../state/openclaw-agent-db-readonly.js";
+import { listOpenClawRegisteredAgentDatabases } from "../../../state/openclaw-agent-db-registry-listing.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../../../state/openclaw-agent-db.generated.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   disposeOpenClawAgentDatabaseByPath,
@@ -67,6 +68,8 @@ type ReturnCovenantDatabaseAssignment = {
   form: ReturnCovenantForm;
   receipt: ReturnCovenantDatabaseProfileReceipt;
 };
+
+type ReturnCovenantSessionDatabase = Pick<OpenClawAgentKyselyDatabase, "session_nodes">;
 
 const fixtureShapeByProfile = {
   "fresh-v19": "fresh",
@@ -214,6 +217,7 @@ async function prepareAssignment(params: {
     if (!disposeOpenClawAgentDatabaseByPath(assignment.databasePath, { env })) {
       throw new Error(`could not close staged ${assignment.executionKey} fixture`);
     }
+
     const migrationDatabase = openNodeSqliteDatabase(assignment.databasePath);
     try {
       await withAgentDatabaseMaintenanceLease({ env }, async () => {
@@ -260,6 +264,38 @@ async function prepareAssignment(params: {
   if (!disposeOpenClawAgentDatabaseByPath(assignment.databasePath, { env })) {
     throw new Error(`could not retain prepared ${assignment.executionKey} fixture`);
   }
+}
+
+function countTemporarySessionsInDatabase(params: {
+  databasePath: string;
+  env: NodeJS.ProcessEnv;
+  runSessionPrefix: string;
+}): number {
+  const result = withOpenClawAgentDatabaseReadOnly(
+    ({ db: database }) => {
+      const db = getNodeSqliteKysely<ReturnCovenantSessionDatabase>(database);
+      return executeSqliteQuerySync(
+        database,
+        db
+          .selectFrom("session_nodes")
+          .select(["parent_session_key", "spawned_by"])
+          .where("created_via", "=", "spawn"),
+      ).rows.filter(
+        (row) =>
+          row.parent_session_key?.startsWith(params.runSessionPrefix) ||
+          row.spawned_by?.startsWith(params.runSessionPrefix),
+      ).length;
+    },
+    {
+      agentId: "proof",
+      env: params.env,
+      path: params.databasePath,
+    },
+  );
+  if (!result.found) {
+    throw new Error(`return-covenant session database is unavailable: ${params.databasePath}`);
+  }
+  return result.value;
 }
 
 function buildAssignments(params: {
@@ -390,6 +426,33 @@ export class PreparedReturnCovenantDatabaseProfiles {
     this.#activeExecutionKey = undefined;
   }
 
+  async retainCanonical(params: { caseId: string; form: ReturnCovenantForm }): Promise<void> {
+    const key = executionKey(params.caseId, params.form);
+    this.assertActive(params.caseId, params.form);
+    const database = openOpenClawAgentDatabase({
+      agentId: "proof",
+      env: this.#env,
+      path: this.#canonicalDatabasePath,
+    });
+    checkpointAgentDatabase(database.db);
+    closeOpenClawAgentDatabasesForTest();
+    if (!(await pathExists(this.#canonicalDatabasePath))) {
+      throw new Error(`return-covenant canonical database disappeared: ${key}`);
+    }
+  }
+
+  async completeActiveCase(params: {
+    caseId: string;
+    form: ReturnCovenantForm;
+    retainCanonical: boolean;
+  }): Promise<void> {
+    if (params.retainCanonical) {
+      await this.retainCanonical(params);
+      return;
+    }
+    await this.deactivate(params);
+  }
+
   snapshot(): ReturnCovenantDatabaseProfilesSnapshot {
     return { activeExecutionKey: this.#activeExecutionKey ?? null };
   }
@@ -426,23 +489,56 @@ export class PreparedReturnCovenantDatabaseProfiles {
     for (const assignment of this.#assignments.values()) {
       const active = assignment.executionKey === this.#activeExecutionKey;
       const storePath = active ? this.#canonicalDatabasePath : assignment.databasePath;
-      count += listSessionEntriesCore({
-        agentId: "proof",
+      count += countTemporarySessionsInDatabase({
+        databasePath: storePath,
         env: this.#env,
-        storePath,
-      }).filter(
-        ({ entry }) =>
-          entry.createdVia === "spawn" &&
-          (entry.parentSessionKey?.startsWith(runSessionPrefix) ||
-            entry.spawnedBy?.startsWith(runSessionPrefix)),
-      ).length;
+        runSessionPrefix,
+      });
     }
     return count;
   }
 
-  async close(options: { preserveActive?: boolean } = {}): Promise<void> {
+  async assertCanonicalObservationStore(): Promise<void> {
+    const stateDir = this.#env.OPENCLAW_STATE_DIR;
+    if (!stateDir) {
+      throw new Error("return-covenant fixture lost its isolated state directory");
+    }
+    const directories = await readdir(path.join(stateDir, "agents"), {
+      withFileTypes: true,
+    });
+    const registered = listOpenClawRegisteredAgentDatabases({
+      env: this.#env,
+      includeIncompatibleSchemaVersions: true,
+    });
+    const [directory] = directories;
+    const [database] = registered;
+    if (
+      directories.length !== 1 ||
+      !directory?.isDirectory() ||
+      directory.isSymbolicLink() ||
+      directory.name !== "proof" ||
+      registered.length !== 1 ||
+      database?.agentId !== "proof" ||
+      database.schemaVersion !== OPENCLAW_AGENT_SCHEMA_VERSION ||
+      path.resolve(database.path) !== this.#canonicalDatabasePath ||
+      !(await pathExists(this.#canonicalDatabasePath))
+    ) {
+      throw new Error("return-covenant final agent database is not canonical");
+    }
+  }
+
+  async close(mode?: "preserve-active" | "retain-canonical"): Promise<void> {
     closeOpenClawAgentDatabasesForTest();
-    if (options.preserveActive) {
+    if (mode === "preserve-active") {
+      return;
+    }
+    if (mode === "retain-canonical") {
+      if (!this.#activeExecutionKey || !(await pathExists(this.#canonicalDatabasePath))) {
+        throw new Error("return-covenant final canonical database is missing");
+      }
+      this.#activeExecutionKey = undefined;
+      await rm(this.#fixtureRoot, { recursive: true, force: true });
+      await this.assertCanonicalObservationStore();
       return;
     }
     if (this.#activeExecutionKey) {
