@@ -45,6 +45,10 @@ enum ApplicationRelocator {
 
     enum LaunchDisposition: Equatable, Sendable {
         case continueLaunch(startUpdater: Bool)
+        /// A self-install is running in the background. The caller must not start
+        /// gateway, menu, onboarding, or other services from the transient bundle;
+        /// the app will relaunch from the installed location once the copy finishes.
+        case installing
         case terminating
     }
 
@@ -281,10 +285,17 @@ enum ApplicationRelocator {
             guard confirmInstall(replacing: replacing) else {
                 return .continueLaunch(startUpdater: false)
             }
-            // Perform the bundle copy asynchronously so the main thread can finish
-            // launching and present UI. A synchronous multi-gigabyte copy here makes
-            // the app appear hung and unresponsive to SIGTERM (see issue #134736).
+            // Perform the bundle copy asynchronously so the main thread stays
+            // responsive (a multi-gigabyte copy on the main thread blocks
+            // applicationDidFinishLaunching and makes the process unkillable by
+            // SIGTERM — see issue #134736). Return .installing so the caller
+            // does not start gateway, menu, onboarding, or CLI services from the
+            // transient bundle; the app relaunches from the installed copy once
+            // the copy completes.
+            let progressWindow = makeInstallProgressWindow(replacing: replacing)
+            progressWindow.makeKeyAndOrderFront(nil)
             Task { @MainActor in
+                defer { progressWindow.close() }
                 do {
                     try await install(
                         source: environment.bundleURL,
@@ -293,12 +304,18 @@ enum ApplicationRelocator {
                         fileManager: fileManager)
                     _ = relaunchAndTerminate(at: destination)
                 } catch {
-                    self.logger.error("Could not install app: \(error.localizedDescription, privacy: .public)")
+                    if let unsafeError = error as? UnsafeCopyDestinationError {
+                        self.logger.error(
+                            "Refusing unsafe copy: source=\(unsafeError.source.path, privacy: .public), "
+                            + "staging=\(unsafeError.staging.path, privacy: .public)")
+                    } else {
+                        self.logger.error("Could not install app: \(error.localizedDescription, privacy: .public)")
+                    }
                     showFailure(
                         "OpenClaw couldn’t be installed in Applications. Move it there manually, then open that copy.")
                 }
             }
-            return .continueLaunch(startUpdater: false)
+            return .installing
         case .cannotInstall:
             let message =
                 "OpenClaw is running from a temporary location. " +
@@ -1003,12 +1020,12 @@ extension ApplicationRelocator {
         let parent = destination.deletingLastPathComponent()
         try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
         let staging = parent.appendingPathComponent(".\(destination.lastPathComponent).installing-\(UUID().uuidString)")
-        defer { try? fileManager.removeItem(at: staging) }
 
-        // Guard against a staging directory that resolves inside the source bundle.
-        // Without this check, copyItem can recursively descend into its own output
-        // and write without bound — observed as ~2 GB of disk writes in 40 s when
-        // the app is launched under App Translocation.
+        // Defensive guard: refuse to copy when the staging directory resolves
+        // inside the source bundle. Production destinations (/Applications,
+        // ~/Applications) are never nested inside a translocated/Downloads
+        // source, so this is belt-and-suspenders rather than the reported
+        // failure path (the 2 GB / 40 s write is the large bundle copy itself).
         guard !isPath(staging, nestedIn: source) else {
             throw UnsafeCopyDestinationError(source: source, staging: staging)
         }
@@ -1017,25 +1034,39 @@ extension ApplicationRelocator {
         // blocks applicationDidFinishLaunching, prevents any UI from appearing,
         // and leaves the process unresponsive to SIGTERM because the main thread
         // is stuck in a kernel write(). Run the copy on a background queue.
-        try await Task.detached(priority: .userInitiated) {
-            try FileManager.default.copyItem(at: source, to: staging)
-        }.value
+        do {
+            try await Task.detached(priority: .userInitiated) {
+                try FileManager().copyItem(at: source, to: staging)
+            }.value
+        } catch {
+            // Remove a partial copy off the main thread so a multi-gigabyte
+            // deletion cannot re-block the caller.
+            Task.detached { try? FileManager().removeItem(at: staging) }
+            throw error
+        }
 
-        if replacing {
-            let backupName = ".\(destination.lastPathComponent).backup-\(UUID().uuidString)"
-            _ = try fileManager.replaceItemAt(
-                destination,
-                withItemAt: staging,
-                backupItemName: backupName)
-            try? fileManager.removeItem(at: parent.appendingPathComponent(backupName))
-        } else {
-            try fileManager.moveItem(at: staging, to: destination)
+        do {
+            if replacing {
+                let backupName = ".\(destination.lastPathComponent).backup-\(UUID().uuidString)"
+                _ = try fileManager.replaceItemAt(
+                    destination,
+                    withItemAt: staging,
+                    backupItemName: backupName)
+                try? fileManager.removeItem(at: parent.appendingPathComponent(backupName))
+            } else {
+                try fileManager.moveItem(at: staging, to: destination)
+            }
+        } catch {
+            // replace/move failed while staging still exists. Clean up off-main.
+            Task.detached { try? FileManager().removeItem(at: staging) }
+            throw error
         }
     }
 
-    /// Returns true when `nested` resolves to the same path as `root` or lies
-    /// inside its directory tree. Uses standardized file URLs so that symlinks,
-    /// relative segments, and trailing slashes cannot bypass the check.
+    /// Returns true when `nested` is the same path as `root` or lies inside its
+    /// directory tree. Uses standardizedFileURL, which collapses `.` / `..` and
+    /// extra slashes but does **not** resolve symlinks. This is a lightweight
+    /// structural check, not a security boundary.
     static func isPath(_ nested: URL, nestedIn root: URL) -> Bool {
         let nestedPath = nested.standardizedFileURL.path
         let rootPath = root.standardizedFileURL.path
@@ -1413,6 +1444,45 @@ extension ApplicationRelocator {
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+
+    /// A small non-modal window shown while the app copies itself to Applications.
+    /// It stays on screen during the background copy and is closed by the caller
+    /// (in a `defer`) once the install succeeds or fails.
+    private static func makeInstallProgressWindow(replacing: Bool) -> NSWindow {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 360, height: 120),
+            styleMask: [.titled, .fullSizeContentView],
+            backing: .buffered,
+            defer: false)
+        window.title = "OpenClaw"
+        window.level = .floating
+        window.isReleasedWhenClosed = false
+        window.center()
+
+        let container = NSView(frame: window.contentLayoutRect)
+        container.autoresizingMask = [.width, .height]
+
+        let spinner = NSProgressIndicator(frame: NSRect(x: 20, y: 40, width: 32, height: 32))
+        spinner.style = .spinning
+        spinner.controlSize = .regular
+        spinner.startAnimation(nil)
+        spinner.autoresizingMask = [.maxXMargin, .maxYMargin]
+        container.addSubview(spinner)
+
+        let text = NSTextField(frame: NSRect(x: 64, y: 44, width: 280, height: 32))
+        text.stringValue = replacing
+            ? "Replacing OpenClaw in Applications…"
+            : "Copying OpenClaw to Applications…"
+        text.isBezeled = false
+        text.isEditable = false
+        text.drawsBackground = false
+        text.font = .systemFont(ofSize: 13)
+        text.autoresizingMask = [.width, .maxYMargin]
+        container.addSubview(text)
+
+        window.contentView = container
+        return window
     }
 
     private static func compareBuild(_ lhs: String, _ rhs: String) -> ComparisonResult {

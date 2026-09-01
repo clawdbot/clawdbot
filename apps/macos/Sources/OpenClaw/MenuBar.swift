@@ -297,7 +297,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let launchPlan = AppLaunchRuntimePlan.current
         if !AppProfile.current.isActive, !launchPlan.isElevationHost {
             switch ApplicationRelocator.handleLaunch() {
-            case .terminating:
+            case .terminating, .installing:
+                // .terminating: the app is handing off to an installed copy.
+                // .installing: a self-install is running in the background and
+                // the app will relaunch from the installed location. In both
+                // cases we must not start gateway, menu, onboarding, or CLI
+                // services from the transient bundle.
                 return
             case let .continueLaunch(startUpdater):
                 if startUpdater, launchPlan.allowsUpdater {
