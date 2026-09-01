@@ -86,7 +86,7 @@ const { values } = parseArgs({
   options: {
     replicates: { type: "string", default: "5" },
     concurrency: { type: "string", default: "3" },
-    "base-ref": { type: "string", default: "origin/main" },
+    "base-ref": { type: "string", default: DEFAULT_BASELINE_REF },
     model: { type: "string", default: "" },
     out: { type: "string", default: "" },
     "dump-events": { type: "string", default: "" },
@@ -105,6 +105,10 @@ const PATCHED_OID = execFileSync("git", ["rev-parse", "HEAD^{commit}"], {
   cwd: repoRoot,
   encoding: "utf8",
 }).trim();
+if (BASELINE_OID === PATCHED_OID) {
+  throw new Error(`baseline and patched commits both resolve to ${PATCHED_OID}`);
+}
+console.log(`Proof commits: baseline ${BASELINE_OID}; patched ${PATCHED_OID}`);
 
 /**
  * Safe stringifier for the untyped runtime payload fields this script reads out of
