@@ -404,7 +404,9 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".sidebar-agent-card__subtitle-row")).toBeNull();
     expect(sidebar.querySelector(".sidebar-agent-section")).toBeNull();
     expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(0);
-    expect(sidebar.querySelector(".sidebar-agent-card__menu-unread")).not.toBeNull();
+    expect(
+      sidebar.querySelector(".sidebar-agent-card__avatar .sidebar-agent-card__menu-unread"),
+    ).not.toBeNull();
 
     // Mid-switch (selected agent != loaded result agent) the list renders the
     // target agent's cached rows instead of flashing empty until refresh.

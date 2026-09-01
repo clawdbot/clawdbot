@@ -17,7 +17,7 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) avatarText = "";
   @property({ attribute: false }) environment: ControlUiEnvironment | null = null;
   @property({ attribute: false }) menuOpen = false;
-  /** Unread sessions exist on non-active agents; surfaces next to the name. */
+  /** Unread sessions exist on non-active agents; surfaces on the avatar. */
   @property({ attribute: false }) menuUnread = false;
   /** More than one agent is configured; labels the menu as a switcher. */
   @property({ attribute: false }) switcherAvailable = false;
@@ -83,6 +83,13 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
               : html`<span class="sidebar-agent-card__avatar-text" aria-hidden="true"
                   >${this.avatarText}</span
                 >`}
+            ${this.menuUnread && !this.menuOpen
+              ? html`<span
+                  class="session-unread-dot sidebar-agent-card__menu-unread"
+                  role="img"
+                  aria-label=${t("sessionsView.unread")}
+                ></span>`
+              : nothing}
           </span>
           <span class="sidebar-agent-card__text">
             <span class="sidebar-agent-card__name">
@@ -97,13 +104,6 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
                 </span>`
               : nothing}
           </span>
-          ${this.menuUnread && !this.menuOpen
-            ? html`<span
-                class="session-unread-dot sidebar-agent-card__menu-unread"
-                role="img"
-                aria-label=${t("sessionsView.unread")}
-              ></span>`
-            : nothing}
         </button>
       </div>
     `;
