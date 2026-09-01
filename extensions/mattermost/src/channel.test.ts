@@ -1793,6 +1793,52 @@ describe("mattermostPlugin", () => {
       });
     });
 
+    it("carries an ask_user question's option index into the outbound buttons", async () => {
+      // The outbound path builds its own resolver arguments, so it has to hand the
+      // Gateway option list over itself; the reply path gets it with the payload.
+      const renderPresentation = requireMattermostRenderPresentation();
+      const cfg = createMattermostTestConfig();
+      const questionId = "01JD3ZK8Q0000000000000000A";
+      const presentation = {
+        blocks: [
+          {
+            type: "buttons" as const,
+            buttons: [
+              {
+                label: "staging",
+                action: { type: "question" as const, questionId, optionValue: "staging" },
+              },
+            ],
+          },
+        ],
+      };
+      const payload = {
+        presentation,
+        channelData: { askUser: { questionId, optionValues: ["staging", "production"] } },
+      };
+
+      const rendered = await renderPresentation({
+        payload,
+        presentation,
+        ctx: { cfg, to: "channel:CHAN1", text: "", payload },
+      });
+
+      expect(rendered).toMatchObject({
+        channelData: {
+          mattermost: {
+            presentationButtons: [
+              [
+                {
+                  text: "staging",
+                  context: { oc_question: true, question_id: questionId, option_index: 0 },
+                },
+              ],
+            ],
+          },
+        },
+      });
+    });
+
     it("renders presentation buttons for normal reply payload delivery", async () => {
       const renderPresentation = requireMattermostRenderPresentation();
       const sendPayload = requireMattermostSendPayload();
