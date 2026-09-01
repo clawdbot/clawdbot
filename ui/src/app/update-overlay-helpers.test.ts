@@ -487,6 +487,14 @@ describe("update status localization", () => {
       afterSha: "after",
       failure: { step: "build", detail: "Type check failed" },
     });
+    const refreshed = projectUpdateStatusResponse(
+      { sentinel: { kind: "update", status: "ok", ts: 122 } },
+      { ...projected, heldUpdateCampaignId: null },
+      projected.failure,
+    );
+    expect(refreshed.failure).toEqual(projected.failure);
+    expect(refreshed.recordedUpdateAttempt).toEqual(projected.recordedUpdateAttempt);
+    expect(refreshed.updateStatusBanner).toEqual(projected.updateStatusBanner);
   });
 
   it.each([
@@ -542,6 +550,37 @@ describe("update status localization", () => {
       text: `The update failed at install: ENOSPC: no space left on device, write. Dependency install failed. Fix the install error and retry. ${TRIAGE_HINT}`,
     });
   });
+
+  it.each(["stderrTail", "stdoutTail"])(
+    "redacts credentials in %s before shortening the recorded cause",
+    (stream) => {
+      installTranslations();
+      const password = "synthetic-password-value";
+      const prefix = "npm ERR! fetch failed ";
+      const userinfo = `https://build:${password}`;
+      const line = `${prefix}${"x".repeat(180 - prefix.length - userinfo.length - 1)} ${userinfo}@registry.example.test/package`;
+      const projected = projectUpdateStatusResponse(
+        {
+          sentinel: {
+            kind: "update",
+            status: "error",
+            ts: 1_000,
+            stats: {
+              reason: "global-install-failed",
+              steps: [{ name: "global update", log: { exitCode: 1, [stream]: line } }],
+            },
+          },
+        },
+        { updateStatusBanner: null, recordedUpdateAttempt: null, heldUpdateCampaignId: null },
+      );
+
+      const detail = projected.failure?.attempt?.failure?.detail;
+      expect(detail).toContain(prefix);
+      expect(detail).not.toContain(password);
+      expect(detail?.length).toBeLessThanOrEqual(180);
+      expect(projected.updateStatusBanner?.text).not.toContain(password);
+    },
+  );
 
   it("preserves unknown status details inside localized fallback guidance", () => {
     const translate = installTranslations();

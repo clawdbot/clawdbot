@@ -76,6 +76,70 @@ describe("update success notice", () => {
     },
   );
 
+  it.each([
+    "unavailable",
+    "read denied",
+    "quota exceeded",
+    "invalid receipts",
+    "oversized history",
+  ])("does not consume triage or erase history when storage is %s", async (failure) => {
+    const { createUpdateNoticeSession } = await import("./update-success-notice.ts");
+    const storage = createStorageMock();
+    getSafeSessionStorageMock.mockReturnValue(storage);
+    const scope = { gateway: "ws://gateway.test", profileId: null };
+    createUpdateNoticeSession(scope.gateway).recordTriage(scope, "previous");
+    if (failure === "invalid receipts") {
+      storage.setItem("openclaw:control-ui:update:v1", '{"triaged":false}');
+    } else if (failure === "oversized history") {
+      storage.setItem("openclaw:control-ui:update:v1", "x".repeat(150_000));
+    }
+    const previous = storage.getItem("openclaw:control-ui:update:v1");
+    getSafeSessionStorageMock.mockReturnValue(
+      failure === "unavailable"
+        ? null
+        : {
+            ...storage,
+            ...(failure === "read denied"
+              ? {
+                  getItem: () => {
+                    throw new Error("Access denied");
+                  },
+                }
+              : {}),
+            ...(failure === "quota exceeded"
+              ? {
+                  setItem: () => {
+                    throw new Error("Quota exceeded");
+                  },
+                }
+              : {}),
+          },
+    );
+    const session = createUpdateNoticeSession(scope.gateway);
+    const admitted = session.recordTriage(scope, "new-failure");
+    expect(session.hasTriaged(scope, "new-failure")).toBe(false);
+    expect(admitted).toBe(false);
+    session.announceVerifiedInstall({ version: "2.0.0", sha: "abcdef1234567890" }, scope);
+    expect(showToastMock).toHaveBeenCalledOnce();
+    expect(storage.getItem("openclaw:control-ui:update:v1")).toBe(previous);
+  });
+
+  it("preserves consumed identities when another receipt exceeds the size limit", async () => {
+    const { createUpdateNoticeSession } = await import("./update-success-notice.ts");
+    const storage = createStorageMock();
+    getSafeSessionStorageMock.mockReturnValue(storage);
+    const scope = { gateway: "ws://gateway.test", profileId: null };
+    const session = createUpdateNoticeSession(scope.gateway);
+    session.recordTriage(scope, "previous");
+    const previous = storage.getItem("openclaw:control-ui:update:v1");
+    const oversized = "x".repeat(150_000);
+    const admitted = session.recordTriage(scope, oversized);
+    expect(session.hasTriaged(scope, oversized)).toBe(false);
+    expect(admitted).toBe(false);
+    expect(storage.getItem("openclaw:control-ui:update:v1")).toBe(previous);
+    expect(createUpdateNoticeSession(scope.gateway).hasTriaged(scope, "previous")).toBe(true);
+  });
+
   it("retains the latest 32 consumed identities independently of pending and success notices", async () => {
     const { createUpdateNoticeSession } = await import("./update-success-notice.ts");
     getSafeSessionStorageMock.mockReturnValue(createStorageMock());

@@ -35,7 +35,7 @@ async function createInstalledTriage(params: { hang?: boolean; promptPath?: stri
 }
 
 describe("update triage child lifecycle", () => {
-  it("returns the fresh CLI report paths and partial-export outcome", async () => {
+  it("keeps artifact paths in local output and returns the partial-export outcome", async () => {
     const { target, promptPath } = await createInstalledTriage();
     const runtime = { log: vi.fn(), error: vi.fn() };
     const result = await runUpdateFailureTriage({
@@ -47,8 +47,12 @@ describe("update triage child lifecycle", () => {
     expect(result).toMatchObject({
       status: "completed",
       contextPath: expect.any(String),
-      hint: `Triage prompt: ${promptPath}\nDiagnostics export unavailable: Snapshot unavailable`,
+      hint: expect.stringContaining("Diagnostics export unavailable: Snapshot unavailable"),
     });
+    expect("hint" in result && result.hint).not.toContain(target.root);
+    expect(runtime.log).toHaveBeenCalledWith(
+      JSON.stringify({ promptPath, bundlePath: null, bundleError: "Snapshot unavailable" }),
+    );
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
@@ -165,31 +169,34 @@ describe("update triage child lifecycle", () => {
       vi.spyOn(exec, "runCommandWithTimeout").mockRejectedValueOnce(
         new Error(`ENOSPC Authorization: Bearer ${credential}\n${"detail ".repeat(1000)}`),
       );
+      const runtime = { log: vi.fn(), error: vi.fn() };
       const result = await runUpdateFailureTriage({
         failure: { error: "Update failed" },
         target: { ...target, env: targetEnv },
         mode: "json",
-        runtime: { log: vi.fn(), error: vi.fn() },
+        runtime,
       });
       expect(result).toMatchObject({ status: "failed", hint: expect.stringContaining("ENOSPC") });
       expect(JSON.stringify(result)).not.toContain(credential);
       if (result.status === "failed") {
+        const guidance = runtime.log.mock.calls.flat().join("\n");
+        expect(result.hint).not.toContain(target.root);
         expect(result.hint.split("\n")[0]?.length).toBeLessThan(284);
         expect(result.contextPath).toEqual(expect.any(String));
         if (platformName === "win32") {
-          expect(result.hint).toContain(
+          expect(guidance).toContain(
             `& openclaw triage --update-result '${result.contextPath!.replaceAll("'", "''")}'`,
           );
           for (const selector of [targetEnv.OPENCLAW_STATE_DIR, configPath, workspaceDir]) {
-            expect(result.hint).toContain(`'${selector.replaceAll("'", "''")}'`);
+            expect(guidance).toContain(`'${selector.replaceAll("'", "''")}'`);
           }
         } else {
-          expect(result.hint).toContain(`--update-result ${quoteCliArg(result.contextPath!)}`);
-          expect(result.hint).toContain(
+          expect(guidance).toContain(`--update-result ${quoteCliArg(result.contextPath!)}`);
+          expect(guidance).toContain(
             `OPENCLAW_STATE_DIR=${quoteCliArg(targetEnv.OPENCLAW_STATE_DIR)}`,
           );
-          expect(result.hint).toContain(`OPENCLAW_CONFIG_PATH=${quoteCliArg(configPath)}`);
-          expect(result.hint).toContain(`OPENCLAW_WORKSPACE_DIR=${quoteCliArg(workspaceDir)}`);
+          expect(guidance).toContain(`OPENCLAW_CONFIG_PATH=${quoteCliArg(configPath)}`);
+          expect(guidance).toContain(`OPENCLAW_WORKSPACE_DIR=${quoteCliArg(workspaceDir)}`);
         }
         await expect(fs.stat(result.contextPath!)).resolves.toMatchObject({
           size: expect.any(Number),

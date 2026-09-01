@@ -224,7 +224,10 @@ describe("openclaw-github-link-hovercard-provider", () => {
       updatedAt: "2026-07-05T09:55:00Z",
     });
     const href = "https://github.com/openclaw/openclaw/pull/99816";
-    const { anchor, provider } = createLink(href, "#99816");
+    const { anchor, provider } = createLink(
+      "HTTPS://GITHUB.COM:443/openclaw/openclaw/pull/99816",
+      "#99816",
+    );
     provider.client = { request } as unknown as GatewayBrowserClient;
 
     await hover(anchor);
@@ -431,6 +434,9 @@ describe("openclaw-github-link-hovercard-provider", () => {
   it.each([
     "http://github.com/openclaw/openclaw/issues/99815",
     "https://user:password@github.com/openclaw/openclaw/issues/99815",
+    "https://github.com:8443/openclaw/openclaw/issues/99815",
+    "https://github.com.example.com/openclaw/openclaw/issues/99815",
+    "blob:https://github.com/issues/99815",
     "https://example.com/openclaw/openclaw/issues/99815",
     "javascript:alert(1)",
   ])("does not preview an untrusted item URL: %s", async (href) => {

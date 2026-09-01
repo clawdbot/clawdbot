@@ -273,8 +273,8 @@ async function resolvePluginArtifactCapabilityConsent(params: {
       resolveAcceptedSurfaceCurrent(params.previousRecord, params.previousDeclared) &&
       resolvePluginInstallRecordIntegrity(params.previousRecord) !== undefined;
     acceptanceCurrent = !hasWidening && priorAcceptanceCurrent;
-    // Managed installs activate the package, even when its previous version was disabled.
-    // Update-only flows preserve disablement in preparePluginUpdateCapabilityConsent instead.
+    // Reinstalls preserve authored disablement; required consent still precedes commit.
+    // Only update-only flows defer it in preparePluginUpdateCapabilityConsent.
   }
   const acknowledgment =
     official || !params.enabled || acceptanceCurrent
@@ -329,7 +329,7 @@ export function createManagedPluginArtifactConsentHandler(params: {
   beforePersistentEffect?: () => void | Promise<void>;
   previousRecords?: Record<string, PluginInstallRecord>;
   previousPluginOwners?: ReadonlyMap<string, string>;
-  /** Update-only flows preserve disablement; ordinary installs activate the package. */
+  /** Update-only flows may defer consent while every known package entry is disabled. */
   updatingPluginIds?: readonly string[];
 }): {
   onBeforePluginArtifactCommit: PluginInstallArtifactConsentHandler;

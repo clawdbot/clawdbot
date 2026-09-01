@@ -105,6 +105,26 @@ describe("update failure triage admission", () => {
           failure: { step: "build", detail: "Disk is full" },
         },
       });
+      // update.run still returns its outcome when sentinel persistence fails.
+      // A later status read can therefore contain the previous attempt.
+      const currentStatus = status;
+      const currentBanner = overlays.snapshot.updateStatusBanner;
+      for (const retainedStatus of ["ok", "error"]) {
+        status = {
+          sentinel: {
+            ...FAILURE,
+            status: retainedStatus,
+            ts: 500,
+            stats: { ...FAILURE.stats, handoffId: "previous-attempt" },
+          },
+        };
+        await overlays.refreshUpdateStatus();
+        expect(overlays.snapshot.updateStatusBanner).toEqual(currentBanner);
+        expect(overlays.snapshot.recordedUpdateAttempt).toEqual(failure?.attempt);
+        expect(admission?.isCurrent()).toBe(true);
+        expect(onUpdateFailure).toHaveBeenCalledOnce();
+      }
+      status = currentStatus;
       expect(admission?.admit()).toBe(true);
       expect(admission?.admit()).toBe(false);
       await overlays.refreshUpdateStatus();
@@ -409,6 +429,19 @@ describe("update failure triage admission", () => {
           expect(overlays.snapshot.updateStatusBanner?.text).not.toContain("Expected v2.0.0");
           expect(onUpdateFailure).toHaveBeenCalledOnce();
         }
+
+        status = {
+          sentinel: {
+            ...STARTED.sentinel.payload,
+            ts: 3_000,
+            stats: { ...STARTED.sentinel.payload.stats, handoffId: "newer-attempt" },
+          },
+        };
+        await overlays.refreshUpdateStatus();
+        expect(overlays.snapshot.updateStatusBanner).toBeNull();
+        expect(overlays.snapshot.recordedUpdateAttempt).toBeNull();
+        expect(admission?.isCurrent()).toBe(false);
+        expect(onUpdateFailure).toHaveBeenCalledOnce();
 
         status = {
           sentinel: {

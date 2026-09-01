@@ -139,7 +139,10 @@ export function createFixture(groups: readonly string[] = TSDOWN_PLUGIN_SDK_DTS_
   })) {
     const source = path.join(sourceRoot, "scripts/lib", entry.name);
     const target = path.join(root, "scripts/lib", entry.name);
-    if (entry.name === "runtime-process-build-entries.mts") {
+    if (
+      entry.name === "runtime-process-build-entries.mts" ||
+      entry.name === "runtime-process-core-build-entries.mts"
+    ) {
       fs.copyFileSync(source, target);
     } else {
       fs.symlinkSync(source, target, entry.isDirectory() ? "junction" : "file");

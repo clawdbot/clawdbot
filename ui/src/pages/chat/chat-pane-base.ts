@@ -271,7 +271,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @litState() protected paneWidth = Number.POSITIVE_INFINITY;
   protected paneResizeObserver: ResizeObserver | null = null;
   protected connectedClient: GatewayBrowserClient | null = null;
-  protected boardProviderLease: (BoardProviderLease & { sessionKey: string }) | undefined;
+  protected boardProviderLease: (BoardProviderLease & { cacheKey: string }) | undefined;
   protected boardProviderLifecycleConnected = false;
   protected connectionGeneration = 0;
   // Owns the abort signal handed to header-scoped destructive confirm dialogs.
@@ -400,7 +400,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
 
   protected resetConfirmation:
     | {
-        sessionKey: string;
+        scopeKey: string;
         promise: Promise<boolean>;
         resolve: (confirmed: boolean) => void;
       }

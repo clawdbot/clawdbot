@@ -8,6 +8,7 @@ import {
   type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
 import { QUICK_ACTIONS_QUESTION } from "../test-helpers/custodian-quick-actions.ts";
+import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -226,6 +227,82 @@ suite.define(() => {
             await page.screenshot({
               animations: "disabled",
               path: path.join(artifactDir, "03-reloaded-without-replay.png"),
+            });
+          }
+          expect(errors).toEqual([]);
+        },
+      );
+    },
+  );
+
+  it.each(["denied", "full"] as const)(
+    "keeps failure guidance without automatic diagnosis when session storage is %s",
+    async (storageFailure) => {
+      const artifactDir = createControlUiE2eArtifactDir(`update-triage-storage-${storageFailure}`);
+      await suite.withPage(
+        {
+          viewport: { height: 1_000, width: 1_400 },
+          recordVideo: { dir: artifactDir, size: { height: 1_000, width: 1_400 } },
+        },
+        async ({ page }) => {
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(String(error)));
+          const traffic = await recordUpdateTraffic(page);
+          await page.addInitScript((failure) => {
+            if (failure === "denied") {
+              Object.defineProperty(window, "sessionStorage", {
+                get: () => {
+                  throw new DOMException("Storage denied", "SecurityError");
+                },
+              });
+            } else {
+              const session = window.sessionStorage;
+              const setItem = Storage.prototype.setItem;
+              Storage.prototype.setItem = function (key, value) {
+                if (this === session) {
+                  throw new DOMException("Storage full", "QuotaExceededError");
+                }
+                setItem.call(this, key, value);
+              };
+            }
+          }, storageFailure);
+          // The server retains the failure independently of denied browser storage.
+          const gateway = await installMockGateway(page, {
+            featureMethods: [...defaultControlUiFeatureMethods, "openclaw.chat"],
+            methodResponses: {
+              "update.status": { sentinel: FAILURE, schedule: SCHEDULE },
+              "openclaw.chat": {
+                sessionId: "storage-failure-session",
+                reply: "Ready to help.",
+                action: "none",
+              },
+            },
+          });
+          await page.goto(`${suite.server.baseUrl}settings/updates`);
+          for (let load = 0; load < 2; load += 1) {
+            if (load > 0) {
+              await page.reload();
+            }
+            await gateway.waitForRequest("update.status");
+            const panel = page.locator("openclaw-assistant-panel");
+            await panel.getByText("Ready to help.", { exact: true }).first().waitFor();
+            const card = panel.locator(".custodian__alert-card");
+            await card.getByText("openclaw triage", { exact: false }).waitFor();
+            expect(await card.textContent()).toContain("ENOSPC");
+            await expectRequestCountStable(gateway, "openclaw.chat", 1);
+            expect(
+              traffic.filter(
+                ({ method, params }) =>
+                  method === "openclaw.chat" &&
+                  params &&
+                  typeof params === "object" &&
+                  "message" in params,
+              ),
+            ).toHaveLength(0);
+            expect(traffic.filter(({ method }) => method === "update.run")).toHaveLength(0);
+            await page.screenshot({
+              animations: "disabled",
+              path: path.join(artifactDir, `0${load + 1}-failure-guidance.png`),
             });
           }
           expect(errors).toEqual([]);

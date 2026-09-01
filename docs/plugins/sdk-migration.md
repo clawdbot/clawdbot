@@ -532,7 +532,7 @@ For local media read policy, import `getAgentScopedMediaLocalRoots(...)` or
     | Pending delivery queue drain | `openclaw/plugin-sdk/delivery-queue-runtime` |
     | Channel activity telemetry | `openclaw/plugin-sdk/channel-activity-runtime` |
     | In-memory and persistent-backed dedupe caches | `openclaw/plugin-sdk/dedupe-runtime` |
-    | Safe local-file/media path helpers | `openclaw/plugin-sdk/file-access-runtime` |
+    | Safe local-file/media paths, regular-file checks, and symlink-parent checks | `openclaw/plugin-sdk/security-runtime` |
     | Dispatcher-aware fetch | `openclaw/plugin-sdk/runtime-fetch` |
     | Proxy and guarded fetch helpers | `openclaw/plugin-sdk/fetch-runtime` |
     | SSRF dispatcher policy types | `openclaw/plugin-sdk/ssrf-dispatcher` |

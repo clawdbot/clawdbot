@@ -113,10 +113,16 @@ export function createApplicationUpdateOverlays(
   let currentFailure: { failure: UpdateFailureTriage; profileId: string | null } | null = null;
 
   function publish() {
+    const applying = snapshot.updateSchedule?.campaign?.state === "applying";
+    // A new campaign supersedes the failed attempt across every schedule source.
+    // Retire its display and admission together, preserving unrelated request errors.
+    if (applying && (currentFailure || snapshot.recordedUpdateAttempt)) {
+      currentFailure = null;
+      snapshot = { ...snapshot, updateStatusBanner: null, recordedUpdateAttempt: null };
+    }
     snapshot = {
       ...snapshot,
-      updateRunning:
-        updateRequestRunning || snapshot.updateSchedule?.campaign?.state === "applying",
+      updateRunning: updateRequestRunning || applying,
       // The update RPC can finish before its restart handoff. Keep consumers
       // locked until the replacement Gateway reports the authoritative result.
       updateReconciliationPending: pendingUpdate !== null,
@@ -173,8 +179,7 @@ export function createApplicationUpdateOverlays(
         }
         // Claim before the ordinary agent send. A reply can be lost during a
         // reload; that must not replay the same diagnostic turn automatically.
-        updateNotices.recordTriage(scope, owned.failure.id);
-        return true;
+        return updateNotices.recordTriage(scope, owned.failure.id);
       },
     });
   };
@@ -444,9 +449,6 @@ export function createApplicationUpdateOverlays(
         ...snapshot,
         ...projectUpdateAvailableEvent(snapshot, payload),
       };
-      if (snapshot.updateSchedule?.campaign?.state === "applying") {
-        currentFailure = null;
-      }
       publish();
       updateCampaignPoller.sync();
       if (

@@ -265,9 +265,11 @@ export class CustodianSessionStore {
     const questionState = [this.answeredQuestions, this.questionReplyUncertain] as const;
     let replyEpoch: number | undefined;
     const reply = this.requestReply(client, params, () => {
+      const ordinaryDraft = this.inputDrafts.ordinary;
       if (admit && !admit()) {
         return false;
       }
+      const draftConsumed = ordinaryDraft !== this.inputDrafts.ordinary;
       this.resetPromptInput(this.sensitive);
       replyEpoch = this.requestEpoch;
       if (questionReply) {
@@ -275,11 +277,15 @@ export class CustodianSessionStore {
       }
       this.abandonedTurnOutcomeUnknown = false;
       this.answeredQuestions = retireCustodianQuestions(this.messages, this.answeredQuestions);
-      this.messages = [
-        ...this.messages,
-        createCustodianMessage(this.nextMessageId++, "user", displayText),
-      ];
-      return true;
+      const message = createCustodianMessage(this.nextMessageId++, "user", displayText);
+      this.messages = [...this.messages, message];
+      return () => {
+        this.messages = this.messages.filter((entry) => entry !== message);
+        this.answeredQuestions = questionState[0];
+        if (draftConsumed && !this.inputDrafts.ordinary) {
+          this.inputDrafts.ordinary = ordinaryDraft;
+        }
+      };
     });
     const outcome = await reply;
     if (questionReply && this.requestEpoch === replyEpoch) {
@@ -649,7 +655,7 @@ export class CustodianSessionStore {
   private async requestReply(
     client: GatewayBrowserClient,
     params: SystemAgentChatParams,
-    admit?: () => boolean,
+    admit?: () => false | (() => void),
   ): Promise<eventNudgeState.CustodianSendOutcome> {
     const context = this.context;
     if (!context) {
@@ -667,12 +673,13 @@ export class CustodianSessionStore {
     this.requestAbort = requestAbort;
     const epoch = this.advanceRequestEpoch();
     let delivery: eventNudgeState.CustodianSendDelivery = "unsent";
+    let rollbackUnsent: false | (() => void) | undefined;
     this.sending = true;
     this.error = null;
     this.retryParams = params;
     this.emit();
     try {
-      if (epoch !== this.requestEpoch || !canRequest() || (admit && !admit())) {
+      if (epoch !== this.requestEpoch || !canRequest() || (rollbackUnsent = admit?.()) === false) {
         if (this.retryParams === params) {
           this.retryParams = null;
         }
@@ -739,6 +746,11 @@ export class CustodianSessionStore {
       return "sent";
     } catch (error) {
       if (epoch === this.requestEpoch && client === this.activeClient) {
+        // Only a known-unsent turn may restore its draft; receipts and sensitive
+        // input stay consumed, and a replacement conversation owns its own state.
+        if (delivery === "unsent" && rollbackUnsent) {
+          rollbackUnsent();
+        }
         this.error = custodianErrorMessage(error);
         const { inferenceUnavailable, sessionInvalidated } = custodianFailure(error);
         if (inferenceUnavailable) {

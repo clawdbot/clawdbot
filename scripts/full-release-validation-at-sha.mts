@@ -32,8 +32,9 @@ const RELEASE_EVIDENCE_VERIFIER_PATHS = [
 ];
 const GH_READ_TIMEOUT_MS = 60_000;
 export const FULL_RELEASE_WAIT_TIMEOUT_MINUTES = 720;
-export const FULL_RELEASE_GITHUB_POLL_INTERVAL_MS = 15 * 60_000;
-const FULL_RELEASE_RUN_DISCOVERY_ATTEMPTS = 2;
+export const FULL_RELEASE_GITHUB_POLL_INTERVAL_MS = 2 * 60_000;
+const FULL_RELEASE_PROGRESS_INTERVAL_MS = 15 * 60_000;
+const FULL_RELEASE_RUN_DISCOVERY_DELAYS_MS = [30_000, 60_000, 120_000];
 const RELEASE_DECISION_FILE = "full-release-decision.json";
 const GH_READ_OPTIONS = {
   encoding: "utf8",
@@ -678,12 +679,41 @@ export function tryReadReleaseDecision(
   }
 }
 
+function releaseDecisionAvailable(parentRunId: string, parentRunAttempt: number) {
+  const artifactName = `full-release-decision-${parentRunId}-${parentRunAttempt}`;
+  try {
+    const response: unknown = JSON.parse(
+      execGhRead(
+        [
+          "api",
+          `repos/openclaw/openclaw/actions/runs/${parentRunId}/artifacts?per_page=100&name=${artifactName}`,
+        ],
+        { ...GH_READ_OPTIONS, stdio: ["ignore", "pipe", "pipe"] },
+      ),
+    );
+    if (!isJsonRecord(response) || !Array.isArray(response.artifacts)) {
+      throw new Error(`Full Release Validation run ${parentRunId} returned invalid artifacts`);
+    }
+    return response.artifacts.some(
+      (artifact) =>
+        isJsonRecord(artifact) && artifact.name === artifactName && artifact.expired === false,
+    );
+  } catch (error) {
+    if (classifyReleaseGhTransportError(error) !== "transient") {
+      throw error;
+    }
+    console.warn(`Release Decision metadata unavailable this poll; retrying: ${String(error)}`);
+    return false;
+  }
+}
+
 function waitForWorkflowRun(parentRunId: string, workflowSha: string) {
   let lastSummary = "";
   let consecutiveErrors = 0;
   const startedAt = Date.now();
   const deadline = startedAt + FULL_RELEASE_WAIT_TIMEOUT_MINUTES * 60_000;
-  let nextProgressAt = startedAt + FULL_RELEASE_GITHUB_POLL_INTERVAL_MS;
+  let nextProgressAt = startedAt + FULL_RELEASE_PROGRESS_INTERVAL_MS;
+  let decision: { attempt: number; state: "unavailable" | "ready" | "passed" } | undefined;
   while (Date.now() < deadline) {
     let suite: Record<string, unknown> | undefined;
     try {
@@ -706,15 +736,30 @@ function waitForWorkflowRun(parentRunId: string, workflowSha: string) {
       lastSummary = summary;
     }
     if (suite) {
-      const releaseDecision = tryReadReleaseDecision(
-        parentRunId,
-        requiredPositiveInteger(suite.run_attempt, "parent run attempt"),
-        workflowSha,
-      );
-      if (releaseDecision && releaseDecisionStopsForeground(releaseDecision.state)) {
-        throw new Error(
-          `${formatReleaseStateOutcome(releaseDecision)}\nhttps://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
-        );
+      const attempt = requiredPositiveInteger(suite.run_attempt, "parent run attempt");
+      if (decision?.attempt !== attempt) {
+        decision = { attempt, state: "unavailable" };
+      }
+      // Metadata is only a readiness hint. Once advertised, keep trying the
+      // authoritative download across status regressions until this attempt validates.
+      if (
+        decision.state === "unavailable" &&
+        (suite.status === "completed" || releaseDecisionAvailable(parentRunId, attempt))
+      ) {
+        decision.state = "ready";
+      }
+      if (decision.state === "ready") {
+        const releaseDecision = tryReadReleaseDecision(parentRunId, attempt, workflowSha);
+        if (releaseDecision && releaseDecisionStopsForeground(releaseDecision.state)) {
+          throw new Error(
+            `${formatReleaseStateOutcome(releaseDecision)}\nhttps://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
+          );
+        }
+        // The workflow uploads one immutable decision per attempt; final success
+        // still requires the parent's terminal conclusion and strict evidence verifier.
+        if (releaseDecision?.state === "passed") {
+          decision.state = "passed";
+        }
       }
     }
     if (suite?.status === "completed" && stringValue(suite.conclusion)) {
@@ -741,7 +786,7 @@ function waitForWorkflowRun(parentRunId: string, workflowSha: string) {
           `Parent run progress query failed: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
-      nextProgressAt += FULL_RELEASE_GITHUB_POLL_INTERVAL_MS;
+      nextProgressAt = now + FULL_RELEASE_PROGRESS_INTERVAL_MS;
     }
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
@@ -980,17 +1025,17 @@ function main() {
     }
     parentRunId = collectRunId(dispatchOutput);
     if (!parentRunId && !args.dryRun) {
-      for (let attempt = 0; attempt < FULL_RELEASE_RUN_DISCOVERY_ATTEMPTS; attempt += 1) {
+      for (let attempt = 0; attempt <= FULL_RELEASE_RUN_DISCOVERY_DELAYS_MS.length; attempt += 1) {
         parentRunId = findLatestRunId(branch, workflowSha);
         if (parentRunId) {
           break;
         }
-        if (attempt + 1 < FULL_RELEASE_RUN_DISCOVERY_ATTEMPTS) {
+        if (attempt < FULL_RELEASE_RUN_DISCOVERY_DELAYS_MS.length) {
           Atomics.wait(
             new Int32Array(new SharedArrayBuffer(4)),
             0,
             0,
-            FULL_RELEASE_GITHUB_POLL_INTERVAL_MS,
+            FULL_RELEASE_RUN_DISCOVERY_DELAYS_MS[attempt],
           );
         }
       }

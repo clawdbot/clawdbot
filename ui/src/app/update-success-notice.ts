@@ -85,11 +85,21 @@ export function createUpdateNoticeSession(gateway: string) {
   const receiptKey = (scope: UpdateNoticeScope, attemptId: string) =>
     JSON.stringify([scope.gateway, scope.profileId, attemptId]);
   const lengthLimit = UPDATE_NOTICE_LENGTH_LIMIT * (UPDATE_TRIAGE_RECEIPT_LIMIT + 1);
+  let storage = getSafeSessionStorage();
   try {
-    const raw = getSafeSessionStorage()?.getItem(UPDATE_NOTICE_KEY);
+    const raw = storage?.getItem(UPDATE_NOTICE_KEY) ?? null;
     const saved: unknown = raw && raw.length <= lengthLimit ? JSON.parse(raw) : null;
+    if (raw !== null && !isRecord(saved)) {
+      storage = null;
+    }
     if (isRecord(saved)) {
       const { triaged: savedReceipts, ...savedNotice } = saved;
+      if (
+        savedReceipts !== undefined &&
+        (!Array.isArray(savedReceipts) || savedReceipts.some((key) => typeof key !== "string"))
+      ) {
+        storage = null;
+      }
       if (isStoredUpdateNotice(savedNotice, gateway)) {
         // The outgoing bundle's flat v1 pending notice predates requestId.
         // Assign it once here, before persisting the same scoped handoff below.
@@ -105,20 +115,26 @@ export function createUpdateNoticeSession(gateway: string) {
       }
     }
   } catch {
-    // Invalid or inaccessible transient notices cannot resume reconciliation.
+    // Unreadable history cannot be overwritten or authorize another automatic turn.
+    storage = null;
   }
-  const write = (next: UpdateNotice | null) => {
+  const write = (next: UpdateNotice | null, receipts = triaged): boolean => {
     notice = next;
     try {
-      const storage = getSafeSessionStorage();
-      const raw = JSON.stringify({ ...notice, triaged });
-      if ((!notice && triaged.length === 0) || raw.length > lengthLimit) {
-        storage?.removeItem(UPDATE_NOTICE_KEY);
-      } else {
-        storage?.setItem(UPDATE_NOTICE_KEY, raw);
+      const raw = JSON.stringify({ ...notice, triaged: receipts });
+      if (!storage || raw.length > lengthLimit) {
+        return false;
       }
+      if (!notice && receipts.length === 0) {
+        storage.removeItem(UPDATE_NOTICE_KEY);
+      } else {
+        storage.setItem(UPDATE_NOTICE_KEY, raw);
+      }
+      triaged = receipts;
+      return true;
     } catch {
-      // Denied storage must not prevent this document reporting its result.
+      // Keep visible results, but only persisted receipts may authorize diagnosis.
+      return false;
     }
   };
   write(notice);
@@ -131,8 +147,10 @@ export function createUpdateNoticeSession(gateway: string) {
     hasTriaged: (scope: UpdateNoticeScope, attemptId: string) =>
       triaged.includes(receiptKey(scope, attemptId)),
     recordTriage(scope: UpdateNoticeScope, attemptId: string) {
-      triaged = [...triaged, receiptKey(scope, attemptId)].slice(-UPDATE_TRIAGE_RECEIPT_LIMIT);
-      write(notice);
+      return write(
+        notice,
+        [...triaged, receiptKey(scope, attemptId)].slice(-UPDATE_TRIAGE_RECEIPT_LIMIT),
+      );
     },
     announceVerifiedInstall(identity: UpdateInstallIdentity, scope: UpdateNoticeScope) {
       write({

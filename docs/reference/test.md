@@ -79,6 +79,14 @@ owning its prepared environment. Direct providers use
 requested proof requires another environment; capacity or hydration failure
 does not make a different provider equivalent.
 
+The direct `.github/workflows/windows-blacksmith-testbox.yml` workflow runs
+native Windows. The wrapper's Blacksmith adapter supports Linux only; explicit
+`--provider blacksmith-testbox` prevents automatic Azure routing but does not
+enable Windows support. Blacksmith CLI 0.4.57 targets `runner` and has no native
+username override, so supported CLI sync/run on this Windows image remains
+blocked. Native SSH inspection with the per-Testbox key is not CLI end-to-end
+proof.
+
 The wrapper checks an executable sibling `../crabbox/bin/crabbox`, then `PATH`,
 then the sibling of the Git common checkout. Verify the selected binary and
 its source rather than trusting a directory name. If it needs repair or is
@@ -197,6 +205,10 @@ launches them with `--import tsx` for their own syntax, while Bun handles that
 syntax natively without the Node loader. Only their runtime imports change.
 Existing package build entry paths and Vitest source parents stay unchanged. Other
 Worker-thread entries and arbitrary source CLI fixtures remain outside this declared set.
+
+The session-title retention test declares its title-reader and session-utils roots
+in this same generation. Each fresh heap-measurement child runs their JavaScript
+without spending its execution deadline on TypeScript imports.
 
 Preparation is lazy across both projects and shards. Config imports, listing
 tests, and tiny tests that do not import these declarations do not load the

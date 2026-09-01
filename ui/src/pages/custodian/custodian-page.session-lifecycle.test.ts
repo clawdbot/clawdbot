@@ -358,39 +358,53 @@ describe("custodian page session lifecycle", () => {
     expect(page.querySelector(".custodian__wizard-step")).toBeNull();
   });
 
-  it("keeps the live session after an error that does not invalidate it", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({
+  it.each(["before send", "after send"])(
+    "keeps the live session after an error %s",
+    async (delivery) => {
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce({
+          sessionId: "engine-session-that-survives",
+          reply: "Welcome.",
+          action: "none",
+        })
+        .mockImplementationOnce((_method, _params, options?: { onSent?: () => void }) => {
+          if (delivery === "after send") {
+            options?.onSent?.();
+          }
+          return Promise.reject(
+            new GatewayProtocolRequestError({
+              code: "UNAVAILABLE",
+              message: "Temporary request failure.",
+            }),
+          );
+        })
+        .mockResolvedValueOnce({
+          sessionId: "engine-session-that-survives",
+          reply: "Still together.",
+          action: "none",
+        });
+      const { context } = createContext(request);
+      const { page } = await mountPage(context);
+      await waitForFast(() => expect(page.textContent).toContain("Welcome."));
+
+      await sendMessage(page, "first try");
+      await waitForFast(() => expect(page.textContent).toContain("Temporary request failure."));
+      expect(page.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe(
+        delivery === "before send" ? "first try" : "",
+      );
+      expect(page.store.messages.filter((message) => message.role === "user")).toHaveLength(
+        delivery === "before send" ? 0 : 1,
+      );
+      await sendMessage(page, "second try");
+
+      await waitForFast(() => expect(page.textContent).toContain("Still together."));
+      expect(request.mock.calls[2]?.[1]).toMatchObject({
         sessionId: "engine-session-that-survives",
-        reply: "Welcome.",
-        action: "none",
-      })
-      .mockRejectedValueOnce(
-        new GatewayProtocolRequestError({
-          code: "UNAVAILABLE",
-          message: "Temporary request failure.",
-        }),
-      )
-      .mockResolvedValueOnce({
-        sessionId: "engine-session-that-survives",
-        reply: "Still together.",
-        action: "none",
+        message: "second try",
       });
-    const { context } = createContext(request);
-    const { page } = await mountPage(context);
-    await waitForFast(() => expect(page.textContent).toContain("Welcome."));
-
-    await sendMessage(page, "first try");
-    await waitForFast(() => expect(page.textContent).toContain("Temporary request failure."));
-    await sendMessage(page, "second try");
-
-    await waitForFast(() => expect(page.textContent).toContain("Still together."));
-    expect(request.mock.calls[2]?.[1]).toMatchObject({
-      sessionId: "engine-session-that-survives",
-      message: "second try",
-    });
-  });
+    },
+  );
 
   it("stops after one rotation when the fresh session failure is also marked", async () => {
     const request = vi

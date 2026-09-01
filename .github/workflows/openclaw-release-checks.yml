@@ -67,7 +67,7 @@ on:
         default: false
         type: boolean
       skip_package_telegram_e2e:
-        description: Defer beta Package Acceptance Telegram E2E
+        description: Defer beta Package Acceptance Telegram E2E; automatic for all-group beta checks without release soak
         required: false
         default: false
         type: boolean
@@ -569,6 +569,12 @@ jobs:
             echo "skip_package_telegram_e2e is allowed only for release_profile=beta." >&2
             exit 1
           fi
+          # Advisory Telegram confidence must not delay the bounded beta gate.
+          # Soak and explicit package reruns keep their existing Telegram selection.
+          if [[ "$release_profile" == "beta" && "$run_release_soak" == "false" &&
+                "$RELEASE_RERUN_GROUP_INPUT" == "all" ]]; then
+            skip_package_telegram_e2e=true
+          fi
           if [[ -n "$TELEGRAM_WAIVER" ]]; then
             TARGET_VERSION="$(jq -er '.version | select(type == "string")' waiver-target/package.json)" \
               RELEASE_PROFILE="$release_profile" node --input-type=module <<'NODE'
@@ -874,6 +880,9 @@ jobs:
             echo "- Matrix QA fail fast: \`${FAIL_FAST}\`"
             echo "- Maturity scorecard docs: \`${RUN_MATURITY_SCORECARD}\`"
             echo "- Package Acceptance Telegram E2E deferred: \`${SKIP_PACKAGE_TELEGRAM_E2E}\`"
+            if [[ "$SKIP_PACKAGE_TELEGRAM_E2E" == "true" ]]; then
+              echo "- Package Acceptance Telegram E2E: not run; deferred to postpublish confidence."
+            fi
             if [[ -n "$TELEGRAM_WAIVER" ]]; then
               echo "- Source and Package Acceptance Telegram E2E: waived/not run (\`${TELEGRAM_WAIVER}\`); not a pass"
             fi

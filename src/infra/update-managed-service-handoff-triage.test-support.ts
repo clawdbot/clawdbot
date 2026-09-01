@@ -62,6 +62,7 @@ export function registerManagedUpdateHandoffTriageTests(
       expect(JSON.stringify(savedFailure)).not.toContain(secret);
       expect(helperLog).toContain(`Saved update failure: ${savedFailure?.path}`);
       expect(helperLog).toContain(`--update-result ${savedFailure?.path}`);
+      expect(helperLog).toContain("OPENCLAW_STATE_DIR=");
       expect(sentinel).toMatchObject({
         payload: {
           status: "error",
@@ -72,6 +73,12 @@ export function registerManagedUpdateHandoffTriageTests(
           },
         },
       });
+      expect(sentinel).toHaveProperty(
+        "payload.doctorHint",
+        expect.not.stringMatching(
+          /handoff\.log|OPENCLAW_(?:STATE_DIR|CONFIG_PATH|WORKSPACE_DIR)=/u,
+        ),
+      );
       expect(helperLog).toContain("update triage could not complete");
       if (options.triageHang) {
         expect(typeof state.triageDescendantPid).toBe("number");

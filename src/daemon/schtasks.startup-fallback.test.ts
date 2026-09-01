@@ -98,7 +98,7 @@ const {
 const { launchFallbackTaskScript, removeStartupEntries } = await import("./schtasks-runtime.js");
 const { createMockGatewayService } = await import("./service.test-helpers.js");
 const { readServiceStatusSummary } = await import("../commands/status.service-summary.js");
-const { formatStatusServiceValue } = await import("../commands/status-all/format.js");
+const { getStatusOverviewRowValue } = await import("../commands/status.test-support.ts");
 
 function createSpawnChild(error?: Error): ChildProcess {
   const child = new EventEmitter() as ChildProcess;
@@ -568,10 +568,12 @@ describe("Windows startup fallback", () => {
         },
         missingUnit: false,
       });
-      expect(formatStatusServiceValue(summary)).toBe(
+      expect(getStatusOverviewRowValue("Gateway service", { gatewayService: summary })).toBe(
         "Scheduled Task missing (inspection failed: service runtime inspection failed) · unknown",
       );
-      expect(formatStatusServiceValue(summary)).not.toContain(detail);
+      expect(
+        getStatusOverviewRowValue("Gateway service", { gatewayService: summary }),
+      ).not.toContain(detail);
     });
   });
 

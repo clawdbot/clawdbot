@@ -162,17 +162,24 @@ export function projectUpdateSentinel(
     timestampMs: sentinel.ts ?? null,
   };
   const id = record.id ?? requestId;
+  const failure: UpdateFailureTriage | null =
+    outcome === "failed" && id && banner ? { id, outcome, attempt, banner } : null;
+  // A response can carry a newer failure than the persisted status record.
+  if (failure && (record.id !== null || record.timestampMs !== null)) {
+    failure.reconciledRecord = record;
+  }
   return {
     outcome,
     record,
     attempt,
     banner,
-    failure: outcome === "failed" && id && banner ? { id, outcome, attempt, banner } : null,
+    failure,
   };
 }
 
 function lastLogLine(tail: string | null | undefined): string | null {
-  const lines = (tail ?? "")
+  // Redact before clipping: a truncated URL can lose its credential delimiter.
+  const lines = formatUiExternalText(tail)
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
@@ -195,7 +202,7 @@ function readUpdateFailureCause(
     : undefined;
   const detail = lastLogLine(failed?.log?.stderrTail) ?? lastLogLine(failed?.log?.stdoutTail);
   const step = failed?.name?.trim();
-  return step && detail ? { step, detail: formatUiExternalText(detail) } : null;
+  return step && detail ? { step, detail } : null;
 }
 
 export type UpdateRunResponse = {
@@ -649,7 +656,7 @@ export function projectUpdateStatusResponse(
     if (!record && !target) {
       return false;
     }
-    if (!result || result.outcome === "pending") {
+    if (!result || (result.outcome === "pending" && relation !== "newer")) {
       return true;
     }
     // Terminal facts for this handoff can retain its original timestamp.
@@ -682,7 +689,7 @@ export function projectUpdateStatusResponse(
       : (result?.failure ?? null);
   const display = failure ?? result;
   return {
-    failure: updateSchedule?.campaign?.state === "applying" ? null : failure,
+    failure,
     updateStatusBanner: display ? display.banner : current.updateStatusBanner,
     recordedUpdateAttempt: display ? display.attempt : current.recordedUpdateAttempt,
     ...(Object.hasOwn(response, "updateAvailable")

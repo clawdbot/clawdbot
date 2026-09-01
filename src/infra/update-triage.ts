@@ -31,6 +31,8 @@ const triageReportPathsSchema = z.object({
   bundlePath: z.string().min(1).max(4096).nullish(),
   bundleError: z.string().max(1024).nullish(),
 });
+const TRIAGE_OUTPUT_HINT =
+  "See the Gateway host command output for saved diagnostics and the installation-specific openclaw triage command.";
 
 /** Run diagnostics outside the updater or serving Gateway, without changing its failure verdict. */
 export async function runUpdateFailureTriage(params: {
@@ -48,6 +50,7 @@ export async function runUpdateFailureTriage(params: {
   }
   const targetEnv = { ...params.target.env };
   const installationTarget = resolveInstallationTarget(targetEnv);
+  const redaction = { env: targetEnv, stateDir: installationTarget.stateDir };
   const { log, error: logError } = params.runtime;
   log("Update failed. Entering triage...");
   let contextPath: string | undefined;
@@ -113,18 +116,13 @@ export async function runUpdateFailureTriage(params: {
     if (exitCode !== 0) {
       throw new Error(`Triage exited with code ${exitCode}.`);
     }
-    let hint = `Triage completed. Saved update failure: ${contextPath}`;
+    // Restart notices reach model context; executable paths stay in local output.
+    let hint = `Triage completed. ${TRIAGE_OUTPUT_HINT}`;
     if (params.mode === "json") {
       const report = triageReportPathsSchema.parse(JSON.parse(stdout));
-      hint = [
-        `Triage prompt: ${report.promptPath}`,
-        ...(report.bundlePath ? [`Sanitized diagnostics: ${report.bundlePath}`] : []),
-        ...(report.bundleError ? [`Diagnostics export unavailable: ${report.bundleError}`] : []),
-      ].join("\n");
-      // Restart notices can reach model context; full artifact paths remain in command output.
-      if (Buffer.byteLength(hint) > 2048) {
-        hint =
-          "Triage completed. See the diagnostic report in the command output for saved prompt and bundle paths.";
+      if (report.bundleError) {
+        const reason = scrubDoctorErrorMessage(redactSupportString(report.bundleError, redaction));
+        hint += `\nDiagnostics export unavailable: ${reason}`;
       }
     }
     return { status: "completed", hint, contextPath };
@@ -133,10 +131,7 @@ export async function runUpdateFailureTriage(params: {
       return { status: "cancelled" };
     }
     const reason = scrubDoctorErrorMessage(
-      redactSupportString(formatErrorMessage(error), {
-        env: targetEnv,
-        stateDir: installationTarget.stateDir,
-      }),
+      redactSupportString(formatErrorMessage(error), redaction),
     );
     const message = `Triage could not complete: ${reason}`;
     const command = formatInstallationTargetCommand(
@@ -150,13 +145,9 @@ export async function runUpdateFailureTriage(params: {
       log(`Saved update failure: ${contextPath}`);
     }
     log(guidance);
-    const hint = `${message}\n${guidance}`;
     return {
       status: "failed",
-      hint:
-        Buffer.byteLength(hint) <= 2048
-          ? hint
-          : `${message}\nSee the command output for saved diagnostic context and the host command.`,
+      hint: `${message}\n${TRIAGE_OUTPUT_HINT}`,
       ...(contextPath ? { contextPath } : {}),
     };
   }

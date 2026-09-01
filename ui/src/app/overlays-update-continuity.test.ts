@@ -47,16 +47,15 @@ const HANDOFF_SUCCESS = {
 
 function createUpdateHarness(request: RequestFn) {
   const harness = createGatewayHarness(client(request));
-  harness.update({
-    hello: {
-      auth: { role: "operator", scopes: ["operator.admin"] },
-      server: { version: "1.0.0" },
-      snapshot: {
-        updateAvailable: { channel: "stable", currentVersion: "1.0.0", latestVersion: "2.0.0" },
-      },
-    } as ApplicationGatewaySnapshot["hello"],
-  });
-  return harness;
+  const hello = {
+    auth: { role: "operator", scopes: ["operator.admin"] },
+    server: { version: "1.0.0" },
+    snapshot: {
+      updateAvailable: { channel: "stable", currentVersion: "1.0.0", latestVersion: "2.0.0" },
+    },
+  };
+  harness.update({ hello: hello as ApplicationGatewaySnapshot["hello"] });
+  return { ...harness, hello };
 }
 
 beforeEach(() => {
@@ -78,6 +77,99 @@ afterEach(() => {
 });
 
 describe("application update attempt continuity", () => {
+  it.each(["status", "retained status", "event", "hello"] as const)(
+    "retires a previous failure when an applying campaign arrives through %s",
+    async (source) => {
+      const failure = {
+        kind: "update",
+        status: "error",
+        ts: 1_000,
+        stats: { handoffId: "previous-attempt", reason: "build-failed" },
+      };
+      const schedule = {
+        channel: "stable",
+        autoEnabled: true,
+        target: { kind: "package", version: "3.0.0" },
+        campaign: {
+          id: "next-campaign",
+          state: "applying",
+          announcedAtMs: 2_000,
+          forceAtMs: 902_000,
+          updatedAtMs: 62_000,
+        },
+      } as const;
+      let response: UpdateRestartStatusResponse = { sentinel: null };
+      let failStatus = false;
+      const request = vi.fn<RequestFn>(async (method) => {
+        if (method === "update.run") {
+          return { ok: false, result: { status: "error" }, sentinel: { payload: failure } };
+        }
+        if (method === "update.status" && failStatus) {
+          throw new Error("Status request unavailable");
+        }
+        return method === "update.status" ? response : {};
+      });
+      const harness = createUpdateHarness(request);
+      const onUpdateFailure = vi.fn();
+      const overlays = createApplicationOverlays(harness.gateway, { onUpdateFailure });
+      try {
+        await flushMicrotasks();
+        await overlays.runUpdate();
+        expect(overlays.snapshot.recordedUpdateAttempt?.reason).toBe("build-failed");
+        expect(onUpdateFailure).toHaveBeenCalledOnce();
+        const admission = onUpdateFailure.mock.calls[0]?.[1];
+
+        // The RPC reports failures even when persistence fails; applying is
+        // published before the next update writes a sentinel.
+        response = { sentinel: source === "retained status" ? failure : null, schedule };
+        if (source === "status" || source === "retained status") {
+          await overlays.refreshUpdateStatus();
+        } else if (source === "event") {
+          harness.emitEvent("update.available", { schedule });
+        } else {
+          const hello = harness.hello;
+          harness.update({ phase: "reconnecting" });
+          harness.update({
+            phase: "connected",
+            hello: {
+              ...hello,
+              snapshot: { ...hello.snapshot, updateSchedule: schedule },
+            } as ApplicationGatewaySnapshot["hello"],
+          });
+          await flushMicrotasks();
+        }
+        expect(overlays.snapshot.updateRunning).toBe(true);
+        expect(overlays.snapshot.updateStatusBanner).toBeNull();
+        expect(overlays.snapshot.recordedUpdateAttempt).toBeNull();
+        expect(admission.isCurrent()).toBe(false);
+        expect(admission.admit()).toBe(false);
+        expect(onUpdateFailure).toHaveBeenCalledOnce();
+
+        failStatus = true;
+        await overlays.refreshUpdateStatus();
+        expect(overlays.snapshot.updateStatusBanner?.text).toContain("Status request unavailable");
+        failStatus = false;
+        response = {
+          sentinel: {
+            ...failure,
+            ts: 63_000,
+            stats: { handoffId: "next-attempt", reason: "deps-install-failed" },
+          },
+          schedule: { channel: "stable", autoEnabled: true },
+        };
+        await overlays.refreshUpdateStatus();
+        expect(overlays.snapshot.updateRunning).toBe(false);
+        expect(overlays.snapshot.recordedUpdateAttempt?.reason).toBe("deps-install-failed");
+        expect(onUpdateFailure).toHaveBeenCalledTimes(2);
+        expect(admission.isCurrent()).toBe(false);
+        expect(onUpdateFailure.mock.calls[1]?.[1].admit()).toBe(true);
+        expect(request.mock.calls.filter(([method]) => method === "update.run")).toHaveLength(1);
+      } finally {
+        overlays.dispose();
+      }
+    },
+  );
+
   it("ends the waiting state when a failed-closed Gateway never reconnects", async () => {
     const request = vi.fn<RequestFn>(async (method) =>
       method === "update.run" ? HANDOFF_RESPONSE : {},

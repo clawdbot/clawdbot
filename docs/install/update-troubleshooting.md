@@ -18,7 +18,10 @@ details and asks it to investigate before retrying. A lost connection or
 verification timeout is presented as an unknown outcome. The tab remembers the
 latest 32 investigated attempt identities, scoped to their Gateway and profile.
 Status checks, switching between those scopes, and reloading the same tab do not
-automatically send those investigations again. If the Gateway or agent is
+automatically send those investigations again. If the browser cannot read or
+save that history, the failure details remain visible without an automatic
+diagnostic request. Ask OpenClaw manually or run `openclaw triage` on the host.
+If the Gateway or agent is
 unavailable, use `openclaw triage` on the Gateway host. Automatic diagnosis keeps
 your unsent composer draft, including when its conversation session must restart.
 
@@ -98,6 +101,9 @@ automatic triage reports that failure and preserves the original update error.
 Repair the installed command, then run `openclaw triage`. Managed updates retain
 their detached helper log even when the Gateway cannot start; the recorded
 outcome points to the available diagnostics or the failed collection attempt.
+Restart notices summarize the diagnostic outcome. Saved artifact paths and exact,
+installation-specific recovery commands remain in the host command output or
+managed update helper log rather than the notice sent to an agent or channel.
 
 If the updater crashes or is killed after the Gateway stops, the Gateway stays
 stopped unless the updater completed and verified recovery. Inspect

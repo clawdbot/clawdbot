@@ -244,6 +244,120 @@ describe("shared auth store relocation", () => {
     }).toEqual(sharedBefore);
   });
 
+  it.each([
+    "identical subset",
+    "older subset",
+    "empty subset",
+    "changed credential",
+    "source-only profile",
+    "malformed source",
+    "malformed target",
+    "changed metadata",
+    "changed state",
+  ])("verifies a richer target against a %s before cleanup", async (scenario) => {
+    const fixture = await createFixture();
+    const sourcePath = fixture.sqlite.resolveAuthProfileDatabasePath(fixture.mainAgentDir);
+    const source = new DatabaseSync(sourcePath);
+    const target = fixture.stateDb.openOpenClawStateDatabase({ env: fixture.env }).db;
+    const sourceStore =
+      scenario === "empty subset" ? { version: 1, profiles: {} } : fixture.sharedStore;
+    const sourceJson =
+      scenario === "malformed source"
+        ? '{"version":1,"profiles":{"bad":null}}'
+        : JSON.stringify(sourceStore);
+    source
+      .prepare(
+        "UPDATE auth_profile_store SET store_json = ?, updated_at = 100 WHERE store_key = 'primary'",
+      )
+      .run(sourceJson);
+    const sourceRow = source
+      .prepare("SELECT store_json, updated_at FROM auth_profile_store WHERE store_key = 'primary'")
+      .get();
+    const stateRow = source
+      .prepare("SELECT state_json, updated_at FROM auth_profile_state WHERE state_key = 'primary'")
+      .get() as { state_json: string; updated_at: number };
+    const targetStore = {
+      profiles: {
+        ...makeStore("openai:extra", "extra-key").profiles,
+        ...(scenario === "source-only profile"
+          ? {}
+          : makeStore(
+              "openai:shared",
+              scenario === "changed credential" ? "different-key" : "shared-key",
+            ).profiles),
+      },
+      version: 1,
+      ...(scenario === "changed metadata" ? { legacyMetadata: "keep" } : {}),
+    };
+    const targetRow = {
+      value_json:
+        scenario === "malformed target"
+          ? '{"version":1,"profiles":null}'
+          : JSON.stringify(targetStore),
+      updated_at_ms: scenario === "identical subset" ? 100 : 200,
+    };
+    target
+      .prepare("INSERT INTO config_machine_state VALUES ('authProfiles.store', ?, ?)")
+      .run(targetRow.value_json, targetRow.updated_at_ms);
+    target
+      .prepare("INSERT INTO config_machine_state VALUES ('authProfiles.state', ?, ?)")
+      .run(stateRow.state_json, stateRow.updated_at + Number(scenario === "changed state"));
+
+    const detected = fixture.migration.detectSharedAuthStoreMigration({
+      stateDir: fixture.stateDir,
+      doctorOnlyStateMigrations: true,
+    });
+    const result = await fixture.migration.migrateSharedAuthStore({
+      detected,
+      stateDir: fixture.stateDir,
+    });
+    const converges = scenario.endsWith("subset");
+    expect(result.warnings).toEqual(converges ? [] : [expect.stringMatching(/conflict.*Back up/)]);
+    expect(
+      target
+        .prepare(
+          "SELECT value_json, updated_at_ms FROM config_machine_state WHERE state_key = 'authProfiles.store'",
+        )
+        .get(),
+    ).toEqual(targetRow);
+    expect(
+      source
+        .prepare(
+          "SELECT store_json, updated_at FROM auth_profile_store WHERE store_key = 'primary'",
+        )
+        .get(),
+    ).toEqual(converges ? undefined : sourceRow);
+    expect(
+      source
+        .prepare(
+          "SELECT state_json, updated_at FROM auth_profile_state WHERE state_key = 'primary'",
+        )
+        .get(),
+    ).toEqual(converges ? undefined : stateRow);
+    const receipt = target
+      .prepare(
+        "SELECT source_sha256, source_record_count, status, removed_source FROM migration_sources WHERE target_table = 'auth_profile_stores'",
+      )
+      .get();
+    expect(receipt).toEqual(
+      converges
+        ? {
+            source_sha256: createHash("sha256").update(JSON.stringify(sourceRow)).digest("hex"),
+            source_record_count: 1,
+            status: "completed",
+            removed_source: 1,
+          }
+        : undefined,
+    );
+    expect(
+      fixture.migration.detectSharedAuthStoreMigration({
+        stateDir: fixture.stateDir,
+        doctorOnlyStateMigrations: true,
+      }).hasLegacy,
+    ).toBe(!converges);
+    source.close();
+  });
+
   it("preserves post-relocation main-agent credential overrides without a receipt", async () => {
     const fixture = await createEmptyFixture(false);
     const mainAgentDir = path.dirname(fixture.sourcePath);
@@ -461,9 +575,19 @@ describe("shared auth store relocation", () => {
         )
         .get() as { state_json: string; updated_at: number };
       const target = fixture.stateDb.openOpenClawStateDatabase({ env: fixture.env }).db;
+      const targetStoreJson =
+        crashState === "flipped-cleaned-not-finalized"
+          ? JSON.stringify({
+              ...fixture.sharedStore,
+              profiles: {
+                ...fixture.sharedStore.profiles,
+                ...makeStore("openai:extra", "extra-key").profiles,
+              },
+            })
+          : sourceStore.store_json;
       target
         .prepare("INSERT INTO config_machine_state VALUES ('authProfiles.store', ?, ?)")
-        .run(sourceStore.store_json, sourceStore.updated_at);
+        .run(targetStoreJson, sourceStore.updated_at);
       target
         .prepare("INSERT INTO config_machine_state VALUES ('authProfiles.state', ?, ?)")
         .run(sourceState.state_json, sourceState.updated_at);
@@ -504,10 +628,15 @@ describe("shared auth store relocation", () => {
                (source_key, migration_kind, source_path, target_table, source_sha256,
                 source_size_bytes, source_record_count, last_run_id, status, imported_at,
                 removed_source, report_json)
-             VALUES (?, 'shared-auth-store-state-db', ?, 'auth_profile_stores', NULL,
-                     NULL, NULL, ?, 'ownership-flipped', 1, 0, '{}')`,
+             VALUES (?, 'shared-auth-store-state-db', ?, 'auth_profile_stores', ?,
+                     NULL, 1, ?, 'ownership-flipped', 1, 0, '{}')`,
           )
-          .run(sourceKey, sourcePath, runId);
+          .run(
+            sourceKey,
+            sourcePath,
+            createHash("sha256").update(JSON.stringify(sourceStore)).digest("hex"),
+            runId,
+          );
       }
 
       const detected = fixture.migration.detectSharedAuthStoreMigration({
@@ -533,6 +662,27 @@ describe("shared auth store relocation", () => {
         location: "state-db",
       });
       expect(retry).toEqual({ changes: [], warnings: [] });
+      if (crashState === "flipped-cleaned-not-finalized") {
+        expect(
+          target
+            .prepare(
+              "SELECT source_sha256, source_record_count, status, removed_source FROM migration_sources WHERE target_table = 'auth_profile_stores'",
+            )
+            .get(),
+        ).toEqual({
+          source_sha256: createHash("sha256").update(JSON.stringify(sourceStore)).digest("hex"),
+          source_record_count: 1,
+          status: "completed",
+          removed_source: 1,
+        });
+        expect(
+          target
+            .prepare(
+              "SELECT value_json FROM config_machine_state WHERE state_key = 'authProfiles.store'",
+            )
+            .get(),
+        ).toEqual({ value_json: targetStoreJson });
+      }
       expect(
         target
           .prepare(

@@ -8,6 +8,7 @@ import { createContext } from "../pages/custodian/custodian-page.test-harness.ts
 import { CustodianSessionStore } from "../pages/custodian/custodian-session-store.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { QUICK_ACTIONS_QUESTION } from "../test-helpers/custodian-quick-actions.ts";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import type {
@@ -48,6 +49,7 @@ afterEach(() => {
   custodianAlertStore.dismiss();
   document.body.replaceChildren();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("update triage presentation", () => {
@@ -168,6 +170,7 @@ describe("update triage presentation", () => {
   });
 
   it("refreshes queued same-attempt facts before sending and never rearms a consumed diagnosis", async () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
     let status: UpdateRestartStatusResponse = {};
     const request = vi.fn(
       async (method: string, params?: { sessionId?: string; message?: string }) => {
@@ -443,50 +446,73 @@ describe("update triage presentation", () => {
     },
   );
 
-  it("does not publish or send an already consumed automatic question", async () => {
-    const request = vi.fn(
-      async (_method: string, params: { sessionId: string; message?: string }) => ({
-        sessionId: params.sessionId,
-        reply: "Ready.",
-        ...(!params.message ? { question: QUICK_ACTIONS_QUESTION } : {}),
-      }),
-    );
-    const { context } = createContext(request);
-    const provider = createApplicationContextProvider(context);
-    const surface = document.createElement("openclaw-custodian-surface");
-    surface.store = new CustodianSessionStore();
-    provider.append(surface);
-    document.body.append(provider);
-    await surface.updateComplete;
-    await vi.waitFor(() => expect(surface.store.canSend).toBe(true));
-    const draft = "Keep my question after rejected triage";
-    const composer = typeComposerDraft(surface, draft);
-    const admission = { isCurrent: () => true, admit: vi.fn(() => false) };
-    presentUpdateFailureTriage(context, FAILURE, admission);
-    await vi.waitFor(() => expect(admission.admit).toHaveBeenCalledOnce());
+  it.each(["consumed admission", "throw before send", "reject before send"])(
+    "does not retain an unsent automatic question after %s",
+    async (failure) => {
+      let rejectDiagnostic = failure !== "consumed admission";
+      const request = vi.fn((_method: string, params: { sessionId: string; message?: string }) => {
+        if (params.message && rejectDiagnostic) {
+          rejectDiagnostic = false;
+          const error = new Error("Diagnostic transport is unavailable");
+          if (failure === "throw before send") {
+            throw error;
+          }
+          return Promise.reject(error);
+        }
+        return Promise.resolve({
+          sessionId: params.sessionId,
+          reply: "Ready.",
+          ...(!params.message ? { question: QUICK_ACTIONS_QUESTION } : {}),
+        });
+      });
+      const { context } = createContext(request);
+      const provider = createApplicationContextProvider(context);
+      const surface = document.createElement("openclaw-custodian-surface");
+      surface.store = new CustodianSessionStore();
+      provider.append(surface);
+      document.body.append(provider);
+      await surface.updateComplete;
+      await vi.waitFor(() => expect(surface.store.canSend).toBe(true));
+      const draft = "Keep my question after rejected triage";
+      const composer = typeComposerDraft(surface, draft);
+      const admission = {
+        isCurrent: () => true,
+        admit: vi.fn(() => failure !== "consumed admission"),
+      };
+      presentUpdateFailureTriage(context, FAILURE, admission);
+      await vi.waitFor(() => expect(admission.admit).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(surface.store.sending).toBe(false));
 
-    expect(request.mock.calls.filter(([, params]) => "message" in params)).toHaveLength(0);
-    expect(
-      surface.store.messages
-        .filter((message) => message.role === "user")
-        .map((message) => message.text),
-    ).toEqual([]);
-    expect(surface.store.hasRealUserTurn()).toBe(false);
-    expect(surface.store.canRetry()).toBe(false);
-    await surface.updateComplete;
-    expect(surface.querySelector(".chat-group.user")).toBeNull();
-    expect(surface.querySelector<HTMLButtonElement>(".option-card__choice")?.disabled).toBe(false);
-    expect(composer.value).toBe(draft);
+      const rejectedRequests = failure === "consumed admission" ? 0 : 1;
+      expect(request.mock.calls.filter(([, params]) => "message" in params)).toHaveLength(
+        rejectedRequests,
+      );
+      expect(
+        surface.store.messages
+          .filter((message) => message.role === "user")
+          .map((message) => message.text),
+      ).toEqual([]);
+      expect(surface.store.hasRealUserTurn()).toBe(false);
+      expect(surface.store.canRetry()).toBe(false);
+      await surface.updateComplete;
+      expect(surface.querySelector(".chat-group.user")).toBeNull();
+      expect(surface.querySelector<HTMLButtonElement>(".option-card__choice")?.disabled).toBe(
+        false,
+      );
+      expect(composer.value).toBe(draft);
 
-    composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    await vi.waitFor(() =>
-      expect(request.mock.calls.filter(([, params]) => "message" in params)).toHaveLength(1),
-    );
-    await surface.updateComplete;
-    expect(request.mock.calls.at(-1)?.[1]).toMatchObject({ message: draft });
-    expect(composer.value).toBe("");
-    expect(admission.admit).toHaveBeenCalledOnce();
-  });
+      composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      await vi.waitFor(() =>
+        expect(request.mock.calls.filter(([, params]) => "message" in params)).toHaveLength(
+          rejectedRequests + 1,
+        ),
+      );
+      await surface.updateComplete;
+      expect(request.mock.calls.at(-1)?.[1]).toMatchObject({ message: draft });
+      expect(composer.value).toBe("");
+      expect(admission.admit).toHaveBeenCalledOnce();
+    },
+  );
 
   it("bounds and redacts diagnostic data before it reaches the agent question", () => {
     const { context } = createContext(vi.fn());

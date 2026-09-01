@@ -1802,9 +1802,15 @@ async function runTelegramIfNeeded(
   manifest: JsonRecord,
   runAttempt: number,
   sourceSha: string,
+  coveragePolicy: string | undefined,
 ): Promise<TelegramResult> {
   if (options.skipTelegram) {
     return { status: "skipped" };
+  }
+  // Only the admitted evidence policy defers this wait; legacy beta evidence
+  // still requires the separate Telegram qualification.
+  if (coveragePolicy === "npm-beta-v1") {
+    return { status: "deferred-postpublish" };
   }
   const workflowFile = "npm-telegram-beta-e2e.yml";
   const artifactInputs = buildTelegramArtifactInputs({
@@ -2035,6 +2041,7 @@ async function main() {
     expectedRepository: options.repo,
     expectedRunId: options.fullReleaseRunId,
     expectedTargetSha: targetSha,
+    expectedReleaseTag: options.tag,
     expectedWorkflowBranch: options.workflowRef,
     isTrustedMainAncestor: (sha: string) => gitIsAncestor(sha, "refs/remotes/origin/main"),
     validateEvidenceReuseStrictly: ({ repository, runId }: { repository: string; runId: string }) =>
@@ -2118,6 +2125,7 @@ async function main() {
     npmManifest,
     npmRun.runAttempt,
     targetSha,
+    fullValidationEvidence.coveragePolicy,
   );
   const pluginNpmPlan = await collectPluginPlanWithRetry(
     "scripts/plugin-npm-release-plan.ts",

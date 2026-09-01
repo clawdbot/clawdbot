@@ -295,6 +295,7 @@ function runCiManifestFixture(options: {
   macosNodeParts?: boolean;
   openClawKitTests?: boolean;
   protocolCoverage?: boolean;
+  packageVersion?: string;
   qaSmokePlan?: boolean;
   formatCheck?: boolean;
   releaseCandidateCompatibility?: boolean;
@@ -375,7 +376,7 @@ function runCiManifestFixture(options: {
       : {};
     writeFileSync(
       path.join(root, "package.json"),
-      `${JSON.stringify({ scripts: packageScripts })}\n`,
+      `${JSON.stringify({ version: options.packageVersion, scripts: packageScripts })}\n`,
     );
     if (options.bundledPlanner) {
       writeFileSync(
@@ -485,6 +486,7 @@ function runCiManifestFixture(options: {
       ].join("\n"),
     );
     const outputPath = path.join(root, "manifest.out");
+    const summaryPath = path.join(root, "summary.md");
     const gitOwner = ".github/actions/git-owner";
     const trustedGitOwner = path.join(root, ".ci-harness", gitOwner);
     mkdirSync(trustedGitOwner, { recursive: true });
@@ -497,6 +499,7 @@ function runCiManifestFixture(options: {
       writeFileSync(reader, "export {};\n");
     }
     writeFileSync(outputPath, "", "utf8");
+    writeFileSync(summaryPath, "", "utf8");
     const manifestStep = readCiWorkflow().jobs.preflight.steps.find(
       (step: { name?: string }) => step.name === "Build CI manifest",
     );
@@ -505,6 +508,7 @@ function runCiManifestFixture(options: {
       env: {
         ...process.env,
         GITHUB_OUTPUT: outputPath,
+        GITHUB_STEP_SUMMARY: summaryPath,
         OPENCLAW_CI_CHANGED_PATHS_JSON: JSON.stringify(options.changedPaths ?? null),
         OPENCLAW_CI_CHECKOUT_REVISION: "a".repeat(40),
         OPENCLAW_CI_DOCS_CHANGED: "true",
@@ -549,7 +553,12 @@ function runCiManifestFixture(options: {
           return [line.slice(0, separator), line.slice(separator + 1)];
         }),
     );
-    return { output: `${run.stdout}${run.stderr}`, outputs, status: run.status };
+    return {
+      output: `${run.stdout}${run.stderr}`,
+      outputs,
+      status: run.status,
+      summary: readFileSync(summaryPath, "utf8"),
+    };
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
@@ -1825,10 +1834,27 @@ NODE
     });
     expect(workflow.on.workflow_dispatch.inputs).not.toHaveProperty("loc_base_ref");
     expect(workflow.on.workflow_dispatch.inputs).not.toHaveProperty("pr_number");
+    expect(workflow.on.workflow_dispatch.inputs.release_scope).toMatchObject({
+      default: "full",
+      type: "choice",
+      options: ["full", "npm-beta"],
+    });
+    expect(workflow.jobs.preflight.outputs.release_scope).toBe(
+      "${{ steps.manifest.outputs.release_scope }}",
+    );
     expect(readFileSync(".github/workflows/ci.yml", "utf8")).toContain(
       "run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.dispatch_id != '' && format('CI {0}', inputs.dispatch_id) || (github.event_name == 'workflow_dispatch' && inputs.release_gate && format('CI release gate {0}', inputs.target_ref) || 'CI') }}",
     );
     const preflightSteps = workflow.jobs.preflight.steps;
+    expect(
+      preflightSteps.find((step: WorkflowStep) => step.name === "Build CI manifest").env,
+    ).toMatchObject({
+      OPENCLAW_CI_RELEASE_SCOPE: "${{ inputs.release_scope || 'full' }}",
+      OPENCLAW_CI_PULL_REQUEST_NUMBER: "${{ inputs.pull_request_number }}",
+      OPENCLAW_CI_TARGET_REF: "${{ inputs.target_ref }}",
+      OPENCLAW_CI_TARGET_CONTEXT_REF: "${{ inputs.target_context_ref }}",
+      OPENCLAW_CI_HISTORICAL_TARGET_TAG: "${{ inputs.historical_target_tag }}",
+    });
     const validationStep = preflightSteps.find(
       (step: WorkflowStep) => step.name === "Validate release-gate dispatch",
     );
@@ -7838,18 +7864,52 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 
   it("fails Windows Testbox setup when Blacksmith phone-home is not accepted", () => {
     const workflow = readFileSync(".github/workflows/windows-blacksmith-testbox.yml", "utf8");
+    const job = parse(workflow).jobs.windows;
+    const prepare = job.steps.find((step: WorkflowStep) => step.name === "Prepare Windows SSH");
+    const finalize = job.steps.find((step: WorkflowStep) => step.name === "Run Testbox").run;
+
+    // Windows administrators use the effective ProgramData file and native ACLs.
+    // The native handshake is the behavioral proof; this guards workflow wiring.
+    expect(prepare?.env).toEqual({
+      TESTBOX_PUBLIC_KEY_PATH: "${{ steps.begin_testbox.outputs.public_key_path }}",
+    });
+    const nativeSetup = prepare?.run ?? "";
+    expect(nativeSetup).toContain("WindowsPrincipal");
+    expect(nativeSetup).toContain("System32\\OpenSSH\\sshd.exe");
+    expect(nativeSetup).toContain('-T -C "user=$nativeUser"');
+    expect(nativeSetup).toContain(
+      "authorizedkeysfile __PROGRAMDATA__/ssh/administrators_authorized_keys",
+    );
+    expect(nativeSetup).toContain("System32\\OpenSSH\\ssh-keygen.exe");
+    expect(nativeSetup).toContain("-E sha256 -lf $env:TESTBOX_PUBLIC_KEY_PATH");
+    expect(nativeSetup).toContain("[IO.File]::AppendAllText($authorizedKeys,");
+    expect(nativeSetup).toContain("S-1-5-18");
+    expect(nativeSetup).toContain("S-1-5-32-544");
+    expect(nativeSetup).toContain("SetAccessRuleProtection($true, $false)");
+    expect(nativeSetup).toContain('"FullControl", "Allow"');
+    expect(nativeSetup).toContain("Set-Acl -LiteralPath $authorizedKeys");
+    expect(workflow).not.toContain(">> ~/.ssh/authorized_keys");
+
+    expect(finalize).toMatch(
+      /if \[ "\$JOB_STATUS" != "success" \]; then\s+phone_home_status="hydration_failed"/u,
+    );
+    expect(finalize).toContain('--arg status "$phone_home_status"');
+    expect(finalize.match(/\/api\/testbox\/phone-home/gu)).toHaveLength(1);
+    expect(finalize.slice(0, finalize.indexOf('echo "Testbox ready!"'))).toMatch(
+      /if \[ "\$phone_home_status" != "ready" \]; then[^]*?exit 1\s+fi/u,
+    );
 
     expect(workflow.match(/--connect-timeout 10 --max-time 30/gu)).toHaveLength(2);
     expect(workflow).toContain('echo "phone_home_hydrating_curl=${hydrating_curl_status}"');
     expect(workflow).toContain('echo "phone_home_hydrating_http=${hydrating_http_code}"');
-    expect(workflow).toContain('echo "phone_home_ready_curl=${ready_curl_status}"');
-    expect(workflow).toContain('echo "phone_home_ready_http=${http_code}"');
+    expect(workflow).toContain('echo "phone_home_${phone_home_status}_curl=${final_curl_status}"');
+    expect(workflow).toContain('echo "phone_home_${phone_home_status}_http=${http_code}"');
     expect(workflow).toContain('jq -e \'type == "number"\' <<<"$installation_model_id"');
     expect(workflow).toContain('--arg testbox_id "$TESTBOX_ID"');
     expect(workflow).toContain('--arg testbox_id "$testbox_id"');
     expect(workflow).toContain('--argjson installation_model_id "$installation_model_id"');
     expect(workflow).toContain('--data-binary @"$hydrating_body"');
-    expect(workflow).toContain('--data-binary @"$ready_body"');
+    expect(workflow).toContain('--data-binary @"$final_body"');
     const hydratingFailureBlock = workflow.slice(
       workflow.indexOf(
         'if (( hydrating_curl_status != 0 )) || [[ ! "$hydrating_http_code" =~ ^2 ]]; then',
@@ -7858,26 +7918,26 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     const missingSshKeyFailureBlock = workflow.slice(
       workflow.indexOf('if [ -z "$ssh_public_key" ]; then'),
-      workflow.indexOf("mkdir -p ~/.ssh"),
+      workflow.indexOf('public_key_path="$(cygpath'),
     );
-    const readyFailureBlock = workflow.slice(
-      workflow.indexOf('if (( ready_curl_status != 0 )) || [[ ! "$http_code" =~ ^2 ]]; then'),
+    const finalFailureBlock = workflow.slice(
+      workflow.indexOf('if (( final_curl_status != 0 )) || [[ ! "$http_code" =~ ^2 ]]; then'),
       workflow.indexOf('echo "============================================"'),
     );
 
     expect(workflow).toContain(')" || hydrating_curl_status=$?');
-    expect(workflow).toContain(')" || ready_curl_status=$?');
+    expect(workflow).toContain(')" || final_curl_status=$?');
     expect(hydratingFailureBlock).toContain("exit 1");
     expect(missingSshKeyFailureBlock).toContain("exit 1");
-    expect(readyFailureBlock).toContain("exit 1");
+    expect(finalFailureBlock).toContain("exit 1");
     expect(workflow).toContain(
-      "Blacksmith phone-home did not return an SSH public key; testbox cannot accept CLI connections.",
+      "Blacksmith phone-home did not return an SSH public key; testbox cannot accept native SSH connections.",
     );
     expect(workflow).not.toContain(
-      'phone_home_ready_http=${http_code}"\n\n          echo "============================================"',
+      'phone_home_${phone_home_status}_http=${http_code}"\n\n          echo "============================================"',
     );
     expect(workflow).not.toContain('\\"testbox_id\\": \\"${TESTBOX_ID}\\"');
-    expect(workflow).not.toContain('cat > "$ready_body" <<JSON');
+    expect(workflow).not.toContain('cat > "$final_body" <<JSON');
     expect(workflow).not.toContain('"testbox_id": "${testbox_id}"');
   });
 
@@ -8727,6 +8787,113 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       ).toHaveLength(selectedJobs.includes("checks-windows") ? 2 : 0);
     },
   );
+
+  it.each(["release branch", "release tag"])(
+    "qualifies npm beta CI without native app jobs through a validated %s",
+    (context) => {
+      const options = {
+        bundledPlanner: true,
+        packageVersion: "2026.9.1-beta.1",
+        scopeEnv: {
+          OPENCLAW_CI_TARGET_REF: "a".repeat(40),
+          OPENCLAW_CI_TARGET_CONTEXT_REF: context === "release branch" ? "release/2026.9.1" : "",
+          OPENCLAW_CI_TARGET_CONTEXT_TARGET: String(context === "release branch"),
+          OPENCLAW_CI_HISTORICAL_TARGET_TAG: context === "release tag" ? "v2026.9.1-beta.1" : "",
+          OPENCLAW_CI_HISTORICAL_TARGET: String(context === "release tag"),
+          OPENCLAW_CI_RUN_UI_TESTS: "true",
+        },
+      };
+      const full = runCiManifestFixture(options);
+      const beta = runCiManifestFixture({
+        ...options,
+        scopeEnv: { ...options.scopeEnv, OPENCLAW_CI_RELEASE_SCOPE: "npm-beta" },
+      });
+      expect(full.status, full.output).toBe(0);
+      expect(beta.status, beta.output).toBe(0);
+      expect(beta.output).toContain("CI release scope: npm-beta");
+      expect(beta.summary).toContain("Scope: `npm-beta`");
+      expect(beta.summary).toContain("Native app qualification: deferred");
+      expect(beta.outputs).toEqual({
+        ...full.outputs,
+        release_scope: "npm-beta",
+        run_macos_swift: "false",
+        run_openclawkit_tests: "false",
+        run_ios_build: "false",
+        run_android: "false",
+        run_android_job: "false",
+        run_native_i18n: "false",
+        android_matrix: JSON.stringify({ include: [] }),
+      });
+      for (const output of [
+        "run_node",
+        "run_macos_node",
+        "run_checks_windows",
+        "run_build_artifacts",
+        "run_check_additional",
+        "run_protocol_event_coverage",
+        "run_ui_tests",
+      ]) {
+        expect(beta.outputs[output], output).toBe("true");
+      }
+      for (const jobName of ["ios-screenshot-shard", "ios-screenshot-evidence"]) {
+        expect(
+          evaluateWorkflowExpression(readCiWorkflow().jobs[jobName].if, {
+            eventName: "workflow_dispatch",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            preflightOutputs: {
+              ...beta.outputs,
+              compatibility_target: "false",
+              run_ios_screenshots: "true",
+            },
+          }),
+          jobName,
+        ).toBe(false);
+      }
+    },
+  );
+
+  it.each<{ label: string } & Omit<Parameters<typeof runCiManifestFixture>[0], "bundledPlanner">>([
+    { label: "stable target", packageVersion: "2026.9.1" },
+    { label: "alpha target", packageVersion: "2026.9.1-alpha.1" },
+    { label: "PR event", eventName: "pull_request" as const },
+    { label: "fork repository", repository: "example/openclaw" },
+    { label: "PR release gate", releaseGate: true },
+    { label: "PR number", scopeEnv: { OPENCLAW_CI_PULL_REQUEST_NUMBER: "123" } },
+    { label: "mutable target", scopeEnv: { OPENCLAW_CI_TARGET_REF: "release/2026.9.1" } },
+    { label: "wrong target", scopeEnv: { OPENCLAW_CI_TARGET_REF: "c".repeat(40) } },
+    { label: "unvalidated branch", scopeEnv: { OPENCLAW_CI_TARGET_CONTEXT_TARGET: "false" } },
+    {
+      label: "wrong release train",
+      scopeEnv: { OPENCLAW_CI_TARGET_CONTEXT_REF: "release/2026.9.2" },
+    },
+    {
+      label: "wrong release tag",
+      scopeEnv: {
+        OPENCLAW_CI_TARGET_CONTEXT_TARGET: "false",
+        OPENCLAW_CI_HISTORICAL_TARGET: "true",
+        OPENCLAW_CI_HISTORICAL_TARGET_TAG: "v2026.9.2-beta.1",
+      },
+    },
+    { label: "unknown scope", scopeEnv: { OPENCLAW_CI_RELEASE_SCOPE: "package" } },
+  ])("rejects npm beta CI qualification for $label", ({ label: _label, scopeEnv, ...options }) => {
+    const result = runCiManifestFixture({
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      packageVersion: "2026.9.1-beta.1",
+      ...options,
+      scopeEnv: {
+        OPENCLAW_CI_RELEASE_SCOPE: "npm-beta",
+        OPENCLAW_CI_TARGET_REF: "a".repeat(40),
+        OPENCLAW_CI_TARGET_CONTEXT_REF: "release/2026.9.1",
+        OPENCLAW_CI_TARGET_CONTEXT_TARGET: "true",
+        ...scopeEnv,
+      },
+    });
+    expect(result.status, result.output).not.toBe(0);
+    expect(result.output).toContain("release_scope");
+    expect(result.outputs).not.toHaveProperty("run_node");
+  });
 
   it.each([
     ["pull_request", "openclaw/openclaw", true],
@@ -9895,7 +10062,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(parityStep.run).not.toContain("pnpm android:i18n:check");
     expect(parityStep.run).not.toContain("pnpm apple:i18n:check");
     expect(fullReleaseCiCase).toContain(
-      'args=(-f target_ref="$TARGET_SHA" -f include_android=true -f dispatch_id="$dispatch_id")',
+      'args=(-f target_ref="$TARGET_SHA" -f release_scope="$ci_release_scope" -f include_android="$include_android" -f dispatch_id="$dispatch_id")',
     );
     expect(fullReleaseCiCase).toContain('dispatch_child ci.yml "$dispatch_run_name"');
     expect(fullReleaseCiCase).not.toContain("release_gate");
@@ -10421,6 +10588,48 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         ],
       },
       { groups: [{ ...tooling, configs: ["test/vitest/legacy-tooling.config.ts"] }] },
+      { groups: [{ ...tooling, configs: ["test/vitest/vitest.tooling-isolated.config.ts"] }] },
+      { groups: [{ ...tooling, configs: ["test/vitest/vitest.tooling-docker.config.ts"] }] },
+      {
+        groups: [
+          {
+            ...tooling,
+            configs: [
+              "test/vitest/vitest.tooling-docker.config.ts",
+              "test/vitest/vitest.tooling-isolated.config.ts",
+            ],
+          },
+        ],
+      },
+      {
+        groups: [
+          {
+            ...tooling,
+            configs: [...tooling.configs, "test/vitest/vitest.tooling-isolated.config.ts"],
+          },
+        ],
+      },
+      {
+        groups: [
+          {
+            ...tooling,
+            configs: [
+              "test/vitest/vitest.tooling-isolated.config.ts",
+              "test/vitest/legacy-tooling.config.ts",
+            ],
+          },
+        ],
+      },
+      { groups: [{ ...tooling, configs: undefined }] },
+      {
+        groups: [
+          {
+            ...tooling,
+            configs: ["test/vitest/vitest.tooling-isolated.config.ts"],
+            includePatterns: [goTest],
+          },
+        ],
+      },
     ];
     const result = runCiManifestFixture({
       bundledPlanner: true,
@@ -10451,6 +10660,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       false,
       true,
       false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      true,
+      true,
       true,
       true,
     ]);

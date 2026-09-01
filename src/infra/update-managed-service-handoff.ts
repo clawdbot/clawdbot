@@ -962,6 +962,7 @@ async function runOwnedUpdateCommand(commandArgv, timeoutMs) {
 async function collectUpdateFailureTriage() {
   try {
     if (!triageFailure || !ownsManagedUpdateLease()) return;
+    appendLog("If triage is unavailable, run " + params.triageRecoveryCommand + " on the Gateway host.");
     // The helper and outer updater start from the same installation. Preserve
     // its complete export; absent exports have only the helper's observed failure.
     const recordedFailure = fs.existsSync(params.triageContextPath);
@@ -1470,7 +1471,14 @@ async function spawnManagedServiceUpdateHandoff(
       installationTarget,
       { env: serviceEnv },
     ),
-    triageHint: `Update triage runs after service recovery; see ${logPath} for the outcome. If triage is unavailable, run ${formatInstallationTargetCommand(["openclaw", "triage"], installationTarget, { env: serviceEnv })} on the Gateway host.`,
+    triageRecoveryCommand: formatInstallationTargetCommand(
+      ["openclaw", "triage"],
+      installationTarget,
+      { env: serviceEnv },
+    ),
+    // This hint becomes a model/channel notice; host paths remain in the helper log.
+    triageHint:
+      "Update triage runs after service recovery; see the managed update helper log for the outcome and the installation-specific openclaw triage command.",
     commandLabel,
     handoffId: params.handoffId,
     nonFailureSkippedReasons: Object.keys(SKIPPED_UPDATE_OUTCOMES),

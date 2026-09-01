@@ -252,23 +252,11 @@ export function resolveCodeModeHeadlessConfig(
   } as OpenClawConfig);
 }
 
-class CodeModeLimitError extends ToolInputError {
-  readonly code = "snapshot_limit_exceeded" as const;
-
-  constructor(message: string) {
-    super(message);
-    this.name = "CodeModeLimitError";
-  }
-}
-
 function isRuntimeInterruptedError(error: unknown): boolean {
   return (error instanceof Error ? error.message : error) === "interrupted";
 }
 
 export function codeModeFailureCode(error: unknown): CodeModeFailureCode {
-  if (error instanceof CodeModeLimitError) {
-    return error.code;
-  }
   if (isRuntimeInterruptedError(error)) {
     return "timeout";
   }
@@ -324,13 +312,4 @@ export function createCodeModeApiFilesForRun(
 ) {
   const { apiFiles: files } = namespaceRuntime;
   return swarmEnabled ? files : files.filter((file) => file.path !== "agents.d.ts");
-}
-
-export function enforceSnapshotPayloadLimits(params: {
-  snapshotBytes: Uint8Array;
-  config: CodeModeConfig;
-}) {
-  if (params.snapshotBytes.byteLength > params.config.maxSnapshotBytes) {
-    throw new CodeModeLimitError("code mode snapshot limit exceeded");
-  }
 }

@@ -214,11 +214,7 @@ export function mergeConcurrentReplySessionMetadata(params: {
   return merged;
 }
 
-export function createReplySessionInitializationRevision(params: {
-  entry: SessionEntry | undefined;
-  storePath: string;
-}): string {
-  const { entry } = params;
+export function createReplySessionInitializationRevision(entry: SessionEntry | undefined): string {
   if (!entry) {
     return JSON.stringify(null);
   }
@@ -226,15 +222,6 @@ export function createReplySessionInitializationRevision(params: {
   // activity/context writes are merged below; comparing them here would reject
   // before the merge can preserve the concurrent metadata.
   return JSON.stringify({ sessionId: entry.sessionId });
-}
-
-export function resolveInitializedReplySessionEntry(params: {
-  agentId: string;
-  currentEntry?: SessionEntry;
-  sessionEntry: SessionEntry;
-  storePath: string;
-}): SessionEntry {
-  return params.sessionEntry;
 }
 
 /** Updates an existing entry only; returns null when the session is absent. */

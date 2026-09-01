@@ -337,6 +337,13 @@ describe("googleChatApprovalNativeRuntime", () => {
       accountId: "default",
       context: { account },
       entry,
+      request: {
+        id: "approval-1",
+        request: { command: "echo hi" },
+        createdAtMs: 0,
+        expiresAtMs: view.expiresAtMs,
+      },
+      approvalKind: "exec",
       payload: final.payload,
       phase: "resolved",
     });

@@ -4,6 +4,7 @@ import type { SpawnOptions } from "node:child_process";
 import fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import pMap from "p-map";
+import { loadPatternListFromEnv } from "../test/vitest/vitest.pattern-file.ts";
 import { formatMs } from "./lib/check-timing-summary.mts";
 import { signalExitCode } from "./lib/managed-child-process.mts";
 import {
@@ -368,7 +369,13 @@ export async function runTestProjects(exitBySignal: typeof exitVitestBySignal) {
       }
     } else {
       const code = await prepareVitestRuntime(
-        runSpecs.map((spec) => ({ configs: [spec.config], includePatterns: spec.includePatterns })),
+        runSpecs.map((spec) => ({
+          configs: [spec.config],
+          // Owned lists are written when readers start; inherited lists remain caller-owned.
+          includePatterns:
+            spec.includePatterns ??
+            loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", spec.env),
+        })),
         baseEnv,
       );
       if (code !== 0) {
