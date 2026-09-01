@@ -8,7 +8,6 @@ import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 // Control UI view renders the Automations (cron) screen: a full-width list (stats, task table,
 // starter ideas) and a full-page detail view for creating or editing a single automation.
-import { isSystemOwnedCronJob } from "../../../../src/cron/metadata.js";
 import "../../styles/chat/text.css";
 import "../../styles/cron.css";
 import type {
@@ -64,6 +63,10 @@ import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
 import { renderRunsSection, runStatusLabel } from "./view-runs.ts";
 
 type CronPanelMode = "overview" | "create" | "job";
+
+function isSystemGroupJob(job: Pick<CronJob, "effectiveGroup">): boolean {
+  return job.effectiveGroup === "System";
+}
 
 export type CronListTab = "tasks" | "activity";
 export type CronDetailTab = "settings" | "history";
@@ -900,7 +903,7 @@ function groupCronJobs(jobs: CronJob[], mode: "none" | "group" | "type") {
 
 function renderJobRow(job: CronJob, props: CronProps) {
   const description = job.description?.trim();
-  const systemOwned = isSystemOwnedCronJob(job);
+  const systemOwned = isSystemGroupJob(job);
   const group = getCronJobGroup(job);
   const nextRunAtMs = job.state?.nextRunAtMs;
   const hasNextRun = typeof nextRunAtMs === "number" && Number.isFinite(nextRunAtMs);
@@ -1107,7 +1110,7 @@ function renderJobMenu(props: CronProps, job: CronJob) {
   if (!props.canManage) {
     return nothing;
   }
-  const systemOwned = isSystemOwnedCronJob(job);
+  const systemOwned = isSystemGroupJob(job);
   return html`
     <wa-dropdown
       class="cron-job-menu"
@@ -1244,7 +1247,7 @@ function renderDetailView(props: CronProps, mode: CronPanelMode) {
 function renderDetailHeader(props: CronProps, mode: CronPanelMode, selectedJob?: CronJob) {
   const title = mode === "job" ? (selectedJob?.name ?? props.form.name) : t("cron.detail.newTitle");
   const description = mode === "job" ? selectedJob?.description?.trim() : undefined;
-  const systemOwned = selectedJob ? isSystemOwnedCronJob(selectedJob) : false;
+  const systemOwned = selectedJob ? isSystemGroupJob(selectedJob) : false;
   // Header describes the SAVED job (schedule + next run); the form's live
   // summary describes unsaved edits, so the two never contradict each other.
   const nextRunAtMs = selectedJob?.state?.nextRunAtMs;
@@ -1350,7 +1353,7 @@ function renderDetailTabs(props: CronProps) {
 function renderEditor(props: CronProps, mode: CronPanelMode) {
   const payloadLocked = props.form.payloadLocked;
   const systemOwned =
-    mode === "job" && props.editingJob !== null && isSystemOwnedCronJob(props.editingJob);
+    mode === "job" && props.editingJob !== null && isSystemGroupJob(props.editingJob);
   const isAgentTurn = !payloadLocked && props.form.payloadKind === "agentTurn";
   const supportsAnnounce =
     props.form.sessionTarget !== "main" &&

@@ -34,7 +34,7 @@ import {
 } from "../../cron/delivery-preview.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
 import { cronJobReadView } from "../../cron/job-read-view.js";
-import { resolveCronJobGroup } from "../../cron/metadata.js";
+import { assertValidCronMetadata, resolveCronJobGroup } from "../../cron/metadata.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
@@ -803,6 +803,9 @@ export const cronHandlers: GatewayRequestHandlers = {
         : undefined;
     let normalized: unknown;
     try {
+      assertValidCronMetadata(
+        params && typeof params === "object" ? (params as { group?: unknown; tags?: unknown }) : {},
+      );
       assertCronDeliveryInputNonBlankFields((params as { delivery?: unknown } | null)?.delivery);
       normalized =
         normalizeCronJobCreate(params, {
@@ -989,6 +992,11 @@ export const cronHandlers: GatewayRequestHandlers = {
       if (typeof rawDisplayName === "string" && rawDisplayName.trim().length === 0) {
         throw new Error("displayName must not be blank");
       }
+      assertValidCronMetadata(
+        rawPatch && typeof rawPatch === "object"
+          ? (rawPatch as { group?: unknown; tags?: unknown })
+          : {},
+      );
       assertCronDeliveryInputNonBlankFields(
         rawPatch && typeof rawPatch === "object"
           ? (rawPatch as { delivery?: unknown }).delivery

@@ -300,9 +300,7 @@ function resolveTsconfigPathAlias(key: string, target: string): ControlUiViteAli
 
 function sourcePackageAlias(packageId: string, subpath?: string): ControlUiViteAlias {
   return {
-    find: subpath
-      ? `@openclaw/${packageId}/${subpath}`
-      : new RegExp(`^@openclaw/${escapeRegExp(packageId)}$`, "u"),
+    find: `@openclaw/${packageId}${subpath ? `/${subpath}` : ""}`,
     replacement: path.join(
       repoRoot,
       "packages",
@@ -317,10 +315,6 @@ function sourcePackageAlias(packageId: string, subpath?: string): ControlUiViteA
 
 export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
   return [
-    {
-      find: /^@openclaw\/normalization-core\/(.+)$/u,
-      replacement: path.join(repoRoot, "packages", "normalization-core", "src", "$1.ts"),
-    },
     sourcePackageAlias("normalization-core", "agent-id"),
     sourcePackageAlias("normalization-core", "code-points"),
     sourcePackageAlias("normalization-core", "json-schema"),
@@ -346,27 +340,10 @@ export function resolveExternalPackageAliasesForVite(
 ): ControlUiViteAlias[] {
   const packageRoot = (specifier: string) =>
     path.dirname(resolvePackage(`${specifier}/package.json`));
-  const packageDist = (specifier: string) => path.dirname(resolvePackage(specifier));
   return [
-    {
-      find: /^@openclaw\/fs-safe$/u,
-      replacement: path.join(packageDist("@openclaw/fs-safe"), "index.js"),
-    },
-    {
-      find: /^@openclaw\/fs-safe\/(.+)$/u,
-      replacement: path.join(packageDist("@openclaw/fs-safe"), "$1.js"),
-    },
     {
       find: "@openclaw/libterminal/browser",
       replacement: path.join(packageRoot("@openclaw/libterminal"), "dist/browser.js"),
-    },
-    {
-      find: /^@openclaw\/proxyline$/u,
-      replacement: path.join(packageDist("@openclaw/proxyline"), "index.js"),
-    },
-    {
-      find: /^@openclaw\/proxyline\/(.+)$/u,
-      replacement: path.join(packageDist("@openclaw/proxyline"), "$1.js"),
     },
     {
       find: "@openclaw/uirouter",

@@ -7,13 +7,11 @@ import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI automation grouping with a real Gateway",
   startServerBeforeBrowser: true,
-  startServer: () => startControlUiE2eServer(undefined, { source: true }),
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not available at ${executablePath}`,
 });
@@ -68,11 +66,17 @@ suite.define(() => {
           const url = new URL("cron", suite.server.baseUrl);
           url.searchParams.set("gatewayUrl", `ws://127.0.0.1:${port}`);
           await page.goto(url.toString());
-          await waitForControlUiGatewayReady(page);
+          const confirmation = page.locator("openclaw-gateway-url-confirmation");
+          await confirmation.waitFor();
+          await confirmation.getByRole("button", { name: "Confirm", exact: true }).click();
+          await waitForControlUiGatewayReady(page, { timeout: 30_000 });
 
           const createJob = async (name: string, group: string, tags: string) => {
             await page.locator('[data-test-id="cron-new-task"]').click();
-            await page.locator("#cron-name").fill(name);
+            const nameInput = page.locator("#cron-name");
+            await nameInput.waitFor({ state: "visible", timeout: 30_000 });
+            await expect.poll(() => nameInput.isEditable(), { timeout: 60_000 }).toBe(true);
+            await nameInput.fill(name);
             await page.locator("#cron-group").fill(group);
             await page.locator("#cron-tags").fill(tags);
             await page.locator("#cron-payload-text").fill(`${name} fired`);

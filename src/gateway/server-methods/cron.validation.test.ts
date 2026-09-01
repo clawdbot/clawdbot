@@ -2813,6 +2813,25 @@ describe("cron method validation", () => {
     expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "must not be blank" });
   });
 
+  it.each(["add", "update"] as const)(
+    "rejects whitespace-only cron.%s metadata before normalization",
+    async (method) => {
+      const result =
+        method === "add"
+          ? await invokeCronAdd(agentTurnCronParams({ group: "   " }))
+          : await invokeCronUpdate(
+              { id: "cron-1", patch: { group: "   " } },
+              createCronJob({ group: "Existing" }),
+            );
+
+      expect(result.context.cron[method === "add" ? "add" : "update"]).not.toHaveBeenCalled();
+      expectResponseError(result.respond, {
+        code: "INVALID_REQUEST",
+        messageIncludes: "cron group must not be blank",
+      });
+    },
+  );
+
   it("hides caller-scoped cron.update for a foreign agent", async () => {
     const { context, respond } = await invokeCronUpdate(
       {
