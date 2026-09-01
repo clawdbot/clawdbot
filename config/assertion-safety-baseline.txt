@@ -501,7 +501,6 @@ extensions/firecrawl/index.ts	2
 extensions/firecrawl/src/config.ts	3
 extensions/firecrawl/src/firecrawl-client.ts	4
 extensions/firecrawl/src/firecrawl-fetch-provider-shared.ts	5
-extensions/firecrawl/web-search-shared.ts	1
 extensions/fish-audio-speech/speech-provider.ts	1
 extensions/github-copilot/connection-bound-ids.ts	1
 extensions/github-copilot/embeddings.ts	6
