@@ -4505,7 +4505,9 @@ NODE
           ? path.join(userHome, "Library", "pnpm", "store")
           : path.join(workspace, ".cache", "openclaw-pnpm-store");
       const seedHome = path.join(root, "seed-home");
+      const toolHome = path.join(root, "tool-home");
       mkdirSync(seedHome, { recursive: true });
+      mkdirSync(toolHome, { recursive: true });
       mkdirSync(userHome, { recursive: true });
       mkdirSync(source, { recursive: true });
       mkdirSync(registry, { recursive: true });
@@ -4521,8 +4523,8 @@ NODE
         }),
       );
       writeFileSync(path.join(source, "index.js"), 'module.exports = "cache-proof-v1";\n');
-      // Resolve the pinned CLI before changing registry/store: pnpm bootstraps itself
-      // through the selected registry and looks for managed versions in that store.
+      // Corepack can bootstrap the pinned CLI under HOME. Keep its lifetime outside
+      // the seed/producer homes that this cache proof deliberately deletes.
       const bootstrap = resolvePnpmRunner();
       const npmExecPath = execFileSync(
         bootstrap.command,
@@ -4530,7 +4532,7 @@ NODE
         {
           cwd: source,
           encoding: "utf8",
-          env: { PATH: process.env.PATH, HOME: seedHome, CI: "true" },
+          env: { PATH: process.env.PATH, HOME: toolHome, CI: "true" },
         },
       ).trim();
       const pnpm = resolvePnpmRunner({ npmExecPath });
