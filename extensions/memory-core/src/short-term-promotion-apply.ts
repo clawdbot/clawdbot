@@ -388,6 +388,7 @@ export async function applyShortTermPromotions(
     options.consolidation?.subagent && toAppend.length > 0
       ? await consolidateMemory({
           subagent: options.consolidation.subagent,
+          ...(options.agentId ? { agentId: options.agentId } : {}),
           workspaceDir,
           existingMemory,
           candidates: toAppend,
