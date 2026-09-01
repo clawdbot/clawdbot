@@ -129,6 +129,9 @@ export function queueDelegatedApproval(params: {
     if (runtimeApprovalAuthority.kind === "local") {
       return true;
     }
+    if (!callerIdentity) {
+      return false;
+    }
     return (
       params.context.validateAgentRuntimeApprovalAuthority?.({
         kind: "agentRuntime",
