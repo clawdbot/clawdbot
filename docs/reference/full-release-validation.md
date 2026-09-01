@@ -229,10 +229,33 @@ Codex `final`, reads randomized workspace inputs, writes their exact artifact,
 and sends explicit completion. This catches the v2026.7.1 regression where an
 ordinary progress send terminated the turn.
 
+Telegram release tests are best effort in every release profile. Selected source
+and package lanes still attempt the real Test Server flow when a Convex credential
+is available. They use the canonical 90-second lease-acquisition retry budget;
+missing broker access, an exhausted pool, or failed tests remain visible as
+failures or skips in the job summaries and evidence, but never block release
+validation. Assertions, credential isolation, lease cleanup, and exact candidate
+identity checks remain unchanged. A successful release decision does not imply
+that Telegram passed; inspect the recorded Telegram outcome separately.
+
 Use `-f skip_package_telegram_e2e=true` only when the release owner explicitly
 defers the Package Acceptance Telegram E2E to a follow-up beta. The input is
 rejected for `stable` and `full`, recorded in validation evidence, and does not disable the focused
 `rerun_group=npm-telegram` workflow.
+
+Best effort is separate from an explicit omission. For the release owner's
+2026.8.1 exception, pass
+`-f telegram_waiver=2026.8.1-owner-approved`. This is accepted only when the
+actual target package is `2026.8.1` and the profile is `stable` or `full`.
+It omits source Telegram QA, Package Acceptance Telegram E2E, and the
+published-package Telegram E2E; their evidence states **waived / not run**,
+never passed. Telegram unit tests and every other selected gate remain active,
+including stable soak and performance checks. An explicit Telegram rerun or
+suite filter, including an aggregate such as `qa-live` or `qa-live-non-slack`
+that selects Telegram, conflicts with the waiver and is rejected. The declaration and
+target version bind the immutable execution plan, manifest, and reuse identity;
+the publisher carries the waiver into release verification notes. The beta-only
+package deferral above remains unchanged.
 
 ## Top-level stages
 
@@ -247,6 +270,16 @@ a fresh Code SHA validation. Pass `reuse_evidence=false` to force a fresh full
 run. Evidence reuse runs only from `main` or a canonical SHA-pinned
 `release-ci/*` ref whose workflow commit remains on trusted `main` lineage;
 other workflow refs run the selected lanes fresh.
+
+The reuse search checks each bound parent manifest for eligibility before
+loading its child runs, job logs, and execution plan. Incompatible profiles,
+inputs, targets, and non-root runs are rejected early. Eligible candidates
+still undergo complete provenance and attempt verification before reuse.
+The verifier reads independent children concurrently (at most seven), retains
+each attempt's job data for its policy checks, and waits for all reads before
+reporting success or failure. Attempts and pagination within each child remain
+sequential. Target resolution and reuse checkouts include only their tooling
+and release metadata; neither needs the complete source tree.
 
 Fresh package-facing validation calls the `Full Release Candidate` reusable
 workflow once. Plugin Prerelease and OpenClaw Release Checks each dispatch an
@@ -282,7 +315,7 @@ it before dispatching. A narrower `rerun_group` skips this preflight.
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Target resolution       | **Job:** `Resolve target ref`<br />**Child workflow:** none<br />**Proves:** resolves the release branch, tag, or full commit SHA and records selected inputs.<br />**Rerun:** rerun the umbrella if this fails.                                                                                                                                                                                                                                                                                                                                                                     |
 | Shared candidate        | **Job:** `Acquire full release candidate`<br />**Child workflow:** `Full Release Candidate`, which exact-reuses a trusted candidate or calls `OpenClaw Live And E2E Checks (Reusable)` on a cache miss<br />**Proves:** packs and validates one exact-SHA package, builds one functional Docker image, and emits content-addressed producer and publisher evidence for the package, plugin registry, image, and preparation plan. Both paths produce the same sealed downstream binding.<br />**Rerun:** rerun the affected package, plugin-prerelease, cross-OS, or live/E2E group. |
-| Docker assets preflight | **Job:** `Verify Docker runtime image assets`<br />**Child workflow:** none<br />**Proves:** the `runtime-assets` Docker build target still succeeds before any other stage dispatches. Runs only for `rerun_group=all`.<br />**Rerun:** rerun the umbrella with `rerun_group=all`.                                                                                                                                                                                                                                                                                                  |
+| Docker assets preflight | **Job:** `Verify Docker runtime image assets`<br />**Child workflow:** none<br />**Proves:** the `runtime-assets` Docker build target succeeds in parallel with other stages and remains enforced by the umbrella verifier. Runs only for `rerun_group=all`.<br />**Rerun:** rerun the umbrella with `rerun_group=all`.                                                                                                                                                                                                                                                              |
 | Vitest and normal CI    | **Job:** `Run normal full CI`<br />**Child workflow:** `CI`<br />**Proves:** manual full CI graph against the target ref, including Linux Node lanes, bundled plugin shards, plugin and channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`, built-artifact smoke checks, docs checks, Python skills, Windows, macOS, Control UI i18n, and Android via the umbrella.<br />**Rerun:** `rerun_group=ci`.                                                                                                                                                   |
 | Plugin prerelease       | **Jobs:** `Run plugin prerelease independent validation` and `Run plugin prerelease candidate validation`<br />**Child workflow:** `Plugin Prerelease`<br />**Proves:** independent static and agentic coverage can start before acquisition, while candidate-dependent Docker lanes consume the sealed package and plugin registry identities.<br />**Rerun:** `rerun_group=plugin-prerelease`.                                                                                                                                                                                     |
 | Release checks          | **Jobs:** `Run release checks independent validation` and `Run release checks candidate validation`<br />**Child workflow:** `OpenClaw Release Checks`<br />**Proves:** independent install, QA, and live coverage can start before acquisition, while package, cross-OS, and candidate-dependent Docker lanes consume the sealed candidate. Stable and full profiles retain exhaustive live/E2E and release-path coverage.<br />**Rerun:** classify the failed surface and select one concrete release-check group.                                                                 |
@@ -375,16 +408,22 @@ artifact when package or Docker-facing stages need it.
 The Docker release-path stage runs these chunks when `live_suite_filter` is
 empty:
 
-| Chunk                                                           | Coverage                                                                                                                                     |
-| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `core`                                                          | Core Docker release-path smoke lanes.                                                                                                        |
-| `package-update-openai`                                         | OpenAI package install/update behavior, Codex on-demand install, Codex plugin live progress follow-through, and Chat Completions tool calls. |
-| `package-update-anthropic`                                      | Anthropic package install and update behavior.                                                                                               |
-| `package-update-core`                                           | Provider-neutral package and update behavior.                                                                                                |
-| `plugins-runtime-plugins`                                       | Plugin runtime lanes that exercise plugin behavior.                                                                                          |
-| `plugins-runtime-services`                                      | Service-backed and live plugin runtime lanes.                                                                                                |
-| `plugins-runtime-install-a` through `plugins-runtime-install-h` | Plugin install/runtime batches split for parallel release validation.                                                                        |
-| `openwebui`                                                     | OpenWebUI compatibility smoke isolated on a dedicated large-disk runner when requested.                                                      |
+| Chunk                                                           | Coverage                                                                                                                                    |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `core`                                                          | Core Docker release-path smoke lanes.                                                                                                       |
+| `package-update-openai`                                         | OpenAI package and tool-call proof, Codex on-demand install and live progress, root-managed VPS upgrades, and authenticated update restart. |
+| `package-update-core`                                           | Provider-neutral package and update behavior.                                                                                               |
+| `plugins-runtime-plugins`                                       | Plugin runtime lanes that exercise plugin behavior.                                                                                         |
+| `plugins-runtime-services`                                      | Service-backed and live plugin runtime lanes.                                                                                               |
+| `plugins-runtime-install-a` through `plugins-runtime-install-h` | Plugin install/runtime batches split for parallel release validation.                                                                       |
+| `openwebui`                                                     | OpenWebUI compatibility smoke isolated on a dedicated large-disk runner when requested.                                                     |
+
+The two package/update rows share the same coverage across every release profile.
+Root-managed VPS upgrade and authenticated restart checks run in the shorter
+OpenAI row to balance the workload without adding jobs or raising resource caps.
+Missing required credentials still fail the job; the diagnostic pool continues
+so independent non-live checks also report their results. Setup failures and
+cancellation do not start that pool.
 
 Expanded published-upgrade survivor and update-migration coverage runs in
 baseline-specific groups of at most three scenarios, with up to 32 targeted
@@ -479,7 +518,8 @@ commands print heartbeat lines so a stuck update is visible before the job
 timeout.
 
 QA release-check failures block normal release validation only for selected
-Matrix, Telegram, and QA runtime tool coverage lanes. QA parity, runtime
+Matrix and QA runtime tool coverage lanes. Source and package Telegram outcomes
+are always advisory; failed or skipped attempts are never reported as passed. QA parity, runtime
 parity, and the gated Discord, WhatsApp, and Slack live lanes are advisory and
 publish status artifacts without blocking the release verifier. Tideclaw
 alpha runs may still treat non-package-safety release-check lanes as advisory. With

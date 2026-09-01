@@ -214,7 +214,7 @@ describe("terminal PTY invocation", () => {
 
     expect(mocks.spawn).toHaveBeenCalledWith(
       expectedComSpec,
-      ["/d", "/s", "/c", `""C:\\Program Files\\Codex\\codex${extension}" resume "thread title""`],
+      `/d /s /c ""C:\\Program Files\\Codex\\codex${extension}" "resume" "thread title""`,
       expect.objectContaining({ cols: 80, rows: 24 }),
     );
   });

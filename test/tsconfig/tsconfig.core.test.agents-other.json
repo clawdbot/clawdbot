@@ -12,6 +12,8 @@
     "../../dist",
     "../../**/dist/**",
     "../../src/agents/*.test.ts",
-    "../../src/agents/*.test.tsx"
+    "../../src/agents/*.test.tsx",
+    "../../src/agents/tools/**/*.test.ts",
+    "../../src/agents/tools/**/*.test.tsx"
   ]
 }

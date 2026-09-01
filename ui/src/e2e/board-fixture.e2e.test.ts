@@ -166,6 +166,45 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     await stopFixtureServer(fixtureServer);
   });
 
+  it("keeps synthetic avatar requests on the preview origin across reloads", async () => {
+    const context = await browser.newContext();
+    const previewOrigin = new URL(fixtureServer.url).origin;
+    const externalRequests: string[] = [];
+    const avatarRequests: string[] = [];
+    try {
+      // A failing regression must never reach a developer's real Gateway.
+      await context.route("**/*", (route) => {
+        const url = route.request().url();
+        if (new URL(url).origin !== previewOrigin) {
+          externalRequests.push(url);
+          return route.abort();
+        }
+        return route.continue();
+      });
+      const page = await context.newPage();
+      page.on("request", (request) => {
+        if (new URL(request.url()).pathname === "/api/users/presence-riley/avatar") {
+          avatarRequests.push(request.url());
+        }
+      });
+      await page.goto(`${previewOrigin}/chat/main?skillLibrary=collaborator&nav=collapsed`);
+      for (const reload of [false, true]) {
+        if (reload) {
+          avatarRequests.length = 0;
+          await page.reload();
+        }
+        await page.getByRole("textbox", { name: "Message Molty" }).waitFor();
+        await expect.poll(() => avatarRequests.length).toBeGreaterThan(0);
+        expect([...new Set(avatarRequests.map((url) => new URL(url).origin))]).toEqual([
+          previewOrigin,
+        ]);
+        expect(externalRequests).toEqual([]);
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
   for (const mode of ["dark", "light"] as const) {
     it(`themes dropdown items and widget frames in ${mode} mode`, async () => {
       const context = await browser.newContext({ colorScheme: mode });

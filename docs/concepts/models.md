@@ -288,8 +288,16 @@ build stamp is ignored.
 
 The hosted file is published from the public
 [`openclaw/catalog`](https://github.com/openclaw/catalog) GitHub repository.
-Its scheduled workflow refreshes from OpenClaw's shipped plugin manifests and
-pricing sources; every catalog content change is preserved as a public commit.
+Its scheduled workflow checks OpenClaw's default-branch plugin manifests and
+public pricing sources every four hours; every catalog content change is
+preserved as a public commit. Provider-owned policies select complete price
+schedules, including context tiers, without mixing rates from different sources.
+Declared native sources read the public Cerebras, Chutes, OpenCode, and Venice
+catalogs, so connected installations can receive advertised price changes without
+a new OpenClaw release. When a valid native feed no longer supplies a model's
+price, publication preserves the model metadata without an estimate; it does not
+infer retirement or substitute another source's rate. Explicit user costs still
+win.
 
 Run `openclaw models refresh` for an immediate metadata and pricing check, or
 disable every hosted catalog request with `models.catalogRefresh.enabled:

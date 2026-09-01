@@ -6,6 +6,7 @@ import {
   type WorkerHelloOk,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { waitForExecScope } from "../agents/bash-process-registry.js";
+import type { ComputerContextEpoch } from "../agents/tools/computer-tool.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
@@ -198,6 +199,7 @@ export async function runWorkerDescriptor(
       import("./embedded-agent.runtime.js"),
       import("./inference-stream.runtime.js"),
     ]);
+    const computerContextEpoch: ComputerContextEpoch = { value: 0 };
     const stream = createWorkerInferenceStreamAdapter({
       client: inference,
       sessionId: descriptor.admission.sessionId,
@@ -205,6 +207,7 @@ export async function runWorkerDescriptor(
       runId: descriptor.assignment.runId,
       turnId: descriptor.assignment.turnId,
       modelRef: descriptor.assignment.modelRef,
+      computerContextEpoch,
     });
     try {
       turnStarted = true;
@@ -234,6 +237,15 @@ export async function runWorkerDescriptor(
             name !== "portal" || hello.protocolFeatures.includes(WORKER_PORTAL_PROTOCOL_FEATURE),
         ),
         ...(descriptor.assignment.browser ? { browser: descriptor.assignment.browser } : {}),
+        ...(descriptor.assignment.computer
+          ? {
+              computer: {
+                contextEpoch: computerContextEpoch,
+                descriptor: descriptor.assignment.computer,
+                requestComputer: (request) => connection.requestComputer(request),
+              },
+            }
+          : {}),
         ...(options.browserRuntime ? { browserRuntime: options.browserRuntime } : {}),
         inference: { stream },
         transcript: {

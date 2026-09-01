@@ -77,6 +77,7 @@ function createFixture() {
     getMessagingToolSentTexts: vi.fn(() => []),
     getMessagingToolSourceReplyPayloads: vi.fn(() => []),
     getPendingToolMediaReply: vi.fn(() => undefined),
+    getToolAutoDeliveryMediaUrls: vi.fn(() => []),
     getReplayState: vi.fn(() => ({ replayInvalid: false, hadPotentialSideEffects: false })),
     getSuccessfulCronAdds: vi.fn(() => []),
     getUsageTotals: vi.fn(() => ({ input: 1, output: 2, total: 3 })),
@@ -175,7 +176,7 @@ function createFixture() {
       activeSession,
       clientToolCallSlots: [],
       coreReadAuthorized: true,
-      getCodeModeReconciliationCandidate: vi.fn(() => false),
+      getCodeModeRecoveryCandidate: vi.fn(() => undefined),
       hasDeliveredSourceReply: vi.fn(() => true),
       hookRunner,
       setCodeModeReconciliationReadAuthorized: vi.fn(),
@@ -233,6 +234,7 @@ function createFixture() {
     resolveActiveContextEnginePluginId: vi.fn(),
     runAbortController: new AbortController(),
     prepared: {
+      promptToolPolicy: { apply: vi.fn(), refresh: vi.fn(), current: {} },
       bootstrap: {
         bootstrapPromptWarning: {},
         shouldRecordCompletedBootstrapTurn: false,
@@ -376,12 +378,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
             __openclaw: { senderName: "Alice" },
           }),
         }),
-        toolPolicy: expect.objectContaining({
-          baseline: {
-            activeToolNames: ["read"],
-            catalogEntries: [],
-          },
-        }),
+        toolPolicy: fixture.input.prepared.promptToolPolicy,
       }),
     );
     expect(mocks.completeResult).toHaveBeenCalledWith(

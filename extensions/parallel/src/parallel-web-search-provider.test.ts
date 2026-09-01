@@ -300,14 +300,6 @@ describe("parallel web search provider", () => {
       "e",
     ]);
   });
-  it("normalizes session ids, rejecting blanks and values past the given limit", () => {
-    expect(testing.normalizeParallelSessionId("session-abc", 1000)).toBe("session-abc");
-    expect(testing.normalizeParallelSessionId("  ", 1000)).toBeUndefined();
-    expect(testing.normalizeParallelSessionId(undefined, 1000)).toBeUndefined();
-    expect(testing.normalizeParallelSessionId("x".repeat(1001), 1000)).toBeUndefined();
-    expect(testing.normalizeParallelSessionId("x".repeat(101), 100)).toBeUndefined();
-    expect(testing.normalizeParallelSessionId("x".repeat(100), 100)).toBe("x".repeat(100));
-  });
   it("normalizes client_model identifiers", () => {
     expect(testing.normalizeParallelClientModel("claude-opus-4-7")).toBe("claude-opus-4-7");
     expect(testing.normalizeParallelClientModel("  gpt-5.5  ")).toBe("gpt-5.5");
@@ -357,9 +349,6 @@ describe("parallel web search provider", () => {
         "web_search (parallel) needs a Parallel API key. Set PARALLEL_API_KEY in the Gateway environment, or configure plugins.entries.parallel.config.webSearch.apiKey.",
       docs: "https://docs.openclaw.ai/tools/parallel-search",
     });
-  });
-  it("identifies the plugin via a versioned User-Agent header", () => {
-    expect(testing.USER_AGENT).toMatch(/^openclaw-parallel\/\d+\.\d+\.\d+/);
   });
   it("treats objective as optional and omits it from the request when absent", async () => {
     enqueueJson();
@@ -468,7 +457,7 @@ describe("parallel web search provider", () => {
     });
     const headers = (call.init.headers ?? {}) as Record<string, string>;
     expect(headers["x-api-key"]).toBe("par-secret");
-    expect(headers["User-Agent"]).toMatch(/^openclaw-parallel\//);
+    expect(headers["User-Agent"]).toMatch(/^openclaw-parallel\/\d+\.\d+\.\d+/);
     expect(result).toMatchObject({
       provider: "parallel",
       searchId: "search_test",

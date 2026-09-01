@@ -22,7 +22,10 @@ import {
   resolveManagedGatewayServiceCommand,
 } from "../../daemon/service-types.js";
 import { resolveGatewayService, type GatewayServiceCommandConfig } from "../../daemon/service.js";
-import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd.js";
+import {
+  hasSudoToRootSystemdUserManagerMismatch,
+  isNonFatalSystemdInstallProbeError,
+} from "../../daemon/systemd.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import {
   defaultGatewayBindMode,
@@ -165,6 +168,17 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     assertGatewayServiceMutationAllowed("install or rewrite the gateway service");
   } catch (error) {
     fail(`Gateway install blocked: ${String(error)}`);
+    return;
+  }
+  if (process.platform === "linux" && hasSudoToRootSystemdUserManagerMismatch(process.env)) {
+    fail(
+      "Gateway install blocked: Refusing a sudo-to-root systemd user-service install because " +
+        "OpenClaw state and service files would belong to root while systemctl targets the " +
+        "invoking user's manager. Rerun the same command without sudo. If [unsafe-permissions] " +
+        "blocked the non-sudo command, repair the reported directory with `chmod go-w <path>` " +
+        "and retry; do not use sudo or --force to bypass it. " +
+        "See https://docs.openclaw.ai/cli/gateway#install-identity.",
+    );
     return;
   }
 

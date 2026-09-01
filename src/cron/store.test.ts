@@ -453,6 +453,36 @@ describe("cron store", () => {
     }
   });
 
+  it("rolls back quarantine deletion when the restored cron row cannot commit", async () => {
+    const { storePath } = await makeStorePath();
+    const store = makeStore("atomic-recovery-job", true);
+    await saveCronStore(storePath, store);
+    const entry = {
+      sourceIndex: 0,
+      reason: "invalid-schedule" as const,
+      job: { id: "atomic-recovery-job" },
+    };
+    saveCronQuarantinedJobs({ storePath, nowMs: 123, entries: [entry] });
+    const database = openOpenClawStateDatabase().db;
+    database.exec(
+      "CREATE TEMP TRIGGER fail_cron_recovery_update BEFORE UPDATE ON cron_jobs BEGIN SELECT RAISE(ABORT, 'cron recovery rejected'); END",
+    );
+    try {
+      await expect(
+        saveCronJobsStore(storePath, store, { deleteQuarantineEntries: [entry] }),
+      ).rejects.toThrow("cron recovery rejected");
+      expect(loadCronQuarantinedJobs(storePath)).toEqual([{ ...entry, quarantinedAtMs: 123 }]);
+      expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual([
+        "atomic-recovery-job",
+      ]);
+    } finally {
+      database.exec("DROP TRIGGER fail_cron_recovery_update");
+    }
+
+    await saveCronJobsStore(storePath, store, { deleteQuarantineEntries: [entry] });
+    expect(loadCronQuarantinedJobs(storePath)).toEqual([]);
+  });
+
   it("runs post-commit hooks only after the cron write commits", async () => {
     const { storePath } = await makeStorePath();
     const store = makeStore("post-commit-hook", true);
@@ -1753,45 +1783,51 @@ describe("saveCronStore", () => {
   });
 });
 describe("cron jobs fingerprint guard", () => {
-  it("refuses a replace from a stale snapshot and accepts it from a fresh one", async () => {
+  it("refuses a replace after a concurrent order change and accepts a fresh snapshot", async () => {
     const { storePath } = await makeStorePath();
-    await saveCronStore(storePath, makeStore("job-a", true));
+    const jobA = expectDefined(makeStore("job-a", true).jobs[0], "job-a fixture");
+    const jobB = expectDefined(makeStore("job-b", true).jobs[0], "job-b fixture");
+    await saveCronStore(storePath, { version: 1, jobs: [jobA, jobB] });
     const staleFingerprint = expectDefined(
       (await loadCronJobsStoreWithConfigJobs(storePath)).jobsFingerprint,
       "fingerprint after first save",
     );
-    await saveCronStore(storePath, {
-      version: 1,
-      jobs: [...makeStore("job-a", true).jobs, ...makeStore("job-c", true).jobs],
-    });
+    await saveCronStore(storePath, { version: 1, jobs: [jobB, jobA] });
 
     await expect(
-      saveCronJobsStoreWithTransactionHooks(storePath, makeStore("job-a", true), undefined, {
-        beforeWrite: (db) => assertCronJobsStoreUnchanged(db, storePath, staleFingerprint),
-      }),
+      saveCronJobsStoreWithTransactionHooks(
+        storePath,
+        { version: 1, jobs: [jobA, jobB] },
+        undefined,
+        { beforeWrite: (db) => assertCronJobsStoreUnchanged(db, storePath, staleFingerprint) },
+      ),
     ).rejects.toBeInstanceOf(CronJobsStoreChangedError);
-    expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual(["job-a", "job-c"]);
+    expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual(["job-b", "job-a"]);
 
     const freshFingerprint = expectDefined(
       (await loadCronJobsStoreWithConfigJobs(storePath)).jobsFingerprint,
-      "fingerprint after concurrent save",
+      "fingerprint after concurrent reorder",
     );
     expect(freshFingerprint).not.toBe(staleFingerprint);
-    await saveCronJobsStoreWithTransactionHooks(storePath, makeStore("job-a", true), undefined, {
-      beforeWrite: (db) => assertCronJobsStoreUnchanged(db, storePath, freshFingerprint),
-    });
-    expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual(["job-a"]);
+    await saveCronJobsStoreWithTransactionHooks(
+      storePath,
+      { version: 1, jobs: [jobA, jobB] },
+      undefined,
+      { beforeWrite: (db) => assertCronJobsStoreUnchanged(db, storePath, freshFingerprint) },
+    );
+    expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual(["job-a", "job-b"]);
   });
 
-  it("preserves a concurrent scheduler run commit through a definition repair", async () => {
+  it("preserves concurrent runtime state and authority through a definition repair", async () => {
     const { storePath } = await makeStorePath();
-    const store = makeStore("job-a", true);
+    const store = makeAuthorityStore("job-a");
     await saveCronStore(storePath, store);
     const fingerprint = expectDefined(
       (await loadCronJobsStoreWithConfigJobs(storePath)).jobsFingerprint,
       "fingerprint before runtime commit",
     );
-    const seeded = expectDefined(store.jobs[0], "seeded job");
+    const concurrent = structuredClone(store);
+    const seeded = expectDefined(concurrent.jobs[0], "seeded job");
     const runAtMs = seeded.updatedAtMs + 5_000;
     seeded.updatedAtMs = runAtMs;
     seeded.state = {
@@ -1801,12 +1837,20 @@ describe("cron jobs fingerprint guard", () => {
       lastRunStatus: "ok",
       consecutiveErrors: 0,
     };
-    await saveCronStore(storePath, store, { stateOnly: true });
+    seeded.runtimeAuthority = {
+      version: 1,
+      runtimeId: "codex",
+      namespace: "codex.apps",
+      payload: { apps: [{ id: "mail" }] },
+    };
+    await saveCronStore(storePath, concurrent);
 
     expect((await loadCronJobsStoreWithConfigJobs(storePath)).jobsFingerprint).toBe(fingerprint);
+    const repair = structuredClone(store);
+    expectDefined(repair.jobs[0], "repair job").enabled = false;
     await saveCronJobsStoreWithTransactionHooks(
       storePath,
-      makeStore("job-a", false),
+      repair,
       { preserveRuntimeState: true },
       { beforeWrite: (db) => assertCronJobsStoreUnchanged(db, storePath, fingerprint) },
     );
@@ -1820,6 +1864,108 @@ describe("cron jobs fingerprint guard", () => {
       lastRunStatus: "ok",
     });
     expect(repaired.updatedAtMs).toBe(runAtMs);
+    expect(repaired.runtimeAuthority).toEqual(seeded.runtimeAuthority);
+  });
+
+  it("requires authority recovery when a repair changes its authorization inputs", async () => {
+    const { storePath } = await makeStorePath();
+    const store = makeAuthorityStore("job-a");
+    await saveCronStore(storePath, store);
+    const fingerprint = expectDefined(
+      (await loadCronJobsStoreWithConfigJobs(storePath)).jobsFingerprint,
+      "fingerprint before authority recapture",
+    );
+    const concurrent = structuredClone(store);
+    const concurrentJob = expectDefined(concurrent.jobs[0], "concurrent job");
+    concurrentJob.runtimeAuthority = {
+      version: 1,
+      runtimeId: "codex",
+      namespace: "codex.apps",
+      payload: { apps: [{ id: "mail" }] },
+    };
+    await saveCronStore(storePath, concurrent);
+    const repair = structuredClone(store);
+    expectDefined(repair.jobs[0], "repair job").payload = {
+      kind: "agentTurn",
+      message: "scheduled continuation",
+      toolsAllow: ["read"],
+    };
+
+    await saveCronJobsStoreWithTransactionHooks(
+      storePath,
+      repair,
+      { preserveRuntimeState: true },
+      { beforeWrite: (db) => assertCronJobsStoreUnchanged(db, storePath, fingerprint) },
+    );
+
+    const repaired = expectDefined((await loadCronStore(storePath)).jobs[0], "repaired job");
+    expect(repaired.runtimeAuthority).toBeUndefined();
+    expect(repaired.runtimeAuthorityRecoveryRequired).toBe(true);
+  });
+
+  it("preserves a concurrent runtime authority clear", async () => {
+    const { storePath } = await makeStorePath();
+    const store = makeAuthorityStore("job-a");
+    await saveCronStore(storePath, store);
+    const fingerprint = expectDefined(
+      (await loadCronJobsStoreWithConfigJobs(storePath)).jobsFingerprint,
+      "fingerprint before authority clear",
+    );
+    const cleared = structuredClone(store);
+    const clearedJob = expectDefined(cleared.jobs[0], "cleared job");
+    delete clearedJob.runtimeAuthority;
+    delete clearedJob.runtimeAuthorityRecoveryRequired;
+    await saveCronStore(storePath, cleared);
+    const repair = structuredClone(store);
+    expectDefined(repair.jobs[0], "repair job").enabled = false;
+
+    await saveCronJobsStoreWithTransactionHooks(
+      storePath,
+      repair,
+      { preserveRuntimeState: true },
+      { beforeWrite: (db) => assertCronJobsStoreUnchanged(db, storePath, fingerprint) },
+    );
+
+    const repaired = expectDefined((await loadCronStore(storePath)).jobs[0], "repaired job");
+    expect(repaired.enabled).toBe(false);
+    expect(repaired.runtimeAuthority).toBeUndefined();
+    expect(repaired.runtimeAuthorityRecoveryRequired).toBeUndefined();
+  });
+
+  it("migrates authority embedded by an older writer during a preserved repair", async () => {
+    const { storePath } = await makeStorePath();
+    const store = makeAuthorityStore("legacy-authority-job");
+    const job = expectDefined(store.jobs[0], "authority job");
+    await saveCronStore(storePath, store);
+    const database = openOpenClawStateDatabase().db;
+    const row = database.prepare("SELECT job_json FROM cron_jobs WHERE job_id = ?").get(job.id) as {
+      job_json: string;
+    };
+    const legacyJob = JSON.parse(row.job_json) as Record<string, unknown>;
+    legacyJob.runtimeAuthority = job.runtimeAuthority;
+    database
+      .prepare("UPDATE cron_jobs SET job_json = ? WHERE job_id = ?")
+      .run(JSON.stringify(legacyJob), job.id);
+    database.prepare("DELETE FROM cron_job_runtime_authorities WHERE job_id = ?").run(job.id);
+    const loaded = await loadCronJobsStoreWithConfigJobs(storePath);
+    const fingerprint = expectDefined(loaded.jobsFingerprint, "legacy authority fingerprint");
+
+    await saveCronJobsStoreWithTransactionHooks(
+      storePath,
+      loaded.store,
+      { preserveRuntimeState: true },
+      { beforeWrite: (db) => assertCronJobsStoreUnchanged(db, storePath, fingerprint) },
+    );
+
+    expect((await loadCronStore(storePath)).jobs[0]?.runtimeAuthority).toEqual(
+      job.runtimeAuthority,
+    );
+    const parent = database
+      .prepare("SELECT job_json FROM cron_jobs WHERE job_id = ?")
+      .get(job.id) as {
+      job_json: string;
+    };
+    expect(JSON.parse(parent.job_json)).not.toHaveProperty("runtimeAuthority");
   });
 
   it("still writes runtime state for a full replace that does not opt into preservation", async () => {
@@ -1834,15 +1980,6 @@ describe("cron jobs fingerprint guard", () => {
 
     const replaced = expectDefined((await loadCronStore(storePath)).jobs[0], "replaced job");
     expect(replaced.state.runningAtMs).toBeUndefined();
-  });
-
-  it("reports the same fingerprint from the read-only loader", async () => {
-    const { storePath } = await makeStorePath();
-    await saveCronStore(storePath, makeStore("job-a", true));
-    const loaded = await loadCronJobsStoreWithConfigJobs(storePath);
-    expect((await loadCronJobsStoreWithConfigJobsReadOnly(storePath)).jobsFingerprint).toBe(
-      loaded.jobsFingerprint,
-    );
   });
 });
 

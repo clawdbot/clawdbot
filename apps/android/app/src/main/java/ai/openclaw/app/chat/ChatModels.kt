@@ -342,6 +342,8 @@ data class ChatSessionEntry(
   val derivedTitle: String? = null,
   val label: String? = null,
   val category: String? = null,
+  val color: String? = null,
+  val hasColorMetadata: Boolean = color != null,
   val pinned: Boolean? = null,
   val archived: Boolean? = null,
   val unread: Boolean? = null,

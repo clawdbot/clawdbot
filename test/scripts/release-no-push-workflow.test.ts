@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -7,12 +8,14 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const FULL_RELEASE = ".github/workflows/full-release-validation.yml";
 const RELEASE_CHECKS = ".github/workflows/openclaw-release-checks.yml";
@@ -28,6 +31,7 @@ const PERFORMANCE = ".github/workflows/openclaw-performance.yml";
 const LIVE_BUILD = "scripts/test-live-build-docker.sh";
 const DOCKER_E2E_IMAGE_HELPER = "scripts/lib/docker-e2e-image.sh";
 const RELEASE_FILTER_VALIDATOR = resolve("scripts/github/validate-release-suite-filters.sh");
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type WorkflowInput = {
   default?: boolean | number | string;
@@ -47,6 +51,7 @@ type WorkflowStep = {
 };
 
 type WorkflowJob = {
+  "continue-on-error"?: boolean | string;
   env?: Record<string, string>;
   if?: string;
   needs?: string | string[];
@@ -234,6 +239,7 @@ function executeReleaseGroupCapture(
         RELEASE_RUN_MATURITY_SCORECARD_INPUT: "false",
         RELEASE_RUN_RELEASE_SOAK_INPUT: String(runReleaseSoak),
         RELEASE_SKIP_PACKAGE_TELEGRAM_E2E_INPUT: "false",
+        TELEGRAM_WAIVER: "",
       },
     });
     const outputText = readFileSync(output, "utf8").trim();
@@ -302,6 +308,143 @@ function executeParentFilterValidation(
 }
 
 describe("release validation no-push transport", () => {
+  it.each([
+    { name: "local validated package", imported: false, status: 0, calls: 0 },
+    { name: "imported package", imported: true, status: 0, calls: 1 },
+    { name: "imported validator failure", imported: true, checkExit: 7, status: 7, calls: 1 },
+    {
+      name: "local source mismatch",
+      imported: false,
+      wrongSource: true,
+      status: 1,
+      calls: 0,
+      error: "Exact-target package build commit differs from the selected SHA.",
+    },
+    {
+      name: "imported digest mismatch",
+      imported: true,
+      wrongDigest: true,
+      status: 1,
+      calls: 0,
+      error: "Declared package tarball SHA-256 differs from package_sha256.",
+    },
+    {
+      name: "imported version mismatch",
+      imported: true,
+      wrongVersion: true,
+      status: 1,
+      calls: 1,
+      error: "Resolved package identity differs from the declared immutable tuple.",
+    },
+    {
+      name: "local metadata mismatch",
+      imported: false,
+      wrongMetadata: true,
+      status: 1,
+      calls: 0,
+      error: "Exact-target package metadata does not bind the selected SHA and tarball.",
+    },
+  ])("validates package identity without repeating local pack checks: $name", (fixture) => {
+    const validate = step(
+      job(readWorkflow(LIVE_E2E), "prepare_docker_e2e_image"),
+      "Validate OpenClaw Docker E2E package",
+    );
+    const root = tempDirs.make("release package identity-");
+    const artifacts = join(root, ".artifacts/docker-e2e-package");
+    const bin = join(root, "bin");
+    const calls = join(root, "validator-calls");
+    const output = join(root, "github-output");
+    const source = "a".repeat(40);
+    const version = "2026.8.1";
+    for (const directory of [
+      artifacts,
+      bin,
+      "package/dist",
+      "scripts",
+      ".release-harness/scripts",
+    ]) {
+      mkdirSync(resolve(root, directory), { recursive: true });
+    }
+    writeFileSync(
+      join(root, "package/package.json"),
+      JSON.stringify({ name: "openclaw", version }),
+    );
+    writeFileSync(
+      join(root, "package/dist/build-info.json"),
+      JSON.stringify({ commit: fixture.wrongSource ? "b".repeat(40) : source }),
+    );
+    const fileName = fixture.imported ? "provided package.tgz" : "openclaw-current.tgz";
+    const tarball = join(artifacts, fileName);
+    const pack = spawnSync("tar", ["-czf", tarball, "-C", root, "package"], { encoding: "utf8" });
+    expect(pack.status, pack.stderr).toBe(0);
+    const digest = createHash("sha256").update(readFileSync(tarball)).digest("hex");
+    if (fixture.wrongMetadata) {
+      writeFileSync(
+        join(artifacts, "package-candidate.json"),
+        JSON.stringify({
+          name: "openclaw",
+          packageSourceSha: source,
+          sha256: "b".repeat(64),
+          version,
+        }),
+      );
+    }
+    writeFileSync(output, "");
+    writeFileSync(calls, "");
+    // Instrument only the validator/package-manager boundary; identity checks use real tar, jq and hashes.
+    writeFileSync(
+      join(root, "scripts/check-openclaw-package-tarball.mjs"),
+      'throw new Error("local pack already validated this package");\n',
+    );
+    writeFileSync(
+      join(root, ".release-harness/scripts/check-openclaw-package-tarball.mjs"),
+      'import fs from "node:fs"; fs.appendFileSync(process.env.VALIDATOR_CALLS, JSON.stringify(process.argv.slice(2)) + "\\n"); process.exit(Number(process.env.CHECK_EXIT));\n',
+    );
+    writeFileSync(
+      join(bin, "pnpm"),
+      '#!/usr/bin/env bash\n[[ "$1" == exec ]] || exit 98\nshift\nexec "$@"\n',
+    );
+    chmodSync(join(bin, "pnpm"), 0o755);
+    const result = spawnSync("bash", ["-euo", "pipefail", "-c", validate.run ?? ""], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        CHECK_EXIT: String(fixture.checkExit ?? 0),
+        EXPECTED_PACKAGE_FILE_NAME: fixture.imported ? fileName : "",
+        EXPECTED_PACKAGE_SHA256: fixture.imported
+          ? fixture.wrongDigest
+            ? "b".repeat(64)
+            : digest
+          : "",
+        EXPECTED_PACKAGE_SOURCE_SHA: fixture.imported ? source : "",
+        EXPECTED_PACKAGE_VERSION: fixture.imported
+          ? fixture.wrongVersion
+            ? "2026.7.1"
+            : version
+          : "",
+        GITHUB_OUTPUT: output,
+        GITHUB_STEP_SUMMARY: join(root, "summary"),
+        GITHUB_WORKSPACE: root,
+        SELECTED_SHA: source,
+        SHARED_IMAGE_POLICY: "no-push-artifact",
+        VALIDATOR_CALLS: calls,
+      },
+    });
+    expect(result.status, result.stderr).toBe(fixture.status);
+    if (fixture.error) {
+      expect(result.stderr).toContain(fixture.error);
+    }
+    expect(readFileSync(calls, "utf8")).toBe(
+      fixture.calls ? `${JSON.stringify([join(artifacts, "openclaw-current.tgz")])}\n` : "",
+    );
+    expect(readFileSync(output, "utf8")).toBe(
+      fixture.status === 0
+        ? `sha256=${digest}\nversion=${version}\nfile_name=openclaw-current.tgz\nsource_sha=${source}\ntag=pkg-${digest.slice(0, 32)}\n`
+        : "",
+    );
+  });
+
   it("routes release retries through explicit concrete groups and resource gates", () => {
     const full = readWorkflow(FULL_RELEASE);
     const release = readWorkflow(RELEASE_CHECKS);
@@ -733,6 +876,81 @@ describe("release validation no-push transport", () => {
     }
   });
 
+  it.each([
+    {
+      producerName: "prepare_docker_e2e_image",
+      readyName: "docker_e2e_image_ready",
+      packStep: "Pack Docker E2E image artifact",
+      artifactDirectory: "docker-e2e-shared-images",
+      image: "openclaw-docker-e2e-bare:test",
+      consumers: ["validate_docker_e2e", "validate_docker_lanes", "validate_docker_openwebui"],
+    },
+    {
+      producerName: "prepare_live_test_image",
+      readyName: "live_test_image_ready",
+      packStep: "Pack live-test image artifact",
+      artifactDirectory: "live-test-shared-image",
+      image: "openclaw-live-test:test",
+      consumers: [
+        "validate_live_models_docker",
+        "validate_live_models_docker_targeted",
+        "validate_live_docker_provider_suites",
+      ],
+    },
+  ])("$producerName owns failed image preparation without another runner", (fixture) => {
+    const workflow = readWorkflow(LIVE_E2E);
+    const producer = job(workflow, fixture.producerName);
+    const pack = step(producer, fixture.packStep);
+    const root = tempDirs.make("release-image-producer-failure-");
+    const bin = join(root, "bin");
+    const calls = join(root, "docker.log");
+    const output = join(root, "github-output");
+    mkdirSync(bin);
+    symlinkSync(resolve("."), join(root, ".release-harness"), "dir");
+    writeFileSync(
+      join(bin, "docker"),
+      '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$DOCKER_CALLS"\nprintf "invalid-config-digest\\n"\n',
+    );
+    chmodSync(join(bin, "docker"), 0o755);
+
+    // Run the checked-in pack step and artifact owner; only an invalid external Docker image ID is injected.
+    const result = spawnSync("bash", ["-c", pack.run ?? ""], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        DOCKER_CALLS: calls,
+        GITHUB_OUTPUT: output,
+        GITHUB_RUN_ID: "123",
+        GITHUB_RUN_ATTEMPT: "1",
+        RUNNER_TEMP: root,
+        BARE_IMAGE: fixture.image,
+        FUNCTIONAL_IMAGE: "openclaw-docker-e2e-functional:test",
+        LIVE_IMAGE: fixture.image,
+        NEEDS_BARE_IMAGE: "1",
+        NEEDS_FUNCTIONAL_IMAGE: "1",
+        PACKAGE_SHA256: "c".repeat(64),
+        SHARED_IMAGE_ARTIFACT_NAMESPACE: "test",
+        TARGET_SHA: "a".repeat(40),
+        WORKFLOW_SHA: "b".repeat(40),
+      },
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`image has an invalid config digest: ${fixture.image}`);
+    expect(readFileSync(calls, "utf8")).toBe(`image inspect --format {{.Id}} ${fixture.image}\n`);
+    expect(existsSync(output)).toBe(false);
+    expect(existsSync(join(root, fixture.artifactDirectory))).toBe(false);
+    expect(producer["continue-on-error"]).toBeUndefined();
+    expect(workflow.jobs?.[fixture.readyName]).toBeUndefined();
+    for (const consumerName of fixture.consumers) {
+      const consumer = job(workflow, consumerName);
+      expect(consumer.needs, consumerName).toContain(fixture.producerName);
+      expect(consumer.needs, consumerName).not.toContain(fixture.readyName);
+      // Preserve GitHub's implicit success gate instead of admitting failed or cancelled prerequisites.
+      expect(consumer.if, consumerName).not.toMatch(/\b(?:always|failure|cancelled|success)\s*\(/u);
+    }
+  });
+
   it("keeps every local reusable-workflow permission request within its caller ceiling", () => {
     const readOnlyCalls = [
       [FULL_RELEASE, "candidate_acquisition"],
@@ -1068,12 +1286,6 @@ describe("release validation no-push transport", () => {
     expectReadOnlyPackagePermission(liveProducer);
     expect(workflow.jobs?.push_docker_e2e_images).toBeUndefined();
     expect(workflow.jobs?.push_live_test_image).toBeUndefined();
-    expect(
-      permissionAt(job(workflow, "docker_e2e_image_ready").permissions, "packages", "none"),
-    ).toBe("none");
-    expect(
-      permissionAt(job(workflow, "live_test_image_ready").permissions, "packages", "none"),
-    ).toBe("none");
     const packageWriters = Object.entries(workflow.jobs ?? {}).filter(
       ([, workflowJob]) => permissionAt(workflowJob.permissions, "packages", "none") === "write",
     );
@@ -1323,7 +1535,7 @@ describe("release validation no-push transport", () => {
       "validate_docker_openwebui",
     ]) {
       const consumer = job(workflow, name);
-      expect(consumer.needs).toContain("docker_e2e_image_ready");
+      expect(consumer.needs).toContain("prepare_docker_e2e_image");
       expect(consumer.env?.OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE).toContain("no-push-artifact");
       expect(step(consumer, "Download OpenClaw Docker E2E package").with).toMatchObject({
         "artifact-ids": "${{ needs.prepare_docker_e2e_image.outputs.package_artifact_id }}",
@@ -1387,7 +1599,7 @@ describe("release validation no-push transport", () => {
       "validate_live_docker_provider_suites",
     ]) {
       const consumer = job(workflow, name);
-      expect(consumer.needs).toContain("live_test_image_ready");
+      expect(consumer.needs).toContain("prepare_live_test_image");
       expect(consumer.env?.OPENCLAW_LIVE_REQUIRE_LOCAL_IMAGE).toContain("no-push-artifact");
       const binding = step(consumer, "Validate live-test image artifact binding");
       expect(binding.if).toContain("shared_image_policy == 'no-push-artifact'");

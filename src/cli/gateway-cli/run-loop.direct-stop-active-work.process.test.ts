@@ -30,9 +30,9 @@ const childScript = `
   import { createChannelIngressQueue } from ${JSON.stringify(moduleUrl("src/channels/message/ingress-queue.ts"))};
   import {
     clearActiveEmbeddedRun,
-    getActiveEmbeddedRunCount,
     setActiveEmbeddedRun,
   } from ${JSON.stringify(moduleUrl("src/agents/embedded-agent-runner/runs.ts"))};
+  import { getActiveEmbeddedRunCount } from ${JSON.stringify(moduleUrl("src/agents/embedded-agent-runner/active-run-projections.ts"))};
   import { runGatewayLoop } from ${JSON.stringify(moduleUrl("src/cli/gateway-cli/run-loop.ts"))};
   import { getActiveGatewayRootWorkCount } from ${JSON.stringify(moduleUrl("src/process/gateway-work-admission.ts"))};
 

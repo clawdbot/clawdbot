@@ -24,11 +24,11 @@ export const telegramQaCliRegistration: LiveTransportQaCliRegistration =
       },
     }),
     credentialOptions: {
-      sourceDescription: "Credential source for Telegram QA: env or convex (default: env)",
+      sourceDescription: "Credential source for Telegram QA (must be convex; default: convex)",
       roleDescription:
         "Credential role for convex auth: maintainer or ci (default: ci in CI, maintainer otherwise)",
     },
-    description: "Run the manual Telegram live QA lane against a private bot-to-bot group harness",
+    description: "Run Telegram Test Server QA with a Convex-leased real-user driver",
     listScenariosHelp: "Print available Telegram scenario ids and exit",
     outputDirHelp: "Telegram QA artifact directory",
     profileHelp: "Taxonomy profile for Telegram scenario selection (default: release)",

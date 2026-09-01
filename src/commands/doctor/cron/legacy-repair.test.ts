@@ -2,17 +2,27 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { loadCronStore, saveCronStore } from "../../../cron/store.js";
+import {
+  loadCronQuarantinedJobs,
+  loadCronStore,
+  saveCronQuarantinedJobs,
+  saveCronStore,
+} from "../../../cron/store.js";
 import { cronStoreKey } from "../../../cron/store/key.js";
 import type { CronJob } from "../../../cron/types.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
-import { applyLegacyCronStoreRepair, loadLegacyCronRepairState } from "./legacy-repair.js";
+import {
+  applyLegacyCronStoreRepair,
+  loadLegacyCronRepairState,
+  repairLegacyCronStoreWithoutPrompt,
+} from "./legacy-repair.js";
 
 let tempRoot: string | undefined;
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   if (tempRoot) {
     await fs.rm(tempRoot, { recursive: true, force: true });
     tempRoot = undefined;
@@ -108,25 +118,6 @@ async function loadRepairStateForStore(storePath: string) {
   return { cfg, state };
 }
 
-it("refuses to rewrite cron rows committed by another process after the repair snapshot", async () => {
-  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-repair-race-"));
-  const storePath = path.join(tempRoot, "cron", "jobs.json");
-  await saveCronStore(storePath, {
-    version: 1,
-    jobs: [{ ...job("job-a"), notify: true } as CronJob],
-  });
-  const { cfg, state } = await loadRepairStateForStore(storePath);
-  await saveCronStore(storePath, { version: 1, jobs: [job("job-a"), job("job-c")] });
-
-  const result = await applyLegacyCronStoreRepair({ cfg, state });
-
-  expect(result.warnings).toEqual([expect.stringContaining("changed while doctor was waiting")]);
-  expect((await loadCronStore(storePath)).jobs.map((entry) => entry.id)).toEqual([
-    "job-a",
-    "job-c",
-  ]);
-});
-
 it("refuses to rewrite a row a writer outside this branch's code committed after the snapshot", async () => {
   tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-repair-mixed-version-"));
   const storePath = path.join(tempRoot, "cron", "jobs.json");
@@ -165,61 +156,38 @@ it("refuses a legacy JSON import when rows were committed after the repair snaps
   expect((await loadCronStore(storePath)).jobs.map((entry) => entry.id)).toEqual(["job-c"]);
 });
 
-it("preserves a scheduler run committed during the prompt window while repairing the definition", async () => {
-  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-repair-runtime-"));
+it("does not reactivate quarantined automations during startup repair", async () => {
+  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-startup-quarantine-"));
   const storePath = path.join(tempRoot, "cron", "jobs.json");
-  await saveCronStore(storePath, {
-    version: 1,
-    jobs: [{ ...job("job-a"), notify: true } as CronJob],
-  });
-  const { cfg, state } = await loadRepairStateForStore(storePath);
-  const runAtMs = Date.now();
-  await saveCronStore(
+  vi.stubEnv("OPENCLAW_STATE_DIR", tempRoot);
+  await saveCronStore(storePath, { version: 1, jobs: [] });
+  saveCronQuarantinedJobs({
     storePath,
-    {
-      version: 1,
-      jobs: [
-        {
-          ...job("job-a"),
-          updatedAtMs: runAtMs,
-          state: {
-            queuedAtMs: runAtMs,
-            runningAtMs: runAtMs,
-            lastRunAtMs: runAtMs,
-            lastRunStatus: "ok",
-            consecutiveErrors: 0,
-          },
-        } as CronJob,
-      ],
-    },
-    { stateOnly: true },
-  );
-
-  const result = await applyLegacyCronStoreRepair({ cfg, state });
-
-  expect(result.warnings).toEqual([]);
-  const repaired = expectDefined((await loadCronStore(storePath)).jobs[0], "repaired job");
-  expect(repaired.state).toMatchObject({
-    queuedAtMs: runAtMs,
-    runningAtMs: runAtMs,
-    lastRunAtMs: runAtMs,
-    lastRunStatus: "ok",
+    nowMs: 123,
+    entries: [
+      {
+        sourceIndex: 0,
+        reason: "invalid-schedule",
+        job: {
+          id: "variant-cron",
+          name: "Variant cron",
+          enabled: true,
+          createdAtMs: 1,
+          updatedAtMs: 1,
+          schedule: { kind: " CRON ", expr: "0 9 * * *" },
+          sessionTarget: "main",
+          wakeMode: "now",
+          payload: { kind: "systemEvent", text: "tick" },
+          state: {},
+        },
+      },
+    ],
   });
-  expect(repaired.updatedAtMs).toBe(runAtMs);
-  expect((repaired as Record<string, unknown>).notify).toBeUndefined();
-});
+  const cfg = { cron: { store: storePath } } as OpenClawConfig;
 
-it("repairs the store when no other process committed after the snapshot", async () => {
-  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-repair-clean-"));
-  const storePath = path.join(tempRoot, "cron", "jobs.json");
-  await saveCronStore(storePath, {
-    version: 1,
-    jobs: [{ ...job("job-a"), notify: true } as CronJob],
-  });
-  const { cfg, state } = await loadRepairStateForStore(storePath);
+  const result = await repairLegacyCronStoreWithoutPrompt({ cfg });
 
-  const result = await applyLegacyCronStoreRepair({ cfg, state });
-
-  expect(result.warnings).toEqual([]);
-  expect((await loadCronStore(storePath)).jobs.map((entry) => entry.id)).toEqual(["job-a"]);
+  expect(result).toEqual({ changes: [], warnings: [] });
+  expect((await loadCronStore(storePath)).jobs).toEqual([]);
+  expect(loadCronQuarantinedJobs(storePath)).toHaveLength(1);
 });

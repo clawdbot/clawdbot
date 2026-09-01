@@ -104,7 +104,7 @@ export async function listSpawnedSessionKeys(params: {
   return result.value;
 }
 
-/** Resolve configured session-tool visibility, defaulting invalid or missing values to tree. */
+/** Resolve configured session-tool visibility, defaulting invalid or missing values to agent. */
 export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionToolsVisibility {
   const raw = (cfg.tools as { sessions?: { visibility?: unknown } } | undefined)?.sessions
     ?.visibility;
@@ -112,7 +112,7 @@ export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionTools
   if (value === "self" || value === "tree" || value === "agent" || value === "all") {
     return value;
   }
-  return "tree";
+  return "agent";
 }
 
 /** Resolve visibility after applying sandbox clamps for spawned-session-only agents. */

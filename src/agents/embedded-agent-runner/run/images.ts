@@ -24,6 +24,7 @@ import { resolveMediaReferenceLocalPath } from "../../../media/media-reference.j
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import { finalizeRuntimePromptImages } from "../../../media/runtime-prompt-image-provenance.js";
 import { loadWebMedia, type WebMediaResult } from "../../../media/web-media.js";
+import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import { resolveUserPath } from "../../../utils.js";
 import type { ImageSanitizationLimits } from "../../image-sanitization.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -289,6 +290,7 @@ async function loadImageFromRef(
 
 export async function detectAndLoadPromptImages(params: {
   prompt: string;
+  userTurnTranscriptRecorder?: Pick<UserTurnTranscriptRecorder, "resolveMessage">;
   media?: readonly MediaFact[];
   workspaceDir: string;
   model: { input?: string[] };
@@ -319,9 +321,16 @@ export async function detectAndLoadPromptImages(params: {
       skippedCount: 0,
     };
   }
-  const media = normalizeMediaFacts(params.media);
+  // Deferred transcript preparation can carry fresher facts than the recorder's
+  // initial message. Resolve without persisting before choosing image ownership.
+  const message = await params.userTurnTranscriptRecorder?.resolveMessage();
+  const media = normalizeMediaFacts(
+    (message ? readPersistedMediaFacts(message) : undefined) ?? params.media,
+  );
+  const mediaImageLayout =
+    (message ? readPersistedMediaImageLayout(message) : undefined) ?? params.mediaImageLayout;
   const suppressed = new Set([
-    ...(params.mediaImageLayout?.suppressedFactIndexes ?? []),
+    ...(mediaImageLayout?.suppressedFactIndexes ?? []),
     ...media.flatMap((fact, index) => (fact.hydrationSuppressed === true ? [index] : [])),
   ]);
   const imageFactIndexes = media.flatMap((fact, factIndex) =>
@@ -356,15 +365,16 @@ export async function detectAndLoadPromptImages(params: {
           : ("offloaded" as const),
     }));
   })();
-  const slots = params.mediaImageLayout?.slots.length
-    ? params.mediaImageLayout.slots.filter(
+  const slots = mediaImageLayout?.slots.length
+    ? mediaImageLayout.slots.filter(
         (slot) => slot.factIndex === undefined || !suppressed.has(slot.factIndex),
       )
     : inferredSlots;
-  const layoutInlineIndexes = (params.mediaImageLayout?.slots ?? slots).flatMap((slot) =>
+  const layoutInlineIndexes = (mediaImageLayout?.slots ?? slots).flatMap((slot) =>
     slot.kind === "inline" ? [slot.factIndex ?? null] : [],
   );
   const existingIndexes =
+    (message ? readPersistedImageBlockFactIndexes(message) : undefined) ??
     params.existingImageFactIndexes ??
     (layoutInlineIndexes.length === (params.existingImages?.length ?? 0)
       ? layoutInlineIndexes

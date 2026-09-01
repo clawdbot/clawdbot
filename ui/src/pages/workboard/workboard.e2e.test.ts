@@ -13,6 +13,7 @@ import type {
   WorkboardCard,
   WorkboardStatus,
 } from "../../lib/workboard/index.ts";
+import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiE2eWaitTimeoutMs,
   installMockGateway,
@@ -27,7 +28,6 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/workboard");
 const viewport = { height: 1000, width: 2400 };
 const baseTime = Date.parse("2026-06-01T18:00:00.000Z");
 const linkedSessionKey = "agent:main:workboard-proof";
@@ -51,9 +51,18 @@ type RecordedPage = {
 };
 
 type ProofArtifacts = {
+  directory: string;
   screenshots: string[];
   videos: string[];
 };
+
+function createProofArtifacts(scope: string): ProofArtifacts {
+  return {
+    directory: captureUiProofEnabled ? createControlUiE2eArtifactDir(scope) : "",
+    screenshots: [],
+    videos: [],
+  };
+}
 
 const requireRecord = createRequireRecord("record", "expected-object-value");
 
@@ -297,12 +306,12 @@ function cardInColumn(page: Page, status: string, title: string) {
 }
 
 async function newRecordedPage(
+  artifacts: ProofArtifacts,
   label: string,
   options: { hasTouch?: boolean } = {},
 ): Promise<RecordedPage> {
-  const rawVideoDir = path.join(artifactDir, `${label}-raw`);
+  const rawVideoDir = path.join(artifacts.directory, `${label}-raw`);
   if (captureUiProofEnabled) {
-    await rm(rawVideoDir, { force: true, recursive: true });
     await mkdir(rawVideoDir, { recursive: true });
   }
   let context: BrowserContext | undefined;
@@ -321,9 +330,6 @@ async function newRecordedPage(
   } catch (error) {
     await page?.close().catch(() => {});
     await context?.close().catch(() => {});
-    if (captureUiProofEnabled) {
-      await rm(rawVideoDir, { force: true, recursive: true });
-    }
     throw error;
   }
 }
@@ -336,7 +342,7 @@ async function captureScreenshot(
   if (!captureUiProofEnabled) {
     return;
   }
-  const screenshotPath = path.join(artifactDir, `${name}.png`);
+  const screenshotPath = path.join(artifacts.directory, `${name}.png`);
   await page.screenshot({ fullPage: true, path: screenshotPath });
   artifacts.screenshots.push(screenshotPath);
 }
@@ -347,28 +353,21 @@ async function closeRecordedPage(
   label: string,
 ): Promise<void> {
   const video = recorded.page.video();
-  try {
-    await recorded.context.close();
-    if (!video) {
-      return;
-    }
-    const rawVideoPath = await video.path();
-    const videoPath = path.join(artifactDir, `${label}.webm`);
-    await copyFile(rawVideoPath, videoPath);
-    artifacts.videos.push(videoPath);
-  } finally {
-    if (captureUiProofEnabled) {
-      await rm(recorded.rawVideoDir, { force: true, recursive: true });
-    }
+  await recorded.context.close();
+  if (!video) {
+    return;
   }
+  const rawVideoPath = await video.path();
+  const videoPath = path.join(artifacts.directory, `${label}.webm`);
+  await copyFile(rawVideoPath, videoPath);
+  artifacts.videos.push(videoPath);
+  // Preserve the raw recording if close or copy fails; only remove the retained copy's source.
+  await rm(recorded.rawVideoDir, { force: true, recursive: true });
 }
 
 suite.define(() => {
   it("persists Workboard create, edit, running move, lifecycle sync, reload, and read-only state", async () => {
-    if (captureUiProofEnabled) {
-      await rm(artifactDir, { force: true, recursive: true });
-    }
-    const artifacts: ProofArtifacts = { screenshots: [], videos: [] };
+    const artifacts = createProofArtifacts("workboard-lifecycle");
     const createdCard = card({
       id: "card-1",
       labels: ["ui", "proof"],
@@ -410,7 +409,7 @@ suite.define(() => {
       updatedAt: baseTime + 5,
     });
 
-    const writable = await newRecordedPage("workboard-writable");
+    const writable = await newRecordedPage(artifacts, "workboard-writable");
     await writable.page.clock.install();
     try {
       const writableGateway = await installMockGateway(writable.page, {
@@ -456,6 +455,7 @@ suite.define(() => {
 
       await priorityCombobox.focus();
       await writable.page.keyboard.press("ArrowDown");
+      await expect.poll(() => priorityCombobox.getAttribute("aria-expanded")).toBe("true");
       await writable.page.keyboard.press("ArrowUp");
       await writable.page.keyboard.press("Enter");
       await waitForWorkboardSelectValue(prioritySelect, "high");
@@ -463,6 +463,7 @@ suite.define(() => {
 
       await priorityCombobox.focus();
       await writable.page.keyboard.press("ArrowDown");
+      await expect.poll(() => priorityCombobox.getAttribute("aria-expanded")).toBe("true");
       await writable.page.keyboard.press("Home");
       await writable.page.keyboard.press("Enter");
       await waitForWorkboardSelectValue(prioritySelect, "all");
@@ -706,7 +707,7 @@ suite.define(() => {
       await closeRecordedPage(writable, artifacts, "workboard-writable");
     }
 
-    const readOnly = await newRecordedPage("workboard-read-only");
+    const readOnly = await newRecordedPage(artifacts, "workboard-read-only");
     try {
       const readOnlyGateway = await installMockGateway(readOnly.page, {
         methodResponses: {
@@ -753,7 +754,7 @@ suite.define(() => {
 
     if (captureUiProofEnabled) {
       await writeFile(
-        path.join(artifactDir, "manifest.json"),
+        path.join(artifacts.directory, "manifest.json"),
         `${JSON.stringify(artifacts, null, 2)}\n`,
         "utf-8",
       );
@@ -761,7 +762,7 @@ suite.define(() => {
   });
 
   it("keeps card titles visible when a column overflows its height", async () => {
-    const artifacts: ProofArtifacts = { screenshots: [], videos: [] };
+    const artifacts = createProofArtifacts("workboard-overflow");
     const crowdedColumnCardCount = 8;
     const overflowTitle = (index: number) =>
       `Overflowing backlog card ${index + 1} with a long title that wraps onto two lines`;
@@ -776,7 +777,7 @@ suite.define(() => {
       }),
     );
 
-    const recorded = await newRecordedPage("workboard-overflow");
+    const recorded = await newRecordedPage(artifacts, "workboard-overflow");
     try {
       await installMockGateway(recorded.page, {
         methodResponses: {
@@ -814,7 +815,7 @@ suite.define(() => {
   });
 
   it("collapses empty stages into rails without squeezing active columns", async () => {
-    const artifacts: ProofArtifacts = { screenshots: [], videos: [] };
+    const artifacts = createProofArtifacts("workboard-collapsed-columns");
     const reviewCard = card({
       id: "review-card",
       status: "review",
@@ -825,7 +826,7 @@ suite.define(() => {
       status: "done",
       title: "Previously completed work",
     });
-    const recorded = await newRecordedPage("workboard-collapsed-columns");
+    const recorded = await newRecordedPage(artifacts, "workboard-collapsed-columns");
     try {
       const gateway = await installMockGateway(recorded.page, {
         methodResponses: {
@@ -987,7 +988,7 @@ suite.define(() => {
   });
 
   it("filters persisted boards and keeps the selection in the URL", async () => {
-    const artifacts: ProofArtifacts = { screenshots: [], videos: [] };
+    const artifacts = createProofArtifacts("workboard-board-filter");
     const defaultCard = card({ id: "default-card", title: "Default board work" });
     const opsCard = card({
       id: "ops-card",
@@ -1014,7 +1015,7 @@ suite.define(() => {
         archivedAt: baseTime,
       },
     ];
-    const recorded = await newRecordedPage("workboard-board-filter");
+    const recorded = await newRecordedPage(artifacts, "workboard-board-filter");
     try {
       await installMockGateway(recorded.page, {
         methodResponses: {

@@ -21,12 +21,13 @@ import {
   parseOffsetlessIsoDateTimeInTimeZone,
 } from "../../infra/format-time/parse-offsetless-zoned-datetime.js";
 import { formatTimestamp } from "../../logging/timestamps.js";
-import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { defaultRuntime, ExitError, type RuntimeEnv } from "../../runtime.js";
 import { formatLookupMiss } from "../error-format.js";
 import { rethrowExpectedCliError } from "../failure-output.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
 import { isJsonOutputModeActive } from "../json-output-mode.js";
+import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { parseDurationMs as parseSharedDurationMs } from "../parse-duration.js";
 
 function parseCronArgv(value: unknown, flag: string): string[] | undefined {
@@ -228,6 +229,10 @@ function formatCronStatusForDisplay(job: CronJob) {
 }
 
 export function handleCronCliError(err: unknown) {
+  // Completed outcomes must reach CLI cleanup, not become new cron errors.
+  if (err instanceof ExitError) {
+    throw err;
+  }
   rethrowExpectedCliError(err);
   const missingJob = readCronJobNotFoundError(err);
   const message = missingJob ? formatCronLookupMiss(missingJob.jobId) : formatErrorMessage(err);
@@ -235,7 +240,7 @@ export function handleCronCliError(err: unknown) {
     throw missingJob ? new Error(message) : err;
   }
   defaultRuntime.error(danger(message));
-  defaultRuntime.exit(1);
+  exitCliAfterOutput(defaultRuntime, 1);
 }
 
 export const formatCronLookupMiss = (jobId: string) =>

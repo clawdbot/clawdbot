@@ -9,6 +9,7 @@ export function createRelayCommandHandler(params: {
   createTab: (message: Record<string, unknown>, operation: CreatedTabOperation) => Promise<void>;
   focusWindowForTab: (tab: BrowserTabSnapshot) => Promise<void>;
   scheduleTabsSync: () => void;
+  captureDebugger: (tabId: number) => () => void;
   captureAccess: (tabId: number, method?: string) => TabAccessEpoch;
   navigateTab: (
     tabId: number,

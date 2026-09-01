@@ -6,12 +6,20 @@ const hoisted = vi.hoisted(() => ({
   classifyProviderFailoverSignalWithPlugin: vi.fn((): FailoverReason | null => null),
 }));
 
-vi.mock("../../logging/node-require.js", () => ({
-  resolveNodeRequireFromMeta: () => () => hoisted,
-}));
+vi.mock("../../plugins/provider-failover.js", () => hoisted);
 
 import { classifyProviderRuntimeFailureKind } from "../embedded-agent-helpers/provider-runtime-failure.js";
 import { classifyFailoverReason, isContextOverflowError } from "./classify.js";
+import { isLikelyHttpErrorText, renderSanitizedUserFacingText } from "./user-copy.js";
+
+it("renders task results and HTTP errors without activating provider hooks", () => {
+  hoisted.classifyProviderFailoverSignalWithPlugin.mockClear();
+  expect(renderSanitizedUserFacingText("Audit complete.", { errorContext: true })).toBe(
+    "Audit complete.",
+  );
+  expect(isLikelyHttpErrorText("500 Internal Server Error")).toBe(true);
+  expect(hoisted.classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
+});
 
 describe("isContextOverflowError provider-hook gate", () => {
   it("skips provider hook dispatch for unrelated errors", () => {

@@ -74,6 +74,8 @@ export const OperationsProtocolSchemas = {
   SystemAgentSetupVerifyResult: openclaw.SystemAgentSetupVerifyResultSchema,
   SystemAgentSetupActivateParams: openclaw.SystemAgentSetupActivateParamsSchema,
   SystemAgentSetupActivateResult: openclaw.SystemAgentSetupActivateResultSchema,
+  SystemAgentSetupActivateStartParams: openclaw.SystemAgentSetupActivateStartParamsSchema,
+  SystemAgentSetupActivateStartResult: openclaw.SystemAgentSetupActivateStartResultSchema,
   SystemAgentSetupAuthStartParams: openclaw.SystemAgentSetupAuthStartParamsSchema,
   SystemAgentSetupAuthStartResult: openclaw.SystemAgentSetupAuthStartResultSchema,
   WizardStartParams: wizard.WizardStartParamsSchema,

@@ -343,6 +343,25 @@ When bundle MCP is enabled, OpenClaw:
 - loads enabled bundle-MCP servers for the current workspace and merges them with any existing backend MCP config/settings shape;
 - rewrites the launch config using the backend-owned integration mode from the owning plugin.
 
+`tools.allow` and `tools.deny` also constrain configured native MCP servers.
+OpenClaw lists each server through its session-scoped runtime, assigns the same
+provider-safe `<safe-server>__<safe-tool>` identities used by embedded tools,
+and applies the complete layered policy before process spawn or Codex
+`thread/start`/`thread/resume`. It then projects exact raw names into each
+backend's enforcement contract: Claude receives server omission plus bare
+`--disallowedTools` entries, Codex receives `enabled_tools` and
+`disabled_tools`, and Gemini receives `includeTools` and `excludeTools`.
+Configured server filters and session overrides remain additional
+restrictions. These backend fields are generated implementation details; keep
+operator policy in OpenClaw configuration.
+
+For example, `agents.entries.research.tools.allow: ["docs__read_docs"]`
+exposes only that tool from the safe `docs` namespace, while
+`deny: ["docs__delete_*"]` removes matching siblings. An empty intersection
+omits the affected MCP server. A server whose restrictive catalog cannot be
+established is also omitted and reported instead of being passed through
+unfiltered.
+
 Restricted runs such as cron jobs with `toolsAllow` require an exact
 backend-owned translation. The bundled `claude-cli` backend disables Claude's
 native tools and user, project, and local customizations, including hooks,

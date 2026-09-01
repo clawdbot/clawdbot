@@ -392,6 +392,7 @@ async function createSessionEntry(
             ...(params.execNode !== undefined ? { execNode: params.execNode } : {}),
             ...(params.execCwd !== undefined ? { execCwd: params.execCwd } : {}),
             initialEntry: {
+              color: params.initialEntry.color,
               ...(harnessInitial ? { agentHarnessId: harnessInitial.agentHarnessId } : {}),
               ...(cliInitial
                 ? {

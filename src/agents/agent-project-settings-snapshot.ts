@@ -42,10 +42,6 @@ function sanitizeAgentSettingsSnapshot(settings: AgentSettingsSnapshot): AgentSe
   return sanitized;
 }
 
-function sanitizeProjectSettings(settings: AgentSettingsSnapshot): AgentSettingsSnapshot {
-  return sanitizeAgentSettingsSnapshot(settings);
-}
-
 function loadBundleSettingsFile(params: {
   rootDir: string;
   relativePath: string;
@@ -166,7 +162,7 @@ export function buildEmbeddedAgentSettingsSnapshot(params: {
     params.policy === "ignore"
       ? {}
       : params.policy === "sanitize"
-        ? sanitizeProjectSettings(params.projectSettings)
+        ? sanitizeAgentSettingsSnapshot(params.projectSettings)
         : params.projectSettings;
   const withPluginSettings = applyMergePatch(
     params.globalSettings,

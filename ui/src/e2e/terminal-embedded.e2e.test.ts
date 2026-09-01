@@ -1,4 +1,6 @@
+import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -12,8 +14,9 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
-const deadSessionScreenshotPath = process.env.OPENCLAW_TERMINAL_DEAD_SESSION_SCREENSHOT?.trim();
-const deadSessionVideoDir = process.env.OPENCLAW_TERMINAL_DEAD_SESSION_VIDEO_DIR?.trim();
+const requestedDeadSessionScreenshotPath =
+  process.env.OPENCLAW_TERMINAL_DEAD_SESSION_SCREENSHOT?.trim();
+const requestedDeadSessionVideoDir = process.env.OPENCLAW_TERMINAL_DEAD_SESSION_VIDEO_DIR?.trim();
 
 suite.define(() => {
   it("returns from an unavailable focused terminal", async () => {
@@ -333,6 +336,27 @@ suite.define(() => {
   });
 
   it("restores a persisted session with no gateway PTY as exited", async () => {
+    const screenshotDir = requestedDeadSessionScreenshotPath
+      ? createControlUiE2eArtifactDir(
+          "terminal-dead-session",
+          path.dirname(requestedDeadSessionScreenshotPath),
+        )
+      : undefined;
+    const deadSessionScreenshotPath =
+      screenshotDir && requestedDeadSessionScreenshotPath
+        ? path.join(screenshotDir, path.basename(requestedDeadSessionScreenshotPath))
+        : undefined;
+    const deadSessionVideoDir = requestedDeadSessionVideoDir
+      ? screenshotDir &&
+        requestedDeadSessionScreenshotPath &&
+        path.resolve(requestedDeadSessionVideoDir) ===
+          path.resolve(path.dirname(requestedDeadSessionScreenshotPath))
+        ? screenshotDir
+        : createControlUiE2eArtifactDir("terminal-dead-session", requestedDeadSessionVideoDir)
+      : undefined;
+    if (deadSessionScreenshotPath) {
+      console.info(`[control-ui-e2e] screenshot: ${deadSessionScreenshotPath}`);
+    }
     await suite.withPage(
       {
         serviceWorkers: "block",

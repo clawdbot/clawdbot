@@ -23,6 +23,8 @@ export type TestChatPane = HTMLElement & {
   prependUniqueNativeMessages: (messages: unknown[], current: unknown[]) => unknown[];
   prependUniqueCatalogMessages: (messages: unknown[]) => unknown[];
   loadOlderMessages: () => Promise<boolean>;
+  stagedOlderPage: unknown;
+  stagedOlderLoad: Promise<void> | null;
   showEarlierMessages: () => Promise<void>;
   requestReplyMessage: (messageId: string) => void;
   readReplyMessage: (messageId: string) => unknown;
@@ -150,4 +152,44 @@ export function createNativeShowEarlierPane(request: ReturnType<typeof vi.fn>) {
   vi.spyOn(result.pane, "updateComplete", "get").mockReturnValue(Promise.resolve(true));
   const scrollToOffset = vi.spyOn(result.pane.transcript, "scrollToOffset");
   return { ...result, scrollToOffset, thread };
+}
+
+/** Offset-scripted chat.history mock for an 8-message transcript whose tail
+ * (seq 7-8) is loaded; overrides replace or extend the default pages. */
+export function stagedPagesRequest(overrides: Record<number, () => unknown> = {}) {
+  const pages: Record<number, () => unknown> = {
+    2: () => ({
+      messages: [nativeHistoryMessage(5), nativeHistoryMessage(6)],
+      hasMore: true,
+      nextOffset: 4,
+      totalMessages: 8,
+    }),
+    4: () => ({
+      messages: [nativeHistoryMessage(3), nativeHistoryMessage(4)],
+      hasMore: true,
+      nextOffset: 6,
+      totalMessages: 8,
+    }),
+    6: () => ({
+      messages: [nativeHistoryMessage(1), nativeHistoryMessage(2)],
+      hasMore: false,
+      totalMessages: 8,
+    }),
+    ...overrides,
+  };
+  return vi.fn(async (_method: string, params: { offset?: number }) => {
+    const page = pages[params.offset ?? -1];
+    if (!page) {
+      throw new Error(`no scripted page for offset ${String(params.offset)}`);
+    }
+    return page();
+  });
+}
+
+export function createStagedPrefetchPane(request: ReturnType<typeof vi.fn>) {
+  const client = { request } as unknown as GatewayBrowserClient;
+  const result = createTestChatPane({ client, sessions: {} as SessionCapability });
+  result.state.chatMessages = [nativeHistoryMessage(7), nativeHistoryMessage(8)];
+  result.state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 8 };
+  return result;
 }

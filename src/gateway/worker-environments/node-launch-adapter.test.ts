@@ -7,6 +7,7 @@ import {
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../../infra/node-commands.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import {
@@ -14,11 +15,16 @@ import {
   type NodeWorkerLaunchInput,
   type NodeWorkerSupervisorReceipt,
 } from "../../worker/node-supervisor-protocol.js";
+import { measureWorkerProcessTurnBytes } from "../../worker/worker-process-protocol.js";
+import { buildNodeInvokeRequest, serializeNodeEvent } from "../node-invoke-request.js";
 import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
-import { createNodeWorkerLaunchAdapter } from "./node-launch-adapter.js";
+import {
+  createNodeWorkerLaunchAdapter,
+  measureNodeWorkerLaunchBytes,
+} from "./node-launch-adapter.js";
 
 const DEVICE_ID = "device-session-host";
 const WORKER_RUNS = {
@@ -132,10 +138,35 @@ function launchRequest(input = launchInput()) {
 describe("node worker launch adapter", () => {
   it("re-arms only a settled pre-admission deadline with fresh idempotent launch identities", async () => {
     const input = launchInput();
+    input.descriptor.assignment.systemPrompt = '"\\\0\n漢😀'.repeat(10_000);
+    input.descriptor.assignment.systemPrompt += "x".repeat(
+      WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES - measureNodeWorkerLaunchBytes(DEVICE_ID, input),
+    );
+    const bound = measureNodeWorkerLaunchBytes(DEVICE_ID, input);
+    expect(bound).toBe(WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES);
     const launches: NodeWorkerLaunchInput[] = [];
     const delays: number[] = [];
     const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
       const attempt = request.params as NodeWorkerLaunchInput;
+      const frameBytes = Buffer.byteLength(
+        serializeNodeEvent(
+          "node.invoke.request",
+          buildNodeInvokeRequest({
+            id: "00000000-0000-0000-0000-000000000000",
+            nodeId: request.node.nodeId,
+            command: request.command,
+            params: attempt,
+            timeoutMs: request.timeoutMs!,
+            idempotencyKey: request.idempotencyKey,
+          }),
+        ),
+      );
+      expect(frameBytes).toBeLessThanOrEqual(bound);
+      expect(measureWorkerProcessTurnBytes(attempt.descriptor)).toBeLessThanOrEqual(bound);
+      console.info(
+        "worker-admission-rearm",
+        JSON.stringify({ turnIdLength: attempt.launchId.length, frameBytes, bound }),
+      );
       launches.push(attempt);
       return wire({
         ...receipt(attempt, "completed"),
@@ -323,26 +354,80 @@ describe("node worker launch adapter", () => {
     },
   );
 
-  it("reports offline availability when the dispatch grace expires", async () => {
-    vi.useFakeTimers();
-    const onDispatchReady = vi.fn();
-    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>();
-    const adapter = createNodeWorkerLaunchAdapter({
-      getTransport: () => transportWith(invoke, async () => []),
-    });
-    try {
-      const launch = adapter
-        .launch({ ...launchRequest(), timeoutMs: 30_000, onDispatchReady })
-        .catch((error: unknown) => error);
-      await vi.runAllTimersAsync();
+  it.each([
+    {
+      name: "timer expiry",
+      clockOnly: false,
+      timeoutMs: 30_000,
+      abort: false,
+      expected: { code: "runner-offline" },
+    },
+    {
+      name: "clock expiry before timer callback",
+      clockOnly: true,
+      timeoutMs: 30_000,
+      abort: false,
+      expected: { code: "runner-offline" },
+    },
+    {
+      name: "shorter launch deadline",
+      clockOnly: true,
+      timeoutMs: 5_000,
+      abort: false,
+      expected: { message: "node worker launch timed out" },
+    },
+    {
+      name: "equal launch deadline",
+      clockOnly: true,
+      timeoutMs: 10_000,
+      abort: false,
+      expected: { message: "node worker launch timed out" },
+    },
+    {
+      name: "caller cancellation",
+      clockOnly: true,
+      timeoutMs: 30_000,
+      abort: true,
+      expected: { message: "caller cancelled" },
+    },
+  ])(
+    "preserves pre-dispatch failure identity after $name",
+    async ({ clockOnly, timeoutMs, abort, expected }) => {
+      vi.useFakeTimers();
+      let nowMs = 0;
+      const controller = new AbortController();
+      const onDispatchReady = vi.fn();
+      const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>();
+      const adapter = createNodeWorkerLaunchAdapter({
+        getTransport: () => transportWith(invoke, async () => []),
+        ...(clockOnly
+          ? {
+              now: () => nowMs,
+              sleep: async () => {
+                nowMs += 10_000;
+                if (abort) {
+                  controller.abort(new Error("caller cancelled"));
+                }
+              },
+            }
+          : {}),
+      });
+      try {
+        const launch = adapter
+          .launch({ ...launchRequest(), timeoutMs, onDispatchReady, signal: controller.signal })
+          .catch((error: unknown) => error);
+        if (!clockOnly) {
+          await vi.runAllTimersAsync();
+        }
 
-      expect(await launch).toMatchObject({ code: "runner-offline" });
-      expect(invoke).not.toHaveBeenCalled();
-      expect(onDispatchReady).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        expect(await launch).toMatchObject(expected);
+        expect(invoke).not.toHaveBeenCalled();
+        expect(onDispatchReady).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("dispatches a bound environment at capacity so its retained worker can reuse the slot", async () => {
     const input = launchInput();

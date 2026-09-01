@@ -23,6 +23,7 @@ import {
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   credential,
+  measureLaunchTurn,
   openSessionManager,
   placements,
   root,
@@ -143,6 +144,7 @@ describe("current attachments in an active remote placement", () => {
             signal: command.signal,
           });
         }),
+        measureLaunchTurn,
         stageAttachments: async (request) => {
           const service = createNodeWorkspaceTransferService({
             getOwner: () => ({

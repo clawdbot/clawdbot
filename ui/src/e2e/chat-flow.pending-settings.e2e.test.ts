@@ -1,9 +1,11 @@
+import path from "node:path";
 import { expect, it } from "vitest";
 import {
   captureUiProofEnabled,
   chatSessionListResponse,
   createChatFlowE2eSuite,
   expectRequestCountStable,
+  controlUiSessionUrl,
   installMockGateway,
   requireRecord,
   waitForRequests,
@@ -54,7 +56,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
 
       const main = page.getByRole("main");
       await main.locator('[data-chat-thinking-select="true"]').click();
@@ -103,7 +105,7 @@ suite.define(() => {
   it("dispatches after its settings refresh while a later roster refresh is still pending", async () => {
     const context = await suite.newBrowserContext({
       ...(captureUiProofEnabled
-        ? { recordVideo: { dir: ".artifacts/send-settings-wait/video" } }
+        ? { recordVideo: { dir: path.join(suite.artifactDir, "send-settings-wait", "video") } }
         : {}),
       locale: "en-US",
       serviceWorkers: "block",
@@ -115,7 +117,7 @@ suite.define(() => {
       models: [{ id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" }],
     });
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       const main = page.getByRole("main");
       await main.locator('[data-chat-thinking-select="true"]').click();
       const listsBefore = (await gateway.getRequests("sessions.list")).length;
@@ -157,7 +159,9 @@ suite.define(() => {
         .getByText("Settings applied and message delivered.")
         .waitFor();
       if (captureUiProofEnabled) {
-        await page.screenshot({ path: ".artifacts/send-settings-wait/browser-after.png" });
+        await page.screenshot({
+          path: path.join(suite.artifactDir, "send-settings-wait", "browser-after.png"),
+        });
       }
       await gateway.resolveDeferred("sessions.list");
     } finally {

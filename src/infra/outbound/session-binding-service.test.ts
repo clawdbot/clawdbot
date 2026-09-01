@@ -1,5 +1,6 @@
 // Covers session binding adapter registration, generic current-conversation
 // fallback, capability errors, deduping, and duplicate graph teardown.
+import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -118,12 +119,12 @@ function createRecord(input: SessionBindingBindInput): SessionBindingRecord {
       ? "thread-created"
       : input.conversation.conversationId.trim() || "thread-current";
   return {
-    bindingId: `default:${conversationId}`,
+    bindingId: `${input.conversation.accountId}:${conversationId}`,
     targetSessionKey: input.targetSessionKey,
     targetKind: input.targetKind,
     conversation: {
-      channel: "demo-binding",
-      accountId: "default",
+      channel: input.conversation.channel,
+      accountId: input.conversation.accountId,
       conversationId,
       parentConversationId: input.conversation.parentConversationId?.trim() || undefined,
     },
@@ -218,6 +219,107 @@ describe("session binding service", () => {
       accountId: "default",
       conversationId: "thread-1",
     });
+  });
+
+  it("keeps colliding adapter ids scoped while session-wide cleanup reaches every owner", async () => {
+    const service = getSessionBindingService();
+    const bindings: SessionBindingRecord[] = [];
+    for (const channel of ["channel-a", "channel-b"]) {
+      let current: SessionBindingRecord | null = null;
+      registerSessionBindingAdapter({
+        channel,
+        accountId: "default",
+        bind: async (input) => (current = createRecord(input)),
+        resolveByConversation: () => current,
+        listBySession: (key) => (current?.targetSessionKey === key ? [current] : []),
+        touch: (id, at) => {
+          if (current?.bindingId === id) {
+            current = { ...current, metadata: { lastActivityAt: at } };
+          }
+        },
+        unbind: async (input) => {
+          if (
+            !current ||
+            (input.bindingId !== current.bindingId &&
+              input.targetSessionKey !== current.targetSessionKey)
+          ) {
+            return [];
+          }
+          const removed = current;
+          current = null;
+          return [removed];
+        },
+      });
+      bindings.push(
+        await service.bind({
+          conversation: { channel, accountId: "default", conversationId: "room-1" },
+          targetSessionKey: "agent:main:shared",
+          targetKind: "session",
+        }),
+      );
+    }
+    const first = expectDefined(bindings[0], "first binding");
+    const second = expectDefined(bindings[1], "second binding");
+    expect(first.bindingId).toBe(second.bindingId);
+    expect(service.listBySession(first.targetSessionKey)).toEqual(bindings);
+
+    const scope = { channel: " CHANNEL-A ", accountId: " DEFAULT " };
+    service.touch(first.bindingId, 1234, scope);
+    expect(service.resolveByConversation(first.conversation)?.metadata?.lastActivityAt).toBe(1234);
+    expect(service.resolveByConversation(second.conversation)).toEqual(second);
+    await expect(
+      service.unbind({ bindingId: first.bindingId, scope, reason: "manual" }),
+    ).resolves.toHaveLength(1);
+    expect(service.resolveByConversation(first.conversation)).toBeNull();
+    expect(service.resolveByConversation(second.conversation)).toEqual(second);
+
+    await service.unbind({
+      bindingId: second.bindingId,
+      scope: { ...scope, accountId: "missing" },
+      reason: "manual",
+    });
+    expect(service.resolveByConversation(second.conversation)).toEqual(second);
+    const rebound = await service.bind({
+      targetSessionKey: first.targetSessionKey,
+      targetKind: first.targetKind,
+      conversation: first.conversation,
+    });
+    expect(rebound.bindingId).toBe(first.bindingId);
+    expect(
+      await service.unbind({ targetSessionKey: first.targetSessionKey, reason: "session-ended" }),
+    ).toEqual([rebound, second]);
+    expect(service.listBySession(first.targetSessionKey)).toEqual([]);
+  });
+
+  it("honors owner scopes for generic touch, detach, and session cleanup", async () => {
+    const service = getSessionBindingService();
+    const first = await service.bind({
+      targetSessionKey: "agent:main:shared",
+      targetKind: "session",
+      conversation: { channel: "workspace", accountId: "default", conversationId: "room-1" },
+    });
+    const second = await service.bind({
+      targetSessionKey: first.targetSessionKey,
+      targetKind: "session",
+      conversation: { channel: "teamchat", accountId: "default", conversationId: "room-1" },
+    });
+    service.touch(first.bindingId, 1234, second.conversation);
+    expect(service.resolveByConversation(first.conversation)).toEqual(first);
+    await expect(
+      service.unbind({ bindingId: first.bindingId, scope: second.conversation, reason: "manual" }),
+    ).resolves.toEqual([]);
+    service.touch(first.bindingId, 1234, first.conversation);
+    expect(service.resolveByConversation(first.conversation)?.metadata?.lastActivityAt).toBe(1234);
+    await expect(
+      service.unbind({
+        targetSessionKey: first.targetSessionKey,
+        scope: first.conversation,
+        reason: "session-ended",
+      }),
+    ).resolves.toHaveLength(1);
+    expect(service.resolveByConversation(first.conversation)).toBeNull();
+    closeOpenClawStateDatabaseForTest();
+    expect(service.resolveByConversation(second.conversation)).toEqual(second);
   });
 
   it("supports explicit child placement when adapter advertises it", async () => {

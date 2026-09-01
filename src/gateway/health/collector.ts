@@ -3,14 +3,16 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../../agents/agent-scope.js";
 import { redactChannelStatusSummaryBaseUrl } from "../../channels/account-snapshot-fields.js";
+import { buildChannelAccountSnapshotFromInspection } from "../../channels/account-summary.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import { buildChannelAccountSnapshotFromAccount } from "../../channels/plugins/status.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import { resolveUnavailableChannelAccountSnapshot } from "../../channels/status/account-state.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
+import type { SessionEntrySummary } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -108,57 +110,65 @@ export function resolveHealthAgentOrder(cfg: OpenClawConfig) {
   return { defaultAgentId, ordered };
 }
 
-export async function buildHealthSessionSummary(storePath: string, agentId?: string) {
-  const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId }).path;
-  const { listSessionEntriesReadOnly } = await import("../../config/sessions/session-accessor.js");
+async function createHealthSessionStoreReader(agentIds: readonly string[]) {
+  const { createStatusSessionStoreReader } = await import("../../status/session-stores.js");
+  const { readSessionStoreSummaryReadOnly } =
+    await import("../../config/sessions/session-accessor.js");
   const { isTransientSqliteError } = await import("../../infra/unhandled-rejections.js");
-  let listed: ReturnType<typeof listSessionEntriesReadOnly>;
-  try {
-    listed = listSessionEntriesReadOnly({
-      ...(agentId ? { agentId } : {}),
-      clone: false,
-      projection: "list",
-      storePath,
-    });
-  } catch (error) {
-    if (!isTransientSqliteError(error)) {
-      throw error;
-    }
-    // Health is best-effort: an empty snapshot beats failing on a transient lock.
-    listed = [];
-  }
-  const recentSessions: Array<{ key: string; updatedAt: number }> = [];
-  let sessionCount = 0;
-  for (const { sessionKey, entry } of listed) {
-    if (sessionKey === "global" || sessionKey === "unknown") {
-      continue;
-    }
-    sessionCount += 1;
-    const session = { key: sessionKey, updatedAt: entry?.updatedAt ?? 0 };
-    const insertAt = recentSessions.findIndex(
-      (recentSession) => session.updatedAt > recentSession.updatedAt,
-    );
-    // Health returns only five rows. Keep the projection bounded while scanning
-    // so refreshes never sort the complete session snapshot.
-    if (insertAt >= 0) {
-      recentSessions.splice(insertAt, 0, session);
-      if (recentSessions.length > HEALTH_RECENT_SESSION_LIMIT) {
-        recentSessions.pop();
+  return createStatusSessionStoreReader(agentIds, HEALTH_RECENT_SESSION_LIMIT, (scope, options) => {
+    try {
+      return readSessionStoreSummaryReadOnly(scope, options);
+    } catch (error) {
+      if (!isTransientSqliteError(error)) {
+        throw error;
       }
-    } else if (recentSessions.length < HEALTH_RECENT_SESSION_LIMIT) {
-      recentSessions.push(session);
+      // Health is best-effort: one empty snapshot beats repeated transient lock failures.
+      return { count: 0, recent: [], byAgent: new Map() };
     }
-  }
-  const recent = recentSessions.map((session) => ({
-    key: session.key,
-    updatedAt: session.updatedAt || null,
-    age: session.updatedAt ? Date.now() - session.updatedAt : null,
+  });
+}
+
+function projectHealthSessions(
+  path: string,
+  summary: { count: number; recent: SessionEntrySummary[] },
+) {
+  const recent = summary.recent.map(({ sessionKey: key, entry }) => ({
+    key,
+    updatedAt: entry.updatedAt || null,
+    age: entry.updatedAt ? Date.now() - entry.updatedAt : null,
   }));
   return {
-    path: databasePath,
-    count: sessionCount,
+    path,
+    count: summary.count,
     recent,
   } satisfies HealthSummary["sessions"];
+}
+
+async function buildHealthSessionSummary(storePath: string, agentId?: string) {
+  const reader = await createHealthSessionStoreReader(agentId ? [agentId] : []);
+  const store = reader.read(storePath, agentId);
+  return projectHealthSessions(store.path, store);
+}
+
+/** Shares one bounded session snapshot across every configured agent in this collection. */
+export async function buildHealthAgentSummaries(
+  cfg: OpenClawConfig,
+  { defaultAgentId, ordered }: ReturnType<typeof resolveHealthAgentOrder>,
+): Promise<AgentHealthSummary[]> {
+  const reader = await createHealthSessionStoreReader(ordered.map((entry) => entry.id));
+  return ordered.map((entry) => {
+    const store = reader.read(
+      resolveSessionStorePathCore(cfg.session?.store, { agentId: entry.id }),
+      entry.id,
+    );
+    return {
+      agentId: entry.id,
+      name: entry.name,
+      isDefault: entry.id === defaultAgentId,
+      heartbeat: resolveHeartbeatSummary(cfg, entry.id),
+      sessions: projectHealthSessions(store.path, store),
+    };
+  });
 }
 
 function buildPluginHealthSummary(): PluginHealthSummary | undefined {
@@ -343,7 +353,20 @@ async function buildHealthAccountRecord(params: {
   runtimeSnapshot?: ChannelRuntimeSnapshot;
 }): Promise<ChannelAccountHealthSummary> {
   const timedOut = () => buildHealthTimeoutRecord(params.accountId, params.timeoutMs);
-  const { probeAccount, snapshotAccount, enabled, configured, diagnostics } =
+  const runtimeSnapshot =
+    params.runtimeSnapshot?.channelAccounts[params.plugin.id]?.[params.accountId] ??
+    (params.accountId === params.defaultAccountId
+      ? params.runtimeSnapshot?.channels[params.plugin.id]
+      : undefined);
+  const unavailable = resolveUnavailableChannelAccountSnapshot({
+    channelId: params.plugin.id,
+    accountId: params.accountId,
+    runtime: runtimeSnapshot,
+  });
+  if (unavailable) {
+    return unavailable;
+  }
+  const { probeAccount, inspectedAccount, enabled, configured, diagnostics } =
     await resolveHealthAccountContext({
       plugin: params.plugin,
       cfg: params.cfg,
@@ -362,7 +385,13 @@ async function buildHealthAccountRecord(params: {
 
   let probe: unknown;
   let lastProbeAt: number | null = null;
-  if (enabled && configured && params.probe && params.plugin.status?.probeAccount) {
+  if (
+    probeAccount !== undefined &&
+    enabled &&
+    configured === true &&
+    params.probe &&
+    params.plugin.status?.probeAccount
+  ) {
     try {
       probe = await params.plugin.status.probeAccount({
         account: probeAccount,
@@ -393,23 +422,26 @@ async function buildHealthAccountRecord(params: {
     });
   }
 
-  const runtimeSnapshot =
-    params.runtimeSnapshot?.channelAccounts[params.plugin.id]?.[params.accountId] ??
-    (params.accountId === params.defaultAccountId
-      ? params.runtimeSnapshot?.channels[params.plugin.id]
-      : undefined);
   const nonSensitiveProbeFailure = buildNonSensitiveProbeFailure(params.plugin.id, probe);
   const snapshotProbe = params.includeSensitive ? probe : nonSensitiveProbeFailure;
-  const snapshot: ChannelAccountSnapshot = await buildChannelAccountSnapshotFromAccount({
-    plugin: params.plugin,
-    cfg: params.cfg,
-    accountId: params.accountId,
-    account: snapshotAccount,
-    runtime: runtimeSnapshot,
-    probe: snapshotProbe,
-    enabledFallback: enabled,
-    configuredFallback: configured,
-  });
+  const snapshot: ChannelAccountSnapshot =
+    probeAccount === undefined
+      ? buildChannelAccountSnapshotFromInspection({
+          account: inspectedAccount,
+          accountId: params.accountId,
+          runtime: runtimeSnapshot,
+          probe: snapshotProbe,
+        })
+      : await buildChannelAccountSnapshotFromAccount({
+          plugin: params.plugin,
+          cfg: params.cfg,
+          accountId: params.accountId,
+          account: probeAccount,
+          runtime: runtimeSnapshot,
+          probe: snapshotProbe,
+          enabledFallback: enabled,
+          configuredFallback: configured,
+        });
   if (Date.now() >= params.deadlineAtMs) {
     return timedOut();
   }
@@ -426,14 +458,15 @@ async function buildHealthAccountRecord(params: {
     snapshot.healthState = healthState;
   }
 
-  const summary = params.plugin.status?.buildChannelSummary
-    ? await params.plugin.status.buildChannelSummary({
-        account: probeAccount,
-        cfg: params.cfg,
-        defaultAccountId: params.accountId,
-        snapshot,
-      })
-    : undefined;
+  const summary =
+    probeAccount !== undefined && params.plugin.status?.buildChannelSummary
+      ? await params.plugin.status.buildChannelSummary({
+          account: probeAccount,
+          cfg: params.cfg,
+          defaultAccountId: params.accountId,
+          snapshot,
+        })
+      : undefined;
   if (Date.now() >= params.deadlineAtMs) {
     return timedOut();
   }
@@ -444,10 +477,9 @@ async function buildHealthAccountRecord(params: {
       : ({
           ...snapshot,
           accountId: params.accountId,
-          configured,
         } satisfies ChannelAccountHealthSummary),
   );
-  if (record.configured === undefined) {
+  if (record.configured === undefined && probeAccount !== undefined) {
     record.configured = configured;
   }
   if (params.includeSensitive && record.probe === undefined && probe !== undefined) {
@@ -503,18 +535,7 @@ export async function collectGatewayHealthSnapshot(params: {
   const cfg = await readRuntimeHealthConfig();
   const { defaultAgentId, ordered } = resolveHealthAgentOrder(cfg);
   const channelBindings = buildChannelAccountBindings(cfg);
-  const agents: AgentHealthSummary[] = [];
-  for (const entry of ordered) {
-    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: entry.id });
-    const sessions = await buildHealthSessionSummary(storePath, entry.id);
-    agents.push({
-      agentId: entry.id,
-      name: entry.name,
-      isDefault: entry.id === defaultAgentId,
-      heartbeat: resolveHeartbeatSummary(cfg, entry.id),
-      sessions,
-    });
-  }
+  const agents = await buildHealthAgentSummaries(cfg, { defaultAgentId, ordered });
   const summaryAgent = agents.find((agent) => agent.isDefault) ?? agents[0];
   const configuredHeartbeatAgentId = normalizeOptionalString(
     cfg.agents?.defaults?.heartbeat?.agentId,

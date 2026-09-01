@@ -17,6 +17,7 @@ export type PairingQrExpiryNotice = {
 
 export type ImageBlock = {
   url: string;
+  factIndex?: number;
   artifactId?: string;
   fileName?: string;
   openUrl?: string;
@@ -32,6 +33,7 @@ export type ArtifactDownloadResolver = (params: {
 }) => Promise<{ url: string; expiresAt?: string } | null>;
 
 export type ImageRenderOptions = {
+  canonicalMessageKey?: string;
   connectionEpoch?: number;
   localMediaPreviewRoots?: readonly string[];
   resourceBasePath?: string;
@@ -328,7 +330,13 @@ export function cacheManagedImageBlobUrl(cacheKey: string, blobUrl: string) {
 }
 
 function appendImageBlock(images: ImageBlock[], block: ImageBlock) {
-  if (!images.some((entry) => entry.url === block.url && entry.alt === block.alt)) {
+  if (
+    !images.some((entry) =>
+      block.factIndex !== undefined
+        ? entry.factIndex === block.factIndex
+        : entry.factIndex === undefined && entry.url === block.url && entry.alt === block.alt,
+    )
+  ) {
     images.push(block);
   }
 }
@@ -486,6 +494,29 @@ export function extractImages(message: unknown): ImageBlock[] {
   const m = message as Record<string, unknown>;
   const content = m.content;
   const images: ImageBlock[] = [];
+  const layout = asNonArrayRecord(asNonArrayRecord(m["__openclaw"]).mediaImageLayout);
+  const slots = Array.isArray(layout.slots) ? layout.slots.map(asNonArrayRecord) : [];
+  const factIndexes = slots.length > 0 ? new Set(slots.map((slot) => slot.factIndex)) : undefined;
+  // Reject ambiguous layouts before deduplication: fact positions, including
+  // holes and duplicate sources, are the persisted attachment identity.
+  const validLayout =
+    factIndexes !== undefined &&
+    !(Array.isArray(layout.suppressedFactIndexes) && layout.suppressedFactIndexes.length > 0) &&
+    slots.every(
+      (slot) =>
+        (slot.kind === "inline" || slot.kind === "offloaded") &&
+        typeof slot.factIndex === "number" &&
+        Number.isSafeInteger(slot.factIndex) &&
+        slot.factIndex >= 0,
+    ) &&
+    factIndexes.size === slots.length;
+  const inlineSlots = validLayout ? slots.filter((slot) => slot.kind === "inline") : [];
+  const alignedInline =
+    inlineSlots.length > 0 &&
+    Array.isArray(content) &&
+    content.filter((block) => asNonArrayRecord(block).type === "image").length ===
+      inlineSlots.length;
+  let inlineIndex = 0;
 
   if (Array.isArray(content)) {
     for (const block of content) {
@@ -497,7 +528,9 @@ export function extractImages(message: unknown): ImageBlock[] {
       if (b.type === "image") {
         // Handle source object format from optimistic user sends.
         const source = b.source as Record<string, unknown> | undefined;
+        const factIndex = alignedInline ? inlineSlots[inlineIndex]?.factIndex : undefined;
         const imageMeta = {
+          ...(typeof factIndex === "number" ? { factIndex } : {}),
           artifactId: typeof b.artifactId === "string" ? b.artifactId : undefined,
           alt: typeof b.alt === "string" ? b.alt : undefined,
           fileName: typeof b.fileName === "string" ? b.fileName : undefined,
@@ -506,6 +539,7 @@ export function extractImages(message: unknown): ImageBlock[] {
           width: typeof b.width === "number" ? b.width : undefined,
           height: typeof b.height === "number" ? b.height : undefined,
         };
+        inlineIndex += 1;
         if (source?.type === "base64" && typeof source.data === "string") {
           appendImageBlock(images, {
             url: buildBase64ImageUrl({
@@ -580,13 +614,22 @@ export function extractImages(message: unknown): ImageBlock[] {
     }
   }
 
-  for (const { path: mediaPath, mediaType, fileName, sizeBytes } of readTranscriptMediaEntries(
-    message,
-  )) {
+  for (const {
+    path: mediaPath,
+    mediaType,
+    fileName,
+    sizeBytes,
+    factIndex,
+  } of readTranscriptMediaEntries(message)) {
     if (!isImageMediaPath(mediaPath, mediaType) || isSvgImageMediaPath(mediaPath, mediaType)) {
       continue;
     }
-    appendImageBlock(images, { url: mediaPath, fileName, sizeBytes });
+    appendImageBlock(images, {
+      url: mediaPath,
+      fileName,
+      sizeBytes,
+      ...(validLayout && factIndexes.has(factIndex) ? { factIndex } : {}),
+    });
   }
 
   return images;

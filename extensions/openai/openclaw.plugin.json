@@ -1,7 +1,7 @@
 {
   "id": "openai",
   "activation": {
-    "onStartup": false
+    "onStartup": true
   },
   "enabledByDefault": true,
   "providers": ["openai"],

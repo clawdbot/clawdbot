@@ -792,10 +792,22 @@ describe("qa-channel plugin", () => {
         action: "thread-reply",
         cfg,
         accountId: "default",
-        params: { channelId: "qa-room", threadId: thread.id, text: "owned reply" },
+        params: { to: "channel:qa-room", threadId: thread.id, message: "owned reply" },
       });
-      const payload = extractToolPayload(result) as { message: { threadId: string } };
+      const payload = extractToolPayload(result) as {
+        message: { id: string; threadId: string };
+        receipt: {
+          primaryPlatformMessageId?: string;
+          threadId?: string;
+          parts: Array<{ threadId?: string }>;
+        };
+      };
       expect(payload.message.threadId).toBe(thread.id);
+      expect(payload.receipt).toMatchObject({
+        primaryPlatformMessageId: payload.message.id,
+        threadId: thread.id,
+        parts: [{ threadId: thread.id }],
+      });
     } finally {
       await bus.stop();
     }

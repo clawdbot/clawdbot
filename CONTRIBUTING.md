@@ -128,18 +128,16 @@ build tooling to support standard decorators.
 
 ## AI/Vibe-Coded PRs Welcome! 🤖
 
-Built with Codex, Claude, or other AI tools? **Awesome - just mark it!**
+Built with Codex, Claude, or other AI tools? **Welcome!** No AI-assistance label or disclosure is required.
 
 Please include in your PR:
 
-- [ ] Mark as AI-assisted in the PR title or description
 - [ ] Include a concise **Evidence** section with the most useful validation. Reviewers will inspect the code, tests, and CI rather than relying on the PR body alone.
-- [ ] Include prompts or session logs if possible (super helpful!)
 - [ ] Confirm you understand what the code does
 - [ ] Run the `autoreview` skill when available and address accepted/actionable findings
 - [ ] Follow the [pull request review flow](https://docs.openclaw.ai/reference/pull-request-review-flow) after Barnacle, ClawSweeper, or maintainer feedback
 
-AI PRs are first-class citizens here. We just want transparency so reviewers know what to look for.
+AI PRs are first-class citizens here and follow the same quality and review standards as any other PR.
 
 ## Current Focus & Roadmap 🗺
 

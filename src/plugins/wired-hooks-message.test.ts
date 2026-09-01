@@ -9,8 +9,10 @@ import { createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
 import type {
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
-  PluginHookMessageSentEvent,
+  PluginHookHandlerMap,
 } from "./types.js";
+
+type PluginHookMessageSentEvent = Parameters<PluginHookHandlerMap["message_sent"]>[0];
 
 async function expectMessageHookCall(params: {
   hookName: "message_sending" | "message_sent";

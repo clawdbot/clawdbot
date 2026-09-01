@@ -374,6 +374,42 @@ export function renderSettingsEmpty(message: unknown): TemplateResult {
   return html`<div class="settings-empty">${message}</div>`;
 }
 
+/** Shape-matched placeholder for settings rows whose content has not loaded yet. */
+export function renderSettingsLoadingSkeleton(
+  options: { label?: unknown; rows?: number } = {},
+): TemplateResult {
+  const rowCount = Math.max(1, options.rows ?? 3);
+  return html`
+    <div
+      class="settings-loading-skeleton"
+      role="status"
+      aria-busy="true"
+      aria-label=${options.label ?? t("common.loading")}
+    >
+      <div class="settings-loading-skeleton__rows" aria-hidden="true">
+        ${Array.from(
+          { length: rowCount },
+          (_, index) => html`
+            <div class="settings-row settings-loading-skeleton__row">
+              <div class="settings-row__text">
+                <span class="skeleton settings-loading-skeleton__title"></span>
+                <span class="skeleton settings-loading-skeleton__description"></span>
+              </div>
+              <div class="settings-row__control">
+                <span
+                  class="skeleton settings-loading-skeleton__control ${index % 2 === 0
+                    ? "settings-loading-skeleton__control--wide"
+                    : ""}"
+                ></span>
+              </div>
+            </div>
+          `,
+        )}
+      </div>
+    </div>
+  `;
+}
+
 /** Secret text input with an inset reveal toggle — one field, no trailing
  * button, so secret rows line up with plain input rows in the same group. */
 export function renderSettingsSecretInput(props: {

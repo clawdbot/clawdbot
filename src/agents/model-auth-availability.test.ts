@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SecretRef } from "../config/types.secrets.js";
 import type { ProviderModelRouteCandidate } from "../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { createModelAuthAvailabilityResolver } from "./model-auth-availability.js";
@@ -125,6 +126,28 @@ describe("createModelAuthAvailabilityResolver", () => {
       selectedAuthMode: "api_key",
     });
     expect(resolver.evaluateModelAuth("anthropic").availability).not.toBe(true);
+  });
+
+  it("keeps configured local providers independent from native-auth probe completion", () => {
+    const resolver = createModelAuthAvailabilityResolver({
+      cfg: {
+        models: {
+          providers: {
+            "local-openai": {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:8080/v1",
+              models: [],
+            },
+          },
+        },
+      },
+      authStore: authStore(),
+      env: {},
+      preparedSyntheticAuthComplete: true,
+    });
+
+    const evaluation = resolver.evaluateModelAuth("local-openai");
+    expect(evaluation).toMatchObject({ availability: undefined });
   });
 
   it.each([
@@ -977,33 +1000,55 @@ describe("createModelAuthAvailabilityResolver", () => {
     });
   });
 
-  it("keeps a non-OpenAI provider SecretRef unresolved without reading it", () => {
-    const result = createModelAuthAvailabilityResolver({
-      cfg: {
-        models: {
-          providers: {
-            anthropic: {
-              api: "anthropic-messages",
-              apiKey: { source: "env", provider: "default", id: "ANTHROPIC_API_KEY" },
-              baseUrl: "https://api.anthropic.com",
-              models: [],
+  it.each<{
+    name: string;
+    apiKey: SecretRef;
+    secrets: OpenClawConfig["secrets"];
+  }>([
+    {
+      name: "env",
+      apiKey: { source: "env", provider: "default", id: "ANTHROPIC_API_KEY" },
+      secrets: { providers: { default: { source: "env" } } },
+    },
+    {
+      name: "store default shadowing file",
+      apiKey: { source: "store", provider: "shared", id: "ANTHROPIC_API_KEY" },
+      secrets: {
+        defaults: { store: "shared" },
+        providers: { shared: { source: "file", path: "/tmp/unused-store-alias-fixture.json" } },
+      },
+    },
+  ])(
+    "keeps a non-OpenAI provider $name SecretRef unresolved without reading it",
+    ({ apiKey, secrets }) => {
+      const result = createModelAuthAvailabilityResolver({
+        cfg: {
+          models: {
+            providers: {
+              anthropic: {
+                api: "anthropic-messages",
+                apiKey,
+                baseUrl: "https://api.anthropic.com",
+                models: [],
+              },
             },
           },
+          secrets,
         },
-        secrets: { providers: { default: { source: "env" } } },
-      },
-      authStore: authStore(),
-      env: {},
-    }).evaluateModelAuth("anthropic", {
-      modelId: "claude-sonnet-4-6",
-      api: "anthropic-messages",
-    });
+        authStore: authStore(),
+        env: {},
+      }).evaluateModelAuth("anthropic", {
+        modelId: "claude-sonnet-4-6",
+        api: "anthropic-messages",
+      });
 
-    expect(result).toMatchObject({
-      availability: undefined,
-      evidence: "provider-config",
-      routeResolution: null,
-      selectedAuthMode: "api-key",
-    });
-  });
+      expect(result).toMatchObject({
+        availability: undefined,
+        evidence: "provider-config",
+        routeResolution: null,
+        selectedAuthMode: "api-key",
+      });
+      expect(result.unavailableReason).toBeUndefined();
+    },
+  );
 });

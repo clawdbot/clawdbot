@@ -29,9 +29,7 @@ function createHarness(
   let groupUpdatedListener: (() => void) | undefined;
   let revision = 0;
   let accessible = true;
-  const attachedTabs = new Set([7]);
-  const attachedAccessEpochs = new Map([[7, { revision: 0, tabRevision: 0 }]]);
-  const attachingTabs = new Map<number, Promise<unknown>>();
+  const attachments = new Map([[7, { epoch: { revision: 0, tabRevision: 0 } }]]);
   const send = vi.fn();
   const policy = {
     mode,
@@ -56,7 +54,6 @@ function createHarness(
       revision += 1;
       return undefined;
     }),
-    retireTabDocument: vi.fn(),
     forwardDocumentEvent: vi.fn((event, emit) => emit(event)),
     invalidateDocumentGroup: vi.fn(),
     invalidateAll: vi.fn(() => {
@@ -70,8 +67,7 @@ function createHarness(
     replaceTab: vi.fn(async () => false),
   };
   const detachDebugger = vi.fn(async (tabId: number) => {
-    attachedTabs.delete(tabId);
-    attachedAccessEpochs.delete(tabId);
+    attachments.delete(tabId);
   });
   const pauseTab = vi.fn(async () => undefined);
   const removeTabFromOpenClawGroup = vi.fn(async () => undefined);
@@ -115,9 +111,8 @@ function createHarness(
     chromeApi,
     accessReady,
     policy,
-    attachedTabs,
-    attachedAccessEpochs,
-    attachingTabs,
+    attachments,
+    nativeDetached: (tabId: number) => attachments.delete(tabId),
     send,
     scheduleTabsSync: vi.fn(),
     detachDebugger,
@@ -135,8 +130,7 @@ function createHarness(
     throw new Error("expected tab access event listeners");
   }
   return {
-    attachedAccessEpochs,
-    attachingTabs,
+    attachments,
     detachDebugger,
     debuggerDetachListener,
     debuggerEventListener,
@@ -211,7 +205,7 @@ describe("tab access event epochs", () => {
       await vi.waitFor(() => expect(harness.policy.inspectTab).toHaveBeenCalledTimes(1));
       harness.tabsUpdatedListener(7, secondChange);
       await vi.waitFor(() => {
-        expect(harness.attachedAccessEpochs.get(7)).toEqual({ revision: 2, tabRevision: 0 });
+        expect(harness.attachments.get(7)?.epoch).toEqual({ revision: 2, tabRevision: 0 });
       });
 
       firstInspection.resolve({ accessible: false });
@@ -301,7 +295,7 @@ describe("tab access event epochs", () => {
 
     harness.tabsUpdatedListener(7, { url: "https://two.example" });
     await vi.waitFor(() => {
-      expect(harness.attachedAccessEpochs.get(7)).toEqual({ revision: 2, tabRevision: 0 });
+      expect(harness.attachments.get(7)?.epoch).toEqual({ revision: 2, tabRevision: 0 });
     });
     groupInspection.resolve({ accessible: false });
     await Promise.resolve();

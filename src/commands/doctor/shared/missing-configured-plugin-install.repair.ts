@@ -102,6 +102,7 @@ export async function repairMissingPluginInstallsForIds(params: {
   env?: NodeJS.ProcessEnv;
   baselineRecords?: Record<string, PluginInstallRecord>;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<RepairMissingPluginInstallsResult> {
   return repairMissingPluginInstalls({
     cfg: params.cfg,
@@ -120,6 +121,7 @@ export async function repairMissingPluginInstallsForIds(params: {
         .filter((pluginId) => pluginId),
     ),
     ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
+    beforePersistentEffect: params.beforePersistentEffect,
     ...(params.baselineRecords ? { baselineRecords: params.baselineRecords } : {}),
   });
 }
@@ -132,6 +134,7 @@ async function repairMissingPluginInstalls(params: {
   env?: NodeJS.ProcessEnv;
   baselineRecords?: Record<string, PluginInstallRecord>;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<RepairMissingPluginInstallsResult> {
   // Baseline, awaited review, package publication, and the index write share one generation.
   return await withPluginLifecycleLease({ env: params.env }, () =>
@@ -148,7 +151,9 @@ async function repairMissingPluginInstallsWithLease(
     configuredChannelOwnerPluginIds,
     bundledPluginsById,
     configuredPluginIdsWithStaleDescriptors,
+    stalePathInstallPluginIds,
     records,
+    persistedRecords,
     updateChannel,
     installedPluginIdsWithRepairablePackageDiagnostics,
     installedPluginIdsWithStaleVersionBoundRuntimePackages,
@@ -207,6 +212,12 @@ async function repairMissingPluginInstallsWithLease(
     }
     delete nextRecords[pluginId];
     changes.push(`Removed stale managed install record for bundled plugin "${pluginId}".`);
+  }
+
+  for (const pluginId of stalePathInstallPluginIds) {
+    changes.push(
+      `Removed stale path-install record for plugin "${pluginId}" (loaded from a configured load path).`,
+    );
   }
 
   if (shouldDeferConfiguredPluginInstallRepair(env)) {
@@ -273,6 +284,7 @@ async function repairMissingPluginInstallsWithLease(
         error: (message) => warnings.push(message),
       },
       ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
+      beforePersistentEffect: params.beforePersistentEffect,
     });
     for (const outcome of updateResult.outcomes) {
       if (outcome.status === "updated" || outcome.status === "unchanged") {
@@ -369,6 +381,7 @@ async function repairMissingPluginInstallsWithLease(
         ? { repairReason: "stale-version-bound-runtime" as const }
         : {}),
       ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
+      beforePersistentEffect: params.beforePersistentEffect,
     });
     if (shouldReplaceBrokenOfficialInstall) {
       const installedRecord = installed.records[candidate.pluginId];
@@ -402,17 +415,13 @@ async function repairMissingPluginInstallsWithLease(
   }
 
   const persistedIndexOptions = { config: params.cfg, env };
-  if (nextRecords !== records) {
-    await writePersistedInstalledPluginIndexInstallRecords(nextRecords, persistedIndexOptions);
-  } else if (params.baselineRecords) {
-    // The caller seeded us from in-memory state that may not yet have been
-    // persisted (e.g. earlier sync/npm record mutations). Even if repair
-    // itself made no further changes, persist the baseline so the disk
-    // matches what we are about to return — otherwise the next reader gets
-    // a stale snapshot.
+  // An explicit baseline may include earlier unpersisted sync/npm changes;
+  // commit it even when this repair made no further changes.
+  if (nextRecords !== persistedRecords || params.baselineRecords) {
+    await params.beforePersistentEffect?.();
     await writePersistedInstalledPluginIndexInstallRecords(nextRecords, persistedIndexOptions);
   }
-  const pluginInventoryChanged = nextRecords !== records || repairedPluginIds.size > 0;
+  const pluginInventoryChanged = nextRecords !== persistedRecords || repairedPluginIds.size > 0;
   return {
     changes,
     warnings,

@@ -11,11 +11,7 @@ import {
 } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
-import {
-  getReusableCachedPluginRegistry,
-  isPluginRegistryCacheEnabled,
-  setCachedPluginRegistry,
-} from "./loader-cache.js";
+import { isPluginRegistryCacheEnabled } from "./loader-cache.js";
 import { resolvePluginLoadDiscovery } from "./loader-discovery.js";
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
 import {
@@ -45,6 +41,7 @@ import type { PluginLoadOptions } from "./loader-types.js";
 import { withProfile } from "./plugin-load-profile.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { createPluginIdScopeSet } from "./plugin-scope.js";
+import { pluginLoaderCacheState } from "./registry-lifecycle.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import { hasKind, kindsEqual } from "./slots.js";
 import type { OpenClawPluginModule } from "./types.js";
@@ -61,7 +58,7 @@ export async function loadOpenClawPluginCliRegistry(
   const cacheKey = `cli-metadata::${context.cacheKey}`;
   const cacheEnabled = isPluginRegistryCacheEnabled(options);
   if (cacheEnabled) {
-    const cached = getReusableCachedPluginRegistry(cacheKey);
+    const cached = pluginLoaderCacheState.get(cacheKey);
     if (cached) {
       return cached;
     }
@@ -366,7 +363,7 @@ export async function loadOpenClawPluginCliRegistry(
     }
   }
   if (cacheEnabled) {
-    setCachedPluginRegistry(cacheKey, registry);
+    pluginLoaderCacheState.set(cacheKey, registry);
   }
   return registry;
 }

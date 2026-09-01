@@ -12,6 +12,8 @@ import "../../components/modal-dialog.ts";
 import "../../components/openclaw-mascot.ts";
 import {
   renderSettingsEmpty,
+  renderSettingsGroup,
+  renderSettingsLoadingSkeleton,
   renderSettingsPage,
   renderSettingsSection,
   renderSettingsSegmented,
@@ -749,7 +751,7 @@ function renderMcpSection(props: PluginsViewProps) {
     return nothing;
   }
   const body = !servers
-    ? html`<div class="plugins-search-state" role="status">${t("pluginsPage.loading")}</div>`
+    ? renderSettingsLoadingSkeleton({ label: t("pluginsPage.loading"), rows: 2 })
     : servers.length === 0
       ? renderSettingsEmpty(t("pluginsPage.mcpEmpty"))
       : repeat(
@@ -1343,7 +1345,7 @@ export function renderPlugins(props: PluginsViewProps) {
         aria-labelledby=${`plugins-tab-${props.activeTab}`}
       >
         ${panelState === "loading"
-          ? html`<div class="plugins-search-state" role="status">${t("pluginsPage.loading")}</div>`
+          ? renderSettingsGroup(renderSettingsLoadingSkeleton({ label: t("pluginsPage.loading") }))
           : panelState === "error"
             ? nothing
             : panelState === "offline"

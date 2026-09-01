@@ -4,6 +4,7 @@ import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { EMPTY_CODE_MODE_OUTPUT } from "./code-mode-json.js";
 import type { CodeModeFailureCode, CodeModeWorkerResult } from "./code-mode-runtime.js";
 
 let quickJsWasmModulePromise: Promise<WebAssembly.Module> | undefined;
@@ -40,7 +41,7 @@ function failedCodeModeWorkerResult(
     code,
     failurePhase: "host",
     bridgeDispatchStarted: false,
-    output: [],
+    output: EMPTY_CODE_MODE_OUTPUT,
   };
 }
 
@@ -94,7 +95,7 @@ export async function runCodeModeWorker(
           code: "timeout",
           failurePhase: "host",
           bridgeDispatchStarted: false,
-          output: [],
+          output: EMPTY_CODE_MODE_OUTPUT,
         });
       }, timeoutMs);
       onAbort = () => {
@@ -108,7 +109,7 @@ export async function runCodeModeWorker(
           code: abortReason instanceof CodeModeHeadlessTimeoutError ? "timeout" : "aborted",
           failurePhase: "host",
           bridgeDispatchStarted: false,
-          output: [],
+          output: EMPTY_CODE_MODE_OUTPUT,
         });
       };
       signal?.addEventListener("abort", onAbort, { once: true });
@@ -143,7 +144,7 @@ export async function runCodeModeWorker(
                   code: "internal_error",
                   failurePhase: "host",
                   bridgeDispatchStarted: false,
-                  output: [],
+                  output: EMPTY_CODE_MODE_OUTPUT,
                 } satisfies CodeModeWorkerResult);
             finish(normalizeCodeModeWorkerResult(result));
           });

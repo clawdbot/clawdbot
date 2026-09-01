@@ -13,7 +13,10 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { resolveConfigDir } from "../utils.js";
 import { readCronStoreStatePath } from "./store/config-state.js";
 import { cronStoreKey } from "./store/key.js";
-import { saveCronQuarantinedJobs } from "./store/quarantine.js";
+import {
+  deleteCronQuarantinedJobsFromDatabase,
+  saveCronQuarantinedJobs,
+} from "./store/quarantine.js";
 import {
   assertCronStoreCanPersist,
   deleteStaleCronJobFamilyRows,
@@ -215,14 +218,13 @@ export async function loadCronJobsStoreWithConfigJobsReadOnly(
     if (!tableExists(db, "cron_jobs")) {
       return emptyLoadedCronStore();
     }
-    const jobsFingerprint = readCronJobsFingerprint(db, storeKey);
     const rows = loadCronRows(db, storeKey);
     if (rows.length > 0) {
       const loaded = loadedCronStoreFromRows(rows);
       loadCronRuntimeAuthorities({ db, storeKey, jobs: loaded.store.jobs });
-      return { ...loaded, jobsFingerprint };
+      return loaded;
     }
-    return { ...emptyLoadedCronStore(), jobsFingerprint };
+    return emptyLoadedCronStore();
   } finally {
     db.close();
   }
@@ -265,11 +267,33 @@ type SaveCronJobsStoreOptions = SaveCronStoreOptions & {
     nowMs: number;
   };
   preserveRuntimeState?: boolean;
+  deleteQuarantineEntries?: readonly (QuarantinedCronConfigJob | CronQuarantinedJob)[];
 };
+
+type CronStoreReplacementOptions = Pick<
+  SaveCronJobsStoreOptions,
+  "deleteQuarantineEntries" | "preserveRuntimeState" | "quarantine"
+>;
 
 type SaveCronJobsStoreInternalOptions = SaveCronJobsStoreOptions & {
   transactionHooks?: CronStoreTransactionHooks;
 };
+
+function replaceCronStoreRows(
+  db: DatabaseSync,
+  storeKey: string,
+  store: CronStoreFile,
+  preserveRuntimeState: boolean,
+): void {
+  const replaced = replaceCronRows(db, storeKey, store, { preserveRuntimeState });
+  replaceCronRuntimeAuthorityRows({
+    db,
+    storeKey,
+    jobs: replaced.jobs,
+    preserveExistingForJobIds: preserveRuntimeState ? replaced.existingJobIds : undefined,
+    writeMissingForJobIds: preserveRuntimeState ? replaced.legacyAuthorityJobIds : undefined,
+  });
+}
 
 /** Persists cron jobs, or only mutable runtime state when stateOnly is set. */
 export async function saveCronJobsStore(
@@ -284,7 +308,10 @@ export async function saveCronJobsStore(
 ): Promise<void> {
   const resolvedStorePath = path.resolve(storePath);
   const storeKey = cronStoreKey(resolvedStorePath);
-  const stateOnly = opts?.stateOnly === true && !opts.quarantine?.entries.length;
+  const stateOnly =
+    opts?.stateOnly === true &&
+    !opts.quarantine?.entries.length &&
+    !opts.deleteQuarantineEntries?.length;
   if (!stateOnly) {
     assertCronStoreCanPersist(store);
   }
@@ -298,6 +325,13 @@ export async function saveCronJobsStore(
         database,
       });
     }
+    if (opts?.deleteQuarantineEntries?.length) {
+      deleteCronQuarantinedJobsFromDatabase({
+        database: database.db,
+        storePath: resolvedStorePath,
+        entries: opts.deleteQuarantineEntries,
+      });
+    }
     // Hot-path timer updates mutate runtime columns only; malformed-row
     // quarantine and full replacement commit together or roll back together.
     if (stateOnly) {
@@ -305,10 +339,7 @@ export async function saveCronJobsStore(
       opts?.transactionHooks?.afterWrite?.(database.db);
       return;
     }
-    const normalizedJobs = replaceCronRows(database.db, storeKey, store, {
-      preserveRuntimeState: opts?.preserveRuntimeState,
-    });
-    replaceCronRuntimeAuthorityRows({ db: database.db, storeKey, jobs: normalizedJobs });
+    replaceCronStoreRows(database.db, storeKey, store, opts?.preserveRuntimeState === true);
     opts?.transactionHooks?.afterWrite?.(database.db);
   });
   // Timeout outcomes may commit before their runner settles. Only after this
@@ -322,8 +353,7 @@ export async function saveCronJobsStoreWithMetadata(
   storePath: string,
   store: CronStoreFile,
   acquireMetadata: (db: DatabaseSync) => boolean,
-  quarantine?: SaveCronJobsStoreOptions["quarantine"],
-  opts?: Pick<SaveCronJobsStoreOptions, "preserveRuntimeState">,
+  opts?: CronStoreReplacementOptions,
 ): Promise<boolean> {
   const resolvedStorePath = path.resolve(storePath);
   const storeKey = cronStoreKey(resolvedStorePath);
@@ -332,18 +362,22 @@ export async function saveCronJobsStoreWithMetadata(
     if (!acquireMetadata(database.db)) {
       return false;
     }
-    if (quarantine?.entries.length) {
+    if (opts?.quarantine?.entries.length) {
       saveCronQuarantinedJobs({
         storePath: resolvedStorePath,
-        entries: quarantine.entries,
-        nowMs: quarantine.nowMs,
+        entries: opts.quarantine.entries,
+        nowMs: opts.quarantine.nowMs,
         database,
       });
     }
-    const normalizedJobs = replaceCronRows(database.db, storeKey, store, {
-      preserveRuntimeState: opts?.preserveRuntimeState,
-    });
-    replaceCronRuntimeAuthorityRows({ db: database.db, storeKey, jobs: normalizedJobs });
+    if (opts?.deleteQuarantineEntries?.length) {
+      deleteCronQuarantinedJobsFromDatabase({
+        database: database.db,
+        storePath: resolvedStorePath,
+        entries: opts.deleteQuarantineEntries,
+      });
+    }
+    replaceCronStoreRows(database.db, storeKey, store, opts?.preserveRuntimeState === true);
     return true;
   });
   if (committed) {

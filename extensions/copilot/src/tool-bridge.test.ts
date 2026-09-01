@@ -1120,27 +1120,31 @@ describe("createCopilotToolBridge", () => {
       expect(getOpts().sessionKey).toBe("fallback-key");
     });
 
-    it("computes modelApi, modelContextWindowTokens, modelCompat, and modelHasVision from attemptParams.model", async () => {
-      const { createOpenClawCodingTools, getOpts } = captureCall();
+    it.each([undefined, 8000])(
+      "uses the effective read context (%s) with prepared model capabilities",
+      async (contextTokenBudget) => {
+        const { createOpenClawCodingTools, getOpts } = captureCall();
 
-      await createCopilotToolBridge({
-        attemptParams: {
-          model: {
-            api: "openai-responses",
-            contextWindow: 200_000,
-            input: ["text", "image"],
-            compat: { some: "shape" },
-          },
-        } as never,
-        createOpenClawCodingTools,
-      });
+        await createCopilotToolBridge({
+          attemptParams: {
+            contextTokenBudget,
+            model: {
+              api: "openai-responses",
+              contextWindow: 200_000,
+              input: ["text", "image"],
+              compat: { some: "shape" },
+            },
+          } as never,
+          createOpenClawCodingTools,
+        });
 
-      const opts = getOpts();
-      expect(opts.modelApi).toBe("openai-responses");
-      expect(opts.modelContextWindowTokens).toBe(200_000);
-      expect(opts.modelHasVision).toBe(true);
-      expect(opts.modelCompat).toEqual({ some: "shape" });
-    });
+        const opts = getOpts();
+        expect(opts.modelApi).toBe("openai-responses");
+        expect(opts.modelContextWindowTokens).toBe(contextTokenBudget ?? 200_000);
+        expect(opts.modelHasVision).toBe(true);
+        expect(opts.modelCompat).toEqual({ some: "shape" });
+      },
+    );
 
     it("modelHasVision is false when model.input does not include 'image'", async () => {
       const { createOpenClawCodingTools, getOpts } = captureCall();
@@ -1461,41 +1465,61 @@ describe("createCopilotToolBridge", () => {
       });
     });
 
-    it("short-circuits when attemptParams.disableTools is true and never calls createOpenClawCodingTools", async () => {
-      const createOpenClawCodingTools = vi.fn(async () => [makeTool()]);
-      const result = await createCopilotToolBridge({
-        attemptParams: { disableTools: true } as never,
-        createOpenClawCodingTools,
+    it("enforces the retained sandbox owner's write deny before SDK tool execution", async () => {
+      await withTempDir("openclaw-copilot-policy-owner-", async (workspaceDir) => {
+        for (const sandboxAgentId of ["marketing", "main"]) {
+          const sessionKey = "agent:marketing:policy-owner-test";
+          const bridge = await createCopilotToolBridge({
+            agentId: "marketing",
+            attemptParams: {
+              config: {
+                agents: { entries: { main: { tools: { deny: ["write"] } }, marketing: {} } },
+                tools: { codeMode: false, toolSearch: false },
+              },
+              sandboxAgentId,
+              sandboxSessionKey: "global",
+              sessionKey,
+              runId: `policy-owner-${sandboxAgentId}`,
+              workspaceDir,
+            },
+            createOpenClawCodingTools: createRealOpenClawCodingTools,
+            sessionKey,
+            workspaceDir,
+          });
+          try {
+            const write = bridge.promptToolPolicy
+              .apply()
+              .tools.find((tool) => tool.name === "write");
+            if (write) {
+              const outputPath = path.join(workspaceDir, `${sandboxAgentId}.txt`);
+              await expect(
+                runSdkTool(write, { path: outputPath, content: "retained policy proof" }),
+              ).resolves.toMatchObject({ resultType: "success" });
+              await expect(fs.readFile(outputPath, "utf8")).resolves.toBe("retained policy proof");
+            }
+            expect(await fs.readdir(workspaceDir)).toEqual(["marketing.txt"]);
+            expect(write === undefined).toBe(sandboxAgentId === "main");
+          } finally {
+            bridge.cleanup?.();
+          }
+        }
       });
-      expect(result.codeModeEngaged).toBe(false);
-      expect(result.promptToolPolicy.apply()).toEqual({ tools: [], callableToolNames: [] });
-      expect(result.sourceTools).toEqual([]);
-      expect(createOpenClawCodingTools).toHaveBeenCalledTimes(0);
     });
 
-    it('short-circuits raw model runs signalled via promptMode: "none"', async () => {
-      const createOpenClawCodingTools = vi.fn(async () => [makeTool()]);
-      const result = await createCopilotToolBridge({
-        attemptParams: { promptMode: "none" } as never,
-        createOpenClawCodingTools,
-      });
-      expect(result.codeModeEngaged).toBe(false);
-      expect(result.promptToolPolicy.apply()).toEqual({ tools: [], callableToolNames: [] });
-      expect(result.sourceTools).toEqual([]);
-      expect(createOpenClawCodingTools).toHaveBeenCalledTimes(0);
-    });
-
-    it("short-circuits raw model runs signalled via modelRun: true", async () => {
-      const createOpenClawCodingTools = vi.fn(async () => [makeTool()]);
-      const result = await createCopilotToolBridge({
-        attemptParams: { modelRun: true } as never,
-        createOpenClawCodingTools,
-      });
-      expect(result.codeModeEngaged).toBe(false);
-      expect(result.promptToolPolicy.apply()).toEqual({ tools: [], callableToolNames: [] });
-      expect(result.sourceTools).toEqual([]);
-      expect(createOpenClawCodingTools).toHaveBeenCalledTimes(0);
-    });
+    it.each([{ disableTools: true }, { promptMode: "none" }, { modelRun: true }] as const)(
+      "skips tool construction for %j",
+      async (attemptParams) => {
+        const createOpenClawCodingTools = vi.fn(async () => [makeTool()]);
+        const result = await createCopilotToolBridge({
+          attemptParams,
+          createOpenClawCodingTools,
+        });
+        expect(result.codeModeEngaged).toBe(false);
+        expect(result.promptToolPolicy.apply()).toEqual({ tools: [], callableToolNames: [] });
+        expect(result.sourceTools).toEqual([]);
+        expect(createOpenClawCodingTools).toHaveBeenCalledTimes(0);
+      },
+    );
 
     it("filters constructed tools to exactly the allowlist when toolsAllow is narrow", async () => {
       const createOpenClawCodingTools = vi.fn(async () => [

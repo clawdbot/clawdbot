@@ -632,6 +632,7 @@ export class NewSessionModelControl {
       modelSwitching: false,
       sending: options.sending,
       sessionKey,
+      selectedSession: undefined,
       sessionsResult: sourceResult,
       stream: null,
       thinkingDefaults,

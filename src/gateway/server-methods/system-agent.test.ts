@@ -6,6 +6,13 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { readConfigFileSnapshot } from "../../config/config.js";
+import {
+  getRuntimeConfigAppliedHash,
+  hashRuntimeConfigValue,
+  setRuntimeConfigAppliedHash,
+} from "../../config/runtime-snapshot.js";
+import { createRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
 import { resetPluginStateStoreForTests } from "../../plugin-state/plugin-state-store.js";
@@ -15,6 +22,7 @@ import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admiss
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
+import type { ActivateSetupInferenceParams } from "../../system-agent/setup-inference.js";
 import {
   createSystemAgentVerifiedInferenceTestFixture,
   installSystemAgentPluginMetadataTestSnapshot,
@@ -143,6 +151,22 @@ let verifiedInference: SystemAgentVerifiedInferenceBinding | undefined;
 let verifiedInferenceDeps: SystemAgentVerifiedInferenceDeps | undefined;
 let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 const systemAgentTempDirs = useAutoCleanupTempDirTracker(afterEach);
+let previousAppliedHash: string | null = null;
+
+async function makeVerificationContext() {
+  const stateDir = systemAgentTempDirs.make("openclaw-setup-verification-");
+  const configPath = path.join(stateDir, "openclaw.json");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+  fs.writeFileSync(configPath, "{}\n");
+  const snapshot = await readConfigFileSnapshot();
+  setRuntimeConfigAppliedHash(hashRuntimeConfigValue(snapshot.sourceConfig));
+  return {
+    configPath,
+    getRuntimeConfig: vi.fn(() => snapshot.runtimeConfig ?? snapshot.config),
+    isConfigReloadSettled: vi.fn(() => true),
+  };
+}
 
 function requireVerifiedInferenceFixture(): SystemAgentVerifiedInferenceBinding {
   return expectDefined(verifiedInference, "verified inference fixture was not initialized");
@@ -220,6 +244,7 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  previousAppliedHash = getRuntimeConfigAppliedHash();
   setupInferenceMocks.verifySetupInference.mockResolvedValue({
     ok: true,
     modelRef: "openai/gpt-5.5",
@@ -255,6 +280,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setRuntimeConfigAppliedHash(previousAppliedHash);
   vi.restoreAllMocks();
   vi.resetAllMocks();
   resetPluginStateStoreForTests();
@@ -318,6 +344,7 @@ describe("openclaw.setup", () => {
   });
 
   it.each([
+    ["openclaw.setup.activate.start" as const, { sessionId: "busy-activation", kind: "codex-cli" }],
     [
       "openclaw.setup.auth.start" as const,
       { sessionId: "busy-auth", authChoice: "github-copilot" },
@@ -459,13 +486,65 @@ describe("openclaw.chat", () => {
     const { calls, respond } = makeRespond();
 
     const verify = systemAgentHandler("openclaw.setup.verify");
-    await verify({ params: { agentId: "research" }, respond } as never);
+    await verify({
+      params: { agentId: "research" },
+      respond,
+      context: await makeVerificationContext(),
+    } as never);
 
     expect(setupInferenceMocks.verifySetupInference).toHaveBeenCalledWith({
       agentId: "research",
       runtime: defaultRuntime,
     });
     expect(calls).toEqual([{ ok: true, payload: result, error: undefined }]);
+  });
+
+  it.each([
+    { change: "unapplied revision", when: "before" },
+    { change: "unknown revision", when: "before" },
+    { change: "restart with unchanged config", when: "before" },
+    { change: "unapplied revision", when: "during" },
+    { change: "restart with unchanged config", when: "during" },
+    { change: "replaced runtime", when: "during" },
+  ])("rejects $change $when verification without false readiness", async ({ change, when }) => {
+    const context = await makeVerificationContext();
+    const changeRuntime = () => {
+      if (change === "unapplied revision") {
+        fs.writeFileSync(context.configPath, JSON.stringify({ logging: { level: "debug" } }));
+      } else if (change === "unknown revision") {
+        setRuntimeConfigAppliedHash(null);
+      } else if (change === "replaced runtime") {
+        context.getRuntimeConfig.mockReturnValue({ ...verifiedConfig });
+      } else {
+        context.isConfigReloadSettled.mockReturnValue(false);
+      }
+    };
+    if (when === "before") {
+      changeRuntime();
+    } else {
+      setupInferenceMocks.verifySetupInference.mockImplementationOnce(async () => {
+        changeRuntime();
+        return { ok: true, modelRef: "openai/gpt-5.6-luna", latencyMs: 1 };
+      });
+    }
+    const { calls, respond } = makeRespond();
+
+    await systemAgentHandler("openclaw.setup.verify")({ params: {}, respond, context } as never);
+
+    expect(calls).toEqual([
+      {
+        ok: true,
+        payload: {
+          ok: false,
+          status: "unavailable",
+          error: expect.stringContaining("not active"),
+        },
+        error: undefined,
+      },
+    ]);
+    expect(setupInferenceMocks.verifySetupInference).toHaveBeenCalledTimes(
+      when === "before" ? 0 : 1,
+    );
   });
 
   it("rejects unknown setup verification params without running inference", async () => {
@@ -478,6 +557,98 @@ describe("openclaw.chat", () => {
 
     expect(setupInferenceMocks.verifySetupInference).not.toHaveBeenCalled();
     expect(calls[0]?.ok).toBe(false);
+  });
+
+  it.each([
+    "applied",
+    "applied-restart-required",
+    "restart-pending",
+    "failed",
+    "stopped",
+    "superseded",
+  ] as const)(
+    "settles setup after the Gateway application receipt without holding its lane: %s",
+    async (outcome) => {
+      const application = createRuntimeConfigWriteApplication();
+      const claim = expectDefined(application.claim(), "application claim");
+      const result = {
+        ok: true as const,
+        modelRef: "openai/gpt-5.6-luna",
+        latencyMs: 1,
+        lines: [],
+      };
+      setupInferenceMocks.activateSetupInference.mockImplementation(
+        async (params: ActivateSetupInferenceParams) => {
+          params.onRuntimeApplication?.(application);
+          return result;
+        },
+      );
+      const { calls, respond } = makeRespond();
+      const pending = systemAgentHandler("openclaw.setup.activate")({
+        params: { kind: "codex-cli" },
+        respond,
+      } as never);
+      try {
+        await vi.waitFor(() =>
+          expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledOnce(),
+        );
+        await waitOneTask();
+        expect(calls).toEqual([]);
+        expect(systemAgentLane().activeCount).toBe(0);
+        await systemAgentHandler("openclaw.setup.verify")({
+          params: {},
+          respond: () => {},
+          context: await makeVerificationContext(),
+        } as never);
+        expect(setupInferenceMocks.verifySetupInference).toHaveBeenCalledOnce();
+      } finally {
+        claim.settle(outcome);
+        if (
+          outcome === "applied" ||
+          outcome === "applied-restart-required" ||
+          outcome === "restart-pending"
+        ) {
+          await pending;
+        } else {
+          await expect(pending).rejects.toThrow(
+            outcome === "superseded" ? "newer settings" : "Restart the Gateway before chatting",
+          );
+        }
+      }
+      if (
+        outcome === "applied" ||
+        outcome === "applied-restart-required" ||
+        outcome === "restart-pending"
+      ) {
+        expect(calls).toEqual([
+          {
+            ok: true,
+            payload: outcome === "applied" ? result : { ...result, gatewayRestartRequired: true },
+            error: undefined,
+          },
+        ]);
+      } else {
+        // The RPC error stops automatic candidate fallthrough after a saved choice.
+        expect(calls).toEqual([]);
+      }
+    },
+  );
+
+  it("reports restart required when the committed setup application is unclaimed", async () => {
+    setupInferenceMocks.activateSetupInference.mockImplementation(
+      async (params: ActivateSetupInferenceParams) => {
+        params.onRuntimeApplication?.(createRuntimeConfigWriteApplication());
+        return { ok: true, modelRef: "openai/gpt-5.6-luna", latencyMs: 1, lines: [] };
+      },
+    );
+    const { calls, respond } = makeRespond();
+    await expect(
+      systemAgentHandler("openclaw.setup.activate")({
+        params: { kind: "codex-cli" },
+        respond,
+      } as never),
+    ).rejects.toThrow("Restart the Gateway before chatting");
+    expect(calls).toEqual([]);
   });
 
   it.each(["success", "task error", "response error"])(
@@ -539,11 +710,12 @@ describe("openclaw.chat", () => {
         workspace: "/tmp/work",
         surface: "gateway",
         runtime: expect.objectContaining({ exit: expect.any(Function) }),
+        onRuntimeApplication: expect.any(Function),
       });
       expect(calls).toEqual(
         outcome === "success" ? [{ ok: true, payload: activationResult, error: undefined }] : [],
       );
-      expect(activeAtResponse).toEqual(outcome === "task error" ? [] : [1]);
+      expect(activeAtResponse).toEqual(outcome === "task error" ? [] : [0]);
       expect(systemAgentLane().activeCount).toBe(0);
     },
   );

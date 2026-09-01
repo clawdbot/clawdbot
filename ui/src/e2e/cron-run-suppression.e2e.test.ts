@@ -1,7 +1,7 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { CronJob, CronRunLogEntry } from "../api/types.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -118,9 +118,11 @@ suite.define(() => {
           expect(await suppressed.textContent()).not.toContain(
             "Synthetic delivery target unavailable.",
           );
-          const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR;
+          const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR;
+          const artifactDir = artifactRoot
+            ? createControlUiE2eArtifactDir("cron-run-suppression", artifactRoot)
+            : undefined;
           if (artifactDir) {
-            await fs.mkdir(artifactDir, { recursive: true });
             // Only the synthetic suppressed row is captured, never the error row.
             await suppressed.screenshot({
               path: path.join(artifactDir, `${scope}-suppressed.png`),

@@ -2,10 +2,15 @@ import { isDeepStrictEqual } from "node:util";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { applyAutoLocalModelLean } from "../config/local-model-lean-auto.js";
 import { applyMergePatch } from "../config/merge-patch.js";
+import {
+  attachRuntimeConfigWriteApplication,
+  createRuntimeConfigWriteApplication,
+} from "../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { normalizePluginTargetConfig } from "../plugins/config-state.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
+import { captureGatewayRootWorkAdmissionContinuationScope } from "../process/gateway-work-admission.js";
 import {
   projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
@@ -181,6 +186,8 @@ export async function persistActivatedSetupInference(input: {
   let manualAuthReceipt: ManualAuthPersistenceReceipt | undefined;
   if (hasPreparedAuthProfiles && plan.manualAuth) {
     throwIfSetupInferenceCancelled(params);
+    await params.beforePersistentEffect?.();
+    throwIfSetupInferenceCancelled(params);
     const initialCandidate = stageCandidate(cfg, "runtime");
     const initialRoute = await projectRoute(initialCandidate);
     const resolvedRoute = await resolveRoute(initialCandidate);
@@ -198,6 +205,7 @@ export async function persistActivatedSetupInference(input: {
       profiles: plan.manualAuth.profiles,
       agentDir: resolvedRoute.agentDir,
       deps,
+      secretStorage: { config: initialCandidate, env: process.env },
     });
     if (persistedManualAuth.status === "unknown") {
       const rolledBack = await rollbackManualAuthProfiles(persistedManualAuth.receipt, deps);
@@ -222,11 +230,20 @@ export async function persistActivatedSetupInference(input: {
     }
     manualAuthReceipt = persistedManualAuth.receipt;
   }
+  const application = params.onRuntimeApplication
+    ? createRuntimeConfigWriteApplication(captureGatewayRootWorkAdmissionContinuationScope()?.run)
+    : undefined;
+  if (application) {
+    params.onRuntimeApplication?.(application);
+  }
   let commitMayHaveStarted = false;
   try {
     throwIfSetupInferenceCancelled(params);
     const committed = await transformConfig({
       base: "source",
+      ...(application
+        ? { writeOptions: attachRuntimeConfigWriteApplication({}, application) }
+        : {}),
       // The transform stays side-effect free so a config conflict can retry
       // without replaying credential writes in another agent directory.
       // The install-record owner adds a restart follow-up when this commit adopts

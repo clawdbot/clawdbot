@@ -24,6 +24,7 @@ describe("tool-card outcomes", () => {
       const show = () =>
         render(
           renderToolCard(card, {
+            messageKey: "test-message",
             expanded: true,
             onToggleExpanded: vi.fn(),
             runActive: true,
@@ -69,7 +70,7 @@ describe("tool-card outcomes", () => {
             message: "BRAVE_API_KEY is not configured",
           }),
         },
-        { expanded: true, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -99,7 +100,7 @@ describe("tool-card outcomes", () => {
           name: "sessions_spawn",
           outputText: JSON.stringify({ status: "error" }),
         },
-        { expanded: true, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -120,7 +121,7 @@ describe("tool-card outcomes", () => {
           name: "Unknown",
           outputText: "Tool not found",
         },
-        { expanded: false, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: false, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -143,7 +144,7 @@ describe("tool-card outcomes", () => {
           outputText: "lookup failed",
           isError: true,
         },
-        { expanded: true, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -164,7 +165,7 @@ describe("tool-card outcomes", () => {
           name: "lookup",
           isError: true,
         },
-        { expanded: true, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -188,7 +189,7 @@ describe("tool-card outcomes", () => {
           }),
           isError: false,
         },
-        { expanded: false, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: false, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -208,7 +209,7 @@ describe("tool-card outcomes", () => {
           name: "browser.open",
           outputText: "Opened page",
         },
-        { expanded: true, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -244,7 +245,7 @@ describe("tool-card outcomes", () => {
           outputText: "Progress card updated",
           completed: true,
         },
-        { expanded: true, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
       ),
       container,
     );
