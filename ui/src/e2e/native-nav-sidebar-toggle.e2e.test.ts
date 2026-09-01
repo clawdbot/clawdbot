@@ -324,7 +324,7 @@ suite.define(() => {
     },
   );
 
-  it("keeps pointer-triggered sidebar focus from opening its tooltip", async () => {
+  it("keeps restored sidebar focus from opening its tooltip", async () => {
     const page = await openPage({ hasTouch: true, nativeNav: false });
     const toggle = page.locator(".sidebar-brand__collapse");
     await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Collapse sidebar");
@@ -339,12 +339,33 @@ suite.define(() => {
     });
 
     const expand = page.locator(".shell-chrome-controls__nav-toggle");
-    const tooltip = expand.locator("xpath=..").locator("wa-tooltip");
+    const tooltip = expand.locator("xpath=..");
     await expect.poll(() => expand.getAttribute("aria-label")).toBe("Expand sidebar");
     await expect
       .poll(() => expand.evaluate((element) => element === document.activeElement))
       .toBe(true);
     await expect.poll(() => tooltip.getAttribute("open")).toBeNull();
+
+    await page.keyboard.press("Enter");
+    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Collapse sidebar");
+    expect(await page.locator("openclaw-tooltip[open]").count()).toBe(0);
+
+    await page.evaluate(() => {
+      window.dispatchEvent(new CustomEvent("openclaw:native-toggle-sidebar"));
+    });
+    await expect.poll(() => expand.getAttribute("aria-label")).toBe("Expand sidebar");
+    await expect
+      .poll(() => expand.evaluate((element) => element === document.activeElement))
+      .toBe(true);
+    await expect.poll(() => tooltip.getAttribute("open")).toBeNull();
+
+    // A later, explicit keyboard return still reveals the accessible hint.
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Shift+Tab");
+    await expect.poll(() => tooltip.getAttribute("open")).toBe("");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Collapse sidebar");
+    expect(await page.locator("openclaw-tooltip[open]").count()).toBe(0);
   });
 
   it("hides the web chrome cluster when the native titlebar toggle is present", async () => {

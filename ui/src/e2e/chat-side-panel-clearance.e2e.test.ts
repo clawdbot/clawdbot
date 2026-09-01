@@ -231,7 +231,7 @@ suite.define(() => {
           .poll(() => header.evaluate((element) => getComputedStyle(element).marginTop))
           .toBe("0px");
 
-        await page.getByRole("button", { name: "Collapse sidebar", exact: true }).click();
+        await page.locator(".sidebar-brand__collapse").click();
         await expect.poll(() => shell.getAttribute("class")).toContain("shell--nav-collapsed");
         await expect
           .poll(() => header.evaluate((element) => getComputedStyle(element).marginTop))
@@ -314,7 +314,7 @@ suite.define(() => {
           document.documentElement.dir = direction;
         }, testCase.direction);
         if (testCase.navCollapsed) {
-          await page.getByRole("button", { name: "Collapse sidebar", exact: true }).click();
+          await page.locator(".sidebar-brand__collapse").click();
           await expect
             .poll(() => page.locator(".shell").getAttribute("class"))
             .toContain("shell--nav-collapsed");

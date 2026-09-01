@@ -229,6 +229,10 @@ html.openclaw-native-web-chrome .sidebar-brand__new-thread:focus-visible {
   box-shadow: var(--focus-ring);
 }
 
+html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrome) .sidebar-brand {
+  --sidebar-agent-avatar-size: 32px;
+}
+
 .macos-titlebar-controls {
   position: fixed;
   top: 0;
@@ -1038,19 +1042,20 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-brand {
-  --shell-chrome-control-size: 29px;
+  --shell-chrome-control-size: 28px;
+  --sidebar-agent-avatar-size: 28px;
   display: flex;
   align-items: center;
   gap: 2px;
   min-height: 34px;
-  padding: 0 4px 8px 0;
+  padding: 0 2px 10px 0;
   flex-shrink: 0;
 }
 
 .sidebar-brand__actions {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 0;
   /* Keep the action rail independent from the fit-content identity card so
      short agent names never pull navigation controls away from the edge. */
   margin-inline-start: auto;
@@ -1073,7 +1078,9 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-brand__new-thread {
+  margin-inline-start: 5px;
   color: var(--text);
+  box-shadow: none;
 }
 
 .sidebar-brand__icon {
@@ -3203,10 +3210,10 @@ a:is(
 .sidebar-agent-card__main {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 6px;
   flex: 1 1 auto;
   min-width: 0;
-  padding: 4px 1px;
+  padding: 5px 6px;
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
@@ -3236,8 +3243,8 @@ a:is(
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: var(--sidebar-agent-avatar-size);
+  height: var(--sidebar-agent-avatar-size);
   flex: none;
   border-radius: var(--radius-full);
   background: var(--secondary);
@@ -3336,6 +3343,7 @@ a:is(
   left: -1px;
   width: 6px;
   height: 6px;
+  box-shadow: 0 0 0 2px var(--sidebar-bg);
 }
 
 /* "Pages" section head: zone-style label plus the pin-editor affordance. */

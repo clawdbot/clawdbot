@@ -105,6 +105,86 @@ suite.define(() => {
     await page.locator(".cmd-palette__input").waitFor({ state: "visible" });
   });
 
+  it("keeps browser sidebar header geometry aligned in LTR and RTL", async () => {
+    const page = await openPage({ width: 1440 });
+    const sidebarBrand = page.locator(".sidebar-brand");
+    const agentName = sidebarBrand.locator(".sidebar-agent-card__name-text");
+
+    await expect
+      .poll(() =>
+        sidebarBrand
+          .locator(".sidebar-brand__collapse, .sidebar-brand__search")
+          .evaluateAll((buttons) =>
+            buttons.map((button) => {
+              const icon = button.querySelector("svg");
+              if (!icon) {
+                return null;
+              }
+              const buttonBox = button.getBoundingClientRect();
+              const iconBox = icon.getBoundingClientRect();
+              return Math.round(
+                buttonBox.left + buttonBox.width / 2 - (iconBox.left + iconBox.width / 2),
+              );
+            }),
+          ),
+      )
+      .toEqual([0, 0]);
+    await expect
+      .poll(() =>
+        sidebarBrand.locator(".sidebar-agent-card__avatar").evaluate((avatar) => {
+          const style = getComputedStyle(avatar);
+          return [style.width, style.height];
+        }),
+      )
+      .toEqual(["28px", "28px"]);
+    await expect
+      .poll(() =>
+        sidebarBrand.locator(".sidebar-brand__new-thread").evaluate((button) => {
+          const style = getComputedStyle(button);
+          return [style.width, style.height, style.boxShadow];
+        }),
+      )
+      .toEqual(["28px", "28px", "none"]);
+
+    const actionInset = async (direction: "ltr" | "rtl") => {
+      const [brandBox, actionsBox] = await Promise.all([
+        sidebarBrand.boundingBox(),
+        sidebarBrand.locator(".sidebar-brand__actions").boundingBox(),
+      ]);
+      if (!brandBox || !actionsBox) {
+        return null;
+      }
+      return direction === "rtl"
+        ? Math.round(actionsBox.x - brandBox.x)
+        : Math.round(brandBox.x + brandBox.width - (actionsBox.x + actionsBox.width));
+    };
+    const nameFade = () =>
+      agentName.evaluate((element) => {
+        const style = getComputedStyle(element);
+        return [style.paddingLeft, style.paddingRight, style.maskImage];
+      });
+
+    await expect.poll(() => actionInset("ltr")).toBe(2);
+    await expect.poll(nameFade).toEqual(["0px", "8px", expect.stringContaining("90deg")]);
+    await page.evaluate(() => {
+      document.documentElement.dir = "rtl";
+    });
+    await expect.poll(() => actionInset("rtl")).toBe(0);
+    await expect.poll(nameFade).toEqual(["8px", "0px", expect.stringContaining("270deg")]);
+  });
+
+  it("keeps the native sidebar avatar larger", async () => {
+    const page = await openPage({ webChrome: true, width: 1440 });
+    await expect
+      .poll(() =>
+        page.locator(".sidebar-agent-card__avatar").evaluate((avatar) => {
+          const style = getComputedStyle(avatar);
+          return [style.width, style.height];
+        }),
+      )
+      .toEqual(["32px", "32px"]);
+  });
+
   it("opens the mobile drawer by swipe across the full mobile-layout range", async () => {
     const page = await openPage({ hasTouch: true, height: 393, width: 852 });
     const shell = page.locator(".shell");
