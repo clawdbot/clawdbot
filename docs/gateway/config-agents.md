@@ -41,6 +41,28 @@ Default: `OPENCLAW_WORKSPACE_DIR` when set, otherwise `<state-dir>/workspace`. T
 
 An explicit `agents.defaults.workspace` value takes precedence over `OPENCLAW_WORKSPACE_DIR`. A sole agent uses this path directly. In a multi-agent fleet, agents without their own `workspace` use an agent-id subdirectory so no implicit owner claims the shared root.
 
+### `agents.defaults.cwd`
+
+Optional working directory for agent reply runs. Use it to run coding tools in an
+existing repository while bootstrap files (`AGENTS.md`, `SOUL.md`) and memory stay
+in the managed agent workspace.
+
+```json5
+{
+  agents: {
+    defaults: { workspace: "~/.openclaw/workspace" },
+    entries: { coder: { cwd: "~/Projects/app", sandbox: { mode: "off" } } },
+  },
+}
+```
+
+Session-spawned working directories take precedence, then `agents.entries.*.cwd`,
+then `agents.defaults.cwd`. When none is set, tools use the agent workspace.
+Paths expand `~` like `workspace`; relative paths resolve against the Gateway
+process working directory. A distinct working directory requires an unsandboxed
+run; sandboxed runs reject it. When the directories differ, the system prompt
+identifies their separate roles so deliverables stay in the working directory.
+
 ### `agents.defaults.repoRoot`
 
 Optional repository root shown in the system prompt's Runtime line. If unset, OpenClaw auto-detects by walking upward from the workspace.
@@ -1073,6 +1095,7 @@ for provider examples and precedence.
 ```
 
 - The `agents.entries` object key is the stable agent id.
+- `cwd`: optional working directory for reply runs, separate from `workspace`. Overrides `agents.defaults.cwd`; see [Working directory](/gateway/config-agents#agentsdefaultscwd) for precedence and sandbox restrictions.
 - `default` is retired. Exactly one configured agent resolves implicitly; multi-agent operations require a binding, surface `agentId` target, scoped session/store owner, or explicit `--agent`/request field.
 - `model`: string form sets a strict per-agent primary with no model fallback; object form `{ primary }` is also strict unless you add `fallbacks`. Use `{ primary, fallbacks: [...] }` to opt that agent into fallback, or `{ primary, fallbacks: [] }` to make strict behavior explicit. Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
 - `utilityModel`: optional per-agent override for short internal tasks such as generated session and thread titles. Falls back to `agents.defaults.utilityModel`, then the effective session provider's declared small-model default. Dashboard titles retry once with the effective regular session model. An empty string skips the alternate utility route for this agent without disabling dashboard title generation.
