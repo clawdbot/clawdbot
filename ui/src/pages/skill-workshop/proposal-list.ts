@@ -19,6 +19,7 @@ export function renderSkillWorkshopProposalList(
     <aside class="sw-queue">
       <div class="sw-queue__search">
         <input
+          class="oc-input"
           placeholder=${t("skillWorkshop.queue.search")}
           .value=${props.query}
           @input=${(event: Event) =>
@@ -68,7 +69,9 @@ function renderProposalRow(
       : "skillWorkshop.applied.revisions";
   return html`
     <button
-      class="sw-row ${latest.isNew ? "is-new" : "is-seen"} ${isSelected ? "is-selected" : ""}"
+      class="sw-row ${latest.isNew ? "is-new" : "is-seen"} ${isSelected
+        ? "is-selected"
+        : ""} oc-card-interactive"
       @click=${() => props.onSelect(latest.key)}
     >
       <span class="sw-row__dot"></span>

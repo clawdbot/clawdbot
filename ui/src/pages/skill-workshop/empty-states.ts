@@ -11,13 +11,13 @@ type SkillWorkshopEmptyIcon = "search" | "clock" | "check" | "x" | "shield" | "r
 export function renderBoardEmptyDetail(query: string, statusFilter: SkillWorkshopStatusFilter) {
   const empty = resolveBoardEmptyState(query, statusFilter);
   return html`
-    <div class="sw-detail sw-detail--empty">
-      <div class="sw-filter-empty">
+    <div class="sw-detail sw-detail--empty oc-empty">
+      <div class="sw-filter-empty oc-empty-content">
         <div class="sw-filter-empty__icon" aria-hidden="true">
           ${renderEmptyStateIcon(empty.icon)}
         </div>
-        <p class="sw-empty__title">${empty.title}</p>
-        <p class="sw-empty__sub">${empty.body}</p>
+        <p class="sw-empty__title oc-empty-title">${empty.title}</p>
+        <p class="sw-empty__sub oc-empty-description">${empty.body}</p>
       </div>
     </div>
   `;
@@ -104,7 +104,10 @@ export function renderWorkshopEmptyState(params: {
 }) {
   return html`
     <div class="sw-empty-state">
-      <section class="sw-empty-state__panel" aria-label=${t("skillWorkshop.empty.noProposalsAria")}>
+      <section
+        class="sw-empty-state__panel oc-card"
+        aria-label=${t("skillWorkshop.empty.noProposalsAria")}
+      >
         <div class="sw-empty-state__glyph" aria-hidden="true">
           <span></span>
           <span></span>

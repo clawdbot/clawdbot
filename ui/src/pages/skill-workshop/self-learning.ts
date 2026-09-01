@@ -113,7 +113,9 @@ export function renderSelfLearningPitch(
       <p>${t("skillWorkshop.selfLearning.pitchBody")}</p>
       <button
         type="button"
-        class="sw-btn sw-btn--primary ${selfLearning.busy ? "is-busy" : ""}"
+        class="sw-btn sw-btn--primary oc-action oc-action-primary ${selfLearning.busy
+          ? "is-busy"
+          : ""}"
         ?disabled=${selfLearning.busy || !selfLearning.canUpdate}
         @click=${() => onToggle(true)}
       >
@@ -129,5 +131,7 @@ export function renderSelfLearningError(selfLearning: SkillWorkshopSelfLearning 
   if (!selfLearning?.error) {
     return nothing;
   }
-  return html`<div class="sw-error" role="status"><span>${selfLearning.error}</span></div>`;
+  return html`<div class="sw-error oc-banner oc-banner-error" role="status">
+    <span>${selfLearning.error}</span>
+  </div>`;
 }

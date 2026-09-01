@@ -194,7 +194,7 @@ export function renderSkillWorkshopHistoryScan(params: {
   const result = params.state.result;
   const coverage = result ? formatCoverage(result) : null;
   return html`
-    <section class="sw-history ${result?.hasScanned ? "is-compact" : ""}">
+    <section class="sw-history oc-card ${result?.hasScanned ? "is-compact" : ""}">
       <div class="sw-history__signal" aria-hidden="true">
         <span></span><span></span><span></span><span></span>
       </div>
@@ -230,7 +230,7 @@ export function renderSkillWorkshopHistoryScan(params: {
       </div>
       <div class="sw-history__action">
         <button
-          class="sw-btn sw-btn--primary"
+          class="sw-btn sw-btn--primary oc-action oc-action-primary"
           ?disabled=${!params.canScan || params.state.running || params.state.loading}
           @click=${params.onScan}
         >

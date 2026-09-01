@@ -418,9 +418,25 @@ describe("Control UI Vite config", () => {
     const aliases = resolveExternalPackageAliasesForVite(resolvePackage);
 
     expect(resolvePackage.mock.calls).toEqual([
+      ["@openclaw/carapace/tokens.css"],
+      ["@openclaw/carapace/components.css"],
+      ["@openclaw/carapace/candidate/controls.css"],
+      ["@openclaw/carapace/candidate/feedback.css"],
+      ["@openclaw/carapace/candidate/data.css"],
+      ["@openclaw/carapace/candidate/application.css"],
       ["@openclaw/libterminal/package.json"],
       ["@openclaw/uirouter/package.json"],
     ]);
+    expect(aliases.find((alias) => alias.find === "@openclaw/carapace/tokens.css")).toEqual({
+      find: "@openclaw/carapace/tokens.css",
+      replacement: "/parent/node_modules/@openclaw/carapace/tokens.css",
+    });
+    expect(
+      aliases.find((alias) => alias.find === "@openclaw/carapace/candidate/application.css"),
+    ).toEqual({
+      find: "@openclaw/carapace/candidate/application.css",
+      replacement: "/parent/node_modules/@openclaw/carapace/candidate/application.css",
+    });
     expect(aliases.find((alias) => alias.find === "@openclaw/libterminal/browser")).toEqual({
       find: "@openclaw/libterminal/browser",
       replacement: path.join("/parent/node_modules/@openclaw/libterminal", "dist/browser.js"),

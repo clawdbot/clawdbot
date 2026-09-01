@@ -106,11 +106,15 @@ export function renderSkillWorkshop(props: SkillWorkshopProps) {
         );
 
   return html`
-    <section class="skill-workshop sw-mode-${props.mode}">
+    <section class="skill-workshop sw-mode-${props.mode} oc-app-surface">
       ${props.error
-        ? html`<div class="sw-error" role="status">
+        ? html`<div class="sw-error oc-banner oc-banner-error" role="status">
             <span>${props.error}</span>
-            <button type="button" class="btn btn--sm" @click=${props.onRetry}>
+            <button
+              type="button"
+              class="btn btn--sm oc-action oc-action-secondary"
+              @click=${props.onRetry}
+            >
               ${t("pluginsPage.tryAgain")}
             </button>
           </div>`
@@ -159,7 +163,7 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
       style="--openclaw-modal-width: 560px"
       @modal-cancel=${cancelDisabled ? undefined : props.onRevisionCancel}
     >
-      <section class="sw-revision-dialog ${busy ? "sw-revision-dialog--sending" : ""}">
+      <section class="sw-revision-dialog oc-card ${busy ? "sw-revision-dialog--sending" : ""}">
         <div class="sw-revision-dialog__head">
           <div>
             <div class="sw-revision-dialog__eyebrow">
@@ -170,7 +174,7 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
           <openclaw-tooltip content=${t("skillWorkshop.actions.close")}>
             <button
               type="button"
-              class="sw-revision-dialog__close"
+              class="sw-revision-dialog__close oc-action oc-action-icon oc-action-ghost"
               aria-label=${t("skillWorkshop.actions.close")}
               ?disabled=${cancelDisabled}
               @click=${props.onRevisionCancel}
@@ -181,7 +185,7 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
         </div>
         <p class="sw-revision-dialog__copy">${t("skillWorkshop.revision.description")}</p>
         <textarea
-          class="sw-revision-dialog__input"
+          class="sw-revision-dialog__input oc-textarea"
           autofocus
           placeholder=${t("skillWorkshop.revision.placeholder")}
           .value=${props.revisionDraft}
@@ -202,7 +206,7 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
         <div class="sw-revision-dialog__actions">
           <button
             type="button"
-            class="sw-btn sw-btn--ghost"
+            class="sw-btn sw-btn--ghost oc-action oc-action-ghost"
             ?disabled=${cancelDisabled}
             @click=${props.onRevisionCancel}
           >
@@ -210,7 +214,7 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
           </button>
           <button
             type="button"
-            class="sw-btn sw-btn--primary ${busy ? "is-busy" : ""}"
+            class="sw-btn sw-btn--primary oc-action oc-action-primary ${busy ? "is-busy" : ""}"
             ?disabled=${!canSubmit}
             @click=${() => props.onRevisionSubmit(proposal.key)}
           >
@@ -231,7 +235,10 @@ function renderBoard(
 ) {
   return html`
     ${renderLifecycleTabs(props)}
-    <div class="sw-triage" style=${styleMap({ "--sw-queue-width": `${props.queueWidth}px` })}>
+    <div
+      class="sw-triage oc-card"
+      style=${styleMap({ "--sw-queue-width": `${props.queueWidth}px` })}
+    >
       ${renderSkillWorkshopProposalList(
         props,
         groups,
@@ -270,13 +277,13 @@ function renderQueueResizer(props: SkillWorkshopProps) {
 
 function renderLifecycleTabs(props: SkillWorkshopProps) {
   return html`
-    <div class="sw-lifecycle-tabs">
+    <div class="sw-lifecycle-tabs oc-segmented">
       ${STATUS_TABS.map((status) => {
         const isActive = props.statusFilter === status;
         const count = props.counts[status] ?? 0;
         return html`
           <button
-            class="sw-lifecycle-tab ${isActive ? "is-active" : ""}"
+            class="sw-lifecycle-tab oc-segmented-item ${isActive ? "is-active" : ""}"
             @click=${() => props.onStatusFilterChange(status)}
           >
             ${t(STATUS_LABEL[status])} <span class="settings-count">${count}</span>
@@ -295,7 +302,7 @@ function renderBodyModeButton(
   const active = props.appliedDiffMode === mode;
   return html`
     <button
-      class="sw-body-mode__button ${active ? "is-active" : ""}"
+      class="sw-body-mode__button oc-segmented-item ${active ? "is-active" : ""}"
       aria-pressed=${active ? "true" : "false"}
       @click=${() => props.onAppliedDiffModeChange(mode)}
     >
@@ -306,7 +313,11 @@ function renderBodyModeButton(
 
 function renderBodyModeToggle(props: SkillWorkshopProps) {
   return html`
-    <div class="sw-body-mode" role="group" aria-label=${t("skillWorkshop.diff.viewLabel")}>
+    <div
+      class="sw-body-mode oc-segmented"
+      role="group"
+      aria-label=${t("skillWorkshop.diff.viewLabel")}
+    >
       ${renderBodyModeButton(props, "changes", t("skillWorkshop.diff.changes"))}
       ${renderBodyModeButton(props, "full", t("skillWorkshop.diff.fullBody"))}
     </div>
@@ -387,7 +398,7 @@ function renderDetail(
       </div>
 
       <div class="sw-detail__body">
-        <div class="sw-body-card">
+        <div class="sw-body-card oc-card">
           <div class="sw-body-card__head">
             <h1>${proposal.slug}</h1>
             ${previousRevision ? renderBodyModeToggle(props) : nothing}
@@ -435,7 +446,7 @@ function renderDetail(
 
 function renderActionNotice(notice: SkillWorkshopActionNotice) {
   return html`
-    <div class="sw-action-toast" role="status" aria-live="polite">
+    <div class="sw-action-toast oc-banner" role="status" aria-live="polite">
       <span>${notice.label}</span>
       <strong>${notice.slug}</strong>
       <span>·</span>
@@ -456,7 +467,7 @@ function renderPendingActions(props: SkillWorkshopProps, proposal: SkillWorkshop
   return html`
     <div class="sw-action-bar" aria-busy=${busy ? "true" : "false"}>
       <button
-        class="sw-btn ${busy === "evaluate" ? "is-busy" : ""}"
+        class="sw-btn oc-action oc-action-secondary ${busy === "evaluate" ? "is-busy" : ""}"
         ?disabled=${disabled || !props.access.canEvaluate}
         @click=${() => props.onEvaluate(proposal.key)}
       >
@@ -465,14 +476,16 @@ function renderPendingActions(props: SkillWorkshopProps, proposal: SkillWorkshop
           : t("skillWorkshop.actions.evaluate")}
       </button>
       <button
-        class="sw-btn sw-btn--primary ${busy === "apply" ? "is-busy" : ""}"
+        class="sw-btn sw-btn--primary oc-action oc-action-primary ${busy === "apply"
+          ? "is-busy"
+          : ""}"
         ?disabled=${disabled || !props.access.canApply}
         @click=${() => props.onApply(proposalDecision(proposal))}
       >
         ${busy === "apply" ? t("skillWorkshop.actions.applying") : t("skillWorkshop.actions.apply")}
       </button>
       <button
-        class="sw-btn ${busy === "revise" ? "is-busy" : ""}"
+        class="sw-btn oc-action oc-action-secondary ${busy === "revise" ? "is-busy" : ""}"
         ?disabled=${disabled || !props.access.canRevise}
         @click=${() => props.onRevise(proposal.key)}
       >
@@ -481,7 +494,9 @@ function renderPendingActions(props: SkillWorkshopProps, proposal: SkillWorkshop
           : t("skillWorkshop.actions.revise")}
       </button>
       <button
-        class="sw-btn sw-btn--ghost sw-btn--danger ${busy === "reject" ? "is-busy" : ""}"
+        class="sw-btn sw-btn--ghost sw-btn--danger oc-action oc-action-ghost ${busy === "reject"
+          ? "is-busy"
+          : ""}"
         ?disabled=${disabled || !props.access.canReject}
         @click=${() => props.onReject(proposalDecision(proposal))}
       >
@@ -504,7 +519,7 @@ function renderToday(
 ) {
   if (!hero) {
     return html`
-      <div class="sw-today sw-today--empty">
+      <div class="sw-today sw-today--empty oc-empty">
         <p class="sw-empty__title">${t("skillWorkshop.today.emptyTitle")}</p>
         <p class="sw-empty__sub">${t("skillWorkshop.today.emptyBody")}</p>
       </div>
@@ -568,7 +583,7 @@ function renderToday(
           : nothing}
       </div>
 
-      <article class="sw-today__hero">
+      <article class="sw-today__hero oc-card">
         <div class="sw-today__label">
           <span class="sw-today__ping"></span>
           ${heroLabel} · ${ageLabel}
@@ -607,7 +622,8 @@ function renderToday(
           ? html`
               <div class="sw-today__actions" aria-busy=${busy ? "true" : "false"}>
                 <button
-                  class="sw-today__big sw-today__big--evaluate ${busy === "evaluate"
+                  class="sw-today__big sw-today__big--evaluate oc-action oc-action-secondary ${busy ===
+                  "evaluate"
                     ? "is-busy"
                     : ""}"
                   ?disabled=${disabled || !props.access.canEvaluate}
@@ -619,7 +635,10 @@ function renderToday(
                   <span class="sw-today__big-sub">${t("skillWorkshop.today.runChecks")}</span>
                 </button>
                 <button
-                  class="sw-today__big sw-today__big--primary ${busy === "apply" ? "is-busy" : ""}"
+                  class="sw-today__big sw-today__big--primary oc-action oc-action-primary ${busy ===
+                  "apply"
+                    ? "is-busy"
+                    : ""}"
                   ?disabled=${disabled || !props.access.canApply}
                   @click=${() => props.onApply(proposalDecision(hero))}
                 >
@@ -629,7 +648,10 @@ function renderToday(
                   <span class="sw-today__big-sub">${t("skillWorkshop.today.addToSkills")}</span>
                 </button>
                 <button
-                  class="sw-today__big sw-today__big--tweak ${busy === "revise" ? "is-busy" : ""}"
+                  class="sw-today__big sw-today__big--tweak oc-action oc-action-secondary ${busy ===
+                  "revise"
+                    ? "is-busy"
+                    : ""}"
                   ?disabled=${disabled || !props.access.canRevise}
                   @click=${() => props.onRevise(hero.key)}
                 >
@@ -639,7 +661,10 @@ function renderToday(
                   <span class="sw-today__big-sub">${t("skillWorkshop.today.askAgent")}</span>
                 </button>
                 <button
-                  class="sw-today__big sw-today__big--skip ${busy === "reject" ? "is-busy" : ""}"
+                  class="sw-today__big sw-today__big--skip oc-action oc-action-ghost ${busy ===
+                  "reject"
+                    ? "is-busy"
+                    : ""}"
                   ?disabled=${disabled || !props.access.canReject}
                   @click=${() => props.onReject(proposalDecision(hero))}
                 >
@@ -726,7 +751,7 @@ function renderToday(
 function renderEvaluation(evaluation: SkillWorkshopEvaluation, today = false) {
   const completedAt = Date.parse(evaluation.completedAt);
   return html`
-    <section class="sw-evaluation ${today ? "sw-evaluation--today" : ""}">
+    <section class="sw-evaluation oc-section ${today ? "sw-evaluation--today" : ""}">
       <header class="sw-evaluation__head">
         <h3>${t("skillWorkshop.evaluation.title")}</h3>
         <div class="sw-evaluation__meta">
@@ -757,18 +782,18 @@ function renderEvaluationOutcome(outcome: SkillWorkshopEvaluationOutcome) {
     ? `${outcome.pluginId} ${outcome.pluginVersion}`
     : outcome.pluginId;
   return html`
-    <section class="sw-evaluation__outcome">
+    <section class="sw-evaluation__outcome oc-card">
       <div class="sw-evaluation__outcome-head">
         <div class="sw-evaluation__identity">
           <strong>${outcome.evaluatorId}</strong>
           <span>${pluginLabel}</span>
         </div>
         <div class="sw-evaluation__badges">
-          <span class="sw-evaluation__badge is-${outcome.status}">
+          <span class="sw-evaluation__badge oc-badge is-${outcome.status}">
             ${t(`skillWorkshop.evaluation.status.${outcome.status}`)}
           </span>
           ${result?.decision
-            ? html`<span class="sw-evaluation__badge is-${result.decision}">
+            ? html`<span class="sw-evaluation__badge oc-badge is-${result.decision}">
                 ${t(`skillWorkshop.evaluation.decision.${result.decision}`)}
               </span>`
             : nothing}

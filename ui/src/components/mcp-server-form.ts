@@ -13,6 +13,7 @@ export function renderMcpServerForm(props: {
   disabled?: boolean;
   blockedReason?: string | null;
   autofocus?: boolean;
+  carapace?: boolean;
   onSubmit: (form: McpServerForm) => void;
   onCancel: () => void;
 }): TemplateResult {
@@ -36,7 +37,7 @@ export function renderMcpServerForm(props: {
         <span>${t("mcpServers.nameLabel")}</span>
         <input
           name="mcp-name"
-          class="settings-input"
+          class="settings-input ${props.carapace ? "oc-input" : ""}"
           type="text"
           required
           placeholder="context7"
@@ -50,7 +51,7 @@ export function renderMcpServerForm(props: {
         <span>${t("mcpServers.transportLabel")}</span>
         <select
           name="mcp-transport"
-          class="settings-select"
+          class="settings-select ${props.carapace ? "oc-select" : ""}"
           title=${props.blockedReason ?? ""}
           ?disabled=${disabled}
         >
@@ -63,7 +64,7 @@ export function renderMcpServerForm(props: {
         <span>${t("mcpServers.targetLabel")}</span>
         <input
           name="mcp-target"
-          class="settings-input"
+          class="settings-input ${props.carapace ? "oc-input" : ""}"
           type="text"
           required
           placeholder="https://mcp.example.com/mcp  ·  npx some-mcp-server"
@@ -75,13 +76,18 @@ export function renderMcpServerForm(props: {
       <div class="mcp-server-form__actions">
         <button
           type="submit"
-          class="btn btn--sm"
+          class="btn btn--sm ${props.carapace ? "oc-action oc-action-primary" : ""}"
           title=${props.blockedReason ?? ""}
           ?disabled=${disabled}
         >
           ${props.busy ? t("mcpServers.adding") : t("mcpServers.add")}
         </button>
-        <button type="button" class="btn btn--sm" ?disabled=${props.busy} @click=${props.onCancel}>
+        <button
+          type="button"
+          class="btn btn--sm ${props.carapace ? "oc-action oc-action-secondary" : ""}"
+          ?disabled=${props.busy}
+          @click=${props.onCancel}
+        >
           ${t("common.cancel")}
         </button>
       </div>

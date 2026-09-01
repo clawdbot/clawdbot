@@ -336,7 +336,19 @@ export function resolveExternalPackageAliasesForVite(
 ): ControlUiViteAlias[] {
   const packageRoot = (specifier: string) =>
     path.dirname(resolvePackage(`${specifier}/package.json`));
+  const carapaceStyles = [
+    "tokens.css",
+    "components.css",
+    "candidate/controls.css",
+    "candidate/feedback.css",
+    "candidate/data.css",
+    "candidate/application.css",
+  ].map((entry) => {
+    const specifier = `@openclaw/carapace/${entry}`;
+    return { find: specifier, replacement: resolvePackage(specifier) };
+  });
   return [
+    ...carapaceStyles,
     {
       find: "@openclaw/libterminal/browser",
       replacement: path.join(packageRoot("@openclaw/libterminal"), "dist/browser.js"),

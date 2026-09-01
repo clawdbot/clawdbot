@@ -15,18 +15,28 @@
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
-  box-sizing: border-box;
   width: 100%;
   max-width: 1120px;
+  box-sizing: border-box;
   height: 100%;
   margin-inline: auto;
   min-height: 0;
   overflow: hidden;
+  padding-inline: var(--space-4);
   padding-bottom: 16px;
 }
 
 .content--skill-workshop .content-header {
+  width: 100%;
   flex-shrink: 0;
+  padding-inline: 0;
+  transform: none;
+}
+
+@media (min-width: 769px) {
+  .content--skill-workshop {
+    transform: translateX(var(--space-3));
+  }
 }
 
 .sw-hub-panel {
