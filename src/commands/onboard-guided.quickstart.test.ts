@@ -184,6 +184,25 @@ describe("runGuidedOnboarding quick start", () => {
     expect(prompter.outro).toHaveBeenCalledOnce();
   });
 
+  it("preserves external Gateway ownership and uses the existing browser handoff", async () => {
+    const prompter = createWizardPrompter(undefined, { selectValues: ["quick"] });
+    const runBrowserHandoff = vi.fn(async () => ({ handedOff: true as const }));
+    const deps = setupDeps({
+      prompter,
+      runBrowserHandoff,
+      applySetup: vi.fn(async () => ({
+        ...setupApplyResult(),
+        gateway: { status: "skipped" as const, reason: "external" as const },
+      })),
+    });
+
+    await runGuidedOnboardingImpl({}, makeRuntime(), deps);
+
+    expect(deps.runForegroundGateway).not.toHaveBeenCalled();
+    expect(runBrowserHandoff).toHaveBeenCalledOnce();
+    expect(prompter.outro).toHaveBeenCalledWith("Your browser is ready — I'll be in Settings.");
+  });
+
   it("cancelling the lane choice does not acknowledge security or scan the machine", async () => {
     const prompter = createWizardPrompter({
       select: vi.fn(async () => {

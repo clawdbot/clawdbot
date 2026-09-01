@@ -51,6 +51,29 @@ describe("runGuidedOnboarding custodian flow", () => {
     );
   });
 
+  it("keeps the pending owner's approved workspace after inference materializes a roster", async () => {
+    const applySetup = vi.fn(async () => setupApplyResult());
+    const deps = setupDeps({ prompter: createWizardPrompter(), applySetup });
+
+    await runGuidedOnboarding(
+      { acceptRisk: true, workspace: "/tmp/approved-workspace" },
+      makeRuntime(),
+      deps,
+    );
+
+    expect(localOnboarding.states.get("/tmp/openclaw.json")).toMatchObject({
+      status: "completed",
+      workspace: "/tmp/approved-workspace",
+    });
+    expect(applySetup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspace: "/tmp/approved-workspace",
+        allowWorkspaceChange: true,
+        assertCommitPreconditions: expect.any(Function),
+      }),
+    );
+  });
+
   it.each([
     ["enables default hooks", {}, true],
     ["preserves --skip-hooks", { skipHooks: true }, undefined],

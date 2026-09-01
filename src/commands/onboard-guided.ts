@@ -513,6 +513,7 @@ async function runGuidedOnboardingFlow(
   // onboarding; authored model-only configs without that receipt stay untouched.
   const alreadyConfigured =
     localSetup?.status !== "pending" && Boolean(detection?.setupComplete || existingConfig.gateway);
+  let gatewayExternallyManaged = false;
   const { resolveSetupWorkspaceSelection } = await import("../wizard/setup.workspace.js");
   const workspaceSelection = await resolveSetupWorkspaceSelection({
     baseConfig: existingConfig,
@@ -571,11 +572,13 @@ async function runGuidedOnboardingFlow(
       }
       const applySetup =
         deps.applySetup ?? (await import("../system-agent/setup-apply.js")).applySystemAgentSetup;
+      // Inference can materialize a roster before setup applies the workspace;
+      // the pending receipt remains the authority for that approved write.
       const applied = await withConsoleSubsystemsSuppressed(() =>
         applySetup({
           workspace,
           ...(firstAgent ? { firstAgent } : {}),
-          ...(allowWorkspaceChange ? { allowWorkspaceChange: true } : {}),
+          allowWorkspaceChange: allowWorkspaceChange || localSetup?.status === "pending",
           ...(resumingSetup ? { resume: true } : {}),
           ...(localSetup?.status === "pending"
             ? { assertCommitPreconditions: assertLocalSetupOwner }
@@ -598,6 +601,8 @@ async function runGuidedOnboardingFlow(
       if (gateway.status === "failed") {
         throw new Error(gateway.error);
       }
+      gatewayExternallyManaged =
+        applied.gateway.status === "skipped" && applied.gateway.reason === "external";
       const appliedSnapshot =
         localSetup?.status === "pending"
           ? await (
@@ -655,7 +660,7 @@ async function runGuidedOnboardingFlow(
         existingConfig.agents?.defaults?.workspace?.trim() || onboardHelpers.DEFAULT_WORKSPACE,
       )
     : appliedWorkspace;
-  if (quickstart) {
+  if (quickstart && !gatewayExternallyManaged) {
     await prompter.outro(t("wizard.guided.setupDone"));
     return { workspace: hatchWorkspace, next: "foreground-gateway" };
   }
