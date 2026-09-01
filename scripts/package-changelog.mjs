@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 // Temporarily narrows CHANGELOG.md to packaged release notes for npm tarballs.
-import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -20,31 +19,6 @@ const RELEASE_VERSION_PATTERN =
   /^([0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*)(?:(?:-(?:alpha|beta)\.[1-9][0-9]*)|(?:-[1-9][0-9]*))?$/u;
 const PRERELEASE_VERSION_PATTERN =
   /^([0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*)-(?:alpha|beta)\.[1-9][0-9]*$/u;
-const FULL_GIT_COMMIT_PATTERN = /^[0-9a-f]{40}$/u;
-
-export function resolveCommittedChangelogRef(cwd, content) {
-  try {
-    const commit = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: 30_000,
-    }).trim();
-    if (!FULL_GIT_COMMIT_PATTERN.test(commit)) {
-      return undefined;
-    }
-    const committed = execFileSync("git", ["show", `${commit}:CHANGELOG.md`], {
-      cwd,
-      encoding: "utf8",
-      maxBuffer: 16 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: 30_000,
-    });
-    return committed === content ? commit : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 /**
  * Resolves acceptable changelog headings for a package version.
@@ -125,7 +99,6 @@ export function extractCurrentPackageChangelog(content, packageVersion, options 
       releaseSection,
       "openclaw/openclaw",
       `v${packageVersion}`,
-      options.sourceCommit,
     );
     if (compacted) {
       assertMeaningfulReleaseBody(compacted.editorialNotes, heading.version);
@@ -153,7 +126,7 @@ async function readPackageVersion(cwd) {
 /**
  * Restores the source changelog from a package-changelog backup.
  */
-export async function restorePackageChangelog(cwd = process.cwd(), options = {}) {
+export async function restorePackageChangelog(cwd = process.cwd()) {
   const backupPath = path.join(cwd, BACKUP_PATH);
   if (!existsSync(backupPath)) {
     return false;
@@ -165,17 +138,13 @@ export async function restorePackageChangelog(cwd = process.cwd(), options = {})
   ]);
   if (current !== backup) {
     const packageVersion = await readPackageVersion(cwd);
-    const sourceCommit = options.sourceCommit ?? resolveCommittedChangelogRef(cwd, backup);
     let expectedPackaged;
     try {
-      expectedPackaged = extractCurrentPackageChangelog(backup, packageVersion, {
-        sourceCommit,
-      });
+      expectedPackaged = extractCurrentPackageChangelog(backup, packageVersion);
     } catch (error) {
       try {
         expectedPackaged = extractCurrentPackageChangelog(backup, packageVersion, {
           allowUnreleased: true,
-          sourceCommit,
         });
       } catch {
         const message = error instanceof Error ? error.message : String(error);
@@ -200,16 +169,12 @@ export async function restorePackageChangelog(cwd = process.cwd(), options = {})
  * Writes packaged changelog content while preserving a restorable backup.
  */
 export async function preparePackageChangelog(cwd = process.cwd(), options = {}) {
-  await restorePackageChangelog(cwd, options);
+  await restorePackageChangelog(cwd);
   const changelogPath = path.join(cwd, CHANGELOG_PATH);
   const backupPath = path.join(cwd, BACKUP_PATH);
   const original = await readFile(changelogPath, "utf8");
   const packageVersion = await readPackageVersion(cwd);
-  const sourceCommit = options.sourceCommit ?? resolveCommittedChangelogRef(cwd, original);
-  const packaged = extractCurrentPackageChangelog(original, packageVersion, {
-    ...options,
-    sourceCommit,
-  });
+  const packaged = extractCurrentPackageChangelog(original, packageVersion, options);
   if (packaged === original) {
     return false;
   }

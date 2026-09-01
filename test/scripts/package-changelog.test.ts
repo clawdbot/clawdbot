@@ -1,31 +1,19 @@
 // Package Changelog tests cover package changelog script behavior.
-import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   extractCurrentPackageChangelog,
   preparePackageChangelog,
   resolvePackageChangelogVersions,
   restorePackageChangelog,
 } from "../../scripts/package-changelog.mjs";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function changelog(strings: TemplateStringsArray, ...values: string[]) {
   return `${String.raw({ raw: strings }, ...values)
     .replace(/^\n/u, "")
     .trimEnd()}\n`;
-}
-
-function git(cwd: string, args: string[]): string {
-  return execFileSync("git", args, {
-    cwd,
-    encoding: "utf8",
-    maxBuffer: 16 * 1024 * 1024,
-  }).trim();
 }
 
 const cumulativeChangelog = changelog`
@@ -53,18 +41,6 @@ const oversizedChangelog = cumulativeChangelog.replace(
   "## 2026.5.27",
   `${oversizedContributionRecord}\n## 2026.5.27`,
 );
-
-const oversizedAccountingLedger = `### Release accounting
-
-- Pull requests: **16,902**
-- Direct commits: **698**
-
-### Pull requests
-
-${"- [#123](https://github.com/openclaw/openclaw/pull/123) Contribution (@contributor).\n".repeat(20_000)}
-### Direct commits
-
-- [\`1234567\`](https://github.com/openclaw/openclaw/commit/1234567890123456789012345678901234567890) Direct fix (Contributor).`;
 
 describe("package-changelog", () => {
   it("maps release-channel package versions to package changelog candidate headings", () => {
@@ -222,74 +198,6 @@ ${record}
       );
     },
   );
-
-  it("requires an immutable source commit for an oversized accounting ledger", () => {
-    const source = `# Changelog\n\n## 2026.5.28\n\n${oversizedAccountingLedger}\n`;
-    expect(() => extractCurrentPackageChangelog(source, "2026.5.28")).toThrow(
-      "accounting ledger compaction requires its immutable source commit",
-    );
-  });
-
-  it("compacts an oversized accounting ledger behind its commit-pinned PR record", () => {
-    const sourceCommit = "a".repeat(40);
-    const source = `# Changelog\n\n## 2026.5.28\n\n${oversizedAccountingLedger}\n`;
-    const packaged = extractCurrentPackageChangelog(source, "2026.5.28", { sourceCommit });
-
-    expect(packaged).toContain("### Release accounting");
-    expect(packaged).toContain("### Pull requests and direct commits");
-    expect(packaged).toContain(
-      `https://github.com/openclaw/openclaw/blob/${sourceCommit}/CHANGELOG.md#pull-requests`,
-    );
-    expect(packaged).not.toContain("[#123](https://github.com/openclaw/openclaw/pull/123)");
-    expect(packaged).not.toContain("### Direct commits");
-  });
-
-  it("pins prepared accounting ledgers to the commit that contains the full record", async () => {
-    const root = tempDirs.make("openclaw-package-ledger-");
-    const source = `# Changelog\n\n## 2026.5.28\n\n${oversizedAccountingLedger}\n`;
-    try {
-      writeFileSync(path.join(root, "package.json"), '{"version":"2026.5.28"}\n', "utf8");
-      writeFileSync(path.join(root, "CHANGELOG.md"), source, "utf8");
-      git(root, ["init", "-q"]);
-      git(root, ["config", "user.name", "Release Test"]);
-      git(root, ["config", "user.email", "release-test@example.com"]);
-      git(root, ["add", "package.json", "CHANGELOG.md"]);
-      git(root, ["commit", "-qm", "release source"]);
-      const sourceCommit = git(root, ["rev-parse", "HEAD"]);
-      expect(git(root, ["show", `${sourceCommit}:CHANGELOG.md`])).toContain(
-        "[#123](https://github.com/openclaw/openclaw/pull/123)",
-      );
-
-      await expect(preparePackageChangelog(root)).resolves.toBe(true);
-      const packaged = readFileSync(path.join(root, "CHANGELOG.md"), "utf8");
-      expect(packaged).toContain(
-        `https://github.com/openclaw/openclaw/blob/${sourceCommit}/CHANGELOG.md#pull-requests`,
-      );
-      await expect(restorePackageChangelog(root)).resolves.toBe(true);
-      expect(readFileSync(path.join(root, "CHANGELOG.md"), "utf8")).toBe(source);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("uses explicit source provenance when packaging a gitless archive", async () => {
-    const root = tempDirs.make("openclaw-package-ledger-archive-");
-    const sourceCommit = "b".repeat(40);
-    const source = `# Changelog\n\n## 2026.5.28\n\n${oversizedAccountingLedger}\n`;
-    try {
-      writeFileSync(path.join(root, "package.json"), '{"version":"2026.5.28"}\n', "utf8");
-      writeFileSync(path.join(root, "CHANGELOG.md"), source, "utf8");
-
-      await expect(preparePackageChangelog(root, { sourceCommit })).resolves.toBe(true);
-      expect(readFileSync(path.join(root, "CHANGELOG.md"), "utf8")).toContain(
-        `https://github.com/openclaw/openclaw/blob/${sourceCommit}/CHANGELOG.md#pull-requests`,
-      );
-      await expect(restorePackageChangelog(root, { sourceCommit })).resolves.toBe(true);
-      expect(readFileSync(path.join(root, "CHANGELOG.md"), "utf8")).toBe(source);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
 
   it("does not use the generated contribution link to satisfy the release-note minimum", () => {
     const source = `# Changelog\n\n## 2026.5.28\n\n### Fixes\n\n${oversizedContributionRecord}\n`;

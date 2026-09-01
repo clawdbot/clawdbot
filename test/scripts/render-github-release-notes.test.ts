@@ -152,47 +152,6 @@ describe("GitHub release-note rendering", () => {
     expect(rendered.size.bytes).toBeLessThanOrEqual(GITHUB_RELEASE_BODY_MAX_BYTES);
   });
 
-  it("requires and verifies a source commit for a post-tag accounting ledger", () => {
-    const sourceCommit = "a".repeat(40);
-    const changelog = [
-      "# Changelog",
-      "",
-      `## ${version}`,
-      "",
-      "### Release accounting",
-      "",
-      "- Pull requests: **20,000**",
-      "",
-      "### Pull requests",
-      "",
-      `- [#123](https://github.com/openclaw/openclaw/pull/123) ${"record ".repeat(20_000)}`,
-    ].join("\n");
-
-    expect(() => renderGithubReleaseNotes({ changelog, version, tag, repository })).toThrow(
-      "accounting ledger compaction requires its immutable source commit",
-    );
-    const rendered = renderGithubReleaseNotes({
-      changelog,
-      repository,
-      sourceCommit,
-      tag,
-      version,
-    });
-    expect(rendered.body).toContain(
-      `https://github.com/openclaw/openclaw/blob/${sourceCommit}/CHANGELOG.md#pull-requests`,
-    );
-    expect(
-      verifyGithubReleaseNotes({
-        body: rendered.body,
-        changelog,
-        repository,
-        sourceCommit,
-        tag,
-        version,
-      }).matches,
-    ).toBe(true);
-  });
-
   it("keeps a fitting full section and omits only a proof tail that would overflow", () => {
     const nearlyFullRecord = `- **PR #123** ${"x".repeat(124_500)}`;
     const changelog = changelogFor(nearlyFullRecord);

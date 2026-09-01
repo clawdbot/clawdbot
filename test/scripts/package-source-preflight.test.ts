@@ -357,20 +357,6 @@ describe("package source preflight", () => {
     ).toBe("2026.8.1");
   });
 
-  it("requires and accepts a source commit for an oversized accounting ledger", () => {
-    const changelogContent = `# Changelog\n\n## 2026.8.1\n\n### Release accounting\n\n- Pull requests: **20,000**\n\n### Pull requests\n\n${"- [#123](https://github.com/openclaw/openclaw/pull/123) Contribution (@contributor).\n".repeat(20_000)}`;
-    const input = {
-      aiManifestContent: aiManifest(),
-      changelogContent,
-      rootManifestContent: rootManifest(),
-    };
-
-    expect(() => validatePackageSource(input)).toThrow(
-      "accounting ledger compaction requires its immutable source commit",
-    );
-    expect(validatePackageSource({ ...input, sourceCommit: "a".repeat(40) })).toBe("2026.8.1");
-  });
-
   it("rejects source package version drift", () => {
     expect(() =>
       validatePackageSource({
@@ -438,9 +424,6 @@ describe("package source preflight", () => {
     const root = JSON.parse(readFileSync("package.json", "utf8")) as {
       dependencies: Record<string, string>;
     };
-    const sourceCommit = execFileSync("git", ["rev-parse", "HEAD"], {
-      encoding: "utf8",
-    }).trim();
     root.dependencies["partial-json"] = "0.1.8";
     expect(() =>
       validatePackageSource({
@@ -448,7 +431,6 @@ describe("package source preflight", () => {
         allowUnreleasedChangelog: true,
         changelogContent: readFileSync("CHANGELOG.md", "utf8"),
         rootManifestContent: JSON.stringify(root),
-        sourceCommit,
       }),
     ).toThrow(
       "package.json must declare partial-json@0.1.7 to bundle packages/ai/package.json without duplicate dependencies",
@@ -746,10 +728,6 @@ describe("package source preflight", () => {
       "Package candidate only inside pinned harness",
     );
     expect(packageCandidate.run).toContain('-v "$PWD/.release-harness:/harness:ro"');
-    expect(packageCandidate.run).toContain('--source-commit "$TARGET_SHA"');
-    expect(packageCandidate.run).toContain(
-      "grep -Fq -- '--source-commit' scripts/package-openclaw-for-docker.mts",
-    );
     expect(packageCandidate.run).toContain(
       'node /harness/scripts/package-source-preflight.mjs "${preflight_args[@]}"',
     );

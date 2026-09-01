@@ -4,10 +4,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  extractCurrentPackageChangelog,
-  resolveCommittedChangelogRef,
-} from "./package-changelog.mjs";
+import { extractCurrentPackageChangelog } from "./package-changelog.mjs";
 import { validateBundledPackageDependencyAlignment } from "./package-source-dependencies.mjs";
 
 const FULL_GIT_COMMIT_RE = /^[0-9a-f]{40}$/u;
@@ -19,7 +16,6 @@ function parseArgs(argv) {
   const options = {
     allowUnreleasedChangelog: false,
     ref: "",
-    sourceCommit: "",
     sourceDir: "",
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -38,11 +34,6 @@ function parseArgs(argv) {
       index += 1;
       continue;
     }
-    if (arg === "--source-commit") {
-      options.sourceCommit = argv[index + 1] ?? "";
-      index += 1;
-      continue;
-    }
     throw new Error(`Unknown package source preflight option: ${arg}`);
   }
   if (options.ref && options.sourceDir) {
@@ -50,14 +41,6 @@ function parseArgs(argv) {
   }
   if (options.ref && !FULL_GIT_COMMIT_RE.test(options.ref)) {
     throw new Error(`--ref must be a full lowercase commit SHA; got ${options.ref}`);
-  }
-  if (options.sourceCommit && !FULL_GIT_COMMIT_RE.test(options.sourceCommit)) {
-    throw new Error(
-      `--source-commit must be a full lowercase commit SHA; got ${options.sourceCommit}`,
-    );
-  }
-  if (options.ref && options.sourceCommit) {
-    throw new Error("--source-commit is only valid with --source-dir.");
   }
   if (!options.ref && !options.sourceDir) {
     throw new Error("Use exactly one of --ref or --source-dir.");
@@ -78,7 +61,6 @@ export function validatePackageSource({
   allowUnreleasedChangelog = false,
   changelogContent,
   rootManifestContent,
-  sourceCommit,
 }) {
   const rootManifest = parseManifest(rootManifestContent, ROOT_MANIFEST_PATH);
   if (typeof rootManifest.version !== "string") {
@@ -86,7 +68,6 @@ export function validatePackageSource({
   }
   extractCurrentPackageChangelog(changelogContent, rootManifest.version, {
     allowUnreleased: allowUnreleasedChangelog,
-    sourceCommit,
   });
 
   const rootDependencies = rootManifest.dependencies ?? {};
@@ -134,25 +115,12 @@ function readGitFile(ref, file, { optional = false } = {}) {
   }
 }
 
-function resolveGitCommit(ref) {
-  const commit = execFileSync("git", ["rev-parse", `${ref}^{commit}`], {
-    encoding: "utf8",
-    timeout: 30_000,
-  }).trim();
-  if (!FULL_GIT_COMMIT_RE.test(commit)) {
-    throw new Error(`Unable to resolve ${ref} to a full commit SHA.`);
-  }
-  return commit;
-}
-
 export function validatePackageSourceRef(ref, options = {}) {
-  const commit = resolveGitCommit(ref);
   return validatePackageSource({
-    aiManifestContent: readGitFile(commit, AI_MANIFEST_PATH, { optional: true }),
+    aiManifestContent: readGitFile(ref, AI_MANIFEST_PATH, { optional: true }),
     allowUnreleasedChangelog: options.allowUnreleasedChangelog,
-    changelogContent: readGitFile(commit, CHANGELOG_PATH),
-    rootManifestContent: readGitFile(commit, ROOT_MANIFEST_PATH),
-    sourceCommit: commit,
+    changelogContent: readGitFile(ref, CHANGELOG_PATH),
+    rootManifestContent: readGitFile(ref, ROOT_MANIFEST_PATH),
   });
 }
 
@@ -169,14 +137,11 @@ function readSourceFile(sourceDir, file, { optional = false } = {}) {
 
 export function validatePackageSourceDir(sourceDir, options = {}) {
   const resolvedSourceDir = path.resolve(sourceDir);
-  const changelogContent = readSourceFile(resolvedSourceDir, CHANGELOG_PATH);
   return validatePackageSource({
     aiManifestContent: readSourceFile(resolvedSourceDir, AI_MANIFEST_PATH, { optional: true }),
     allowUnreleasedChangelog: options.allowUnreleasedChangelog,
-    changelogContent,
+    changelogContent: readSourceFile(resolvedSourceDir, CHANGELOG_PATH),
     rootManifestContent: readSourceFile(resolvedSourceDir, ROOT_MANIFEST_PATH),
-    sourceCommit:
-      options.sourceCommit ?? resolveCommittedChangelogRef(resolvedSourceDir, changelogContent),
   });
 }
 

@@ -668,7 +668,6 @@ jobs:
       - name: Package candidate only inside pinned harness
         env:
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
-          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
         run: |
           set -euo pipefail
           package_dir="${RUNNER_TEMP}/candidate-package"
@@ -682,7 +681,6 @@ jobs:
             --entrypoint /bin/bash \
             -e ALLOW_UNRELEASED_CHANGELOG \
             -e CI=1 \
-            -e TARGET_SHA \
             -v "${RUNNER_TEMP}/candidate.tar.gz:/input/candidate.tar.gz:ro" \
             -v "${package_dir}:/output" \
             -v "$PWD/.release-harness:/harness:ro" \
@@ -696,7 +694,7 @@ jobs:
                 --no-same-permissions \
                 -C "$source_dir"
               cd "$source_dir"
-              preflight_args=(--source-dir "$source_dir" --source-commit "$TARGET_SHA")
+              preflight_args=(--source-dir "$source_dir")
               if [[ "$ALLOW_UNRELEASED_CHANGELOG" == "true" ]]; then
                 preflight_args+=(--allow-unreleased-changelog)
               fi
@@ -710,11 +708,6 @@ jobs:
                 --output-dir /output
                 --output-name candidate.tgz
               )
-              # Frozen sources before post-tag ledgers do not expose this option
-              # and do not need it. Current ledger-bearing sources must pin it.
-              if grep -Fq -- '--source-commit' scripts/package-openclaw-for-docker.mts; then
-                package_args+=(--source-commit "$TARGET_SHA")
-              fi
               # The TypeScript implementation is the capability boundary for this
               # newer option; frozen Node-native packers intentionally omit it.
               if [[ "$ALLOW_UNRELEASED_CHANGELOG" == "true" ]] && \

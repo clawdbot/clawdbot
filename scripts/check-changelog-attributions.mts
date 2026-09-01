@@ -100,12 +100,8 @@ export function findForbiddenChangelogThanks(content: string) {
       if (!THANKS_PATTERN.test(text)) {
         return null;
       }
-      const thanksIndex = text.search(THANKS_PATTERN);
-      const thanksText = text.slice(thanksIndex);
-      // Ledger rows also contain authors, reporters, and co-authors before the
-      // explicit Thanks segment. Only the handles actually being thanked are
-      // governed by this check.
-      for (const match of thanksText.matchAll(THANKED_HANDLE_PATTERN)) {
+      // A single changelog line may thank multiple handles; scan all of them.
+      for (const match of text.matchAll(THANKED_HANDLE_PATTERN)) {
         const handle = match[1];
         if (handle && isForbiddenChangelogThanksHandle(handle)) {
           return { line: index + 1, handle: handle.toLowerCase(), text };

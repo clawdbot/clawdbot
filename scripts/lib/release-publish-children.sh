@@ -621,7 +621,6 @@ render_github_release_notes() {
     --changelog "${changelog_file}"
     --tag "${RELEASE_TAG}"
     --repository "${GITHUB_REPOSITORY}"
-    --source-commit "${TARGET_SHA}"
     --output "${output_file}"
   )
 
@@ -662,7 +661,6 @@ canonical_release_body_matches() {
   RELEASE_BODY_FILE="${body_file}" \
     RELEASE_CHANGELOG_FILE="${changelog_file}" \
     RELEASE_REPOSITORY="${GITHUB_REPOSITORY}" \
-    RELEASE_SOURCE_COMMIT="${TARGET_SHA}" \
     RELEASE_TAG="${RELEASE_TAG}" \
     node --import tsx --input-type=module <<'NODE'
 import { readFileSync } from "node:fs";
@@ -679,7 +677,6 @@ const result = verifyGithubReleaseNotes({
   version: releaseNotesVersionForTag(process.env.RELEASE_TAG),
   tag: process.env.RELEASE_TAG,
   repository: process.env.RELEASE_REPOSITORY,
-  sourceCommit: process.env.RELEASE_SOURCE_COMMIT,
 });
 if (!result.matches) {
   process.exitCode = 1;

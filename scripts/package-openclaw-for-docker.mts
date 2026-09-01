@@ -38,7 +38,6 @@ const PROCESS_GROUP_EXIT_POLL_MS = 25;
 const POST_FORCE_KILL_WAIT_MS = 1_000;
 const DEFAULT_CAPTURED_STDOUT_MAX_BYTES = 1024 * 1024;
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
-const FULL_GIT_COMMIT_PATTERN = /^[0-9a-f]{40}$/u;
 const AI_RUNTIME_PACKAGE = "@openclaw/ai";
 const AI_RUNTIME_BACKUP_DIR = ".openclaw-ai-package-backup";
 
@@ -92,7 +91,6 @@ type PackageOptions = RunOptions & {
   restoreManifest?: (cwd: string) => Promise<unknown>;
   runCaptureImpl?: RunImpl;
   runImpl?: CommandRunner;
-  sourceCommit?: string;
 };
 type MutableJsonRecord = Record<string, unknown>;
 
@@ -232,7 +230,6 @@ export function parseArgs(argv: string[]) {
       packJson: "",
       pnpmPack: false,
       skipBuild: false,
-      sourceCommit: "",
       sourceDir: ROOT_DIR,
     },
     [
@@ -243,7 +240,6 @@ export function parseArgs(argv: string[]) {
       stringFlag("--pack-json", "packJson", { rejectShortOptions: true }),
       booleanFlag("--pnpm-pack", "pnpmPack"),
       booleanFlag("--skip-build", "skipBuild"),
-      stringFlag("--source-commit", "sourceCommit", { rejectShortOptions: true }),
       stringFlag("--source-dir", "sourceDir", { rejectShortOptions: true }),
     ],
     {
@@ -258,9 +254,6 @@ export function parseArgs(argv: string[]) {
   }
   if (options.packJson && options.pnpmPack) {
     throw new Error("--pack-json cannot be combined with --pnpm-pack");
-  }
-  if (options.sourceCommit && !FULL_GIT_COMMIT_PATTERN.test(options.sourceCommit)) {
-    throw new Error("--source-commit must be a full lowercase commit SHA");
   }
   return options;
 }
@@ -887,11 +880,8 @@ export async function packOpenClawPackageForDocker(
     ((cwd: string) =>
       preparePackageChangelog(cwd, {
         allowUnreleased: packageOptions.allowUnreleasedChangelog,
-        sourceCommit: packageOptions.sourceCommit,
       }));
-  const restoreChangelog =
-    packageOptions.restoreChangelog ??
-    ((cwd: string) => restorePackageChangelog(cwd, { sourceCommit: packageOptions.sourceCommit }));
+  const restoreChangelog = packageOptions.restoreChangelog ?? restorePackageChangelog;
   // Frozen refs own their package contents. Only refs carrying this lifecycle ship a generated map.
   const sourceDocsMapLifecycle =
     packageOptions.prepareDocsMap && packageOptions.restoreDocsMap
@@ -1120,7 +1110,6 @@ async function main() {
     outputName: options.outputName,
     packJsonPath: options.packJson,
     pnpmPack: options.pnpmPack,
-    sourceCommit: options.sourceCommit,
   });
 
   console.error("==> Checking OpenClaw package tarball");

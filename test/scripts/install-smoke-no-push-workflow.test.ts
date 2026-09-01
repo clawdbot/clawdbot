@@ -705,23 +705,7 @@ describe("install smoke no-push root image transport", () => {
     );
     expect(packageCandidate.env).toMatchObject({
       ALLOW_UNRELEASED_CHANGELOG: "${{ inputs.allow_unreleased_changelog }}",
-      TARGET_SHA: "${{ needs.preflight.outputs.target_sha }}",
     });
-    expect(packageCandidate.run).toContain("-e TARGET_SHA");
-    expect(packageCandidate.run).toContain('--source-commit "$TARGET_SHA"');
-    expect(packageCandidate.run).toContain(
-      "grep -Fq -- '--source-commit' scripts/package-openclaw-for-docker.mts",
-    );
-    const sourceCommitGate = packageCandidate.run!.indexOf(
-      "if grep -Fq -- '--source-commit' scripts/package-openclaw-for-docker.mts; then",
-    );
-    const sourceCommitAppend = packageCandidate.run!.indexOf(
-      'package_args+=(--source-commit "$TARGET_SHA")',
-    );
-    const sourceCommitGateEnd = packageCandidate.run!.indexOf("fi", sourceCommitAppend);
-    expect(sourceCommitGate).toBeGreaterThan(-1);
-    expect(sourceCommitAppend).toBeGreaterThan(sourceCommitGate);
-    expect(sourceCommitGateEnd).toBeGreaterThan(sourceCommitAppend);
     expect(packageCandidate.run).toContain("--output-name candidate.tgz");
     expect(packageCandidate.run).not.toContain("--pack-json");
     expect(packageCandidate.run).toContain("scripts/package-openclaw-for-docker.mts");

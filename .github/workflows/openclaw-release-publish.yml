@@ -1247,7 +1247,6 @@ jobs:
             --changelog "${changelog_file}" \
             --tag "${RELEASE_TAG}" \
             --repository "${GITHUB_REPOSITORY}" \
-            --source-commit "${TARGET_SHA}" \
             --output "${notes_file}"
 
       - name: Write Android release approval

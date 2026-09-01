@@ -28,10 +28,9 @@ export const GITHUB_RELEASE_BODY_MAX_BYTES = 125_000;
 
 type ReleaseNotesTarget = {
   changelog: unknown;
-  repository: unknown;
-  sourceCommit?: unknown;
-  tag: unknown;
   version: unknown;
+  tag: unknown;
+  repository: unknown;
 };
 
 const RELEASE_VERIFICATION_HEADING = "### Release verification";
@@ -308,15 +307,11 @@ export function renderGithubReleaseNotes({
   version,
   tag,
   repository,
-  sourceCommit,
   verification = "",
 }: ReleaseNotesTarget & { verification?: string }) {
   assertString(repository, "repository");
   assertString(tag, "tag");
   assertString(version, "version");
-  if (sourceCommit !== undefined) {
-    assertString(sourceCommit, "sourceCommit");
-  }
   validateRepository(repository);
   validateTag(tag);
   const tagVersion = releaseNotesVersionForTag(tag);
@@ -325,8 +320,7 @@ export function renderGithubReleaseNotes({
   }
   const section = releaseNotesSectionForTag(changelog, version, tag);
   const mode = fitsGithubReleaseBody(section) ? "full" : "compact";
-  const baseBody =
-    mode === "full" ? section : compactReleaseNotes(section, repository, tag, sourceCommit)?.body;
+  const baseBody = mode === "full" ? section : compactReleaseNotes(section, repository, tag)?.body;
   if (baseBody === undefined) {
     fail(
       "release notes exceed GitHub's body limit and cannot be compacted without a complete contribution record",
@@ -358,7 +352,6 @@ export function verifyGithubReleaseNotes({
   version,
   tag,
   repository,
-  sourceCommit,
 }: ReleaseNotesTarget & { body: unknown }) {
   assertString(body, "release body");
   const normalizedBody = body.trimEnd();
@@ -367,7 +360,6 @@ export function verifyGithubReleaseNotes({
     version,
     tag,
     repository,
-    sourceCommit,
   });
   if (normalizedBody === base.body) {
     return {
@@ -386,7 +378,6 @@ export function verifyGithubReleaseNotes({
         version,
         tag,
         repository,
-        sourceCommit,
         verification,
       })
     : base;
@@ -401,7 +392,7 @@ function usage() {
   return `Usage:
   node --import tsx scripts/render-github-release-notes.mts \\
     --changelog <path> --tag <tag> --repository <owner/repo> \\
-    [--version <version>] [--source-commit <sha>] [--verification-file <path>] [--output <path>] \\
+    [--version <version>] [--verification-file <path>] [--output <path>] \\
     [--metadata-output <path>]
 `;
 }
@@ -412,7 +403,6 @@ function parseArgs(argv: string[]) {
     ["--version", "version"],
     ["--tag", "tag"],
     ["--repository", "repository"],
-    ["--source-commit", "sourceCommit"],
     ["--verification-file", "verificationFile"],
     ["--output", "output"],
     ["--metadata-output", "metadataOutput"],
@@ -469,7 +459,6 @@ function main() {
     version: options.version ?? releaseNotesVersionForTag(tag),
     tag,
     repository,
-    sourceCommit: options.sourceCommit,
     verification,
   });
   if (options.output) {

@@ -8318,9 +8318,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(androidApprovalIndex).toBeGreaterThan(notesIndex);
     expect(dispatchIndex).toBeGreaterThan(notesIndex);
     expect(publishSteps[notesIndex]?.if).toBe("${{ inputs.publish_openclaw_npm }}");
-    expect(publishSteps[notesIndex]?.run).toContain('--source-commit "${TARGET_SHA}"');
-    expect(publishOrchestration.run).toContain('--source-commit "${TARGET_SHA}"');
-    expect(publishOrchestration.run).toContain('RELEASE_SOURCE_COMMIT="${TARGET_SHA}"');
 
     const publishRun = publishOrchestration.run ?? "";
     const createReleaseIndex = publishRun.lastIndexOf("create_or_update_github_release");

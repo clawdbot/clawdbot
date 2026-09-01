@@ -411,8 +411,6 @@ describe("package-openclaw-for-docker", () => {
         ".artifacts/docker/pack.json",
         "--source-dir",
         "/repo",
-        "--source-commit",
-        "a".repeat(40),
         "--allow-unreleased-changelog",
         "--skip-build",
       ]),
@@ -424,7 +422,6 @@ describe("package-openclaw-for-docker", () => {
       packJson: ".artifacts/docker/pack.json",
       pnpmPack: false,
       skipBuild: true,
-      sourceCommit: "a".repeat(40),
       sourceDir: "/repo",
     });
   });
@@ -434,7 +431,6 @@ describe("package-openclaw-for-docker", () => {
       "--output-dir",
       "--output-name",
       "--pack-json",
-      "--source-commit",
       "--source-dir",
       "--bundle-plugin",
     ]) {
@@ -621,7 +617,6 @@ describe("package-openclaw-for-docker", () => {
         ["--allow-unreleased-changelog", "--allow-unreleased-changelog"],
       ],
       ["--pnpm-pack", ["--pnpm-pack", "--pnpm-pack"]],
-      ["--source-commit", ["--source-commit", "a".repeat(40), "--source-commit", "b".repeat(40)]],
       ["--source-dir", ["--source-dir", "/repo-a", "--source-dir=/repo-b"]],
       ["--skip-build", ["--skip-build", "--skip-build"]],
     ] satisfies Array<[string, string[]]>;
@@ -629,12 +624,6 @@ describe("package-openclaw-for-docker", () => {
     for (const [flag, args] of duplicateCases) {
       expect(() => parseArgs(args), flag).toThrow(`${flag} was provided more than once`);
     }
-  });
-
-  it("requires a full lowercase source commit", () => {
-    expect(() => parseArgs(["--source-commit", "abc123"])).toThrow(
-      "--source-commit must be a full lowercase commit SHA",
-    );
   });
 
   it("loads from a trusted harness checkout without installed dependencies", async () => {
@@ -1348,8 +1337,8 @@ describe("package-openclaw-for-docker", () => {
         prepareManifest: preparePackageManifest,
         restoreManifest: restorePackageManifest,
       };
-      const ready = createDeferred();
-      const finishSecond = createDeferred();
+      const ready = createDeferred<void>();
+      const finishSecond = createDeferred<void>();
       let second: Promise<string> | undefined;
       let markerAtCapture: string | undefined;
       const firstError = new Error("first pack failed");
