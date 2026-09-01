@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
@@ -6,6 +7,7 @@ import path from "node:path";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as openclawRoot from "../infra/openclaw-root.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
   readWorkerBundleDirectoryManifest,
@@ -703,20 +705,15 @@ describe("node worker bundle installer", () => {
     ).rejects.toThrow("gateway returned an unexpected worker bundle length");
   });
 
-  it("cancels prewarming and releases the namespace queue for the next install", async () => {
-    const slowStarted = path.join(root, "slow-prewarm-started");
-    const slow = await bundleFixture({
-      fixtureName: "slow",
-      bundlePrewarm: 1,
-      workerSource: `import fs from "node:fs";\nfs.writeFileSync(${JSON.stringify(slowStarted)}, "started");\nawait new Promise((resolve) => setTimeout(resolve, 2_000));\n`,
-    });
-    const fastMarker = path.join(root, "fast-prewarm-finished");
-    const fast = await bundleFixture({
-      fixtureName: "fast",
-      bundlePrewarm: 1,
-      prewarmMarker: fastMarker,
-    });
+  it("cancels prewarming and releases the namespace queue for the next install", async ({
+    signal,
+  }) => {
+    const slowStarted = createDeferredCore<http.ServerResponse>();
     server = http.createServer((req, res) => {
+      if (req.url === "/prewarm-started") {
+        slowStarted.resolve(res);
+        return;
+      }
       const archive = req.url?.endsWith(slow.input.build.bundleHash) ? slow.archive : fast.archive;
       res.writeHead(200, {
         "content-type": "application/octet-stream",
@@ -732,27 +729,48 @@ describe("node worker bundle installer", () => {
       throw new Error("test server did not bind a TCP port");
     }
     const gatewayUrl = `ws://127.0.0.1:${address.port}`;
+    const slow = await bundleFixture({
+      fixtureName: "slow",
+      bundlePrewarm: 1,
+      workerSource: `await fetch("http://127.0.0.1:${address.port}/prewarm-started");\n`,
+    });
+    const fastMarker = path.join(root, "fast-prewarm-finished");
+    const fast = await bundleFixture({
+      fixtureName: "fast",
+      bundlePrewarm: 1,
+      prewarmMarker: fastMarker,
+    });
     const installer = new NodeWorkerBundleInstaller({ root });
     const controller = new AbortController();
     const first = installer.ensure({
       input: slow.input,
       gatewayUrl,
-      signal: controller.signal,
+      signal: AbortSignal.any([controller.signal, signal]),
     });
-    await vi.waitFor(async () => await expect(fs.access(slowStarted)).resolves.toBeUndefined());
-    const second = installer.ensure({ input: fast.input, gatewayUrl });
-
-    controller.abort(new Error("launch fenced"));
-
-    await expect(first).rejects.toThrow("launch fenced");
-    await expect(
-      Promise.race([
-        second,
-        new Promise<never>((_, reject) => {
-          setTimeout(() => reject(new Error("namespace queue stayed occupied")), 750);
+    let second: ReturnType<typeof installer.ensure> | undefined;
+    let held: http.ServerResponse | undefined;
+    try {
+      held = await Promise.race([
+        slowStarted.promise,
+        first.then(() => {
+          throw new Error("Slow prewarm finished before cancellation");
         }),
-      ]),
-    ).resolves.toEqual(fast.input.build);
-    await expect(fs.readFile(fastMarker, "utf8")).resolves.toBe("ready");
+      ]);
+      // The unfinished request keeps the child alive; peer close witnesses cancellation,
+      // independent of archive extraction, process startup, or the next install's speed.
+      const slowClosed = once(held, "close", { signal });
+      second = installer.ensure({ input: fast.input, gatewayUrl, signal });
+      controller.abort(new Error("launch fenced"));
+      await Promise.all([
+        expect(first).rejects.toThrow("launch fenced"),
+        slowClosed,
+        expect(second).resolves.toEqual(fast.input.build),
+      ]);
+      await expect(fs.readFile(fastMarker, "utf8")).resolves.toBe("ready");
+    } finally {
+      controller.abort();
+      held?.end();
+      await Promise.allSettled([first, second]);
+    }
   });
 });
