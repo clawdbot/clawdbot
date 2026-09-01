@@ -254,8 +254,12 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
       .prepare("SELECT report_json FROM migration_sources WHERE source_path = ?")
       .get(authPath) as { report_json: string };
     const report = JSON.parse(receipt.report_json);
-    if (scenario !== "fingerprinted") delete report.expectedProfileSha256;
-    if (scenario === "empty-fingerprints") report.expectedProfileSha256 = {};
+    if (scenario !== "fingerprinted") {
+      delete report.expectedProfileSha256;
+    }
+    if (scenario === "empty-fingerprints") {
+      report.expectedProfileSha256 = {};
+    }
     db.prepare("UPDATE migration_sources SET report_json = ? WHERE source_path = ?").run(
       JSON.stringify(report),
       authPath,
@@ -267,16 +271,19 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
         key: "synthetic-unrelated-key",
       },
     };
-    if (scenario === "credential-present" || scenario === "legacy-id")
+    if (scenario === "credential-present" || scenario === "legacy-id") {
       profiles["openai:default"] = credential;
-    if (scenario === "partial-row")
+    }
+    if (scenario === "partial-row") {
       profiles["openai:default"] = {
         type: "oauth",
         provider: "openai",
         refresh: "synthetic-current-refresh",
       };
-    if (scenario === "malformed-row")
+    }
+    if (scenario === "malformed-row") {
       profiles["openai:default"] = { type: "unknown", key: "synthetic-current-key" };
+    }
     const writeTarget = () =>
       location === "state-db"
         ? writeConfigMachineState(
@@ -287,9 +294,15 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
         : writePersistedAuthProfileStoreRaw({ version: 1, profiles }, state.agentDir());
     writeTarget();
     const archiveBytes = fs.readFileSync(report.archivePath);
-    if (scenario === "restored-source") fs.writeFileSync(authPath, archiveBytes);
-    if (scenario === "no-archive") fs.unlinkSync(report.archivePath);
-    if (scenario === "tampered-archive") fs.appendFileSync(report.archivePath, " ");
+    if (scenario === "restored-source") {
+      fs.writeFileSync(authPath, archiveBytes);
+    }
+    if (scenario === "no-archive") {
+      fs.unlinkSync(report.archivePath);
+    }
+    if (scenario === "tampered-archive") {
+      fs.appendFileSync(report.archivePath, " ");
+    }
     const before = db
       .prepare("SELECT * FROM migration_sources WHERE source_path = ?")
       .get(authPath);
@@ -297,7 +310,9 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
       const link = fs.linkSync;
       const fault = vi.spyOn(fs, "linkSync").mockImplementation((...args) => {
         link(...args);
-        if (args[1] === authPath) throw new Error("simulated recovery interruption");
+        if (args[1] === authPath) {
+          throw new Error("simulated recovery interruption");
+        }
       });
       try {
         expect((await migrate()).warnings).toEqual([
