@@ -322,27 +322,6 @@ function countJsonlLines(filePath: string): number {
   }
 }
 
-export function findOtherStateDirs(
-  stateDir: string,
-  deps?: {
-    defaultStateDir?: string;
-    existsDir?: (dir: string) => boolean;
-  },
-): string[] {
-  const resolvedState = path.resolve(stateDir);
-  const defaultStateDir = path.resolve(
-    deps?.defaultStateDir ?? path.join(os.homedir(), ".openclaw"),
-  );
-  if (defaultStateDir === resolvedState) {
-    return [];
-  }
-  const dirExists = deps?.existsDir ?? existsDir;
-  if (!dirExists(defaultStateDir)) {
-    return [];
-  }
-  return [defaultStateDir];
-}
-
 function isPathUnderRoot(targetPath: string, rootPath: string): boolean {
   const normalizedTarget = path.resolve(targetPath);
   const normalizedRoot = path.resolve(rootPath);
@@ -1247,15 +1226,12 @@ export async function noteStateIntegrity(
     }
   }
 
-  const extraStateDirs = new Set<string>();
-  for (const other of findOtherStateDirs(stateDir, { defaultStateDir })) {
-    extraStateDirs.add(other);
-  }
-  if (extraStateDirs.size > 0) {
+  // Compare only the effective home's default; other accounts do not share this history.
+  if (path.resolve(stateDir) !== path.resolve(defaultStateDir) && existsDir(defaultStateDir)) {
     warnings.push(
       [
         "- Multiple state directories detected. This can split session history.",
-        ...Array.from(extraStateDirs).map((dir) => `  - ${shortenHomePath(dir)}`),
+        `  - ${shortenHomePath(defaultStateDir)}`,
         `  Active state dir: ${displayStateDir}`,
       ].join("\n"),
     );
