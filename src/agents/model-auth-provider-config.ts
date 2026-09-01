@@ -238,33 +238,30 @@ export function shouldPreferExplicitConfigApiKeyAuth(
   );
 }
 
-/** True when a custom local provider can use a synthetic no-auth placeholder. */
+/** True when configured or prepared route facts prove a local no-auth provider. */
 export function hasSyntheticLocalProviderAuthConfig(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
+  route?: { api?: string | null; baseUrl?: unknown };
 }): boolean {
   const providerConfig = resolveProviderConfig(params.cfg, params.provider);
-  if (!providerConfig) {
-    return false;
-  }
-  const hasApiConfig =
-    Boolean(providerConfig.api?.trim()) ||
-    Boolean(providerConfig.baseUrl?.trim()) ||
-    (Array.isArray(providerConfig.models) && providerConfig.models.length > 0);
-  if (!hasApiConfig) {
-    return false;
-  }
   const authOverride = resolveProviderAuthOverride(params.cfg, params.provider);
   if (authOverride && authOverride !== "api-key") {
     return false;
   }
   if (
-    !isCustomLocalProviderConfig(providerConfig) ||
-    hasExplicitProviderApiKeyConfig(providerConfig)
+    (!params.route && (!providerConfig || !isCustomLocalProviderConfig(providerConfig))) ||
+    (providerConfig !== undefined && hasExplicitProviderApiKeyConfig(providerConfig))
   ) {
     return false;
   }
-  return Boolean(providerConfig.baseUrl && isLocalAuthProviderBaseUrl(providerConfig.baseUrl));
+  const route = params.route ?? providerConfig;
+  return (
+    typeof route?.api === "string" &&
+    route.api.trim().length > 0 &&
+    typeof route.baseUrl === "string" &&
+    isLocalAuthProviderBaseUrl(route.baseUrl)
+  );
 }
 
 export function resolveProviderAuthOverride(
