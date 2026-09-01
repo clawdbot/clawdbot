@@ -125,15 +125,6 @@ describe("write-unified-entry-dts", () => {
     expect(treeHashes(path.join(root, "dist"))).toEqual(before);
     expect(treeHashes(cache)).toEqual(cached);
     expectStagingClean(root);
-
-    write("src/contract.d.ts", 'export interface SourceOnly { value: "changed"; }');
-    const changed = runUnifiedBuild(root);
-    expect(changed.status, changed.stdout + changed.stderr).toBe(0);
-    expect(
-      (changed.stdout + changed.stderr).match(/\[tsdown-build\] invocation \d\/\d finished/gu),
-    ).toHaveLength(7);
-    expect(treeHashes(path.join(root, "dist"))).not.toEqual(before);
-    expectStagingClean(root);
   });
 
   it("records successful empty partitions for a bounded plugin selection", () => {

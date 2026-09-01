@@ -1,5 +1,5 @@
 ---
-summary: "CLI onboarding: verify inference, then hand remaining setup to OpenClaw"
+summary: "CLI onboarding: quick start with detected AI access or choose custom setup"
 read_when:
   - Running or configuring CLI onboarding
   - Setting up a new machine
@@ -12,16 +12,17 @@ openclaw onboard
 ```
 
 CLI onboarding is the recommended terminal setup path on macOS, Linux, and
-Windows (native or WSL2). By default it detects AI access already available on
-the machine, verifies it with a real completion, and starts OpenClaw to
-configure the workspace, Gateway, and optional features. `openclaw setup` runs the same flow ([Setup](/cli/setup) covers
+Windows (native or WSL2). On a fresh install, **Quick start** detects AI access
+already available on the machine, verifies it with a real completion, and opens
+the web dashboard with a foreground Gateway. **Custom setup** preserves the full
+guided flow. `openclaw setup` runs the same flow ([Setup](/cli/setup) covers
 the `--baseline` config-only variant). Windows desktop users can also start
 from [Windows Hub](/platforms/windows).
 
-Guided onboarding establishes inference first. It detects available AI access,
-requires a real completion, and only then starts [OpenClaw](/cli/openclaw)
-to configure the rest of OpenClaw. Choosing **Skip for now** exits onboarding
-without starting OpenClaw.
+Guided onboarding establishes inference first: a real completion must succeed
+before workspace and Gateway setup continues. If no detected route works, it
+opens manual provider setup. Choosing **Skip for now** exits onboarding without
+starting OpenClaw.
 
 The classic wizard remains available for remote Gateway setup, channel pairing,
 daemon controls, skills, and imports. Run it explicitly
@@ -46,8 +47,9 @@ To change the model provider or its authentication, exit OpenClaw and run
 `openclaw onboard`; OpenClaw does not open guided or classic provider flows.
 
 <Info>
-Fastest first chat: finish guided setup, run `openclaw dashboard`, and chat in
-the browser through the Control UI. Docs: [Dashboard](/web/dashboard).
+On a fresh install, run `npx openclaw@latest` and choose **Quick start** for the
+browser dashboard. Reopen it later with `openclaw dashboard`.
+Docs: [Dashboard](/web/dashboard).
 </Info>
 
 ## Locale
@@ -86,17 +88,25 @@ conversationally. Docs: [Web tools](/tools/web).
 
 ## Guided default
 
-Plain `openclaw onboard` follows this path:
+Fresh local interactive onboarding offers **Quick start** and **Custom setup**
+after a one-line pointer to the [security guide](/gateway/security). Quick start
+records the security acknowledgment; Custom setup shows the full security note
+and asks for confirmation. Quick start uses the default agent name `main` and
+full access, leaves telemetry consent unset, and skips route confirmation,
+memory import, and app recommendations. Custom setup keeps the telemetry choice,
+agent name, access mode, route confirmation, and optional setup prompts.
 
-1. Accept the security notice.
+Quick start follows this path:
+
+1. Choose **Quick start** after the one-line security pointer.
 2. Detect configured models, API-key environment variables, supported local AI
    CLIs, and already installed tool-capable models from reachable Ollama or LM
    Studio servers on the Gateway host. This read-only pass never downloads a
    model. Pi and OpenCode installs may also be reported for context when they
    cannot serve as the reusable inference route. Gemini CLI and Antigravity are
    not offered as detected setup routes.
-3. Test the first detected candidate with a real completion. On failure, show the
-   reason and continue to the next usable candidate.
+3. Test detected candidates with real completions until one works, then announce
+   the selected route. Earlier failures are summarized quietly.
 4. If detection is exhausted, choose OpenAI, Anthropic, xAI (Grok), Google, or
    OpenRouter, or choose **More…** for the remaining providers. Each provider's
    regions, plans, and supported browser, device, API-key, or token methods
@@ -105,11 +115,19 @@ Plain `openclaw onboard` follows this path:
    its base URL, optional API key, compatibility, and model ID. Custom setup
    runs in the local CLI on the Gateway host and verifies a real reply before
    saving the provider or replacing the active model.
-   Choose **Skip for now** to exit without starting OpenClaw.
-5. Persist only the verified model route and any credential/plugin state it
-   requires. Workspace and Gateway settings remain untouched.
-6. Start OpenClaw with the verified model so it can configure the workspace,
-   Gateway, channels, agents, plugins, and the remaining optional setup.
+   Choose **Skip for now** to exit without starting OpenClaw. Manual provider
+   setup continues through the remaining guided steps, including Gateway service
+   installation and optional setup. The quick-start defaults stay: agent name
+   `main`, full access, and telemetry consent unset.
+5. Save the verified route, prepare the agent workspace, and persist Gateway
+   settings.
+6. Start the Gateway in the foreground and open the browser dashboard. Press
+   **Ctrl+C** to stop it; config persists. Use `openclaw gateway install` later
+   for background operation, `openclaw` for the TUI, or `openclaw dashboard` to
+   reopen the web UI.
+
+The quick-start choice is not offered for configured installs, remote Gateway
+chat setup, non-interactive runs, or runs with `--skip-ui` or `--tui`.
 
 Re-running the command on a configured installation tests the current default
 model first, making the guided flow a verification and repair pass. A failing

@@ -426,6 +426,14 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
         }),
       );
     }
+    for (const resource of this.sandbox.readOnlyResourceMounts ?? []) {
+      mounts.push({
+        localRoot: resource.hostPath,
+        containerRoot: resource.containerPath,
+        writable: false,
+        source: "protectedSkill",
+      });
+    }
     return mounts;
   }
 

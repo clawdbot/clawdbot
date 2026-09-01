@@ -1388,7 +1388,12 @@ describe("Codex app-server native code mode config", () => {
     expect(instructions).toContain("## Skill Workshop");
     expect(instructions).toContain("Durable reusable skill/playbook/workflow work");
     expect(instructions).toContain("`skill_workshop`");
-    expect(instructions).toContain("Other generated work = pending proposal");
+    expect(instructions).toContain(
+      "unsolicited improvements stay pending proposals when supported",
+    );
+    expect(instructions).toContain(
+      "Publication-only create/update requires an explicit user request",
+    );
     expect(instructions).toContain("only explicit user ask");
   });
 

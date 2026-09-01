@@ -744,19 +744,20 @@ function isDirectRun() {
 export function parseArgs(argv) {
   const args = { base: "", head: "HEAD", mergeHeadFirstParent: false };
   for (let i = 0; i < argv.length; i += 1) {
-    if (argv[i] === "--base") {
-      args.base = requireOptionArgument(argv, i, "--base");
+    const arg = argv[i];
+    if (arg === "--base" || arg === "--head") {
+      args[arg === "--base" ? "base" : "head"] = requireOptionArgument(argv, i, arg);
       i += 1;
       continue;
     }
-    if (argv[i] === "--head") {
-      args.head = requireOptionArgument(argv, i, "--head");
-      i += 1;
-      continue;
-    }
-    if (argv[i] === "--merge-head-first-parent") {
+    if (arg === "--merge-head-first-parent") {
       args.mergeHeadFirstParent = true;
+      continue;
     }
+    throw new Error(`Unknown argument: ${arg}`);
+  }
+  if (!args.base) {
+    throw new Error("--base is required");
   }
   return args;
 }

@@ -13,6 +13,7 @@ import {
   type OpenClawStateDatabaseOptions,
   type OpenClawStateDatabase,
 } from "./openclaw-state-db.js";
+import { mergeUserGitHubConnection } from "./user-github-connections.js";
 import { ensureUserPreferencesSchema, mergeUserPreferences } from "./user-preferences.js";
 import { emitUserProfilesChanged } from "./user-profile-events.js";
 import {
@@ -390,6 +391,7 @@ function mergeUserProfiles(
     ).rows.map((row) => row.id),
   ];
   prepareUserProfileGitHubMerge(db, sourceProfileIds, targetProfileId);
+  mergeUserGitHubConnection(db, sourceProfileId, targetProfileId);
   for (const mergedProfileId of sourceProfileIds) {
     mergeUserPreferences(db, mergedProfileId, targetProfileId);
   }

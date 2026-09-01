@@ -256,7 +256,7 @@ describe("bundled plugin build entries", () => {
     delete baselineEnv[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV];
     const dockerEnv = {
       ...baselineEnv,
-      [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "slack clickclack,slack,msteams",
+      [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "slack clickclack,slack,msteams,whatsapp",
     };
     const entries = listBundledPluginBuildEntries({ env: dockerEnv });
     const baselineArtifacts = listBundledPluginPackArtifacts({ env: baselineEnv });
@@ -264,7 +264,7 @@ describe("bundled plugin build entries", () => {
     const reorderedEntries = listBundledPluginBuildEntries({
       env: {
         ...baselineEnv,
-        [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "msteams,clickclack slack",
+        [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "whatsapp,msteams,clickclack slack",
       },
     });
     const entryKeys = Object.keys(entries);
@@ -273,6 +273,8 @@ describe("bundled plugin build entries", () => {
     expect(entries["extensions/slack/index"]).toBe("extensions/slack/index.ts");
     expect(entries["extensions/slack/setup-entry"]).toBe("extensions/slack/setup-entry.ts");
     expect(entries["extensions/msteams/index"]).toBe("extensions/msteams/index.ts");
+    expect(entries["extensions/whatsapp/index"]).toBe("extensions/whatsapp/index.ts");
+    expect(entries["extensions/whatsapp/setup-entry"]).toBe("extensions/whatsapp/setup-entry.ts");
     expect(entries["extensions/clawrouter/index"]).toBe("extensions/clawrouter/index.ts");
     expect(entryKeys.findIndex((entry) => entry.startsWith("extensions/clickclack/"))).toBeLessThan(
       entryKeys.findIndex((entry) => entry.startsWith("extensions/slack/")),
@@ -282,6 +284,7 @@ describe("bundled plugin build entries", () => {
     expectNoPrefixMatches(artifacts, "dist/extensions/clickclack/");
     expectNoPrefixMatches(artifacts, "dist/extensions/msteams/");
     expectNoPrefixMatches(artifacts, "dist/extensions/slack/");
+    expectNoPrefixMatches(artifacts, "dist/extensions/whatsapp/");
   });
 
   it("sorts Docker-selected build entries without git metadata", () => {
@@ -331,21 +334,6 @@ describe("bundled plugin build entries", () => {
     } finally {
       readdirSpy.mockRestore();
     }
-  });
-
-  it("preserves known dependency-only Docker plugin selections", () => {
-    const baselineEnv = { ...process.env };
-    delete baselineEnv[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV];
-    const baselineEntries = listBundledPluginBuildEntries({ env: baselineEnv });
-    const selectedEntries = listBundledPluginBuildEntries({
-      env: {
-        ...baselineEnv,
-        [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "whatsapp",
-      },
-    });
-
-    expect(selectedEntries).toEqual(baselineEntries);
-    expectNoPrefixMatches(Object.keys(selectedEntries), "extensions/whatsapp/");
   });
 
   it("preserves known package-less bundled Docker plugin selections", () => {

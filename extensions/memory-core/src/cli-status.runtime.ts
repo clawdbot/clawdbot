@@ -6,6 +6,7 @@ import {
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { formatByteSize } from "openclaw/plugin-sdk/number-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   formatAuditCounts,
@@ -373,7 +374,16 @@ export async function runMemoryStatus(
           total === null
             ? `${entry.files}/? files · ${entry.chunks} chunks`
             : `${entry.files}/${total} files · ${entry.chunks} chunks`;
-        lines.push(`  ${accent(entry.source)} ${muted("·")} ${muted(counts)}`);
+        const payload =
+          entry.chunkBytes === undefined
+            ? ""
+            : ` · ${formatByteSize(entry.chunkBytes, {
+                style: "iec",
+                maxUnit: "tera",
+                separator: " ",
+                fractionDigits: 1,
+              })} text + embeddings`;
+        lines.push(`  ${accent(entry.source)} ${muted("·")} ${muted(counts + payload)}`);
       }
     }
     if (status.fallback) {

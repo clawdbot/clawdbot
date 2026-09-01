@@ -4040,7 +4040,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           .evaluate((node) => Number.parseFloat(getComputedStyle(node).paddingTop));
 
         expect(attachment.x - input.x).toBeGreaterThanOrEqual(9.5);
-        expect(previewPaddingTop).toBe(10);
+        expect(previewPaddingTop).toBe(18);
         expect(preview.x).toBeGreaterThanOrEqual(input.x);
         expect(preview.x + preview.width).toBeLessThanOrEqual(input.x + input.width + 1);
       } finally {

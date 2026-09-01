@@ -2,8 +2,10 @@ import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { sessionRefFromPath } from "../../../app-session-route-paths.ts";
+import { isStaleChunkImportError } from "../../../app/stale-chunk-reload.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
+import { renderLazyViewError } from "../../../components/lazy-view-error.ts";
 import {
   handleMarkdownCodeBlockClick,
   markdownCodeBlocks,
@@ -26,6 +28,7 @@ import {
   resolveEmbedSandbox,
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
+import { isSvgImageMediaPath } from "../../../lib/media-file-extension.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { renderCompactAttachmentCard } from "./chat-attachment-card.ts";
@@ -34,7 +37,6 @@ import { openInlineChatImage } from "./chat-image-lightbox.ts";
 import "./chat-audio-player.ts";
 import "./chat-video-player.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
-import { isSvgImageMediaPath } from "./chat-message-media.ts";
 import type { AttachmentSidebarRuntime, SidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderSidebarFile, type FileViewControls } from "./chat-sidebar-file-view.ts";
 import "./session-diff-panel.ts";
@@ -176,7 +178,8 @@ function resolveSidebarCanvasSandbox(
 
 type MarkdownSidebarProps = {
   content: ChatDetailPanelContent | null;
-  error: string | null;
+  error: Error | null;
+  onRetry: () => void;
   fileView?: FileViewControls;
   onClose: () => void;
   onOpenImage?: (item: ImageLightboxItem) => void;
@@ -248,8 +251,12 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
       <div class="sidebar-content">
         ${props.error
           ? html`
-              <div class="callout danger">${props.error}</div>
-              ${content?.rawText?.trim()
+              ${renderLazyViewError({
+                error: props.error,
+                stale: isStaleChunkImportError(props.error),
+                onRetry: props.onRetry,
+              })}
+              ${content?.kind === "file" || content?.rawText?.trim()
                 ? html`
                     <button
                       @click=${props.onViewRawText}

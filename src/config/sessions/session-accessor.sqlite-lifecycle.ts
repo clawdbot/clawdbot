@@ -8,6 +8,7 @@ import {
   resolveAgentHarnessSessionStoreEntryError,
 } from "../../sessions/agent-harness-session-key.js";
 import { emitSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
+import { deletePersonalGitHubSessionReceipts } from "../../state/github-personal-publication-lifecycle.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -539,6 +540,15 @@ async function deleteSqliteSessionEntryLifecycleLocked(
         }, toDatabaseOptions(resolved)),
       );
       if (result.deleted) {
+        deletePersonalGitHubSessionReceipts({
+          agentId: resolved.agentId,
+          env: resolved.env,
+          sessionKeys: [
+            params.target.canonicalKey,
+            ...params.target.storeKeys,
+            ...prepared.targetSnapshot.map((row) => row.sessionKey),
+          ],
+        });
         emitSessionIdentityMutation({
           kind: "delete",
           previous: {

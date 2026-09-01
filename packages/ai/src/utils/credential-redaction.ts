@@ -191,7 +191,7 @@ export function projectDiagnosticValue(
         !("value" in descriptor) ||
         (!descriptor.enumerable &&
           (policy.propertyScope === "enumerable" ||
-            !["cause", "message", "name", "stack"].includes(key))) ||
+            !["cause", "errors", "message", "name", "stack"].includes(key))) ||
         key === "length"
       ) {
         continue;

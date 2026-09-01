@@ -1827,7 +1827,9 @@ describe("Codex app-server dynamic tool build", () => {
       { type: "inputText", text: "Unknown OpenClaw tool: node_process" },
     ]);
     const nodeExec = tools.find((tool) => tool.name === "node_exec");
-    expect(nodeExec?.description).toContain("Select the node by name or id");
+    expect(nodeExec?.description).toContain(
+      "The sole connected node that can execute commands is selected automatically; select by name or id when several can.",
+    );
     expect(nodeExec?.parameters).toMatchObject({
       type: "object",
       properties: {

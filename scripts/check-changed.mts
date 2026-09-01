@@ -9,6 +9,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -113,6 +114,7 @@ const SHRINK_RATCHET_OWNER_PATH = "scripts/lib/shrink-ratchet.mts";
 const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
 const EXTENSIONS_OXLINT_TS_CONFIG = "extensions/tsconfig.json";
 const SCRIPTS_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.scripts.json";
+const ROOT_TEST_TS_CONFIG = "test/tsconfig/tsconfig.test.root.json";
 const TARGETED_LINT_PATH_LIMIT = 8;
 const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_EXTENSION_PATH_RE = /^extensions\/[^/]+\/.+\.[cm]?[jt]sx?$/u;
@@ -495,6 +497,42 @@ export function createChangedCheckPlan(
   const addTypecheck = (name: string, args: string[]) =>
     typechecks.add(add(name, args, createSparseTsgoSkipEnv(baseEnv)));
   const finishPlan = (summary: string) => {
+    // Full lint shards exclude test/. Keep changed root sources covered even
+    // when another path selects the all-lane early return, without widening lint.
+    let rootTestTargets = result.paths.filter(
+      (file) => getChangedPathFacts(file).isRootTestSource && existsSync(file),
+    );
+    if (rootTestTargets.length > 0) {
+      // --tsconfig affects import resolution, not native semantic discovery or
+      // target selection. Expand the canonical roots before passing explicit files.
+      const ts = createRequire(import.meta.url)("typescript") as typeof import("typescript");
+      const config = ts.getParsedCommandLineOfConfigFile(
+        path.resolve(ROOT_TEST_TS_CONFIG),
+        {},
+        {
+          ...ts.sys,
+          onUnRecoverableConfigFileDiagnostic(diagnostic) {
+            throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
+          },
+        },
+      );
+      if (!config || config.errors.length > 0) {
+        throw new Error(
+          `Invalid ${ROOT_TEST_TS_CONFIG}: ${config?.errors.map((error) => ts.flattenDiagnosticMessageText(error.messageText, "\n")).join("\n")}`,
+        );
+      }
+      const roots = new Set(config.fileNames.map((file) => path.resolve(file)));
+      rootTestTargets = rootTestTargets.filter((file) => roots.has(path.resolve(file)));
+    }
+    for (let offset = 0; offset < rootTestTargets.length; offset += TARGETED_LINT_PATH_LIMIT) {
+      const batch = rootTestTargets.slice(offset, offset + TARGETED_LINT_PATH_LIMIT);
+      addCommand(
+        batch.length === 1 ? "lint test root changed file" : "lint test root changed files",
+        "node",
+        ["scripts/run-oxlint.mjs", "--tsconfig", ROOT_TEST_TS_CONFIG, ...batch],
+        baseEnv,
+      );
+    }
     const end = commands.findLastIndex((command) => typechecks.has(command)) + 1;
     const prefix = commands.slice(0, end);
     // These audits produce diagnostics, not compiler inputs. Defer them without
@@ -1012,6 +1050,7 @@ function createTargetedOxlintCommand({
         !LINTABLE_CORE_PATH_RE.test(changedPath) &&
         !LINTABLE_EXTENSION_PATH_RE.test(changedPath) &&
         !LINTABLE_SCRIPT_PATH_RE.test(changedPath) &&
+        !getChangedPathFacts(changedPath).isRootTestSource &&
         !neutralPathRe.test(changedPath) &&
         !MARKDOWN_LINT_OPTIMIZATION_NEUTRAL_PATH_RE.test(changedPath),
     )

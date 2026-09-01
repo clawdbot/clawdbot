@@ -37,7 +37,7 @@ const OXLINT_SOURCE_FILE_PATTERN = /\.[cm]?[jt]sx?$/;
 const PARENT_TERMINATION_SIGNALS = ["SIGINT", "SIGTERM"] satisfies NodeJS.Signals[];
 
 type OxlintShard = { name: string; args: string[] };
-type CoreStripe = { index: number; total: number };
+type ShardStripe = { index: number; total: number };
 type HostResources = { logicalCpuCount: number; totalMemoryBytes: number };
 type ReadDirectoryEntries = (target: string, options: { withFileTypes: true }) => Dirent[];
 type DirectoryOptions = { cwd?: string; readDir?: ReadDirectoryEntries };
@@ -272,9 +272,9 @@ export async function main(
     hostResources,
     splitCore: shardArgs.splitCore,
   });
-  const selectedShards = selectCoreOxlintStripe(
-    filterOxlintShards(shards, shardArgs.only),
-    shardArgs.coreStripe,
+  const selectedShards = selectExtensionOxlintStripe(
+    selectCoreOxlintStripe(filterOxlintShards(shards, shardArgs.only), shardArgs.coreStripe),
+    shardArgs.extensionStripe,
   );
 
   ensureRepoToolNodeModulesLink(resolveRepoToolBinPath("oxlint"));
@@ -288,6 +288,7 @@ export async function main(
         bin: process.execPath,
         args: distArtifactEntryArgs(
           path.resolve("scripts/prepare-extension-package-boundary-artifacts.mts"),
+          ["--mode=package-boundary"],
         ),
         env,
         requireProcessTreeExit: process.platform !== "win32",
@@ -344,7 +345,8 @@ function resolveHostResources(hostResources?: HostResources) {
 export function parseShardRunnerArgs(args: string[]) {
   const only = new Set<string>();
   const oxlintArgs: string[] = [];
-  let coreStripe: CoreStripe | undefined;
+  let coreStripe: ShardStripe | undefined;
+  let extensionStripe: ShardStripe | undefined;
   let splitCore = false;
 
   for (let index = 0; index < args.length; index += 1) {
@@ -357,12 +359,24 @@ export function parseShardRunnerArgs(args: string[]) {
       continue;
     }
     if (arg === "--core-stripe") {
-      coreStripe = parseCoreStripe(args[index + 1]);
+      coreStripe = parseShardStripe(args[index + 1], "--core-stripe");
       index += 1;
       continue;
     }
     if (arg.startsWith("--core-stripe=")) {
-      coreStripe = parseCoreStripe(arg.slice("--core-stripe=".length));
+      coreStripe = parseShardStripe(arg.slice("--core-stripe=".length), "--core-stripe");
+      continue;
+    }
+    if (arg === "--extension-stripe") {
+      extensionStripe = parseShardStripe(args[index + 1], "--extension-stripe");
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--extension-stripe=")) {
+      extensionStripe = parseShardStripe(
+        arg.slice("--extension-stripe=".length),
+        "--extension-stripe",
+      );
       continue;
     }
     if (arg === "--only") {
@@ -380,10 +394,10 @@ export function parseShardRunnerArgs(args: string[]) {
   if (coreStripe && !splitCore) {
     throw new Error("--core-stripe requires --split-core");
   }
-  return { coreStripe, only, oxlintArgs, splitCore };
+  return { coreStripe, extensionStripe, only, oxlintArgs, splitCore };
 }
 
-function parseCoreStripe(value: string | undefined): CoreStripe {
+function parseShardStripe(value: string | undefined, flag: string): ShardStripe {
   const match = /^(\d+)\/(\d+)$/u.exec(value ?? "");
   const index = Number(match?.[1]);
   const total = Number(match?.[2]);
@@ -394,7 +408,7 @@ function parseCoreStripe(value: string | undefined): CoreStripe {
     total < 1 ||
     index > total
   ) {
-    throw new Error(`--core-stripe requires INDEX/TOTAL with 1 <= INDEX <= TOTAL; got: ${value}`);
+    throw new Error(`${flag} requires INDEX/TOTAL with 1 <= INDEX <= TOTAL; got: ${value}`);
   }
   return { index, total };
 }
@@ -423,7 +437,7 @@ export function filterOxlintShards<T extends { name: string }>(shards: T[], only
 }
 
 /** Aggregate one deterministic, disjoint stripe into a single core Program. */
-export function selectCoreOxlintStripe(shards: OxlintShard[], stripe: CoreStripe | undefined) {
+export function selectCoreOxlintStripe(shards: OxlintShard[], stripe: ShardStripe | undefined) {
   if (!stripe) {
     return shards;
   }
@@ -442,6 +456,20 @@ export function selectCoreOxlintStripe(shards: OxlintShard[], stripe: CoreStripe
       args: ["--tsconfig", CORE_TS_CONFIG, ...targets],
     },
   ];
+}
+
+/** Select one deterministic, disjoint stripe of independently bounded extension Programs. */
+export function selectExtensionOxlintStripe(
+  shards: OxlintShard[],
+  stripe: ShardStripe | undefined,
+) {
+  if (!stripe) {
+    return shards;
+  }
+  if (shards.length === 0 || shards.some((shard) => !shard.name.startsWith("extensions:"))) {
+    throw new Error("--extension-stripe requires a non-empty extension-only shard selection");
+  }
+  return shards.filter((_, index) => index % stripe.total === stripe.index - 1);
 }
 
 export function shouldPrepareExtensionPackageBoundaryArtifactsForShards(

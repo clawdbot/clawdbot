@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty as normalizeErrorSignal } from "@openclaw/normalization-core/string-coerce";
+import { formatProviderRefusalText } from "../agents/embedded-agent-helpers/error-text.js";
 import { isContextOverflowError } from "../agents/failover/classify.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
@@ -133,9 +134,12 @@ function isContextOverflowAssistantError(message: Record<string, unknown>): bool
 }
 
 function getAssistantErrorFallbackText(message: Record<string, unknown>): string {
-  return isContextOverflowAssistantError(message)
-    ? GATEWAY_ASSISTANT_CONTEXT_OVERFLOW_FALLBACK_TEXT
-    : GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT;
+  return (
+    formatProviderRefusalText(message) ??
+    (isContextOverflowAssistantError(message)
+      ? GATEWAY_ASSISTANT_CONTEXT_OVERFLOW_FALLBACK_TEXT
+      : GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT)
+  );
 }
 
 function sanitizeAssistantErrorDisplayMessage(

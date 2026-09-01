@@ -1,8 +1,10 @@
+import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
 import {
   buildAgentRunTerminalOutcomeFromAttempt,
   classifyAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../../agent-run-terminal-outcome.js";
+import { formatUserFacingAssistantErrorText } from "../../embedded-agent-helpers.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 type EmbeddedRunAttemptTerminalInput = Pick<
@@ -24,7 +26,15 @@ export function resolveEmbeddedRunAttemptTerminalOutcome(params: {
   return buildAgentRunTerminalOutcomeFromAttempt({
     terminal: params.attempt.terminal,
     promptTimeoutOutcome: params.attempt.promptTimeoutOutcome,
-    assistant: params.assistant,
+    // Terminal metadata is displayed directly; keep the provider's raw diagnostics
+    // on the original message and project only safe refusal copy.
+    assistant:
+      params.assistant && isProviderRefusalAssistantError(params.assistant)
+        ? {
+            ...params.assistant,
+            errorMessage: formatUserFacingAssistantErrorText(params.assistant),
+          }
+        : params.assistant,
     abortSignal: params.abortSignal,
   });
 }
