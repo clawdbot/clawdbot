@@ -946,6 +946,22 @@ describe("message-normalizer", () => {
       expect(result.content).not.toContainEqual(expect.objectContaining({ type: "omitted_media" }));
     });
 
+    it("does not add an omitted-media placeholder when a renderable URL remains", () => {
+      const result = normalizeMessage({
+        role: "user",
+        content: [
+          {
+            type: "image",
+            omitted: true,
+            bytes: 12 * 1024,
+            url: "https://files.example/history-image.png",
+          },
+        ],
+      });
+
+      expect(result.content).not.toContainEqual(expect.objectContaining({ type: "omitted_media" }));
+    });
+
     it("preserves named attachment failures beside successful attachments", () => {
       const result = normalizeMessage({
         role: "assistant",

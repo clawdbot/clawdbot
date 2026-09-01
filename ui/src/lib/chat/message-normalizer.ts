@@ -88,7 +88,11 @@ function readSenderSession(value: unknown): NormalizedMessage["senderSession"] {
 function normalizeOmittedMediaContentBlock(
   item: Record<string, unknown>,
 ): Extract<MessageContentItem, { type: "omitted_media" }> | null {
-  if (item.type !== "image" || item.omitted !== true) {
+  if (
+    item.type !== "image" ||
+    item.omitted !== true ||
+    normalizeOptionalString(item.url) !== undefined
+  ) {
     return null;
   }
   const sizeBytes = asNonNegativeFiniteNumber(item.bytes);
