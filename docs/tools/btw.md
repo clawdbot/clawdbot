@@ -70,14 +70,12 @@ session companion RPCs and renders their bounded exchange state in the rail.
 ## Selection popup (Control UI)
 
 Highlighting text inside a chat message in the Control UI opens a small
-selection popup with two actions:
+selection popup with one action:
 
-- **More details** immediately asks the session rail companion to explain the
-  highlighted text in the context of the current session.
 - **Ask in side chat** opens the rail and pre-fills its composer with a quoted
   draft so you can type your own question about the selection.
 
-Both actions follow normal `/btw` semantics: the question and answer stay out
+The action follows normal `/btw` semantics: the question and answer stay out
 of session history and the main run is left untouched.
 
 ## When to use it

@@ -6019,7 +6019,6 @@ export const en: TranslationMap = {
       currentMessage: "current message",
       actions: "Message actions",
       selectionActions: "Selection actions",
-      moreDetails: "More details",
       askInSideChat: "Ask in side chat",
       rewind: "Rewind",
       rewindConfirm: "Rewind to before this message?",
