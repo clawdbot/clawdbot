@@ -35,7 +35,9 @@ export type CliTerminalFailure =
   // The backend ended the turn on purpose without a reply (hook stop, aborted
   // tools, budget). Keeping the CLI's own `terminal_reason` here is what lets
   // consumers name the cause instead of reporting a transport-shaped failure.
-  | { reason: "turn_stopped"; terminalReason: string; stopReason?: string };
+  | { reason: "turn_stopped"; terminalReason: string; stopReason?: string }
+  /** Stream ended without a result event and without producing any turn content. */
+  | { reason: "missing_result" };
 
 export type CliTerminalInterruption = {
   reason: "aborted" | "timeout";

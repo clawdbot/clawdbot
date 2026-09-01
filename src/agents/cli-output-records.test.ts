@@ -686,6 +686,9 @@ describe("parseCliOutput", () => {
         sessionId: "session-empty",
         usage: undefined,
         errorText: "CLI stream-json output ended without a result event.",
+        // A content-free stream is the orphaned-exit empty-failure class, so it
+        // stays eligible for the fresh-session retry.
+        terminalFailure: { reason: "missing_result" },
       },
     },
   ])("$name", ({ raw, expected }) => {

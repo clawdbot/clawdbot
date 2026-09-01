@@ -384,7 +384,11 @@ export async function executeCliProcess(params: {
       : null);
   // A completed terminal record is authoritative even if the CLI hangs
   // afterward. Reclassifying it as a timeout could replay completed tools.
-  if (parsedStructuredOutput?.terminalFailure) {
+  // Manual compaction is a control operation whose output contract belongs to
+  // the backend's validateOutput, not the model-turn classifier: a compaction
+  // stream legitimately ends without a model-turn result, so the terminal
+  // classification must not preempt that check.
+  if (parsedStructuredOutput?.terminalFailure && runParams.controlOperation !== "compact") {
     const terminalError = createCliOutputFailoverError({
       output: parsedStructuredOutput,
       ...outputErrorContext,

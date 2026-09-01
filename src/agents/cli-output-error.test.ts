@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
+import type { CliOutput } from "./cli-output-contracts.js";
+import {
+  CLI_STREAM_JSON_MISSING_RESULT_ERROR,
+  createCliJsonlStreamingParser,
+} from "./cli-output-stream.js";
 import { extractCliErrorMessage, formatCliOutputError, parseCliOutput } from "./cli-output.js";
+import { createCliOutputFailoverError } from "./cli-runner/output-error.js";
 import { createClaudeApiErrorFixture } from "./test-helpers/claude-api-error-fixture.js";
 
 type ParseCliOutputParams = Parameters<typeof parseCliOutput>[0];
@@ -61,6 +66,49 @@ describe("formatCliOutputError", () => {
       "Claude CLI ended the turn without a reply (terminal_reason: aborted_tools). " +
         "Tool actions may already have run; verify their effects before retrying.",
     );
+  });
+});
+
+describe("createCliOutputFailoverError", () => {
+  // Protocol-only orphaned exits must carry the fresh-session retry code, the
+  // same class the zero-output exit already reports.
+  it.each([
+    {
+      name: "missing-result terminal failure keeps the empty-failure retry code",
+      output: {
+        text: "",
+        sessionId: "orphaned-resume",
+        errorText: CLI_STREAM_JSON_MISSING_RESULT_ERROR,
+        terminalFailure: { reason: "missing_result" as const },
+      },
+      expectedReason: "unknown",
+      expectedCode: "cli_unknown_empty_failure",
+    },
+    {
+      name: "synthetic no-response keeps the format retry code",
+      output: {
+        text: "",
+        sessionId: "synthetic-empty",
+        errorText: "Claude CLI returned a synthetic no-response result.",
+        terminalFailure: { reason: "synthetic_no_response" as const },
+      },
+      expectedReason: "format",
+      expectedCode: "cli_synthetic_no_response",
+    },
+  ] as ReadonlyArray<{
+    name: string;
+    output: CliOutput;
+    expectedReason: string;
+    expectedCode: string;
+  }>)("classifies $name", ({ output, expectedReason, expectedCode }) => {
+    const error = createCliOutputFailoverError({
+      output,
+      provider: "claude-cli",
+      model: "claude-sonnet-4-6",
+    });
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({ reason: expectedReason, code: expectedCode });
   });
 });
 

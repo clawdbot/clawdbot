@@ -313,6 +313,23 @@ describe("CLI runner fault sequences", () => {
       expectedChildren: 2,
       expectedCode: "cli_unknown_empty_failure",
     },
+    {
+      // A config hot-reload rebuild can orphan a resumed CLI child after it
+      // emitted only init/control lines: clean exit, no result event. Same
+      // empty-failure class as the zero-output exit, so the retry stays eligible.
+      label: "clean exit with protocol-only stdout",
+      install: () => {
+        supervisorSpawnMock
+          .mockResolvedValueOnce(
+            managedRun({
+              stdout: claudeJsonl([{ type: "system", subtype: "init", session_id: "cli-orphan" }]),
+            }),
+          )
+          .mockResolvedValueOnce(managedRun(successExit("fallback after orphaned resume")));
+      },
+      expectedChildren: 2,
+      expectedCode: "cli_unknown_empty_failure",
+    },
   ])(
     "classifies a pre-activity $label once before advancing the outer candidate",
     async (testCase) => {

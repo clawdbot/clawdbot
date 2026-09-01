@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
+import {
+  CLI_STREAM_JSON_MISSING_RESULT_ERROR,
+  createCliJsonlStreamingParser,
+} from "./cli-output-stream.js";
 
 const OPENAI_COMPATIBLE_CLI_USAGE_CASES = [
   {
@@ -322,6 +325,59 @@ describe("createCliJsonlStreamingParser", () => {
       },
     });
   });
+
+  it.each([
+    {
+      name: "protocol-only init and system lines",
+      sessionId: "orphaned-resume",
+      frames: [
+        { type: "init", session_id: "orphaned-resume" },
+        { type: "system", subtype: "init", session_id: "orphaned-resume" },
+      ],
+      terminal: true,
+    },
+    {
+      name: "assistant tool activity without a result",
+      sessionId: "tool-activity",
+      frames: [
+        { type: "init", session_id: "tool-activity" },
+        {
+          type: "assistant",
+          message: {
+            model: "claude-sonnet-4-6",
+            role: "assistant",
+            content: [{ type: "tool_use", id: "tool-1", name: "Read", input: {} }],
+          },
+        },
+      ],
+      terminal: false,
+    },
+  ])(
+    "classifies a stream ending without a result after $name",
+    ({ frames, sessionId, terminal }) => {
+      const parser = createCliJsonlStreamingParser({
+        backend: {
+          command: "claude",
+          output: "jsonl",
+          jsonlDialect: "claude-stream-json",
+          sessionIdFields: ["session_id"],
+        },
+        providerId: "claude-cli",
+        onAssistantDelta: () => {},
+      });
+
+      parser.push(joinJsonlFrames(...frames, ""));
+      parser.finish();
+
+      expect(parser.getOutput()).toEqual({
+        text: "",
+        sessionId,
+        usage: undefined,
+        errorText: CLI_STREAM_JSON_MISSING_RESULT_ERROR,
+        ...(terminal ? { terminalFailure: { reason: "missing_result" } } : {}),
+      });
+    },
+  );
 
   it.each([
     {

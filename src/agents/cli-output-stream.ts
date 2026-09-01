@@ -700,11 +700,22 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         return { text: "", sessionId, usage };
       }
       if (isStreamJsonDialect(params)) {
+        // A stream that ended without a result event but also without any turn
+        // content (assistant text or tool activity) is the orphaned-process
+        // signature of a mid-turn session rebuild. Marking it terminal keeps it
+        // eligible for the fresh-session retry a zero-line exit already gets;
+        // unmarked, the unknown reason silently fails the turn.
+        const producedContent =
+          texts.length > 0 ||
+          toolTracker.pendingByIndex.size > 0 ||
+          toolTracker.startedIds.size > 0 ||
+          toolTracker.resultDeliveredIds.size > 0;
         return {
           text: "",
           sessionId,
           usage,
           errorText: CLI_STREAM_JSON_MISSING_RESULT_ERROR,
+          ...(producedContent ? {} : { terminalFailure: { reason: "missing_result" as const } }),
         };
       }
       const text = texts.join("\n").trim();
