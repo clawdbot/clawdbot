@@ -62,6 +62,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
   const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit();
   let rateLimitProfileRotations = 0;
   let transientRetryCount = 0;
+  let transientRetryBudget = MAX_TRANSIENT_RETRIES;
   // Wall-clock anchor set at the first transient consult so the 90s budget
   // counts failed-request time, not only backoff sleeps; a slow provider
   // timeout consumes budget instead of extending the retry window.
@@ -150,6 +151,9 @@ export function createEmbeddedRunFailoverRetryController(input: {
     get transientRetryCount() {
       return transientRetryCount;
     },
+    setTransientRetryBudget: (maxRetries?: number) => {
+      transientRetryBudget = maxRetries ?? MAX_TRANSIENT_RETRIES;
+    },
     advanceAuthProfile: input.advanceAuthProfile,
     advanceRateLimitAuthProfile: async (context: RateLimitAuthProfileContext): Promise<boolean> => {
       if (rateLimitProfileRotations >= rateLimitProfileRotationLimit && fallbackConfigured) {
@@ -225,7 +229,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
       ) {
         return false;
       }
-      if (transientRetryCount >= MAX_TRANSIENT_RETRIES) {
+      if (transientRetryCount >= transientRetryBudget) {
         return false;
       }
       const nowMs = Date.now();
@@ -239,7 +243,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
         return false;
       }
       log.warn(
-        `transient same-model retry ${transientRetryCount + 1}/${MAX_TRANSIENT_RETRIES} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} reason=${retry.reason}: delayMs=${delayMs}`,
+        `transient same-model retry ${transientRetryCount + 1}/${transientRetryBudget} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} reason=${retry.reason}: delayMs=${delayMs}`,
       );
       await sleepForRetry(delayMs);
       transientRetryCount += 1;

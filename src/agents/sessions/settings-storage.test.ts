@@ -12,7 +12,7 @@ const fixtures = createFixtureLifetime();
 afterEach(() => fixtures.cleanup());
 
 describe("FileSettingsStorage", () => {
-  it("removes retired provider retries on the next settings write", async () => {
+  it("preserves provider retry settings across an upgraded settings write", async () => {
     const root = fixtures.createTempDir("openclaw-settings-retry-migration-");
     const agentDir = join(root, "agent");
     const settingsPath = join(agentDir, "settings.json");
@@ -24,14 +24,16 @@ describe("FileSettingsStorage", () => {
 
     const manager = SettingsManager.create(root, agentDir);
     expect(manager.drainErrors()).toEqual([]);
-    expect(manager.getProviderRetrySettings()).toMatchObject({ timeoutMs: 1_000 });
+    expect(manager.getProviderRetrySettings()).toMatchObject({
+      timeoutMs: 1_000,
+      maxRetries: 7,
+    });
 
     manager.setRetryEnabled(false);
     await manager.flush();
 
     const stored = JSON.parse(readFileSync(settingsPath, "utf8"));
-    expect(stored.retry.provider).toEqual({ timeoutMs: 1_000 });
-    expect(stored.retry.provider).not.toHaveProperty("maxRetries");
+    expect(stored.retry.provider).toEqual({ maxRetries: 7, timeoutMs: 1_000 });
   });
 
   it("loads missing settings without creating their directories", () => {

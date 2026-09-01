@@ -1,6 +1,5 @@
 import { existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { acquireFileLockSyncWithRetry } from "../../infra/file-lock-sync.js";
 import type { Transport } from "../../llm/types.js";
 import { CONFIG_DIR_NAME } from "../config.js";
@@ -18,8 +17,7 @@ export interface BranchSummarySettings {
 
 export interface ProviderRetrySettings {
   timeoutMs?: number; // SDK/provider request timeout in milliseconds
-  // maxRetries is retired. FileSettingsStorage removes it from persisted data;
-  // the embedded runner's failover retry controller owns provider retries.
+  maxRetries?: number; // transient provider retry attempts
   maxRetryDelayMs?: number; // default: 60000 (max server-requested delay before failing)
 }
 
@@ -130,21 +128,6 @@ export interface SettingsError {
   error: Error;
 }
 
-function stripRetiredProviderMaxRetries(content: string | undefined): string | undefined {
-  if (content === undefined) {
-    return undefined;
-  }
-  const parsed: unknown = JSON.parse(content);
-  const settings = asOptionalObjectRecord(parsed);
-  const retry = asOptionalObjectRecord(settings?.retry);
-  const provider = asOptionalObjectRecord(retry?.provider);
-  if (!settings || !provider || !("maxRetries" in provider)) {
-    return content;
-  }
-  delete provider.maxRetries;
-  return JSON.stringify(settings);
-}
-
 export class FileSettingsStorage implements SettingsStorage {
   private paths: Record<SettingsScope, string>;
 
@@ -180,9 +163,7 @@ export class FileSettingsStorage implements SettingsStorage {
     // read and derive their updates only after that shared ownership is established.
     const release = acquireFileLockSyncWithRetry(path);
     try {
-      const current = stripRetiredProviderMaxRetries(
-        existsSync(path) ? readFileSync(path, "utf-8") : undefined,
-      );
+      const current = existsSync(path) ? readFileSync(path, "utf-8") : undefined;
       const next = fn(current);
       if (next !== undefined) {
         writeFileSync(path, next, "utf-8");

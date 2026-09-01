@@ -116,6 +116,15 @@ describe("createEmbeddedRunFailoverRetryController", () => {
     expect(controller.transientRetryCount).toBe(3);
   });
 
+  it("honors the saved provider retry budget", async () => {
+    const controller = createController(vi.fn(async () => false));
+    controller.setTransientRetryBudget(1);
+
+    await expect(controller.maybeRetryTransient({ reason: "server_error" })).resolves.toBe(true);
+    await expect(controller.maybeRetryTransient({ reason: "server_error" })).resolves.toBe(false);
+    expect(controller.transientRetryCount).toBe(1);
+  });
+
   it("uses the bounded backoff timer without emitting a user notice", async () => {
     vi.useFakeTimers();
     const random = vi.spyOn(Math, "random").mockReturnValue(0);
