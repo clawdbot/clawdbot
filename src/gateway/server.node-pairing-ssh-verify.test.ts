@@ -133,6 +133,35 @@ describeWithLanNodePairingServer("gateway ssh-verified node pairing auto-approve
     });
   });
 
+  test("does not ssh-approve observable bootstrap auth", async () => {
+    await attempt({
+      identityName: "ssh-verify-bootstrap-manual",
+      run: async ({ loaded, connectNode }) => {
+        const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
+        const issued = await issueDeviceBootstrapToken({
+          profile: { roles: ["node"], scopes: [] },
+        });
+        probeMock.mockImplementation(async () => ({
+          status: "ok",
+          stdout: `{"deviceId":"${loaded.identity.deviceId}","publicKey":"${loaded.publicKey}"}\n`,
+        }));
+
+        const res = await connectNode({ bootstrapToken: issued.token });
+        expect(res.ok).toBe(false);
+        await new Promise((resolve) => {
+          setTimeout(resolve, 250);
+        });
+        expect(probeMock).not.toHaveBeenCalled();
+        expect(await getPairedDevice(loaded.identity.deviceId)).toBeNull();
+        const pending = (await listDevicePairing()).pending.filter(
+          (entry) => entry.deviceId === loaded.identity.deviceId,
+        );
+        expect(pending).toHaveLength(1);
+        expect(pending[0]?.silent).toBe(false);
+      },
+    });
+  });
+
   test("leaves the pairing pending when the remote identity does not match", async () => {
     await attempt({
       identityName: "ssh-verify-key-mismatch",

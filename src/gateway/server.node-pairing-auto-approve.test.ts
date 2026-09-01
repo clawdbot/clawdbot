@@ -66,4 +66,32 @@ describeWithLanNodePairingServer("gateway trusted CIDR node pairing auto-approve
       },
     });
   });
+
+  test("does not auto-approve observable bootstrap auth from a trusted CIDR", async () => {
+    await attempt({
+      identityName: "trusted-cidr-bootstrap-manual",
+      configure: async (lanIp) => {
+        await writeConfigFile({
+          gateway: {
+            nodes: { pairing: { autoApproveCidrs: [`${lanIp}/32`], sshVerify: false } },
+          },
+        });
+      },
+      run: async ({ loaded, connectNode }) => {
+        const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
+        const issued = await issueDeviceBootstrapToken({
+          profile: { roles: ["node"], scopes: [] },
+        });
+        const res = await connectNode({ bootstrapToken: issued.token });
+        expect(res.ok).toBe(false);
+        expect(res.error?.message ?? "").toContain("pairing required");
+        const pending = (await listDevicePairing()).pending.filter(
+          (entry) => entry.deviceId === loaded.identity.deviceId,
+        );
+        expect(pending).toHaveLength(1);
+        expect(pending[0]?.silent).toBe(false);
+        expect(await getPairedDevice(loaded.identity.deviceId)).toBeNull();
+      },
+    });
+  });
 });

@@ -40,8 +40,13 @@ export function startGatewayNodePairingSshApproval(params: {
     runDetachedConnectWork,
   } = context;
   const { connId, buildRequestContext, logGateway } = context.handler;
-  const { device, role, scopes, isControlUi, isWebchat } = state;
-  if (!device || pairing.request.silent === true) {
+  const { device, role, scopes, isControlUi, isWebchat, authMethod, bootstrapTokenCandidate } =
+    state;
+  const requiresOwnerBootstrapApproval =
+    authMethod === "bootstrap-token" &&
+    Boolean(bootstrapTokenCandidate) &&
+    !context.confidentialTransport;
+  if (!device || pairing.request.silent === true || requiresOwnerBootstrapApproval) {
     return false;
   }
   // Gate on the request actually being approved, not just this

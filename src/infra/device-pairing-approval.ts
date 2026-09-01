@@ -399,6 +399,9 @@ async function approveDevicePairingWithOptions(
   if (result?.status !== "approved") {
     return result;
   }
+  if ((options?.approvedVia ?? "owner") !== "owner") {
+    return result;
+  }
   const binding = takeApprovedBootstrapIdentityBinding({
     requestId,
     deviceId: result.device.deviceId,

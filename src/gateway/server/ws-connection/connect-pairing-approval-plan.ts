@@ -103,7 +103,12 @@ export function resolvePairingApprovalPlan(params: {
     issuedBootstrapProfile,
     pairingLocality,
   } = state;
+  const requiresOwnerBootstrapApproval =
+    authMethod === "bootstrap-token" &&
+    Boolean(bootstrapTokenCandidate) &&
+    !params.confidentialTransport;
   const allowSilentLocalPairing =
+    !requiresOwnerBootstrapApproval &&
     !(existingPairedDevice && role !== "operator") &&
     shouldAllowSilentLocalPairing({
       autoApproveLocal: configSnapshot.gateway?.nodes?.pairing?.autoApproveLocal,
@@ -115,18 +120,20 @@ export function resolvePairingApprovalPlan(params: {
       authMethod,
       reason,
     });
-  const allowSilentTrustedCidrsNodePairing = shouldAutoApproveNodePairingFromTrustedCidrs({
-    existingPairedDevice: Boolean(existingPairedDevice),
-    role,
-    reason,
-    scopes,
-    hasBrowserOriginHeader: params.hasBrowserOriginHeader,
-    isControlUi,
-    isWebchat,
-    reportedClientIpSource: params.reportedClientIpSource,
-    reportedClientIp: params.reportedClientIp,
-    autoApproveCidrs: configSnapshot.gateway?.nodes?.pairing?.autoApproveCidrs,
-  });
+  const allowSilentTrustedCidrsNodePairing =
+    !requiresOwnerBootstrapApproval &&
+    shouldAutoApproveNodePairingFromTrustedCidrs({
+      existingPairedDevice: Boolean(existingPairedDevice),
+      role,
+      reason,
+      scopes,
+      hasBrowserOriginHeader: params.hasBrowserOriginHeader,
+      isControlUi,
+      isWebchat,
+      reportedClientIpSource: params.reportedClientIpSource,
+      reportedClientIp: params.reportedClientIp,
+      autoApproveCidrs: configSnapshot.gateway?.nodes?.pairing?.autoApproveCidrs,
+    });
   const trustedProxyAutoApproveConfig =
     configSnapshot.gateway?.auth?.trustedProxy?.deviceAutoApprove;
   const trustedProxyUser = authResult.user?.trim();
