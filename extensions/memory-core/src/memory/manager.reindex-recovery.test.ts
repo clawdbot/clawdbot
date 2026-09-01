@@ -21,6 +21,7 @@ type ReindexHarness = {
   syncMemoryFiles: (params: { needsFullReindex: boolean }) => Promise<unknown>;
   syncArchiveFiles: (params: SyncArchiveParams) => Promise<unknown>;
   db: DatabaseSync;
+  cache: { enabled: boolean; maxEntries?: number };
   writeMeta: (meta: MemoryIndexMeta) => void;
   providerKey: string | null;
   dirty: boolean;
@@ -64,6 +65,7 @@ describe("memory manager reindex recovery", () => {
   function createCfg(params: {
     provider?: string;
     sources?: Array<"memory" | "sessions">;
+    cacheEnabled?: boolean;
   }): OpenClawConfig {
     return {
       memory: {
@@ -71,7 +73,7 @@ describe("memory manager reindex recovery", () => {
           provider: params.provider ?? "openai",
           model: "mock-embed",
           store: { vector: {} },
-          cache: { enabled: false },
+          cache: { enabled: params.cacheEnabled ?? false },
           sources: params.sources,
           rememberAcrossConversations: params.sources?.includes("sessions") ?? false,
         },
@@ -191,6 +193,86 @@ describe("memory manager reindex recovery", () => {
         .prepare("SELECT path, text FROM memory_index_chunks ORDER BY path, start_line")
         .all(),
     ).toEqual(publishedRows);
+  });
+
+  it("bounds the shadow cache before any entries reach the primary", async () => {
+    const memoryManager = await openManager(createCfg({ sources: ["memory"], cacheEnabled: true }));
+    const harness = memoryManager as unknown as ReindexHarness;
+    harness.cache.maxEntries = 2;
+    for (let i = 0; i < 4; i += 1) {
+      await fs.writeFile(path.join(memoryDir, `${i}.md`), `unique cache content ${i}`);
+    }
+    // Reject transient overflow too: checking only the final row count misses
+    // primary-file high-water growth followed by post-publication deletion.
+    harness.db.exec(`
+      CREATE TEMP TRIGGER reject_cache_overflow BEFORE INSERT ON memory_embedding_cache
+      WHEN (SELECT COUNT(*) FROM memory_embedding_cache) >= 2
+      BEGIN SELECT RAISE(ABORT, 'primary cache overflow'); END;
+    `);
+
+    await memoryManager.sync({ reason: "cli", force: true });
+
+    expect(
+      harness.db.prepare("SELECT COUNT(*) AS count FROM memory_embedding_cache").get(),
+    ).toEqual({ count: 2 });
+    expect(harness.db.prepare("SELECT COUNT(*) AS count FROM memory_index_sources").get()).toEqual({
+      count: 4,
+    });
+  });
+
+  it("leaves even an oversized published cache untouched when a full rebuild fails", async () => {
+    const memoryManager = await openManager(createCfg({ sources: ["memory"], cacheEnabled: true }));
+    await fs.writeFile(path.join(memoryDir, "alpha.md"), "published alpha");
+    await memoryManager.sync({ reason: "cli", force: true });
+    const harness = memoryManager as unknown as ReindexHarness;
+    const insert = harness.db.prepare(`
+      INSERT INTO memory_embedding_cache
+        (provider, model, provider_key, hash, embedding, dims, updated_at)
+      VALUES ('previous-provider', 'previous-model', 'previous-key', ?, '[0,1,0]', 3, 1)
+    `);
+    insert.run("old-a");
+    insert.run("old-b");
+    harness.cache.maxEntries = 1;
+    const before = harness.db.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all();
+    harness.writeMeta = () => {
+      throw new Error("failed shadow metadata");
+    };
+
+    await expect(memoryManager.sync({ reason: "cli", force: true })).rejects.toThrow(
+      "failed shadow metadata",
+    );
+
+    expect(harness.db.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all()).toEqual(
+      before,
+    );
+  });
+
+  it("still bounds committed incremental work when its progress callback fails", async () => {
+    const memoryManager = await openManager(createCfg({ sources: ["memory"], cacheEnabled: true }));
+    await fs.writeFile(path.join(memoryDir, "alpha.md"), "published alpha");
+    await memoryManager.sync({ reason: "cli", force: true });
+    const harness = memoryManager as unknown as ReindexHarness;
+    harness.cache.maxEntries = 1;
+    harness.dirty = true;
+    await fs.writeFile(path.join(memoryDir, "alpha.md"), "incremental beta");
+
+    await expect(
+      memoryManager.sync({
+        reason: "session-delta",
+        progress: ({ completed }) => {
+          if (completed > 0) {
+            throw new Error("failed progress callback");
+          }
+        },
+      }),
+    ).rejects.toThrow("failed progress callback");
+
+    expect(
+      harness.db.prepare("SELECT COUNT(*) AS count FROM memory_embedding_cache").get(),
+    ).toEqual({ count: 1 });
+    expect(harness.db.prepare("SELECT text FROM memory_index_chunks").get()).toEqual({
+      text: "incremental beta",
+    });
   });
 
   it("rejects a full reindex while another process owns the build lock", async () => {

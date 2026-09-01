@@ -1,5 +1,5 @@
 // Memory Core plugin module implements manager status state behavior.
-import type { SQLInputValue } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
 type StatusProvider = {
@@ -11,18 +11,14 @@ type StatusAggregateRow = {
   kind: "files" | "chunks";
   source: MemorySource;
   c: number;
+  bytes: number;
 };
 
-type StatusAggregateDb = {
-  prepare: (sql: string) => {
-    all: (...args: SQLInputValue[]) => StatusAggregateRow[];
-  };
-};
-
+// octet_length reads record lengths, not large text/vector payloads from disk.
 const MEMORY_STATUS_AGGREGATE_SQL =
-  `SELECT 'files' AS kind, source, COUNT(*) as c FROM memory_index_sources WHERE 1=1__FILTER__ GROUP BY source\n` +
+  `SELECT 'files' AS kind, source, COUNT(*) as c, 0 AS bytes FROM memory_index_sources WHERE 1=1__FILTER__ GROUP BY source\n` +
   `UNION ALL\n` +
-  `SELECT 'chunks' AS kind, source, COUNT(*) as c FROM memory_index_chunks WHERE 1=1__FILTER__ GROUP BY source`;
+  `SELECT 'chunks' AS kind, source, COUNT(*) as c, COALESCE(SUM(octet_length(text) + octet_length(embedding)), 0) AS bytes FROM memory_index_chunks WHERE 1=1__FILTER__ GROUP BY source`;
 
 export function resolveInitialMemoryDirty(params: {
   hasMemorySource: boolean;
@@ -68,35 +64,37 @@ export function resolveStatusProviderInfo(params: {
 }
 
 export function collectMemoryStatusAggregate(params: {
-  db: StatusAggregateDb;
+  db: Pick<DatabaseSync, "prepare">;
   sources: Iterable<MemorySource>;
   sourceFilterSql?: string;
   sourceFilterParams?: MemorySource[];
 }): {
   files: number;
   chunks: number;
-  sourceCounts: Array<{ source: MemorySource; files: number; chunks: number }>;
+  sourceCounts: Array<{ source: MemorySource; files: number; chunks: number; chunkBytes: number }>;
 } {
   const sources = Array.from(params.sources);
-  const bySource = new Map<MemorySource, { files: number; chunks: number }>();
+  const bySource = new Map<MemorySource, { files: number; chunks: number; chunkBytes: number }>();
   for (const source of sources) {
-    bySource.set(source, { files: 0, chunks: 0 });
+    bySource.set(source, { files: 0, chunks: 0, chunkBytes: 0 });
   }
   const sourceFilterSql = params.sourceFilterSql ?? "";
   const sourceFilterParams = params.sourceFilterParams ?? [];
   const aggregateRows = params.db
     .prepare(MEMORY_STATUS_AGGREGATE_SQL.replaceAll("__FILTER__", sourceFilterSql))
-    .all(...sourceFilterParams, ...sourceFilterParams);
+    // SAFETY: Both UNION branches return the declared kind/source and numeric count/byte aggregates.
+    .all(...sourceFilterParams, ...sourceFilterParams) as StatusAggregateRow[];
   let files = 0;
   let chunks = 0;
   for (const row of aggregateRows) {
     const count = row.c ?? 0;
-    const entry = bySource.get(row.source) ?? { files: 0, chunks: 0 };
+    const entry = bySource.get(row.source) ?? { files: 0, chunks: 0, chunkBytes: 0 };
     if (row.kind === "files") {
       entry.files = count;
       files += count;
     } else {
       entry.chunks = count;
+      entry.chunkBytes = row.bytes;
       chunks += count;
     }
     bySource.set(row.source, entry);

@@ -754,7 +754,7 @@ extensions/memory-core/src/memory/manager-source-state.ts	2
 extensions/memory-core/src/memory/manager-sync-base.ts	5
 extensions/memory-core/src/memory/manager-vector-rebuild-state.ts	1
 extensions/memory-core/src/memory/manager-watch-ops.ts	4
-extensions/memory-core/src/memory/manager.ts	3
+extensions/memory-core/src/memory/manager.ts	2
 extensions/memory-core/src/memory/project-ranking.ts	1
 extensions/memory-core/src/memory/search-deadline.ts	1
 extensions/memory-core/src/migration/doctor-host-event-sources.ts	1
