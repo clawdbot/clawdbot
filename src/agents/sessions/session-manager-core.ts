@@ -120,6 +120,13 @@ export class SessionManagerCore {
       return;
     }
     const header = partitioned.fileEntries.find((entry) => entry.type === "session");
+    // Runtime never rebuilds a missing header in place: silently replacing malformed
+    // history would hide the corruption. Doctor owns the repair.
+    if (target && !header) {
+      throw new Error(
+        'Persisted session transcript has no session header row; run "openclaw doctor --fix" to repair it',
+      );
+    }
     if (target && (header?.version ?? 1) < CURRENT_SESSION_VERSION) {
       throw new Error(
         "Persisted legacy session transcripts require doctor/import migration before runtime use",

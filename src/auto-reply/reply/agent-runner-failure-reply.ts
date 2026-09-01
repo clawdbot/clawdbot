@@ -144,6 +144,18 @@ export function resolveExternalRunFailureTextForConversation(params: {
   return silentPolicy === "disallow" ? params.text : SILENT_REPLY_TOKEN;
 }
 
+const SESSION_TRANSCRIPT_REPAIR_REQUIRED_RE =
+  /\b(?:transcript has no session header row|Persisted legacy session transcripts require doctor\/import migration)\b/iu;
+
+// Session-hydration failures are permanent until repaired; classifying them as
+// generic would let group silent-reply policy hide the turn's failure entirely.
+function buildSessionTranscriptRepairFailureText(message: string): string | null {
+  if (!SESSION_TRANSCRIPT_REPAIR_REQUIRED_RE.test(collapseRepeatedFailureDetail(message))) {
+    return null;
+  }
+  return "⚠️ This chat's stored session history needs repair before I can reply. Run `openclaw doctor --fix` on the gateway, then send your message again.";
+}
+
 const CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE =
   /\bcodex app-server client closed before turn completed\b/iu;
 const CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE =
@@ -316,6 +328,10 @@ export function buildExternalRunFailureReply(
   const codexAppServerFailure = buildCodexAppServerFailureText(normalizedMessage);
   if (codexAppServerFailure) {
     return { text: codexAppServerFailure, isGenericRunnerFailure: false };
+  }
+  const sessionTranscriptRepairFailure = buildSessionTranscriptRepairFailureText(normalizedMessage);
+  if (sessionTranscriptRepairFailure) {
+    return { text: sessionTranscriptRepairFailure, isGenericRunnerFailure: false };
   }
   const classifiedFailure = renderAssistantRequestFailureCopy(failoverFacts);
   if (classifiedFailure) {

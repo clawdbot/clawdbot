@@ -20,6 +20,7 @@ import type {
 import {
   createTranscriptIdentityReader,
   findTranscriptEventInDatabase,
+  loadTranscriptEventsFromDatabase,
   readTranscriptEventId,
   readTranscriptEventMessage,
   readTranscriptIdentityByEventId,
@@ -36,6 +37,10 @@ import {
   rotateTranscriptGenerationInTransaction,
   touchTranscriptMutationInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
+import {
+  buildSessionResetBoundaryEvent,
+  type SessionResetBoundaryRequest,
+} from "./session-reset-boundary-event.js";
 import {
   createTranscriptIndexAppenderInTransaction,
   deleteSessionTranscriptIndexInTransaction,
@@ -266,6 +271,26 @@ export function appendTranscriptEventsInTransaction(
     );
   }
   return appended;
+}
+
+/** Appends one reset boundary to the session's transcript; a transcript with nothing to reset gets none. */
+export function appendSessionResetBoundaryEventInTransaction(
+  database: OpenClawAgentDatabase,
+  scope: ResolvedTranscriptScope,
+  request: SessionResetBoundaryRequest,
+): void {
+  const boundary = buildSessionResetBoundaryEvent({
+    events: loadTranscriptEventsFromDatabase(database, scope.sessionId, {
+      projection: "reset-boundary",
+    }),
+    ...request,
+  });
+  if (!boundary) {
+    return;
+  }
+  if (appendTranscriptEventsInTransaction(database, scope, [boundary]) !== 1) {
+    throw new Error(`Failed to append reset boundary for ${scope.sessionKey}`);
+  }
 }
 
 function appendTranscriptEventRowInTransaction(

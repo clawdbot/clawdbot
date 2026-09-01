@@ -73,7 +73,7 @@ export function buildSessionResetBoundaryEvent(
   params: {
     events: readonly unknown[];
   } & SessionResetBoundaryRequest,
-): SessionResetBoundaryEvent {
+): SessionResetBoundaryEvent | undefined {
   const entries = params.events.filter(
     (event) =>
       event !== null &&
@@ -81,6 +81,12 @@ export function buildSessionResetBoundaryEvent(
       !Array.isArray(event) &&
       (event as { type?: unknown }).type !== "session",
   );
+  // A transcript with no boundary-relevant entries has nothing to reset. Appending a
+  // boundary anyway would materialize a headerless transcript, which every later
+  // load rejects until doctor repairs it.
+  if (entries.length === 0) {
+    return undefined;
+  }
   const activeEntries = selectSessionTranscriptLeafControlledPath(entries) ?? entries;
   const keptEntries =
     params.context === "preserve-tail"

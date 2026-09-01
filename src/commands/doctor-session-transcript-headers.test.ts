@@ -129,7 +129,7 @@ describe("doctor SQLite session transcript header repair", () => {
     }, databaseOptions);
 
     expect(() => SessionManager.open(scope, state.workspaceDir)).toThrow(
-      "require doctor/import migration before runtime use",
+      'no session header row; run "openclaw doctor --fix"',
     );
 
     await expect(
@@ -270,7 +270,7 @@ describe("doctor SQLite session transcript header repair", () => {
 
     expect(readTranscriptStorageRows(database, SESSION_ID)).toEqual(before);
     expect(() => SessionManager.open(scope, state.workspaceDir)).toThrow(
-      "require doctor/import migration before runtime use",
+      'no session header row; run "openclaw doctor --fix"',
     );
     expect(loadTranscriptEventsSync(scope)).toHaveLength(2);
     expect(note).not.toHaveBeenCalled();
@@ -317,7 +317,7 @@ describe("doctor SQLite session transcript header repair", () => {
 
     expect(readTranscriptStorageRows(database, SESSION_ID)).toEqual(before);
     expect(() => SessionManager.open(scope, state.workspaceDir)).toThrow(
-      "require doctor/import migration before runtime use",
+      'no session header row; run "openclaw doctor --fix"',
     );
     expect(note).not.toHaveBeenCalled();
   });
