@@ -527,6 +527,10 @@ export function createConfiguredGuard(
           messages: [{ role: "user", content: input }],
           maxTokens,
           responseFormat,
+          // Reef only needs a small constrained classification verdict. Keep
+          // reasoning explicit so reasoning-model defaults cannot consume the
+          // entire guard deadline before emitting the JSON result.
+          reasoning: "low",
           requiredAuthMode: "oauth",
           signal,
           purpose: "reef.guard",

@@ -75,7 +75,7 @@ The interactive wizard writes both the Reef guard selection and the exact host L
         authProfileId: "openai:default",
         pinnedModel: "gpt-5.6-terra",
         policyVersion: "reef-v1",
-        timeoutMs: 30000,
+        timeoutMs: 120000,
       },
     },
   },
@@ -93,7 +93,7 @@ The interactive wizard writes both the Reef guard selection and the exact host L
 }
 ```
 
-The selected profile must resolve to OAuth. Reef receives only the structured verdict plus provider/model/terminal evidence; the host rejects a profile with another auth mode before dispatch and never returns credentials through the plugin runtime.
+The selected profile must resolve to OAuth. Reef requests low reasoning for this narrow classifier and the wizard uses a 120-second fail-closed deadline to accommodate OAuth refresh and provider cold starts. Reef receives only the structured verdict plus provider/model/terminal evidence; the host rejects a profile with another auth mode before dispatch and never returns credentials through the plugin runtime.
 
 ### API key
 

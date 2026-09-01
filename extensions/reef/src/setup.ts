@@ -257,7 +257,10 @@ export const reefSetupWizard = {
             authProfileId,
             pinnedModel,
             policyVersion,
-            timeoutMs: 30_000,
+            // ChatGPT OAuth can include profile refresh and a reasoning-model
+            // cold start. Keep the hard fail-closed deadline, but give that
+            // host-owned path the full bounded budget accepted by the schema.
+            timeoutMs: 120_000,
           }
         : { provider, pinnedModel, apiKeyEnv, policyVersion, timeoutMs: 30_000 };
     const reef: ReefChannelConfig = ReefChannelConfigSchema.parse({

@@ -126,6 +126,7 @@ describe("createConfiguredGuard", () => {
       ],
       maxTokens: 512,
       purpose: "reef.guard",
+      reasoning: "low",
       requiredAuthMode: "oauth",
       responseFormat: {
         type: "json_schema",

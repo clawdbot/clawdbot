@@ -137,7 +137,7 @@ describe("Reef setup wizard identity binding", () => {
       authProfileId: "openai:work",
       pinnedModel: "gpt-5.6-terra",
       policyVersion: "reef-v1",
-      timeoutMs: 30_000,
+      timeoutMs: 120_000,
     });
     expect(result.cfg.plugins?.entries?.reef?.llm).toEqual({
       allowModelOverride: true,
