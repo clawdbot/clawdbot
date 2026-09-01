@@ -387,6 +387,11 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       mode: "persistent",
       model: "openai/gpt-5.5",
     });
+    await runtime.ensureSession({
+      sessionKey: "agent:codex:main",
+      agent: "codex",
+      mode: "persistent",
+    });
     await expect(
       runtime.ensureSession({
         sessionKey: "agent:codex:main",
@@ -395,7 +400,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
         model: "openai/gpt-5.6",
       }),
     ).rejects.toMatchObject({ code: "ACP_BACKEND_UNSUPPORTED_CONTROL" });
-    expect(firstEnsure).toHaveBeenCalledOnce();
+    expect(firstEnsure).toHaveBeenCalledTimes(2);
 
     await runtime.prepareFreshSession({ sessionKey: "agent:codex:main" });
 

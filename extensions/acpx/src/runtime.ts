@@ -1588,11 +1588,13 @@ export class AcpxRuntime implements CompleteAcpRuntime {
         ? classifiedCodexOverride
         : undefined;
     // The managed MCP child must receive only identity the adapter will actually use.
-    // Codex always owns the OpenAI provider; dropped inherited models stay unknown.
+    // An omitted model retains a cached session's identity; new Codex sessions own OpenAI.
     const managedToolsModelRef = isCodexAcp
       ? codexModelOverride?.model
         ? `openai/${codexModelOverride.model}`
-        : "openai"
+        : this.managedToolsSessionModelRefs.has(input.sessionKey)
+          ? this.managedToolsSessionModelRefs.get(input.sessionKey)
+          : "openai"
       : undefined;
     const delegate = this.resolveDelegateForSession({
       command,
