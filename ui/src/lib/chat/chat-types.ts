@@ -263,6 +263,13 @@ export type MessageContentItem =
       thinking: string;
     }
   | {
+      type: "omitted_media";
+      media: {
+        kind: "image";
+        sizeBytes?: number;
+      };
+    }
+  | {
       type: "attachment";
       attachment: {
         url: string;

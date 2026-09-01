@@ -897,6 +897,55 @@ describe("message-normalizer", () => {
       ]);
     });
 
+    it("preserves omitted historical images as non-recoverable media placeholders", () => {
+      const result = normalizeMessage({
+        role: "user",
+        content: [{ type: "image", omitted: true, bytes: 12 * 1024 }],
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "omitted_media",
+          media: {
+            kind: "image",
+            sizeBytes: 12 * 1024,
+          },
+        },
+      ]);
+    });
+
+    it.each([
+      ["missing", undefined],
+      ["negative", -1],
+      ["NaN", Number.NaN],
+      ["infinite", Number.POSITIVE_INFINITY],
+      ["string", "12288"],
+    ])(
+      "omits %s byte metadata without dropping the historical image placeholder",
+      (_label, bytes) => {
+        const result = normalizeMessage({
+          role: "user",
+          content: [{ type: "image", omitted: true, ...(bytes === undefined ? {} : { bytes }) }],
+        });
+
+        expect(result.content).toEqual([
+          {
+            type: "omitted_media",
+            media: { kind: "image" },
+          },
+        ]);
+      },
+    );
+
+    it("does not treat ordinary image blocks as omitted media", () => {
+      const result = normalizeMessage({
+        role: "user",
+        content: [{ type: "image", omitted: false, bytes: 12 * 1024 }],
+      });
+
+      expect(result.content).not.toContainEqual(expect.objectContaining({ type: "omitted_media" }));
+    });
+
     it("preserves named attachment failures beside successful attachments", () => {
       const result = normalizeMessage({
         role: "assistant",
