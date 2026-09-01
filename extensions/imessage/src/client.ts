@@ -7,6 +7,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { expandIMessageUserPath } from "./cli-path.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
+import { invalidateCachedIMessagePrivateApiStatus } from "./private-api-status.js";
 
 type IMessageRpcError = {
   code?: number;
@@ -45,6 +46,20 @@ export class IMessageRpcRequestError extends Error {
     super(message);
     this.name = "IMessageRpcRequestError";
   }
+}
+
+// A stalled bridge, as opposed to a rejected request.
+//
+// Two shapes mean the same thing — the injected helper never answered:
+//   - imsg replies with a JSON-RPC error carrying its own wait timeout, e.g.
+//     "Internal error: code=-32603 Timed out waiting for response to 'send-message'"
+//   - the request outlives our own client-side timer ("imsg rpc timeout (...)")
+//
+// Deliberately narrow. An ordinary rejection (bad target, unknown chat) says
+// nothing about bridge health and must not discard the capability cache.
+export function isIMessageBridgeStall(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return message.includes("Timed out waiting for response") || message.includes("imsg rpc timeout");
 }
 
 type PendingRequest = {
@@ -223,7 +238,20 @@ export class IMessageRpcClient {
     } catch (err) {
       this.failTransport(err, this.child);
     }
-    return await response;
+    try {
+      return await response;
+    } catch (err) {
+      // Every private-API action funnels through here, so this is the one place
+      // that learns the bridge went away. Without it the cached "available"
+      // verdict never expires and each later send is dispatched into a dead
+      // bridge, surfacing an opaque -32603 instead of the actionable
+      // "run imsg launch" guidance. Clearing the entry makes the next action
+      // re-probe and report the real state.
+      if (isIMessageBridgeStall(err)) {
+        invalidateCachedIMessagePrivateApiStatus(this.cliPath);
+      }
+      throw err;
+    }
   }
 
   private async stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {

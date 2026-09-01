@@ -49,10 +49,14 @@ function createMockChild(): MockChild {
 
 let IMessageRpcClient: typeof import("./client.js").IMessageRpcClient;
 let IMessageRpcRequestError: typeof import("./client.js").IMessageRpcRequestError;
+let privateApiStatus: typeof import("./private-api-status.js");
 
 beforeAll(async () => {
   vi.resetModules();
   ({ IMessageRpcClient, IMessageRpcRequestError } = await import("./client.js"));
+  // Imported after resetModules so this is the same module instance the client
+  // mutates; a separate copy would hold a different cache map.
+  privateApiStatus = await import("./private-api-status.js");
 });
 
 afterAll(() => {
@@ -389,5 +393,98 @@ describe("IMessageRpcClient child stream error handling", () => {
     );
     child.emit("close", 0, null);
     await client.stop();
+  });
+});
+
+describe("IMessageRpcClient bridge-stall cache invalidation", () => {
+  let child: MockChild;
+
+  const seeded = {
+    available: true,
+    v2Ready: true,
+    selectors: {},
+    rpcMethods: [],
+  } as const;
+
+  beforeEach(() => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("VITEST", "");
+    child = createMockChild();
+    spawnMock.mockReset().mockReturnValue(child);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  // A successful probe is cached with expiresAt=0 and therefore never expires.
+  // Before this path existed, a bridge that wedged after that probe was never
+  // re-evaluated: Messages.app stayed alive with the dylib mapped, so nothing
+  // else could notice, and every later send was dispatched into a dead bridge
+  // and failed with an opaque -32603 instead of the actionable
+  // "run imsg launch" guidance. Dropping the entry here makes the next action
+  // re-probe. This test fails without the invalidation in request().
+  it("discards the cached verdict when imsg reports its own wait timeout", async () => {
+    const cliPath = "/tmp/imsg-stall-invalidation";
+    privateApiStatus.setCachedIMessagePrivateApiStatus(cliPath, { ...seeded });
+    expect(privateApiStatus.getCachedIMessagePrivateApiStatus(cliPath)?.available).toBe(true);
+
+    const client = new IMessageRpcClient({ cliPath });
+    await client.start();
+    const pending = client.request("send", {}, { timeoutMs: 0 });
+    pending.catch(() => {});
+    child.stdout.emit(
+      "data",
+      Buffer.from(
+        `${JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          error: {
+            code: -32603,
+            message: "Timed out waiting for response to 'send-message'",
+          },
+        })}\n`,
+      ),
+    );
+
+    const error = await pending.catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(IMessageRpcRequestError);
+    expect(privateApiStatus.getCachedIMessagePrivateApiStatus(cliPath)).toBeUndefined();
+
+    child.emit("close", 0, null);
+    await client.stop();
+  });
+
+  // The cache is what keeps the bridge off the hot path, so an ordinary
+  // rejection must not cost every later send a re-probe.
+  it("keeps the cached verdict when the request is merely rejected", async () => {
+    const cliPath = "/tmp/imsg-stall-preserved";
+    privateApiStatus.setCachedIMessagePrivateApiStatus(cliPath, { ...seeded });
+
+    const client = new IMessageRpcClient({ cliPath });
+    await client.start();
+    const pending = client.request("send", {}, { timeoutMs: 0 });
+    pending.catch(() => {});
+    child.stdout.emit(
+      "data",
+      Buffer.from(
+        `${JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          error: {
+            code: -32602,
+            message: 'Unknown target "nobody" for iMessage',
+          },
+        })}\n`,
+      ),
+    );
+
+    await pending.catch((cause: unknown) => cause);
+    expect(privateApiStatus.getCachedIMessagePrivateApiStatus(cliPath)?.available).toBe(true);
+
+    child.emit("close", 0, null);
+    await client.stop();
+    privateApiStatus.invalidateCachedIMessagePrivateApiStatus(cliPath);
   });
 });
