@@ -20,6 +20,7 @@ import { isSensitiveFieldKey, redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   forceKillChildProcessTree,
+  isChildProcessTreeAlive,
   signalChildProcessTree,
   shouldDetachChildForProcessTree,
 } from "../process/child-process-tree.js";
@@ -30,6 +31,7 @@ const log = createSubsystemLogger("provider-local-service");
 const DEFAULT_READY_TIMEOUT_MS = 120_000;
 const DEFAULT_PROBE_TIMEOUT_MS = 2_000;
 const PROBE_INTERVAL_MS = 250;
+const PROCESS_TREE_EXIT_POLL_MS = 25;
 const LOCAL_SERVICE_OUTPUT_TAIL_MAX_BYTES = 8 * 1024;
 
 const MODEL_PROVIDER_LOCAL_SERVICE_SYMBOL = Symbol.for("openclaw.modelProviderLocalService");
@@ -625,10 +627,10 @@ async function stopManagedProcess(managed: ManagedLocalService, signal: AbortSig
   }
   drainLocalServiceOutput(child);
   signalChildProcessTree(child, "SIGTERM");
-  await waitForChildExit(child, signal, DEFAULT_PROBE_TIMEOUT_MS);
-  if (!hasLocalServiceProcessExited(child)) {
+  await waitForChildProcessTreeExit(child, signal, DEFAULT_PROBE_TIMEOUT_MS);
+  if (process.platform === "win32" || isChildProcessTreeAlive(child)) {
     forceKillChildProcessTree(child);
-    await waitForChildExit(child, signal, DEFAULT_PROBE_TIMEOUT_MS);
+    await waitForChildProcessTreeExit(child, signal, DEFAULT_PROBE_TIMEOUT_MS);
   }
 }
 
@@ -739,34 +741,20 @@ function waitForSpawnResult(
   });
 }
 
-function waitForChildExit(
+async function waitForChildProcessTreeExit(
   child: ChildProcess,
   signal: AbortSignal,
   timeoutMs: number,
 ): Promise<void> {
-  if (hasLocalServiceProcessExited(child)) {
-    return Promise.resolve();
+  const deadline = Date.now() + timeoutMs;
+  while (isChildProcessTreeAlive(child)) {
+    throwIfAborted(signal);
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      return;
+    }
+    await sleepWithAbort(Math.min(PROCESS_TREE_EXIT_POLL_MS, remainingMs), signal);
   }
-  throwIfAborted(signal);
-  return new Promise((resolve, reject) => {
-    const cleanup = () => {
-      clearTimeout(timeout);
-      child.off("exit", onExit);
-      signal.removeEventListener("abort", onAbort);
-    };
-    const finish = () => {
-      cleanup();
-      resolve();
-    };
-    const onExit = () => finish();
-    const onAbort = () => {
-      cleanup();
-      reject(toAbortError(signal));
-    };
-    const timeout: NodeJS.Timeout = setTimeout(finish, timeoutMs);
-    child.once("exit", onExit);
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
 }
 
 /** Return whether a child process has already reported an exit code or signal. */

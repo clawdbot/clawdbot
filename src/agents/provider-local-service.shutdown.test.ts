@@ -1,5 +1,8 @@
+import fs from "node:fs/promises";
 import net from "node:net";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
 import {
@@ -26,14 +29,18 @@ async function freePort(): Promise<number> {
 }
 
 describe("provider local service shutdown", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
   afterEach(async () => {
     await stopManagedProviderLocalServices();
   });
 
-  it("waits for a stubborn service to exit before host shutdown returns", async () => {
+  it("waits for a stubborn descendant after its parent exits", async () => {
     const port = await freePort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
+    const descendantPidPath = path.join(tempDirs.make("local-service-tree-"), "descendant.pid");
     let pid: number | undefined;
+    let descendantPid: number | undefined;
 
     try {
       const lease = await ensureProviderLocalService({
@@ -43,7 +50,7 @@ describe("provider local service shutdown", () => {
           command: process.execPath,
           args: [
             "-e",
-            `const http=require("node:http");process.on("SIGTERM",()=>{});http.createServer((req,res)=>res.end("ok")).listen(${port},"127.0.0.1");`,
+            `const {spawn}=require("node:child_process");const fs=require("node:fs");const http=require("node:http");const child=spawn(process.execPath,["-e",'process.on("SIGTERM",()=>{});setInterval(()=>{},1000);'],{stdio:"ignore"});fs.writeFileSync(${JSON.stringify(descendantPidPath)},String(child.pid));http.createServer((req,res)=>res.end("ok")).listen(${port},"127.0.0.1");`,
           ],
           healthUrl,
           readyTimeoutMs: 5_000,
@@ -57,12 +64,15 @@ describe("provider local service shutdown", () => {
       if (!pid) {
         throw new Error("Expected managed provider local service pid");
       }
+      descendantPid = Number(await fs.readFile(descendantPidPath, "utf8"));
 
       await stopManagedProviderLocalServices();
 
       expect(isPidAlive(pid)).toBe(false);
+      expect(isPidAlive(descendantPid)).toBe(false);
       lease.release();
     } finally {
+      killPidIfAlive(descendantPid);
       killPidIfAlive(pid);
     }
   });
