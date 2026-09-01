@@ -192,8 +192,11 @@ runs:
         # its input globber rejects parent traversals. Share the original patterns.
         {
           echo 'paths<<EOF'
+          # macOS rejects hard links sourced from app-bundle metadata. Archive
+          # the store first so restored bundle files link from their store owner.
+          if [ "${RUNNER_OS:-}" = "macOS" ]; then printf '%s\n' "$store_pattern"; fi
           printf '%s\n' node_modules ui/node_modules 'packages/*/node_modules' 'extensions/*/node_modules' 'examples/*/node_modules'
-          printf '%s\n' "$store_pattern"
+          if [ "${RUNNER_OS:-}" != "macOS" ]; then printf '%s\n' "$store_pattern"; fi
           echo EOF
         } >> "$GITHUB_OUTPUT"
 

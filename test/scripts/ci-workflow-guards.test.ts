@@ -4515,7 +4515,7 @@ NODE
       writeFileSync(
         path.join(source, "package.json"),
         JSON.stringify({
-          files: ["index.js"],
+          files: ["index.js", "Fixture.app"],
           name: "cache-proof-dep",
           packageManager: rootPackageManager,
           scripts: { "pnpm-path": "node -p process.env.npm_execpath" },
@@ -4523,6 +4523,13 @@ NODE
         }),
       );
       writeFileSync(path.join(source, "index.js"), 'module.exports = "cache-proof-v1";\n');
+      const bundleFiles =
+        runnerOs === "macOS" ? ["PkgInfo", "CodeResources", "_CodeSignature/CodeResources"] : [];
+      for (const file of bundleFiles) {
+        const bundleFile = path.join(source, "Fixture.app", "Contents", file);
+        mkdirSync(path.dirname(bundleFile), { recursive: true });
+        writeFileSync(bundleFile, `cache-proof ${file}\n`);
+      }
       // Corepack can bootstrap the pinned CLI under HOME. Keep its lifetime outside
       // the seed/producer homes that this cache proof deliberately deletes.
       const bootstrap = resolvePnpmRunner();
@@ -4575,7 +4582,7 @@ NODE
       let dependencyEnvironment = configureStore();
       const cachePaths = readFileSync(outputFile, "utf8");
       expect(cachePaths).toBe(
-        `paths<<EOF\nnode_modules\nui/node_modules\npackages/*/node_modules\nextensions/*/node_modules\nexamples/*/node_modules\n${runnerOs === "macOS" ? "~/Library/pnpm/store" : ".cache/openclaw-pnpm-store"}\nEOF\n`,
+        `paths<<EOF\n${runnerOs === "macOS" ? "~/Library/pnpm/store\n" : ""}node_modules\nui/node_modules\npackages/*/node_modules\nextensions/*/node_modules\nexamples/*/node_modules\n${runnerOs === "macOS" ? "" : ".cache/openclaw-pnpm-store\n"}EOF\n`,
       );
       const runPnpm = (args: string[], cwd: string, home = userHome) =>
         spawnSync(pnpm.command, [...pnpm.args, ...args], {
@@ -4752,6 +4759,7 @@ server.listen(0, "127.0.0.1", () => {
         const manifest = path.join(root, "dependency-cache.manifest");
         // Actions expands HOME in glob inputs, then makes matched tar entries
         // workspace-relative. Passing ../ directly to its globber is invalid.
+        // Preserve its search-path order; Node's multi-pattern glob interleaves roots.
         const patterns = cachePaths
           .split("\n")
           .slice(1, -2)
@@ -4760,7 +4768,8 @@ server.listen(0, "127.0.0.1", () => {
           );
         writeFileSync(
           manifest,
-          globSync(patterns, { cwd: workspace })
+          patterns
+            .flatMap((pattern) => globSync(pattern, { cwd: workspace }))
             .map((entry) => path.relative(workspace, path.resolve(workspace, entry)))
             .join("\n"),
         );
@@ -4808,6 +4817,16 @@ server.listen(0, "127.0.0.1", () => {
           "index.js",
         );
         expect(findSameFile(store, restoredPackageFile)).toBeDefined();
+        for (const file of bundleFiles) {
+          const bundleFile = path.join(
+            path.dirname(restoredPackageFile),
+            "Fixture.app",
+            "Contents",
+            file,
+          );
+          expect(readFileSync(bundleFile, "utf8")).toBe(`cache-proof ${file}\n`);
+          expect(findSameFile(store, bundleFile)).toBeDefined();
+        }
         const readConsumerPackage = () =>
           execFileSync(
             process.execPath,
