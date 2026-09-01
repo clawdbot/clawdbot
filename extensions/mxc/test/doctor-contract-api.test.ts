@@ -31,5 +31,6 @@ describe("mxc doctor contract", () => {
     expect(rule?.match?.([smallPath], {})).toBe(false);
     expect(rule?.match?.([join(dir, "missing.json")], {})).toBe(false);
     expect(rule?.message).toContain("before upgrading");
+    expect(rule?.message).toContain("1 MiB or less");
   });
 });

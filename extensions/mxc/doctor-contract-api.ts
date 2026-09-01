@@ -11,7 +11,7 @@ type LegacyConfigRule = {
 const MXC_POLICY_PATHS = ["plugins", "entries", "mxc", "config", "mxcPolicyPaths"];
 const MXC_POLICY_SIZE_MESSAGE =
   `Configured MXC policy files include a file larger than ${MAX_SANDBOX_POLICY_FILE_BYTES} bytes (1 MiB). ` +
-  "Reduce each file below the limit or remove it from plugins.entries.mxc.config.mxcPolicyPaths before upgrading; do not rely on a silent fallback.";
+  "Reduce each file to 1 MiB or less or remove it from plugins.entries.mxc.config.mxcPolicyPaths before upgrading; do not rely on a silent fallback.";
 
 function hasOversizedPolicyFile(value: unknown): boolean {
   if (!Array.isArray(value)) {

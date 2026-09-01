@@ -324,7 +324,7 @@ function policyFileError(policyPath: string, err: unknown): Error {
   }
   if (err instanceof FsSafeError && err.code === "too-large") {
     return new Error(
-      `Configured sandbox policy file ${policyPath} exceeds the maximum policy file size of ${MAX_SANDBOX_POLICY_FILE_BYTES} bytes (${MAX_SANDBOX_POLICY_FILE_BYTES / (1024 * 1024)} MiB). Reduce the file below the limit or remove it from mxcPolicyPaths.`,
+      `Configured sandbox policy file ${policyPath} exceeds the maximum policy file size of ${MAX_SANDBOX_POLICY_FILE_BYTES} bytes (${MAX_SANDBOX_POLICY_FILE_BYTES / (1024 * 1024)} MiB). Reduce the file to 1 MiB or less or remove it from mxcPolicyPaths.`,
       { cause: err },
     );
   }
