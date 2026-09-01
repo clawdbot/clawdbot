@@ -450,15 +450,26 @@ export const startSubagentAnnounceCleanupFlow = (
     );
   };
   const releaseDeleteCleanupDispatchAfterSessionChanged = () => {
-    // The pre-request stamp survives only while deletion outcome is unknown.
-    // A confirmed session-changed rejection leaves the successor live, so
-    // parent navigation must not keep treating the child as already gone.
-    if (entry.deleteCleanupDispatchedAt === undefined) {
+    // Marker removal and successor suppression are one durable transition.
+    // persistOrThrow must see both fields together. If it throws, keep the
+    // in-memory fence: rolling suppression back lets the detached retry
+    // reload the live successor and submit sessions.delete against it.
+    if (
+      entry.deleteCleanupDispatchedAt === undefined &&
+      entry.execution.suppressSessionEffects === true
+    ) {
+      suppressSessionEffects = true;
       return;
     }
     entry.deleteCleanupDispatchedAt = undefined;
-    suppressChildSessionEffects();
-    params.persist(runId);
+    suppressSessionEffects = true;
+    if (entry.execution.suppressSessionEffects !== true) {
+      entry.execution = {
+        ...entry.execution,
+        suppressSessionEffects: true,
+      };
+    }
+    params.persistOrThrow(runId);
   };
   if (entry.expectsCompletionMessage === false || skipRequesterDelivery) {
     runDetachedCleanupAttempt(context, {
