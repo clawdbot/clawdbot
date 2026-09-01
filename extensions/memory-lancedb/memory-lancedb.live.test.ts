@@ -7,6 +7,34 @@ const HAS_OPENAI_KEY = Boolean(process.env.OPENAI_API_KEY);
 const liveEnabled = HAS_OPENAI_KEY && process.env.OPENCLAW_LIVE_TEST === "1";
 const describeLive = liveEnabled ? describe : describe.skip;
 
+/** Counts real POST requests to the OpenAI embeddings endpoint, without
+ * disturbing them -- the mocked-harness coverage for this same scenario
+ * (index.test.ts, "re-embeds an already-captured surviving message once its
+ * cursor fingerprint is evicted from history") spies on the embeddings
+ * client directly; that proves this module's own selection logic but not
+ * that a real configured plugin, real OpenAI embeddings endpoint, and real
+ * LanceDB storage agree on the same call count (ClawSweeper P1 on #131329:
+ * "supplied before/after runs call it through a harness with mocked
+ * embedding and LanceDB clients"). */
+class OpenAIEmbeddingCallCounter {
+  count = 0;
+  private readonly realFetch = globalThis.fetch;
+
+  install(): void {
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("api.openai.com") && url.includes("/embeddings")) {
+        this.count += 1;
+      }
+      return this.realFetch(input, init);
+    }) as typeof fetch;
+  }
+
+  restore(): void {
+    globalThis.fetch = this.realFetch;
+  }
+}
+
 // Live tests that require OpenAI API key and actually use LanceDB
 describeLive("memory plugin live tests", () => {
   const { getDbPath } = installTmpDirHarness({ prefix: "openclaw-memory-live-" });
@@ -130,4 +158,82 @@ describeLive("memory plugin live tests", () => {
 
     expect(recallAfterForget.details?.count).toBe(0);
   }, 60000); // 60s timeout for live API calls
+
+  test("does not re-embed a surviving auto-capture message after real compaction", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    const registeredHooks: Record<string, ((...args: unknown[]) => unknown)[]> = {};
+    const logs: string[] = [];
+    const mockApi = {
+      id: "memory-lancedb",
+      name: "Memory (LanceDB)",
+      source: "test",
+      config: {},
+      pluginConfig: {
+        embedding: { apiKey: OPENAI_API_KEY, model: "text-embedding-3-small" },
+        dbPath: getDbPath(),
+        autoCapture: true,
+        autoRecall: false,
+      },
+      runtime: {},
+      logger: {
+        info: (msg: string) => logs.push(`[info] ${msg}`),
+        warn: (msg: string) => logs.push(`[warn] ${msg}`),
+        error: (msg: string) => logs.push(`[error] ${msg}`),
+        debug: (msg: string) => logs.push(`[debug] ${msg}`),
+      },
+      registerTool: () => {},
+      registerCli: () => {},
+      registerService: () => {},
+      on: (hookName: string, handler: (...args: unknown[]) => unknown) => {
+        (registeredHooks[hookName] ??= []).push(handler);
+      },
+      resolvePath: (p: string) => p,
+    };
+
+    memoryPlugin.register(mockApi as unknown as Parameters<typeof memoryPlugin.register>[0]);
+    const agentEnd = registeredHooks.agent_end?.[0];
+    expect(agentEnd).toBeTypeOf("function");
+
+    const counter = new OpenAIEmbeddingCallCounter();
+    counter.install();
+    try {
+      const sessionKey = "live-auto-capture-compaction";
+      // Turn 1: two capturable facts.
+      await agentEnd?.(
+        {
+          success: true,
+          messages: [
+            { role: "user", content: "I prefer Helix for editing code every day." },
+            { role: "user", content: "I prefer Fish for shell commands every day." },
+          ],
+        },
+        { agentId: "main", sessionKey },
+      );
+      expect(counter.count).toBe(2);
+
+      // Turn 2 simulates a real compaction: the cursor's tracked message
+      // ("...Fish...") is gone, but the earlier "...Helix..." message it
+      // already captured survives verbatim, ahead of one genuinely new
+      // fact ("...Zed...").
+      await agentEnd?.(
+        {
+          success: true,
+          messages: [
+            { role: "user", content: "I prefer Helix for editing code every day." },
+            { role: "user", content: "I prefer Zed for editing code every day." },
+          ],
+        },
+        { agentId: "main", sessionKey },
+      );
+
+      // Real proof of the fix: exactly one more embeddings request fired
+      // (for "...Zed..."), not two -- the surviving "...Helix..." message
+      // was recognized via its retained fingerprint and never resubmitted
+      // to the real embedding endpoint.
+      expect(counter.count).toBe(3);
+    } finally {
+      counter.restore();
+    }
+  }, 60000);
 });
