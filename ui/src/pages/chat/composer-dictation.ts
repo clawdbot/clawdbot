@@ -189,7 +189,7 @@ class ComposerDictationSession {
     return this.transcriptIncludingPartial();
   }
 
-  async finish(): Promise<void> {
+  async finish(): Promise<string> {
     await this.stopCapture();
     await this.startPromise?.catch((error: unknown) => {
       if (!isAbortError(error)) {
@@ -198,6 +198,11 @@ class ComposerDictationSession {
     });
     await this.appendChain;
     await this.closeRemote();
+    // Retire the listener only after the remote close drained any late final
+    // transcript, so a Stop with no prior partial still keeps the utterance.
+    this.unsubscribe?.();
+    this.unsubscribe = null;
+    return this.transcriptIncludingPartial();
   }
 
   async cancel(): Promise<void> {
@@ -206,6 +211,8 @@ class ComposerDictationSession {
     await this.startPromise?.catch(() => undefined);
     await this.appendChain;
     await this.closeRemote();
+    this.unsubscribe?.();
+    this.unsubscribe = null;
   }
 
   markGatewayDisconnected(): boolean {
@@ -254,11 +261,12 @@ class ComposerDictationSession {
 
   private handleEvent(frame: GatewayEventFrame): void {
     const payload = eventPayload(frame);
-    if (
-      !payload ||
-      payload.transcriptionSessionId !== this.transcriptionSessionId ||
-      this.stopped
-    ) {
+    if (!payload || payload.transcriptionSessionId !== this.transcriptionSessionId) {
+      return;
+    }
+    // After stop, only a matching final transcript may still update the draft;
+    // partials and other events are ignored because capture already ended.
+    if (this.stopped && !(payload.type === "transcript" && payload.final === true)) {
       return;
     }
     if (payload.type === "partial" && typeof payload.text === "string") {
@@ -317,9 +325,8 @@ class ComposerDictationSession {
     this.stopped = true;
     this.input.stop();
     this.inputPump.stop();
-    // Retire UI events immediately; queued audio may still drain into remote close.
-    this.unsubscribe?.();
-    this.unsubscribe = null;
+    // Keep the event listener alive until remote close so a late matching
+    // final transcript can still update the draft; finish/cancel retire it.
     this.inputMeter?.stop();
     this.inputMeter = null;
     await this.context?.close();
@@ -604,30 +611,44 @@ export class ComposerDictationController {
     }
   }
 
-  private stop(options: { commit: boolean }): Promise<boolean> {
+  private async stop(options: { commit: boolean }): Promise<boolean> {
     if (this.phase === "idle" || this.phase === "stopping") {
-      return Promise.resolve(false);
+      return false;
     }
     const wasActive = this.active;
     this.clearPointerGesture();
     const session = this.session;
     if (!session) {
       this.reset();
-      return Promise.resolve(false);
+      return false;
     }
     this.setPhase("stopping");
-    const transcript = options.commit ? session.transcriptSnapshot() : "";
-    const committed = Boolean(options.commit && transcript && wasActive && !this.disposed);
-    this.session = null;
-    this.reset();
-    if (committed) {
-      this.options.onCommit(transcript);
+    const snapshot = options.commit ? session.transcriptSnapshot() : "";
+    const committed = Boolean(options.commit && snapshot && wasActive && !this.disposed);
+    if (committed || !options.commit) {
+      this.session = null;
+      this.reset();
+      if (committed) {
+        this.options.onCommit(snapshot);
+      }
+      // UI ownership ends at the operator action. Provider close can be slow, but
+      // it must never retain the composer in a transient finalizing state.
+      const close = options.commit ? session.finish() : session.cancel();
+      void close.catch(() => undefined);
+      return committed;
     }
-    // UI ownership ends at the operator action. Provider close can be slow, but
-    // it must never retain the composer in a transient finalizing state.
-    const close = options.commit ? session.finish() : session.cancel();
-    void close.catch(() => undefined);
-    return Promise.resolve(committed);
+    // Commit was requested but no transcript had arrived yet (early Stop before
+    // the first partial/final). Wait for the bounded final drain, then commit the
+    // accumulated final transcript exactly once. Detach the session first so a
+    // late drain error cannot be surfaced as the current session's failure.
+    this.session = null;
+    const finalTranscript = await session.finish().catch(() => "");
+    this.reset();
+    const finalCommitted = Boolean(finalTranscript && wasActive && !this.disposed);
+    if (finalCommitted) {
+      this.options.onCommit(finalTranscript);
+    }
+    return finalCommitted;
   }
 
   private reset(): void {

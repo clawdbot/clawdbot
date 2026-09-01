@@ -219,8 +219,8 @@ describe("ComposerDictationController", () => {
       expect(onCommit).toHaveBeenCalledWith("Keep these words");
       expect(controller.active).toBe(false);
       expect(track.stop).toHaveBeenCalledOnce();
-      expect(listeners.size).toBe(0);
       expect(processors[0]?.onaudioprocess).toBeNull();
+      await waitForFast(() => expect(listeners.size).toBe(0));
       await waitForFast(() =>
         expect(request).toHaveBeenCalledWith("talk.session.close", { sessionId: "dictation-1" }),
       );
@@ -671,6 +671,26 @@ describe("ComposerDictationController", () => {
       expect(request).toHaveBeenCalledWith("talk.session.close", { sessionId: "late-session" }),
     );
     expect(onError).not.toHaveBeenCalled();
+    controller.dispose();
+  });
+
+  it("commits a late final transcript after early Stop before the first partial", async () => {
+    const { controller, onCommit, target } = createHarness();
+    await startHold(target);
+
+    // Stop and keep text before any partial/final transcript has arrived.
+    await commitLatched(controller, target);
+    expect(onCommit).not.toHaveBeenCalled();
+
+    // The matching final transcript arrives during the bounded final drain.
+    emit({
+      transcriptionSessionId: "dictation-1",
+      type: "transcript",
+      text: "late words",
+      final: true,
+    });
+    await waitForFast(() => expect(onCommit).toHaveBeenCalledWith("late words"));
+    expect(controller.active).toBe(false);
     controller.dispose();
   });
 
