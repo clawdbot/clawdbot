@@ -220,6 +220,33 @@ function cronJobReadView(job: CronJob) {
   };
 }
 
+async function cronAddPayloadWithDeliveryPreview(params: {
+  result: CronJob | { created: boolean; updated?: boolean; job: CronJob };
+  cfg: OpenClawConfig;
+  defaultAgentId?: string;
+}) {
+  const job = "job" in params.result ? params.result.job : params.result;
+  const deliveryPreview = (
+    await resolveCronDeliveryPreviews({
+      cfg: params.cfg,
+      defaultAgentId: params.defaultAgentId,
+      jobs: [job],
+    })
+  )[job.id];
+  if ("job" in params.result) {
+    return {
+      created: params.result.created,
+      ...(params.result.updated === undefined ? {} : { updated: params.result.updated }),
+      job: cronJobReadView(job),
+      deliveryPreview,
+    };
+  }
+  return {
+    ...cronJobReadView(job),
+    deliveryPreview,
+  };
+}
+
 function compactCronListJob(job: CronJob) {
   // Optional declaration/delivery fields are omitted when unset so compact
   // rows stay lean for the common undeclared job.
@@ -973,13 +1000,11 @@ export const cronHandlers: GatewayRequestHandlers = {
     });
     respond(
       true,
-      "job" in result
-        ? {
-            created: result.created,
-            ...(result.updated === undefined ? {} : { updated: result.updated }),
-            job: cronJobReadView(job),
-          }
-        : cronJobReadView(job),
+      await cronAddPayloadWithDeliveryPreview({
+        result,
+        cfg,
+        defaultAgentId: context.cron.getDefaultAgentId(),
+      }),
       undefined,
     );
   },

@@ -546,6 +546,10 @@ describe("gateway server cron", () => {
       expect(withoutContext.payload).toMatchObject({
         sessionTarget: "isolated",
         delivery: { mode: "announce" },
+        deliveryPreview: {
+          label: "announce -> last",
+          detail: expect.stringContaining("last -> no route, will fail-closed"),
+        },
       });
     } finally {
       await cleanupCronTestRun({ cronState, prevSkipCron });
@@ -640,6 +644,12 @@ describe("gateway server cron", () => {
       expect(addRes.ok).toBe(true);
       const dailyJobId = (addRes.payload as { id?: unknown } | null)?.id;
       expect(typeof dailyJobId).toBe("string");
+      expect(addRes.payload).toMatchObject({
+        deliveryPreview: {
+          label: "webhook:https://example.invalid/cron-finished",
+          detail: "webhook",
+        },
+      });
 
       const internalJob = cronState.cron.getJob(String(dailyJobId));
       expect(internalJob).toBeDefined();
