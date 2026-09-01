@@ -250,13 +250,10 @@ function transportFailureAlert(
     pendingFallback = false;
   };
   if (!state.deps.sendCronFailureAlert) {
+    // No transport means no send whose outcome could be recorded: the alert
+    // goes straight to the in-app fallback queue and the intent stays
+    // "unknown", matching the pre-existing contract for transport-less setups.
     fallback();
-    void recordFailureAlertOutcome(state, {
-      jobId,
-      alertAtMs,
-      delivered: false,
-      error: "failure-alert transport unavailable; queued as in-app notification",
-    });
     return;
   }
   void state.deps
