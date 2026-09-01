@@ -1,4 +1,5 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { applyPendingCardRemovals, updatePendingCardRemovals } from "./card-state.ts";
 import { formatError } from "./normalization-utils.ts";
 import { normalizeCardsPayload } from "./normalization.ts";
 import {
@@ -113,9 +114,10 @@ async function loadWorkboardInternal(
       if (!isCurrentWorkboardLoadGeneration(params.host, generation)) {
         return false;
       }
+      updatePendingCardRemovals(state.pendingCardRemovals, normalized.cards);
       const previousTasksByCardId = state.tasksByCardId;
       const taskLinkState: WorkboardTaskLinkState = {
-        cards: normalized.cards,
+        cards: applyPendingCardRemovals(normalized.cards, state.pendingCardRemovals),
         tasksByCardId: new Map(),
         missingTaskIds: new Set(state.missingTaskIds),
       };

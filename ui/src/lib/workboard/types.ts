@@ -1,6 +1,7 @@
 import type {
   WorkboardBoardSummary,
   WorkboardCard,
+  WorkboardLink,
   WorkboardPriority,
   WorkboardStatus,
   WorkboardTemplateId,
@@ -53,6 +54,15 @@ export type WorkboardDispatchSummary = {
 };
 
 export type WorkboardRefreshSource = "initial" | "manual" | "live";
+
+export type WorkboardCardRemoval = {
+  cardId: string;
+  card?: WorkboardCard;
+  incomingLinks: Array<{
+    cardId: string;
+    links: WorkboardLink[];
+  }>;
+};
 
 export type WorkboardViewPresetId =
   | "all"
@@ -128,7 +138,7 @@ export type WorkboardUiState = {
   detailCardId: string | null;
   detailCommentBody: string;
   busyCardIds: Set<string>;
-  pendingCardRemovalIds: Set<string>;
+  pendingCardRemovals: Map<string, WorkboardCardRemoval>;
   draggedCardId: string | null;
   capturingSessionKeys: Set<string>;
 };

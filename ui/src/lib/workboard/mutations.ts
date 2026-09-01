@@ -2,7 +2,9 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   changedDraftPayload,
+  applyPendingCardRemovals,
   captureCardRemoval,
+  discardPendingLinksToCard,
   draftPayload,
   rebaseWorkboardDraft,
   removeCardAndReferences,
@@ -245,18 +247,28 @@ export async function deleteWorkboardCard(params: {
   invalidateWorkboardLoads(params.host);
   state.busyCardIds.add(params.cardId);
   state.error = null;
-  const removal = captureCardRemoval(state.cards, params.cardId);
-  state.pendingCardRemovalIds.add(params.cardId);
-  state.cards = removeCardAndReferences(state.cards, params.cardId);
+  const removal = captureCardRemoval(state.cards, params.cardId, state.pendingCardRemovals);
+  state.pendingCardRemovals.set(params.cardId, removal);
+  state.cards = applyPendingCardRemovals(state.cards, state.pendingCardRemovals);
   params.requestUpdate?.();
   try {
     await params.client.request("workboard.cards.delete", { id: params.cardId });
-    state.cards = removeCardAndReferences(state.cards, params.cardId);
+    // Invalidate any list read that overlapped the delete before removing the
+    // tombstone, so an older payload cannot resurrect the acknowledged card.
+    invalidateWorkboardLoads(params.host);
+    state.pendingCardRemovals.delete(params.cardId);
+    discardPendingLinksToCard(state.pendingCardRemovals, params.cardId);
+    state.cards = applyPendingCardRemovals(
+      removeCardAndReferences(state.cards, params.cardId),
+      state.pendingCardRemovals,
+    );
   } catch (error) {
-    state.cards = restoreCardRemoval(state.cards, removal);
+    const rollback = state.pendingCardRemovals.get(params.cardId) ?? removal;
+    state.pendingCardRemovals.delete(params.cardId);
+    state.cards = restoreCardRemoval(state.cards, rollback, state.pendingCardRemovals);
+    state.cards = applyPendingCardRemovals(state.cards, state.pendingCardRemovals);
     state.error = formatError(error);
   } finally {
-    state.pendingCardRemovalIds.delete(params.cardId);
     state.busyCardIds.delete(params.cardId);
     params.requestUpdate?.();
   }
@@ -322,7 +334,7 @@ export async function dispatchWorkboard(params: {
     );
     const payload = await params.client.request("workboard.cards.list", {});
     const normalized = normalizeCardsPayload(payload);
-    state.cards = normalized.cards;
+    state.cards = applyPendingCardRemovals(normalized.cards, state.pendingCardRemovals);
     state.statuses = normalized.statuses;
     state.lastDispatchSummary = normalizeDispatchSummary(dispatchResult);
     state.tasksByCardId = new Map();

@@ -2,6 +2,7 @@ import { normalizeNullableString as normalizeString } from "@openclaw/normalizat
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type {
   WorkboardCard,
+  WorkboardCardRemoval,
   WorkboardDependencyState,
   WorkboardLink,
   WorkboardMetadata,
@@ -45,14 +46,10 @@ export function selectedWorkboardBoardParams(
 }
 
 export function replaceCard(state: WorkboardUiState, card: WorkboardCard) {
+  updatePendingCardRemovals(state.pendingCardRemovals, [card]);
   const next = state.cards.filter((existing) => existing.id !== card.id);
   next.push(card);
-  state.cards = next.toSorted((left, right) => left.position - right.position);
-  // A concurrent response can carry stale links; keep pending deletions out of
-  // the projection until their Gateway requests settle.
-  for (const pendingCardId of state.pendingCardRemovalIds) {
-    state.cards = removeCardAndReferences(state.cards, pendingCardId);
-  }
+  state.cards = applyPendingCardRemovals(next, state.pendingCardRemovals);
 }
 
 function parentDependencyIds(card: WorkboardCard): string[] {
@@ -113,46 +110,169 @@ export function removeCardAndReferences(
   return nextCards;
 }
 
-export type WorkboardCardRemoval = {
-  cardId: string;
-  card?: WorkboardCard;
-  cardIndex: number;
-  incomingLinks: Array<{
-    cardId: string;
-    links: WorkboardLink[];
-  }>;
-};
+export function applyPendingCardRemovals(
+  cards: readonly WorkboardCard[],
+  pendingRemovals: ReadonlyMap<string, WorkboardCardRemoval>,
+): WorkboardCard[] {
+  let nextCards = [...cards];
+  for (const cardId of pendingRemovals.keys()) {
+    nextCards = removeCardAndReferences(nextCards, cardId);
+  }
+  return nextCards.toSorted((left, right) => left.position - right.position);
+}
+
+function appendMissingLinks(
+  currentLinks: readonly WorkboardLink[],
+  linksToAppend: readonly WorkboardLink[],
+): WorkboardLink[] {
+  const nextLinks = [...currentLinks];
+  for (const link of linksToAppend) {
+    if (
+      !nextLinks.some(
+        (current) =>
+          current.id === link.id ||
+          (current.type === link.type && current.targetCardId === link.targetCardId),
+      )
+    ) {
+      nextLinks.push(link);
+    }
+  }
+  return nextLinks;
+}
+
+function restorePendingIncomingLinks(
+  card: WorkboardCard,
+  pendingRemovals: ReadonlyMap<string, WorkboardCardRemoval>,
+): WorkboardCard {
+  const linksToRestore = [...pendingRemovals.values()].flatMap((removal) =>
+    removal.incomingLinks
+      .filter((incoming) => incoming.cardId === card.id)
+      .flatMap((incoming) => incoming.links),
+  );
+  const currentLinks = card.metadata?.links ?? [];
+  const nextLinks = appendMissingLinks(currentLinks, linksToRestore);
+  if (nextLinks.length === currentLinks.length) {
+    return card;
+  }
+  return { ...card, metadata: { ...card.metadata, links: nextLinks } };
+}
+
+function updatePendingCardRemovalForCard(
+  pendingRemovals: Map<string, WorkboardCardRemoval>,
+  card: WorkboardCard,
+): void {
+  for (const [pendingCardId, removal] of pendingRemovals) {
+    let nextRemoval = removal;
+    if (pendingCardId === card.id && removal.card !== card) {
+      nextRemoval = { ...nextRemoval, card };
+    }
+    if (card.id !== pendingCardId) {
+      const nextIncomingLinks = removal.incomingLinks.filter(
+        (incoming) => incoming.cardId !== card.id,
+      );
+      const links = card.metadata?.links?.filter((link) => link.targetCardId === pendingCardId);
+      if (links?.length) {
+        nextIncomingLinks.push({ cardId: card.id, links: [...links] });
+      }
+      nextRemoval = { ...nextRemoval, incomingLinks: nextIncomingLinks };
+    }
+    if (nextRemoval !== removal) {
+      pendingRemovals.set(pendingCardId, nextRemoval);
+    }
+  }
+}
+
+export function updatePendingCardRemovals(
+  pendingRemovals: Map<string, WorkboardCardRemoval>,
+  cards: readonly WorkboardCard[],
+): void {
+  for (const card of cards) {
+    updatePendingCardRemovalForCard(pendingRemovals, card);
+  }
+}
+
+function withoutLinksToCards(card: WorkboardCard, cardIds: ReadonlySet<string>): WorkboardCard {
+  const links = card.metadata?.links;
+  if (!links) {
+    return card;
+  }
+  const nextLinks = links.filter(
+    (link) => link.targetCardId === undefined || !cardIds.has(link.targetCardId),
+  );
+  if (nextLinks.length === links.length) {
+    return card;
+  }
+  const metadata: WorkboardMetadata = { ...card.metadata, links: nextLinks };
+  if (nextLinks.length === 0) {
+    delete metadata.links;
+  }
+  return Object.keys(metadata).length ? { ...card, metadata } : { ...card, metadata: undefined };
+}
+
+export function discardPendingLinksToCard(
+  pendingRemovals: Map<string, WorkboardCardRemoval>,
+  cardId: string,
+) {
+  const deletedCardIds = new Set([cardId]);
+  for (const [pendingCardId, removal] of pendingRemovals) {
+    if (!removal.card) {
+      continue;
+    }
+    const card = withoutLinksToCards(removal.card, deletedCardIds);
+    if (card !== removal.card) {
+      pendingRemovals.set(pendingCardId, { ...removal, card });
+    }
+  }
+}
 
 export function captureCardRemoval(
   cards: readonly WorkboardCard[],
   cardId: string,
+  pendingRemovals: ReadonlyMap<string, WorkboardCardRemoval> = new Map(),
 ): WorkboardCardRemoval {
   const cardIndex = cards.findIndex((card) => card.id === cardId);
   return {
     cardId,
-    card: cardIndex >= 0 ? cards[cardIndex] : undefined,
-    cardIndex,
-    incomingLinks: cards.flatMap((card) => {
-      if (card.id === cardId) {
-        return [];
-      }
-      const links = card.metadata?.links?.filter((link) => link.targetCardId === cardId);
-      return links?.length ? [{ cardId: card.id, links: [...links] }] : [];
-    }),
+    card:
+      cardIndex >= 0 && cards[cardIndex]
+        ? restorePendingIncomingLinks(cards[cardIndex], pendingRemovals)
+        : undefined,
+    incomingLinks: [
+      ...cards.flatMap((card) => {
+        if (card.id === cardId) {
+          return [];
+        }
+        const links = card.metadata?.links?.filter((link) => link.targetCardId === cardId);
+        return links?.length ? [{ cardId: card.id, links: [...links] }] : [];
+      }),
+      ...[...pendingRemovals.values()].flatMap((removal) => {
+        const card = removal.card;
+        if (!card || card.id === cardId) {
+          return [];
+        }
+        const links = card.metadata?.links?.filter((link) => link.targetCardId === cardId);
+        return links?.length ? [{ cardId: card.id, links: [...links] }] : [];
+      }),
+    ],
   };
 }
 
 export function restoreCardRemoval(
   cards: readonly WorkboardCard[],
   removal: WorkboardCardRemoval,
+  pendingRemovals: ReadonlyMap<string, WorkboardCardRemoval> = new Map(),
 ): WorkboardCard[] {
   const nextCards = [...cards];
-  if (removal.card && !nextCards.some((card) => card.id === removal.cardId)) {
-    const insertAt = Math.min(Math.max(removal.cardIndex, 0), nextCards.length);
-    nextCards.splice(insertAt, 0, removal.card);
+  const pendingCardIds = new Set(pendingRemovals.keys());
+  const restoredCard = removal.card ? withoutLinksToCards(removal.card, pendingCardIds) : undefined;
+  if (restoredCard && !nextCards.some((card) => card.id === removal.cardId)) {
+    nextCards.push(restoredCard);
   }
 
   for (const incoming of removal.incomingLinks) {
+    if (pendingRemovals.has(incoming.cardId)) {
+      continue;
+    }
     const cardIndex = nextCards.findIndex((card) => card.id === incoming.cardId);
     if (cardIndex < 0) {
       continue;
@@ -162,25 +282,18 @@ export function restoreCardRemoval(
       continue;
     }
     const currentLinks = card.metadata?.links ?? [];
-    const linksToRestore = incoming.links.filter(
-      (link) =>
-        !currentLinks.some(
-          (current) =>
-            current.id === link.id ||
-            (current.type === link.type && current.targetCardId === link.targetCardId),
-        ),
-    );
-    if (linksToRestore.length === 0) {
+    const nextLinks = appendMissingLinks(currentLinks, incoming.links);
+    if (nextLinks.length === currentLinks.length) {
       continue;
     }
     const metadata: WorkboardMetadata = {
       ...card.metadata,
-      links: [...currentLinks, ...linksToRestore],
+      links: nextLinks,
     };
     nextCards[cardIndex] = { ...card, metadata };
   }
 
-  return nextCards;
+  return nextCards.toSorted((left, right) => left.position - right.position);
 }
 
 export function resetDraftState(state: WorkboardUiState) {
