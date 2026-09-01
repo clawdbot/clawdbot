@@ -3546,7 +3546,7 @@ src/plugins/runtime/runtime-llm-isolated.ts	3
 src/plugins/runtime/runtime-llm.runtime.ts	4
 src/plugins/runtime/runtime-plugin-boundary.ts	2
 src/plugins/runtime/runtime-taskflow.ts	1
-src/plugins/runtime/runtime-web-channel-plugin.ts	3
+src/plugins/runtime/runtime-web-channel-plugin.ts	1
 src/plugins/schema-validator.ts	6
 src/plugins/sdk-alias.ts	3
 src/plugins/services.ts	1
