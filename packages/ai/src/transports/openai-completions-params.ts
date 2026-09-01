@@ -235,13 +235,14 @@ function applyTogetherOpenAICompletionsThinkingParams(params: {
   modelReasoning: boolean;
   payload: Record<string, unknown>;
   requestedEffort: OpenAIReasoningEffort;
-}): void {
+}): boolean {
   if (!params.modelReasoning || params.compatThinkingFormat !== "together") {
-    return;
+    return false;
   }
   params.payload.reasoning = {
     enabled: isOpenAICompletionsThinkingEnabled(params.requestedEffort),
   };
+  return true;
 }
 
 function convertTools(
@@ -447,6 +448,7 @@ export function buildOpenAICompletionsParams(
       }
     }
   }
+  const requestedCompletionsReasoning = options?.reasoningEffort ?? options?.reasoning;
   const completionsReasoningEffort = resolveOpenAICompletionsReasoningEffort(options);
   const resolvedCompletionsReasoningEffort = completionsReasoningEffort
     ? resolveOpenAIReasoningEffortForModel({
@@ -471,12 +473,27 @@ export function buildOpenAICompletionsParams(
     payload: params,
     requestedEffort: completionsReasoningEffort,
   });
-  applyTogetherOpenAICompletionsThinkingParams({
+  const handledTogetherThinkingFormat = applyTogetherOpenAICompletionsThinkingParams({
     compatThinkingFormat: compat.thinkingFormat,
     modelReasoning: model.reasoning,
     payload: params,
     requestedEffort: completionsReasoningEffort,
   });
+  // An explicit off mapping is declared metadata, so honor it when the effort resolver has no
+  // answer. Never invent a disabled wire value: endpoints disagree on `none` versus omission,
+  // so a model that declares neither keeps the field absent.
+  const offCompletionsReasoningEffort =
+    compat.reasoningEffortMap?.off ?? model.thinkingLevelMap?.off;
+  const declaredDisabledEffort =
+    !isOpenAICompletionsThinkingEnabled(completionsReasoningEffort) &&
+    !handledQwenThinkingFormat &&
+    !handledTogetherThinkingFormat &&
+    typeof offCompletionsReasoningEffort === "string"
+      ? offCompletionsReasoningEffort
+      : undefined;
+  const completionsReasoningEffortToSend =
+    resolvedCompletionsReasoningEffort ?? declaredDisabledEffort;
+
   if (disableChatCompletionsToolReasoning) {
     // GPT-5.6 Chat Completions defaults reasoning on, but rejects function
     // tools unless reasoning is explicitly disabled.
@@ -484,19 +501,22 @@ export function buildOpenAICompletionsParams(
   } else if (
     compat.thinkingFormat === "openrouter" &&
     model.reasoning &&
-    resolvedCompletionsReasoningEffort
+    completionsReasoningEffortToSend
   ) {
     params.reasoning = {
-      effort: resolvedCompletionsReasoningEffort,
+      effort: completionsReasoningEffortToSend,
     };
   } else if (
-    resolvedCompletionsReasoningEffort &&
+    completionsReasoningEffortToSend &&
     model.reasoning &&
     compat.supportsReasoningEffort &&
     !handledQwenThinkingFormat &&
-    !omitChatCompletionsToolReasoningEffort
+    !omitChatCompletionsToolReasoningEffort &&
+    // A null off mapping declares the endpoint cannot disable reasoning. Substituting the
+    // unset default for a caller that named no level would request more thinking, not less.
+    (requestedCompletionsReasoning !== undefined || offCompletionsReasoningEffort !== null)
   ) {
-    params.reasoning_effort = resolvedCompletionsReasoningEffort;
+    params.reasoning_effort = completionsReasoningEffortToSend;
   }
   return params;
 }

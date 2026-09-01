@@ -248,3 +248,31 @@ describe("OpenAI temperature support", () => {
     ).toBe(false);
   });
 });
+
+describe("unsupported reasoning effort fallback", () => {
+  function modelSupporting(efforts: string[]) {
+    return { id: "some-model", compat: { supportedReasoningEfforts: efforts } };
+  }
+
+  it.each([
+    { requested: "max", expected: "high" },
+    { requested: "xhigh", expected: "high" },
+    { requested: "minimal", expected: "low" },
+  ])("resolves $requested to the nearest supported $expected", ({ requested, expected }) => {
+    expect(
+      resolveOpenAIReasoningEffortForModel({
+        model: modelSupporting(["low", "medium", "high"]),
+        effort: requested,
+      }),
+    ).toBe(expected);
+  });
+
+  it("does not answer a top-end request with the weakest supported effort", () => {
+    expect(
+      resolveOpenAIReasoningEffortForModel({
+        model: modelSupporting(["none", "low", "high"]),
+        effort: "max",
+      }),
+    ).toBe("high");
+  });
+});

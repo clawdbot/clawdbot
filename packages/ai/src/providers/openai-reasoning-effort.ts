@@ -103,6 +103,11 @@ function isDisabledReasoningEffort(effort: string): boolean {
   return effort === "none" || effort === "off";
 }
 
+/** Whether a model declares the reasoning efforts its endpoint accepts. */
+export function declaresOpenAIReasoningEfforts(model: OpenAIReasoningModel): boolean {
+  return readCompatReasoningEfforts(model.compat) !== undefined;
+}
+
 /** Resolve the reasoning efforts accepted by a specific OpenAI-compatible model. */
 export function resolveOpenAISupportedReasoningEfforts(
   model: OpenAIReasoningModel,
@@ -196,19 +201,36 @@ export function resolveOpenAIReasoningEffortForModel(params: {
   if (isDisabledReasoningEffort(requested) || isDisabledReasoningEffort(normalized)) {
     return undefined;
   }
-  if (requested === "minimal" && supported.includes("low")) {
-    return "low";
-  }
-  if ((requested === "minimal" || requested === "low") && supported.includes("medium")) {
-    return "medium";
-  }
-  if (requested === "xhigh" && supported.includes("high")) {
-    return "high";
-  }
-  if (requested === "max" && supported.includes("xhigh")) {
-    return "xhigh";
-  }
-  return supported.find(
+  return resolveNearestSupportedReasoningEffort(requested, supported);
+}
+
+// Ordered weakest to strongest so an unsupported request lands on its nearest neighbour.
+const RANKED_REASONING_EFFORTS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+function reasoningEffortRank(effort: string): number {
+  const normalized = normalizeOpenAIReasoningEffort(effort);
+  return RANKED_REASONING_EFFORTS.findIndex((candidate) => candidate === normalized);
+}
+
+/**
+ * Picks the strongest supported effort at or below the request, falling back to the weakest
+ * effort above it. Returning the first supported entry instead would answer `max` with `low`.
+ */
+function resolveNearestSupportedReasoningEffort(
+  requested: string,
+  supported: readonly OpenAIApiReasoningEffort[],
+): OpenAIApiReasoningEffort | undefined {
+  const usable = supported.filter(
     (effort) => !isDisabledReasoningEffort(normalizeOpenAIReasoningEffort(effort)),
+  );
+  // Upstream catalogs supply this list in feed order, so rank it before picking a neighbour.
+  const ranked = usable
+    .filter((effort) => reasoningEffortRank(effort) >= 0)
+    .toSorted((left, right) => reasoningEffortRank(left) - reasoningEffortRank(right));
+  const requestedRank = reasoningEffortRank(requested);
+  return (
+    ranked.findLast((effort) => reasoningEffortRank(effort) <= requestedRank) ??
+    ranked[0] ??
+    usable[0]
   );
 }

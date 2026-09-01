@@ -486,7 +486,8 @@ function buildParams(
       : (reasoningEffortMap[options.reasoningEffort] ??
         thinkingLevelMap?.[options.reasoningEffort] ??
         options.reasoningEffort);
-  const reasoningEnabled = reasoningEffort !== undefined && reasoningEffort !== "none";
+  const reasoningEnabled =
+    reasoningEffort !== undefined && isOpenAICompletionsThinkingEnabled(reasoningEffort);
   const offReasoningEffort = reasoningEffortMap.off ?? model.thinkingLevelMap?.off;
 
   if (compat.thinkingFormat === "zai" && model.reasoning) {
@@ -525,8 +526,10 @@ function buildParams(
   } else if (reasoningEnabled && model.reasoning && compat.supportsReasoningEffort) {
     // OpenAI-style reasoning_effort
     params.reasoning_effort = reasoningEffort;
-  } else if (model.reasoning && compat.supportsReasoningEffort) {
-    if (typeof offReasoningEffort === "string") {
+  } else if (model.reasoning && compat.supportsReasoningEffort && offReasoningEffort !== null) {
+    // Send only a wire value the model actually declares. Endpoints differ on whether a
+    // disabled level is spelled `none` or omitted entirely, so inventing one is not safe.
+    if (offReasoningEffort !== undefined) {
       params.reasoning_effort = offReasoningEffort;
     }
   }
