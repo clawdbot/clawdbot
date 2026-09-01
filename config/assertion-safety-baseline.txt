@@ -3795,7 +3795,7 @@ src/utils/usage-format.ts	1
 src/version.ts	5
 src/video-generation/capability-overlays.ts	1
 src/video-generation/runtime.ts	1
-src/web-fetch/runtime.ts	6
+src/web-fetch/runtime.ts	3
 src/web-search/runtime-execution.ts	1
 src/web-search/runtime.ts	3
 src/web/provider-runtime-shared.ts	1
