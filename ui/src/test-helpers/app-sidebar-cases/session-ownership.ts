@@ -143,6 +143,7 @@ describe("AppSidebar session ownership", () => {
           instanceId: "bob-browser",
           user: {
             id: "profile-bob",
+            identity: { type: "profile", id: "profile-bob" },
             name: "Bob",
             avatarUrl: "/api/users/profile-bob/avatar?v=99",
           },
@@ -340,6 +341,63 @@ describe("AppSidebar session ownership", () => {
     await sidebar.updateComplete;
     expect(harness.list).toHaveBeenCalledWith(expect.objectContaining({ involvingMe: true }));
   });
+
+  it.each([
+    ["peeking participant", 1, undefined, true, ["profile-carol"]],
+    ["implicit participant count", undefined, undefined, true, ["profile-carol"]],
+    ["participant overflow", 2, undefined, true, ["profile-bob", "profile-carol"]],
+    ["hidden attribution", 1, "sparkles", true, ["profile-ada", "profile-bob", "profile-carol"]],
+    ["unqualified viewer", 1, undefined, false, ["profile-carol", "profile-bob"]],
+  ] as const)(
+    "deduplicates only visible participant identities: %s",
+    async (_name, participantCount, icon, qualified, expectedViewers) => {
+      const gateway = createGatewayHarness({} as GatewayBrowserClient);
+      const harness = createSessionsHarness("main", ["agent:main:main", "agent:main:collab"]);
+      const result = harness.sessions.state.result!;
+      const collab = result.sessions[1]!;
+      setEffectiveOwner(collab, { type: "human", id: "profile-ada", label: "Ada" });
+      collab.participants = [{ identity: { type: "profile", id: "profile-bob" }, label: "Bob" }];
+      if (participantCount === 2) {
+        collab.participants.push({
+          identity: { type: "agent", id: "research" },
+          label: "Research",
+        });
+      }
+      collab.participantCount = participantCount;
+      collab.icon = icon;
+      result.owners = [
+        { type: "human", id: "profile-ada", label: "Ada" },
+        { type: "human", id: "profile-bob", label: "Bob" },
+      ];
+      const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
+      harness.publishList({ result, agentId: "main" });
+      gateway.publishEvent("presence", {
+        presence: ["ada", "bob", "carol"].map((name) => {
+          const id = `profile-${name}`;
+          return {
+            instanceId: id,
+            user: {
+              id,
+              ...(qualified || name !== "bob"
+                ? { identity: { type: "profile" as const, id } }
+                : {}),
+            },
+            watchedSessions: [collab.key],
+          };
+        }),
+      });
+      await sidebar.updateComplete;
+      const row = sidebar.querySelector('[data-session-key="agent:main:collab"]')!;
+      await waitForFast(() => {
+        expect(
+          [...row.querySelectorAll("[data-viewer-id]")].map((avatar) =>
+            avatar.getAttribute("data-viewer-id"),
+          ),
+        ).toEqual(expectedViewers);
+      });
+      expect(row.querySelector(".session-owner-stack") !== null).toBe(icon === undefined);
+    },
+  );
 
   it("renders no ownership chrome when the listed sessions have fewer than two owners", async () => {
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
@@ -565,7 +623,12 @@ describe("AppSidebar session ownership", () => {
       throw new Error("expected archive attribution rows");
     }
     archived.archived = true;
-    archived.archivedBy = { type: "human", id: "profile-bob", label: "Bob" };
+    archived.archivedBy = {
+      type: "human",
+      id: "profile-bob",
+      identity: { type: "profile", id: "profile-bob" },
+      label: "Bob",
+    };
     setEffectiveOwner(archived, { type: "human", id: "profile-ada", label: "Ada" });
     setEffectiveOwner(collaborator, { type: "human", id: "profile-bob", label: "Bob" });
     result.owners = [
@@ -586,8 +649,8 @@ describe("AppSidebar session ownership", () => {
     // so Bob is excluded while owner Ada must stay visible as a viewer.
     const archivedFacepile = sidebar.querySelector(
       '[data-session-key="agent:main:archived"] openclaw-viewer-facepile',
-    ) as (HTMLElement & { excludeUserId?: string }) | null;
-    expect(archivedFacepile?.excludeUserId).toBe("profile-bob");
+    ) as HTMLElementTagNameMap["openclaw-viewer-facepile"] | null;
+    expect(archivedFacepile?.excludeIdentities).toEqual([archived.archivedBy.identity]);
 
     setEffectiveOwner(collaborator, { type: "human", id: "profile-ada", label: "Ada" });
     result.owners = [{ type: "human", id: "profile-ada", label: "Ada" }];
@@ -597,7 +660,7 @@ describe("AppSidebar session ownership", () => {
     expect(sidebar.querySelector("openclaw-session-owner-chip")).toBeNull();
     const soloFacepile = sidebar.querySelector(
       '[data-session-key="agent:main:archived"] openclaw-viewer-facepile',
-    ) as (HTMLElement & { excludeUserId?: string }) | null;
-    expect(soloFacepile?.excludeUserId).toBeUndefined();
+    ) as HTMLElementTagNameMap["openclaw-viewer-facepile"] | null;
+    expect(soloFacepile?.excludeIdentities).toEqual([]);
   });
 });

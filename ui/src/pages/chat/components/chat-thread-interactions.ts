@@ -2,7 +2,13 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
-import type { SessionsListResult } from "../../../api/types.ts";
+import type { ChatPendingInputsPage } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { GatewayBrowserClient } from "../../../api/gateway.ts";
+import type {
+  AgentsListResult,
+  GatewaySessionRow,
+  SessionsListResult,
+} from "../../../api/types.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { copyMarkdownLabel, handleCopyButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
@@ -24,12 +30,16 @@ import {
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
+import type { TurnRecapWatch } from "../chat-progress.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
+import type { RunOutputUsage } from "../tool-stream-contract.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
+import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
+import type { ChatSendStatusActions } from "./chat-message-send-status.ts";
 import {
   dismissConfirmedActionPopovers,
   openChatRewindConfirmation,
@@ -39,6 +49,7 @@ import { handleChatSelectionPointerUp, removeChatSelectionPopup } from "./chat-s
 import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
 
 export type ChatThreadState = {
+  turnRecapWatch: TurnRecapWatch | null;
   searchOpen: boolean;
   searchQuery: string;
   searchFocusPending: boolean;
@@ -51,7 +62,7 @@ export type ChatThreadState = {
   };
 };
 
-export type ReplyMessageAccess = {
+type ReplyMessageAccess = {
   revision: number;
   navigationId: string | null;
   read: (messageId: string) => unknown;
@@ -59,25 +70,31 @@ export type ReplyMessageAccess = {
   open: (messageId: string) => void;
 };
 
-export type ChatThreadProps = {
+export type ChatThreadProps = ChatSendStatusActions & {
   paneId: string;
   /** Routing for peer sender names in a shared session. */
   personActivity?: PersonActivityRouting;
   sessionKey: string;
+  gatewayClient?: GatewayBrowserClient | null;
+  selectedSession: GatewaySessionRow | undefined;
   boardProvider?: BoardProvider;
   announceTranscript?: boolean;
   loading: boolean;
-  historyLoading?: boolean;
+  /** Older-history pagination: renders the auto-load sentinel plus the in-flow boundary row. */
+  historyPagination?: ChatHistoryBoundaryProps;
   messages: unknown[];
   toolMessages: unknown[];
+  browserTabPreviewsActive?: boolean;
   guardianNotices?: ChatGuardianNotice[];
   streamSegments: ChatStreamSegment[];
   stream: string | null;
   streamStartedAt: number | null;
+  /** Browser-local active run identity, retained across transient disconnects. */
   runId?: string | null;
-  runOutputTokens?: number | null;
+  runUsageById?: ReadonlyMap<string, RunOutputUsage>;
   runStatus?: ChatRunUiStatus | null;
   queue: ChatQueueItem[];
+  pendingInputs?: ChatPendingInputsPage["items"];
   showThinking: boolean;
   showToolCalls: boolean;
   persistCommentary?: boolean;
@@ -87,9 +104,15 @@ export type ChatThreadProps = {
   waitingApproval?: boolean;
   questionPrompts?: readonly QuestionPrompt[];
   sessions: SessionsListResult | null;
+  /** Host context resolving global-alias session keys (scope=global fleets). */
   sessionHost?: UiSessionDefaultsHost | null;
   assistantName: string;
   assistantAvatar: string | null;
+  senderAgentAvatars?: ReadonlyMap<string, string | null>;
+  agents?: AgentsListResult["agents"];
+  /** Configured main-session key; an agent's main source labels as the agent. */
+  mainKey?: string;
+  currentAgentId?: string;
   assistantAvatarUrl?: string | null;
   userId?: string | null;
   userName?: string | null;
@@ -121,7 +144,6 @@ export type ChatThreadProps = {
   onHistoryIntent?: (event: Event) => void;
   onDraftChange: (next: string) => void;
   onSend: () => void;
-  onRetryQueuedMessage?: (id: string) => void;
   onSetReply?: (target: MessageReplyTarget) => void;
   replyMessageAccess?: ReplyMessageAccess;
   onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
@@ -150,6 +172,7 @@ type TranscriptInteractionProps = Pick<
 
 function createTranscriptState(): ChatThreadState {
   return {
+    turnRecapWatch: null,
     searchOpen: false,
     searchQuery: "",
     searchFocusPending: false,
@@ -299,39 +322,28 @@ export function toggleTranscriptSearch(
   requestUpdate();
 }
 
-let activeReplyContextMenu: HTMLElement | null = null;
-let activeReplyContextMenuPaneId: string | null = null;
-let contextMenuDocumentClickHandler: ((event: MouseEvent) => void) | null = null;
-let contextMenuDocumentContextMenuHandler: ((event: MouseEvent) => void) | null = null;
-let contextMenuKeydownHandler: ((event: KeyboardEvent) => void) | null = null;
+let activeReplyContextMenu: {
+  element: HTMLElement;
+  paneId: string;
+  listeners: AbortController;
+} | null = null;
 
 function removeReplyContextMenu(paneId?: string) {
-  if (paneId && paneId !== activeReplyContextMenuPaneId) {
+  const owner = activeReplyContextMenu;
+  if (paneId && paneId !== owner?.paneId) {
     return;
   }
-  if (activeReplyContextMenu) {
-    dismissConfirmedActionPopovers(activeReplyContextMenu);
-    activeReplyContextMenu.remove();
+  if (owner) {
+    dismissConfirmedActionPopovers(owner.element);
+    owner.element.remove();
   }
   activeReplyContextMenu = null;
-  activeReplyContextMenuPaneId = null;
   const fallbackMenu = document.querySelector<HTMLElement>(".chat-reply-context-menu");
   if (fallbackMenu) {
     dismissConfirmedActionPopovers(fallbackMenu);
     fallbackMenu.remove();
   }
-  if (contextMenuDocumentClickHandler) {
-    document.removeEventListener("click", contextMenuDocumentClickHandler);
-    contextMenuDocumentClickHandler = null;
-  }
-  if (contextMenuDocumentContextMenuHandler) {
-    document.removeEventListener("contextmenu", contextMenuDocumentContextMenuHandler, true);
-    contextMenuDocumentContextMenuHandler = null;
-  }
-  if (contextMenuKeydownHandler) {
-    document.removeEventListener("keydown", contextMenuKeydownHandler);
-    contextMenuKeydownHandler = null;
-  }
+  owner?.listeners.abort();
 }
 
 function stableReplyMessageId(senderLabel: string | undefined, text: string): string {
@@ -570,8 +582,8 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
     focusCandidates.push(action.button);
   }
   document.body.appendChild(menu);
-  activeReplyContextMenu = menu;
-  activeReplyContextMenuPaneId = props.paneId;
+  const owner = { element: menu, paneId: props.paneId, listeners: new AbortController() };
+  activeReplyContextMenu = owner;
 
   const menuRect = menu.getBoundingClientRect();
   let left = event.clientX;
@@ -586,15 +598,10 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
   menu.style.top = `${Math.max(0, top)}px`;
   focusCandidates.find((button) => !button.disabled)?.focus();
   requestAnimationFrame(() => {
-    if (!menu.isConnected || activeReplyContextMenu !== menu) {
+    if (!menu.isConnected || activeReplyContextMenu !== owner) {
       return;
     }
-    contextMenuDocumentClickHandler = (nextEvent: MouseEvent) => {
-      if (!menu.contains(nextEvent.target as Node | null)) {
-        removeReplyContextMenu();
-      }
-    };
-    contextMenuDocumentContextMenuHandler = (nextEvent: MouseEvent) => {
+    const handleOutsideEvent = (nextEvent: MouseEvent) => {
       if (!menu.contains(nextEvent.target as Node | null)) {
         removeReplyContextMenu();
       }
@@ -607,10 +614,10 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
         props.onFocusComposer?.();
       }
     };
-    contextMenuKeydownHandler = handleKeydown;
-    document.addEventListener("click", contextMenuDocumentClickHandler);
+    const { signal } = owner.listeners;
+    document.addEventListener("click", handleOutsideEvent, { signal });
     // Capture closes this owner even when the next menu stops event propagation.
-    document.addEventListener("contextmenu", contextMenuDocumentContextMenuHandler, true);
-    document.addEventListener("keydown", handleKeydown);
+    document.addEventListener("contextmenu", handleOutsideEvent, { capture: true, signal });
+    document.addEventListener("keydown", handleKeydown, { signal });
   });
 }

@@ -57,6 +57,7 @@ import {
   type OverloadRetryState,
 } from "./agent-runner-error-handler.js";
 import type {
+  AgentTurnCompaction,
   AgentTurnExecutionResult,
   AgentTurnInternalResult,
   AgentTurnParams,
@@ -81,11 +82,11 @@ import { type CurrentTurnImages, resolveCurrentTurnImages } from "./current-turn
 import type { FollowupRun } from "./queue.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
 import { createReplyMediaContext } from "./reply-media-paths.runtime.js";
+import { resolveReplyOperationAbortReason } from "./reply-operation-abort.js";
 import {
-  isReplyOperationRestartAbort,
-  isReplyOperationUserAbort,
-} from "./reply-operation-abort.js";
-import { markReplyOperationExecutionStarted } from "./reply-run-registry.js";
+  markReplyOperationExecutionStarted,
+  retainReplyOperationUntilComplete,
+} from "./reply-run-registry.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 
 type InternalFollowupRun = FollowupRun & {
@@ -128,9 +129,9 @@ async function executeAgentTurnInternalWithRetryState(
   preparedRunAdmission: PreparedAgentRunAdmission,
   admittedRunContext: { current?: AdmittedRunContext },
   deferredLifecycle: DeferredEmbeddedRunLifecycleManager,
+  compaction: AgentTurnCompaction,
 ): Promise<AgentTurnInternalResult> {
   const heartbeatState = { didLogStrip: false };
-  let autoCompactionCount = 0;
   // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
   const directlySentBlockKeys = new Set<string>();
   const directlySentBlockPayloads: Array<ReplyPayload | undefined> = [];
@@ -209,6 +210,7 @@ async function executeAgentTurnInternalWithRetryState(
       agentTurnTiming.measureSync("reply_media_context", () =>
         createReplyMediaContext({
           cfg: runtimeConfig,
+          agentId: params.followupRun.run.agentId,
           sessionKey: params.sessionKey,
           workspaceDir: params.followupRun.run.workspaceDir,
           messageProvider: params.followupRun.run.messageProvider,
@@ -311,7 +313,8 @@ async function executeAgentTurnInternalWithRetryState(
   const fallbackCycleState: AgentFallbackCycleState = {
     deferredLifecycle,
     lifecycleGeneration,
-    autoCompactionCount,
+    compaction,
+    postCompactionModelAttempted: false,
     attemptedRuntimeProvider: fallbackProvider,
     attemptedRuntimeModel: fallbackModel,
     bootstrapPromptWarningSignaturesSeen: resolveBootstrapWarningSignaturesSeen(
@@ -362,7 +365,9 @@ async function executeAgentTurnInternalWithRetryState(
         clearRecoveredAutoFallbackPrimaryProbe,
       });
       lifecycleGeneration = fallbackCycleState.lifecycleGeneration;
-      autoCompactionCount = fallbackCycleState.autoCompactionCount;
+      if (cycle.kind === "aborted") {
+        return cycle;
+      }
       if (cycle.kind === "final") {
         return {
           ...cycle,
@@ -380,9 +385,6 @@ async function executeAgentTurnInternalWithRetryState(
       terminalRunFailed = cycle.terminalRunFailed;
       break;
     } catch (err) {
-      if (isAgentRunRestartAbortReason(err)) {
-        throw err;
-      }
       if (err instanceof LiveSessionModelSwitchError) {
         liveModelSwitchRetries += 1;
       }
@@ -399,6 +401,9 @@ async function executeAgentTurnInternalWithRetryState(
         consumeTransientHttpRetry,
         modelPatch,
       });
+      if (action.kind === "aborted") {
+        return action;
+      }
       if (action.kind === "final") {
         return {
           ...action,
@@ -439,6 +444,7 @@ async function executeAgentTurnInternalWithRetryState(
         payload: markAgentRunFailureReplyPayload({
           text: "⚠️ Context overflow — this conversation is too large for the model. Use /new to start a fresh session.",
         }),
+        postCompactionModelFailure: fallbackCycleState.postCompactionModelAttempted || undefined,
       };
     }
   }
@@ -495,7 +501,7 @@ async function executeAgentTurnInternalWithRetryState(
   const terminalFailurePayload = terminalRunFailed
     ? buildTerminalAgentRunFailureReplyPayload({
         isHeartbeat: params.isHeartbeat,
-        visibleReplyDelivered: false,
+        visibleReplyDelivered: (await params.resolveVisibleReplyDelivery?.()) === true,
         sessionCtx: params.sessionCtx,
         cfg: params.followupRun.run.config,
       })
@@ -509,12 +515,15 @@ async function executeAgentTurnInternalWithRetryState(
     ...(fallbackExhausted ? { fallbackExhausted: true as const } : {}),
     fallbackAttempts,
     didLogHeartbeatStrip: heartbeatState.didLogStrip,
-    autoCompactionCount,
+    autoCompactionCount: compaction.count,
     directlySentBlockKeys: directlySentBlockKeys.size > 0 ? directlySentBlockKeys : undefined,
     directlySentBlockPayloads: directlySentBlockPayloads.filter(
       (payload): payload is ReplyPayload => payload !== undefined,
     ),
     ...(terminalFailurePayload ? { terminalFailurePayload } : {}),
+    ...(terminalRunFailed && fallbackCycleState.postCompactionModelAttempted
+      ? { postCompactionModelFailure: true as const }
+      : {}),
   };
 }
 
@@ -522,6 +531,7 @@ async function executeAgentTurnInternal(
   params: AgentTurnParams,
   commitTerminalOutcome: () => void,
   commitMcpAppModelContext: () => void,
+  compaction: AgentTurnCompaction,
 ): Promise<AgentTurnInternalResult> {
   const overloadRetryState: OverloadRetryState = {
     retryCount: 0,
@@ -549,6 +559,7 @@ async function executeAgentTurnInternal(
   });
   const deferredLifecycle = createDeferredEmbeddedRunLifecycleManager({
     runId,
+    agentId: params.followupRun.run.agentId,
     sessionId: params.followupRun.run.sessionId,
     sessionKey: params.sessionKey,
     sessionFile: params.followupRun.run.sessionFile,
@@ -563,6 +574,7 @@ async function executeAgentTurnInternal(
       preparedRunAdmission,
       admittedRunContext,
       deferredLifecycle,
+      compaction,
     );
   } finally {
     await deferredLifecycle.complete();
@@ -598,9 +610,14 @@ async function executeAgentTurnOutcome(params: AgentTurnParams): Promise<AgentTu
         transcriptCommandBody: modelContextLease.transcriptPrompt,
       }
     : executionParams;
+  // Keep committed facts outside cleanup so a restart cannot erase them.
+  const compaction: AgentTurnCompaction = { count: 0, durable: [] };
+  const completedCompaction = () =>
+    compaction.count > 0
+      ? { compaction: { count: compaction.count, durable: [...compaction.durable] } }
+      : {};
   let terminalOutcomeCommitted = false;
-  // Callers invoke this only inside the guarded execution below, including its
-  // inner finally, so restart errors from freezeAbort reach the outer catch.
+  // Settlement freezes cancellation once, including failure exits through finally.
   const commitTerminalOutcome = () => {
     if (terminalOutcomeCommitted) {
       return;
@@ -616,33 +633,34 @@ async function executeAgentTurnOutcome(params: AgentTurnParams): Promise<AgentTu
           turnParams,
           commitTerminalOutcome,
           modelContextLease?.commit ?? (() => undefined),
+          compaction,
         );
       } finally {
         modelContextLease?.rollback();
         commitTerminalOutcome();
       }
     });
+    if (internal.kind === "aborted") {
+      return { runId, outcome: { ...internal, ...completedCompaction() } };
+    }
+    const abortReason = resolveReplyOperationAbortReason(executionParams.replyOperation);
+    if (abortReason) {
+      return { runId, outcome: { kind: "aborted", reason: abortReason, ...completedCompaction() } };
+    }
     if (internal.kind === "final") {
-      if (isReplyOperationRestartAbort(executionParams.replyOperation)) {
-        return { runId, outcome: { kind: "aborted", reason: "restart" } };
-      }
-      if (isReplyOperationUserAbort(executionParams.replyOperation)) {
-        return { runId, outcome: { kind: "aborted", reason: "user" } };
-      }
       return {
         runId,
         outcome: {
           kind: "rejected",
           payload: internal.payload,
           resolved: internal.resolved,
+          ...(internal.postCompactionModelFailure
+            ? { postCompactionModelFailure: internal.postCompactionModelFailure }
+            : {}),
+          ...completedCompaction(),
         },
       };
     }
-    const abortReason = isReplyOperationRestartAbort(executionParams.replyOperation)
-      ? "restart"
-      : isReplyOperationUserAbort(executionParams.replyOperation)
-        ? "user"
-        : undefined;
     const provider =
       internal.fallbackProvider ??
       internal.result.meta?.agentMeta?.provider ??
@@ -651,12 +669,20 @@ async function executeAgentTurnOutcome(params: AgentTurnParams): Promise<AgentTu
       internal.fallbackModel ??
       internal.result.meta?.agentMeta?.model ??
       executionParams.followupRun.run.model;
+    const terminalStatus = internal.terminalFailurePayload
+      ? {
+          status: "failed" as const,
+          terminalFailurePayload: internal.terminalFailurePayload,
+          ...(internal.postCompactionModelFailure
+            ? { postCompactionModelFailure: internal.postCompactionModelFailure }
+            : {}),
+        }
+      : { status: "ok" as const };
     return {
       runId,
       outcome: {
         kind: "settled",
-        status: internal.terminalFailurePayload ? "failed" : "ok",
-        ...(abortReason ? { abortReason } : {}),
+        ...terminalStatus,
         result: internal.result,
         resolved: { provider, model },
         fallback: {
@@ -664,24 +690,18 @@ async function executeAgentTurnOutcome(params: AgentTurnParams): Promise<AgentTu
           attempts: internal.fallbackAttempts,
         },
         autoCompactionCount: internal.autoCompactionCount,
+        ...completedCompaction(),
         didLogHeartbeatStrip: internal.didLogHeartbeatStrip,
         directlySentBlockKeys: internal.directlySentBlockKeys,
         directlySentBlockPayloads: internal.directlySentBlockPayloads,
-        terminalFailurePayload: internal.terminalFailurePayload,
       },
     };
   } catch (error) {
-    if (
-      isReplyOperationRestartAbort(executionParams.replyOperation) ||
-      isAgentRunRestartAbortReason(error)
-    ) {
-      if (executionParams.replyOperation && !executionParams.replyOperation.result) {
-        executionParams.replyOperation.complete();
-      }
-      return { runId, outcome: { kind: "aborted", reason: "restart" } };
-    }
-    if (isReplyOperationUserAbort(executionParams.replyOperation)) {
-      return { runId, outcome: { kind: "aborted", reason: "user" } };
+    const abortReason = isAgentRunRestartAbortReason(error)
+      ? "restart"
+      : resolveReplyOperationAbortReason(executionParams.replyOperation);
+    if (abortReason) {
+      return { runId, outcome: { kind: "aborted", reason: abortReason, ...completedCompaction() } };
     }
     throw error;
   }
@@ -689,14 +709,17 @@ async function executeAgentTurnOutcome(params: AgentTurnParams): Promise<AgentTu
 
 /** Runs the agent turn and records its message-tool-only visible-outcome fact once. */
 export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTurnExecutionResult> {
+  if (params.replyOperation) {
+    // Cancellation stops execution, but the exact owner must finish committed accounting first.
+    retainReplyOperationUntilComplete(params.replyOperation);
+  }
   const runId = params.opts?.runId ?? crypto.randomUUID();
   const executionParams =
     params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
   try {
     const result = await executeAgentTurnOutcome(executionParams);
     const terminalOutcome =
-      result.outcome.kind === "aborted" ||
-      (result.outcome.kind === "settled" && result.outcome.abortReason)
+      result.outcome.kind === "aborted"
         ? undefined
         : result.outcome.kind === "rejected" || result.outcome.status === "failed"
           ? "failed"

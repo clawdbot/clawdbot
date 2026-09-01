@@ -26,7 +26,7 @@ export function renderSessionSplitDiff(
   lines: readonly DiffLine[],
   renderSkip?: (line: DiffLine) => unknown,
   file: DiffFilePaths = { path: "" },
-) {
+): ReturnType<typeof renderHighlightedDiff> {
   const rows = pairSessionDiffLines(lines);
   return renderHighlightedDiff(
     lines,

@@ -17,9 +17,17 @@ type TransportDropScenario = {
   diagnostics?: AssistantMessage["diagnostics"];
   activeCount?: number;
   codeModeSuspended?: boolean;
+  failedToolCallId?: string;
+  lastToolError?: Parameters<typeof makeEmbeddedRunnerAttempt>[0]["lastToolError"];
   transportDropContinuations?: number;
   terminal?: Parameters<typeof makeEmbeddedRunnerAttempt>[0]["terminal"];
   yieldDetected?: boolean;
+};
+
+const disabledCompactionRuntime = {
+  prepareRecoveryOwner: () => {
+    throw new Error("Compaction is disabled in this recovery fixture");
+  },
 };
 
 // Live shape: a code-mode exec batch settled, then the ChatGPT Responses stream
@@ -48,7 +56,12 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
   const messagesSnapshot = [
     { role: "user", content: "why is it unauthorized?" },
     toolAssistant,
-    ...toolCalls.map((id) => ({ role: "toolResult", toolCallId: id, toolName: "exec" })),
+    ...toolCalls.map((id) => ({
+      role: "toolResult",
+      toolCallId: id,
+      toolName: "exec",
+      isError: id === scenario.failedToolCallId,
+    })),
     erroredAssistant,
   ] as never;
   const attempt = makeEmbeddedRunnerAttempt({
@@ -61,6 +74,7 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
     })) as never,
     lastAssistant: erroredAssistant,
     currentAttemptAssistant: erroredAssistant,
+    lastToolError: scenario.lastToolError,
     itemLifecycle: {
       startedCount: toolCalls.length,
       completedCount: toolCalls.length,
@@ -73,6 +87,7 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
     attempt,
     assistant: erroredAssistant,
   });
+  const markOwnedTranscriptRetry = vi.fn();
   const continueFromCurrentTranscript = vi.fn();
   const contextRecoveryState = createEmbeddedRunContextRecoveryState();
   contextRecoveryState.transportDropContinuations = scenario.transportDropContinuations ?? 0;
@@ -121,9 +136,13 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
       canRestartForLiveSwitch: false,
     },
     runtimePlan: { auth: {} },
-    sessionPromptState: { sessionFile: "/tmp/session.jsonl", continueFromCurrentTranscript },
+    sessionPromptState: {
+      sessionFile: "/tmp/session.jsonl",
+      markOwnedTranscriptRetry,
+      continueFromCurrentTranscript,
+    },
     failoverRetryController,
-    compactionRuntime: {},
+    compactionRuntime: disabledCompactionRuntime,
     contextRecoveryState,
     usageAccumulator: createUsageAccumulator(),
     lastRunPromptUsage: undefined,
@@ -134,13 +153,20 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
     traceAttempts: [],
     sessionAgentId: "main",
   } as never);
-  return { recovery, continueFromCurrentTranscript, contextRecoveryState, failoverRetryController };
+  return {
+    recovery,
+    markOwnedTranscriptRetry,
+    continueFromCurrentTranscript,
+    contextRecoveryState,
+    failoverRetryController,
+  };
 }
 
 describe("recoverEmbeddedRunAttempt", () => {
   it("continues from the transcript after a transient transport drop on a settled exec batch", async () => {
     const {
       recovery,
+      markOwnedTranscriptRetry,
       continueFromCurrentTranscript,
       contextRecoveryState,
       failoverRetryController,
@@ -148,26 +174,59 @@ describe("recoverEmbeddedRunAttempt", () => {
 
     expect(recovery).toMatchObject({ action: "retry" });
     expect(contextRecoveryState.transportDropContinuations).toBe(1);
+    expect(markOwnedTranscriptRetry).toHaveBeenCalledTimes(1);
     expect(continueFromCurrentTranscript).toHaveBeenCalledTimes(1);
     expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
     expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
   });
 
+  it("continues after a transient transport drop on a settled failed-tool batch", async () => {
+    const { recovery, markOwnedTranscriptRetry, continueFromCurrentTranscript } =
+      await recoverAfterTransportDrop({
+        failedToolCallId: "call_2",
+        lastToolError: { toolName: "exec", error: "command failed" },
+      });
+
+    expect(recovery).toMatchObject({ action: "retry" });
+    expect(markOwnedTranscriptRetry).toHaveBeenCalledTimes(1);
+    expect(continueFromCurrentTranscript).toHaveBeenCalledWith({
+      includeToolFailureInstruction: true,
+    });
+  });
+
   it.each([0, 1])(
     "continues a parked Code Mode run from its persisted waiting result with activeCount=%i",
     async (activeCount) => {
-      const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
-        codeModeSuspended: true,
-        activeCount,
-      });
+      const { recovery, markOwnedTranscriptRetry, continueFromCurrentTranscript } =
+        await recoverAfterTransportDrop({
+          codeModeSuspended: true,
+          activeCount,
+        });
 
       expect(recovery).toMatchObject({ action: "retry" });
+      expect(markOwnedTranscriptRetry).toHaveBeenCalledTimes(1);
       expect(continueFromCurrentTranscript).toHaveBeenCalledTimes(1);
     },
   );
 
   it.each<[string, TransportDropScenario]>([
     ["the exec batch is still running", { activeCount: 1 }],
+    [
+      "the failed tool summary does not match the settled batch",
+      {
+        failedToolCallId: "call_2",
+        lastToolError: { toolName: "write", error: "write failed" },
+      },
+    ],
+    [
+      "the failed tool batch is parked but not fully settled",
+      {
+        activeCount: 1,
+        codeModeSuspended: true,
+        failedToolCallId: "call_2",
+        lastToolError: { toolName: "exec", error: "command failed" },
+      },
+    ],
     ["the run was externally aborted", { terminal: { kind: "aborted", source: "external" } }],
     ["the run timed out", { terminal: { kind: "timeout", phase: "prompt", source: "runtime" } }],
     ["the attempt already has terminal state", { yieldDetected: true }],
@@ -182,9 +241,11 @@ describe("recoverEmbeddedRunAttempt", () => {
     ],
     ["the continuation budget is spent", { transportDropContinuations: 2 }],
   ])("keeps the replay gate closed when %s", async (_label, scenario) => {
-    const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop(scenario);
+    const { recovery, markOwnedTranscriptRetry, continueFromCurrentTranscript } =
+      await recoverAfterTransportDrop(scenario);
 
     expect(recovery).toEqual({ action: "proceed", shouldSurfaceCodexCompletionTimeout: false });
+    expect(markOwnedTranscriptRetry).not.toHaveBeenCalled();
     expect(continueFromCurrentTranscript).not.toHaveBeenCalled();
   });
 
@@ -368,7 +429,7 @@ describe("recoverEmbeddedRunAttempt", () => {
       runtimePlan: { auth: {} },
       sessionPromptState: { sessionFile: "/tmp/session.jsonl" },
       failoverRetryController,
-      compactionRuntime: {},
+      compactionRuntime: disabledCompactionRuntime,
       contextRecoveryState: createEmbeddedRunContextRecoveryState(),
       usageAccumulator: createUsageAccumulator(),
       lastRunPromptUsage: undefined,

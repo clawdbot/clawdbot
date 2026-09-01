@@ -81,7 +81,7 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
         "- Buzz mentions: write a unique current room member as `@Display Name`. For an explicit identity, include `nostr:npub...`; the public key must belong to the target room. Any unresolved or ambiguous label needs an explicit identity for every intended member.",
       ],
     },
-    reload: { configPrefixes: ["channels.buzz"] },
+    reload: { configPrefixes: ["channels.buzz"], accountScopedRestart: true },
     configSchema: BuzzConfigSchema,
     setupContract: buzzSetupContract,
     setupWizard: buzzSetupWizard,

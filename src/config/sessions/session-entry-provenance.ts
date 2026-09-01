@@ -1,18 +1,28 @@
 import type { HookExternalContentSource } from "../../security/external-content.js";
 
 /** Kept aligned with SessionStateActorType (src/sessions/session-state-event-kinds.ts); not imported to avoid layering config/sessions onto src/sessions. */
-export type SessionCreatedActor = {
+export type SessionActor = {
   type: "human" | "agent" | "system";
   id?: string;
   label?: string;
 };
 
+/** Only trusted creation owners may stamp a Gateway profile namespace. */
+export type SessionCreatedActor = SessionActor &
+  ({ type: "human"; source: "profile" | "channel" | "unknown" } | { type: "agent" | "system" });
+
+export function sessionCreatorProfileId(
+  actor: (SessionActor & { source?: unknown }) | undefined,
+): string | undefined {
+  return actor?.type === "human" && actor.source === "profile" ? actor.id : undefined;
+}
+
 export type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 export const MAX_SESSION_PARTICIPANTS = 32;
 
 export type SessionOwnerAssignment = {
-  actor: SessionCreatedActor;
-  assignedBy?: SessionCreatedActor;
+  actor: SessionActor;
+  assignedBy?: SessionActor;
   assignedAt?: number;
 };
 export type SessionCreatedVia =
@@ -46,17 +56,17 @@ export function buildSessionCreationStamp(params: {
   };
 }
 
-/** A required node keeps its original isolation identity across every write and rollover. */
+/** Logical nodes retain creation attribution and isolation across writes and rollovers. */
 export function preserveCreationStamp<
   T extends Partial<ReturnType<typeof buildSessionCreationStamp>>,
 >(entry: T, authoritative: Partial<ReturnType<typeof buildSessionCreationStamp>> | undefined): T {
-  return authoritative?.sandbox === "required"
+  return authoritative
     ? {
         ...entry,
         createdVia: authoritative.createdVia,
         createdActor: authoritative.createdActor,
         createdAt: authoritative.createdAt,
-        sandbox: authoritative.sandbox,
+        ...(authoritative.sandbox === "required" ? { sandbox: authoritative.sandbox } : {}),
       }
     : entry;
 }

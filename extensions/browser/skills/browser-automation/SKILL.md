@@ -37,6 +37,7 @@ Use this skill when you need the `browser` tool for anything beyond a single pag
    - Use `action="emulate"` with `device`, `colorScheme`, `timezoneId`, or `locale` when testing those settings; snapshot again afterward. Existing-session profiles do not support emulation.
 5. Report real blockers:
    - Debug network failures with `action="requests"`, optional URL/type `filter`, and `limit` (default 50 recent entries). `clear=true` clears the collected log after reading. Use a managed profile; existing-session profiles do not support this log.
+   - Debug page errors with `action="errors"` and `limit` (default 50 recent entries). `clear=true` clears the collected log after reading. Existing-session profiles do not support this log.
    - If the page needs login, permission, captcha, 2FA, camera/microphone approval, or another manual step, stop and tell the user exactly what is needed.
    - Do not claim the browser is not logged in just because the current page shows a permission or onboarding dialog. Inspect the visible UI first.
 

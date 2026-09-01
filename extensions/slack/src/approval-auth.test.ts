@@ -1,6 +1,6 @@
 // Slack tests cover approval auth plugin behavior.
 import { describe, expect, it } from "vitest";
-import { isSlackApprovalAuthorizedSender } from "./approval-auth.js";
+import { getSlackApprovalApprovers, isSlackApprovalAuthorizedSender } from "./approval-auth.js";
 
 describe("isSlackApprovalAuthorizedSender", () => {
   it("authorizes general Slack approvers from allowFrom and defaultTo", () => {
@@ -34,6 +34,43 @@ describe("isSlackApprovalAuthorizedSender", () => {
 
     for (const senderId of ["U123OWNER", "U345DEFAULT"]) {
       expect(isSlackApprovalAuthorizedSender({ cfg, senderId })).toBe(true);
+    }
+  });
+
+  it("keeps workspace-qualified plugin approvers scoped to their workspace", () => {
+    const qualifiedApprover = "team:T11111111:user:U123OWNER";
+    const qualifiedCfg = {
+      channels: {
+        slack: {
+          allowFrom: [qualifiedApprover],
+        },
+      },
+    };
+
+    expect(getSlackApprovalApprovers({ cfg: qualifiedCfg })).toEqual([qualifiedApprover]);
+    expect(
+      isSlackApprovalAuthorizedSender({
+        cfg: qualifiedCfg,
+        senderId: qualifiedApprover,
+      }),
+    ).toBe(true);
+    for (const senderId of ["team:T22222222:user:U123OWNER", "U123OWNER"]) {
+      expect(isSlackApprovalAuthorizedSender({ cfg: qualifiedCfg, senderId })).toBe(false);
+    }
+
+    const unqualifiedCfg = {
+      channels: {
+        slack: {
+          allowFrom: ["U123OWNER"],
+        },
+      },
+    };
+    for (const senderId of [
+      "U123OWNER",
+      "team:T11111111:user:U123OWNER",
+      "team:T22222222:user:U123OWNER",
+    ]) {
+      expect(isSlackApprovalAuthorizedSender({ cfg: unqualifiedCfg, senderId })).toBe(true);
     }
   });
 

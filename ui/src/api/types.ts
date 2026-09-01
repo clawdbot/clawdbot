@@ -484,11 +484,7 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   };
 };
 
-export type {
-  CostUsageSummary,
-  SessionsUsageResult,
-  SessionUsageTimeSeries,
-} from "../pages/usage/data-types.ts";
+export type { CostUsageSummary, SessionsUsageResult } from "../pages/usage/data-types.ts";
 
 export type CronRunStatus = NonNullable<ProtocolCronRunLogEntry["status"]>;
 export type CronDeliveryStatus = NonNullable<ProtocolCronRunLogEntry["deliveryStatus"]>;
@@ -653,6 +649,7 @@ export type ModelCatalogEntry = {
   reasoning?: boolean;
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingDefault?: string;
+  effectiveFastMode?: FastMode;
   supportsTools?: boolean;
   agentRuntime?: import("../../../packages/gateway-protocol/src/schema.js").GatewayAgentRuntime;
   input?: Array<"text" | "image" | "document">;
@@ -693,8 +690,6 @@ export type SystemAgentSetupActivateParams =
   import("../../../packages/gateway-protocol/src/schema.js").SystemAgentSetupActivateParams;
 export type SystemAgentSetupActivateResult =
   import("../../../packages/gateway-protocol/src/schema.js").SystemAgentSetupActivateResult;
-export type SystemAgentSetupAuthStartResult =
-  import("../../../packages/gateway-protocol/src/schema.js").SystemAgentSetupAuthStartResult;
 export type SystemAgentSetupDetectResult =
   import("../../../packages/gateway-protocol/src/schema.js").SystemAgentSetupDetectResult;
 export type SystemAgentSetupVerifyResult =

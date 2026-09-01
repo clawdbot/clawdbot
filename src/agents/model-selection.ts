@@ -43,7 +43,7 @@ export { resolveAllowedModelRefCore as resolveAllowedModelRef } from "./model-se
 export { buildAllowedModelSet } from "./model-selection-shared.js";
 export {
   resolveThinkingDefault,
-  resolveThinkingDefaultWithRuntimeCatalog,
+  resolveThinkingDefaultWithRuntimeCatalogCore,
 } from "./model-thinking-default.js";
 
 export type { ModelAliasIndex, ModelManifestNormalizationContext, ModelRef };
@@ -228,18 +228,19 @@ function appendAuthProfileSuffix(modelRef: string, profile: string | undefined):
  * or not a known alias, returns it unchanged.
  */
 function resolveModelThroughAliases(value: string, aliasIndex: ModelAliasIndex): string {
+  const { model, profile } = splitTrailingAuthProfile(value);
   // Already a provider/model ref — no alias resolution needed.
-  if (value.includes("/")) {
-    return value;
+  if (model.includes("/")) {
+    return appendAuthProfileSuffix(model, profile);
   }
   // Check if the value is a known alias; if so, resolve to provider/model.
   // Unknown bare strings are returned as-is (don't guess the provider).
-  const aliasKey = normalizeLowercaseStringOrEmpty(value);
+  const aliasKey = normalizeLowercaseStringOrEmpty(model);
   const aliasMatch = aliasIndex.byAlias.get(aliasKey);
   if (aliasMatch) {
-    return `${aliasMatch.ref.provider}/${aliasMatch.ref.model}`;
+    return appendAuthProfileSuffix(`${aliasMatch.ref.provider}/${aliasMatch.ref.model}`, profile);
   }
-  return value;
+  return appendAuthProfileSuffix(model, profile);
 }
 
 export function resolveSubagentSpawnModelSelection(params: {

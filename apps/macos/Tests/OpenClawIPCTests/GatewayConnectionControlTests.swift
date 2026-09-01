@@ -132,6 +132,7 @@ private func makeTestGatewayConnection() -> (GatewayConnection, GatewayTestWebSo
 }
 
 private func makeRecordingGatewayConnection(
+    capabilities: [String] = [],
     responseData: @escaping @Sendable (String) -> Data) -> (GatewayConnection, WebSocketMessageRecorder)
 {
     let recorder = WebSocketMessageRecorder()
@@ -142,6 +143,14 @@ private func makeRecordingGatewayConnection(
                   let id = GatewayWebSocketTestSupport.requestID(from: message)
             else { return }
             task.emitReceiveSuccess(.data(responseData(id)))
+        }, receiveHook: { task, receiveIndex in
+            if receiveIndex == 0 {
+                return .data(GatewayWebSocketTestSupport.connectChallengeData())
+            }
+            let id = task.snapshotConnectRequestID() ?? "connect"
+            return .data(GatewayWebSocketTestSupport.connectOkData(
+                id: id,
+                capabilities: capabilities))
         })
     })
     let connection = GatewayConnection(
@@ -311,52 +320,56 @@ private func assertConfigLookupCannotRecreateRoute(
         }
     }
 
-    @Test func `uncancelled trusted TLS mismatch still repairs its stored pin`() async throws {
-        try await withFakeGatewayTLSKeychain {
-            let url = try #require(URL(string: "wss://gateway.example.ts.net"))
-            let storeKey = "autoqa-185-tls-recovery"
-            GatewayTLSStore.saveFingerprint("old", stableID: storeKey)
-            let route = try #require(GatewayTLSRoute.resolve(
-                url: url,
-                connectionMode: .remote,
-                configuredFingerprint: nil,
-                storedFingerprint: "old",
-                storeKey: storeKey))
-            let failure = GatewayTLSValidationFailure(
-                kind: .pinMismatch,
-                host: "gateway.example.ts.net",
-                storeKey: storeKey,
-                expectedFingerprint: "old",
-                observedFingerprint: "new",
-                systemTrustOk: true,
-                port: 443)
-            let requests = WebSocketMessageRecorder()
-            let session = GatewayTestWebSocketSession(taskFactory: {
-                GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
-                    guard sendIndex > 0 else { return }
-                    requests.append(message)
-                    if requests.snapshot().count == 1 {
-                        throw GatewayTLSValidationError(failure: failure, context: "isolated TLS test")
-                    }
-                    guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
-                    socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
-                })
+    @Test(.gatewayTLSStoreIsolated)
+    func `uncancelled trusted TLS mismatch still repairs its stored pin`() async throws {
+        let url = try #require(URL(string: "wss://gateway.example.ts.net"))
+        let storeKey = "autoqa-185-tls-recovery"
+        GatewayTLSStore.saveFingerprint("old", stableID: storeKey)
+        let route = try #require(GatewayTLSRoute.resolve(
+            url: url,
+            connectionMode: .remote,
+            configuredFingerprint: nil,
+            storedFingerprint: "old",
+            storeKey: storeKey))
+        let failure = GatewayTLSValidationFailure(
+            kind: .pinMismatch,
+            host: "gateway.example.ts.net",
+            storeKey: storeKey,
+            expectedFingerprint: "old",
+            observedFingerprint: "new",
+            systemTrustOk: true,
+            port: 443)
+        let requests = WebSocketMessageRecorder()
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
+                guard sendIndex > 0 else { return }
+                requests.append(message)
+                if requests.snapshot().count == 1 {
+                    throw GatewayTLSValidationError(failure: failure, context: "isolated TLS test")
+                }
+                guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+                socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
             })
-            let connection = GatewayConnection(
-                testEndpointProvider: {
-                    GatewayConnection.EndpointSnapshot(
-                        config: (url: url, token: nil, password: nil),
-                        tls: route,
-                        routeAuthority: nil)
-                },
-                sessionBox: WebSocketSessionBox(session: session))
+        })
+        let connection = GatewayConnection(
+            testEndpointProvider: {
+                GatewayConnection.EndpointSnapshot(
+                    config: (url: url, token: nil, password: nil),
+                    tls: route,
+                    routeAuthority: nil)
+            },
+            sessionBox: WebSocketSessionBox(session: session))
 
+        do {
             _ = try await connection.request(method: "status", params: nil)
 
             #expect(GatewayTLSStore.loadFingerprint(stableID: storeKey) == "new")
             #expect(requests.snapshot().count == 2)
+        } catch {
             await connection.shutdown()
+            throw error
         }
+        await connection.shutdown()
     }
 
     @Test func `realtime talk transport pins requests to its server lease`() async throws {
@@ -994,18 +1007,25 @@ private func assertConfigLookupCannotRecreateRoute(
         #expect(params?["voiceWakeTrigger"] as? String == "")
     }
 
-    @Test func `chat send carries routing precondition and omits inherited thinking`() async throws {
-        let (connection, recorder) = makeRecordingGatewayConnection {
+    @Test func `chat send carries route bound routing and settings preconditions`() async throws {
+        let (connection, recorder) = makeRecordingGatewayConnection(
+            capabilities: [GatewayServerCapability.sessionSettingsCAS.rawValue])
+        {
             Self.chatSendOkResponseData(id: $0)
         }
+        let route = try await connection.acquireServerLease().route
 
         _ = try await connection.chatSend(
             sessionKey: "main",
             expectedSessionRoutingContract: "per-sender|main|main",
+            expectedSessionSettings: OpenClawChatSessionSettingsExpectation(
+                permissionMode: .guarded,
+                toolOverrides: OpenClawChatSessionToolOverrides(webSearch: false)),
             message: "hello",
             thinking: nil,
             idempotencyKey: "chat-1",
-            attachments: [])
+            attachments: [],
+            ifCurrentRoute: route)
         await connection.shutdown()
 
         guard let chatMessage = recorder.snapshot().reversed().first(where: { message in
@@ -1027,6 +1047,8 @@ private func assertConfigLookupCannotRecreateRoute(
         let params = json?["params"] as? [String: Any]
         #expect(params?["thinking"] == nil)
         #expect(params?["expectedSessionRoutingContract"] as? String == "per-sender|main|main")
+        #expect(params?["expectedPermissionMode"] as? String == "guarded")
+        #expect((params?["expectedToolOverrides"] as? [String: Any])?["webSearch"] as? Bool == false)
         #expect(params?["timeoutMs"] == nil)
     }
 
@@ -1083,8 +1105,9 @@ private func assertConfigLookupCannotRecreateRoute(
         try Data(#"{"gateway":{"mode":"local","port":\#(port)}}"#.utf8).write(to: configURL)
         defer { try? FileManager.default.removeItem(at: isolatedState) }
 
+        // Profiles and their reserved ports live for the process; a temporary
+        // profile here would permanently change later tests' ownership checks.
         return try await TestIsolation.withEnvValues([
-            "OPENCLAW_PROFILE": "autoqa-185-tests",
             "OPENCLAW_CONFIG_PATH": configURL.path,
             "OPENCLAW_STATE_DIR": isolatedState.path,
         ]) {
@@ -1241,6 +1264,7 @@ private func assertConfigLookupCannotRecreateRoute(
                     routeAuthority: nil,
                     deviceAuthGatewayID: route.owner)
             },
+            supportsSharedEndpointRecovery: false,
             activationBindingKeyProvider: { nil },
             sessionBox: WebSocketSessionBox(session: session))
         _ = try await connection.request(

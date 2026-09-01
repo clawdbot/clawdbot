@@ -2,6 +2,7 @@ import {
   getCommandPositionalsWithRootOptions,
   getRootOptionAwareCommandPath,
 } from "../infra/cli-root-options.js";
+import { UPDATE_OPTION_SPECS } from "./update-option-specs.js";
 
 const AGENT_PARENT_BOOLEAN_FLAGS = ["--local", "--deliver", "--json"];
 const AGENT_PARENT_VALUE_FLAGS = [
@@ -24,6 +25,12 @@ const AGENT_PARENT_VALUE_FLAGS = [
 ];
 export const MODELS_PARENT_BOOLEAN_FLAGS = ["--json", "--status-json", "--status-plain"];
 export const MODELS_PARENT_VALUE_FLAGS = ["--agent"];
+const UPDATE_PARENT_BOOLEAN_FLAGS = UPDATE_OPTION_SPECS.filter(
+  ([flags]) => !flags.includes("<"),
+).map(([flags]) => flags);
+const UPDATE_PARENT_VALUE_FLAGS = UPDATE_OPTION_SPECS.filter(([flags]) => flags.includes("<")).map(
+  ([flags]) => flags.slice(0, flags.indexOf(" ")),
+);
 
 function resolveParentCommandPath(
   argv: readonly string[],
@@ -39,6 +46,7 @@ function resolveParentCommandPath(
     booleanFlags,
     valueFlags,
     maxPositionals: 1,
+    mode: "command-path",
   })?.[0];
   return child ? [command, child] : [command];
 }
@@ -56,6 +64,7 @@ export function resolveModelsParentCommandPath(argv: readonly string[]): string[
 export function resolveParentAwareCommandPath(argv: readonly string[]): string[] | null {
   return (
     resolveParentCommandPath(argv, "agent", AGENT_PARENT_BOOLEAN_FLAGS, AGENT_PARENT_VALUE_FLAGS) ??
-    resolveModelsParentCommandPath(argv)
+    resolveModelsParentCommandPath(argv) ??
+    resolveParentCommandPath(argv, "update", UPDATE_PARENT_BOOLEAN_FLAGS, UPDATE_PARENT_VALUE_FLAGS)
   );
 }

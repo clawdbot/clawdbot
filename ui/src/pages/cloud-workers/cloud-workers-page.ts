@@ -162,7 +162,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
     if (!this.canManage()) {
       return;
     }
-    if (profile.providerId !== "crabbox") {
+    if (profile.providerId !== "crabbox" || !profile.machineClass) {
       this.context.navigate("advanced", { search: "?section=cloudWorkers" });
       return;
     }

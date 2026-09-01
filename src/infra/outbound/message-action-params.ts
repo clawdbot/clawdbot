@@ -396,6 +396,7 @@ type AttachmentMediaPolicy =
       mode: "sandbox";
       sandboxRoot: string;
       containerWorkdir?: string;
+      mediaReadFile?: OutboundMediaReadFile;
     }
   | {
       mode: "host";
@@ -420,6 +421,7 @@ export function resolveAttachmentMediaPolicy(params: {
       ...(params.sandboxContainerWorkdir
         ? { containerWorkdir: params.sandboxContainerWorkdir }
         : {}),
+      ...(params.mediaReadFile ? { mediaReadFile: params.mediaReadFile } : {}),
     };
   }
   const explicitLocalRoots = resolveOutboundMediaLocalRoots(params.mediaLocalRoots);
@@ -460,11 +462,13 @@ function buildAttachmentMediaLoadOptions(params: {
   if (params.policy.mode === "sandbox") {
     const sandboxRoot = params.policy.sandboxRoot.trim();
     let sandboxFsPromise: ReturnType<typeof root> | undefined;
-    const readSandboxFile = createBoundedOutboundMediaReadFile(async (filePath, options) => {
-      sandboxFsPromise ??= root(sandboxRoot);
-      const sandboxFs = await sandboxFsPromise;
-      return await sandboxFs.readBytes(filePath, { maxBytes: options?.maxBytes });
-    });
+    const readSandboxFile =
+      params.policy.mediaReadFile ??
+      createBoundedOutboundMediaReadFile(async (filePath, options) => {
+        sandboxFsPromise ??= root(sandboxRoot);
+        const sandboxFs = await sandboxFsPromise;
+        return await sandboxFs.readBytes(filePath, { maxBytes: options?.maxBytes });
+      });
     return {
       maxBytes: params.maxBytes,
       ...(params.optimizeImages !== undefined ? { optimizeImages: params.optimizeImages } : {}),

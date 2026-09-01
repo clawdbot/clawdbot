@@ -34,6 +34,7 @@ source scripts/lib/openclaw-e2e-instance.sh
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
 export SHARED_WORKSPACE="$HOME/workspace-shared"
 output_file="$HOME/delete.json"
+agents_file="$HOME/agents.json"
 gateway_log="$HOME/gateway.log"
 gateway_pid=""
 
@@ -50,13 +51,14 @@ trap cleanup EXIT
 trap dump_logs_on_error ERR
 
 mkdir -p "$OPENCLAW_STATE_DIR" "$SHARED_WORKSPACE"
-node scripts/e2e/lib/fixture.mjs agents-delete-config
-
 entry="$(openclaw_e2e_resolve_entrypoint)"
+node "$entry" agents add alpha --workspace "$SHARED_WORKSPACE" --non-interactive
+node "$entry" agents add ops --workspace "$SHARED_WORKSPACE" --non-interactive
 gateway_pid="$(openclaw_e2e_start_gateway "$entry" 18789 "$gateway_log")"
 openclaw_e2e_wait_gateway_ready "$gateway_pid" "$gateway_log" 300 18789
 
 node "$entry" agents delete ops --force --json > "$output_file"
+node "$entry" agents list --json > "$agents_file"
 
-node scripts/e2e/lib/fixture.mjs agents-delete-assert "$output_file"
+node scripts/e2e/lib/fixture.mjs agents-delete-assert "$output_file" "$agents_file"
 '

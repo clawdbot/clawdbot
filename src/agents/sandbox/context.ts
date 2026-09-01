@@ -28,7 +28,7 @@ import { readRegisteredSandboxRuntimeIds, updateRegistry } from "./registry.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
-import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
+import type { SandboxContext, SandboxIsolationSubject, SandboxWorkspaceInfo } from "./types.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
 
 const sandboxLog = createSubsystemLogger("agent/sandbox");
@@ -86,7 +86,7 @@ async function ensureSandboxWorkspaceLayout(params: {
   cfg: ReturnType<typeof resolveSandboxConfigForAgent>;
   agentId: string;
   rawSessionKey: string;
-  sandboxPrincipalId?: string;
+  isolationSubject?: SandboxIsolationSubject;
   config?: OpenClawConfig;
   execOverrides?: ExecPolicyOverrides;
   skillsSnapshot?: SkillSnapshot;
@@ -106,7 +106,7 @@ async function ensureSandboxWorkspaceLayout(params: {
       cfg,
       rawSessionKey,
       agentId: params.agentId,
-      sandboxPrincipalId: params.sandboxPrincipalId,
+      isolationSubject: params.isolationSubject,
       workspaceDir: params.workspaceDir,
     });
 
@@ -174,18 +174,13 @@ function resolveSandboxSession(params: {
   if (!runtime.sandboxRequired) {
     return { rawSessionKey, runtime, cfg: configuredSandbox };
   }
-  if (!runtime.sandboxPrincipalId) {
-    throw new Error(
-      "A required sandbox cannot be provisioned without its session creator principal.",
-    );
-  }
   if (configuredSandbox.workspaceAccess === "rw") {
     sandboxLog.warn(
       'Configured sandbox workspaceAccess "rw" is capped to "ro" for a role-required session; guests cannot share the writable agent workspace.',
     );
   }
   // Docker and browser backends replace shared scope keys with a literal name;
-  // agent scope lets the creator-qualified key own every sandbox resource.
+  // agent scope lets the prepared isolation subject own every sandbox resource.
   const cfg = {
     ...configuredSandbox,
     scope: "agent" as const,
@@ -261,7 +256,7 @@ async function resolveProvisionedSandboxContext(
     cfg,
     agentId: runtime.agentId,
     rawSessionKey,
-    sandboxPrincipalId: runtime.sandboxPrincipalId,
+    isolationSubject: runtime.isolationSubject,
     config: params.config,
     execOverrides: params.execOverrides,
     skillsSnapshot: params.skillsSnapshot,
@@ -398,6 +393,7 @@ export async function resolveSandboxContext(params: {
 
 export async function ensureSandboxWorkspaceForSession(params: {
   config?: OpenClawConfig;
+  agentId?: string;
   sessionKey?: string;
   workspaceDir?: string;
 }): Promise<SandboxWorkspaceInfo | null> {
@@ -419,7 +415,7 @@ export async function ensureSandboxWorkspaceForSession(params: {
     cfg,
     agentId: runtime.agentId,
     rawSessionKey,
-    sandboxPrincipalId: runtime.sandboxPrincipalId,
+    isolationSubject: runtime.isolationSubject,
     config: params.config,
     workspaceDir: params.workspaceDir,
   });

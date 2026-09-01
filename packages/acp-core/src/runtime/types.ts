@@ -22,6 +22,8 @@ export type AcpRuntimeControl = "session/set_mode" | "session/set_config_option"
 /** Stable handle returned by ensureSession and passed back into all ACP runtime operations. */
 export type AcpRuntimeHandle = {
   sessionKey: string;
+  /** OpenClaw session-store owner; independent of the external harness. */
+  agentId?: string;
   backend: string;
   runtimeSessionName: string;
   /** Effective runtime working directory for this ACP session, if exposed by adapter/runtime. */
@@ -43,6 +45,9 @@ export type AcpRuntimeHandle = {
 
 export type AcpRuntimeEnsureInput = {
   sessionKey: string;
+  agentId?: string;
+  /** Existing locator for migration detection, never execution authority. */
+  persistedHandle?: AcpRuntimeHandle;
   agent: string;
   mode: AcpRuntimeSessionMode;
   /** Backend or agent session id to resume when reopening an existing conversation. */
@@ -117,6 +122,17 @@ export type AcpRuntimeCapabilities = {
    * Empty/undefined means "backend accepts keys, but did not advertise a strict list".
    */
   configOptionKeys?: string[];
+};
+
+/** Complete accepted control snapshot after a successful config-option write. */
+export type AcpRuntimeConfigOptionResult = {
+  configOptions: Array<{
+    id: string;
+    category?: string | null;
+    currentValue: string | boolean;
+    /** Selectable values, flat or grouped as in ACP session config options. */
+    options?: Array<{ value: string }> | Array<{ options: Array<{ value: string }> }>;
+  }>;
 };
 
 export type AcpRuntimeStatus = {
@@ -222,6 +238,8 @@ export interface AcpRuntimeTurn {
 
 /** ACP adapter contract implemented by backend plugins and consumed by gateway/session flows. */
 export interface AcpRuntime {
+  /** Version 1 isolates bare logical keys by agentId in both ensure and fresh reset. */
+  readonly ownerAwareSessions?: 1;
   ensureSession(input: AcpRuntimeEnsureInput): Promise<AcpRuntimeHandle>;
 
   /**
@@ -241,7 +259,12 @@ export interface AcpRuntime {
 
   setMode?(input: { handle: AcpRuntimeHandle; mode: string }): Promise<void>;
 
-  setConfigOption?(input: { handle: AcpRuntimeHandle; key: string; value: string }): Promise<void>;
+  /** Older third-party backends may omit the accepted snapshot. Empty options are authoritative. */
+  setConfigOption?(input: {
+    handle: AcpRuntimeHandle;
+    key: string;
+    value: string;
+  }): Promise<AcpRuntimeConfigOptionResult | void>;
 
   doctor?(): Promise<AcpRuntimeDoctorReport>;
 
@@ -249,7 +272,11 @@ export interface AcpRuntime {
    * Prepare the next ensureSession for this session key to start fresh instead
    * of reopening backend-owned persistent state.
    */
-  prepareFreshSession?(input: { sessionKey: string }): Promise<void>;
+  prepareFreshSession?(input: {
+    sessionKey: string;
+    agentId?: string;
+    persistedHandle?: AcpRuntimeHandle;
+  }): Promise<void>;
 
   cancel(input: { handle: AcpRuntimeHandle; reason?: string }): Promise<void>;
 

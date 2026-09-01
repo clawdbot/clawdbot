@@ -1,4 +1,4 @@
-import type { TabAccessEpoch, TabAccessMode } from "./tab-access.js";
+import type { TabAccessEpoch, TabAccessMode, TabAccessPolicy } from "./tab-access.js";
 import type { BrowserTabSnapshot } from "./tab-eligibility.js";
 
 type ChromeEvent<Listener> = {
@@ -18,14 +18,14 @@ export type TabAccessEventsChromeApi = {
     onUpdated: ChromeEvent<
       (
         tabId: number,
-        changeInfo: { groupId?: number; url?: string },
+        changeInfo: { groupId?: number; url?: string; status?: string },
         tab: BrowserTabSnapshot,
       ) => void
     >;
   };
   tabGroups: {
-    onUpdated: ChromeEvent<() => void>;
-    onRemoved: ChromeEvent<() => void>;
+    onUpdated: ChromeEvent<(group?: { id: number; title?: string }) => void>;
+    onRemoved: ChromeEvent<(group?: { id: number; title?: string }) => void>;
   };
 };
 
@@ -36,12 +36,20 @@ export type TabAccessEventPolicy = {
   capture(tabId: number): TabAccessEpoch;
   epochIsCurrent(tabId: number, epoch: TabAccessEpoch): boolean;
   invalidateTab(tabId: number): void;
+  retireTab(tabId: number): void;
+  forwardDocumentEvent: TabAccessPolicy["forwardDocumentEvent"];
+  invalidateDocumentGroup: TabAccessPolicy["invalidateDocumentGroup"];
   renewTabAccess(
     tabId: number,
     attachedEpoch: TabAccessEpoch | undefined,
     tab: BrowserTabSnapshot | undefined,
   ): TabAccessEpoch | undefined;
-  invalidateAll(): void;
+  invalidateAll(group?: { id: number; title?: string }): void;
+  observeTabUpdate(
+    tabId: number,
+    change: { groupId?: number; url?: string; status?: string },
+    tab?: BrowserTabSnapshot,
+  ): boolean;
   inspectTab(tabId: number, epoch: TabAccessEpoch): Promise<{ accessible: boolean }>;
   listAccessibleTabs(): Promise<Array<{ id: number }>>;
   forgetTab(tabId: number): Promise<void>;
@@ -52,9 +60,11 @@ export function registerTabAccessEvents(options: {
   chromeApi?: TabAccessEventsChromeApi;
   accessReady: Promise<unknown>;
   policy: TabAccessEventPolicy;
-  attachedTabs: Set<number>;
-  attachedAccessEpochs: Map<number, TabAccessEpoch>;
-  attachingTabs: Map<number, Promise<unknown>>;
+  attachments: Map<
+    number,
+    { epoch?: TabAccessEpoch; pending?: Promise<unknown>; retired?: boolean }
+  >;
+  nativeDetached(tabId: number): void;
   send(message: Record<string, unknown>): void;
   scheduleTabsSync(): void;
   detachDebugger(tabId: number): Promise<void>;

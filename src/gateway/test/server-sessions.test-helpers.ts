@@ -3,19 +3,21 @@
  */
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { AssistantMessage, UserMessage } from "openclaw/plugin-sdk/llm";
-import { afterAll, beforeAll, beforeEach, expect, vi } from "vitest";
+import { beforeEach, expect, vi } from "vitest";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
-import type { GatewayServerHarness } from "../server.e2e-ws-harness.js";
 import { embeddedRunMock, agentDiscoveryMock, testState } from "../test-helpers.runtime-state.js";
 import * as gatewayTestHelpers from "../test-helpers.server.js";
+import {
+  installGatewaySessionsTestResources,
+  type GatewaySessionsSuiteSetup,
+} from "./server-sessions-resources.test-helpers.js";
 
 export const getSessionManagerModule = createLazyRuntimeModule(
   () => import("../../agents/sessions/index.js"),
@@ -27,10 +29,6 @@ export const getGatewayConfigModule = createLazyRuntimeModule(
 
 const getSessionAccessorModule = createLazyRuntimeModule(
   () => import("../../config/sessions/session-accessor.js"),
-);
-
-const getGatewayServerHarnessModule = createLazyRuntimeModule(
-  () => import("../server.e2e-ws-harness.js"),
 );
 
 const getGatewayServerMethodsModule = createLazyRuntimeModule(() => import("../server-methods.js"));
@@ -308,33 +306,14 @@ export function setupGatewaySessionsHandlerTestHarness() {
   return handlerFixture;
 }
 
-export function setupGatewaySessionsTestHarness() {
-  return createGatewaySessionsTestHarness(true);
+export function setupGatewaySessionsTestHarness(setup?: GatewaySessionsSuiteSetup) {
+  return createGatewaySessionsTestHarness(true, setup);
 }
 
-function createGatewaySessionsTestHarness(startServer: boolean) {
-  gatewayTestHelpers.installGatewayTestHooks({ scope: "suite" });
-
-  const defaultAgentWorkspace = path.join(os.tmpdir(), "openclaw-gateway-test");
-  let harness: GatewayServerHarness | undefined;
-  let sharedSessionStoreDir: string | undefined;
+function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewaySessionsSuiteSetup) {
+  const { defaultAgentWorkspace, requireHarness, requireSharedSessionStoreDir } =
+    installGatewaySessionsTestResources(startServer, setup);
   let sessionStoreCaseSeq = 0;
-
-  beforeAll(async () => {
-    await fs.mkdir(defaultAgentWorkspace, { recursive: true });
-    if (startServer) {
-      const { startGatewayServerHarness } = await getGatewayServerHarnessModule();
-      harness = await startGatewayServerHarness();
-    }
-    sharedSessionStoreDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
-  });
-
-  afterAll(async () => {
-    await harness?.close();
-    if (sharedSessionStoreDir) {
-      await fs.rm(sharedSessionStoreDir, { recursive: true, force: true });
-    }
-  });
 
   beforeEach(async () => {
     const { clearConfigCache, clearRuntimeConfigSnapshot } = await getGatewayConfigModule();
@@ -379,20 +358,6 @@ function createGatewaySessionsTestHarness(startServer: boolean) {
       return true;
     });
   });
-
-  const requireHarness = () => {
-    if (!harness) {
-      throw new Error("Gateway sessions test harness was not started");
-    }
-    return harness;
-  };
-
-  const requireSharedSessionStoreDir = () => {
-    if (!sharedSessionStoreDir) {
-      throw new Error("Gateway sessions shared session store dir was not created");
-    }
-    return sharedSessionStoreDir;
-  };
 
   const openClient = async (opts?: Parameters<typeof gatewayTestHelpers.connectOk>[1]) =>
     await gatewayTestHelpers
@@ -646,10 +611,12 @@ export function expectActiveRunCleanup(
   requesterSessionKey: string,
   expectedQueueKeys: string[],
   sessionId: string,
+  requesterAgentId: string,
 ) {
   expect(sessionCleanupMocks.stopSubagentsForRequester).toHaveBeenCalledWith({
     cfg: expect.any(Object),
     requesterSessionKey,
+    requesterAgentId,
   });
   expectSessionQueueCleanup(expectedQueueKeys);
   expect(embeddedRunMock.abortCalls).toEqual([sessionId]);
@@ -683,14 +650,22 @@ export async function directSessionReq<TPayload = unknown>(
     sessionMutationAuthorization?: SessionsHandlerOptions["sessionMutationAuthorization"];
     coercePayload?: (payload: unknown) => TPayload;
   },
-): Promise<{ ok: boolean; payload?: TPayload; error?: { code?: string; message?: string } }> {
+): Promise<{
+  ok: boolean;
+  payload?: TPayload;
+  error?: { code?: string; message?: string; details?: unknown };
+}> {
   const sessionsHandlers = await getSessionsHandlers();
   const { getRuntimeConfig } = await getGatewayConfigModule();
   const loadGatewayModelCatalog =
     (opts?.context?.loadGatewayModelCatalog as GatewayRequestContext["loadGatewayModelCatalog"]) ??
     (async () => agentDiscoveryMock.models);
   let result:
-    | { ok: boolean; payload?: TPayload; error?: { code?: string; message?: string } }
+    | {
+        ok: boolean;
+        payload?: TPayload;
+        error?: { code?: string; message?: string; details?: unknown };
+      }
     | undefined;
   const handler = sessionsHandlers[method];
   if (!handler) {
@@ -719,7 +694,7 @@ export async function directSessionReq<TPayload = unknown>(
       dedupe: new Map(),
       getSessionEventSubscriberConnIds: () => new Set<string>(),
       loadGatewayModelCatalog,
-      readPreparedGatewayModelCatalog: loadGatewayModelCatalog,
+      readPreparedGatewayModelCatalog: async () => ({ entries: await loadGatewayModelCatalog() }),
       getRuntimeConfig,
       ...opts?.context,
     } as never,

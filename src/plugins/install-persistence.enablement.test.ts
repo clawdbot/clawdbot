@@ -379,6 +379,44 @@ describe("persistPluginInstall enablement", () => {
     });
   });
 
+  it("rejects a malformed manifest schema instead of treating it as missing config", async () => {
+    const { persistPluginInstall } = await import("./install-persistence.js");
+    const baseConfig = {
+      plugins: { allow: ["memory-core"], deny: ["broken-schema"], entries: {} },
+    } as OpenClawConfig;
+    loadPluginManifestRegistryMock.mockReturnValue({
+      plugins: [
+        createManifestRecord("broken-schema", {
+          configSchema: {
+            type: "object",
+            properties: { mode: { $ref: "#/$defs/Mode" } },
+          },
+        }),
+      ],
+      diagnostics: [],
+    });
+
+    await expect(
+      persistPluginInstall({
+        snapshot: {
+          config: baseConfig,
+          baseHash: "config-1",
+          writeOptions: installWriteOptions,
+        },
+        pluginId: "broken-schema",
+        install: {
+          source: "npm",
+          spec: "broken-schema@1.0.0",
+          installPath: "/tmp/broken-schema",
+        },
+      }),
+    ).rejects.toThrow("has invalid configured settings");
+
+    expect(enablePluginInConfigMock).not.toHaveBeenCalled();
+    expect(writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock).not.toHaveBeenCalled();
+    expect(configWriteMock).not.toHaveBeenCalled();
+  });
+
   it("rejects invalid authored plugin config even for a disabled install", async () => {
     const { persistPluginInstall } = await import("./install-persistence.js");
     let committed = false;

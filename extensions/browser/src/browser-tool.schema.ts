@@ -49,6 +49,7 @@ const BROWSER_TOOL_ACTIONS = [
   "navigate",
   "console",
   "requests",
+  "errors",
   "text",
   "emulate",
   "pdf",
@@ -89,7 +90,7 @@ export function resolveBrowserToolCapabilities(params?: {
     Partial<
       Pick<
         BrowserProfileCapabilities,
-        "supportsRequests" | "supportsPageText" | "supportsEmulation"
+        "supportsRequests" | "supportsErrors" | "supportsPageText" | "supportsEmulation"
       >
     >;
 }): BrowserToolCapabilities {
@@ -101,6 +102,7 @@ export function resolveBrowserToolCapabilities(params?: {
       (action) =>
         (profileCapabilities?.supportsPdf !== false || action !== "pdf") &&
         (profileCapabilities?.supportsRequests !== false || action !== "requests") &&
+        (profileCapabilities?.supportsErrors !== false || action !== "errors") &&
         (profileCapabilities?.supportsPageText !== false || action !== "text") &&
         (profileCapabilities?.supportsEmulation !== false || action !== "emulate") &&
         (profileCapabilities?.supportsDownloads !== false ||
@@ -184,7 +186,7 @@ export function createBrowserToolSchema(capabilities: BrowserToolCapabilities) {
       kind: stringEnum(capabilities.actKinds, { description: actKindDescription }),
       ...actProperties,
     },
-    { description: "Nested action=act request." },
+    { description: "Nested act request." },
   );
   return Type.Object({
     action: stringEnum(capabilities.actions),
@@ -284,6 +286,10 @@ export const BrowserToolOutputSchema = Type.Object(
             targetId: Type.Optional(Type.String()),
             title: Type.Optional(Type.String()),
             url: Type.Optional(Type.String()),
+            urlUnavailableReason: optionalStringEnum([
+              "navigation_blocked",
+              "navigation_check_failed",
+            ] as const),
             type: Type.Optional(Type.String()),
           },
           { additionalProperties: true },

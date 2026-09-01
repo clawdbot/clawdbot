@@ -83,17 +83,13 @@ export function canUseCodexModelBackedApprovalsReviewerForModel(
 ): boolean {
   const explicitProvider = params.modelProvider?.trim().toLowerCase();
   const inferredProvider = inferProviderFromModelRef(params.model);
-  if (explicitProvider && explicitProvider !== "codex") {
-    return (
-      isTrustedCodexModelBackedApprovalsReviewerProvider(explicitProvider, params) &&
-      (inferredProvider === undefined ||
-        isTrustedCodexModelBackedApprovalsReviewerProvider(inferredProvider, params))
-    );
+  if (explicitProvider && explicitProvider !== "codex" && explicitProvider !== "openai") {
+    return false;
   }
-  if (inferredProvider !== undefined) {
-    return isTrustedCodexModelBackedApprovalsReviewerProvider(inferredProvider, params);
-  }
-  return isTrustedCodexModelBackedApprovalsReviewerProvider(explicitProvider, params);
+  return (
+    (inferredProvider ?? explicitProvider) === "openai" &&
+    isTrustedCodexModelBackedOpenAIProvider(params)
+  );
 }
 
 function isTrustedCodexModelBackedOpenAIProvider(params: {
@@ -165,29 +161,6 @@ export function resolveCodexModelBackedReviewerPolicyContext(params: {
     modelProvider: params.nativeAuthProfile === true ? "openai" : undefined,
     model: params.model ?? params.bindingModel,
   };
-}
-
-function isCodexModelBackedApprovalsReviewerProvider(provider: string | undefined): boolean {
-  const normalized = provider?.trim().toLowerCase();
-  return normalized === "openai";
-}
-
-function isTrustedCodexModelBackedApprovalsReviewerProvider(
-  provider: string | undefined,
-  params: CodexModelBackedReviewerContext,
-): boolean {
-  return (
-    isCodexModelBackedApprovalsReviewerProvider(provider) &&
-    isTrustedCodexModelBackedOpenAIProvider({
-      config: params.config,
-      env: params.env,
-      model: params.model,
-      agentDir: params.agentDir,
-      codexConfigToml: params.codexConfigToml,
-      homeScope: params.homeScope,
-      codexArgs: params.codexArgs,
-    })
-  );
 }
 
 function readCodexBaseUrlOverridesForModelBackedReview(

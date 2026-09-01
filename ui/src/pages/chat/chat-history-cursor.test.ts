@@ -1,12 +1,15 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
+import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
-import { preserveQueuedUserTurn } from "./chat-send-support.ts";
+import { retireDeliveredQueuedUserTurn } from "./chat-send-support.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
+import { admitStoredChatComposerQueueItem } from "./composer-persistence.ts";
 import {
   getChatSessionProjection,
   readChatSessionProjectionScope,
@@ -74,9 +77,12 @@ async function loadHistoryWithBrowserTimers(state: ReturnType<typeof createState
 }
 
 describe("chat history cursor revalidation", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
   it.each(["live", "history-delta"] as const)(
     "retains an attributed pending steer across a leaf advance before %s persistence",
     async (delivery) => {
+      vi.stubGlobal("sessionStorage", createStorageMock());
       const sessionKey = "agent:main:participant-steer";
       const sendRunId = "bob-send";
       const aliceFinal = {
@@ -150,6 +156,13 @@ describe("chat history cursor revalidation", () => {
         sessionKey,
         sender: { id: "bob-profile", name: "Bob Proof" },
       };
+      expect(
+        admitStoredChatComposerQueueItem(
+          state,
+          captureChatOutboxAdmission(state, sessionKey, queued.agentId),
+          queued,
+        ),
+      ).toBe(true);
       state.chatQueue = [queued];
       const renderedBobMessages = () =>
         buildChatItems({
@@ -173,8 +186,8 @@ describe("chat history cursor revalidation", () => {
       expect(renderedBobMessages()).toHaveLength(1);
 
       // Delivery retirement materializes the acknowledged turn before its durable row arrives.
-      preserveQueuedUserTurn(state, queued);
-      state.chatQueue = [];
+      expect(await retireDeliveredQueuedUserTurn(state, sendRunId, { sessionKey })).toBe("retired");
+      expect(state.chatQueue).toEqual([]);
       expect(renderedBobMessages()).toHaveLength(1);
       await loadChatHistory(state);
       expect(handler).toHaveBeenCalledWith(expect.objectContaining({ cursor: "cursor-3" }));
@@ -262,11 +275,7 @@ describe("chat history cursor revalidation", () => {
 
     await loadChatHistory(state);
 
-    const current = getChatSessionProjection(
-      state,
-      state.chatMessages,
-      readChatSessionProjectionScope(state),
-    );
+    const current = getChatSessionProjection(state, readChatSessionProjectionScope(state));
     expect(current.scope.activeLeafEntryId).toBe("next-leaf");
     expect(current.runs).toBe(projection.runs);
   });
@@ -325,24 +334,26 @@ describe("chat history cursor revalidation", () => {
     });
   });
 
-  it("recovers a missed terminal failure even when cursor catch-up has no new messages", async () => {
+  it("retires a missed terminal failure after a newer successful cursor catch-up", async () => {
     const cached = message("user", "cached", "cached-user", 1);
-    const handler = vi.fn(async (_params?: unknown) => ({
-      kind: "delta",
-      messages: [],
-      deltaCursor: "cursor-2",
-      sessionInfo: {
-        key: "main",
-        kind: "direct",
-        sessionId: "session-cursor",
-        updatedAt: 2,
-        status: "failed",
-        hasActiveRun: false,
-        lastRunId: "run-first",
-        lastRunError:
-          "Git clone could not reach GitHub. Check the Gateway network connection and retry.",
-      },
-    }));
+    const handler = vi.fn(
+      async (_params?: unknown): Promise<unknown> => ({
+        kind: "delta",
+        messages: [],
+        deltaCursor: "cursor-2",
+        sessionInfo: {
+          key: "main",
+          kind: "direct",
+          sessionId: "session-cursor",
+          updatedAt: 2,
+          status: "failed",
+          hasActiveRun: false,
+          lastRunId: "run-first",
+          lastRunError:
+            "Git clone could not reach GitHub. Check the Gateway network connection and retry.",
+        },
+      }),
+    );
     const state = createState(handler);
     const cache = seedCachedHistory(state, [cached], "cursor-1");
 
@@ -355,6 +366,27 @@ describe("chat history cursor revalidation", () => {
     expect(
       readChatSessionSnapshot(cache, state, { sessionKey: state.sessionKey })?.deltaCursor,
     ).toBe("cursor-2");
+
+    const reply = message("assistant", "Recovery completed.", "retry-answer", 2);
+    handler.mockResolvedValueOnce({
+      kind: "delta",
+      messages: [{ message: reply, messageId: "retry-answer", messageSeq: 2, runId: "run-retry" }],
+      deltaCursor: "cursor-3",
+      sessionInfo: {
+        key: "main",
+        kind: "direct",
+        sessionId: "session-cursor",
+        updatedAt: 3,
+        status: "done",
+        hasActiveRun: false,
+        lastRunId: "run-retry",
+      },
+    });
+    await loadChatHistory(state);
+
+    expect(handler).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: "cursor-2" }));
+    expect(state.chatMessages.map(extractText)).toEqual(["cached", "Recovery completed."]);
+    expect(state.chatRunError).toBeNull();
   });
 
   it.each([

@@ -1,7 +1,11 @@
 import { readPackageVersion } from "./package-json.js";
 // Runs OpenClaw package update checks, package steps, and restart handoff.
 import { detectGlobalInstallManagerForRoot } from "./update-global.js";
-import { resolveUpdateInstallRoot, updateInstallRootsMatch } from "./update-install-root.js";
+import {
+  resolveGitRoot,
+  resolveUpdateInstallRoot,
+  updateInstallRootsMatch,
+} from "./update-install-root.js";
 import { buildUpdateCommandRunner, UPDATE_RUNNER_TIMEOUT_MS } from "./update-runner-command.js";
 import { resolveUpdateDoctorExecutionPolicy } from "./update-runner-doctor.js";
 import { updateGitCheckout } from "./update-runner-git.js";
@@ -11,7 +15,6 @@ import {
   findPackageRoot,
   looksLikeGitCheckout,
   normalizeDir,
-  resolveGitRoot,
   resolveUpdateInstallSurface,
 } from "./update-runner-install-surface.js";
 import type { UpdateRunResult, UpdateRunnerOptions } from "./update-runner-types.js";
@@ -49,6 +52,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       mode: "unknown",
       root: gitRoot,
       reason: "not-openclaw-root",
+      recovery: { serviceRestartSafe: true },
       steps: [],
       durationMs: Date.now() - startedAt,
     };
@@ -68,6 +72,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       status: "error",
       mode: "unknown",
       reason: "not-openclaw-root",
+      recovery: { serviceRestartSafe: true },
       steps: [],
       durationMs: Date.now() - startedAt,
     };
@@ -93,6 +98,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     mode: "unknown",
     root: pkgRoot,
     reason: "not-git-install",
+    recovery: { serviceRestartSafe: true },
     before: { version: beforeVersion },
     steps: [],
     durationMs: Date.now() - startedAt,

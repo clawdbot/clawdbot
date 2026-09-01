@@ -1,5 +1,5 @@
 // Daemon probe tests cover gateway probe command behavior and output.
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import { gatewayProbeResultSawGateway } from "../../commands/gateway-health-auth-diagnostic.js";
 import { probeGatewayStatus } from "./probe.js";
 import type { DaemonStatus } from "./status.gather.js";
@@ -47,6 +47,7 @@ describe("probeGatewayStatus", () => {
       error,
       close: { code: 1008, reason: "pairing required" },
       auth: pairingPendingAuth,
+      gatewayReached: true,
     });
   }
 
@@ -55,6 +56,7 @@ describe("probeGatewayStatus", () => {
       ok: false,
       kind: "connect",
       capability: "pairing_pending",
+      gatewayReached: true,
       auth: pairingPendingAuth,
       connectFailure: { kind: "pairing-required" },
       error: "gateway closed (1008): pairing required",
@@ -114,6 +116,7 @@ describe("probeGatewayStatus", () => {
         secret: "do-not-print",
       },
       auth: pairingPendingAuth,
+      gatewayReached: true,
     });
 
     const result = await probeGatewayStatus({
@@ -122,7 +125,7 @@ describe("probeGatewayStatus", () => {
       json: true,
     });
 
-    expect(result.ok).toBe(false);
+    assert(!result.ok);
     if (result.ok) {
       throw new Error("expected failed gateway probe");
     }
@@ -139,7 +142,7 @@ describe("probeGatewayStatus", () => {
     expect(json).not.toContain("scope-upgrade");
   });
 
-  it("classifies a legacy pairing close when the probe error is generic", async () => {
+  it("classifies a legacy pairing close without treating its prose as Gateway evidence", async () => {
     probeGatewayMock.mockResolvedValueOnce({
       ok: false,
       error: "connect failed",
@@ -152,35 +155,37 @@ describe("probeGatewayStatus", () => {
       json: true,
     });
 
-    expect(result.ok).toBe(false);
+    assert(!result.ok);
     if (result.ok) {
       throw new Error("expected failed gateway probe");
     }
     expect(result.error).toBe("connect failed");
     expect(result.connectFailure).toEqual({ kind: "pairing-required" });
-    expect(gatewayProbeResultSawGateway(result)).toBe(true);
-  });
-
-  it("does not classify an unvalidated transport close as a reachable gateway", async () => {
-    probeGatewayMock.mockResolvedValueOnce({
-      ok: false,
-      error: "connect ECONNREFUSED 127.0.0.1:19191",
-      close: { code: 1006, reason: "" },
-    });
-
-    const result = await probeGatewayStatus({
-      url: "ws://127.0.0.1:19191",
-      timeoutMs: 5_000,
-      json: true,
-    });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("expected failed gateway probe");
-    }
-    expect(result.connectFailure).toEqual({ kind: "unreachable" });
     expect(gatewayProbeResultSawGateway(result)).toBe(false);
   });
+
+  it.each(["connect ECONNREFUSED 127.0.0.1:19191", "gateway closed (1006): ", null])(
+    "does not treat an unvalidated transport close with error %s as a Gateway response",
+    async (error) => {
+      probeGatewayMock.mockResolvedValueOnce({
+        ok: false,
+        error,
+        close: { code: 1006, reason: "" },
+      });
+
+      const result = await probeGatewayStatus({
+        url: "ws://127.0.0.1:19191",
+        timeoutMs: 5_000,
+        json: true,
+      });
+
+      assert(!result.ok);
+      if (result.ok) {
+        throw new Error("expected failed gateway probe");
+      }
+      expect(gatewayProbeResultSawGateway(result)).toBe(false);
+    },
+  );
 
   it("projects authentication rate limits as reachable temporary lockouts", async () => {
     probeGatewayMock.mockResolvedValueOnce({
@@ -196,6 +201,7 @@ describe("probeGatewayStatus", () => {
         recommendedNextStep: "wait_then_retry",
         retryAfterMs: 60_000,
       },
+      gatewayReached: true,
     });
 
     const result = await probeGatewayStatus({
@@ -204,7 +210,7 @@ describe("probeGatewayStatus", () => {
       json: true,
     });
 
-    expect(result.ok).toBe(false);
+    assert(!result.ok);
     if (result.ok) {
       throw new Error("expected failed gateway probe");
     }
@@ -234,7 +240,7 @@ describe("probeGatewayStatus", () => {
       json: true,
     });
 
-    expect(result.ok).toBe(false);
+    assert(!result.ok);
     if (result.ok) {
       throw new Error("expected failed gateway probe");
     }
@@ -557,7 +563,7 @@ describe("probeGatewayStatus", () => {
       timeoutMs: 5_000,
     });
 
-    expect(result.ok).toBe(false);
+    assert(!result.ok);
     expect(result.kind).toBe("connect");
     expect(result.error).toBe("scope upgrade pending approval (requestId: req-123)");
   });
@@ -576,7 +582,7 @@ describe("probeGatewayStatus", () => {
       timeoutMs: 5_000,
     });
 
-    expect(result.ok).toBe(false);
+    assert(!result.ok);
     expect(result.error).not.toContain("secret");
     expect(result.error).not.toContain("abc123");
     expect(result.error).toContain("ws://***:***@gw.example.com:18789?token=***");
@@ -594,7 +600,7 @@ describe("probeGatewayStatus", () => {
       timeoutMs: 5_000,
     });
 
-    expect(result.ok).toBe(false);
+    assert(!result.ok);
     expect(result.error).not.toContain("secret");
     expect(result.error).toContain("ws://***:***@gw.example.com:18789");
   });

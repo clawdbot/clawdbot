@@ -16,6 +16,7 @@ import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { isCronSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { CRON_DIRECT_DELIVERY_CONTEXT_KIND } from "../../shared/transcript-only-openclaw-assistant.js";
 import { resolveAdmittedCronCompletionStatus } from "../completion-status.js";
 import { normalizeCronRunErrorText } from "../service/execution-errors.js";
 import type { CronResolvedDeliveryState } from "../types.js";
@@ -505,14 +506,17 @@ export async function dispatchCronDelivery(
         delivery,
         deliveryBestEffort: params.deliveryBestEffort,
       });
+      const targetSessionAwarenessText =
+        !params.deliveryBestEffort &&
+        (shouldQueueAwarenessForDelivery ||
+          !isSameSessionKey(deliverySessionKey, awarenessMainSessionKey))
+          ? deliveryAwarenessText
+          : undefined;
       // For explicit isolated deliveries that resolve to the main session, the
       // awareness queue is the intentional main-session record on the next turn;
       // adding an immediate assistant mirror would make the cron text appear twice.
-      const awarenessText = shouldQueueAwarenessForDelivery ? deliveryAwarenessText : undefined;
       const deliveryWillReachAwarenessMainSession =
-        mirrorTargetsAwarenessMainSession &&
-        shouldQueueAwarenessForDelivery &&
-        Boolean(awarenessText);
+        mirrorTargetsAwarenessMainSession && Boolean(targetSessionAwarenessText);
       // Implicit/default isolated delivery must not create main-session awareness.
       const mirrorWouldBypassIsolatedAwarenessPolicy =
         mirrorTargetsAwarenessMainSession &&
@@ -557,6 +561,10 @@ export async function dispatchCronDelivery(
             agentId: params.agentId,
           }),
           idempotencyKey: deliveryIdempotencyKey,
+          // The durable marker is a fallback only when target awareness is absent.
+          ...(targetSessionAwarenessText === undefined
+            ? { deliveryMirror: { kind: CRON_DIRECT_DELIVERY_CONTEXT_KIND } }
+            : {}),
           config: params.cfgWithAgentDefaults,
         };
         if (mirrorTargetsDeletingRunSession) {
@@ -569,20 +577,14 @@ export async function dispatchCronDelivery(
           });
         }
       }
-      if (
-        deliveryState.delivered &&
-        !params.deliveryBestEffort &&
-        deliveryAwarenessText &&
-        (shouldQueueAwarenessForDelivery ||
-          !isSameSessionKey(deliverySessionKey, awarenessMainSessionKey))
-      ) {
+      if (deliveryState.delivered && targetSessionAwarenessText) {
         await queueCronAwarenessSystemEvent({
           cfg: params.cfgWithAgentDefaults,
           jobId: params.job.id,
           agentId: params.agentId,
           deliveryIdempotencyKey,
           queueMainSession: shouldQueueAwarenessForDelivery,
-          text: deliveryAwarenessText,
+          text: targetSessionAwarenessText,
           targetSessionKey: deliverySessionKey,
         });
       }
@@ -705,7 +707,13 @@ export async function dispatchCronDelivery(
       }
       params.queueSourceSessionMessageToolAwareness = undefined;
       if (!completion.requiresExternalDelivery) {
-        recordDelivery("delivered");
+        // A deliveryError means the conversation's external route failed to
+        // resolve; the committed turn keeps its ok status with the failure
+        // recorded, instead of collapsing into a run error.
+        recordDelivery(
+          completion.deliveryError ? "not-delivered" : "delivered",
+          completion.deliveryError,
+        );
         return null;
       }
       // The source transcript is committed. External custody remains required

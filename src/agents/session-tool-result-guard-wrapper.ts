@@ -3,6 +3,8 @@
  *
  * Installs message-write hooks, input provenance handling, and pending tool-result flush behavior once per manager.
  */
+
+import type { PrepareAssistantTranscriptMessage } from "../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
@@ -22,6 +24,7 @@ import {
 } from "../sessions/user-turn-transcript.js";
 import type { EmbeddedRunTrigger } from "./embedded-agent-runner/run/params.js";
 import { resolveLiveToolResultMaxChars } from "./embedded-agent-runner/tool-result-truncation.js";
+import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { projectAgentHarnessTranscriptMessageForDisplay } from "./harness/transcript-visibility.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
@@ -40,7 +43,11 @@ type GuardedSessionManager = SessionManager & {
   /** Persist the next user message when an earlier canonical entry was removed. */
   clearNextUserMessagePersistenceSuppression?: () => void;
   /** Refresh the exact owning run when a caller reuses this guarded manager. */
-  setTranscriptRunId?: (runId: string | undefined) => void;
+  setTranscriptRunContext?: (
+    runId: string | undefined,
+    prepareAssistantTranscriptMessage: PrepareAssistantTranscriptMessage | undefined,
+    skipBeforeMessageWriteHooks: boolean | undefined,
+  ) => void;
 };
 
 /**
@@ -52,6 +59,7 @@ export function guardSessionManager(
   opts?: {
     agentId?: string;
     runId?: string;
+    prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
     sessionKey?: string;
     config?: OpenClawConfig;
     contextWindowTokens?: number;
@@ -92,8 +100,15 @@ export function guardSessionManager(
   },
 ): GuardedSessionManager {
   const guardedSessionManager: GuardedSessionManager = sessionManager;
+  let prepareAssistantTranscriptMessage =
+    opts?.trigger === "memory" ? undefined : opts?.prepareAssistantTranscriptMessage;
+  let skipBeforeMessageWriteHooks = opts?.skipBeforeMessageWriteHooks;
   if (typeof guardedSessionManager.flushPendingToolResults === "function") {
-    guardedSessionManager.setTranscriptRunId?.(opts?.runId);
+    guardedSessionManager.setTranscriptRunContext?.(
+      opts?.runId,
+      prepareAssistantTranscriptMessage,
+      skipBeforeMessageWriteHooks,
+    );
     return guardedSessionManager;
   }
 
@@ -111,24 +126,38 @@ export function guardSessionManager(
     const runtimeUserMessage = runtimeUserMessageByPersistedMessage.get(event.message);
     let message = event.message;
     let changed = false;
-    if (!opts?.skipBeforeMessageWriteHooks && hookRunner?.hasHooks("before_message_write")) {
-      const result = hookRunner.runBeforeMessageWrite(event, {
+    // Accepted source bytes already passed the plugin hook before ACK. Only
+    // core redaction and visibility still run when the native turn consumes them.
+    const skipUserWriteHook =
+      skipBeforeMessageWriteHooks ||
+      (message.role === "user" &&
+        queuedUserTurnTranscriptRecorder?.getPendingInputMessage?.() !== undefined);
+    if (
+      (!skipUserWriteHook && hookRunner?.hasHooks("before_message_write")) ||
+      prepareAssistantTranscriptMessage
+    ) {
+      const preparedMessage =
+        message.role === "user"
+          ? { ...message, __openclaw: { ...Reflect.get(message, "__openclaw") } }
+          : undefined;
+      const next = runAgentHarnessBeforeMessageWriteHook({
+        message,
         agentId: opts?.agentId,
         sessionKey: opts?.sessionKey,
+        prepareAssistantTranscriptMessage,
+        skipBeforeMessageWriteHooks: skipUserWriteHook,
       });
-      if (result?.block) {
+      if (!next) {
         runtimeUserMessageByPersistedMessage.delete(event.message);
         queuedUserTurnTranscriptRecorder?.markBlocked();
         queuedUserTurnTranscriptRecorder = undefined;
-        return result;
+        return { block: true };
       }
-      if (result?.message) {
-        message = restorePreparedUserTurnOperationalMetaForRuntime({
-          runtimeMessage: result.message,
-          ...(event.message.role === "user" ? { preparedMessage: event.message } : {}),
-        });
-        changed = true;
-      }
+      message = restorePreparedUserTurnOperationalMetaForRuntime({
+        runtimeMessage: next,
+        preparedMessage,
+      });
+      changed = true;
     }
     copyCodeModeSourceAppend(event.message, message, sourceAppend);
     const redacted = redactTranscriptMessage(message, opts?.config, sourceAppend);
@@ -237,11 +266,7 @@ export function guardSessionManager(
       const runtimeMessage = runtimeUserMessageByPersistedMessage.get(message);
       runtimeUserMessageByPersistedMessage.delete(message);
       const recorder = takeRuntimeUserTurnTranscriptRecorder(message);
-      if (persistence.anchor) {
-        recorder?.markRuntimePersisted(message, persistence.anchor);
-      } else {
-        recorder?.markRuntimePersisted(message);
-      }
+      recorder?.markRuntimePersisted(message, persistence.anchor);
       await opts?.onUserMessagePersisted?.(message, runtimeMessage);
     },
     onUserMessagePersistenceSuppressed: async (message) => {
@@ -256,6 +281,10 @@ export function guardSessionManager(
   guardedSessionManager.clearPendingToolResults = guard.clearPendingToolResults;
   guardedSessionManager.clearNextUserMessagePersistenceSuppression =
     guard.clearNextUserMessagePersistenceSuppression;
-  guardedSessionManager.setTranscriptRunId = guard.setTranscriptRunId;
+  guardedSessionManager.setTranscriptRunContext = (runId, prepare, skipHooks) => {
+    guard.setTranscriptRunId(runId);
+    prepareAssistantTranscriptMessage = prepare;
+    skipBeforeMessageWriteHooks = skipHooks;
+  };
   return guardedSessionManager;
 }

@@ -74,15 +74,14 @@ describe("shared automation mutation options", () => {
     [["--on-exit", "./watch.sh", "--every", "5m"], "Choose at most one schedule change"],
   ])("rejects invalid exit-triggered schedule options", async (args, message) => {
     const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
     try {
-      await createMutationProgram().parseAsync(["edit", "job-1", ...args], { from: "user" });
+      await expect(
+        createMutationProgram().parseAsync(["edit", "job-1", ...args], { from: "user" }),
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(message));
-      expect(exitSpy).toHaveBeenCalledWith(1);
       expect(callGatewayFromCli).not.toHaveBeenCalled();
     } finally {
       errorSpy.mockRestore();
-      exitSpy.mockRestore();
     }
   });
 
@@ -98,19 +97,18 @@ describe("shared automation mutation options", () => {
     "rejects blank thread id $threadId before automation $operation",
     async ({ args, threadId }) => {
       const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-      const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
       try {
-        await createMutationProgram().parseAsync([...args, "--thread-id", threadId], {
-          from: "user",
-        });
+        await expect(
+          createMutationProgram().parseAsync([...args, "--thread-id", threadId], {
+            from: "user",
+          }),
+        ).rejects.toMatchObject({ name: "ExitError", code: 1 });
         expect(errorSpy).toHaveBeenCalledWith(
           expect.stringContaining("--thread-id must be a positive integer"),
         );
-        expect(exitSpy).toHaveBeenCalledWith(1);
         expect(callGatewayFromCli).not.toHaveBeenCalled();
       } finally {
         errorSpy.mockRestore();
-        exitSpy.mockRestore();
       }
     },
   );
@@ -141,31 +139,30 @@ describe("shared automation mutation options", () => {
     "rejects invalid thread id %j before loading an automation for a combined edit",
     async (threadId) => {
       const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-      const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
       try {
-        await createMutationProgram().parseAsync(
-          [
-            "edit",
-            "job-1",
-            "--pacing-min",
-            "30m",
-            "--channel",
-            "telegram",
-            "--to",
-            "group-123",
-            "--thread-id",
-            threadId,
-          ],
-          { from: "user" },
-        );
+        await expect(
+          createMutationProgram().parseAsync(
+            [
+              "edit",
+              "job-1",
+              "--pacing-min",
+              "30m",
+              "--channel",
+              "telegram",
+              "--to",
+              "group-123",
+              "--thread-id",
+              threadId,
+            ],
+            { from: "user" },
+          ),
+        ).rejects.toMatchObject({ name: "ExitError", code: 1 });
         expect(errorSpy).toHaveBeenCalledWith(
           expect.stringContaining("--thread-id must be a positive integer"),
         );
-        expect(exitSpy).toHaveBeenCalledWith(1);
         expect(callGatewayFromCli).not.toHaveBeenCalled();
       } finally {
         errorSpy.mockRestore();
-        exitSpy.mockRestore();
       }
     },
   );

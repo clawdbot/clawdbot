@@ -1,7 +1,6 @@
 /** Builds API-key provider auth methods that write profiles and config updates. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { upsertAuthProfileWithLockOrThrow } from "../agents/auth-profiles/profiles.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
@@ -221,6 +220,7 @@ export function createProviderApiKeyAuthMethod(
 
       const profileIds = resolveProfileIds(params);
       if (resolved.source !== "profile") {
+        const { upsertAuthProfileWithLockOrThrow } = await loadProviderApiKeyAuthRuntime();
         for (const profileId of profileIds) {
           const credential = ctx.toApiKeyCredential({
             provider: normalizeOptionalString(profileId.split(":", 1)[0]) || params.providerId,

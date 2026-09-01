@@ -109,7 +109,13 @@ async function runThroughTransport(
   const baseUrl = await startNdjsonChatServer(chunks);
   const streamFn = createOllamaStreamFn(baseUrl);
   const stream = streamFn(
-    { api: "ollama", provider: "ollama", id: "proof-model", contextWindow: 65536 } as never,
+    {
+      api: "ollama",
+      provider: "ollama",
+      id: "proof-model",
+      input: ["text"],
+      contextWindow: 65536,
+    } as never,
     { messages: [{ role: "user", content: "config?" }], tools } as never,
     {},
   );

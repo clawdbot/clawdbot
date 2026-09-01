@@ -375,6 +375,7 @@ export async function resolvePluginCapabilityConsent(params: {
   env?: NodeJS.ProcessEnv;
   acknowledge?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  beforePersistentEffect?: () => void | Promise<void>;
   metadata?: PluginMetadataSnapshot;
 }): Promise<void> {
   const env = params.env ?? process.env;
@@ -430,6 +431,7 @@ export async function resolvePluginCapabilityConsent(params: {
     if (!acknowledgment) {
       throwManagedPluginCapabilityConsentRequired(review);
     }
+    await params.beforePersistentEffect?.();
     const records = await loadInstalledPluginIndexInstallRecords({ env });
     const persistedRecord = records[installOwner];
     if (!persistedRecord?.installPath) {
@@ -471,6 +473,7 @@ async function resolvePluginArtifactCapabilityConsent(params: {
   env?: NodeJS.ProcessEnv;
   acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  beforePersistentEffect?: () => void | Promise<void>;
   previousDeclared?: PluginAcceptedDeclaredSurface;
   previousRecord?: PluginInstallRecord;
   mode?: "install" | "update";
@@ -489,20 +492,25 @@ async function resolvePluginArtifactCapabilityConsent(params: {
     declared,
     ...(params.previousDeclared ? { previousDeclared: params.previousDeclared } : {}),
   });
+  let acceptanceCurrent = false;
   if (params.mode === "update" && params.previousDeclared) {
     const { hasWidening } = diffDeclaredSurfaceWidening(params.previousDeclared, declared);
     const priorAcceptanceCurrent =
       params.previousRecord !== undefined &&
       resolveAcceptedSurfaceCurrent(params.previousRecord, params.previousDeclared) &&
       resolvePluginInstallRecordIntegrity(params.previousRecord) !== undefined;
-    if (!hasWidening && priorAcceptanceCurrent) {
-      return declared;
-    }
+    acceptanceCurrent = !hasWidening && priorAcceptanceCurrent;
     // Managed installs activate the package, even when its previous version was disabled.
     // Update-only flows preserve disablement in preparePluginUpdateCapabilityConsent instead.
   }
-  const acknowledgment =
-    params.acknowledgeCapabilities ?? (await params.onCapabilityConsent?.(review));
+  const acknowledgment = acceptanceCurrent
+    ? { reviewToken: review.reviewToken }
+    : (params.acknowledgeCapabilities ?? (await params.onCapabilityConsent?.(review)));
+  // Review and staged-package rollback remain cancellable. Lock only when
+  // accepting this artifact, then recheck its bytes after the callback yields.
+  if (acknowledgment) {
+    await params.beforePersistentEffect?.();
+  }
   // Interactive consent yields; re-read the final stage so a replaced artifact cannot inherit it.
   const { declared: finalDeclared, manifest: finalManifest } = inspectPluginArtifact(
     params.artifactDir,
@@ -539,6 +547,7 @@ export function createManagedPluginArtifactConsentHandler(params: {
   expectedIntegrity?: string;
   acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  beforePersistentEffect?: () => void | Promise<void>;
   previousRecords?: Record<string, PluginInstallRecord>;
   previousPluginOwners?: ReadonlyMap<string, string>;
 }): {
@@ -598,6 +607,7 @@ export function createManagedPluginArtifactConsentHandler(params: {
         },
         acknowledgeCapabilities: params.acknowledgeCapabilities,
         onCapabilityConsent: params.onCapabilityConsent,
+        beforePersistentEffect: params.beforePersistentEffect,
         ...(previousRecord ? { previousRecord } : {}),
         ...(previousDeclared ? { previousDeclared } : {}),
         mode: artifact.mode,

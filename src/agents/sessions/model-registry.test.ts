@@ -94,6 +94,7 @@ function pluginOwnerSnapshotEntries(
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
     },
   };
 }
@@ -326,13 +327,15 @@ describe("ModelRegistry models.json auth", () => {
   });
 
   it("automatically migrates released provider models before the first registry load", async () => {
+    // A synthetic provider keeps host credentials out of this migration-only fixture.
+    const providerId = "migrated-catalog-provider";
     const modelsPath = writeModelsJson({ providers: {} });
     const agentDir = dirname(modelsPath);
     const catalogPath = join(agentDir, "plugins", "zai", PLUGIN_MODEL_CATALOG_FILE);
     const contents = JSON.stringify({
       generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
       providers: {
-        zai: {
+        [providerId]: {
           baseUrl: "https://api.z.ai/api/paas/v4",
           api: "openai-completions",
           apiKey: "released-zai-provider-test-key",
@@ -344,12 +347,12 @@ describe("ModelRegistry models.json auth", () => {
     writeFileSync(catalogPath, contents, "utf8");
 
     const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath, {
-      pluginMetadataSnapshot: pluginOwnerSnapshot("zai", "zai"),
+      pluginMetadataSnapshot: pluginOwnerSnapshot(providerId, "zai"),
     });
 
     expect(registry.getError()).toBeUndefined();
-    expect(registry.find("zai", "glm-5.1")?.name).toBe("GLM 5.1");
-    await expect(registry.getApiKeyForProvider("zai")).resolves.toBe(
+    expect(registry.find(providerId, "glm-5.1")?.name).toBe("GLM 5.1");
+    await expect(registry.getApiKeyForProvider(providerId)).resolves.toBe(
       "released-zai-provider-test-key",
     );
     expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([{ pluginId: "zai", contents }]);

@@ -154,7 +154,7 @@ function createStartupEntryRemovalError(error: unknown): Error {
   );
 }
 
-export async function hasScheduledTaskRunningEvidence(env: GatewayServiceEnv): Promise<boolean> {
+async function hasScheduledTaskRunningEvidence(env: GatewayServiceEnv): Promise<boolean> {
   const runtime = await readScheduledTaskRuntime(env).catch(() => null);
   if (runtime?.status !== "running") {
     return false;

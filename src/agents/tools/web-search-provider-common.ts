@@ -390,9 +390,12 @@ export function parseWebSearchTimeFilters<Provider extends WebSearchFreshnessPro
     : parsedDateRange;
 }
 
-/** Reads a search cache payload and marks it so provider responses can disclose cache hits. */
-export function readCachedSearchPayload(cacheKey: string): Record<string, unknown> | undefined {
-  const cached = readCache(SEARCH_CACHE, cacheKey);
+/** Reads a marked search payload; omitted TTL preserves the stored-expiry SDK contract. */
+export function readCachedSearchPayload(
+  cacheKey: string,
+  ttlMs?: number,
+): Record<string, unknown> | undefined {
+  const cached = readCache(SEARCH_CACHE, cacheKey, ttlMs);
   return cached ? { ...cached.value, cached: true } : undefined;
 }
 

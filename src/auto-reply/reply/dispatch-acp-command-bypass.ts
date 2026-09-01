@@ -2,7 +2,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasControlCommand } from "../command-detection.js";
 import { isCommandEnabled } from "../commands-registry-list.js";
-import { maybeResolveTextAlias } from "../commands-registry-normalize.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { resolveCommandContextText } from "./context-text.js";
@@ -15,10 +14,6 @@ function isAcpCommandCandidate(text: string): boolean {
   return /^\/acp(?:\s|$)/i.test(text);
 }
 
-function isLocalCommandCandidate(text: string, cfg: OpenClawConfig): boolean {
-  return hasControlCommand(text, cfg);
-}
-
 export function shouldBypassAcpDispatchForCommand(
   ctx: FinalizedRuntimeMsgContext,
   cfg: OpenClawConfig,
@@ -27,29 +22,24 @@ export function shouldBypassAcpDispatchForCommand(
   if (!candidate) {
     return false;
   }
-  const normalized = candidate.trim();
   const allowTextCommands = shouldHandleTextCommands({
     cfg,
     surface: ctx.Surface ?? ctx.Provider ?? "",
     commandSource: ctx.CommandSource,
   });
-  if (!normalized.startsWith("/") && maybeResolveTextAlias(candidate, cfg) != null) {
-    return allowTextCommands;
-  }
-
-  if (isResetCommandCandidate(normalized)) {
+  if (isResetCommandCandidate(candidate)) {
     return true;
   }
 
-  if (isAcpCommandCandidate(normalized)) {
+  if (isAcpCommandCandidate(candidate)) {
     return true;
   }
 
-  if (isLocalCommandCandidate(normalized, cfg)) {
+  if (hasControlCommand(candidate, cfg)) {
     return allowTextCommands;
   }
 
-  if (!normalized.startsWith("!")) {
+  if (!candidate.startsWith("!")) {
     return false;
   }
 

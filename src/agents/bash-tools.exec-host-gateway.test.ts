@@ -2020,7 +2020,7 @@ describe("processGatewayAllowlist", () => {
   it.runIf(process.platform !== "win32")(
     "defers compound plans with more than 64 candidates before Guardian review",
     async () => {
-      const command = Array.from({ length: 65 }, () => "node --version").join(" && ");
+      const command = Array.from({ length: 65 }, () => "/bin/echo ok").join(" && ");
       await configurePlanBackedCommand({ command });
 
       const result = await runGatewayAllowlist({ command, ask: "on-miss", autoReview: true });

@@ -40,6 +40,38 @@ describe("scripts/openclaw-release-clawhub-runtime-state.ts", () => {
     expect(result.stderr).toBe("");
   });
 
+  it("awaits staging without querying public packages before parent completion", () => {
+    const result = runRuntimeStateScript([
+      "--repository",
+      "openclaw/openclaw",
+      "--wait-for-clawhub",
+      "true",
+      "--force-skip-clawhub",
+      "false",
+      "--normal-publication-staged",
+      "true",
+      "--normal-run-id",
+      "123",
+      "--bootstrap-run-id",
+      "456",
+      "--bootstrap-completed",
+      "true",
+    ]);
+    expect(result.status).toBe(0);
+    const state = JSON.parse(result.stdout);
+    expect(state.verifierArgs).toEqual([
+      "--skip-clawhub",
+      "--plugin-clawhub-run",
+      "123",
+      "--plugin-clawhub-bootstrap-run",
+      "456",
+    ]);
+    expect(state.proofLines.normal).toContain(
+      "public artifact verification follows successful release-parent completion",
+    );
+    expect(state.proofLines.bootstrap).toContain("actions/runs/456");
+  });
+
   it("rejects invalid boolean flag values before emitting runtime state", () => {
     const result = runRuntimeStateScript([
       "--repository",

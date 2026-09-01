@@ -1,8 +1,8 @@
 // Real-browser proof for inline and context-menu chat message actions.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type Locator, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -16,7 +16,12 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-message-actions");
+let artifactDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    artifactDir = createControlUiE2eArtifactDir("chat-message-actions");
+  }
+});
 
 // Neutral filler line repeated to push the fixture past the transport
 // preview limit without embedding stale implementation narrative; the
@@ -154,9 +159,6 @@ describeControlUiE2e("Control UI chat message actions", () => {
     if (!chromiumAvailable) {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
     }
-    if (captureUiProof) {
-      await mkdir(artifactDir, { recursive: true });
-    }
     server = await startControlUiE2eServer();
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
   });
@@ -164,6 +166,133 @@ describeControlUiE2e("Control UI chat message actions", () => {
   afterAll(async () => {
     await browser?.close();
     await server?.close();
+  });
+
+  it("keeps assistant actions hidden when the user message is last", async () => {
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: "Earlier assistant reply.",
+          timestamp: Date.now() - 4_000,
+          __openclaw: { id: "earlier-assistant", seq: 1 },
+        },
+        {
+          role: "user",
+          content: "A question between replies.",
+          timestamp: Date.now() - 3_000,
+          __openclaw: { id: "middle-user", seq: 2 },
+        },
+        {
+          role: "assistant",
+          content: "Latest assistant lead-in.",
+          timestamp: Date.now() - 2_000,
+          __openclaw: { id: "latest-assistant", seq: 3 },
+        },
+        {
+          role: "assistant",
+          content: "Latest assistant reply.",
+          timestamp: Date.now() - 1_500,
+          __openclaw: { id: "latest-assistant-final", seq: 4 },
+        },
+        {
+          role: "user",
+          content: "A newer user follow-up.",
+          timestamp: Date.now() - 1_000,
+          __openclaw: { id: "latest-user", seq: 5 },
+        },
+      ],
+    });
+
+    const presentation = (group: Locator) =>
+      group.evaluate((element) => {
+        const footer = element.querySelector<HTMLElement>(".chat-group-footer");
+        const action = element.querySelector<HTMLElement>(".chat-group-footer-actions button");
+        return {
+          actionOpacity: action ? getComputedStyle(action).opacity : null,
+          actionPointerEvents: action ? getComputedStyle(action).pointerEvents : null,
+          footerOpacity: footer ? getComputedStyle(footer).opacity : null,
+          footerPointerEvents: footer ? getComputedStyle(footer).pointerEvents : null,
+        };
+      });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.mouse.move(0, 0);
+      const assistantGroups = page.locator(".chat-group.assistant");
+      await expect.poll(() => assistantGroups.count()).toBe(2);
+      const earlierAssistant = assistantGroups.first();
+      const latestAssistant = assistantGroups.last();
+      await latestAssistant.getByText("Latest assistant reply.", { exact: true }).waitFor();
+      const inlineAction = latestAssistant.locator(".chat-message-actions-row button").first();
+      await expect.poll(() => inlineAction.count()).toBe(1);
+
+      await screenshot(page, "user-last-assistant-actions-hidden-desktop.png");
+      await expect
+        .poll(() => presentation(earlierAssistant))
+        .toEqual({
+          actionOpacity: "0",
+          actionPointerEvents: "none",
+          footerOpacity: "0",
+          footerPointerEvents: "none",
+        });
+      await expect
+        .poll(() => presentation(latestAssistant))
+        .toEqual({
+          actionOpacity: "0",
+          actionPointerEvents: "none",
+          footerOpacity: "0",
+          footerPointerEvents: "none",
+        });
+      await expect
+        .poll(() =>
+          inlineAction.evaluate((element) => ({
+            opacity: getComputedStyle(element).opacity,
+            pointerEvents: getComputedStyle(element).pointerEvents,
+          })),
+        )
+        .toEqual({ opacity: "0", pointerEvents: "none" });
+
+      await page.setViewportSize({ width: 390, height: 844 });
+      await screenshot(page, "latest-assistant-actions-resting-mobile.png");
+      await expect
+        .poll(() => presentation(latestAssistant))
+        .toEqual({
+          actionOpacity: "0",
+          actionPointerEvents: "none",
+          footerOpacity: "0",
+          footerPointerEvents: "none",
+        });
+      await latestAssistant.locator(".chat-bubble").last().dispatchEvent("pointerup", {
+        button: 0,
+        pointerType: "touch",
+      });
+      await expect
+        .poll(() => presentation(latestAssistant))
+        .toEqual({
+          actionOpacity: "1",
+          actionPointerEvents: "auto",
+          footerOpacity: "1",
+          footerPointerEvents: "auto",
+        });
+      await expect
+        .poll(() =>
+          inlineAction.evaluate((element) => ({
+            opacity: getComputedStyle(element).opacity,
+            pointerEvents: getComputedStyle(element).pointerEvents,
+          })),
+        )
+        .toEqual({ opacity: "1", pointerEvents: "auto" });
+    } finally {
+      await context.close();
+    }
   });
 
   it("shares tooltip styling and dismissal across message metadata, actions, and file hints", async () => {
@@ -516,7 +645,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       );
       const fullMessageRequest = await gateway.waitForRequest("chat.message.get");
       expect(fullMessageRequest.params).toMatchObject({
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         messageId: "assistant-full-message",
         maxChars: 500_000,
       });

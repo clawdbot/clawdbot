@@ -3,7 +3,6 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { buildAggregatesFromSessions } from "./metrics.ts";
-import * as usageQuery from "./query.ts";
 import type { UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
 import { renderUsage } from "./view.ts";
 
@@ -61,6 +60,7 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
   return {
     data: {
       loading: false,
+      exporting: false,
       error: null,
       sessions: [],
       agents: [],
@@ -97,6 +97,11 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
       headerPinned: false,
     },
     detail: {
+      context: {
+        weight: undefined,
+        loading: false,
+        status: { error: null, hasLoaded: false, stale: false },
+      },
       timeSeriesMode: "cumulative",
       timeSeriesBreakdownMode: "total",
       timeSeries: null,
@@ -135,6 +140,7 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
         onClearQuery: noop,
       },
       display: {
+        onExportJson: noop,
         onChartModeChange: noop,
         onDailyChartModeChange: noop,
         onSessionSortChange: noop,
@@ -156,6 +162,7 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
         onTimeSeriesCursorRangeChange: noop,
         onRetryTimeSeries: noop,
         onRetrySessionLogs: noop,
+        onRetryContextWeight: noop,
       },
     },
     ...overrides,
@@ -312,34 +319,31 @@ describe("renderUsage", () => {
       if (!totals) {
         throw new Error("usage session fixture must include totals");
       }
-      const download = vi.spyOn(usageQuery, "downloadTextFile").mockImplementation(() => {});
-      try {
-        const container = document.createElement("div");
-        render(
-          renderUsage(
-            createUsageProps({
-              data: {
-                ...base.data,
-                sessions: [session],
-                costDaily: [{ ...totals, date: "2026-05-14" }],
-              },
-              filters: {
-                ...base.filters,
-                selectedSessions: filter === "session" ? [session.key] : [],
-                selectedDays: filter === "day" ? ["2026-05-14"] : [],
-              },
-            }),
-          ),
-          container,
-        );
-        container
-          .querySelector(".usage-export-menu")
-          ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "json" } } }));
-        expect(download).toHaveBeenCalledOnce();
-        expect(JSON.parse(download.mock.calls[0]?.[1] ?? "{}")).toMatchObject({ totals: missing });
-      } finally {
-        download.mockRestore();
-      }
+      const onExportJson = vi.fn();
+      const container = document.createElement("div");
+      render(
+        renderUsage(
+          createUsageProps({
+            data: {
+              ...base.data,
+              sessions: [session],
+              costDaily: [{ ...totals, date: "2026-05-14" }],
+            },
+            filters: {
+              ...base.filters,
+              selectedSessions: filter === "session" ? [session.key] : [],
+              selectedDays: filter === "day" ? ["2026-05-14"] : [],
+            },
+            callbacks: { ...base.callbacks, display: { ...base.callbacks.display, onExportJson } },
+          }),
+        ),
+        container,
+      );
+      container
+        .querySelector(".usage-export-menu")
+        ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "json" } } }));
+      expect(onExportJson).toHaveBeenCalledOnce();
+      expect(onExportJson.mock.calls[0]?.[0]).toMatchObject({ totals: missing });
     },
   );
 

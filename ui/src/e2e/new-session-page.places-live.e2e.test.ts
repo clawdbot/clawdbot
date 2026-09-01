@@ -281,10 +281,11 @@ suite.define(() => {
       await expect.poll(() => runner.isDisabled()).toBe(true);
       await expect
         .poll(() => runner.locator(".new-session-page__menu-fact").allTextContents())
-        .toEqual([
-          "Worker slots 0/2",
-          "No worker slots are available. Wait for a slot or pick another device.",
-        ]);
+        .toEqual(["No worker slots are available. Wait for a slot or pick another device."]);
+      // A disabled row keeps a muted meter with no utilization claim.
+      await expect
+        .poll(() => runner.locator(".capacity-meter-pips").getAttribute("aria-label"))
+        .toBe("Slot utilization unavailable");
       expect(await gateway.getRequests("node.list")).toHaveLength(0);
     } finally {
       await context.close();

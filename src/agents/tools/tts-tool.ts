@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { textToSpeech } from "../../tts/tts.js";
 import type { AnyAgentTool } from "./common.js";
 import { readPositiveIntegerParam, readToolStringParam } from "./common.js";
+import { markCoreTtsToolResult } from "./tts-tool-result-provenance.js";
 
 const TtsToolSchema = Type.Object({
   text: Type.String({ description: "Text to speak." }),
@@ -76,19 +77,22 @@ export function createTtsTool(opts?: {
         // still delivered via details.media. Sanitize first so a crafted
         // utterance cannot inject reply directives when the tool output is
         // rendered in verbose mode.
-        return {
-          content: [{ type: "text", text: `(spoken) ${sanitizeTranscriptForToolContent(text)}` }],
-          details: {
-            audioPath: result.audioPath,
-            provider: result.provider,
-            ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-            media: {
-              mediaUrl: result.audioPath,
-              trustedLocalMedia: true,
-              ...(result.audioAsVoice || result.voiceCompatible ? { audioAsVoice: true } : {}),
+        return markCoreTtsToolResult(
+          {
+            content: [{ type: "text", text: `(spoken) ${sanitizeTranscriptForToolContent(text)}` }],
+            details: {
+              audioPath: result.audioPath,
+              provider: result.provider,
+              ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+              media: {
+                mediaUrl: result.audioPath,
+                trustedLocalMedia: true,
+                ...(result.audioAsVoice || result.voiceCompatible ? { audioAsVoice: true } : {}),
+              },
             },
           },
-        };
+          [result.audioPath],
+        );
       }
 
       throw new Error(result.error ?? "TTS conversion failed");

@@ -36,6 +36,7 @@ import {
   resolveSessionEntry,
   upsertSessionEntryCore,
 } from "./session-accessor.sqlite-entry.js";
+import { readSessionStoreSummaryReadOnly } from "./session-accessor.sqlite-summary.js";
 import type {
   SessionAccessScope,
   LogicalSessionAccessScope,
@@ -88,6 +89,7 @@ export {
   // fresh-reads and checks sessionId inside its locked commit, and void/entry has no rebound signal.
   replaceSessionEntrySync,
   resolveSessionEntryFromStore,
+  readSessionStoreSummaryReadOnly,
   upsertSessionEntryCore,
 };
 
@@ -239,7 +241,7 @@ export function resolveSessionEntryCandidateTarget(
     return {
       agentId: resolvedAgentId,
       candidateKey,
-      entry: structuredClone(resolved.existing),
+      entry: resolved.existing,
       persisted: true,
       sessionKey: resolved.normalizedKey,
     };
@@ -261,8 +263,16 @@ function resolveSessionEntryStoreTarget(
   scope: LogicalSessionAccessScope,
 ): ResolvedSessionEntryStoreTarget {
   const requestedKey = scope.sessionKey.trim();
-  const canonicalKey = resolveSessionStoreKey({ cfg: scope.cfg, sessionKey: requestedKey });
-  const agentId = resolveSessionStoreAgentId(scope.cfg, canonicalKey);
+  // Scoped aliases can become global, so validate both the requested and fixed-store owners.
+  const requestedAgentId = scope.agentId
+    ? resolveSessionStoreAgentId(scope.cfg, requestedKey, scope.agentId)
+    : undefined;
+  const canonicalKey = resolveSessionStoreKey({
+    cfg: scope.cfg,
+    sessionKey: requestedKey,
+    storeAgentId: requestedAgentId,
+  });
+  const agentId = resolveSessionStoreAgentId(scope.cfg, canonicalKey, requestedAgentId);
   const scanTargets = buildLogicalSessionEntryCandidateKeys({
     agentId,
     canonicalKey,
@@ -349,7 +359,7 @@ export async function updateResolvedSessionEntry<T>(
   }
   let updateResult: T | undefined;
   const updated = await patchSessionEntryCore(
-    { sessionKey: target.storeKey, storePath: target.storePath },
+    { agentId: target.agentId, sessionKey: target.storeKey, storePath: target.storePath },
     async (entry) => {
       const context: ResolvedSessionEntryUpdateContext = {
         agentId: target.agentId,
@@ -387,11 +397,9 @@ export function listSessionEntriesCore(scope: SessionEntryListScope = {}): Sessi
 }
 
 /**
- * Borrowed keyed view over one resolved store for synchronous read-only hot paths.
- * Unlike loadSessionEntry, `get` is a raw exact persisted-key probe with no alias
- * or canonical-key resolution. The first probe materializes one validated store
- * snapshot; later probes and `entries` reuse its parsed rows. Rows are borrowed,
- * not cloned: callers must not mutate them and must drop the view before any await.
+ * Synchronous read view: `get` queries one exact persisted key without alias resolution;
+ * `entries` caches listing metadata or loads complete entries. Rows and nested values are
+ * borrowed: callers must not mutate them and must drop the view before any await.
  */
 export function openSessionEntryReadView(
   scope: Omit<SessionEntryListScope, "clone" | "readConsistency"> = {},

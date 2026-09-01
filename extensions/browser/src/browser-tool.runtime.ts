@@ -47,6 +47,7 @@ export {
   browserArmFileChooser,
   browserConsoleMessages,
   browserRequests,
+  browserErrors,
   browserPageText,
   browserEmulateSetting,
   browserDownload,

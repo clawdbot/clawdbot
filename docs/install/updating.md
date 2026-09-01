@@ -13,6 +13,10 @@ For Docker, Podman, and Kubernetes image replacements, see
 gateway runs startup-safe upgrade work before readiness and exits if mounted
 state needs manual repair.
 
+Before a significant update, [create a verified backup](#before-updating-create-a-verified-backup).
+Automatic config copies and migration recovery originals are not a full-state
+backup.
+
 ## Recommended: `openclaw update`
 
 Detects your install type (npm, pnpm, Bun, or git), fetches the latest version, runs `openclaw doctor`, and restarts the gateway.
@@ -69,15 +73,54 @@ not a self-contained package artifact. Use `openclaw update --channel dev` to
 switch to the supported checkout and build flow. Other explicit package specs
 keep their package-manager behavior.
 
+After a beta core update, eligible official npm plugins follow the exact installed
+beta version, including one-off `--tag` updates from a stable installation.
 For managed plugins, a missing beta release is a warning, not a failure: the
 core update can still succeed while a plugin falls back to its recorded
 default/latest release.
 
 See [Release channels](/install/development-channels) for channel semantics.
 
+## Retire update recovery data
+
+Once you have verified the update and your conversations, preview retained
+migration originals:
+
+```bash
+openclaw update cleanup --dry-run
+```
+
+Use the same profile and state/config overrides as the update, and check the
+state directory printed in the report. The metadata-only preview can run while
+the Gateway is active. To apply, stop that Gateway yourself, wait for other
+SQLite maintenance to finish, then run `openclaw update cleanup`. Cleanup never
+stops or restarts the Gateway. Confirmation defaults to **No**; automation must
+explicitly pass `--yes`, including when using `--json`.
+
+Cleanup permanently gives up rollback to eligible originals, including repaired
+branches and old provider metadata. Current SQLite history, operator backups,
+and protected or unknown artifacts remain. It is not a substitute for a
+[pre-update backup](#before-updating-create-a-verified-backup). See
+[Update cleanup](/cli/update#update-cleanup) for eligibility, JSON output, and
+resuming interrupted deletion.
+
 ## Switch between npm and git installs
 
 Installer-driven switches verify the replacement before the working owner is retired. Source wrappers are published atomically; same-path npm shim transitions use an identity-checked backup that is restored on failure, so a failed candidate leaves the previous command runnable. The `openclaw update` command prints its final success result only after post-core convergence and requested restart health checks succeed.
+
+If a CLI update fails after installing a usable replacement, recovery uses the
+newly installed CLI to restart the Gateway it stopped, preserving the managed
+service definition. A rejected staged candidate leaves the original package intact,
+and recovery restarts that usable installation. A failed staged swap can also
+recover when the updater verifies that the original package and every changed
+launcher were restored. Incomplete rollback keeps the Gateway stopped and retains
+available backups for repair. After the live package has been modified, a blocking
+lifecycle, verification, or Doctor failure also leaves the Gateway stopped because
+the replacement is not known to be runnable. Repair the reported failure, rerun
+`openclaw update`, and check `openclaw gateway status --deep`.
+If an older target does not support preserving the service definition, automatic
+recovery stops and reports the error; inspect the service before restarting it
+manually.
 
 Use channels to change the install type. The updater keeps your state, config,
 credentials, and workspace in `~/.openclaw`; it only changes which OpenClaw
@@ -119,10 +162,38 @@ service's Node path, and checks that Node version against the target release's
 
 Teams running a gateway directly from a git checkout on a server can update it
 with `scripts/update-gateway.sh` from inside that checkout. It is the reference
-for an efficient source-server update: it restores tracked build outputs that
-`pnpm build` rewrites, fails closed on any other local changes, fast-forwards
-`main` (or rebases a local server branch onto `origin/main`), installs
-dependencies, builds clean, and restarts the gateway.
+for a source-server update: it fails closed on all tracked local changes,
+including build outputs, fast-forwards `main` (or rebases a local server branch
+onto `origin/main`), installs dependencies with a frozen lockfile, builds clean,
+and restarts the gateway only after the build succeeds.
+
+This reference script requires **Corepack** and creates temporary shims without
+global activation before fetching. After fetching, it freezes the target commit
+and checks that its exact pnpm pin can run through those shims in a private probe
+workspace. The probe contains only package-manager metadata, not the target's
+dependencies, hooks, or configuration. Missing or invalid metadata, provisioning
+failure, or a version mismatch stops before checkout update or restart; repair
+the target pin or install a compatible Corepack, then retry.
+
+The same fetched commit is used for fast-forward or rebase. This is a fetched-target
+toolchain preflight, not a complete preflight of a rebased local branch or its
+build, and the script does not roll back later install or build failures. Local
+branch overrides remain in effect: install and build resolve the resulting
+checkout's pin, which may differ from the probed target pin. Operators must verify
+those overrides and maintain a recovery path. The same shim directory leads
+nested commands' `PATH`, and child workspace and lockfile roots follow each
+operation's directory. Bootstrap, install, or build failure prevents restart.
+The hosted [installers](/install/installer) also support npm-owned temporary provisioning
+when Corepack is unavailable; this server script deliberately requires Corepack.
+
+<Warning>
+A running older updater or server script keeps its old bootstrap code even if it
+checks out files containing this repair. If that older entry point invokes
+ambient pnpm, the operator must select a target-compatible pnpm launcher before
+the first update across the pin change. Validate that launcher against both the
+intended target and the known-good rollback ref before starting the update.
+Updating target files alone does not repair an older running binary.
+</Warning>
 
 Generated output roots such as `dist`, `dist-runtime`, and package-local
 `dist` directories must be real directories. Builds refuse symbolic-link roots
@@ -237,11 +308,14 @@ release predates pnpm 11's isolated global-package layout, so its updater can
 mistake another npm installation for the running CLI. Later releases retain
 pnpm ownership and follow the replacement package root during updates. They
 also use the owning manager's reported global bin directory and stop before
-mutation when the available pnpm command reports another global root or major,
+mutation when the available pnpm command reports another global root,
 or when the invoking package is orphaned or not the only active OpenClaw
 install there.
 
-If OpenClaw shares a pnpm 11 global install group with another package, the
+pnpm 12 retains the `global/v11` layout; the layout number does not need to match
+the pnpm CLI major version.
+
+If OpenClaw shares a pnpm global install group with another package, the
 automatic updater stops before changing the group. Update the original
 comma-separated group manually so its sibling packages and build policy stay
 intact.
@@ -440,7 +514,16 @@ omitted files.
 
 For a byte-for-byte recovery point that includes volatile artifacts omitted by
 the portable archive, stop the Gateway and use a filesystem, volume, or VM
-snapshot provided by your platform.
+snapshot provided by your platform. This matters for older file-backed installs:
+the portable archive omits matching JSONL transcripts and logs even when they
+are no longer being written.
+
+When migrating large legacy histories, leave room for the original files, a
+temporary SQLite spool, and the destination database/WAL simultaneously. SQLite
+can be larger than the original JSONL; streaming import does not imply a fixed
+RAM requirement or migration time. Check free space on both the system temporary
+volume and the state volume. See [Session SQLite migration](/cli/doctor#session-sqlite-migration)
+for staging and memory details.
 
 ### Roll back a package install
 
@@ -459,6 +542,13 @@ metadata, restarts the Gateway, and verifies the running version. If the stored
 channel is `extended-stable`, use
 `--channel stable --tag <known-good-version>` because exact one-off tags cannot
 be combined with the `extended-stable` selector.
+
+Downgrade finalization runs in the installed target when it supports the update
+handoff. After successful validation, current targets save the configuration with
+their own version, including when a one-off `--tag` leaves the channel unchanged.
+This allows later Gateway restarts without an older-binary override. Older targets
+that lack this finalization behavior can still refuse service activation because
+the configuration records a newer writer; follow the reported recovery guidance.
 
 Package updates stage and verify the candidate before activation. If the
 filesystem swap or command-shim replacement fails, OpenClaw restores the old
@@ -489,13 +579,23 @@ from immediately applying a newer release by setting
 
 ### Roll back a source checkout
 
-Use a clean checkout and select a known-good tag or commit:
+Use a clean checkout and select a known-good tag or commit. First verify that
+your Corepack bootstrap supports that ref's pnpm pin as described in
+[Source-checkout servers](#source-checkout-servers-reference-script):
 
 ```bash
 git fetch --all --tags
 git checkout --detach <known-good-tag-or-commit>
-pnpm install && pnpm build
-openclaw gateway restart
+(
+  pnpm_shims="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pnpm.XXXXXX")" || exit
+  trap 'rm -rf "$pnpm_shims"' EXIT
+  corepack enable --install-directory "$pnpm_shims" pnpm || exit
+  export PATH="$pnpm_shims:$PATH"
+  export NPM_CONFIG_WORKSPACE_DIR="$PWD" npm_config_workspace_dir="$PWD"
+  export PNPM_CONFIG_LOCKFILE_DIR="$PWD" pnpm_config_lockfile_dir="$PWD"
+  "$pnpm_shims/pnpm" install --frozen-lockfile || exit
+  "$pnpm_shims/pnpm" build
+) && openclaw gateway restart
 ```
 
 To return to latest: `git checkout main && git pull`.

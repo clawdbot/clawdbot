@@ -14,7 +14,7 @@ vi.mock("./cli-credentials.js", () => ({
   readMiniMaxCliCredentialsCached: () => null,
 }));
 
-vi.mock("../plugins/provider-runtime.js", () => ({
+vi.mock("../plugins/provider-external-auth.js", () => ({
   resolveExternalAuthProfilesWithPlugins: () => [],
 }));
 

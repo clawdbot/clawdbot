@@ -673,6 +673,8 @@ export class NodeWorkerWorkspaceRuntime {
           }
           const hashMemo = takeWorkspaceHashMemo(this.workspaceHashMemos, generationKey);
           const stdout = await runNodeWorkerWorkspaceTransfer({
+            seedsRoot: this.seedsRoot,
+            gatewayNamespace: input.gatewayNamespace,
             gatewayUrl: gateway.url,
             gatewayTlsFingerprint: gateway.tlsFingerprint,
             gatewayCloudflareAccess: gateway.cloudflareAccess,
@@ -685,7 +687,9 @@ export class NodeWorkerWorkspaceRuntime {
           });
           // A snapshot sent before this transfer knows only the old base. Keep the latest
           // result across command gaps; supersede it on transfer or drop it with its generation.
-          this.latestTransferredManifest.set(generationKey, stdout);
+          if (!(input.transfer.direction === "download" && input.transfer.attachments)) {
+            this.latestTransferredManifest.set(generationKey, stdout);
+          }
           return projectNodeWorkerWorkspaceExecResult(workspacePath, {
             stdout: `${stdout}\n`,
             stderr: "",

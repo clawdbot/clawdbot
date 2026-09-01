@@ -4,17 +4,11 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { icons } from "../../components/icons.ts";
-import {
-  renderChatPaneComposerControls,
-  resolveChatModelCatalogState,
-} from "./chat-pane-session-controls.ts";
+import { t } from "../../i18n/index.ts";
+import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
 import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { renderChatPermissionPicker } from "./components/chat-permission-picker.ts";
-
-const { showToastMock } = vi.hoisted(() => ({ showToastMock: vi.fn() }));
-
-vi.mock("../../lib/toast.ts", () => ({ showToast: showToastMock }));
 
 function iconMarkup(icon: unknown): string | undefined {
   const container = document.createElement("div");
@@ -22,118 +16,93 @@ function iconMarkup(icon: unknown): string | undefined {
   return container.querySelector("svg")?.innerHTML;
 }
 
-describe("chat model catalog state", () => {
-  const cachedCatalog = [
-    {
-      id: "gpt-5.6-luna",
-      name: "GPT-5.6 Luna",
-      provider: "openai",
-      available: false,
-    },
-  ];
-
+describe("chat pane composer controls", () => {
   it.each([
-    {
-      label: "ready",
-      state: {
-        chatModelCatalog: [],
-        chatModelCatalogError: null,
-        chatModelsLoading: false,
-        connected: true,
-      },
-      expected: { hasSnapshot: true, status: "ready" },
-    },
-    {
-      label: "ready with a cached snapshot",
-      state: {
-        chatModelCatalog: cachedCatalog,
-        chatModelCatalogError: null,
-        chatModelsLoading: false,
-        connected: true,
-      },
-      expected: { hasSnapshot: true, status: "ready" },
-    },
-    {
-      label: "loading without a cached snapshot",
-      state: {
-        chatModelCatalog: [],
-        chatModelCatalogError: null,
-        chatModelsLoading: true,
-        connected: true,
-      },
-      expected: { hasSnapshot: false, status: "loading" },
-    },
+    { label: "empty", cached: false, connected: true, error: null, message: "No models available" },
     {
       label: "offline",
-      state: {
-        chatModelCatalog: cachedCatalog,
-        chatModelCatalogError: null,
-        chatModelsLoading: false,
-        connected: false,
-      },
-      expected: { hasSnapshot: true, status: "offline" },
+      cached: true,
+      connected: false,
+      error: "metadata unavailable",
+      message: "Offline",
     },
     {
-      label: "error",
-      state: {
-        chatModelCatalog: cachedCatalog,
-        chatModelCatalogError: "metadata unavailable",
-        chatModelsLoading: false,
-        connected: true,
-      },
-      expected: { hasSnapshot: true, status: "error" },
-    },
-  ])("resolves $label", ({ state, expected }) => {
-    expect(resolveChatModelCatalogState(state)).toEqual(expected);
-  });
-});
-
-describe("chat pane composer controls", () => {
-  it("assembles model and permission controls as separate footer inputs", () => {
-    const container = document.createElement("div");
-    const state = {
-      chatRunId: null,
+      label: "failed with a snapshot",
+      cached: true,
       connected: true,
-      client: {},
-      chatLoading: false,
-      chatModelCatalog: [],
-      sessions: { state: { modelOverrides: {} }, think: () => undefined, patch: vi.fn() },
-      chatModelSwitchPromises: {},
-      sessionKey: "main",
-      chatModelsLoading: false,
-      chatSending: false,
-      sessionsResult: null,
-      chatStream: null,
-    } as unknown as ChatPageHost;
-    const onModelSetup = vi.fn();
-    const toastAnchor = document.createElement("div");
+      error: "metadata unavailable",
+      message: null,
+    },
+    {
+      label: "failed without a snapshot",
+      cached: false,
+      connected: true,
+      error: "metadata unavailable",
+      message: "Models unavailable",
+    },
+  ])(
+    "renders separate footer inputs with a $label catalog",
+    ({ cached, connected, error, message }) => {
+      const container = document.createElement("div");
+      const state = {
+        chatRunId: null,
+        connected,
+        client: {},
+        chatLoading: false,
+        chatModelCatalog: cached
+          ? [{ id: "cached-model", name: "Cached Model", provider: "openai", available: false }]
+          : [],
+        chatModelCatalogError: error,
+        sessions: { state: { modelOverrides: {} }, think: () => undefined, patch: vi.fn() },
+        chatModelSwitchPromises: {},
+        sessionKey: "main",
+        chatModelsLoading: false,
+        chatSending: false,
+        sessionsResult: null,
+        chatStream: null,
+      } as unknown as ChatPageHost;
+      const onModelSetup = vi.fn();
 
-    const controls = renderChatPaneComposerControls({
-      state,
-      selectedSession: undefined,
-      agentDefaultModel: undefined,
-      modelAccess: { allowed: true, requiredScope: "operator.write" },
-      effortAccess: { allowed: true, requiredScope: "operator.write" },
-      permissionAccess: { allowed: true, requiredScope: "operator.write" },
-      canSelectFull: true,
-      toastAnchor,
-      onModelSetup,
-    });
-    render(controls.composerControls, container);
+      const controls = renderChatPaneComposerControls({
+        state,
+        selectedSession: undefined,
+        agentDefaultModel: undefined,
+        agentDefaultPermissionMode: "guarded",
+        modelAccess: { allowed: true, requiredScope: "operator.write" },
+        effortAccess: { allowed: true, requiredScope: "operator.write" },
+        permissionAccess: { allowed: true, requiredScope: "operator.write" },
+        canSelectFull: true,
+        onModelSetup,
+      });
+      render(controls.composerControls, container);
 
-    expect(Array.from(container.children).map((node) => node.className)).toEqual([
-      "chat-composer-model-control",
-    ]);
-    expect(container.querySelector('[data-chat-provider-usage="true"]')).toBeNull();
-    expect(container.querySelector('[data-chat-permission-select="true"]')).toBeNull();
-    const permissionContainer = document.createElement("div");
-    render(renderChatPermissionPicker(controls.permissionPicker), permissionContainer);
-    expect(
-      permissionContainer.querySelector('[data-chat-permission-select="true"]'),
-    ).not.toBeNull();
-    container.querySelector<HTMLButtonElement>('[data-chat-model-setup="true"]')?.click();
-    expect(onModelSetup).toHaveBeenCalledOnce();
-  });
+      expect(Array.from(container.children).map((node) => node.className)).toEqual([
+        "chat-composer-model-control",
+      ]);
+      expect(container.querySelector('[data-chat-provider-usage="true"]')).toBeNull();
+      expect(container.querySelector('[data-chat-permission-select="true"]')).toBeNull();
+      const catalogMessage = container.querySelector(".chat-controls__model-catalog-state");
+      if (message) {
+        expect(catalogMessage?.textContent).toContain(message);
+      } else {
+        expect(catalogMessage).toBeNull();
+      }
+      expect(
+        container.querySelector('[data-chat-model-select="true"]')?.getAttribute("aria-disabled"),
+      ).toBe(String(!connected));
+      expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(cached ? 1 : 0);
+      const permissionContainer = document.createElement("div");
+      render(renderChatPermissionPicker(controls.permissionPicker), permissionContainer);
+      expect(
+        permissionContainer.querySelector('[data-chat-permission-select="true"]'),
+      ).not.toBeNull();
+      expect(
+        permissionContainer.querySelector('[data-chat-permission-select="true"]')?.textContent,
+      ).toContain("Default (Guarded)");
+      container.querySelector<HTMLButtonElement>('[data-chat-model-setup="true"]')?.click();
+      expect(onModelSetup).toHaveBeenCalledTimes(error ? 0 : 1);
+    },
+  );
 
   it("renders a distinct active icon for every permission mode", () => {
     const activeIcons = new Set<string>();
@@ -153,6 +122,35 @@ describe("chat pane composer controls", () => {
     }
     expect(activeIcons.size).toBe(5);
   });
+
+  it.each([
+    [undefined, "Default"],
+    ["read-only", "Default (Read Only)"],
+    ["guarded", "Default (Guarded)"],
+    ["workspace", "Default (Workspace)"],
+    ["full", "Default (Full Access)"],
+  ] as const)(
+    "labels inherited permissions for %s without selecting a mode",
+    (defaultMode, label) => {
+      const container = document.createElement("div");
+      const onSelect = vi.fn();
+      render(
+        renderChatPermissionPicker({ canSelectFull: false, defaultMode, onSelect }),
+        container,
+      );
+      const trigger = container.querySelector('[data-chat-permission-select="true"]');
+      const option = container.querySelector('[data-chat-permission-option="default"]');
+      expect(trigger?.textContent?.trim()).toBe(label);
+      expect(trigger?.getAttribute("aria-label")).toBe(`Permissions: ${label}`);
+      expect(trigger?.getAttribute("data-chat-select-value")).toBe("");
+      expect(
+        option?.querySelector(".chat-controls__permission-option-title")?.textContent?.trim(),
+      ).toBe(label);
+      expect(option?.getAttribute("aria-checked")).toBe("true");
+      expect(option?.textContent).toContain("Follow the agent's configured policy.");
+      expect(onSelect).not.toHaveBeenCalled();
+    },
+  );
 
   it("links the permission picker to the permission modes guide", () => {
     const container = document.createElement("div");
@@ -200,11 +198,11 @@ describe("chat pane composer controls", () => {
         permissionMode: "full",
       },
       agentDefaultModel: undefined,
+      agentDefaultPermissionMode: "guarded",
       modelAccess: { allowed: true, requiredScope: "operator.write" },
       effortAccess: { allowed: true, requiredScope: "operator.write" },
       permissionAccess: { allowed: true, requiredScope: "operator.write" },
       canSelectFull: false,
-      toastAnchor: document.createElement("div"),
       onModelSetup: vi.fn(),
     });
     render(renderChatPermissionPicker(controls.permissionPicker), container);
@@ -231,6 +229,10 @@ describe("chat pane composer controls", () => {
       expect(renderedIcon?.getAttribute("stroke-width")).toBe("2");
     }
     expect(defaultOption?.textContent).toContain("Follow the agent's configured policy");
+    expect(defaultOption?.textContent).toContain("Default (Guarded)");
+    expect(
+      container.querySelector('[data-chat-permission-select="true"]')?.textContent?.trim(),
+    ).toBe("Full Access");
     expect(full?.hasAttribute("disabled")).toBe(true);
     expect(full?.getAttribute("aria-checked")).toBe("true");
     expect(full?.querySelector(".chat-controls__permission-shortcut")).toBeNull();
@@ -239,7 +241,9 @@ describe("chat pane composer controls", () => {
     expect(full?.getAttribute("aria-label")).toContain("operator.admin");
 
     dropdown?.dispatchEvent(new KeyboardEvent("keydown", { key: "3", bubbles: true }));
-    await Promise.resolve();
+    await vi.waitFor(() =>
+      expect(getPendingChatPickerPatch(state, state.sessionKey)).toBeUndefined(),
+    );
     expect(patch).toHaveBeenCalledWith(
       "agent:main:permission-test",
       { permissionMode: "guarded" },
@@ -256,22 +260,10 @@ describe("chat pane composer controls", () => {
     );
   });
 
-  it.each([
-    { label: "running", chatRunId: null, hasActiveRun: true, status: "running", toastCount: 1 },
-    {
-      label: "locally running with a stale idle session row",
-      chatRunId: "run-active",
-      hasActiveRun: false,
-      status: "done",
-      toastCount: 1,
-    },
-    { label: "idle", chatRunId: null, hasActiveRun: false, status: "done", toastCount: 0 },
-  ] as const)("shows the next-run notice only for a $label session", async (sessionCase) => {
-    showToastMock.mockClear();
+  it("shows an applying state for a permission update from another client", () => {
     const patch = vi.fn(async () => ({}));
-    const toastAnchor = document.createElement("div");
     const state = {
-      chatRunId: sessionCase.chatRunId,
+      chatRunId: "run-active",
       connected: true,
       client: {},
       chatLoading: false,
@@ -284,39 +276,44 @@ describe("chat pane composer controls", () => {
       sessionsResult: null,
       chatStream: null,
     } as unknown as ChatPageHost;
-    const controls = renderChatPaneComposerControls({
+    const selectedSession = {
+      key: state.sessionKey,
+      kind: "direct" as const,
+      permissionMode: "full" as const,
+      permissionModePending: true,
+    };
+    const controlParams = {
       state,
-      selectedSession: {
-        key: state.sessionKey,
-        kind: "direct",
-        permissionMode: "read-only",
-        hasActiveRun: sessionCase.hasActiveRun,
-        status: sessionCase.status,
-      },
+      selectedSession,
       agentDefaultModel: undefined,
-      modelAccess: { allowed: true, requiredScope: "operator.write" },
-      effortAccess: { allowed: true, requiredScope: "operator.write" },
-      permissionAccess: { allowed: true, requiredScope: "operator.write" },
+      modelAccess: { allowed: true, requiredScope: "operator.write" } as const,
+      effortAccess: { allowed: true, requiredScope: "operator.write" } as const,
+      permissionAccess: { allowed: true, requiredScope: "operator.write" } as const,
       canSelectFull: true,
-      toastAnchor,
       onModelSetup: vi.fn(),
-    });
-
-    await controls.permissionPicker.onSelect("guarded");
-
-    expect(showToastMock).toHaveBeenCalledTimes(sessionCase.toastCount);
-    if (sessionCase.toastCount === 1) {
-      expect(showToastMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          anchor: toastAnchor,
-          durationMs: 5_000,
-          message: "New permissions apply to the next run.",
-        }),
+    };
+    const container = document.createElement("div");
+    const renderPicker = () =>
+      render(
+        renderChatPermissionPicker(renderChatPaneComposerControls(controlParams).permissionPicker),
+        container,
       );
-    }
+
+    renderPicker();
+    const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
+    expect(trigger.textContent).toContain("Applying permissions");
+    expect(trigger.getAttribute("aria-label")).not.toContain(
+      t("chat.permissionControls.modes.full.label"),
+    );
+    expect(trigger.disabled).toBe(true);
+
+    selectedSession.permissionModePending = false;
+    renderPicker();
+    expect(trigger.textContent).toContain(t("chat.permissionControls.modes.full.label"));
+    expect(trigger.disabled).toBe(false);
   });
 
-  it("holds the session send barrier until a Full Access selection settles", async () => {
+  it("holds permission display and the send barrier until a Full Access update is applied", async () => {
     const pending = createDeferred<Record<string, never>>();
     const state = {
       chatRunId: null,
@@ -337,23 +334,48 @@ describe("chat pane composer controls", () => {
       sessionsResult: null,
       chatStream: null,
     } as unknown as ChatPageHost;
-    const controls = renderChatPaneComposerControls({
+    const selectedSession = {
+      key: state.sessionKey,
+      kind: "direct" as const,
+      permissionMode: "workspace" as "workspace" | "full",
+    };
+    const controlParams = {
       state,
-      selectedSession: { key: state.sessionKey, kind: "direct" },
+      selectedSession,
       agentDefaultModel: undefined,
-      modelAccess: { allowed: true, requiredScope: "operator.write" },
-      effortAccess: { allowed: true, requiredScope: "operator.write" },
-      permissionAccess: { allowed: true, requiredScope: "operator.write" },
+      modelAccess: { allowed: true, requiredScope: "operator.write" } as const,
+      effortAccess: { allowed: true, requiredScope: "operator.write" } as const,
+      permissionAccess: { allowed: true, requiredScope: "operator.write" } as const,
       canSelectFull: true,
-      toastAnchor: document.createElement("div"),
       onModelSetup: vi.fn(),
-    });
-
+    };
+    const controls = renderChatPaneComposerControls(controlParams);
     const selection = controls.permissionPicker.onSelect("full");
-    expect(getPendingChatPickerPatch(state, state.sessionKey)).toBeDefined();
+    const container = document.createElement("div");
+    try {
+      expect(getPendingChatPickerPatch(state, state.sessionKey)).toBeDefined();
+      selectedSession.permissionMode = "full";
+      const pendingControls = renderChatPaneComposerControls(controlParams);
+      render(renderChatPermissionPicker(pendingControls.permissionPicker), container);
+      const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
+      expect(trigger.textContent).toContain("Applying permissions");
+      expect(trigger.getAttribute("data-chat-select-value")).toBe("workspace");
+      expect(trigger.disabled).toBe(true);
+      void pendingControls.permissionPicker.onSelect("guarded");
+      void controls.permissionPicker.onSelect("read-only");
+      expect(state.sessions.patch).toHaveBeenCalledOnce();
+    } finally {
+      pending.resolve({});
+      await selection;
+    }
 
-    pending.resolve({});
-    await selection;
+    render(
+      renderChatPermissionPicker(renderChatPaneComposerControls(controlParams).permissionPicker),
+      container,
+    );
+    const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
+    expect(trigger.textContent).toContain(t("chat.permissionControls.modes.full.label"));
+    expect(trigger.disabled).toBe(false);
     expect(getPendingChatPickerPatch(state, state.sessionKey)).toBeUndefined();
   });
 
@@ -403,7 +425,6 @@ describe("chat pane composer controls", () => {
     },
   ] as const)("suppresses alerts for a $label", async (lifecycleCase) => {
     const { invalidate, result } = lifecycleCase;
-    showToastMock.mockClear();
     const pending = createDeferred<Record<string, never> | null>();
     const state = {
       assistantAgentId: "main",
@@ -438,7 +459,6 @@ describe("chat pane composer controls", () => {
       effortAccess: { allowed: true, requiredScope: "operator.write" },
       permissionAccess: { allowed: true, requiredScope: "operator.write" },
       canSelectFull: true,
-      toastAnchor: document.createElement("div"),
       onModelSetup: vi.fn(),
     });
 
@@ -451,12 +471,10 @@ describe("chat pane composer controls", () => {
     }
     await selection;
 
-    expect(showToastMock).not.toHaveBeenCalled();
     expect(state.chatError).toBeNull();
   });
 
   it("reports an unavailable permission update on the current session", async () => {
-    showToastMock.mockClear();
     const state = {
       chatRunId: "remote-worker-run",
       chatError: null,
@@ -478,23 +496,29 @@ describe("chat pane composer controls", () => {
       chatStream: null,
       requestUpdate: vi.fn(),
     } as unknown as ChatPageHost;
-    const controls = renderChatPaneComposerControls({
+    const controlParams = {
       state,
-      selectedSession: { key: state.sessionKey, kind: "direct", hasActiveRun: true },
+      selectedSession: { key: state.sessionKey, kind: "direct" as const, hasActiveRun: true },
       agentDefaultModel: undefined,
-      modelAccess: { allowed: true, requiredScope: "operator.write" },
-      effortAccess: { allowed: true, requiredScope: "operator.write" },
-      permissionAccess: { allowed: true, requiredScope: "operator.write" },
+      modelAccess: { allowed: true, requiredScope: "operator.write" } as const,
+      effortAccess: { allowed: true, requiredScope: "operator.write" } as const,
+      permissionAccess: { allowed: true, requiredScope: "operator.write" } as const,
       canSelectFull: true,
-      toastAnchor: document.createElement("div"),
       onModelSetup: vi.fn(),
-    });
+    };
+    const controls = renderChatPaneComposerControls(controlParams);
 
     await controls.permissionPicker.onSelect("full");
 
-    expect(showToastMock).not.toHaveBeenCalled();
     expect(state.chatError).toContain("Failed to update permissions");
-    expect(state.requestUpdate).toHaveBeenCalledOnce();
+    const container = document.createElement("div");
+    render(
+      renderChatPermissionPicker(renderChatPaneComposerControls(controlParams).permissionPicker),
+      container,
+    );
+    const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
+    expect(trigger.textContent).not.toContain("Applying permissions");
+    expect(trigger.disabled).toBe(false);
   });
 
   it.each([
@@ -539,7 +563,6 @@ describe("chat pane composer controls", () => {
         effortAccess: { allowed: true, requiredScope: "operator.write" } as const,
         permissionAccess: { allowed: true, requiredScope: "operator.write" } as const,
         canSelectFull: true,
-        toastAnchor: document.createElement("div"),
         onModelSetup: vi.fn(),
       };
       render(renderChatPaneComposerControls(controlParams).composerControls, container);

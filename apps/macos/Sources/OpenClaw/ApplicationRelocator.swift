@@ -183,6 +183,7 @@ enum ApplicationRelocator {
         "OPENCLAW_REPLACEMENT_SUPERVISOR_LABEL"
     private nonisolated static let replacementSupervisorPlistEnvironmentKey =
         "OPENCLAW_REPLACEMENT_SUPERVISOR_PLIST"
+    nonisolated static let relocationRelaunchArgument = "--openclaw-relocation-relaunch"
 
     static func recommendation(for environment: Environment) -> Recommendation {
         guard !environment.isDebugOrTesting,
@@ -251,7 +252,16 @@ enum ApplicationRelocator {
             bundle: bundle,
             fileManager: fileManager,
             processInfo: processInfo)
-        switch self.recommendation(for: environment) {
+        let recommendation = self.recommendation(for: environment)
+        if self.shouldStopRelocationRelaunch(
+            recommendation: recommendation,
+            arguments: processInfo.arguments)
+        {
+            self.showFailure(
+                "OpenClaw is installed in Applications, but couldn’t reopen automatically. Open it there manually.")
+            return .continueLaunch(startUpdater: false)
+        }
+        switch recommendation {
         case .continueLaunch:
             #if DEBUG
             let monitorDebugReplacement = processInfo.environment["OPENCLAW_MONITOR_APP_REPLACEMENT"] == "1"
@@ -290,6 +300,19 @@ enum ApplicationRelocator {
                 "Move it to Applications manually to enable updates and launch at login."
             showFailure(message)
             return .continueLaunch(startUpdater: false)
+        }
+    }
+
+    static func shouldStopRelocationRelaunch(
+        recommendation: Recommendation,
+        arguments: [String]) -> Bool
+    {
+        guard arguments.contains(self.relocationRelaunchArgument) else { return false }
+        switch recommendation {
+        case .handOff, .offerInstall:
+            return true
+        case .continueLaunch, .cannotInstall:
+            return false
         }
     }
 
@@ -1006,10 +1029,12 @@ extension ApplicationRelocator {
         let processInfo = ProcessInfo.processInfo
         helper.arguments = [
             "-c",
-            "while /bin/kill -0 \"$2\" 2>/dev/null; do /bin/sleep 0.1; done; exec /usr/bin/open -n \"$1\"",
+            "while /bin/kill -0 \"$2\" 2>/dev/null; do /bin/sleep 0.1; done; " +
+                "exec /usr/bin/open -n \"$1\" --args \"$3\"",
             "openclaw-relocation",
             destination.path,
             String(processInfo.processIdentifier),
+            self.relocationRelaunchArgument,
         ]
         do {
             try helper.run()

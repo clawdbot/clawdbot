@@ -7,6 +7,7 @@ import type {
   EmbeddedAttemptAbortStatePort,
 } from "./attempt-finalize.js";
 import type { prepareEmbeddedAttemptHistory } from "./attempt-history.js";
+import type { createPromptBuildToolPolicy } from "./attempt-prompt-support.js";
 import type { prepareEmbeddedAttemptSessionRuntime } from "./attempt-session-runtime-prepare.js";
 import type { prepareEmbeddedAttemptSetup } from "./attempt-setup.js";
 import type { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
@@ -52,6 +53,7 @@ export type EmbeddedAttemptExecutionPhaseInput = {
     systemPrompt: Prepared<typeof prepareEmbeddedAttemptSystemPrompt>;
     toolBase: ReturnType<typeof prepareEmbeddedAttemptToolBase>;
     toolCatalog: ReturnType<typeof prepareEmbeddedAttemptToolCatalog>;
+    promptToolPolicy: ReturnType<typeof createPromptBuildToolPolicy>;
   };
   sessionLock: Pick<
     PreparedTranscriptLifecycle,
@@ -73,6 +75,7 @@ export type EmbeddedAttemptExecutionPhaseInput = {
   };
   state: EmbeddedAttemptExecutionState;
   lifecycle: {
+    applyPermissionMode?: NonNullable<StreamInput["applyPermissionMode"]>;
     readYieldState: () => {
       yieldAbortSettled: Promise<void> | null;
       yieldDetected: boolean;

@@ -12,8 +12,17 @@ private let gatewayConnectionLogger = Logger(subsystem: "ai.openclaw", category:
 /// This owns exactly one `GatewayChannelActor` and reuses it across all callers
 /// (ControlChannel, debug actions, SwiftUI WebChat, etc.).
 actor GatewayConnection {
-    static let shared = GatewayConnection(
-        endpointProvider: GatewayConnection.defaultEndpointProvider)
+    static let shared: GatewayConnection = {
+        #if DEBUG
+        // Rendered test views can request previews through the shared connection.
+        // Only explicitly injected test routes may reach a transport or credentials.
+        if ProcessInfo.processInfo.isRunningTests {
+            return GatewayConnection(testEndpointProvider: { throw URLError(.notConnectedToInternet) })
+        }
+        #endif
+        return GatewayConnection(endpointProvider: GatewayConnection.defaultEndpointProvider)
+    }()
+
     nonisolated static let operatorClientCaps = [
         OpenClawGatewayClientCapability.agentKind,
         OpenClawGatewayClientCapability.inlineWidgets,
@@ -457,22 +466,17 @@ actor GatewayConnection {
         guard await isCurrentServerLease(lease) else {
             throw OpenClawChatTransportSendError.notDispatched
         }
-        do {
-            let data = try await lease.client.request(
-                method: method,
-                params: params,
-                timeoutMs: timeoutMs,
-                ifCurrentConnectionGeneration: lease.socketGeneration)
-            guard await self.isCurrentServerLease(lease) else {
-                throw OpenClawChatTransportSendError.notDispatched
-            }
-            return data
-        } catch is CancellationError {
-            if Task.isCancelled {
-                throw CancellationError()
-            }
-            throw OpenClawChatTransportSendError.notDispatched
+        // Untagged channel cancellation can follow a send. Only the guard above
+        // proves this wrapper rejected the request before dispatch.
+        let data = try await lease.client.request(
+            method: method,
+            params: params,
+            timeoutMs: timeoutMs,
+            ifCurrentConnectionGeneration: lease.socketGeneration)
+        guard await self.isCurrentServerLease(lease) else {
+            throw CancellationError()
         }
+        return data
     }
 }
 
@@ -1485,6 +1489,7 @@ extension GatewayConnection {
         sessionKey: String,
         agentID: String? = nil,
         expectedSessionRoutingContract: String? = nil,
+        expectedSessionSettings: OpenClawChatSessionSettingsExpectation? = nil,
         message: String,
         thinking: String?,
         idempotencyKey: String,
@@ -1494,11 +1499,23 @@ extension GatewayConnection {
         ifCurrentRoute route: Route? = nil,
         distinguishPreDispatchRouteChange: Bool = false) async throws -> OpenClawChatSendResponse
     {
+        let supportsSettingsCAS = if let route {
+            await self.supportsServerCapability(
+                .sessionSettingsCAS,
+                ifCurrentRoute: route) == true
+        } else {
+            false
+        }
+        guard expectedSessionSettings == nil || supportsSettingsCAS else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
         let resolvedKey = self.canonicalizeSessionKey(sessionKey)
         let request = OpenClawChatGatewayRequests.sendMessage(
             sessionKey: resolvedKey,
             agentID: agentID,
             expectedSessionRoutingContract: expectedSessionRoutingContract,
+            expectedSessionSettings: expectedSessionSettings,
+            supportsSessionSettingsCAS: supportsSettingsCAS,
             message: message,
             thinking: thinking,
             idempotencyKey: idempotencyKey,

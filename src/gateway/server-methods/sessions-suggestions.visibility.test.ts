@@ -70,7 +70,7 @@ describe("session suggestion visibility and role ceilings", () => {
         {
           sessionId: "session-main",
           updatedAt: 1,
-          createdActor: { type: "human", id: ownerProfile.id },
+          createdActor: { type: "human", source: "profile", id: ownerProfile.id },
           visibility: "suggest",
         },
       );
@@ -146,7 +146,7 @@ describe("session suggestion visibility and role ceilings", () => {
         {
           sessionId: "session-draft",
           updatedAt: 1,
-          createdActor: { type: "human", id: "owner" },
+          createdActor: { type: "human", source: "profile", id: "owner" },
           visibility: "draft",
         },
       );
@@ -229,7 +229,7 @@ describe("session suggestion visibility and role ceilings", () => {
           sessionId: "session-incognito",
           updatedAt: 1,
           incognito: true,
-          createdActor: { type: "human", id: "owner" },
+          createdActor: { type: "human", source: "profile", id: "owner" },
           visibility: "suggest",
         },
       );

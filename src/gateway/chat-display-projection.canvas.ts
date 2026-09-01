@@ -17,6 +17,15 @@ function boundedReviewText(value: unknown, maxChars: number): string | undefined
   return text ? truncateUtf16Safe(text, maxChars) : undefined;
 }
 
+function isBrowserRouteIdentifier(value: unknown, maxChars: number): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= maxChars &&
+    value.trim() === value
+  );
+}
+
 function projectToolApprovalReview(value: unknown): Record<string, unknown> | undefined {
   const review = readRecord(value);
   const id = boundedReviewText(review?.id, 256);
@@ -72,9 +81,19 @@ export function projectToolResultDetails(
   }
   const projected: Record<string, unknown> = {};
   const browserTab = readRecord(record.browserTab);
-  if (typeof browserTab?.targetId === "string" && browserTab.targetId.trim()) {
+  // A partial or shortened address can select a different browser. Only display
+  // text may be truncated; route identifiers must survive projection unchanged.
+  if (
+    isBrowserRouteIdentifier(browserTab?.targetId, 128) &&
+    isBrowserRouteIdentifier(browserTab?.profile, 128) &&
+    ((browserTab?.target === "host" && browserTab.node === undefined) ||
+      (browserTab?.target === "node" && isBrowserRouteIdentifier(browserTab.node, 256)))
+  ) {
     projected.browserTab = {
-      targetId: truncateUtf16Safe(browserTab.targetId, 128),
+      targetId: browserTab.targetId,
+      profile: browserTab.profile,
+      target: browserTab.target,
+      ...(browserTab.target === "node" ? { node: browserTab.node } : {}),
       ...(typeof browserTab.url === "string"
         ? { url: truncateUtf16Safe(browserTab.url, 2_048) }
         : {}),
