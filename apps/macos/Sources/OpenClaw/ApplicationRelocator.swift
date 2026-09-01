@@ -281,19 +281,24 @@ enum ApplicationRelocator {
             guard confirmInstall(replacing: replacing) else {
                 return .continueLaunch(startUpdater: false)
             }
-            do {
-                try install(
-                    source: environment.bundleURL,
-                    destination: destination,
-                    replacing: replacing,
-                    fileManager: fileManager)
-                return relaunchAndTerminate(at: destination)
-            } catch {
-                self.logger.error("Could not install app: \(error.localizedDescription, privacy: .public)")
-                showFailure(
-                    "OpenClaw couldn’t be installed in Applications. Move it there manually, then open that copy.")
-                return .continueLaunch(startUpdater: false)
+            // Perform the bundle copy asynchronously so the main thread can finish
+            // launching and present UI. A synchronous multi-gigabyte copy here makes
+            // the app appear hung and unresponsive to SIGTERM (see issue #134736).
+            Task { @MainActor in
+                do {
+                    try await install(
+                        source: environment.bundleURL,
+                        destination: destination,
+                        replacing: replacing,
+                        fileManager: fileManager)
+                    _ = relaunchAndTerminate(at: destination)
+                } catch {
+                    self.logger.error("Could not install app: \(error.localizedDescription, privacy: .public)")
+                    showFailure(
+                        "OpenClaw couldn’t be installed in Applications. Move it there manually, then open that copy.")
+                }
             }
+            return .continueLaunch(startUpdater: false)
         case .cannotInstall:
             let message =
                 "OpenClaw is running from a temporary location. " +
@@ -983,17 +988,38 @@ extension ApplicationRelocator {
         return fileManager.isWritableFile(atPath: ancestor.path)
     }
 
+    /// Error thrown when the requested copy would recurse into the source bundle.
+    struct UnsafeCopyDestinationError: Error, Equatable, Sendable {
+        let source: URL
+        let staging: URL
+    }
+
     private static func install(
         source: URL,
         destination: URL,
         replacing: Bool,
-        fileManager: FileManager) throws
+        fileManager: FileManager) async throws
     {
         let parent = destination.deletingLastPathComponent()
         try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
         let staging = parent.appendingPathComponent(".\(destination.lastPathComponent).installing-\(UUID().uuidString)")
         defer { try? fileManager.removeItem(at: staging) }
-        try fileManager.copyItem(at: source, to: staging)
+
+        // Guard against a staging directory that resolves inside the source bundle.
+        // Without this check, copyItem can recursively descend into its own output
+        // and write without bound — observed as ~2 GB of disk writes in 40 s when
+        // the app is launched under App Translocation.
+        guard !isPath(staging, nestedIn: source) else {
+            throw UnsafeCopyDestinationError(source: source, staging: staging)
+        }
+
+        // The bundle can exceed 2 GB. Copying it synchronously on the main thread
+        // blocks applicationDidFinishLaunching, prevents any UI from appearing,
+        // and leaves the process unresponsive to SIGTERM because the main thread
+        // is stuck in a kernel write(). Run the copy on a background queue.
+        try await Task.detached(priority: .userInitiated) {
+            try FileManager.default.copyItem(at: source, to: staging)
+        }.value
 
         if replacing {
             let backupName = ".\(destination.lastPathComponent).backup-\(UUID().uuidString)"
@@ -1005,6 +1031,15 @@ extension ApplicationRelocator {
         } else {
             try fileManager.moveItem(at: staging, to: destination)
         }
+    }
+
+    /// Returns true when `nested` resolves to the same path as `root` or lies
+    /// inside its directory tree. Uses standardized file URLs so that symlinks,
+    /// relative segments, and trailing slashes cannot bypass the check.
+    static func isPath(_ nested: URL, nestedIn root: URL) -> Bool {
+        let nestedPath = nested.standardizedFileURL.path
+        let rootPath = root.standardizedFileURL.path
+        return isInside(nestedPath, root: rootPath)
     }
 
     private static func confirmInstall(replacing: Bool) -> Bool {

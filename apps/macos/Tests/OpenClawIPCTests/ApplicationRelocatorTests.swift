@@ -478,6 +478,44 @@ struct ApplicationRelocatorTests {
     }
 
     @Test
+    func `nested path detection rejects staging inside source bundle`() {
+        let source = URL(fileURLWithPath: "/private/var/folders/x/AppTranslocation/y/d/OpenClaw.app")
+
+        // Staging directory that resolves inside the source bundle must be rejected.
+        let stagingInside = source.deletingLastPathComponent()
+            .appendingPathComponent(".OpenClaw.app.installing-abc")
+        // This staging path is a sibling of the source, not nested — should be safe.
+        let stagingSibling = URL(fileURLWithPath: "/Applications/.OpenClaw.app.installing-abc")
+
+        #expect(ApplicationRelocator.isPath(stagingInside, nestedIn: source) == true)
+        #expect(ApplicationRelocator.isPath(stagingSibling, nestedIn: source) == false)
+    }
+
+    @Test
+    func `nested path detection handles identical paths and relative segments`() {
+        let root = URL(fileURLWithPath: "/Applications/OpenClaw.app")
+
+        // Identical path counts as nested.
+        #expect(ApplicationRelocator.isPath(root, nestedIn: root) == true)
+        // Direct child.
+        #expect(ApplicationRelocator.isPath(
+            root.appendingPathComponent("Contents"),
+            nestedIn: root) == true)
+        // Sibling is not nested.
+        #expect(ApplicationRelocator.isPath(
+            URL(fileURLWithPath: "/Applications/Safari.app"),
+            nestedIn: root) == false)
+        // ".." segments are resolved before comparison.
+        #expect(ApplicationRelocator.isPath(
+            URL(fileURLWithPath: "/Applications/OpenClaw.app/Contents/../Contents/MacOS"),
+            nestedIn: root) == true)
+        // A path that escapes via ".." is not nested.
+        #expect(ApplicationRelocator.isPath(
+            URL(fileURLWithPath: "/Applications/OpenClaw.app/../Safari.app"),
+            nestedIn: root) == false)
+    }
+
+    @Test
     func `launch at login hydration does not persist the current bundle path`() {
         #expect(!AppState.shouldPersistLaunchAtLoginChange(
             isInitializing: false,
