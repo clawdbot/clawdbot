@@ -273,7 +273,7 @@ suite.define(() => {
             return [style.paddingLeft, style.paddingRight, style.maskImage];
           }),
         )
-        .toEqual(["0px", "8px", expect.stringContaining("to right")]);
+        .toEqual(["0px", "8px", expect.stringContaining("90deg")]);
       await page.evaluate(() => {
         document.documentElement.dir = "rtl";
       });
@@ -296,7 +296,7 @@ suite.define(() => {
             return [style.paddingLeft, style.paddingRight, style.maskImage];
           }),
         )
-        .toEqual(["8px", "0px", expect.stringContaining("to left")]);
+        .toEqual(["8px", "0px", expect.stringContaining("270deg")]);
       await page.evaluate(() => {
         document.documentElement.dir = "ltr";
       });
