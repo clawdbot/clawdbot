@@ -42,6 +42,7 @@ import {
   closeOrphanedOperatorApprovals,
   pruneTerminalOperatorApprovals,
 } from "./operator-approval-store.js";
+import { PluginExternalVerificationRuntime } from "./plugin-external-verification-runtime.js";
 import { QuestionManager } from "./question-manager.js";
 import { publishAppliedApprovalResolution } from "./server-methods/approval-publication.js";
 import {
@@ -89,6 +90,7 @@ export function createGatewayAuxHandlers(
     nowMs: approvalStartupNowMs,
   });
   pruneTerminalOperatorApprovals({ nowMs: approvalStartupNowMs });
+  let externalVerificationRuntime: PluginExternalVerificationRuntime | null = null;
   const createApprovalManager = <TPayload>(
     approvalKind: "exec" | "plugin" | "system-agent",
     resolveAllowedDecisions: (request: TPayload) => readonly ExecApprovalDecision[],
@@ -103,7 +105,10 @@ export function createGatewayAuxHandlers(
       ...(params.resolveGrantDefaultExpiresAtMs
         ? { resolveStandingGrantExpiresAtMs: params.resolveGrantDefaultExpiresAtMs }
         : {}),
-      onLifecycle: params.onApprovalLifecycle,
+      onLifecycle: (event) => {
+        params.onApprovalLifecycle?.(event);
+        externalVerificationRuntime?.onApprovalLifecycle(event);
+      },
       // Timeout expiry is gateway-clock truth: publish the terminal like a
       // resolve so reviewer surfaces need not infer it from their own clocks.
       onExpired: (record, liveRecord) => {
@@ -187,6 +192,12 @@ export function createGatewayAuxHandlers(
     resolveCanonicalPluginApprovalRequestAllowedDecisions,
   );
   const pluginApprovalIosPushDelivery = createPluginApprovalIosPushDelivery({ log: params.log });
+  externalVerificationRuntime = new PluginExternalVerificationRuntime({
+    manager: pluginApprovalManager,
+    runtimeEpoch: approvalPersistence.runtimeEpoch,
+    forwarder: execApprovalForwarder,
+    iosPushDelivery: pluginApprovalIosPushDelivery,
+  });
   type PendingAuthorityPublication = {
     kind: ChannelApprovalKind;
     record: Parameters<typeof publishAppliedApprovalResolution>[0]["record"];
@@ -240,6 +251,11 @@ export function createGatewayAuxHandlers(
           authority,
           reason: approvalReason,
           manager: pluginApprovalManager,
+          // Run-end cleanup pins approvals whose reviewer ceremony is live so a
+          // mid-scan QR stays valid; policy-driven closures still fail closed.
+          spare: (pending) =>
+            (!approvalReason || approvalReason === "run-aborted") &&
+            externalVerificationRuntime.hasActiveCeremonyForApproval(pending.id),
           publish: (record, liveRecord) =>
             publishAuthorityClosure({ kind: "plugin", record, liveRecord }),
         });
@@ -341,6 +357,7 @@ export function createGatewayAuxHandlers(
         cancelUnboundRunApprovals({
           runId: target,
           manager: pluginApprovalManager,
+          spare: (pending) => externalVerificationRuntime.hasActiveCeremonyForApproval(pending.id),
           publish: (record, liveRecord) => publish("plugin", record, liveRecord),
         }) +
         cancelUnboundRunApprovals({
@@ -381,6 +398,7 @@ export function createGatewayAuxHandlers(
         createPluginApprovalHandlers(pluginApprovalManager, {
           forwarder: execApprovalForwarder,
           iosPushDelivery: pluginApprovalIosPushDelivery,
+          externalVerificationRuntime,
         }),
       ),
     { cacheRejections: true },
@@ -442,6 +460,7 @@ export function createGatewayAuxHandlers(
 
   return {
     execApprovalManager,
+    externalVerificationRuntime,
     cancelRunBoundApprovals,
     forwardPluginApprovalRequest: execApprovalForwarder.handlePluginApprovalRequested,
     approvalWebPushDelivery,
@@ -469,6 +488,14 @@ export function createGatewayAuxHandlers(
         loadExecApprovalHandlers,
       ),
       "plugin.approval.list": createLazyHandler("plugin.approval.list", loadPluginApprovalHandlers),
+      "plugin.approval.external.prepare": createLazyHandler(
+        "plugin.approval.external.prepare",
+        loadPluginApprovalHandlers,
+      ),
+      "plugin.approval.external.start": createLazyHandler(
+        "plugin.approval.external.start",
+        loadPluginApprovalHandlers,
+      ),
       "plugin.approval.request": createLazyHandler(
         "plugin.approval.request",
         loadPluginApprovalHandlers,

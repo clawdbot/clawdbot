@@ -11,11 +11,16 @@ function cancelMatchingApprovals<TPayload>(params: {
   reason?: "run-aborted" | "permission-change" | "approval-scope-closed";
   manager: ExecApprovalManager<TPayload>;
   matches: (record: ExecApprovalRecord<TPayload>) => boolean;
+  /** Records the caller pins past this cleanup (e.g. an in-flight human ceremony). */
+  spare?: (record: ExecApprovalRecord<TPayload>) => boolean;
   publish: (record: OperatorApprovalRecord, liveRecord: ExecApprovalRecord<TPayload>) => void;
 }): number {
   let cancelled = 0;
   for (const pending of params.manager.listPendingRecords()) {
     if (!params.matches(pending)) {
+      continue;
+    }
+    if (params.spare?.(pending)) {
       continue;
     }
     // Revoke the issuing execution, not necessarily the outer agent loop.
@@ -42,11 +47,14 @@ export function cancelAgentRuntimeBoundApprovals<TPayload>(params: {
   authority: AgentRunDelegatedAuthority;
   reason?: "run-aborted" | "permission-change" | "approval-scope-closed";
   manager: ExecApprovalManager<TPayload>;
+  /** Run-end cleanup only: pins approvals with an in-flight human ceremony. */
+  spare?: (record: ExecApprovalRecord<TPayload>) => boolean;
   publish: (record: OperatorApprovalRecord, liveRecord: ExecApprovalRecord<TPayload>) => void;
 }): number {
   return cancelMatchingApprovals({
     reason: params.reason,
     manager: params.manager,
+    ...(params.spare ? { spare: params.spare } : {}),
     publish: params.publish,
     matches: (pending) => {
       const bound = pending.agentRuntimeDelegatedAuthority;
@@ -85,10 +93,13 @@ export function cancelWorkerTurnClaimBoundApprovals<TPayload>(params: {
 export function cancelUnboundRunApprovals<TPayload extends { runId?: string | null }>(params: {
   runId: string;
   manager: ExecApprovalManager<TPayload>;
+  /** Run-end cleanup only: pins approvals with an in-flight human ceremony. */
+  spare?: (record: ExecApprovalRecord<TPayload>) => boolean;
   publish: (record: OperatorApprovalRecord, liveRecord: ExecApprovalRecord<TPayload>) => void;
 }): number {
   return cancelMatchingApprovals({
     manager: params.manager,
+    ...(params.spare ? { spare: params.spare } : {}),
     publish: params.publish,
     matches: (pending) =>
       !pending.agentRuntimeDelegatedAuthority && pending.request.runId === params.runId,
