@@ -57,23 +57,36 @@ export function withEmbeddedRunLaneTimeout(
   return { ...opts, taskTimeoutMs: laneTaskTimeoutMs };
 }
 
-export function resolveEmbeddedRunSessionQueuePriority(
+export function resolveEmbeddedRunSessionLanePolicy(
   trigger: RunEmbeddedAgentParams["trigger"],
   inputProvenance?: RunEmbeddedAgentParams["inputProvenance"],
-): CommandQueueEnqueueOptions["priority"] {
-  if (isMainSessionRestartRecoveryInputProvenance(inputProvenance)) {
-    return "background";
-  }
+): {
+  priority: CommandQueueEnqueueOptions["priority"];
+  canResumeAcrossRotation: boolean;
+} {
+  let triggerPriority: CommandQueueEnqueueOptions["priority"];
   switch (trigger) {
     case "user":
     case "manual":
-      return "foreground";
+      triggerPriority = "foreground";
+      break;
     case "cron":
     case "heartbeat":
     case "memory":
     case "overflow":
-      return "background";
+      triggerPriority = "background";
+      break;
     default:
-      return "normal";
+      triggerPriority = "normal";
   }
+  const isRestartRecovery = isMainSessionRestartRecoveryInputProvenance(inputProvenance);
+  // Inter-session work must yield to humans without losing already-admitted
+  // user work when the Gateway lifecycle rotates while it waits.
+  return {
+    priority:
+      isRestartRecovery || inputProvenance?.kind === "inter_session"
+        ? "background"
+        : triggerPriority,
+    canResumeAcrossRotation: !isRestartRecovery && triggerPriority === "foreground",
+  };
 }

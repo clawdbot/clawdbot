@@ -1508,8 +1508,9 @@ function Test-NpmLifecycleCompleted {
         return $false
     }
     $entryPath = Join-Path $npmRoot "openclaw\dist\entry.js"
-    $guardPath = Join-Path $npmRoot "openclaw\dist\openclaw-install-guard"
-    return (Test-Path -LiteralPath $entryPath -PathType Leaf) -and -not (Test-Path -LiteralPath $guardPath)
+    $pendingPath = Join-Path $npmRoot "openclaw\.openclaw-lifecycle-pending"
+    $legacyGuardPath = Join-Path $npmRoot "openclaw\dist\openclaw-install-guard"
+    return (Test-Path -LiteralPath $entryPath -PathType Leaf) -and -not (Test-Path -LiteralPath $pendingPath) -and -not (Test-Path -LiteralPath $legacyGuardPath)
 }
 
 function Format-OpenClawGitWrapper {
@@ -1853,7 +1854,9 @@ function Install-OpenClawFromGit {
         $env:PNPM_CONFIG_SIDE_EFFECTS_CACHE = $prevPnpmSideEffectsCache
         $env:NODE_OPTIONS = $prevNodeOptions
         foreach ($entry in $previousPnpmContext) {
-            [Environment]::SetEnvironmentVariable($entry.Name, $entry.Value, "Process")
+            # The Env provider preserves absence; .NET string binding turns
+            # $null into an empty variable on PowerShell 7.5+.
+            Set-Item -LiteralPath "Env:$($entry.Name)" -Value $entry.Value
         }
         if (Test-Path -LiteralPath $pnpmInstallDirectory) {
             Remove-Item -LiteralPath $pnpmInstallDirectory -Recurse -Force

@@ -152,7 +152,8 @@ function validateConfigObjectWithPluginMode(
     },
   });
   const legacyDefaultAgentId = tryGetLegacyDefaultAgentId(migrated);
-  if (!result.ok || !legacyDefaultAgentId) {
+  // Core roster normalization already ran; ambient channel ownership belongs to Gateway discovery.
+  if (!result.ok || !legacyDefaultAgentId || params?.pluginValidation === "core-only") {
     return result;
   }
   // Carry the migration sidecar across Zod's fresh object.

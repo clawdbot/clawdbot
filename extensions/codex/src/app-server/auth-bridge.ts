@@ -12,7 +12,6 @@ import {
   findPersistedAuthProfileCredential,
   loadAuthProfileStoreForSecretsRuntime,
   refreshOAuthCredentialForRuntime,
-  resolveAuthProfileOrder,
   resolveProviderIdForAuth,
   resolveApiKeyForProfile,
   resolveDefaultAgentDir,
@@ -23,6 +22,7 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import {
   hasUsableOAuthCredential,
+  resolveAuthProfileOrder,
   resolveOpenAICodexAuthIdentity,
 } from "openclaw/plugin-sdk/provider-auth";
 import { readSecretFile } from "openclaw/plugin-sdk/secret-file";
@@ -800,31 +800,17 @@ export async function applyCodexAppServerAuthProfile(params: {
     await assertNativeCodexAccountMatchesRoute(params.client, params.authRequirement);
     return;
   }
-  let loginParams: CodexLoginAccountParams | undefined;
-  try {
-    loginParams =
-      params.preparedAuth?.kind === "profile"
-        ? params.preparedAuth.snapshot.loginParams
-        : params.preparedAuth?.kind === "api-key"
-          ? { type: "apiKey", apiKey: params.preparedAuth.apiKey }
-          : await resolveCodexAppServerAuthProfileLoginParams({
-              agentDir: params.agentDir,
-              authProfileId: params.authProfileId ?? undefined,
-              authProfileStore: params.authProfileStore,
-              config: params.config,
-            });
-  } catch (error) {
-    if (
-      params.authRequirement === "subscription" &&
-      error instanceof CodexAppServerAuthProfileUnavailableError
-    ) {
-      throw createCodexAppServerAuthError(
-        "Codex subscription auth profile could not produce login credentials. Sign in with `openclaw models auth login --provider openai`, select that profile, then retry.",
-        error,
-      );
-    }
-    throw error;
-  }
+  const loginParams =
+    params.preparedAuth?.kind === "profile"
+      ? params.preparedAuth.snapshot.loginParams
+      : params.preparedAuth?.kind === "api-key"
+        ? { type: "apiKey", apiKey: params.preparedAuth.apiKey }
+        : await resolveCodexAppServerAuthProfileLoginParams({
+            agentDir: params.agentDir,
+            authProfileId: params.authProfileId ?? undefined,
+            authProfileStore: params.authProfileStore,
+            config: params.config,
+          });
   if (params.authRequirement === "subscription" && loginParams?.type !== "chatgptAuthTokens") {
     throw createCodexAppServerAuthError(
       "Codex subscription auth profile could not produce login credentials. Sign in with `openclaw models auth login --provider openai`, select that profile, then retry.",
@@ -888,6 +874,7 @@ function createCodexAppServerAuthError(message: string, cause?: unknown): Error 
 
 class CodexAppServerAuthProfileUnavailableError extends Error {
   readonly status = 401;
+  readonly code = "selected_auth_profile_unavailable";
 }
 
 async function resolveCodexAppServerAuthProfileLoginParams(params: {
@@ -991,12 +978,12 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
   }
   const credential = store.profiles[profileId];
   if (!credential) {
-    throw new Error(
+    throw new CodexAppServerAuthProfileUnavailableError(
       `Codex app-server auth profile "${profileId}" was not found. Select an existing OpenAI profile or sign in again with OpenClaw, then retry.`,
     );
   }
   if (!isCodexAppServerAuthProfileCredential(credential)) {
-    throw new Error(
+    throw new CodexAppServerAuthProfileUnavailableError(
       `Codex app-server auth profile "${profileId}" must use the canonical OpenAI auth provider; run "openclaw doctor --fix" to migrate legacy provider IDs.`,
     );
   }

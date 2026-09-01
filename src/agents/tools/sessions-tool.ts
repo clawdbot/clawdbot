@@ -7,6 +7,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
   SESSION_AGENT_ATTENTION_ICON_IDS,
+  SESSION_COLOR_IDS,
   SESSION_ICON_GLYPH_IDS,
 } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
@@ -112,10 +113,15 @@ const SessionsToolSchema = Type.Object(
         description: `Persistent sidebar icon: a single emoji, or a named icon: ${SESSION_ICON_GLYPH_DESCRIPTION}. Empty string clears it. Distinct from attention, which is temporary.`,
       }),
     ),
-    category: Type.Optional(
+    color: Type.Optional(
+      Type.String({
+        description: `Persistent sidebar color tint, one of: ${SESSION_COLOR_IDS.join(", ")}. Empty string clears it.`,
+      }),
+    ),
+    group: Type.Optional(
       Type.Union([Type.String(), Type.Null()], {
         description:
-          "Sidebar category membership. Null or an empty string clears it. This assigns one session; group_set only replaces the ordered category catalog.",
+          "patch: custom sidebar group for this session. Null or an empty string clears it back to ungrouped; assigning a new name creates the group.",
       }),
     ),
     statusNote: Type.Optional(
@@ -152,11 +158,14 @@ const SessionsToolSchema = Type.Object(
     ownerId: Type.Optional(Type.String({ description: "New owner id for assign_owner" })),
     names: Type.Optional(
       Type.Array(Type.String(), {
-        description: "Ordered sidebar category catalog; does not assign sessions.",
+        description:
+          "group_set: full replacement of the ordered group catalog. Array order becomes sidebar order; new names are created; empty groups left out are deleted. Dropping a group that still has member sessions is rejected — remove it with group_delete first. Never moves sessions. To reorder, pass the complete current list in the new order.",
       }),
     ),
-    name: Type.Optional(Type.String({ description: "Group name" })),
-    to: Type.Optional(Type.String({ description: "New group name" })),
+    name: Type.Optional(
+      Type.String({ description: "group_rename and group_delete: the group to act on." }),
+    ),
+    to: Type.Optional(Type.String({ description: "group_rename: the new group name." })),
   },
   { additionalProperties: false },
 );
@@ -331,7 +340,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
     label: "Sessions",
     name: "sessions",
     description:
-      "Session settings, ownership, reset, delete, and sidebar categories: patch label/icon/category/status, pin, archive/restore, model/thinking override; category assigns one session while group_set replaces the ordered category catalog; assign_owner hands responsibility to a human or agent; reset/delete visible sessions; group_list/group_set/group_rename/group_delete.",
+      "Session settings, ownership, reset, delete, and custom sidebar groups: patch label/icon/group/status, pin, archive/restore, model/thinking override. patch with group files one session into a group; group_list shows the catalog; group_set replaces the whole ordered catalog; group_rename/group_delete change one group everywhere. assign_owner hands responsibility to a human or agent; reset/delete visible sessions.",
     parameters: SessionsToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;
@@ -504,9 +513,9 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         ...lifecycleIdentity,
         ...(params.label !== undefined ? { label: readClearableString(params, "label") } : {}),
         ...(params.icon !== undefined ? { icon: readClearableString(params, "icon") } : {}),
-        ...(params.category !== undefined
-          ? { category: readClearableString(params, "category") }
-          : {}),
+        ...(params.color !== undefined ? { color: readClearableString(params, "color") } : {}),
+        // sessions.patch persists groups under the legacy wire field `category`.
+        ...(params.group !== undefined ? { category: readClearableString(params, "group") } : {}),
         ...(params.statusNote !== undefined
           ? { statusNote: readClearableString(params, "statusNote") }
           : {}),

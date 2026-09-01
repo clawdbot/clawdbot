@@ -1,7 +1,7 @@
 // Model list forward-compat tests cover list command behavior with future catalog shapes.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 
 const OPENAI_CODEX_MODEL = {
   provider: "openai",
@@ -19,6 +19,18 @@ const OPENAI_CODEX_53_MODEL = {
   ...OPENAI_CODEX_MODEL,
   id: "gpt-5.4",
   name: "GPT-5.3 Codex",
+};
+
+const ANTHROPIC_CLI_MODEL = {
+  provider: "anthropic",
+  id: "claude-opus-5",
+  name: "Claude Opus 5",
+  api: "anthropic-messages",
+  baseUrl: "https://api.anthropic.com",
+  input: ["text"],
+  contextWindow: 200_000,
+  maxTokens: 4096,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 };
 
 const mocks = vi.hoisted(() => {
@@ -65,6 +77,7 @@ const mocks = vi.hoisted(() => {
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
     },
     metrics: {
       registrySnapshotMs: 0,
@@ -115,6 +128,7 @@ const mocks = vi.hoisted(() => {
     readPersistedInstalledPluginIndexSync: vi.fn(),
     loadManifestMetadataSnapshot: vi.fn(),
     loadPluginRegistrySnapshotWithMetadata: vi.fn(),
+    prepareScopedReadOnlyModelAuthModes: vi.fn(),
   };
 });
 
@@ -132,6 +146,7 @@ function resetMocks() {
     agentDir: "/tmp/openclaw-agent",
   });
   mocks.loadModelRegistry.mockResolvedValue({
+    authModes: {},
     models: [],
     availableKeys: new Set(),
     registry: {
@@ -161,6 +176,7 @@ function resetMocks() {
     snapshot: { plugins: [] },
     diagnostics: [],
   });
+  mocks.prepareScopedReadOnlyModelAuthModes.mockReset().mockResolvedValue({});
 }
 
 function createRuntime() {
@@ -171,8 +187,10 @@ function primeModelRegistry(
   models: unknown[],
   availableKeys?: Set<string>,
   registryModels: unknown[] = models,
+  authModes: Record<string, "api_key" | "oauth" | "token"> = {},
 ) {
   return mocks.loadModelRegistry.mockResolvedValueOnce({
+    authModes,
     models,
     availableKeys,
     registry: { getAll: () => registryModels },
@@ -320,6 +338,13 @@ function installModelsListCommandForwardCompatMocks() {
     },
   }));
 
+  vi.doMock("../../agents/prepared-model-runtime.scoped-catalog.js", async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../../agents/prepared-model-runtime.scoped-catalog.js")
+    >()),
+    prepareScopedReadOnlyModelAuthModes: mocks.prepareScopedReadOnlyModelAuthModes,
+  }));
+
   vi.doMock("./list.scoped-catalog.js", () => ({
     loadScopedListModelCatalogSnapshot: async (params: {
       providerIds: readonly string[];
@@ -409,6 +434,10 @@ async function buildAllOpenAiCodexRows(opts: { supplementCatalog?: boolean } = {
 beforeEach(() => {
   vi.clearAllMocks();
   resetMocks();
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe("modelsListCommand forward-compat", () => {
@@ -1103,6 +1132,186 @@ describe("modelsListCommand forward-compat", () => {
   });
 
   describe("availability fallback", () => {
+    const claudeConfig = {
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-5" } } },
+      models: {
+        providers: {
+          anthropic: { agentRuntime: { id: "claude-cli" }, models: [] },
+        },
+      },
+    };
+    function configureClaudeRuntime(config: Record<string, unknown> = claudeConfig) {
+      mocks.loadModelsConfigWithSource.mockResolvedValueOnce({
+        sourceConfig: config,
+        resolvedConfig: config,
+        diagnostics: [],
+      });
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({
+        entries: [
+          {
+            key: "anthropic/claude-opus-5",
+            ref: { provider: "anthropic", model: "claude-opus-5" },
+            tags: new Set(["default"]),
+            aliases: [],
+          },
+        ],
+      });
+      return config;
+    }
+
+    it("prints the default list without waiting for native CLI auth", async () => {
+      configureClaudeRuntime();
+      mocks.prepareScopedReadOnlyModelAuthModes.mockReturnValueOnce(new Promise(() => {}));
+
+      await withTestTimeout(
+        modelsListCommand({ json: true }, createRuntime() as never),
+        5_000,
+        "default model list waited for native CLI auth",
+      );
+
+      expect(mocks.prepareScopedReadOnlyModelAuthModes).not.toHaveBeenCalled();
+      expect(mocks.printModelTable).toHaveBeenCalledOnce();
+    });
+
+    it.each([
+      {
+        authModes: { "claude-cli": "api_key" as const },
+        providerApiKey: false,
+        available: true,
+      },
+      { authModes: {}, providerApiKey: false, available: null },
+      { authModes: {}, providerApiKey: true, available: null },
+    ])(
+      "uses the prepared CLI runtime auth result ($available) with provider key=$providerApiKey",
+      async ({ authModes, providerApiKey, available }) => {
+        vi.stubEnv("ANTHROPIC_API_KEY", providerApiKey ? "test-key" : "");
+        const config = configureClaudeRuntime();
+        primeModelRegistry([ANTHROPIC_CLI_MODEL]);
+        mocks.prepareScopedReadOnlyModelAuthModes.mockResolvedValueOnce(authModes);
+
+        await modelsListCommand({ provider: "anthropic", json: true }, createRuntime() as never);
+
+        expect(mocks.prepareScopedReadOnlyModelAuthModes).toHaveBeenCalledWith(
+          expect.objectContaining({ config, workspaceDir: "/tmp/openclaw-workspace" }),
+          ["claude-cli"],
+          mocks.emptyPluginMetadataSnapshot,
+        );
+        expectRowFields(
+          lastPrintedRows<{ key: string; available: boolean }>(),
+          "anthropic/claude-opus-5",
+          { available },
+        );
+      },
+    );
+
+    it("keeps a disabled CLI runtime unavailable", async () => {
+      configureClaudeRuntime({
+        ...claudeConfig,
+        plugins: { entries: { anthropic: { enabled: false } } },
+      });
+      mocks.loadManifestMetadataSnapshot.mockReturnValueOnce({
+        ...mocks.emptyPluginMetadataSnapshot,
+        owners: {
+          ...mocks.emptyPluginMetadataSnapshot.owners,
+          cliBackends: new Map([["claude-cli", ["anthropic"]]]),
+        },
+      });
+      mocks.prepareScopedReadOnlyModelAuthModes.mockResolvedValueOnce({
+        "claude-cli": "api_key",
+      });
+      primeModelRegistry([ANTHROPIC_CLI_MODEL]);
+
+      await modelsListCommand({ provider: "anthropic", json: true }, createRuntime() as never);
+
+      expect(mocks.prepareScopedReadOnlyModelAuthModes).toHaveBeenCalledWith(
+        expect.anything(),
+        ["claude-cli"],
+        expect.anything(),
+      );
+      expectRowFields(
+        lastPrintedRows<{ key: string; available: boolean | null }>(),
+        "anthropic/claude-opus-5",
+        { available: false },
+      );
+    });
+
+    it("reuses CLI auth from the prepared full-list generation", async () => {
+      configureClaudeRuntime();
+      primeModelRegistry([], new Set(), [], { "claude-cli": "api_key" });
+
+      await modelsListCommand({ all: true, json: true }, createRuntime() as never);
+
+      expect(mocks.prepareScopedReadOnlyModelAuthModes).not.toHaveBeenCalled();
+    });
+
+    it("does not let prepared OpenAI auth change standalone OpenAI availability", async () => {
+      const config = {
+        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+        models: { providers: { openai: { models: [] } } },
+      };
+      mocks.loadModelsConfigWithSource.mockResolvedValueOnce({
+        sourceConfig: config,
+        resolvedConfig: config,
+        diagnostics: [],
+      });
+      primeModelRegistry([OPENAI_CODEX_MODEL], new Set(), [OPENAI_CODEX_MODEL], {
+        openai: "api_key",
+      });
+
+      await modelsListCommand(
+        { all: true, provider: "openai", json: true },
+        createRuntime() as never,
+      );
+
+      expectRowFields(
+        lastPrintedRows<{ key: string; available: boolean | null }>(),
+        "openai/gpt-5.4",
+        { available: false },
+      );
+    });
+
+    it("does not prepare an unrelated CLI runtime for a filtered list", async () => {
+      configureClaudeRuntime({
+        ...claudeConfig,
+        models: {
+          providers: {
+            ...claudeConfig.models.providers,
+            openai: {},
+          },
+        },
+      });
+
+      await modelsListCommand({ provider: "openai", json: true }, createRuntime() as never);
+
+      expect(mocks.prepareScopedReadOnlyModelAuthModes).not.toHaveBeenCalled();
+    });
+
+    it("does not prepare CLI auth for a local-only list", async () => {
+      configureClaudeRuntime();
+
+      await modelsListCommand({ local: true, json: true }, createRuntime() as never);
+
+      expect(mocks.prepareScopedReadOnlyModelAuthModes).not.toHaveBeenCalled();
+    });
+
+    it("keeps listing when CLI auth preparation fails", async () => {
+      configureClaudeRuntime();
+      primeModelRegistry([ANTHROPIC_CLI_MODEL]);
+      mocks.prepareScopedReadOnlyModelAuthModes.mockRejectedValueOnce(new Error("probe failed"));
+      const runtime = createRuntime();
+
+      await expect(
+        modelsListCommand({ provider: "anthropic", json: true }, runtime as never),
+      ).resolves.toBeUndefined();
+
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("probe failed"));
+      expectRowFields(
+        lastPrintedRows<{ key: string; available: boolean | null }>(),
+        "anthropic/claude-opus-5",
+        { available: null },
+      );
+    });
+
     it("marks synthetic codex gpt-5.4 rows available with compatible OAuth auth", async () => {
       const oauthConfig = {
         agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },

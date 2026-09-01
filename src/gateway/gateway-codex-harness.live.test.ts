@@ -183,6 +183,11 @@ const describeDisabled = LIVE && !CODEX_HARNESS_LIVE ? describe : describe.skip;
 const CODEX_HARNESS_TIMEOUT_MS = CODEX_HARNESS_RESTART_STRESS ? 3_600_000 : 900_000;
 const DEFAULT_CODEX_MODEL = "openai/gpt-5.6-luna";
 const GATEWAY_CONNECT_TIMEOUT_MS = 60_000;
+// Request-local tool observation requires a negotiated capability, even for admin clients.
+const CODEX_HARNESS_CLIENT_CAPS = [
+  GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+  ...(CODEX_HARNESS_MULTI_SESSION_PROBE ? [GATEWAY_CLIENT_CAPS.PLUGIN_APPROVALS] : []),
+];
 const CODEX_HARNESS_REASONING_EFFORTS = [
   "minimal",
   "low",
@@ -216,6 +221,8 @@ type CodexHarnessAgentResult = {
   usage?: CodexHarnessAttemptUsage;
 };
 
+const CODEX_REDUCED_CONTEXT_AUTO_COMPACT_LIMIT = 4_000;
+const CODEX_REDUCED_CONTEXT_PRESSURE_CHARS = 90_000;
 const CODEX_FULL_CONTEXT_AUTO_COMPACT_LIMIT = 700_000;
 const CODEX_FULL_CONTEXT_EFFECTIVE_WINDOW = 875_900;
 const CODEX_FULL_CONTEXT_STANDARD_WINDOW = 272_000;
@@ -450,8 +457,8 @@ function buildCodexCompactionAppServerArgs(mode: CodexCompactionStressMode): str
       : mode.kind === "reduced"
         ? [
             "model_auto_compact_token_limit_scope=body_after_prefix",
-            // One truncated 300 KB tool result is only a few thousand tokens.
-            "model_auto_compact_token_limit=4000",
+            // Raw nested CodeMode output is not necessarily emitted to model context.
+            `model_auto_compact_token_limit=${CODEX_REDUCED_CONTEXT_AUTO_COMPACT_LIMIT}`,
             "tool_output_token_limit=10000",
           ]
         : undefined;
@@ -1286,6 +1293,20 @@ async function verifyCodexCompactionStress(params: {
   let completedCompactions = 0;
   let reportedCompactions = 0;
   let startedCompactions = 0;
+  const observeTurn = (label: string, result: CodexHarnessAgentResult) => {
+    recordCodexAttemptIdentity({ events: result.events, sessionKey: params.sessionKey });
+    logCodexHarnessTurnMeasurement(label, result);
+    const compaction = readCompletedCodexCompactionStats(result.events);
+    completedCompactions += compaction.count;
+    startedCompactions += compaction.startedCount;
+    reportedCompactions += result.compactionCount;
+    const usage = readCodexNativeUsageSnapshots(result.events).at(-1);
+    if (!usage || usage.promptTokens <= 0) {
+      throw new Error(`${label} emitted no final native prompt usage`);
+    }
+    return { usage, compaction };
+  };
+  let previousUsage: CodexNativeUsageSnapshot | undefined;
   for (let turn = 1; turn <= CODEX_HARNESS_COMPACTION_STRESS_TURNS; turn += 1) {
     const acknowledgement = `CODEX-LARGE-OUTPUT-${turn}-OK`;
     const commandMarker = `OPENCLAW-CODEX-LARGE-OUTPUT-${turn}-${randomBytes(6).toString("hex").toUpperCase()}`;
@@ -1302,17 +1323,12 @@ async function verifyCodexCompactionStress(params: {
     ].join("\n");
     const result = await requestAgentTextWithEvents({
       client: params.client,
-      eventPrefixes: ["codex_app_server.", "compaction", "tool"],
+      eventPrefixes: [...CODEX_HARNESS_CONTEXT_EVENT_PREFIXES, "tool"],
       sessionKey: params.sessionKey,
       message,
     });
     expect(result.text).toContain(acknowledgement);
-    recordCodexAttemptIdentity({ events: result.events, sessionKey: params.sessionKey });
-    logCodexHarnessTurnMeasurement(`reduced-stress-${turn}`, result);
-    const turnCompaction = readCompletedCodexCompactionStats(result.events);
-    completedCompactions += turnCompaction.count;
-    startedCompactions += turnCompaction.startedCount;
-    reportedCompactions += result.compactionCount;
+    previousUsage = observeTurn(`reduced-output-${turn}`, result).usage;
     const history: { messages?: unknown[] } = await params.client.request("chat.history", {
       sessionKey: params.sessionKey,
       limit: 100,
@@ -1326,6 +1342,69 @@ async function verifyCodexCompactionStress(params: {
     });
   }
 
+  // Native output above proves command execution, not CodeMode's outer emission.
+  // Direct input supplies bounded pressure after this wave's warm/cold-resume prefix.
+  let measuredPressureCycles = 0;
+  for (let cycle = 1; cycle <= 2; cycle += 1) {
+    if (!previousUsage) {
+      throw new Error("reduced pressure probe has no preceding native usage");
+    }
+    const denseToken = `CODEX-PRESSURE-${cycle}-OK`;
+    const dense = await requestAgentTextWithEvents({
+      client: params.client,
+      eventPrefixes: CODEX_HARNESS_CONTEXT_EVENT_PREFIXES,
+      sessionKey: params.sessionKey,
+      message: [
+        buildCodexHarnessDenseContext({
+          marker: `PRESSURE-${randomBytes(6).toString("hex").toUpperCase()}`,
+          chars: CODEX_REDUCED_CONTEXT_PRESSURE_CHARS,
+        }),
+        `Do not use tools. Reply exactly ${denseToken} and nothing else.`,
+      ].join("\n\n"),
+    });
+    expect(dense.text.trim()).toBe(denseToken);
+    const pressure = observeTurn(`reduced-pressure-${cycle}`, dense);
+    // A final answer can cross the limit without another sampling opportunity.
+    const triggerToken = `CODEX-PRESSURE-TRIGGER-${cycle}-OK`;
+    const trigger = await requestAgentTextWithEvents({
+      client: params.client,
+      eventPrefixes: CODEX_HARNESS_CONTEXT_EVENT_PREFIXES,
+      sessionKey: params.sessionKey,
+      message: `Do not use tools. Reply exactly ${triggerToken} and nothing else.`,
+    });
+    expect(trigger.text.trim()).toBe(triggerToken);
+    const after = observeTurn(`reduced-trigger-${cycle}`, trigger);
+    const promptGrowth = pressure.usage.promptTokens - previousUsage.promptTokens;
+    // Compaction changes the prefix. Never compare usage across that boundary;
+    // the second fixed pair supplies a fresh interval if the first compacted early.
+    if (pressure.compaction.count === 0) {
+      expect(
+        promptGrowth,
+        "dense input did not create measured prompt pressure",
+      ).toBeGreaterThanOrEqual(CODEX_REDUCED_CONTEXT_AUTO_COMPACT_LIMIT);
+      expect(
+        after.compaction.count,
+        "small trigger did not compact measured pressure",
+      ).toBeGreaterThan(0);
+      // Native compact retains real user messages; total prompt size need not shrink.
+      measuredPressureCycles += 1;
+    }
+    logCodexLiveStep("reduced-pressure-cycle", {
+      cycle,
+      inputChars: CODEX_REDUCED_CONTEXT_PRESSURE_CHARS,
+      beforePromptTokens: previousUsage.promptTokens,
+      densePromptTokens: pressure.usage.promptTokens,
+      afterPromptTokens: after.usage.promptTokens,
+      denseCompactions: pressure.compaction.count,
+      triggerCompactions: after.compaction.count,
+      measured: pressure.compaction.count === 0,
+    });
+    previousUsage = after.usage;
+  }
+  expect(
+    measuredPressureCycles,
+    "wave omitted measured pressure-to-compaction proof",
+  ).toBeGreaterThan(0);
   expect(completedCompactions, "expected at least one native automatic compaction").toBeGreaterThan(
     0,
   );
@@ -2146,10 +2225,7 @@ describeLive("gateway live (Codex harness)", () => {
           timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
           requestTimeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS,
           clientDisplayName: "vitest-codex-harness-live",
-          // Approval events require an explicit renderer capability even for admin clients.
-          ...(CODEX_HARNESS_MULTI_SESSION_PROBE
-            ? { caps: [GATEWAY_CLIENT_CAPS.PLUGIN_APPROVALS] }
-            : {}),
+          caps: CODEX_HARNESS_CLIENT_CAPS,
           onEvent: captureGatewayEvent,
         });
         activeApprovalClient = client;
@@ -2465,6 +2541,7 @@ describeLive("gateway live (Codex harness)", () => {
               timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
               requestTimeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS,
               clientDisplayName: `vitest-codex-resume-stress-${restart}`,
+              caps: CODEX_HARNESS_CLIENT_CAPS,
               onEvent: captureGatewayEvent,
             });
             activeApprovalClient = client;

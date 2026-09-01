@@ -140,9 +140,7 @@ export function createExecTool(
       safeBinTrustedDirs: defaults?.safeBinTrustedDirs,
       safeBinProfiles: defaults?.safeBinProfiles,
     },
-    onWarning: (message) => {
-      logInfo(message);
-    },
+    onWarning: logInfo,
   });
   if (unprofiledSafeBins.length > 0) {
     logInfo(
@@ -217,8 +215,7 @@ export function createExecTool(
       const resolveExecEnvPrepared = requestPreparation.isResolveExecEnvPrepared(
         args as ExecToolArgs,
       );
-      const deferredResolveExecEnvState =
-        requestPreparation.getDeferredResolveExecEnvPreparedState(params);
+      const hookContext = requestPreparation.getExecHookContext(params);
       const preparedWorkdirState = requestPreparation.getResolvedExecWorkdirPreparedState(params);
 
       const maxOutput = DEFAULT_MAX_OUTPUT;
@@ -428,7 +425,7 @@ export function createExecTool(
         }
         if (!resolveExecEnvPrepared) {
           params = await requestPreparation.prepareParamsWithResolvedExecEnv(params, {
-            hookContext: deferredResolveExecEnvState?.hookContext,
+            hookContext,
           });
         }
 
@@ -508,11 +505,17 @@ export function createExecTool(
           throw new Error("exec internal error: local execution requires a resolved workdir");
         }
 
+        const githubProfileDir =
+          host === "gateway" && preparedRunEnvironment.managedLocalIdentity
+            ? preparedRunEnvironment.localIdentityEnv.GH_CONFIG_DIR
+            : undefined;
+
         if (host === "gateway" && !bypassApprovals) {
           const gatewayResult = await processGatewayAllowlist({
             command: params.command,
             workdir,
             env,
+            githubProfileDir,
             pathPrepend: defaultPathPrepend,
             requestedEnv,
             pty: params.pty === true && !sandbox,
@@ -589,6 +592,7 @@ export function createExecTool(
           execCommand: execCommandOverride,
           workdir,
           env,
+          githubProfileDir,
           pathPrepend: defaultPathPrepend,
           sandbox,
           containerWorkdir,

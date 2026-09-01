@@ -19,6 +19,7 @@ import {
   mcpTool,
   createCodeModeHarness,
 } from "./code-mode.test-support.js";
+import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import {
   createToolSearchCatalogRef,
   TOOL_CALL_RAW_TOOL_NAME,
@@ -26,7 +27,6 @@ import {
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
   resolveToolSearchConfig,
-  ToolSearchRuntime,
 } from "./tool-search.js";
 import { jsonResult } from "./tools/common.js";
 

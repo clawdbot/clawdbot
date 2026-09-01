@@ -54,9 +54,6 @@ flow:
         - set: requestCursorBefore
           value:
             expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
-        - set: outboundStartIndex
-          value:
-            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
         - set: sessionKey
           value:
             expr: "`agent:qa:qa-channel:group:group:${config.channelId}`"
@@ -68,17 +65,53 @@ flow:
             senderId: qa-driver
             senderName: QA Driver
             text: "@openclaw Failed tool terminal recovery QA check: read the missing workspace file, then respond with exact marker: `QA-FAILED-TOOL-FINALIZED-OK`."
-        - waitForOutbound:
-            conversation:
-              id:
-                ref: config.channelId
-              kind: group
-            sinceIndex:
-              ref: outboundStartIndex
-            textIncludes:
-              ref: config.expectedMarker
-            timeoutMs: 60000
-          saveAs: reply
+          saveAs: inbound
+        - set: inboundEvents
+          value:
+            expr: "state.getSnapshot().events.filter((event) => event.kind === 'inbound-message' && event.accountId === transport.accountId && event.message.id === inbound.id)"
+        - assert:
+            expr: "inbound.accountId === transport.accountId && inboundEvents.length === 1 && Number.isSafeInteger(inboundEvents[0].cursor) && inboundEvents[0].cursor > 0"
+            message: expected one account-qualified inbound event cursor
+        - set: inboundCursor
+          value:
+            expr: inboundEvents[0].cursor
+        - call: waitForCondition
+          args:
+            - lambda:
+                expr: "state.getAcknowledgedPollCursor(transport.accountId) >= inboundCursor ? true : undefined"
+            - 60000
+        - set: settled
+          value:
+            expr: state.getSnapshot()
+        - set: deliveries
+          value:
+            expr: "settled.messages.filter((message) => message.direction === 'outbound' && !message.deleted)"
+        - assert:
+            expr: "deliveries.length === 1 && deliveries[0].text === config.expectedReply && deliveries[0].isError !== true"
+            message:
+              expr: "`expected exactly one failure-honest reply, got ${JSON.stringify(deliveries)}`"
+        - set: reply
+          value:
+            expr: deliveries[0]
+        - assert:
+            expr: "reply.accountId === transport.accountId && reply.conversation.kind === 'group' && reply.conversation.id === config.channelId && reply.threadId == null && reply.replyToId === inbound.id"
+            message:
+              expr: "`retained reply has the wrong route: ${JSON.stringify(reply)}`"
+        - set: deliveryEvents
+          value:
+            expr: |-
+              settled.events.filter((event) => event.cursor > inboundCursor &&
+                event.accountId === transport.accountId && "message" in event &&
+                event.message.direction === "outbound" && event.message.accountId === transport.accountId &&
+                event.message.conversation.kind === "group" && event.message.conversation.id === config.channelId &&
+                event.message.threadId == null && event.message.replyToId === inbound.id)
+        - assert:
+            # This mock's completed text produces a preview; its tool-backed final replaces it.
+            expr: |-
+              deliveryEvents.some((preview) => preview.kind === "outbound-message" && preview.message.id !== reply.id &&
+                deliveryEvents.some((deleted) => deleted.kind === "message-deleted" && deleted.message.id === preview.message.id && deleted.cursor > preview.cursor &&
+                  deliveryEvents.some((final) => final.kind === "outbound-message" && final.message.id === reply.id && final.cursor > deleted.cursor)))
+            message: retained reply lacks its ordered preview send/delete/replacement chain
         - set: scenarioRequests
           value:
             expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet))"
@@ -118,11 +151,4 @@ flow:
             expr: "transcript.assistantToolCallCounts.exec === 1 && transcript.completedToolCallCounts.exec === 1 && !transcript.successfulToolCallCounts.exec"
             message:
               expr: "`expected exactly one settled failed exec result, got ${JSON.stringify(transcript)}`"
-        - set: deliveries
-          value:
-            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && !message.deleted && message.conversation.id === config.channelId)"
-        - assert:
-            expr: "deliveries.length === 1 && deliveries[0].text.trim() === config.expectedReply && reply.text.trim() === config.expectedReply"
-            message:
-              expr: "`expected exactly one failure-honest reply, got ${JSON.stringify(deliveries)}`"
       detailsExpr: "`${reply.text}; calls=${String(transcript.assistantToolCallCounts.exec)} failed=${String(transcript.completedToolCallCounts.exec)} continuations=${String(continuations.length)}`"

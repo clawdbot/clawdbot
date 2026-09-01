@@ -142,6 +142,7 @@ export async function continueClaudeSession(
         ...(record.cwd ? { spawnedCwd: record.cwd } : {}),
         ...(nodeId ? { execNode: nodeId, ...(record.cwd ? { execCwd: record.cwd } : {}) } : {}),
         initialEntry: {
+          ...(record.color ? { color: record.color } : {}),
           cliBackendId: CLAUDE_CLI_BACKEND_ID,
           model,
           modelSelectionLocked: true,

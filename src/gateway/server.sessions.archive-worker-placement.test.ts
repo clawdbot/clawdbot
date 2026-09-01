@@ -114,7 +114,7 @@ test("sessions.patch reclaims the exact active cloud placement before archive me
   expect(reclaim).toHaveBeenCalledOnce();
   expect(reclaim).toHaveBeenCalledWith(
     { sessionId, sessionKey, agentId: "main" },
-    undefined,
+    expect.any(Function),
     expect.any(Function),
   );
   expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();

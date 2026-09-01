@@ -160,7 +160,7 @@ describe("ClawHub published artifact verification", () => {
     expect(source).toContain("AbortSignal.timeout(timeoutMs)");
   });
 
-  it("verifies normal OIDC publication against the exact prepared artifact bytes", async () => {
+  it("verifies exact artifact bytes without claiming the publication authentication", async () => {
     const artifact = new TextEncoder().encode("exact oidc tgz bytes");
     const fetchImpl = registryFetch(artifact);
     const evidence = await verifyPublishedClawHubPackage({
@@ -174,7 +174,8 @@ describe("ClawHub published artifact verification", () => {
 
     expect(evidence).toMatchObject({
       schemaVersion: 1,
-      verificationMode: "oidc-postpublish",
+      verificationMode: "artifact-postpublish",
+      publicationAuthentication: "not-verified",
       expectedArtifact: identity(artifact),
       package: {
         packageName: "@openclaw/meta",

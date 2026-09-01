@@ -217,6 +217,7 @@ function createMetadataSnapshotFixture(
       setupProviders: ownerMap([]),
       commandAliases: ownerMap([]),
       contracts: ownerMap([]),
+      modelIdNormalizationPolicies: new Map(),
     },
   };
 }

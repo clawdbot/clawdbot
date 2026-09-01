@@ -17,7 +17,11 @@ import { registerLogsCli } from "./logs-cli.js";
 afterEach(() => vi.restoreAllMocks());
 
 async function withLogsGateway(
-  options: { source?: "config" | "environment"; denied?: boolean },
+  options: {
+    source?: "config" | "environment";
+    denied?: boolean;
+    failure?: "timeout" | "disconnect" | "malformed";
+  },
   run: (fixture: {
     port: string;
     requests: string[];
@@ -58,6 +62,12 @@ async function withLogsGateway(
               frame.id,
               buildMinimalGatewayHelloOkPayload({ methods: ["logs.tail"] }),
             );
+          } else if (options.failure) {
+            if (options.failure === "disconnect") {
+              socket.terminate();
+            } else if (options.failure === "malformed") {
+              sendMinimalGatewayResponse(socket, frame.id, null);
+            }
           } else if (options.denied) {
             socket.send(
               JSON.stringify({
@@ -134,7 +144,7 @@ describe("logs local port selection", () => {
         if (mode === "json") {
           expect(JSON.parse(output)).toMatchObject({
             type: "error",
-            message: "Gateway not reachable. Is it running and accessible?",
+            message: "logs unavailable for this client",
             error: "logs unavailable for this client",
             details: { url: `ws://127.0.0.1:${port}` },
           });
@@ -142,6 +152,37 @@ describe("logs local port selection", () => {
           expect(output).not.toContain("Gateway not reachable");
           expect(output).toContain(`Gateway target: ws://127.0.0.1:${port}`);
         }
+      });
+    },
+  );
+
+  it.each([
+    { failure: "timeout" as const, error: /timeout|timed out/ },
+    { failure: "disconnect" as const, error: /gateway closed/ },
+    { failure: "malformed" as const, error: /^Unexpected logs\.tail response$/ },
+  ])(
+    "uses the failure reason as the JSON summary after a post-hello $failure",
+    async ({ failure, error }) => {
+      await withLogsGateway({ failure }, async ({ port, requests, stdout, stderr }) => {
+        await expect(
+          runLogs([
+            "--url",
+            `ws://127.0.0.1:${port}`,
+            "--token",
+            "fixture-token",
+            "--json",
+            "--timeout",
+            "1500",
+          ]),
+        ).rejects.toBeInstanceOf(ExitError);
+        expect(requests).toEqual(["connect", "logs.tail"]);
+        expect(stdout.join("")).toBe("");
+        expect(JSON.parse(stderr.join(""))).toMatchObject({
+          type: "error",
+          message: expect.stringMatching(error),
+          error: expect.stringMatching(error),
+          details: { url: `ws://127.0.0.1:${port}` },
+        });
       });
     },
   );

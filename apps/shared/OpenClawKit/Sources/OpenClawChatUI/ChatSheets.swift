@@ -309,6 +309,12 @@ public struct ChatSessionsSheet: View {
                 }
             }
             .contextMenu {
+                OpenClawSessionColorMenu(color: session.color) { color in
+                    Task {
+                        await self.viewModel.setSessionColor(key: session.key, color: color)
+                        await self.refreshScopedSessionsIfNeeded(debounce: false)
+                    }
+                }
                 Button {
                     self.inspectedSession = session
                 } label: {
@@ -398,6 +404,10 @@ public struct ChatSessionsSheet: View {
                     .foregroundStyle(.secondary)
                     .accessibilityLabel("Pinned")
             }
+        }
+        .overlay(alignment: .leading) {
+            OpenClawSessionColorStripe(color: session.color)
+                .offset(x: -6)
         }
     }
 

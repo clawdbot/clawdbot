@@ -1561,11 +1561,46 @@ describe("verify-pr-hosted-gates", () => {
     expect(() => parseArgs(["--repo", "openclaw/openclaw"])).toThrow("Usage:");
     expect(() => parseArgs(requiredCliArgs.with(1, "-h"))).toThrow("Expected --repo <value>.");
     expect(() => parseArgs(requiredCliArgs.with(3, "-h"))).toThrow("Expected --sha <value>.");
-    expect(() => parseArgs(requiredCliArgs.with(5, "zero"))).toThrow(
-      "Expected --pr <positive-integer>.",
-    );
+    expect(() => parseArgs(requiredCliArgs.with(5, "-h"))).toThrow("Expected --pr <value>.");
+    for (const [value, expected] of [
+      ["1", 1],
+      ["001", 1],
+      [String(Number.MAX_SAFE_INTEGER), Number.MAX_SAFE_INTEGER],
+    ] as const) {
+      expect(parseArgs(requiredCliArgs.with(5, value)).pr).toBe(expected);
+    }
+    for (const value of [
+      "zero",
+      "0",
+      String(Number.MAX_SAFE_INTEGER + 1),
+      "1e3",
+      "0x10",
+      "0b10",
+      "1.5",
+      "+1",
+      " 1 ",
+    ]) {
+      expect(() => parseArgs(requiredCliArgs.with(5, value))).toThrow(
+        "Expected --pr <positive-integer>.",
+      );
+    }
     expect(() => parseArgs(requiredCliArgs.with(7, "-h"))).toThrow("Expected --output <value>.");
     expect(() => parseArgs(requiredCliArgs.with(9, "origin/main"))).toThrow("Usage:");
+  });
+
+  it("rejects malformed PR numbers before invoking GitHub", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        join(process.cwd(), "scripts/verify-pr-hosted-gates.mjs"),
+        ...requiredCliArgs.with(5, "1e3"),
+      ],
+      { encoding: "utf8", env: { ...process.env, PATH: "" } },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Expected --pr <positive-integer>.");
+    expect(result.stderr).not.toContain("spawnSync gh");
   });
 
   it("rejects duplicate hosted gate verifier CLI arguments", () => {

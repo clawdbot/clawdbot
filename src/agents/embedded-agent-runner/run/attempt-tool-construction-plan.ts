@@ -9,10 +9,7 @@ import {
   resolveCoreToolFactoryFamily,
 } from "../../core-tool-factory-descriptors.js";
 import { mayMatchGlobWithPrefix } from "../../glob-pattern.js";
-import {
-  isRuntimeToolAllowed,
-  isRuntimeToolAllowedForConstruction,
-} from "../../tool-policy-match.js";
+import { createRuntimeToolMatcher } from "../../tool-policy-match.js";
 import {
   attachToolAllowlistIntersection,
   buildPluginToolGroups,
@@ -78,13 +75,17 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
     if (hasWildcardToolAllowlist(restriction)) {
       return currentTools;
     }
+    if (currentTools.length === 0) {
+      return [];
+    }
     const pluginGroups = options?.toolMeta
       ? buildPluginToolGroups({ tools: currentTools, toolMeta: options.toolMeta })
       : undefined;
     const policy = pluginGroups
       ? expandPolicyWithPluginGroups({ allow: restriction }, pluginGroups)
       : { allow: expandShippedCoreToolPolicyNames(restriction) };
-    return currentTools.filter((tool) => isRuntimeToolAllowed(tool.name, policy?.allow));
+    const matches = createRuntimeToolMatcher(policy?.allow);
+    return currentTools.filter((tool) => matches(tool.name));
   }, tools);
 }
 
@@ -137,21 +138,15 @@ function resolveCodingToolConstructionPlanForAllowlist(
   const constructionEntries = restrictions?.flat() ?? toolsAllow;
   const expanded = expandToolGroups(expandShippedCoreToolPolicyNames(constructionEntries));
   const normalized = normalizeToolList(expanded);
-  const constructionRestrictions = restrictions ?? [toolsAllow];
+  // Construction must not select a shell factory only through write -> apply_patch.
+  const constructionMatchers = (restrictions ?? [toolsAllow]).map((restriction) =>
+    createRuntimeToolMatcher(expandShippedCoreToolPolicyNames(restriction), false),
+  );
   // Construct every family containing a tool that the final runtime policy can retain.
   // Otherwise a valid glob can survive filtering after its factory was never run.
   const coreFamilies = new Set<CoreToolFactoryFamily>(
     listCoreToolFactoryDescriptors()
-      .filter(({ name }) =>
-        constructionRestrictions.every(
-          (restriction) =>
-            restriction.length > 0 &&
-            isRuntimeToolAllowedForConstruction(
-              name,
-              expandShippedCoreToolPolicyNames(restriction),
-            ),
-        ),
-      )
+      .filter(({ name }) => constructionMatchers.every((matches) => matches(name)))
       .map(({ family }) => family),
   );
   let includePluginTools = false;

@@ -9,6 +9,7 @@ import {
   renderSettingsEmpty,
   renderSettingsDefaultDescription,
   renderSettingsGroup,
+  renderSettingsLoadingSkeleton,
   renderSettingsPage,
   renderSettingsRow,
   renderSettingsSection,
@@ -589,8 +590,7 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
   }
   if (props.loading) {
     return renderSettingsPage(html`
-      ${renderModelBehavior(props)}
-      <div aria-busy="true">${renderSettingsGroup(renderSettingsEmpty(t("common.loading")))}</div>
+      ${renderModelBehavior(props)} ${renderSettingsGroup(renderSettingsLoadingSkeleton())}
     `);
   }
   const providerRows = html`

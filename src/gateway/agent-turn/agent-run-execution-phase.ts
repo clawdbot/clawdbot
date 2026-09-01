@@ -114,10 +114,23 @@ export function startAgentRunExecution(params: {
   let preparedModelRuntimeLease: typeof prepared.preparedModelRuntimeLease | undefined =
     prepared.preparedModelRuntimeLease;
   let releaseGatewayRootContinuation = retainGatewayRootWorkAdmissionContinuation() ?? undefined;
-  const cleanupAdmittedRun: typeof prepared.activeRunAbort.cleanup = (options) => {
+  const cleanupAdmittedRun: typeof prepared.activeRunAbort.cleanup = () => {
     const refsToDiscard = unpersistedOffloadedRefs;
     unpersistedOffloadedRefs = [];
-    prepared.activeRunAbort.cleanup(options);
+    try {
+      releasePreparedAgentRunUserTurn(
+        prepared.userTurn,
+        prepared.activeRunAbort.controller.signal.aborted &&
+          prepared.activeRunAbort.entry?.abortStopReason !== "restart"
+          ? "cancelled"
+          : "interrupted",
+      );
+    } catch (error) {
+      params.context.logGateway.warn(
+        `failed to settle pending agent input: ${formatForLog(error)}`,
+      );
+    }
+    prepared.activeRunAbort.cleanup();
     prepared.activeGatewayWorkAdmission.release();
     const runtimeLease = preparedModelRuntimeLease;
     preparedModelRuntimeLease = undefined;
@@ -125,13 +138,26 @@ export function startAgentRunExecution(params: {
     releaseGatewayRootContinuation?.();
     releaseGatewayRootContinuation = undefined;
     void discardPreparedInboundMedia(refsToDiscard, params.context.logGateway);
+    if (prepared.userTurn.recorder && params.resolvedSessionKey) {
+      emitSessionsChanged(params.context, {
+        sessionKey: params.resolvedSessionKey,
+        agentId: params.activeSessionAgentId,
+        reason: "agent.input.settled",
+      });
+    }
   };
-  const dispatchAdmittedAgentRun = (dispatch: Parameters<typeof dispatchAgentRunFromGateway>[0]) =>
-    withPreparedModelRuntimePluginGenerationScope(
-      prepared.replyDispatchRuntime.pluginGeneration,
-      () => dispatchAgentRunFromGateway(dispatch),
-      () => preparedModelRuntimeLease?.snapshot,
-    );
+  const dispatchAdmittedAgentRun = (
+    dispatch: Parameters<typeof dispatchAgentRunFromGateway>[0],
+  ) => {
+    const run = () =>
+      withPreparedModelRuntimePluginGenerationScope(
+        prepared.replyDispatchRuntime.pluginGeneration,
+        () => dispatchAgentRunFromGateway(dispatch),
+        () => preparedModelRuntimeLease?.snapshot,
+      );
+    const recorder = prepared.userTurn.recorder;
+    return recorder?.withPendingInput ? recorder.withPendingInput(run) : run();
+  };
   void prepared.activeGatewayWorkAdmission.run(async () => {
     await yieldAfterAgentAcceptedAck();
     let dispatched = false;
@@ -488,7 +514,6 @@ export function startAgentRunExecution(params: {
       });
     } finally {
       if (!dispatched) {
-        releasePreparedAgentRunUserTurn(prepared.userTurn);
         try {
           const restoreAdmittedRecovery = prepared.restoreAdmittedRestartRecoveryInterrupted;
           if (restoreAdmittedRecovery) {
@@ -515,7 +540,7 @@ export function startAgentRunExecution(params: {
               );
             } finally {
               try {
-                cleanupAdmittedRun({ force: true });
+                cleanupAdmittedRun();
               } finally {
                 scheduleMainSessionRecoveryPendingTarget(pendingRecovery);
               }

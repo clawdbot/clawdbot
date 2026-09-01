@@ -175,10 +175,9 @@ describe("minimal npm extended-stable workflow", () => {
     expect(readFileSync(workflowPath, "utf8")).toContain("pluginSdkApi,");
   });
 
-  it("reuses the v1 preflight tarball and guards all three extended-stable gates", () => {
+  it("reuses the prepared tarball and guards all three extended-stable gates", () => {
     const parsed = workflow();
     const raw = readFileSync(workflowPath, "utf8");
-    expect(raw).toContain("version: 1");
     expect(raw).toContain("openclaw-npm-preflight-${{ inputs.tag }}");
     expect(raw.match(/openclaw-npm-extended-stable-release\.mjs validate-request/g)).toHaveLength(
       3,
@@ -330,9 +329,6 @@ describe("minimal npm extended-stable workflow", () => {
     expect(step(preflight, "Check").if).toBeUndefined();
     const verifyReleaseContents = step(preflight, "Verify release contents");
     expect(verifyReleaseContents.if).toBeUndefined();
-    expect(verifyReleaseContents.run).toBe(
-      "pnpm release:generated:check && node --import tsx scripts/release-check.ts",
-    );
     expect(step(preflight, "Verify prepared npm tarball install").if).toBeUndefined();
 
     const save = step(preflight, "Save preflight build outputs");

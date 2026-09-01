@@ -1,4 +1,6 @@
 import os from "node:os";
+import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope-config.js";
+import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -10,16 +12,14 @@ import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db.js";
 import { repairOpenClawStateDatabaseSchemaIfNeeded } from "../state/openclaw-state-db.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
-import {
-  createPluginDoctorStateMigrationContext,
-  type PluginDoctorRepairAuthority,
-} from "./state-migrations.plugin-doctor-context.js";
+import { createPluginDoctorStateMigrationContext } from "./state-migrations.plugin-doctor-context.js";
 import { autoMigrateLegacyStateDir } from "./state-migrations.state-dir.js";
 import type {
   DetectedPluginDoctorStateMigrationPlan,
   LegacyStateDetection,
   MigrationLogger,
   MigrationMessages,
+  PluginDoctorRepairAuthority,
 } from "./state-migrations.types.js";
 
 type PluginDoctorInput = Omit<
@@ -52,6 +52,9 @@ export async function collectPluginDoctorStateMigrationPlans(
     try {
       detected = await entry.migration.detectLegacyState({
         ...input,
+        serviceWorkspaceDir:
+          tryResolveConfiguredAgentWorkspaceDir(config, env) ??
+          resolveDefaultAgentWorkspaceDir(env),
         context: createPluginDoctorStateMigrationContext({
           pluginId: entry.pluginId,
           env,
@@ -155,6 +158,9 @@ async function migratePluginDoctorStatePlans(
         repairAuthority?.assertCurrent();
         const result = await plan.migration.migrateLegacyState({
           ...input,
+          serviceWorkspaceDir:
+            tryResolveConfiguredAgentWorkspaceDir(input.config, input.env) ??
+            resolveDefaultAgentWorkspaceDir(input.env),
           context: createPluginDoctorStateMigrationContext({
             pluginId: plan.pluginId,
             env: input.env,

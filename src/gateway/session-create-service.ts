@@ -12,6 +12,7 @@ import {
   type SessionVisibility,
   errorShape,
   missingScopeErrorShape,
+  normalizeSessionColorValue,
 } from "../../packages/gateway-protocol/src/index.js";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
@@ -110,7 +111,7 @@ const loadSessionLifecycleRuntime = createLazyRuntimeModule(
   () => import("./server-methods/sessions.runtime.js"),
 );
 
-export function resolveSessionCreateModelSelection(
+function resolveSessionCreateModelSelection(
   cfg: OpenClawConfig,
   agentId: string,
   input: string | { model: string; agentRuntime?: string } | undefined,
@@ -275,6 +276,7 @@ type CreatedGatewaySession = {
 
 type TrustedInitialSessionEntry = {
   agentHarnessId?: NonNullable<SessionEntry["agentHarnessId"]>;
+  color?: string;
   pluginOwnerId?: string;
   providerOverride?: string;
   modelOverride?: string;
@@ -903,6 +905,16 @@ export async function createGatewaySession(params: {
     const currentTargetEntry = loadGatewaySessionEntryReadOnly(target.canonicalKey, {
       agentId: target.agentId,
     }).entry;
+    // Lifecycle custody keeps this owner stable through naming and filesystem preparation.
+    const existingOwnershipError = resolvePluginSessionOwnershipError({
+      action: "adopt",
+      entry: currentTargetEntry,
+      key: target.canonicalKey,
+      pluginOwnerId: params.authorizedPluginId,
+    });
+    if (existingOwnershipError) {
+      return { ok: false, error: existingOwnershipError };
+    }
     if (!currentTargetEntry) {
       const creationError = authorizeGatewaySessionCreation({
         cfg: params.cfg,
@@ -960,15 +972,6 @@ export async function createGatewaySession(params: {
           if (creationError) {
             return { ok: false, error: creationError };
           }
-        }
-        const existingOwnershipError = resolvePluginSessionOwnershipError({
-          action: "adopt",
-          entry: existingEntry,
-          key: target.canonicalKey,
-          pluginOwnerId: params.authorizedPluginId,
-        });
-        if (existingOwnershipError) {
-          return { ok: false, error: existingOwnershipError };
         }
         if (
           isAgentHarnessSessionKey(target.canonicalKey) &&
@@ -1148,6 +1151,11 @@ export async function createGatewaySession(params: {
         const initialAgentHarnessId = params.initialEntry
           ? normalizeOptionalString(params.initialEntry.agentHarnessId)
           : undefined;
+        // Initializers compare their callback snapshot with the stored row during finalization.
+        // Normalize before both so persistence cannot make this creation look like external drift.
+        const initialColor = params.initialEntry?.color
+          ? normalizeSessionColorValue(params.initialEntry.color)
+          : null;
         if (params.initialEntry && !initialAgentHarnessId && !authorizedPluginCreation) {
           return {
             ok: false,
@@ -1221,6 +1229,7 @@ export async function createGatewaySession(params: {
               }
             : {}),
           ...(initialAgentHarnessId ? { agentHarnessId: initialAgentHarnessId } : {}),
+          ...(initialColor ? { color: initialColor } : {}),
           ...(createdNewEntry && params.authorizedPluginId && !params.catalogTarget
             ? { pluginOwnerId: params.authorizedPluginId }
             : {}),

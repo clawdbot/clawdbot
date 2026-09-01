@@ -117,6 +117,8 @@ export function resolveSandboxRuntimeStatus(params: {
     sessionKey: classificationSessionKey,
     config: params.cfg,
     agentId: params.classificationAgentId,
+    // Reuse the owner only for this session; independent targets still need their own identity.
+    fallbackAgentId: classificationSessionKey === sessionKey ? agentId : undefined,
   });
   const cfg = params.cfg;
   const sandboxCfg = resolveSandboxConfigForAgent(cfg, classificationAgentId);
@@ -198,6 +200,7 @@ function shellEscapeSingleArg(value: string): string {
 export function formatSandboxToolPolicyBlockedMessage(params: {
   cfg?: OpenClawConfig;
   sessionKey?: string;
+  agentId?: string;
   toolName: string;
   audit?: boolean;
 }): string | undefined {
@@ -209,6 +212,7 @@ export function formatSandboxToolPolicyBlockedMessage(params: {
   const runtime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
+    agentId: params.agentId,
   });
   if (!runtime.sandboxed) {
     return undefined;
@@ -266,11 +270,10 @@ export function formatSandboxToolPolicyBlockedMessage(params: {
   if (runtime.mode === "non-main" && !runtime.sandboxRequired) {
     lines.push("- Use the agent main session instead of a non-main session.");
   }
-  const explainCommand = runtime.sessionKey
-    ? hasUnsafeControlChars(runtime.sessionKey)
-      ? `openclaw sandbox explain --agent ${runtime.agentId}`
-      : `openclaw sandbox explain --session ${shellEscapeSingleArg(runtime.sessionKey)}`
-    : "openclaw sandbox explain";
+  const explainCommand =
+    runtime.sessionKey && !hasUnsafeControlChars(runtime.sessionKey)
+      ? `openclaw sandbox explain --session ${shellEscapeSingleArg(runtime.sessionKey)} --agent ${runtime.agentId}`
+      : `openclaw sandbox explain --agent ${runtime.agentId}`;
   lines.push(`- See: ${formatCliCommand(explainCommand)}`);
 
   return lines.join("\n");

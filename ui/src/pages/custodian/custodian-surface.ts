@@ -6,7 +6,7 @@ import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { icons } from "../../components/icons.ts";
 import {
   handleMarkdownCodeBlockClick,
-  initializeMarkdownCodeBlocks,
+  markdownCodeBlocks,
 } from "../../components/markdown-code-blocks.ts";
 import {
   enhanceMarkdownTables,
@@ -98,11 +98,8 @@ class CustodianSurface extends OpenClawLightDomElement {
     }
     const transcript = this.querySelector<HTMLElement>(".custodian__messages");
     if (transcript) {
-      // Caretaker turns render through the assistant bubble, so they carry the
-      // same interactive code-block and table markup the chat thread emits.
-      // Without this lifecycle those controls render but never do anything.
+      // Assistant bubbles emit table controls that need this transcript owner.
       this.markdownHost = transcript;
-      initializeMarkdownCodeBlocks(transcript);
       enhanceMarkdownTables(transcript);
     }
     const messageId = this.store.messages.at(-1)?.id ?? null;
@@ -194,6 +191,7 @@ class CustodianSurface extends OpenClawLightDomElement {
       >
         <div
           class="custodian__messages"
+          ${markdownCodeBlocks()}
           aria-live="polite"
           @click=${(event: MouseEvent) => {
             handleMarkdownCodeBlockClick(event);

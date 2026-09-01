@@ -527,13 +527,132 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.assertMinimumTouchTarget(attachmentButton)
         self.assertMinimumTouchTarget(dictationButton)
         self.assertMinimumTouchTarget(talkButton)
+        let contextUsage = app.buttons["chat-context-usage"]
+        XCTAssertTrue(contextUsage.waitForExistence(timeout: 5))
+        let inlinePermissions = app.buttons["chat-composer-inline-permissions"]
+        let inlineModel = app.buttons["chat-composer-inline-model"]
+        let inlineEffort = app.buttons["chat-composer-inline-effort"]
+        XCTAssertTrue(inlinePermissions.waitForExistence(timeout: 5))
+        XCTAssertTrue(inlineModel.waitForExistence(timeout: 5))
+        XCTAssertTrue(inlineEffort.waitForExistence(timeout: 5))
+        self.assertMinimumTouchTarget(inlinePermissions)
+        self.assertMinimumTouchTarget(inlineModel)
+        self.assertMinimumTouchTarget(inlineEffort)
+        for inlineControl in [inlinePermissions, contextUsage, inlineModel, inlineEffort] {
+            XCTAssertGreaterThanOrEqual(inlineControl.frame.minX, composerSurface.frame.minX)
+            XCTAssertLessThanOrEqual(inlineControl.frame.maxX, composerSurface.frame.maxX)
+            XCTAssertLessThanOrEqual(abs(inlineControl.frame.midY - dictationButton.frame.midY), 1)
+        }
+        XCTAssertEqual(inlinePermissions.value as? String, "Guarded")
+        XCTAssertFalse((inlineModel.value as? String ?? "").isEmpty)
+        XCTAssertFalse((inlineEffort.value as? String ?? "").isEmpty)
+        self.assertMinimumTouchTarget(contextUsage)
+        self.assertNoHorizontalOverlap([
+            attachmentButton,
+            inlinePermissions,
+            contextUsage,
+            inlineModel,
+            inlineEffort,
+            dictationButton,
+            talkButton,
+        ])
+        XCTAssertEqual(contextUsage.value as? String, "19 percent of the context window used")
         let compactHeight = textField.frame.height
+        let compactSurfaceHeight = composerSurface.frame.height
+        XCTAssertGreaterThanOrEqual(compactSurfaceHeight, 96)
         XCTAssertLessThanOrEqual(compactHeight, 44)
+        XCTAssertLessThanOrEqual(textField.frame.maxY, attachmentButton.frame.minY + 2)
         XCTAssertLessThanOrEqual(abs(attachmentButton.frame.midY - dictationButton.frame.midY), 1)
         XCTAssertLessThanOrEqual(abs(talkButton.frame.midY - dictationButton.frame.midY), 1)
+        self.attachScreenshot(named: "chat-composer-inline-controls")
+
+        inlinePermissions.tap()
+        XCTAssertTrue(app.buttons["Default (inherited)"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Read-only"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Guarded"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Workspace"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Full"].waitForExistence(timeout: 3))
+        self.attachScreenshot(named: "chat-composer-permissions")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+
+        inlineModel.tap()
+        let inlineSelectedModel = app.buttons["openai/gpt-5.6-sol"]
+        XCTAssertTrue(inlineSelectedModel.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Default: openai/gpt-5.6-sol"].exists)
+        let inlineNonDefaultModel = app.buttons["anthropic/claude-opus-4-1"]
+        XCTAssertTrue(inlineNonDefaultModel.waitForExistence(timeout: 3))
+        self.attachScreenshot(named: "chat-composer-model")
+        inlineNonDefaultModel.tap()
+        let updatedInlineModel = app.buttons["chat-composer-inline-model"]
+        XCTAssertTrue(updatedInlineModel.waitForExistence(timeout: 3))
+        self.waitForValue("claude-opus-4-1", of: updatedInlineModel)
+        updatedInlineModel.tap()
+        let selectedInlineModel = app.buttons["anthropic/claude-opus-4-1"]
+        XCTAssertTrue(selectedInlineModel.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["openai/gpt-5.6-sol"].exists)
+        app.buttons["openai/gpt-5.6-sol"].tap()
+        let restoredInlineModel = app.buttons["chat-composer-inline-model"]
+        XCTAssertTrue(restoredInlineModel.waitForExistence(timeout: 3))
+        self.waitForValue("gpt-5.6-sol", of: restoredInlineModel)
+
+        inlineEffort.tap()
+        XCTAssertTrue(app.buttons["Thinking"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Fast"].waitForExistence(timeout: 3))
+        self.attachScreenshot(named: "chat-composer-effort")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+
+        contextUsage.tap()
+        XCTAssertTrue(
+            app.descendants(matching: .any)["24.0k of 128.0k tokens used"]
+                .waitForExistence(timeout: 3))
+        let compactThread = app.buttons["Compact Thread"]
+        XCTAssertTrue(compactThread.waitForExistence(timeout: 3))
+        XCTAssertTrue(compactThread.isEnabled)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
 
         attachmentButton.tap()
+        let photoLibrary = app.buttons["Photo Library"]
+        XCTAssertTrue(photoLibrary.waitForExistence(timeout: 3))
+        XCTAssertTrue(photoLibrary.isEnabled)
+        XCTAssertTrue(app.buttons["Camera"].waitForExistence(timeout: 3))
+        let mediaFile = app.buttons["Choose Media File"]
+        XCTAssertTrue(mediaFile.waitForExistence(timeout: 3))
+        XCTAssertTrue(mediaFile.isEnabled)
+        XCTAssertTrue(app.buttons["Verbosity"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Web Search"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Skills"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Connectors"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["Permissions"].exists)
+        XCTAssertEqual(
+            app.buttons.matching(NSPredicate(format: "label == %@", "Model")).count,
+            1)
+        XCTAssertFalse(app.buttons["Thinking"].exists)
+        XCTAssertFalse(app.buttons["Fast"].exists)
         XCTAssertFalse(self.app?.buttons["Voice Memo"].exists == true)
+        self.attachScreenshot(named: "chat-composer-capabilities")
+        self.app?.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+
+        attachmentButton.tap()
+        app.buttons["Skills"].tap()
+        XCTAssertTrue(app.buttons["Auto Review"].waitForExistence(timeout: 3))
+        let disabledSkill = app.buttons["Disabled Skill — Disabled in the Gateway configuration."]
+        XCTAssertTrue(disabledSkill.waitForExistence(timeout: 3))
+        XCTAssertFalse(disabledSkill.isEnabled)
+        self.attachScreenshot(named: "chat-composer-skills")
+        self.app?.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+
+        attachmentButton.tap()
+        app.buttons["Connectors"].tap()
+        XCTAssertTrue(app.buttons["GitHub"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Linear"].waitForExistence(timeout: 3))
+        self.attachScreenshot(named: "chat-composer-connectors")
+        app.buttons["GitHub"].tap()
+        XCTAssertTrue(app.buttons["Enabled for this session"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Tool Access"].waitForExistence(timeout: 3))
+        app.buttons["Tool Access"].tap()
+        XCTAssertTrue(app.buttons["Search code"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Create issue"].waitForExistence(timeout: 3))
+        self.attachScreenshot(named: "chat-composer-tool-access")
         self.app?.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
         self.attachScreenshot(named: "chat-composer-compact")
 
@@ -548,6 +667,10 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(sendButton.waitForExistence(timeout: 3))
         XCTAssertTrue(talkButton.waitForNonExistence(timeout: 3))
         self.assertMinimumTouchTarget(sendButton)
+        XCTAssertGreaterThanOrEqual(composerSurface.frame.height, compactSurfaceHeight + 12)
+        XCTAssertLessThanOrEqual(textField.frame.maxY, attachmentButton.frame.minY + 2)
+        XCTAssertLessThanOrEqual(abs(attachmentButton.frame.midY - dictationButton.frame.midY), 1)
+        XCTAssertLessThanOrEqual(abs(sendButton.frame.midY - dictationButton.frame.midY), 1)
         self.attachScreenshot(named: "chat-composer-expanded")
 
         self.app?.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
@@ -1466,6 +1589,22 @@ extension OpenClawSnapshotUITests {
         let tolerance = minimum.ulp * 16
         XCTAssertGreaterThanOrEqual(element.frame.width + tolerance, minimum, file: file, line: line)
         XCTAssertGreaterThanOrEqual(element.frame.height + tolerance, minimum, file: file, line: line)
+    }
+
+    private func assertNoHorizontalOverlap(
+        _ elements: [XCUIElement],
+        file: StaticString = #filePath,
+        line: UInt = #line)
+    {
+        let ordered = elements.sorted { $0.frame.minX < $1.frame.minX }
+        for (left, right) in zip(ordered, ordered.dropFirst()) {
+            XCTAssertLessThanOrEqual(
+                left.frame.maxX,
+                right.frame.minX + 0.5,
+                "\(left.identifier) overlaps \(right.identifier)",
+                file: file,
+                line: line)
+        }
     }
 
     private func element(_ element: XCUIElement, hasValue value: String, timeout: TimeInterval) -> Bool {

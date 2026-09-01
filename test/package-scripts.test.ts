@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { detectChangedScope } from "../scripts/ci-changed-scope.mjs";
 
 type RootPackageJson = {
   scripts: Record<string, string>;
@@ -161,7 +162,7 @@ describe("package scripts", () => {
 
   it("builds the native host before browser bootstrap E2E against real Chromium", () => {
     expect(readPackageJson().scripts["test:e2e:browser-extension"]).toBe(
-      "pnpm build && node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers -- node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers OPENCLAW_BROWSER_EXTENSION_E2E=1 OPENCLAW_E2E_WORKERS=1 -- node scripts/run-vitest.mjs extensions/browser/chrome-extension/bootstrap.chromium.test.ts",
+      "pnpm build:ci-artifacts && node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers -- node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers OPENCLAW_BROWSER_EXTENSION_E2E=1 OPENCLAW_E2E_WORKERS=1 -- node scripts/run-vitest.mjs extensions/browser/chrome-extension/bootstrap.chromium.test.ts",
     );
   });
 
@@ -226,6 +227,13 @@ describe("package scripts", () => {
     expect(scripts["android:test"]).toContain(":wear:testDebugUnitTest");
   });
 
+  it("routes every declared Windows CI test to its native lane", () => {
+    const missedTargets = readWindowsCiPartScripts()
+      .flatMap(readWindowsCiTargets)
+      .filter((target) => !detectChangedScope([target]).runWindows);
+    expect(missedTargets).toEqual([]);
+  });
+
   it("partitions Windows CI coverage into two disjoint explicit test lists", () => {
     const scripts = readPackageJson().scripts;
     const partScripts = readWindowsCiPartScripts();
@@ -256,6 +264,15 @@ describe("package scripts", () => {
 
   it("runs direct-run entrypoint coverage in Windows CI", () => {
     expect(readWindowsCiCoverageScript()).toContain("test/scripts/direct-run-entrypoints.test.ts");
+  });
+
+  it("runs compiled worker path, IPC, transform, and cleanup coverage in Windows CI", () => {
+    expect(readWindowsCiPartScripts().flatMap(readWindowsCiTargets)).toEqual(
+      expect.arrayContaining([
+        "test/scripts/vitest-worker-artifacts.test.ts",
+        "test/scripts/vitest-worker-artifacts.transforms.test.ts",
+      ]),
+    );
   });
 
   it("runs Docker package process-tree coverage in Windows CI", () => {

@@ -52,6 +52,7 @@ type LogsTailPayload = {
   lines?: string[];
   truncated?: boolean;
   reset?: boolean;
+  skippedBytes?: number;
   localFallback?: boolean;
 };
 
@@ -338,6 +339,12 @@ function normalizeTailText(text: string, truncated: boolean): { text: string; tr
   return { text: text.slice(firstNewline + 1), truncated };
 }
 
+function formatLogResetNotice(skippedBytes: number | undefined): string {
+  return skippedBytes !== undefined && skippedBytes > 0
+    ? `Log cursor re-anchored (skipped ${skippedBytes} bytes).`
+    : "Log cursor reset (file rotated).";
+}
+
 function parseJournalctlOutput(output: string): { lines: string[]; cursor?: string } {
   const lines: string[] = [];
   let cursor: string | undefined;
@@ -482,7 +489,6 @@ async function emitGatewayError(
   emitJsonLine: (payload: Record<string, unknown>, toStdErr?: boolean) => boolean,
   errorLine: (text: string) => boolean,
 ) {
-  const message = "Gateway not reachable. Is it running and accessible?";
   const hint = `Hint: run \`${formatCliCommand("openclaw doctor")}\`.`;
   const errorText = redactSensitiveUrlLikeString(formatErrorMessage(err));
 
@@ -490,20 +496,16 @@ async function emitGatewayError(
     isGatewayTransportError(err) ? err.connectionDetails : opts.connection,
   );
   if (mode === "json") {
-    if (
-      !emitJsonLine(
-        {
-          type: "error",
-          message,
-          error: errorText,
-          details,
-          hint,
-        },
-        true,
-      )
-    ) {
-      return;
-    }
+    emitJsonLine(
+      {
+        type: "error",
+        message: errorText,
+        error: errorText,
+        details,
+        hint,
+      },
+      true,
+    );
     return;
   }
 
@@ -735,7 +737,7 @@ export function registerLogsCli(program: Command) {
           if (
             !emitJsonLine({
               type: "notice",
-              message: "Log cursor reset (file rotated).",
+              message: formatLogResetNotice(payload.skippedBytes),
             })
           ) {
             return;
@@ -790,7 +792,7 @@ export function registerLogsCli(program: Command) {
           }
         }
         if (payload.reset) {
-          if (!errorLine("Log cursor reset (file rotated).")) {
+          if (!errorLine(formatLogResetNotice(payload.skippedBytes))) {
             return;
           }
         }

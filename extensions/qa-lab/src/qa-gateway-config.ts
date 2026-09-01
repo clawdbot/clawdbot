@@ -215,6 +215,10 @@ export function buildQaGatewayConfig(params: {
     meta: {
       lastTouchedVersion: OPENCLAW_VERSION,
     },
+    // Keep daily rollover and pruning inside the owned QA workspace.
+    logging: {
+      file: `${params.workspaceDir}/logs/openclaw-YYYY-MM-DD.log`,
+    },
     memory: {
       search: {
         ...mockMemorySearch,
@@ -252,6 +256,7 @@ export function buildQaGatewayConfig(params: {
           [primaryModel]: resolveModelEntry(primaryModel),
           [alternateModel]: resolveModelEntry(alternateModel),
         },
+        modelPolicy: { allow: uniqueStrings([primaryModel, alternateModel]) },
         subagents: {
           allowAgents: ["*"],
           maxConcurrent: 2,

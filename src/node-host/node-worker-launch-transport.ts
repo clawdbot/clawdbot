@@ -2,7 +2,11 @@ import { isGatewayLoopbackHost } from "../../packages/gateway-client/src/websock
 import { createChildAdapter } from "../process/supervisor/adapters/child.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 import { parseNodeWorkerConnectionFailureMessage } from "../worker/node-supervisor-protocol.js";
-import type { WorkerProcessInput } from "../worker/worker-process-protocol.js";
+import {
+  buildWorkerProcessTurn,
+  serializeWorkerProcessInput,
+  type WorkerProcessInput,
+} from "../worker/worker-process-protocol.js";
 import {
   buildNodeWorkerContainerStartArgv,
   createNodeWorkerContainer,
@@ -149,11 +153,7 @@ export async function startNodeWorkerLaunchTransport(params: {
   if (!params.isCurrent()) {
     throw new Error("node worker admission closed before descriptor dispatch");
   }
-  await sendNodeWorkerInput(params.adapter, {
-    type: "turn",
-    turnId: params.descriptor.assignment.turnId,
-    descriptor: params.descriptor,
-  });
+  await sendNodeWorkerInput(params.adapter, buildWorkerProcessTurn(params.descriptor));
 }
 
 export async function sendNodeWorkerInput(
@@ -164,8 +164,9 @@ export async function sendNodeWorkerInput(
   if (!stdin) {
     throw new Error("node worker did not provide a writable stdin pipe");
   }
+  const encoded = serializeWorkerProcessInput(message);
   await new Promise<void>((resolve, reject) => {
-    stdin.write(`${JSON.stringify(message)}\n`, (error) => {
+    stdin.write(encoded, (error) => {
       if (error) {
         reject(error);
         return;

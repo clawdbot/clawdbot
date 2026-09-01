@@ -214,18 +214,14 @@
   pointer-events: auto;
 }
 
-.chat-group:hover .chat-group-footer--persistent-identity .chat-confirm-wrap,
-.chat-group:hover .chat-group-footer--persistent-identity .chat-group-timestamp,
-.chat-group:hover .chat-group-footer--persistent-identity .msg-meta__summary,
-.chat-group:focus-within .chat-group-footer--persistent-identity .chat-confirm-wrap,
-.chat-group:focus-within .chat-group-footer--persistent-identity .chat-group-timestamp,
-.chat-group:focus-within .chat-group-footer--persistent-identity .msg-meta__summary,
-.chat-group-footer--persistent-identity:has(.msg-meta[open]) .chat-confirm-wrap,
-.chat-group-footer--persistent-identity:has(.msg-meta[open]) .chat-group-timestamp,
-.chat-group-footer--persistent-identity:has(.msg-meta[open]) .msg-meta__summary,
-.chat-group:hover .chat-group-footer--persistent-identity .chat-group-footer-actions,
-.chat-group:focus-within .chat-group-footer--persistent-identity .chat-group-footer-actions,
-.chat-group-footer--persistent-identity:has(.msg-meta[open]) .chat-group-footer-actions {
+.chat-group:hover
+  .chat-group-footer--persistent-identity
+  :is(.chat-confirm-wrap, .chat-group-timestamp, .msg-meta__summary, .chat-group-footer-actions),
+.chat-group:focus-within
+  .chat-group-footer--persistent-identity
+  :is(.chat-confirm-wrap, .chat-group-timestamp, .msg-meta__summary, .chat-group-footer-actions),
+.chat-group-footer--persistent-identity:has(.msg-meta[open])
+  :is(.chat-confirm-wrap, .chat-group-timestamp, .msg-meta__summary, .chat-group-footer-actions) {
   position: static;
   opacity: 1;
   pointer-events: auto;
@@ -362,7 +358,7 @@
 
 /* ── Group footer action buttons ── */
 .chat-group-footer-actions button,
-.chat-group-footer .chat-send-status__retry,
+.chat-group-footer .chat-send-status__action,
 .chat-message-actions-row button {
   background: none;
   border: none;
@@ -381,7 +377,7 @@
 }
 
 .chat-group-footer-actions button,
-.chat-group-footer .chat-send-status__retry {
+.chat-group-footer .chat-send-status__action {
   opacity: var(--chat-footer-action-opacity, var(--chat-footer-disclosure-opacity, 0));
   pointer-events: var(--chat-footer-disclosure-pointer-events, none);
 }
@@ -435,7 +431,7 @@
   color: var(--warn);
 }
 
-.chat-group-footer .chat-send-status__retry {
+.chat-group-footer .chat-send-status__action {
   width: auto;
   min-width: 0;
   min-height: 0;
@@ -447,7 +443,7 @@
   pointer-events: auto;
 }
 
-.chat-group-footer .chat-send-status__retry:hover {
+.chat-group-footer .chat-send-status__action:hover {
   color: inherit;
   text-decoration: underline;
 }
@@ -681,7 +677,8 @@ img.chat-avatar.user {
   color: var(--muted);
 }
 
-.chat-avatar.other {
+.chat-avatar.other,
+.chat-avatar--forwarded {
   background: var(--secondary);
   color: var(--muted);
 }
@@ -759,8 +756,8 @@ img.chat-avatar.chat-avatar--logo {
   box-shadow: none;
 }
 
-/* Assistant replies render as a flat text stream: only user messages keep the
-   bubble card. Border collapses to 0 so the streaming border pulse and hover
+/* Assistant replies render as a flat text stream; user and forwarded messages
+   keep bubble cards. Border collapses to 0 so the streaming border pulse and hover
    outline become no-ops without extra rules. */
 .chat-group.assistant {
   --chat-message-column-max: var(--chat-message-max-width, min(980px, calc(100% - 46px)));
@@ -773,8 +770,17 @@ img.chat-avatar.chat-avatar--logo {
   box-shadow: none;
 }
 
+.chat-group.assistant.chat-group--forwarded .chat-bubble {
+  width: fit-content;
+  padding: 13px 16px;
+  border: 1px solid var(--border);
+  background: var(--card);
+}
+
 /* Keep the working claw on the same left edge as the flat text column. */
 .chat-group.assistant .chat-bubble.chat-reading-indicator {
+  display: inline-flex;
+  align-items: center;
   padding: 10px 0;
 }
 
@@ -841,8 +847,10 @@ img.chat-avatar.chat-avatar--logo {
 
 .chat-reply-attribution {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 5px;
+  margin-bottom: var(--space-1);
   color: var(--muted);
   font-size: 12px;
 }
@@ -1014,18 +1022,20 @@ img.chat-avatar.chat-avatar--logo {
 }
 
 :root[data-theme-mode="light"] .chat-bubble--tool-shell,
-:root[data-theme-mode="light"] .chat-group.assistant .chat-bubble {
+:root[data-theme-mode="light"]
+  .chat-group.assistant:not(:where(.chat-group--forwarded))
+  .chat-bubble {
   border-color: transparent;
   background: transparent;
   box-shadow: none;
 }
 
-/* Per-user bubble tint: --chat-sender-hue is the sender's stable identity hue
-   (same seed as their avatar initials). Only hue varies per user; saturation/
+/* Sender bubble tint: --chat-sender-hue is the user or source session's stable
+   identity hue (same seed as avatar initials). Only hue varies; saturation/
    lightness/alpha are fixed per theme mode so bubble text keeps contrast for
    every hue. Order contract: stays below the light-mode reset above — the
    dark rule outranks it by specificity, so light mode needs its own skin. */
-.chat-group.user.chat-group--sender-tint .chat-bubble {
+.chat-group:is(.user, .chat-group--forwarded).chat-group--sender-tint .chat-bubble {
   background: hsl(var(--chat-sender-hue) 48% 42% / 0.16);
 }
 
@@ -1039,7 +1049,6 @@ img.chat-avatar.chat-avatar--logo {
 
 :root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-bubble {
   background: hsl(var(--chat-sender-hue) 65% 94%);
-  border-color: transparent;
 }
 
 /* Keep tinted user turns borderless when the generic light hover skin applies. */
@@ -1181,7 +1190,8 @@ img.chat-avatar.chat-avatar--logo {
   min-width: 200px;
   max-width: calc(100vw - 48px);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  z-index: 100;
+  /* Above the still-connected .chat-reply-context-menu (9999). */
+  z-index: 10000;
   animation: scale-in 0.15s ease-out;
   transform-origin: top right;
 }
@@ -1239,17 +1249,20 @@ img.chat-avatar.chat-avatar--logo {
   color: var(--media-foreground);
 }
 
-:root[data-theme="dark"] .chat-confirm-popover__yes {
-  background: var(--destructive);
-  color: var(--destructive-foreground);
-}
-
-:root[data-theme="openknot"] .chat-confirm-popover__yes,
-:root[data-theme="dash"] .chat-confirm-popover__yes,
-:root[data-theme="absolutely"] .chat-confirm-popover__yes,
-:root[data-theme="tide"] .chat-confirm-popover__yes,
-:root[data-theme="phosphor"] .chat-confirm-popover__yes,
-:root[data-theme="beacon"] .chat-confirm-popover__yes {
+:root:is(
+    [data-theme="dark"],
+    [data-theme="openknot"],
+    [data-theme="dash"],
+    [data-theme="absolutely"],
+    [data-theme="tide"],
+    [data-theme="phosphor"],
+    [data-theme="crt"],
+    [data-theme="manuscript"],
+    [data-theme="rose"],
+    [data-theme="miami"],
+    [data-theme="beacon"]
+  )
+  .chat-confirm-popover__yes {
   background: var(--destructive);
   color: var(--destructive-foreground);
 }
@@ -1258,16 +1271,20 @@ img.chat-avatar.chat-avatar--logo {
   background: var(--danger-solid-hover);
 }
 
-:root[data-theme="dark"] .chat-confirm-popover__yes:hover {
-  background: var(--destructive-hover);
-}
-
-:root[data-theme="openknot"] .chat-confirm-popover__yes:hover,
-:root[data-theme="dash"] .chat-confirm-popover__yes:hover,
-:root[data-theme="absolutely"] .chat-confirm-popover__yes:hover,
-:root[data-theme="tide"] .chat-confirm-popover__yes:hover,
-:root[data-theme="phosphor"] .chat-confirm-popover__yes:hover,
-:root[data-theme="beacon"] .chat-confirm-popover__yes:hover {
+:root:is(
+    [data-theme="dark"],
+    [data-theme="openknot"],
+    [data-theme="dash"],
+    [data-theme="absolutely"],
+    [data-theme="tide"],
+    [data-theme="phosphor"],
+    [data-theme="crt"],
+    [data-theme="manuscript"],
+    [data-theme="rose"],
+    [data-theme="miami"],
+    [data-theme="beacon"]
+  )
+  .chat-confirm-popover__yes:hover {
   background: var(--destructive-hover);
 }
 

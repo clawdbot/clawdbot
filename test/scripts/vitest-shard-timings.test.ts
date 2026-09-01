@@ -3,10 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveShardTimingKey } from "../../scripts/lib/vitest-shard-metadata.mts";
 import {
   createShardTimingSample,
   readShardTimings,
-  resolveShardTimingKey,
   writeShardTimings,
 } from "../../scripts/lib/vitest-shard-timings.mts";
 

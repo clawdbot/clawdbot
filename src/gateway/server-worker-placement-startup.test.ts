@@ -1,159 +1,18 @@
+import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
+import { getWorkerPlacementStartupMocks } from "./server-worker-placement-startup.test-harness.js";
+
+// Install the shared module mocks before any source imports can load the runtime.
+const { runtimeFactoryMocks, moveDestinationMocks } = getWorkerPlacementStartupMocks();
+
 import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
+  startSessionWorkAdmissionInterruption,
 } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-
-const runtimeFactoryMocks = vi.hoisted(() => ({
-  createDispatch: vi.fn(),
-  createDiskSpace: vi.fn(),
-  createSessionEvidenceResolver: vi.fn(),
-  resolveSessionEvidence: vi.fn(),
-}));
-const moveDestinationMocks = vi.hoisted(() => ({
-  getRuntimeConfig: vi.fn(() => ({})),
-  findManagedWorktree: vi.fn(() => ({
-    id: "worktree-recovery",
-    ownerId: "agent:main:move-source",
-    path: "/gateway/workspace",
-  })),
-  resolveCanonicalSession: vi.fn(() => ({
-    sessionId: "session-recovery",
-    worktree: { id: "worktree-recovery" },
-  })),
-  resolveExecutionMode: vi.fn(() => "remote-exec"),
-  resolveGatewaySessionTarget: vi.fn(() => ({
-    agentId: "main",
-    canonicalKey: "agent:main:move-source",
-    store: {},
-    storeKeys: ["agent:main:move-source"],
-    storePath: "/tmp/openclaw-worker-placement-session.sqlite",
-  })),
-  resolveSessionRuntime: vi.fn(() => "codex"),
-  resolveSessionTarget: vi.fn(() => ({
-    config: {},
-    entry: {},
-    target: { agentId: "main", canonicalKey: "agent:main:move-source" },
-    worktree: { path: "/gateway/workspace" },
-  })),
-}));
-
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return { ...actual, getRuntimeConfig: moveDestinationMocks.getRuntimeConfig };
-});
-
-vi.mock("./server-worker-placement-session-target.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("./server-worker-placement-session-target.js")>();
-  return {
-    ...actual,
-    resolveWorkerPlacementSessionTarget: moveDestinationMocks.resolveSessionTarget,
-  };
-});
-
-vi.mock("./worker-environments/placement-session-runtime.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("./worker-environments/placement-session-runtime.js")>();
-  return {
-    ...actual,
-    resolveWorkerPlacementExecutionMode: moveDestinationMocks.resolveExecutionMode,
-    resolveWorkerPlacementSessionRuntime: moveDestinationMocks.resolveSessionRuntime,
-  };
-});
-
-vi.mock("./session-utils.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./session-utils.js")>();
-  return {
-    ...actual,
-    resolveCanonicalSessionEntryFromStoreKeys: moveDestinationMocks.resolveCanonicalSession,
-    resolveGatewaySessionStoreTargetWithStore: moveDestinationMocks.resolveGatewaySessionTarget,
-  };
-});
-
-vi.mock("../agents/worktrees/service.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/worktrees/service.js")>();
-  return {
-    ...actual,
-    managedWorktrees: {
-      findLiveByOwner: moveDestinationMocks.findManagedWorktree,
-    },
-  };
-});
-
-vi.mock("./worker-environments/placement-dispatch.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("./worker-environments/placement-dispatch.js")>();
-  return {
-    ...actual,
-    createWorkerPlacementDispatchService: runtimeFactoryMocks.createDispatch,
-  };
-});
-
-vi.mock("./server-worker-placement-session-evidence.js", () => ({
-  createWorkerPlacementSessionEvidenceResolver: runtimeFactoryMocks.createSessionEvidenceResolver,
-}));
-
-vi.mock("./worker-environments/placement-disk-space.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("./worker-environments/placement-disk-space.js")>();
-  return {
-    ...actual,
-    createWorkerPlacementDiskSpaceMonitor: runtimeFactoryMocks.createDiskSpace,
-  };
-});
-
-import { createGatewayWorkerPlacementMoveBarrier } from "./server-worker-placement-move-barrier.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
-import {
-  resolveCanonicalSessionEntryFromStoreKeys,
-  resolveGatewaySessionStoreTargetWithStore,
-} from "./session-utils.js";
-import {
-  createWorkerPlacementMoveService,
-  type WorkerPlacementMoveBarrier,
-} from "./worker-environments/placement-move-service.js";
-
-function createMoveBarrierBeginFixture(sessionId: string, sessionKey: string) {
-  const source = { generation: 4, environmentId: "environment-source", ownerEpoch: 2 };
-  return {
-    intent: {
-      operationId: "move:v1:test",
-      sessionId,
-      source,
-      target: { kind: "gateway" },
-      abandonSource: true,
-      lastError: null,
-      createdAtMs: 1,
-      updatedAtMs: 1,
-    },
-    placement: {
-      sessionId,
-      sessionKey,
-      agentId: "main",
-      executionMode: "worker-turn",
-      state: "draining",
-      generation: 5,
-      environmentId: source.environmentId,
-      activeOwnerEpoch: source.ownerEpoch,
-      workspaceBaseManifestRef: "manifest-source",
-      remoteWorkspaceDir: "/worker/session-source",
-      workerBundleHash: "c".repeat(64),
-      lastTranscriptAckCursor: null,
-      lastLiveEventAckCursor: null,
-      recoveryError: null,
-      terminalReason: null,
-      terminalAtMs: null,
-      turnClaim: null,
-      createdAtMs: 1,
-      updatedAtMs: 2,
-      stateChangedAtMs: 2,
-    },
-    joined: false,
-  } satisfies Awaited<ReturnType<Parameters<WorkerPlacementMoveBarrier>[0]["begin"]>>;
-}
+import type { WorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
 
 describe("worker placement startup health lifetime", () => {
   it("samples disk on schedule while reconciliation is stuck and drains both on stop", async () => {
@@ -189,6 +48,7 @@ describe("worker placement startup health lifetime", () => {
     };
     const warn = vi.fn();
     const runtime = createGatewayWorkerPlacementRuntime({
+      cancelSessionWork: vi.fn(async () => {}),
       placements: {
         workspaceResultInstanceId: () => "gateway-test",
         get: () => undefined,
@@ -271,6 +131,7 @@ describe("worker placement startup health lifetime", () => {
         stop: vi.fn().mockResolvedValue(undefined),
       };
       const runtime = createGatewayWorkerPlacementRuntime({
+        cancelSessionWork: vi.fn(async () => {}),
         placements: {
           workspaceResultInstanceId: () => "gateway-test",
           get: () => placement,
@@ -362,6 +223,7 @@ describe("worker placement startup health lifetime", () => {
       stopNodeEnrollmentWaits: vi.fn(),
     };
     const runtime = createGatewayWorkerPlacementRuntime({
+      cancelSessionWork: vi.fn(async () => {}),
       placements: {
         workspaceResultInstanceId: () => "gateway-test",
         get: () => placement,
@@ -432,6 +294,7 @@ describe("worker placement startup health lifetime", () => {
       stop: vi.fn().mockRejectedValueOnce(stopError).mockResolvedValueOnce(undefined),
     };
     const runtime = createGatewayWorkerPlacementRuntime({
+      cancelSessionWork: vi.fn(async () => {}),
       placements: {
         workspaceResultInstanceId: () => "gateway-test",
         get: () => undefined,
@@ -474,9 +337,18 @@ describe("worker placement startup health lifetime", () => {
       state: "active" | "provisioning";
       environmentId: string;
     }> = [];
-    const resumeProvisioning = vi.fn(async (_placement, reconcileCore) => {
-      await reconcileCore();
-    });
+    const resumeProvisioning = vi.fn<WorkerPlacementDispatchService["resumeProvisioning"]>(
+      async (placement, reconcileCore, onTransition, runAdmitted) => {
+        if (!runAdmitted) {
+          throw new Error("Recovery fixture requires the coordinator admission owner");
+        }
+        return await runAdmitted(async (signal) => {
+          onTransition?.(placement);
+          await reconcileCore(signal);
+          return undefined;
+        });
+      },
+    );
     const reconcile = vi.fn(async () => {
       expect(installedGuard).toBeDefined();
     });
@@ -503,6 +375,7 @@ describe("worker placement startup health lifetime", () => {
       stop: vi.fn().mockResolvedValue(undefined),
     };
     const runtime = createGatewayWorkerPlacementRuntime({
+      cancelSessionWork: vi.fn(async () => {}),
       placements: {
         workspaceResultInstanceId: () => "gateway-test",
         get: () => undefined,
@@ -528,40 +401,53 @@ describe("worker placement startup health lifetime", () => {
     }
 
     const provisioning = {
-      sessionId: "session-guarded",
+      sessionId: "session-recovery",
+      sessionKey: "agent:main:move-source",
+      agentId: "main",
+      executionMode: "remote-exec" as const,
       state: "provisioning" as const,
+      generation: 2,
       environmentId: "worker-guarded",
+      activeOwnerEpoch: null,
     };
-    placementRows = [provisioning];
-    const exactCore = vi.fn(async () => {});
-    await guard(provisioning.environmentId, exactCore);
-    expect(resumeProvisioning).toHaveBeenCalledWith(provisioning, exactCore);
-    expect(exactCore).toHaveBeenCalledOnce();
+    try {
+      placementRows = [provisioning];
+      const exactCore = vi.fn(async (signal?: AbortSignal) => {
+        expect(signal).toBeInstanceOf(AbortSignal);
+        expect(signal?.aborted).toBe(false);
+      });
+      await guard(provisioning.environmentId, exactCore);
+      expect(resumeProvisioning).toHaveBeenCalledOnce();
+      expect(resumeProvisioning.mock.calls[0]?.[0]).toBe(provisioning);
+      expect(exactCore).toHaveBeenCalledOnce();
 
-    placementRows = [];
-    const unrelatedCore = vi.fn(async () => {});
-    await guard("worker-unrelated", unrelatedCore);
-    expect(unrelatedCore).toHaveBeenCalledOnce();
+      placementRows = [];
+      const unrelatedCore = vi.fn(async () => {});
+      await guard("worker-unrelated", unrelatedCore);
+      expect(unrelatedCore).toHaveBeenCalledOnce();
 
-    placementRows = [
-      provisioning,
-      { sessionId: "session-duplicate", state: "active", environmentId: "worker-guarded" },
-    ];
-    const ambiguousCore = vi.fn(async () => {});
-    await expect(guard("worker-guarded", ambiguousCore)).rejects.toThrow(
-      "multiple placement owners",
-    );
-    expect(ambiguousCore).not.toHaveBeenCalled();
+      placementRows = [
+        provisioning,
+        { sessionId: "session-duplicate", state: "active", environmentId: "worker-guarded" },
+      ];
+      const ambiguousCore = vi.fn(async () => {});
+      await expect(guard("worker-guarded", ambiguousCore)).rejects.toThrow(
+        "multiple placement owners",
+      );
+      expect(ambiguousCore).not.toHaveBeenCalled();
 
-    placementRows = [
-      { sessionId: "session-mismatch", state: "active", environmentId: "worker-mismatch" },
-    ];
-    const mismatchedCore = vi.fn(async () => {});
-    await expect(guard("worker-mismatch", mismatchedCore)).rejects.toThrow(
-      "provisioning owner is active",
-    );
-    expect(mismatchedCore).not.toHaveBeenCalled();
-    await sidecar.stop();
+      placementRows = [
+        { sessionId: "session-mismatch", state: "active", environmentId: "worker-mismatch" },
+      ];
+      const mismatchedCore = vi.fn(async () => {});
+      await expect(guard("worker-mismatch", mismatchedCore)).rejects.toThrow(
+        "provisioning owner is active",
+      );
+      expect(mismatchedCore).not.toHaveBeenCalled();
+      expect(resumeProvisioning).toHaveBeenCalledOnce();
+    } finally {
+      await sidecar.stop();
+    }
   });
 
   it("closes guarded recovery admission and drains it during environment stop", async () => {
@@ -615,6 +501,7 @@ describe("worker placement startup health lifetime", () => {
       }),
     };
     const runtime = createGatewayWorkerPlacementRuntime({
+      cancelSessionWork: vi.fn(async () => {}),
       placements: {
         workspaceResultInstanceId: () => "gateway-test",
         get: () => placement,
@@ -663,279 +550,8 @@ describe("worker placement startup health lifetime", () => {
   });
 });
 
-describe("worker placement move destination", () => {
-  it.each([
-    { name: "persists the claimed partial", claimRunId: "worker-run", outcome: "success" },
-    {
-      name: "joins an existing decision without new-source validation or persistence",
-      claimRunId: "worker-run",
-      outcome: "joined-existing",
-    },
-    { name: "fails before the durable move", claimRunId: "worker-run", outcome: "persist-error" },
-    {
-      name: "rejects a changed source after persistence",
-      claimRunId: "worker-run",
-      outcome: "stale-source",
-    },
-    {
-      name: "rejects authority revoked during persistence",
-      claimRunId: "worker-run",
-      outcome: "revoked-authority",
-    },
-    {
-      name: "rejects a worker claim rotated during persistence",
-      claimRunId: "worker-run",
-      outcome: "rotated-claim",
-    },
-    { name: "does not persist an unclaimed turn", claimRunId: undefined, outcome: "success" },
-  ] as const)("abandonment $name before interrupting its owner", async (scenario) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const sessionId = "session-move-source";
-      const sessionKey = "agent:main:move-source";
-      const target = resolveGatewaySessionStoreTargetWithStore({
-        cfg: {},
-        key: sessionKey,
-        agentId: "main",
-        clone: false,
-      });
-      const identities = [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId];
-      const observed: string[] = [];
-      const admission = await beginSessionWorkAdmission({
-        scope: target.storePath,
-        identities,
-        assertAllowed: () => undefined,
-        onInterrupt: () => observed.push("interrupt"),
-      });
-      let sourceChanged = false;
-      const persistAbandonedPartial = vi.fn(async () => {
-        observed.push("persist");
-        if (scenario.outcome === "persist-error") {
-          throw new Error("transcript append failed");
-        }
-        sourceChanged = scenario.outcome === "stale-source";
-      });
-      const revokeSessionAuthority = vi.fn(() => observed.push("revoke"));
-      const barrier = createGatewayWorkerPlacementMoveBarrier({
-        placements: { waitForTurnClaimRelease: vi.fn() },
-        loadSessionRuntime: async () => ({
-          managedWorktrees: { findLiveByOwner: () => undefined },
-          resolveCanonicalSessionEntryFromStoreKeys,
-          resolveGatewaySessionStoreTargetWithStore,
-        }),
-        revokeSessionAuthority,
-        persistAbandonedPartial,
-      });
-      const begin = vi.fn(async (prepareNew?: (runId: string) => Promise<void>) => {
-        observed.push("inspect-intent");
-        if (scenario.outcome === "joined-existing") {
-          return { ...createMoveBarrierBeginFixture(sessionId, sessionKey), joined: true };
-        }
-        observed.push("validate-source");
-        if (scenario.claimRunId) {
-          await prepareNew?.(scenario.claimRunId);
-          observed.push("validate-claim");
-          if (scenario.outcome === "rotated-claim") {
-            throw new Error("worker turn changed");
-          }
-        }
-        observed.push("begin");
-        if (sourceChanged) {
-          throw new Error("placement source changed");
-        }
-        return createMoveBarrierBeginFixture(sessionId, sessionKey);
-      });
-      const operation = barrier({
-        sessionId,
-        sessionKey,
-        agentId: "main",
-        sourceDisposition: "abandon",
-        authorize: () => {
-          observed.push("authorize");
-          if (scenario.outcome === "revoked-authority" && observed.includes("persist")) {
-            throw new Error("session access revoked");
-          }
-        },
-        begin,
-      });
-
-      try {
-        if (scenario.outcome === "persist-error") {
-          await expect(operation).rejects.toThrow("transcript append failed");
-          expect(revokeSessionAuthority).not.toHaveBeenCalled();
-          expect(observed).toEqual(["authorize", "inspect-intent", "validate-source", "persist"]);
-        } else if (scenario.outcome === "stale-source") {
-          await expect(operation).rejects.toThrow("placement source changed");
-          expect(revokeSessionAuthority).not.toHaveBeenCalled();
-          expect(observed).toEqual([
-            "authorize",
-            "inspect-intent",
-            "validate-source",
-            "persist",
-            "authorize",
-            "validate-claim",
-            "begin",
-          ]);
-        } else if (scenario.outcome === "revoked-authority") {
-          await expect(operation).rejects.toThrow("session access revoked");
-          expect(revokeSessionAuthority).not.toHaveBeenCalled();
-          expect(observed).toEqual([
-            "authorize",
-            "inspect-intent",
-            "validate-source",
-            "persist",
-            "authorize",
-          ]);
-        } else if (scenario.outcome === "rotated-claim") {
-          await expect(operation).rejects.toThrow("worker turn changed");
-          expect(revokeSessionAuthority).not.toHaveBeenCalled();
-          expect(observed).toEqual([
-            "authorize",
-            "inspect-intent",
-            "validate-source",
-            "persist",
-            "authorize",
-            "validate-claim",
-          ]);
-        } else if (scenario.outcome === "joined-existing") {
-          await expect(operation).resolves.toMatchObject({
-            joined: true,
-            placement: { state: "draining" },
-          });
-          expect(observed).toEqual(["authorize", "inspect-intent", "revoke", "interrupt"]);
-        } else {
-          await expect(operation).resolves.toMatchObject({ placement: { state: "draining" } });
-          expect(observed).toEqual([
-            "authorize",
-            "inspect-intent",
-            "validate-source",
-            ...(scenario.claimRunId ? ["persist", "authorize", "validate-claim"] : []),
-            "begin",
-            "revoke",
-            "interrupt",
-          ]);
-        }
-        expect(begin).toHaveBeenCalledOnce();
-        if (scenario.claimRunId && scenario.outcome !== "joined-existing") {
-          expect(persistAbandonedPartial).toHaveBeenCalledWith({
-            sessionId,
-            sessionKey,
-            agentId: "main",
-            runId: scenario.claimRunId,
-          });
-        } else {
-          expect(persistAbandonedPartial).not.toHaveBeenCalled();
-        }
-      } finally {
-        admission.release();
-        await operation.catch(() => undefined);
-      }
-    });
-  });
-
-  it.each([
-    { sourceDisposition: "abandon" as const, settlesImmediately: true },
-    { sourceDisposition: "reconcile" as const, settlesImmediately: false },
-  ])(
-    "$sourceDisposition move interruption preserves its settlement contract",
-    async ({ sourceDisposition, settlesImmediately }) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        vi.useFakeTimers();
-        const sessionId = "session-move-source";
-        const sessionKey = "agent:main:move-source";
-        const target = resolveGatewaySessionStoreTargetWithStore({
-          cfg: {},
-          key: sessionKey,
-          agentId: "main",
-          clone: false,
-        });
-        const identities = [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId];
-        const onInterrupt = vi.fn();
-        const admission = await beginSessionWorkAdmission({
-          scope: target.storePath,
-          identities,
-          assertAllowed: () => undefined,
-          onInterrupt,
-        });
-        const waitForTurnClaimRelease = vi.fn().mockResolvedValue(undefined);
-        runtimeFactoryMocks.createDiskSpace.mockReturnValue({
-          read: vi.fn(),
-          version: vi.fn(() => 0),
-          sweep: vi.fn().mockResolvedValue(undefined),
-        });
-        runtimeFactoryMocks.createDispatch.mockReturnValue({
-          dispatch: vi.fn(),
-          forceDestroyEnvironment: vi.fn(),
-          move: vi.fn(),
-          reclaim: vi.fn(),
-          reconcile: vi.fn(),
-          reconcileActive: vi.fn(),
-        });
-        createGatewayWorkerPlacementRuntime({
-          placements: {
-            workspaceResultInstanceId: () => "gateway-test",
-            get: () => undefined,
-            list: () => [],
-            waitForTurnClaimRelease,
-            retireSessionPlacement: vi.fn(),
-            pruneOrphanedWorkspaceReconciliations: () => [],
-            listWorkspaceReconciliationOwners: () => [],
-            listPendingWorkspaceResults: () => [],
-          } as never,
-          environments: {} as never,
-          gatewayNamespace: "gateway-test",
-          revokeSessionAuthority: vi.fn(),
-          warn: vi.fn(),
-        });
-        const dispatchOptions = runtimeFactoryMocks.createDispatch.mock.calls.at(-1)?.[0] as
-          | {
-              runMoveBarrier: Parameters<
-                typeof createWorkerPlacementMoveService
-              >[0]["runMoveBarrier"];
-            }
-          | undefined;
-        if (!dispatchOptions) {
-          throw new Error("worker placement move barrier was not captured");
-        }
-        const begin = vi.fn(async () => createMoveBarrierBeginFixture(sessionId, sessionKey));
-        const operation = dispatchOptions.runMoveBarrier({
-          sessionId,
-          sessionKey,
-          agentId: "main",
-          sourceDisposition,
-          begin,
-        });
-        let settled = false;
-        void operation.then(
-          () => {
-            settled = true;
-          },
-          () => {
-            settled = true;
-          },
-        );
-        try {
-          await vi.waitFor(() => expect(begin).toHaveBeenCalledOnce());
-          expect(onInterrupt).toHaveBeenCalledOnce();
-          expect(settled).toBe(settlesImmediately);
-          expect(waitForTurnClaimRelease).not.toHaveBeenCalled();
-          if (!settlesImmediately) {
-            await vi.advanceTimersByTimeAsync(15_000);
-            await expect(operation).rejects.toThrow("placement move interrupted");
-          } else {
-            await expect(operation).resolves.toMatchObject({ placement: { state: "draining" } });
-          }
-        } finally {
-          admission.release();
-          await operation.catch(() => undefined);
-          vi.useRealTimers();
-        }
-      });
-    },
-  );
-});
-
 describe("worker placement startup recovery authority", () => {
-  it("holds exact session authority through async recovery work", async () => {
+  it("holds exact session authority through async recovery work after cancellation", async () => {
     runtimeFactoryMocks.createDiskSpace.mockReturnValue({
       read: vi.fn(),
       version: vi.fn(() => 0),
@@ -955,6 +571,7 @@ describe("worker placement startup recovery authority", () => {
       environmentId: "worker-recovery",
     };
     createGatewayWorkerPlacementRuntime({
+      cancelSessionWork: vi.fn(async () => {}),
       placements: {
         workspaceResultInstanceId: () => "gateway-test",
         get: () => placement,
@@ -973,6 +590,7 @@ describe("worker placement startup recovery authority", () => {
             executionMode: "remote-exec";
             environmentId: string;
             expectedGeneration: number;
+            signal?: AbortSignal;
             run: (localPath: string) => Promise<void>;
           }) => Promise<void>;
         }
@@ -990,14 +608,29 @@ describe("worker placement startup recovery authority", () => {
     };
     const releaseRecovery = createDeferredCore();
     const events: string[] = [];
-    const recovery = dispatchOptions.runRecoveryBarrier({
-      ...request,
-      run: async (localPath) => {
-        events.push(`recovery:${localPath}`);
-        await releaseRecovery.promise;
-        events.push("recovery:done");
-      },
+    const controller = new AbortController();
+    const identity = {
+      scope: "/tmp/openclaw-worker-placement-session.sqlite",
+      identities: [request.sessionKey, request.sessionId],
+    };
+    const admission = await beginSessionWorkAdmission({
+      ...identity,
+      assertAllowed: () => {},
+      onInterrupt: (reason) => controller.abort(reason),
     });
+    const recovery = admission
+      .run(() =>
+        dispatchOptions.runRecoveryBarrier({
+          ...request,
+          signal: controller.signal,
+          run: async (localPath) => {
+            events.push(`recovery:${localPath}`);
+            await releaseRecovery.promise;
+            events.push("recovery:done");
+          },
+        }),
+      )
+      .finally(() => admission.release());
     await vi.waitFor(() => expect(events).toEqual(["recovery:/gateway/workspace"]));
     const contender = runExclusiveSessionLifecycleMutation({
       scope: "/tmp/openclaw-worker-placement-session.sqlite",
@@ -1011,10 +644,20 @@ describe("worker placement startup recovery authority", () => {
         events.push("contender");
       },
     });
-    await Promise.resolve();
-    expect(events).toEqual(["recovery:/gateway/workspace"]);
-    releaseRecovery.resolve();
-    await Promise.all([recovery, contender]);
+    const interruption = startSessionWorkAdmissionInterruption(identity);
+    const admissionReleased = vi.fn();
+    void interruption.released.then(admissionReleased);
+    try {
+      expect(controller.signal.aborted).toBe(true);
+      await setImmediate();
+      expect(admission.isActive()).toBe(true);
+      expect(events).toEqual(["recovery:/gateway/workspace"]);
+      expect(admissionReleased).not.toHaveBeenCalled();
+    } finally {
+      releaseRecovery.resolve();
+      await Promise.all([recovery, contender, interruption.released]);
+    }
+    expect(admissionReleased).toHaveBeenCalledOnce();
     expect(events).toEqual(["recovery:/gateway/workspace", "recovery:done", "contender"]);
 
     moveDestinationMocks.resolveExecutionMode.mockReturnValueOnce("worker-turn");

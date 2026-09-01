@@ -66,6 +66,15 @@ afterEach(() => {
 });
 
 describe("resolvePluginRuntimeArtifact", () => {
+  it("keeps the bundled root build ahead of adjacent source output", () => {
+    const fixture = createBundledPluginFixture();
+    fs.writeFileSync(path.join(fixture.rootDir, "index.js"), 'module.exports = { id: "stale" };\n');
+
+    expect(resolveFixture({ ...fixture, preferBuiltPluginArtifacts: true }).source).toBe(
+      fixture.builtSource,
+    );
+  });
+
   it.each([
     { firstPreference: false, firstArtifact: "source" },
     { firstPreference: true, firstArtifact: "built" },
@@ -113,6 +122,11 @@ describe("resolvePluginRuntimeArtifact", () => {
       entryKind: "setup" as const,
       sourceName: "setup-entry.ts",
       artifactName: "setup-entry.js",
+    },
+    {
+      entryKind: "provider-discovery" as const,
+      sourceName: "provider-discovery.ts",
+      artifactName: "provider-discovery.js",
     },
   ])(
     "keeps source-external $entryKind entries inside their selected root after packaging",
@@ -179,26 +193,29 @@ describe("resolvePluginRuntimeArtifact", () => {
     expect(aliased).toEqual(first);
   });
 
-  it("keeps runtime and setup entries distinct within one plugin root", () => {
-    const fixture = createBundledPluginFixture();
-    const setupSource = path.join(fixture.rootDir, "setup-entry.ts");
-    fs.writeFileSync(setupSource, "export default { register() {} };\n");
-    const runtime = resolveFixture({
-      ...fixture,
-      preferBuiltPluginArtifacts: false,
-    });
-    const setup = resolvePluginRuntimeArtifact({
-      pluginId: "fixture",
-      entryKind: "setup",
-      rootDir: fixture.rootDir,
-      source: fs.realpathSync(setupSource),
-      origin: "bundled",
-      preferBuiltPluginArtifacts: false,
-    });
+  it.each(["setup", "provider-discovery"] as const)(
+    "keeps runtime and %s entries distinct within one plugin root",
+    (entryKind) => {
+      const fixture = createBundledPluginFixture();
+      const setupSource = path.join(fixture.rootDir, "setup-entry.ts");
+      fs.writeFileSync(setupSource, "export default { register() {} };\n");
+      const runtime = resolveFixture({
+        ...fixture,
+        preferBuiltPluginArtifacts: false,
+      });
+      const setup = resolvePluginRuntimeArtifact({
+        pluginId: "fixture",
+        entryKind,
+        rootDir: fixture.rootDir,
+        source: fs.realpathSync(setupSource),
+        origin: "bundled",
+        preferBuiltPluginArtifacts: false,
+      });
 
-    expect(runtime.source).toBe(fixture.source);
-    expect(setup.source).toBe(fs.realpathSync(setupSource));
-  });
+      expect(runtime.source).toBe(fixture.source);
+      expect(setup.source).toBe(fs.realpathSync(setupSource));
+    },
+  );
 
   it("re-resolves after the active registry memo is cleared", () => {
     const fixture = createBundledPluginFixture();

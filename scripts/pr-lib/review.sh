@@ -31,7 +31,8 @@ review_claim() {
     local user_log
     user_log=".local/review-claim-user-attempt-$attempt.log"
 
-    if reviewer=$(gh_plain api user --jq .login 2>"$user_log"); then
+    # A relay's REST /user may identify its caller, not the local mutation writer.
+    if reviewer=$(gh_plain api graphql -f 'query=query { viewer { login } }' --jq .data.viewer.login 2>"$user_log"); then
       printf "%s\n" "$reviewer" >"$user_log"
       break
     fi

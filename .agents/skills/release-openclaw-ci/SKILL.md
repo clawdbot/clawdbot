@@ -200,6 +200,12 @@ until their dependent enforcement changes land.
 
 ## Preflight
 
+Before full matrix dispatch, run both `pnpm ui:i18n:check` and
+`pnpm native:i18n:check` against the frozen trusted target in approved isolation.
+Bind both results to that exact SHA; either generated-locale drift blocks
+dispatch. Keep target execution outside the trusted dispatch helper—do not
+execute an arbitrary target checkout as helper code.
+
 Before full release validation:
 
 ```bash

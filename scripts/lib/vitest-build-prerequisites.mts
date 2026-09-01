@@ -4,7 +4,9 @@ import { matchesVitestCliSelection } from "../../test/vitest/vitest.pattern-file
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
 import { runManagedCommand } from "./managed-child-process.mts";
 
-export type VitestPretestBuildMode = "private-qa" | "runtime";
+// A private-QA build also satisfies ordinary runtime readers.
+const VITEST_PRETEST_BUILD_MODES = ["private-qa", "runtime"] as const;
+export type VitestPretestBuildMode = (typeof VITEST_PRETEST_BUILD_MODES)[number];
 type SetupCommandRunner = (args: string[], env: NodeJS.ProcessEnv) => Promise<number>;
 
 type TestSelection = {
@@ -16,7 +18,6 @@ type TestSelection = {
 // These process tests consume built runtime artifacts. Prepare their strongest
 // prerequisite before admitting any workers: a child build invalidates dist
 // while unrelated workers may still be importing its public plugin facades.
-// Strongest first: a private-QA build also satisfies ordinary runtime readers.
 const runtimeConsumers = [
   {
     file: "extensions/qa-lab/src/suite-process-lifecycle.test.ts",
@@ -25,23 +26,27 @@ const runtimeConsumers = [
     dir: "extensions",
   },
   {
+    file: "src/cli/update-dry-run-state.process.test.ts",
+    configs: ["test/vitest/vitest.cli.config.ts"],
+    mode: "runtime",
+    dir: "src/cli",
+  },
+  {
     file: "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
     configs: ["test/vitest/vitest.tooling.config.ts"],
     mode: "runtime",
     dir: "",
   },
-  {
-    file: "src/gateway/gateway-active-memory.test.ts",
+  ...[
+    "src/gateway/gateway-active-memory.test.ts",
+    "src/gateway/gateway-concurrent-streams.test.ts",
+    "src/gateway/gateway-cron-process-identity.windows.test.ts",
+  ].map((file) => ({
+    file,
     configs: ["test/vitest/vitest.gateway-core.config.ts", "test/vitest/vitest.gateway.config.ts"],
-    mode: "runtime",
+    mode: "runtime" as const,
     dir: "src/gateway",
-  },
-  {
-    file: "src/gateway/gateway-concurrent-streams.test.ts",
-    configs: ["test/vitest/vitest.gateway-core.config.ts", "test/vitest/vitest.gateway.config.ts"],
-    mode: "runtime",
-    dir: "src/gateway",
-  },
+  })),
 ] as const;
 
 function includesRuntimeConfig(configs: readonly string[] | undefined, config: string) {
@@ -81,21 +86,32 @@ export function listVitestRuntimeConsumerFiles(configs: readonly string[]): stri
     .map((consumer) => consumer.file);
 }
 
+/** Merge prepared prerequisites without repeating test-file ownership discovery. */
+export function mergeVitestPretestBuildModes(
+  modes: readonly (VitestPretestBuildMode | undefined)[],
+): VitestPretestBuildMode | undefined {
+  return VITEST_PRETEST_BUILD_MODES.find((mode) => modes.includes(mode));
+}
+
 export function resolveVitestPretestBuildMode(
   selections: readonly TestSelection[],
 ): VitestPretestBuildMode | undefined {
-  return runtimeConsumers.find(({ file, configs: consumerConfigs }) =>
-    selections.some(({ configs, includePatterns, cli }) => {
-      const included = includePatterns
-        ? includePatterns.some((pattern) => path.matchesGlob(file, pattern))
-        : consumerConfigs.some((config) => includesRuntimeConfig(configs, config));
-      // Only project the canonical consumers; config loading and test discovery
-      // stay with Vitest. Include-file overrides still intersect emitted filters.
-      return cli
-        ? matchesVitestCliSelection(file, included ? [file] : [], cli.args, cli.dir, cli.env)
-        : included;
-    }),
-  )?.mode;
+  return mergeVitestPretestBuildModes(
+    runtimeConsumers
+      .filter(({ file, configs: consumerConfigs }) =>
+        selections.some(({ configs, includePatterns, cli }) => {
+          const included = includePatterns
+            ? includePatterns.some((pattern) => path.matchesGlob(file, pattern))
+            : consumerConfigs.some((config) => includesRuntimeConfig(configs, config));
+          // Only project the canonical consumers; config loading and test discovery
+          // stay with Vitest. Include-file overrides still intersect emitted filters.
+          return cli
+            ? matchesVitestCliSelection(file, included ? [file] : [], cli.args, cli.dir, cli.env)
+            : included;
+        }),
+      )
+      .map(({ mode }) => mode),
+  );
 }
 
 export async function prepareVitestRuntime(
@@ -117,6 +133,20 @@ export async function prepareVitestRuntime(
 
 export function isE2eBuildSkipped(env: NodeJS.ProcessEnv) {
   return env.OPENCLAW_E2E_SKIP_BUILD === "1" || env.OPENCLAW_E2E_USE_PREBUILT_DIST === "1";
+}
+
+export async function prepareE2eVitestRuntime(env: NodeJS.ProcessEnv) {
+  if (isE2eBuildSkipped(env)) {
+    return {};
+  }
+  console.error("[test] preparing E2E runtime before Vitest workers");
+  await runE2eGlobalSetup(
+    (args, commandEnv) =>
+      runManagedCommand({ bin: process.execPath, args, cwd: process.cwd(), env: commandEnv }),
+    env,
+  );
+  // Only successful preparation may tell readers to reuse this shared generation.
+  return { OPENCLAW_E2E_USE_PREBUILT_DIST: "1" };
 }
 
 function runE2eSetupCommand(args: string[], env: NodeJS.ProcessEnv): Promise<number> {

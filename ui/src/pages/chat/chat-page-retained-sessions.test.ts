@@ -9,11 +9,17 @@ vi.mock("../../app/native-gateways.runtime.ts", () => ({
   nativeGatewaysCapability: () => null,
 }));
 
+import type { GatewayHelloOk } from "../../api/gateway.ts";
+import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { loadSettings } from "../../app/settings.ts";
+import { UI_COMMAND_EVENT } from "../../components/panel-toggle-contract.ts";
 import { SESSION_NAVIGATION_INTENT_EVENT } from "../../lib/sessions/navigation-handoff.ts";
+import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { ChatPage } from "./chat-page.ts";
 import { routeDraft } from "./route-draft.ts";
+import type { SessionChatRouteData } from "./route-loader.ts";
 
 type RenderedPane = HTMLElement & {
   active: boolean;
@@ -47,7 +53,11 @@ function setNavigationContext(page: ChatPage) {
     basePath: "",
     sessions: { state: { result: null }, subscribe: () => () => undefined, patch },
     agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
-    gateway: { snapshot: { hello: null }, subscribe: () => () => undefined },
+    gateway: {
+      snapshot: { hello: null },
+      setSessionKey: vi.fn(),
+      subscribe: () => () => undefined,
+    },
     navigate,
     replace,
     agentSelection: {
@@ -59,7 +69,15 @@ function setNavigationContext(page: ChatPage) {
     chatAttachmentHandoff,
   } as unknown as ApplicationContext;
   (page as unknown as { context: ApplicationContext }).context = context;
-  return { chatAttachmentHandoff, navigate, patch, replace };
+  return { chatAttachmentHandoff, context, navigate, patch, replace };
+}
+
+function getRouteDraftForActivePane(page: ChatPage): string | undefined {
+  const state = page as unknown as {
+    data: SessionChatRouteData;
+    consumedDraftData: SessionChatRouteData | null;
+  };
+  return routeDraft(state.data, state.consumedDraftData);
 }
 
 function stubMatchMedia() {
@@ -110,6 +128,85 @@ describe("chat page retained sessions", () => {
     document.body.replaceChildren();
     localStorage.clear();
     vi.unstubAllGlobals();
+  });
+
+  it("keeps route ownership on the selected split pane while dock input is active", async () => {
+    const page = new ChatPage();
+    const workSessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
+    const { context } = setNavigationContext(page);
+    page.data = { sessionKey: workSessionKey, agentId: "main" };
+    document.body.append(page);
+    await page.updateComplete;
+    chatInputOwnerForContext(context).claim("dock");
+    const otherSession = "agent:research:review";
+    window.dispatchEvent(
+      new CustomEvent(UI_COMMAND_EVENT, {
+        detail: {
+          command: { kind: "split", direction: "right", sessionKey: otherSession },
+          sessionKey: workSessionKey,
+        },
+        cancelable: true,
+      }),
+    );
+    await page.updateComplete;
+    expect(context.gateway.setSessionKey).toHaveBeenLastCalledWith(otherSession);
+    expect(context.agentSelection.set).toHaveBeenLastCalledWith("research");
+    page
+      .querySelector<HTMLElement>(".chat-split-view__cell")
+      ?.dispatchEvent(new Event("pointerdown"));
+    await page.updateComplete;
+
+    expect(context.gateway.setSessionKey).toHaveBeenLastCalledWith(workSessionKey);
+    expect(loadSettings()).toMatchObject({
+      sessionKey: workSessionKey,
+      lastActiveSessionKey: workSessionKey,
+    });
+    expect(context.agentSelection.set).toHaveBeenLastCalledWith("main");
+    expect(chatInputOwnerForContext(context).current).toBe("dock");
+  });
+
+  it("binds newly resolved Home defaults even when the canonical route is equivalent", async () => {
+    const page = new ChatPage();
+    const { context, navigate, replace } = setNavigationContext(page);
+    page.data = { sessionKey: "main" };
+    document.body.append(page);
+    await page.updateComplete;
+    context.gateway.snapshot.hello = {
+      snapshot: { sessionDefaults: { mainKey: "main", mainSessionKey: "agent:main:main" } },
+    } as GatewayHelloOk;
+    const pane = page.querySelector<RenderedPane>("openclaw-chat-pane")!;
+
+    pane.onPaneSessionChange?.(pane.paneId, "agent:main:main");
+
+    expect(context.gateway.setSessionKey).toHaveBeenLastCalledWith("agent:main:main");
+    expect(loadSettings().sessionKey).toBe("agent:main:main");
+    expect(navigate).not.toHaveBeenCalled();
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("hands each route-provided draft to the active pane only once", async () => {
+    window.history.replaceState({}, "", "/chat/main?draft=one-shot%20draft&panel=details#pane");
+    const page = new ChatPage();
+    const navigation = setNavigationContext(page);
+    const firstRouteData = { sessionKey: "main", draft: "one-shot draft" };
+    page.data = firstRouteData;
+    expect(getRouteDraftForActivePane(page)).toBe("one-shot draft");
+
+    document.body.append(page);
+    await vi.waitFor(() => expect(navigation.replace).toHaveBeenCalledOnce());
+
+    expect(getRouteDraftForActivePane(page)).toBeUndefined();
+    expect(navigation.replace).toHaveBeenCalledWith("chat", {
+      pathname: sessionNavigationTarget({
+        face: "chat",
+        sessionKey: "main",
+        fallbackAgentId: "main",
+      }).options.pathname,
+      search: "?panel=details",
+      hash: "#pane",
+    });
+    page.data = { ...firstRouteData };
+    expect(getRouteDraftForActivePane(page)).toBe("one-shot draft");
   });
 
   it("retains three session panes and reactivates them without remounting", async () => {

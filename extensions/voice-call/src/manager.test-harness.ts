@@ -143,6 +143,7 @@ export async function createManagerHarness(
 ): Promise<{
   manager: CallManager;
   provider: FakeProvider;
+  storePath: string;
 }> {
   const config = VoiceCallConfigSchema.parse({
     enabled: true,
@@ -151,9 +152,10 @@ export async function createManagerHarness(
     ...configOverrides,
   });
   installVoiceCallStateRuntimeForTests();
-  const manager = registerTestManagerCleanup(new CallManager(config, createTestStorePath()));
+  const storePath = createTestStorePath();
+  const manager = registerTestManagerCleanup(new CallManager(config, storePath));
   await manager.initialize(provider, "https://example.com/voice/webhook");
-  return { manager, provider };
+  return { manager, provider, storePath };
 }
 
 export function markCallAnswered(manager: CallManager, callId: string, eventId: string): void {
