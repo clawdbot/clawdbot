@@ -58,15 +58,7 @@ function createProgressNarrator(params: {
   abortSignal?: AbortSignal;
   /** Mirror of the channel's commandText: "status" policy for narration input. */
   hideCommandText?: boolean;
-  /** Test seam: replaces the utility-model completion. */
-  generate?: (input: ProgressNarrationInput) => Promise<string | null>;
-  now?: () => number;
-  setTimeoutFn?: typeof setTimeout;
-  clearTimeoutFn?: typeof clearTimeout;
 }) {
-  const now = params.now ?? Date.now;
-  const setTimeoutFn = params.setTimeoutFn ?? setTimeout;
-  const clearTimeoutFn = params.clearTimeoutFn ?? clearTimeout;
   let activity = createSessionActivityNoteState();
   let disabled = false;
   let inFlight = false;
@@ -83,21 +75,22 @@ function createProgressNarrator(params: {
   let visibilityRetryCount = 0;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let retryImmediate = false;
-  let turnGeneration = 0;
-  let turnActive = true;
+  // Each turn owns cancellation; replacing it fences old continuations without
+  // discarding the prepared model shared by queued turns.
+  let turnController = new AbortController();
   let userMessage = params.userMessage ?? "";
 
   const clearRetryTimer = () => {
     if (retryTimer !== undefined) {
-      clearTimeoutFn(retryTimer);
+      clearTimeout(retryTimer);
       retryTimer = undefined;
     }
     retryImmediate = false;
   };
 
   const resetTurnState = () => {
-    turnGeneration += 1;
-    turnActive = true;
+    turnController.abort();
+    turnController = new AbortController();
     // Queued turns reuse the narrator lifecycle but not the primary request.
     // Empty context is safer than describing follow-up work with stale intent.
     userMessage = "";
@@ -117,11 +110,7 @@ function createProgressNarrator(params: {
   };
 
   const stopTurn = () => {
-    if (!turnActive) {
-      return;
-    }
-    turnGeneration += 1;
-    turnActive = false;
+    turnController.abort();
     inFlight = false;
     pendingImmediate = false;
     clearRetryTimer();
@@ -144,33 +133,32 @@ function createProgressNarrator(params: {
     });
   }
 
-  const generate =
-    params.generate ??
-    (async (input: ProgressNarrationInput) => {
-      preparedPromise ??= prepareNarrationModel({ cfg: params.cfg, agentId: params.agentId });
-      const prepared = await preparedPromise;
-      if (!prepared) {
-        disableNarration();
-        return null;
-      }
-      const { provider, modelId, profileId } = prepared.selection;
-      utilityModelLabel = `${provider}/${modelId}${profileId ? ` via ${profileId}` : ""}`;
-      const outcome = await generateNarrationWithUtilityModel({
-        cfg: params.cfg,
-        prepared,
-        input,
-        abortSignal: params.abortSignal,
-      });
-      lastFailure = outcome.error;
-      return outcome.text;
+  const generate = async (input: ProgressNarrationInput, abortSignal: AbortSignal) => {
+    preparedPromise ??= prepareNarrationModel({ cfg: params.cfg, agentId: params.agentId });
+    const prepared = await preparedPromise;
+    if (abortSignal.aborted) {
+      return null;
+    }
+    if (!prepared) {
+      disableNarration();
+      return null;
+    }
+    const { provider, modelId, profileId } = prepared.selection;
+    utilityModelLabel = `${provider}/${modelId}${profileId ? ` via ${profileId}` : ""}`;
+    return await generateNarrationWithUtilityModel({
+      cfg: params.cfg,
+      prepared,
+      input,
+      abortSignal,
     });
+  };
 
   const recordEvent = (
     stream: AgentEventStream,
     data: Record<string, unknown>,
     options?: { immediate?: boolean; flushAssistant?: boolean },
   ): void => {
-    if (!turnActive || disabled || params.abortSignal?.aborted) {
+    if (turnController.signal.aborted || disabled || params.abortSignal?.aborted) {
       return;
     }
     visibilityRetryCount = 0;
@@ -179,7 +167,7 @@ function createProgressNarrator(params: {
       runId: "progress-narrator",
       seq: sequenceBefore + 1,
       stream,
-      ts: now(),
+      ts: Date.now(),
       data,
     };
     noteSessionActivityEvent(activity, event, NARRATION_NOTE_MAX_CHARS);
@@ -203,21 +191,21 @@ function createProgressNarrator(params: {
     if (newNotes >= MIN_EVENTS_PER_NARRATION) {
       return true;
     }
-    return now() - lastRunAt >= MIN_INTERVAL_MS;
+    return Date.now() - lastRunAt >= MIN_INTERVAL_MS;
   };
 
   // Skips retain note bookkeeping; one replaceable timer rechecks the active gate.
   const scheduleRetry = (delayMs: number, immediate: boolean) => {
     retryImmediate ||= immediate;
     if (retryTimer !== undefined) {
-      clearTimeoutFn(retryTimer);
+      clearTimeout(retryTimer);
       retryTimer = undefined;
     }
-    if (!turnActive || disabled || params.abortSignal?.aborted) {
+    if (turnController.signal.aborted || disabled || params.abortSignal?.aborted) {
       retryImmediate = false;
       return;
     }
-    retryTimer = setTimeoutFn(
+    retryTimer = setTimeout(
       () => {
         retryTimer = undefined;
         const rerunImmediate = retryImmediate;
@@ -229,7 +217,7 @@ function createProgressNarrator(params: {
   };
 
   function maybeRun(immediate: boolean) {
-    if (!turnActive || disabled || params.abortSignal?.aborted) {
+    if (turnController.signal.aborted || disabled || params.abortSignal?.aborted) {
       clearRetryTimer();
       return;
     }
@@ -240,7 +228,7 @@ function createProgressNarrator(params: {
       }
       return;
     }
-    const preambleAge = lastPreambleAt === undefined ? undefined : now() - lastPreambleAt;
+    const preambleAge = lastPreambleAt === undefined ? undefined : Date.now() - lastPreambleAt;
     if (preambleAge !== undefined && preambleAge < PROGRESS_STATUS_PREAMBLE_FRESH_MS) {
       scheduleRetry(
         PROGRESS_STATUS_PREAMBLE_FRESH_MS - preambleAge + PREAMBLE_RETRY_EPSILON_MS,
@@ -262,10 +250,10 @@ function createProgressNarrator(params: {
     }
     visibilityRetryCount = 0;
     inFlight = true;
-    const runGeneration = turnGeneration;
+    const runSignal = turnController.signal;
     narrationCount += 1;
     noteSequenceAtLastRun = activity.noteSequence;
-    lastRunAt = now();
+    lastRunAt = Date.now();
     const input: ProgressNarrationInput = {
       userMessage,
       activityNotes: activity.notes.map((note) => note.text),
@@ -273,11 +261,12 @@ function createProgressNarrator(params: {
     };
     void (async () => {
       try {
-        const raw = await generate(input);
-        if (!turnActive || runGeneration !== turnGeneration) {
+        const outcome = await generate(input, runSignal);
+        if (runSignal.aborted) {
           return;
         }
-        const text = raw ? normalizeNarrationText(raw) : "";
+        lastFailure = outcome?.error;
+        const text = outcome?.text ? normalizeNarrationText(outcome.text) : "";
         if (!text) {
           consecutiveFailures += 1;
           if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
@@ -302,7 +291,7 @@ function createProgressNarrator(params: {
       } catch (err) {
         logVerbose(`progress-narrator: update failed: ${String(err)}`);
       } finally {
-        if (runGeneration === turnGeneration) {
+        if (!runSignal.aborted) {
           inFlight = false;
           const rerunImmediate = pendingImmediate;
           pendingImmediate = false;
@@ -368,7 +357,7 @@ function createProgressNarrator(params: {
         if (!preambleText) {
           return;
         }
-        lastPreambleAt = now();
+        lastPreambleAt = Date.now();
         recordEvent("assistant", { text: preambleText }, { flushAssistant: true });
         return;
       }
