@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { findVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { makeTempDir } from "./temp-dir.js";
 
 function hasUnjoinedWork(value: unknown): boolean {
@@ -20,10 +21,19 @@ function hasUnjoinedWork(value: unknown): boolean {
 /** Own whole fixture bodies as well as commands that can outlive a failed assertion. */
 export function createFixtureLifetime() {
   const roots = new Set<string>();
+  const claims = new Map<string, () => void>();
   let pendingCleanup: Promise<void> | undefined;
   const work: { completion: Promise<unknown>; cleanup: boolean }[] = [];
 
+  function register(root?: string) {
+    const owner = findVitestResourceOwner(root);
+    if (owner && !claims.has(owner.root)) {
+      claims.set(owner.root, owner.claim());
+    }
+  }
+
   function track<T>(completion: Promise<T>, cleanup = false): Promise<T> {
+    register();
     work.push({ completion, cleanup });
     void completion.catch(() => {});
     return completion;
@@ -32,6 +42,7 @@ export function createFixtureLifetime() {
   function run<T>(body: () => Promise<T>): Promise<T> {
     // Register before the callback's first await, and observe late rejection even
     // when Vitest has already rejected its separate timeout/cancellation promise.
+    register();
     return track(Promise.resolve().then(body));
   }
 
@@ -52,6 +63,9 @@ export function createFixtureLifetime() {
     if (failures.length) {
       const ownedRoots = [...roots];
       roots.clear();
+      // Abandon the local handles, never the pending receipts. Later cleanup,
+      // reuse, or module reset cannot certify an earlier failed drain.
+      claims.clear();
       throw new AggregateError(
         failures,
         `Fixture cleanup unverified; retained ${ownedRoots.join(", ")}`,
@@ -74,15 +88,21 @@ export function createFixtureLifetime() {
     if (errors.length > 1) {
       throw new AggregateError(errors, "Test temporary directory cleanup failed");
     }
+    for (const [root, release] of claims) {
+      release();
+      claims.delete(root);
+    }
   }
 
   return {
     run,
     track,
     verifyCleanup: (body: () => Promise<void>) => {
+      register();
       return track(Promise.resolve().then(body), true);
     },
     createTempDir: (prefix: string, root?: string) => {
+      register(root);
       return makeTempDir(roots, prefix, root);
     },
     cleanup() {

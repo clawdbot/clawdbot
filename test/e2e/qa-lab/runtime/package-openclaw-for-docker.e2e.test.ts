@@ -656,6 +656,7 @@ describe("package-openclaw-for-docker", () => {
       "scripts/lib/bundled-plugin-paths.mjs",
       "scripts/lib/error-format.mts",
       "scripts/lib/managed-child-process.mts",
+      "scripts/lib/vitest-resource-ownership.mts",
       "scripts/lib/npm-json-output.mts",
       "scripts/lib/optional-bundled-clusters.mjs",
       "scripts/lib/output-root-guard.mjs",

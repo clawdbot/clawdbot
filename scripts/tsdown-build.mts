@@ -105,6 +105,7 @@ export const TSDOWN_DECLARATION_TOOL_INPUTS = [
   "scripts/lib/build-artifact-cache.mts",
   "scripts/lib/dist-artifact-ownership.mts",
   "scripts/lib/managed-child-process.mts",
+  "scripts/lib/vitest-resource-ownership.mts",
   "scripts/lib/direct-run.mjs",
   "scripts/lib/repo-root.mjs",
   "scripts/lib/local-check-runtime.mts",
