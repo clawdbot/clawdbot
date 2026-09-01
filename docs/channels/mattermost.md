@@ -371,6 +371,14 @@ Send messages with clickable buttons. When a user clicks a button, the agent rec
 
 Buttons come from the semantic `presentation` payload (in normal agent replies and in `message action=send`). OpenClaw renders value buttons as Mattermost interactive buttons, keeps URL buttons visible in the message text, and downgrades select menus to readable text.
 
+The options an `ask_user` question offers are also rendered as buttons, and tapping one answers
+that question directly. The question stays answerable by typing, and an option the Gateway does
+not index — the "Other…" choice, a multi-select question, or one with more than four options —
+stays in the prose instead. Other typed presentation actions (`command`, `callback`) are not
+rendered as buttons on Mattermost: a click here reaches the agent as a message rather than
+running the action, so those stay readable text instead of becoming a control that does
+something other than what it says.
+
 ```text
 message action=send channel=mattermost target=channel:<channelId> presentation={"blocks":[{"type":"buttons","buttons":[{"label":"Yes","value":"yes"},{"label":"No","value":"no"}]}]}
 ```
