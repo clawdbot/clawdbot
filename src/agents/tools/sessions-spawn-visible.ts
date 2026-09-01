@@ -35,6 +35,7 @@ import {
   resolveConfiguredSubagentRunTimeoutSeconds,
   splitModelRef,
 } from "../subagents/spawn/subagent-spawn-plan.js";
+import { readRequesterThinkingLevel } from "../subagents/spawn/subagent-spawn-requester-prefs.js";
 import { resolveSubagentThinkingOverride } from "../subagents/spawn/subagent-spawn-thinking.js";
 import { resolveSubagentTargetPolicy } from "../subagents/spawn/subagent-target-policy.js";
 import { normalizeToolModelOverride, readToolStringParam, ToolInputError } from "./common.js";
@@ -234,9 +235,19 @@ export async function maybeSpawnVisibleSession(params: {
   }
   const resolvedModel =
     modelOverride ?? resolveSubagentSpawnModelSelection({ cfg, agentId: targetAgentId });
+  const requesterAgentConfig = resolveAgentConfig(cfg, requesterAgentId);
+  const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
+  const callerThinkingRaw = readRequesterThinkingLevel({
+    cfg,
+    requesterInternalKey: requesterKey,
+    requesterAgentId,
+  });
   const thinkingPlan = resolveSubagentThinkingOverride({
     cfg,
+    requesterAgentConfig,
+    targetAgentConfig,
     thinkingOverrideRaw,
+    callerThinkingRaw,
   });
   if (thinkingPlan.status === "error") {
     const { provider, model } = splitModelRef(resolvedModel);

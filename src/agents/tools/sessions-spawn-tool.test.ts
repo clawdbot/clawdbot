@@ -713,6 +713,102 @@ describe("sessions_spawn tool", () => {
   });
 
   it.each([
+    {
+      name: "target-agent configuration over global configuration",
+      requesterThinking: undefined,
+      targetThinking: "off",
+      expected: "off",
+    },
+    {
+      name: "requester-agent configuration over target-agent configuration",
+      requesterThinking: "low",
+      targetThinking: "medium",
+      expected: "low",
+    },
+  ])("preserves native thinking precedence for visible sessions: $name", async (input) => {
+    await withTestDir({ prefix: "openclaw-visible-spawn-thinking-" }, async (dir) => {
+      const callGateway = vi.fn(async () => ({
+        key: "agent:worker:dashboard:child",
+        runStarted: true,
+        runId: "run-visible-thinking",
+      }));
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+        config: {
+          session: { store: path.join(dir, "sessions.json") },
+          agents: {
+            defaults: { subagents: { allowAgents: ["worker"], thinking: "high" } },
+            list: [
+              {
+                id: "main",
+                ...(input.requesterThinking
+                  ? { subagents: { thinking: input.requesterThinking } }
+                  : {}),
+              },
+              {
+                id: "worker",
+                ...(input.targetThinking ? { subagents: { thinking: input.targetThinking } } : {}),
+              },
+            ],
+          },
+        },
+        callGateway: callGateway as never,
+        registerRun: vi.fn(),
+        countActiveRuns: () => 0,
+      });
+
+      await tool.execute("visible-thinking-precedence", {
+        task: "inspect",
+        agentId: "worker",
+        visible: true,
+      });
+
+      expect(callGateway).toHaveBeenCalledWith(
+        "sessions.create",
+        expect.objectContaining({
+          agentId: "worker",
+          thinkingLevel: input.expected,
+        }),
+      );
+    });
+  });
+
+  it("inherits the caller thinking level for visible sessions", async () => {
+    await withTestDir({ prefix: "openclaw-visible-spawn-caller-thinking-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: "agent:main:main", storePath },
+        { thinkingLevel: "off" },
+      );
+      const callGateway = vi.fn(async () => ({
+        key: "agent:main:dashboard:child",
+        runStarted: true,
+        runId: "run-visible-caller-thinking",
+      }));
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+        config: {
+          session: { store: storePath },
+          agents: { defaults: { subagents: {} }, list: [{ id: "main" }] },
+        },
+        callGateway: callGateway as never,
+        registerRun: vi.fn(),
+        countActiveRuns: () => 0,
+      });
+
+      await tool.execute("visible-caller-thinking", {
+        task: "inspect",
+        visible: true,
+      });
+
+      expect(callGateway).toHaveBeenCalledWith(
+        "sessions.create",
+        expect.objectContaining({ thinkingLevel: "off" }),
+      );
+    });
+  });
+
+  it.each([
     { label: "default", mode: undefined },
     { label: "read-only", mode: "read-only" },
     { label: "guarded", mode: "guarded" },
