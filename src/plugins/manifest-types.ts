@@ -480,6 +480,8 @@ export type PluginManifestContracts = {
   webFetchProviders?: string[];
   webSearchProviders?: string[];
   workerProviders?: string[];
+  /** Provider ids supplying task-lane snapshots to the automation task-lane registry. */
+  taskLaneProviders?: string[];
   /** Provider ids whose plugin owns usage auth and snapshot hooks. */
   usageProviders?: string[];
   migrationProviders?: string[];

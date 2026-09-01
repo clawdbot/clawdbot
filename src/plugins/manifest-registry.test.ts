@@ -2667,6 +2667,48 @@ describe("loadPluginManifestRegistry", () => {
     });
   });
 
+  it("preserves taskLaneProviders contracts from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "acme-lanes",
+      contracts: {
+        taskLaneProviders: ["acme-lane"],
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "acme-lanes",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.contracts).toEqual({
+      taskLaneProviders: ["acme-lane"],
+    });
+  });
+
+  it("rejects malformed taskLaneProviders manifest entries", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "acme-lanes",
+      contracts: {
+        taskLaneProviders: [" space-lane ", "", 42],
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "acme-lanes",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.contracts).toEqual({
+      taskLaneProviders: ["space-lane"],
+    });
+  });
+
   it("preserves host-trusted plugin contracts from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
