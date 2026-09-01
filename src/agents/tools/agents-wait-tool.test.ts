@@ -154,6 +154,25 @@ describe("agents_wait", () => {
     });
   });
 
+  it("does not extend a bounded wait when the wall clock rolls back", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
+    vi.setSystemTime(1_000);
+    records.set("clock-rollback", collectorRun("clock-rollback", "agent:main:main"));
+    const tool = createAgentsWaitTool({
+      agentSessionKey: "agent:main:main",
+      agentId: "main",
+      config: { tools: { swarm: true } },
+    });
+    const wait = tool.execute("call", { ids: ["clock-rollback"], timeoutSeconds: 0.1 });
+
+    await vi.advanceTimersByTimeAsync(50);
+    vi.setSystemTime(0);
+    await vi.advanceTimersByTimeAsync(50);
+
+    await expect(wait).resolves.toMatchObject({ details: { pending: ["clock-rollback"] } });
+    vi.useRealTimers();
+  });
+
   it("projects an authorized collector failure without failing a mixed batch", async () => {
     const failed = collectorRun("failed", "agent:main:main", {
       status: "failed",
