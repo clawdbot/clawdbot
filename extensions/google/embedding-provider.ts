@@ -55,6 +55,8 @@ type GeminiTaskType = NonNullable<MemoryEmbeddingProviderCreateOptions["taskType
 const GEMINI_EMBEDDING_2_MODELS = new Set(["gemini-embedding-2", "gemini-embedding-2-preview"]);
 
 const GEMINI_EMBEDDING_2_DEFAULT_DIMENSIONS = 3072;
+const GOOGLE_RETRY_INFO_TYPE = "type.googleapis.com/google.rpc.RetryInfo";
+const GOOGLE_RETRY_DELAY_RE = /^(\d+)(?:\.(\d{1,9}))?s$/u;
 const GEMINI_EMBEDDING_2_TASK_PREFIXES: Record<GeminiTaskType, string> = {
   RETRIEVAL_QUERY: "task: search result | query:",
   RETRIEVAL_DOCUMENT: "title: none | text:",
@@ -207,6 +209,35 @@ function normalizeGeminiModel(model: string): string {
   return withoutPrefix;
 }
 
+function extractGoogleRetryInfoDelayMs(errorBody: unknown): number | undefined {
+  if (typeof errorBody !== "string" || !errorBody) {
+    return undefined;
+  }
+  try {
+    const details = asOptionalRecord(asOptionalRecord(JSON.parse(errorBody))?.error)?.details;
+    if (!Array.isArray(details)) {
+      return undefined;
+    }
+    let retryAfterMs: number | undefined;
+    for (const rawDetail of details) {
+      const detail = asOptionalRecord(rawDetail);
+      const retryDelay = normalizeOptionalString(detail?.retryDelay);
+      const match = retryDelay ? GOOGLE_RETRY_DELAY_RE.exec(retryDelay) : undefined;
+      if (normalizeOptionalString(detail?.["@type"]) !== GOOGLE_RETRY_INFO_TYPE || !match) {
+        continue;
+      }
+      const delayMs =
+        Number(match[1]) * 1000 + (match[2] ? Math.ceil(Number(`0.${match[2]}`) * 1000) : 0);
+      if (Number.isSafeInteger(delayMs) && delayMs >= 0) {
+        retryAfterMs = Math.max(retryAfterMs ?? delayMs, delayMs);
+      }
+    }
+    return retryAfterMs;
+  } catch {
+    return undefined;
+  }
+}
+
 export function sanitizeGeminiEmbedding(values: number[], expectedDimensions?: number): number[] {
   if (expectedDimensions != null && values.length !== expectedDimensions) {
     throw unexpectedGeminiEmbeddingDimensions(expectedDimensions, values.length);
@@ -241,7 +272,21 @@ async function fetchGeminiEmbeddingPayload(params: {
         },
         onResponse: async (res) => {
           if (!res.ok) {
-            throw await createProviderHttpError(res, "gemini embeddings failed");
+            const error = await createProviderHttpError(res, "gemini embeddings failed");
+            const fields = asOptionalRecord(error);
+            const retryAfterMs = extractGoogleRetryInfoDelayMs(fields?.errorBody);
+            if (retryAfterMs !== undefined) {
+              // Google-owned enrichment of its own thrown error: core keeps
+              // retryAfterMs vendor-agnostic (header-only), so the RetryInfo
+              // merge happens here at the provider boundary.
+              Object.assign(error, {
+                retryAfterMs: Math.max(
+                  retryAfterMs,
+                  typeof fields?.retryAfterMs === "number" ? fields.retryAfterMs : 0,
+                ),
+              });
+            }
+            throw error;
           }
           return await readProviderJsonObjectResponse(res, "gemini embeddings failed");
         },

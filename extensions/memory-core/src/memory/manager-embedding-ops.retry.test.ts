@@ -1,3 +1,4 @@
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EmbeddingProvider } from "./embeddings.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
@@ -53,7 +54,6 @@ describe("memory embedding query retry cancellation", () => {
 
   it("cancels provider backoff immediately without sending a second request", async () => {
     vi.useFakeTimers();
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const controller = new AbortController();
     const abortReason = new Error("memory search was cancelled");
     const embedQuery = vi.fn<EmbeddingProvider["embed"]>().mockRejectedValue(
@@ -63,13 +63,25 @@ describe("memory embedding query retry cancellation", () => {
       }),
     );
     const manager = createEmbeddingQueryRetryHarness(embedQuery, 10_000);
+    const waitForRetrySpy = vi.spyOn(
+      manager as unknown as {
+        waitForEmbeddingRetry: (
+          delayMs: number,
+          action: string,
+          signal?: AbortSignal,
+        ) => Promise<void>;
+      },
+      "waitForEmbeddingRetry",
+    );
 
     const pending = manager.embedQueryWithRetry("search terms", controller.signal);
     await vi.advanceTimersByTimeAsync(0);
 
     expect(embedQuery).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(1);
-    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 60_000);
+    const firstDelayMs = waitForRetrySpy.mock.calls[0]?.[0];
+    expect(firstDelayMs).toBeGreaterThanOrEqual(6400);
+    expect(firstDelayMs).toBeLessThanOrEqual(8000);
 
     controller.abort(abortReason);
 
@@ -95,6 +107,33 @@ describe("memory embedding query retry cancellation", () => {
       cause: abortReason,
     });
     expect(embedQuery).not.toHaveBeenCalled();
+  });
+
+  it("reaches caller fallback within the memory_search deadline after a hinted 429", async () => {
+    vi.useFakeTimers();
+    const waits: number[] = [];
+    const embedQuery = vi.fn<EmbeddingProvider["embed"]>().mockRejectedValue(
+      Object.assign(new Error("gemini embeddings failed (429)"), {
+        status: 429,
+        retryAfterMs: 60_000,
+      }),
+    );
+    const manager = Object.assign(createEmbeddingQueryRetryHarness(embedQuery), {
+      waitForEmbeddingRetry: async (delayMs: number, _action: string, signal?: AbortSignal) => {
+        waits.push(delayMs);
+        await sleepWithAbort(delayMs, signal);
+      },
+    }) as EmbeddingQueryRetryHarness;
+    const fallback = vi.fn(async () => [0, 1, 0, 0]);
+
+    const pending = manager.embedQueryWithRetry("search terms").catch(fallback);
+    await vi.runAllTimersAsync();
+
+    await expect(pending).resolves.toEqual([0, 1, 0, 0]);
+    expect(embedQuery).toHaveBeenCalledTimes(3);
+    expect(fallback).toHaveBeenCalledOnce();
+    expect(waits.every((delayMs) => delayMs <= 8_000)).toBe(true);
+    expect(waits.reduce((total, delayMs) => total + delayMs, 0)).toBeLessThan(15_000);
   });
 
   it("retries provider success that arrives after each embedding deadline", async () => {

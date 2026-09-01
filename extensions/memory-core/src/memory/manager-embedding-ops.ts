@@ -613,6 +613,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         provider,
         async () =>
           await runMemoryEmbeddingBatchRetryWithSplit({
+            profile: "index",
             items: params.items,
             run: async (batchItems) => {
               const timeoutMs = this.resolveEmbeddingTimeout(
@@ -707,6 +708,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         provider,
         async () =>
           await runMemoryEmbeddingRetryLoop({
+            profile: "query",
             run: async () => {
               signal?.throwIfAborted();
               const timeoutMs = this.resolveEmbeddingTimeout("query", provider, providerRuntime);

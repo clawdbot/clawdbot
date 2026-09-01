@@ -324,54 +324,14 @@ describe("provider error utils", () => {
     }
   });
 
-  it("uses the largest valid provider cooldown minimum", async () => {
-    const error = await createProviderHttpError(
-      new Response(
-        JSON.stringify({
-          error: {
-            code: 429,
-            status: "RESOURCE_EXHAUSTED",
-            details: [
-              {
-                "@type": "type.googleapis.com/google.rpc.RetryInfo",
-                retryDelay: "21.549315790s",
-              },
-            ],
-          },
-        }),
-        { status: 429, headers: { "Retry-After": "30" } },
-      ),
-      "Provider API error",
-    );
-
-    expect(error).toMatchObject({ retryAfterMs: 30_000 });
-  });
-
   it.each([
     ["negative header", { header: "-1" }],
     ["unsafe header", { header: "9007199254741" }],
-    ["negative RetryInfo", { retryDelay: "-1s" }],
-    ["malformed RetryInfo", { retryDelay: "NaNs" }],
-    ["over-precise RetryInfo", { retryDelay: "1.0000000001s" }],
-    ["unsafe RetryInfo", { retryDelay: "9007199254741s" }],
   ])("ignores $name cooldown hints", async (_name, value) => {
-    const body =
-      "retryDelay" in value
-        ? JSON.stringify({
-            error: {
-              details: [
-                {
-                  "@type": "type.googleapis.com/google.rpc.RetryInfo",
-                  retryDelay: value.retryDelay,
-                },
-              ],
-            },
-          })
-        : null;
     const error = await createProviderHttpError(
-      new Response(body, {
+      new Response(null, {
         status: 429,
-        headers: "header" in value ? { "Retry-After": value.header } : undefined,
+        headers: { "Retry-After": value.header },
       }),
       "Provider API error",
     );
