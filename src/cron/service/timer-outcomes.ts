@@ -90,6 +90,8 @@ export function applyJobResult(
     scheduleOwnershipAtMs?: number;
     // Startup recovery restores historical notification facts separately.
     replay?: boolean;
+    // Originating run-history row; forwarded into the alert callback for exact settlement.
+    taskRunId?: string;
     deferredNotifications?: DeferredCronNotifications;
   },
 ): boolean {
@@ -171,6 +173,7 @@ export function applyJobResult(
         error: result.error,
         runAtMs: result.startedAt,
         consecutiveCount: job.state.consecutiveSkipped,
+        taskRunId: opts?.taskRunId,
         deferredNotifications: opts?.deferredNotifications,
       });
     }
@@ -208,6 +211,7 @@ export function applyJobResult(
       completionFailed: completionStatus === "failed",
       autoDisableNotificationOwnsFailure,
       replay: opts?.replay,
+      taskRunId: opts?.taskRunId,
       deferredNotifications: opts?.deferredNotifications,
     });
     return shouldDelete;
@@ -710,6 +714,7 @@ export function applyOutcomeToAuthoritativeJob(
 
   const shouldDelete = applyJobResult(state, job, result, {
     scheduleOwnership,
+    taskRunId: result.taskRunId,
     deferredNotifications: opts?.deferredNotifications,
   });
   applyTriggerRunResult(job, result, { scheduleOwnership, triggerOwnership });

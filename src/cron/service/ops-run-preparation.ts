@@ -172,6 +172,14 @@ async function skipInvalidPersistedManualRun(params: {
     severity: "warn",
     nowMs: params.state.deps.nowMs,
   });
+  // Allocate the run id up front so the deferred alert settlement callback
+  // can update the same history row that emitCronRunFinished creates below.
+  const { runId: taskRunId } = tryCreateCronTaskRunHandle({
+    state: params.state,
+    job: params.job,
+    startedAt: endedAt,
+    publicRunId: params.runId,
+  });
   applyJobResult(
     params.state,
     params.job,
@@ -185,6 +193,7 @@ async function skipInvalidPersistedManualRun(params: {
     },
     {
       scheduleMode: isImmediateCronRunMode(params.mode) ? "preserve" : "advance",
+      taskRunId,
       deferredNotifications: postPersistNotifications,
     },
   );
@@ -207,6 +216,7 @@ async function skipInvalidPersistedManualRun(params: {
       failureNotificationDelivery: failureNotificationDeliveryFromJobState(params.job),
     },
     params.terminalTracker,
+    taskRunId,
   );
 
   const committedJob = commitCronRuntimeRows({

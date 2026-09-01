@@ -1,6 +1,7 @@
 /** Detached task-ledger integration for cron runs. */
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   createExecutionStartedOwnerBinding,
   isRetainedExecutionOwnerBinding,
@@ -15,6 +16,7 @@ import {
   recordTaskRunProgressByRunIdCore,
 } from "../../tasks/task-executor.js";
 import { bindTaskFlowExecution } from "../../tasks/task-flow-registry.store.sqlite.js";
+import { updateTaskStateByRunId } from "../../tasks/task-registry-record-api.js";
 import {
   bindTaskRunExecution,
   listTaskRecordsByRuntimeSourceIdInDatabase,
@@ -44,6 +46,7 @@ import {
 import { cronRunLogEntryFromEvent } from "../task-run-event-codec.js";
 import type {
   CronCompletionStatus,
+  CronFailureNotificationDelivery,
   CronJob,
   CronRunErrorClassification,
   CronRunStatus,
@@ -51,6 +54,53 @@ import type {
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import type { CronEvent, CronExecutionIdentityAdmission, CronServiceState } from "./state.js";
 import { CRON_TASK_RUNNING_PROGRESS_SUMMARY } from "./task-ledger.js";
+
+/** Writes the settled failure-alert delivery outcome back onto its run-history record. */
+export function tryRecordCronFailureNotificationDeliveryOutcome(
+  state: CronServiceState,
+  params: {
+    jobId: string;
+    outcome: CronFailureNotificationDelivery;
+    // When provided, updates exactly this run-history row; no scan required.
+    taskRunId?: string;
+  },
+): void {
+  try {
+    // Only settle the exact originating run-history row. The newest-unknown
+    // fallback scan is removed: taskRunId is the sole settlement identity
+    // (Finding 3), and both the job-state and history-row guards use it.
+    if (params.taskRunId === undefined) {
+      return;
+    }
+    const storeKey = cronStoreKey(state.deps.storePath);
+    const exact = findTaskByRunId(params.taskRunId);
+    if (
+      exact?.runtime !== "cron" ||
+      cronTaskRecordStoreKey(exact) !== storeKey ||
+      !isRecord(exact.detail)
+    ) {
+      return;
+    }
+    const runId = exact.runId;
+    const detail = exact.detail;
+    if (runId === undefined || !isRecord(detail)) {
+      return;
+    }
+    updateTaskStateByRunId({
+      runId,
+      runtime: "cron",
+      detail: {
+        ...detail,
+        failureNotificationDelivery: { ...params.outcome },
+      } as JsonValue,
+    });
+  } catch (error) {
+    state.deps.log.warn(
+      { jobId: params.jobId, error },
+      "cron: failed to record failure-notification delivery outcome on run history",
+    );
+  }
+}
 
 function requireCronAgentId(agentId: string | undefined): string {
   if (!agentId?.trim()) {

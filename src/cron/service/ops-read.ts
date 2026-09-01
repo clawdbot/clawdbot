@@ -33,6 +33,7 @@ import {
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
 import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
+import { tryCreateCronTaskRunHandle } from "./task-runs.js";
 import { applyJobResult, armTimer } from "./timer.js";
 
 /** Returns cron service status after a read-only maintenance pass. */
@@ -126,6 +127,13 @@ export async function recordExternalFailure(
     const postPersistNotifications: DeferredCronNotifications = [];
     const now = state.deps.nowMs();
     assertCronJobStateTimestamps(statePatch);
+    // Allocate the run id up front so the deferred alert settlement callback
+    // can update the same history row that emitCronRunFinished creates below.
+    const { runId: taskRunId } = tryCreateCronTaskRunHandle({
+      state,
+      job,
+      startedAt: now,
+    });
     const committedJob = commitCronRuntimeRows({
       state,
       jobIds: [id],
@@ -152,19 +160,24 @@ export async function recordExternalFailure(
             startedAt: now,
             endedAt: now,
           },
-          { deferredNotifications: postPersistNotifications },
+          { taskRunId, deferredNotifications: postPersistNotifications },
         );
         current.state.nextRunAtMs = undefined;
-        emitCronRunFinished(state, {
-          jobId: current.id,
-          action: "finished",
-          job: current,
-          status: "error",
-          error,
-          runAtMs: now,
-          durationMs: 0,
-          failureNotificationDelivery: failureNotificationDeliveryFromJobState(current),
-        });
+        emitCronRunFinished(
+          state,
+          {
+            jobId: current.id,
+            action: "finished",
+            job: current,
+            status: "error",
+            error,
+            runAtMs: now,
+            durationMs: 0,
+            failureNotificationDelivery: failureNotificationDeliveryFromJobState(current),
+          },
+          undefined,
+          taskRunId,
+        );
         return { upsertJobIds: [current.id], value: current };
       },
     });
