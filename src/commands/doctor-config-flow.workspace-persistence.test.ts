@@ -54,6 +54,69 @@ describe("Doctor workspace persistence", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
+  it.each([
+    ["entries", false],
+    ["list", false],
+    ["entries", true],
+    ["list", true],
+  ] as const)(
+    "persists per-agent migrations with explicit ownership (%s, update in progress: %s)",
+    async (shape, updateInProgress) => {
+      await withTempHome(async (home) => {
+        await withEnvOverride(
+          {
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+            OPENCLAW_UPDATE_IN_PROGRESS: updateInProgress ? "1" : undefined,
+          },
+          async () => {
+            const entries = {
+              ops: {
+                memorySearch: { enabled: false, extraPaths: [path.join(home, "notes")] },
+                sandbox: { perSession: true },
+                model: { primary: "openai/gpt-5.6-sol", timeoutMs: 20_000 },
+              },
+              research: { memory: { search: { provider: "auto" } } },
+            };
+            const configPath = await writeOpenClawConfig(home, {
+              agents: {
+                ownership: "explicit",
+                ...(shape === "entries"
+                  ? { entries }
+                  : {
+                      list: Object.entries(entries).map(([id, entry]) =>
+                        Object.assign({ id }, entry),
+                      ),
+                    }),
+              },
+              gateway: { mode: "local" },
+              plugins: { enabled: false },
+            });
+            expect((await readConfigFileSnapshot()).valid).toBe(false);
+
+            const ctx = await prepareDoctorContext(configPath);
+            await runInitialConfigWriteHealth(ctx);
+            expect(ctx.configWriteRefusal).toBeUndefined();
+
+            const saved = JSON.parse(await fs.readFile(configPath, "utf-8"));
+            expect(saved.agents.entries.ops).toEqual({
+              memory: { search: entries.ops.memorySearch },
+              sandbox: { scope: "session" },
+              model: { primary: "openai/gpt-5.6-sol" },
+            });
+            expect(saved.agents.ownership).toBe("explicit");
+            expect(saved.agents.entries.research).toEqual({
+              memory: { search: { provider: "openai" } },
+            });
+            expect((await readConfigFileSnapshot()).valid).toBe(true);
+            expect((await prepareDoctorContext(configPath)).configResult.shouldWriteConfig).toBe(
+              false,
+            );
+          },
+        );
+      });
+    },
+  );
+
   it.each(["entries", "list"])(
     "persists explicit ownership for a markerless multi-agent %s roster",
     async (shape) => {
