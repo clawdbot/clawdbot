@@ -93,9 +93,13 @@ function requestInstanceBindingProbe(runtime: PluginRuntime) {
 }
 
 function holdInstanceBindingCronAdd(runtime: PluginRuntime) {
-  return runtime.gateway.request(INSTANCE_BINDING_HOLD_CRON_ADD_METHOD, {}, {
-    scopes: ["operator.admin"],
-  });
+  return runtime.gateway.request(
+    INSTANCE_BINDING_HOLD_CRON_ADD_METHOD,
+    {},
+    {
+      scopes: ["operator.admin"],
+    },
+  );
 }
 
 async function writeInstanceBindingProbePlugin(): Promise<{ bundledRoot: string }> {
@@ -335,8 +339,8 @@ describe("gateway plugin instance bindings", () => {
       expect(currentConfig.ok).toBe(true);
       expect(typeof currentConfig.payload?.hash).toBe("string");
       coordinator.cronAddGate = {
-        entered: createDeferred<void>(),
-        release: createDeferred<void>(),
+        entered: createDeferred(),
+        release: createDeferred(),
       };
       await expect(holdInstanceBindingCronAdd(initialRuntime)).resolves.toEqual({});
       const oldGenerationAdd = initialCron.add({
@@ -402,9 +406,7 @@ describe("gateway plugin instance bindings", () => {
           payload: { kind: "systemEvent", text: "retired" },
         }),
       ).rejects.toThrow("plugin runtime has retired");
-      await expect(initialCron.update("retired", {})).rejects.toThrow(
-        "plugin runtime has retired",
-      );
+      await expect(initialCron.update("retired", {})).rejects.toThrow("plugin runtime has retired");
       await expect(initialCron.remove("retired")).rejects.toThrow("plugin runtime has retired");
       await expect(
         initialCron.removeStaleJobFamily({

@@ -10,7 +10,6 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
 import { activatePluginRegistry } from "../plugins/loader-shared.js";
 import type { ChannelPluginLoadIntent } from "../plugins/loader-types.js";
@@ -39,7 +38,6 @@ import type {
   RuntimeGatewayRequestOptions,
 } from "../plugins/runtime/types.js";
 import type { PluginLogger, PluginOrigin } from "../plugins/types.js";
-import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "./method-scopes.js";
 import { normalizeOperatorScopeList, type OperatorScope } from "./operator-scopes.js";
 import type { GatewayNodeInvokeStream } from "./server-methods/shared-types.js";
@@ -48,6 +46,7 @@ import type {
   GatewayRequestHandler,
   GatewayRequestOptions,
 } from "./server-methods/types.js";
+import { createGatewayPluginCronRuntime } from "./server-plugin-cron-runtime.js";
 import {
   dispatchGatewayMethodInProcess,
   dispatchGatewayMethodInProcessRaw,
@@ -499,32 +498,11 @@ function createGatewayPluginRuntimeBindings(
   const resolveBoundGatewayContext = resolveGatewayContext
     ? () => (active ? resolveGatewayContext() : undefined)
     : undefined;
-  const assertCronRuntimeActive = (): void => {
-    if (!active) {
-      throw new Error("Gateway cron is unavailable because this plugin runtime has retired.");
-    }
-  };
-  const resolveCron = (): GatewayCronServiceContract => {
-    assertCronRuntimeActive();
-    const cron = resolveBoundGatewayContext?.()?.cron;
-    if (!cron) {
-      throw new Error("Gateway cron is unavailable for this plugin runtime.");
-    }
-    // Gateway owns the concrete scheduler behind this narrow plugin facade.
-    return cron as GatewayCronServiceContract;
-  };
-  const cron: PluginHookGatewayCronService = {
-    list: (opts) => resolveCron().list(opts),
-    add: (input) => resolveCron().add(input, { commitGuard: assertCronRuntimeActive }),
-    update: (id, patch) =>
-      resolveCron().update(id, patch, { commitGuard: assertCronRuntimeActive }),
-    remove: (id) => resolveCron().remove(id, { commitGuard: assertCronRuntimeActive }),
-    removeStaleJobFamily: (family) =>
-      resolveCron().removeStaleJobFamily(family, { commitGuard: assertCronRuntimeActive }),
-  };
+  const cronRuntime = createGatewayPluginCronRuntime(resolveBoundGatewayContext);
   return {
     retire: () => {
       lifetime.abort(new Error("Plugin Gateway runtime retired; duplex invocation cancelled."));
+      cronRuntime.retire();
       active = false;
     },
     runtime: {
@@ -545,8 +523,7 @@ function createGatewayPluginRuntimeBindings(
       },
       gateway: {
         isAvailable: async () => hasInProcessGatewayContext(resolveBoundGatewayContext),
-        getCron: () =>
-          resolveBoundGatewayContext?.()?.cron ? cron : undefined,
+        getCron: cronRuntime.getService,
         request: (method, params, options) =>
           dispatchTrustedPluginGatewayMethod(method, params, options, resolveBoundGatewayContext),
       },
