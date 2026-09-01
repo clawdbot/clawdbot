@@ -201,6 +201,23 @@ export async function prepareReplyAgentPayloads(state: {
         sessionCtx,
         cfg,
       });
+  const buildTerminalEmptyInteractiveReplyPayload = () =>
+    buildEmptyInteractiveReplyPayload({
+      isInteractive:
+        followupRun.currentInboundEventKind !== "room_event" &&
+        (followupRun.run.inputProvenance?.kind === undefined ||
+          followupRun.run.inputProvenance.kind === "external_user"),
+      isHeartbeat: false,
+      silentExpected: followupRun.run.silentExpected,
+      allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
+      hasPendingContinuation:
+        runResult.meta?.yielded === true || (runResult.meta?.pendingToolCalls?.length ?? 0) > 0,
+      hasExplicitSilentReply: hasDeliberateSilentTerminalReply(runResult),
+      hasCommittedDelivery: false,
+      hasIntentionalTerminalCompletion: hasIntentionalTerminalCompletion(runResult),
+      sessionCtx,
+      cfg,
+    });
   const buildStrandedRetryMissingDeliveryDiagnostic = (): ReplyPayload | undefined => {
     if (!sessionKey || !storePath || followupRun.strandedReplyRetry !== true) {
       return undefined;
@@ -501,23 +518,7 @@ export async function prepareReplyAgentPayloads(state: {
       return { kind: "return" as const, value: silentFallbackFailurePayload };
     }
     const emptyFallbackPayload =
-      emptyInteractiveReplyPayload ??
-      buildEmptyInteractiveReplyPayload({
-        isInteractive:
-          followupRun.currentInboundEventKind !== "room_event" &&
-          (followupRun.run.inputProvenance?.kind === undefined ||
-            followupRun.run.inputProvenance.kind === "external_user"),
-        isHeartbeat,
-        silentExpected: followupRun.run.silentExpected,
-        allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
-        hasPendingContinuation:
-          runResult.meta?.yielded === true || (runResult.meta?.pendingToolCalls?.length ?? 0) > 0,
-        hasExplicitSilentReply: hasDeliberateSilentTerminalReply(runResult),
-        hasCommittedDelivery: false,
-        hasIntentionalTerminalCompletion: hasIntentionalTerminalCompletion(runResult),
-        sessionCtx,
-        cfg,
-      });
+      emptyInteractiveReplyPayload ?? buildTerminalEmptyInteractiveReplyPayload();
     if (emptyFallbackPayload && !effectiveContinuationSignal && !hasQueuedDelegateWork) {
       const emptyPayloadResult = await buildFinalPayloads([emptyFallbackPayload]);
       if (emptyPayloadResult.replyPayloads.length > 0) {
@@ -557,24 +558,9 @@ export async function prepareReplyAgentPayloads(state: {
     !hasQueuedDelegateWork
   ) {
     const emptyPayloadResult = await buildFinalPayloads(
-      [
-        buildEmptyInteractiveReplyPayload({
-          isInteractive:
-            followupRun.currentInboundEventKind !== "room_event" &&
-            (followupRun.run.inputProvenance?.kind === undefined ||
-              followupRun.run.inputProvenance.kind === "external_user"),
-          isHeartbeat: false,
-          silentExpected: followupRun.run.silentExpected,
-          allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
-          hasPendingContinuation:
-            runResult.meta?.yielded === true || (runResult.meta?.pendingToolCalls?.length ?? 0) > 0,
-          hasExplicitSilentReply: hasDeliberateSilentTerminalReply(runResult),
-          hasCommittedDelivery: false,
-          hasIntentionalTerminalCompletion: hasIntentionalTerminalCompletion(runResult),
-          sessionCtx,
-          cfg,
-        }),
-      ].filter((payload): payload is ReplyPayload => payload !== undefined),
+      [buildTerminalEmptyInteractiveReplyPayload()].filter(
+        (payload): payload is ReplyPayload => payload !== undefined,
+      ),
     );
     if (emptyPayloadResult.replyPayloads.length > 0) {
       replyOperation.retainFailureUntilComplete();

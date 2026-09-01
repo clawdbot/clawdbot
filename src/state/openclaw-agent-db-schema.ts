@@ -336,23 +336,15 @@ function migrateSessionTranscriptActiveProjection(db: DatabaseSync, previousVers
   `);
 }
 
-function parseMigratedSessionEntry(value: unknown): MigratedSessionEntry | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  return safeParseJsonRecord(value) ?? null;
-}
+const parseMigratedSessionEntry = (value: unknown): MigratedSessionEntry | null =>
+  typeof value === "string" ? (safeParseJsonRecord(value) ?? null) : null;
 
-function migratedObjectField(
+const migratedObjectField = (
   entry: MigratedSessionEntry,
   key: string,
-): MigratedSessionEntry | null {
-  return asNullableRecord(entry[key]);
-}
+): MigratedSessionEntry | null => asNullableRecord(entry[key]);
 
-function migratedNumber(value: unknown): number | null {
-  return asFiniteNumber(value) ?? null;
-}
+const migratedNumber = (value: unknown): number | null => asFiniteNumber(value) ?? null;
 
 function migratedChatType(value: unknown): "direct" | "group" | "channel" | null {
   if (value === "direct" || value === "group" || value === "channel") {
@@ -416,14 +408,11 @@ function migratedEntryAccountId(entry: MigratedSessionEntry): string | null {
   );
 }
 
-function migratedEntryDisplayName(entry: MigratedSessionEntry): string | null {
-  return (
-    migratedText(entry.displayName) ??
-    migratedText(entry.label) ??
-    migratedText(entry.subject) ??
-    migratedText(entry.groupId)
-  );
-}
+const migratedEntryDisplayName = (entry: MigratedSessionEntry): string | null =>
+  migratedText(entry.displayName) ??
+  migratedText(entry.label) ??
+  migratedText(entry.subject) ??
+  migratedText(entry.groupId);
 
 function backfillOpenClawAgentSchema(db: DatabaseSync, previousVersion: number): void {
   if (previousVersion >= 2) {

@@ -65,9 +65,8 @@ const RETRYABLE_HEARTBEAT_SKIP_REASONS = new Set([
 ]);
 const RETRYABLE_GUARD_SKIP_REASONS = new Set(["not-due", "min-spacing", "flood"]);
 
-export function isRetryableHeartbeatSkipReason(reason: string): boolean {
-  return RETRYABLE_HEARTBEAT_SKIP_REASONS.has(reason);
-}
+export const isRetryableHeartbeatSkipReason = (reason: string): boolean =>
+  RETRYABLE_HEARTBEAT_SKIP_REASONS.has(reason);
 
 // Continuation dispatch shares this retry gate; preemption now joins the same
 // retained-work contract as the previously busy-only reasons.
@@ -88,9 +87,8 @@ function markTrustedContinuationRoutingCarrier<T extends object>(request: T): T 
   return request;
 }
 
-export function markTrustedContinuationHeartbeatWake<T extends object>(request: T): T {
-  return markTrustedContinuationRoutingCarrier(request);
-}
+export const markTrustedContinuationHeartbeatWake = <T extends object>(request: T): T =>
+  markTrustedContinuationRoutingCarrier(request);
 
 export function hasTrustedContinuationHeartbeatWake(
   request: unknown,
@@ -104,13 +102,11 @@ export function hasTrustedContinuationHeartbeatWake(
 
 let heartbeatsEnabled = true;
 
-export function setHeartbeatsEnabled(enabled: boolean) {
+export const setHeartbeatsEnabled = (enabled: boolean) => {
   heartbeatsEnabled = enabled;
-}
+};
 
-export function areHeartbeatsEnabled(): boolean {
-  return heartbeatsEnabled;
-}
+export const areHeartbeatsEnabled = (): boolean => heartbeatsEnabled;
 
 let handler: HeartbeatWakeHandler | null = null;
 let handlerGeneration = 0;
