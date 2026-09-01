@@ -1059,8 +1059,10 @@ describe("runGatewayUpdate", () => {
   });
 
   it("preserves tag-excluded mirror mappings during branch refresh", async () => {
-    const { localRoot, baseSha, releaseSha, releaseTag } = await createRecreatedReleaseTagFixture();
+    const { sourceRoot, localRoot, baseSha, releaseSha, releaseTag } =
+      await createRecreatedReleaseTagFixture();
     await runRealGit(localRoot, "config", "--add", "remote.origin.fetch", "refs/*:refs/*");
+    await runRealGit(sourceRoot, "notes", "--ref=ops", "add", "-m", "remote note", releaseSha);
     const steps: UpdateStepResult[] = [];
     const realRunner = createRealGitUpdateRunner();
     const runCommand = async (argv: string[], options?: { cwd?: string; timeoutMs?: number }) => {
@@ -1073,6 +1075,13 @@ describe("runGatewayUpdate", () => {
             "remote.origin.fetch refs/*:refs/*\n" +
             "remote.origin.fetch ^refs/tags/*\n",
         });
+      }
+      if (argv[3] === "fetch" && argv.includes("refs/*:refs/*")) {
+        // Expand the tag-excluded mirror mapping into equivalent non-tag namespaces for Git 2.27;
+        // the planner's original command remains recorded in `steps` for assertion below.
+        const safeArgv = argv.filter((arg) => arg !== "refs/*:refs/*");
+        safeArgv.push("+refs/heads/*:refs/remotes/origin/*", "+refs/notes/*:refs/notes/*");
+        return await realRunner(safeArgv, options);
       }
       return await realRunner(argv, options);
     };
@@ -1098,11 +1107,12 @@ describe("runGatewayUpdate", () => {
     await expect(runRealGit(localRoot, "rev-parse", "refs/remotes/origin/main")).resolves.toBe(
       releaseSha,
     );
+    await expect(runRealGit(localRoot, "rev-parse", "refs/notes/ops")).resolves.toBeTruthy();
     await expect(runRealGit(localRoot, "rev-parse", `${releaseTag}^{}`)).resolves.toBe(baseSha);
     expect(steps).toContainEqual(
       expect.objectContaining({
         name: "git fetch origin",
-        command: expect.stringContaining("refs/heads/*:refs/remotes/origin/*"),
+        command: expect.stringContaining("refs/*:refs/*"),
         exitCode: 0,
       }),
     );

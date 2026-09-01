@@ -63,10 +63,6 @@ function isBroadTagFetchRefspec(refspec: string): boolean {
   return isBroadRefspecMapping(source, destination);
 }
 
-function deriveRemoteTrackingBranchRefspec(remote: string): string {
-  return `+refs/heads/*:refs/remotes/${remote}/*`;
-}
-
 export type StableGitFetchResult = {
   reason?: "fetch-failed";
   remotes?: string[];
@@ -159,16 +155,14 @@ export async function prepareStableGitFetch(params: {
               const normalized = refspec.trim();
               if (normalized.startsWith("^")) {
                 // Keep exclusions out of explicit argv: supported Git versions apply configured
-                // negatives while older Git rejects the syntax. The derived branch mapping keeps
-                // this preliminary refresh tag-safe without relying on that CLI syntax.
+                // negatives while older Git rejects the syntax. The positive mapping remains in
+                // argv so every configured non-tag destination is refreshed without CLI syntax.
                 return [];
               }
               if (!isTagFetchRefspec(refspec)) {
                 return [refspec];
               }
-              return preserveBroadMappings && isBroadTagFetchRefspec(refspec)
-                ? [deriveRemoteTrackingBranchRefspec(remote)]
-                : [];
+              return preserveBroadMappings && isBroadTagFetchRefspec(refspec) ? [refspec] : [];
             }),
           ),
         ]
