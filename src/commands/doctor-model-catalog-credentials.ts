@@ -52,10 +52,28 @@ function credentialMatches(
   );
 }
 
+function collectAuthoredEnvApiKeyIds(providers: unknown): Set<string> {
+  if (!isRecord(providers)) {
+    return new Set();
+  }
+  const ids = new Set<string>();
+  for (const entry of Object.values(providers)) {
+    if (!isRecord(entry) || typeof entry.apiKey !== "string") {
+      continue;
+    }
+    const ref = parseEnvTemplateSecretRef(entry.apiKey);
+    if (ref?.source === "env") {
+      ids.add(ref.id);
+    }
+  }
+  return ids;
+}
+
 function collectCredentials(
   providers: unknown,
   store: AuthProfileStore,
   blockedStores: readonly AuthProfileStore[] = [],
+  authoredEnvApiKeyIds: ReadonlySet<string> = new Set(),
 ): PlaintextCredential[] {
   if (!isRecord(providers)) {
     return [];
@@ -69,6 +87,7 @@ function collectCredentials(
     if (
       !key.trim() ||
       parseEnvTemplateSecretRef(key) !== null ||
+      authoredEnvApiKeyIds.has(key) ||
       isNonSecretApiKeyMarker(key) ||
       store.profiles[key] !== undefined ||
       findMatchingProfileId(store, credential, blockedStores) !== undefined
@@ -258,6 +277,7 @@ export async function maybeMigrateModelCatalogCredentials(params: {
   const childStores = catalogs
     .filter((catalog) => catalog.agentDir !== mainAgentDir)
     .map((catalog) => catalog.localStore);
+  const authoredEnvApiKeyIds = collectAuthoredEnvApiKeyIds(params.cfg.models?.providers);
   const configCredentials = collectCredentials(
     params.cfg.models?.providers,
     mainStore,
@@ -266,7 +286,12 @@ export async function maybeMigrateModelCatalogCredentials(params: {
   const catalogCredentials = catalogs.map((catalog, index) =>
     uniqueCredentials(
       catalog.providers.flatMap((providers) =>
-        collectCredentials(providers, effectiveStores[index] ?? mainStore),
+        collectCredentials(
+          providers,
+          effectiveStores[index] ?? mainStore,
+          [],
+          authoredEnvApiKeyIds,
+        ),
       ),
     ),
   );

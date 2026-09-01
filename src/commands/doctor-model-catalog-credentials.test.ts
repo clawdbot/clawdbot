@@ -311,4 +311,34 @@ describe("doctor model catalog credential migration", () => {
     expect(profiles["braced:default"]).toBeUndefined();
     expect(profiles["shorthand:default"]).toBeUndefined();
   });
+
+  it("skips bare catalog env markers that match an authored provider SecretRef", async () => {
+    const state = createState();
+    const { agentDir } = state;
+    const cfg: OpenClawConfig = {
+      models: { providers: { example: provider("${CUSTOM_API_KEY}") } },
+    };
+    // A generated catalog stores the same SecretRef as a bare env id.
+    fs.writeFileSync(
+      path.join(agentDir, "models.json"),
+      `${JSON.stringify({ providers: { example: provider("CUSTOM_API_KEY") } }, null, 2)}\n`,
+    );
+
+    const result = await maybeMigrateModelCatalogCredentials(migrationParams(state, cfg));
+
+    expect(result).toMatchObject({ detected: 0, migrated: 0, warnings: [] });
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = state.stateDir;
+    let profiles: Record<string, unknown>;
+    try {
+      profiles = loadPersistedAuthProfileStore(undefined)?.profiles ?? {};
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+    }
+    expect(profiles["example:default"]).toBeUndefined();
+  });
 });
