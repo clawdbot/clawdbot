@@ -331,6 +331,22 @@ describe("renderChatComposer controls", () => {
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
   });
 
+  it("shows placement work as an attached busy status while composing is disabled", () => {
+    const { container } = renderComposer({
+      canSend: false,
+      disabledReason: "Preparing workspace…",
+      disabledReasonTone: "info",
+      disabledReasonBusy: true,
+      draft: "Keep this draft",
+    });
+
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
+    expect(container.querySelector(".agent-chat__input")?.getAttribute("aria-busy")).toBe("true");
+    const status = container.querySelector('.agent-chat__composer-underlaps[data-tone="info"]');
+    expect(status?.textContent).toContain("Preparing workspace…");
+    expect(status?.querySelector(".btn__spinner")).not.toBeNull();
+  });
+
   it("opens the microphone picker, marks the selected input, and persists a selection", async () => {
     discoverRealtimeTalkInputsMock.mockResolvedValue({
       devices: [

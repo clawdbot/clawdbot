@@ -881,15 +881,14 @@ export const cronHandlers: GatewayRequestHandlers = {
     }
     const callerScope = readCronCallerScope(client);
     const operatorActor = callerScope ? undefined : resolveOperatorSessionCreation(client).actor;
+    const creatorSession = callerScope?.sessionKey
+      ? loadGatewaySessionEntryReadOnly(callerScope.sessionKey, {
+          agentId: callerScope.agentId,
+        }).entry
+      : undefined;
     // Agent-tool clients own one exact signed session. Read that session's creator instead of
     // reclassifying spawn context as the automation creator; params never carry this provenance.
-    const actor =
-      operatorActor ??
-      (callerScope?.sessionKey
-        ? loadGatewaySessionEntryReadOnly(callerScope.sessionKey, {
-            agentId: callerScope.agentId,
-          }).entry?.createdActor
-        : undefined);
+    const actor = operatorActor ?? creatorSession?.createdActor;
     const actorId = normalizeOptionalString(actor?.id);
     const createdActor = actor ? { ...actor, ...(actorId ? { id: actorId } : {}) } : undefined;
     let captureRuntimeAuthority: (() => CronRuntimeAuthority | undefined) | undefined;
@@ -899,7 +898,25 @@ export const cronHandlers: GatewayRequestHandlers = {
       respondInvalidCronParams(respond, "cron.add", formatErrorMessage(err));
       return;
     }
-    const commitGuard = resolveCronMutationCommitGuard(client, context);
+    const assertMutationCurrent = resolveCronMutationCommitGuard(client, context);
+    const selectionIdentity = JSON.stringify(creatorSession?.skillLibrarySelections);
+    const commitGuard = () => {
+      assertMutationCurrent?.();
+      if (creatorSession && callerScope?.sessionKey) {
+        const latest = loadGatewaySessionEntryReadOnly(callerScope.sessionKey, {
+          agentId: callerScope.agentId,
+        }).entry;
+        if (
+          latest?.sessionId !== creatorSession.sessionId ||
+          latest.lifecycleRevision !== creatorSession.lifecycleRevision ||
+          JSON.stringify(latest.skillLibrarySelections) !== selectionIdentity
+        ) {
+          throw new Error(
+            "Creator session changed before scheduling; retry from the current turn.",
+          );
+        }
+      }
+    };
     const jobCreate = applyCronCreateCallerScopeDefault(candidate as CronJobCreate, callerScope);
     const cfg = context.getRuntimeConfig();
     try {
@@ -960,7 +977,10 @@ export const cronHandlers: GatewayRequestHandlers = {
       result = await context.cron.add(jobCreate, {
         enabledExplicit,
         ...(createdActor ? { createdActor } : {}),
-        ...(commitGuard ? { commitGuard } : {}),
+        ...(creatorSession?.skillLibrarySelections
+          ? { skillLibrarySelections: creatorSession.skillLibrarySelections }
+          : {}),
+        commitGuard,
         ...(captureRuntimeAuthority ? { captureRuntimeAuthority } : {}),
         matchesExisting: (job) =>
           cronJobMatchesDeclarationScope({

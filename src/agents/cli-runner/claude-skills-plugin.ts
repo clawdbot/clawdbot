@@ -97,6 +97,11 @@ export async function prepareClaudeCliSkillsPlugin(params: {
   if (normalizeLowercaseStringOrEmpty(params.backendId) !== CLAUDE_CLI_BACKEND_ID) {
     return { args: [], cleanup: async () => {} };
   }
+  // Library command identities are host-owned, not frontmatter names. Keep their
+  // canonical catalog and immutable paths instead of registering colliding native aliases.
+  if (params.skillsSnapshot?.librarySelections?.length) {
+    return { args: [], cleanup: async () => {} };
+  }
 
   const skills = await collectClaudePluginSkills(params.skillsSnapshot);
   if (skills.length === 0) {

@@ -14,6 +14,8 @@ export const vitestWorkerDeclarationEntries = {
     "src/agents/command/cli-compaction-runtime.test-support.ts",
   "gateway/session-title-retention.test-support":
     "src/gateway/session-title-retention.test-support.ts",
+  "skills/library/persistence-runtime.test-support":
+    "src/skills/library/persistence-runtime.test-support.ts",
   "tui/tui-pty-runtime-test-support": "src/tui/tui-pty-runtime-test-support.ts",
 };
 

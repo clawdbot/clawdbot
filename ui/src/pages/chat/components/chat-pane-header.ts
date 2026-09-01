@@ -78,8 +78,10 @@ type ChatPaneHeaderProps = {
   sharingControl?: TemplateResult | typeof nothing;
   sessionMenuAction: TemplateResult | typeof nothing;
   placementMoving?: boolean;
+  placementRestarting?: boolean;
   placementMoveDisabledReason?: string;
   placementReclaimDisabledReason?: string;
+  placementRestartDisabledReason?: string;
   nativeGateways?: NativeGatewaysCapability | null;
   gatewaysSnapshot?: NativeGatewaysSnapshot | null;
   onboarding?: boolean;
@@ -92,6 +94,7 @@ type ChatPaneHeaderProps = {
   onOpenParentSession: (sessionKey: string) => void;
   onPlacementMove?: () => void;
   onPlacementReclaim?: () => void;
+  onPlacementRestart?: () => void;
   onBranchSelect: (leafEntryId: string) => void;
   onOpenSplitView?: () => void;
   onSplitDown?: (paneId: string) => void;

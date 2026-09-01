@@ -18,6 +18,7 @@ export type { SessionMutationTarget } from "./session-mutation-authorization-err
 type SessionMutationTargetField = "key" | "parentSessionKey" | "sessionKey";
 
 const SESSION_TARGET_FIELDS_BY_METHOD = new Map<string, readonly SessionMutationTargetField[]>([
+  ["skills.library.activate", ["sessionKey"]],
   ["agent", ["sessionKey"]],
   ["board.event", ["sessionKey"]],
   ["board.update", ["sessionKey"]],
@@ -77,6 +78,7 @@ const SESSION_TARGET_FIELDS_BY_METHOD = new Map<string, readonly SessionMutation
 ]);
 
 const REQUIRED_SESSION_TARGET_METHODS = new Set([
+  "skills.library.activate",
   "board.action",
   "board.event",
   "board.update",

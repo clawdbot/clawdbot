@@ -315,6 +315,21 @@ export class GitHubIdentityController {
     }
   }
 
+  private async runMutation(owner: RequestOwner, run: () => Promise<boolean>): Promise<boolean> {
+    this.beginMutation(owner);
+    let succeeded = false;
+    try {
+      succeeded = await run();
+    } catch (error) {
+      if (this.isCurrent(owner)) {
+        this.error = formatUiError(error);
+      }
+    } finally {
+      this.finishMutation(owner, succeeded);
+    }
+    return succeeded;
+  }
+
   private acceptSharedStatus(owner: SharedRequestOwner, status: ToolsGitHubStatusResult) {
     if (
       status.agentId !== owner.target.agentId ||
@@ -413,22 +428,14 @@ export class GitHubIdentityController {
     if (!owner) {
       return;
     }
-    this.beginMutation(owner);
-    let succeeded = false;
-    try {
+    const succeeded = await this.runMutation(owner, async () => {
       await owner.client.request("users.github.disconnect", {});
       if (!this.isCurrent(owner)) {
-        return;
+        return false;
       }
       this.personal = null;
-      succeeded = true;
-    } catch (error) {
-      if (this.isCurrent(owner)) {
-        this.error = formatUiError(error);
-      }
-    } finally {
-      this.finishMutation(owner, succeeded);
-    }
+      return true;
+    });
     if (succeeded && this.isCurrent(owner)) {
       await this.verify();
     }
@@ -458,55 +465,48 @@ export class GitHubIdentityController {
     const owner = { ...captured, target: captured.target };
     const name = draft.name.trim();
     const email = draft.email.trim();
-    this.beginMutation(owner);
-    let stored = false;
-    let secretName = "";
-    let succeeded = false;
-    const deleteSetupHandoff = () =>
-      owner.client.request("secrets.store.delete", { name: secretName }).catch(() => undefined);
-    try {
-      secretName = `github-setup-${generateUUID().replaceAll("-", "").toLowerCase()}`;
-      await owner.client.request("secrets.store.set", {
-        name: secretName,
-        value: draft.token,
-        kind: "secret",
-        allowedHosts: [],
-      });
-      stored = true;
-      if (!this.isCurrent(owner)) {
-        await deleteSetupHandoff();
-        return;
+    await this.runMutation(owner, async () => {
+      const secretName = `github-setup-${generateUUID().replaceAll("-", "").toLowerCase()}`;
+      let stored = false;
+      try {
+        await owner.client.request("secrets.store.set", {
+          name: secretName,
+          value: draft.token,
+          kind: "secret",
+          allowedHosts: [],
+        });
+        stored = true;
+        if (!this.isCurrent(owner)) {
+          return false;
+        }
+        const result = await this.runConfigureMutation(owner, runExternalMutation, {
+          scope: owner.target.scope,
+          agentId: owner.target.agentId,
+          mode: "managed",
+          secretName,
+          ...(name || email
+            ? { gitAuthor: { ...(name ? { name } : {}), ...(email ? { email } : {}) } }
+            : {}),
+        });
+        if (!result.ok) {
+          throw new Error(result.error);
+        }
+        stored = false;
+        this.applyMutationStatus(
+          owner,
+          result.value,
+          { ...draft, token: "" },
+          result.refresh.ok ? null : result.refresh.error,
+        );
+        return true;
+      } finally {
+        if (stored) {
+          await owner.client
+            .request("secrets.store.delete", { name: secretName })
+            .catch(() => undefined);
+        }
       }
-      const result = await this.runConfigureMutation(owner, runExternalMutation, {
-        scope: owner.target.scope,
-        agentId: owner.target.agentId,
-        mode: "managed",
-        secretName,
-        ...(name || email
-          ? { gitAuthor: { ...(name ? { name } : {}), ...(email ? { email } : {}) } }
-          : {}),
-      });
-      if (!result.ok) {
-        throw new Error(result.error);
-      }
-      stored = false;
-      this.applyMutationStatus(
-        owner,
-        result.value,
-        { ...draft, token: "" },
-        result.refresh.ok ? null : result.refresh.error,
-      );
-      succeeded = true;
-    } catch (error) {
-      if (stored) {
-        await deleteSetupHandoff();
-      }
-      if (this.isCurrent(owner)) {
-        this.error = formatUiError(error);
-      }
-    } finally {
-      this.finishMutation(owner, succeeded);
-    }
+    });
   }
 
   async inherit() {
@@ -557,9 +557,7 @@ export class GitHubIdentityController {
     ) {
       return;
     }
-    this.beginMutation(owner);
-    let succeeded = false;
-    try {
+    await this.runMutation(owner, async () => {
       const result = await this.runConfigureMutation(owner, runExternalMutation, {
         scope,
         agentId: owner.target.agentId,
@@ -575,15 +573,10 @@ export class GitHubIdentityController {
           { token: "", name: "", email: "" },
           result.refresh.ok ? null : result.refresh.error,
         );
-        succeeded = true;
+        return true;
       }
-    } catch (error) {
-      if (this.isCurrent(owner)) {
-        this.error = formatUiError(error);
-      }
-    } finally {
-      this.finishMutation(owner, succeeded);
-    }
+      return false;
+    });
   }
   private runConfigureMutation(
     owner: SharedRequestOwner,

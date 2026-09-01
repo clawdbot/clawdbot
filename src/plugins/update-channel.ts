@@ -58,7 +58,7 @@ type PluginChannelSyncSummary = {
   errors: string[];
 };
 
-type PluginChannelSyncResult = {
+export type PluginChannelSyncResult = {
   config: OpenClawConfig;
   changed: boolean;
   summary: PluginChannelSyncSummary;

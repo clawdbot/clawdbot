@@ -170,6 +170,7 @@ function createStaleReplySessionInitializationResult(
  * transcript after metadata commits, keeping archive failure warning-only.
  */
 export async function commitReplySessionInitialization(params: {
+  commitGuard?: () => void;
   activeSessionKey: string;
   agentId: string;
   archivePreviousTranscript?: boolean;
@@ -269,6 +270,7 @@ export async function commitReplySessionInitialization(params: {
       maintenanceOverride: params.maintenanceConfig,
       storePath,
       upserts,
+      beforeCommitInTransaction: params.commitGuard,
     });
   } catch (error) {
     if (

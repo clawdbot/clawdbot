@@ -195,6 +195,7 @@ describe("resolveUpdateTargetEnv", () => {
       invocationCwd: "/srv/openclaw",
       baseEnv: {
         PATH: "/bin",
+        OPENCLAW_SERVICE_REPAIR_POLICY: "external",
         OPENCLAW_STATE_DIR: "/wrong/state",
         OPENCLAW_CONFIG_PATH: "/wrong/openclaw.json",
         OPENCLAW_PROFILE: "wrong",
@@ -209,6 +210,7 @@ describe("resolveUpdateTargetEnv", () => {
     });
 
     expect(env.PATH).toBe("/bin");
+    expect(env.OPENCLAW_SERVICE_REPAIR_POLICY).toBe("external");
     expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("1");
     expect(env.OPENCLAW_STATE_DIR).toBe(path.join("/srv/openclaw", "daemon-state"));
     expect(env.OPENCLAW_CONFIG_PATH).toBe(
@@ -222,12 +224,14 @@ describe("resolveUpdateTargetEnv", () => {
     const env = resolveUpdateTargetEnv({
       baseEnv: {
         PATH: "/bin",
+        OPENCLAW_SERVICE_REPAIR_POLICY: "external",
         OPENCLAW_STATE_DIR: "/caller/state",
         OPENCLAW_PROFILE: "caller",
       },
     });
 
     expect(env.PATH).toBe("/bin");
+    expect(env.OPENCLAW_SERVICE_REPAIR_POLICY).toBe("external");
     expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("1");
     expect(env.OPENCLAW_STATE_DIR).toBe("/caller/state");
     expect(env.OPENCLAW_PROFILE).toBe("caller");
@@ -585,18 +589,6 @@ describe("collectMissingPluginInstallPayloads", () => {
   });
 });
 
-describe("resolvePostSyncPluginUpdateSkipIds", () => {
-  it("skips plugins already switched through ClawHub or npm and repaired payloads", () => {
-    expect(
-      updateCommandPluginsTesting.resolvePostSyncPluginUpdateSkipIds({
-        switchedToClawHub: ["whatsapp"],
-        switchedToNpm: ["voice-call"],
-        repairedMissingPayloadIds: new Set(["telegram"]),
-      }),
-    ).toStrictEqual(new Set(["whatsapp", "voice-call", "telegram"]));
-  });
-});
-
 describe("shouldUseLegacyProcessRestartAfterUpdate", () => {
   it("never restarts package updates through the pre-update process", () => {
     expect(
@@ -928,7 +920,7 @@ describe("updatePluginsAfterCoreUpdate (invalid config)", () => {
       } as unknown as Awaited<
         ReturnType<typeof import("../../config/io.js").readConfigFileSnapshot>
       >,
-      opts: { json: true } as never,
+      json: true,
       timeoutMs: 1000,
     });
     expect(result.status).toBe("error");

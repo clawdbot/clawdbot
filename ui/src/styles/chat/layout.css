@@ -4257,6 +4257,12 @@ button.chat-pr__diff {
   line-height: 1.25;
 }
 
+.agent-chat__capability-menu-item[value^="library-"] .agent-chat__capability-menu-label > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .agent-chat__capability-menu-state {
   padding: 10px 12px;
   line-height: 1.4;

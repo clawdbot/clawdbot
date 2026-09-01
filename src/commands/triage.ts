@@ -36,7 +36,7 @@ import {
 const TRIAGE_EXTERNAL_AGENTS = ["claude", "codex", "opencode", "pi"] as const;
 type TriageExternalAgent = (typeof TRIAGE_EXTERNAL_AGENTS)[number];
 
-export type TriageRecoveryContext = {
+type TriageRecoveryContext = {
   target: InstallationTarget;
   cwd?: string;
   updateFailure: TriageUpdateFailure;

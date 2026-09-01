@@ -3,12 +3,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginInstallRecord } from "../../config/types.plugins.js";
-import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import {
   runPluginPayloadSmokeCheck,
   runPluginPayloadSmokeCheckForManifestRecords,
-} from "./plugin-payload-validation.js";
+} from "./payload-verification.js";
 
 type BundleFormat = "agent" | "codex" | "claude" | "cursor";
 type FormatMarkedBundleInstallRecord = PluginInstallRecord & {

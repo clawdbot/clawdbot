@@ -2034,6 +2034,24 @@ function installControlUiMockGateway(
         };
       case "chat.abort":
         return { aborted: true };
+      case "skills.status":
+        return {
+          workspaceDir: "/tmp/control-ui-mock/workspace",
+          managedSkillsDir: "/tmp/control-ui-mock/skills",
+          skills: [],
+        };
+      case "skills.library.list":
+        return {
+          entries: [],
+          profileId: null,
+          multipleProfiles: false,
+          defaultTarget: "workspace",
+          canManageWorkspace: true,
+          defaultSelectionLimit: 64,
+          ...(isRecord(params) && typeof params.sessionKey === "string"
+            ? { session: { sessionKey: params.sessionKey, selections: [], attachable: [] } }
+            : {}),
+        };
       case "commands.list":
         return { commands: [] };
       case "health":

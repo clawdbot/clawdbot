@@ -61,6 +61,7 @@ describe("test runtime prerequisites", () => {
       ["test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts"],
       "runtime",
     ],
+    ["ACP CLI process", ["src/cli/acp-cli-exit.process.test.ts"], "runtime"],
     ["update CLI process", ["src/cli/update-dry-run-state.process.test.ts"], "runtime"],
     ["CLI directory", ["src/cli"], "runtime"],
     ["CLI config", ["test/vitest/vitest.cli.config.ts"], undefined],
@@ -2264,6 +2265,8 @@ describe("scripts/test-projects changed-target routing", () => {
     "src/cli/update-dry-run-state.process.test.ts",
     "src/cli/one-shot-exit.test.ts",
     "src/cli/program/subcli-descriptors.test.ts",
+    "src/cli/state-dir-gateway-check.process.test.ts",
+    "src/cli/state-dir-gateway-check.server.test.ts",
   ])("routes CLI process test %s through its isolated project", (file) => {
     expectSingleVitestRunPlan(buildVitestRunPlans([file]), {
       config: "test/vitest/vitest.cli-process.config.ts",

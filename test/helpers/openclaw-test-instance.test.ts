@@ -1,6 +1,6 @@
 // OpenClaw test instance tests cover spawned test instance lifecycle.
 import { AsyncLocalStorage, createHook } from "node:async_hooks";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { terminateManagedChild } from "../../scripts/lib/managed-child-process.mts";
 import { hasErrnoCode } from "../../src/infra/errno.js";
@@ -974,6 +975,43 @@ describe("openclaw test instance", () => {
     expect(logs).toContain("recent stderr");
     expect(logs).not.toContain("old stdout");
     expect(logs).not.toContain("old stderr");
+  });
+
+  it("terminates UTF-8 log trimming within the byte cap", { timeout: 15_000 }, async () => {
+    const cases = [
+      { chunks: ["€a", "b"], limit: 4, expected: "ab" },
+      { chunks: ["old", "recent"], limit: 8, expected: "ldrecent" },
+      { chunks: ["€abc"], limit: 4, expected: "abc" },
+      { chunks: ["😀a", "b"], limit: 5, expected: "ab" },
+      { chunks: ["😀a"], limit: 1, expected: "a" },
+      { chunks: ["😀"], limit: 1, expected: "" },
+      { chunks: ["😀"], limit: 3, expected: "" },
+      { chunks: ["€"], limit: 2, expected: "" },
+      { chunks: ["a", "€"], limit: 3, expected: "€" },
+    ];
+    // A synchronous regression must be killed and joined outside the Vitest event loop.
+    const script = `
+      import assert from "node:assert/strict";
+      import { testing } from ${JSON.stringify(new URL("./openclaw-test-instance.ts", import.meta.url).href)};
+      process.stderr.write("loaded actual log helper; starting UTF-8 cases\\n");
+      for (const { chunks, limit, expected } of JSON.parse(process.argv[1])) {
+        const log = testing.createBoundedStringLog();
+        for (const chunk of chunks) {
+          testing.appendLogChunk(log, chunk, limit);
+          assert.ok(Buffer.byteLength(log.join("")) <= limit);
+        }
+        assert.equal(log.join(""), expected);
+        assert.ok(!log.join("").includes("�"));
+        assert.match(testing.formatLogs(log, []), /output truncated to last/);
+      }
+      process.stdout.write("UTF-8 cases completed");
+    `;
+    const { stdout } = await promisify(execFile)(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "--eval", script, JSON.stringify(cases)],
+      { timeout: 10_000, killSignal: "SIGKILL", encoding: "utf8" },
+    );
+    expect(stdout).toBe("UTF-8 cases completed");
   });
 
   it("fails startup waits immediately after signaled gateway exits", async () => {

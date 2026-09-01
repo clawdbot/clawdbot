@@ -1,30 +1,30 @@
 // Reconciles configured plugin installs after the core package update has completed.
 import path from "node:path";
-// Link mandatory repairs before a package swap can remove this updater's old chunks.
-import { maybeRepairStaleManagedNpmBundledPlugins } from "../../commands/doctor-plugin-registry.js";
-import { repairMissingConfiguredPluginInstalls } from "../../commands/doctor/shared/missing-configured-plugin-install.js";
-import { UPDATE_POST_CORE_CONVERGENCE_ENV } from "../../commands/doctor/shared/update-phase.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { PluginInstallRecord } from "../../config/types.plugins.js";
-import type { PluginCapabilityConsentHandler } from "../../plugins/capability-consent.js";
-import {
-  resolveDefaultPluginExtensionsDir,
-  resolveDefaultPluginNpmDir,
-} from "../../plugins/install-paths.js";
-import { listManagedPluginNpmRoots } from "../../plugins/npm-project-roots.js";
-import {
-  reconcileRegisteredOpenClawHostLinks,
-  relinkOpenClawPeerDependenciesInManagedNpmRoot,
-} from "../../plugins/plugin-peer-link.js";
-import { pruneStaleLocalBundledPluginInstallRecords } from "../../plugins/stale-local-bundled-plugin-install-records.js";
-import type { PluginUpdateOutcome } from "../../plugins/update.js";
-import { resolveUserPath } from "../../utils.js";
-import { VERSION } from "../../version.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import {
   filterRecordsToActive,
   runActivePluginPayloadSmokeCheck,
-} from "./active-plugin-payload-validation.js";
-import type { PluginPayloadSmokeFailure } from "./plugin-payload-validation.js";
+} from "../../../plugins/active-payload-verification.js";
+import type { PluginCapabilityConsentHandler } from "../../../plugins/capability-consent.js";
+import {
+  resolveDefaultPluginExtensionsDir,
+  resolveDefaultPluginNpmDir,
+} from "../../../plugins/install-paths.js";
+import { listManagedPluginNpmRoots } from "../../../plugins/npm-project-roots.js";
+import type { PluginPayloadSmokeFailure } from "../../../plugins/payload-verification.js";
+import {
+  reconcileRegisteredOpenClawHostLinks,
+  relinkOpenClawPeerDependenciesInManagedNpmRoot,
+} from "../../../plugins/plugin-peer-link.js";
+import { pruneStaleLocalBundledPluginInstallRecords } from "../../../plugins/stale-local-bundled-plugin-install-records.js";
+import type { PluginUpdateOutcome } from "../../../plugins/update.js";
+import { resolveUserPath } from "../../../utils.js";
+import { VERSION } from "../../../version.js";
+// Link mandatory repairs before a package swap can remove this updater's old chunks.
+import { maybeRepairStaleManagedNpmBundledPlugins } from "../../doctor-plugin-registry.js";
+import { repairMissingConfiguredPluginInstalls } from "./missing-configured-plugin-install.js";
+import { UPDATE_POST_CORE_CONVERGENCE_ENV } from "./update-phase.js";
 
 type PostCoreConvergenceWarning = {
   pluginId?: string;
@@ -215,11 +215,9 @@ export async function runPostCorePluginConvergence(params: {
   const records: Record<string, PluginInstallRecord> = repair.records;
   // Filter the smoke-check input to active records ONLY: configured /
   // enabled plugins, plus trusted-source-linked official sync targets
-  // (mirroring the existing `collectMissingPluginInstallPayloads` policy
-  // at update-command.ts:~218 with `skipDisabledPlugins: true`). Without
-  // this filter, a stale install record for a disabled or no-longer-
-  // configured plugin whose payload was deleted on disk would block the
-  // entire update — even though the gateway will never load that plugin.
+  // selected by `filterRecordsToActive`. Without this filter, a stale install
+  // record for an inactive plugin could block the update even though the
+  // gateway will never load it.
   const smoke = await runActivePluginPayloadSmokeCheck({
     cfg: params.cfg,
     records,

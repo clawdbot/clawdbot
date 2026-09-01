@@ -177,6 +177,7 @@ export async function spawnSubagentDirect(
     const spawnedByKey = requesterInternalKey;
     const { resolvedModel, thinkingOverride } = plan;
     const initialSession = await createInitialSubagentSession({
+      assertActive,
       cfg,
       targetAgentId,
       childSessionKey,

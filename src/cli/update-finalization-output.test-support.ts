@@ -18,6 +18,9 @@ export async function doctorCommand() {
     console.log(JSON.stringify({ ok: true, checksRun: 1, checksSkipped: 0, findings: [] }));
     return;
   }
+  if (process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION !== '0') {
+    throw new Error('Update Doctor unexpectedly allowed gateway activation');
+  }
   intro('OpenClaw doctor');
   note('Doctor panel diagnostic', 'Repair');
   if (!process.argv.includes('--no-workspace-suggestions')) note('Doctor workspace diagnostic', 'Workspace');
@@ -82,7 +85,7 @@ const stubs = new Map<string, string>([
   ],
   [
     sourceUrl("./update-cli/update-command-plugins.ts"),
-    `export const updatePluginsAfterCoreUpdate = async ({opts}) => { if (opts.restart !== false) throw new Error('Unexpected restart'); return {status: ${JSON.stringify(scenario?.endsWith("plugin-error") ? "error" : scenario?.endsWith("plugin-warning") ? "warning" : "ok")}, changed: false}; };`,
+    `export const updatePluginsAfterCoreUpdate = async () => ({status: ${JSON.stringify(scenario?.endsWith("plugin-error") ? "error" : scenario?.endsWith("plugin-warning") ? "warning" : "ok")}, changed: false, warnings: [], sync: {changed: false, switchedToBundled: [], switchedToNpm: [], warnings: [], errors: []}, npm: {changed: false, outcomes: []}, integrityDrifts: []});`,
   ],
   [
     sourceUrl("../daemon/gateway-entrypoint.ts"),

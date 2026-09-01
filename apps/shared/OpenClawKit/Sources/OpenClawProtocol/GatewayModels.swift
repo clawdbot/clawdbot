@@ -8206,6 +8206,7 @@ public struct FailedSessionPlacement: Codable, Sendable {
     public let terminalreason: String?
     public let terminalatms: Int?
     public let recoveryerror: String
+    public let recoveryaction: String?
 
     public init(
         state: String,
@@ -8225,7 +8226,8 @@ public struct FailedSessionPlacement: Codable, Sendable {
         workspaceresultconflict: [String: AnyCodable]? = nil,
         terminalreason: String? = nil,
         terminalatms: Int? = nil,
-        recoveryerror: String)
+        recoveryerror: String,
+        recoveryaction: String? = nil)
     {
         self.state = state
         self.generation = generation
@@ -8245,6 +8247,7 @@ public struct FailedSessionPlacement: Codable, Sendable {
         self.terminalreason = terminalreason
         self.terminalatms = terminalatms
         self.recoveryerror = recoveryerror
+        self.recoveryaction = recoveryaction
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -8266,6 +8269,7 @@ public struct FailedSessionPlacement: Codable, Sendable {
         case terminalreason = "terminalReason"
         case terminalatms = "terminalAtMs"
         case recoveryerror = "recoveryError"
+        case recoveryaction = "recoveryAction"
     }
 }
 
@@ -14379,6 +14383,141 @@ public struct WebLoginWaitParams: Codable, Sendable {
     }
 }
 
+public struct SkillsLibraryListParams: Codable, Sendable {
+    public let sessionkey: String?
+    public let scope: AnyCodable?
+
+    public init(
+        sessionkey: String? = nil,
+        scope: AnyCodable? = nil)
+    {
+        self.sessionkey = sessionkey
+        self.scope = scope
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case scope
+    }
+}
+
+public struct SkillsLibraryReadParams: Codable, Sendable {
+    public let skillid: String
+    public let revision: String?
+    public let sessionkey: String?
+
+    public init(
+        skillid: String,
+        revision: String? = nil,
+        sessionkey: String? = nil)
+    {
+        self.skillid = skillid
+        self.revision = revision
+        self.sessionkey = sessionkey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case skillid = "skillId"
+        case revision
+        case sessionkey = "sessionKey"
+    }
+}
+
+public struct SkillsLibrarySaveParams: Codable, Sendable {
+    public let skillid: String?
+    public let expectedrevision: AnyCodable
+    public let slug: String
+    public let content: String
+    public let files: [[String: AnyCodable]]?
+
+    public init(
+        skillid: String? = nil,
+        expectedrevision: AnyCodable,
+        slug: String,
+        content: String,
+        files: [[String: AnyCodable]]? = nil)
+    {
+        self.skillid = skillid
+        self.expectedrevision = expectedrevision
+        self.slug = slug
+        self.content = content
+        self.files = files
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case skillid = "skillId"
+        case expectedrevision = "expectedRevision"
+        case slug
+        case content
+        case files
+    }
+}
+
+public struct SkillsLibraryMutateParams: Codable, Sendable {
+    public let skillid: String
+    public let expectedrevision: String
+    public let action: AnyCodable
+    public let revision: String?
+
+    public init(
+        skillid: String,
+        expectedrevision: String,
+        action: AnyCodable,
+        revision: String? = nil)
+    {
+        self.skillid = skillid
+        self.expectedrevision = expectedrevision
+        self.action = action
+        self.revision = revision
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case skillid = "skillId"
+        case expectedrevision = "expectedRevision"
+        case action
+        case revision
+    }
+}
+
+public struct SkillsLibraryActivateParams: Codable, Sendable {
+    public let sessionkey: String
+    public let action: AnyCodable
+    public let skillid: String?
+    public let revision: String?
+
+    public init(
+        sessionkey: String,
+        action: AnyCodable,
+        skillid: String? = nil,
+        revision: String? = nil)
+    {
+        self.sessionkey = sessionkey
+        self.action = action
+        self.skillid = skillid
+        self.revision = revision
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case action
+        case skillid = "skillId"
+        case revision
+    }
+}
+
+public struct SkillsLibraryImportParams: Codable, Sendable {
+    public let slug: String
+    public let source: [String: AnyCodable]
+
+    public init(
+        slug: String,
+        source: [String: AnyCodable])
+    {
+        self.slug = slug
+        self.source = source
+    }
+}
+
 public struct AgentSummary: Codable, Sendable {
     public let id: String
     public let kind: AgentKind?
@@ -15516,17 +15655,20 @@ public struct CommandEntry: Codable, Sendable {
 }
 
 public struct CommandsListParams: Codable, Sendable {
+    public let sessionkey: String?
     public let agentid: String?
     public let provider: String?
     public let scope: AnyCodable?
     public let includeargs: Bool?
 
     public init(
+        sessionkey: String? = nil,
         agentid: String? = nil,
         provider: String? = nil,
         scope: AnyCodable? = nil,
         includeargs: Bool? = nil)
     {
+        self.sessionkey = sessionkey
         self.agentid = agentid
         self.provider = provider
         self.scope = scope
@@ -15534,6 +15676,7 @@ public struct CommandsListParams: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
         case agentid = "agentId"
         case provider
         case scope
@@ -15553,15 +15696,19 @@ public struct CommandsListResult: Codable, Sendable {
 
 public struct SkillsStatusParams: Codable, Sendable {
     public let agentid: String?
+    public let sessionkey: String?
 
     public init(
-        agentid: String? = nil)
+        agentid: String? = nil,
+        sessionkey: String? = nil)
     {
         self.agentid = agentid
+        self.sessionkey = sessionkey
     }
 
     private enum CodingKeys: String, CodingKey {
         case agentid = "agentId"
+        case sessionkey = "sessionKey"
     }
 }
 
@@ -24514,6 +24661,214 @@ public enum TalkClientCreateResult: Codable, Sendable {
         case .providerWebsocket(let value): try value.encode(to: encoder)
         case .gatewayRelay(let value): try value.encode(to: encoder)
         case .managedRoom(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
+public struct SkillsLibraryUploadParamsBegin: Codable, Sendable {
+    public let action: String
+    public let slug: String
+    public let sizebytes: Int
+    public let sha256: String
+
+    public init(
+        slug: String,
+        sizebytes: Int,
+        sha256: String
+    )
+    {
+        self.action = "begin"
+        self.slug = slug
+        self.sizebytes = sizebytes
+        self.sha256 = sha256
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case action
+        case slug
+        case sizebytes = "sizeBytes"
+        case sha256
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["action", "slug", "sizeBytes", "sha256"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for SkillsLibraryUploadParamsBegin: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedAction = try container.decode(String.self, forKey: .action)
+        guard decodedAction == "begin" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .action,
+                in: container,
+                debugDescription: "Expected action to equal begin"
+            )
+        }
+        self.action = "begin"
+        self.slug = try container.decode(String.self, forKey: .slug)
+        self.sizebytes = try container.decode(Int.self, forKey: .sizebytes)
+        self.sha256 = try container.decode(String.self, forKey: .sha256)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("begin", forKey: .action)
+        try container.encode(slug, forKey: .slug)
+        try container.encode(sizebytes, forKey: .sizebytes)
+        try container.encode(sha256, forKey: .sha256)
+    }
+}
+
+public struct SkillsLibraryUploadParamsChunk: Codable, Sendable {
+    public let action: String
+    public let uploadid: String
+    public let offset: Int
+    public let data: String
+
+    public init(
+        uploadid: String,
+        offset: Int,
+        data: String
+    )
+    {
+        self.action = "chunk"
+        self.uploadid = uploadid
+        self.offset = offset
+        self.data = data
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case action
+        case uploadid = "uploadId"
+        case offset
+        case data
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["action", "uploadId", "offset", "data"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for SkillsLibraryUploadParamsChunk: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedAction = try container.decode(String.self, forKey: .action)
+        guard decodedAction == "chunk" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .action,
+                in: container,
+                debugDescription: "Expected action to equal chunk"
+            )
+        }
+        self.action = "chunk"
+        self.uploadid = try container.decode(String.self, forKey: .uploadid)
+        self.offset = try container.decode(Int.self, forKey: .offset)
+        self.data = try container.decode(String.self, forKey: .data)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("chunk", forKey: .action)
+        try container.encode(uploadid, forKey: .uploadid)
+        try container.encode(offset, forKey: .offset)
+        try container.encode(data, forKey: .data)
+    }
+}
+
+public struct SkillsLibraryUploadParamsCommit: Codable, Sendable {
+    public let action: String
+    public let uploadid: String
+
+    public init(
+        uploadid: String
+    )
+    {
+        self.action = "commit"
+        self.uploadid = uploadid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case action
+        case uploadid = "uploadId"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["action", "uploadId"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for SkillsLibraryUploadParamsCommit: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedAction = try container.decode(String.self, forKey: .action)
+        guard decodedAction == "commit" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .action,
+                in: container,
+                debugDescription: "Expected action to equal commit"
+            )
+        }
+        self.action = "commit"
+        self.uploadid = try container.decode(String.self, forKey: .uploadid)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("commit", forKey: .action)
+        try container.encode(uploadid, forKey: .uploadid)
+    }
+}
+
+public enum SkillsLibraryUploadParams: Codable, Sendable {
+    case begin(SkillsLibraryUploadParamsBegin)
+    case chunk(SkillsLibraryUploadParamsChunk)
+    case commit(SkillsLibraryUploadParamsCommit)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "action"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "begin": self = try .begin(SkillsLibraryUploadParamsBegin(from: decoder))
+        case "chunk": self = try .chunk(SkillsLibraryUploadParamsChunk(from: decoder))
+        case "commit": self = try .commit(SkillsLibraryUploadParamsCommit(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown SkillsLibraryUploadParams discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .begin(let value): try value.encode(to: encoder)
+        case .chunk(let value): try value.encode(to: encoder)
+        case .commit(let value): try value.encode(to: encoder)
         }
     }
 }

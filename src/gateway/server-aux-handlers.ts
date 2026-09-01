@@ -35,9 +35,13 @@ import {
 import {
   ExecApprovalManager,
   type OperatorApprovalLifecycleEvent,
+  type OperatorStandingGrantMintSpec,
 } from "./exec-approval-manager.js";
 import { createLazyHandler } from "./lazy-handler.js";
-import type { CronStandingGrantMintSpec } from "./operator-approval-standing-grants.js";
+import {
+  createPlacementStandingGrantRuntime,
+  type PlacementStandingGrantRuntime,
+} from "./operator-approval-placement-grants.js";
 import {
   closeOrphanedOperatorApprovals,
   pruneTerminalOperatorApprovals,
@@ -83,6 +87,9 @@ export function createGatewayAuxHandlers(
   // Gateway-lifetime epoch while retaining separate in-process waiter maps.
   // A newly constructed Gateway cannot resume the prior lifetime's waiters.
   const approvalPersistence = { runtimeEpoch: randomUUID() };
+  const placementStandingGrants = createPlacementStandingGrantRuntime({
+    runtimeEpoch: approvalPersistence.runtimeEpoch,
+  });
   const approvalStartupNowMs = Date.now();
   closeOrphanedOperatorApprovals({
     runtimeEpoch: approvalPersistence.runtimeEpoch,
@@ -92,7 +99,8 @@ export function createGatewayAuxHandlers(
   const createApprovalManager = <TPayload>(
     approvalKind: "exec" | "plugin" | "system-agent",
     resolveAllowedDecisions: (request: TPayload) => readonly ExecApprovalDecision[],
-    resolveStandingGrantMint?: (request: TPayload) => CronStandingGrantMintSpec | null,
+    resolveStandingGrantMint?: (request: TPayload) => OperatorStandingGrantMintSpec | null,
+    retainPlacementStandingGrant?: PlacementStandingGrantRuntime["retain"],
   ) =>
     new ExecApprovalManager<TPayload>({
       approvalKind,
@@ -100,6 +108,7 @@ export function createGatewayAuxHandlers(
       resolveAudienceSessionKeys: resolveApprovalSessionAudienceWithFallback,
       resolveAllowedDecisions,
       ...(resolveStandingGrantMint ? { resolveStandingGrantMint } : {}),
+      ...(retainPlacementStandingGrant ? { retainPlacementStandingGrant } : {}),
       ...(params.resolveGrantDefaultExpiresAtMs
         ? { resolveStandingGrantExpiresAtMs: params.resolveGrantDefaultExpiresAtMs }
         : {}),
@@ -132,6 +141,7 @@ export function createGatewayAuxHandlers(
         return null;
       }
       return {
+        kind: "cron",
         agentId,
         cronJobId: source.jobId,
         jobConfigRevision: source.jobConfigRevision,
@@ -185,6 +195,17 @@ export function createGatewayAuxHandlers(
   const pluginApprovalManager = createApprovalManager<PluginApprovalRequestPayload>(
     "plugin",
     resolveCanonicalPluginApprovalRequestAllowedDecisions,
+    (request) => {
+      if (!request.placementGrant) {
+        return null;
+      }
+      // Abort-wins for plugin approvals matches the cron mint boundary.
+      if (request.runId && params.hasRunAbortMarker?.(request.runId) === true) {
+        return null;
+      }
+      return { kind: "placement", ...request.placementGrant };
+    },
+    placementStandingGrants.retain,
   );
   const pluginApprovalIosPushDelivery = createPluginApprovalIosPushDelivery({ log: params.log });
   type PendingAuthorityPublication = {
@@ -447,6 +468,7 @@ export function createGatewayAuxHandlers(
     approvalWebPushDelivery,
     pluginApprovalIosPushDelivery,
     pluginApprovalManager,
+    placementStandingGrants,
     systemAgentApprovalManager,
     bindApprovalPublicationContext,
     unregisterApprovalAuthorityObserver,

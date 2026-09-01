@@ -13,6 +13,7 @@ import { pathExists } from "../utils.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import type { UpdateChannel } from "./update-channels.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
+import { buildUpdateDoctorEnv } from "./update-runner-doctor.js";
 import {
   resolveUpdateDoctorExecutionPolicy,
   resolveUpdateInstallSurface,
@@ -83,6 +84,55 @@ describe("resolveUpdateDoctorExecutionPolicy", () => {
       }),
     ).toEqual({ fix: false });
   });
+
+  it.each([
+    {
+      name: "authorized service repair",
+      targetVersion: "2026.4.1",
+      allowGatewayServiceRepair: true,
+      expectedPolicy: null,
+    },
+    {
+      name: "an older target without service repair",
+      targetVersion: "2026.4.24",
+      allowGatewayServiceRepair: false,
+      expectedPolicy: null,
+    },
+    {
+      name: "a supported target without service repair",
+      targetVersion: "2026.4.25",
+      allowGatewayServiceRepair: false,
+      expectedPolicy: "external",
+    },
+  ])(
+    "passes the selected Doctor policy to a real child for $name",
+    async ({ targetVersion, allowGatewayServiceRepair, expectedPolicy }) => {
+      const policy = resolveUpdateDoctorExecutionPolicy({
+        targetVersion,
+        allowGatewayServiceRepair,
+      });
+      const result = await withEnvAsync({ OPENCLAW_SERVICE_REPAIR_POLICY: "external" }, () =>
+        runCommandWithTimeout(
+          [
+            process.execPath,
+            "-e",
+            "process.stdout.write(JSON.stringify(process.env.OPENCLAW_SERVICE_REPAIR_POLICY ?? null))",
+          ],
+          {
+            timeoutMs: 5000,
+            env: buildUpdateDoctorEnv({
+              allowGatewayServiceRepair,
+              allowGatewayActivation: false,
+              serviceRepairPolicy: policy.serviceRepairPolicy,
+            }),
+          },
+        ),
+      );
+
+      expect(result.code).toBe(0);
+      expect(result.stdout).toBe(JSON.stringify(expectedPolicy));
+    },
+  );
 });
 
 describe("runGatewayUpdate", () => {

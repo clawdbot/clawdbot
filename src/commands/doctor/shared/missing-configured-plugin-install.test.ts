@@ -661,7 +661,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     const repairSpy = vi.spyOn(repairModule, "repairMissingConfiguredPluginInstalls");
     try {
       const { runPostCorePluginConvergence, convergenceWarningsToOutcomes } =
-        await import("../../../cli/update-cli/post-core-plugin-convergence.js");
+        await import("./post-core-plugin-convergence.js");
       const convergence = await runPostCorePluginConvergence({
         cfg: { plugins: { entries: { demo: { enabled: true }, other: { enabled: true } } } },
         env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
@@ -831,7 +831,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       }
 
       const { runPostCorePluginConvergence, convergenceWarningsToOutcomes } =
-        await import("../../../cli/update-cli/post-core-plugin-convergence.js");
+        await import("./post-core-plugin-convergence.js");
       const convergence = await runPostCorePluginConvergence({
         cfg,
         env: { OPENCLAW_STATE_DIR: path.join(root, "state") },

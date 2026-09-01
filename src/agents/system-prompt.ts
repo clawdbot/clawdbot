@@ -910,7 +910,7 @@ export function buildAgentSystemPrompt(params: {
     sessions_yield: "End turn; await subagent events",
     subagents: "Subagent status; never wait-loop",
     session_status: "Session/model/usage/time/status; model override",
-    skill_workshop: "Manage reusable-skill proposals",
+    skill_workshop: "Author reusable skills",
     image: "Analyze images",
     image_generate: "Generate/edit images",
   };
