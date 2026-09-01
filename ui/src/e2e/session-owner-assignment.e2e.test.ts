@@ -96,9 +96,9 @@ async function captureProof(page: Page, surface: string): Promise<void> {
   });
 }
 
-async function chooseAssignToMe(page: Page): Promise<void> {
+async function chooseMe(page: Page): Promise<void> {
   await page.getByRole("menuitem", { name: "Assign to…", exact: true }).hover();
-  const action = page.getByRole("menuitemradio", { name: "Assign to me", exact: true });
+  const action = page.getByRole("menuitemradio", { name: "Me", exact: true });
   await action.waitFor({ state: "visible" });
   await action.click();
 }
@@ -136,13 +136,7 @@ suite.define(() => {
         const ownerItems = assignTo.locator(
           ':scope > wa-dropdown-item[slot="submenu"] > .session-menu__text',
         );
-        await expectBrowser(ownerItems).toHaveText([
-          "Assign to me",
-          "OpenClaw",
-          "Ada",
-          "Bob",
-          "Carol",
-        ]);
+        await expectBrowser(ownerItems).toHaveText(["Me", "OpenClaw", "Ada", "Bob", "Carol"]);
         await captureProof(page, "assignment-submenu");
 
         await assignTo.getByRole("menuitemradio", { name: "Carol", exact: true }).click();
@@ -162,7 +156,7 @@ suite.define(() => {
           exact: true,
         });
         await expectBrowser(
-          page.getByRole("menuitemradio", { name: "Assign to me", exact: true }),
+          page.getByRole("menuitemradio", { name: "Me", exact: true }),
         ).toBeFocused();
         await page.keyboard.press("Escape");
         await expectBrowser(trigger).toHaveAttribute("aria-expanded", "false");
@@ -170,7 +164,7 @@ suite.define(() => {
         await openSessionMenuSubmenu(page, "Assign to…");
         await expectBrowser(keyboardAssignTo).toHaveAttribute("aria-expanded", "true");
         await expectBrowser(
-          page.getByRole("menuitemradio", { name: "Assign to me", exact: true }),
+          page.getByRole("menuitemradio", { name: "Me", exact: true }),
         ).toBeFocused();
         await page.keyboard.press("Enter");
         await expectAssignmentRequest(gateway, "profile-ada", 1);
@@ -206,7 +200,7 @@ suite.define(() => {
           .click();
         const assignTo = page.getByRole("menuitem", { name: "Assign to…", exact: true });
         await assignTo.hover();
-        await assignTo.getByRole("menuitemradio", { name: "Assign to me", exact: true }).waitFor();
+        await assignTo.getByRole("menuitemradio", { name: "Me", exact: true }).waitFor();
 
         const paint = await readThemedPopupPaint(assignTo, "submenu");
         await captureProof(page, "assignee-submenu");
@@ -228,7 +222,7 @@ suite.define(() => {
         const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
         const menuTrigger = activePane.getByRole("button", { name: "Actions for Owner outcome" });
         await menuTrigger.press("Enter");
-        await chooseAssignToMe(page);
+        await chooseMe(page);
         await expectAssignmentRequest(gateway);
 
         const message = "Owner assignment rejected for visible outcome proof.";
@@ -262,7 +256,7 @@ suite.define(() => {
         await row
           .getByRole("button", { name: "Open session menu: Owner outcome", exact: true })
           .click();
-        await chooseAssignToMe(page);
+        await chooseMe(page);
         await expectAssignmentRequest(gateway);
 
         const message = "Sidebar owner assignment rejected for visible outcome proof.";

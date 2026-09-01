@@ -158,13 +158,13 @@ describe("session menu", () => {
     expect(menuItemLabels(menu).filter((label) => label.startsWith("Assign to"))).toEqual([
       "Assign to…",
     ]);
-    expect(menuItemLabels(submenu)).toEqual(["Assign to me", "Ada", "Research"]);
+    expect(menuItemLabels(submenu)).toEqual(["Me", "Ada", "Research"]);
     expect(selected.getAttribute("role")).toBe("menuitemradio");
     expect(selected.getAttribute("aria-checked")).toBe("true");
     expect(selected.disabled).toBe(true);
     expect(selected.querySelector("[slot='details']")).not.toBeNull();
 
-    for (const label of ["Assign to me", "Ada"]) {
+    for (const label of ["Me", "Ada"]) {
       const value = menuItem(menu, label).getAttribute("value");
       menu.querySelector("wa-dropdown")?.dispatchEvent(
         new CustomEvent("wa-select", {
@@ -292,7 +292,7 @@ describe("session menu", () => {
     await menu.updateComplete;
     selectMenuValue(menu, "compact:open-assign-owner");
     await menu.updateComplete;
-    expect(menuItemLabels(menu)).toEqual(["Back", "Assign to me", "Ada", "Research owner"]);
+    expect(menuItemLabels(menu)).toEqual(["Back", "Me", "Ada", "Research owner"]);
 
     selectMenuValue(menu, "compact:back");
     await menu.updateComplete;

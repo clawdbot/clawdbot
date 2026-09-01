@@ -2808,6 +2808,11 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   padding: 2px;
 }
 
+.session-menu__colors + .session-menu__icon-picker,
+.session-menu__icon-grid + .session-menu__icon-section-label {
+  margin-top: var(--space-1);
+}
+
 .session-menu__icon-options {
   display: flex;
   flex-direction: column;

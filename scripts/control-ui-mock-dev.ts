@@ -2033,7 +2033,6 @@ async function createChatPickerScenario(
       "openclaw.chat",
       "openclaw.chat.history",
       "progressCard.get",
-      "sessions.assignOwner",
       "sessions.delete",
       "sessions.diff",
       "sessions.files.set",

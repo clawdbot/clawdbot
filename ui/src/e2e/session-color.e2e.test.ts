@@ -70,6 +70,18 @@ suite.define(() => {
           await openSessionMenuSubmenu(page, "Icon & color");
         }
         const picker = page.locator(".session-menu__appearance:visible");
+        await expect
+          .poll(() =>
+            picker.evaluate((element) => {
+              const iconPicker = element.querySelector(".session-menu__icon-picker");
+              const iconsLabel = element.querySelectorAll(".session-menu__icon-section-label")[2];
+              return [
+                iconPicker ? getComputedStyle(iconPicker).marginTop : null,
+                iconsLabel ? getComputedStyle(iconsLabel).marginTop : null,
+              ];
+            }),
+          )
+          .toEqual(["4px", "4px"]);
         const focused = () =>
           page.evaluate(
             () =>
