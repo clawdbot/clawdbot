@@ -529,40 +529,6 @@ CREATE TABLE IF NOT EXISTS operator_approval_standing_grants (
 CREATE INDEX IF NOT EXISTS idx_operator_approval_standing_grants_binding
   ON operator_approval_standing_grants(agent_id, cron_job_id, operation_binding, created_at_ms DESC);
 
-CREATE TABLE IF NOT EXISTS operator_approval_placement_grants (
-  grant_id TEXT NOT NULL PRIMARY KEY CHECK (length(grant_id) > 0),
-  minted_by_approval_id TEXT NOT NULL
-    REFERENCES operator_approvals(approval_id) ON DELETE CASCADE,
-  plugin_id TEXT NOT NULL CHECK (length(plugin_id) > 0),
-  command TEXT NOT NULL CHECK (length(command) > 0),
-  approval_scope TEXT NOT NULL CHECK (length(approval_scope) > 0),
-  agent_id TEXT NOT NULL CHECK (length(agent_id) > 0),
-  session_key TEXT NOT NULL CHECK (length(session_key) > 0),
-  session_id TEXT NOT NULL CHECK (length(session_id) > 0),
-  node_id TEXT NOT NULL CHECK (length(node_id) > 0),
-  pairing_generation TEXT NOT NULL CHECK (length(pairing_generation) > 0),
-  environment_id TEXT NOT NULL CHECK (length(environment_id) > 0),
-  owner_epoch INTEGER NOT NULL CHECK (owner_epoch >= 1),
-  placement_generation INTEGER NOT NULL CHECK (placement_generation >= 0),
-  cwd TEXT NOT NULL CHECK (length(cwd) > 0),
-  created_at_ms INTEGER NOT NULL,
-  expires_at_ms INTEGER NOT NULL CHECK (expires_at_ms >= created_at_ms),
-  revoked_at_ms INTEGER,
-  revoked_by TEXT,
-  last_used_at_ms INTEGER,
-  use_count INTEGER NOT NULL DEFAULT 0
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_operator_approval_placement_grants_binding
-  ON operator_approval_placement_grants(
-    plugin_id,
-    command,
-    approval_scope,
-    agent_id,
-    session_id,
-    created_at_ms DESC
-  );
-
 CREATE TABLE IF NOT EXISTS schema_meta (
   meta_key TEXT NOT NULL PRIMARY KEY,
   role TEXT NOT NULL,

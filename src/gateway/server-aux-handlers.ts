@@ -35,10 +35,13 @@ import {
 import {
   ExecApprovalManager,
   type OperatorApprovalLifecycleEvent,
+  type OperatorStandingGrantMintSpec,
 } from "./exec-approval-manager.js";
 import { createLazyHandler } from "./lazy-handler.js";
-import { createPlacementStandingGrantRuntime } from "./operator-approval-placement-grants.js";
-import type { OperatorStandingGrantMintSpec } from "./operator-approval-standing-grant-types.js";
+import {
+  createPlacementStandingGrantRuntime,
+  type PlacementStandingGrantRuntime,
+} from "./operator-approval-placement-grants.js";
 import {
   closeOrphanedOperatorApprovals,
   pruneTerminalOperatorApprovals,
@@ -84,6 +87,9 @@ export function createGatewayAuxHandlers(
   // Gateway-lifetime epoch while retaining separate in-process waiter maps.
   // A newly constructed Gateway cannot resume the prior lifetime's waiters.
   const approvalPersistence = { runtimeEpoch: randomUUID() };
+  const placementStandingGrants = createPlacementStandingGrantRuntime({
+    runtimeEpoch: approvalPersistence.runtimeEpoch,
+  });
   const approvalStartupNowMs = Date.now();
   closeOrphanedOperatorApprovals({
     runtimeEpoch: approvalPersistence.runtimeEpoch,
@@ -94,6 +100,7 @@ export function createGatewayAuxHandlers(
     approvalKind: "exec" | "plugin" | "system-agent",
     resolveAllowedDecisions: (request: TPayload) => readonly ExecApprovalDecision[],
     resolveStandingGrantMint?: (request: TPayload) => OperatorStandingGrantMintSpec | null,
+    retainPlacementStandingGrant?: PlacementStandingGrantRuntime["retain"],
   ) =>
     new ExecApprovalManager<TPayload>({
       approvalKind,
@@ -101,6 +108,7 @@ export function createGatewayAuxHandlers(
       resolveAudienceSessionKeys: resolveApprovalSessionAudienceWithFallback,
       resolveAllowedDecisions,
       ...(resolveStandingGrantMint ? { resolveStandingGrantMint } : {}),
+      ...(retainPlacementStandingGrant ? { retainPlacementStandingGrant } : {}),
       ...(params.resolveGrantDefaultExpiresAtMs
         ? { resolveStandingGrantExpiresAtMs: params.resolveGrantDefaultExpiresAtMs }
         : {}),
@@ -197,10 +205,8 @@ export function createGatewayAuxHandlers(
       }
       return { kind: "placement", ...request.placementGrant };
     },
+    placementStandingGrants.retain,
   );
-  const placementStandingGrants = createPlacementStandingGrantRuntime({
-    runtimeEpoch: approvalPersistence.runtimeEpoch,
-  });
   const pluginApprovalIosPushDelivery = createPluginApprovalIosPushDelivery({ log: params.log });
   type PendingAuthorityPublication = {
     kind: ChannelApprovalKind;

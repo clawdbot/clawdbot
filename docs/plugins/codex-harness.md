@@ -206,12 +206,14 @@ replace launch authorization. The critical prompt offers two approval scopes:
   placement remains active on the same node, pairing generation, environment,
   owner epoch, placement generation, command risk, and working directory.
 
-The Gateway revalidates a standing placement grant immediately before every
-node transport dispatch. To revoke one, move or reclaim the session. Restarting
-the Gateway, replacing the environment, reconnecting under a new pairing,
-changing the workspace, or reaching the 30-day maximum lifetime also returns to
-the normal prompt. If the Gateway cannot derive the exact placement authority,
-it offers only **Allow once**. Deny starts no process.
+The Gateway keeps the standing placement grant only in its current process and
+revalidates it immediately before every node transport dispatch. Restarting the
+Gateway therefore returns to the normal prompt without migrating or reloading
+approval state. Moving or reclaiming the session, replacing the environment,
+reconnecting under a new pairing, changing the workspace, or reaching the
+30-day maximum lifetime also invalidates reuse. If the Gateway cannot derive
+the exact placement authority, it offers only **Allow once**. Deny starts no
+process.
 
 Explicitly selected session **Full access** can substitute for the prompt only
 during the exact admitted turn and placement, and only when the node's own

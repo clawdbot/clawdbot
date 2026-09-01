@@ -20,7 +20,11 @@ import {
 } from "../process/gateway-work-admission.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import type { AgentRuntimeDelegatedAuthority } from "./agent-runtime-identity-token.js";
-import type { OperatorStandingGrantMintSpec } from "./operator-approval-standing-grant-types.js";
+import type {
+  PlacementStandingGrantMintSpec,
+  PlacementStandingGrantRuntime,
+} from "./operator-approval-placement-grants.js";
+import type { CronStandingGrantMintSpec } from "./operator-approval-standing-grants.js";
 import {
   consumeOperatorApprovalAllowOnce,
   forceDenyOperatorApproval,
@@ -120,6 +124,10 @@ type OperatorApprovalPersistenceRuntime = {
   databaseOptions?: OpenClawStateDatabaseOptions;
 };
 
+export type OperatorStandingGrantMintSpec =
+  | ({ kind: "cron" } & CronStandingGrantMintSpec)
+  | ({ kind: "placement" } & PlacementStandingGrantMintSpec);
+
 type ExecApprovalManagerOptions<TPayload> = {
   approvalKind?: OperatorApprovalKind;
   persistence?: OperatorApprovalPersistenceRuntime;
@@ -136,10 +144,11 @@ type ExecApprovalManagerOptions<TPayload> = {
     context: { approvalId: string; approvalKind: OperatorApprovalKind; operation: "expire" },
   ) => void;
   onLifecycle?: (event: OperatorApprovalLifecycleEvent) => void;
-  /** Eligible allow-always requests mint a scoped standing grant in the
-   * durable resolution transaction. Returning null keeps the decision
-   * grant-free (ineligible requests, aborted runs, missing bindings). */
+  /** Eligible allow-always requests derive one scoped grant. Returning null
+   * keeps the decision grant-free (ineligible requests, aborted runs, missing bindings). */
   resolveStandingGrantMint?: (request: TPayload) => OperatorStandingGrantMintSpec | null;
+  /** Installs a placement grant after the durable approval CAS succeeds. */
+  retainPlacementStandingGrant?: PlacementStandingGrantRuntime["retain"];
   /** Default grant terms frozen at resolve time: config-driven expiry stamp,
    * or null for until-revoked. A per-resolve override wins over this default. */
   resolveStandingGrantExpiresAtMs?: (nowMs: number) => number | null;
@@ -590,13 +599,20 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
         expectedKind: this.approvalKind,
         runtimeEpoch: persistence.runtimeEpoch,
         databaseOptions: persistence.databaseOptions,
-        ...(standingGrant ? { standingGrant } : {}),
+        ...(standingGrant?.kind === "cron" ? { standingGrant } : {}),
       });
     } catch (error) {
       this.settleLocalStorageFailure(recordId);
       throw error;
     }
 
+    if (result.outcome === "resolved" && standingGrant?.kind === "placement") {
+      this.options.retainPlacementStandingGrant?.({
+        ...standingGrant,
+        approvalId: recordId,
+        nowMs: result.record.resolvedAtMs ?? Date.now(),
+      });
+    }
     if (
       result.outcome === "resolved" ||
       result.outcome === "expired" ||

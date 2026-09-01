@@ -1,15 +1,12 @@
 // Placement-scoped standing grants for dangerous plugin-owned node launches.
-// The parent operator approval remains the sole authorization owner; every use
-// revalidates the exact placement before the transport handoff.
-import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+// Grants live only for this Gateway process; the durable parent approval and
+// current placement remain the authorization owners at every use.
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
-import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   runOpenClawStateWriteTransaction,
@@ -18,53 +15,11 @@ import {
 } from "../state/openclaw-state-db.js";
 import { find as findWorkerSessionPlacement } from "./worker-environments/placement-row-codec.js";
 
-const PLACEMENT_GRANT_TABLE = "operator_approval_placement_grants";
 const PLACEMENT_GRANT_TTL_MS = 30 * 24 * 60 * 60_000;
-
-// Mirrors the canonical declaration in openclaw-state-schema.sql. This is a
-// first-use additive table, so older readers remain safe without a version bump.
-const PLACEMENT_GRANT_SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS operator_approval_placement_grants (
-  grant_id TEXT NOT NULL PRIMARY KEY CHECK (length(grant_id) > 0),
-  minted_by_approval_id TEXT NOT NULL
-    REFERENCES operator_approvals(approval_id) ON DELETE CASCADE,
-  plugin_id TEXT NOT NULL CHECK (length(plugin_id) > 0),
-  command TEXT NOT NULL CHECK (length(command) > 0),
-  approval_scope TEXT NOT NULL CHECK (length(approval_scope) > 0),
-  agent_id TEXT NOT NULL CHECK (length(agent_id) > 0),
-  session_key TEXT NOT NULL CHECK (length(session_key) > 0),
-  session_id TEXT NOT NULL CHECK (length(session_id) > 0),
-  node_id TEXT NOT NULL CHECK (length(node_id) > 0),
-  pairing_generation TEXT NOT NULL CHECK (length(pairing_generation) > 0),
-  environment_id TEXT NOT NULL CHECK (length(environment_id) > 0),
-  owner_epoch INTEGER NOT NULL CHECK (owner_epoch >= 1),
-  placement_generation INTEGER NOT NULL CHECK (placement_generation >= 0),
-  cwd TEXT NOT NULL CHECK (length(cwd) > 0),
-  created_at_ms INTEGER NOT NULL,
-  expires_at_ms INTEGER NOT NULL CHECK (expires_at_ms >= created_at_ms),
-  revoked_at_ms INTEGER,
-  revoked_by TEXT,
-  last_used_at_ms INTEGER,
-  use_count INTEGER NOT NULL DEFAULT 0
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_operator_approval_placement_grants_binding
-  ON operator_approval_placement_grants(
-    plugin_id,
-    command,
-    approval_scope,
-    agent_id,
-    session_id,
-    created_at_ms DESC
-  );
-`;
 
 type PlacementGrantDatabase = Pick<
   OpenClawStateKyselyDatabase,
-  | "operator_approval_placement_grants"
-  | "operator_approvals"
-  | "worker_environments"
-  | "worker_session_placements"
+  "operator_approvals" | "worker_environments" | "worker_session_placements"
 >;
 
 export type PlacementStandingGrantMintSpec = NonNullable<
@@ -72,12 +27,8 @@ export type PlacementStandingGrantMintSpec = NonNullable<
 >;
 
 type PlacementStandingGrantRecord = PlacementStandingGrantMintSpec & {
-  grantId: string;
   mintedByApprovalId: string;
-  createdAtMs: number;
   expiresAtMs: number;
-  lastUsedAtMs: number | null;
-  useCount: number;
 };
 
 type ConsumePlacementStandingGrantResult =
@@ -85,9 +36,7 @@ type ConsumePlacementStandingGrantResult =
   | {
       outcome:
         | "no-grant"
-        | "revoked"
         | "expired"
-        | "gateway-restarted"
         | "approval-missing"
         | "approval-not-allow-always"
         | "placement-missing"
@@ -109,14 +58,16 @@ type PlacementGrantResolutionInput = Pick<
 
 export type PlacementStandingGrantRuntime = {
   resolveBinding: (input: PlacementGrantResolutionInput) => PlacementStandingGrantMintSpec | null;
+  retain: (
+    grant: PlacementStandingGrantMintSpec & {
+      approvalId: string;
+      nowMs: number;
+      expiresAtMs: number | null;
+    },
+  ) => boolean;
   validate: (binding: PlacementStandingGrantMintSpec) => ConsumePlacementStandingGrantResult;
   consume: (binding: PlacementStandingGrantMintSpec) => ConsumePlacementStandingGrantResult;
 };
-
-function ensurePlacementGrantSchema(db: DatabaseSync): void {
-  // sqlite-allow-raw -- first-use additive schema DDL; grant rows use Kysely.
-  db.exec(PLACEMENT_GRANT_SCHEMA_SQL);
-}
 
 function hasExactAttachedSession(value: string, sessionId: string): boolean {
   try {
@@ -219,196 +170,74 @@ function resolvePlacementStandingGrantBinding(
   }, input.databaseOptions);
 }
 
-/** Mints in the same transaction that resolves the parent approval. */
-export function mintPlacementStandingGrantLocked(
-  database: OpenClawStateDatabase,
-  params: PlacementStandingGrantMintSpec & {
-    approvalId: string;
-    nowMs: number;
-    expiresAtMs: number | null;
-  },
-): boolean {
-  if (!isPlacementBindingCurrent(database, params)) {
-    return false;
+function placementGrantKey(binding: PlacementStandingGrantMintSpec): string {
+  return JSON.stringify([
+    binding.pluginId,
+    binding.command,
+    binding.approvalScope,
+    binding.agentId,
+    binding.sessionId,
+  ]);
+}
+
+function resolveRetainedGrant(params: {
+  grants: Map<string, PlacementStandingGrantRecord>;
+  binding: PlacementStandingGrantMintSpec;
+  runtimeEpoch: string;
+  nowMs: number;
+  databaseOptions?: OpenClawStateDatabaseOptions;
+}): ConsumePlacementStandingGrantResult {
+  const key = placementGrantKey(params.binding);
+  const grant = params.grants.get(key);
+  if (!grant) {
+    return { outcome: "no-grant" };
   }
-  const maxExpiresAtMs = params.nowMs + PLACEMENT_GRANT_TTL_MS;
-  const expiresAtMs = Math.min(params.expiresAtMs ?? maxExpiresAtMs, maxExpiresAtMs);
-  if (expiresAtMs <= params.nowMs) {
-    return false;
+  if (grant.expiresAtMs <= params.nowMs) {
+    params.grants.delete(key);
+    return { outcome: "expired" };
   }
-  ensurePlacementGrantSchema(database.db);
-  const stateDb = getNodeSqliteKysely<PlacementGrantDatabase>(database.db);
-  executeSqliteQuerySync(
-    database.db,
-    stateDb.deleteFrom(PLACEMENT_GRANT_TABLE).where("expires_at_ms", "<=", params.nowMs),
-  );
-  executeSqliteQuerySync(
-    database.db,
-    stateDb
-      .deleteFrom(PLACEMENT_GRANT_TABLE)
-      .where("plugin_id", "=", params.pluginId)
-      .where("command", "=", params.command)
-      .where("approval_scope", "=", params.approvalScope)
-      .where("agent_id", "=", params.agentId)
-      .where("session_id", "=", params.sessionId),
-  );
-  executeSqliteQuerySync(
-    database.db,
-    stateDb.insertInto(PLACEMENT_GRANT_TABLE).values({
-      grant_id: randomUUID(),
-      minted_by_approval_id: params.approvalId,
-      plugin_id: params.pluginId,
-      command: params.command,
-      approval_scope: params.approvalScope,
-      agent_id: params.agentId,
-      session_key: params.sessionKey,
-      session_id: params.sessionId,
-      node_id: params.nodeId,
-      pairing_generation: params.pairingGeneration,
-      environment_id: params.environmentId,
-      owner_epoch: params.ownerEpoch,
-      placement_generation: params.placementGeneration,
-      cwd: params.cwd,
-      created_at_ms: params.nowMs,
-      expires_at_ms: expiresAtMs,
-      revoked_at_ms: null,
-      revoked_by: null,
-      last_used_at_ms: null,
-      use_count: 0,
-    }),
-  );
-  return true;
-}
-
-function validatePlacementStandingGrant(
-  params: PlacementStandingGrantMintSpec & {
-    runtimeEpoch: string;
-    nowMs?: number;
-    databaseOptions?: OpenClawStateDatabaseOptions;
-  },
-): ConsumePlacementStandingGrantResult {
-  return lookupPlacementStandingGrant(params, false);
-}
-
-function consumePlacementStandingGrant(
-  params: PlacementStandingGrantMintSpec & {
-    runtimeEpoch: string;
-    nowMs?: number;
-    databaseOptions?: OpenClawStateDatabaseOptions;
-  },
-): ConsumePlacementStandingGrantResult {
-  return lookupPlacementStandingGrant(params, true);
-}
-
-function lookupPlacementStandingGrant(
-  params: PlacementStandingGrantMintSpec & {
-    runtimeEpoch: string;
-    nowMs?: number;
-    databaseOptions?: OpenClawStateDatabaseOptions;
-  },
-  recordUse: boolean,
-): ConsumePlacementStandingGrantResult {
+  if (grant.nodeId !== params.binding.nodeId) {
+    params.grants.delete(key);
+    return { outcome: "node-changed" };
+  }
+  if (grant.pairingGeneration !== params.binding.pairingGeneration) {
+    params.grants.delete(key);
+    return { outcome: "pairing-changed" };
+  }
   return runOpenClawStateWriteTransaction((database) => {
-    if (!tableExists(database.db, PLACEMENT_GRANT_TABLE)) {
-      return { outcome: "no-grant" };
-    }
-    const nowMs = params.nowMs ?? Date.now();
-    const stateDb = getNodeSqliteKysely<PlacementGrantDatabase>(database.db);
-    const grant = executeSqliteQueryTakeFirstSync(
-      database.db,
-      stateDb
-        .selectFrom(PLACEMENT_GRANT_TABLE)
-        .selectAll()
-        .where("plugin_id", "=", params.pluginId)
-        .where("command", "=", params.command)
-        .where("approval_scope", "=", params.approvalScope)
-        .where("agent_id", "=", params.agentId)
-        .where("session_id", "=", params.sessionId)
-        .orderBy("created_at_ms", "desc")
-        .orderBy("grant_id", "desc")
-        .limit(1),
-    );
-    if (!grant) {
-      return { outcome: "no-grant" };
-    }
-    if (grant.revoked_at_ms !== null) {
-      return { outcome: "revoked" };
-    }
-    if (grant.expires_at_ms <= nowMs) {
-      return { outcome: "expired" };
-    }
-    if (grant.node_id !== params.nodeId) {
-      return { outcome: "node-changed" };
-    }
-    if (grant.pairing_generation !== params.pairingGeneration) {
-      return { outcome: "pairing-changed" };
-    }
     const bindingMatches =
-      grant.session_key === params.sessionKey &&
-      grant.environment_id === params.environmentId &&
-      grant.owner_epoch === params.ownerEpoch &&
-      grant.placement_generation === params.placementGeneration &&
-      grant.cwd === params.cwd;
-    if (!bindingMatches || !isPlacementBindingCurrent(database, params)) {
-      return findWorkerSessionPlacement(database.db, params.sessionId)
+      grant.sessionKey === params.binding.sessionKey &&
+      grant.environmentId === params.binding.environmentId &&
+      grant.ownerEpoch === params.binding.ownerEpoch &&
+      grant.placementGeneration === params.binding.placementGeneration &&
+      grant.cwd === params.binding.cwd;
+    if (!bindingMatches || !isPlacementBindingCurrent(database, params.binding)) {
+      params.grants.delete(key);
+      return findWorkerSessionPlacement(database.db, params.binding.sessionId)
         ? { outcome: "placement-changed" }
         : { outcome: "placement-missing" };
     }
+    const stateDb = getNodeSqliteKysely<PlacementGrantDatabase>(database.db);
     const approval = executeSqliteQueryTakeFirstSync(
       database.db,
       stateDb
         .selectFrom("operator_approvals")
         .select(["status", "decision", "runtime_epoch"])
-        .where("approval_id", "=", grant.minted_by_approval_id),
+        .where("approval_id", "=", grant.mintedByApprovalId),
     );
     if (!approval) {
+      params.grants.delete(key);
       return { outcome: "approval-missing" };
     }
-    if (approval.runtime_epoch !== params.runtimeEpoch) {
-      return { outcome: "gateway-restarted" };
-    }
-    if (approval.status !== "allowed" || approval.decision !== "allow-always") {
+    if (
+      approval.runtime_epoch !== params.runtimeEpoch ||
+      approval.status !== "allowed" ||
+      approval.decision !== "allow-always"
+    ) {
+      params.grants.delete(key);
       return { outcome: "approval-not-allow-always" };
     }
-    const record: PlacementStandingGrantRecord = {
-      pluginId: grant.plugin_id,
-      command: grant.command,
-      approvalScope: grant.approval_scope,
-      agentId: grant.agent_id,
-      sessionKey: grant.session_key,
-      sessionId: grant.session_id,
-      nodeId: grant.node_id,
-      pairingGeneration: grant.pairing_generation,
-      environmentId: grant.environment_id,
-      ownerEpoch: grant.owner_epoch,
-      placementGeneration: grant.placement_generation,
-      cwd: grant.cwd,
-      grantId: grant.grant_id,
-      mintedByApprovalId: grant.minted_by_approval_id,
-      createdAtMs: grant.created_at_ms,
-      expiresAtMs: grant.expires_at_ms,
-      lastUsedAtMs: grant.last_used_at_ms,
-      useCount: grant.use_count,
-    };
-    if (!recordUse) {
-      return { outcome: "consumed", grant: record };
-    }
-    const nextUseCount = grant.use_count + 1;
-    const updated = executeSqliteQuerySync(
-      database.db,
-      stateDb
-        .updateTable(PLACEMENT_GRANT_TABLE)
-        .set({ last_used_at_ms: nowMs, use_count: nextUseCount })
-        .where("grant_id", "=", grant.grant_id)
-        .where("revoked_at_ms", "is", null)
-        .where("expires_at_ms", ">", nowMs),
-    );
-    return updated.numAffectedRows === 1n
-      ? {
-          outcome: "consumed",
-          grant: { ...record, lastUsedAtMs: nowMs, useCount: nextUseCount },
-        }
-      : { outcome: "no-grant" };
+    return { outcome: "consumed", grant };
   }, params.databaseOptions);
 }
 
@@ -417,20 +246,75 @@ export function createPlacementStandingGrantRuntime(params: {
   databaseOptions?: OpenClawStateDatabaseOptions;
   now?: () => number;
 }): PlacementStandingGrantRuntime {
+  const grants = new Map<string, PlacementStandingGrantRecord>();
   const now = params.now ?? Date.now;
   return {
     resolveBinding: (input) =>
       resolvePlacementStandingGrantBinding({ ...input, databaseOptions: params.databaseOptions }),
+    retain: (grant) => {
+      const maxExpiresAtMs = grant.nowMs + PLACEMENT_GRANT_TTL_MS;
+      const expiresAtMs = Math.min(grant.expiresAtMs ?? maxExpiresAtMs, maxExpiresAtMs);
+      if (expiresAtMs <= grant.nowMs) {
+        return false;
+      }
+      try {
+        const retained = runOpenClawStateWriteTransaction((database) => {
+          if (!isPlacementBindingCurrent(database, grant)) {
+            return null;
+          }
+          const stateDb = getNodeSqliteKysely<PlacementGrantDatabase>(database.db);
+          const approval = executeSqliteQueryTakeFirstSync(
+            database.db,
+            stateDb
+              .selectFrom("operator_approvals")
+              .select(["status", "decision", "runtime_epoch"])
+              .where("approval_id", "=", grant.approvalId),
+          );
+          if (
+            approval?.runtime_epoch !== params.runtimeEpoch ||
+            approval.status !== "allowed" ||
+            approval.decision !== "allow-always"
+          ) {
+            return null;
+          }
+          return {
+            pluginId: grant.pluginId,
+            command: grant.command,
+            approvalScope: grant.approvalScope,
+            agentId: grant.agentId,
+            sessionKey: grant.sessionKey,
+            sessionId: grant.sessionId,
+            nodeId: grant.nodeId,
+            pairingGeneration: grant.pairingGeneration,
+            environmentId: grant.environmentId,
+            ownerEpoch: grant.ownerEpoch,
+            placementGeneration: grant.placementGeneration,
+            cwd: grant.cwd,
+            mintedByApprovalId: grant.approvalId,
+            expiresAtMs,
+          } satisfies PlacementStandingGrantRecord;
+        }, params.databaseOptions);
+        if (!retained) {
+          return false;
+        }
+        grants.set(placementGrantKey(retained), retained);
+        return true;
+      } catch {
+        return false;
+      }
+    },
     validate: (binding) =>
-      validatePlacementStandingGrant({
-        ...binding,
+      resolveRetainedGrant({
+        grants,
+        binding,
         runtimeEpoch: params.runtimeEpoch,
         nowMs: now(),
         databaseOptions: params.databaseOptions,
       }),
     consume: (binding) =>
-      consumePlacementStandingGrant({
-        ...binding,
+      resolveRetainedGrant({
+        grants,
+        binding,
         runtimeEpoch: params.runtimeEpoch,
         nowMs: now(),
         databaseOptions: params.databaseOptions,
