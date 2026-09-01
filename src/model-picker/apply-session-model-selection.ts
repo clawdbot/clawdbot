@@ -1,4 +1,8 @@
-import { resolveAgentDir, type AgentModelPrimaryWriteTarget } from "../agents/agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  type AgentModelPrimaryWriteTarget,
+} from "../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { modelKey } from "../agents/model-selection.js";
 import {
@@ -90,7 +94,7 @@ export type ApplySessionModelSelectionResult =
     }
   | {
       status: "rejected";
-      reason: "locked" | "not-allowed" | "invalid-runtime" | "unknown-provider";
+      reason: "locked" | "not-allowed" | "invalid-runtime" | "unknown-provider" | "missing-harness";
       message: string;
     }
   | { status: "conflict"; message: string };
@@ -184,6 +188,7 @@ export async function applySessionModelSelection(
     provider: request.provider,
     model: request.model,
     catalog: params.thinkingCatalog ?? params.modelCatalog,
+    workspaceDir: resolveAgentWorkspaceDir(params.cfg, params.agentId),
     rawRuntime:
       request.runtime.kind === "set"
         ? request.runtime.runtime

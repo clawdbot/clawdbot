@@ -1,5 +1,6 @@
 /** Applies directive-only command state changes without running the agent. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { renderExecTargetLabel } from "../../agents/bash-tools.exec-runtime.js";
 import { resolveExecDefaults } from "../../agents/exec-defaults.js";
 import {
@@ -179,7 +180,7 @@ export async function handleDirectiveOnly(
       model: resolvedModel,
       catalog: thinkingCatalog ?? [],
       rawRuntime: directives.rawModelRuntime,
-      workspaceDir: params.workspaceDir,
+      workspaceDir: params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, activeAgentId),
       sessionEntry,
     });
     if (prepared.status === "rejected") {
