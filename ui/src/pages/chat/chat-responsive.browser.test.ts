@@ -4974,6 +4974,48 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
+  it("scrolls a tall markdown body inside the composer progress card", async () => {
+    const page = await openBrowserPage(1024, 800);
+    const tallMarkdown = Array.from(
+      { length: 14 },
+      (_, index) =>
+        `<p>Markdown paragraph ${index + 1} - lorem ipsum dolor sit amet, consectetur adipiscing elit.</p>`,
+    ).join("");
+    try {
+      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+        <div class="agent-chat__progress-float" style="width: 800px">
+          <details class="session-progress-card session-progress-card--composer" open>
+            <summary class="session-progress-card__summary">
+              <span class="session-progress-card__summary-indicator"></span>
+              <span class="session-progress-card__summary-expanded">Task progress</span>
+              <span class="session-progress-card__summary-chevron">${iconSvg()}</span>
+            </summary>
+            <div class="session-progress-card__body">
+              <div class="session-progress-card__markdown sidebar-markdown">${tallMarkdown}</div>
+            </div>
+          </details>
+        </div>
+      </body></html>`);
+
+      const state = await page.evaluate(() => {
+        const element = document.querySelector<HTMLElement>(".session-progress-card__markdown")!;
+        const style = getComputedStyle(element);
+        element.scrollTop = 999_999;
+        return {
+          overflowY: style.overflowY,
+          clientHeight: element.clientHeight,
+          scrollHeight: element.scrollHeight,
+          scrollTopAfter: element.scrollTop,
+        };
+      });
+      expect(["auto", "scroll"]).toContain(state.overflowY);
+      expect(state.scrollHeight).toBeGreaterThan(state.clientHeight);
+      expect(state.scrollTopAfter).toBeGreaterThan(0);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
   it("keeps queued states neutral and puts the editing ring only on the input", async () => {
     const page = await openBrowserPage(820, 640);
     try {

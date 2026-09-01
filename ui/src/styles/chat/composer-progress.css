@@ -876,6 +876,18 @@
   padding-inline-end: 4px;
 }
 
+/* The composer card body clips at min(300px, 48dvh) with overflow:hidden. Give
+   the markdown section the same bounded scroll the step checklist already has,
+   so tall markdown stays reachable instead of being cut off with no scrollbar. */
+.session-progress-card--composer .session-progress-card__markdown.sidebar-markdown {
+  min-height: 0;
+  max-height: min(calc(8.4em + 35px), 36dvh);
+  padding-inline-end: 4px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
 .session-progress-card--composer .session-progress-card__markdown progress {
   display: none;
 }
