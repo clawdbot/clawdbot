@@ -601,7 +601,7 @@ extensions/line/src/bot-message-context.ts	1
 extensions/line/src/card-command.ts	3
 extensions/line/src/flex-templates/basic-cards.ts	19
 extensions/line/src/flex-templates/common.ts	2
-extensions/line/src/flex-templates/media-control-cards.ts	35
+extensions/line/src/flex-templates/media-control-cards.ts	19
 extensions/line/src/flex-templates/schedule-cards.ts	28
 extensions/line/src/gateway.ts	1
 extensions/line/src/group-keys.ts	1
