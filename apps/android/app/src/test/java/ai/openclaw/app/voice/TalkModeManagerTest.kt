@@ -1581,15 +1581,15 @@ class TalkModeManagerTest {
   // ---- playback-time uplink observation ------------------------------------------------------
 
   @Test
-  fun aFrameForwardedWhilePlayingReportsTheQualifiedFullDuplexState() {
+  fun aFrameEnqueuedWhilePlayingReportsTheQualifiedFullDuplexState() {
     val manager = createManager()
     enterCommunicationModeForTest(manager, audioManagerForTest())
     setRealtimeAecEnabled(manager, true)
     startPlaybackForTest(manager)
 
-    observeForwarded(manager)
+    observeEnqueued(manager)
 
-    assertEquals("a frame crossing the uplink while playing is the full-duplex state", "FORWARDED_DURING_PLAYBACK", uplinkPhaseName(manager))
+    assertEquals("a frame reaching the local send boundary while playing is the full-duplex state", "ENQUEUED_DURING_PLAYBACK", uplinkPhaseName(manager))
     assertTrue("the echo capability that allowed it must be reported", uplinkAec(manager))
     assertTrue("the communication-audio eligibility that allowed it must be reported", uplinkComm(manager))
   }
@@ -1630,21 +1630,21 @@ class TalkModeManagerTest {
     startPlaybackForTest(manager)
 
     val before = uplinkObservations()
-    repeat(200) { observeForwarded(manager) }
+    repeat(200) { observeEnqueued(manager) }
 
     assertEquals("200 frames in one state must not become 200 observations", 1, uplinkObservations() - before)
   }
 
   @Test
-  fun forwardingAndSuppressionRemainVisibleEachTimeTheDecisionChanges() {
+  fun enqueueAndSuppressionRemainVisibleEachTimeTheDecisionChanges() {
     val manager = createManager()
     enterCommunicationModeForTest(manager, audioManagerForTest())
     startPlaybackForTest(manager)
 
     setRealtimeAecEnabled(manager, true)
     val before = uplinkObservations()
-    observeForwarded(manager)
-    assertEquals("FORWARDED_DURING_PLAYBACK", uplinkPhaseName(manager))
+    observeEnqueued(manager)
+    assertEquals("ENQUEUED_DURING_PLAYBACK", uplinkPhaseName(manager))
 
     // The route loses its canceller mid-playback.
     setRealtimeAecEnabled(manager, false)
@@ -1653,8 +1653,8 @@ class TalkModeManagerTest {
 
     // And gets it back.
     setRealtimeAecEnabled(manager, true)
-    repeat(5) { observeForwarded(manager) }
-    assertEquals("FORWARDED_DURING_PLAYBACK", uplinkPhaseName(manager))
+    repeat(5) { observeEnqueued(manager) }
+    assertEquals("ENQUEUED_DURING_PLAYBACK", uplinkPhaseName(manager))
 
     assertEquals("each edge is reported exactly once", 3, uplinkObservations() - before)
   }
@@ -1676,11 +1676,138 @@ class TalkModeManagerTest {
     assertTrue("the fence must not be reported as a missing canceller", uplinkAec(manager))
   }
 
+  // ---- forwarding-boundary repairs ---------------------------------------------------------
+
+  @Test
+  fun aQueuedFrameIsHeldByTheFenceWhenCancellationTakesTheTurnBeforeItIsSubmitted() {
+    // The capture side let this frame through; cancelOutput then took the turn while it waited in
+    // the bounded queue. The fence is unconditional, so the dequeue boundary must refuse it rather
+    // than let the full-duplex exception carry it to the socket.
+    val manager = createManager()
+    enterCommunicationModeForTest(manager, audioManagerForTest())
+    setRealtimeAecEnabled(manager, true)
+    startPlaybackForTest(manager)
+
+    assertTrue("a qualified frame must be submittable before cancellation", shouldSubmitDequeued(manager, "relay-1"))
+
+    setPrivateField(manager, "pendingRealtimeOutputClear", CompletableDeferred<String?>())
+
+    assertFalse("a frame dequeued after the fence went up must not be submitted", shouldSubmitDequeued(manager, "relay-1"))
+    assertEquals("HELD_BY_CANCELLATION_FENCE", uplinkPhaseName(manager))
+  }
+
+  @Test
+  fun aDequeuedFrameFromAnOldSessionIsNotSubmitted() {
+    val manager = createManager()
+    enterCommunicationModeForTest(manager, audioManagerForTest())
+    setRealtimeAecEnabled(manager, true)
+
+    assertFalse(shouldSubmitDequeued(manager, "relay-from-a-previous-session"))
+  }
+
+  @Test
+  fun localMediaPlaybackDoesNotQualifyForTheCommunicationExemption() {
+    // Local assistant speech plays on the media path. The canceller is subtracting the realtime
+    // downlink, not that, so an enabled AEC says nothing about whether the microphone is hearing
+    // the assistant here.
+    val manager = createManager()
+    enterCommunicationModeForTest(manager, audioManagerForTest())
+    setRealtimeAecEnabled(manager, true)
+    setLocalMediaPlaying(manager, true)
+
+    assertTrue("local media playback must suppress capture", shouldSuppressRealtimeCaptureForPlayback(manager))
+    observeHeldBack(manager)
+    assertEquals("SUPPRESSED_DURING_PLAYBACK", uplinkPhaseName(manager))
+    assertTrue("the reported reason must name local playback, not the canceller", uplinkLocal(manager))
+    assertTrue("the canceller was enabled and must not be blamed", uplinkAec(manager))
+  }
+
+  @Test
+  fun localMediaOverlappingRealtimePlayoutIsStillSuppressed() {
+    val manager = createManager()
+    enterCommunicationModeForTest(manager, audioManagerForTest())
+    setRealtimeAecEnabled(manager, true)
+    startPlaybackForTest(manager)
+    setLocalMediaPlaying(manager, true)
+
+    assertTrue("overlapping local media contaminates the reference", shouldSuppressRealtimeCaptureForPlayback(manager))
+  }
+
+  @Test
+  fun qualifiedForwardingResumesWhenLocalMediaRetiresAndRealtimePlayoutRemains() {
+    val manager = createManager()
+    enterCommunicationModeForTest(manager, audioManagerForTest())
+    setRealtimeAecEnabled(manager, true)
+    startPlaybackForTest(manager)
+    setLocalMediaPlaying(manager, true)
+    assertTrue(shouldSuppressRealtimeCaptureForPlayback(manager))
+
+    setLocalMediaPlaying(manager, false)
+
+    assertFalse(
+      "realtime playout alone, with the predicates live, is the case the exception exists for",
+      shouldSuppressRealtimeCaptureForPlayback(manager),
+    )
+    observeEnqueued(manager)
+    assertEquals("ENQUEUED_DURING_PLAYBACK", uplinkPhaseName(manager))
+    assertFalse(uplinkLocal(manager))
+  }
+
+  @Test
+  fun theSpeakingProjectionStaysTheUnionOfBothSourcesWhileTheGateSeesThemApart() {
+    // #130868's invariant is a UI fact and must not be narrowed by this repair; the forwarding
+    // policy simply stops using it as the answer to a question it never answered.
+    val manager = createManager()
+    val audioManager = audioManagerForTest()
+    enterCommunicationModeForTest(manager, audioManager)
+    setRealtimeAecEnabled(manager, true)
+    startPlaybackForTest(manager)
+    publishSpeakingStateFor(manager, realtimePlaying = true, localPlaying = true)
+
+    assertTrue("either source keeps the app speaking", manager.isSpeaking.value)
+    assertTrue("but local media still disqualifies the exception", shouldSuppressRealtimeCaptureForPlayback(manager))
+
+    publishSpeakingStateFor(manager, realtimePlaying = false, localPlaying = true)
+    assertTrue("local playback alone still reports speaking", manager.isSpeaking.value)
+
+    publishSpeakingStateFor(manager, realtimePlaying = false, localPlaying = false)
+    assertFalse("neither source playing clears the projection", manager.isSpeaking.value)
+  }
+
+  /** Drives the real derivation point so the mirrors are proven to follow it, not set by hand. */
+  private fun publishSpeakingStateFor(
+    manager: TalkModeManager,
+    realtimePlaying: Boolean,
+    localPlaying: Boolean,
+  ) {
+    setPrivateField(manager, "realtimePlaying", realtimePlaying)
+    if (localPlaying) {
+      val leaseClass = Class.forName("ai.openclaw.app.voice.TalkModeManager\$PlaybackLease")
+      val phaseClass = Class.forName("ai.openclaw.app.voice.TalkModeManager\$PlaybackPhase")
+      val playing = phaseClass.enumConstants!!.first { (it as Enum<*>).name == "Playing" }
+      val ctor = leaseClass.declaredConstructors.first()
+      ctor.isAccessible = true
+      val lease = ctor.newInstance(1L, Job(), playing)
+      setPrivateField(manager, "localPlayback", lease)
+    } else {
+      setPrivateField(manager, "localPlayback", null)
+    }
+    val method = manager.javaClass.getDeclaredMethod("publishSpeakingState")
+    method.isAccessible = true
+    method.invoke(manager)
+  }
+
+  private fun shouldSuppressRealtimeCaptureForPlayback(manager: TalkModeManager): Boolean {
+    val method = manager.javaClass.getDeclaredMethod("shouldSuppressRealtimeCaptureForPlayback")
+    method.isAccessible = true
+    return method.invoke(manager) as Boolean
+  }
+
   private fun startPlaybackForTest(manager: TalkModeManager) {
     setPrivateField(manager, "realtimePlaybackEndsAtMs", SystemClock.elapsedRealtime() + 5_000)
   }
 
-  private fun observeForwarded(manager: TalkModeManager) = invokeUplinkObserver(manager, "observeRealtimeFrameForwarded")
+  private fun observeEnqueued(manager: TalkModeManager) = invokeUplinkObserver(manager, "observeRealtimeFrameEnqueued")
 
   private fun observeHeldBack(manager: TalkModeManager) = invokeUplinkObserver(manager, "observeRealtimeCaptureHeldBack")
 
@@ -1697,7 +1824,7 @@ class TalkModeManagerTest {
 
   private fun uplinkPhaseName(manager: TalkModeManager): String =
     when (uplinkPhaseValue(manager) and 3) {
-      2 -> "FORWARDED_DURING_PLAYBACK"
+      2 -> "ENQUEUED_DURING_PLAYBACK"
       1 -> "SUPPRESSED_DURING_PLAYBACK"
       3 -> "HELD_BY_CANCELLATION_FENCE"
       else -> "IDLE_NO_PLAYBACK"
@@ -1706,6 +1833,22 @@ class TalkModeManagerTest {
   private fun uplinkAec(manager: TalkModeManager): Boolean = uplinkPhaseValue(manager) and (1 shl 2) != 0
 
   private fun uplinkComm(manager: TalkModeManager): Boolean = uplinkPhaseValue(manager) and (1 shl 3) != 0
+
+  private fun uplinkLocal(manager: TalkModeManager): Boolean = uplinkPhaseValue(manager) and (1 shl 4) != 0
+
+  private fun setLocalMediaPlaying(
+    manager: TalkModeManager,
+    playing: Boolean,
+  ) = setPrivateField(manager, "localMediaPlaybackActive", playing)
+
+  private fun shouldSubmitDequeued(
+    manager: TalkModeManager,
+    sessionId: String,
+  ): Boolean {
+    val method = manager.javaClass.getDeclaredMethod("shouldSubmitDequeuedRealtimeFrame", String::class.java)
+    method.isAccessible = true
+    return method.invoke(manager, sessionId) as Boolean
+  }
 
   /** What an operator would actually see: the count of emitted uplink observations. */
   private fun uplinkObservations(): Int = ShadowLog.getLogsForTag("TalkMode").count { it.msg.startsWith("realtime uplink ") }

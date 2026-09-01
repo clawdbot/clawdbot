@@ -227,10 +227,11 @@ class TalkModeManager internal constructor(
     // capture path can compare without allocating.
     private const val uplinkPhaseIdle = 0
     private const val uplinkPhaseSuppressed = 1
-    private const val uplinkPhaseForwarded = 2
+    private const val uplinkPhaseEnqueued = 2
     private const val uplinkPhaseFenced = 3
     private const val uplinkAecBit = 1 shl 2
     private const val uplinkCommBit = 1 shl 3
+    private const val uplinkLocalBit = 1 shl 4
     private const val uplinkPhaseUnobserved = -1
 
     // Realtime playback plays the Gateway's declared wire audio verbatim, so its rate is a
@@ -561,6 +562,18 @@ class TalkModeManager internal constructor(
 
   private var localPlayback: PlaybackLease? = null
   private var realtimePlaying = false
+
+  /**
+   * Lock-free mirrors of the two speaking sources, republished by [publishSpeakingState].
+   *
+   * The capture path cannot take [playbackLock] to ask which source is playing, and it must not
+   * ask [_isSpeaking], because that is deliberately the union of both. Mirrors rather than a
+   * second state machine: they are derived in exactly one place, from the same read that
+   * publishes the projection.
+   */
+  @Volatile private var realtimeCommunicationPlaybackActive = false
+
+  @Volatile private var localMediaPlaybackActive = false
   private val systemSpeech = SystemSpeechSpeaker(context)
 
   @Volatile private var finalizeInFlight = false
@@ -1459,11 +1472,7 @@ class TalkModeManager internal constructor(
     realtimeAppendJob =
       gatewayWorkScope.launch(realtimeCaptureDispatcher) {
         for (frame in audioFrames) {
-          if (realtimeSessionId != sessionId) continue
-          if (shouldSuppressRealtimeCaptureForPlayback()) {
-            observeRealtimeCaptureHeldBack()
-            continue
-          }
+          if (!shouldSubmitDequeuedRealtimeFrame(sessionId)) continue
           val audioBase64 = Base64.encodeToString(frame, Base64.NO_WRAP)
           val params =
             buildJsonObject {
@@ -1480,9 +1489,8 @@ class TalkModeManager internal constructor(
               Log.w(tag, "realtime appendAudio failed: ${error.message}")
               failRealtimeRelay(sessionId, error.message)
             }
-            // After the request, not before it: the claim being reported is that a frame reached
-            // the uplink, and a send that threw did not.
-            observeRealtimeFrameForwarded()
+            // After the call returns, not before it: a send that threw never reached the socket.
+            observeRealtimeFrameEnqueued()
           } catch (err: Throwable) {
             if (err is CancellationException) throw err
             Log.w(tag, "realtime appendAudio failed: ${err.message ?: err::class.simpleName}")
@@ -1709,9 +1717,15 @@ class TalkModeManager internal constructor(
    * frames closes the uplink on the very next forwarded frame instead of the next publication.
    * Both are lock-free volatile reads, so this stays free of the monitor and of any IPC.
    */
-  private fun shouldSuppressRealtimeCaptureForPlayback(): Boolean =
-    isRealtimePlaybackActive() &&
-      !(realtimeAecEnabled && realtimeCommunicationAudio.communicationAudioEligibleUnsynchronized)
+  private fun shouldSuppressRealtimeCaptureForPlayback(): Boolean {
+    // Local assistant speech plays on the media path, not the communication downlink this rule is
+    // about. The canceller is subtracting the realtime downlink; it is not subtracting local media,
+    // so local playback -- alone or overlapping realtime playout -- can contaminate the microphone
+    // reference and must never qualify for the exception.
+    if (localMediaPlaybackActive) return true
+    if (!isRealtimeCommunicationPlaybackActive()) return false
+    return !(realtimeAecEnabled && realtimeCommunicationAudio.communicationAudioEligibleUnsynchronized)
+  }
 
   /**
    * Two independent reasons to hold a captured frame back, and both must be clear.
@@ -1743,22 +1757,28 @@ class TalkModeManager internal constructor(
     phase: Int,
     aecEnabled: Boolean,
     communicationEligible: Boolean,
+    localPlayback: Boolean,
   ) {
     val encoded =
       phase or
         (if (aecEnabled) uplinkAecBit else 0) or
-        (if (communicationEligible) uplinkCommBit else 0)
+        (if (communicationEligible) uplinkCommBit else 0) or
+        (if (localPlayback) uplinkLocalBit else 0)
     val previous = realtimeUplinkPhase.get()
     if (previous == encoded) return
     if (!realtimeUplinkPhase.compareAndSet(previous, encoded)) return
     val name =
       when (phase) {
-        uplinkPhaseForwarded -> "FORWARDED_DURING_PLAYBACK"
+        uplinkPhaseEnqueued -> "ENQUEUED_DURING_PLAYBACK"
         uplinkPhaseSuppressed -> "SUPPRESSED_DURING_PLAYBACK"
         uplinkPhaseFenced -> "HELD_BY_CANCELLATION_FENCE"
         else -> "IDLE_NO_PLAYBACK"
       }
-    Log.i(tag, "realtime uplink $name aecEnabled=$aecEnabled commEligible=$communicationEligible")
+    Log.i(
+      tag,
+      "realtime uplink $name aecEnabled=$aecEnabled commEligible=$communicationEligible " +
+        "localPlayback=$localPlayback",
+    )
   }
 
   /**
@@ -1771,32 +1791,70 @@ class TalkModeManager internal constructor(
    */
   private fun observeRealtimeCaptureHeldBack() {
     val fenced = pendingRealtimeOutputClear != null
+    val local = localMediaPlaybackActive
     // A frame dropped while nothing is playing and nothing is fenced carries no decision worth
     // reporting -- it is an empty converted frame, not a policy outcome.
-    if (!fenced && !isRealtimePlaybackActive()) return
+    if (!fenced && !local && !isRealtimeCommunicationPlaybackActive()) return
     observeRealtimeUplinkPhase(
       if (fenced) uplinkPhaseFenced else uplinkPhaseSuppressed,
       realtimeAecEnabled,
       realtimeCommunicationAudio.communicationAudioEligibleUnsynchronized,
+      local,
     )
   }
 
   /**
-   * A captured frame has just been handed to `talk.session.appendAudio`.
+   * The decision taken after a frame leaves the capture queue and before it is submitted.
+   *
+   * Separate from the capture-side check on purpose. A frame can clear that check, wait in the
+   * bounded queue, and be dequeued after `cancelOutput` has taken the turn; the fence is
+   * unconditional, so the full-duplex exception must not carry such a frame past it. Ownership is
+   * what makes this the right place: it is the last point that still holds the frame. A request
+   * already handed to the socket may be in flight and is not recalled here, and nothing in this
+   * design claims otherwise.
+   */
+  private fun shouldSubmitDequeuedRealtimeFrame(sessionId: String): Boolean {
+    if (realtimeSessionId != sessionId) return false
+    if (pendingRealtimeOutputClear != null) {
+      observeRealtimeCaptureHeldBack()
+      return false
+    }
+    if (shouldSuppressRealtimeCaptureForPlayback()) {
+      observeRealtimeCaptureHeldBack()
+      return false
+    }
+    return true
+  }
+
+  /**
+   * A captured frame has just been submitted locally as a `talk.session.appendAudio` request.
+   *
+   * Named for exactly what the call proves and no more. [sendGatewayRequestFrame] returns once the
+   * request has been handed to the socket; the Gateway's response, including a rejection, arrives
+   * later on the error callback. So this reports that the frame passed Android's playback-time gate
+   * and left the app -- not that the Gateway accepted it, not that the provider received it, and
+   * certainly not that a turn resulted.
    *
    * Published here rather than at the predicate on purpose: the question a reviewer has is not
-   * whether the policy said yes, but whether a real frame crossed the uplink boundary while the
-   * speaker was playing. Only this point knows both.
+   * whether the policy said yes, but whether a real frame reached the local send boundary while the
+   * communication downlink was playing. Only this point knows both.
    */
-  private fun observeRealtimeFrameForwarded() {
+  private fun observeRealtimeFrameEnqueued() {
     observeRealtimeUplinkPhase(
-      if (isRealtimePlaybackActive()) uplinkPhaseForwarded else uplinkPhaseIdle,
+      if (isRealtimeCommunicationPlaybackActive()) uplinkPhaseEnqueued else uplinkPhaseIdle,
       realtimeAecEnabled,
       realtimeCommunicationAudio.communicationAudioEligibleUnsynchronized,
+      localMediaPlaybackActive,
     )
   }
 
-  private fun isRealtimePlaybackActive(): Boolean = _isSpeaking.value || SystemClock.elapsedRealtime() < realtimePlaybackEndsAtMs
+  /**
+   * Is the *realtime communication* downlink playing, as opposed to anything that merely makes the
+   * app "speaking"? Both terms are realtime-owner facts: the published source flag, and the
+   * playout deadline the owner extends per written frame, which covers the tail after the last
+   * write while the device is still draining.
+   */
+  private fun isRealtimeCommunicationPlaybackActive(): Boolean = realtimeCommunicationPlaybackActive || SystemClock.elapsedRealtime() < realtimePlaybackEndsAtMs
 
   private fun handleRealtimeTalkEvent(payloadJson: String?) {
     if (payloadJson.isNullOrBlank()) return
@@ -3523,7 +3581,14 @@ class TalkModeManager internal constructor(
   // Gateway receive path never waits on the device behind it.
   // Either source can keep speaking after the other source completes or is cancelled.
   private fun publishSpeakingState() {
-    _isSpeaking.value = realtimePlaying || localPlayback?.phase == PlaybackPhase.Playing
+    val realtime = realtimePlaying
+    val local = localPlayback?.phase == PlaybackPhase.Playing
+    // Published as two facts, not one. [_isSpeaking] is the UI projection and must stay the union
+    // of both sources; the forwarding policy needs to know *which* source is playing, because only
+    // the realtime downlink is the audio the platform canceller is subtracting.
+    realtimeCommunicationPlaybackActive = realtime
+    localMediaPlaybackActive = local
+    _isSpeaking.value = realtime || local
   }
 
   private fun markAudioPlaybackStarting(playbackToken: Long) {
