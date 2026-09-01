@@ -292,7 +292,6 @@ function buildPluginsMenuReply(ctx: PluginCommandContext): PluginCommandResult {
     { label: "list", command: "/codex plugins list" },
     { label: "available", command: "/codex plugins available" },
     { label: "status", command: "/codex plugins status" },
-    { label: "recheck", command: "/codex plugins recheck" },
     { label: "enable", command: "/codex plugins enable" },
     { label: "disable", command: "/codex plugins disable" },
     { label: "help", command: "/codex plugins help" },
@@ -426,7 +425,7 @@ async function installCodexPlugin(
   const requested = parseCodexPluginMarketplaceId(requestedId);
   if (!requested) {
     return {
-      text: "Invalid plugin identifier. Use /codex plugins install <plugin>@<marketplace> with ASCII letters, digits, underscores, or hyphens.",
+      text: "Invalid plugin identifier. Use /codex plugins install <plugin>@<marketplace>. Both names allow ASCII letters, digits, underscores, and hyphens. Plugin names may also contain dots between nonempty segments.",
     };
   }
 
@@ -615,8 +614,11 @@ async function installCodexPlugin(
           type: "buttons",
           buttons: [
             {
-              label: "Finished connecting / recheck",
-              action: { type: "command", command: `/codex plugins recheck ${requestedId}` },
+              label: appLinks.length > 0 ? "Recheck app tools" : "Check status",
+              action: {
+                type: "command",
+                command: `/codex plugins ${appLinks.length > 0 ? "recheck" : "status"} ${requestedId}`,
+              },
             },
           ],
         },

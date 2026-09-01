@@ -26,6 +26,7 @@ function fixture(
   options: {
     threadId?: string | null;
     appCount?: number;
+    pluginName?: string;
     disabled?: boolean;
     blocked?: boolean;
     runtime?: v2.InstalledApp[];
@@ -40,18 +41,19 @@ function fixture(
     catalog?: { marketplace: string; kind: string };
   } = {},
 ) {
+  const pluginName = options.pluginName ?? "notes";
   const current = {
     enabled: true,
     plugins: {
       notes: {
         marketplaceName: options.catalog?.marketplace ?? "company-tools",
-        pluginName: options.catalog ? `notes@${options.catalog.marketplace}` : "notes",
+        pluginName: options.catalog ? `${pluginName}@${options.catalog.marketplace}` : pluginName,
         enabled: !options.disabled,
       },
     },
   };
   const summary: v2.PluginSummary = {
-    id: `notes@${options.catalog?.marketplace ?? "company-tools"}`,
+    id: `${pluginName}@${options.catalog?.marketplace ?? "company-tools"}`,
     name: "Notes",
     installed: true,
     enabled: true,
@@ -104,9 +106,10 @@ function fixture(
         break;
       case "plugin/list": {
         const requested = params as v2.PluginListParams;
-        const includesCatalog = requested.marketplaceKinds?.some(
-          (kind) => kind === options.catalog?.kind,
-        );
+        const includesCatalog =
+          options.catalog?.kind === "curated"
+            ? !requested.marketplaceKinds
+            : requested.marketplaceKinds?.some((kind) => kind === options.catalog?.kind);
         response = {
           marketplaces: includesCatalog
             ? [{ name: options.catalog?.marketplace, plugins: [summary] }]
@@ -177,7 +180,7 @@ function fixture(
     withContext: async <T>(run: (value: CodexPluginCommandContext) => Promise<T>): Promise<T> =>
       run(context),
   };
-  return { io, context, runtime, request };
+  return { io, context, current, runtime, request };
 }
 
 describe("Codex plugin status command", () => {
@@ -388,6 +391,45 @@ describe("Codex plugin status command", () => {
     expect(first.text).not.toContain("another-agent-app");
   });
 
+  it.each([
+    { pluginName: "notes", marketplace: "openai-api-curated", curated: true },
+    { pluginName: "notes", marketplace: "openai-curated-remote", curated: true },
+    { pluginName: "notes.v2", marketplace: "company-tools", curated: false },
+  ])(
+    "resolves generated continuation commands for $pluginName in $marketplace",
+    async ({ pluginName, marketplace, curated }) => {
+      const test = fixture({
+        appCount: 7,
+        pluginName,
+        ...(curated ? { catalog: { marketplace, kind: "curated" } } : {}),
+      });
+      if (curated) {
+        test.current.plugins.notes.marketplaceName = "openai-curated";
+      }
+      const first = await handleCodexPluginsSubcommand(
+        ctx,
+        ["status", "notes"],
+        test.io,
+        test.runtime,
+      );
+      const continuation = first.presentation?.blocks
+        .flatMap((block) => (block.type === "buttons" ? block.buttons : []))
+        .find((button) => button.label === "More apps");
+      if (continuation?.action.type !== "command") {
+        throw new Error("Expected the first status page to provide a More apps command");
+      }
+      const next = await handleCodexPluginsSubcommand(
+        ctx,
+        continuation.action.command.split(" ").slice(2),
+        test.io,
+        test.runtime,
+      );
+      expect(next.text).toContain("Apps (page 2/2)");
+      expect(next.text).toContain("Open App 6 in ChatGPT");
+      expect(test.io.mutate).not.toHaveBeenCalled();
+    },
+  );
+
   it("checks owner authority before reading profile-scoped inventory", async () => {
     const test = fixture();
     const result = await handleCodexPluginsSubcommand(
@@ -414,7 +456,7 @@ describe("Codex plugin recheck command", () => {
       test.io,
       test.runtime,
     );
-    expect(result.text).toContain("App inventory recheck completed");
+    expect(result.text).toContain("App inventory check completed");
     expect(result.text).toContain("disabled by effective Codex app policy");
     expect(result.text).toContain("/new or /reset");
     expect(result.text).toContain("Snapshot freshness is unknown");
@@ -424,7 +466,10 @@ describe("Codex plugin recheck command", () => {
       ["app/installed", { forceRefresh: true }],
       ["app/installed", { threadId: "thread-a", forceRefresh: false }],
     ]);
-    expect(test.request).toHaveBeenCalledWith("app/read", { appIds: ["app-0"] });
+    expect(test.request).toHaveBeenCalledWith("app/read", {
+      appIds: ["app-0"],
+      includeTools: true,
+    });
     expect(test.runtime.refresh).not.toHaveBeenCalled();
     expect(test.runtime.install).not.toHaveBeenCalled();
     expect(test.io.mutate).not.toHaveBeenCalled();
@@ -434,6 +479,9 @@ describe("Codex plugin recheck command", () => {
     { options: { disabled: true }, expected: "disabled for new conversations" },
     { options: { blocked: true }, expected: "blocked by marketplace policy" },
     { options: { appCount: 0 }, expected: "No hosted apps declared" },
+    { options: { accountType: "apiKey" as const }, expected: "ChatGPT sign-in" },
+    { options: { appsFeature: false }, expected: "disabled in this Codex runtime" },
+    { options: { missingMetadata: true }, expected: "app-page permissions are unknown" },
   ])("does not refresh when $expected", async ({ options, expected }) => {
     const test = fixture(options);
     const result = await handleCodexPluginsSubcommand(
@@ -443,7 +491,7 @@ describe("Codex plugin recheck command", () => {
       test.runtime,
     );
     expect(result.text).toContain(expected);
-    expect(result.text).not.toContain("recheck completed");
+    expect(result.text).not.toContain("check completed");
     expect(test.request).not.toHaveBeenCalledWith("app/installed", { forceRefresh: true });
     expect(test.io.mutate).not.toHaveBeenCalled();
   });
@@ -481,7 +529,7 @@ describe("Codex plugin recheck command", () => {
       expect(result.text).toContain(expected);
       expect(result.text).toContain("/codex plugins recheck notes@company-tools");
       expect(result.text).toContain("Previous inventory was not confirmed");
-      expect(result.text).not.toContain("recheck completed");
+      expect(result.text).not.toContain("check completed");
       expect(result.text).not.toContain("private upstream response");
       expect(test.io.mutate).not.toHaveBeenCalled();
     },

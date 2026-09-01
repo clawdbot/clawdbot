@@ -20,6 +20,7 @@ import {
   CODEX_PLUGIN_APP_LINK_PAGE_SIZE,
 } from "./command-plugin-app-links.js";
 import {
+  resolveConfiguredPluginIdentity,
   resolveInstalledPluginKey,
   resolveCuratedMarketplaceAliases,
   type CodexPluginsConfigBlock,
@@ -145,6 +146,18 @@ export function codexPluginAppPageLinks(readiness: CodexPluginReadiness): v2.App
   });
 }
 
+export function canRecheckCodexPluginApps(
+  readiness: CodexPluginReadiness,
+): readiness is CodexPluginReadiness & { detail: v2.PluginDetail } {
+  return (
+    readiness.openClawEnabled &&
+    readiness.summary?.installed === true &&
+    readiness.summary.enabled &&
+    readiness.detail !== undefined &&
+    codexPluginAppPageLinks(readiness).length > 0
+  );
+}
+
 /** Reads existing snapshots only. Neither metadata nor installation proves a live connection. */
 export async function readCodexPluginReadiness(params: {
   context: CodexPluginCommandContext;
@@ -153,16 +166,15 @@ export async function readCodexPluginReadiness(params: {
 }): Promise<CodexPluginReadiness> {
   const { context, current, configKey } = params;
   const entry = current.plugins?.[configKey];
-  if (!entry?.marketplaceName || !entry.pluginName) {
+  const identity = entry ? resolveConfiguredPluginIdentity(entry) : undefined;
+  if (!entry?.marketplaceName || !entry.pluginName || !identity) {
     throw new Error(
       "This configured plugin has no marketplace identity. Check /codex plugins list.",
     );
   }
   const result: CodexPluginReadiness = {
     configKey,
-    commandId: entry.pluginName.endsWith(`@${entry.marketplaceName}`)
-      ? entry.pluginName
-      : `${entry.pluginName}@${entry.marketplaceName}`,
+    commandId: `${identity.pluginName}@${identity.marketplaceName}`,
     openClawEnabled: current.enabled === true && entry.enabled !== false,
     agentId: context.agentId,
     profileId: context.profileId,
@@ -303,6 +315,7 @@ export function formatCodexPluginReadiness(
   const summary = readiness.summary;
   const catalog = pluginCatalogState(summary);
   const hasApps = Boolean(readiness.detail?.apps.length);
+  const canRecheck = canRecheckCodexPluginApps(readiness);
   const lines = [
     `Plugin: ${display(readiness.commandId)}`,
     `Agent: ${display(readiness.agentId)} · Profile: ${display(readiness.profileId ?? "native Codex account (profile unknown)")}`,
@@ -339,7 +352,7 @@ export function formatCodexPluginReadiness(
   if (options.rechecked) {
     blocks.unshift({
       type: "text",
-      text: "App inventory recheck completed. Existing conversations keep their admitted app policy; use /new or /reset after connecting.",
+      text: "App inventory check completed. A hosted refresh was requested; Codex does not report whether it replaced the snapshot. Existing conversations keep their admitted app policy; use /new or /reset after connecting.",
     });
   }
   if (readiness.diagnostic) {
@@ -422,8 +435,11 @@ export function formatCodexPluginReadiness(
         type: "buttons",
         buttons: [
           {
-            label: "Finished connecting / recheck",
-            action: { type: "command", command: `/codex plugins recheck ${readiness.commandId}` },
+            label: canRecheck ? "Recheck app tools" : "Check status",
+            action: {
+              type: "command",
+              command: `/codex plugins ${canRecheck ? "recheck" : "status"} ${readiness.commandId}`,
+            },
           },
         ],
       });

@@ -32,7 +32,7 @@ describe("explicit Codex plugin app refresh", () => {
 
     expect(request.mock.calls).toEqual([
       ["app/installed", { forceRefresh: true }],
-      ["app/read", { appIds: [connectedApp.id] }],
+      ["app/read", { appIds: [connectedApp.id], includeTools: true }],
     ]);
     expect(appCache.read({ key: "selected-runtime", request }).snapshot?.apps).toEqual([
       expect.objectContaining({ id: connectedApp.id, isAccessible: true }),

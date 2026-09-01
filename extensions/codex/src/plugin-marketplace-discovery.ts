@@ -2,7 +2,9 @@
 import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { v2 } from "./app-server/protocol.js";
 
-const PLUGIN_SEGMENT_PATTERN = /^[A-Za-z0-9_-]+$/;
+// Codex permits dots between plugin-name segments, but not in marketplace names.
+const PLUGIN_NAME_PATTERN = /^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$/;
+const MARKETPLACE_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
 const MAX_PLUGIN_DESCRIPTION_LENGTH = 160;
 const SUPPLEMENTAL_MARKETPLACE_KINDS = [
   "workspace-directory",
@@ -61,7 +63,7 @@ export function parseCodexPluginMarketplaceId(
   }
   const pluginName = value.slice(0, separator);
   const marketplaceName = value.slice(separator + 1);
-  return PLUGIN_SEGMENT_PATTERN.test(pluginName) && PLUGIN_SEGMENT_PATTERN.test(marketplaceName)
+  return PLUGIN_NAME_PATTERN.test(pluginName) && MARKETPLACE_NAME_PATTERN.test(marketplaceName)
     ? { pluginName, marketplaceName }
     : undefined;
 }
@@ -128,7 +130,7 @@ export async function discoverCodexMarketplacePlugins(params: {
   const discovered = new Map<string, CodexAvailablePlugin>();
   const ambiguous = new Set<string>();
   for (const marketplace of marketplaces) {
-    if (!PLUGIN_SEGMENT_PATTERN.test(marketplace.name)) {
+    if (!MARKETPLACE_NAME_PATTERN.test(marketplace.name)) {
       continue;
     }
     for (const summary of marketplace.plugins) {
@@ -219,10 +221,10 @@ function pluginSlug(summary: v2.PluginSummary, marketplaceName: string): string 
     return qualified.pluginName;
   }
   const identitySegment = summary.id.split("/").at(-1);
-  if (identitySegment && PLUGIN_SEGMENT_PATTERN.test(identitySegment)) {
+  if (identitySegment && PLUGIN_NAME_PATTERN.test(identitySegment)) {
     return identitySegment;
   }
-  return PLUGIN_SEGMENT_PATTERN.test(summary.name) ? summary.name : undefined;
+  return PLUGIN_NAME_PATTERN.test(summary.name) ? summary.name : undefined;
 }
 
 function pluginDescription(summary: v2.PluginSummary): string | undefined {

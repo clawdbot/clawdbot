@@ -7,8 +7,8 @@ import {
   fakeCtx,
   inMemoryIO,
   pluginRuntime,
-  presentationButtons,
   pluginSummary,
+  presentationButtons,
   type CodexPluginsManagementRuntime,
 } from "./command-plugins-management.test-support.js";
 
@@ -54,7 +54,6 @@ describe("Codex /codex plugins subcommand", () => {
       "/codex plugins list",
       "/codex plugins available",
       "/codex plugins status",
-      "/codex plugins recheck",
       "/codex plugins enable",
       "/codex plugins disable",
       "/codex plugins help",
@@ -192,36 +191,40 @@ describe("Codex /codex plugins subcommand", () => {
     expect(result.text).not.toContain("*instructions*");
   });
 
-  it("installs local plugins from their exact marketplace path and enables only the selected plugin", async () => {
-    const io = inMemoryIO({}, { enabled: false });
-    const runtime = pluginRuntime({
-      marketplacePath: "/repo/company/.agents/plugins/marketplace.json",
-    });
+  it.each(["security-review", "security-review.v2"])(
+    "installs local %s from its exact marketplace path and enables only the selected plugin",
+    async (pluginName) => {
+      const io = inMemoryIO({}, { enabled: false });
+      const runtime = pluginRuntime({
+        pluginName,
+        marketplacePath: "/repo/company/.agents/plugins/marketplace.json",
+      });
 
-    const result = await handleCodexPluginsSubcommand(
-      fakeCtx,
-      ["install", "security-review@company-tools"],
-      io,
-      runtime,
-    );
+      const result = await handleCodexPluginsSubcommand(
+        fakeCtx,
+        ["install", `${pluginName}@company-tools`],
+        io,
+        runtime,
+      );
 
-    expect(runtime.install).toHaveBeenCalledWith({
-      marketplacePath: "/repo/company/.agents/plugins/marketplace.json",
-      pluginName: "security-review",
-    });
-    expect(io.currentConfig()).toEqual({
-      enabled: true,
-      plugins: {
-        "security-review@company-tools": {
-          enabled: true,
-          marketplaceName: "company-tools",
-          pluginName: "security-review",
+      expect(runtime.install).toHaveBeenCalledWith({
+        marketplacePath: "/repo/company/.agents/plugins/marketplace.json",
+        pluginName,
+      });
+      expect(io.currentConfig()).toEqual({
+        enabled: true,
+        plugins: {
+          [`${pluginName}@company-tools`]: {
+            enabled: true,
+            marketplaceName: "company-tools",
+            pluginName,
+          },
         },
-      },
-    });
-    expect(io.currentConfig()).not.toHaveProperty("allow_all_plugins");
-    expect(result.text).toContain("bundle was installed in Codex");
-  });
+      });
+      expect(io.currentConfig()).not.toHaveProperty("allow_all_plugins");
+      expect(result.text).toContain("bundle was installed in Codex");
+    },
+  );
 
   it("installs remote plugins with their opaque remote identity and preserves exact summary ids", async () => {
     const io = inMemoryIO();

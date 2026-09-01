@@ -8,6 +8,7 @@ import { refreshCodexPluginAppRuntimeState } from "./app-server/plugin-activatio
 import { CodexAppServerRpcError } from "./app-server/rpc-error.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
 import {
+  canRecheckCodexPluginApps,
   formatCodexPluginReadiness,
   readCodexPluginReadiness,
 } from "./command-plugins-readiness.js";
@@ -20,14 +21,7 @@ export async function recheckCodexPluginReadiness(
 ): Promise<PluginCommandResult> {
   const params = { context, current: context.current, configKey };
   const before = await readCodexPluginReadiness(params);
-  if (
-    !before.openClawEnabled ||
-    !before.summary?.installed ||
-    !before.summary.enabled ||
-    before.summary.availability === "DISABLED_BY_ADMIN" ||
-    before.summary.installPolicy === "NOT_AVAILABLE" ||
-    !before.detail?.apps.length
-  ) {
+  if (!canRecheckCodexPluginApps(before)) {
     return formatCodexPluginReadiness(before);
   }
 
