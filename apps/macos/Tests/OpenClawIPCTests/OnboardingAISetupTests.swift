@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import ConcurrencyExtras
 import CryptoKit
 import Foundation
@@ -774,19 +775,87 @@ private func setupAdmissionBusyResponse(id: String, confirmed: Bool = true) -> D
         """.utf8)
 }
 
+private enum AISetupAccessibilityError: Error {
+    case requestFailed(attribute: String, code: Int32)
+    case invalidValue(attribute: String)
+    case missingWindow
+}
+
+/// SwiftPM does not run NSApplication.main; finish Cocoa startup once so its AX server can answer.
+@MainActor
+private let aiSetupAccessibilityApplication: Void = NSApplication.shared.finishLaunching()
+
+private nonisolated func inspectAISetupWindow(identifier: String) throws
+-> (labels: [String], buttons: [String: Bool]) {
+    func attributeValue(_ element: AXUIElement, _ attribute: String) throws -> CFTypeRef? {
+        var raw: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &raw)
+        switch result {
+        case .attributeUnsupported, .noValue:
+            return nil
+        case .success:
+            return raw
+        default:
+            throw AISetupAccessibilityError.requestFailed(attribute: attribute, code: result.rawValue)
+        }
+    }
+    func value<T>(_ element: AXUIElement, _ attribute: String, as _: T.Type) throws -> T? {
+        guard let raw = try attributeValue(element, attribute) else { return nil }
+        guard let typed = raw as? T else {
+            throw AISetupAccessibilityError.invalidValue(attribute: attribute)
+        }
+        return typed
+    }
+
+    let application = AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)
+    let windows = try value(application, kAXWindowsAttribute, as: [AXUIElement].self) ?? []
+    guard let window = try windows.first(where: {
+        try value($0, kAXIdentifierAttribute, as: String.self) == identifier
+    }) else {
+        throw AISetupAccessibilityError.missingWindow
+    }
+    var labels: [String] = []
+    var buttons: [String: Bool] = [:]
+    var visited = Set<AXUIElement>()
+    func visit(_ element: AXUIElement) throws {
+        guard visited.insert(element).inserted else { return }
+        // AXValue is a string for text, but a boolean/number for controls.
+        let text = try [kAXDescriptionAttribute, kAXTitleAttribute, kAXValueAttribute].compactMap {
+            try attributeValue(element, $0) as? String
+        }
+        labels.append(contentsOf: text)
+        if try value(element, kAXRoleAttribute, as: String.self) == kAXButtonRole, !text.isEmpty {
+            guard let enabled = try value(element, kAXEnabledAttribute, as: Bool.self) else {
+                throw AISetupAccessibilityError.invalidValue(attribute: kAXEnabledAttribute)
+            }
+            for label in text {
+                buttons[label] = enabled
+            }
+        }
+        for child in try value(element, kAXChildrenAttribute, as: [AXUIElement].self) ?? [] {
+            try visit(child)
+        }
+    }
+    try visit(window)
+    return (labels, buttons)
+}
+
 @MainActor
 private func inspectAISetupSheet(
     _ model: OnboardingAISetupModel,
-    colorScheme: ColorScheme = .light) -> (labels: [String], buttons: [String: Bool], size: NSSize)
+    colorScheme: ColorScheme = .light) async -> (labels: [String], buttons: [String: Bool], size: NSSize)
 {
+    _ = aiSetupAccessibilityApplication
     var appeared = false
     let hosting = NSHostingView(rootView: OnboardingAISetupSheet(model: model)
         .environment(\.colorScheme, colorScheme)
         .onAppear { appeared = true })
     hosting.frame = NSRect(x: 0, y: 0, width: 500, height: 500)
-    // SwiftUI needs a window-backed hierarchy to expose the rendered accessibility tree.
+    // Keep the sheet mounted through the AX request and detach it before closing.
     let window = NSWindow(contentRect: hosting.frame, styleMask: [], backing: .buffered, defer: false)
     window.isReleasedWhenClosed = false
+    let identifier = UUID().uuidString
+    window.setAccessibilityIdentifier(identifier)
     window.contentView = hosting
     defer {
         window.orderOut(nil)
@@ -798,26 +867,18 @@ private func inspectAISetupSheet(
     window.displayIfNeeded()
     hosting.layoutSubtreeIfNeeded()
     #expect(appeared)
-    var labels: [String] = []
-    var buttons: [String: Bool] = [:]
-    var visited = Set<ObjectIdentifier>()
-    func visit(_ element: any NSAccessibilityProtocol) {
-        guard visited.insert(ObjectIdentifier(element)).inserted else { return }
-        let text = [element.accessibilityLabel(), element.accessibilityTitle(), element.accessibilityValue() as? String]
-            .compactMap(\.self)
-        labels.append(contentsOf: text)
-        if element.accessibilityRole() == .button {
-            for label in text {
-                buttons[label] = element.isAccessibilityEnabled()
-            }
-        }
-        for child in element.accessibilityChildren() ?? [] {
-            if let child = child as? any NSAccessibilityProtocol { visit(child) }
-        }
+    // AX client requests materialize SwiftUI's virtual nodes without relying on ObjC
+    // protocol conformance. Keep MainActor free so AppKit can answer those requests.
+    let snapshot: (labels: [String], buttons: [String: Bool])
+    do {
+        snapshot = try await Task.detached { try inspectAISetupWindow(identifier: identifier) }.value
+    } catch {
+        // Record the failure without skipping callers' gated wizard-task cleanup.
+        Issue.record(error)
+        snapshot = ([], [:])
     }
-    visit(hosting)
-    #expect(buttons["Cancel"] != nil)
-    return (labels, buttons, hosting.fittingSize)
+    #expect(snapshot.buttons["Cancel"] != nil)
+    return (snapshot.labels, snapshot.buttons, hosting.fittingSize)
 }
 
 @Suite(.serialized)
@@ -1084,7 +1145,7 @@ struct OnboardingAISetupTests {
         #expect(model.activeAuthOption?.label == (manual ? "OpenAI API key" : "Codex CLI"))
         #expect(model.activeAuthOption?.brandId == "openai")
         #expect(model.activeAuthOption?.icon == (manual ? "fixture-key-icon" : "fixture-candidate-icon"))
-        let reviewSheet = inspectAISetupSheet(model)
+        let reviewSheet = await inspectAISetupSheet(model)
         #expect(reviewSheet.labels.contains(reviewMessage))
         #expect(reviewSheet.size.height <= 500)
         if manual { #expect(reviewSheet.size.height > 260) }
@@ -1103,7 +1164,7 @@ struct OnboardingAISetupTests {
         if decision == "error-replaced" {
             markPending(defaults, owner: replacementOwner)
         }
-        let consentSheet = inspectAISetupSheet(model)
+        let consentSheet = await inspectAISetupSheet(model)
         #expect(consentSheet.labels.contains("Confirm"))
         #expect(consentSheet.buttons["Submit"] == true)
         if decision == "retry-cancel" {
@@ -1113,7 +1174,7 @@ struct OnboardingAISetupTests {
             }
             #expect(model.authError != nil)
             #expect(model.authBusy)
-            let retrySheet = inspectAISetupSheet(model)
+            let retrySheet = await inspectAISetupSheet(model)
             #expect(retrySheet.buttons["Cancel"] == true)
             #expect(!retrySheet.labels.contains("Requesting cancellation…"))
             #expect(retrySheet.labels.contains("Cancellation not confirmed"))
@@ -1270,7 +1331,7 @@ struct OnboardingAISetupTests {
         model.cancelProviderAuth()
         if !terminalReply, !confirmedCancellation {
             await cancellation.waitUntilStarted()
-            let pendingSheet = inspectAISetupSheet(model)
+            let pendingSheet = await inspectAISetupSheet(model)
             #expect(pendingSheet.labels.contains("Requesting cancellation…"))
             #expect(pendingSheet.buttons["Cancel"] == false)
             #expect(pendingSheet.buttons["Submit"] == nil)
@@ -1442,7 +1503,7 @@ struct OnboardingAISetupTests {
 
         #expect(model.selectedKind == "codex-cli")
         #expect(model.activeAuthOption?.label == "Codex CLI")
-        let startingSheet = inspectAISetupSheet(model)
+        let startingSheet = await inspectAISetupSheet(model)
         #expect(startingSheet.labels.contains("Preparing your AI connection…"))
         #expect(startingSheet.buttons["Submit"] == nil)
         #expect(startingSheet.size.width == 500)
@@ -1542,7 +1603,7 @@ struct OnboardingAISetupTests {
         #expect(model.isPreparingModel)
         #expect(model.authStep.map(wizardStepType) == "progress")
         #expect(model.authStep?.message == "Downloading model: 80%")
-        let progressSheet = inspectAISetupSheet(model, colorScheme: colorScheme)
+        let progressSheet = await inspectAISetupSheet(model, colorScheme: colorScheme)
         #expect(progressSheet.labels.contains("Downloading model: 80%"))
         #expect(progressSheet.labels.contains(option.label))
         #expect(progressSheet.buttons["Submit"] == nil)
