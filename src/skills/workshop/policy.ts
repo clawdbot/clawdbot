@@ -214,6 +214,9 @@ export async function resolveSkillWorkshopToolApproval(params: {
         });
   return {
     requireApproval: {
+      // Core-generated workshop approvals carry the workspace-skills owner so
+      // the Gateway's fail-closed authority check can sign the request.
+      pluginId: "workspace-skills",
       ...text,
       description: approvalDescription.description,
       timeoutMs: SKILL_WORKSHOP_APPROVAL_TIMEOUT_MS,

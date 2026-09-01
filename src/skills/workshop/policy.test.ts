@@ -63,6 +63,7 @@ describe("resolveSkillWorkshopToolApproval", () => {
       severity: "warning",
       timeoutMs: 70_000,
       allowedDecisions: ["allow-once", "deny"],
+      pluginId: "workspace-skills",
     });
     expect(result?.requireApproval?.description).toContain(`Proposal ID: ${proposal.record.id}`);
     expect(result?.requireApproval?.description).toContain("Target skill: Weather Helper");
