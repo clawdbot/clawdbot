@@ -354,7 +354,7 @@ describe("memory index", () => {
     }
   });
 
-  it("reindexes legacy curated provenance before the first automatic candidate read", async () => {
+  it("defers legacy curated provenance reindex to detached maintenance", async () => {
     const projectKey = "github.com/openclaw/openclaw";
     await fs.writeFile(
       path.join(fixture.paths.workspace, "MEMORY.md"),
@@ -389,58 +389,29 @@ describe("memory index", () => {
       if (!upgradedManager.listCuratedProjectCandidates || !upgradedManager.listTriggerCandidates) {
         throw new Error("expected curated project and trigger candidate listing");
       }
-      const syncAdmitted = vi
+      const syncAdmitted = vi.spyOn(
+        upgradedManager as unknown as {
+          syncAdmitted: (params?: MemorySyncParams) => Promise<void>;
+        },
+        "syncAdmitted",
+      );
+      const syncPublishedIndexInBackground = vi
         .spyOn(
           upgradedManager as unknown as {
-            syncAdmitted: (
-              params?: MemorySyncParams,
-              options?: { allowEmbeddingBootstrapFallback?: boolean },
-            ) => Promise<void>;
+            syncPublishedIndexInBackground: (params: { reason: string }) => Promise<void>;
           },
-          "syncAdmitted",
+          "syncPublishedIndexInBackground",
         )
-        .mockRejectedValueOnce(new Error("legacy provenance repair unavailable"));
+        .mockResolvedValue(undefined);
       await expect(
         upgradedManager.listCuratedProjectCandidates({ activeProjectKeys: [projectKey] }),
       ).resolves.toEqual([]);
-      expect(syncAdmitted).toHaveBeenCalledWith(
-        { reason: "search" },
-        { allowEmbeddingBootstrapFallback: true },
-      );
+      // The repair is detached: the first turn never blocks on a synchronous sync.
+      expect(syncAdmitted).not.toHaveBeenCalled();
+      expect(syncPublishedIndexInBackground).toHaveBeenCalledWith({ reason: "search" });
       expect(upgradedManager.status().dirty).toBe(true);
       syncAdmitted.mockRestore();
-
-      const runSync = vi.spyOn(
-        upgradedManager as unknown as { runSync: (params?: MemorySyncParams) => Promise<void> },
-        "runSync",
-      );
-      const [projectCandidates, triggerCandidates] = await Promise.all([
-        upgradedManager.listCuratedProjectCandidates({ activeProjectKeys: [projectKey] }),
-        upgradedManager.listTriggerCandidates({ activeProjectKeys: [projectKey] }),
-      ]);
-      expect(projectCandidates).toMatchObject([
-        {
-          projectKey,
-          triggers: "legacy preference",
-          provenance: { originClass: "agent" },
-        },
-      ]);
-      expect(triggerCandidates).toMatchObject([
-        {
-          projectKey,
-          triggers: "legacy preference",
-          provenance: { originClass: "agent" },
-        },
-      ]);
-      expect(runSync).toHaveBeenCalledTimes(1);
-      expect(upgradedManager.status().dirty).toBe(false);
-      expect(
-        upgradedDb
-          .prepare(
-            `SELECT hash FROM memory_index_sources WHERE path = 'MEMORY.md' AND source = 'memory'`,
-          )
-          .get(),
-      ).toMatchObject({ hash: expect.not.stringMatching(/^$/u) });
+      syncPublishedIndexInBackground.mockRestore();
     } finally {
       await upgradedManager.close();
     }

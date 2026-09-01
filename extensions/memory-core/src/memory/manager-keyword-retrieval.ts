@@ -122,22 +122,18 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
                WHERE source = 'memory' AND hash = '' LIMIT 1`,
             )
             .get() !== undefined;
-        try {
-          // Provenance schema adoption invalidates legacy source hashes. Finish that
-          // owner-classified reindex before the first automatic candidate read.
-          if (repairPending()) {
-            await this.syncAdmitted(
-              { reason: "search" },
-              { allowEmbeddingBootstrapFallback: true },
-            );
-          }
-        } catch (err) {
-          log.warn(`memory sync failed (automatic candidates): ${formatErrorMessage(err)}`);
-        }
-        this.memorySourceProvenanceRepairPending = repairPending();
-        if (this.memorySourceProvenanceRepairPending) {
+        // Provenance schema adoption invalidates legacy source hashes. Rebuild it
+        // on the detached maintenance path so the first turn never blocks on the
+        // full reindex. Until the repaired index publishes, serve no automatic
+        // candidates to preserve the provenance boundary.
+        if (repairPending()) {
+          this.memorySourceProvenanceRepairPending = true;
+          void this.syncPublishedIndexInBackground({ reason: "search" }).catch((err) => {
+            log.warn(`memory provenance repair failed (background): ${formatErrorMessage(err)}`);
+          });
           return [];
         }
+        this.memorySourceProvenanceRepairPending = false;
       }
       return this.toCuratedMemorySearchResults(read());
     });
