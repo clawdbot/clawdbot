@@ -45,7 +45,7 @@ type LoginFailureFeedback = {
   kind: LoginFailureKind;
   title: string;
   summary: string;
-  refreshAction?: boolean;
+  refreshAction?: { label: string };
   steps: LoginFailureStep[];
   docsHref: string;
   rawError: string;
@@ -102,7 +102,7 @@ function buildFeedback(params: {
   summaryKey?: string;
   stepKeys: LoginFailureStepDefinition[];
   stepParams?: Record<string, string>;
-  refreshAction?: boolean;
+  refreshAction?: { label: string };
 }): LoginFailureFeedback {
   const docsHref = params.docsHref ?? "https://docs.openclaw.ai/web/dashboard";
   const rawError = redactLoginFailureError(params.rawError);
@@ -151,7 +151,7 @@ function resolveLoginFailureFeedback(
       rawError,
       titleKey: "chat.sidebar.serverUpdatedTitle",
       summaryKey: "chat.sidebar.serverUpdatedRefresh",
-      refreshAction: true,
+      refreshAction: { label: t("login.failure.protocol.refresh") },
       stepKeys: [],
       docsHref: "https://docs.openclaw.ai/web/control-ui",
     });
@@ -252,7 +252,7 @@ function resolveLoginFailureFeedback(
         "https://docs.openclaw.ai/web/control-ui#debuggingtesting-dev-server--remote-gateway",
       titleKey: "login.failure.protocol.title",
       summaryKey: "login.failure.protocol.summary",
-      refreshAction: true,
+      refreshAction: { label: t("login.failure.protocol.refresh") },
       stepKeys: [
         {
           key: "login.failure.protocol.stepDashboard",
@@ -328,47 +328,31 @@ function refreshLoginGatePage() {
   window.location.reload();
 }
 
-type LoginFailureStepSegment = { kind: "text"; value: string } | { kind: "command"; value: string };
-
-function segmentLoginFailureStep(text: string, commands: string[]): LoginFailureStepSegment[] {
+function renderLoginFailureStep({ text, commands }: LoginFailureStep) {
   const unmatchedCommands = new Set(commands);
   const matches = [...unmatchedCommands]
-    .map((command) => ({ command, index: text.indexOf(command) }))
-    .filter((match) => match.index >= 0)
+    .map((command) => [command, text.indexOf(command)] as const)
     .toSorted(
-      (left, right) => left.index - right.index || right.command.length - left.command.length,
+      ([left, leftIndex], [right, rightIndex]) =>
+        leftIndex - rightIndex || right.length - left.length,
     );
-  const segments: LoginFailureStepSegment[] = [];
+  const segments: (string | ReturnType<typeof renderConnectCommand>)[] = [];
   let cursor = 0;
 
-  for (const match of matches) {
-    if (match.index < cursor) {
+  for (const [command, index] of matches) {
+    if (index < cursor) {
       continue;
     }
-    if (match.index > cursor) {
-      segments.push({ kind: "text", value: text.slice(cursor, match.index) });
-    }
-    segments.push({ kind: "command", value: match.command });
-    unmatchedCommands.delete(match.command);
-    cursor = match.index + match.command.length;
+    segments.push(text.slice(cursor, index), renderConnectCommand(command));
+    unmatchedCommands.delete(command);
+    cursor = index + command.length;
   }
 
-  if (cursor < text.length || !segments.length) {
-    segments.push({ kind: "text", value: text.slice(cursor) });
-  }
+  segments.push(text.slice(cursor));
   for (const command of unmatchedCommands) {
-    if (segments.length) {
-      segments.push({ kind: "text", value: " " });
-    }
-    segments.push({ kind: "command", value: command });
+    segments.push(" ", renderConnectCommand(command));
   }
   return segments;
-}
-
-function renderLoginFailureStep(step: LoginFailureStep) {
-  return segmentLoginFailureStep(step.text, step.commands).map((segment) =>
-    segment.kind === "command" ? renderConnectCommand(segment.value) : segment.value,
-  );
 }
 
 function renderLoginFailure(feedback: LoginFailureFeedback) {
@@ -388,7 +372,7 @@ function renderLoginFailure(feedback: LoginFailureFeedback) {
               class="btn primary login-gate__failure-refresh"
               @click=${refreshLoginGatePage}
             >
-              ${t("login.failure.protocol.refresh")}
+              ${feedback.refreshAction.label}
             </button>
           `
         : nothing}
