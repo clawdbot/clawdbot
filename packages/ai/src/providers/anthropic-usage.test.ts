@@ -223,6 +223,6 @@ describe("applyAnthropicMessageDeltaUsage", () => {
 
     applyAnthropicMessageDeltaUsage(usage, {}, messageStartPromptUsage);
 
-    expect(usage.contextUsage).toEqual({ state: "unavailable" });
+    expect(usage).toMatchObject({ contextUsage: { state: "unavailable" } });
   });
 });
