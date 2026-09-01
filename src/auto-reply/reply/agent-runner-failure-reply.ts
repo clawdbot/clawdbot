@@ -36,6 +36,7 @@ import { buildProviderAuthRecoveryHint } from "../../agents/provider-auth-recove
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { stripErrorIconPrefix } from "../../shared/error-icon.js";
 import { buildCodexLoginRecovery } from "../codex-login-recovery.js";
 import {
   copyReplyPayloadMetadata,
@@ -198,10 +199,10 @@ export function buildAuthProfileFailoverFailureText(error: unknown): string | nu
 }
 
 function formatForwardedExternalRunFailureText(message: string): string {
-  const sanitized = renderUserFacingText(message, { errorContext: true })
-    .trim()
-    .replace(/^⚠️\s*/u, "")
-    .replace(/\s+/gu, " ");
+  // Keep raw message stored; format only for user-facing text via canonical sanitization.
+  const sanitized = stripErrorIconPrefix(
+    renderUserFacingText(message, { errorContext: true }).trim(),
+  ).replace(/\s+/gu, " ");
   if (!sanitized) {
     return GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
   }
@@ -352,7 +353,7 @@ export function renderPostCompactionModelFailurePayload(payload: ReplyPayload): 
     typeof payload.text === "string"
     ? copyReplyPayloadMetadata(payload, {
         ...payload,
-        text: `⚠️ Context compaction succeeded, but the later model request still failed. ${payload.text.replace(/^⚠️\s*/u, "")}`,
+        text: `⚠️ Context compaction succeeded, but the later model request still failed. ${stripErrorIconPrefix(payload.text)}`,
       })
     : payload;
 }
