@@ -468,7 +468,7 @@ describe("fleet restore runtime", () => {
     const containers = containerMock({ kind: "missing", state: "missing" });
 
     await expect(restoreFleetCell(restoreParams(containers, archive))).rejects.toThrow(
-      /fleet rm acme --force.*fleet create acme --runtime docker --no-start --image <image>.*retry fleet restore/iu,
+      /fleet rm acme --force.*original full provisioning profile.*fleet create acme --runtime docker --image <image> --port <port> --memory <memory> --cpus <cpus> --pids-limit <pids-limit> --network <bridge\|internal>.*--env KEY=VALUE.*saved provisioning record.*do not use create defaults.*retry fleet restore/iu,
     );
     expect(containers.remove).not.toHaveBeenCalled();
   });
@@ -662,11 +662,26 @@ describe("fleet restore runtime", () => {
     expect(message).toMatch(/openclaw fleet start acme/iu);
   });
 
-  it("gives recreate-and-retry guidance when a force-stopped cell disappears", async () => {
+  it("requires the original profile when a force-stopped Podman cell disappears", async () => {
     record.runtime = "podman";
+    record.hostPort = 19125;
     const archive = await createArchive({ runtime: "podman" });
     const running = inspection(true);
+    running.memory = "4294967296";
+    running.cpus = "1.5";
+    running.pidsLimit = 1024;
+    running.labels["openclaw.fleet.env-keys"] = "TENANT_REGION";
+    running.environment.TENANT_REGION = "west=1";
     const containers = containerMock(running);
+    containers.inspectNetwork.mockResolvedValue({
+      kind: "ok",
+      labels: {
+        "openclaw.fleet.tenant": "acme",
+        "openclaw.fleet.owner": cellOwnerId(record.dataDir),
+      },
+      attachedContainers: [{ id: "cell", name: record.containerName }],
+      internal: true,
+    });
     containers.stop.mockImplementation(async () => {
       running.running = false;
       running.state = "exited";
@@ -686,7 +701,7 @@ describe("fleet restore runtime", () => {
     expect(message).toMatch(/transient removal failure/iu);
     expect(message).toMatch(/previous cell container is missing/iu);
     expect(message).toMatch(
-      /fleet rm acme --force.*fleet create acme --runtime podman --no-start --image <image>.*retry fleet restore/iu,
+      /original full provisioning profile.*fleet create acme --runtime podman --image <image> --port <port> --memory <memory> --cpus <cpus> --pids-limit <pids-limit> --network <bridge\|internal>.*--disk <disk>.*--env KEY=VALUE.*saved provisioning record.*do not use create defaults.*retry fleet restore/iu,
     );
     expect(message).not.toMatch(/fleet start acme/iu);
     expect(containers.start).not.toHaveBeenCalled();

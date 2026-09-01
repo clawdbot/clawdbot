@@ -219,7 +219,23 @@ openclaw fleet restore acme --from ./acme.tgz
 
 These are host-operator-privileged commands. Archives contain tenant state and auth secrets, are created with mode `0600`, and must be stored like credentials. Backup refuses a running cell so SQLite state is captured consistently. Restore refuses a running cell unless `--force` is supplied, replaces only that tenant's state, rotates the Gateway token, and prints the new token once. Fleet backs up one tenant at a time; all-tenant backup is a separate operator action.
 
-Restore needs an existing stopped container because its inspected runtime profile supplies the replacement limits, user mapping, environment provenance, and image. If the registered container was removed out of band, first run `openclaw fleet rm <tenant> --force` without `--purge-data`, then run `openclaw fleet create <tenant> --runtime <runtime> --no-start --image <image>`, where `<runtime>` is the same value named by the restore error (`docker` or `podman`), before retrying restore. `fleet create` defaults to Docker, so omitting `--runtime` can recreate a Podman cell with the wrong runtime. The first removal keeps both tenant data directories intact.
+Restore needs an existing stopped container because its inspected runtime profile supplies the replacement limits, user mapping, environment provenance, and image. If the registered container was removed out of band, first run `openclaw fleet rm <tenant> --force` without `--purge-data`, then recreate a stopped cell with the complete original provisioning profile before retrying restore:
+
+```bash
+openclaw fleet create <tenant> \
+  --runtime <runtime> \
+  --image <image> \
+  --port <port> \
+  --memory <memory> \
+  --cpus <cpus> \
+  --pids-limit <pids-limit> \
+  --network <bridge|internal> \
+  [--disk <disk>] \
+  [--env KEY=VALUE ...] \
+  --no-start
+```
+
+Replace every placeholder with the original value and repeat `--env` for every original environment entry; omit only options that were not originally set. If any original value is unknown, recover it from the saved provisioning command or deployment record before recreating the cell. Do not guess or rely on `fleet create` defaults: they can change the cell's port, network egress, resource limits, or environment. The `<runtime>` value is the one named by the restore error (`docker` or `podman`). The first removal keeps both tenant data directories intact.
 
 Both commands accept `--max-bytes <bytes>` to bound archived or extracted file data, and both apply the same fixed one-million budget of archive path segments so metadata-only archive bombs cannot exhaust host inodes and every accepted backup stays restorable. Backup accepts `--out <path>` and both commands support `--json`.
 
