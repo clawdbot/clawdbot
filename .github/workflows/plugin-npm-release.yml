@@ -1552,6 +1552,9 @@ jobs:
         run: |
           set -euo pipefail
           unset NODE_AUTH_TOKEN NPM_TOKEN NODE_OPTIONS
+          # npm requires distinct user and global config sources, even when both are empty.
+          npmrc="$(mktemp "${RUNNER_TEMP}/plugin-npm-oidc.XXXXXX")"
+          trap 'rm -f "$npmrc"' EXIT
           # Publish the attested bytes; rebuilding here loses the candidate's patched install.
           node scripts/release-tooling-identity.mjs verify \
             --repository "$OPENCLAW_RELEASE_TOOLING_REPOSITORY" \
@@ -1564,7 +1567,7 @@ jobs:
             --release-publish-full-ref "$OPENCLAW_RELEASE_PUBLISH_FULL_REF" \
             --release-publish-parent-state-policy "$OPENCLAW_RELEASE_PUBLISH_PARENT_STATE_POLICY" \
             --allow-prevalidated-ref
-          NPM_CONFIG_USERCONFIG=/dev/null \
+          NPM_CONFIG_USERCONFIG="$npmrc" \
             NPM_CONFIG_GLOBALCONFIG=/dev/null \
             NPM_CONFIG_REGISTRY=https://registry.npmjs.org/ \
             timeout --signal=TERM --kill-after=10s 300s npm publish "$TARBALL_PATH" \
