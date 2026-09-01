@@ -396,6 +396,30 @@ describe("agent runtime plugin registries", () => {
     });
   });
 
+  it("carries low-level reply policy without rebinding the loader's cached registry", async () => {
+    const config = { plugins: { enabled: false } } satisfies OpenClawConfig;
+    const cachedRegistry = createEmptyPluginRegistry();
+    hoisted.loadPluginRegistryHandle.mockReturnValue(cachedRegistry);
+    const pluginRegistry = loadAgentRuntimePluginRegistryHandle({
+      config,
+      workspaceDir: "/tmp/workspace",
+      allowGatewaySubagentBinding: true,
+    });
+    const error = await ensureSelectedAgentHarnessPlugin({
+      provider: "openai",
+      modelId: "gpt-5.5",
+      agentHarnessRuntimeOverride: "codex",
+      workspaceDir: "/tmp/workspace",
+      pluginRegistry,
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("plugins disabled");
+    expect(getPluginRuntimeLoadContext(pluginRegistry)?.activationSourceConfig).toBe(config);
+    expect(getPluginRuntimeLoadContext(cachedRegistry)).toBeUndefined();
+    expect(hoisted.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+  });
+
   it("keeps an explicit metadata generation source-default without Gateway selection", () => {
     const config = {} as never;
     const metadataSnapshot = createMetadataSnapshot();

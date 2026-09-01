@@ -193,6 +193,52 @@ describe("harness runtime plugins", () => {
     expect(formatForLog((error as Error).message)).toContain('Run "openclaw doctor --fix"');
   });
 
+  it("reports explicit library policy without a prepared registry context", async () => {
+    const error = await ensureSelectedAgentHarnessPlugin({
+      provider: "openai",
+      modelId: "gpt-5.5",
+      config: { plugins: { enabled: false } },
+      agentHarnessRuntimeOverride: "codex",
+      workspaceDir: "/tmp/workspace",
+      pluginRegistry: undefined,
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("plugins disabled");
+    expect((error as Error).message).not.toContain("absent from this prepared plugin generation");
+  });
+
+  it("reports a missing activatable owner as degraded when a sibling owner is blocked", async () => {
+    const config = { plugins: { allow: ["ready-owner"] } } satisfies OpenClawConfig;
+    const pluginRegistry = createEmptyPluginRegistry();
+    attachPreparedPluginFacts(
+      pluginRegistry,
+      config,
+      makeRegistry(
+        ["blocked-owner", "ready-owner"].map((id) => ({
+          id,
+          channels: [],
+          origin: "bundled" as const,
+          activation: { onAgentHarnesses: ["custom-harness"] },
+        })),
+      ),
+    );
+
+    const error = await ensureSelectedAgentHarnessPlugin({
+      provider: "custom-provider",
+      modelId: "custom-model",
+      config,
+      agentHarnessRuntimeOverride: "custom-harness",
+      workspaceDir: "/tmp/workspace",
+      pluginRegistry,
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("reason=owner-plugin-degraded");
+    expect((error as Error).message).toContain('Owner plugin "blocked-owner" is not activatable');
+    expect((error as Error).message).toContain("ready-owner");
+  });
+
   it("reports the prepared owner's loader failure before activation policy", async () => {
     const pluginRegistry = createEmptyPluginRegistry();
     const config = { plugins: { allow: ["telegram"] } } satisfies OpenClawConfig;
