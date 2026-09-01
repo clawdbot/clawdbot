@@ -3527,7 +3527,7 @@ src/plugins/runtime/runtime-web-channel-plugin.ts	1
 src/plugins/schema-validator.ts	6
 src/plugins/sdk-alias.ts	3
 src/plugins/services.ts	1
-src/plugins/session-catalog-history-import.ts	2
+src/plugins/session-catalog-history-import.ts	1
 src/plugins/setup-registry-loader-state.ts	1
 src/plugins/setup-registry.ts	12
 src/plugins/slots.ts	3
