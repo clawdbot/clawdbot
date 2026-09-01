@@ -801,6 +801,61 @@ describe("POST /tools/invoke", () => {
     expect(lastCreateOpenClawToolsContext?.disablePluginTools).toBe(false);
   });
 
+  it("keeps batch Tool Search reachable through the non-model Gateway invoke API", async () => {
+    setMainAllowedTools({ allow: ["tools_invoke_test", "browser"] });
+    cfg = {
+      ...cfg,
+      tools: { toolSearch: { mode: "tools" } },
+    };
+
+    const res = await invokeToolAuthed({
+      tool: "tool_search",
+      args: {
+        queries: [
+          { query: "invoke test", limit: 2 },
+          { query: "browser", limit: 1 },
+        ],
+      },
+      sessionKey: "main",
+    });
+
+    const body = await expectOkInvokeResponse(res);
+    const content = body.result?.content as Array<{ text?: string }> | undefined;
+    const payload = JSON.parse(content?.[0]?.text ?? "{}") as {
+      results?: Array<{ query?: string; candidates?: Array<{ name?: string }> }>;
+    };
+    expect(payload.results).toEqual([
+      expect.objectContaining({
+        query: "invoke test",
+        candidates: expect.arrayContaining([
+          expect.objectContaining({ name: "tools_invoke_test" }),
+        ]),
+      }),
+      expect.objectContaining({
+        query: "browser",
+        candidates: [expect.objectContaining({ name: "browser" })],
+      }),
+    ]);
+    expect(firstHookCallArg().toolName).toBe("tool_search");
+    expect(lastCreateOpenClawToolsContext?.disablePluginTools).toBe(false);
+  });
+
+  it("does not expose Gateway Tool Search when the feature is disabled", async () => {
+    setMainAllowedTools({ allow: ["tools_invoke_test"] });
+
+    const res = await invokeToolAuthed({
+      tool: "tool_search",
+      args: { queries: [{ query: "invoke test" }] },
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({
+      ok: false,
+      error: { type: "not_found", message: "Tool not available: tool_search" },
+    });
+  });
+
   it("allows the requested plugin tool through Gateway profile filtering", async () => {
     cfg = {
       ...cfg,

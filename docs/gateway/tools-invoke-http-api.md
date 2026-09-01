@@ -70,6 +70,13 @@ Fields:
 - `idempotencyKey` (string, optional): used to derive a stable tool-call id for the invocation.
 - `dryRun` (boolean, optional): reserved for future use; currently ignored.
 
+When [Tool Search](/tools/tool-search) is enabled, trusted non-model callers may
+invoke `tool_search` here with either scalar `{ query, limit? }` arguments or a
+bounded `{ queries: [{ query, limit? }, ...] }` batch. Search candidates come
+only from the session-scoped tool inventory after the policy and Gateway HTTP
+deny filters described below. The model-visible Tool Search tool remains a
+separate scalar-only contract.
+
 ## Policy + routing behavior
 
 Tool availability is filtered through the same policy chain used by Gateway agents:

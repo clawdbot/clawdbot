@@ -231,8 +231,26 @@ provider compatibility pass that removes object-closure keywords cannot route
 undeclared legacy batch fields into the model-facing parser. A batch-only
 payload is rejected at the model-visible handler even after that normalization.
 
-The separately named internal request entry point retains batch parsing and
-execution for non-model callers. Internal batches return
+Authenticated non-model callers retain batch search through Gateway
+`tools.invoke` (or `POST /tools/invoke`) with `name`/`tool` set to `tool_search`.
+This path is available only while Tool Search is enabled and builds its catalog
+from the caller's session-scoped, policy-filtered Gateway tool inventory. For
+example:
+
+```json
+{
+  "name": "tool_search",
+  "sessionKey": "main",
+  "args": {
+    "queries": [
+      { "query": "today's calendar events", "limit": 3 },
+      { "query": "messages needing attention", "limit": 3 }
+    ]
+  }
+}
+```
+
+Non-model batches return
 `{ results: [{ query, candidates }] }` in request order and accept at most 16
 queries, 50 requested candidates, 512 characters per query, and 512 UTF-8 bytes
 across the serialized query list. If the complete batch would exceed the
