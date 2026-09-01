@@ -1036,11 +1036,15 @@ class TalkModeManagerTest {
                   if (early) webSocket.send(final)
                   """{"runId":"owned-run","agentId":"voice","agentSessionKey":"$agentKey"}"""
                 }
+
                 "talk.session.submitToolResult" -> {
                   result.complete(checkNotNull(params))
                   "{}"
                 }
-                else -> null
+
+                else -> {
+                  null
+                }
               }
             },
           ) { proof ->

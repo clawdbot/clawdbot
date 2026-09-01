@@ -382,6 +382,7 @@ class ChatControllerOutboxTest {
           }
           response
         }
+
         "chat.history" -> {
           val params =
             runCatching {
@@ -407,7 +408,11 @@ class ChatControllerOutboxTest {
           val explicit = (json.parseToJsonElement(explicitJson) as JsonArray).map { it.toString() }
           """{"sessionId":"session-1","messages":[${(explicit + echoed).joinToString(",")}]}"""
         }
-        "chat.metadata" -> """{"commands":[],"models":$metadataModelsJson}"""
+
+        "chat.metadata" -> {
+          """{"commands":[],"models":$metadataModelsJson}"""
+        }
+
         "sessions.patch" -> {
           settingsPatchStarted?.complete(Unit)
           settingsPatchGate?.await()
@@ -416,7 +421,10 @@ class ChatControllerOutboxTest {
           }
           "{}"
         }
-        else -> "{}"
+
+        else -> {
+          "{}"
+        }
       }
     }
   }

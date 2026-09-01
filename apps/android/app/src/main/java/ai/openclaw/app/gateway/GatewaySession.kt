@@ -1396,7 +1396,10 @@ class GatewaySession(
       scopes: List<String>,
     ): List<String>? =
       when (role.trim()) {
-        "node" -> emptyList()
+        "node" -> {
+          emptyList()
+        }
+
         // The Gateway bounds setup-code handoff to a closed mobile profile. Persist
         // only the supported full or limited scope set and drop unexpected extras.
         "operator" -> {
@@ -1411,7 +1414,10 @@ class GatewaySession(
             )
           scopes.filter { allowedOperatorScopes.contains(it) }.distinct().sorted()
         }
-        else -> null
+
+        else -> {
+          null
+        }
       }
 
     private fun persistBootstrapHandoffToken(
@@ -1568,20 +1574,28 @@ class GatewaySession(
 
       val authJson =
         when {
-          selectedAuth.authToken != null ->
+          selectedAuth.authToken != null -> {
             buildJsonObject {
               put("token", JsonPrimitive(selectedAuth.authToken))
               selectedAuth.authDeviceToken?.let { put("deviceToken", JsonPrimitive(it)) }
             }
-          selectedAuth.authBootstrapToken != null ->
+          }
+
+          selectedAuth.authBootstrapToken != null -> {
             buildJsonObject {
               put("bootstrapToken", JsonPrimitive(selectedAuth.authBootstrapToken))
             }
-          selectedAuth.authPassword != null ->
+          }
+
+          selectedAuth.authPassword != null -> {
             buildJsonObject {
               put("password", JsonPrimitive(selectedAuth.authPassword))
             }
-          else -> null
+          }
+
+          else -> {
+            null
+          }
         }
 
       val connectScopes = resolveConnectScopes(selectedAuth)
@@ -2068,12 +2082,25 @@ class GatewaySession(
     val authBootstrapToken = if (authToken == null) explicitBootstrapToken else null
     val authSource =
       when {
-        authDeviceToken != null || (explicitGatewayToken == null && authToken != null) ->
+        authDeviceToken != null || (explicitGatewayToken == null && authToken != null) -> {
           GatewayConnectAuthSource.DEVICE_TOKEN
-        authToken != null -> GatewayConnectAuthSource.SHARED_TOKEN
-        authBootstrapToken != null -> GatewayConnectAuthSource.BOOTSTRAP_TOKEN
-        explicitPassword != null -> GatewayConnectAuthSource.PASSWORD
-        else -> GatewayConnectAuthSource.NONE
+        }
+
+        authToken != null -> {
+          GatewayConnectAuthSource.SHARED_TOKEN
+        }
+
+        authBootstrapToken != null -> {
+          GatewayConnectAuthSource.BOOTSTRAP_TOKEN
+        }
+
+        explicitPassword != null -> {
+          GatewayConnectAuthSource.PASSWORD
+        }
+
+        else -> {
+          GatewayConnectAuthSource.NONE
+        }
       }
     return SelectedConnectAuth(
       authToken = authToken,
@@ -2159,7 +2186,9 @@ internal fun shouldPauseGatewayReconnectAfterAuthFailure(
   if (code == "AUTH_RATE_LIMITED") return true
   when (details?.recommendedNextStep) {
     "wait_then_retry" -> return false
+
     "retry_with_device_token" -> return !pendingDeviceTokenRetry
+
     "update_auth_configuration",
     "update_auth_credentials",
     "review_auth_configuration",
@@ -2177,10 +2206,13 @@ internal fun shouldPauseGatewayReconnectAfterAuthFailure(
     "CONTROL_UI_DEVICE_IDENTITY_REQUIRED",
     "DEVICE_IDENTITY_REQUIRED",
     -> true
+
     // The first shared-token mismatch may schedule one trusted stored-device-token retry.
     // Once no retry is pending, keep the terminal recovery action visible until credentials change.
     "AUTH_TOKEN_MISMATCH" -> !pendingDeviceTokenRetry
+
     "PROTOCOL_MISMATCH" -> true
+
     else -> false
   }
 }
@@ -2276,7 +2308,10 @@ private fun JsonElement?.asBooleanOrNull(): Boolean? =
         else -> null
       }
     }
-    else -> null
+
+    else -> {
+      null
+    }
   }
 
 private fun JsonElement?.asLongOrNull(): Long? =

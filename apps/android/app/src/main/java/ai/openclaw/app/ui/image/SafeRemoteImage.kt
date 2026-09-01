@@ -302,6 +302,7 @@ private fun InetAddress.isSpecialPurposeAddress(): Boolean =
         (first == 203 && second == 0 && third == 113) ||
         first >= 224
     }
+
     is Inet6Address -> {
       val bytes = address
       val first = bytes[0].toInt() and 0xff
@@ -317,7 +318,10 @@ private fun InetAddress.isSpecialPurposeAddress(): Boolean =
         bytes.matchesPrefix(0x20, 0x02) ||
         (bytes.matchesPrefix(0x3f, 0xff) && (bytes[2].toInt() and 0xf0) == 0)
     }
-    else -> true
+
+    else -> {
+      true
+    }
   }
 
 private fun ByteArray.matchesPrefix(vararg prefix: Int): Boolean = matchesAt(0, *prefix)

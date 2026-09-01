@@ -74,11 +74,13 @@ private class ChatRichBlockBitmapCache(
         failures.remove(request)
         images.put(request, result.value)
       }
+
       ChatRichBlockResult.Failure -> {
         failures[request] = Unit
         while (failures.size > RENDER_NEGATIVE_CACHE_ENTRIES) failures.remove(failures.entries.first().key)
       }
-      ChatRichBlockResult.TransientFailure -> Unit
+
+      ChatRichBlockResult.TransientFailure -> {}
     }
   }
 }

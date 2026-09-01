@@ -8,6 +8,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -362,22 +363,6 @@ vi.mock("../plugins/installed-plugin-index-store-write.js", async (importOrigina
 });
 
 vi.mock("../commands/doctor/shared/post-core-plugin-convergence.js", () => ({
-  convergenceWarningsToOutcomes: (convergence: {
-    warnings: Array<{ pluginId?: string; message: string }>;
-    errored: boolean;
-  }) => ({
-    warnings: convergence.warnings,
-    outcomes: convergence.warnings
-      .filter((warning): warning is { pluginId: string; message: string } =>
-        Boolean(warning.pluginId),
-      )
-      .map((warning) => ({
-        pluginId: warning.pluginId,
-        status: "error",
-        message: warning.message,
-      })),
-    errored: convergence.errored,
-  }),
   runPostCorePluginConvergence: vi.fn(async (params: { baselineInstallRecords?: unknown }) => ({
     changes: [],
     warnings: [],
@@ -3456,6 +3441,82 @@ describe("update-cli", () => {
       env: { OPENCLAW_UPDATE_IN_PROGRESS: "0" },
     });
   });
+
+  it.each([false, true].flatMap((json) => [false, true].map((errored) => ({ json, errored }))))(
+    "preserves convergence diagnostic output (json=$json, errored=$errored)",
+    async ({ json, errored }) => {
+      const repairWarning = {
+        reason: "Package lookup deferred.",
+        message: "Package lookup deferred.",
+        guidance: ["Retry plugin repair."],
+      };
+      const smokeWarning = {
+        pluginId: "reporting-fixture",
+        reason: "missing-main-entry: entry missing",
+        message: 'Plugin "reporting-fixture" failed payload verification.',
+        guidance: ["Inspect the plugin entry."],
+      };
+      const notice = {
+        reason: "Retained plugin remains available.",
+        message: "Retained plugin remains available.",
+        guidance: [],
+      };
+      const warnings = errored ? [repairWarning, smokeWarning] : [repairWarning];
+      runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
+        ...postCoreConvergenceResult({ warnings, errored }),
+        notices: [notice],
+      });
+      const { updatePluginsAfterCoreUpdate } =
+        await import("./update-cli/update-command-plugins.js");
+
+      const result = await updatePluginsAfterCoreUpdate({
+        root: process.cwd(),
+        channel: "stable",
+        configSnapshot: baseSnapshot,
+        timeoutMs: 60_000,
+        json,
+      });
+
+      expect(result).toEqual({
+        status: errored ? "error" : "warning",
+        changed: false,
+        warnings: [...warnings, notice],
+        sync: {
+          changed: false,
+          switchedToBundled: [],
+          switchedToNpm: [],
+          warnings: [],
+          errors: [],
+        },
+        npm: {
+          changed: false,
+          outcomes: errored
+            ? [{ pluginId: "reporting-fixture", status: "error", message: smokeWarning.message }]
+            : [],
+        },
+        integrityDrifts: [],
+      });
+      const logs = vi
+        .mocked(defaultRuntime.log)
+        .mock.calls.map(([value]) => stripAnsi(String(value)));
+      expect(logs).toEqual(
+        json
+          ? []
+          : [
+              "",
+              "Updating plugins...",
+              repairWarning.message,
+              "  Retry plugin repair.",
+              ...(errored ? [smokeWarning.message, "  Inspect the plugin entry."] : []),
+              notice.message,
+              errored
+                ? "npm plugins: 0 updated, 0 unchanged, 1 failed."
+                : "No plugin updates needed.",
+              ...(errored ? [smokeWarning.message] : []),
+            ],
+      );
+    },
+  );
 
   it("keeps fresh doctor output off stdout during json post-core resume", async () => {
     vi.mocked(runExec).mockImplementation(async (_file, args) => ({

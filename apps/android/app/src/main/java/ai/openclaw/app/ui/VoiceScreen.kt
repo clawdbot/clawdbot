@@ -144,19 +144,23 @@ fun VoiceScreen(
       if (granted) {
         // Gateway readiness can change while the system permission dialog is open.
         when (pendingAction) {
-          VoiceAction.Talk ->
+          VoiceAction.Talk -> {
             if (talkSetupReadiness.realtimeTalk.requiresSetup) {
               onOpenVoiceSettings()
             } else {
               viewModel.setTalkModeEnabled(true)
             }
-          VoiceAction.Dictation ->
+          }
+
+          VoiceAction.Dictation -> {
             if (talkSetupReadiness.dictation.requiresSetup) {
               onOpenVoiceSettings()
             } else {
               viewModel.setMicEnabled(true)
             }
-          null -> Unit
+          }
+
+          null -> {}
         }
       }
       pendingAction = null

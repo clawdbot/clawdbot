@@ -436,11 +436,21 @@ private class OpenedAndroidClientDatabases private constructor(
   private suspend fun resolvePendingGatewayRemovals(registeredGatewayIds: Set<String>?) {
     for (removal in clientState.controlDao().gatewayRemovals()) {
       when {
-        removal.phase == GATEWAY_REMOVAL_CACHE_PENDING -> completeCacheRemoval(removal.gatewayId, propagateFailure = false)
-        removal.phase == GATEWAY_REMOVAL_COMMITTING -> commitGatewayRemoval(removal.gatewayId)
-        registeredGatewayIds != null && removal.gatewayId !in registeredGatewayIds ->
+        removal.phase == GATEWAY_REMOVAL_CACHE_PENDING -> {
+          completeCacheRemoval(removal.gatewayId, propagateFailure = false)
+        }
+
+        removal.phase == GATEWAY_REMOVAL_COMMITTING -> {
           commitGatewayRemoval(removal.gatewayId)
-        registeredGatewayIds != null -> cancelGatewayRemoval(removal.gatewayId)
+        }
+
+        registeredGatewayIds != null && removal.gatewayId !in registeredGatewayIds -> {
+          commitGatewayRemoval(removal.gatewayId)
+        }
+
+        registeredGatewayIds != null -> {
+          cancelGatewayRemoval(removal.gatewayId)
+        }
       }
     }
   }

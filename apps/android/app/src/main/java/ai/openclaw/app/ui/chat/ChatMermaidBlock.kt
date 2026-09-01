@@ -150,8 +150,11 @@ internal fun ChatMermaidBlock(source: String) {
     ) {
       Box(modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp)) {
         when {
-          showSource -> Column(modifier = Modifier.padding(top = 48.dp)) { ChatCodeBlock(source, language = null) }
-          rendered != null ->
+          showSource -> {
+            Column(modifier = Modifier.padding(top = 48.dp)) { ChatCodeBlock(source, language = null) }
+          }
+
+          rendered != null -> {
             Image(
               bitmap = rendered.bitmap.asImageBitmap(),
               contentDescription = nativeString("Mermaid diagram"),
@@ -162,7 +165,9 @@ internal fun ChatMermaidBlock(source: String) {
                   .clickable(role = Role.Button, onClickLabel = nativeString("Expand diagram")) { expanded = true }
                   .padding(start = 8.dp, end = 8.dp, top = 48.dp, bottom = 8.dp),
             )
-          else ->
+          }
+
+          else -> {
             Column(modifier = Modifier.padding(start = 10.dp, end = 10.dp, top = 48.dp, bottom = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
               Text(
                 text =
@@ -176,6 +181,7 @@ internal fun ChatMermaidBlock(source: String) {
               )
               ChatCodeBlock(source, language = null)
             }
+          }
         }
         Surface(modifier = Modifier.align(Alignment.TopEnd), shape = RoundedCornerShape(8.dp), color = colors.surfaceRaised.copy(alpha = 0.92f)) {
           Row {

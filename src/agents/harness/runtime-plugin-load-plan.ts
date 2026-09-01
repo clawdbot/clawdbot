@@ -172,7 +172,7 @@ export function createAgentRuntimeMetadataPluginIdScope(params: {
   workspaceDir: string;
   selections: readonly AgentHarnessPluginSelection[];
   shorthandModelIds?: readonly string[];
-}): PluginMetadataSnapshotPluginIdScope {
+}): PluginMetadataSnapshotPluginIdScope & { key: string } {
   return {
     key: hashJson({
       kind: "agent-runtime",

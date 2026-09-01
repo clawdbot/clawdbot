@@ -105,9 +105,12 @@ internal fun ChatMathBlock(
               bitmap = result.value.bitmap
               failed = false
             }
+
             ChatRichBlockResult.Failure,
             ChatRichBlockResult.TransientFailure,
-            -> failed = true
+            -> {
+              failed = true
+            }
           }
         }
       onDispose { subscription.cancel() }

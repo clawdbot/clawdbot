@@ -1,9 +1,12 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type {
   SkillsLibraryListResult,
   SkillsLibraryReadResult,
   SkillsLibraryReceipt,
   SkillsLibrarySaveParams,
+  SkillsLibraryUploadParams,
+  SkillsLibraryUploadResult,
 } from "../../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { runQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import {
@@ -314,6 +317,55 @@ describe("skill library real Gateway identity boundary", () => {
             }),
             "FORBIDDEN",
           );
+
+          const { default: JSZip } = await import("jszip");
+          const zipContent =
+            "---\nname: upload-proof\ndescription: Synthetic quota boundary proof.\n---\n# Upload proof\n";
+          const zip = new JSZip().file("SKILL.md", zipContent);
+          const bytes = await zip.generateAsync({ type: "nodebuffer" });
+          const sha256 = createHash("sha256").update(bytes).digest("hex");
+          const upload = (client: SkillLibraryWireClient, params: SkillsLibraryUploadParams) =>
+            client.request<SkillsLibraryUploadResult>("skills.library.upload", params);
+          const begin = (client: SkillLibraryWireClient, slug: string) =>
+            upload(client, { action: "begin", slug, sizeBytes: bytes.length, sha256 });
+          for (let index = 0; index < 16; index++) {
+            await expect(begin(alice, `pending-${index}`)).resolves.toMatchObject({
+              uploadId: expect.any(String),
+              offset: 0,
+            });
+          }
+          // The quota follows the person, including their separate administrator connection.
+          for (const client of [alice, aliceAdmin]) {
+            await expectLibraryError(begin(client, "over-profile-limit"), "LIMIT");
+          }
+          const begun = await begin(bob, "upload-proof");
+          if (!("uploadId" in begun)) {
+            throw new Error("Expected Bob's upload ID");
+          }
+          await expect(
+            upload(bob, {
+              action: "chunk",
+              uploadId: begun.uploadId,
+              offset: 0,
+              data: bytes.toString("base64"),
+            }),
+          ).resolves.toMatchObject({ uploadId: begun.uploadId, offset: bytes.length });
+          const published = await upload(bob, { action: "commit", uploadId: begun.uploadId });
+          if (!("entry" in published)) {
+            throw new Error("Expected Bob's publication receipt");
+          }
+          expect(published).toMatchObject({
+            state: "published",
+            entry: { ownerProfileId: bobList.profileId },
+          });
+          expect((await read(bob, published.entry.skillId)).content).toBe(zipContent);
+          await expect(
+            upload(bob, { action: "commit", uploadId: begun.uploadId }),
+          ).resolves.toMatchObject({
+            state: "unchanged",
+            entry: { skillId: published.entry.skillId },
+          });
+          await expectLibraryError(begin(alice, "still-over-profile-limit"), "LIMIT");
         },
         async () => {
           for (const client of clients.toReversed()) {
