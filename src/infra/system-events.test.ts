@@ -78,6 +78,7 @@ describe("system events (session routing)", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllEnvs();
   });
 
   it("does not leak session-scoped events into main", async () => {
@@ -339,6 +340,35 @@ describe("system events (session routing)", () => {
       {
         text: "Refreshed managed return",
         sessionDeliveryAckId: "delivery-1",
+      },
+    ]);
+  });
+
+  it("deduplicates explicit and ambient paths for the same durable delivery", () => {
+    const sessionKey = "agent:main:durable-state-dir";
+    const stateDir = "/tmp/openclaw-system-event-state";
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    expect(
+      enqueueSystemEvent("Recovered delegate return", {
+        sessionKey,
+        trusted: true,
+        sessionDeliveryAckId: "delivery-1",
+        sessionDeliveryAckStateDir: stateDir,
+      }),
+    ).toBe(true);
+    expect(
+      enqueueSystemEvent("Recovered delegate return", {
+        sessionKey,
+        trusted: true,
+        sessionDeliveryAckId: "delivery-1",
+      }),
+    ).toBe(false);
+
+    expect(peekSystemEventEntries(sessionKey)).toMatchObject([
+      {
+        sessionDeliveryAckId: "delivery-1",
+        sessionDeliveryAckStateDir: stateDir,
       },
     ]);
   });

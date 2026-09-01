@@ -109,6 +109,15 @@ function normalizeTraceparent(traceparent?: string): string | undefined {
 
 type ReceiptOptions = { allowDuplicate?: boolean };
 
+function resolveSessionDeliveryAckStateDir(options: SystemEventOptions): string | undefined {
+  if (!options.sessionDeliveryAckId) {
+    return undefined;
+  }
+  // Explicit and ambient paths can name the same durable row across restart.
+  // Normalize before dedupe so concurrent recovery cannot create two prompt slots.
+  return options.sessionDeliveryAckStateDir ?? process.env.OPENCLAW_STATE_DIR;
+}
+
 function requireSessionKey(key?: string | null): string {
   const trimmed = normalizeOptionalString(key) ?? "";
   if (!trimmed) {
@@ -222,6 +231,7 @@ function enqueueOwnedSystemEventEntry(
   const normalizedDeliveryContext = normalizeDeliveryContext(options.deliveryContext);
   const normalizedTraceparent = normalizeTraceparent(options?.traceparent);
   const normalizedOwnerAgentId = resolveSystemEventOptionsOwnerAgentId(options);
+  const sessionDeliveryAckStateDir = resolveSessionDeliveryAckStateDir(options);
   applyContextKeyPolicy(entry, normalizedContextKey);
   const event: SystemEvent = {
     id: generateSecureUuid(),
@@ -230,9 +240,7 @@ function enqueueOwnedSystemEventEntry(
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
     ...(options.sessionDeliveryAckId ? { sessionDeliveryAckId: options.sessionDeliveryAckId } : {}),
-    ...(options.sessionDeliveryAckStateDir
-      ? { sessionDeliveryAckStateDir: options.sessionDeliveryAckStateDir }
-      : {}),
+    ...(sessionDeliveryAckStateDir ? { sessionDeliveryAckStateDir } : {}),
     ...(options.trusted === true && options.sessionDeliveryAwaitsTurnAdoption
       ? { sessionDeliveryAwaitsTurnAdoption: true }
       : {}),
@@ -375,6 +383,7 @@ function replaceSystemEventEntry(text: string, options: SystemEventOptions): Sys
   const normalizedDeliveryContext = normalizeDeliveryContext(options.deliveryContext);
   const normalizedTraceparent = normalizeTraceparent(options.traceparent);
   const normalizedOwnerAgentId = resolveSystemEventOptionsOwnerAgentId(options);
+  const sessionDeliveryAckStateDir = resolveSessionDeliveryAckStateDir(options);
   const replacement: SystemEvent = {
     id: generateSecureUuid(),
     text: cleaned,
@@ -382,9 +391,7 @@ function replaceSystemEventEntry(text: string, options: SystemEventOptions): Sys
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
     ...(options.sessionDeliveryAckId ? { sessionDeliveryAckId: options.sessionDeliveryAckId } : {}),
-    ...(options.sessionDeliveryAckStateDir
-      ? { sessionDeliveryAckStateDir: options.sessionDeliveryAckStateDir }
-      : {}),
+    ...(sessionDeliveryAckStateDir ? { sessionDeliveryAckStateDir } : {}),
     ...(options.trusted === true && options.expectedSessionId
       ? { expectedSessionId: options.expectedSessionId }
       : {}),
