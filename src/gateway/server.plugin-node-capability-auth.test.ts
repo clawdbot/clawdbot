@@ -368,9 +368,12 @@ async function withCanvasGatewayHarness(params: {
   run: (ctx: {
     listener: Awaited<ReturnType<typeof listen>>;
     clients: Set<GatewayWsClient>;
+    getDispatches: () => { http: number; ws: number };
   }) => Promise<void>;
 }) {
   const clients = new Set<GatewayWsClient>();
+  let httpDispatches = 0;
+  let wsDispatches = 0;
   const canvasWss = new WebSocketServer({
     noServer: true,
     maxPayload: MAX_PREAUTH_PAYLOAD_BYTES,
@@ -408,7 +411,11 @@ async function withCanvasGatewayHarness(params: {
         res.end("A2UI assets not found");
         return true;
       }
-      return canvasHandler.handleHttpRequest(req, res);
+      const handled = await canvasHandler.handleHttpRequest(req, res);
+      if (handled) {
+        httpDispatches += 1;
+      }
+      return handled;
     },
     resolvePluginNodeCapabilityRoute:
       params.resolvePluginNodeCapabilityRoute ?? (() => ({ surface: "canvas" })),
@@ -424,8 +431,13 @@ async function withCanvasGatewayHarness(params: {
   attachGatewayUpgradeHandler({
     httpServer,
     wss,
-    handlePluginUpgrade: async (req, socket, head) =>
-      canvasHandler.handleUpgrade(req, socket, head),
+    handlePluginUpgrade: async (req, socket, head) => {
+      const handled = canvasHandler.handleUpgrade(req, socket, head);
+      if (handled) {
+        wsDispatches += 1;
+      }
+      return handled;
+    },
     resolvePluginNodeCapabilityRoute:
       params.resolvePluginNodeCapabilityRoute ?? (() => ({ surface: "canvas" })),
     clients,
@@ -438,7 +450,11 @@ async function withCanvasGatewayHarness(params: {
 
   const listener = await listen(httpServer, params.listenHost);
   try {
-    await params.run({ listener, clients });
+    await params.run({
+      listener,
+      clients,
+      getDispatches: () => ({ http: httpDispatches, ws: wsDispatches }),
+    });
   } finally {
     for (const ws of canvasWss.clients) {
       ws.terminate();
@@ -490,7 +506,7 @@ describe("gateway plugin node capability auth", () => {
       await withCanvasGatewayHarness({
         resolvedAuth: tokenResolvedAuth,
         handleHttpRequest: allowCanvasHostHttp,
-        run: async ({ listener, clients }) => {
+        run: async ({ listener, clients, getDispatches }) => {
           const host = "127.0.0.1";
           const pendingNodeCapability = "pending-node";
           const operatorCapability = "operator-cap";
@@ -498,7 +514,10 @@ describe("gateway plugin node capability auth", () => {
           const activeNodeCapability = "active-node";
           const activeCanvasPath = scopedCanvasPath(activeNodeCapability, `${CANVAS_HOST_PATH}/`);
           const activeWsPath = scopedCanvasPath(activeNodeCapability, CANVAS_WS_PATH);
-          const proof: Record<string, { http: number; ws: number }> = {};
+          const proof: Record<
+            string,
+            { http: number; ws: number; dispatches: { http: number; ws: number } }
+          > = {};
 
           const unauthCanvas = await fetchCanvas(
             `http://${host}:${listener.port}${CANVAS_HOST_PATH}/`,
@@ -529,12 +548,18 @@ describe("gateway plugin node capability auth", () => {
               `http://${host}:${listener.port}${scopedCanvasPath(pendingNodeCapability, `${CANVAS_HOST_PATH}/`)}`,
             );
             expect(pendingNodeBlocked.status).toBe(401);
-            const pendingWsStatus = await expectWsRejected(
-              `ws://${host}:${listener.port}${scopedCanvasPath(pendingNodeCapability, CANVAS_WS_PATH)}`,
-              {},
-            );
-            expect(pendingWsStatus).toBe(401);
-            proof.pending = { http: pendingNodeBlocked.status, ws: pendingWsStatus };
+            const pendingWs = await requestWsUpgradeResponse({
+              port: listener.port,
+              path: scopedCanvasPath(pendingNodeCapability, CANVAS_WS_PATH),
+              headers: {},
+            });
+            expect(pendingWs.statusCode).toBe(401);
+            expect(getDispatches()).toEqual({ http: 0, ws: 0 });
+            proof.pending = {
+              http: pendingNodeBlocked.status,
+              ws: pendingWs.statusCode,
+              dispatches: getDispatches(),
+            };
 
             const approvedSession = nodeRegistry.updateSurface("c-pending-node", {
               caps: ["canvas"],
@@ -551,7 +576,12 @@ describe("gateway plugin node capability auth", () => {
               `ws://${host}:${listener.port}${scopedCanvasPath(pendingNodeCapability, CANVAS_WS_PATH)}`,
             );
             expect(approvedWsStatus).toBe(101);
-            proof.approved = { http: approvedSameSession.status, ws: approvedWsStatus };
+            expect(getDispatches()).toEqual({ http: 1, ws: 1 });
+            proof.approved = {
+              http: approvedSameSession.status,
+              ws: approvedWsStatus,
+              dispatches: getDispatches(),
+            };
 
             const revokedSession = nodeRegistry.updateSurface("c-pending-node", {
               caps: [],
@@ -564,12 +594,18 @@ describe("gateway plugin node capability auth", () => {
               `http://${host}:${listener.port}${scopedCanvasPath(pendingNodeCapability, `${CANVAS_HOST_PATH}/`)}`,
             );
             expect(revokedNodeBlocked.status).toBe(401);
-            const revokedWsStatus = await expectWsRejected(
-              `ws://${host}:${listener.port}${scopedCanvasPath(pendingNodeCapability, CANVAS_WS_PATH)}`,
-              {},
-            );
-            expect(revokedWsStatus).toBe(401);
-            proof.revoked = { http: revokedNodeBlocked.status, ws: revokedWsStatus };
+            const revokedWs = await requestWsUpgradeResponse({
+              port: listener.port,
+              path: scopedCanvasPath(pendingNodeCapability, CANVAS_WS_PATH),
+              headers: {},
+            });
+            expect(revokedWs.statusCode).toBe(401);
+            expect(getDispatches()).toEqual({ http: 1, ws: 1 });
+            proof.revoked = {
+              http: revokedNodeBlocked.status,
+              ws: revokedWs.statusCode,
+              dispatches: getDispatches(),
+            };
           } finally {
             clients.delete(pendingNode);
             nodeRegistry.unregister(pendingNode.connId);
@@ -595,7 +631,12 @@ describe("gateway plugin node capability auth", () => {
             `ws://${host}:${listener.port}${scopedCanvasPath(operatorCapability, CANVAS_WS_PATH)}`,
           );
           expect(operatorWsStatus).toBe(101);
-          proof.operator = { http: operatorAllowed.status, ws: operatorWsStatus };
+          expect(getDispatches()).toEqual({ http: 2, ws: 2 });
+          proof.operator = {
+            http: operatorAllowed.status,
+            ws: operatorWsStatus,
+            dispatches: getDispatches(),
+          };
           process.stdout.write(
             `plugin-node-capability-proof ${JSON.stringify(
               {
