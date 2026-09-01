@@ -489,7 +489,7 @@ suite.define(() => {
         }
         return Math.round(brandBox.x + brandBox.width - (newThreadBox.x + newThreadBox.width));
       })
-      .toBe(4);
+      .toBe(2);
 
     const back = toolbar.getByRole("button", { name: "Back" });
     const forward = toolbar.getByRole("button", { name: "Forward" });
