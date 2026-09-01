@@ -13,7 +13,6 @@ import { isUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
 import { boundaryTestFiles } from "../test/vitest/vitest.unit-paths.mjs";
 import { parsePermissiveBooleanToken } from "./lib/arg-utils.mts";
 import { resolveExtensionTestConfig } from "./lib/extension-test-plan.mts";
-import { runWithFailedTrailer, writeFailedTrailer } from "./lib/failed-trailer.mts";
 import { createGatewayServerTestTargetChunks } from "./lib/gateway-server-test-plan.mts";
 import { signalExitCode } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
@@ -28,6 +27,7 @@ import {
   isVitestWorkerMetadataRequest,
   vitestOptionConsumesNextArg,
 } from "./lib/vitest-cli-mode.mts";
+import { runVitestCli, type exitVitestBySignal } from "./lib/vitest-cli.mts";
 import { resolveVitestProcessEnv } from "./lib/vitest-process-env.mts";
 import { spawnOwnedVitestProcess } from "./lib/vitest-process.mts";
 import {
@@ -1306,8 +1306,10 @@ async function finishVitestProcess({
   completion,
   getForwardedSignal,
   beforeSignal,
+  exitBySignal,
 }: Pick<VitestProcessHandle, "completion" | "getForwardedSignal"> & {
   beforeSignal?: () => void | Promise<void>;
+  exitBySignal: typeof exitVitestBySignal;
 }): Promise<number> {
   const { code, signal } = await completion;
   const exitSignal = getForwardedSignal() ?? signal;
@@ -1317,8 +1319,7 @@ async function finishVitestProcess({
     } catch (error) {
       console.error(error);
     } finally {
-      writeFailedTrailer("vitest", signalExitCode(exitSignal));
-      process.kill(process.pid, exitSignal);
+      await exitBySignal(exitSignal);
     }
     return signalExitCode(exitSignal);
   }
@@ -1327,7 +1328,8 @@ async function finishVitestProcess({
   return exitCode;
 }
 
-async function main(
+export async function runVitest(
+  exitBySignal: typeof exitVitestBySignal,
   argv: string[] = process.argv.slice(2),
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
@@ -1351,7 +1353,7 @@ async function main(
 
   const delegatedArgs = resolveTestProjectsDelegationArgs(argv);
   if (delegatedArgs) {
-    await finishVitestProcess(spawnTestProjectsRunner(delegatedArgs, env));
+    await finishVitestProcess({ ...spawnTestProjectsRunner(delegatedArgs, env), exitBySignal });
     return;
   }
 
@@ -1422,6 +1424,7 @@ async function main(
       });
       const exitCode = await finishVitestProcess({
         ...handle,
+        exitBySignal,
         beforeSignal: () => workers?.dispose(),
       });
       // Ordinary test failures must not hide later files. Signals are forwarded by
@@ -1442,5 +1445,5 @@ async function main(
 }
 
 if (import.meta.main) {
-  await runWithFailedTrailer("vitest", main);
+  await runVitestCli("vitest", runVitest);
 }
