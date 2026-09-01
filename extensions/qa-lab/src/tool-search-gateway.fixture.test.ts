@@ -16,6 +16,7 @@ import {
   readQaMockRequestCursor,
 } from "./providers/shared/debug-request-cursor.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
+import { runToolSearchGatewayBatchInvoke } from "./tool-search-gateway-batch.fixture.js";
 import {
   assertToolSearchStructuredLaneResult,
   assertToolSearchLaneResults,
@@ -251,6 +252,73 @@ describe("tool search gateway e2e session log scanner", () => {
 });
 
 describe("tool search gateway e2e lane result", () => {
+  it("invokes authenticated Gateway batch Tool Search without exposing credentials", async () => {
+    const jsonResponse = (body: unknown) =>
+      new Response(JSON.stringify(body), {
+        headers: { "content-type": "application/json" },
+      });
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        ok: true,
+        result: {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                results: [
+                  {
+                    query: "fake_plugin_tool_17",
+                    candidates: [{ name: "fake_plugin_tool_17" }],
+                  },
+                  {
+                    query: "fake plugin tool 01",
+                    candidates: [{ name: "fake_plugin_tool_01" }],
+                  },
+                ],
+              }),
+            },
+          ],
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const env: QaSuiteRuntimeEnv = {
+      alternateModel: "openai/gpt-5.6-luna",
+      cfg: {},
+      gateway: {
+        baseUrl: "http://gateway.test",
+        call: async () => ({}),
+        runtimeEnv: { OPENCLAW_GATEWAY_TOKEN: "test-token" },
+        tempRoot: "/unused",
+        workspaceDir: "/unused",
+      },
+      mock: { baseUrl: "http://mock-openai.test" },
+      outputDir: "/unused",
+      primaryModel: "openai/gpt-5.6-luna",
+      providerMode: "mock-openai",
+      repoRoot: "/unused",
+      transport: {} as QaSuiteRuntimeEnv["transport"],
+    };
+
+    await expect(
+      runToolSearchGatewayBatchInvoke({
+        env,
+        fixture: { fakePluginDir: "/unused", targetTool: "fake_plugin_tool_17" },
+      }),
+    ).resolves.toEqual({
+      candidateNames: [["fake_plugin_tool_17"], ["fake_plugin_tool_01"]],
+      queryCount: 2,
+      targetFound: true,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://gateway.test/tools/invoke",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ authorization: "Bearer test-token" }),
+      }),
+    );
+  });
+
   it("preserves surrogate pairs in provider request snippets", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tool-search-lane-"));
     const configPath = path.join(tempRoot, "openclaw.json");

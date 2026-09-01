@@ -102,6 +102,8 @@ export function resolveGatewayScopedTools(params: {
   /** Server-minted coding tools that must be mediated through the loopback surface. */
   mediatedToolNames?: Iterable<string>;
   disablePluginTools?: boolean;
+  /** Server-owned tools added before the shared policy pipeline. */
+  additionalTools?: readonly AnyAgentTool[];
   gatewayRequestedTools?: string[];
   /** Add the CLI-only, node-forced exec tool before applying the shared policy pipeline. */
   includeNodeExecTool?: boolean;
@@ -444,6 +446,7 @@ export function resolveGatewayScopedTools(params: {
     // coincidentally named Gateway/plugin implementation.
     ...baseTools.filter((tool) => !mediatedToolNames.has(normalizeToolPolicyName(tool.name))),
     ...mediatedCodingTools,
+    ...(params.additionalTools ?? []),
   ];
   const allTools = nodeExecDefaults
     ? [

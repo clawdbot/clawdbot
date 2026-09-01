@@ -345,7 +345,7 @@ async function invokeGatewayToolWithSignal(
       },
     };
   }
-  const resolveTools = (disablePluginTools: boolean) =>
+  const resolveTools = (disablePluginTools: boolean, additionalTools?: readonly AnyAgentTool[]) =>
     resolveGatewayScopedTools({
       cfg: params.cfg,
       sessionKey,
@@ -362,6 +362,7 @@ async function invokeGatewayToolWithSignal(
       allowMediaInvokeCommands: true,
       surface: "http",
       disablePluginTools,
+      additionalTools,
       gatewayRequestedTools,
     });
 
@@ -381,18 +382,20 @@ async function invokeGatewayToolWithSignal(
       },
     };
   }
-  const gatewayToolSearch =
-    toolName === TOOL_SEARCH_RAW_TOOL_NAME
-      ? createGatewayToolSearchInvokeTool({
-          cfg: params.cfg,
-          tools,
-          agentId,
-          sessionKey,
-          sessionId: sessionEntry?.sessionId,
-          signal: params.signal,
-        })
-      : undefined;
-  const tool = gatewayToolSearch ?? tools.find((candidate) => candidate.name === toolName);
+  if (toolName === TOOL_SEARCH_RAW_TOOL_NAME) {
+    const gatewayToolSearch = createGatewayToolSearchInvokeTool({
+      cfg: params.cfg,
+      tools,
+      agentId,
+      sessionKey,
+      sessionId: sessionEntry?.sessionId,
+      signal: params.signal,
+    });
+    if (gatewayToolSearch) {
+      ({ agentId, tools, workspaceDir } = resolveTools(knownCoreTool, [gatewayToolSearch]));
+    }
+  }
+  const tool = tools.find((candidate) => candidate.name === toolName);
   if (!tool) {
     return {
       ok: false,

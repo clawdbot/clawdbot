@@ -802,7 +802,7 @@ describe("POST /tools/invoke", () => {
   });
 
   it("keeps batch Tool Search reachable through the non-model Gateway invoke API", async () => {
-    setMainAllowedTools({ allow: ["tools_invoke_test", "browser"] });
+    setMainAllowedTools({ allow: ["tool_search", "tools_invoke_test", "browser"] });
     cfg = {
       ...cfg,
       tools: { toolSearch: { mode: "tools" } },
@@ -854,6 +854,30 @@ describe("POST /tools/invoke", () => {
       ok: false,
       error: { type: "not_found", message: "Tool not available: tool_search" },
     });
+  });
+
+  it("honors gateway.tools.deny for Gateway Tool Search", async () => {
+    setMainAllowedTools({
+      allow: ["tool_search", "tools_invoke_test"],
+      gatewayDeny: ["tool_search"],
+    });
+    cfg = {
+      ...cfg,
+      tools: { toolSearch: { mode: "tools" } },
+    };
+
+    const res = await invokeToolAuthed({
+      tool: "tool_search",
+      args: { queries: [{ query: "invoke test" }] },
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({
+      ok: false,
+      error: { type: "not_found", message: "Tool not available: tool_search" },
+    });
+    expect(hookMocks.runBeforeToolCallHook).not.toHaveBeenCalled();
   });
 
   it("allows the requested plugin tool through Gateway profile filtering", async () => {

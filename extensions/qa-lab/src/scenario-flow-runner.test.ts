@@ -849,8 +849,19 @@ describe("scenario-flow-runner", () => {
                 },
               },
               {
+                set: "toolSearchBatch",
+                value: {
+                  expr: 'await qaImport("./tool-search-gateway-batch.fixture.js")',
+                },
+              },
+              {
                 assert: {
                   expr: 'typeof plugin.evaluateCodexPluginLifecycle === "function"',
+                },
+              },
+              {
+                assert: {
+                  expr: 'typeof toolSearchBatch.runToolSearchGatewayBatchInvoke === "function"',
                 },
               },
             ],

@@ -234,7 +234,9 @@ payload is rejected at the model-visible handler even after that normalization.
 Authenticated non-model callers retain batch search through Gateway
 `tools.invoke` (or `POST /tools/invoke`) with `name`/`tool` set to `tool_search`.
 This path is available only while Tool Search is enabled and builds its catalog
-from the caller's session-scoped, policy-filtered Gateway tool inventory. For
+from the caller's session-scoped, policy-filtered Gateway tool inventory. The
+control itself also follows that inventory policy: restrictive tool allowlists
+must include `tool_search`, and `gateway.tools.deny` can always block it. For
 example:
 
 ```json
