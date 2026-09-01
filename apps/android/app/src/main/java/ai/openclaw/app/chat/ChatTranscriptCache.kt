@@ -1,11 +1,11 @@
 package ai.openclaw.app.chat
 
-import androidx.room.Dao
-import androidx.room.Entity
-import androidx.room.Insert
-import androidx.room.OnConflictStrategy
-import androidx.room.Query
-import androidx.room.withTransaction
+import androidx.room3.Dao
+import androidx.room3.Entity
+import androidx.room3.Insert
+import androidx.room3.OnConflictStrategy
+import androidx.room3.Query
+import androidx.room3.withWriteTransaction
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
@@ -383,7 +383,7 @@ class RoomChatTranscriptCache internal constructor(
     val agent = scopedAgentId(agentId) ?: return
     val retainedKey = retainedSessionKey?.trim()?.takeIf { it.isNotEmpty() }
     val dao = database.dao()
-    database.withTransaction {
+    database.withWriteTransaction {
       val initialSessions = sessions.take(MAX_CACHED_SESSIONS)
       val needsRetainedRow = retainedKey != null && initialSessions.none { it.key == retainedKey }
       val retainedEntry = if (needsRetainedRow) sessions.firstOrNull { it.key == retainedKey } else null
@@ -530,7 +530,7 @@ class RoomChatTranscriptCache internal constructor(
           )
         }
     val dao = database.dao()
-    database.withTransaction {
+    database.withWriteTransaction {
       dao.deleteTranscript(gateway, agent, key)
       dao.insertMessages(rows)
       // A transcript may arrive for a session missing from the cached list (e.g. deep session
@@ -568,7 +568,7 @@ class RoomChatTranscriptCache internal constructor(
   override suspend fun clearGateway(gatewayId: String) {
     val gateway = scopedGatewayId(gatewayId) ?: return
     val dao = database.dao()
-    database.withTransaction {
+    database.withWriteTransaction {
       dao.deleteMessages(gateway)
       dao.deleteSessionsForGateway(gateway)
       dao.deleteGatewayOwner(gateway)
@@ -584,7 +584,7 @@ class RoomChatTranscriptCache internal constructor(
     val agent = scopedAgentId(agentId) ?: return
     val key = sessionKey.trim().takeIf { it.isNotEmpty() } ?: return
     val dao = database.dao()
-    database.withTransaction {
+    database.withWriteTransaction {
       dao.deleteSessionRow(gateway, agent, key)
       dao.deleteTranscript(gateway, agent, key)
     }
