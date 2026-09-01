@@ -1,11 +1,13 @@
 // Server chat agent-event tests protect event fanout, heartbeat visibility,
 // session lifecycle persistence, and subscriber registry behavior.
 
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatEventSchema } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import {
@@ -21,6 +23,10 @@ import {
 } from "../agents/internal-runtime-context.js";
 import { createAgentLifecycleTerminalBackstop } from "../auto-reply/reply/agent-lifecycle-terminal.js";
 import { formatChannelProgressDraftLine } from "../channels/streaming.js";
+import {
+  loadSessionEntry as loadStoredSessionEntry,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import {
   emitAgentEvent as emitRuntimeAgentEvent,
   emitAgentEventForOwner,
@@ -109,6 +115,7 @@ import {
   type AgentEventHandlerOptions,
 } from "./server-chat.js";
 import { broadcastChatError } from "./server-methods/chat-broadcast.js";
+import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import { loadSessionEntry } from "./session-utils.js";
 
 function waitForFast<T>(
@@ -119,6 +126,7 @@ function waitForFast<T>(
 }
 
 describe("agent event handler", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   beforeEach(() => {
     resetAgentEventsForTest({ preserveListeners: true });
     vi.mocked(getRuntimeConfig).mockReturnValue({});
@@ -4251,39 +4259,96 @@ describe("agent event handler", () => {
     expect(agentRunSeq.has("run-terminal-error")).toBe(false);
   });
 
-  it("finalizes fallback-exhausted lifecycle errors without waiting for retry grace", () => {
+  it.each([
+    {
+      name: "fallback-exhausted failure",
+      terminal: {
+        error: "LLM request failed: network connection error.",
+        fallbackExhaustedFailure: true,
+      },
+      status: "failed",
+    },
+    {
+      name: "provider timeout after a tool error",
+      terminal: {
+        error:
+          "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+        aborted: false,
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+      status: "timeout",
+    },
+  ])("persists $name without waiting for retry grace", async ({ terminal, status }) => {
+    const sessionKey = "session-terminal-error";
+    const storePath = path.join(tempDirs.make("openclaw-terminal-projection-"), "sessions.json");
+    const target = { storePath, sessionKey };
+    const read = () => loadStoredSessionEntry({ ...target, readConsistency: "latest" });
+    await replaceSessionEntry(target, {
+      sessionId: "session-terminal",
+      updatedAt: 1_000,
+      status: "running",
+      startedAt: 1_000,
+    });
+    vi.mocked(loadSessionEntry).mockImplementation(() => ({
+      cfg: {},
+      agentId: "main",
+      storePath,
+      store: {},
+      entry: read(),
+      canonicalKey: sessionKey,
+      storeKeys: [sessionKey],
+      legacyKey: undefined,
+    }));
+    loadGatewaySessionRow.mockImplementation(() => ({
+      ...OWNED_SESSION_ROW,
+      ...read(),
+      key: sessionKey,
+    }));
+    persistGatewaySessionLifecycleEventMock.mockImplementation(persistGatewaySessionLifecycleEvent);
     vi.useFakeTimers();
-    const { broadcast, clearAgentRunContext, agentRunSeq, handler } = createHarness({
-      resolveSessionKeyForRun: () => "session-terminal-error",
-      lifecycleErrorRetryGraceMs: 100,
+    vi.setSystemTime(2_000);
+    const { broadcast, broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
+      resolveSessionKeyForRun: () => sessionKey,
     });
+    sessionEventSubscribers.subscribe("conn-session");
     registerAgentRunContext("run-terminal-final-failure", {
-      sessionKey: "session-terminal-error",
+      sessionKey,
     });
 
-    emitAgentEvent(handler, "run-terminal-final-failure", "lifecycle", {
-      phase: "error",
-      error: "LLM request failed: network connection error.",
-      fallbackExhaustedFailure: true,
-    });
+    emitAgentEvents(handler, "run-terminal-final-failure", [
+      ["lifecycle", { phase: "error", error: "Retryable provider failure." }],
+      ["tool", { phase: "result", name: "read", isError: true, result: "An earlier tool failed." }],
+      ["lifecycle", { phase: "error", startedAt: 1_000, endedAt: 2_000, ...terminal }],
+    ]);
+    await Promise.all(
+      persistGatewaySessionLifecycleEventMock.mock.results.map((result) => result.value),
+    );
 
-    const finalPayload = chatBroadcastCalls(broadcast).at(-1)?.[1] as {
-      state?: string;
-      runId?: string;
-      errorMessage?: string;
-    };
-    expect(finalPayload.state).toBe("error");
-    expect(finalPayload.runId).toBe("run-terminal-final-failure");
-    expect(finalPayload.errorMessage).toContain("network connection error");
-    expect(clearAgentRunContext).toHaveBeenCalledWith("run-terminal-final-failure");
-    expect(agentRunSeq.has("run-terminal-final-failure")).toBe(false);
+    expect(read()).toMatchObject({ status, lastRunError: terminal.error, endedAt: 2_000 });
     expect(
-      persistGatewaySessionLifecycleEventMock.mock.calls.some(
-        ([params]) =>
-          (params as { event?: { data?: { fallbackExhaustedFailure?: boolean } } }).event?.data
-            ?.fallbackExhaustedFailure === true,
-      ),
-    ).toBe(true);
+      broadcastToConnIds.mock.calls.find(([event]) => event === "sessions.changed")?.[1],
+    ).toMatchObject({
+      status,
+      lastRunError: terminal.error,
+    });
+
+    vi.setSystemTime(3_000);
+    emitAgentEvents(handler, "run-recovered", [
+      ["lifecycle", { phase: "start", startedAt: 3_000 }],
+      ["lifecycle", { phase: "end", startedAt: 3_000, endedAt: 4_000 }],
+    ]);
+    await Promise.all(
+      persistGatewaySessionLifecycleEventMock.mock.results.map((result) => result.value),
+    );
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(read()).toMatchObject({ status: "done", startedAt: 3_000, endedAt: 4_000 });
+    expect(read()?.lastRunError).toBeUndefined();
+    expect(chatBroadcastCalls(broadcast).map(([, payload]) => payload.state)).toEqual([
+      "error",
+      "final",
+    ]);
+    handler.dispose();
   });
 
   it("keeps deferred lifecycle-error cleanup across later non-terminal events", () => {
