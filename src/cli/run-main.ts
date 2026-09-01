@@ -280,7 +280,7 @@ async function closeCliResources(): Promise<void> {
       if (hasManagedProviderLocalServices()) {
         const { stopManagedProviderLocalServices } =
           await import("../agents/provider-local-service.js");
-        stopManagedProviderLocalServices();
+        await stopManagedProviderLocalServices();
       }
     },
     async () => {
