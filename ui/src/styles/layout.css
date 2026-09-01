@@ -1321,17 +1321,19 @@ openclaw-settings-save-indicator:empty {
 .sidebar-shell__body--scroll-top,
 .sidebar-shell__body--scroll-middle,
 .sidebar-shell__body--scroll-bottom {
-  --sidebar-scrollbar-edge: right;
+  --sidebar-scroll-edge: right;
 
   /* The second layer keeps the native scrollbar out of the content fade. */
-  -webkit-mask: var(--sidebar-body-mask), linear-gradient(black, black)
-    var(--sidebar-scrollbar-edge) / var(--scrollbar-size) 100% no-repeat;
-  mask: var(--sidebar-body-mask), linear-gradient(black, black) var(--sidebar-scrollbar-edge) /
-    var(--scrollbar-size) 100% no-repeat;
+  -webkit-mask:
+    var(--sidebar-body-mask),
+    linear-gradient(black, black) var(--sidebar-scroll-edge) / var(--scrollbar-size) 100% no-repeat;
+  mask:
+    var(--sidebar-body-mask),
+    linear-gradient(black, black) var(--sidebar-scroll-edge) / var(--scrollbar-size) 100% no-repeat;
 }
 
 :root[dir="rtl"] .sidebar-shell__body {
-  --sidebar-scrollbar-edge: left;
+  --sidebar-scroll-edge: left;
 }
 
 .sidebar-recent-sessions__group {
