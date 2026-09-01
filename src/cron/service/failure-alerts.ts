@@ -9,6 +9,7 @@ import type { FailoverReason } from "../../agents/failover/signal.js";
 import { buildCodexLoginRecovery } from "../../auto-reply/codex-login-recovery.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { normalizeAnyChannelId } from "../../channels/registry-normalize.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
@@ -196,8 +197,9 @@ export function resolveFailureAlert(
 
 /**
  * Writes the settled outcome of a failure-alert send back onto the live job so
- * `cron get`/`cron runs` stop reporting the pre-send "unknown" forever. The job
- * is re-resolved by id because the transport may hold a snapshot, and the
+ * `cron get` stops reporting the pre-send "unknown" forever. Run-history
+ * entries snapshot these fields at run finalization and are not revised. The
+ * job is re-resolved by id because the transport may hold a snapshot, and the
  * write-back is skipped when a newer alert cycle owns the fields.
  */
 async function recordFailureAlertOutcome(
@@ -288,11 +290,14 @@ function transportFailureAlert(
         "cron: failure alert delivery failed",
       );
       fallback();
+      // A send can report a successful delivery attempt and then reject for
+      // later partial work; the recipient was still reached, so keep the
+      // rejection as diagnostic context instead of overwriting the reach fact.
       void recordFailureAlertOutcome(state, {
         jobId,
         alertAtMs,
-        delivered: false,
-        error: String(err),
+        delivered: reachedRecipient,
+        error: formatErrorMessage(err),
       });
     });
 }

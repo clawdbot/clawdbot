@@ -5,6 +5,7 @@ import {
   noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { markCronJobActive } from "../active-jobs.js";
 import { loadCronStore, saveCronStore } from "../store.js";
@@ -559,6 +560,46 @@ describe("cron failure alert outcome write-back", () => {
         lastFailureNotificationDeliveryError: expect.stringContaining("recipient not reached"),
       });
     });
+  });
+
+  it("keeps the reach fact when the send rejects after a successful delivery attempt", async () => {
+    const { store } = await runFailure({
+      id: "alert-outcome-reach-then-reject",
+      sendCronFailureAlert: vi.fn(async (params) => {
+        params.onDeliveryAttempt?.(true);
+        throw new Error("later delivery work failed");
+      }),
+    });
+
+    await vi.waitFor(async () => {
+      expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
+        lastFailureNotificationDelivered: true,
+        lastFailureNotificationDeliveryStatus: "delivered",
+        lastFailureNotificationDeliveryError: expect.stringContaining("later delivery work failed"),
+      });
+    });
+  });
+
+  it("redacts transport errors before persisting them", async () => {
+    const err = new Error(
+      "webhook rejected: token=abcdefghijklmnopqrstuvwxyz123456 for https://alerts.example.test",
+    );
+    const { store } = await runFailure({
+      id: "alert-outcome-redacted-error",
+      sendCronFailureAlert: vi.fn(async () => {
+        throw err;
+      }),
+    });
+
+    await vi.waitFor(async () => {
+      expect(
+        (await loadCronStore(store.storePath)).jobs[0]?.state.lastFailureNotificationDeliveryStatus,
+      ).toBe("not-delivered");
+    });
+    const persisted = (await loadCronStore(store.storePath)).jobs[0]?.state
+      .lastFailureNotificationDeliveryError;
+    expect(persisted).toBe(formatErrorMessage(err));
+    expect(persisted).not.toContain("abcdefghijklmnopqrstuvwxyz123456");
   });
 
   it("does not clobber a newer alert cycle that owns the fields", async () => {
