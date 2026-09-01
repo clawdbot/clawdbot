@@ -423,7 +423,10 @@ describe("scheduled Codex app authority", () => {
   it.each([
     {
       name: "explicit tool disablement",
-      appConfig: { tools: { edit: { enabled: false } } },
+      appConfig: {
+        default_tools_enabled: true,
+        tools: { edit: { enabled: false } },
+      },
       expectedEnabled: false,
     },
     {

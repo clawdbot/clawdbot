@@ -424,7 +424,7 @@ describe("Codex app inventory across physical process restart", () => {
       }
       if (scheduled) {
         expect(process.loadedThreads.get(second.threadId)).toMatchObject({
-          apps: { [appId]: { tools: { list: { approval_mode: "prompt" } } } },
+          apps: { [appId]: { tools: { list: { enabled: true, approval_mode: "prompt" } } } },
         });
       }
       expect((await f.readBinding())?.pluginAppPolicyContext?.apps[appId]).toMatchObject({
