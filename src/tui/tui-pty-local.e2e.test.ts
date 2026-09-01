@@ -924,6 +924,7 @@ async function startGatewayModeTui(
   const outputOffset = run.visibleOutput().length;
   return {
     kind: "gateway" as const,
+    controlClient,
     run,
     gateway: shared.gateway,
     mockModel: {
@@ -2102,7 +2103,7 @@ export default {
     "executes Gateway status model new and reset RPCs through a real TUI PTY",
     async ({ onTestFinished }) => {
       const fixture = await startGatewayModeTui("command", onTestFinished);
-      const { controlClient } = await requireSharedGatewayFixture();
+      const { controlClient, mockModel } = await requireSharedGatewayFixture();
       try {
         await fixture.run.write("/gateway-status\r", { delay: false });
         await fixture.waitForOutput("Default model: tui-pty-validation (128k ctx)");
@@ -2174,14 +2175,16 @@ export default {
             Boolean(sessionInfo?.activeLeafEntryId) &&
             sessionInfo?.activeLeafEntryId !== selectedInfo.activeLeafEntryId &&
             [sessionInfo?.modelProvider, sessionInfo?.model].join("/") === alternateModel &&
-            findOrderedTurn(messages, resetMarker, seedReply) >= 0,
+            messages.every(
+              (message) =>
+                ![resetMarker, seedReply].includes(extractTextFromMessage(message).trim()),
+            ),
         );
         const postMarker = "T02_POST_RESET";
         const postOffset = fixture.run.visibleOutput().length;
         await fixture.run.write(`${postMarker}\r`, { delay: false });
         await waitForOutputAfter(fixture.run, GATEWAY_SCENARIOS.reconnect.replyText, postOffset);
         await waitForHistoryMessages(controlClient, createdKey!, ({ messages, sessionInfo }) => {
-          const serialized = JSON.stringify(messages);
           return (
             Boolean(sessionInfo?.activeLeafEntryId) &&
             sessionInfo?.sessionId === selectedInfo.sessionId &&
@@ -2189,11 +2192,19 @@ export default {
             (sessionInfo?.updatedAt as number) >= (reset.sessionInfo?.updatedAt as number) &&
             sessionInfo?.activeLeafEntryId !== reset.sessionInfo?.activeLeafEntryId &&
             [sessionInfo?.modelProvider, sessionInfo?.model].join("/") === alternateModel &&
-            findOrderedTurn(messages, resetMarker, seedReply) >= 0 &&
-            serialized.indexOf(postMarker) > serialized.indexOf(seedReply) &&
+            messages.every(
+              (message) =>
+                ![resetMarker, seedReply].includes(extractTextFromMessage(message).trim()),
+            ) &&
             findOrderedTurn(messages, postMarker, GATEWAY_SCENARIOS.reconnect.replyText) >= 0
           );
         });
+        const postRequest = JSON.stringify(
+          mockModel.requests(GATEWAY_SCENARIOS.reconnect.modelId).at(-1)?.body,
+        );
+        expect(postRequest).toContain(postMarker);
+        expect(postRequest).not.toContain(resetMarker);
+        expect(postRequest).not.toContain(seedReply);
       } finally {
         await fixture.cleanup();
       }
@@ -2371,6 +2382,12 @@ export default {
     "renders a non-deliverable direct reply failure through the real Gateway and TUI",
     async ({ onTestFinished }) => {
       const fixture = await startGatewayModeTui("emptyReply", onTestFinished);
+      const chatEvents: unknown[] = [];
+      fixture.controlClient.onEvent = ({ event, payload }) => {
+        if (event === "chat") {
+          chatEvents.push(payload);
+        }
+      };
       try {
         await fixture.run.write("non-deliverable first turn\r");
         await waitFor({
@@ -2386,7 +2403,7 @@ export default {
             fixture.visibleOutput().includes("did not produce a visible reply") ? true : null,
           onTimeout: () =>
             new Error(
-              `empty-reply fallback was not rendered\nrequests=${JSON.stringify(
+              `empty-reply fallback was not rendered\nchatEvents=${JSON.stringify(chatEvents)}\nrequests=${JSON.stringify(
                 fixture.mockModel.requests(),
                 null,
                 2,
@@ -2395,6 +2412,13 @@ export default {
         });
         expect(fixture.mockModel.requests()).toHaveLength(1);
         expect(fixture.visibleOutput()).not.toContain("[[reply_to_current]]");
+        expect(chatEvents).toContainEqual(
+          expect.objectContaining({
+            sessionKey: fixture.sessionKey,
+            state: "error",
+            errorMessage: expect.stringContaining("did not produce a visible reply"),
+          }),
+        );
 
         await fixture.run.write("turn after empty reply\r");
         await waitFor({
