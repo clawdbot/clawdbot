@@ -454,7 +454,7 @@ async function installCodexPlugin(
       blocks: [
         {
           type: "text",
-          text: `${formatCodexDisplayText(requestedId)} was installed and authorized, but ${authRequirement} connector authentication. Complete sign-in before using those apps.`,
+          text: `${formatCodexDisplayText(requestedId)} bundle was installed in Codex. OpenClaw app access is configured. ${authRequirement} connector authentication in ChatGPT. Installation does not confirm app connections or current-conversation readiness.`,
         },
         ...buildCodexPluginAppLinks(appsNeedingAuth),
         { type: "context", text: `${refreshWarning.trim()} ${POLICY_REFRESH_HINT}`.trim() },
@@ -468,10 +468,10 @@ async function installCodexPlugin(
   }
 
   const status = alreadyInstalled
-    ? "was already installed in Codex and is now authorized"
-    : "was installed and authorized";
+    ? "bundle was already installed in Codex"
+    : "bundle was installed in Codex";
   return {
-    text: `${formatCodexDisplayText(requestedId)} ${status}.${refreshWarning} ${POLICY_REFRESH_HINT}`,
+    text: `${formatCodexDisplayText(requestedId)} ${status}. OpenClaw app access is configured.${refreshWarning} ${POLICY_REFRESH_HINT}`,
   };
 }
 

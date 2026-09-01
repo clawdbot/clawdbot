@@ -326,7 +326,7 @@ describe("Codex /codex plugins subcommand", () => {
       },
     });
     expect(io.currentConfig()).not.toHaveProperty("allow_all_plugins");
-    expect(result.text).toContain("installed and authorized");
+    expect(result.text).toContain("bundle was installed in Codex");
   });
 
   it("installs remote plugins with their opaque remote identity and preserves exact summary ids", async () => {
@@ -350,7 +350,7 @@ describe("Codex /codex plugins subcommand", () => {
     expect(io.current()["security-review@workspace-directory"]?.pluginName).toBe(
       "security-review@workspace-directory",
     );
-    expect(result.text).toContain("installed and authorized");
+    expect(result.text).toContain("bundle was installed in Codex");
   });
 
   it.each([
@@ -399,7 +399,7 @@ describe("Codex /codex plugins subcommand", () => {
 
       expect(runtime.install).not.toHaveBeenCalled();
       expect(io.current()).toHaveProperty("security-review@workspace-directory");
-      expect(result.text).toContain("already installed in Codex and is now authorized");
+      expect(result.text).toContain("bundle was already installed in Codex");
     },
   );
 
@@ -416,7 +416,7 @@ describe("Codex /codex plugins subcommand", () => {
 
     expect(runtime.install).not.toHaveBeenCalled();
     expect(io.current()).toHaveProperty("security-review@company-tools");
-    expect(result.text).toContain("already installed in Codex and is now authorized");
+    expect(result.text).toContain("bundle was already installed in Codex");
   });
 
   it("accepts Codex-approved local marketplace roots outside the selected workspace", async () => {
@@ -436,7 +436,7 @@ describe("Codex /codex plugins subcommand", () => {
       marketplacePath: "/approved/codex-home/company-tools/marketplace.json",
       pluginName: "security-review",
     });
-    expect(result.text).toContain("installed and authorized");
+    expect(result.text).toContain("bundle was installed in Codex");
   });
 
   it("updates an existing legacy policy for the same marketplace-qualified plugin", async () => {
@@ -467,7 +467,7 @@ describe("Codex /codex plugins subcommand", () => {
         allow_destructive_actions: "ask",
       },
     });
-    expect(result.text).toContain("installed and authorized");
+    expect(result.text).toContain("bundle was installed in Codex");
   });
 
   it.each(["openai-curated-remote", "openai-api-curated"])(
@@ -506,7 +506,7 @@ describe("Codex /codex plugins subcommand", () => {
         remoteMarketplaceName: marketplace,
         pluginName: "plugins~Plugin_github_opaque",
       });
-      expect(result.text).toContain("installed and authorized");
+      expect(result.text).toContain("bundle was installed in Codex");
     },
   );
 
@@ -534,7 +534,7 @@ describe("Codex /codex plugins subcommand", () => {
           pluginName: "github",
         },
       });
-      expect(result.text).toContain("installed and authorized");
+      expect(result.text).toContain("bundle was installed in Codex");
     },
   );
 
@@ -560,7 +560,7 @@ describe("Codex /codex plugins subcommand", () => {
         remoteMarketplaceName: marketplace,
         pluginName: "plugins~Plugin_github_opaque",
       });
-      expect(result.text).toContain("installed and authorized");
+      expect(result.text).toContain("bundle was installed in Codex");
     },
   );
 
@@ -596,7 +596,7 @@ describe("Codex /codex plugins subcommand", () => {
       pluginName: remotePluginId,
     });
     expect(io.current()).toHaveProperty("github@openai-curated");
-    expect(result.text).toContain("installed and authorized");
+    expect(result.text).toContain("bundle was installed in Codex");
   });
 
   it("preserves an already active plugin reported under another curated wire alias", async () => {
@@ -636,7 +636,7 @@ describe("Codex /codex plugins subcommand", () => {
 
     expect(runtime.install).not.toHaveBeenCalled();
     expect(io.current()).toHaveProperty("github@openai-curated");
-    expect(result.text).toContain("already installed in Codex and is now authorized");
+    expect(result.text).toContain("bundle was already installed in Codex");
   });
 
   it("retains administrator restrictions when curated wire aliases are deduplicated", async () => {
@@ -858,7 +858,7 @@ describe("Codex /codex plugins subcommand", () => {
       io,
       runtime,
     );
-    expect(allowed.text).toContain("installed and authorized");
+    expect(allowed.text).toContain("bundle was installed in Codex");
     expect(runtime.install).toHaveBeenCalledOnce();
   });
 
@@ -922,11 +922,14 @@ describe("Codex /codex plugins subcommand", () => {
       runtime,
     );
 
-    expect(result.text).toContain("1 app still requires connector authentication");
+    expect(result.text).toContain("bundle was installed in Codex");
+    expect(result.text).toContain("OpenClaw app access is configured");
+    expect(result.text).toContain("1 app still requires connector authentication in ChatGPT");
+    expect(result.text).toContain("Installation does not confirm app connections");
     expect(result.text).toContain(installUrl);
     expect(result.presentation?.blocks).toContainEqual({
       type: "buttons",
-      buttons: [{ label: "Set up / manage GitHub", action: { type: "url", url: installUrl } }],
+      buttons: [{ label: "Open GitHub in ChatGPT", action: { type: "url", url: installUrl } }],
     });
     expect(io.current()["security-review@company-tools"]?.enabled).toBe(true);
   });
@@ -956,7 +959,7 @@ describe("Codex /codex plugins subcommand", () => {
     expect(result.text).toContain("does not confirm that it is connected or callable");
     expect(result.presentation?.blocks).toContainEqual({
       type: "buttons",
-      buttons: [{ label: "Set up / manage GitHub", action: { type: "url", url: installUrl } }],
+      buttons: [{ label: "Open GitHub in ChatGPT", action: { type: "url", url: installUrl } }],
     });
     expect(result.presentationTextMode).toBe("fallback");
   });
@@ -990,7 +993,7 @@ describe("Codex /codex plugins subcommand", () => {
       runtime,
     );
 
-    expect(result.text).toContain("GitHub: setup/manage link unavailable");
+    expect(result.text).toContain("GitHub: ChatGPT setup/manage link unavailable");
     expect(result.text).toContain("In Codex CLI, run /apps and select this app");
     expect(result.presentation?.blocks.some((block) => block.type === "buttons")).toBe(false);
     if (installUrl) {
@@ -1026,11 +1029,11 @@ describe("Codex /codex plugins subcommand", () => {
     );
     expect(buttons).toHaveLength(5);
     expect(buttons?.map((button) => button.label)).toEqual([
-      "Set up / manage App 0",
-      "Set up / manage App 1",
-      "Set up / manage App 2",
-      "Set up / manage App 3",
-      "Set up / manage App 4",
+      "Open App 0 in ChatGPT",
+      "Open App 1 in ChatGPT",
+      "Open App 2 in ChatGPT",
+      "Open App 3 in ChatGPT",
+      "Open App 4 in ChatGPT",
     ]);
     expect(result.text).toContain("7 apps still require connector authentication");
     expect(result.text).toContain("2 more apps are not shown");
