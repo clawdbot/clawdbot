@@ -1,29 +1,45 @@
 import { consume } from "@lit/context";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
+import type { ControlUiAction } from "../../../src/plugin-sdk/control-ui.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { icons, type IconName } from "../components/icons.ts";
 import { t } from "../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { findUiSessionRow } from "../lib/sessions/route-navigation.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
-import { scopeControlUiHost } from "./control-ui-scope.ts";
+import { runControlUiPluginAction } from "./control-ui-actions.ts";
+import type { ControlUiRegistration } from "./control-ui-runtime.ts";
 import { renderPluginContribution } from "./control-ui-view.ts";
 
 class ControlUiPluginContributions extends OpenClawLightDomContentsElement {
+  private lifetime = new AbortController();
+  private readonly actionLifetimes = new Map<
+    AbortSignal,
+    { entry: ControlUiRegistration<ControlUiAction>; abort: AbortController }
+  >();
   @consume({ context: applicationContext, subscribe: true }) private context?: ApplicationContext;
   @property({ attribute: false }) kind: "navigation" | "session-header" | "composer" | "header" =
     "navigation";
   @property({ attribute: false }) sessionKey = "";
+  @property({ attribute: false }) agentId?: string;
   @property({ attribute: false }) navigationKey = "";
   @property({ attribute: false }) excludedNavigationKeys: readonly string[] = [];
   @property({ type: Boolean }) presented = true;
   @state() private actionError = "";
-  private lifetime = new AbortController();
-  private readonly subscriptions = new SubscriptionsController(this).watch(
-    () => this.context?.plugins,
-    (plugins, notify) => plugins.subscribe(notify),
-  );
+  private readonly subscriptions = new SubscriptionsController(this)
+    .watch(
+      () => this.context?.plugins,
+      (plugins, notify) => plugins.subscribe(notify),
+      () => this.retireHiddenActions(),
+    )
+    .watch(
+      () =>
+        this.kind === "header" || this.kind === "composer" ? this.context?.sessions : undefined,
+      (sessions, notify) => sessions.subscribe(notify),
+      () => this.retireHiddenActions(),
+    );
 
   override connectedCallback() {
     if (this.lifetime.signal.aborted) {
@@ -34,14 +50,59 @@ class ControlUiPluginContributions extends OpenClawLightDomContentsElement {
 
   override disconnectedCallback() {
     this.lifetime.abort();
+    this.actionLifetimes.clear();
     this.subscriptions.clear();
     super.disconnectedCallback();
   }
 
-  override willUpdate(changes: Map<PropertyKey, unknown>) {
-    if (changes.has("sessionKey")) {
+  override requestUpdate(...args: Parameters<OpenClawLightDomContentsElement["requestUpdate"]>) {
+    const [name, previous] = args;
+    // Lit calls this synchronously; a hide/show before rendering still retires old actions.
+    if (
+      (name === "sessionKey" || name === "agentId" || name === "presented") &&
+      this[name] !== previous
+    ) {
       this.lifetime.abort();
+      this.actionLifetimes.clear();
       this.lifetime = new AbortController();
+    }
+    super.requestUpdate(...args);
+  }
+
+  private currentSession() {
+    return this.context ? findUiSessionRow(this.context, this.sessionKey, this.agentId) : undefined;
+  }
+
+  private resolveAction(
+    entry: ControlUiRegistration<ControlUiAction>,
+  ): ReturnType<NonNullable<ControlUiAction["resolve"]>> | undefined {
+    const session = this.currentSession();
+    try {
+      return entry.value.resolve?.({
+        sessionKey: this.sessionKey,
+        agentId: this.agentId ?? session?.agentId,
+        session: session ? structuredClone(session) : undefined,
+      });
+    } catch (error) {
+      this.retireAction(entry.signal);
+      this.context?.plugins.reportError(entry.pluginId, error);
+      return { hidden: true };
+    }
+  }
+
+  private retireAction(signal: AbortSignal) {
+    const action = this.actionLifetimes.get(signal);
+    this.actionLifetimes.delete(signal);
+    action?.abort.abort();
+  }
+
+  private retireHiddenActions() {
+    for (const [signal, { entry }] of this.actionLifetimes) {
+      // An action may disable itself while running. Hiding instead retires
+      // its retained invocations before awaited work can resume.
+      if (signal.aborted || this.resolveAction(entry)?.hidden) {
+        this.retireAction(signal);
+      }
     }
   }
 
@@ -94,7 +155,7 @@ class ControlUiPluginContributions extends OpenClawLightDomContentsElement {
           renderPluginContribution(
             "accessories",
             entry.key,
-            { sessionKey: this.sessionKey },
+            { sessionKey: this.sessionKey, agentId: this.agentId },
             nothing,
             this.presented,
           ),
@@ -106,45 +167,42 @@ class ControlUiPluginContributions extends OpenClawLightDomContentsElement {
       .registrations("actions")
       .filter((entry) => entry.value.placement === this.kind)
       .map((entry) => {
-        const session = this.context?.sessions.state.result?.sessions.find(
-          (row) => row.key === this.sessionKey,
-        );
-        const params = {
-          sessionKey: this.sessionKey,
-          session: session ? structuredClone(session) : undefined,
-        };
-        let actionState: ReturnType<NonNullable<typeof entry.value.resolve>> | undefined;
-        try {
-          actionState = entry.value.resolve?.(params);
-        } catch (error) {
-          runtime.reportError(entry.pluginId, error);
-          return nothing;
-        }
+        const actionState = this.resolveAction(entry);
         if (actionState?.hidden) {
+          this.retireAction(entry.signal);
           return nothing;
         }
+        let actionLifetime = this.actionLifetimes.get(entry.signal);
+        if (!actionLifetime) {
+          actionLifetime = { entry, abort: new AbortController() };
+          this.actionLifetimes.set(entry.signal, actionLifetime);
+        }
+        const signal = AbortSignal.any([
+          this.lifetime.signal,
+          entry.signal,
+          actionLifetime.abort.signal,
+        ]);
         return html`<button
           class="btn btn--sm"
           type="button"
           ?disabled=${actionState?.disabled ?? false}
           @click=${async () => {
-            const signal = AbortSignal.any([this.lifetime.signal, entry.signal]);
-            if (signal.aborted || entry.signal.aborted) {
+            if (signal.aborted || !this.presented || !this.isConnected) {
               return;
             }
             this.actionError = "";
             try {
-              const next = entry.value.resolve?.(params);
-              if (next?.hidden || next?.disabled) {
-                return;
-              }
-              await entry.value.run({
-                ...params,
-                host: scopeControlUiHost(entry.host, signal),
+              await runControlUiPluginAction({
+                runtime,
+                id: entry.key,
+                placement: entry.value.placement,
+                sessionKey: this.sessionKey,
+                agentId: this.agentId,
+                session: this.currentSession(),
                 signal,
               });
             } catch (error) {
-              if (!signal.aborted && !entry.signal.aborted) {
+              if (!signal.aborted) {
                 this.actionError = error instanceof Error ? error.message : String(error);
               }
             }

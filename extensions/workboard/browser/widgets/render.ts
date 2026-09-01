@@ -15,8 +15,13 @@ import type { WorkboardProps } from "../pages/workboard/view-helpers.ts";
 import { workboardPageTarget } from "../pages/workboard/workboard-page.ts";
 import type { WorkboardWidgetModel } from "./runtime.ts";
 
-export function renderWorkboardMiniWidget(model: WorkboardWidgetModel): TemplateResult {
-  if (model.loading && !model.loaded) {
+function renderAvailability(model: WorkboardWidgetModel): TemplateResult | null {
+  if (!model.connected) {
+    return html`<p class="workboard-widget__state" role="status">
+      ${t("workboard.widget.disconnected")}
+    </p>`;
+  }
+  if (!model.loaded && !model.error) {
     return html`<p class="workboard-widget__state">${t("workboard.widget.loading")}</p>`;
   }
   if (model.error) {
@@ -26,6 +31,14 @@ export function renderWorkboardMiniWidget(model: WorkboardWidgetModel): Template
         ${t("common.retry")}
       </button>
     </div>`;
+  }
+  return null;
+}
+
+export function renderWorkboardMiniWidget(model: WorkboardWidgetModel): TemplateResult {
+  const availability = renderAvailability(model);
+  if (availability) {
+    return availability;
   }
   // No boardId prop means every board: silently scoping to "default" hides
   // cards created with an explicit board id and renders an all-zero widget.
@@ -87,16 +100,9 @@ export function renderWorkboardCardWidget(model: WorkboardWidgetModel): Template
       ${t("workboard.widget.cardIdRequired")}
     </p>`;
   }
-  if (model.loading && !model.loaded) {
-    return html`<p class="workboard-widget__state">${t("workboard.widget.loading")}</p>`;
-  }
-  if (model.error) {
-    return html`<div class="workboard-widget__state" role="alert">
-      <span>${model.error}</span>
-      <button class="btn btn--sm" type="button" @click=${() => model.retryLoad()}>
-        ${t("common.retry")}
-      </button>
-    </div>`;
+  const availability = renderAvailability(model);
+  if (availability) {
+    return availability;
   }
   const card = model.cards.find((candidate) => candidate.id === cardId);
   if (!card) {
@@ -150,16 +156,9 @@ export function renderWorkboardCardWidget(model: WorkboardWidgetModel): Template
 }
 
 export function renderWorkboardBoardWidget(model: WorkboardWidgetModel): TemplateResult {
-  if (model.loading && !model.loaded) {
-    return html`<p class="workboard-widget__state">${t("workboard.widget.loading")}</p>`;
-  }
-  if (model.error) {
-    return html`<div class="workboard-widget__state" role="alert">
-      <span>${model.error}</span>
-      <button class="btn btn--sm" type="button" @click=${() => model.retryLoad()}>
-        ${t("common.retry")}
-      </button>
-    </div>`;
+  const availability = renderAvailability(model);
+  if (availability) {
+    return availability;
   }
 
   // No boardId prop means every board, matching the summary widget. Defaulting
@@ -175,12 +174,18 @@ export function renderWorkboardBoardWidget(model: WorkboardWidgetModel): Templat
     byStatus.get(card.status)?.push(card);
   }
 
-  const client = model.workboardClient;
+  // Hidden widgets retain their controls; mutation admission must follow the current lease.
   const props: WorkboardProps = {
     host: model.workboardStateHost,
-    client,
-    connected: client !== null,
-    canWrite: model.canMutate,
+    get client() {
+      return model.workboardClient;
+    },
+    get connected() {
+      return model.connected;
+    },
+    get canWrite() {
+      return model.canMutate;
+    },
     pluginEnabled: true,
     agentsList: null,
     sessions: [],

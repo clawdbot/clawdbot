@@ -13,7 +13,9 @@ export type { WorkboardBoardSummary } from "@openclaw/workboard-contract";
 
 type WorkboardLifecycleState =
   | "unlinked"
-  | "missing"
+  | "unknown"
+  | "unavailable"
+  | "ambiguous"
   | "idle"
   | "queued"
   | "running"

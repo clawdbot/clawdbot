@@ -896,12 +896,13 @@ describe("chat Swarm progress", () => {
       ],
     });
 
-    const widget = container.querySelector("[data-test-id=chat-swarm]");
-    expect(widget).not.toBeNull();
-    const scrollAnchor = widget?.previousElementSibling;
+    const widget = requireElement(container, "[data-test-id=chat-swarm]", "Swarm progress");
+    const shell = requireElement(container, ".agent-chat__composer-shell", "composer shell");
+    const scrollAnchor = widget.previousElementSibling;
     expect(scrollAnchor?.classList.contains("chat-scroll-to-bottom-wrap")).toBe(true);
     expect(scrollAnchor?.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
-    expect(widget?.nextElementSibling?.classList.contains("agent-chat__composer-shell")).toBe(true);
+    expect(widget.parentElement).toBe(shell.parentElement);
+    expect(widget.compareDocumentPosition(shell)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(container.querySelector(".chat-swarm__task-name")?.textContent).toBe("Worker A");
   });
 });
@@ -930,12 +931,12 @@ describe("inline approval card", () => {
     });
 
     const card = container.querySelector(".chat-inline-approval .exec-approval-card");
-    const inlineSurface = container.querySelector(".chat-inline-approval");
+    const inlineSurface = requireElement(container, ".chat-inline-approval", "inline approval");
+    const shell = requireElement(container, ".agent-chat__composer-shell", "composer shell");
     expect(card?.getAttribute("data-approval-id")).toBe("approval-inline");
-    expect(inlineSurface?.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
-    expect(
-      inlineSurface?.nextElementSibling?.classList.contains("agent-chat__composer-shell"),
-    ).toBe(true);
+    expect(inlineSurface.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
+    expect(inlineSurface.parentElement).toBe(shell.parentElement);
+    expect(inlineSurface.compareDocumentPosition(shell)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     const countdown = expectDefined(
       container.querySelector<LitElement>(".exec-approval-countdown"),
       "inline approval countdown",
@@ -2469,7 +2470,8 @@ describe("chat scroll-to-bottom affordance", () => {
     const shell = requireElement(container, ".agent-chat__composer-shell", "composer shell");
     const queue = requireElement(container, ".chat-queue", "composer queue");
     const composer = requireElement(shell, ".agent-chat__input", "composer");
-    expect(wrapper.nextElementSibling).toBe(shell);
+    expect(wrapper.parentElement).toBe(shell.parentElement);
+    expect(wrapper.compareDocumentPosition(shell)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(queue.closest(".agent-chat__composer-shell")).toBe(shell);
     expect(queue.compareDocumentPosition(composer)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });

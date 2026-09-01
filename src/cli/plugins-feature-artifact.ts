@@ -1,20 +1,22 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import { createRequire, isBuiltin } from "node:module";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { create as createArchive } from "tar";
 import { root } from "../infra/fs-safe.js";
+import { readPluginControlUiAssets } from "../plugins/control-ui-assets.js";
 import { loadPluginManifest, resolvePackageExtensionEntries } from "../plugins/manifest.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { defaultRuntime } from "../runtime.js";
 import { collectPluginsValidationResult } from "./plugins-authoring-command.js";
+import { buildPluginBundle, isPluginBundleHostImport } from "./plugins-build-bundle.js";
 
 export type PluginsPackOptions = { root?: string; out?: string; json?: boolean };
 
 /** Produce one reviewable import: bundled code, immutable UI assets, no install scripts. */
-export async function packFeaturePlugin(opts: PluginsPackOptions) {
+async function packFeaturePlugin(opts: PluginsPackOptions) {
   const rootDir = await fs.realpath(path.resolve(opts.root ?? process.cwd()));
   const validation = await collectPluginsValidationResult({ root: rootDir });
   if (!validation.valid) {
@@ -37,32 +39,17 @@ export async function packFeaturePlugin(opts: PluginsPackOptions) {
   const require = createRequire(path.join(rootDir, "package.json"));
   // SAFETY: Node resolves the plugin's installed esbuild package with this public API.
   const builder = require("esbuild") as typeof import("esbuild");
-  const result = await builder.build({
+  const result = await buildPluginBundle(builder, {
     absWorkingDir: rootDir,
     entryPoints: [entry],
     outfile: "dist/index.js",
-    bundle: true,
     platform: "node",
-    format: "esm",
     target: "node22",
     external: ["openclaw", "openclaw/*"],
-    // Bundled CommonJS dependencies still use require for Node builtins in ESM.
-    banner: {
-      js: 'import { createRequire as __openclawCreateRequire } from "node:module"; const require = __openclawCreateRequire(import.meta.url);',
-    },
-    write: false,
-    metafile: true,
-    logLevel: "silent",
   });
   const unbundled = Object.values(result.metafile.outputs)
     .flatMap((output) => output.imports)
-    .filter(
-      (item) =>
-        item.external &&
-        !isBuiltin(item.path) &&
-        item.path !== "openclaw" &&
-        !item.path.startsWith("openclaw/"),
-    );
+    .filter((item) => item.external && !isPluginBundleHostImport(item.path));
   if (unbundled.length || result.outputFiles.length !== 1) {
     throw new Error("Plugin artifact must bundle all dependencies into its backend entrypoint.");
   }
@@ -105,12 +92,13 @@ export async function packFeaturePlugin(opts: PluginsPackOptions) {
     await destination.mkdir("dist");
     await destination.create("dist/index.js", Buffer.from(result.outputFiles[0]!.contents));
     const controlUi = loaded.manifest.controlUi;
-    for (const asset of controlUi ? [controlUi.entry, ...(controlUi.styles ?? [])] : []) {
-      await destination.mkdir(path.dirname(asset));
-      await destination.create(
-        asset,
-        await source.readBytes(asset, { maxBytes: 16 * 1024 * 1024 }),
-      );
+    if (controlUi) {
+      const { directory, assets } = await readPluginControlUiAssets(rootDir, controlUi);
+      for (const [name, asset] of assets) {
+        const relativePath = path.posix.join(directory, name);
+        await destination.mkdir(path.posix.dirname(relativePath));
+        await destination.create(relativePath, asset.body);
+      }
     }
     const archive = path.join(staging, "plugin.tgz");
     await createArchive(

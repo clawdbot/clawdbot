@@ -21,6 +21,7 @@ import {
   formatPriorityLabel,
   formatStatusLabel,
   isWorkboardSessionChoice,
+  renderWorkboardError,
   type WorkboardProps,
 } from "./view-helpers.ts";
 import { renderWorkboardSelect, type WorkboardSelectOption } from "./workboard-select.ts";
@@ -233,6 +234,7 @@ export function renderCardModal(props: WorkboardProps) {
             <p id=${workboardCardModalDescriptionId}>
               ${editing ? t("workboard.editCardHelp") : t("workboard.newCardHelp")}
             </p>
+            ${renderWorkboardError(state.error)}
           </div>
           <span title=${t("common.cancel")}>
             <button

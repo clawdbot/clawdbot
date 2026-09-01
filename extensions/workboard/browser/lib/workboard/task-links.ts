@@ -2,6 +2,7 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isGatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { normalizeSessionKeyForUiComparison } from "../sessions/session-key.ts";
 import { taskTimestampMs } from "../tasks/data.ts";
 import { normalizeTaskSummary } from "../tasks/task-summary.ts";
 import {
@@ -13,6 +14,8 @@ import {
 import { formatError } from "./normalization-utils.ts";
 import { normalizeTasksPage } from "./normalization.ts";
 import { getWorkboardRuntime, type WorkboardHost } from "./runtime.ts";
+import { workboardSessionKeyMatches, workboardSessionLookupKeys } from "./session-links.ts";
+import { workboardCardSessionTarget } from "./session-resolution.ts";
 import type { WorkboardCard, WorkboardTaskLinkState, WorkboardTaskSummary } from "./types.ts";
 
 const WORKBOARD_TASKS_LIST_LIMIT = 500;
@@ -75,22 +78,6 @@ export function sessionUpdatedAtValue(session: GatewaySessionRow): number | unde
   return asFiniteNumber(session.updatedAt);
 }
 
-export function taskSessionKeyMatchesCardSession(
-  taskSessionKey: string | undefined,
-  cardSessionKey: string,
-): boolean {
-  if (!taskSessionKey) {
-    return false;
-  }
-  if (taskSessionKey === cardSessionKey) {
-    return true;
-  }
-  return (
-    cardSessionKey.startsWith("subagent:workboard-") &&
-    taskSessionKey.endsWith(`:${cardSessionKey}`)
-  );
-}
-
 export function taskMatchesCard(task: WorkboardTaskSummary, card: WorkboardCard): boolean {
   const cardTaskId = normalizeString(card.taskId);
   if (cardTaskId && (task.taskId === cardTaskId || task.id === cardTaskId)) {
@@ -99,14 +86,16 @@ export function taskMatchesCard(task: WorkboardTaskSummary, card: WorkboardCard)
   const cardSessionKey = workboardCardSessionKey(card);
   const taskSessionMatches = cardSessionKey
     ? [task.sessionKey, task.childSessionKey, task.ownerKey].some((taskSessionKey) =>
-        taskSessionKeyMatchesCardSession(taskSessionKey, cardSessionKey),
+        workboardSessionKeyMatches(taskSessionKey, cardSessionKey),
       )
     : false;
   const cardRunId = workboardCardRunId(card);
-  if (cardRunId && task.runId === cardRunId) {
-    return cardSessionKey ? taskSessionMatches : true;
+  if (cardRunId) {
+    return task.runId === cardRunId && (!cardSessionKey || taskSessionMatches);
   }
-  return taskSessionMatches;
+  // Task pages cannot prove a provisional link's owner. Only an exact task/run
+  // identity or an already canonical session link can establish this association.
+  return Boolean(workboardCardSessionTarget(card)) && taskSessionMatches;
 }
 
 function taskMatchesCanonicalCardLink(task: WorkboardTaskSummary, card: WorkboardCard): boolean {
@@ -115,10 +104,6 @@ function taskMatchesCanonicalCardLink(task: WorkboardTaskSummary, card: Workboar
     // Exact persisted task IDs stay authoritative when card run metadata is stale
     // or an otherwise matching task summary omits its optional run ID.
     return task.taskId === cardTaskId || task.id === cardTaskId;
-  }
-  const cardRunId = workboardCardRunId(card);
-  if (cardRunId && task.runId !== cardRunId) {
-    return false;
   }
   return taskMatchesCard(task, card);
 }
@@ -346,14 +331,8 @@ function buildWorkboardTaskIndex(tasks: readonly WorkboardTaskSummary[]): Workbo
     addTaskIndexEntry(index.byId, task.taskId, task);
     addTaskIndexEntry(index.byRunId, task.runId, task);
     for (const sessionKey of [task.sessionKey, task.childSessionKey, task.ownerKey]) {
-      addTaskIndexEntry(index.bySessionKey, sessionKey, task);
-      const nestedWorkboardSessionIndex = sessionKey?.lastIndexOf(":subagent:workboard-") ?? -1;
-      if (nestedWorkboardSessionIndex >= 0) {
-        addTaskIndexEntry(
-          index.bySessionKey,
-          sessionKey?.slice(nestedWorkboardSessionIndex + 1),
-          task,
-        );
+      for (const key of workboardSessionLookupKeys(sessionKey ?? "")) {
+        addTaskIndexEntry(index.bySessionKey, key, task);
       }
     }
   }
@@ -387,7 +366,9 @@ function findLatestTaskForCard(
     }
   };
   addCandidates(index.byRunId.get(workboardCardRunId(card) ?? ""));
-  addCandidates(index.bySessionKey.get(workboardCardSessionKey(card) ?? ""));
+  addCandidates(
+    index.bySessionKey.get(normalizeSessionKeyForUiComparison(workboardCardSessionKey(card) ?? "")),
+  );
   let latest: WorkboardTaskSummary | null = null;
   for (const task of candidates) {
     if (

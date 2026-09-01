@@ -1377,7 +1377,6 @@ extensions/whatsapp/src/setup-finalize.ts	4
 extensions/whatsapp/src/targets-runtime.ts	2
 extensions/workboard/browser/lib/workboard/metadata-contract-normalization.ts	1
 extensions/workboard/browser/lib/workboard/normalization.ts	5
-extensions/workboard/browser/lib/workboard/session-card-lookup.ts	2
 extensions/workboard/browser/pages/workboard/view-card-actions.ts	2
 extensions/workboard/browser/pages/workboard/view-card-details.ts	1
 extensions/workboard/browser/pages/workboard/view-card-modal.ts	1
@@ -3080,7 +3079,7 @@ src/infra/heartbeat-outcome-store.ts	1
 src/infra/heartbeat-runner-config.ts	1
 src/infra/heartbeat-visibility.ts	1
 src/infra/heartbeat-wake.ts	1
-src/infra/install-package-dir.ts	3
+src/infra/install-package-dir.ts	2
 src/infra/install-source-utils.ts	2
 src/infra/json-file.ts	1
 src/infra/json-utf8-bytes.ts	4

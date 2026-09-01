@@ -1,13 +1,16 @@
 /* @vitest-environment jsdom */
 
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { ControlUiHost, ControlUiViewContext } from "../../../src/plugin-sdk/control-ui.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { ApplicationContext } from "../app/context.ts";
 import {
   acquireBoardProviderForSession,
   type BoardProvider,
   type BoardProviderLease,
 } from "../lib/board/provider.ts";
+import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import "./control-ui-dashboard.ts";
 
 type DashboardElement = HTMLElementTagNameMap["openclaw-plugin-session-dashboard"] & {
@@ -46,6 +49,7 @@ async function mountDashboard(
   session: BoardGetParams,
   client: GatewayBrowserClient,
   capabilities: { canMutate?: boolean; canGrant?: boolean } = {},
+  container: HTMLElement = document.body,
 ): Promise<DashboardElement> {
   const element = document.createElement("openclaw-plugin-session-dashboard");
   element.session = session;
@@ -53,7 +57,7 @@ async function mountDashboard(
   element.connected = true;
   element.canMutate = capabilities.canMutate ?? false;
   element.canGrant = capabilities.canGrant ?? false;
-  document.body.append(element);
+  container.append(element);
   mounted.push(element);
   // The provider is acquired in updated(), after the first DOM render.
   // Await the real lifecycle so a loaded runner cannot observe the toggle early.
@@ -69,6 +73,109 @@ afterEach(() => {
 });
 
 describe("Plugin session dashboard", () => {
+  it.each([
+    { sessionKey: "global", hydrateOwner: false },
+    { sessionKey: "agent:writer:workboard-owner-hydration", hydrateOwner: true },
+  ])(
+    "passes the queried owner of $sessionKey to native widgets outside the selected agent",
+    async ({ sessionKey, hydrateOwner }) => {
+      const lifetime = new AbortController();
+      const widgetSignals: AbortSignal[] = [];
+      const host = {
+        signal: lifetime.signal,
+        sessions: {},
+        agents: {},
+        navigation: {},
+        ui: {},
+        components: {},
+      } as unknown as ControlUiHost;
+      const entry = {
+        key: "identity/context",
+        pluginId: "identity",
+        signal: lifetime.signal,
+        host,
+        value: {
+          id: "context",
+          label: "Conversation owner",
+          mount(container: HTMLElement, view: ControlUiViewContext<BoardGetParams>) {
+            widgetSignals.push(view.signal);
+            container.dataset.nativeOwner = "widget";
+            container.textContent = `${view.props.agentId}/${view.props.sessionKey}`;
+          },
+        },
+      };
+      const reportError = vi.fn();
+      const context = {
+        agentSelection: { state: { selectedId: "main" } },
+        gateway: {
+          snapshot: {
+            phase: "connected",
+            hello: {
+              controlUiWidgetKinds: [
+                { pluginId: "identity", kind: "identity:context", label: "Conversation owner" },
+              ],
+            },
+          },
+        },
+        plugins: {
+          registrations: (kind: string) => (kind === "widgets" ? [entry] : []),
+          subscribe: () => () => undefined,
+          reportError,
+        },
+      } as unknown as ApplicationContext;
+      const provider = createApplicationContextProvider(context);
+      onTestFinished(() => provider.remove());
+      document.body.append(provider);
+      const { client, request } = createClient([
+        {
+          name: "owner",
+          tabId: "main",
+          title: "Conversation owner",
+          contentKind: "plugin",
+          pluginKind: "identity:context",
+          sizeW: 6,
+          sizeH: 2,
+          position: 0,
+          grantState: "none",
+          revision: 1,
+        },
+      ]);
+      const session = { sessionKey, agentId: "writer" };
+      const initial: BoardGetParams = hydrateOwner ? { sessionKey } : session;
+      const element = await mountDashboard(initial, client, {}, provider);
+
+      await customElements.whenDefined("openclaw-board-view");
+      await vi.waitFor(() => {
+        expect(reportError).not.toHaveBeenCalled();
+        expect(
+          element.querySelector('[data-native-owner="widget"]'),
+          element.innerHTML,
+        ).not.toBeNull();
+      });
+      expect(request).toHaveBeenCalledWith("board.get", initial);
+      expect(element.querySelector('[data-native-owner="widget"]')?.textContent).toBe(
+        `${initial.agentId}/${sessionKey}`,
+      );
+      if (hydrateOwner) {
+        const previousSignal = widgetSignals.at(-1);
+        expect(previousSignal?.aborted).toBe(false);
+
+        element.session = session;
+        await element.updateComplete;
+
+        await vi.waitFor(() =>
+          expect(element.querySelector('[data-native-owner="widget"]')?.textContent).toBe(
+            `writer/${sessionKey}`,
+          ),
+        );
+        expect(previousSignal?.aborted).toBe(true);
+        expect(widgetSignals.at(-1)?.aborted).toBe(false);
+      }
+      expect(request).toHaveBeenCalledOnce();
+      expect(reportError).not.toHaveBeenCalled();
+    },
+  );
+
   it("waits for the initial gateway snapshot before choosing its expanded state", async () => {
     const sessionKey = "agent:main:workboard-delayed-snapshot";
     const snapshot = {

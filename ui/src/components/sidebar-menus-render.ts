@@ -24,8 +24,8 @@ import {
 import { showToast } from "../lib/toast.ts";
 import {
   pluginSessionMenuActions,
-  runPluginSessionMenuAction,
-} from "../plugins/control-ui-session-actions.ts";
+  runControlUiPluginAction,
+} from "../plugins/control-ui-actions.ts";
 import { renderSidebarAgentMenu, renderSidebarIdentityMenu } from "./app-sidebar-agent-menu.ts";
 import { renderSidebarCustomizeMenu, renderSidebarMoreMenu } from "./app-sidebar-nav-menus.ts";
 import { formatSidebarTimestamp } from "./app-sidebar-session-catalogs.ts";
@@ -194,10 +194,14 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
     return nothing;
   }
   const context = host.sessionDataContext;
+  const pluginActionSignal = controller.pluginActionLifetime.signal;
   const currentSession = host.findSidebarSessionByKey(menu.session.key);
-  const pluginSession = host.sessionData.sessionsResult?.sessions.find(
-    (row) => row.key === menu.session.key,
-  );
+  // Read again at dispatch: session updates can arrive before the menu rerenders.
+  const currentPluginSession = () =>
+    host.sessionData.sessionsResult?.sessions.find(
+      (row) => row.key === menu.session.key && row.sessionId === menu.session.sessionId,
+    );
+  const pluginSession = currentPluginSession();
   // Appearance editing keeps this menu open. Refresh its row without adopting
   // a replacement session that happens to reuse the captured key.
   const session =
@@ -342,14 +346,16 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
               void host.sessionOrganizer.forkSession(session);
               break;
             case "plugin":
-              if (context?.plugins && pluginSession) {
-                void runPluginSessionMenuAction({
+              if (context?.plugins) {
+                void runControlUiPluginAction({
                   runtime: context.plugins,
                   id: action.id,
-                  session: pluginSession,
-                  signal: controller.pluginActionLifetime.signal,
+                  placement: "session",
+                  sessionKey: menu.session.key,
+                  session: currentPluginSession(),
+                  signal: pluginActionSignal,
                 }).catch((error: unknown) => {
-                  if (!controller.pluginActionLifetime.signal.aborted) {
+                  if (!pluginActionSignal.aborted) {
                     showToast({ message: error instanceof Error ? error.message : String(error) });
                   }
                 });

@@ -182,7 +182,6 @@ describe("run-tsgo sparse guard", () => {
       - packages
       - ui/config
       - ui/src
-      - extensions
       Expand this worktree's sparse checkout to include those paths, or rerun in a full worktree."
     `);
   });
@@ -213,7 +212,7 @@ describe("run-tsgo sparse guard", () => {
         cwd,
         fileExists: () => true,
         isSparseCheckoutEnabled: () => true,
-        sparseCheckoutPatterns: ["/extensions/", "/packages/", "/ui/config/", "/ui/src/"],
+        sparseCheckoutPatterns: ["/packages/", "/ui/config/", "/ui/src/"],
       }),
     ).toMatchInlineSnapshot(`
       "tsconfig.ui.json cannot be typechecked from this sparse checkout because tracked project inputs are missing or only partially included:
@@ -226,7 +225,7 @@ describe("run-tsgo sparse guard", () => {
     "tsconfig.ui.json",
     "test/tsconfig/tsconfig.core.test.json",
     "test/tsconfig/tsconfig.core.test.ui-other.json",
-  ])("requires plugin browser sources for %s", (project) => {
+  ])("does not require plugin browser sources for %s", (project) => {
     const cwd = createTempDir("openclaw-run-tsgo-");
     const options = {
       cwd,
@@ -235,13 +234,7 @@ describe("run-tsgo sparse guard", () => {
       sparseCheckoutPatterns: ["/packages/", "/src/", "/ui/config/", "/ui/src/"],
     };
 
-    expect(getSparseTsgoGuardError(["-p", project], options)).toContain("- extensions");
-    expect(
-      getSparseTsgoGuardError(["-p", project], {
-        ...options,
-        sparseCheckoutPatterns: [...options.sparseCheckoutPatterns, "/extensions/"],
-      }),
-    ).toBeNull();
+    expect(getSparseTsgoGuardError(["-p", project], options)).toBeNull();
   });
 
   it("returns a helpful message for sparse core-test worktrees missing ui and packages files", () => {

@@ -28,9 +28,8 @@ import { renderPluginContribution } from "../../plugins/control-ui-view.ts";
 import { pluginTabKey } from "./route.ts";
 
 /**
- * Bundled plugin tab views ship with the Control UI and render natively; every
- * other tab either embeds the plugin-served panel (descriptor path) in a
- * sandboxed frame or shows the unavailable card.
+ * Views shipped with the Control UI use this adapter. Native plugin entries
+ * mount through the contribution runtime; descriptor paths use sandboxed frames.
  */
 type BundledPluginTabView = {
   render: (props: {
@@ -657,6 +656,12 @@ export class PluginPage extends OpenClawLightDomContentsElement {
           ></iframe>
         </section>
       `;
+    }
+    if (
+      context.gateway.snapshot.phase !== "connected" ||
+      context.plugins?.isLoading(this.pluginId)
+    ) {
+      return renderLoadingState();
     }
     return html`
       <section class="card lazy-view-state" role="status">

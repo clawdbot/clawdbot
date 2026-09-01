@@ -31,12 +31,8 @@ const GUARDED_CONFIGS = new Set([
 ]);
 const TSGO_SPARSE_SKIP_ENV_KEY = "OPENCLAW_TSGO_SPARSE_SKIP";
 const CORE_PROD_SPARSE_ROOTS = ["packages"];
-const UI_PROD_SPARSE_ROOTS = ["extensions", "packages", "src", "ui/config", "ui/src"];
+const UI_PROD_SPARSE_ROOTS = ["packages", "src", "ui/config", "ui/src"];
 const CORE_TEST_SPARSE_ROOTS = ["packages", "ui/config", "ui/src"];
-const PLUGIN_UI_TEST_CONFIGS = new Set([
-  "tsconfig.core.test.json",
-  "tsconfig.core.test.ui-other.json",
-]);
 
 const CORE_PROD_REQUIRED_PATHS = [
   {
@@ -169,9 +165,7 @@ function getRequiredSparseRootsForProject(projectName: string) {
     return UI_PROD_SPARSE_ROOTS;
   }
   if (CORE_TEST_CONFIGS.has(projectName)) {
-    return PLUGIN_UI_TEST_CONFIGS.has(projectName)
-      ? [...CORE_TEST_SPARSE_ROOTS, "extensions"]
-      : CORE_TEST_SPARSE_ROOTS;
+    return CORE_TEST_SPARSE_ROOTS;
   }
   return [];
 }

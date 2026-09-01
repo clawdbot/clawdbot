@@ -305,7 +305,7 @@ export function sidebarPanelDefinitions(
         content: renderPluginContribution(
           "panels",
           entry.key,
-          { sessionKey: state?.sessionKey ?? "" },
+          { sessionKey: state?.sessionKey ?? "", agentId: params?.agentId ?? undefined },
           nothing,
           params?.isPluginPanelPresented(slot),
         ),

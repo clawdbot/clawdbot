@@ -6,10 +6,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   CONTROL_UI_PLUGIN_MAX_ASSET_BYTES,
   CONTROL_UI_PLUGIN_MAX_BUILD_BYTES,
-} from "../gateway/control-ui-plugin-assets-contract.js";
+} from "../plugins/control-ui-assets.js";
 import type { PluginManifestControlUi } from "../plugins/manifest-types.js";
 import { PLUGIN_MANIFEST_FILENAME } from "../plugins/manifest.js";
 import { buildPluginLoaderAliasMap } from "../plugins/sdk-alias.js";
+import { buildPluginBundle } from "./plugins-build-bundle.js";
 
 export async function writePluginBuildManifest(
   rootDir: string,
@@ -60,24 +61,19 @@ export async function buildPluginControlUi(params: {
       { cause },
     );
   }
-  const result = await builder.build({
+  const result = await buildPluginBundle(builder, {
     absWorkingDir: rootDir,
     entryPoints: { index: entry },
     outdir: path.join(rootDir, "dist/control-ui/build"),
-    write: false,
-    bundle: true,
     platform: "browser",
-    format: "esm",
     target: "es2022",
     minify: true,
     legalComments: "none",
     sourcemap: false,
-    metafile: true,
     tsconfigRaw: {
       compilerOptions: { experimentalDecorators: true, useDefineForClassFields: false },
     },
     alias: buildPluginLoaderAliasMap(entry, process.argv[1], import.meta.url),
-    logLevel: "silent",
   });
   if (
     Object.values(result.metafile.outputs).some((output) =>

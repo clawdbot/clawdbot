@@ -1,6 +1,6 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { getWorkboardLifecycle } from "./lifecycle.ts";
-import { taskSessionKeyMatchesCardSession } from "./task-links.ts";
+import { workboardSessionKeyMatches } from "./session-links.ts";
 import type {
   WorkboardCard,
   WorkboardHealthKey,
@@ -46,7 +46,7 @@ function taskFailureRepresentedByCard(
       return Boolean(
         attempt.sessionKey &&
         taskSessionKeys.some((sessionKey) =>
-          taskSessionKeyMatchesCardSession(sessionKey, attempt.sessionKey ?? ""),
+          workboardSessionKeyMatches(sessionKey, attempt.sessionKey ?? ""),
         ),
       );
     }),

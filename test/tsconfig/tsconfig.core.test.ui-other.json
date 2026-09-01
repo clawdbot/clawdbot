@@ -6,9 +6,7 @@
   "include": [
     "../../ui/src/main.ts",
     "../../ui/**/*.test.ts",
-    "../../ui/**/*.test.tsx",
-    "../../extensions/*/browser/**/*.test.ts",
-    "../../extensions/*/browser/**/*.test.tsx"
+    "../../ui/**/*.test.tsx"
   ],
   "exclude": [
     "../../node_modules",

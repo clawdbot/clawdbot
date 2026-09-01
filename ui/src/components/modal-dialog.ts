@@ -75,7 +75,9 @@ export class OpenClawModalDialog extends OpenClawLitElement {
       border-radius: 0;
     }
 
-    :host(.viewport-edge-to-edge) wa-dialog::part(body) {
+    /* Slotted scroll containers need the body's definite viewport height. */
+    :host(.viewport-edge-to-edge) wa-dialog::part(body),
+    :host(.drawer) wa-dialog::part(body) {
       height: 100%;
     }
 

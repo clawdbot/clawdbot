@@ -265,10 +265,11 @@ export function bootstrapApplication(): ApplicationRuntime {
   const scopeUpgrade = createScopeUpgradeCapability(gateway);
   const config = createApplicationConfigCapability({
     resourceBasePath,
-    auth: {
-      settings: { token: settings.token },
-      password: startup.password ?? "",
-    },
+    getAuth: () => ({
+      hello: gateway.snapshot.hello,
+      settings: { token: gateway.connection.token },
+      password: gateway.connection.password,
+    }),
   });
   const sessions = createSessionCapability(gateway);
   const runtimeConfig = createRuntimeConfigCapability(gateway);
@@ -386,15 +387,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     const client = snapshot.client;
     if (lastPostConnectClient !== client) {
       lastPostConnectClient = client;
-      void connectionBootstrap.run("config", () =>
-        config.refresh({
-          auth: {
-            hello: snapshot.hello,
-            settings: { token: gateway.connection.token },
-            password: gateway.connection.password,
-          },
-        }),
-      );
+      void connectionBootstrap.run("config", () => config.refresh());
       void connectionBootstrap.run("session-observer", () =>
         sendSessionObserverVisibility(client, loadChatObserverDisplayPreference() !== "off"),
       );

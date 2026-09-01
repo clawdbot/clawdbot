@@ -25,16 +25,15 @@ function hostFixture() {
   const events = new Map<string, (payload: unknown) => void>();
   const listeners = new Set<() => void>();
   const pending: Array<(value: unknown) => void> = [];
-  const host = {
+  const host: FeatureTransport = {
     pluginId: contract.pluginId,
     signal: controller.signal,
     connection: { connected: true },
-    request: vi.fn<FeatureTransport["request"]>(
-      <T>() =>
-        new Promise<T>((resolve) => {
-          pending.push((value) => resolve(value as T));
-        }),
-    ),
+    request<T = unknown>(_method: string, _params?: Record<string, unknown>): Promise<T> {
+      return new Promise<T>((resolve) => {
+        pending.push((value) => resolve(value as T));
+      });
+    },
     onEvent: (event: string, listener: (payload: unknown) => void) => {
       events.set(event, listener);
       return () => {
@@ -48,6 +47,7 @@ function hostFixture() {
       };
     },
   };
+  vi.spyOn(host, "request");
   return {
     host,
     pending,

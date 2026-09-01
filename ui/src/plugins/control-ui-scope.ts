@@ -7,8 +7,19 @@ export function scopeControlUiHost(host: ControlUiHost, signal: AbortSignal): Co
       throw new Error("This plugin UI view has ended.");
     }
   };
+  const bindCallback =
+    <Args extends unknown[]>(listener: (...args: Args) => void) =>
+    (...args: Args) => {
+      if (!signal.aborted && !host.signal.aborted) {
+        listener(...args);
+      }
+    };
   const disposers = new Set<() => void>();
   const keep = (dispose: () => void) => {
+    if (signal.aborted || host.signal.aborted) {
+      dispose();
+      check();
+    }
     let active = true;
     const stop = () => {
       if (!active) {
@@ -21,6 +32,13 @@ export function scopeControlUiHost(host: ControlUiHost, signal: AbortSignal): Co
     disposers.add(stop);
     return stop;
   };
+  const checkCompletion = (result: unknown) =>
+    result instanceof Promise
+      ? result.then((next) => {
+          check();
+          return next;
+        })
+      : result;
   signal.addEventListener(
     "abort",
     () => {
@@ -35,7 +53,10 @@ export function scopeControlUiHost(host: ControlUiHost, signal: AbortSignal): Co
     },
     { once: true },
   );
-  const services = <T extends object>(source: T): T =>
+  const services = <T extends object>(
+    source: T,
+    callbackArguments: Readonly<Partial<Record<PropertyKey, number>>> = {},
+  ): T =>
     new Proxy(source, {
       get(target, property, receiver) {
         check();
@@ -45,6 +66,16 @@ export function scopeControlUiHost(host: ControlUiHost, signal: AbortSignal): Co
         }
         return (...args: unknown[]) => {
           check();
+          // An initial callback can retire the view before we retain its disposer.
+          const callbackIndex = callbackArguments[property];
+          if (callbackIndex !== undefined) {
+            const callback = args[callbackIndex];
+            if (typeof callback === "function") {
+              args[callbackIndex] = bindCallback((...values: unknown[]) =>
+                Reflect.apply(callback, undefined, values),
+              );
+            }
+          }
           const result: unknown = Reflect.apply(value, target, args);
           if (typeof result === "function") {
             return keep(() => result());
@@ -67,19 +98,13 @@ export function scopeControlUiHost(host: ControlUiHost, signal: AbortSignal): Co
                 return typeof method === "function"
                   ? (...handleArgs: unknown[]) => {
                       check();
-                      return Reflect.apply(method, handle, handleArgs);
+                      return checkCompletion(Reflect.apply(method, handle, handleArgs));
                     }
                   : method;
               },
             });
           }
-          if (result instanceof Promise) {
-            return result.then((next) => {
-              check();
-              return next;
-            });
-          }
-          return result;
+          return checkCompletion(result);
         };
       },
     });
@@ -102,25 +127,13 @@ export function scopeControlUiHost(host: ControlUiHost, signal: AbortSignal): Co
     },
     onEvent: (name, listener) => {
       check();
-      return keep(
-        host.onEvent(name, (payload) => {
-          if (!signal.aborted) {
-            listener(payload);
-          }
-        }),
-      );
+      return keep(host.onEvent(name, bindCallback(listener)));
     },
     subscribe: (listener) => {
       check();
-      return keep(
-        host.subscribe(() => {
-          if (!signal.aborted) {
-            listener();
-          }
-        }),
-      );
+      return keep(host.subscribe(bindCallback(listener)));
     },
-    sessions: services(host.sessions),
+    sessions: services(host.sessions, { observe: 1 }),
     agents: services(host.agents),
     navigation: services(host.navigation),
     ui: services(host.ui),

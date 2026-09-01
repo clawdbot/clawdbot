@@ -1,13 +1,13 @@
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
+import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
 import {
   cardFitsWithinWorkboardContent,
   createMobileScrollCards,
   expectedMobileScrollGeometry,
   readMobileScrollGeometry,
 } from "./workboard-scroll.e2e.test-support.ts";
-import { workboardUi } from "./workboard.e2e.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Workboard mobile scroll E2E",

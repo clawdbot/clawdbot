@@ -118,13 +118,15 @@ describe("createApplicationConfigCapability", () => {
     const response = deferred<Response>();
     const fetchMock = vi.fn<typeof fetch>(() => response.promise);
     vi.stubGlobal("fetch", fetchMock);
-    const config = createApplicationConfigCapability({ resourceBasePath: "" });
-
-    const first = config.refresh({ auth: { settings: { token: "fixture-token" } } });
-    const second = config.refresh({
-      auth: { settings: { token: " fixture-token " } },
-      skipWithoutAuthCandidate: true,
+    let token = "fixture-token";
+    const config = createApplicationConfigCapability({
+      resourceBasePath: "",
+      getAuth: () => ({ settings: { token } }),
     });
+
+    const first = config.refresh();
+    token = " fixture-token ";
+    const second = config.refresh({ skipWithoutAuthCandidate: true });
     response.resolve(bootstrapResponse("ready"));
 
     await expect(first).resolves.toMatchObject({ serverVersion: "ready" });
@@ -138,17 +140,42 @@ describe("createApplicationConfigCapability", () => {
       "fetch",
       vi.fn<typeof fetch>(() => response.promise),
     );
-    const config = createApplicationConfigCapability({ resourceBasePath: "" });
+    let token = "fixture-token";
+    const config = createApplicationConfigCapability({
+      resourceBasePath: "",
+      getAuth: () => ({ settings: { token } }),
+    });
 
-    const loading = config.refresh({ auth: { settings: { token: "fixture-token" } } });
-    await expect(
-      config.refresh({ auth: { settings: { token: "" } }, skipWithoutAuthCandidate: true }),
-    ).resolves.toBeNull();
+    const loading = config.refresh();
+    token = "";
+    await expect(config.refresh({ skipWithoutAuthCandidate: true })).resolves.toBeNull();
     response.resolve(bootstrapResponse("old"));
 
     await expect(loading).resolves.toBeNull();
     expect(config.current.serverVersion).toBeNull();
   });
+
+  it.each(["", "replacement-fixture-token"])(
+    "rejects an authenticated response when live credentials change without another refresh: %s",
+    async (nextToken) => {
+      const response = deferred<Response>();
+      const fetchMock = vi.fn<typeof fetch>(() => response.promise);
+      vi.stubGlobal("fetch", fetchMock);
+      let token = "fixture-token";
+      const config = createApplicationConfigCapability({
+        resourceBasePath: "",
+        getAuth: () => ({ settings: { token } }),
+      });
+
+      const loading = config.refresh();
+      token = nextToken;
+      response.resolve(bootstrapResponse("retired"));
+
+      await expect(loading).resolves.toBeNull();
+      expect(config.current.serverVersion).toBeNull();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it.each([false, true])(
     "keeps independent callers valid and publishes the newest successful response (aborted: %s)",
@@ -188,10 +215,15 @@ describe("createApplicationConfigCapability", () => {
       .mockImplementationOnce(() => firstResponse.promise)
       .mockImplementationOnce(() => secondResponse.promise);
     vi.stubGlobal("fetch", fetchMock);
-    const config = createApplicationConfigCapability({ resourceBasePath: "" });
+    let token = "old-fixture-token";
+    const config = createApplicationConfigCapability({
+      resourceBasePath: "",
+      getAuth: () => ({ settings: { token } }),
+    });
 
-    const firstRefresh = config.refresh({ auth: { settings: { token: "old-fixture-token" } } });
-    const secondRefresh = config.refresh({ auth: { settings: { token: "new-fixture-token" } } });
+    const firstRefresh = config.refresh();
+    token = "new-fixture-token";
+    const secondRefresh = config.refresh();
     secondResponse.resolve(bootstrapResponse("new"));
     await expect(secondRefresh).resolves.toMatchObject({ serverVersion: "new" });
     firstResponse.resolve(bootstrapResponse("old"));

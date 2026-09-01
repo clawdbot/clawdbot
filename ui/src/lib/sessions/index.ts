@@ -41,7 +41,6 @@ export type {
 export type { SessionPatch, SessionPatchResult } from "./patch.ts";
 export { DEFAULT_SESSION_LIST_QUERY, SESSIONS_PAGE_DEFAULT_LIMIT } from "./session-requests.ts";
 export { reconcileSessionRunTerminal, type SessionRunTerminal } from "./reconcile.ts";
-export { requestSessionCreate } from "./create.ts";
 export { resolveSessionKey } from "./navigation.ts";
 export {
   compareSessionRowsByUpdatedAt,
@@ -191,8 +190,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         publish({ ...state, error: null });
       }
       if (previousError !== null && error === null) {
-        // Observer outages do not replay events; one canonical list closes the gap.
+        // Observer outages do not replay events; every held query must close the gap.
         void roster.refresh({ ...roster.lastOptions(), backgroundHydrate: true, force: true });
+        roster.invalidateManagedLists();
       }
     },
   });
@@ -456,6 +456,11 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   };
 
   const reconcileRunTerminal = (terminal: SessionRunTerminal): boolean => {
+    for (const key of terminal.sessionKeys) {
+      if (key.trim()) {
+        roster.invalidateManagedLists(parseAgentSessionKey(key)?.agentId);
+      }
+    }
     const result = reconcileSessionRunTerminal(state.result, terminal);
     if (result === state.result) {
       return false;
@@ -621,6 +626,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     captureConnectionScope: () => connection.capture(),
     isConnectionScopeCurrent: (scope) => connection.isCurrent(scope),
     list: roster.list,
+    observeList: roster.observeList,
     listSnapshot: (scope) => roster.listSnapshot(scope),
     subscribeList(scope, listener) {
       if (!roster.isPrimaryList(scope)) {

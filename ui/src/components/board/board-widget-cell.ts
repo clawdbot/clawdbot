@@ -1,4 +1,5 @@
 import { consume } from "@lit/context";
+import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
@@ -71,6 +72,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   @property({ attribute: false }) contentHeightPx?: number;
   @property({ type: Boolean }) fitAutoContent = false;
   @property({ attribute: false }) tabs: readonly BoardTab[] = [];
+  @property({ attribute: false }) session: BoardGetParams = { sessionKey: "" };
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) widgetFrameUrl?: BoardWidgetFrameUrl;
   @property({ attribute: false }) callbacks?: BoardWidgetCellCallbacks;
@@ -290,18 +292,21 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     if (widget.contentKind === "plugin") {
       const pluginId = pluginIdForWidgetKind(widget.pluginKind);
       const activeKinds = this.context?.gateway.snapshot.hello?.controlUiWidgetKinds ?? [];
+      const runtime = this.context?.plugins;
       const key = `${pluginId}/${widget.pluginKind?.slice(pluginId.length + 1)}`;
-      const native = activeKinds.some(
+      const advertised = activeKinds.some(
         (entry) => entry.kind === widget.pluginKind && entry.pluginId === pluginId,
-      )
-        ? this.context?.plugins?.registrations("widgets").find((entry) => entry.key === key)
+      );
+      const native = advertised
+        ? runtime?.registrations("widgets").find((entry) => entry.key === key)
         : undefined;
+      // Keep healthy renderers visible while their replacement loads or fails.
       if (native) {
         return renderPluginContribution(
           "widgets",
           key,
           {
-            sessionKey: this.sessionKey,
+            ...this.session,
             widget: { name: widget.name, props: widget.props },
             canMutate: this.canMutate,
             canGrant: this.canGrant,
@@ -323,13 +328,26 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
         });
       }
       const contribution = getPluginWidgetKindContribution(widget.pluginKind, activeKinds);
-      return contribution
-        ? html`<p class="board-widget__plugin-loading">${t("board.widget.pluginLoading")}</p>`
-        : renderBoardDisabledPlugin({
-            pluginId,
-            disabled: this.busy || this.actionPending || !this.canMutate,
-            onRemove: () => void this.runAction(() => callbacks.remove(widget)),
-          });
+      if (
+        contribution ||
+        (this.context && this.context.gateway.snapshot.phase !== "connected") ||
+        runtime?.isLoading(pluginId)
+      ) {
+        return html`<p class="board-widget__plugin-loading">${t("board.widget.pluginLoading")}</p>`;
+      }
+      if (advertised && runtime) {
+        const error = runtime.errors.find(
+          (entry) => entry.pluginId === pluginId || entry.pluginId === "host",
+        );
+        if (error) {
+          return renderBoardWidgetError(error.message, () => void runtime.refresh());
+        }
+      }
+      return renderBoardDisabledPlugin({
+        pluginId,
+        disabled: this.busy || this.actionPending || !this.canMutate,
+        onRemove: () => void this.runAction(() => callbacks.remove(widget)),
+      });
     }
     return this.frame.render(widget);
   }

@@ -1,4 +1,5 @@
 import { consume, ContextConsumer } from "@lit/context";
+import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { html, LitElement, nothing, render, type ChildPart, type PropertyValues } from "lit";
 import { AsyncDirective, directive } from "lit/async-directive.js";
 import { property, state } from "lit/decorators.js";
@@ -33,12 +34,21 @@ class ControlUiPluginView extends OpenClawLightDomContentsElement {
   private registration?: ViewRegistration;
   private mountAbort?: AbortController;
   private mountGeneration = 0;
+  private ownerChanged = false;
   private handle?: ReturnType<ControlUiView<unknown>>;
   private viewContext?: ControlUiViewContext<unknown>;
   private readonly defaultContainers = new Set<HTMLElement>();
   private readonly subscriptions = new SubscriptionsController(this).watch(
     () => this.context?.plugins,
     (plugins, notify) => plugins.subscribe(notify),
+    () => {
+      const next = this.resolveRegistration();
+      if (this.registration?.value !== next?.value || this.registration?.signal !== next?.signal) {
+        // Selection can leave and return before Lit renders. Retirement cannot wait.
+        this.ownerChanged = true;
+        this.mountAbort?.abort();
+      }
+    },
   );
 
   private resolveRegistration(): ViewRegistration | undefined {
@@ -53,26 +63,39 @@ class ControlUiPluginView extends OpenClawLightDomContentsElement {
     return entry as ViewRegistration | undefined;
   }
 
+  override requestUpdate(...args: Parameters<OpenClawLightDomContentsElement["requestUpdate"]>) {
+    const [name, previous] = args;
+    if (name === "props") {
+      // SAFETY: host renderers supply props records; plugin page props may omit session identity.
+      const before = previous as Partial<BoardGetParams> | undefined;
+      // SAFETY: the next value follows the same host-owned props contract.
+      const after = this.props as Partial<BoardGetParams> | undefined;
+      if (before?.sessionKey !== after?.sessionKey || before?.agentId !== after?.agentId) {
+        // Record every transition, including A→B→A before Lit renders; old handles stay retired.
+        this.ownerChanged = true;
+        this.mountAbort?.abort();
+      }
+    }
+    super.requestUpdate(...args);
+  }
+
   protected override shouldUpdate(): boolean {
     // Lit may finish a queued update after removal. Rendering the retired
     // default template would move retained host nodes out of the restored UI.
     return this.isConnected;
   }
 
-  override willUpdate(changes: PropertyValues<this>): void {
+  override willUpdate(): void {
     // Failure recovery renders the original template here. Its method handlers
     // must keep the same receiver as the built-in owner and mountDefault.
     this.renderOptions.host = this.defaultHost ?? this;
     const next = this.resolveRegistration();
-    // SAFETY: every SDK view receives a host-owned props record; pages may omit the session key.
-    const previousProps = changes.get("props") as { sessionKey?: string } | undefined;
-    // SAFETY: the same host-owned record contract applies to the next props value.
-    const nextProps = this.props as { sessionKey?: string } | undefined;
     if (
       this.registration?.value !== next?.value ||
       this.registration?.signal !== next?.signal ||
-      (changes.has("props") && previousProps?.sessionKey !== nextProps?.sessionKey)
+      this.ownerChanged
     ) {
+      this.ownerChanged = false;
       this.unmount();
       this.registration = next;
       this.error = "";

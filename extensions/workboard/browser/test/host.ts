@@ -52,6 +52,16 @@ export function createWorkboardTestHost() {
       selectedKey: "main",
       normalizeKey: vi.fn((key) => key.trim().toLowerCase()),
       refresh: vi.fn(async () => undefined),
+      observe: vi.fn<ControlUiHost["sessions"]["observe"]>((_query, listener) => {
+        const publish = () =>
+          listener({
+            result: { sessions: [], hasMore: false, totalCount: 0 },
+            loading: false,
+            error: null,
+          });
+        publish();
+        return { refresh: vi.fn(async () => publish()), dispose: vi.fn() };
+      }),
       open: vi.fn(),
       create: vi.fn(async () => null),
       patch: vi.fn(async () => undefined),

@@ -1138,11 +1138,12 @@ describe("scoped vitest configs", () => {
   it("normalizes ui include patterns relative to the scoped dir", () => {
     const testConfig = requireTestConfig(defaultUiConfig);
     expect(testConfig.dir).toBe(process.cwd());
-    expect(testConfig.include?.every((pattern) => pattern.startsWith("ui/src/"))).toBe(true);
     for (const [file, included] of [
       ["ui/src/pages/chat/chat-view.test.ts", true],
       ["ui/src/components/form-controls.browser.test.ts", true],
       ["ui/src/components/markdown-mermaid.runtime.browser.test.ts", false],
+      ["extensions/workboard/browser/catalog.test.ts", true],
+      ["extensions/workboard/browser/native.browser.test.ts", false],
     ] as const) {
       expect(
         testConfig.include?.some((pattern) => path.matchesGlob(file, pattern)),
@@ -1150,6 +1151,7 @@ describe("scoped vitest configs", () => {
       ).toBe(included);
     }
     expect(testConfig.exclude).toContain("ui/src/**/*.e2e.test.ts");
+    expect(testConfig.exclude).toContain("extensions/*/browser/**/*.e2e.test.ts");
   });
 
   it("normalizes utils include patterns relative to the scoped dir", () => {

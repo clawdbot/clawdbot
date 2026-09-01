@@ -19,6 +19,7 @@ import type {
 } from "../../api/types.ts";
 import { requestSessionRecovery } from "./recover.ts";
 import type {
+  SessionCapability,
   SessionCompactResult,
   SessionConnectionOwner,
   SessionConnectionScope,
@@ -42,7 +43,7 @@ import {
 type SessionScopedOperationsHost = {
   connection: SessionConnectionOwner;
   agentId: () => string | null;
-  refreshReplacement: (agentId?: string | null) => Promise<void>;
+  refreshReplacement: SessionCapability["refreshReplacement"];
   notifyCreated: (key: string) => void;
   reportError: (error: unknown) => void;
 };

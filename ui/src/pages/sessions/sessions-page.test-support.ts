@@ -1,5 +1,4 @@
 import { vi } from "vitest";
-import type { ControlUiAction, ControlUiHost } from "../../../../src/plugin-sdk/control-ui.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   GatewaySessionRow,
@@ -221,30 +220,6 @@ export function createContext(
     navigate: vi.fn(),
     preload: vi.fn(),
   } as unknown as ApplicationContext;
-}
-
-export function registerSessionPluginAction(context: ApplicationContext, action: ControlUiAction) {
-  const lifetime = new AbortController();
-  const open = vi.fn();
-  const host = {
-    signal: lifetime.signal,
-    sessions: { open },
-    agents: {},
-    navigation: {},
-    ui: {},
-    components: {},
-  } as unknown as ControlUiHost;
-  const entry = {
-    key: `review/${action.id}`,
-    pluginId: "review",
-    value: action,
-    signal: lifetime.signal,
-    host,
-  };
-  Object.assign(context.plugins, {
-    registrations: vi.fn((kind) => (kind === "actions" ? [entry] : [])),
-  });
-  return { entry, lifetime, open };
 }
 
 export async function createRenderedPage(

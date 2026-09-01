@@ -1,18 +1,18 @@
+import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { html } from "lit";
-import "../../plugins/control-ui-contributions.ts";
 import { isMockBoardEnabled, type BoardViewCallbacks } from "../../lib/board/provider.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
 import type { BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 
 type BoardSessionSurfaceProps = {
   active: boolean;
+  session: BoardGetParams;
   snapshot: BoardSnapshot;
   activeTabId: string;
   canMutate: boolean;
   canGrant: boolean;
   callbacks: BoardViewCallbacks;
   widgetFrameUrl: BoardWidgetFrameUrl;
-  sessionKey: string;
 };
 
 let boardViewLoad: Promise<unknown> | null = null;
@@ -31,13 +31,9 @@ export async function ensureBoardViewElement(): Promise<boolean> {
 function renderBoardView(props: BoardSessionSurfaceProps) {
   return html`
     <div class="board-session-surface__board">
-      <openclaw-plugin-contributions
-        .kind=${"session-header"}
-        .sessionKey=${props.sessionKey}
-        .presented=${props.active}
-      ></openclaw-plugin-contributions>
       <openclaw-board-view
         .active=${props.active}
+        .session=${props.session}
         .snapshot=${props.snapshot}
         .activeTabId=${props.activeTabId}
         .widgetFrameUrl=${props.widgetFrameUrl}

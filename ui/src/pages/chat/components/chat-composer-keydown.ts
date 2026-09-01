@@ -166,7 +166,7 @@ export function createComposerKeyDownHandler({
       commitDraft(target.value);
       const followUpModeOverride =
         (event.metaKey || event.ctrlKey) && !event.altKey ? alternateFollowUpMode : undefined;
-      props.onSend(followUpModeOverride, event);
+      void props.onSend(followUpModeOverride, event);
       syncDraftAfterSend(target);
     }
   };

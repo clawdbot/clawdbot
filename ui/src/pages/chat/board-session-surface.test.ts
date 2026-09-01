@@ -33,8 +33,8 @@ describe("board session shell", () => {
     const provider = boardProviderForSession({ sessionKey: "agent:main:main" });
     const props = {
       active: true,
+      session: { sessionKey: "agent:main:main" },
       snapshot: provider.snapshot$.value,
-      sessionKey: provider.snapshot$.value.sessionKey,
       activeTabId: "main",
       canMutate: true,
       canGrant: true,

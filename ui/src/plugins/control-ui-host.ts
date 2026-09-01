@@ -31,6 +31,10 @@ export function createControlUiPluginHost(
     return getContext();
   };
   const retain = (dispose: ControlUiDisposer) => {
+    if (!runtime.isCurrent(owner)) {
+      dispose();
+      current();
+    }
     owner.disposers.add(dispose);
     return () => {
       owner.disposers.delete(dispose);
@@ -133,14 +137,62 @@ export function createControlUiPluginHost(
         return current().gateway.snapshot.sessionKey;
       },
       normalizeKey: normalizeSessionKeyForUiComparison,
-      refresh: () => call((context) => context.sessions.refresh()),
-      open(sessionKey) {
+      refresh: () =>
+        call(async (context) => {
+          if ((await context.sessions.refreshReplacement()) === null) {
+            throw new Error("The session refresh did not complete. Try again.");
+          }
+        }),
+      observe(query, listener) {
+        const { archived, ...options } = query;
+        let disposed = false;
+        const observer = current().sessions.observeList(
+          {
+            ...options,
+            archivedFilter: archived === "all" ? "all" : archived ? "archived" : "active",
+          },
+          ({ result, loading, error }) => {
+            if (disposed || !runtime.isCurrent(owner)) {
+              return;
+            }
+            try {
+              listener({
+                loading,
+                error,
+                result: result
+                  ? {
+                      sessions: structuredClone(result.sessions),
+                      hasMore: result.hasMore,
+                      nextOffset: result.nextOffset,
+                      totalCount: result.totalCount,
+                    }
+                  : null,
+              });
+            } catch (listenerError) {
+              runtime.reportError(owner.descriptor.pluginId, listenerError);
+            }
+          },
+        );
+        const dispose = retain(() => {
+          disposed = true;
+          observer.dispose();
+        });
+        const refresh = () => call(() => observer.refresh());
+        void refresh().catch((error: unknown) => {
+          if (!disposed && runtime.isCurrent(owner)) {
+            runtime.reportError(owner.descriptor.pluginId, error);
+          }
+        });
+        return { refresh, dispose };
+      },
+      open({ sessionKey, agentId }) {
         const context = current();
-        const face = resolveSessionPreferredFaceForKey(context, sessionKey);
+        const face = resolveSessionPreferredFaceForKey(context, sessionKey, agentId);
         const target = sessionNavigationTarget({
           context,
           face,
           sessionKey,
+          agentId,
           preferenceDerivedFace: true,
           exactKey: true,
         });
@@ -148,13 +200,29 @@ export function createControlUiPluginHost(
           selection: context.agentSelection,
           gateway: context.gateway,
           sessionKey,
+          agentId,
         });
         context.navigate(face, target.options);
       },
       create: (params) => call((context) => context.sessions.create(params)),
-      patch: (key, patch) =>
+      patch: ({ sessionKey, agentId }, patch) =>
         call(async (context) => {
-          await context.sessions.patch(key, patch);
+          // A plugin query may target another global owner. Its mutation does not
+          // own the primary roster's optimistic model or remembered list scope.
+          const result = await context.sessions.patch(sessionKey, patch, {
+            agentId,
+            ownsModelOverride: () => false,
+            deferListRefresh: true,
+          });
+          if (!result) {
+            throw new Error("The session update did not complete. Try again.");
+          }
+          current();
+          if ((await context.sessions.refreshReplacement()) === null) {
+            throw new Error(
+              "The session was updated, but the session list could not be refreshed. Refresh the list to see the change.",
+            );
+          }
         }),
     },
     agents: {
@@ -178,7 +246,9 @@ export function createControlUiPluginHost(
       },
       refresh: () =>
         call(async (context) => {
-          await context.agents.ensureList();
+          if ((await context.agents.refreshList()) === null) {
+            throw new Error("The agent refresh did not complete. Try again.");
+          }
         }),
     },
     navigation: {
@@ -207,7 +277,7 @@ export function createControlUiPluginHost(
       registerReplacement: (value) => runtime.register(owner, "replacements", value),
       selectReplacement(surface, id) {
         current();
-        if (id !== null && owner.contributions.replacements.get(id)?.surface !== surface) {
+        if (id !== null && owner.contributions.replacements.get(id)?.value.surface !== surface) {
           throw new Error("A plugin can select only its own registered UI replacement.");
         }
         owner.selections.set(surface, id);

@@ -51,7 +51,7 @@ export function isSessionsHubRoute(routeId: NavigationRouteId): boolean {
 export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
 export type PersistedSidebarRoute = SidebarNavRoute;
 
-export function isPersistedSidebarRoute(value: unknown): value is PersistedSidebarRoute {
+function isPersistedSidebarRoute(value: unknown): value is PersistedSidebarRoute {
   return SIDEBAR_NAV_ROUTES.includes(value as PersistedSidebarRoute);
 }
 

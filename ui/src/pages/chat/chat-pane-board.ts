@@ -289,12 +289,14 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
   }
 
   protected renderBoardPanel(board: ResolvedBoardView, layout: SidebarLayout) {
+    const session = this.resolveBoardConversation();
     const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
     const shouldRender = board.hasBoard && Boolean(sessionKey);
     const boardActive = isSidebarSlotVisible(layout, "dashboard") && this.visuallyPresented;
     const renderSurface = (active: boolean) =>
       renderBoardSessionSurface({
         active,
+        session,
         snapshot: board.snapshot,
         activeTabId: board.activeTabId,
         canMutate: board.provider.canMutate,
@@ -312,12 +314,13 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
             board.provider.refreshWidgetAppView(name, revision),
         } satisfies BoardViewCallbacks,
         widgetFrameUrl: (name, revision) => board.provider.widgetFrameUrl(name, revision),
-        sessionKey,
       });
     // Keep one template boundary so hiding the panel does not remount app iframes.
     const boardSurface = !shouldRender
       ? nothing
-      : html`${boardActive ? renderSurface(true) : guard([sessionKey], () => renderSurface(false))}`;
+      : html`${boardActive
+          ? renderSurface(true)
+          : guard([sessionKey, session.agentId], () => renderSurface(false))}`;
     return boardSurface;
   }
 

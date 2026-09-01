@@ -3,6 +3,7 @@ import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import type { WorkboardCard, WorkboardUiState } from "../../lib/workboard/index.ts";
 
+export type WorkboardAgentsList = Pick<AgentsListResult, "defaultId" | "agents">;
 type WorkboardAgentRow = AgentsListResult["agents"][number];
 type WorkboardConfiguredAgentOption = { id: string; label: string; isDefault: boolean };
 type WorkboardAgentFilterOption = {
@@ -15,23 +16,26 @@ export function agentDisplayName(agent: WorkboardAgentRow | undefined, fallback:
   return agent?.name ?? agent?.identity?.name ?? agent?.id ?? fallback;
 }
 
-function cardAgentId(card: WorkboardCard, agentsList: AgentsListResult | null): string {
+function cardAgentId(card: WorkboardCard, agentsList: WorkboardAgentsList | null): string {
   return card.agentId?.trim() || agentsList?.defaultId || "";
 }
 
-export function findCardAgent(card: WorkboardCard, agentsList: AgentsListResult | null) {
+export function findCardAgent(card: WorkboardCard, agentsList: WorkboardAgentsList | null) {
   const id = cardAgentId(card, agentsList);
   return id ? agentsList?.agents.find((agent) => agent.id === id) : undefined;
 }
 
-export function cardAgentLabel(card: WorkboardCard, agentsList: AgentsListResult | null): string {
+export function cardAgentLabel(
+  card: WorkboardCard,
+  agentsList: WorkboardAgentsList | null,
+): string {
   const fallback = card.agentId?.trim() || t("workboard.defaultAgent");
   return agentDisplayName(findCardAgent(card, agentsList), fallback);
 }
 
 export function matchesAgentFilter(
   card: WorkboardCard,
-  agentsList: AgentsListResult | null,
+  agentsList: WorkboardAgentsList | null,
   filter: WorkboardUiState["agentFilter"],
 ): boolean {
   if (filter === "all") {
@@ -46,15 +50,15 @@ export function matchesAgentFilter(
 }
 
 export function matchesAgentScope(
-  card: WorkboardCard,
-  agentsList: AgentsListResult | null,
+  card: Pick<WorkboardCard, "agentId">,
+  defaultAgentId: string | null | undefined,
   agentId: string | null | undefined,
 ): boolean {
   if (!agentId) {
     return true;
   }
   const explicitAgentId = card.agentId?.trim();
-  return explicitAgentId === agentId || (!explicitAgentId && agentsList?.defaultId === agentId);
+  return explicitAgentId === agentId || (!explicitAgentId && defaultAgentId === agentId);
 }
 
 function normalizeAgentOptionId(value: unknown): string {
@@ -62,7 +66,7 @@ function normalizeAgentOptionId(value: unknown): string {
 }
 
 function buildConfiguredAgentOptions(
-  agentsList: AgentsListResult | null,
+  agentsList: WorkboardAgentsList | null,
 ): WorkboardConfiguredAgentOption[] {
   const seen = new Set<string>();
   const defaultAgentId = normalizeAgentOptionId(agentsList?.defaultId);
@@ -87,7 +91,7 @@ function defaultAgentFilterLabel(configuredAgents: readonly WorkboardConfiguredA
 }
 
 export function buildAgentFilterOptions(
-  agentsList: AgentsListResult | null,
+  agentsList: WorkboardAgentsList | null,
   cards: readonly WorkboardCard[],
 ) {
   const configuredAgents = buildConfiguredAgentOptions(agentsList);
@@ -125,7 +129,7 @@ export function buildAgentFilterOptions(
 }
 
 export function buildAssignableAgentOptions(
-  agentsList: AgentsListResult | null,
+  agentsList: WorkboardAgentsList | null,
   currentAgentId: string,
 ) {
   const selectableList = agentsList

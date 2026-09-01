@@ -37,8 +37,13 @@ class PluginSessionDashboard extends OpenClawLightDomElement {
   @state() private activeTabId = "";
   @state() private viewError: string | null = null;
   private viewLoad: Promise<void> | null = null;
-  private lease: (BoardProviderLease & { client: GatewayBrowserClient; cacheKey: string }) | null =
-    null;
+  private lease:
+    | (BoardProviderLease & {
+        client: GatewayBrowserClient;
+        cacheKey: string;
+        session: BoardGetParams;
+      })
+    | null = null;
   private unsubscribeSnapshot: (() => void) | null = null;
   private expansionInitialized = false;
 
@@ -69,6 +74,14 @@ class PluginSessionDashboard extends OpenClawLightDomElement {
     }
     const key = boardProviderCacheKey(session);
     if (this.lease?.client === client && this.lease.cacheKey === key) {
+      if (
+        this.lease.session.sessionKey !== session.sessionKey ||
+        this.lease.session.agentId !== session.agentId
+      ) {
+        // Canonical aliases share a transport; native views still need the latest query identity.
+        this.lease.session = { ...session };
+        this.requestUpdate();
+      }
       this.lease.update(client, this.connected, {
         canPinWidgets: false,
         canPinMcpApps: false,
@@ -90,7 +103,7 @@ class PluginSessionDashboard extends OpenClawLightDomElement {
       this.canMutate,
       this.canGrant,
     );
-    this.lease = { ...lease, client, cacheKey: key };
+    this.lease = { ...lease, client, cacheKey: key, session: { ...session } };
     this.provider = lease.provider;
     this.unsubscribeSnapshot = lease.provider.snapshot$.subscribe(() => {
       this.reconcileSnapshot(lease.provider);
@@ -123,6 +136,7 @@ class PluginSessionDashboard extends OpenClawLightDomElement {
   override render() {
     const provider = this.provider;
     const snapshot = provider?.snapshot$.value;
+    const session = this.lease?.session;
     const hasBoard = Boolean(snapshot && boardExists(snapshot));
     const callbacks = provider
       ? ({
@@ -168,10 +182,11 @@ class PluginSessionDashboard extends OpenClawLightDomElement {
                 >
                   ${t("common.retry")}
                 </button>`
-            : hasBoard && provider && snapshot && callbacks
+            : hasBoard && provider && snapshot && session && callbacks
               ? html`
                   <openclaw-board-view
                     .active=${this.expanded && this.presented}
+                    .session=${session}
                     .snapshot=${snapshot}
                     .activeTabId=${this.activeTabId}
                     .widgetFrameUrl=${(name: string, revision: number) =>

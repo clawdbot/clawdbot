@@ -7,12 +7,12 @@ import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/inde
 import { SANDBOX_HOST_PATH } from "../../../src/agents/sandbox-host.js";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
-import { workboardUi } from "../pages/workboard/workboard.e2e.test-support.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { workboardUi } from "../test-helpers/control-ui-workboard-fixture.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
 import {
   dockChatSidePanel,

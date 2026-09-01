@@ -1,7 +1,10 @@
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
+  controlUiSessionUrl,
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -9,6 +12,19 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const suite = createControlUiE2eSuite({ name: "Native plugin UI ownership" });
 const pluginId = "ui-fixture";
+type NativePluginWindow = Window & {
+  nativePluginProof?: { release?: () => void };
+  nativeActionProof?: {
+    runs: number;
+    current?: {
+      signal: AbortSignal;
+      release: () => void;
+      withdraw: () => void;
+      done: boolean;
+      outcome: string;
+    };
+  };
+};
 
 function catalog(revision: string) {
   return {
@@ -45,12 +61,25 @@ function pluginModule(revision: string) {
         const button = (label, action) => { const element = document.createElement("button"); element.textContent = label; element.onclick = async () => { try { await action(); output.textContent = "completed"; } catch(error) { output.textContent = error.message; } }; return element; };
         container.append(title, output,
           button("Call current activation", () => context.host.request("fixture.current")),
+          button("Unregister composer", () => unregisterComposer()),
+          button("Register composer", () => { unregisterComposer = registerComposer(); }),
+          button("Unregister retired composer", () => firstUnregisterComposer()),
           button("Call retired composer", () => proof.composer.setDraft("retired draft")),
           button("Call previous activation", () => previous.request("fixture.stale")),
           button("Release pending initializer", () => { proof.release(); throw new Error("released"); }));
       }});
       host.ui.registerNavigation({id:"proof", label:"UI fixture", page:{id:"proof"}});
-      host.ui.registerReplacement({id:"composer", label:"Fixture composer", surface:"composer", mount(container, context) {
+      host.ui.registerAccessory({id:"session", placement:"session-header", mount(container, context) {
+        const output = document.createElement("output"); output.dataset.fixtureSessionAccessory = "";
+        const update = next => { output.textContent = next.props.sessionKey; output.dataset.presented = String(next.presented); output.hidden = !next.presented; };
+        container.append(output); update(context);
+        return { update };
+      }});
+      host.ui.registerWidget({id:"card", label:"Fixture widget", mount(container) {
+        const content = document.createElement("p"); content.textContent = "Fixture widget ${revision}";
+        container.append(content);
+      }});
+      const composer = {id:"composer", label:"Fixture composer", surface:"composer", mount(container, context) {
         let current = context;
         proof.composer = context.props;
         const input = document.createElement("textarea"); input.setAttribute("aria-label", "Fixture draft"); input.value = current.props.draft;
@@ -60,7 +89,10 @@ function pluginModule(revision: string) {
         send.onclick = async () => { try { const result = await current.props.send(); output.textContent = result === true ? "accepted" : result === false ? "rejected" : "completed"; } catch(error) { output.textContent = error.message; } };
         container.append(input, send, output);
         return { update(next) { current = next; input.value = next.props.draft; }, focus() { input.focus(); } };
-      }});
+      }};
+      const registerComposer = () => host.ui.registerReplacement(composer);
+      let unregisterComposer = registerComposer();
+      const firstUnregisterComposer = unregisterComposer;
       host.ui.registerReplacement({id:"workspace", label:"Fixture workspace", surface:"workspace", mount(container, context) {
         const title = document.createElement("h1"); title.textContent = "Custom workspace";
         const recover = document.createElement("button"); recover.textContent = "Show built-in workspace";
@@ -68,10 +100,56 @@ function pluginModule(revision: string) {
         container.append(title, recover);
       }});
       host.ui.registerReplacement({id:"failing-transcript", label:"Failing transcript", surface:"transcript", mount() { throw new Error("Fixture transcript failed"); }});
+      if (["withdrawn", "invalid-selection"].includes(${JSON.stringify(revision)})) {
+        if (${JSON.stringify(revision)} === "invalid-selection") {
+          host.ui.selectReplacement("workspace", "workspace");
+        }
+        const replacement = {id:"staged-composer", label:"Staged composer", surface:"composer", mount() {}};
+        const withdraw = host.ui.registerReplacement(replacement);
+        host.ui.selectReplacement("composer", replacement.id);
+        if (${JSON.stringify(revision)} === "withdrawn") withdraw();
+        else replacement.surface = "transcript";
+      }
       return () => { proof.disposed = (proof.disposed ?? 0) + 1; };
     }
   };`;
 }
+
+const hungPluginModule = `export default { id:"hung-ui", async activate(host) {
+  await host.request("fixture.peerStarted");
+  await new Promise(resolve => { globalThis.nativePluginProof.release = resolve; });
+  await host.request("fixture.latePeer");
+} };`;
+
+const actionPluginModule = `export default { id:"ui-fixture", activate(host) {
+  const proof = globalThis.nativeActionProof = { runs: 0 };
+  for (const placement of ["header", "composer", "session"]) {
+    let unregister;
+    const action = {
+      id: placement, label: "Hold " + placement + " action", placement,
+      async run(context) {
+        const invocation = { signal: context.signal, done: false, outcome: "pending" };
+        const gate = new Promise(resolve => { invocation.release = resolve; });
+        invocation.withdraw = () => {
+          unregister();
+          unregister = host.ui.registerAction(action);
+        };
+        proof.current = invocation;
+        proof.runs += 1;
+        try {
+          await gate;
+          await context.host.request("fixture.actionContinuation", { placement });
+          invocation.outcome = "completed";
+        } catch (error) {
+          invocation.outcome = error.message;
+        } finally {
+          invocation.done = true;
+        }
+      },
+    };
+    unregister = host.ui.registerAction(action);
+  }
+} };`;
 
 async function selectView(page: Page, label: string, value: string) {
   await page.getByRole("button", { name: "Customize UI", exact: true }).click();
@@ -80,6 +158,342 @@ async function selectView(page: Page, label: string, value: string) {
 }
 
 suite.define(() => {
+  it("retires withdrawn action registrations without reviving pending invocations on reuse", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, serviceWorkers: "block" },
+      async ({ page }) => {
+        const sessionKey = "agent:main:held-action";
+        const gateway = await installMockGateway(page, {
+          sessionKey,
+          featureMethods: [
+            ...defaultControlUiFeatureMethods,
+            "plugins.controlUi.list",
+            "plugins.controlUi.report",
+          ],
+          methodResponses: {
+            "plugins.controlUi.list": catalog("actions"),
+            "plugins.controlUi.report": { ok: true },
+            "fixture.actionContinuation": { ok: true },
+            "sessions.list": {
+              ts: 1,
+              count: 1,
+              defaults: {},
+              sessions: [
+                {
+                  key: sessionKey,
+                  kind: "direct",
+                  agentId: "main",
+                  label: "Held action",
+                  updatedAt: 1,
+                },
+              ],
+            },
+          },
+        });
+        await page.route("**/__openclaw__/plugins/control-ui/ui-fixture/*/index.js", (route) =>
+          route.fulfill({ status: 200, contentType: "text/javascript", body: actionPluginModule }),
+        );
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "chat"));
+        let runs = 0;
+        const start = async (placement: "header" | "composer" | "session") => {
+          if (placement === "session") {
+            await page
+              .locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`)
+              .click({ button: "right" });
+            await page
+              .locator("openclaw-session-menu")
+              .getByRole("menuitem", { name: "Hold session action", exact: true })
+              .click();
+          } else {
+            await page
+              .getByRole("button", { name: `Hold ${placement} action`, exact: true })
+              .click();
+          }
+          runs += 1;
+          await page.waitForFunction(
+            (expected) => (window as NativePluginWindow).nativeActionProof?.runs === expected,
+            runs,
+          );
+        };
+        const finish = async () => {
+          await page.waitForFunction(
+            () => (window as NativePluginWindow).nativeActionProof?.current?.done === true,
+          );
+          return page.evaluate(
+            () => (window as NativePluginWindow).nativeActionProof?.current?.outcome,
+          );
+        };
+        const retired = [];
+        for (const placement of ["header", "composer", "session"] as const) {
+          await start(placement);
+          const before = (await gateway.getRequests("fixture.actionContinuation")).length;
+          const abortedBeforeResume = await page.evaluate(() => {
+            const invocation = (window as NativePluginWindow).nativeActionProof?.current;
+            if (!invocation) {
+              throw new Error("Expected a running plugin action.");
+            }
+            invocation.withdraw();
+            const aborted = invocation.signal.aborted;
+            invocation.release();
+            return aborted;
+          });
+          const outcome = await finish();
+          const after = (await gateway.getRequests("fixture.actionContinuation")).length;
+          retired.push({ placement, abortedBeforeResume, outcome, requests: after - before });
+
+          await start(placement);
+          await page.evaluate(() => {
+            const invocation = (window as NativePluginWindow).nativeActionProof?.current;
+            if (!invocation) {
+              throw new Error("Expected the replacement action to run.");
+            }
+            invocation.release();
+          });
+          expect(await finish()).toBe("completed");
+          expect(await gateway.getRequests("fixture.actionContinuation")).toHaveLength(after + 1);
+        }
+        expect(retired).toEqual(
+          ["header", "composer", "session"].map((placement) => ({
+            placement,
+            abortedBeforeResume: true,
+            outcome: "This plugin UI view has ended.",
+            requests: 0,
+          })),
+        );
+      },
+    );
+  });
+
+  it("recovers native widgets from initialization failure and retains healthy reloads", async () => {
+    await suite.withPage(
+      {
+        viewport: { width: 1280, height: 900 },
+        serviceWorkers: "block",
+        recordVideo: { dir: suite.artifactDir, size: { width: 1280, height: 900 } },
+      },
+      async ({ page }) => {
+        const sessionKey = "agent:main:native-widget";
+        const gateway = await installMockGateway(page, {
+          sessionKey,
+          heldMethods: ["fixture.activationStarted"],
+          controlUiWidgetKinds: [{ pluginId, kind: `${pluginId}:card`, label: "Fixture widget" }],
+          featureMethods: [
+            ...defaultControlUiFeatureMethods,
+            "board.get",
+            "plugins.controlUi.list",
+            "plugins.controlUi.report",
+          ],
+          methodResponses: {
+            "plugins.controlUi.list": catalog("pending"),
+            "plugins.controlUi.report": { ok: true },
+            "board.get": {
+              sessionKey,
+              revision: 1,
+              tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "hidden" }],
+              widgets: [
+                {
+                  name: "native-card",
+                  tabId: "main",
+                  title: "Native card",
+                  contentKind: "plugin",
+                  pluginKind: `${pluginId}:card`,
+                  sizeW: 6,
+                  sizeH: 4,
+                  position: 0,
+                  grantState: "none",
+                  revision: 1,
+                },
+              ],
+            },
+          },
+        });
+        await page.route("**/__openclaw__/plugins/control-ui/ui-fixture/*/index.js", (route) => {
+          const revision = new URL(route.request().url()).pathname.split("/").at(-2)!;
+          return route.fulfill({
+            status: 200,
+            contentType: "text/javascript",
+            body: pluginModule(revision),
+          });
+        });
+        const cell = page.locator('[data-widget-name="native-card"]');
+        const loading = cell.getByText("Loading plugin widget…", { exact: true });
+        const disabled = cell.locator('[data-test-id="board-disabled-plugin"]');
+        const error = cell.locator('[data-test-id="board-widget-error"]');
+        const expectHealthy = async (revision: string) => {
+          await cell.getByText(`Fixture widget ${revision}`, { exact: true }).waitFor();
+          expect(await loading.count()).toBe(0);
+          expect(await disabled.count()).toBe(0);
+          expect(await error.count()).toBe(0);
+        };
+        const reload = async (revision: string) => {
+          await gateway.setMethodResponse("plugins.controlUi.list", catalog(revision));
+          await gateway.emitGatewayEvent("plugins.controlUi.changed", { revision });
+        };
+
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
+        await gateway.waitForRequest("fixture.activationStarted");
+        await cell.locator(".board-widget__body").waitFor();
+        expect(await loading.count()).toBe(1);
+        expect(await disabled.count()).toBe(0);
+        await page.screenshot({ path: path.join(suite.artifactDir, "widget-loading.png") });
+
+        await gateway.rejectDeferred("fixture.activationStarted", {
+          message: "Widget initialization failed",
+        });
+        await error.waitFor();
+        expect(await error.locator("code").textContent()).toContain("Widget initialization failed");
+        expect(await loading.count()).toBe(0);
+        expect(await disabled.count()).toBe(0);
+        await page.screenshot({ path: path.join(suite.artifactDir, "widget-failed.png") });
+        await gateway.setMethodResponse("plugins.controlUi.list", catalog("one"));
+        await error.getByRole("button", { name: "Retry", exact: true }).click();
+        await expectHealthy("one");
+
+        const started = (await gateway.getRequests("fixture.activationStarted")).length;
+        await gateway.deferNext("fixture.activationStarted");
+        await reload("pending");
+        await gateway.waitForRequest("fixture.activationStarted", { after: started });
+        await expectHealthy("one");
+        const reports = (await gateway.getRequests("plugins.controlUi.report")).length;
+        await gateway.rejectDeferred("fixture.activationStarted", {
+          message: "Widget reload failed",
+        });
+        const failed = await gateway.waitForRequest("plugins.controlUi.report", { after: reports });
+        expect(failed.params).toMatchObject({ pluginId, revision: "pending", status: "failed" });
+        await expectHealthy("one");
+
+        await reload("two");
+        await expectHealthy("two");
+        expect(await cell.getByText("Fixture widget one", { exact: true }).count()).toBe(0);
+        await page.screenshot({ path: path.join(suite.artifactDir, "widget-reloaded.png") });
+        await gateway.setMethodResponse("plugins.controlUi.list", {
+          revision: "empty",
+          plugins: [],
+          diagnostics: [],
+        });
+        await gateway.emitGatewayEvent("plugins.controlUi.changed", { revision: "empty" });
+        await disabled.waitFor();
+        expect(await cell.getByText("Fixture widget two", { exact: true }).count()).toBe(0);
+        expect(
+          await disabled.getByRole("button", { name: "Remove", exact: true }).isEnabled(),
+        ).toBe(true);
+        await page.screenshot({ path: path.join(suite.artifactDir, "widget-removed.png") });
+
+        const listed = (await gateway.getRequests("plugins.controlUi.list")).length;
+        await gateway.deferNext("plugins.controlUi.list");
+        await gateway.emitGatewayEvent("plugins.controlUi.changed", { revision: "retry" });
+        await gateway.waitForRequest("plugins.controlUi.list", { after: listed });
+        await loading.waitFor();
+        await gateway.rejectDeferred("plugins.controlUi.list", {
+          message: "Widget catalog temporarily unavailable",
+        });
+        await error.waitFor();
+        expect(await error.locator("code").textContent()).toContain(
+          "Widget catalog temporarily unavailable",
+        );
+        expect(await disabled.count()).toBe(0);
+        await gateway.setMethodResponse("plugins.controlUi.list", catalog("two"));
+        await error.getByRole("button", { name: "Retry", exact: true }).click();
+        await expectHealthy("two");
+      },
+    );
+  });
+
+  it("shows loading through first activation and opens the page while another plugin is pending", async () => {
+    await suite.withPage(
+      {
+        viewport: { width: 1280, height: 900 },
+        serviceWorkers: "block",
+        recordVideo: { dir: suite.artifactDir, size: { width: 1280, height: 900 } },
+      },
+      async ({ page }) => {
+        const initial = catalog("pending");
+        initial.plugins.unshift({
+          pluginId: "hung-ui",
+          name: "Hung fixture",
+          revision: "pending",
+          entryUrl: "/__openclaw__/plugins/control-ui/hung-ui/pending/index.js",
+          styles: [],
+        });
+        const gateway = await installMockGateway(page, {
+          heldMethods: ["plugins.controlUi.list", "fixture.peerStarted"],
+          featureMethods: [
+            ...defaultControlUiFeatureMethods,
+            "plugins.controlUi.list",
+            "plugins.controlUi.report",
+          ],
+          methodResponses: {
+            "plugins.controlUi.list": initial,
+            "plugins.controlUi.report": { ok: true },
+          },
+        });
+        const bootstrapRequested = createDeferred();
+        const bootstrapGate = createDeferred();
+        // Startup and activation can share this request, so hold it before navigation.
+        await page.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, async (route) => {
+          bootstrapRequested.resolve();
+          await bootstrapGate.promise;
+          await route.fallback();
+        });
+        await page.route("**/__openclaw__/plugins/control-ui/*/*/index.js", (route) =>
+          route.fulfill({
+            status: 200,
+            contentType: "text/javascript",
+            body: route.request().url().includes("/hung-ui/")
+              ? hungPluginModule
+              : pluginModule("pending"),
+          }),
+        );
+        const pluginPage = page.locator("openclaw-plugin-page");
+        const expectLoading = async () => {
+          await pluginPage.getByRole("status", { name: "Loading…", exact: true }).waitFor();
+          expect(
+            await pluginPage.getByText("Plugin panel unavailable", { exact: true }).count(),
+          ).toBe(0);
+        };
+        try {
+          await page.goto(`${suite.server.baseUrl}plugin?plugin=ui-fixture&id=proof`, {
+            waitUntil: "domcontentloaded",
+          });
+          await gateway.waitForRequest("plugins.controlUi.list");
+          await expectLoading();
+          await gateway.resolveDeferred("plugins.controlUi.list");
+          await bootstrapRequested.promise;
+          await expectLoading();
+          bootstrapGate.resolve();
+          await gateway.waitForRequest("fixture.activationStarted");
+          await gateway.waitForRequest("fixture.peerStarted");
+          await page.waitForFunction(
+            () => typeof (window as NativePluginWindow).nativePluginProof?.release === "function",
+          );
+          await expectLoading();
+          await page.screenshot({ path: path.join(suite.artifactDir, "startup-loading.png") });
+          await page.evaluate(() => {
+            const release = (window as NativePluginWindow).nativePluginProof?.release;
+            if (!release) {
+              throw new Error("The fixture initializer has not started.");
+            }
+            release();
+          });
+          await page.getByRole("heading", { name: "Fixture revision pending" }).waitFor();
+          expect(
+            await pluginPage.getByRole("status", { name: "Loading…", exact: true }).count(),
+          ).toBe(0);
+          await page.getByRole("button", { name: "Call current activation" }).click();
+          await gateway.waitForRequest("fixture.current");
+          await expect
+            .poll(() => page.getByLabel("Fixture outcome").textContent())
+            .toBe("completed");
+          const activation = await gateway.waitForRequest("plugins.controlUi.report");
+          expect(activation.params).toMatchObject({ pluginId, status: "activated" });
+          await page.screenshot({ path: path.join(suite.artifactDir, "startup-ready.png") });
+        } finally {
+          bootstrapGate.resolve();
+        }
+      },
+    );
+  });
+
   it("loads without asset grants for auth:none and preserves canonical chat admission and view recovery", async () => {
     await suite.withPage(
       {
@@ -88,23 +502,87 @@ suite.define(() => {
         recordVideo: { dir: suite.artifactDir, size: { width: 1280, height: 900 } },
       },
       async ({ page }) => {
+        const sessionKey = "agent:main:main";
+        const otherSessionKey = "agent:main:accessory-peer";
+        const boardSnapshot = (chatDock: "right" | "left" | "bottom" | "hidden", revision = 1) => ({
+          sessionKey,
+          revision,
+          tabs: [{ tabId: "main", title: "Main", position: 0, chatDock }],
+          widgets: [],
+        });
         const gateway = await installMockGateway(page, {
+          sessionKey,
           pluginAssetsRequireAuth: false,
           featureMethods: [
             ...defaultControlUiFeatureMethods,
+            "board.get",
+            "board.update",
             "plugins.controlUi.list",
             "plugins.controlUi.report",
           ],
           methodResponses: {
             "plugins.controlUi.list": catalog("one"),
             "plugins.controlUi.report": { ok: true },
+            "sessions.list": {
+              ts: 1,
+              count: 2,
+              defaults: {},
+              sessions: [sessionKey, otherSessionKey].map((key) => ({
+                key,
+                kind: "direct",
+                label: key,
+                updatedAt: 1,
+              })),
+            },
+            "board.get": {
+              cases: [
+                { match: { sessionKey }, response: boardSnapshot("right") },
+                {
+                  match: { sessionKey: otherSessionKey },
+                  response: { sessionKey: otherSessionKey, revision: 1, tabs: [], widgets: [] },
+                },
+              ],
+            },
+            "board.update": {
+              sequence: [
+                boardSnapshot("left", 2),
+                boardSnapshot("bottom", 3),
+                boardSnapshot("hidden", 4),
+              ],
+            },
           },
         });
         await page.route("**/__openclaw__/plugins/control-ui/ui-fixture/*/index.js", (route) =>
           route.fulfill({ status: 200, contentType: "text/javascript", body: pluginModule("one") }),
         );
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "chat"));
         await page.getByRole("link", { name: "UI fixture", exact: true }).waitFor();
+        const accessories = page.locator("[data-fixture-session-accessory]");
+        const accessory = accessories.filter({ hasText: sessionKey });
+        const expectOneAccessory = async (key = sessionKey) => {
+          await expect
+            .poll(() => page.locator("[data-fixture-session-accessory]:visible").allTextContents())
+            .toEqual([key]);
+          expect(await accessories.filter({ hasText: key }).count()).toBe(1);
+        };
+        await expectOneAccessory();
+        const mode = (value: "chat" | "split" | "dashboard") =>
+          page.locator(`wa-radio.settings-segmented__btn[value="${value}"]`);
+        await mode("split").click();
+        await page.locator(".board-session-surface--dock-right:not([hidden])").waitFor();
+        await expectOneAccessory();
+        for (const dock of ["left", "bottom"] as const) {
+          await page.getByRole("button", { name: /^Chat dock:/ }).click();
+          await page.locator(`.chat-pane__dock-caret wa-dropdown-item[value="${dock}"]`).click();
+          await page.locator(`.board-session-surface--dock-${dock}:not([hidden])`).waitFor();
+          await expectOneAccessory();
+        }
+        await mode("dashboard").click();
+        await page.locator(".board-session-surface--dock-hidden:not([hidden])").waitFor();
+        await expectOneAccessory();
+        await mode("chat").click();
+        await page.locator(".board-session-surface[hidden]").waitFor({ state: "attached" });
+        await expectOneAccessory();
         await page.screenshot({ path: path.join(suite.artifactDir, "before.png"), fullPage: true });
         await selectView(page, "Composer", "ui-fixture/composer");
         await page
@@ -165,6 +643,21 @@ suite.define(() => {
           .poll(() => page.getByLabel("Fixture outcome").textContent())
           .toContain("view has ended");
         await page.screenshot({ path: path.join(suite.artifactDir, "after.png"), fullPage: true });
+        await page.locator(".nav-item--home").click();
+        await expectOneAccessory();
+        await page
+          .locator(`.sidebar-recent-session[data-session-key="${otherSessionKey}"] a`)
+          .click();
+        await expectOneAccessory(otherSessionKey);
+        await expect.poll(() => accessory.getAttribute("data-presented")).toBe("false");
+        expect(await accessory.isVisible()).toBe(false);
+        await page.locator(".nav-item--home").click();
+        await expectOneAccessory();
+        expect(await accessory.getAttribute("data-presented")).toBe("true");
+        await page.screenshot({
+          path: path.join(suite.artifactDir, "session-accessory-returned.png"),
+          fullPage: true,
+        });
       },
     );
   });
@@ -215,6 +708,14 @@ suite.define(() => {
           await gateway.setMethodResponse("plugins.controlUi.list", catalog(revision));
           await gateway.emitGatewayEvent("plugins.controlUi.changed", { revision });
         };
+        const readComposerSelection = async () => {
+          await page.getByRole("button", { name: "Customize UI", exact: true }).click();
+          const selected = await page
+            .getByRole("combobox", { name: "Composer", exact: true })
+            .inputValue();
+          await page.getByRole("button", { name: "Close", exact: true }).last().click();
+          return selected;
+        };
         await gateway.setMethodResponse("plugins.controlUi.list", catalog("two"));
         await page.getByRole("button", { name: "Customize UI", exact: true }).click();
         await page.getByRole("button", { name: "Reload plugin UI", exact: true }).click();
@@ -227,6 +728,17 @@ suite.define(() => {
           .poll(() => page.getByLabel("Fixture outcome").textContent())
           .toContain("activation has ended");
         expect(await gateway.getRequests("fixture.stale")).toHaveLength(0);
+        await selectView(page, "Composer", "ui-fixture/composer");
+        const sameRevisionListed = (await gateway.getRequests("plugins.controlUi.list")).length;
+        await page.getByRole("button", { name: "Customize UI", exact: true }).click();
+        const reloadButton = page.getByRole("button", { name: "Reload plugin UI", exact: true });
+        await reloadButton.click();
+        await gateway.waitForRequest("plugins.controlUi.list", { after: sameRevisionListed });
+        await expect.poll(() => reloadButton.isEnabled()).toBe(true);
+        expect(
+          await page.getByRole("combobox", { name: "Composer", exact: true }).inputValue(),
+        ).toBe("ui-fixture/composer");
+        await page.getByRole("button", { name: "Close", exact: true }).last().click();
         await reload("broken");
         await expect
           .poll(async () =>
@@ -236,6 +748,49 @@ suite.define(() => {
           )
           .toBe(true);
         await page.getByRole("heading", { name: "Fixture revision two" }).waitFor();
+        expect(await readComposerSelection()).toBe("ui-fixture/composer");
+        await selectView(page, "Composer", "");
+        const revisions = [
+          ["withdrawn", "activated"],
+          ["invalid-selection", "failed"],
+          // A rejected revision must remain retryable.
+          ["invalid-selection", "failed"],
+        ] as const;
+        for (const [attempt, [revision, status]] of revisions.entries()) {
+          const reported = (await gateway.getRequests("plugins.controlUi.report")).length;
+          await reload(revision);
+          const receipt = await gateway.waitForRequest("plugins.controlUi.report", {
+            after: reported,
+          });
+          expect(receipt.params).toMatchObject({ pluginId, revision, status });
+          await page.getByRole("heading", { name: "Fixture revision withdrawn" }).waitFor();
+          const calls = (await gateway.getRequests("fixture.current")).length;
+          await page.getByRole("button", { name: "Call current activation" }).click();
+          await gateway.waitForRequest("fixture.current", { after: calls });
+          await expect
+            .poll(() => page.getByLabel("Fixture outcome").textContent())
+            .toBe("completed");
+          await page.getByRole("button", { name: "Customize UI", exact: true }).click();
+          for (const surface of ["Composer", "Workspace"]) {
+            expect(
+              await page.getByRole("combobox", { name: surface, exact: true }).inputValue(),
+            ).toBe("");
+          }
+          if (status === "failed") {
+            const { error } = receipt.params as { error: string };
+            expect(error).toEqual(expect.stringMatching(/\S/));
+            await page
+              .getByRole("alert")
+              .filter({ hasText: pluginId })
+              .filter({ hasText: error })
+              .waitFor();
+          }
+          await page.screenshot({
+            path: path.join(suite.artifactDir, `selection-${attempt + 1}-${revision}.png`),
+            fullPage: true,
+          });
+          await page.getByRole("button", { name: "Close", exact: true }).last().click();
+        }
         await reload("pending");
         await gateway.waitForRequest("fixture.activationStarted");
         await reload("three");
@@ -247,6 +802,18 @@ suite.define(() => {
         await page.getByRole("button", { name: "Release pending initializer" }).click();
         await expect.poll(() => page.getByLabel("Fixture outcome").textContent()).toBe("released");
         expect(await gateway.getRequests("fixture.staleInitializer")).toHaveLength(0);
+        const retiredSelections: Record<string, string> = {};
+        await selectView(page, "Composer", "ui-fixture/composer");
+        await page.getByRole("button", { name: "Unregister composer", exact: true }).click();
+        await expect.poll(() => page.getByLabel("Fixture outcome").textContent()).toBe("completed");
+        await page.getByRole("button", { name: "Register composer", exact: true }).click();
+        retiredSelections.registration = await readComposerSelection();
+        await selectView(page, "Composer", "ui-fixture/composer");
+        await page
+          .getByRole("button", { name: "Unregister retired composer", exact: true })
+          .click();
+        await expect.poll(() => page.getByLabel("Fixture outcome").textContent()).toBe("completed");
+        expect(await readComposerSelection()).toBe("ui-fixture/composer");
         await gateway.setMethodResponse("plugins.controlUi.list", {
           revision: "empty",
           plugins: [],
@@ -255,6 +822,55 @@ suite.define(() => {
         await gateway.emitGatewayEvent("plugins.controlUi.changed", { revision: "empty" });
         await page.getByText("Plugin panel unavailable", { exact: true }).waitFor();
         expect(await page.getByRole("link", { name: "UI fixture", exact: true }).count()).toBe(0);
+        await reload("three");
+        await page.getByRole("heading", { name: "Fixture revision three" }).waitFor();
+        retiredSelections.removal = await readComposerSelection();
+        await selectView(page, "Composer", "ui-fixture/composer");
+        const connected = (await gateway.getRequests("connect")).length;
+        const reported = (await gateway.getRequests("plugins.controlUi.report")).length;
+        await gateway.deferNext("connect");
+        await gateway.closeLatest();
+        await gateway.waitForRequest("connect", { after: connected });
+        for (const collapsed of [false, true]) {
+          if (collapsed) {
+            await page.locator(".sidebar-brand__collapse").click();
+          }
+          const chrome = page.locator(
+            collapsed ? ".shell-chrome-controls" : ".sidebar-brand__actions",
+          );
+          await expect
+            .poll(async () => {
+              const banner = await page.locator(".connection-action-block").boundingBox();
+              const controls = await chrome.boundingBox();
+              if (!banner || !controls) {
+                throw new Error("The reconnect banner and shell controls must be visible.");
+              }
+              // Expanded controls occupy the sidebar; collapsed controls share the content column.
+              return collapsed
+                ? banner.y - (controls.y + controls.height)
+                : banner.x - (controls.x + controls.width);
+            })
+            .toBeGreaterThanOrEqual(0);
+        }
+        await page.locator(".shell-chrome-controls__nav-toggle").click();
+        const pluginPage = page.locator("openclaw-plugin-page");
+        await pluginPage.getByRole("status", { name: "Loading…", exact: true }).waitFor();
+        expect(
+          await pluginPage.getByText("Plugin panel unavailable", { exact: true }).count(),
+        ).toBe(0);
+        await page.screenshot({ path: path.join(suite.artifactDir, "reconnecting.png") });
+        await gateway.resolveDeferred("connect");
+        const reconnected = await gateway.waitForRequest("plugins.controlUi.report", {
+          after: reported,
+        });
+        expect(reconnected.params).toMatchObject({
+          pluginId,
+          revision: "three",
+          status: "activated",
+        });
+        await page.getByRole("heading", { name: "Fixture revision three" }).waitFor();
+        retiredSelections.connection = await readComposerSelection();
+        expect(retiredSelections).toEqual({ registration: "", removal: "", connection: "" });
       },
     );
   });
@@ -282,13 +898,7 @@ suite.define(() => {
         await page.route("**/__openclaw__/plugins/control-ui/*/*/index.js", (route) => {
           const segments = new URL(route.request().url()).pathname.split("/");
           const body =
-            segments.at(-3) === "hung-ui"
-              ? `export default { id:"hung-ui", async activate(host) {
-              await host.request("fixture.peerStarted");
-              await new Promise(resolve => { globalThis.nativePluginProof.release = resolve; });
-              await host.request("fixture.latePeer");
-            } };`
-              : pluginModule(segments.at(-2)!);
+            segments.at(-3) === "hung-ui" ? hungPluginModule : pluginModule(segments.at(-2)!);
           return route.fulfill({ status: 200, contentType: "text/javascript", body });
         });
         await page.goto(`${suite.server.baseUrl}plugin?plugin=ui-fixture&id=proof`);

@@ -1,14 +1,15 @@
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import path from "node:path";
 import type {
   PluginControlUiActivation,
   PluginControlUiDiagnostic,
   PluginControlUiModule,
   PluginsControlUiCatalog,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
-import { root } from "../infra/fs-safe.js";
-import { walkRootDirectory } from "../infra/root-walk.js";
+import {
+  readPluginControlUiAssets,
+  type PluginControlUiAsset,
+} from "../plugins/control-ui-assets.js";
 import { loadPluginManifest, type PluginManifestControlUi } from "../plugins/manifest.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
@@ -19,8 +20,6 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 import {
   CONTROL_UI_PLUGIN_ASSET_PREFIX,
-  CONTROL_UI_PLUGIN_MAX_ASSET_BYTES,
-  CONTROL_UI_PLUGIN_MAX_BUILD_BYTES,
   controlUiPluginAssetPrefix,
 } from "./control-ui-plugin-assets-contract.js";
 import {
@@ -32,21 +31,20 @@ import { authorizeOperatorScopesForRequiredScope, READ_SCOPE } from "./method-sc
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
 const MAX_CONTROL_UI_PLUGINS = 64;
-const MAX_CONTROL_UI_ASSETS = 128;
 const MAX_CONTROL_UI_CATALOG_BYTES = 64 * 1024 * 1024;
+const MAX_CONTROL_UI_CATALOG_REVISIONS = 256;
 
-type BrowserAsset = { body: Buffer; contentType: string };
 type BrowserBuild = {
   owner: PluginRecord;
   isCurrent: () => boolean;
   module: PluginControlUiModule;
-  assets: ReadonlyMap<string, BrowserAsset>;
+  assets: ReadonlyMap<string, PluginControlUiAsset>;
   bytes: number;
 };
 type BrowserCatalogState = {
   isCurrent: () => boolean;
   builds: Map<string, BrowserBuild>;
-  previousBuilds: Map<string, BrowserBuild>;
+  revisions: Map<string, BrowserBuild>;
   diagnostics: Map<string, PluginControlUiDiagnostic>;
   activations: WeakMap<object, Map<string, PluginControlUiActivation>>;
   pending?: Promise<void>;
@@ -67,7 +65,7 @@ function catalogState(registry: PluginRegistry): BrowserCatalogState {
     state = {
       isCurrent,
       builds: new Map(),
-      previousBuilds: new Map(),
+      revisions: new Map(),
       diagnostics: new Map(),
       activations: new WeakMap(),
       initialized: false,
@@ -92,44 +90,10 @@ async function snapshotBrowserBuild(
   if (!declaration || !record.rootDir || !isCurrent?.()) {
     throw new Error("plugin is no longer active");
   }
-  const pluginRoot = await root(record.rootDir, {
-    hardlinks: "reject",
-    symlinks: "reject",
-    maxBytes: CONTROL_UI_PLUGIN_MAX_ASSET_BYTES,
-  });
-  const directory = path.posix.dirname(declaration.entry);
-  const assets = new Map<string, BrowserAsset>();
-  let totalBytes = 0;
-  for await (const entry of walkRootDirectory(pluginRoot.rootReal, directory, {
-    symlinkPolicy: "skip",
-    maxDepth: 8,
-    maxEntries: MAX_CONTROL_UI_ASSETS,
-    limitBehavior: "throw",
-  })) {
-    const relativePath = path.posix.relative(directory, entry.relativePath);
-    if (
-      entry.kind !== "file" ||
-      !/^(?:[\w-][\w.-]*\/)*[\w-][\w.-]*\.(?:m?js|css)$/u.test(relativePath)
-    ) {
-      continue;
-    }
-    const body = await pluginRoot.readBytes(entry.relativePath);
-    totalBytes += body.length;
-    if (totalBytes > CONTROL_UI_PLUGIN_MAX_BUILD_BYTES) {
-      throw new Error("browser build exceeds its byte limit");
-    }
-    assets.set(relativePath, {
-      body,
-      contentType: relativePath.endsWith(".css")
-        ? "text/css; charset=utf-8"
-        : "text/javascript; charset=utf-8",
-    });
-  }
-  const entryName = path.posix.basename(declaration.entry);
-  const styles = (declaration.styles ?? []).map((style) => path.posix.relative(directory, style));
-  if (![entryName, ...styles].every((name) => assets.has(name))) {
-    throw new Error("declared browser assets are missing");
-  }
+  const { entryName, styles, assets, bytes } = await readPluginControlUiAssets(
+    record.rootDir,
+    declaration,
+  );
   const digest = createHash("sha256").update(JSON.stringify(declaration));
   for (const [name, asset] of [...assets].toSorted(([left], [right]) =>
     left.localeCompare(right),
@@ -147,7 +111,7 @@ async function snapshotBrowserBuild(
     owner: record,
     isCurrent,
     assets,
-    bytes: totalBytes,
+    bytes,
     module: {
       pluginId: record.id,
       name: record.name,
@@ -192,29 +156,36 @@ async function refreshBrowserCatalog(
         declaration = loaded.manifest.controlUi;
       }
       const build = await snapshotBrowserBuild(registry, record, declaration);
-      const currentBytes = [...state.builds.values()]
-        .filter((current) => current.owner.id !== record.id)
-        .reduce((sum, current) => sum + current.bytes, build.bytes);
-      if (currentBytes > MAX_CONTROL_UI_CATALOG_BYTES) {
-        throw new Error("browser catalog exceeds its byte limit");
-      }
-      const previous = state.builds.get(record.id);
-      if (previous && previous.module.revision !== build.module.revision) {
-        // Keep one previous revision for imports already in flight during the change event.
-        state.previousBuilds.set(record.id, previous);
-      }
-      let retainedBytes = [...state.previousBuilds.values()].reduce(
-        (sum, current) => sum + current.bytes,
-        0,
-      );
-      for (const [id, retained] of state.previousBuilds) {
-        if (currentBytes + retainedBytes <= MAX_CONTROL_UI_CATALOG_BYTES) {
-          break;
+      // Advertised revisions remain usable by old tabs and failed-activation fallbacks.
+      // Only retired backend owners can release them; browser receipts are observations.
+      for (const [key, retained] of state.revisions) {
+        if (!retained.isCurrent()) {
+          state.revisions.delete(key);
+          if (state.builds.get(retained.owner.id) === retained) {
+            state.builds.delete(retained.owner.id);
+          }
         }
-        state.previousBuilds.delete(id);
-        retainedBytes -= retained.bytes;
       }
-      // Publish complete immutable bytes at once; a failed rebuild leaves the last build usable.
+      const revisionKey = `${record.id}/${build.module.revision}`;
+      if (!state.revisions.has(revisionKey)) {
+        const bytes = [...state.revisions.values()].reduce(
+          (sum, retained) => sum + retained.bytes,
+          build.bytes,
+        );
+        if (
+          bytes > MAX_CONTROL_UI_CATALOG_BYTES ||
+          state.revisions.size >= MAX_CONTROL_UI_CATALOG_REVISIONS
+        ) {
+          state.diagnostics.set(record.id, {
+            pluginId: record.id,
+            message:
+              "Control UI revision cache is full. Restart the Gateway to load another browser build.",
+          });
+          continue;
+        }
+      }
+      // Publish complete immutable bytes at once; refused reloads preserve every advertised URL.
+      state.revisions.set(revisionKey, build);
       state.builds.set(record.id, build);
       state.diagnostics.delete(record.id);
     } catch {
@@ -251,9 +222,9 @@ function projectBrowserCatalog(
   return { revision, plugins, diagnostics };
 }
 
-/** Explicit UI-only refresh; never imports or replaces backend plugin code. */
-export async function reloadControlUiPluginCatalog(
+async function loadControlUiPluginCatalog(
   pluginId?: string,
+  reloadManifest = false,
 ): Promise<PluginsControlUiCatalog> {
   const registry = getPluginRegistryForContext();
   if (!registry) {
@@ -263,40 +234,35 @@ export async function reloadControlUiPluginCatalog(
     return projectBrowserCatalog(null);
   }
   const state = catalogState(registry);
-  const pending = (state.pending ?? Promise.resolve()).then(() =>
-    refreshBrowserCatalog(registry, state, pluginId, true),
+  const operation = (state.pending ?? Promise.resolve()).then(async () => {
+    if (reloadManifest || !state.initialized) {
+      await refreshBrowserCatalog(registry, state, pluginId, reloadManifest);
+    }
+    return projectBrowserCatalog(registry, state);
+  });
+  // A failed request owns its rejection; later readers and reloads wait only for
+  // settlement. Check initialization inside this lane so cold readers cannot race.
+  const pending = operation.then(
+    () => undefined,
+    () => undefined,
   );
   state.pending = pending;
   try {
-    await pending;
+    return await operation;
   } finally {
     if (state.pending === pending) {
       state.pending = undefined;
     }
   }
-  return projectBrowserCatalog(registry, state);
 }
 
-export async function listControlUiPluginCatalog(): Promise<PluginsControlUiCatalog> {
-  const registry = getPluginRegistryForContext();
-  if (!registry) {
-    return projectBrowserCatalog(null);
-  }
-  const state = catalogState(registry);
-  if (state.pending) {
-    await state.pending;
-  } else if (!state.initialized) {
-    const pending = refreshBrowserCatalog(registry, state);
-    state.pending = pending;
-    try {
-      await pending;
-    } finally {
-      if (state.pending === pending) {
-        state.pending = undefined;
-      }
-    }
-  }
-  return projectBrowserCatalog(registry, state);
+/** Explicit UI-only refresh; never imports or replaces backend plugin code. */
+export function reloadControlUiPluginCatalog(pluginId?: string): Promise<PluginsControlUiCatalog> {
+  return loadControlUiPluginCatalog(pluginId, true);
+}
+
+export function listControlUiPluginCatalog(): Promise<PluginsControlUiCatalog> {
+  return loadControlUiPluginCatalog();
 }
 
 /** A receipt is an observation by one live browser connection, never activation authority. */
@@ -395,9 +361,7 @@ export async function handleControlUiPluginAssetRequest(
   }
   const registry = getPluginRegistryForContext();
   const state = registry && browserCatalogs.get(registry);
-  const current = state && state.builds.get(pluginId);
-  const build =
-    current?.module.revision === revision ? current : state && state.previousBuilds.get(pluginId);
+  const build = state?.revisions.get(`${pluginId}/${revision}`);
   const asset =
     build && build.module.revision === revision && build.isCurrent()
       ? build.assets.get(fileParts.join("/"))

@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -37,7 +38,10 @@ vi.mock("../cli/plugins-install-config.js", () => ({
 }));
 vi.mock("../plugins/management-service.js", () => ({ installManagedPluginSource: mocks.install }));
 vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
-  withPluginLifecycleLease: async (_params: unknown, run: () => Promise<unknown>) => await run(),
+  withPluginLifecycleLease: async (
+    _params: unknown,
+    run: (lease: { assertOwned: () => void }) => Promise<unknown>,
+  ) => await run({ assertOwned: () => {} }),
 }));
 
 describe("exact system-agent plugin artifacts", () => {
@@ -106,13 +110,22 @@ describe("exact system-agent plugin artifacts", () => {
     });
     expect(await fs.readFile(review.retainedPath)).toEqual(reviewedBytes);
     await fs.writeFile(operation.path, "source changed after proposal");
-    const beforePersistentApply = vi.fn(async () => {});
+    const beforePersistentApply = vi.fn(() => {});
+    const installedPath = path.join(
+      fixture,
+      "state",
+      "imports",
+      "plugins",
+      `${operation.sha256}.tgz`,
+    );
     mocks.install.mockImplementation(async (params) => {
       expect(params.request.path).not.toBe(review.retainedPath);
-      expect(params.request.recordPath).toBe(review.retainedPath);
+      expect(params.request.recordPath).toBe(installedPath);
       expect(await fs.readFile(params.request.path)).toEqual(reviewedBytes);
+      expect(await fs.readFile(installedPath)).toEqual(reviewedBytes);
       expect(params.acknowledgeCapabilities).toEqual({ reviewToken: review.reviewToken });
       await params.beforePersistentEffect();
+      params.beforePersistentApply();
       return { ok: true, pluginId: "artifact-demo", config: {} };
     });
     const { runtime, lines } = createSystemAgentTestRuntime();
@@ -122,13 +135,43 @@ describe("exact system-agent plugin artifacts", () => {
         beforePersistentApply,
       }),
     ).toMatchObject({ applied: true });
-    expect(beforePersistentApply).toHaveBeenCalledTimes(2);
+    await expect(fs.access(review.retainedPath)).rejects.toThrow();
+    expect(beforePersistentApply).toHaveBeenCalledTimes(3);
     expect(lines.join("\n")).toContain("Restart the Gateway");
     expect(mocks.audit).toHaveBeenCalledWith(
       expect.objectContaining({
-        details: expect.objectContaining({ pluginId: "artifact-demo", sha256: operation.sha256 }),
+        details: expect.objectContaining({
+          pluginId: "artifact-demo",
+          sha256: operation.sha256,
+          sourcePath: installedPath,
+        }),
       }),
     );
+  });
+
+  it("preserves the approved source when the installer reports a late failure", async () => {
+    const operation = await pack();
+    const reviewedBytes = await fs.readFile(operation.path);
+    const review = await prepareSystemAgentPluginArtifact(operation);
+    const failure = new Error("registry refresh failed after commit");
+    mocks.install.mockRejectedValue(failure);
+    const { runtime, lines } = createSystemAgentTestRuntime();
+
+    await expect(
+      executePluginArtifactActivation(operation, runtime, { approved: true }),
+    ).rejects.toBe(failure);
+    const installCall = mocks.install.mock.calls[0];
+    assert.ok(installCall, "The managed installer must receive the approved archive.");
+    const installedPath = installCall[0].request.recordPath;
+    expect(await fs.readFile(installedPath)).toEqual(reviewedBytes);
+    await expect(fs.access(review.retainedPath)).rejects.toThrow();
+    expect(lines.join("\n")).toContain("propose the exact artifact again");
+    expect(mocks.audit).not.toHaveBeenCalled();
+
+    await expect(
+      executePluginArtifactActivation(operation, runtime, { approved: true }),
+    ).rejects.toThrow(/no longer retained.*propose/i);
+    expect(mocks.install).toHaveBeenCalledOnce();
   });
 
   it("rejects a changed retained archive before entering the installer", async () => {
@@ -141,6 +184,44 @@ describe("exact system-agent plugin artifacts", () => {
     ).rejects.toThrow("SHA256 does not match");
     expect(mocks.install).not.toHaveBeenCalled();
     expect(mocks.audit).not.toHaveBeenCalled();
+  });
+
+  it("bounds pending imports without removing an installed archive", async () => {
+    const operation = await pack();
+    const bytes = await fs.readFile(operation.path);
+    await prepareSystemAgentPluginArtifact(operation);
+    const { runtime } = createSystemAgentTestRuntime();
+    await executePluginArtifactActivation(operation, runtime, { approved: true });
+    const installCall = mocks.install.mock.calls[0];
+    assert.ok(installCall, "The managed installer must receive the approved archive.");
+    const installedPath = installCall[0].request.recordPath;
+    const pendingDir = path.join(fixture, "state", "imports", "plugins", "pending");
+    await fs.mkdir(pendingDir, { recursive: true });
+    for (let index = 0; index < 9; index += 1) {
+      const name = `${index.toString(16).padStart(64, "0")}.tgz`;
+      await fs.writeFile(path.join(pendingDir, name), "abandoned review");
+    }
+
+    const next = await prepareSystemAgentPluginArtifact(await pack({ version: "2.0.0" }));
+    expect((await fs.readdir(pendingDir)).length).toBeLessThanOrEqual(8);
+    expect(await fs.readFile(installedPath)).toEqual(bytes);
+    expect(await fs.readFile(next.retainedPath)).not.toEqual(bytes);
+  });
+
+  it("prunes expired reviews and requires a fresh proposal before applying them", async () => {
+    const operation = await pack();
+    const review = await prepareSystemAgentPluginArtifact(operation);
+    const expired = new Date(Date.now() - 2 * 60 * 60_000);
+    await fs.utimes(review.retainedPath, expired, expired);
+    const { runtime } = createSystemAgentTestRuntime();
+
+    await expect(
+      executePluginArtifactActivation(operation, runtime, { approved: true }),
+    ).rejects.toThrow(/expired.*propose/i);
+    expect(mocks.install).not.toHaveBeenCalled();
+
+    await prepareSystemAgentPluginArtifact(await pack({ version: "2.0.0" }));
+    await expect(fs.access(review.retainedPath)).rejects.toThrow();
   });
 
   it.each(["review", "apply"])(
@@ -163,7 +244,9 @@ describe("exact system-agent plugin artifacts", () => {
       expect(mocks.audit).not.toHaveBeenCalled();
       if (phase === "review") {
         await expect(
-          fs.access(path.join(fixture, "state", "imports", "plugins", `${operation.sha256}.tgz`)),
+          fs.access(
+            path.join(fixture, "state", "imports", "plugins", "pending", `${operation.sha256}.tgz`),
+          ),
         ).rejects.toThrow();
       }
     },
@@ -180,7 +263,9 @@ describe("exact system-agent plugin artifacts", () => {
       /bundle|dependencies|scripts/,
     );
     await expect(
-      fs.access(path.join(fixture, "state", "imports", "plugins", `${operation.sha256}.tgz`)),
+      fs.access(
+        path.join(fixture, "state", "imports", "plugins", "pending", `${operation.sha256}.tgz`),
+      ),
     ).rejects.toThrow();
     expect(mocks.install).not.toHaveBeenCalled();
   });

@@ -4408,14 +4408,15 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   max-height: 80px;
 }
 
-/* Keep ordinary page headers below the fixed web chrome instead of shifting
-   their titles away from the page content. Settings, mobile drawers, and
-   native hosts own different chrome. */
+/* Clear collapsed-sidebar web chrome once, at the reconnect notice or page header.
+   Settings, mobile drawers, and native hosts own different chrome. */
 html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
   .shell.shell--nav-collapsed:not(.shell--mobile-nav):not(.shell--settings)
-  .content:not(.content--chat)
-  .content-header {
-  margin-top: 48px;
+  .content:not(.content--chat) {
+  > .connection-action-block,
+  &:not(:has(> .connection-action-block)) .content-header {
+    margin-top: 48px;
+  }
 }
 
 .content-header--page + * {

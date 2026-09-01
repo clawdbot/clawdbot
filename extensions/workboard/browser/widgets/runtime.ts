@@ -16,7 +16,6 @@ export type WorkboardWidgetRuntime = {
   client: GatewayBrowserClient;
   connected: boolean;
   loading: boolean;
-  error: string;
   listeners: Set<() => void>;
   refresh: () => Promise<void>;
   notify: () => void;
@@ -37,7 +36,6 @@ export function acquireWidgetRuntime(host: ControlUiHost, listener: () => void) 
       client: createWorkboardClient(host),
       connected: host.connection.connected,
       loading: false,
-      error: "",
       listeners: new Set(),
       notify() {
         for (const notify of current.listeners) {
@@ -58,7 +56,9 @@ export function acquireWidgetRuntime(host: ControlUiHost, listener: () => void) 
           while (pending && isCurrent() && current.connected) {
             pending = false;
             current.loading = true;
-            current.error = "";
+            const state = getWorkboardState(current.owner);
+            // Clear the previous outcome before loading; completion must preserve newer failures.
+            state.error = null;
             current.notify();
             try {
               const snapshot = normalizeCardsPayload(
@@ -67,7 +67,6 @@ export function acquireWidgetRuntime(host: ControlUiHost, listener: () => void) 
               if (!isCurrent()) {
                 return;
               }
-              const state = getWorkboardState(current.owner);
               state.cards = snapshot.cards;
               state.statuses = snapshot.statuses;
               state.loaded = true;
@@ -77,7 +76,7 @@ export function acquireWidgetRuntime(host: ControlUiHost, listener: () => void) 
               if (!isCurrent()) {
                 return;
               }
-              current.error = formatUiError(error);
+              state.error = formatUiError(error);
             } finally {
               if (isCurrent()) {
                 current.loading = false;
@@ -111,7 +110,6 @@ export function acquireWidgetRuntime(host: ControlUiHost, listener: () => void) 
         pending = false;
         current.owner = {};
         current.loading = false;
-        current.error = "";
         if (current.connected) {
           void current.refresh();
         }
@@ -152,11 +150,14 @@ export class WorkboardWidgetModel {
   get canMutate() {
     return this.isActive() && this.mutationAllowed();
   }
+  get connected() {
+    return this.runtime.connected;
+  }
   get workboardStateHost() {
     return this.runtime.owner;
   }
   get workboardClient() {
-    return this.isActive() && this.runtime.connected ? createWorkboardClient(this.host) : null;
+    return this.canMutate && this.runtime.connected ? createWorkboardClient(this.host) : null;
   }
   get cards() {
     return getWorkboardState(this.runtime.owner).cards.filter(isActiveWorkboardCard);
@@ -167,11 +168,8 @@ export class WorkboardWidgetModel {
   get loaded() {
     return getWorkboardState(this.runtime.owner).loaded;
   }
-  get loading() {
-    return this.runtime.loading;
-  }
   get error() {
-    return getWorkboardState(this.runtime.owner).error || this.runtime.error;
+    return getWorkboardState(this.runtime.owner).error;
   }
   readStringProp(key: string) {
     const value = this.props[key];
@@ -191,7 +189,7 @@ export class WorkboardWidgetModel {
   }
   async moveCard(card: WorkboardCard, status: WorkboardStatus) {
     const client = this.workboardClient;
-    if (!client || !this.canMutate || !isActiveWorkboardCard(card) || card.status === status) {
+    if (!client || !isActiveWorkboardCard(card) || card.status === status) {
       return;
     }
     const owner = this.runtime.owner;

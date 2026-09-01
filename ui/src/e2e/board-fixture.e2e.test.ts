@@ -14,7 +14,9 @@ import type { ApplicationRuntime } from "../app/bootstrap.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionUrl,
   resolvePlaywrightChromiumExecutablePath,
+  type ControlUiMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -48,7 +50,7 @@ async function reservePort(): Promise<number> {
   return port;
 }
 
-async function startFixtureServer(fixture?: "attachments"): Promise<FixtureServer> {
+async function startFixtureServer(fixture?: "attachments" | "workboard"): Promise<FixtureServer> {
   const port = await reservePort();
   const url = `http://127.0.0.1:${port}/__fixtures/board/`;
   const child = spawn(
@@ -895,6 +897,69 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
       expect(await composer.inputValue()).toBe("");
     } finally {
       await page.close();
+    }
+  });
+});
+
+describeStandaloneMockServer("standalone native plugin preview", () => {
+  let server: FixtureServer;
+  let previewBrowser: Browser;
+
+  beforeAll(async () => {
+    server = await startFixtureServer("workboard");
+    previewBrowser = await chromium.launch({
+      executablePath: chromiumExecutablePath,
+      headless: true,
+    });
+  });
+
+  afterAll(async () => {
+    await previewBrowser?.close();
+    await stopFixtureServer(server);
+  });
+
+  it("loads native plugin pages and dashboard widgets in the standalone preview", async () => {
+    const artifactDir = createControlUiE2eArtifactDir("standalone-native-plugin-preview");
+    const context = await previewBrowser.newContext({
+      viewport: { width: 1440, height: 1000 },
+      recordVideo: { dir: artifactDir, size: { width: 1440, height: 1000 } },
+    });
+    const page = await context.newPage();
+    try {
+      await page.goto(new URL("/workboard", server.url).toString());
+      await page.getByText("Capture customer feedback themes", { exact: true }).waitFor();
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const gateway = (
+              window as Window & { openclawControlUiE2eGateway?: ControlUiMockGateway }
+            ).openclawControlUiE2eGateway;
+            return gateway?.requests
+              .filter((request) => request.method === "plugins.controlUi.report")
+              .map((request) => request.params);
+          }),
+        )
+        .toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ pluginId: "workboard", status: "activated" }),
+          ]),
+        );
+      await page.screenshot({ path: path.join(artifactDir, "native-page.png"), fullPage: true });
+
+      await page.goto(
+        controlUiSessionUrl(
+          new URL("/", server.url).toString(),
+          "agent:main:workboard-proof",
+          "dashboard",
+        ),
+      );
+      const widget = page.locator('[data-test-id="workboard-board-widget"]');
+      await widget.getByText("Capture customer feedback themes", { exact: true }).waitFor();
+      expect(await page.getByText("Unknown plugin widget", { exact: false }).count()).toBe(0);
+      await page.screenshot({ path: path.join(artifactDir, "native-widget.png"), fullPage: true });
+    } finally {
+      await page.screenshot({ path: path.join(artifactDir, "final.png"), fullPage: true });
+      await context.close();
     }
   });
 });

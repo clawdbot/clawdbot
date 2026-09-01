@@ -10,7 +10,7 @@ import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import type { InstallSecurityScanResult } from "./install-security-scan.js";
 import {
   attachPluginInstallTransaction,
-  isPluginInstallCommitDeferred,
+  resolvePluginInstallTransactionRequest,
 } from "./install-transaction.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
@@ -453,9 +453,10 @@ export async function installPluginDirectoryIntoExtensions(params: {
       return { ok: true as const };
     },
   };
+  const transactionRequest = resolvePluginInstallTransactionRequest(params);
   const installRes = await runtime.installPackageDir(
-    isPluginInstallCommitDeferred(params)
-      ? requestDeferredPackageDirInstall(packageInstallParams)
+    transactionRequest
+      ? requestDeferredPackageDirInstall(packageInstallParams, transactionRequest.assertOwned)
       : packageInstallParams,
   );
   if (!installRes.ok) {

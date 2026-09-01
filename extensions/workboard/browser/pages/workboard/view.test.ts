@@ -1,15 +1,21 @@
 import "../../test/dom.setup.ts";
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 // Control UI tests cover workboard behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { nextWorkboardCardPosition } from "../../lib/workboard/card-state.ts";
 import { getWorkboardState, stopWorkboardLifecycleRefresh } from "../../lib/workboard/index.ts";
 import {
+  createGatewaySession,
   createWorkboardCard,
   createWorkboardExecution,
+  createWorkboardTestClient,
 } from "../../lib/workboard/test/index-helpers.ts";
 import { workboardTestHost } from "../../test/host.setup.ts";
+import { waitForFast } from "../../test/wait-for.ts";
 import { renderWorkboard } from "./view.ts";
 
 type WorkboardRenderProps = Parameters<typeof renderWorkboard>[0];
@@ -33,6 +39,7 @@ function createWorkboardRenderProps(
     agentsList: null,
     sessions: [],
     onOpenSession: () => undefined,
+    onRefresh: () => undefined,
     ...overrides,
   };
 }
@@ -222,16 +229,18 @@ describe("renderWorkboard", () => {
   });
 
   it.each([
-    { sessionKey: "agent:main:dashboard-panel-close", agentId: undefined, expectedAgentId: "main" },
-    { sessionKey: "global", agentId: "work", expectedAgentId: "work" },
+    { sessionKey: "agent:main:dashboard-panel-close", expectedAgentId: "main" },
+    { sessionKey: "agent:work:dashboard-panel-close", expectedAgentId: "work" },
   ])(
     "disposes the $sessionKey dashboard mount when card details close",
-    ({ sessionKey, agentId, expectedAgentId }) => {
+    ({ sessionKey, expectedAgentId }) => {
       const { state, container, renderView } = createWorkboardView();
       state.detailCardId = "card-1";
-      state.cards = [createWorkboardCard({ sessionKey, agentId })];
+      state.cards = [createWorkboardCard({ sessionKey, agentId: "reassigned" })];
       const mount = vi.mocked(workboardTestHost().host.components.mountDashboard);
-      renderView();
+      renderView({
+        sessions: [createGatewaySession({ key: sessionKey, agentId: expectedAgentId })],
+      });
       expect(mount).toHaveBeenCalledWith(
         expect.any(HTMLElement),
         expect.objectContaining({ session: { sessionKey, agentId: expectedAgentId } }),
@@ -241,6 +250,62 @@ describe("renderWorkboard", () => {
       renderView();
       expect(handle.dispose).toHaveBeenCalledOnce();
       expect(container.querySelector("[data-test-dashboard]")).toBeNull();
+    },
+  );
+
+  it.each([
+    {
+      name: "resolved",
+      owners: ["main"],
+      expected: "agent:main:subagent:workboard-default-card-1",
+    },
+    { name: "missing", owners: [], expected: undefined },
+    { name: "ambiguous", owners: ["main", "worker"], expected: undefined },
+  ])(
+    "uses only an identified execution for a $name provisional session",
+    ({ owners, expected }) => {
+      const onOpenSession = vi.fn();
+      const { state, container, renderView } = createWorkboardView({
+        onOpenSession,
+        sessions: owners.map((owner) =>
+          createGatewaySession({ key: `agent:${owner}:subagent:workboard-default-card-1` }),
+        ),
+        sessionResolution: expected
+          ? {
+              key: "subagent:workboard-default-card-1",
+              status: "resolved",
+              session: createGatewaySession({ key: expected }),
+            }
+          : {
+              key: "subagent:workboard-default-card-1",
+              status: owners.length > 1 ? "ambiguous" : "unavailable",
+            },
+      });
+      state.cards = [
+        createWorkboardCard({
+          agentId: "worker",
+          sessionKey: "subagent:workboard-default-card-1",
+        }),
+      ];
+      state.detailCardId = "card-1";
+      const mount = vi.mocked(workboardTestHost().host.components.mountDashboard);
+
+      renderView();
+
+      const open = container.querySelector<HTMLButtonElement>(
+        '.workboard-detail button[aria-label="Open session"]',
+      );
+      if (expected) {
+        expect(mount).toHaveBeenCalledWith(
+          expect.any(HTMLElement),
+          expect.objectContaining({ session: { sessionKey: expected } }),
+        );
+        expectDefined(open, "resolved session action").click();
+        expect(onOpenSession).toHaveBeenCalledWith({ sessionKey: expected });
+      } else {
+        expect(mount).not.toHaveBeenCalled();
+        expect(open).toBeNull();
+      }
     },
   );
 
@@ -833,8 +898,6 @@ describe("renderWorkboard", () => {
     const { container, renderView } = createWorkboardView({
       agentsList: {
         defaultId: "main",
-        mainKey: "agent:main:main",
-        scope: "per-sender",
         agents: [{ id: "main", name: "Main" }],
       },
     });
@@ -863,8 +926,6 @@ describe("renderWorkboard", () => {
     const { state, container, renderView } = createWorkboardView({
       agentsList: {
         defaultId: "main",
-        mainKey: "agent:main:main",
-        scope: "per-sender",
         agents: [{ id: "main" }, { id: "writer" }, { id: "ops" }],
       },
       scopeAgentId: "writer",
@@ -1568,19 +1629,20 @@ describe("renderWorkboard", () => {
     expect(state.cards[0]).toMatchObject({ status: "todo", updatedAt: 1 });
   });
 
-  it("offers start controls when a linked session no longer exists", () => {
+  it("offers Edit without replacement Start when linked session metadata is unknown", () => {
     const { state, container, renderView } = createWorkboardView();
     state.cards = [
       createWorkboardCard({
-        title: "Restart this",
+        title: "Recover this link",
         status: "blocked",
         sessionKey: "agent:main:missing:1",
       }),
     ];
     renderView();
 
-    expect(container.textContent).toContain("Session missing");
-    expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(1);
+    expect(container.textContent).toContain("Session state unknown");
+    expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
+    expect(container.querySelector('button[aria-label="Edit card"]')).not.toBeNull();
   });
 
   it("opens a modal for new cards", () => {
@@ -1646,8 +1708,6 @@ describe("renderWorkboard", () => {
     const { state, container, renderView } = createWorkboardView({
       agentsList: {
         defaultId: "main",
-        mainKey: "agent:main:main",
-        scope: "per-sender",
         agents: [
           { id: "main", name: "Main" },
           { id: "writer", name: "Writer" },
@@ -1731,6 +1791,59 @@ describe("renderWorkboard", () => {
           ".workboard-draft .workboard-agent-select [data-test-agent-picker]",
         )?.value,
       ).toBe(expectedAgentId);
+    },
+  );
+
+  it.each(["main", "research"])(
+    "keeps a new default-agent card visible in %s scope before metadata loads",
+    async (defaultAgentId) => {
+      const created = createWorkboardCard({ id: "created", title: "New default-agent work" });
+      const client = createWorkboardTestClient({ "workboard.cards.create": { card: created } });
+      const { state, container, renderView } = createWorkboardView({
+        client,
+        defaultAgentId,
+        scopeAgentId: defaultAgentId,
+      });
+      state.cards = [
+        createWorkboardCard({
+          id: "assigned",
+          title: "Assigned default work",
+          agentId: defaultAgentId,
+        }),
+        createWorkboardCard({ id: "other", title: "Other agent work", agentId: "writer" }),
+      ];
+      renderView();
+      expectDefined(buttonByText(container, "New card"), "new card action").click();
+      renderView();
+      const title = expectDefined(
+        container.querySelector<HTMLInputElement>(".workboard-draft__title"),
+        "new card title",
+      );
+      title.value = created.title;
+      title.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      container
+        .querySelector<HTMLFormElement>(".workboard-draft")!
+        .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      await waitForFast(() => expect(state.draftOpen).toBe(false));
+      renderView();
+
+      expect(client.request).toHaveBeenCalledWith(
+        "workboard.cards.create",
+        expect.objectContaining({ title: created.title, agentId: "" }),
+      );
+      expect(container.querySelector(".workboard-board")?.textContent).toContain(created.title);
+      expect(container.querySelector(".workboard-board")?.textContent).not.toContain(
+        "Other agent work",
+      );
+      changeWorkboardSelect(
+        container.querySelector('select[aria-label="Workboard view"]'),
+        "default_agent",
+      );
+      renderView();
+      expect(container.querySelector(".workboard-board")?.textContent).toContain(created.title);
+      expect(container.querySelector(".workboard-board")?.textContent).toContain(
+        "Assigned default work",
+      );
     },
   );
 
@@ -1987,8 +2100,6 @@ describe("renderWorkboard", () => {
   it("filters cards by linked agent", () => {
     const agentsList: NonNullable<WorkboardRenderProps["agentsList"]> = {
       defaultId: "main",
-      mainKey: "agent:main:main",
-      scope: "per-sender",
       agents: [
         { id: "main", name: "Main" },
         { id: "ops", name: "Ops" },
@@ -2073,8 +2184,6 @@ describe("renderWorkboard", () => {
     const { state, container, renderView } = createWorkboardView({
       agentsList: {
         defaultId: "main",
-        mainKey: "agent:main:main",
-        scope: "per-sender",
         agents: [
           { id: "main", name: "Main" },
           { id: "main", name: "Main duplicate" },
@@ -2143,8 +2252,6 @@ describe("renderWorkboard", () => {
     const { state, container, renderView } = createWorkboardView({
       agentsList: {
         defaultId: "main",
-        mainKey: "agent:main:main",
-        scope: "per-sender",
         agents: [{ id: "main", name: "Main", agentRuntime: { id: "codex", source: "agent" } }],
       },
     });
@@ -2423,6 +2530,7 @@ describe("renderWorkboard", () => {
       agentsList: null,
       sessions: [],
       onOpenSession: () => undefined,
+      onRefresh: () => undefined,
       onRequestUpdate: () => undefined,
     };
     const container = document.createElement("div");
@@ -2502,6 +2610,153 @@ describe("renderWorkboard", () => {
     ).toBe("high");
   });
 
+  it.each(["create", "update", "comment", "conflict"] as const)(
+    "shows %s failure inside the active card editor and preserves retryable input",
+    async (operation) => {
+      const card = createWorkboardCard({ title: "Original title", notes: "Original notes" });
+      const current = { ...card, priority: "high" as const, updatedAt: 2 };
+      const message =
+        operation === "conflict" ? "Card changed. Review and retry." : `${operation} unavailable`;
+      const error =
+        operation === "conflict"
+          ? new GatewayProtocolRequestError({
+              code: "workboard_conflict",
+              message,
+              details: { type: "workboard_card_conflict", card: current },
+            })
+          : new Error(message);
+      const method =
+        operation === "create"
+          ? "workboard.cards.create"
+          : operation === "comment"
+            ? "workboard.cards.comment"
+            : "workboard.cards.update";
+      const saved =
+        operation === "comment"
+          ? {
+              ...card,
+              updatedAt: 3,
+              metadata: { comments: [{ id: "note", body: "Unsaved comment", createdAt: 3 }] },
+            }
+          : { ...current, title: "Unsaved title", notes: "Unsaved notes", updatedAt: 3 };
+      const client = createWorkboardTestClient({ [method]: { card: saved } });
+      client.request.mockImplementationOnce(async () => {
+        throw error;
+      });
+      const { state, container, renderView } = createWorkboardView({ client });
+      state.cards = operation === "create" ? [] : [card];
+      renderView();
+      expectDefined(
+        operation === "create"
+          ? buttonByText(container, "New card")
+          : buttonByLabel(container, "Edit card"),
+        "open card editor",
+      ).click();
+      renderView();
+      const inputs: [string, string][] = [
+        [".workboard-draft__title", "Unsaved title"],
+        [".workboard-draft__notes", "Unsaved notes"],
+      ];
+      if (operation === "comment") {
+        inputs.push([".workboard-comments__input", "Unsaved comment"]);
+      }
+      for (const [selector, value] of inputs) {
+        const input = container.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)!;
+        input.value = value;
+        input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      }
+      const submit = () => {
+        if (operation === "comment") {
+          container.querySelector<HTMLButtonElement>(".workboard-comments__submit")!.click();
+        } else {
+          container
+            .querySelector<HTMLFormElement>(".workboard-draft")!
+            .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+        }
+      };
+      submit();
+      await waitForFast(() => expect(state.error).toContain(message));
+      renderView();
+
+      expect(client.request).toHaveBeenCalledWith(method, expect.anything());
+      const alert = expectDefined(
+        container.querySelector('.workboard-draft [role="alert"]'),
+        "failure in the active editor",
+      );
+      expect(alert.textContent).toContain(message);
+      expect(alert.closest('[inert], [aria-hidden="true"]')).toBeNull();
+      expect(container.querySelectorAll(".callout.danger")).toHaveLength(1);
+      expect(container.querySelector<HTMLInputElement>(".workboard-draft__title")?.value).toBe(
+        "Unsaved title",
+      );
+      expect(container.querySelector<HTMLTextAreaElement>(".workboard-draft__notes")?.value).toBe(
+        "Unsaved notes",
+      );
+      if (operation === "conflict") {
+        expect(alert.textContent).toContain("Your unsaved edits remain in the form.");
+        expect(
+          container.querySelector<HTMLSelectElement>('select[aria-label="Priority"]')?.value,
+        ).toBe("high");
+      }
+      if (operation === "comment") {
+        expect(
+          container.querySelector<HTMLTextAreaElement>(".workboard-comments__input")?.value,
+        ).toBe("Unsaved comment");
+      }
+
+      submit();
+      await waitForFast(() => {
+        expect(state.draftSaving).toBe(false);
+        expect(state.busyCardIds.size).toBe(0);
+      });
+      renderView();
+      expect(client.request).toHaveBeenCalledTimes(2);
+      expect(container.querySelector('[role="alert"]')).toBeNull();
+      expect(state.draftOpen).toBe(operation === "comment");
+    },
+  );
+
+  it("shows a failed note inside the active detail drawer and allows retry", async () => {
+    const card = createWorkboardCard({ title: "Review this card" });
+    const body = "Keep this note until it saves.";
+    const client = createWorkboardTestClient({
+      "workboard.cards.comment": {
+        card: { ...card, metadata: { comments: [{ id: "note", body, createdAt: 2 }] } },
+      },
+    });
+    client.request.mockImplementationOnce(async () => {
+      throw new Error("Note unavailable");
+    });
+    const { state, container, renderView } = createWorkboardView({ client });
+    state.cards = [card];
+    renderView();
+    expectDefined(buttonByLabel(container, "View details"), "open details").click();
+    renderView();
+    const note = container.querySelector<HTMLTextAreaElement>(".workboard-detail__note")!;
+    note.value = body;
+    note.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    renderView();
+    expectDefined(buttonByText(container, "Add note"), "submit note").click();
+    await waitForFast(() => expect(state.error).toBe("Note unavailable"));
+    renderView();
+
+    const alert = expectDefined(
+      container.querySelector('.workboard-detail [role="alert"]'),
+      "failure in the active drawer",
+    );
+    expect(alert.textContent).toBe("Note unavailable");
+    expect(alert.closest('[inert], [aria-hidden="true"]')).toBeNull();
+    expect(container.querySelectorAll(".callout.danger")).toHaveLength(1);
+    expect(note.value).toBe(body);
+    expectDefined(buttonByText(container, "Add note"), "retry note").click();
+    await waitForFast(() => expect(state.busyCardIds.size).toBe(0));
+    renderView();
+    expect(client.request).toHaveBeenCalledTimes(2);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(container.querySelector(".workboard-detail__list")?.textContent).toContain(body);
+    expect(note.value).toBe("");
+  });
+
   it("locks edit-modal actions while a comment request is in flight", () => {
     const { host, state } = createLoadedWorkboardState();
     state.draftOpen = true;
@@ -2523,56 +2778,105 @@ describe("renderWorkboard", () => {
     expect(buttons.find((button) => button.textContent?.includes("Save"))?.disabled).toBe(true);
   });
 
-  it("adds operator notes from the details drawer", async () => {
-    const { host, state } = createLoadedWorkboardState();
-    state.cards = [
-      createWorkboardCard({
-        title: "Investigate proof gap",
-        status: "review",
-      }),
-    ];
-    const request = vi.fn(async () => ({
-      card: {
-        ...state.cards[0],
-        metadata: {
-          comments: [{ id: "comment-1", body: "Need Linux proof.", createdAt: 2 }],
-        },
-      },
-    }));
-    const props = {
-      host,
-      client: { request } as unknown as GatewayBrowserClient,
-      connected: true,
-      pluginEnabled: true,
-      agentsList: null,
-      sessions: [],
-      onOpenSession: () => undefined,
-      onRequestUpdate: () => undefined,
+  it.each(["", "Verify the browser flow next."])(
+    "saves a details note and preserves a newer draft %j",
+    async (nextDraft) => {
+      const card = createWorkboardCard({ title: "Investigate proof gap", status: "review" });
+      const comment = { id: "comment-1", body: "Need Linux proof.", createdAt: 2 };
+      const pending = createDeferred<{ card: typeof card }>();
+      const client = createWorkboardTestClient(() => pending.promise);
+      const { state, container, renderView } = createWorkboardView({ client });
+      state.cards = [card];
+      state.detailCardId = card.id;
+      renderView();
+      const note = expectDefined(
+        container.querySelector<HTMLTextAreaElement>(".workboard-detail__note"),
+        "details note editor",
+      );
+      note.value = ` ${comment.body} `;
+      note.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      renderView();
+      expectDefined(buttonByText(container, "Add note"), "submit note").click();
+      renderView();
+      expect(note.disabled).toBe(false);
+      if (nextDraft) {
+        note.value = nextDraft;
+        note.dispatchEvent(new InputEvent("input", { bubbles: true }));
+        renderView();
+      }
+
+      pending.resolve({ card: { ...card, metadata: { comments: [comment] } } });
+      await waitForFast(() => expect(state.busyCardIds.size).toBe(0));
+      renderView();
+
+      expect(client.request).toHaveBeenCalledWith("workboard.cards.comment", {
+        id: card.id,
+        body: comment.body,
+      });
+      expect(container.querySelector(".workboard-detail__list")?.textContent).toContain(
+        comment.body,
+      );
+      expect(note.value).toBe(nextDraft);
+      expect(buttonByText(container, "Add note")?.disabled).toBe(!nextDraft);
+    },
+  );
+
+  it("keeps another card's editor draft when an earlier note finishes", async () => {
+    const first = createWorkboardCard({ title: "First card" });
+    const second = createWorkboardCard({ id: "card-2", title: "Second card" });
+    const body = "Review this card.";
+    const pending = createDeferred<{ card: typeof first }>();
+    const client = createWorkboardTestClient(() => pending.promise);
+    const { state, container, renderView } = createWorkboardView({ client });
+    state.cards = [first, second];
+    renderView();
+    const editCard = (title: string) => {
+      const card = expectDefined(
+        [...container.querySelectorAll("article.workboard-card")].find(
+          (candidate) => candidate.querySelector("h3")?.textContent === title,
+        ),
+        "card to edit",
+      );
+      expectDefined(buttonByLabel(card, "Edit card"), "edit card action").click();
+      renderView();
     };
-    const container = document.createElement("div");
+    const typeNote = () => {
+      const input = expectDefined(
+        container.querySelector<HTMLTextAreaElement>(".workboard-comments__input"),
+        "editor note",
+      );
+      input.value = body;
+      input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      return input;
+    };
+    editCard(first.title);
+    typeNote();
+    expectDefined(
+      container.querySelector<HTMLButtonElement>(".workboard-comments__submit"),
+      "submit editor note",
+    ).click();
+    renderView();
+    expectDefined(buttonByLabel(container, "Cancel"), "cancel editor").click();
+    renderView();
+    editCard(second.title);
+    const nextNote = typeNote();
+    renderView();
 
-    render(renderWorkboard(props), container);
-    container
-      .querySelector<HTMLButtonElement>('button[aria-label="View details"]')
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    render(renderWorkboard(props), container);
-
-    const note = container.querySelector<HTMLTextAreaElement>(".workboard-detail__note");
-    note!.value = "Need Linux proof.";
-    note!.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    render(renderWorkboard(props), container);
-    [...container.querySelectorAll<HTMLButtonElement>(".workboard-detail button")]
-      .find((button) => button.textContent?.includes("Add note"))
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(request).toHaveBeenCalledWith("workboard.cards.comment", {
-      id: "card-1",
-      body: "Need Linux proof.",
+    pending.resolve({
+      card: { ...first, metadata: { comments: [{ id: "note-1", body, createdAt: 2 }] } },
     });
-    expect(state.detailCommentBody).toBe("");
-    expect(state.cards[0]?.metadata?.comments?.[0]?.body).toBe("Need Linux proof.");
+    await waitForFast(() => expect(state.busyCardIds.size).toBe(0));
+    renderView();
+
+    expect(state.editingCardId).toBe(second.id);
+    expect(state.draftCommentBody).toBe(body);
+    expect(nextNote.value).toBe(body);
+    expect(
+      container.querySelector<HTMLButtonElement>(".workboard-comments__submit")?.disabled,
+    ).toBe(false);
+    expect(state.cards.find((card) => card.id === first.id)?.metadata?.comments?.[0]?.body).toBe(
+      body,
+    );
   });
 
   it("archives cards from the card action", async () => {
@@ -2625,6 +2929,9 @@ describe("renderWorkboard", () => {
               displayName: "Existing session",
               updatedAt: 2,
             },
+            createGatewaySession({ key: "global", kind: "global", agentId: "main" }),
+            createGatewaySession({ key: "unknown", kind: "unknown", agentId: "main" }),
+            createGatewaySession({ key: "agent:writer:unknown", agentId: "writer" }),
           ],
         }),
       ),
@@ -2633,6 +2940,15 @@ describe("renderWorkboard", () => {
 
     expect(container.textContent).toContain("No linked session");
     expect(container.textContent).toContain("Existing session");
+    const select = expectDefined(
+      container.querySelector<HTMLSelectElement>('.workboard-draft select[aria-label="Session"]'),
+      "new-card session choices",
+    );
+    expect([...select.options].map((option) => option.value)).toEqual([
+      "",
+      "agent:main:dashboard:1",
+      "agent:writer:unknown",
+    ]);
   });
 
   it("shows a missing current session key instead of a false empty selection", () => {
@@ -2707,6 +3023,7 @@ describe("renderWorkboard", () => {
         agentsList: null,
         sessions: [],
         onOpenSession: () => undefined,
+        onRefresh: () => undefined,
       }),
       container,
     );
@@ -2727,6 +3044,7 @@ describe("renderWorkboard", () => {
         agentsList: null,
         sessions: [],
         onOpenSession: () => undefined,
+        onRefresh: () => undefined,
       }),
       container,
     );
@@ -2754,6 +3072,7 @@ describe("renderWorkboard", () => {
         agentsList: null,
         sessions: [],
         onOpenSession: () => undefined,
+        onRefresh: () => undefined,
         onReloadConfig,
       }),
       container,

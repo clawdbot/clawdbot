@@ -1,9 +1,10 @@
+import { html, nothing } from "lit";
+import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { AgentsListResult, GatewaySessionRow } from "../../api/types.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { formatDateMs, formatDateTimeMs, formatDurationCompact } from "../../lib/format.ts";
 import {
-  findWorkboardSession,
   getWorkboardState,
   workboardMutationsReady,
   type WorkboardCard,
@@ -14,9 +15,10 @@ import {
   type WorkboardPriority,
   type WorkboardStatus,
   type WorkboardTaskSummary,
-  type WorkboardUiState,
 } from "../../lib/workboard/index.ts";
-import { agentDisplayName, findCardAgent } from "./agent-filter.ts";
+import { isReservedSessionKey } from "../../lib/workboard/session-links.ts";
+import type { WorkboardSessionResolution } from "../../lib/workboard/session-resolution.ts";
+import { agentDisplayName, findCardAgent, type WorkboardAgentsList } from "./agent-filter.ts";
 
 export type WorkboardProps = {
   host: object;
@@ -27,16 +29,21 @@ export type WorkboardProps = {
   canModelOverride?: boolean;
   pluginEnabled: boolean | null;
   pluginEnablementError?: string | null;
-  agentsList: AgentsListResult | null;
+  agentsList: WorkboardAgentsList | null;
   defaultAgentId?: string | null;
   sessions: GatewaySessionRow[];
+  sessionResolution?: WorkboardSessionResolution;
   scopeAgentId?: string | null;
   showAgentFilter?: boolean;
-  onOpenSession: (sessionKey: string) => void;
+  onOpenSession: ControlUiHost["sessions"]["open"];
   onBoardFilterChange?: (boardFilter: string) => void;
   onReloadConfig?: () => void;
   onRequestUpdate?: () => void;
 };
+
+export function renderWorkboardError(error: string | null | undefined) {
+  return error ? html`<div class="callout danger" role="alert">${error}</div>` : nothing;
+}
 
 const eventLabelKeys: Record<WorkboardEvent["kind"], string> = {
   created: "workboard.eventCreated",
@@ -78,7 +85,9 @@ const lifecycleCopy = {
   failed: ["workboard.lifecycleNeedsReview", "workboard.lifecycleNeedsReviewDetail", "blocked"],
   stale: ["workboard.lifecycleStale", "workboard.lifecycleStaleDetail", "blocked"],
   idle: ["workboard.lifecycleLinked", "workboard.lifecycleIdleDetail", "idle"],
-  missing: ["workboard.lifecycleMissing", "workboard.lifecycleMissingDetail", "blocked"],
+  unknown: ["workboard.lifecycleUnknown", "workboard.lifecycleUnknownDetail", "idle"],
+  unavailable: ["workboard.lifecycleUnavailable", "workboard.lifecycleUnavailableDetail", "idle"],
+  ambiguous: ["workboard.lifecycleAmbiguous", "workboard.lifecycleAmbiguousDetail", "blocked"],
   unlinked: ["workboard.lifecycleUnlinked", "workboard.lifecycleUnlinkedDetail", "idle"],
 } as const satisfies Record<WorkboardLifecycle["state"], LifecycleCopy>;
 
@@ -191,7 +200,7 @@ export function matchesFilter(
 }
 
 export function isWorkboardSessionChoice(session: GatewaySessionRow): boolean {
-  if (session.archived || session.kind === "global") {
+  if (session.archived || isReservedSessionKey(session.key)) {
     return false;
   }
   const raw = [session.key, session.label, session.displayName]
@@ -284,19 +293,6 @@ export function cardHasUnresolvedStartedRun(card: WorkboardCard): boolean {
   const sessionKey = card.sessionKey ?? card.execution?.sessionKey;
   const runId = card.runId ?? card.execution?.runId;
   return card.status === "running" && Boolean(sessionKey && runId);
-}
-
-export function cardCanStart(
-  state: WorkboardUiState,
-  sessions: readonly GatewaySessionRow[],
-  card: WorkboardCard,
-): boolean {
-  const task = state.tasksByCardId.get(card.id);
-  const session = findWorkboardSession(card, sessions);
-  const taskBlocksStart =
-    taskIsActive(task) || cardHasUnresolvedTaskLink(card, task, state.missingTaskIds);
-  const linkedSessionKey = card.sessionKey ?? card.execution?.sessionKey;
-  return !taskBlocksStart && !cardHasUnresolvedStartedRun(card) && (!linkedSessionKey || !session);
 }
 
 export function formatDependencyBlockerTitle(

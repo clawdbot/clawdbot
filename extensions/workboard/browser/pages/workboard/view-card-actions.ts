@@ -1,10 +1,13 @@
+import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { html, nothing, type TemplateResult } from "lit";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import {
   isActiveWorkboardCard,
   nextWorkboardCardPosition,
+  workboardCardSessionKey,
 } from "../../lib/workboard/card-state.ts";
+import { canStartWorkboardCard } from "../../lib/workboard/execution.ts";
 import {
   archiveWorkboardCard,
   deleteWorkboardCard,
@@ -18,10 +21,10 @@ import {
   type WorkboardExecutionMode,
   type WorkboardStatus,
 } from "../../lib/workboard/index.ts";
+import { workboardCardSessionTarget } from "../../lib/workboard/session-resolution.ts";
 import { openEditModal } from "./view-card-modal.ts";
 import {
   canMutate,
-  cardCanStart,
   cardHasActiveOrRunningUnresolvedTask,
   cardHasUnresolvedStartedRun,
   engineBlockedByRuntime,
@@ -131,7 +134,14 @@ export function renderCardActionSlot(content: TemplateResult | typeof nothing) {
 export function getCardActionState(props: WorkboardProps, card: WorkboardCard) {
   const state = getWorkboardState(props.host);
   const task = state.tasksByCardId.get(card.id);
-  const session = findWorkboardSession(card, props.sessions);
+  const session = findWorkboardSession(card, props.sessions, props.sessionResolution);
+  const linkedSessionKey = workboardCardSessionKey(card);
+  const sessionTarget = workboardCardSessionTarget(
+    card,
+    session
+      ? { sessionKey: session.key, ...(session.agentId ? { agentId: session.agentId } : {}) }
+      : undefined,
+  );
   const busy = state.busyCardIds.has(card.id) || state.dispatching;
   const activeTask = cardHasActiveOrRunningUnresolvedTask(card, task, state.missingTaskIds);
   const writable = canMutate(props);
@@ -146,9 +156,10 @@ export function getCardActionState(props: WorkboardProps, card: WorkboardCard) {
     busy,
     activeTask,
     live,
-    linkedSessionKey: card.sessionKey ?? card.execution?.sessionKey,
+    linkedSessionKey,
+    sessionTarget,
     writable,
-    showStartControls: writable && cardCanStart(state, props.sessions, card),
+    showStartControls: writable && canStartWorkboardCard(state, card),
     archived: Boolean(card.metadata?.archivedAt),
   };
 }
@@ -227,17 +238,17 @@ export function renderArchiveCardAction(
 
 export function renderOpenSessionCardAction(
   props: WorkboardProps,
-  linkedSessionKey: string | undefined,
+  session: BoardGetParams | undefined,
   options: { iconOnly?: boolean } = {},
 ) {
-  if (!linkedSessionKey) {
+  if (!session) {
     return nothing;
   }
   return renderCardActionButton({
     label: t("workboard.openSession"),
     icon: icons.messageSquare,
     iconOnly: options.iconOnly,
-    onClick: () => props.onOpenSession(linkedSessionKey),
+    onClick: () => props.onOpenSession(session),
   });
 }
 
@@ -257,6 +268,7 @@ export function renderStopCardAction(
         host: props.host,
         client: props.client,
         card,
+        session: getCardActionState(props, card).sessionTarget,
         requestUpdate: props.onRequestUpdate,
       });
     },
@@ -332,7 +344,7 @@ export function renderStartExecutionButton(
           requestUpdate: props.onRequestUpdate,
         });
         if (key) {
-          props.onOpenSession(key);
+          props.onOpenSession({ sessionKey: key });
         }
       }}
     >

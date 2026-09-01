@@ -1,7 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { stableStringify } from "../packages/normalization-core/src/stable-stringify.ts";
-import { isPluginControlUiPath } from "../test/vitest/vitest.ui-paths.mjs";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
 import { getChangedPathFacts, normalizeChangedPath } from "./lib/changed-path-facts.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
@@ -276,15 +275,6 @@ export function detectChangedLanes(
       lanes.extensionTests = true;
       extensionImpactFromCore = true;
       reasons.push(`${changedPath}: public core/plugin contract affects extensions`);
-      continue;
-    }
-
-    if (isPluginControlUiPath(changedPath)) {
-      lanes.coreTests = true;
-      lanes.ui = !facts.isChangedLaneTest || lanes.ui;
-      reasons.push(
-        `${changedPath}: plugin Control UI ${facts.isChangedLaneTest ? "test" : "production"}`,
-      );
       continue;
     }
 

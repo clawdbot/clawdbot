@@ -1,3 +1,4 @@
+import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -17,6 +18,7 @@ import {
   workboardMutationsReady,
   type WorkboardHost,
 } from "./runtime.ts";
+import { workboardCardSessionTarget } from "./session-resolution.ts";
 import {
   isMissingTaskLookupError,
   listWorkboardTasks,
@@ -31,6 +33,7 @@ import type {
   WorkboardExecutionMode,
   WorkboardExecutionStatus,
   WorkboardTaskSummary,
+  WorkboardUiState,
 } from "./types.ts";
 
 const WORKBOARD_ENGINE_MODELS = {
@@ -38,6 +41,23 @@ const WORKBOARD_ENGINE_MODELS = {
   claude: "anthropic/claude-sonnet-4-6",
 } as const;
 const WORKBOARD_SESSION_LABEL_MAX_CHARS = 512;
+
+export function canStartWorkboardCard(state: WorkboardUiState, card: WorkboardCard): boolean {
+  const task = state.tasksByCardId.get(card.id);
+  return (
+    !workboardCardSessionKey(card) &&
+    !taskIsActive(task) &&
+    !(card.taskId && !task && !state.missingTaskIds.has(card.taskId))
+  );
+}
+
+function assertCurrentCard(state: WorkboardUiState, card: WorkboardCard): void {
+  const current = state.cards.find((candidate) => candidate.id === card.id);
+  // Page hiding closes admission; an existing action still owns this revision.
+  if (!current || current.updatedAt !== card.updatedAt) {
+    throw new Error("This card changed. Refresh its details before starting or stopping it.");
+  }
+}
 
 function engineModel(engine: WorkboardExecutionEngine | null | undefined): string | undefined {
   return engine === "codex"
@@ -134,22 +154,22 @@ function workboardRunWasAborted(result: unknown): boolean {
 
 async function abortWorkboardSessionRun(params: {
   client: GatewayBrowserClient;
-  sessionKey: string;
+  session: BoardGetParams;
   runId?: string;
+  assertCurrent: () => void;
 }): Promise<boolean> {
   const targetedAbort = await params.client.request("chat.abort", {
-    sessionKey: params.sessionKey,
+    ...params.session,
     ...(params.runId ? { runId: params.runId } : {}),
   });
+  params.assertCurrent();
   const aborted = workboardRunWasAborted(targetedAbort);
   if (aborted || !params.runId) {
     return aborted;
   }
   // A card run id that no longer names the live run aborts nothing, so retry
   // session-wide before reporting failure; otherwise Stop strands an active run.
-  return workboardRunWasAborted(
-    await params.client.request("chat.abort", { sessionKey: params.sessionKey }),
-  );
+  return workboardRunWasAborted(await params.client.request("chat.abort", params.session));
 }
 
 function taskIsActive(task: WorkboardTaskSummary | undefined): task is WorkboardTaskSummary {
@@ -201,6 +221,12 @@ export async function startWorkboardCard(params: {
   state.busyCardIds.add(params.card.id);
   params.requestUpdate?.();
   try {
+    assertCurrentCard(state, params.card);
+    if (!canStartWorkboardCard(state, params.card)) {
+      throw new Error(
+        "This card already has an execution. Refresh its details or use Edit to clear its session link before starting another.",
+      );
+    }
     if (mode === "autonomous") {
       const separator = model?.indexOf("/") ?? -1;
       const payload = await params.client.request("workboard.cards.start", {
@@ -209,6 +235,7 @@ export async function startWorkboardCard(params: {
           ? { provider: model?.slice(0, separator), model: model?.slice(separator + 1) }
           : {}),
       });
+      assertCurrentCard(state, params.card);
       const card = normalizeCardPayload(payload);
       replaceCard(state, card);
       const sessionKey = workboardCardSessionKey(card);
@@ -216,6 +243,7 @@ export async function startWorkboardCard(params: {
       const task = sessionKey
         ? await findTaskForStartedRun({ client: params.client, card, sessionKey, runId })
         : null;
+      assertCurrentCard(state, card);
       if (task) {
         state.tasksByCardId.set(card.id, task);
       } else {
@@ -231,9 +259,11 @@ export async function startWorkboardCard(params: {
       label: buildCardSessionLabel(params.card),
       ...(model ? { model } : {}),
     });
+    assertCurrentCard(state, params.card);
     const sessionKey = created.key.trim() || null;
     const payload = await params.client.request("workboard.cards.update", {
       id: params.card.id,
+      expectedUpdatedAt: params.card.updatedAt,
       patch: {
         status: nextCardStatus,
         ...(shouldClearManualSchedule ? { scheduledAt: null } : {}),
@@ -253,6 +283,7 @@ export async function startWorkboardCard(params: {
           : { execution: null }),
       },
     });
+    assertCurrentCard(state, params.card);
     replaceCard(state, normalizeCardPayload(payload));
     state.tasksByCardId.delete(params.card.id);
     return sessionKey;
@@ -269,10 +300,12 @@ export async function stopWorkboardCard(params: {
   host: WorkboardHost;
   client: GatewayBrowserClient | null;
   card: WorkboardCard;
+  session?: BoardGetParams;
   requestUpdate?: () => void;
 }) {
   const state = getWorkboardState(params.host);
-  const sessionKey = workboardCardSessionKey(params.card);
+  const linkedSessionKey = workboardCardSessionKey(params.card);
+  const session = workboardCardSessionTarget(params.card, params.session);
   const task = state.tasksByCardId.get(params.card.id);
   const cardTaskId = normalizeString(params.card.taskId);
   const taskId = cardTaskId && !state.missingTaskIds.has(cardTaskId) ? cardTaskId : task?.taskId;
@@ -281,7 +314,7 @@ export async function stopWorkboardCard(params: {
     !workboardMutationsReady(state) ||
     state.dispatching ||
     state.busyCardIds.has(params.card.id) ||
-    (!sessionKey && !taskId)
+    (!linkedSessionKey && !taskId)
   ) {
     return;
   }
@@ -289,7 +322,9 @@ export async function stopWorkboardCard(params: {
   state.busyCardIds.add(params.card.id);
   state.error = null;
   params.requestUpdate?.();
+  const assertCurrent = () => assertCurrentCard(state, params.card);
   try {
+    assertCurrent();
     let taskStopped = false;
     if (taskId && (!task || taskIsActive(task))) {
       try {
@@ -297,12 +332,13 @@ export async function stopWorkboardCard(params: {
           client: params.client,
           taskId,
         });
+        assertCurrent();
         if (cancelled.missing) {
           state.missingTaskIds.add(taskId);
           if (task?.taskId === taskId || task?.id === taskId) {
             state.tasksByCardId.delete(params.card.id);
           }
-          taskStopped = !sessionKey;
+          taskStopped = !linkedSessionKey;
         } else if (cancelled.cancelled) {
           taskStopped = true;
           state.tasksByCardId.set(
@@ -315,6 +351,7 @@ export async function stopWorkboardCard(params: {
           );
         }
       } catch (error) {
+        assertCurrent();
         if (!isMissingTaskLookupError(error, taskId)) {
           throw error;
         }
@@ -322,16 +359,17 @@ export async function stopWorkboardCard(params: {
         if (task?.taskId === taskId || task?.id === taskId) {
           state.tasksByCardId.delete(params.card.id);
         }
-        taskStopped = !sessionKey;
+        taskStopped = !linkedSessionKey;
       }
     }
     let sessionAborted = false;
-    if (sessionKey) {
+    if (session) {
       try {
         sessionAborted = await abortWorkboardSessionRun({
           client: params.client,
-          sessionKey,
+          session,
           runId: workboardCardRunId(params.card),
+          assertCurrent,
         });
       } catch (error) {
         if (!taskStopped) {
@@ -339,11 +377,18 @@ export async function stopWorkboardCard(params: {
         }
       }
     }
+    assertCurrent();
     if (!taskStopped && !sessionAborted) {
+      if (linkedSessionKey && !session) {
+        throw new Error(
+          "Refresh this card's session details before stopping it, or use Edit to choose its session.",
+        );
+      }
       return;
     }
     const payload = await params.client.request("workboard.cards.update", {
       id: params.card.id,
+      expectedUpdatedAt: params.card.updatedAt,
       patch: {
         status: "blocked",
         ...(params.card.execution
@@ -357,6 +402,7 @@ export async function stopWorkboardCard(params: {
           : {}),
       },
     });
+    assertCurrent();
     replaceCard(state, normalizeCardPayload(payload));
   } catch (error) {
     state.error = formatError(error);

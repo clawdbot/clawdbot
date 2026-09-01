@@ -7,7 +7,7 @@ import { GUARDED_CONFIG_INCLUDE_WRITE_ERROR } from "../config/mutation-conflict.
 import { resolveStateDir } from "../config/paths.js";
 import type { PluginAcceptedDeclaredSurface } from "../config/types.plugins.js";
 import { extractArchive, resolvePackedRootDir } from "../infra/archive.js";
-import { root } from "../infra/fs-safe.js";
+import { root, type Root } from "../infra/fs-safe.js";
 import { withInstallWorkspace } from "../infra/install-source-utils.js";
 import { loadPluginManifest, resolvePackageExtensionEntries } from "../plugins/manifest.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
@@ -23,6 +23,10 @@ import type { SystemAgentOperationResult } from "./operations-parse.js";
 type ArtifactOperation = Extract<SystemAgentOperation, { kind: "plugin-activate-artifact" }>;
 const MAX_ARTIFACT_BYTES = 32 * 1024 * 1024;
 const MAX_REVIEW_CHARS = 3_000;
+const MAX_PENDING_ARTIFACTS = 8;
+const ARTIFACT_REVIEW_TTL_MS = 60 * 60_000;
+const ARTIFACT_IMPORT_DIR = "imports/plugins";
+const PENDING_ARTIFACT_DIR = `${ARTIFACT_IMPORT_DIR}/pending`;
 
 type ArtifactReview = {
   pluginId: string;
@@ -57,12 +61,56 @@ function verifyArtifactDigest(bytes: Buffer, expected: string): void {
   }
 }
 
-function retainedArtifactPath(sha256: string): string {
+function artifactArchiveName(sha256: string): string {
   if (!/^[a-f0-9]{64}$/u.test(sha256)) {
     throw new Error("Plugin artifact requires a lowercase SHA256 digest.");
   }
-  // This retained import is the reviewed product artifact, not mutable runtime state.
-  return path.join(resolveStateDir(), "imports", "plugins", `${sha256}.tgz`);
+  return `${sha256}.tgz`;
+}
+
+async function withArtifactImports<T>(
+  run: (files: Root, assertOwned: () => void) => Promise<T>,
+): Promise<T> {
+  const { withPluginLifecycleLease } = await import("../plugins/plugin-lifecycle-lease.js");
+  return await withPluginLifecycleLease({}, async (lease) => {
+    const stateDir = resolveStateDir();
+    lease.assertOwned();
+    await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
+    const files = await root(stateDir, {
+      hardlinks: "reject",
+      symlinks: "reject",
+      mode: 0o600,
+      maxBytes: MAX_ARTIFACT_BYTES,
+    });
+    lease.assertOwned();
+    await files.mkdir(PENDING_ARTIFACT_DIR);
+    return await run(files, () => lease.assertOwned());
+  });
+}
+
+async function prunePendingArtifacts(
+  files: Root,
+  archiveName: string,
+  assertOwned: () => void,
+): Promise<void> {
+  const pending = (await files.list(PENDING_ARTIFACT_DIR, { withFileTypes: true }))
+    .filter((entry) => entry.isFile && /^[a-f0-9]{64}\.tgz$/u.test(entry.name))
+    .toSorted((left, right) => right.mtimeMs - left.mtimeMs || left.name.localeCompare(right.name));
+  const expiresBefore = Date.now() - ARTIFACT_REVIEW_TTL_MS;
+  let remaining = MAX_PENDING_ARTIFACTS - 1;
+  // Proposal owners can disappear across processes. Reserve one slot for this
+  // review and reclaim only pending imports, never an approved install source.
+  for (const entry of pending) {
+    if (entry.name === archiveName) {
+      continue;
+    }
+    if (entry.mtimeMs <= expiresBefore || entry.size > MAX_ARTIFACT_BYTES || remaining === 0) {
+      assertOwned();
+      await files.remove(`${PENDING_ARTIFACT_DIR}/${entry.name}`);
+    } else {
+      remaining -= 1;
+    }
+  }
 }
 
 async function readVerifiedArtifact(filePath: string, sha256: string): Promise<Buffer> {
@@ -130,7 +178,8 @@ async function inspectArtifact(rootDir: string): Promise<ArtifactReview> {
       await artifact.readBytes(asset, { maxBytes: MAX_ARTIFACT_BYTES });
     }
   }
-  const { resolvePluginArtifactDeclaredSurface } = await import("../plugins/capability-consent.js");
+  const { resolvePluginArtifactDeclaredSurface } =
+    await import("../plugins/capability-artifact.js");
   const { computeDeclaredSurfaceHash } = await import("../plugins/capability-summary.js");
   const declared = resolvePluginArtifactDeclaredSurface(rootDir);
   const review: ArtifactReview = {
@@ -189,21 +238,19 @@ export async function prepareSystemAgentPluginArtifact(
       "This plugin backs OpenClaw's active inference route. Stop OpenClaw and install the artifact from a trusted shell.",
     );
   }
-  const retainedPath = retainedArtifactPath(operation.sha256);
-  const stateDir = resolveStateDir();
-  await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
-  const state = await root(stateDir, { hardlinks: "reject", symlinks: "reject", mode: 0o600 });
-  const importPath = `imports/plugins/${operation.sha256}.tgz`;
-  await state.mkdir("imports/plugins");
-  if (await state.exists(importPath)) {
-    verifyArtifactDigest(
-      await state.readBytes(importPath, { maxBytes: MAX_ARTIFACT_BYTES }),
-      operation.sha256,
-    );
-  } else {
-    await state.create(importPath, bytes);
-  }
-  return { ...review, sha256: operation.sha256, retainedPath };
+  return await withArtifactImports(async (files, assertOwned) => {
+    const archiveName = artifactArchiveName(operation.sha256);
+    const importPath = `${PENDING_ARTIFACT_DIR}/${archiveName}`;
+    await prunePendingArtifacts(files, archiveName, assertOwned);
+    assertOwned();
+    // A fresh proposal for the same digest renews its review lifetime.
+    await files.write(importPath, bytes);
+    return {
+      ...review,
+      sha256: operation.sha256,
+      retainedPath: path.join(files.rootDir, importPath),
+    };
+  });
 }
 
 export async function executePluginArtifactActivation(
@@ -219,63 +266,97 @@ export async function executePluginArtifactActivation(
     operation,
     runtime,
     opts,
-    run: async (ctx) => {
-      // Read the retained reviewed import, never the source path that may have changed
-      // while approval was pending. Installation gets a private copy of those exact bytes.
-      const retainedPath = retainedArtifactPath(operation.sha256);
-      const bytes = await readVerifiedArtifact(retainedPath, operation.sha256);
-      return await withVerifiedArtifact(bytes, async ({ archivePath, review }) => {
-        const { assertConfigWriteAllowedInCurrentMode } = await import("../config/config.js");
-        const { loadConfigForInstall } = await import("../cli/plugins-install-config.js");
-        const { installManagedPluginSource } = await import("../plugins/management-service.js");
-        const { withPluginLifecycleLease } = await import("../plugins/plugin-lifecycle-lease.js");
-        assertConfigWriteAllowedInCurrentMode();
-        const guard = async () => {
-          await assertArtifactConfigPublicationSupported();
-          if (await isPluginBackingDefaultInferenceRoute(review.pluginId)) {
-            throw new Error(
-              "Artifact activation stopped: this plugin now backs the active inference route. Stop OpenClaw and install it from a trusted shell.",
-            );
-          }
-          await opts.beforePersistentApply?.();
-        };
-        await ctx.commit(() =>
-          withPluginLifecycleLease({}, async () => {
+    run: async (ctx) =>
+      await withArtifactImports(async (files, assertOwned) => {
+        const archiveName = artifactArchiveName(operation.sha256);
+        const pendingPath = `${PENDING_ARTIFACT_DIR}/${archiveName}`;
+        if (
+          !(await files.exists(pendingPath)) ||
+          (await files.stat(pendingPath)).mtimeMs <= Date.now() - ARTIFACT_REVIEW_TTL_MS
+        ) {
+          throw new Error(
+            "Plugin artifact review expired or is no longer retained. Propose the exact artifact again before applying it.",
+          );
+        }
+        // Hold the lifecycle lease through installation so another proposal cannot
+        // evict this review. Never fall back to the original or an approved import.
+        const bytes = await files.readBytes(pendingPath);
+        verifyArtifactDigest(bytes, operation.sha256);
+        return await withVerifiedArtifact(bytes, async ({ archivePath, review }) => {
+          const { assertConfigWriteAllowedInCurrentMode } = await import("../config/config.js");
+          const { loadConfigForInstall } = await import("../cli/plugins-install-config.js");
+          const { installManagedPluginSource } = await import("../plugins/management-service.js");
+          assertConfigWriteAllowedInCurrentMode();
+          const assertPersistentApply = () => {
+            ctx.assertPersistentApply?.();
+            assertOwned();
+          };
+          const guard = async () => {
             await assertArtifactConfigPublicationSupported();
-            const snapshot = await loadConfigForInstall({
-              rawSpec: archivePath,
-              normalizedSpec: archivePath,
-              resolvedPath: archivePath,
-              installKind: "plugin",
-            });
-            const installed = await installManagedPluginSource({
-              request: {
-                source: "local",
-                path: archivePath,
-                recordPath: retainedPath,
-                recordSource: "archive",
-                mode: "update",
-              },
-              snapshot,
-              runtime,
-              acknowledgeCapabilities: { reviewToken: review.reviewToken },
-              beforePersistentEffect: guard,
-            });
-            if (!installed.ok) {
-              throw new Error(installed.error);
+            if (await isPluginBackingDefaultInferenceRoute(review.pluginId)) {
+              throw new Error(
+                "Artifact activation stopped: this plugin now backs the active inference route. Stop OpenClaw and install it from a trusted shell.",
+              );
             }
-          }),
-        );
-        return {
-          summary: `Installed approved plugin artifact ${review.pluginId}`,
-          details: {
-            pluginId: review.pluginId,
-            sha256: operation.sha256,
-            sourcePath: retainedPath,
-          },
-        };
-      });
-    },
+            assertPersistentApply();
+          };
+          await assertArtifactConfigPublicationSupported();
+          const snapshot = await loadConfigForInstall({
+            rawSpec: archivePath,
+            normalizedSpec: archivePath,
+            resolvedPath: archivePath,
+            installKind: "plugin",
+          });
+          const importPath = `${ARTIFACT_IMPORT_DIR}/${archiveName}`;
+          const retainedPath = path.join(files.rootDir, importPath);
+          const retained = await files.exists(importPath);
+          if (retained) {
+            verifyArtifactDigest(await files.readBytes(importPath), operation.sha256);
+          }
+          await ctx.commit(async () => {
+            assertOwned();
+            if (!retained) {
+              await files.create(importPath, bytes);
+            }
+            assertOwned();
+            await files.remove(pendingPath);
+            try {
+              const installed = await installManagedPluginSource({
+                request: {
+                  source: "local",
+                  path: archivePath,
+                  recordPath: retainedPath,
+                  recordSource: "archive",
+                  mode: "update",
+                },
+                snapshot,
+                runtime,
+                acknowledgeCapabilities: { reviewToken: review.reviewToken },
+                beforePersistentApply: assertPersistentApply,
+                beforePersistentEffect: guard,
+              });
+              if (!installed.ok) {
+                throw new Error(installed.error);
+              }
+            } catch (error) {
+              // The installer can throw after committing. Keep its approved source
+              // and preserve the original error, including inference-loss identity.
+              runtime.error(
+                "Inspect the plugin's current status, then propose the exact artifact again before retrying.",
+              );
+              throw error;
+            }
+          });
+          return {
+            summary: `Installed approved plugin artifact ${review.pluginId}`,
+            details: {
+              pluginId: review.pluginId,
+              sha256: operation.sha256,
+              sourcePath: retainedPath,
+            },
+          };
+        });
+      }),
   });
   if (result.applied) {
     runtime.log(

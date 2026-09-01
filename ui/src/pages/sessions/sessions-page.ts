@@ -70,8 +70,8 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import {
   pluginSessionMenuActions,
-  runPluginSessionMenuAction,
-} from "../../plugins/control-ui-session-actions.ts";
+  runControlUiPluginAction,
+} from "../../plugins/control-ui-actions.ts";
 import { sessionAgentIdentityById, sessionAgentIds } from "./agent-scope.ts";
 import { rememberSessionCustomGroup, sessionCategoryNames } from "./custom-groups.ts";
 import { loadStoredGroupBy, saveStoredGroupBy } from "./page-state.ts";
@@ -127,7 +127,9 @@ class SessionsPage extends OpenClawLightDomElement {
   @state() private page = 0;
   @state() private pageSize = 25;
   @state() private selectedKeys = new Set<string>();
-  @state() private sessionMenu: { key: string; x: number; y: number } | null = null;
+  @state() private sessionMenu:
+    | (Pick<GatewaySessionRow, "key" | "sessionId"> & { x: number; y: number })
+    | null = null;
   @state() private sessionMenuWork: SessionMenuWork | null = null;
   @state() private expandedSessionKey: string | null = null;
   // Route deep-link target (?session=...); unlike expandedSessionKey it also
@@ -1381,11 +1383,15 @@ class SessionsPage extends OpenClawLightDomElement {
     position: { x: number; y: number },
     trigger: HTMLElement | null,
   ) {
-    if (this.sessionMenu?.key === row.key && trigger) {
+    if (
+      this.sessionMenu?.key === row.key &&
+      this.sessionMenu.sessionId === row.sessionId &&
+      trigger
+    ) {
       this.closeSessionMenu();
       return;
     }
-    this.sessionMenu = { key: row.key, ...position };
+    this.sessionMenu = { key: row.key, sessionId: row.sessionId, ...position };
     this.sessionMenuTrigger = trigger;
     this.loadSessionMenuWork(row);
   }
@@ -1438,7 +1444,11 @@ class SessionsPage extends OpenClawLightDomElement {
   private renderSessionMenu() {
     const menu = this.sessionMenu;
     const context = this.context;
-    const row = menu ? this.result?.sessions.find((session) => session.key === menu.key) : null;
+    const row = menu
+      ? this.result?.sessions.find(
+          (session) => session.key === menu.key && session.sessionId === menu.sessionId,
+        )
+      : null;
     if (!menu || !context || !row) {
       return nothing;
     }
@@ -1532,7 +1542,7 @@ class SessionsPage extends OpenClawLightDomElement {
               void this.forkSession(row.key, row.hasActiveRun === true);
               break;
             case "plugin":
-              void this.runPluginAction(action.id, row);
+              void this.runPluginAction(action.id, menu);
               break;
             case "move-to-group":
               this.assignCategory(row.key, action.category);
@@ -1758,16 +1768,20 @@ class SessionsPage extends OpenClawLightDomElement {
     `;
   }
 
-  private async runPluginAction(id: string, session: GatewaySessionRow) {
+  private async runPluginAction(id: string, target: Pick<GatewaySessionRow, "key" | "sessionId">) {
     const scope = this.captureRequestScope();
     if (!scope) {
       return;
     }
     try {
-      await runPluginSessionMenuAction({
+      await runControlUiPluginAction({
         runtime: scope.context.plugins,
         id,
-        session,
+        placement: "session",
+        sessionKey: target.key,
+        session: this.result?.sessions.find(
+          (row) => row.key === target.key && row.sessionId === target.sessionId,
+        ),
         signal: this.pluginActionLifetime.signal,
       });
     } catch (error) {

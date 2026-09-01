@@ -172,6 +172,7 @@ export function renderChat(props: ChatProps) {
     "transcript",
     {
       sessionKey: props.sessionKey,
+      agentId: props.currentAgentId,
       messages: props.messages,
       stream: props.stream,
       loading: props.loading,
@@ -344,6 +345,7 @@ export function renderChat(props: ChatProps) {
                 <openclaw-plugin-contributions
                   .kind=${"header"}
                   .sessionKey=${props.sessionKey}
+                  .agentId=${props.currentAgentId}
                   .presented=${props.presented ?? true}
                 ></openclaw-plugin-contributions>
                 ${renderTranscriptSearch(props.paneId, requestUpdate)}
@@ -435,6 +437,7 @@ export function renderChat(props: ChatProps) {
                   <openclaw-plugin-contributions
                     .kind=${"composer"}
                     .sessionKey=${props.sessionKey}
+                    .agentId=${props.currentAgentId}
                     .presented=${props.presented ?? true}
                   ></openclaw-plugin-contributions>
                   ${showModelSetupSplash ? nothing : chatColumnFooter}

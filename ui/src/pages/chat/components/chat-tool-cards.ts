@@ -524,6 +524,7 @@ export function renderPluginToolResult(
     "tool-result",
     {
       sessionKey: opts.sessionKey ?? "",
+      agentId: opts.agentId,
       toolName: card.name,
       toolCallId: card.callId ?? card.id,
       input: card.args,

@@ -22,10 +22,14 @@ it("runs control-ui localization checks for the canonical locale config", () => 
   );
 });
 
-it("runs Chromium UI tests for browser copilot extension changes", () => {
-  expect(detectChangedScope(["extensions/browser/chrome-extension/sidepanel.ts"]).runUiTests).toBe(
-    true,
-  );
+it.each([
+  "extensions/browser/chrome-extension/sidepanel.ts",
+  "extensions/example/browser/page.ts",
+  "extensions/example/browser/page.test.ts",
+  "extensions/example/browser/page.browser.test.ts",
+  "extensions/example/browser/page.e2e.test.ts",
+])("runs Chromium UI tests for %s", (changedPath) => {
+  expect(detectChangedScope([changedPath]).runUiTests).toBe(true);
 });
 
 it.each([

@@ -44,7 +44,6 @@ type ApplicationConfig = {
 export type ApplicationConfigCapability = {
   readonly current: ApplicationConfig;
   refresh: (options?: {
-    auth?: ApplicationConfigAuthSource;
     skipWithoutAuthCandidate?: boolean;
     signal?: AbortSignal;
   }) => Promise<ApplicationConfig | null>;
@@ -170,7 +169,7 @@ async function loadApplicationConfig(params: {
 
 export function createApplicationConfigCapability(params: {
   resourceBasePath: string;
-  auth?: ApplicationConfigAuthSource;
+  getAuth?: () => ApplicationConfigAuthSource;
 }): ApplicationConfigCapability {
   let current = DEFAULT_APPLICATION_CONFIG;
   let authVersion = 0;
@@ -186,9 +185,10 @@ export function createApplicationConfigCapability(params: {
     };
     loadControlUiPresentation(current.environment, undefined, () => publishedVersion === 0);
   }
-  let currentAuth = params.auth;
   const url = `${normalizeRouteBasePath(params.resourceBasePath)}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`;
   const sameOrigin = new URL(url, window.location.origin).origin === window.location.origin;
+  const resolveAuth = () =>
+    sameOrigin ? resolveControlUiAuthCandidates(params.getAuth?.() ?? {}) : [];
   let authCandidates: string[] = [];
   let pending: { signal?: AbortSignal; promise: Promise<ApplicationConfig | null> } | undefined;
   const listeners = new Set<(config: ApplicationConfig) => void>();
@@ -198,8 +198,9 @@ export function createApplicationConfigCapability(params: {
       return current;
     },
     async refresh(options) {
-      currentAuth = options?.auth ?? currentAuth;
-      const candidates = sameOrigin ? resolveControlUiAuthCandidates(currentAuth ?? {}) : [];
+      // Queued bootstrap work cannot own credentials: plugin activation may
+      // request its asset grant before that queue reaches the config refresh.
+      const candidates = resolveAuth();
       if (
         candidates.length !== authCandidates.length ||
         candidates.some((candidate, index) => candidate !== authCandidates[index])
@@ -219,7 +220,15 @@ export function createApplicationConfigCapability(params: {
       const version = ++refreshVersion;
       const authority = authVersion;
       const signal = options?.signal;
-      const isCurrent = () => authority === authVersion && !signal?.aborted;
+      const isCurrent = () => {
+        const liveCandidates = resolveAuth();
+        return (
+          authority === authVersion &&
+          !signal?.aborted &&
+          candidates.length === liveCandidates.length &&
+          candidates.every((candidate, index) => candidate === liveCandidates[index])
+        );
+      };
       const promise = loadApplicationConfig({
         url,
         authCandidates: candidates,

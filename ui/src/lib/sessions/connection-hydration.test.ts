@@ -415,7 +415,7 @@ describe("session connection hydration", () => {
     sessions.dispose();
   });
 
-  it("preserves a failed session observer through hydration and retries the current connection", async () => {
+  it("recovers primary and managed lists after retrying the current session observer", async () => {
     vi.useFakeTimers();
     const result = emptySessionsResult();
     const recoveredResult: SessionsListResult = {
@@ -425,7 +425,7 @@ describe("session connection hydration", () => {
     };
     let subscriptionCalls = 0;
     let listCalls = 0;
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, params?: { agentId?: string }) => {
       if (method === "sessions.subscribe") {
         subscriptionCalls += 1;
         if (subscriptionCalls === 1) {
@@ -439,6 +439,22 @@ describe("session connection hydration", () => {
         return { subscribed: true };
       }
       if (method === "sessions.list") {
+        if (params?.agentId === "writer") {
+          const done = subscriptionCalls > 1;
+          return {
+            ...result,
+            count: 1,
+            sessions: [
+              {
+                key: "agent:writer:linked",
+                kind: "direct",
+                updatedAt: done ? 2 : 1,
+                hasActiveRun: !done,
+                status: done ? "done" : "running",
+              },
+            ],
+          } satisfies SessionsListResult;
+        }
         listCalls += 1;
         return listCalls === 1 ? result : recoveredResult;
       }
@@ -447,6 +463,8 @@ describe("session connection hydration", () => {
     const { sessions, connect } = createSubscriptionHydrationHarness(
       request as unknown as GatewayBrowserClient["request"],
     );
+    const writerQuery = { agentId: "writer", archivedFilter: "all" as const, limit: 2 };
+    const stopWriter = sessions.subscribeList(writerQuery, () => undefined);
 
     try {
       connect();
@@ -455,6 +473,11 @@ describe("session connection hydration", () => {
       expect(sessions.state.result).toBe(result);
       expect(sessions.state.error).toBe("session observer temporarily unavailable");
       expect(subscriptionCalls).toBe(1);
+      expect(sessions.listSnapshot(writerQuery).result?.sessions[0]).toMatchObject({
+        key: "agent:writer:linked",
+        hasActiveRun: true,
+        status: "running",
+      });
 
       await vi.advanceTimersByTimeAsync(99);
       expect(subscriptionCalls).toBe(1);
@@ -463,9 +486,16 @@ describe("session connection hydration", () => {
       expect(subscriptionCalls).toBe(2);
       expect(sessions.state.error).toBeNull();
       expect(sessions.state.result).toBe(recoveredResult);
-      expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(2);
+      expect(listCalls).toBe(2);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(sessions.listSnapshot(writerQuery).result?.sessions[0]).toMatchObject({
+        key: "agent:writer:linked",
+        hasActiveRun: false,
+        status: "done",
+      });
       expect(vi.getTimerCount()).toBe(0);
     } finally {
+      stopWriter();
       sessions.dispose();
       vi.useRealTimers();
     }

@@ -8,7 +8,7 @@ import {
   installMockGateway,
   waitForControlUiRoute,
 } from "../../test-helpers/control-ui-e2e.ts";
-import { workboardUi } from "./workboard.e2e.test-support.ts";
+import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Workboard routing",

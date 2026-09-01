@@ -6,7 +6,7 @@ import { workboardBoardLabel } from "./lib/workboard/board-presentation.ts";
 import { createWorkboardCapability } from "./lib/workboard/capability.ts";
 import { WORKBOARD_CHANGED_EVENT } from "./lib/workboard/types.ts";
 import { createWorkboardPage, workboardPageTarget } from "./pages/workboard/workboard-page.ts";
-import { mountWorkboardSessionAccessory } from "./session-accessory.ts";
+import { createWorkboardSessionAccessory } from "./session-accessory.ts";
 import { createWorkboardSessionAction } from "./session-action.ts";
 import { createWorkboardWidget } from "./widgets.ts";
 import "./styles/workboard.css";
@@ -64,7 +64,7 @@ export default defineControlUiPlugin({
       host.ui.registerAccessory({
         id: "linked-card",
         placement: "session-header",
-        mount: mountWorkboardSessionAccessory,
+        mount: createWorkboardSessionAccessory(workboard),
       }),
       ...(["mini", "card", "board"] as const).map((id) =>
         host.ui.registerWidget({

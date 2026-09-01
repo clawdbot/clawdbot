@@ -8,7 +8,6 @@ import {
   dispatchWorkboard,
   filterWorkboardCardsForPreset,
   getWorkboardState,
-  refreshWorkboard,
   summarizeWorkboardHealth,
   workboardHasActiveWrites,
   WORKBOARD_PRIORITIES,
@@ -37,6 +36,7 @@ import {
   formatPriorityLabel,
   formatRefreshTime,
   matchesFilter,
+  renderWorkboardError,
   type WorkboardProps,
 } from "./view-helpers.ts";
 import { renderWorkboardSelect, type WorkboardSelectOption } from "./workboard-select.ts";
@@ -140,7 +140,7 @@ const emptyColumnModeOptions = [
   ["hide", "workboard.hideEmptyColumns"],
 ] as const;
 
-export function renderWorkboard(props: WorkboardProps) {
+export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void }) {
   const state = getWorkboardState(props.host);
 
   if (props.pluginEnabled === null) {
@@ -172,6 +172,7 @@ export function renderWorkboard(props: WorkboardProps) {
     `;
   }
 
+  const defaultAgentId = props.agentsList?.defaultId ?? props.defaultAgentId;
   const agentOptions = buildAgentFilterOptions(props.agentsList, state.cards);
   state.agentFilter = normalizeActiveAgentFilter(agentOptions, state.agentFilter);
   const boardOptions = buildBoardFilterOptions(state.boards, state.cards);
@@ -182,7 +183,7 @@ export function renderWorkboard(props: WorkboardProps) {
     cards
       .filter((card) => state.showArchived || !card.metadata?.archivedAt)
       .filter((card) => matchesBoardFilter(card, activeBoardFilter))
-      .filter((card) => matchesAgentScope(card, props.agentsList, props.scopeAgentId))
+      .filter((card) => matchesAgentScope(card, defaultAgentId, props.scopeAgentId))
       .filter((card) => matchesAgentFilter(card, props.agentsList, state.agentFilter))
       .filter((card) =>
         matchesFilter(card, { query: state.query, priority: state.priorityFilter }),
@@ -194,7 +195,7 @@ export function renderWorkboard(props: WorkboardProps) {
         preset,
         tasksByCardId: state.tasksByCardId,
         sessions: props.sessions,
-        defaultAgentId: props.agentsList?.defaultId,
+        defaultAgentId,
       }),
     );
   const filtered = cardsForPreset(state.viewPreset);
@@ -260,6 +261,7 @@ export function renderWorkboard(props: WorkboardProps) {
           ? ("bot" as const)
           : undefined,
   }));
+  // The active dialog owns the error alert while the board is inert.
   const dialogOpen = state.draftOpen || Boolean(getVisibleDetailCard(state));
   return html`
     <section class="workboard">
@@ -387,14 +389,7 @@ export function renderWorkboard(props: WorkboardProps) {
               class="btn"
               type="button"
               ?disabled=${state.loading || state.dispatching || workboardHasActiveWrites(state)}
-              @click=${() =>
-                refreshWorkboard({
-                  host: props.host,
-                  client: props.client,
-                  requestUpdate: props.onRequestUpdate,
-                  source: "manual",
-                  refreshDiagnostics: props.canWrite !== false,
-                })}
+              @click=${props.onRefresh}
             >
               ${state.loading ? t("common.refreshing") : t("common.refresh")}
             </button>
@@ -440,7 +435,7 @@ export function renderWorkboard(props: WorkboardProps) {
           </div>
         </div>
         ${renderHealthStrip(state, health, props.onRequestUpdate)}
-        ${visibleError ? html`<div class="callout danger">${visibleError}</div>` : nothing}
+        ${dialogOpen ? nothing : renderWorkboardError(visibleError)}
         ${renderDispatchSummary(state)}
         ${
           (filtered.length === 0 && activeFiltering) || visibleStatuses.length === 0

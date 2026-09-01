@@ -1,4 +1,8 @@
-import { GATEWAY_SERVER_CAPS, type BoardSnapshot } from "@openclaw/gateway-protocol";
+import {
+  GATEWAY_SERVER_CAPS,
+  type BoardGetParams,
+  type BoardSnapshot,
+} from "@openclaw/gateway-protocol";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -48,7 +52,7 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
 
   private provider: BoardProvider | null = null;
   private providerLease: BoardProviderLease | null = null;
-  private binding: ProviderBinding | null = null;
+  private binding: (ProviderBinding & { session: BoardGetParams }) | null = null;
   private unsubscribeSnapshot: (() => void) | null = null;
   private unsubscribeLoadError: (() => void) | null = null;
   private unsubscribeEvents: (() => void) | null = null;
@@ -151,8 +155,9 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
       if (!current || current.client !== binding.client) {
         return;
       }
+      const session = { sessionKey: described.session.key, agentId: described.session.agentId };
       const lease = acquireBoardProviderForSession(
-        { sessionKey: described.session.key, agentId: described.session.agentId },
+        session,
         binding.client,
         current.phase === "connected",
         capabilities.canPinWidgets,
@@ -163,7 +168,7 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
       const provider = lease.provider;
       this.provider = provider;
       this.providerLease = lease;
-      this.binding = binding;
+      this.binding = { ...binding, session };
       this.unsubscribeSnapshot = provider.snapshot$.subscribe(() =>
         this.reconcileProvider(provider),
       );
@@ -264,7 +269,8 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
     }
     const provider = this.provider;
     const snapshot = this.snapshot;
-    if (!provider || !snapshot) {
+    const session = this.binding?.session;
+    if (!provider || !snapshot || !session) {
       return nothing;
     }
     const callbacks = {
@@ -281,6 +287,7 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
     return html`<openclaw-board-view
       .active=${true}
       .fitAutoContent=${true}
+      .session=${session}
       .snapshot=${snapshot}
       .activeTabId=${this.activeTabId}
       .widgetFrameUrl=${(name: string, revision: number) => provider.widgetFrameUrl(name, revision)}

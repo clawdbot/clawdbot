@@ -10,7 +10,7 @@ import {
 import type { PluginCapabilityConsentHandler } from "./capability-consent.js";
 import {
   attachPluginInstallTransaction,
-  isPluginInstallCommitDeferred,
+  resolvePluginInstallTransactionRequest,
 } from "./install-transaction.js";
 import type { PluginInstallArtifactConsentHandler } from "./install-types.js";
 import type { ManagedPluginSourceInstallRequest } from "./management-service.js";
@@ -160,8 +160,11 @@ describe("managed plugin install transactions", () => {
               return { ok: true as const };
             },
           };
+          const transactionRequest = resolvePluginInstallTransactionRequest(params);
           const copied = await installPackageDir(
-            isPluginInstallCommitDeferred(params) ? requestDeferredPackageDirInstall(copy) : copy,
+            transactionRequest
+              ? requestDeferredPackageDirInstall(copy, transactionRequest.assertOwned)
+              : copy,
           );
           if (!copied.ok) {
             throw new Error(copied.error);

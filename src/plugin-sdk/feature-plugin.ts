@@ -140,7 +140,7 @@ export function defineFeaturePlugin<C extends FeatureContract>(
       };
       if (Object.keys(contract.events).length > 0) {
         api.registerService({
-          id: "feature-events",
+          id: `${contract.pluginId}:feature-events`,
           start(context) {
             gatewayEvents = context.gatewayEvents;
           },

@@ -6,6 +6,7 @@ export type WorkboardHost = object;
 
 export type WorkboardLoadToken = {
   queuedAfterGeneration?: number;
+  catalogOnly: boolean;
 };
 
 type WorkboardLiveRefreshEntry = {

@@ -90,16 +90,6 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["plugin.approval.waitDecision", null, "operator.approvals", "<=2026.7"],
   ["plugin.approval.resolve", null, "operator.approvals", "<=2026.7"],
   ["plugins.uiDescriptors", "plugin-host-hooks", "operator.read", "<=2026.7"],
-  ["plugins.controlUi.list", "plugins-control-ui", "operator.read", "2026.8"],
-  [
-    "plugins.controlUi.reload",
-    "plugins-control-ui",
-    "operator.admin",
-    "2026.8",
-    { controlPlaneWrite: true },
-  ],
-  ["plugins.controlUi.report", "plugins-control-ui", "operator.read", "2026.8"],
-  ["plugins.controlUi.status", "plugins-control-ui", "operator.admin", "2026.8"],
   ["plugins.sessionAction", "plugin-host-hooks", "dynamic", "<=2026.7"],
   ["openclaw.chat", "system-agent", "operator.admin", "<=2026.7"],
   ["openclaw.chat.history", "system-agent", "operator.admin", "2026.7"],
@@ -645,6 +635,16 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["transcripts.get", "transcripts", "operator.read", "2026.8"],
   ["models.authOrderSet", "models-auth-order", "operator.admin", "2026.8", CONTROL_PLANE_WRITE],
   ["canvas.document.view", "canvas", "operator.read", "2026.8"],
+  ["plugins.controlUi.list", "plugins-control-ui", "operator.read", "2026.8"],
+  [
+    "plugins.controlUi.reload",
+    "plugins-control-ui",
+    "operator.admin",
+    "2026.8",
+    { controlPlaneWrite: true },
+  ],
+  ["plugins.controlUi.report", "plugins-control-ui", "operator.read", "2026.8"],
+  ["plugins.controlUi.status", "plugins-control-ui", "operator.admin", "2026.8"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;

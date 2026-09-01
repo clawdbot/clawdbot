@@ -147,7 +147,9 @@ export async function addWorkboardCardComment(params: {
 }) {
   const state = getWorkboardState(params.host);
   const cardId = params.cardId ?? state.editingCardId;
-  const body = (params.body ?? state.draftCommentBody).trim();
+  const draftField = params.body === undefined ? "draftCommentBody" : "detailCommentBody";
+  const submittedDraft = params.body ?? state.draftCommentBody;
+  const body = submittedDraft.trim();
   if (
     !cardId ||
     !params.client ||
@@ -173,10 +175,12 @@ export async function addWorkboardCardComment(params: {
     if (state.editingCardId === cardId && state.editingCardBase?.id === cardId) {
       rebaseWorkboardDraft(state, current);
     }
-    if (params.body === undefined) {
-      state.draftCommentBody = "";
-    } else if (state.detailCardId === cardId) {
-      state.detailCommentBody = "";
+    // The operator may type another note or switch cards while this request settles.
+    // Clear only the draft that submitted it, preserving the raw text for comparison.
+    const draftCardId =
+      draftField === "draftCommentBody" ? state.editingCardId : state.detailCardId;
+    if (draftCardId === cardId && state[draftField] === submittedDraft) {
+      state[draftField] = "";
     }
   } catch (error) {
     state.error = formatError(error);

@@ -55,7 +55,9 @@ export type ControlUiPluginOwner = {
   client: GatewayBrowserClient;
   abort: AbortController;
   disposers: Set<ControlUiDisposer>;
-  contributions: { [K in keyof Contributions]: Map<string, Contributions[K]> };
+  contributions: {
+    [K in keyof Contributions]: Map<string, { value: Contributions[K]; signal: AbortSignal }>;
+  };
   selections: Map<ControlUiSurface, string | null>;
   host: ControlUiHost;
 };
@@ -65,9 +67,10 @@ const ACTIVATION_TIMEOUT_MS = 15_000;
 
 export class ControlUiPluginRuntime {
   private readonly owners = new Map<string, ControlUiPluginOwner>();
-  private readonly selected = new Map<ControlUiSurface, string>();
+  private readonly selected = new Map<ControlUiSurface, { key: string; signal: AbortSignal }>();
   private readonly listeners = new Set<() => void>();
   private readonly loadingOwners = new Set<Omit<ControlUiPluginOwner, "host">>();
+  private loadingCatalog: "pending" | Set<string> | null = null;
   private readonly stops: ControlUiDisposer[] = [];
   private client: GatewayBrowserClient | null = null;
   private hello: object | null = null;
@@ -84,6 +87,14 @@ export class ControlUiPluginRuntime {
 
   get hasPlugins(): boolean {
     return this.owners.size > 0 || this.loadingOwners.size > 0;
+  }
+
+  isLoading(pluginId: string): boolean {
+    return (
+      this.loadingCatalog === "pending" ||
+      this.loadingCatalog?.has(pluginId) === true ||
+      [...this.loadingOwners].some((owner) => owner.descriptor.pluginId === pluginId)
+    );
   }
 
   get canReload(): boolean {
@@ -163,94 +174,104 @@ export class ControlUiPluginRuntime {
       this.disposeOwner(owner);
     }
     this.loadingOwners.clear();
+    this.loadingCatalog = "pending";
+    this.publish();
     const current = () =>
       !this.disposed && this.client === client && this.refreshGeneration === generation;
-    const load = async () => {
-      try {
-        const catalog = await client.request<PluginCatalog>("plugins.controlUi.list", {});
+    try {
+      const catalog = await client.request<PluginCatalog>("plugins.controlUi.list", {});
+      if (!current()) {
+        return;
+      }
+      this.diagnostics = catalog.diagnostics;
+      const installed = new Set(catalog.plugins.map((plugin) => plugin.pluginId));
+      this.loadingCatalog = installed;
+      for (const [id, owner] of this.owners) {
+        if (!installed.has(id)) {
+          this.owners.delete(id);
+          this.disposeOwner(owner);
+        }
+      }
+      this.publish();
+      const granted = new Set<string>();
+      if (catalog.plugins.length) {
+        const gatewayUrl = new URL(client.gatewayUrl, window.location.href);
+        if (gatewayUrl.protocol === "ws:") {
+          gatewayUrl.protocol = "http:";
+        }
+        if (gatewayUrl.protocol === "wss:") {
+          gatewayUrl.protocol = "https:";
+        }
+        if (gatewayUrl.origin !== window.location.origin) {
+          this.loadingCatalog = null;
+          const error = new Error(
+            `Native plugin UI requires the Control UI served by the connected Gateway. Open ${gatewayUrl.origin} and reconnect there.`,
+          );
+          await Promise.all(
+            catalog.plugins.map((descriptor) => {
+              this.reportError(descriptor.pluginId, error);
+              return this.reportActivation(descriptor, client, current, "failed", error);
+            }),
+          );
+          return;
+        }
+        const bootstrap = await this.getContext().config.refresh();
         if (!current()) {
           return;
         }
-        this.diagnostics = catalog.diagnostics;
-        const installed = new Set(catalog.plugins.map((plugin) => plugin.pluginId));
-        for (const [id, owner] of this.owners) {
-          if (!installed.has(id)) {
-            this.owners.delete(id);
-            this.disposeOwner(owner);
-          }
+        if (!bootstrap) {
+          throw new Error("Could not authenticate native plugin assets. Reconnect and retry.");
         }
-        this.publish();
-        const granted = new Set<string>();
-        if (catalog.plugins.length) {
-          const gatewayUrl = new URL(client.gatewayUrl, window.location.href);
-          if (gatewayUrl.protocol === "ws:") {
-            gatewayUrl.protocol = "http:";
-          }
-          if (gatewayUrl.protocol === "wss:") {
-            gatewayUrl.protocol = "https:";
-          }
-          if (gatewayUrl.origin !== window.location.origin) {
+        for (const descriptor of catalog.plugins) {
+          const prefix = `/__openclaw__/plugins/control-ui/${encodeURIComponent(descriptor.pluginId)}/`;
+          if (
+            !bootstrap.pluginAssetsRequireAuth ||
+            bootstrap.pluginFrameGrants.some(
+              (grant) =>
+                grant.pluginId === descriptor.pluginId &&
+                grant.match === "prefix" &&
+                grant.path === prefix,
+            )
+          ) {
+            granted.add(descriptor.pluginId);
+          } else {
+            this.loadingCatalog.delete(descriptor.pluginId);
             const error = new Error(
-              `Native plugin UI requires the Control UI served by the connected Gateway. Open ${gatewayUrl.origin} and reconnect there.`,
+              `Native plugin asset grant unavailable: ${descriptor.pluginId}`,
             );
-            await Promise.all(
-              catalog.plugins.map((descriptor) => {
-                this.reportError(descriptor.pluginId, error);
-                return this.reportActivation(descriptor, client, current, "failed", error);
-              }),
-            );
-            return;
-          }
-          const bootstrap = await this.getContext().config.refresh();
-          if (!current()) {
-            return;
-          }
-          if (!bootstrap) {
-            throw new Error("Could not authenticate native plugin assets. Reconnect and retry.");
-          }
-          for (const descriptor of catalog.plugins) {
-            const prefix = `/__openclaw__/plugins/control-ui/${encodeURIComponent(descriptor.pluginId)}/`;
-            if (
-              !bootstrap.pluginAssetsRequireAuth ||
-              bootstrap.pluginFrameGrants.some(
-                (grant) =>
-                  grant.pluginId === descriptor.pluginId &&
-                  grant.match === "prefix" &&
-                  grant.path === prefix,
-              )
-            ) {
-              granted.add(descriptor.pluginId);
-            } else {
-              const error = new Error(
-                `Native plugin asset grant unavailable: ${descriptor.pluginId}`,
-              );
-              this.reportError(descriptor.pluginId, error);
-              await this.reportActivation(descriptor, client, current, "failed", error);
+            this.reportError(descriptor.pluginId, error);
+            await this.reportActivation(descriptor, client, current, "failed", error);
+            if (!current()) {
+              return;
             }
           }
-          if (bootstrap.pluginAssetsRequireAuth) {
-            this.startGrantRenewal();
-          }
         }
-        // Each plugin owns its deadline. A slow initializer must not prevent
-        // unrelated plugins from becoming available or keep Reload pending.
-        await Promise.all(
-          catalog.plugins
-            .filter(
-              (descriptor) =>
-                granted.has(descriptor.pluginId) &&
-                this.owners.get(descriptor.pluginId)?.descriptor.revision !== descriptor.revision,
-            )
-            .map((descriptor) => this.activate(descriptor, client, current)),
-        );
-        this.publish();
-      } catch (error) {
-        if (current()) {
-          this.reportError("host", error);
+        if (bootstrap.pluginAssetsRequireAuth) {
+          this.startGrantRenewal();
         }
       }
-    };
-    await load();
+      // Each plugin owns its deadline. A slow initializer must not prevent
+      // unrelated plugins from becoming available or keep Reload pending.
+      const activations = catalog.plugins
+        .filter(
+          (descriptor) =>
+            granted.has(descriptor.pluginId) &&
+            this.owners.get(descriptor.pluginId)?.descriptor.revision !== descriptor.revision,
+        )
+        .map((descriptor) => this.activate(descriptor, client, current));
+      // Loading becomes activation-owned before awaiting peers, so a ready or
+      // failed page never waits for another plugin's initializer.
+      this.loadingCatalog = null;
+      this.publish();
+      await Promise.all(activations);
+      this.publish();
+    } catch (error) {
+      if (current()) {
+        this.loadingCatalog = null;
+        this.reportError("host", error);
+        this.publish();
+      }
+    }
   }
 
   private startGrantRenewal(): void {
@@ -370,26 +391,66 @@ export class ControlUiPluginRuntime {
         this.disposeOwner(owner);
         return;
       }
+      // Validate the whole staged selection before retiring a working activation.
+      // A rejected revision must leave both its predecessor and the current choices intact.
+      const selections = [...complete.selections].map(([surface, id]) => {
+        if (id === null) {
+          return [surface, null] as const;
+        }
+        const replacement = complete.contributions.replacements.get(id);
+        if (replacement?.value.surface !== surface) {
+          throw new Error("The selected UI replacement is unavailable.");
+        }
+        return [
+          surface,
+          { key: `${descriptor.pluginId}/${id}`, signal: replacement.signal },
+        ] as const;
+      });
       const previous = this.owners.get(descriptor.pluginId);
       // The receipt is asynchronous, but publication completes activation.
       // A concurrent catalog refresh may revoke only owners still initializing.
       this.loadingOwners.delete(owner);
       this.owners.set(descriptor.pluginId, complete);
+      // A successful revision can inherit a live choice. Retirement or reuse of
+      // the same contribution ID alone must never resurrect a previous choice.
+      if (previous) {
+        for (const [surface, selection] of this.selected) {
+          const id = selection.key.slice(descriptor.pluginId.length + 1);
+          if (
+            selection.signal.aborted ||
+            selection.signal !== previous.contributions.replacements.get(id)?.signal
+          ) {
+            continue;
+          }
+          const replacement = complete.contributions.replacements.get(id);
+          if (replacement?.value.surface === surface) {
+            this.selected.set(surface, { key: selection.key, signal: replacement.signal });
+          } else {
+            this.selected.delete(surface);
+          }
+        }
+      }
+      for (const [surface, selection] of selections) {
+        if (selection === null) {
+          this.selected.delete(surface);
+        } else {
+          this.selected.set(surface, selection);
+        }
+      }
       for (const link of styles) {
         link.media = "all";
       }
       if (previous) {
         this.disposeOwner(previous);
       }
-      for (const [surface, id] of complete.selections) {
-        this.selectReplacement(surface, id === null ? null : `${descriptor.pluginId}/${id}`);
-      }
       this.publish();
       await this.reportActivation(descriptor, client, current, "activated");
     } catch (error) {
+      this.loadingOwners.delete(owner);
       this.disposeOwner(owner);
       if (current()) {
         this.reportError(descriptor.pluginId, error);
+        this.publish();
         await this.reportActivation(descriptor, client, current, "failed", error);
       }
     } finally {
@@ -446,32 +507,48 @@ export class ControlUiPluginRuntime {
       throw new Error("This plugin UI activation has ended.");
     }
     const entries = owner.contributions[kind];
-    if (!CONTRIBUTION_ID.test(value.id) || entries.has(value.id)) {
-      throw new Error(`Invalid or duplicate plugin UI contribution: ${value.id}`);
+    // A disposer owns the registered ID even if the plugin later mutates its definition.
+    const id = value.id;
+    if (!CONTRIBUTION_ID.test(id) || entries.has(id)) {
+      throw new Error(`Invalid or duplicate plugin UI contribution: ${id}`);
     }
-    entries.set(value.id, value);
-    this.publish();
+    const abort = new AbortController();
+    const entry = { value, signal: AbortSignal.any([owner.abort.signal, abort.signal]) };
+    entries.set(id, entry);
     const dispose = () => {
-      owner.disposers.delete(dispose);
-      if (entries.get(value.id) === value) {
-        entries.delete(value.id);
-        this.publish();
+      // Reusing the same definition must not revive an earlier disposer.
+      if (!owner.disposers.delete(dispose)) {
+        return;
       }
+      entries.delete(id);
+      if (kind === "replacements") {
+        for (const [surface, selectedId] of owner.selections) {
+          if (selectedId === id) {
+            owner.selections.delete(surface);
+          }
+        }
+        this.clearSelections(entry.signal);
+      }
+      abort.abort();
+      this.publish();
     };
     owner.disposers.add(dispose);
+    // Listeners may retire or replace the activation during this publication.
+    // Its registration and cleanup must already have the same owner.
+    this.publish();
     return dispose;
   }
 
   registrations<K extends keyof Contributions>(kind: K): ControlUiRegistration<Contributions[K]>[] {
     const values: ControlUiRegistration<Contributions[K]>[] = [];
     for (const owner of this.owners.values()) {
-      for (const [id, value] of owner.contributions[kind]) {
+      for (const [id, entry] of owner.contributions[kind]) {
         values.push({
           key: `${owner.descriptor.pluginId}/${id}`,
           pluginId: owner.descriptor.pluginId,
-          value,
+          value: entry.value,
           host: owner.host,
-          signal: owner.abort.signal,
+          signal: entry.signal,
         });
       }
     }
@@ -483,23 +560,24 @@ export class ControlUiPluginRuntime {
   ): ControlUiRegistration<ControlUiReplacement> | undefined {
     const selected = this.selected.get(surface);
     return this.registrations("replacements").find(
-      (entry) => entry.key === selected && entry.value.surface === surface,
+      (entry) =>
+        entry.key === selected?.key &&
+        entry.signal === selected.signal &&
+        entry.value.surface === surface,
     );
   }
 
   selectReplacement(surface: ControlUiSurface, key: string | null): void {
-    if (
-      key !== null &&
-      !this.registrations("replacements").some(
-        (entry) => entry.key === key && entry.value.surface === surface,
-      )
-    ) {
-      throw new Error("The selected UI replacement is unavailable.");
-    }
     if (key === null) {
       this.selected.delete(surface);
     } else {
-      this.selected.set(surface, key);
+      const replacement = this.registrations("replacements").find(
+        (entry) => entry.key === key && entry.value.surface === surface,
+      );
+      if (!replacement) {
+        throw new Error("The selected UI replacement is unavailable.");
+      }
+      this.selected.set(surface, { key, signal: replacement.signal });
     }
     this.publish();
   }
@@ -528,6 +606,9 @@ export class ControlUiPluginRuntime {
   }
 
   private disposeOwner(owner: Omit<ControlUiPluginOwner, "host">): void {
+    for (const { signal } of owner.contributions.replacements.values()) {
+      this.clearSelections(signal);
+    }
     owner.abort.abort();
     for (const dispose of [...owner.disposers].toReversed()) {
       try {
@@ -539,8 +620,17 @@ export class ControlUiPluginRuntime {
     owner.disposers.clear();
   }
 
+  private clearSelections(signal: AbortSignal): void {
+    for (const [surface, selection] of this.selected) {
+      if (selection.signal === signal) {
+        this.selected.delete(surface);
+      }
+    }
+  }
+
   private retireOwners(): void {
     this.refreshGeneration += 1;
+    this.loadingCatalog = null;
     if (this.grantTimer !== null) {
       clearInterval(this.grantTimer);
       this.grantTimer = null;

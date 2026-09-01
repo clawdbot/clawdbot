@@ -2,6 +2,7 @@ import { GatewayProtocolRequestError as GatewayRequestError } from "@openclaw/ga
 // @vitest-environment node
 // Control UI tests cover workboard behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { workboardTestHost } from "../../test/host.setup.ts";
@@ -63,6 +64,7 @@ const sampleCard = createWorkboardCard();
 const sampleSession = createGatewaySession();
 
 const sampleTaskSessionKey = "subagent:workboard-default-card-1";
+const sampleResolvedTaskSessionKey = `agent:main:${sampleTaskSessionKey}`;
 const sampleTask = createWorkboardTask();
 
 function makeCard(overrides: Partial<WorkboardCard> = {}) {
@@ -152,6 +154,18 @@ function createDiscoveryBatchFixture() {
     polledTask: makeCardTask(polledCard, "polled-task"),
     exactTask: makeCardTask(exactCard, "exact-task"),
   };
+}
+
+function newerTasksFromOtherRuns() {
+  return ["previous-run", undefined].map((runId, index) =>
+    makeTask({
+      id: `task-unrelated-${index}`,
+      taskId: `task-unrelated-${index}`,
+      runId,
+      status: "completed",
+      updatedAt: 10 + index,
+    }),
+  );
 }
 
 function listResult(cards: unknown[] = [sampleCard], statuses: string[] = ["todo", "done"]) {
@@ -298,11 +312,17 @@ function startSampleCard(
   client: WorkboardTestClient,
   options: Omit<Parameters<typeof startWorkboardCard>[0], "host" | "client" | "card"> = {},
 ) {
+  setLoadedCard(sampleCard);
   return startCard(client, { card: sampleCard, ...options });
 }
 
-function stopCard(client: WorkboardTestClient, card: WorkboardCard) {
-  return stopWorkboardCard({ host, client, card });
+function stopCard(client: WorkboardTestClient, card: WorkboardCard, sessionKey?: string) {
+  return stopWorkboardCard({
+    host,
+    client,
+    card,
+    session: sessionKey ? { sessionKey } : undefined,
+  });
 }
 
 function commentCard(
@@ -477,7 +497,7 @@ describe("workboard controller", () => {
     });
 
     it("rejects an invalidated generation after its replacement loads", async () => {
-      const staleList = Promise.withResolvers<unknown>();
+      const staleList = createDeferred<unknown>();
       const currentCard = makeCard({ title: "Current generation" });
       const client = createSequencedClient({
         "workboard.cards.list": [staleList.promise, listResult([currentCard])],
@@ -800,20 +820,18 @@ describe("workboard controller", () => {
     expect(state.tasksByCardId.get(sampleCard.id)).toEqual(sampleTask);
   });
 
-  it("keeps a canonical task link over a newer loose session match", async () => {
+  it.each([
+    { link: "persisted task", taskId: sampleTask.taskId },
+    { link: "current run", taskId: undefined },
+  ])("links the $link despite newer tasks from another run", async ({ taskId }) => {
     const linked = makeCard({
-      taskId: sampleTask.taskId,
+      taskId,
       sessionKey: sampleTaskSessionKey,
       runId: sampleTask.runId,
     });
-    const unrelated = makeTask({
-      id: "task-unrelated",
-      taskId: "task-unrelated",
-      updatedAt: 10,
-    });
     const client = createClient({
       "workboard.cards.list": listResult([linked], ["todo", "done"]),
-      "tasks.list": { tasks: [sampleTask, unrelated] },
+      "tasks.list": { tasks: [sampleTask, ...newerTasksFromOtherRuns()] },
     });
 
     await loadBoard(client);
@@ -1687,7 +1705,7 @@ describe("workboard controller", () => {
     { name: "a card drag starts", title: "Drag target", interaction: "drag" },
     { name: "an edit draft opens", title: "Edit target", interaction: "edit" },
   ] as const)("discards an in-flight poll when $name", async ({ title, interaction }) => {
-    const listedCards = Promise.withResolvers<unknown>();
+    const listedCards = createDeferred<unknown>();
     const initialCard = makeCard({ title });
     const refreshedCard = makeCard({ title: "Server refresh" });
     state.cards = [initialCard];
@@ -1804,7 +1822,7 @@ describe("workboard controller", () => {
   });
 
   it("blocks dispatch while a card draft write is in flight", async () => {
-    const update = Promise.withResolvers<unknown>();
+    const update = createDeferred<unknown>();
     state.cards = [sampleCard];
     openEditDraft(sampleCard);
     state.draftTitle = "Move out of ready";
@@ -1836,8 +1854,8 @@ describe("workboard controller", () => {
   });
 
   it("keeps concurrent card writes busy until each write finishes", async () => {
-    const first = Promise.withResolvers<unknown>();
-    const second = Promise.withResolvers<unknown>();
+    const first = createDeferred<unknown>();
+    const second = createDeferred<unknown>();
     const secondCard = makeCard({ id: "card-2", title: "Second card" });
     const client = createClient((method, params) => {
       if (method === "workboard.cards.move") {
@@ -1986,7 +2004,7 @@ describe("workboard controller", () => {
   });
 
   it("does not let an older refresh overwrite cards listed after dispatch", async () => {
-    const refreshList = Promise.withResolvers<unknown>();
+    const refreshList = createDeferred<unknown>();
     const staleCard = makeCard({ title: "Stale refresh card" });
     const dispatchedCard = makeCard({ title: "Dispatched card" });
     const client = createSequencedClient({
@@ -2019,7 +2037,7 @@ describe("workboard controller", () => {
   });
 
   it("does not let an older refresh overwrite a card move", async () => {
-    const refreshList = Promise.withResolvers<unknown>();
+    const refreshList = createDeferred<unknown>();
     const staleCard = makeCard({ status: "ready", title: "Stale ready card" });
     const movedCard = makeCard({ status: "review", title: "Moved card" });
     const client = createClient((method) => {
@@ -2050,8 +2068,8 @@ describe("workboard controller", () => {
   });
 
   it("allows automatic reload after an initial load is invalidated by a write", async () => {
-    const initialList = Promise.withResolvers<unknown>();
-    const reloadedList = Promise.withResolvers<unknown>();
+    const initialList = createDeferred<unknown>();
+    const reloadedList = createDeferred<unknown>();
     const movedCard = makeCard({ title: "Moved during initial load" });
     const reloadedCard = makeCard({ title: "Reloaded canonical card" });
     const client = createSequencedClient({
@@ -2085,8 +2103,8 @@ describe("workboard controller", () => {
   });
 
   it("does not clear draft-save loading state from an invalidated refresh", async () => {
-    const refreshList = Promise.withResolvers<unknown>();
-    const saveResponse = Promise.withResolvers<{ card: WorkboardCard }>();
+    const refreshList = createDeferred<unknown>();
+    const saveResponse = createDeferred<{ card: WorkboardCard }>();
     const client = createClient((method) => {
       if (method === "workboard.cards.list") {
         return refreshList.promise;
@@ -2124,7 +2142,7 @@ describe("workboard controller", () => {
   });
 
   it("queues a forced full refresh behind an in-flight bounded poll load", async () => {
-    const pollList = Promise.withResolvers<unknown>();
+    const pollList = createDeferred<unknown>();
     const forcedCard = makeCard({ title: "Forced full refresh" });
     const client = createSequencedClient({
       "workboard.cards.list": [pollList.promise, listResult([forcedCard])],
@@ -2144,7 +2162,7 @@ describe("workboard controller", () => {
   });
 
   it("preserves a stronger forced refresh behind another queued forced refresh", async () => {
-    const initialList = Promise.withResolvers<unknown>();
+    const initialList = createDeferred<unknown>();
     const weakerCard = makeCard({ title: "Weaker queued refresh" });
     const strongerCard = makeCard({ title: "Stronger queued refresh" });
     const client = createSequencedClient({
@@ -2170,7 +2188,7 @@ describe("workboard controller", () => {
   });
 
   it("does not restart a queued forced refresh after lifecycle teardown", async () => {
-    const pollList = Promise.withResolvers<unknown>();
+    const pollList = createDeferred<unknown>();
     const client = createClient((method) => {
       if (method === "workboard.cards.list") {
         return pollList.promise;
@@ -2296,7 +2314,7 @@ describe("workboard controller", () => {
   });
 
   it("keeps an in-flight dispatch reload-required after lifecycle teardown", async () => {
-    const dispatchResult = Promise.withResolvers<unknown>();
+    const dispatchResult = createDeferred<unknown>();
     const client = createClient((method) => {
       if (method === "workboard.cards.dispatch") {
         return dispatchResult.promise;
@@ -2328,8 +2346,8 @@ describe("workboard controller", () => {
   });
 
   it("does not attach a stale forced refresh to a reopened board load", async () => {
-    const staleList = Promise.withResolvers<unknown>();
-    const reopenedList = Promise.withResolvers<unknown>();
+    const staleList = createDeferred<unknown>();
+    const reopenedList = createDeferred<unknown>();
     const reopenedCard = makeCard({ title: "Reopened board" });
     const client = createSequencedClient({
       "workboard.cards.list": [staleList.promise, reopenedList.promise],
@@ -2352,7 +2370,7 @@ describe("workboard controller", () => {
   });
 
   it("detaches a stalled initial load during lifecycle teardown", async () => {
-    const initialList = Promise.withResolvers<unknown>();
+    const initialList = createDeferred<unknown>();
     const reopenedCard = makeCard({ title: "Reopened board" });
     const client = createSequencedClient({
       "workboard.cards.list": [initialList.promise, listResult([reopenedCard])],
@@ -2377,7 +2395,7 @@ describe("workboard controller", () => {
   });
 
   it("does not start a queued forced refresh after a card write begins", async () => {
-    const pollList = Promise.withResolvers<unknown>();
+    const pollList = createDeferred<unknown>();
     const client = createClient((method) => {
       if (method === "workboard.cards.list") {
         return pollList.promise;
@@ -2397,7 +2415,7 @@ describe("workboard controller", () => {
   });
 
   it("does not mark a load successful when task enrichment is invalidated by a write", async () => {
-    const taskList = Promise.withResolvers<unknown>();
+    const taskList = createDeferred<unknown>();
     const movedCard = makeCard({ title: "Moved during task enrichment" });
     const reloadedCard = makeCard({ title: "Reloaded after task invalidation" });
     const client = createSequencedClient({
@@ -3178,7 +3196,7 @@ describe("workboard controller", () => {
   it("does not refresh task links while a canonical refresh is loading", async () => {
     state.loaded = true;
     state.cards = [makeCard({ sessionKey: sampleSession.key })];
-    const loadResponse = Promise.withResolvers<unknown>();
+    const loadResponse = createDeferred<unknown>();
     const client = createClient((method) => {
       if (method === "workboard.cards.list") {
         return loadResponse.promise;
@@ -3205,7 +3223,7 @@ describe("workboard controller", () => {
     openEditDraft(linked);
     state.draftTitle = "Saved while lifecycle waits";
     const saved = makeMovedCard(linked);
-    const saveResponse = Promise.withResolvers<{ card: WorkboardCard }>();
+    const saveResponse = createDeferred<{ card: WorkboardCard }>();
     const client = createClient((method) => {
       if (method === "workboard.cards.update") {
         return saveResponse.promise;
@@ -3478,7 +3496,7 @@ describe("workboard controller", () => {
     const secondSession = makeSession({ key: "agent:main:dashboard:second" });
     const firstCard = makeCard({ id: "card-first", sessionKey: firstSession.key });
     const secondCard = makeCard({ id: "card-second", sessionKey: secondSession.key });
-    const firstCreate = Promise.withResolvers<unknown>();
+    const firstCreate = createDeferred<unknown>();
     const client = createClient((method, params) => {
       if (method === "chat.history") {
         return { messages: [] };
@@ -3516,8 +3534,8 @@ describe("workboard controller", () => {
   });
 
   it("does not duplicate same-session captures waiting on the initial load", async () => {
-    const list = Promise.withResolvers<unknown>();
-    const create = Promise.withResolvers<unknown>();
+    const list = createDeferred<unknown>();
+    const create = createDeferred<unknown>();
     const created = makeCard({ sessionKey: sampleSession.key });
     const client = createClient((method) => {
       if (method === "workboard.cards.list") {
@@ -3579,7 +3597,7 @@ describe("workboard controller", () => {
   });
 
   it("waits for an in-flight Workboard load before capturing a session", async () => {
-    const list = Promise.withResolvers<unknown>();
+    const list = createDeferred<unknown>();
     const created = makeCard({ sessionKey: sampleSession.key });
     const client = createClient((method) => {
       if (method === "workboard.cards.list") {
@@ -3643,7 +3661,9 @@ describe("workboard controller", () => {
 
   it("links a started run after recovering its full task scan", async () => {
     const running = createLinkedCard();
-    const taskList = createRejectedContinuationResponder([[sampleTask]]);
+    const taskList = createRejectedContinuationResponder([
+      [sampleTask, ...newerTasksFromOtherRuns()],
+    ]);
     const client = createClient((method, params) => {
       if (method === "workboard.cards.start") {
         return { card: running, sessionKey: sampleTaskSessionKey, runId: "run-1" };
@@ -3820,6 +3840,7 @@ describe("workboard controller", () => {
       "sessions.create": { key: "agent:main:dashboard:manual" },
       "workboard.cards.update": { card: manualLinked },
     });
+    setLoadedCard(manualScheduled);
     const manualSessionKey = await startCard(manualClient, {
       card: manualScheduled,
       mode: "manual",
@@ -3850,6 +3871,7 @@ describe("workboard controller", () => {
         card: makeCard({ ...readyWithSchedule, sessionKey: "agent:main:dashboard:ready-manual" }),
       },
     });
+    setLoadedCard(readyWithSchedule);
     await startCard(readyManualClient, {
       card: readyWithSchedule,
       mode: "manual",
@@ -3983,15 +4005,14 @@ describe("workboard controller", () => {
     );
   });
 
-  it("clears stale task linkage when opening a manual execution", async () => {
-    const staleLinkedCard = createWorkboardCard({
-      sessionKey: sampleTaskSessionKey,
+  it("clears terminal task linkage after explicitly unlinking a manual execution", async () => {
+    const unlinkedCard = createWorkboardCard({
       runId: "run-1",
       taskId: "task-1",
       execution: createWorkboardExecution({
         id: "card-1:codex",
         status: "blocked",
-        sessionKey: sampleTaskSessionKey,
+        sessionKey: undefined,
         runId: "run-1",
         startedAt: 10,
         updatedAt: 20,
@@ -4014,10 +4035,10 @@ describe("workboard controller", () => {
       "sessions.create": { key: "agent:main:dashboard:new", runStarted: false },
       "workboard.cards.update": { card: reopened },
     });
-    getWorkboardState(host).tasksByCardId.set("card-1", sampleTask);
+    setLoadedCard(unlinkedCard, makeTask({ status: "cancelled" }));
 
     await startCard(client, {
-      card: staleLinkedCard,
+      card: unlinkedCard,
       engine: "claude",
       mode: "manual",
     });
@@ -4228,7 +4249,7 @@ describe("workboard controller", () => {
 
   it("cancels in-flight lifecycle reconciliation when refresh stops", async () => {
     createLifecycleHarness(host);
-    const taskList = Promise.withResolvers<unknown>();
+    const taskList = createDeferred<unknown>();
     const client = createClient((method) => {
       if (method === "tasks.list") {
         return taskList.promise;
@@ -4249,7 +4270,7 @@ describe("workboard controller", () => {
 
   it("reuses an in-flight lifecycle task refresh across render-driven syncs", async () => {
     createLifecycleHarness(host);
-    const taskList = Promise.withResolvers<unknown>();
+    const taskList = createDeferred<unknown>();
     const client = createClient((method) => {
       if (method === "tasks.list") {
         return taskList.promise;
@@ -4277,7 +4298,7 @@ describe("workboard controller", () => {
     const { card: linked } = createLifecycleHarness(host);
     const commented = makeCommentedCard(linked, "Keep this", { updatedAt: 2 });
     const completedTask = makeTask({ status: "completed", updatedAt: 3 });
-    const firstTaskList = Promise.withResolvers<unknown>();
+    const firstTaskList = createDeferred<unknown>();
     const client = createSequencedClient({
       "tasks.list": [firstTaskList.promise, { tasks: [completedTask] }],
       "workboard.cards.comment": [{ card: commented }],
@@ -4624,7 +4645,7 @@ describe("workboard controller", () => {
 
   it("does not publish task links when dispatch starts during task refresh", async () => {
     const { card: linked } = createLifecycleHarness(host);
-    const taskList = Promise.withResolvers<unknown>();
+    const taskList = createDeferred<unknown>();
     const client = createClient((method) => {
       if (method === "tasks.list") {
         return taskList.promise;
@@ -4645,7 +4666,7 @@ describe("workboard controller", () => {
   it("does not apply lifecycle task refresh after a newer card write", async () => {
     const { card: linked } = createLifecycleHarness(host);
     const commented = makeCommentedCard(linked, "Keep this", { updatedAt: 2 });
-    const taskList = Promise.withResolvers<unknown>();
+    const taskList = createDeferred<unknown>();
     const client = createClient((method) => {
       if (method === "tasks.list") {
         return taskList.promise;
@@ -4712,6 +4733,7 @@ describe("workboard controller", () => {
 
   it("stops linked sessions and marks cards blocked", async () => {
     const linked = makeCard({ sessionKey: sampleSession.key, runId: "run-1" });
+    setLoadedCard(linked);
     const blocked = { ...linked, status: "blocked" };
     const client = createClient({
       "chat.abort": { aborted: true, runIds: ["run-1"] },
@@ -4726,6 +4748,7 @@ describe("workboard controller", () => {
     });
     expect(client.request).toHaveBeenNthCalledWith(2, "workboard.cards.update", {
       id: "card-1",
+      expectedUpdatedAt: linked.updatedAt,
       patch: { status: "blocked" },
     });
     expect(getWorkboardState(host).cards[0]).toMatchObject({ status: "blocked" });
@@ -4742,18 +4765,19 @@ describe("workboard controller", () => {
       "workboard.cards.update": { card: blocked },
     });
 
-    await stopCard(client, linked);
+    await stopCard(client, linked, sampleResolvedTaskSessionKey);
 
     expect(client.request).toHaveBeenNthCalledWith(1, "tasks.cancel", {
       taskId: "task-1",
       reason: "Stopped from Workboard.",
     });
     expect(client.request).toHaveBeenNthCalledWith(2, "chat.abort", {
-      sessionKey: sampleTaskSessionKey,
+      sessionKey: sampleResolvedTaskSessionKey,
       runId: "run-1",
     });
     expect(client.request).toHaveBeenNthCalledWith(3, "workboard.cards.update", {
       id: "card-1",
+      expectedUpdatedAt: linked.updatedAt,
       patch: { status: "blocked" },
     });
     expect(getWorkboardState(host).cards[0]).toMatchObject({ status: "blocked" });
@@ -4774,10 +4798,11 @@ describe("workboard controller", () => {
       "workboard.cards.update": [{ card: blocked }],
     });
 
-    await stopCard(client, linked);
+    await stopCard(client, linked, sampleResolvedTaskSessionKey);
 
     expect(client.request).toHaveBeenCalledWith("workboard.cards.update", {
       id: "card-1",
+      expectedUpdatedAt: linked.updatedAt,
       patch: { status: "blocked" },
     });
     expect(state.cards[0]).toMatchObject({ status: "blocked" });
@@ -4801,7 +4826,7 @@ describe("workboard controller", () => {
       "workboard.cards.update": { card: blocked },
     });
 
-    await stopCard(client, linked);
+    await stopCard(client, linked, sampleResolvedTaskSessionKey);
 
     expect(client.request).toHaveBeenNthCalledWith(1, "tasks.cancel", {
       taskId: replacementTask.taskId,
@@ -4849,7 +4874,10 @@ describe("workboard controller", () => {
 
     expect(client.request.mock.calls).toEqual([
       ["tasks.cancel", { taskId, reason: "Stopped from Workboard." }],
-      ["workboard.cards.update", { id: "card-1", patch: { status: "blocked" } }],
+      [
+        "workboard.cards.update",
+        { id: "card-1", expectedUpdatedAt: linked.updatedAt, patch: { status: "blocked" } },
+      ],
     ]);
     expect(state.cards).toEqual([blocked]);
     if (missing) {
@@ -4872,18 +4900,19 @@ describe("workboard controller", () => {
       { card: blocked },
     );
 
-    await stopCard(client, linked);
+    await stopCard(client, linked, sampleResolvedTaskSessionKey);
 
     expect(client.request).toHaveBeenNthCalledWith(1, "tasks.cancel", {
       taskId: "task-pruned",
       reason: "Stopped from Workboard.",
     });
     expect(client.request).toHaveBeenNthCalledWith(2, "chat.abort", {
-      sessionKey: sampleTaskSessionKey,
+      sessionKey: sampleResolvedTaskSessionKey,
       runId: "run-1",
     });
     expect(client.request).toHaveBeenNthCalledWith(3, "workboard.cards.update", {
       id: "card-1",
+      expectedUpdatedAt: linked.updatedAt,
       patch: { status: "blocked" },
     });
     expect(state.cards).toEqual([blocked]);
@@ -4907,7 +4936,7 @@ describe("workboard controller", () => {
       { card: { ...linked, status: "blocked" } },
     );
 
-    await stopCard(client, linked);
+    await stopCard(client, linked, sampleResolvedTaskSessionKey);
 
     expect(client.request).toHaveBeenCalledTimes(3);
     expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
@@ -4929,7 +4958,7 @@ describe("workboard controller", () => {
       "chat.abort": [new Error("session abort unavailable")],
     });
 
-    await stopCard(client, linked);
+    await stopCard(client, linked, sampleResolvedTaskSessionKey);
 
     expect(client.request).toHaveBeenCalledTimes(2);
     expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
@@ -4946,7 +4975,7 @@ describe("workboard controller", () => {
       "tasks.cancel": [new Error("task ledger unavailable")],
     });
 
-    await stopCard(client, linked);
+    await stopCard(client, linked, sampleResolvedTaskSessionKey);
 
     expect(client.request).toHaveBeenCalledOnce();
     expect(client.request).toHaveBeenCalledWith("tasks.cancel", {
@@ -4968,21 +4997,22 @@ describe("workboard controller", () => {
       "workboard.cards.update": { card: blocked },
     });
 
-    await stopCard(client, linked);
+    await stopCard(client, linked, sampleResolvedTaskSessionKey);
 
     expect(client.request).toHaveBeenNthCalledWith(1, "tasks.cancel", {
       taskId: "task-1",
       reason: "Stopped from Workboard.",
     });
     expect(client.request).toHaveBeenNthCalledWith(2, "chat.abort", {
-      sessionKey: sampleTaskSessionKey,
+      sessionKey: sampleResolvedTaskSessionKey,
       runId: "run-1",
     });
     expect(client.request).toHaveBeenNthCalledWith(3, "chat.abort", {
-      sessionKey: sampleTaskSessionKey,
+      sessionKey: sampleResolvedTaskSessionKey,
     });
     expect(client.request).toHaveBeenNthCalledWith(4, "workboard.cards.update", {
       id: "card-1",
+      expectedUpdatedAt: linked.updatedAt,
       patch: { status: "blocked" },
     });
     expect(state.cards).toEqual([blocked]);
@@ -5009,6 +5039,7 @@ describe("workboard controller", () => {
     });
     expect(client.request).toHaveBeenNthCalledWith(2, "workboard.cards.update", {
       id: "card-1",
+      expectedUpdatedAt: sampleCard.updatedAt,
       patch: { status: "blocked" },
     });
     expect(getWorkboardState(host).tasksByCardId.get("card-1")).toMatchObject({
@@ -5034,6 +5065,7 @@ describe("workboard controller", () => {
 
   it("falls back to the active session abort when the stored run id is stale", async () => {
     const linked = makeCard({ sessionKey: sampleSession.key, runId: "old-run" });
+    setLoadedCard(linked);
     const blocked = { ...linked, status: "blocked" };
     const client = createSequencedClient(
       {
@@ -5056,6 +5088,7 @@ describe("workboard controller", () => {
     });
     expect(client.request).toHaveBeenNthCalledWith(3, "workboard.cards.update", {
       id: "card-1",
+      expectedUpdatedAt: linked.updatedAt,
       patch: { status: "blocked" },
     });
     expect(getWorkboardState(host).cards[0]).toMatchObject({ status: "blocked" });

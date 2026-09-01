@@ -1,4 +1,5 @@
-import type { ControlUiSession } from "../../../src/plugin-sdk/control-ui.js";
+import type { BoardGetParams } from "@openclaw/gateway-protocol";
+import type { ControlUiAction, ControlUiSession } from "../../../src/plugin-sdk/control-ui.js";
 import type { PluginSessionMenuAction } from "../components/session-menu.ts";
 import type { ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 import { scopeControlUiHost } from "./control-ui-scope.ts";
@@ -14,6 +15,7 @@ export function pluginSessionMenuActions(
       try {
         const state = entry.value.resolve?.({
           sessionKey: session.key,
+          agentId: session.agentId,
           session: structuredClone(session),
         });
         return state?.hidden
@@ -32,28 +34,43 @@ export function pluginSessionMenuActions(
     });
 }
 
-export async function runPluginSessionMenuAction(params: {
-  runtime: ControlUiPluginRuntime;
-  id: string;
-  session: ControlUiSession;
-  signal: AbortSignal;
-}): Promise<void> {
+export async function runControlUiPluginAction(
+  params: BoardGetParams & {
+    runtime: ControlUiPluginRuntime;
+    id: string;
+    placement: ControlUiAction["placement"];
+    session?: ControlUiSession;
+    signal: AbortSignal;
+  },
+): Promise<void> {
+  const retry =
+    params.placement === "session"
+      ? "Reopen the session menu."
+      : "Try again from the current view.";
+  if (params.placement === "session" && !params.session) {
+    throw new Error(`This session is no longer available. ${retry}`);
+  }
   const entry = params.runtime
     .registrations("actions")
-    .find((candidate) => candidate.key === params.id && candidate.value.placement === "session");
+    .find(
+      (candidate) => candidate.key === params.id && candidate.value.placement === params.placement,
+    );
   if (!entry) {
-    throw new Error("This plugin action is no longer active. Reopen the session menu.");
+    throw new Error(`This plugin action is no longer active. ${retry}`);
   }
   const signal = AbortSignal.any([params.signal, entry.signal]);
   signal.throwIfAborted();
-  const session = structuredClone(params.session);
-  const state = entry.value.resolve?.({ sessionKey: session.key, session });
+  const context = {
+    sessionKey: params.sessionKey,
+    agentId: params.agentId ?? params.session?.agentId,
+    session: params.session ? structuredClone(params.session) : undefined,
+  };
+  const state = entry.value.resolve?.(context);
   if (state?.hidden || state?.disabled) {
-    throw new Error("This plugin action is currently unavailable. Reopen the session menu.");
+    throw new Error(`This plugin action is currently unavailable. ${retry}`);
   }
   await entry.value.run({
-    sessionKey: params.session.key,
-    session,
+    ...context,
     host: scopeControlUiHost(entry.host, signal),
     signal,
   });

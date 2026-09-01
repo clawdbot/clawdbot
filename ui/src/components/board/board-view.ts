@@ -1,3 +1,4 @@
+import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
@@ -78,6 +79,8 @@ function itemsForWidgets(
 }
 
 class OpenClawBoardView extends OpenClawLightDomElement {
+  // Snapshots acknowledge an observer-scoped key; native views retain the query's exact owner.
+  @property({ attribute: false }) session: BoardGetParams = { sessionKey: "" };
   @property({ attribute: false }) snapshot?: BoardSnapshot;
   @property({ attribute: false }) activeTabId = "";
   @property({ attribute: false }) widgetFrameUrl?: BoardWidgetFrameUrl;
@@ -602,6 +605,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
                 .contentHeightPx=${this.contentHeights.get(widget.name)}
                 .fitAutoContent=${this.fitAutoContent}
                 .tabs=${tabs}
+                .session=${this.session}
                 .sessionKey=${sessionKey}
                 .widgetFrameUrl=${this.widgetFrameUrl}
                 .callbacks=${this.cellCallbacks}

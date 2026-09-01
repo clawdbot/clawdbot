@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import type { Page } from "playwright";
+import { controlUiPluginAssetPrefix } from "../../../src/gateway/control-ui-plugin-assets-contract.js";
 import type { PluginManifestControlUi } from "../../../src/plugins/manifest-types.js";
 
 export type NativeControlUiPluginFixture = {
@@ -12,11 +12,11 @@ export type NativeControlUiPluginFixture = {
 const builds = new Map<string, Promise<PluginManifestControlUi>>();
 
 /** Browser proofs load the same self-contained assets the plugin authoring command produces. */
-export async function installNativeControlUiPluginFixtures(
-  page: Page,
+export async function prepareNativeControlUiPluginFixtures(
   fixtures: readonly NativeControlUiPluginFixture[],
 ) {
   const plugins = [];
+  const assets = new Map<string, { body: Buffer; contentType: string }>();
   for (const fixture of fixtures) {
     const key = `${fixture.rootDir}\0${fixture.source}`;
     let build = builds.get(key);
@@ -28,22 +28,13 @@ export async function installNativeControlUiPluginFixtures(
     }
     const declaration = await build;
     const revision = path.basename(path.dirname(declaration.entry));
-    const prefix = `/__openclaw__/plugins/control-ui/${encodeURIComponent(fixture.pluginId)}/${revision}/`;
-    const assets = new Map<string, { body: Buffer; contentType: string }>();
+    const prefix = `${controlUiPluginAssetPrefix(fixture.pluginId)}${revision}/`;
     for (const file of [declaration.entry, ...(declaration.styles ?? [])]) {
       assets.set(`${prefix}${path.basename(file)}`, {
         body: await readFile(path.join(fixture.rootDir, file)),
         contentType: file.endsWith(".css") ? "text/css" : "text/javascript",
       });
     }
-    await page.route(`**${prefix}*`, async (route) => {
-      const asset = assets.get(new URL(route.request().url()).pathname);
-      if (asset) {
-        await route.fulfill({ status: 200, ...asset });
-      } else {
-        await route.fulfill({ status: 404 });
-      }
-    });
     plugins.push({
       pluginId: fixture.pluginId,
       name: fixture.pluginId,
@@ -52,5 +43,12 @@ export async function installNativeControlUiPluginFixtures(
       styles: (declaration.styles ?? []).map((file) => `${prefix}${path.basename(file)}`),
     });
   }
-  return { revision: plugins.map((entry) => entry.revision).join("-"), plugins, diagnostics: [] };
+  return {
+    assets,
+    catalog: {
+      revision: plugins.map((entry) => entry.revision).join("-"),
+      plugins,
+      diagnostics: [],
+    },
+  };
 }

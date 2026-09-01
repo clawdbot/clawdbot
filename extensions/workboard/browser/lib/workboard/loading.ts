@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatError } from "./normalization-utils.ts";
 import { normalizeCardsPayload } from "./normalization.ts";
@@ -45,9 +46,16 @@ export async function loadWorkboard(params: LoadWorkboardParams): Promise<boolea
   return await loadWorkboardInternal(params);
 }
 
+export async function loadWorkboardCatalog(
+  params: Pick<LoadWorkboardParams, "host" | "client" | "requestUpdate">,
+): Promise<boolean> {
+  return await loadWorkboardInternal({ ...params, force: true }, undefined, true);
+}
+
 async function loadWorkboardInternal(
   params: LoadWorkboardParams,
   queuedAfterGeneration?: number,
+  catalogOnly = false,
 ): Promise<boolean> {
   const runtime = getWorkboardRuntime(params.host);
   const state = getWorkboardState(params.host);
@@ -55,6 +63,7 @@ async function loadWorkboardInternal(
     !params.client ||
     state.dispatching ||
     workboardHasActiveWrites(state) ||
+    (catalogOnly && shouldDeferWorkboardLiveRefresh(state)) ||
     (!params.force && (state.loaded || state.loadAttempted))
   ) {
     return false;
@@ -63,6 +72,7 @@ async function loadWorkboardInternal(
   const existingLoad = runtime.loadPromise;
   if (existingLoad) {
     const existingGeneration = runtime.loadGeneration;
+    const requiresTaskLoad = !catalogOnly && runtime.loadToken?.catalogOnly;
     const result = await existingLoad;
     const existingLoadIsCurrent =
       existingGeneration !== undefined &&
@@ -76,27 +86,29 @@ async function loadWorkboardInternal(
       Boolean(runtime.loadPromise);
     // Forced callers carry their own diagnostics/task-refresh contract, so a
     // weaker in-flight load cannot satisfy them.
-    return params.force &&
+    return (params.force || requiresTaskLoad) &&
       (existingLoadIsCurrent || queuedLoadReplacedExisting) &&
       !state.dispatching &&
       !workboardHasActiveWrites(state)
-      ? await loadWorkboardInternal(params, existingGeneration)
+      ? await loadWorkboardInternal(params, existingGeneration, catalogOnly)
       : result;
   }
   const generation = nextWorkboardLoadGeneration(params.host);
-  const loadToken: WorkboardLoadToken = { queuedAfterGeneration };
+  const loadToken: WorkboardLoadToken = { queuedAfterGeneration, catalogOnly };
   runtime.loadToken = loadToken;
   const lastRefreshErrorBeforeLoad = state.lastRefreshError;
-  state.loadAttempted = true;
-  state.loading = true;
-  if (!params.preserveError) {
-    delete runtime.loadError;
-    state.error = null;
+  if (!catalogOnly) {
+    state.loadAttempted = true;
+    state.loading = true;
+    if (!params.preserveError) {
+      delete runtime.loadError;
+      state.error = null;
+    }
+    if (params.taskRefresh !== "linked" || !state.lifecycleTaskRefreshFailed) {
+      state.lastRefreshError = null;
+    }
+    params.requestUpdate?.();
   }
-  if (params.taskRefresh !== "linked" || !state.lifecycleTaskRefreshFailed) {
-    state.lastRefreshError = null;
-  }
-  params.requestUpdate?.();
   const loadPromise = (async () => {
     try {
       if (params.refreshDiagnostics) {
@@ -109,9 +121,37 @@ async function loadWorkboardInternal(
         }
       }
       const payload = await client.request("workboard.cards.list", {});
+      if (
+        catalogOnly &&
+        (!isRecord(payload) || !Array.isArray(payload.cards) || !Array.isArray(payload.boards))
+      ) {
+        return false;
+      }
       const normalized = normalizeCardsPayload(payload);
       if (!isCurrentWorkboardLoadGeneration(params.host, generation)) {
         return false;
+      }
+      if (catalogOnly) {
+        if (shouldDeferWorkboardLiveRefresh(state)) {
+          return false;
+        }
+        // Navigation and session links share card data, but this read does not
+        // establish the page's task freshness or authorize stale edit drafts.
+        state.cards = normalized.cards;
+        state.boards = normalized.boards;
+        state.statuses = normalized.statuses;
+        state.tasksByCardId = new Map(
+          state.cards.flatMap((card) => {
+            const task = state.tasksByCardId.get(card.id);
+            return task && taskMatchesTrackedCardLink(task, card, state.missingTaskIds)
+              ? [[card.id, task] as const]
+              : [];
+          }),
+        );
+        if (!workboardTaskLinksReadyForLifecycle(state, { requireRunningTaskDiscovery: true })) {
+          setWorkboardLifecycleTasksPrepared(state, false, { host: params.host });
+        }
+        return true;
       }
       const previousTasksByCardId = state.tasksByCardId;
       const taskLinkState: WorkboardTaskLinkState = {
@@ -284,7 +324,7 @@ async function loadWorkboardInternal(
       state.loaded = true;
       return true;
     } catch (error) {
-      if (isCurrentWorkboardLoadGeneration(params.host, generation)) {
+      if (!catalogOnly && isCurrentWorkboardLoadGeneration(params.host, generation)) {
         const formattedError = formatError(error);
         if (params.preserveError) {
           state.lastRefreshError = formattedError;
@@ -297,10 +337,10 @@ async function loadWorkboardInternal(
     } finally {
       const isCurrentGeneration = isCurrentWorkboardLoadGeneration(params.host, generation);
       const ownsLoad = runtime.loadToken === loadToken;
-      if (!isCurrentGeneration && !state.loaded) {
+      if (!catalogOnly && !isCurrentGeneration && !state.loaded) {
         state.loadAttempted = false;
       }
-      if (isCurrentGeneration || (ownsLoad && !state.draftSaving)) {
+      if (!catalogOnly && (isCurrentGeneration || (ownsLoad && !state.draftSaving))) {
         state.loading = false;
       }
       if (ownsLoad) {

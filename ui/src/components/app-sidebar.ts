@@ -532,6 +532,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       "session-list",
       {
         sessionKey: this.sessionKey,
+        agentId: navigationState.selectedAgentId,
         sessions: this.context?.sessions.state.result?.sessions ?? [],
       },
       renderSessionList({

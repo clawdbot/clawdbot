@@ -1,5 +1,3 @@
-import { isPluginControlUiPath } from "../../test/vitest/vitest.ui-paths.mjs";
-
 export const TSGO_CORE_TEST_MAX_ROOTS = 720;
 
 export const TSGO_CORE_TEST_SHARDS = [
@@ -162,11 +160,7 @@ export function selectChangedTsgoCoreTestShards(
 ): readonly { name: string; config: string }[] | undefined {
   if (
     paths.length === 0 ||
-    paths.some(
-      (file) =>
-        !/\.test\.tsx?$/u.test(file) ||
-        (!/^(?:src|ui|packages)\//u.test(file) && !isPluginControlUiPath(file)),
-    )
+    paths.some((file) => !/^(?:src|ui|packages)\/.+\.test\.tsx?$/u.test(file))
   ) {
     return undefined;
   }

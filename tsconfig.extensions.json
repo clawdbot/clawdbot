@@ -17,7 +17,6 @@
     "**/*test-harness.ts",
     "**/*test-support.ts",
     "extensions/**/test/**",
-    "extensions/*/browser/**",
     "extensions/**/src/test-support/**",
     "test/**"
   ]

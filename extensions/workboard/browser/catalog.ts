@@ -1,7 +1,7 @@
 import type { GatewayBrowserClient } from "./api/gateway.ts";
 import type { WorkboardCapability } from "./lib/workboard/capability.ts";
-import { normalizeBoardsPayload } from "./lib/workboard/normalization.ts";
-import { getWorkboardState } from "./lib/workboard/runtime.ts";
+import { loadWorkboardCatalog } from "./lib/workboard/loading.ts";
+import { getWorkboardState, invalidateWorkboardLoads } from "./lib/workboard/runtime.ts";
 import type { WorkboardBoardSummary } from "./lib/workboard/types.ts";
 
 type WorkboardCatalogSnapshot = {
@@ -49,6 +49,7 @@ class WorkboardCatalog implements WorkboardCatalogRuntime {
         // after disconnect or blocking a fresh load on a fast reconnect.
         this.generation += 1;
         this.load = null;
+        invalidateWorkboardLoads(this.host);
       }
       this.clearRetry();
       return;
@@ -57,6 +58,8 @@ class WorkboardCatalog implements WorkboardCatalogRuntime {
       this.client = client;
       this.generation += 1;
       this.load = null;
+      invalidateWorkboardLoads(this.host);
+      this.host.clearCatalog();
       this.publishCatalog([], false);
     }
     this.ensureAndRecover(reconnecting);
@@ -74,7 +77,8 @@ class WorkboardCatalog implements WorkboardCatalogRuntime {
     this.generation += 1;
     this.load = null;
     this.clearRetry();
-    this.host.clearBoards();
+    invalidateWorkboardLoads(this.host);
+    this.host.clearCatalog();
   }
 
   private ensureAndRecover(force: boolean): void {
@@ -135,9 +139,13 @@ class WorkboardCatalog implements WorkboardCatalogRuntime {
     const generation = ++this.generation;
     const pending = (async () => {
       try {
-        const boards = normalizeBoardsPayload(await client.request("workboard.boards.list", {}));
+        const loaded = await loadWorkboardCatalog({
+          host: this.host,
+          client,
+          requestUpdate: this.host.notify,
+        });
         if (
-          !boards ||
+          !loaded ||
           this.disposed ||
           !this.connected ||
           this.client !== client ||
@@ -145,7 +153,7 @@ class WorkboardCatalog implements WorkboardCatalogRuntime {
         ) {
           return false;
         }
-        this.publishCatalog(boards, true);
+        this.publishCatalog(getWorkboardState(this.host).boards, true);
         return true;
       } catch {
         return false;
@@ -163,7 +171,6 @@ class WorkboardCatalog implements WorkboardCatalogRuntime {
   }
 
   private publishCatalog(boards: WorkboardBoardSummary[], ready: boolean): void {
-    getWorkboardState(this.host).boards = boards;
     this.host.setBoardsReady(ready);
     this.host.notify();
     const snapshot: WorkboardCatalogSnapshot = {

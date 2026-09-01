@@ -3,7 +3,6 @@ import { renderDashboard, renderDialog } from "../../components/host-components.
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
-import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import {
   addWorkboardCardComment,
   getWorkboardDependencyState,
@@ -29,6 +28,7 @@ import {
   formatPriorityLabel,
   formatStatusLabel,
   formatUpdatedTime,
+  renderWorkboardError,
   taskDetail,
   taskMatchesLifecycle,
   type WorkboardProps,
@@ -141,9 +141,18 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
   if (!card) {
     return nothing;
   }
-  const { task, busy, activeTask, live, linkedSessionKey, writable, showStartControls, archived } =
-    getCardActionState(props, card);
-  const lifecycle = getWorkboardLifecycle(card, props.sessions, task);
+  const {
+    task,
+    busy,
+    activeTask,
+    live,
+    linkedSessionKey,
+    sessionTarget,
+    writable,
+    showStartControls,
+    archived,
+  } = getCardActionState(props, card);
+  const lifecycle = getWorkboardLifecycle(card, props.sessions, task, props.sessionResolution);
   const formatted = formatLifecycle(lifecycle);
   const taskIsAuthoritative = task ? taskMatchesLifecycle(task, lifecycle) : false;
   const comments = card.metadata?.comments ?? [];
@@ -287,6 +296,7 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
               </button>
             </span>
           </header>
+          ${renderWorkboardError(state.error)}
 
           <section class="workboard-detail__section">
             <div class="workboard-card__lifecycle">
@@ -322,12 +332,9 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
                 </section>
               `
             : nothing}
-          ${linkedSessionKey
+          ${sessionTarget
             ? renderDashboard({
-                session: {
-                  sessionKey: linkedSessionKey,
-                  agentId: parseAgentSessionKey(linkedSessionKey)?.agentId ?? card.agentId,
-                },
+                session: sessionTarget,
                 canMutate: props.canWrite !== false,
                 canGrant: props.canGrant === true,
               })
@@ -394,7 +401,7 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
                 ? renderStopCardAction(props, card, busy)
                 : nothing
             }
-            ${renderOpenSessionCardAction(props, linkedSessionKey)}
+            ${renderOpenSessionCardAction(props, sessionTarget)}
             ${writable ? renderDeleteCardAction(props, card, busy) : nothing}
             ${showStartControls ? renderStartExecutionControls(props, card) : nothing}
           </div>

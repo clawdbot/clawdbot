@@ -10,7 +10,7 @@ export type WorkboardCapability = {
   readonly boardsReady: boolean;
   notify: () => void;
   setBoardsReady: (ready: boolean) => void;
-  clearBoards: () => void;
+  clearCatalog: () => void;
   subscribe: (listener: () => void) => () => void;
   dispose: () => void;
 };
@@ -37,12 +37,16 @@ export function createWorkboardCapability(): WorkboardCapability {
     setBoardsReady(ready) {
       boardsReady = ready;
     },
-    clearBoards() {
-      const hadBoards = capability.state.boards.length > 0;
+    clearCatalog() {
+      const hadRows = capability.state.boards.length > 0 || capability.state.cards.length > 0;
       const wasReady = boardsReady;
       boardsReady = false;
       capability.state.boards = [];
-      if (hadBoards || wasReady) {
+      capability.state.cards = [];
+      capability.state.tasksByCardId.clear();
+      capability.state.loaded = false;
+      capability.state.loadAttempted = false;
+      if (hadRows || wasReady) {
         capability.notify();
       }
     },

@@ -1525,13 +1525,6 @@ describe("scripts/changed-lanes", () => {
     }
   });
 
-  it.each([
-    { path: "extensions/example/browser/page.ts", ui: true },
-    { path: "extensions/example/browser/page.test.ts", ui: false },
-  ])("selects UI ownership for $path", ({ path: changedPath, ui }) => {
-    expectLanes(detectChangedLanes([changedPath]).lanes, { coreTests: true, ui });
-  });
-
   it("falls back to core lint for a non-lintable core test asset", () => {
     const result = detectChangedLanes([
       "packages/ai/test/fixtures/provider-transport-parity/openai-success.snap.txt",
@@ -1936,6 +1929,24 @@ describe("scripts/changed-lanes", () => {
         lanes: { coreTests: true },
         includes: ["tsgo:core:test"],
         excludes: ["tsgo:core"],
+      },
+    },
+    {
+      name: "routes plugin browser production to extension typechecks",
+      path: "extensions/workboard/browser/index.ts",
+      expected: {
+        lanes: { extensions: true, extensionTests: true },
+        includes: ["tsgo:extensions", "tsgo:extensions:test"],
+        excludes: ["tsgo:core", "tsgo:core:test", "tsgo:ui"],
+      },
+    },
+    {
+      name: "routes plugin browser tests to extension test types",
+      path: "extensions/workboard/browser/catalog.test.ts",
+      expected: {
+        lanes: { extensionTests: true },
+        includes: ["tsgo:extensions:test"],
+        excludes: ["tsgo:extensions", "tsgo:core", "tsgo:core:test", "tsgo:ui"],
       },
     },
     {

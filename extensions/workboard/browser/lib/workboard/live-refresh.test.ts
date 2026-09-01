@@ -1,4 +1,5 @@
 import "../../test/host.setup.ts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForFast } from "../../test/wait-for.ts";
@@ -80,7 +81,7 @@ describe("Workboard live refresh", () => {
 
   it("coalesces revisions that arrive during a canonical read", async () => {
     const host = {};
-    const firstList = Promise.withResolvers<unknown>();
+    const firstList = createDeferred<unknown>();
     let listCalls = 0;
     const client = createClient((method) => {
       if (method === "workboard.cards.list") {
@@ -168,7 +169,7 @@ describe("Workboard live refresh", () => {
 
   it("discards a live read that completes after teardown", async () => {
     const host = {};
-    const list = Promise.withResolvers<unknown>();
+    const list = createDeferred<unknown>();
     const client = createClient((method) =>
       method === "workboard.cards.list" ? list.promise : { tasks: [] },
     );
@@ -204,7 +205,7 @@ describe("Workboard live refresh", () => {
 
   it("discards a direct canonical read that completes after teardown", async () => {
     const host = {};
-    const list = Promise.withResolvers<unknown>();
+    const list = createDeferred<unknown>();
     const client = createClient((method) =>
       method === "workboard.cards.list" ? list.promise : { tasks: [] },
     );

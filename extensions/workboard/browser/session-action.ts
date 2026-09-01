@@ -4,6 +4,9 @@ import { t } from "./i18n/index.ts";
 import type { WorkboardCapability } from "./lib/workboard/capability.ts";
 import { isActiveWorkboardCard } from "./lib/workboard/card-state.ts";
 import { captureSessionToWorkboard } from "./lib/workboard/session-capture.ts";
+import { findWorkboardSessionCard, isReservedSessionKey } from "./lib/workboard/session-links.ts";
+import { matchesAgentScope } from "./pages/workboard/agent-filter.ts";
+import { openCardDetails } from "./pages/workboard/view-card-details.ts";
 import { workboardPageTarget } from "./pages/workboard/workboard-page.ts";
 
 export function createWorkboardSessionAction(
@@ -17,17 +20,17 @@ export function createWorkboardSessionAction(
     placement,
     resolve({ sessionKey, session }) {
       const row = session ?? host.sessions.rows.find((candidate) => candidate.key === sessionKey);
-      const captured = workboard.state.cards.some(
-        (card) =>
-          isActiveWorkboardCard(card) &&
-          [card.sessionKey, card.execution?.sessionKey].includes(sessionKey),
-      );
+      const card = findWorkboardSessionCard(workboard.state.cards, sessionKey);
+      const captured = card && isActiveWorkboardCard(card);
       return {
         label: t(captured ? "sessionsView.openWorkboardCard" : "sessionsView.addToWorkboard"),
         disabled:
           workboard.state.dispatching || workboard.state.capturingSessionKeys.has(sessionKey),
         hidden:
-          !host.connection.connected || !host.connection.canWrite || !row || row.kind === "global",
+          !host.connection.connected ||
+          !host.connection.canWrite ||
+          !row ||
+          isReservedSessionKey(row.key),
       };
     },
     async run({ sessionKey, session, host: actionHost, signal }) {
@@ -51,7 +54,17 @@ export function createWorkboardSessionAction(
             "The session could not be added to Workboard. Refresh and try again.",
         );
       }
-      workboard.state.detailCardId = card.id;
+      // Card assignment can differ from the source session; widen only the page scope.
+      if (
+        !matchesAgentScope(
+          card,
+          actionHost.agents.defaultId ?? actionHost.connection.assistantAgentId,
+          actionHost.agents.scopeId,
+        )
+      ) {
+        actionHost.agents.setScope(null);
+      }
+      openCardDetails(workboard.state, card);
       actionHost.navigation.openPage(workboardPageTarget(card.metadata?.automation?.boardId));
     },
   };

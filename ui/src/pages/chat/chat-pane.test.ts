@@ -161,7 +161,7 @@ describe("chat pane header state", () => {
       const deleteOne = vi.fn(async () => ({ deleted: true }));
       const sessions = createSessionCapabilityFixture({
         delete: deleteOne,
-        refreshReplacement: vi.fn(async () => undefined),
+        refreshReplacement: vi.fn(async () => null),
       });
       const client = createGatewayBrowserClientFixture();
       const { pane } = createTestChatPane({ client, sessions });

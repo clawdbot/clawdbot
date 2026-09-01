@@ -1,11 +1,11 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { workboardUi } from "../pages/workboard/workboard.e2e.test-support.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { workboardUi } from "../test-helpers/control-ui-workboard-fixture.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({

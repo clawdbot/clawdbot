@@ -18,7 +18,7 @@ import {
   KEYBOARD_SHORTCUT_COMBOS,
 } from "../lib/keyboard-shortcut-contract.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
-import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import { normalizeAgentId, resolveUiSelectedSessionAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
@@ -706,7 +706,19 @@ export function renderApplicationShell(host: ShellViewHost) {
   `;
   return html`${renderPluginSurface(
       "workspace",
-      { sessionKey: host.activeSessionKey, routeId: activeRoute },
+      {
+        sessionKey: host.activeSessionKey,
+        agentId: resolveUiSelectedSessionAgentId(
+          {
+            assistantAgentId:
+              context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId,
+            agentsList: context.agents.state.agentsList,
+            hello: gatewaySnapshot.hello,
+          },
+          host.activeSessionKey,
+        ),
+        routeId: activeRoute,
+      },
       workspace,
     )}<openclaw-plugin-manager></openclaw-plugin-manager>`;
 }

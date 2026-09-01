@@ -685,9 +685,12 @@ describe("installPluginFromGitSpec", () => {
       });
 
       expect(result.ok).toBe(true);
-      expect(mkdtempSpy).toHaveBeenCalledTimes(2);
-      const targetPrefix = mkdtempSpy.mock.calls[0]?.[0];
-      const fallbackPrefix = mkdtempSpy.mock.calls[1]?.[0];
+      const cloneWorkspaceCalls = mkdtempSpy.mock.calls.filter(([prefix]) =>
+        path.basename(prefix).startsWith("openclaw-git-plugin-"),
+      );
+      expect(cloneWorkspaceCalls).toHaveLength(2);
+      const targetPrefix = cloneWorkspaceCalls[0]?.[0];
+      const fallbackPrefix = cloneWorkspaceCalls[1]?.[0];
       const persistentRepoDir = expectedGitRepoDir({
         gitDir,
         normalizedSpec: "git:https://github.com/acme/demo.git",

@@ -6,9 +6,14 @@ import type {
   PluginCommandContext,
   OpenClawPluginCommandDefinition,
 } from "../plugins/plugin-command.types.js";
+import { startPluginServices } from "../plugins/services.js";
 import type { OpenClawPluginToolFactory } from "../plugins/tool-types.js";
 import { defineFeatureContract } from "./feature-contract.js";
 import { defineFeaturePlugin, type FeatureInvocationContext } from "./feature-plugin.js";
+import {
+  createPluginRegistryFixture,
+  registerVirtualTestPlugin,
+} from "./test-helpers/contracts-testkit.js";
 import { getToolPluginMetadata } from "./tool-plugin.js";
 
 const contract = defineFeatureContract({
@@ -170,5 +175,88 @@ describe("typed feature plugins", () => {
     controller.abort(new Error("tool cancelled"));
     expectDefined(finish, "feature handler completion")();
     await expect(result).rejects.toThrow("tool cancelled");
+  });
+
+  it("starts and retires independent event emitters for multiple feature plugins", async () => {
+    const { config, registry } = createPluginRegistryFixture();
+    const fixtures = [
+      { pluginId: "feature-alpha", operation: "update", event: "updated" },
+      { pluginId: "feature-beta", operation: "publish", event: "published" },
+    ];
+    const valueSchema = Type.Object({ value: Type.String() }, { additionalProperties: false });
+    for (const { pluginId, operation, event } of fixtures) {
+      const pluginContract = defineFeatureContract({
+        pluginId,
+        operations: {
+          [operation]: {
+            kind: "action",
+            description: "Publish a fixture value.",
+            input: valueSchema,
+            output: valueSchema,
+          },
+        },
+        events: { [event]: valueSchema },
+      });
+      const entry = defineFeaturePlugin({
+        contract: pluginContract,
+        name: pluginId,
+        description: "Fixture event operations.",
+        setup: (_api, events) => ({
+          [operation]: (input) => {
+            events.emit(event, input);
+            return input;
+          },
+        }),
+      });
+      registerVirtualTestPlugin({
+        registry,
+        config,
+        id: pluginId,
+        name: pluginId,
+        register: entry.register,
+      });
+    }
+    const actions = fixtures.map(({ pluginId, operation }) => {
+      const { action } = expectDefined(
+        registry.registry.sessionActions.find(
+          (entry) => entry.pluginId === pluginId && entry.action.id === operation,
+        ),
+        `registered ${pluginId} action`,
+      );
+      return {
+        pluginId,
+        invoke: () =>
+          action.handler({ pluginId, actionId: operation, payload: { value: pluginId } }),
+      };
+    });
+    for (const { invoke } of actions) {
+      await expect(invoke()).rejects.toThrow("emitter is unavailable");
+    }
+
+    const broadcastPluginEvent = vi.fn();
+    const services = await startPluginServices({
+      registry: registry.registry,
+      config,
+      broadcastPluginEvent,
+    });
+    try {
+      for (const { pluginId, invoke } of actions) {
+        await expect(invoke()).resolves.toEqual({ ok: true, result: { value: pluginId } });
+      }
+      expect(registry.registry.diagnostics).toEqual([]);
+      expect(broadcastPluginEvent.mock.calls).toEqual(
+        fixtures.map(({ pluginId, event }) => [
+          `plugin.${pluginId}.${event}`,
+          { value: pluginId },
+          "operator.read",
+        ]),
+      );
+    } finally {
+      await services.stop();
+    }
+    for (const { invoke } of actions) {
+      await expect(invoke()).rejects.toThrow();
+    }
+    expect(broadcastPluginEvent).toHaveBeenCalledTimes(fixtures.length);
   });
 });
