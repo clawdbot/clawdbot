@@ -133,7 +133,9 @@ describe("Code Mode wait, scope, and suspended runs", () => {
       state.pending.find((entry) => entry.method === "callValue"),
       "pending bridge state",
     );
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 20);
+    });
     expect(pending.settled).toBeUndefined();
 
     bridgeResult.resolve();
