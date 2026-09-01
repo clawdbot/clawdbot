@@ -61,6 +61,12 @@ export function formatStrictJsonParseFailure(params: { value: string; cause: unk
   const cause = rawCause.trim().replace(/[.。]+$/u, "");
   const preview =
     params.value.length > 48 ? `${truncateUtf16Safe(params.value, 45).trimEnd()}...` : params.value;
+  const looksLikeStructuredJson = /^[\[{]/u.test(params.value.trim());
+  const shellHint = looksLikeStructuredJson
+    ? `If your shell stripped quotes from the JSON value, pass the entire JSON argument as one quoted argument; in PowerShell, use single quotes around the JSON, for example ${formatInlineCliCommand(
+        `openclaw config set commands.ownerAllowFrom '["telegram:user-id"]' --strict-json`,
+      )}.`
+    : "";
   return [
     `Could not parse ${JSON.stringify(preview)} as JSON for --strict-json.`,
     `${cause}.`,
@@ -68,7 +74,10 @@ export function formatStrictJsonParseFailure(params: { value: string; cause: unk
       "openclaw config set gateway.port 18789 --strict-json",
     )}.`,
     "For plain strings, omit --strict-json.",
-  ].join(" ");
+    shellHint,
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 /** Normalize gateway failure text and attach the deep-status recovery command. */
