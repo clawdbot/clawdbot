@@ -71,6 +71,9 @@ beforeEach(async () => {
       OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH: undefined,
       OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL: undefined,
       OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS: undefined,
+      OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: undefined,
+      OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR: undefined,
+      OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART: undefined,
     },
   });
   await state.writeConfig({ plugins: { enabled: false }, update: { channel: "stable" } });
@@ -182,11 +185,15 @@ function expectSuccess(lane: Lane): void {
 
 describe("update orchestration lifecycle ownership", () => {
   it.each(["resume", "current-process", "repair"] as const)(
-    "%s keeps plugin mutation exclusive and releases ownership for fresh doctor and strict validation",
+    "%s releases plugin ownership for fresh doctor without delegating Gateway activation",
     async (lane) => {
       await writeScenario(lane, {
         hostVersion: lane === "repair" ? undefined : "1.0.0",
       });
+      if (lane === "current-process") {
+        vi.stubEnv("OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION", "1");
+        vi.stubEnv("OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR", "1");
+      }
       mocks.plugins.mockImplementationOnce(async () => {
         const result = await runExec(process.execPath, [entrypoint, "probe"], {
           timeoutMs: 15_000,
@@ -196,6 +203,9 @@ describe("update orchestration lifecycle ownership", () => {
       });
       await invoke(lane);
       expectSuccess(lane);
+      expect(process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION).toBe(
+        lane === "current-process" ? "1" : undefined,
+      );
       expect(await events()).toEqual([
         ...(lane === "current-process" ? [] : ["pre-attempt", "pre-acquired"]),
         "post-attempt",

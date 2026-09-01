@@ -505,8 +505,8 @@ function buildControlUiSessionCompanionSection(params: {
     return [];
   }
   return [
-    "## Control UI Session Companion",
-    "- Operator has a read-only rail companion for this session's status and explanations.",
+    "## Control UI Side Chat",
+    "- Operator has a read-only Side chat for this session's status and explanations.",
     "- On request, do not spawn sub-agents or burn main-thread turns merely to summarize status or re-explain recent work.",
     ...(params.sessionsSpawnAvailable
       ? ["- Reserve `sessions_spawn` for delegated work with its own deliverable."]

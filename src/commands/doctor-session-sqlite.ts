@@ -869,10 +869,11 @@ function validateImportedRecordBeforeArchive(
     return;
   }
   const sqliteEvents = snapshot.transcriptEventCountsBySessionId.get(record.entry.sessionId) ?? 0;
-  if (!record.recovery?.complete && sqliteEvents < (record.recovery?.events ?? result.events)) {
+  const expectedEvents = record.recovery?.events ?? result.events;
+  if (sqliteEvents < expectedEvents) {
     report.issues.push({
       code: "sqlite_transcript_count_mismatch",
-      message: `SQLite transcript has ${sqliteEvents} events; source has ${result.events}.`,
+      message: `SQLite transcript has ${sqliteEvents} events; verified import expects ${expectedEvents}.`,
       sessionKey: record.sessionKey,
     });
   }

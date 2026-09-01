@@ -1,10 +1,19 @@
 // Release Check tests cover release check script behavior.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import {
   collectRootPackageExcludedExtensionDirs,
   listBundledPluginPackArtifacts,
@@ -26,9 +35,28 @@ function requirePluginEntries(config: { plugins?: { entries?: Record<string, unk
 }
 
 describe("release-check", () => {
-  it("checks target SDK inventory when release tooling lives in another checkout", () => {
+  it("loads sparse release tooling and checks the separate target SDK inventory", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-target-"));
     try {
+      const toolingRoot = join(root, "tooling");
+      const workflow = parse(readFileSync(".github/workflows/openclaw-npm-release.yml", "utf8"));
+      const checkout = workflow.jobs.preflight_openclaw_npm.steps.find(
+        (step: { name?: string }) => step.name === "Checkout trusted Plugin SDK API tooling",
+      );
+      const sparseRoots = checkout.with["sparse-checkout"].trim().split(/\s+/u) as string[];
+      const trackedPaths = execFileSync(
+        "git",
+        ["ls-files", "-z", "--", ":(top,glob)*", ...sparseRoots],
+        { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 },
+      )
+        .split("\0")
+        .filter(Boolean);
+      for (const relativePath of trackedPaths) {
+        const destination = join(toolingRoot, relativePath);
+        mkdirSync(dirname(destination), { recursive: true });
+        copyFileSync(relativePath, destination);
+      }
+      symlinkSync(resolve("node_modules"), join(toolingRoot, "node_modules"), "junction");
       mkdirSync(join(root, "scripts", "lib"), { recursive: true });
       mkdirSync(join(root, "extensions"));
       writeFileSync(join(root, "package.json"), JSON.stringify({ files: ["dist"] }));
@@ -40,24 +68,42 @@ describe("release-check", () => {
         join(root, "scripts/lib/plugin-sdk-private-local-only-subpaths.json"),
         JSON.stringify(["target-private"]),
       );
-      const moduleUrl = pathToFileURL(resolve("scripts/release-check.ts")).href;
+      mkdirSync(join(root, "scripts", "fixtures"));
+      writeFileSync(
+        join(root, "scripts/fixtures/packed-plugin-sdk-type-smoke.ts"),
+        "stale target fixture",
+      );
+      const moduleUrl = pathToFileURL(join(toolingRoot, "scripts/release-check.ts")).href;
       const output = execFileSync(
         process.execPath,
         [
           "--import",
-          resolve("scripts/tsx.mjs"),
+          join(toolingRoot, "scripts/tsx.mjs"),
           "--input-type=module",
           "--eval",
-          `const { collectForbiddenPackPaths } = await import(${JSON.stringify(moduleUrl)});\n` +
-            `console.log(JSON.stringify(collectForbiddenPackPaths(["dist/plugin-sdk/target-private.d.ts", "dist/plugin-sdk/target-public.d.ts"])));`,
+          `import { readFileSync } from "node:fs";\n` +
+            `const { collectForbiddenPackPaths, collectMissingPackPaths, createPackedPluginSdkTypescriptSmokeProject } = await import(${JSON.stringify(moduleUrl)});\n` +
+            `createPackedPluginSdkTypescriptSmokeProject({ consumerDir: "consumer", packageSpec: "file:fixture.tgz" });\n` +
+            `console.log(JSON.stringify({ forbidden: collectForbiddenPackPaths(["dist/plugin-sdk/target-private.d.ts", "dist/plugin-sdk/target-public.d.ts"]), required: collectMissingPackPaths([]).filter(path => path.startsWith("dist/plugin-sdk/")), fixture: readFileSync("consumer/src/index.ts", "utf8") }));`,
         ],
         {
           cwd: root,
           encoding: "utf8",
-          env: { ...process.env, TSX_TSCONFIG_PATH: resolve("tsconfig.json") },
+          env: { ...process.env, TSX_TSCONFIG_PATH: join(toolingRoot, "tsconfig.json") },
         },
       );
-      expect(JSON.parse(output)).toEqual(["dist/plugin-sdk/target-private.d.ts"]);
+      expect(JSON.parse(output)).toEqual({
+        fixture: readFileSync(
+          join(toolingRoot, "scripts/fixtures/packed-plugin-sdk-type-smoke.ts"),
+          "utf8",
+        ),
+        forbidden: ["dist/plugin-sdk/target-private.d.ts"],
+        required: [
+          "dist/plugin-sdk/target-private.js",
+          "dist/plugin-sdk/target-public.d.ts",
+          "dist/plugin-sdk/target-public.js",
+        ],
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

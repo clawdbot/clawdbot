@@ -639,6 +639,12 @@ textarea.settings-input {
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-3);
+  min-width: 0;
+
+  .settings-status {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
 }
 
 .updates-attempt-details {

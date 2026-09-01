@@ -657,7 +657,6 @@ extensions/matrix/src/matrix/actions/summary.ts	2
 extensions/matrix/src/matrix/actions/verification.ts	1
 extensions/matrix/src/matrix/client-bootstrap.ts	1
 extensions/matrix/src/matrix/client/config.ts	5
-extensions/matrix/src/matrix/client/file-sync-store.ts	5
 extensions/matrix/src/matrix/client/logging.ts	3
 extensions/matrix/src/matrix/client/runtime.ts	1
 extensions/matrix/src/matrix/config-update.ts	4
@@ -3260,7 +3259,6 @@ src/infra/windows-port-pids.ts	2
 src/infra/windows-powershell-spawn.ts	1
 src/infra/windows-shell-command.ts	1
 src/interactive/payload.ts	2
-src/llm/model-runtime-binding.ts	2
 src/llm/providers/stream-wrappers/anthropic-family-tool-payload-compat.ts	3
 src/llm/providers/stream-wrappers/google-thinking-payload.ts	3
 src/llm/providers/stream-wrappers/minimax.ts	3
@@ -3868,7 +3866,6 @@ ui/src/app/stale-chunk-reload.ts	1
 ui/src/app/startup-settings.ts	1
 ui/src/app/theme.ts	4
 ui/src/app/update-schedule-dto.ts	2
-ui/src/app/update-success-notice.ts	1
 ui/src/app/user-profile.ts	2
 ui/src/app/web-push.runtime.ts	2
 ui/src/components/agent-select.ts	3

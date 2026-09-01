@@ -53,6 +53,15 @@ const grepSchema = Type.Object({
 });
 const DEFAULT_LIMIT = 100;
 
+type RipgrepJsonText = { text?: string; bytes?: string };
+
+function decodeRipgrepJsonText(value: RipgrepJsonText | undefined): string | undefined {
+  return (
+    value?.text ??
+    (value?.bytes === undefined ? undefined : Buffer.from(value.bytes, "base64").toString("utf8"))
+  );
+}
+
 /**
  * Pluggable operations for the grep tool.
  * Override these to delegate search to remote systems (for example SSH).
@@ -284,7 +293,12 @@ export function createGrepToolDefinition(
             spawnedChild.stdout?.on("error", (error) => onStreamError("stdout", error));
             spawnedChild.stderr?.on("error", (error) => onStreamError("stderr", error));
 
-            const matches: Array<{ filePath: string; lineNumber: number; lineText?: string }> = [];
+            const matches: Array<{
+              filePath: string;
+              pathIdentity: string;
+              lineNumber: number;
+              lineText?: string;
+            }> = [];
             const nativeFiles = new Map<string, Map<number, string>>();
             rl.on("line", (line) => {
               if (!line.trim() || settled || killedDueToLimit) {
@@ -293,9 +307,9 @@ export function createGrepToolDefinition(
               let event: {
                 type?: string;
                 data?: {
-                  path?: { text?: string };
+                  path?: RipgrepJsonText;
                   line_number?: unknown;
-                  lines?: { text?: string; bytes?: string };
+                  lines?: RipgrepJsonText;
                 };
               };
               try {
@@ -303,36 +317,41 @@ export function createGrepToolDefinition(
               } catch {
                 return;
               }
-              const filePath = event.data?.path?.text;
+              const filePath = decodeRipgrepJsonText(event.data?.path);
+              // Ripgrep emits exactly one text/bytes tag. Keep that lossless identity:
+              // distinct invalid-byte paths can have the same replacement-character display.
+              const pathIdentity = JSON.stringify(event.data?.path);
               const lineNumber = event.data?.line_number;
               const lineText = event.data?.lines?.text;
               if (event.type === "match") {
                 matchCount++;
                 matchLimitReached = matchCount > effectiveLimit;
-                if (!matchLimitReached && filePath && typeof lineNumber === "number") {
-                  matches.push({ filePath, lineNumber, lineText });
+                if (
+                  !matchLimitReached &&
+                  filePath &&
+                  pathIdentity &&
+                  typeof lineNumber === "number"
+                ) {
+                  matches.push({ filePath, pathIdentity, lineNumber, lineText });
                 }
               }
               const lastMatch = matches.at(-1);
               const windowEnd = (lastMatch?.lineNumber ?? 0) + contextValue;
               const inLastWindow =
-                filePath === lastMatch?.filePath &&
+                pathIdentity === lastMatch?.pathIdentity &&
                 typeof lineNumber === "number" &&
                 lineNumber <= windowEnd;
               if (
-                filePath &&
+                pathIdentity &&
                 typeof lineNumber === "number" &&
                 (matchCount < effectiveLimit || inLastWindow)
               ) {
                 const text =
-                  lineText ??
-                  (!customOps && event.data?.lines?.bytes !== undefined
-                    ? Buffer.from(event.data.lines.bytes, "base64").toString("utf8")
-                    : undefined);
+                  lineText ?? (!customOps ? decodeRipgrepJsonText(event.data?.lines) : undefined);
                 if (text !== undefined) {
-                  const lines = nativeFiles.get(filePath) ?? new Map<number, string>();
+                  const lines = nativeFiles.get(pathIdentity) ?? new Map<number, string>();
                   lines.set(lineNumber, text);
-                  nativeFiles.set(filePath, lines);
+                  nativeFiles.set(pathIdentity, lines);
                 }
               }
               // The extra match can be context for the last retained match. Capture its
@@ -369,7 +388,7 @@ export function createGrepToolDefinition(
 
                 // Format matches after streaming finishes so custom readFile() backends can be async.
                 const fileCache = new Map<string, string[]>();
-                for (const { filePath, lineNumber, lineText: matchText } of matches) {
+                for (const { filePath, pathIdentity, lineNumber, lineText: matchText } of matches) {
                   const relativePath = formatPath(filePath);
                   let customLines: string[] | undefined;
                   if (customOps && (contextValue > 0 || matchText === undefined)) {
@@ -391,7 +410,7 @@ export function createGrepToolDefinition(
                       continue;
                     }
                   }
-                  const nativeLines = nativeFiles.get(filePath);
+                  const nativeLines = nativeFiles.get(pathIdentity);
                   for (
                     let current = Math.max(1, lineNumber - contextValue);
                     current <= lineNumber + contextValue;

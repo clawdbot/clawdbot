@@ -104,6 +104,7 @@ export function resolveHostedPluginSurfaceUrl(params: HostedPluginSurfaceUrlPara
     }
   }
 
-  const formatted = host.includes(":") ? `[${host}]` : host;
+  const formatted =
+    host.includes(":") && !(host.startsWith("[") && host.endsWith("]")) ? `[${host}]` : host;
   return `${scheme}://${formatted}:${exposedPort}`;
 }

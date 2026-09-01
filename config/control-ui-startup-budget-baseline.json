@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 346777,
-  "reason": "Sender-agent avatars on forwarded cross-session messages (PR #133439): agent-avatar resolution, attribution label rules, and direct-thread identity chrome measured 346777 B, +592 B over the prior baseline; below the 358400 B ceiling; hard cap and allowances unchanged",
-  "updatedAt": "2026-08-30"
+  "startupJsGzipBytes": 347792,
+  "reason": "Final automatic update lifecycle ownership and stale hold response fencing measured 347792 B in the canonical isolated production build (+1015 B, 0.29% from the original baseline); fixed 358400 B cap and allowances unchanged",
+  "updatedAt": "2026-09-01"
 }

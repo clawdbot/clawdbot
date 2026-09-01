@@ -27,8 +27,10 @@ import {
   createPreparedModelCatalogWorkerInput,
 } from "./prepared-model-catalog-worker.js";
 import {
+  DISCOVERED_HARNESS_ID,
   PROVIDER_ID,
   HARNESS_ID,
+  MISSING_AUTH_HARNESS_ID,
   SHARED_AUTH_PROVIDER_ID,
   PLUGIN_ID,
   PROFILE_ID,
@@ -483,7 +485,7 @@ describe("prepared model catalog worker boundary", () => {
     );
   });
 
-  it("preserves exact configured native auth across a full catalog refresh", async () => {
+  it("pairs full catalog native routes with exact-generation auth", async () => {
     const fixture = await createStaticSnapshot(
       0,
       {},
@@ -495,8 +497,9 @@ describe("prepared model catalog worker boundary", () => {
     const syntheticAuthProbePath = path.join(fixture.root, "synthetic-auth-probes.txt");
 
     expect(fixture.snapshot.authModes[HARNESS_ID]).toBe("api_key");
+    expect(fixture.snapshot.authModes[DISCOVERED_HARNESS_ID]).toBeUndefined();
+    expect(fixture.snapshot.authModes[MISSING_AUTH_HARNESS_ID]).toBeUndefined();
     expect(fixture.snapshot.authModes[PROVIDER_ID]).toBeUndefined();
-    fs.rmSync(fixture.externalAuthPath);
     fs.writeFileSync(syntheticAuthProbePath, "", "utf8");
     await loadPreparedModelRuntimeAuth(fixture.snapshot, { providerIds: [] });
     fs.writeFileSync(syntheticAuthProbePath, "", "utf8");
@@ -506,9 +509,13 @@ describe("prepared model catalog worker boundary", () => {
 
     expect(fs.readFileSync(syntheticAuthProbePath, "utf8").trim().split("\n")).toEqual([
       HARNESS_ID,
+      DISCOVERED_HARNESS_ID,
+      MISSING_AUTH_HARNESS_ID,
     ]);
     expect(fullAuth?.authModes[HARNESS_ID]).toBe("api_key");
-    expect(fullAuth?.authModes[PROVIDER_ID]).toBeUndefined();
+    expect(fullAuth?.authModes[DISCOVERED_HARNESS_ID]).toBe("api_key");
+    expect(fullAuth?.authModes[MISSING_AUTH_HARNESS_ID]).toBeUndefined();
+    expect(fullAuth?.authModes[PROVIDER_ID]).toBe("oauth");
   });
 
   it("refreshes durable auth before provider hooks decide catalog membership", async () => {

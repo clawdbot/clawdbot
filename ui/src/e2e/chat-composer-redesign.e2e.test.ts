@@ -94,6 +94,38 @@ suite.define(() => {
       );
     },
   );
+  it("keeps the loading model picker beside the microphone", async () => {
+    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("chat-composer-redesign", artifactRoot)
+      : undefined;
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["chat.startup"],
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+
+      const composer = page.locator(".agent-chat__input");
+      const model = composer.locator('[data-chat-model-select="true"]');
+      const voice = page.getByRole("button", { name: "Start voice input" });
+      await expect.poll(() => model.getAttribute("aria-busy")).toBe("true");
+      await expect.poll(() => voice.isVisible()).toBe(true);
+      if (artifactDir) {
+        await composer.screenshot({
+          animations: "disabled",
+          path: `${artifactDir}/loading-model-picker-spacing.png`,
+        });
+      }
+
+      const measureGap = async () => {
+        const [modelBox, voiceBox] = await Promise.all([model.boundingBox(), voice.boundingBox()]);
+        return modelBox && voiceBox ? voiceBox.x - (modelBox.x + modelBox.width) : null;
+      };
+      await expect.poll(measureGap).toBeGreaterThanOrEqual(0);
+      await expect.poll(measureGap).toBeLessThanOrEqual(16);
+    });
+  });
 
   it("keeps offline status in one bounded composer row", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {

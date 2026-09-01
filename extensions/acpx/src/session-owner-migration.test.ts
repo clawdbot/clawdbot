@@ -134,6 +134,34 @@ async function fixture(mode: "persistent" | "oneshot" = "persistent", sessionKey
   };
 }
 
+it.each(["missing", "empty"])(
+  "does not inspect session claims when the legacy directory is %s",
+  async (directoryState) => {
+    const directory = directories.make("acpx-empty-owner-migration-");
+    if (directoryState === "empty") {
+      await fs.mkdir(path.join(directory, "state", "sessions"), { recursive: true });
+    }
+    const context: PluginDoctorStateMigrationContext = {
+      openPluginStateKeyedStore() {
+        throw new Error("No record requires a state store");
+      },
+      async inspectAcpSessionClaims() {
+        throw new Error("No record requires canonical ownership evidence");
+      },
+    };
+    await expect(
+      acpxSessionOwnerMigration.detectLegacyState({
+        config: {},
+        env: { ...process.env, OPENCLAW_STATE_DIR: directory },
+        stateDir: directory,
+        oauthDir: path.join(directory, "oauth"),
+        serviceWorkspaceDir: directory,
+        context,
+      }),
+    ).resolves.toBeNull();
+  },
+);
+
 it.each(["none", "publication", "canonical"])(
   "preserves raw history and resumes idempotently after interruption=%s",
   async (interrupted) => {

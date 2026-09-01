@@ -11,7 +11,7 @@ session** without adding it to conversation history. It is modeled after
 Claude Code's `/btw`, adapted to OpenClaw's Gateway and multi-channel
 architecture.
 
-The two side-question contracts are deliberately separate. BTW is a one-shot question on the session's actual model, preserving harness behavior and Codex thread-fork continuity for channel ingress (WhatsApp, Telegram, and Discord), the TUI, and embedded `tui --local`; the TUI stays on BTW by design. The companion is a persistent, read-only RPC thread for Control UI-class clients. Its first question lazily prepares bounded visible context from the selected session; a temporary history failure remains retryable and does not run as an empty session. Channels cannot use the companion because they do not have an RPC connection.
+The two side-question contracts are deliberately separate. BTW is a one-shot question on the session's actual model, preserving harness behavior and Codex thread-fork continuity for channel ingress (WhatsApp, Telegram, and Discord), the TUI, and embedded `tui --local`; the TUI stays on BTW by design. Side chat uses a persistent, read-only RPC thread for Control UI-class clients. Its first question lazily prepares bounded visible context from the selected session; a temporary history failure remains retryable and does not run as an empty session. Channels cannot use Side chat because they do not have an RPC connection.
 
 ```text
 /btw what changed?
@@ -48,7 +48,7 @@ use a direct one-shot provider call instead.
 
 `/btw` does not create a durable session, continue the unfinished main task,
 or persist question/answer data to transcript history. Detached BTW results do
-not survive a reload. The Control UI companion can rehydrate its in-memory
+not survive a reload. Control UI Side chat can rehydrate its in-memory
 thread after a reload, but the thread is cleared by a session reset, Gateway
 restart, idle expiry, or the rail's clear button.
 
@@ -57,15 +57,15 @@ restart, idle expiry, or the rail's clear button.
 Normal assistant chat uses the Gateway `chat` event. Detached BTW uses a
 separate `chat.side_result` event so clients cannot mistake it for regular
 conversation history. The Control UI does not consume that event; it calls the
-session companion RPCs and renders their bounded exchange state in the rail.
+`sessions.companion.*` RPCs and renders their bounded exchange state in the rail.
 
 ## Surface behavior
 
-| Surface           | Behavior                                                                                                                                                                                                                                                  |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| TUI               | Rendered inline in the chat log, visibly distinct from a normal reply, dismissible with `Enter` or `Esc`.                                                                                                                                                 |
-| External channels | Delivered as a clearly labeled one-off reply (Telegram, WhatsApp, Discord have no local ephemeral overlay).                                                                                                                                               |
-| Control UI / web  | Routes `/btw` and `/side` to the expanded session rail companion. The read-only thread is keyed by session, rehydrates from Gateway memory, and preserves a failed question for Retry. It can be cleared with the trash button. `Esc` collapses the rail. |
+| Surface           | Behavior                                                                                                                                                                                                                                     |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TUI               | Rendered inline in the chat log, visibly distinct from a normal reply, dismissible with `Enter` or `Esc`.                                                                                                                                    |
+| External channels | Delivered as a clearly labeled one-off reply (Telegram, WhatsApp, Discord have no local ephemeral overlay).                                                                                                                                  |
+| Control UI / web  | Routes `/btw` and `/side` to the expanded Side chat. The read-only thread is keyed by session, rehydrates from Gateway memory, and preserves a failed question for Retry. It can be cleared with the trash button. `Esc` collapses the rail. |
 
 ## Selection popup (Control UI)
 

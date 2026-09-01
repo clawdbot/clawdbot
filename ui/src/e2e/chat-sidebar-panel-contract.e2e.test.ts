@@ -629,10 +629,29 @@ suite.define(() => {
 
     await choices.filter({ hasText: "Side chat" }).click();
     const contentActions = page.locator(".side-panel__action-group--content");
-    const companionMenu = contentActions.locator("wa-dropdown.chat-session-rail__menu");
-    await companionMenu.waitFor();
-    expect(await companionMenu.count()).toBe(1);
-    expect(await contentActions.locator(":scope > button").count()).toBe(0);
+    const clearAction = contentActions.getByRole("button", {
+      name: "Clear side chat",
+      exact: true,
+    });
+    await clearAction.waitFor();
+    expect(await clearAction.locator('path[d^="M3 6h18M19 6v14"]').count()).toBe(1);
+    expect(await contentActions.locator("wa-dropdown").count()).toBe(0);
+    const restingColor = await clearAction.evaluate((button) => getComputedStyle(button).color);
+    for (const selector of [".side-panel__expand", ".side-panel__minimize"]) {
+      expect(
+        await page.locator(selector).evaluate((button) => getComputedStyle(button).color),
+      ).toBe(restingColor);
+    }
+    const clearTooltip = clearAction.locator("..");
+    await clearAction.hover();
+    await expect
+      .poll(() =>
+        clearTooltip.locator("wa-tooltip").evaluate((tooltip) => Reflect.get(tooltip, "open")),
+      )
+      .toBe(true);
+    expect(await clearTooltip.locator("wa-tooltip .tooltip-content").textContent()).toContain(
+      "Clear side chat",
+    );
 
     const tab = page.locator(".side-panel__header .tabstrip-tab[active]");
     for (const direction of ["ltr", "rtl"] as const) {

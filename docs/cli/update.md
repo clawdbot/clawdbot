@@ -69,6 +69,10 @@ print progress steps.
 completion profiles and caches are still repaired when needed; installing
 completion in a new shell profile remains an interactive choice.
 
+`--tag` changes only this package update. A saved `update.channel` continues to
+govern later foreground and automatic updates, even after a one-off beta
+install. Use `--channel` to change that policy.
+
 For source checkouts, `--dry-run` previews the update flow without fetching Git
 refs or checking working-tree changes. The real update checks for uncommitted
 changes before modifying the checkout. Use `openclaw update status` to inspect
@@ -256,9 +260,12 @@ aligned:
 
 ### Restart handoff
 
-The Gateway core auto-updater (when enabled via config) launches the CLI
-update path outside the live Gateway request handler. Control-plane
-`update.run` package-manager updates and supervised git-checkout updates use
+The Gateway core auto-updater requires a managed service restart path. It hands
+the CLI update to a detached helper before the Gateway exits. A foreground
+Gateway keeps update hints but leaves installation and activation to the
+operator: stop it, run `openclaw update`, then launch it again.
+
+Control-plane `update.run` package-manager updates and supervised git-checkout updates use
 the same managed-service handoff instead of replacing the package tree or
 rebuilding `dist/` inside the live Gateway process: the Gateway starts a
 detached helper and exits, and that helper runs `openclaw update --yes --json`

@@ -6112,6 +6112,13 @@ button.chat-pr__diff {
   pointer-events: none;
 }
 
+/* Collapse the empty effort slot while loading unless the open model menu
+   needs its anchor. */
+.chat-controls__model-settings:not(:has(.chat-controls__model-picker[open]))
+  .chat-controls__effort-picker--reserved {
+  display: none;
+}
+
 .chat-controls__inline-select {
   min-width: 0;
 }

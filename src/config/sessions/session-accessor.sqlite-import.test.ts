@@ -353,3 +353,88 @@ it.each(["implicit", "leaf", "root", "opaque"])(
     });
   },
 );
+
+it.each([
+  {
+    kind: "indexed",
+    repeated: {
+      type: "message",
+      id: "repeated",
+      parentId: "root",
+      message: { role: "assistant", content: "same replay" },
+    },
+  },
+  {
+    kind: "leaf",
+    repeated: {
+      type: "leaf",
+      id: "repeated",
+      parentId: "root",
+      targetId: "root",
+    },
+  },
+])("repairs an identical repeated $kind event and reruns idempotently", async ({ repeated }) => {
+  await withOpenClawTestState({ label: "import-identical-replay" }, async (state) => {
+    const scope = target(state, "identical-replay");
+    const events = [
+      {
+        type: "session",
+        version: 3,
+        id: "identical-replay",
+        timestamp: "2026-08-30T00:00:00Z",
+        cwd: "/fixture",
+      },
+      {
+        type: "message",
+        id: "root",
+        parentId: null,
+        message: { role: "user", content: "root" },
+      },
+      repeated,
+      repeated,
+    ];
+    const readTranscriptEvents = (append: (event: unknown) => void) => {
+      for (const event of events) {
+        append(event);
+      }
+    };
+
+    const imported = await importSqliteSessionRows({
+      ...scope,
+      repairLegacyTranscript: true,
+      readTranscriptEvents,
+    });
+    expect(imported).toMatchObject({
+      recovery: { complete: true, events: 3, repaired: true },
+      transcriptEvents: 3,
+    });
+    expect(
+      loadTranscriptEventsSync({ ...scope, sessionId: "identical-replay" }).map(
+        (event) => (event as { id?: string }).id,
+      ),
+    ).toEqual(["identical-replay", "root", "repeated"]);
+
+    await expect(
+      importSqliteSessionRows({
+        ...scope,
+        repairLegacyTranscript: true,
+        readTranscriptEvents,
+      }),
+    ).resolves.toMatchObject({
+      recovery: { complete: true, events: 3, repaired: true },
+      transcriptEvents: 0,
+    });
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+    expect(
+      database.db
+        .prepare(
+          "SELECT event_id, COUNT(*) AS count FROM transcript_event_identities GROUP BY event_id ORDER BY event_id",
+        )
+        .all(),
+    ).toEqual([
+      { event_id: "identical-replay", count: 1 },
+      { event_id: "repeated", count: 1 },
+      { event_id: "root", count: 1 },
+    ]);
+  });
+});
