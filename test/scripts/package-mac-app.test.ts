@@ -519,6 +519,7 @@ const swiftPMResourceBundles = [
   "GRDB_GRDB.bundle",
   "OpenClaw_OpenClaw.bundle",
   "OpenClawKit_OpenClawKit.bundle",
+  "OpenClawKit_OpenClawChatUI.bundle",
   "KeyboardShortcuts_KeyboardShortcuts.bundle",
   "SwiftMath_SwiftMath.bundle",
 ] as const;
@@ -1637,6 +1638,10 @@ describe("package-mac-app plist stamping", () => {
     const resolveCall =
       'run_with_locked_swift_packages swift package --scratch-path "$BUILD_PATH" resolve';
     const buildCall = 'swift build -c "$BUILD_CONFIG" --product "$PRODUCT"';
+    const prepareCall = 'node "$ROOT_DIR/scripts/prepare-apple-mermaid.mjs"';
+
+    expect(script.indexOf(prepareCall)).toBeGreaterThan(script.indexOf("run_pnpm build"));
+    expect(script.indexOf(prepareCall)).toBeLessThan(script.indexOf(resolveCall));
 
     expect(script).toContain(
       'resolved_file="${SWIFT_PACKAGE_ROOT:-$ROOT_DIR/apps/macos}/Package.resolved"',

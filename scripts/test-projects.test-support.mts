@@ -702,6 +702,14 @@ const MERMAID_RENDERER_TEST_TARGETS = [
 ];
 const SOURCE_TEST_TARGETS = new Map([
   ...PRECISE_SOURCE_TEST_TARGETS,
+  [
+    "scripts/prepare-apple-mermaid.mjs",
+    [
+      "test/scripts/build-and-run-mac.test.ts",
+      "test/scripts/package-mac-app.test.ts",
+      "test/scripts/ci-workflow-guards.test.ts",
+    ],
+  ],
   ["packages/mermaid-renderer/package.json", MERMAID_RENDERER_TEST_TARGETS],
   ["packages/mermaid-renderer/vite.config.ts", MERMAID_RENDERER_TEST_TARGETS],
   ["packages/mermaid-renderer/native/index.html", MERMAID_RENDERER_TEST_TARGETS],

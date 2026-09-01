@@ -287,6 +287,16 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("routes Apple Mermaid preparation to its build and packaging proof", () => {
+    const plan = resolveChangedTestTargetPlan(["scripts/prepare-apple-mermaid.mjs"]);
+    expect(plan.mode).toBe("targets");
+    expect(plan.targets).toEqual([
+      "test/scripts/build-and-run-mac.test.ts",
+      "test/scripts/package-mac-app.test.ts",
+      "test/scripts/ci-workflow-guards.test.ts",
+    ]);
+  });
+
   it("bounds extensionless prefix probes while excluding deleted cached matches", () => {
     const target = "src/selector/topic";
     const rejectedFiles = [

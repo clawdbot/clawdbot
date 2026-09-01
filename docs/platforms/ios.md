@@ -21,6 +21,7 @@ Availability: iPhone app builds are distributed through Apple channels when enab
 - Queues text messages sent while disconnected in a durable per-gateway outbox (up to 50): queued bubbles show in the transcript, flush in order on reconnect with idempotent retries, remain durable until canonical history confirms the send, retry with backoff before surfacing a retry/delete action, and expire instead of sending after 48 hours offline; reset/forget clears the queue with the cache.
 - Chat is the single text-and-voice surface. Chat actions can open the full Sessions screen without leaving Chat and can show or hide assistant reasoning and tool activity. Tap the microphone for draft dictation, open its menu to record a voice note, or use the inline Talk control for realtime voice; the Talk control animates from live microphone or playback level while listening or speaking.
 - Chat accepts images from the photo picker, camera, Files, paste, and the iOS share sheet. Assistant-generated images render inline from short-lived Gateway artifact URLs, open in a full-screen preview, and remain available after reconnect or history reload without storing image bytes in the transcript cache.
+- Renders completed Mermaid code fences as inline diagrams, with source/copy controls and a full-screen zoomable preview. Diagram rendering uses bundled assets and works offline.
 - **Settings -> OpenClaw** opens a dedicated Gateway settings assistant when the operator connection has `operator.admin` and the Gateway supports `openclaw.chat`. Its setup conversation stays separate from ordinary Chat, redacts secret replies locally, and moves to Chat only after you tap **Open Chat**.
 - Speaks assistant messages on demand: long-press a message in Chat and choose **Listen**. The app plays supported gateway `tts.speak` clips with the configured TTS provider and falls back to on-device speech when gateway audio is unavailable or unplayable. Playback stops on session switch or backgrounding.
 
@@ -29,6 +30,21 @@ Availability: iPhone app builds are distributed through Apple channels when enab
 Long-press a session in the sidebar or Sessions screen to open its session actions, then choose **Color**. Select red, blue, green, yellow, purple, orange, pink, or cyan. **Default** clears the color.
 
 A colored session has a narrow leading stripe in session lists and a small dot beside its title in Chat. Unset colors show neither marker. The Gateway stores color names, not hex values; the app adjusts their hues for light and dark appearances.
+
+## Diagrams in chat
+
+Use a fenced `mermaid` block to display a diagram. A diagram renders when its
+closing fence arrives or the response finishes; an incomplete streaming fence
+stays readable as code. Ordinary code fences keep their usual presentation.
+
+Tap the diagram to open a full-screen preview with pinch-to-zoom. The corner menu
+lets you switch between the diagram and its source, and the copy button copies
+the complete source. If rendering fails, the source remains available; temporary
+failures offer **Retry diagram**.
+
+Local source builds generate the bundled renderer during `pnpm ios:gen`. Run
+`pnpm install` from the repository root before generating the Xcode project so
+the pinned renderer dependencies are available.
 
 ## Requirements
 
