@@ -2650,7 +2650,7 @@ src/config/sessions/metadata.ts	1
 src/config/sessions/restart-recovery-state.ts	6
 src/config/sessions/session-accessor.entry-mutation.ts	2
 src/config/sessions/session-accessor.entry.ts	1
-src/config/sessions/session-accessor.sqlite-active-events.ts	3
+src/config/sessions/session-accessor.sqlite-active-events.ts	2
 src/config/sessions/session-accessor.sqlite-archive-store.ts	1
 src/config/sessions/session-accessor.sqlite-archive.ts	3
 src/config/sessions/session-accessor.sqlite-archive.worker.ts	7
@@ -2665,7 +2665,7 @@ src/config/sessions/session-accessor.sqlite-message-cut.ts	1
 src/config/sessions/session-accessor.sqlite-parent-fork.ts	1
 src/config/sessions/session-accessor.sqlite-read.ts	12
 src/config/sessions/session-accessor.sqlite-recovery.ts	1
-src/config/sessions/session-accessor.sqlite-reset-window.ts	3
+src/config/sessions/session-accessor.sqlite-reset-window.ts	2
 src/config/sessions/session-accessor.sqlite-title-probes.ts	2
 src/config/sessions/session-accessor.sqlite-transcript-message-append.ts	1
 src/config/sessions/session-accessor.sqlite-transcript-mirror.ts	1
@@ -2988,7 +2988,6 @@ src/gateway/session-sharing.ts	1
 src/gateway/session-transcript-derived-readers.ts	2
 src/gateway/session-transcript-files.fs.ts	2
 src/gateway/session-transcript-message.ts	4
-src/gateway/session-transcript-readers.ts	3
 src/gateway/session-transcript-title-reader.ts	1
 src/gateway/session-utils-core.ts	1
 src/gateway/session-utils-row.ts	1

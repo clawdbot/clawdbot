@@ -54,7 +54,7 @@ import {
 } from "./chat-transcript-session.ts";
 
 export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscriptSession {
-  readonly expandedAssistantMessages = new Map<string, AssistantMessageExpansionState>();
+  expandedAssistantMessages = new Map<string, AssistantMessageExpansionState>();
   private readonly controllers = new Set<ReactiveController>();
   private readonly virtualizerController: VirtualizerController<HTMLDivElement, HTMLElement>;
   private threadInnerElement: HTMLDivElement | null = null;
@@ -355,9 +355,10 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   }
 
   disconnect(): void {
-    // Full bodies belong to this presentation, not the session-key cache.
-    // Clearing also retires pending loads before this owner can reconnect.
+    // Clear retires bodies and pending loads; replacement invalidates guarded
+    // rows when this presentation reconnects with the same source messages.
     this.expandedAssistantMessages.clear();
+    this.expandedAssistantMessages = new Map();
     this.scrollCommand = null;
     if (this.pendingRowMeasureFrame !== null) {
       cancelAnimationFrame(this.pendingRowMeasureFrame);
