@@ -352,6 +352,79 @@ export function detectLegacyWorkspaceState(params: {
   return { sources, hasLegacy: sources.length > 0 };
 }
 
+function isReservedHashedAttestationSource(source: LegacyWorkspaceStateSource): boolean {
+  return (
+    source.kind === "attestation" &&
+    path.basename(path.dirname(source.sourcePath)) === LEGACY_WORKSPACE_ATTESTATION_DIRNAME &&
+    /^[a-f0-9]{64}\.attested$/.test(path.basename(source.sourcePath))
+  );
+}
+
+function formatLegacyWorkspaceReadWarning(
+  source: LegacyWorkspaceStateSource,
+  error: unknown,
+): string {
+  return `Failed reading legacy workspace state at ${source.sourcePath}: ${formatErrorMessage(error)}`;
+}
+
+function isEmptyReservedHashedAttestation(
+  source: LegacyWorkspaceStateSource,
+  snapshot: SourceSnapshot,
+): boolean {
+  return isReservedHashedAttestationSource(source) && snapshot.size === 0;
+}
+
+async function discardEmptyReservedAttestation(params: {
+  sourceClaim: LegacyMigrationSourceClaim<SourceSnapshot>;
+  source: LegacyWorkspaceStateSource;
+  snapshot: SourceSnapshot;
+  hasSource: boolean;
+  beforeClaim?: (source: LegacyWorkspaceStateSource) => void;
+  removeSource?: (sourcePath: string) => Promise<void> | void;
+}): Promise<MigrationMessages> {
+  let claimedByThisRun = false;
+  try {
+    let snapshot = params.snapshot;
+    if (params.hasSource) {
+      snapshot = await params.sourceClaim.claim({
+        snapshot,
+        beforeClaim: () => {
+          params.beforeClaim?.(params.source);
+          assertConfiguredWorkspaceIdentity(params.source);
+        },
+        mismatchMessage: "legacy workspace source changed before Doctor could claim it",
+      });
+      claimedByThisRun = true;
+      if (snapshot.size !== 0) {
+        throw new Error("legacy workspace source changed before Doctor could discard it");
+      }
+    }
+    if (await params.sourceClaim.exists()) {
+      throw new Error("legacy workspace source reappeared during discard");
+    }
+    const unchanged = await params.sourceClaim.read(true);
+    if (!snapshotsMatch(snapshot, unchanged) || unchanged.size !== 0) {
+      throw new Error("legacy workspace claim changed before discard");
+    }
+    await params.sourceClaim.remove({
+      removeSource: params.removeSource,
+      skipSourceCheck: true,
+    });
+    return {
+      changes: [`Discarded empty reserved workspace attestation at ${params.source.sourcePath}.`],
+      warnings: [],
+    };
+  } catch (error) {
+    const restoreError = claimedByThisRun ? await params.sourceClaim.restore() : null;
+    return {
+      changes: [],
+      warnings: [
+        `Failed discarding empty reserved workspace attestation at ${params.source.sourcePath}: ${formatErrorMessage(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
+      ],
+    };
+  }
+}
+
 function assertConfiguredWorkspaceIdentity(source: LegacyWorkspaceStateSource): void {
   if (!source.workspaceAliasPath) {
     return;
@@ -462,7 +535,7 @@ async function migrateOneSource(params: {
   } catch (error) {
     return {
       changes: [],
-      warnings: [`Failed reading legacy workspace state: ${formatErrorMessage(error)}`],
+      warnings: [formatLegacyWorkspaceReadWarning(params.source, error)],
     };
   }
   const receipt = readReceipt(params.source, params.env);
@@ -474,7 +547,7 @@ async function migrateOneSource(params: {
   } catch (error) {
     return {
       changes: [],
-      warnings: [`Failed reading legacy workspace state: ${formatErrorMessage(error)}`],
+      warnings: [formatLegacyWorkspaceReadWarning(params.source, error)],
     };
   }
   // One artifact after verified removal is a new generation, including a source
@@ -506,11 +579,24 @@ async function migrateOneSource(params: {
   let claimedByThisRun = false;
   try {
     snapshot = await sourceClaim.read(!hasSource);
+    // Empty reserved hashed markers have no importable state. The runtime gate is
+    // presence-only, so leaving them in place blocks agent turns forever.
+    // Nonempty, linked, sibling, and unreadable sources stay fail-closed.
+    if (isEmptyReservedHashedAttestation(params.source, snapshot)) {
+      return await discardEmptyReservedAttestation({
+        sourceClaim,
+        source: params.source,
+        snapshot,
+        hasSource,
+        beforeClaim: params.beforeClaim,
+        removeSource: params.removeSource,
+      });
+    }
     parsed = parseSource(params.source, snapshot);
   } catch (error) {
     return {
       changes: [],
-      warnings: [`Failed reading legacy workspace state: ${formatErrorMessage(error)}`],
+      warnings: [formatLegacyWorkspaceReadWarning(params.source, error)],
     };
   }
 
