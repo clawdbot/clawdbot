@@ -1,12 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { withTempDirSync } from "../test-helpers/temp-dir.js";
 import {
   pluginInstallPathMatchesRoot,
   toPublicPluginVerificationDiagnostic,
 } from "./runtime-degraded-state.js";
+
+afterEach(() => {
+  resetSecretRedactionRegistryForTest();
+});
 
 describe("pluginInstallPathMatchesRoot", () => {
   it("matches an existing plugin root through a symlink alias", () => {
