@@ -9,6 +9,9 @@ export type CodexAsyncDeliverySettlement = "settled" | "retry";
 export type CodexAppServerEventProjectorOptions = {
   initialContextTokens?: number;
   nativePostToolUseRelayEnabled?: boolean;
+  resolveNativeFileChangeAfterToolCallCoverage?: (
+    toolUseId: string,
+  ) => "native_apply_patch" | "intercepted" | "pending";
   asyncUserMessageAllowed?: boolean;
   onAsyncDelivery?: (delivery: {
     itemId: string;

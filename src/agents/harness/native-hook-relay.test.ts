@@ -236,6 +236,49 @@ async function importDuplicateNativeHookRelayModuleForTests(): Promise<NativeHoo
 }
 
 describe("native hook relay registry", () => {
+  it("filters recorded invocations by normalized tool name", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-filter",
+      runId: "run-filter",
+      allowedEvents: ["post_tool_use"],
+      ttlMs: 10_000,
+    });
+
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "post_tool_use",
+      rawPayload: {
+        hook_event_name: "PostToolUse",
+        tool_name: "Write",
+        tool_use_id: "file-change-1",
+        tool_input: {
+          command: "*** Begin Patch\n*** End Patch\n",
+        },
+        tool_response: "Done!",
+      },
+    });
+
+    expect(
+      hasNativeHookRelayInvocation({
+        relayId: relay.relayId,
+        event: "post_tool_use",
+        toolUseId: "file-change-1",
+        toolName: "apply_patch",
+      }),
+    ).toBe(true);
+
+    expect(
+      hasNativeHookRelayInvocation({
+        relayId: relay.relayId,
+        event: "post_tool_use",
+        toolUseId: "file-change-1",
+        toolName: "exec",
+      }),
+    ).toBe(false);
+  });
+
   it("registers a short-lived relay and builds hidden CLI commands", () => {
     const relay = registerNativeHookRelay({
       provider: "codex",

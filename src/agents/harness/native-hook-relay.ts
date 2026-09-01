@@ -572,16 +572,21 @@ export function hasNativeHookRelayInvocation(params: {
   relayId: string;
   event: NativeHookRelayEvent;
   toolUseId?: string;
+  toolName?: string;
 }): boolean {
   const toolUseId = params.toolUseId?.trim();
   if (!toolUseId) {
     return false;
   }
+  const toolName = params.toolName?.trim();
+  const normalizedToolName = toolName ? normalizeNativeHookToolName(toolName) : undefined;
   return invocations.some(
     (invocation) =>
       invocation.relayId === params.relayId &&
       invocation.event === params.event &&
-      invocation.toolUseId === toolUseId,
+      invocation.toolUseId === toolUseId &&
+      (normalizedToolName === undefined ||
+        normalizeNativeHookToolName(invocation.toolName) === normalizedToolName),
   );
 }
 

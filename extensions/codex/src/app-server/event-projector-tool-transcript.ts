@@ -1,26 +1,23 @@
 import path from "node:path";
 import {
   embeddedAgentLog,
-  runAgentHarnessAfterToolCallHook,
   type AgentMessage,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { Usage } from "openclaw/plugin-sdk/llm";
-import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import { CodexAfterToolCallProjection } from "./event-projector-after-tool-call.js";
 import {
   isMutatingNativeToolItem,
   isNonSuccessItemStatus,
   itemName,
   itemStatus,
   shouldRecordNativeToolTranscript,
-  shouldSynthesizeToolProgressForItem,
 } from "./event-projector-items.js";
+import type { CodexAppServerEventProjectorOptions } from "./event-projector-options.js";
 import {
-  isNativePostToolUseRelayItem,
   itemMeta,
   itemOutputText,
   itemToolArgs,
-  itemToolError,
   itemToolResult,
   itemTranscriptResultText,
 } from "./event-projector-tool-items.js";
@@ -44,7 +41,6 @@ import {
 } from "./protocol.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import { sanitizeCodexToolArguments } from "./tool-progress-normalization.js";
-import type { CodexTrajectoryRecorder } from "./trajectory.js";
 import type { CodexTranscriptCheckpointEntry } from "./transcript-checkpoint.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
 
@@ -145,7 +141,7 @@ export class CodexToolTranscriptProjection {
   private readonly trajectoryResultIds = new Set<string>();
   private readonly trajectoryNamesById = new Map<string, string>();
   private readonly trajectoryItemsById = new Map<string, CodexThreadItem>();
-  private readonly afterToolCallObservedItemIds = new Set<string>();
+  private readonly afterToolCall: CodexAfterToolCallProjection;
   private readonly nativeMcpAppResultDetails = new Map<string, unknown>();
   private readonly nativeMcpAppResultDetailsAttempted = new Set<string>();
   private readonly approvalReviewsByCallId = new Map<string, ToolApprovalReviewState>();
@@ -159,13 +155,12 @@ export class CodexToolTranscriptProjection {
     private readonly turnId: string,
     private readonly progress: CodexToolProgressProjection,
     private readonly nextTranscriptTimestamp: () => number,
-    private readonly options: {
-      nativePostToolUseRelayEnabled?: boolean;
-      prepareNativeMcpAppResultDetails?: (item: CodexThreadItem) => Promise<unknown>;
-      trajectoryRecorder?: CodexTrajectoryRecorder | null;
+    private readonly options: CodexAppServerEventProjectorOptions & {
       checkpointMessage?: (entry: CodexTranscriptCheckpointEntry) => void;
     } = {},
-  ) {}
+  ) {
+    this.afterToolCall = new CodexAfterToolCallProjection(params, progress, options);
+  }
 
   get transcriptMessages(): readonly AgentMessage[] {
     return this.messages;
@@ -499,35 +494,11 @@ export class CodexToolTranscriptProjection {
   }
 
   emitAfterToolCallObservation(item: CodexThreadItem): void {
-    if (!this.shouldEmitAfterToolCallObservation(item)) {
-      return;
-    }
-    const name = itemName(item);
-    const status = itemStatus(item);
-    if (!name || status === "running") {
-      return;
-    }
-    this.afterToolCallObservedItemIds.add(item.id);
-    const result = itemToolResult(item).result;
-    const error =
-      this.progress.approvalTimeoutExplanation(item.id, status) ??
-      itemToolError(item, status, this.progress.outputTextByItem);
-    const startedAt = resolveStartedAtFromDurationMs(item.durationMs);
-    const hookParams = {
-      toolName: name,
-      toolCallId: item.id,
-      runId: this.params.runId,
-      agentId: this.params.agentId,
-      sessionId: this.params.sessionId,
-      sessionKey: this.params.sessionKey,
-      startArgs: itemToolArgs(item) ?? {},
-      ...(result !== undefined ? { result } : {}),
-      ...(error ? { error } : {}),
-      ...(startedAt !== undefined ? { startedAt } : {}),
-    };
-    setImmediate(() => {
-      void runAgentHarnessAfterToolCallHook(hookParams);
-    });
+    this.afterToolCall.emit(item);
+  }
+
+  settlePendingFileChangeAfterToolCallObservations(options?: { finalize?: boolean }): void {
+    this.afterToolCall.settlePendingFileChanges(options);
   }
 
   synthesizeMissingToolResults(params: {
@@ -661,16 +632,6 @@ export class CodexToolTranscriptProjection {
     });
   }
 
-  private shouldEmitAfterToolCallObservation(item: CodexThreadItem): boolean {
-    if (
-      !shouldSynthesizeToolProgressForItem(item) ||
-      this.afterToolCallObservedItemIds.has(item.id)
-    ) {
-      return false;
-    }
-    return !(this.options.nativePostToolUseRelayEnabled && isNativePostToolUseRelayItem(item));
-  }
-
   private createToolCallMessage(params: ToolTranscriptCallInput): AgentMessage {
     const args = normalizeToolTranscriptArguments(params.arguments);
     const attribution = resolveCodexLocalRuntimeAttribution(this.params);
@@ -725,11 +686,4 @@ function formatMissingToolResultError(params: { id: string; name: string }): str
 
 function toolResultStatusText(params: ToolTranscriptResultInput): string {
   return params.isError ? `${params.name} failed` : `${params.name} completed`;
-}
-
-function resolveStartedAtFromDurationMs(durationMs: unknown): number | undefined {
-  if (typeof durationMs !== "number" || !Number.isFinite(durationMs)) {
-    return undefined;
-  }
-  return asDateTimestampMs(Date.now() - Math.max(0, durationMs));
 }

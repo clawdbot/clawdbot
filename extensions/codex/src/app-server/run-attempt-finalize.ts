@@ -115,6 +115,7 @@ export async function finalizeCodexAttempt(
     abortListener[Symbol.dispose]();
     clearTimeout(abortGraceTimer);
   }
+  activeProjector.finalizePendingFileChangeAfterToolCallObservations();
   const hasQuiescentCompletedAssistant =
     activeProjector.hasCompletedTerminalAssistantText() &&
     state.activeAppServerTurnRequests === 0 &&

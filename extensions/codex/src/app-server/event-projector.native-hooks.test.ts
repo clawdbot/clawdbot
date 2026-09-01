@@ -180,6 +180,199 @@ describe("CodexAppServerEventProjector native tool hook projection", () => {
     });
   });
 
+  it("waits for native apply_patch PostToolUse before suppressing direct FileChange AFTER", async () => {
+    const afterToolCall = vi.fn();
+    let coverage: "native_apply_patch" | "intercepted" | "pending" = "pending";
+
+    const resolveNativeFileChangeAfterToolCallCoverage = vi.fn(() => coverage);
+
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "after_tool_call",
+          handler: afterToolCall,
+        },
+      ]),
+    );
+
+    const projector = await createProjector(
+      {
+        ...(await createParams()),
+        sessionKey: "agent:main:session-1",
+      },
+      {
+        nativePostToolUseRelayEnabled: true,
+        resolveNativeFileChangeAfterToolCallCoverage,
+      },
+    );
+
+    const changes = [
+      {
+        path: "direct.txt",
+        kind: { type: "add" },
+      },
+    ];
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "fileChange",
+          id: "patch-direct",
+          changes,
+          status: "completed",
+        },
+      }),
+    );
+
+    expect(afterToolCall).not.toHaveBeenCalled();
+
+    coverage = "native_apply_patch";
+
+    await projector.handleNotification(
+      forCurrentTurn("hook/completed", {
+        run: {
+          id: "hook-direct",
+          eventName: "postToolUse",
+          handlerType: "command",
+          executionMode: "sync",
+          scope: "turn",
+          source: "project",
+          sourcePath: "/repo/.codex/hooks.json",
+          status: "completed",
+          statusMessage: null,
+          durationMs: 1,
+          entries: [],
+        },
+      }),
+    );
+
+    expect(resolveNativeFileChangeAfterToolCallCoverage).toHaveBeenCalledWith("patch-direct");
+
+    expect(afterToolCall).not.toHaveBeenCalled();
+  });
+
+  it("synthesizes apply_patch AFTER immediately for an intercepted FileChange", async () => {
+    const afterToolCall = vi.fn();
+
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "after_tool_call",
+          handler: afterToolCall,
+        },
+      ]),
+    );
+
+    const projector = await createProjector(
+      {
+        ...(await createParams()),
+        sessionKey: "agent:main:session-1",
+      },
+      {
+        nativePostToolUseRelayEnabled: true,
+        resolveNativeFileChangeAfterToolCallCoverage: () => "intercepted",
+      },
+    );
+
+    const changes = [
+      {
+        path: "intercepted.txt",
+        kind: { type: "add" },
+      },
+    ];
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "fileChange",
+          id: "patch-intercepted",
+          changes,
+          status: "completed",
+        },
+      }),
+    );
+
+    await vi.waitFor(() => expect(afterToolCall).toHaveBeenCalledTimes(1));
+
+    const event = requireRecord(
+      mockCallArg(afterToolCall, 0, 0, "after_tool_call event"),
+      "after_tool_call event",
+    );
+
+    expect(event.toolName).toBe("apply_patch");
+    expect(event.toolCallId).toBe("patch-intercepted");
+    expect(event.params).toEqual({ changes });
+    expect(event.result).toEqual({
+      status: "completed",
+      changes,
+    });
+  });
+
+  it("falls back to one synthetic FileChange AFTER at turn completion", async () => {
+    const afterToolCall = vi.fn();
+
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "after_tool_call",
+          handler: afterToolCall,
+        },
+      ]),
+    );
+
+    const projector = await createProjector(
+      {
+        ...(await createParams()),
+        sessionKey: "agent:main:session-1",
+      },
+      {
+        nativePostToolUseRelayEnabled: true,
+        resolveNativeFileChangeAfterToolCallCoverage: () => "pending",
+      },
+    );
+
+    const changes = [
+      {
+        path: "fallback.txt",
+        kind: { type: "add" },
+      },
+    ];
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "fileChange",
+          id: "patch-fallback",
+          changes,
+          status: "completed",
+        },
+      }),
+    );
+
+    expect(afterToolCall).not.toHaveBeenCalled();
+
+    await projector.handleNotification(
+      forCurrentTurn("turn/completed", {
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          items: [],
+          error: null,
+        },
+      }),
+    );
+
+    await vi.waitFor(() => expect(afterToolCall).toHaveBeenCalledTimes(1));
+
+    const event = requireRecord(
+      mockCallArg(afterToolCall, 0, 0, "after_tool_call event"),
+      "after_tool_call event",
+    );
+
+    expect(event.toolName).toBe("apply_patch");
+    expect(event.toolCallId).toBe("patch-fallback");
+  });
+
   it("uses Codex web search action metadata when the top-level query is empty", async () => {
     const afterToolCall = vi.fn();
     initializeGlobalHookRunner(
