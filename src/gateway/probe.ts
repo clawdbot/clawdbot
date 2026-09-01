@@ -31,7 +31,7 @@ import {
   resolveEdgeAuthHeaders,
   type EdgeAuthHeadersConfig,
 } from "./edge-auth.js";
-import { READ_SCOPE } from "./method-scopes.js";
+import { ADMIN_SCOPE, READ_SCOPE } from "./method-scopes.js";
 import { isLoopbackHost } from "./net.js";
 
 export type GatewayProbeAuth = {
@@ -446,7 +446,7 @@ export async function probeGateway(opts: {
           : undefined),
       preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs,
       env: opts.env,
-      scopes: [READ_SCOPE],
+      scopes: [READ_SCOPE, ADMIN_SCOPE],
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       clientVersion: "dev",
       mode: GATEWAY_CLIENT_MODES.PROBE,
@@ -565,6 +565,21 @@ export async function probeGateway(opts: {
           } catch (err) {
             const error = formatErrorMessage(err);
             const missingScopeErrorDetails = readMissingScopeError(err);
+            if (
+              missingScopeErrorDetails?.missingScope === OPERATOR_READ_SCOPE &&
+              auth.scopes.includes(OPERATOR_ADMIN_SCOPE)
+            ) {
+              settleProbe({
+                ok: true,
+                error: null,
+                verifiedRead: true,
+                health: null,
+                status: null,
+                presence: null,
+                configSnapshot: null,
+              });
+              return;
+            }
             settleProbe({
               ok: false,
               error,
