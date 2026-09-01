@@ -5366,6 +5366,11 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "github.event_name == 'workflow_dispatch' && always()",
     );
     expect(runWindowsTestboxStep.if).toBe("always()");
+    expect(runWindowsTestboxStep.env?.JOB_STATUS).toBe("${{ job.status }}");
+    expect(runWindowsTestboxStep.env?.NATIVE_SSH_USER).toBe(
+      "${{ steps.prepare_windows.outputs.ssh_user }}",
+    );
+    expect(runWindowsTestboxStep.run).toContain("${NATIVE_SSH_USER}@${runner_host}");
     expect(runTestboxStep["continue-on-error"]).toBeUndefined();
   });
 

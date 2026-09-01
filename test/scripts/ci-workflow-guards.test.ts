@@ -7838,18 +7838,52 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 
   it("fails Windows Testbox setup when Blacksmith phone-home is not accepted", () => {
     const workflow = readFileSync(".github/workflows/windows-blacksmith-testbox.yml", "utf8");
+    const job = parse(workflow).jobs.windows;
+    const prepare = job.steps.find((step: WorkflowStep) => step.name === "Prepare Windows SSH");
+    const finalize = job.steps.find((step: WorkflowStep) => step.name === "Run Testbox").run;
+
+    // Windows administrators use the effective ProgramData file and native ACLs.
+    // The native handshake is the behavioral proof; this guards workflow wiring.
+    expect(prepare?.env).toEqual({
+      TESTBOX_PUBLIC_KEY_PATH: "${{ steps.begin_testbox.outputs.public_key_path }}",
+    });
+    const nativeSetup = prepare?.run ?? "";
+    expect(nativeSetup).toContain("WindowsPrincipal");
+    expect(nativeSetup).toContain("System32\\OpenSSH\\sshd.exe");
+    expect(nativeSetup).toContain('-T -C "user=$nativeUser"');
+    expect(nativeSetup).toContain(
+      "authorizedkeysfile __PROGRAMDATA__/ssh/administrators_authorized_keys",
+    );
+    expect(nativeSetup).toContain("System32\\OpenSSH\\ssh-keygen.exe");
+    expect(nativeSetup).toContain("-E sha256 -lf $env:TESTBOX_PUBLIC_KEY_PATH");
+    expect(nativeSetup).toContain("[IO.File]::AppendAllText($authorizedKeys,");
+    expect(nativeSetup).toContain("S-1-5-18");
+    expect(nativeSetup).toContain("S-1-5-32-544");
+    expect(nativeSetup).toContain("SetAccessRuleProtection($true, $false)");
+    expect(nativeSetup).toContain('"FullControl", "Allow"');
+    expect(nativeSetup).toContain("Set-Acl -LiteralPath $authorizedKeys");
+    expect(workflow).not.toContain(">> ~/.ssh/authorized_keys");
+
+    expect(finalize).toMatch(
+      /if \[ "\$JOB_STATUS" != "success" \]; then\s+phone_home_status="hydration_failed"/u,
+    );
+    expect(finalize).toContain('--arg status "$phone_home_status"');
+    expect(finalize.match(/\/api\/testbox\/phone-home/gu)).toHaveLength(1);
+    expect(finalize.slice(0, finalize.indexOf('echo "Testbox ready!"'))).toMatch(
+      /if \[ "\$phone_home_status" != "ready" \]; then[^]*?exit 1\s+fi/u,
+    );
 
     expect(workflow.match(/--connect-timeout 10 --max-time 30/gu)).toHaveLength(2);
     expect(workflow).toContain('echo "phone_home_hydrating_curl=${hydrating_curl_status}"');
     expect(workflow).toContain('echo "phone_home_hydrating_http=${hydrating_http_code}"');
-    expect(workflow).toContain('echo "phone_home_ready_curl=${ready_curl_status}"');
-    expect(workflow).toContain('echo "phone_home_ready_http=${http_code}"');
+    expect(workflow).toContain('echo "phone_home_${phone_home_status}_curl=${final_curl_status}"');
+    expect(workflow).toContain('echo "phone_home_${phone_home_status}_http=${http_code}"');
     expect(workflow).toContain('jq -e \'type == "number"\' <<<"$installation_model_id"');
     expect(workflow).toContain('--arg testbox_id "$TESTBOX_ID"');
     expect(workflow).toContain('--arg testbox_id "$testbox_id"');
     expect(workflow).toContain('--argjson installation_model_id "$installation_model_id"');
     expect(workflow).toContain('--data-binary @"$hydrating_body"');
-    expect(workflow).toContain('--data-binary @"$ready_body"');
+    expect(workflow).toContain('--data-binary @"$final_body"');
     const hydratingFailureBlock = workflow.slice(
       workflow.indexOf(
         'if (( hydrating_curl_status != 0 )) || [[ ! "$hydrating_http_code" =~ ^2 ]]; then',
@@ -7858,26 +7892,26 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     const missingSshKeyFailureBlock = workflow.slice(
       workflow.indexOf('if [ -z "$ssh_public_key" ]; then'),
-      workflow.indexOf("mkdir -p ~/.ssh"),
+      workflow.indexOf('public_key_path="$(cygpath'),
     );
-    const readyFailureBlock = workflow.slice(
-      workflow.indexOf('if (( ready_curl_status != 0 )) || [[ ! "$http_code" =~ ^2 ]]; then'),
+    const finalFailureBlock = workflow.slice(
+      workflow.indexOf('if (( final_curl_status != 0 )) || [[ ! "$http_code" =~ ^2 ]]; then'),
       workflow.indexOf('echo "============================================"'),
     );
 
     expect(workflow).toContain(')" || hydrating_curl_status=$?');
-    expect(workflow).toContain(')" || ready_curl_status=$?');
+    expect(workflow).toContain(')" || final_curl_status=$?');
     expect(hydratingFailureBlock).toContain("exit 1");
     expect(missingSshKeyFailureBlock).toContain("exit 1");
-    expect(readyFailureBlock).toContain("exit 1");
+    expect(finalFailureBlock).toContain("exit 1");
     expect(workflow).toContain(
-      "Blacksmith phone-home did not return an SSH public key; testbox cannot accept CLI connections.",
+      "Blacksmith phone-home did not return an SSH public key; testbox cannot accept native SSH connections.",
     );
     expect(workflow).not.toContain(
-      'phone_home_ready_http=${http_code}"\n\n          echo "============================================"',
+      'phone_home_${phone_home_status}_http=${http_code}"\n\n          echo "============================================"',
     );
     expect(workflow).not.toContain('\\"testbox_id\\": \\"${TESTBOX_ID}\\"');
-    expect(workflow).not.toContain('cat > "$ready_body" <<JSON');
+    expect(workflow).not.toContain('cat > "$final_body" <<JSON');
     expect(workflow).not.toContain('"testbox_id": "${testbox_id}"');
   });
 
