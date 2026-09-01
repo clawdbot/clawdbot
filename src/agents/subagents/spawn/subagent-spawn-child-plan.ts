@@ -234,11 +234,15 @@ export async function resolveSubagentChildPlan(params: {
   const targetAgentDir = resolveAgentDir(params.cfg, params.targetAgentId);
   const requesterAgentConfig = resolveAgentConfig(params.cfg, params.requesterAgentId);
   const targetAgentConfig = resolveAgentConfig(params.cfg, params.targetAgentId);
-  const callerThinkingRaw = readRequesterThinkingLevel({
-    cfg: params.cfg,
-    requesterInternalKey: params.requesterInternalKey,
-    requesterAgentId: params.requesterAgentId,
-  });
+  // The active turn owns inherited effort; saved preferences may already describe
+  // a later turn and cannot represent one-shot overrides.
+  const callerThinkingRaw =
+    params.ctx.requesterThinkingLevel ??
+    readRequesterThinkingLevel({
+      cfg: params.cfg,
+      requesterInternalKey: params.requesterInternalKey,
+      requesterAgentId: params.requesterAgentId,
+    });
   const inheritedFastMode =
     params.swarmEnabled && params.request.fastMode === undefined
       ? readRequesterFastMode({

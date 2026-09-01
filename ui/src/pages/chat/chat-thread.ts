@@ -45,7 +45,7 @@ type RenderChatItem = ReturnType<typeof buildChatItems>[number];
 const chatItemsByPane = new Map<string, Map<string, CachedChatItems>>();
 const expandedToolCardsBySession = new Map<string, Map<string, boolean>>();
 const expandedUserMessagesBySession = new Map<string, Map<string, boolean>>();
-const expandedBooleanMapVersions = new WeakMap<ReadonlyMap<string, boolean>, number>();
+const expansionMapVersions = new WeakMap<ReadonlyMap<string, unknown>, number>();
 const initializedToolCardsBySession = new Map<string, Set<string>>();
 const lastAutoExpandPrefBySession = new Map<string, boolean>();
 // This memo only skips repeated work. Keeping its transcript strongly would
@@ -353,21 +353,21 @@ export function buildCachedChatItems(
   return items;
 }
 
-export function getExpansionStateVersion(values: ReadonlyMap<string, boolean>): number {
-  return expandedBooleanMapVersions.get(values) ?? 0;
+export function getExpansionStateVersion(values: ReadonlyMap<string, unknown>): number {
+  return expansionMapVersions.get(values) ?? 0;
 }
 
-export function setExpansionState(values: Map<string, boolean>, key: string, value: boolean): void {
+export function setExpansionState<T>(values: Map<string, T>, key: string, value: T): void {
   if (values.has(key) && values.get(key) === value) {
     return;
   }
   values.set(key, value);
-  expandedBooleanMapVersions.set(values, getExpansionStateVersion(values) + 1);
+  expansionMapVersions.set(values, getExpansionStateVersion(values) + 1);
 }
 
-function deleteExpansionState(values: Map<string, boolean>, key: string): void {
+export function deleteExpansionState<T>(values: Map<string, T>, key: string): void {
   if (values.delete(key)) {
-    expandedBooleanMapVersions.set(values, getExpansionStateVersion(values) + 1);
+    expansionMapVersions.set(values, getExpansionStateVersion(values) + 1);
   }
 }
 
@@ -402,15 +402,6 @@ export type AssistantMessageExpansionState =
   | { status: "loading"; revision: number }
   | { status: "error"; revision: number }
   | { status: "loaded"; markdown: string; revision: number };
-
-export function assistantMessageExpansionSignature(
-  values: ReadonlyMap<string, AssistantMessageExpansionState>,
-): string {
-  return Array.from(values)
-    .toSorted(([left], [right]) => left.localeCompare(right))
-    .map(([key, value]) => `${key}:${value.revision}`)
-    .join("\u0000");
-}
 
 function getInitializedToolCards(sessionKey: string): Set<string> {
   return getOrCreateSessionCacheValue(initializedToolCardsBySession, sessionKey, () => new Set());

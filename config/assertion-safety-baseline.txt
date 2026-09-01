@@ -1753,7 +1753,7 @@ src/agents/embedded-agent-runner/delivery-evidence.ts	12
 src/agents/embedded-agent-runner/direct-compaction-preparation.ts	1
 src/agents/embedded-agent-runner/empty-assistant-turn.ts	1
 src/agents/embedded-agent-runner/extensions.ts	1
-src/agents/embedded-agent-runner/extra-params.ts	12
+src/agents/embedded-agent-runner/extra-params.ts	10
 src/agents/embedded-agent-runner/google-prompt-cache.ts	5
 src/agents/embedded-agent-runner/history.ts	2
 src/agents/embedded-agent-runner/message-visibility.ts	13
@@ -2309,7 +2309,7 @@ src/cli/capability-cli/video.ts	7
 src/cli/capability-cli/web.ts	6
 src/cli/channel-auth.ts	4
 src/cli/channel-options.ts	1
-src/cli/channels-cli.ts	7
+src/cli/channels-cli.ts	5
 src/cli/claws-cli.gateway-readiness.ts	1
 src/cli/claws-cli.runtime.ts	2
 src/cli/command-config-resolution.ts	2
@@ -2409,7 +2409,6 @@ src/cli/startup-metadata.ts	1
 src/cli/subprocess-exit-code.ts	1
 src/cli/test-runtime-capture.ts	1
 src/cli/update-cli.ts	2
-src/cli/update-cli/plugin-payload-validation.ts	2
 src/cli/update-cli/shared.ts	1
 src/cli/update-cli/update-command-config.ts	6
 src/cli/update-cli/update-command-plugins.ts	1
@@ -2431,7 +2430,6 @@ src/commands/backup-restore.ts	1
 src/commands/backup-schedule.ts	2
 src/commands/backup-shared.ts	1
 src/commands/backup-verify.ts	2
-src/commands/channel-setup/channel-plugin-resolution.ts	1
 src/commands/channel-setup/config-compatibility.ts	2
 src/commands/channel-setup/discovery.ts	11
 src/commands/channel-test-registry.ts	2
@@ -2651,7 +2649,7 @@ src/config/sessions/metadata.ts	1
 src/config/sessions/restart-recovery-state.ts	6
 src/config/sessions/session-accessor.entry-mutation.ts	2
 src/config/sessions/session-accessor.entry.ts	1
-src/config/sessions/session-accessor.sqlite-active-events.ts	3
+src/config/sessions/session-accessor.sqlite-active-events.ts	2
 src/config/sessions/session-accessor.sqlite-archive-store.ts	1
 src/config/sessions/session-accessor.sqlite-archive.ts	3
 src/config/sessions/session-accessor.sqlite-archive.worker.ts	7
@@ -2666,7 +2664,7 @@ src/config/sessions/session-accessor.sqlite-message-cut.ts	1
 src/config/sessions/session-accessor.sqlite-parent-fork.ts	1
 src/config/sessions/session-accessor.sqlite-read.ts	12
 src/config/sessions/session-accessor.sqlite-recovery.ts	1
-src/config/sessions/session-accessor.sqlite-reset-window.ts	3
+src/config/sessions/session-accessor.sqlite-reset-window.ts	2
 src/config/sessions/session-accessor.sqlite-title-probes.ts	2
 src/config/sessions/session-accessor.sqlite-transcript-message-append.ts	1
 src/config/sessions/session-accessor.sqlite-transcript-mirror.ts	1
@@ -2989,7 +2987,6 @@ src/gateway/session-sharing.ts	1
 src/gateway/session-transcript-derived-readers.ts	2
 src/gateway/session-transcript-files.fs.ts	2
 src/gateway/session-transcript-message.ts	4
-src/gateway/session-transcript-readers.ts	3
 src/gateway/session-transcript-title-reader.ts	1
 src/gateway/session-utils-core.ts	1
 src/gateway/session-utils-row.ts	1
@@ -3995,7 +3992,7 @@ ui/src/pages/chat/chat-page.ts	1
 ui/src/pages/chat/chat-pane-board.ts	2
 ui/src/pages/chat/chat-pane-browser-annotation.ts	2
 ui/src/pages/chat/chat-pane-lifecycle.ts	4
-ui/src/pages/chat/chat-pane-render.ts	4
+ui/src/pages/chat/chat-pane-render.ts	3
 ui/src/pages/chat/chat-progress.ts	2
 ui/src/pages/chat/chat-queue.ts	1
 ui/src/pages/chat/chat-realtime.ts	1

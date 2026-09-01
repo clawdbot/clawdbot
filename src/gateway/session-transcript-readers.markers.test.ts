@@ -175,13 +175,8 @@ describe("session transcript reader marker projection", () => {
     }
     const visited: Array<{ message: unknown; seq: number }> = [];
     await expect(
-      visitSessionMessagesAsync(
-        scope,
-        (entryMessage, seq) => visited.push({ message: entryMessage, seq }),
-        {
-          mode: "full",
-          reason: `${fixture.name} visitor projection test`,
-        },
+      visitSessionMessagesAsync(scope, (entryMessage, seq) =>
+        visited.push({ message: entryMessage, seq }),
       ),
     ).resolves.toBe(expectedVisits.length);
     expect(visited).toEqual(expectedVisits);

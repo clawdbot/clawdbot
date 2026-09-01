@@ -807,6 +807,7 @@ describe("runSystemAgentTurn", () => {
     expect(call).toMatchObject({
       provider: "openai",
       model: "gpt-5.4",
+      systemAgentTool: { agentId: "ops" },
       agentDir,
       authProfileId: "openai:ops",
       authProfileIdSource: "user",

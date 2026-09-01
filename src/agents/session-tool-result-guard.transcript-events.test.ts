@@ -135,48 +135,55 @@ describe("guardSessionManager transcript updates", () => {
     }
   });
 
-  it("records the admission anchor when adopting an ingress-persisted user", async () => {
-    const { root, target } = await openPersistedSessionManager();
-    const message = {
-      role: "user" as const,
-      content: "canonical prompt",
-      idempotencyKey: "canonical-run:user",
-      timestamp: Date.now(),
-    };
-    await appendTranscriptMessage(target, {
-      cwd: root,
-      eventId: "ingress-persisted-user",
-      message,
-      now: message.timestamp,
-    });
-    const recorder = createUserTurnTranscriptRecorder({
-      message,
-      target: {
-        ...target,
-        sessionEntry: { sessionId: target.sessionId, updatedAt: message.timestamp },
-      },
-    });
-    const guarded = guardSessionManager(SessionManager.open(target, root), {
-      agentId: target.agentId,
-      sessionKey: target.sessionKey,
-      preparedUserTurnMessage: message,
-      preparedUserTurnTranscriptRecorder: recorder,
-    });
+  it.each([false, true])(
+    "records the admission anchor when adopting an ingress-persisted user (excluded: %s)",
+    async (excludeFromContext) => {
+      const { root, target } = await openPersistedSessionManager();
+      const message = {
+        role: "user" as const,
+        content: "canonical prompt",
+        idempotencyKey: "canonical-run:user",
+        ...(excludeFromContext ? { excludeFromContext: true as const } : {}),
+        timestamp: Date.now(),
+      };
+      await appendTranscriptMessage(target, {
+        cwd: root,
+        eventId: "ingress-persisted-user",
+        message,
+        now: message.timestamp,
+      });
+      const recorder = createUserTurnTranscriptRecorder({
+        message,
+        target: {
+          ...target,
+          sessionEntry: { sessionId: target.sessionId, updatedAt: message.timestamp },
+        },
+      });
+      const guarded = guardSessionManager(
+        SessionManager.openBounded(target, { cwd: root, maxBytes: 100_000, maxEvents: 100 }),
+        {
+          agentId: target.agentId,
+          sessionKey: target.sessionKey,
+          preparedUserTurnMessage: message,
+          preparedUserTurnTranscriptRecorder: recorder,
+        },
+      );
 
-    expect(recorder.getAdmissionReceipt()).toBeUndefined();
-    guarded.appendMessage({ ...message });
+      expect(recorder.getAdmissionReceipt()).toBeUndefined();
+      guarded.appendMessage({ ...message });
 
-    expect(recorder.hasPersisted()).toBe(true);
-    expect(recorder.getAdmissionReceipt()).toMatchObject({
-      agentId: target.agentId,
-      sessionId: target.sessionId,
-      sessionKey: target.sessionKey,
-      storePath: target.storePath,
-      entryId: "ingress-persisted-user",
-      idempotencyKey: message.idempotencyKey,
-      role: "user",
-    });
-  });
+      expect(recorder.hasPersisted()).toBe(true);
+      expect(recorder.getAdmissionReceipt()).toMatchObject({
+        agentId: target.agentId,
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        storePath: target.storePath,
+        entryId: "ingress-persisted-user",
+        idempotencyKey: message.idempotencyKey,
+        role: "user",
+      });
+    },
+  );
 
   it.each(["active", "side", "setup-metadata"] as const)(
     "adopts an ingress-persisted %s-branch user without broadcasting a duplicate",

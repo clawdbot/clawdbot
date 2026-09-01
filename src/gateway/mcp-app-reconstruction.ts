@@ -266,11 +266,7 @@ async function reconstructMcpAppView(params: {
     sessionEntry: loaded.entry,
   };
   const data = await findMcpAppReconstructionDataByVisit(async (visit) => {
-    await visitSessionMessagesAsync(transcriptScope, (message) => visit(message), {
-      mode: "full",
-      reason: "MCP App restart reconstruction",
-      cache: "reuse",
-    });
+    await visitSessionMessagesAsync(transcriptScope, visit);
   }, params.lookup);
   if (!data) {
     return undefined;

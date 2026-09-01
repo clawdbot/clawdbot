@@ -31,7 +31,7 @@ required.
     Build the model candidate chain from the current model selection and the fallback policy for that selection source. Configured defaults, cron job primaries, and auto-selected fallback models can use configured fallbacks; explicit user session selections are strict.
   </Step>
   <Step title="Try the current provider">
-    Try the current provider with auth-profile rotation/cooldown rules.
+    Try the current provider with auth-profile rotation/cooldown rules. Embedded runs apply their bounded retry policy to replay-safe transient failures before rotating profiles or advancing model fallback.
   </Step>
   <Step title="Advance on failover-worthy errors">
     If that provider is exhausted with a failover-worthy error, move to the next model candidate.
@@ -39,11 +39,8 @@ required.
   <Step title="Use fallback for the current turn">
     Run the winning fallback candidate without changing the session's selected provider/model.
   </Step>
-  <Step title="Retry safe pure overload exhaustion">
-    If every candidate fails only because providers are overloaded, retry the full turn-local chain up to 10 times with exponential backoff while no tool execution or assistant output has started. After 30 seconds, send one status notice so the user is not left waiting silently.
-  </Step>
-  <Step title="Throw FailoverError if exhausted">
-    If every candidate fails, throw a `FailoverError` with structured per-attempt detail and the soonest cooldown expiry when one is known.
+  <Step title="Report failure if exhausted">
+    If every candidate fails, surface the terminal failure. Thrown exhaustion summaries include structured per-attempt details and the soonest cooldown expiry when one is known.
   </Step>
 </Steps>
 
@@ -261,13 +258,13 @@ State is stored in the per-agent SQLite auth state:
 }
 ```
 
-Overloaded and rate-limit errors are handled more aggressively than billing cooldowns: by default, OpenClaw allows one same-provider auth-profile retry, then switches to the next configured model fallback without waiting.
+Overloaded and rate-limit errors allow one same-provider auth-profile rotation by default before advancing to the next configured model fallback. The active runtime may first use its own safe retry budget; embedded runs can retry transient failures while no assistant output or tool activity has started.
 
 ## Model fallback
 
 If all profiles for a provider fail, OpenClaw moves to the next model in `agents.defaults.model.fallbacks` when the failure matches one of the failover reasons listed below. This includes `model_not_found` for HTTP 404 responses unless the response body identifies a more specific condition such as context overflow, session expiry, billing, authentication, or request format. Provider errors that do not expose enough detail are still labeled precisely in fallback state: `empty_response` means the provider returned no usable message or status, `no_error_details` means the provider explicitly returned `Unknown error (no error details in response)`, and `unclassified` means OpenClaw preserved the raw preview but no classifier matched it yet.
 
-Provider-busy signals such as `ModelNotReadyException` land in the overloaded bucket and follow the same one-rotation-then-fallback policy as rate limits (see the defaults table above).
+Provider-busy signals such as `ModelNotReadyException` land in the overloaded bucket and follow the same one-rotation-then-fallback policy as rate limits.
 
 The embedded failover controller owns transient retries, including overloads and server errors. `retry.provider.maxRetries` sets the retry budget (default: 3), with jittered backoff, provider retry pacing, and a fixed 90-second retry window. Once that budget or window is exhausted, recovery proceeds to profile rotation, configured model fallback, or a visible error. Provider SDKs and the reply runner do not add separate replay loops. Retry and any fallback winner remain turn-local, and replay-unsafe attempts are not retried.
 
@@ -313,6 +310,8 @@ OpenClaw builds the candidate list from the currently requested `provider/model`
 
   </Tab>
 </Tabs>
+
+A final provider refusal ends the current turn. OpenClaw surfaces it without automatic recovery turns, compaction retries, or switching to an unrelated model. A queued or later user message still starts its own turn.
 
 ### Cooldown skip vs probe behavior
 
@@ -361,7 +360,7 @@ Structured `model_fallback_decision` logs also include flat `fallbackStep*` fiel
 
 For a missing-model fallback, look for a `model_fallback_decision` event whose `reason` or `fallbackStepFromFailureReason` is `model_not_found`.
 
-When every candidate fails, OpenClaw throws `FailoverError` with structured attempt records. The outer reply runner can use those records to build a more specific message such as "all models are temporarily rate-limited" and include the soonest cooldown expiry when one is known.
+Exhaustion summaries preserve the structured attempt records. The fallback runner can return a classified exhausted result or throw a `FailoverError`. The outer reply runner can use those details to build a more specific message such as "all models are temporarily rate-limited" and include the soonest cooldown expiry when one is known.
 
 That cooldown summary is model-aware:
 

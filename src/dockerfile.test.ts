@@ -105,7 +105,7 @@ describe("Dockerfile", () => {
       "FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime",
     );
     const caInstallIndex = collapsed.indexOf(
-      "ca-certificates curl git hostname lsof openssh-client openssl procps python3",
+      "ca-certificates curl git hostname libgomp1 lsof openssh-client openssl procps python3",
     );
 
     expect(runtimeIndex).toBeGreaterThan(-1);
@@ -115,20 +115,20 @@ describe("Dockerfile", () => {
     expect(collapsed).toContain("update-ca-certificates");
   });
 
-  it("installs python3 and tini in the slim runtime stage", async () => {
+  it("installs Python, tini, and the llama-server OpenMP runtime in the slim stage", async () => {
     const dockerfile = collapseDockerContinuations(await readFile(dockerfilePath, "utf8"));
     const runtimeIndex = dockerfile.indexOf(
       "FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime",
     );
     const pythonInstallIndex = dockerfile.indexOf(
-      "ca-certificates curl git hostname lsof openssh-client openssl procps python3",
+      "ca-certificates curl git hostname libgomp1 lsof openssh-client openssl procps python3",
     );
 
     expect(runtimeIndex).toBeGreaterThan(-1);
     expect(pythonInstallIndex).toBeGreaterThan(runtimeIndex);
     expect(pythonInstallIndex).toBeLessThan(dockerfile.indexOf("RUN chown node:node /app"));
     expect(dockerfile).toContain(
-      "ca-certificates curl git hostname lsof openssh-client openssl procps python3 tini",
+      "ca-certificates curl git hostname libgomp1 lsof openssh-client openssl procps python3 tini",
     );
     expect(dockerfile).toContain('ENTRYPOINT ["tini", "-s", "--"]');
   });

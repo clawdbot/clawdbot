@@ -472,6 +472,20 @@
     },
     {
       "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/skills/library-detail.ts",
+      "text": "SKILL.md"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/skills/library-view.ts",
+      "text": "SKILL.md"
+    },
+    {
+      "count": 1,
       "kind": "object-property",
       "name": "description",
       "path": "ui/src/pages/skills/view.test-support.ts",

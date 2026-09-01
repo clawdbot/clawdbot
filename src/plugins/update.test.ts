@@ -5653,7 +5653,12 @@ describe("syncPluginsForUpdateChannel", () => {
     expect(result.summary.switchedToNpm).toStrictEqual([]);
     expect(result.summary.warnings).toStrictEqual([]);
     expect(result.summary.errors).toEqual([
-      "Failed to update legacy-chat: Package not found on ClawHub. (ClawHub clawhub:legacy-chat@2026.5.1-beta.2).",
+      {
+        pluginId: "legacy-chat",
+        code: "package_not_found",
+        message:
+          "Failed to update legacy-chat: Package not found on ClawHub. (ClawHub clawhub:legacy-chat@2026.5.1-beta.2).",
+      },
     ]);
   });
 
@@ -5750,7 +5755,12 @@ describe("syncPluginsForUpdateChannel", () => {
     expect(result.config).toBe(config);
     expect(result.summary.warnings).toEqual(["WARNING\nSecurity scan: suspicious"]);
     expect(result.summary.errors).toEqual([
-      "Failed to update legacy-chat: ClawHub ClawPack integrity mismatch. (ClawHub clawhub:legacy-chat@2026.5.1-beta.2).",
+      {
+        pluginId: "legacy-chat",
+        code: "archive_integrity_mismatch",
+        message:
+          "Failed to update legacy-chat: ClawHub ClawPack integrity mismatch. (ClawHub clawhub:legacy-chat@2026.5.1-beta.2).",
+      },
     ]);
   });
 
@@ -5819,7 +5829,9 @@ describe("syncPluginsForUpdateChannel", () => {
 
     expect(result.changed).toBe(false);
     expect(result.config).toBe(config);
-    expect(result.summary.errors).toEqual(["Failed to update legacy-chat: package unavailable"]);
+    expect(result.summary.errors).toEqual([
+      { pluginId: "legacy-chat", message: "Failed to update legacy-chat: package unavailable" },
+    ]);
   });
 
   it("does not externalize custom local path installs that only share the old plugin id", async () => {

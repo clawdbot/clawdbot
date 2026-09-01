@@ -221,6 +221,23 @@ export function detectChangedLanes(
       continue;
     }
 
+    // Shared inputs retain their Node/tooling owner as well as browser checks.
+    if (
+      changedPath === "tsconfig.json" ||
+      /^packages\/normalization-core\/(?:package\.json|src\/record-coerce\.ts)$/u.test(changedPath)
+    ) {
+      lanes.ui = true;
+      reasons.push(`${changedPath}: shared browser renderer input`);
+    }
+
+    // Native hosts bundle this DOM runtime; the Node-only core graph cannot own it.
+    if (changedPath.startsWith("packages/mermaid-renderer/")) {
+      lanes.ui = true;
+      lanes.coreTests = true;
+      reasons.push(`${changedPath}: shared browser renderer`);
+      continue;
+    }
+
     if (facts.surface === "source" || facts.surface === "package") {
       if (facts.isChangedLaneTest) {
         lanes.coreTests = true;

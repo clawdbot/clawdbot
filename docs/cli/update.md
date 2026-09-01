@@ -164,7 +164,10 @@ Plugin artifacts that require capability consent are not installed without an
 interactive review or explicit `--accept-capabilities`. `--yes` alone does not
 accept capability changes, and JSON mode does not prompt. An unresolved review
 preserves the previous plugin, exits non-zero, and blocks any requested Gateway
-restart.
+restart. This also applies when a bundled plugin moves to an external package or
+a missing configured plugin has no install record yet. Automatic repair can
+report a deferred replacement as a notice when a usable, enabled artifact remains
+installed; that retained artifact still undergoes payload validation.
 
 If the core package has already changed, run `openclaw update repair` in an
 interactive terminal to review plugin capabilities. After reviewing the changes,

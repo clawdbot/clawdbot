@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { readArtifactRecord } from "../../scripts/lib/build-artifact-cache.mts";
 import { TSDOWN_NON_SDK_DTS_CONFIG_GROUPS } from "../../scripts/lib/tsdown-config-groups.mts";
+import { resolveTsdownDeclarationGeneratorInputs } from "../../scripts/lib/tsdown-declaration-generator-inputs.mts";
 import {
   createFixture,
   declarationInputs,
@@ -14,6 +15,95 @@ import {
 } from "./tsdown-declaration-fixture.js";
 
 describe("write-unified-entry-dts", () => {
+  it("owns the executable generator closure without unrelated CI planning code", () => {
+    const root = process.cwd();
+    const closure = resolveTsdownDeclarationGeneratorInputs(
+      root,
+      "scripts/write-unified-entry-dts.ts",
+    ).map((file) => path.relative(root, file).split(path.sep).join("/"));
+
+    expect(closure).toEqual(
+      expect.arrayContaining([
+        "scripts/lib/tsdown-declaration-generator-inputs.mts",
+        "scripts/lib/plugin-sdk-entrypoints.json",
+        "scripts/lib/record-shared.mjs",
+        "packages/normalization-core/src/mountinfo-path.ts",
+        "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
+        "src/state/openclaw-state-schema.sql",
+        "src/state/openclaw-agent-schema.sql",
+      ]),
+    );
+    expect(closure).not.toContain("scripts/lib/ci-node-test-plan.mts");
+  });
+
+  it.each([
+    ["unowned dynamic", "\nvoid import(generatorTarget);\n", "Unresolved dynamic module edges"],
+    ["unresolved static", '\nimport "./missing-generator-owner.mts";\n', "Unresolved import"],
+  ])("rejects an %s edge in the real generator graph", (_name, injected, message) => {
+    const readFileSync = fs.readFileSync.bind(fs);
+    const read = vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
+      const contents = readFileSync(file, options);
+      return typeof contents === "string" && String(file).endsWith("numeric-options.mjs")
+        ? `${contents}${injected}`
+        : contents;
+    });
+    try {
+      expect(() =>
+        resolveTsdownDeclarationGeneratorInputs(
+          process.cwd(),
+          "scripts/write-unified-entry-dts.ts",
+        ),
+      ).toThrow(message);
+    } finally {
+      read.mockRestore();
+    }
+  });
+
+  it("rejects a same-count computed import retarget", () => {
+    const readFileSync = fs.readFileSync.bind(fs);
+    const read = vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
+      const contents = readFileSync(file, options);
+      return typeof contents === "string" && String(file).endsWith("tsx-cli-shim.mjs")
+        ? contents.replace(
+            "resolveTsxImport(SHIM_CHECKOUT_ROOT)",
+            "resolveTsxImport(process.cwd())",
+          )
+        : contents;
+    });
+    try {
+      expect(() =>
+        resolveTsdownDeclarationGeneratorInputs(
+          process.cwd(),
+          "scripts/write-unified-entry-dts.ts",
+        ),
+      ).toThrow("Unresolved dynamic module edges");
+    } finally {
+      read.mockRestore();
+    }
+  });
+
+  it("leaves physical and external installed dependencies to lockfile topology", () => {
+    const root = process.cwd();
+    const list = () =>
+      resolveTsdownDeclarationGeneratorInputs(root, "scripts/write-unified-entry-dts.ts").map(
+        (file) => path.relative(root, file).split(path.sep).join("/"),
+      );
+    expect(list().some((file) => file.endsWith("/typescript/lib/typescript.d.ts"))).toBe(false);
+
+    const realpathSync = fs.realpathSync.bind(fs);
+    const realpath = vi.spyOn(fs, "realpathSync").mockImplementation((file, options) => {
+      const name = String(file).replaceAll("\\", "/");
+      return name.endsWith("/node_modules/typescript/lib/typescript.d.ts")
+        ? path.join(root, "node_modules/typescript/lib/typescript.d.ts")
+        : realpathSync(file, options as never);
+    });
+    try {
+      expect(list().some((file) => file.endsWith("/typescript/lib/typescript.d.ts"))).toBe(false);
+    } finally {
+      realpath.mockRestore();
+    }
+  });
+
   it("reuses six complete unified groups after unrelated byte edits while rebuilding runtime", () => {
     const { root, write, production, declarations } = createFixture(
       TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
@@ -113,6 +203,10 @@ describe("write-unified-entry-dts", () => {
     write("test/unrelated.test.ts", "export const test = 2;\n");
     write("ui/unrelated.ts", "export const view = 2;\n");
     write(".github/workflows/unrelated.yml", "name: unrelated after\n");
+    fs.appendFileSync(
+      path.join(root, "scripts/lib/ci-node-test-plan.mts"),
+      "\n// Unrelated CI planning edit.\n",
+    );
     fs.rmSync(path.join(root, "dist"), { recursive: true });
     for (const [file, bytes] of Object.entries(preserved)) {
       write(file, bytes);

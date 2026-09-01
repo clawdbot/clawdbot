@@ -130,6 +130,7 @@ function evaluateWorkflowExpression(
     runAttempt: number;
     steps?: Record<string, { outputs: Record<string, string> }>;
     targetContextRef?: string;
+    targetRef?: string;
     workflowSha?: string;
   },
 ) {
@@ -177,6 +178,7 @@ function evaluateWorkflowExpression(
       dispatch_id: context.dispatchId ?? "",
       release_gate: context.releaseGate ?? false,
       target_context_ref: context.targetContextRef ?? "",
+      target_ref: context.targetRef ?? "",
     },
     matrix: context.matrix ?? {},
     runner: { environment: context.runnerEnvironment ?? "" },
@@ -215,6 +217,39 @@ function runCiGateFixture(requiredResults: string, selectedResults: string) {
 
 function quoteShell(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+function runPreflightNodeInvocation(
+  script: string,
+  options: {
+    checkoutRevision: string;
+    eventName: "pull_request" | "push" | "workflow_dispatch";
+    workflowRevision: string;
+  },
+) {
+  const root = tempDirs.make("openclaw-preflight-runtime-");
+  const binDir = path.join(root, "bin");
+  const argsPath = path.join(root, "node-args");
+  mkdirSync(binDir, { recursive: true });
+  const nodePath = path.join(binDir, "node");
+  writeFileSync(
+    nodePath,
+    '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$OPENCLAW_NODE_ARGS"\ncat >/dev/null\n',
+  );
+  chmodSync(nodePath, 0o755);
+  const result = spawnSync("bash", ["-c", script], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GITHUB_EVENT_NAME: options.eventName,
+      OPENCLAW_CI_CHECKOUT_REVISION: options.checkoutRevision,
+      OPENCLAW_CI_WORKFLOW_REVISION: options.workflowRevision,
+      OPENCLAW_NODE_ARGS: argsPath,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+    },
+  });
+  expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+  return readFileSync(argsPath, "utf8").trim().split("\n");
 }
 
 function runWorkflowShellScript(
@@ -7159,6 +7194,101 @@ server.listen(0, "127.0.0.1", () => {
     expect(manualCheckoutStep.run).toContain("workflow_dispatch target_ref");
   });
 
+  it("uses native preflight tooling unless a dispatch selects a different revision", () => {
+    const workflow = readCiWorkflow();
+    const steps = workflow.jobs.preflight.steps as WorkflowStep[];
+    const setupPnpm = expectDefined(
+      steps.find((step) => step.name === "Setup manifest pnpm"),
+      "manifest pnpm setup",
+    );
+    const installDependencies = expectDefined(
+      steps.find((step) => step.name === "Install manifest dependencies"),
+      "manifest dependency install",
+    );
+    const buildManifest = expectDefined(
+      steps.find((step) => step.name === "Build CI manifest"),
+      "manifest builder",
+    );
+    const checkProtocolCoverage = expectDefined(
+      steps.find((step) => step.name === "Check mobile protocol event coverage"),
+      "protocol coverage owner",
+    );
+    const workflowSha = "a".repeat(40);
+    const otherSha = "b".repeat(40);
+    const cases = [
+      ["same-revision dispatch", "workflow_dispatch", workflowSha, "", false, false],
+      [
+        "same-revision explicit target dispatch",
+        "workflow_dispatch",
+        workflowSha,
+        workflowSha,
+        false,
+        false,
+      ],
+      ["same-revision release gate", "workflow_dispatch", workflowSha, workflowSha, true, false],
+      ["push", "push", otherSha, "", false, false],
+      ["pull request", "pull_request", otherSha, "", false, false],
+      ["different-revision dispatch", "workflow_dispatch", otherSha, otherSha, false, true],
+      ["different-revision release gate", "workflow_dispatch", otherSha, otherSha, true, true],
+    ] as const;
+
+    for (const [
+      label,
+      eventName,
+      checkoutRevision,
+      targetRef,
+      releaseGate,
+      usesCompatibilityTooling,
+    ] of cases) {
+      const context = {
+        eventName,
+        releaseGate,
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        steps: { checkout_ref: { outputs: { sha: checkoutRevision } } },
+        targetRef,
+        workflowSha,
+      };
+      const evaluateStep = (step: WorkflowStep) =>
+        evaluateWorkflowExpression(`\${{ ${step.if} }}`, context);
+      expect([evaluateStep(setupPnpm), evaluateStep(installDependencies)], label).toEqual([
+        usesCompatibilityTooling,
+        usesCompatibilityTooling,
+      ]);
+      const invocationOptions = (step: WorkflowStep) => ({
+        checkoutRevision: String(
+          evaluateWorkflowExpression(step.env?.OPENCLAW_CI_CHECKOUT_REVISION, context),
+        ),
+        eventName,
+        workflowRevision: String(
+          evaluateWorkflowExpression(step.env?.OPENCLAW_CI_WORKFLOW_REVISION, context),
+        ),
+      });
+      expect(
+        runPreflightNodeInvocation(
+          expectDefined(buildManifest.run, "manifest script"),
+          invocationOptions(buildManifest),
+        ),
+        label,
+      ).toEqual(
+        usesCompatibilityTooling
+          ? ["--import", "tsx", "--input-type=module"]
+          : ["--input-type=module"],
+      );
+      expect(
+        runPreflightNodeInvocation(
+          expectDefined(checkProtocolCoverage.run, "protocol coverage script"),
+          invocationOptions(checkProtocolCoverage),
+        ),
+        label,
+      ).toEqual([
+        usesCompatibilityTooling
+          ? "scripts/check-protocol-event-coverage.mjs"
+          : "scripts/check-protocol-event-coverage.mts",
+      ]);
+    }
+  });
+
   it("keeps manual candidates separate from trusted cache authority", () => {
     const workflow = readCiWorkflow();
     const preflight = workflow.jobs.preflight;
@@ -8552,8 +8682,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       (step: WorkflowStep) => step.name === "Run check shard",
     ).run;
 
-    // Push/PR preflight is dependency-free and runs the .mts natively;
-    // dispatches (frozen targets) keep the tsx shim path.
+    // Current-source preflight runs the .mts natively; dispatches selecting
+    // another revision retain that target's tsx shim.
     expect(coverageStep.run).toContain("node scripts/check-protocol-event-coverage.mts");
     expect(coverageStep.run).toContain("node scripts/check-protocol-event-coverage.mjs");
     expect(coverageStep.if).toBe("steps.manifest.outputs.run_protocol_event_coverage == 'true'");

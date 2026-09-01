@@ -714,7 +714,11 @@ export function installSessionToolResultGuard(
     copyCodeModeSourceAppend(message, runOwnedMessage, sourceAppend);
     const parentEntryId = sessionManager.getLeafId();
     const appendParentEntryId = sessionManager.getAppendParentId();
-    const { entryId, anchor } = withRuntimeUserTurnTranscriptRecorder(runOwnedMessage, () =>
+    const {
+      entryId,
+      anchor,
+      message: persistedMessage,
+    } = withRuntimeUserTurnTranscriptRecorder(runOwnedMessage, () =>
       originalAppendWithTranscriptAnchor(
         runOwnedMessage as never,
         sourceAppend
@@ -722,11 +726,6 @@ export function installSessionToolResultGuard(
           : options,
       ),
     );
-    const entry = sessionManager.getEntry(entryId);
-    if (entry?.type !== "message") {
-      throw new Error(`Appended transcript message is unavailable: ${entryId}`);
-    }
-    const persistedMessage = entry.message;
     // Destructive tool-side state commits only after this exact result is durable.
     acknowledgeInternalToolResult(acknowledgementSource);
     const persistedId =
