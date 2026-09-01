@@ -97,6 +97,13 @@ suite.define(() => {
         const reset = picker.getByRole("button", { name: "Reset to default", exact: true });
         await expect
           .poll(() =>
+            reset.evaluate(
+              (element) => element.previousElementSibling?.getAttribute("role") ?? null,
+            ),
+          )
+          .toBe("separator");
+        await expect
+          .poll(() =>
             reset.evaluateAll((elements) =>
               elements.some((element) => element === document.activeElement),
             ),

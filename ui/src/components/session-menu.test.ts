@@ -142,7 +142,7 @@ function selectMenuValue(menu: SessionMenuElement, value: string) {
 }
 
 describe("session menu", () => {
-  it("dispatches the same canonical owner from the self shortcut and submenu", async () => {
+  it("puts the self shortcut first in the owner submenu and dispatches canonical owners", async () => {
     const onAction = vi.fn<(action: SessionMenuAction) => void>();
     const onClose = vi.fn();
     const selfOwner = { type: "human", id: "profile-ada", label: "Ada" } as const;
@@ -154,6 +154,11 @@ describe("session menu", () => {
       onClose,
     });
     const selected = menuItem(menu, "Research");
+    const submenu = menuItem(menu, "Assign to…");
+    expect(menuItemLabels(menu).filter((label) => label.startsWith("Assign to"))).toEqual([
+      "Assign to…",
+    ]);
+    expect(menuItemLabels(submenu)).toEqual(["Assign to me", "Ada", "Research"]);
     expect(selected.getAttribute("role")).toBe("menuitemradio");
     expect(selected.getAttribute("aria-checked")).toBe("true");
     expect(selected.disabled).toBe(true);
@@ -287,7 +292,7 @@ describe("session menu", () => {
     await menu.updateComplete;
     selectMenuValue(menu, "compact:open-assign-owner");
     await menu.updateComplete;
-    expect(menuItemLabels(menu)).toEqual(["Back", "Ada", "Research owner"]);
+    expect(menuItemLabels(menu)).toEqual(["Back", "Assign to me", "Ada", "Research owner"]);
 
     selectMenuValue(menu, "compact:back");
     await menu.updateComplete;
@@ -626,6 +631,7 @@ describe("session menu", () => {
     choices[1]?.click();
     expect(onAction).toHaveBeenCalledWith({ kind: "set-icon", icon: "🚀" });
     const remove = submenu.querySelector<HTMLButtonElement>(".session-menu__icon-remove");
+    expect(remove?.previousElementSibling?.getAttribute("role")).toBe("separator");
     expect(remove?.textContent?.trim()).toBe("Reset to default");
     remove?.click();
     expect(onAction).toHaveBeenCalledWith({ kind: "reset-appearance" });

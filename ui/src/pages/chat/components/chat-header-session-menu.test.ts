@@ -454,7 +454,7 @@ describe("chat header session menu", () => {
     expect(splitRight).toHaveBeenCalledOnce();
   });
 
-  it("offers direct and submenu owner assignment", async () => {
+  it("offers self and named owner assignment in one submenu", async () => {
     const onAction = vi.fn<(action: HeaderMenuAction) => void>();
     const ada = { type: "human", id: "profile-ada", label: "Ada" } as const;
     const research = { type: "agent", id: "research:one", label: "Research" } as const;
@@ -465,11 +465,15 @@ describe("chat header session menu", () => {
       onAction,
     });
 
-    expect(item(menu, "Assign to me").disabled).toBe(false);
     const submenu = item(menu, "Assign to…");
     expect(
+      Array.from(menu.querySelectorAll<MenuItemElement>(":scope > wa-dropdown > wa-dropdown-item"))
+        .map(itemLabel)
+        .filter((label) => label.startsWith("Assign to")),
+    ).toEqual(["Assign to…"]);
+    expect(
       Array.from(submenu.querySelectorAll("wa-dropdown-item[slot='submenu']")).map(itemLabel),
-    ).toEqual(["Ada", "Research"]);
+    ).toEqual(["Assign to me", "Ada", "Research"]);
     const selected = item(menu, "Research");
     expect(selected.getAttribute("role")).toBe("menuitemradio");
     expect(selected.getAttribute("aria-checked")).toBe("true");
@@ -615,7 +619,7 @@ describe("chat header session menu", () => {
       Array.from(
         menu.querySelectorAll<MenuItemElement>(":scope > wa-dropdown > wa-dropdown-item"),
       ).map(itemLabel),
-    ).toEqual(["Back", "Ada", "Research"]);
+    ).toEqual(["Back", "Assign to me", "Ada", "Research"]);
     select(menu, "assign-owner:human:profile-ada");
     expect(onAction).toHaveBeenCalledWith({
       kind: "assign-owner",
