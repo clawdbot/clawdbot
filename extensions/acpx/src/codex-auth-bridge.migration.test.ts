@@ -17,6 +17,7 @@ import { resolveAcpxPluginConfig } from "./config.js";
 const execFileAsync = promisify(execFile);
 let testWorkspace: TempWorkspace;
 const previousEnv = {
+  CODEX_CONFIG: process.env.CODEX_CONFIG,
   CODEX_HOME: process.env.CODEX_HOME,
   OPENCLAW_AGENT_DIR: process.env.OPENCLAW_AGENT_DIR,
 };
@@ -74,12 +75,42 @@ function expectClaudeWrapperCommand(command: string | undefined, wrapperPath: st
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  restoreEnv("CODEX_CONFIG");
   restoreEnv("CODEX_HOME");
   restoreEnv("OPENCLAW_AGENT_DIR");
   await testWorkspace.cleanup();
 });
 
 describe("prepareAcpxCodexAuthConfig command migration", () => {
+  it("uses final migrated legacy Codex overrides for policy identity", async () => {
+    const root = testWorkspace.dir;
+    const stateDir = path.join(root, "state");
+    process.env.CODEX_CONFIG = JSON.stringify({
+      model: "ambient-model",
+      model_provider: "openai",
+    });
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {
+        agents: {
+          codex: {
+            command:
+              "npx @zed-industries/codex-acp@0.12.0 -c=model='\"legacy-model\"' -c=model_provider='\"azure_foundry\"'",
+          },
+        },
+      },
+      workspaceDir: root,
+    });
+
+    const resolved = await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+      resolveInstalledCodexAcpBinPath: async () => path.join(root, "codex-acp.js"),
+    });
+
+    expect(resolved.codexModel).toBe("legacy-model");
+    expect(resolved.codexModelProvider).toBe("azure_foundry");
+  });
+
   it("migrates an explicitly configured Zed Codex ACP command to the local wrapper", async () => {
     const root = testWorkspace.dir;
     const sourceCodexHome = path.join(root, "source-codex");

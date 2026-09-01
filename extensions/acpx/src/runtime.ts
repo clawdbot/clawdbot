@@ -1934,7 +1934,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     const isCodexAcp = isCodexAcpCommand(command);
     if (
       key === "model" &&
-      isCodexAcp &&
+      (isCodexAcp || isClaudeAcpCommand(command)) &&
       this.pluginToolsMcpBridgeEnabled &&
       !shouldUseBridgeSafeDelegateForCommand(command)
     ) {

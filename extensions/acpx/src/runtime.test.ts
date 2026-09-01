@@ -2030,6 +2030,53 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(setConfigOption).not.toHaveBeenCalled();
   });
 
+  it.each(["anthropic/claude-opus-4-6", "amazon-bedrock/global.anthropic.claude-sonnet-5"])(
+    "requires a fresh Claude session to change managed plugin policy identity to %s",
+    async (value) => {
+      const claudeCommand = "npx @agentclientprotocol/claude-agent-acp";
+      const baseStore: TestSessionStore = {
+        load: vi.fn(async () => ({
+          acpxRecordId: "agent:claude:acp:test",
+          agentCommand: claudeCommand,
+        })),
+        save: vi.fn(async () => {}),
+      };
+      const { runtime } = makeRuntime(baseStore, {
+        pluginToolsMcpBridgeEnabled: true,
+        mcpServers: [
+          {
+            name: "openclaw-plugin-tools",
+            command: "node",
+            args: ["dist/mcp/plugin-tools-serve.js"],
+            env: [],
+          },
+        ],
+      });
+      const managedDelegate = (
+        runtime as unknown as {
+          resolveManagedToolsDelegateForSession(target: { sessionKey: string; model?: string }): {
+            setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
+          };
+        }
+      ).resolveManagedToolsDelegateForSession({
+        sessionKey: "agent:claude:acp:test",
+        model: "anthropic/claude-sonnet-4-6",
+      });
+      const setConfigOption = vi.spyOn(managedDelegate, "setConfigOption");
+      const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
+        sessionKey: "agent:claude:acp:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:claude:acp:test",
+        acpxRecordId: "agent:claude:acp:test",
+      };
+
+      await expect(runtime.setConfigOption({ handle, key: "model", value })).rejects.toMatchObject({
+        code: "ACP_BACKEND_UNSUPPORTED_CONTROL",
+      });
+      expect(setConfigOption).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps model changes for bridge-safe sessions when plugin tools are enabled", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({

@@ -225,6 +225,56 @@ describe("plugin tools MCP server", () => {
     expect(tools.map((tool) => tool.name)).toEqual(["benign_plugin_tool"]);
   });
 
+  it("denies list and call for a migrated non-OpenAI provider identity", async () => {
+    const deniedExecute = vi.fn().mockResolvedValue({ content: "unexpected" });
+    const benignExecute = vi.fn().mockResolvedValue({ content: "allowed" });
+    loadManifestContractSnapshotMock.mockReturnValue({
+      plugins: [{ providers: ["azure_foundry"] }],
+    });
+    resolvePluginToolsMock.mockReturnValue([
+      {
+        name: "provider_denied_tool",
+        description: "Provider-denied tool",
+        parameters: { type: "object", properties: {} },
+        execute: deniedExecute,
+      },
+      {
+        name: "benign_plugin_tool",
+        description: "Benign tool",
+        parameters: { type: "object", properties: {} },
+        execute: benignExecute,
+      },
+    ] as unknown as AnyAgentTool[]);
+    const config = {
+      plugins: { enabled: true },
+      models: { providers: { azure_foundry: {} } },
+      tools: {
+        byProvider: {
+          "azure_foundry/legacy-model": { deny: ["provider_denied_tool"] },
+        },
+      },
+    } as never;
+    const { resolvePluginToolsForMcp } = await import("./plugin-tools-serve.js");
+
+    const tools = resolvePluginToolsForMcp({
+      config,
+      modelRef: "azure_foundry/legacy-model",
+    });
+    const handlers = createPluginToolsMcpHandlers(tools);
+
+    await expect(handlers.listTools()).resolves.toMatchObject({
+      tools: [{ name: "benign_plugin_tool" }],
+    });
+    await expect(handlers.callTool({ name: "provider_denied_tool" })).resolves.toMatchObject({
+      isError: true,
+    });
+    expect(deniedExecute).not.toHaveBeenCalled();
+    await expect(handlers.callTool({ name: "benign_plugin_tool" })).resolves.toMatchObject({
+      content: [{ type: "text", text: "allowed" }],
+    });
+    expect(benignExecute).toHaveBeenCalledOnce();
+  });
+
   it("routes logs to stderr before resolving tools for stdio", async () => {
     const { servePluginToolsMcp } = await import("./plugin-tools-serve.js");
     const runtimeRegistry = createMockPluginRegistry([]);

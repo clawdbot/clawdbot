@@ -935,11 +935,14 @@ async function persistMigratedCodexMcpConfig(params: {
   await fs.writeFile(configPath, stringifyToml(merged as TomlTableWithoutBigInt), "utf8");
 }
 
-async function resolvePreparedCodexModelIdentity(codexHome: string): Promise<{
+async function resolvePreparedCodexModelIdentity(params: {
+  codexHome: string;
+  migratedConfig?: Record<string, unknown>;
+}): Promise<{
   codexModel?: string;
   codexModelProvider?: string;
 }> {
-  const configPath = path.join(codexHome, "config.toml");
+  const configPath = path.join(params.codexHome, "config.toml");
   // SAFETY: smol-toml parses a complete TOML document into its root table.
   let config = parseToml(await fs.readFile(configPath, "utf8")) as Record<string, unknown>;
   const envConfig = process.env.CODEX_CONFIG?.trim();
@@ -955,6 +958,11 @@ async function resolvePreparedCodexModelIdentity(codexHome: string): Promise<{
       // Keep policy identity unknown so it cannot authorize tools beforehand.
       return {};
     }
+  }
+  if (params.migratedConfig) {
+    // The legacy wrapper applies its migrated config after ambient CODEX_CONFIG at launch.
+    // Derive authorization identity from that same final precedence.
+    config = mergeConfigRecords(config, params.migratedConfig);
   }
   const configuredProvider = config.model_provider;
   const codexModelProvider =
@@ -1004,7 +1012,10 @@ export async function prepareAcpxCodexAuthConfig(params: {
     codexHome,
     migratedConfig: codexLaunch?.migratedConfig,
   });
-  const codexModelIdentity = await resolvePreparedCodexModelIdentity(codexHome);
+  const codexModelIdentity = await resolvePreparedCodexModelIdentity({
+    codexHome,
+    migratedConfig: codexLaunch?.migratedConfig,
+  });
   const installedCodexBinPath = await (
     params.resolveInstalledCodexAcpBinPath ?? resolveInstalledCodexAcpBinPath
   )();
