@@ -144,13 +144,12 @@ async function writeConcurrentHandoffParams(params: {
         parentExitTimeoutMs: 5_000,
         handoffId: params.owner,
         updateLeaseOwner: params.owner,
-        ...(params.stateDatabasePath === undefined
-          ? {}
-          : { stateDatabasePath: params.stateDatabasePath }),
-        ...(params.leaseDatabasePath === undefined
-          ? {}
-          : { updateLeaseDatabasePath: params.leaseDatabasePath }),
+        stateDatabasePath: params.stateDatabasePath ?? params.baseParams.stateDatabasePath,
+        updateLeaseDatabasePath:
+          params.leaseDatabasePath ?? params.baseParams.updateLeaseDatabasePath,
         commandArgv: params.commandArgv,
+        triageCommandArgv: [process.execPath, "-e", "process.exit(0)", "--"],
+        triageContextPath: path.join(params.tmpDir, `${params.name}-failure.json`),
         logPath: path.join(params.tmpDir, `${params.name}.log`),
         sensitivePaths: [],
       },
