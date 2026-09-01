@@ -29,4 +29,4 @@ Use the memory plugin docs for embedding provider setup, storage paths, indexing
 
 - Plugin id: `memory-lancedb`
 - Package: `@openclaw/memory-lancedb`
-- Minimum OpenClaw host: `2026.4.10`
+- Minimum OpenClaw host: `2026.5.31`
