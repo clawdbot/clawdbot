@@ -3675,6 +3675,12 @@ describe("initSessionState reset authorization", () => {
             }
           : {}),
       });
+      // Materialize the existing transcript so an allowed reset appends a durable
+      // boundary; a never-materialized transcript correctly gets none.
+      await appendTranscriptMessage(
+        { storePath, sessionId: existingSessionId, sessionKey },
+        { message: { role: "user", content: "existing turn" } },
+      );
       setActivePluginRegistry(
         createTestRegistry([
           {
