@@ -202,9 +202,11 @@ class ComposerDictationSession {
       }
     });
     if (waitForTerminal) {
-      // The late-final wait and close start independently of create/audio append,
-      // so a stalled create or append request cannot prevent the bounded Stop.
-      void this.closeRemote();
+      // Close needs the session id from create; audio append is not required for
+      // close. Wait for create, send close, then start the bounded final-drain
+      // deadline once the close sequence can actually begin.
+      await startPromise;
+      await this.closeRemote();
       await this.waitForCloseEvent();
     } else {
       await startPromise;
