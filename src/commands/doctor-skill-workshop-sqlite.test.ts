@@ -8,7 +8,11 @@ import {
   listSkillProposals,
   reviseSkillProposal,
 } from "../skills/workshop/service.js";
-import { hashSkillProposalContent, readSkillProposalRollback } from "../skills/workshop/store.js";
+import {
+  hashSkillProposalContent,
+  importLegacySkillProposal,
+  readSkillProposalRollback,
+} from "../skills/workshop/store.js";
 import {
   SKILL_WORKSHOP_ROLLBACK_SCHEMA,
   SKILL_WORKSHOP_SCHEMA,
@@ -408,6 +412,15 @@ describe("doctor Skill Workshop SQLite migration", () => {
       "# Orphan proof\n",
       "utf8",
     );
+    const previousRecoveryDir = path.join(
+      testState.stateDir,
+      "skill-workshop",
+      "recovery",
+      "proposals",
+      proposalId,
+    );
+    await fs.mkdir(previousRecoveryDir, { recursive: true });
+    await fs.writeFile(path.join(previousRecoveryDir, "prior.md"), "prior recovery\n", "utf8");
 
     const result = await migrateLegacySkillWorkshopProposals({
       config: {
@@ -423,22 +436,32 @@ describe("doctor Skill Workshop SQLite migration", () => {
     expect(result.changes.join("\n")).toContain(
       `Quarantined incomplete Skill Workshop proposal ${proposalId}`,
     );
-    // The source is out of active discovery (no repeat warning on the next run).
+    const second = await migrateLegacySkillWorkshopProposals({
+      config: {
+        agents: {
+          entries: {
+            main: { default: true, workspace: workspaceDir },
+          },
+        },
+      },
+    });
+    expect(second).toEqual({ changes: [], warnings: [], detected: 0, migrated: 0 });
     await expect(fs.access(proposalDir)).rejects.toThrow();
-    // Remaining artifacts are preserved under the Doctor recovery archive.
+    await expect(fs.readFile(path.join(previousRecoveryDir, "prior.md"), "utf8")).resolves.toBe(
+      "prior recovery\n",
+    );
+    const recoveryRoot = path.dirname(previousRecoveryDir);
+    const recoveryDirs = (await fs.readdir(recoveryRoot)).filter((name) =>
+      name.startsWith(`${proposalId}-`),
+    );
+    expect(recoveryDirs).toHaveLength(1);
+    const recoveredProposalDir = recoveryDirs[0];
+    if (!recoveredProposalDir) {
+      throw new Error("expected one recovered proposal directory");
+    }
     await expect(
-      fs.access(
-        path.join(
-          testState.stateDir,
-          "skill-workshop",
-          "recovery",
-          "proposals",
-          proposalId,
-          "references",
-          "proof.md",
-        ),
-      ),
-    ).resolves.toBeUndefined();
+      fs.readFile(path.join(recoveryRoot, recoveredProposalDir, "references", "proof.md"), "utf8"),
+    ).resolves.toBe("# Orphan proof\n");
   });
 
   it("quarantines a legacy directory with proposal.json but no PROPOSAL.md", async () => {
@@ -499,17 +522,35 @@ describe("doctor Skill Workshop SQLite migration", () => {
     );
     await expect(fs.access(proposalDir)).rejects.toThrow();
     // The metadata JSON sidecar is preserved for manual recovery.
+    const recoveryRoot = path.join(testState.stateDir, "skill-workshop", "recovery", "proposals");
+    const recoveryDirs = (await fs.readdir(recoveryRoot)).filter((name) =>
+      name.startsWith(`${proposalId}-`),
+    );
+    expect(recoveryDirs).toHaveLength(1);
+    const recoveryDir = recoveryDirs[0];
+    if (!recoveryDir) {
+      throw new Error("expected one recovered proposal directory");
+    }
     await expect(
-      fs.access(
-        path.join(
-          testState.stateDir,
-          "skill-workshop",
-          "recovery",
-          "proposals",
-          proposalId,
-          "proposal.json",
-        ),
-      ),
+      fs.access(path.join(recoveryRoot, recoveryDir, "proposal.json")),
+    ).resolves.toBeUndefined();
+
+    importLegacySkillProposal({ record, ownerAgentId: "main", workspaceDir });
+    await fs.mkdir(path.join(proposalDir, "references"), { recursive: true });
+    await fs.writeFile(path.join(proposalDir, "references", "leftover.md"), "leftover\n", "utf8");
+    await expect(
+      migrateLegacySkillWorkshopProposals({
+        config: {
+          agents: {
+            entries: {
+              main: { default: true, workspace: workspaceDir },
+            },
+          },
+        },
+      }),
+    ).resolves.toEqual({ changes: [], warnings: [], detected: 1, migrated: 0 });
+    await expect(
+      fs.access(path.join(proposalDir, "references", "leftover.md")),
     ).resolves.toBeUndefined();
   });
 

@@ -1,5 +1,5 @@
 /** Doctor-owned migration of Skill Workshop proposal metadata into shared SQLite. */
-import fs from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -12,6 +12,7 @@ import {
   hashSkillProposalContent,
   importLegacySkillProposal,
   readSkillProposal,
+  readSkillProposalRecord,
   readSkillProposalRollback,
   validateSkillProposalRecord,
   validateSkillProposalRollback,
@@ -182,7 +183,7 @@ async function migrateProposal(params: {
   return result;
 }
 
-type OrphanDisposition = "removed-empty" | "quarantined";
+type OrphanDisposition = { kind: "removed-empty" } | { kind: "quarantined"; recoveryPath: string };
 
 /**
  * Reconcile a confirmed-incomplete legacy proposal directory that cannot be
@@ -193,31 +194,19 @@ type OrphanDisposition = "removed-empty" | "quarantined";
 async function reconcileIncompleteProposal(params: {
   proposalId: string;
   proposalDir: string;
-  stateDir: string;
+  stateRoot: Root;
 }): Promise<OrphanDisposition> {
-  const stateRoot = await root(params.stateDir);
-  const entries = await stateRoot.list(params.proposalDir, { withFileTypes: true });
+  const entries = await params.stateRoot.list(params.proposalDir, { withFileTypes: true });
   if (entries.length === 0) {
-    await stateRoot.remove(params.proposalDir);
-    return "removed-empty";
+    await params.stateRoot.remove(params.proposalDir);
+    return { kind: "removed-empty" };
   }
-  const recoveryProposalsDir = path.join(params.stateDir, RECOVERY_PROPOSALS_DIR);
-  await fs.mkdir(recoveryProposalsDir, { recursive: true });
-  // The recovery archive is Doctor-owned: clear any stale quarantine of the same
-  // proposal before moving the current one, then atomically relocate the whole
-  // tree so no artifact is dropped. removePathWithinRoot expects a root-relative
-  // path, not an absolute one.
-  const destination = path.join(recoveryProposalsDir, params.proposalId);
-  const destinationRelative = `${RECOVERY_PROPOSALS_DIR}/${params.proposalId}`;
-  await removePathWithinRoot({ rootDir: params.stateDir, relativePath: destinationRelative }).catch(
-    (error: unknown) => {
-      if (!isMissingPathError(error)) {
-        throw error;
-      }
-    },
-  );
-  await fs.rename(path.join(params.stateDir, params.proposalDir), destination);
-  return "quarantined";
+  await params.stateRoot.mkdir(RECOVERY_PROPOSALS_DIR);
+  // A unique target preserves earlier recovery artifacts without an unsafe
+  // check-then-replace window. The fs-safe move pins both directory parents.
+  const recoveryPath = `${RECOVERY_PROPOSALS_DIR}/${params.proposalId}-${randomUUID()}`;
+  await params.stateRoot.move(params.proposalDir, recoveryPath, { overwrite: true });
+  return { kind: "quarantined", recoveryPath };
 }
 
 /** Import verified legacy proposal sidecars, then remove only the imported JSON metadata. */
@@ -278,19 +267,19 @@ export async function migrateLegacySkillWorkshopProposals(params: {
         warnings.push(`Failed to migrate Skill Workshop proposal ${proposalId}: ${String(error)}`);
         continue;
       }
-      if (await readSkillProposal(proposalId, { env }, {}, { reconcile: false })) {
+      if (await readSkillProposalRecord(proposalId, { env }, {}, { reconcile: false })) {
         continue;
       }
       try {
         const disposition = await reconcileIncompleteProposal({
           proposalId,
           proposalDir,
-          stateDir,
+          stateRoot,
         });
         changes.push(
-          disposition === "removed-empty"
+          disposition.kind === "removed-empty"
             ? `Removed empty legacy Skill Workshop proposal directory ${proposalId}.`
-            : `Quarantined incomplete Skill Workshop proposal ${proposalId} to ${RECOVERY_PROPOSALS_DIR}/${proposalId} for manual recovery.`,
+            : `Quarantined incomplete Skill Workshop proposal ${proposalId} to ${disposition.recoveryPath} for manual recovery.`,
         );
       } catch (reconcileError) {
         warnings.push(
