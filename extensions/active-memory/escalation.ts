@@ -43,6 +43,18 @@ const LOCALIZED_RECALL_INTENT_PATTERNS = [
     retrospective:
       /(?:지난\s*(?:번|주|달)|저번|예전|어제).{0,24}(?:논의했|(?:이야기|얘기|대화)했|말했|언급했|결정했)/u,
   },
+  {
+    // -amos verbs are syncretic (present = past), so intent requires an
+    // adjacent past marker or recall-question construction; "lembra" needs a
+    // retrospective interrogative (o que/do que/quando/...) rather than a
+    // bare question mark, so "lembra de configurar isso?" stays a reminder.
+    intent:
+      /lembra(?:-se)?\s+(?:o\s+que|do\s+que|quando|onde|por\s+que|como|quem)\b|(?:ontem|anteontem|semana\s+passada|m[êe]s\s+passado|outro\s+dia|d[íi]a\s+desses|última\s+vez).{0,30}(?:discutimos|conversamos|decidimos|falamos|combinamos|investigamos)|(?:discutimos|conversamos|decidimos|falamos|combinamos|investigamos).{0,30}(?:ontem|anteontem|semana\s+passada|m[êe]s\s+passado|outro\s+dia|d[íi]a\s+desses|última\s+vez|hoje)|a\s+gente\s+(?:discutiu|decidiu|conversou|falou|combinou)|o\s+que\s+(?:decidimos|discutimos|conversamos|falamos|combinamos)/iu,
+    future:
+      /amanhã|amanha|depois\s+de\s+amanh[ãa]|pr[óo]xima\s+semana|pr[óo]ximo\s+(?:m[êe]s|ano)|daqui\s+a|no\s+futuro|em\s+breve|mais\s+tarde|hoje\s+à\s+(?:noite|tarde)/iu,
+    retrospective:
+      /(?:ontem|anteontem|semana\s+passada|m[êe]s\s+passado|outro\s+dia|d[íi]a\s+desses|última\s+vez).{0,30}(?:discutimos|conversamos|decidimos|falamos|combinamos|investigamos|discutiu|decidiu|conversou|falou|combinou)|(?:discutimos|conversamos|decidimos|falamos|combinamos|investigamos).{0,30}(?:ontem|semana\s+passada|m[êe]s\s+passado|outro\s+dia|última\s+vez)|lembra(?:-se)?\s+(?:o\s+que|do\s+que|quando|onde|por\s+que|como|quem)\b.{0,30}(?:decidimos|discutimos|conversamos|falamos|combinamos|investigamos)/iu,
+  },
 ];
 
 export function hasRecallIntent(message: string): boolean {

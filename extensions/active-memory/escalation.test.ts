@@ -46,6 +46,14 @@ describe("active-memory escalation", () => {
     "그 설정 기억나지요?",
     "그 설정 기억나죠?",
     "그 설정 기억나ㅋㅋ",
+    "Qual foi a causa raiz do problema que investigamos hoje?",
+    "Sem olhar a conversa atual: o que decidimos sobre o upgrade?",
+    "O que a gente discutiu ontem sobre memória?",
+    "Você lembra o que combinamos na semana passada?",
+    "O que decidimos da última vez?",
+    "Lembra-se do que conversamos outro dia?",
+    "Você lembra o que decidimos para amanhã?",
+    "Lembra o que discutimos para a próxima semana?",
   ])("recognizes recall intent in %j", (message) => {
     expect(hasRecallIntent(message)).toBe(true);
   });
@@ -159,6 +167,15 @@ describe("active-memory escalation", () => {
     "내일 기억나게 알려줘",
     "나중에 기억나도록 알림 설정해줘",
     "잊지 않게 내일 기억나게 해줘",
+    "Lembre de enviar o relatório amanhã",
+    "Me lembre amanhã",
+    "Lembra de configurar isso",
+    "Amanhã vamos decidir o upgrade",
+    "Lembra de enviar o relatório amanhã?",
+    "Lembra de enviar o relatório hoje à noite",
+    "Lembra de configurar isso?",
+    "Falamos inglês.",
+    "Discutimos o problema.",
   ])("does not mistake ordinary or future-facing %j for recall intent", (message) => {
     expect(hasRecallIntent(message)).toBe(false);
   });

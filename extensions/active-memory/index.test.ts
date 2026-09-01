@@ -842,6 +842,24 @@ describe("active-memory plugin", () => {
     expect(lastEmbeddedRunParams().lane).toBe("active-memory");
   });
 
+  it("escalates deep recall for Portuguese (PT-BR) retrospective prompts in escalate mode", async () => {
+    syncRuntimePluginConfig({ agents: ["main"], mode: "escalate", logging: true });
+
+    const result = await runPromptBuild({ prompt: "O que a gente discutiu ontem sobre memória?" });
+
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    expectPrependContextContains(result, "lemon pepper wings");
+  });
+
+  it("does not escalate deep recall for ordinary Portuguese (PT-BR) reminders in escalate mode", async () => {
+    syncRuntimePluginConfig({ agents: ["main"], mode: "escalate", logging: true });
+
+    const result = await runPromptBuild({ prompt: "Lembra de configurar isso?" });
+
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(result).toBeUndefined();
+  });
+
   it("creates and removes the exact SQLite recall session around the embedded run", async () => {
     let persistedEntryAtRun: Record<string, unknown> | undefined;
     runEmbeddedAgent.mockImplementationOnce(async (params: Record<string, unknown>) => {
