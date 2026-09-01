@@ -20,6 +20,7 @@ import {
 import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
+import { resolveSlackMarkdownOptions } from "../accounts.js";
 import { buildSlackBlocksFallbackText } from "../blocks-fallback.js";
 import { SLACK_MAX_BLOCKS } from "../blocks-input.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
@@ -40,6 +41,7 @@ import {
   hasSlackReplyStructuredContent,
   resolveSlackReplyBlockResolution,
   resolveSlackReplyBlocks,
+  resolveSlackReplyDeliveryMessages,
 } from "../reply-blocks.js";
 import type { SlackEventScope } from "./event-scope.js";
 import {
@@ -162,6 +164,7 @@ export async function deliverReplies(params: {
   /** Validated non-serializable client scope for an enterprise listener turn. */
   eventScope?: SlackEventScope;
 }) {
+  const markdownOptions = resolveSlackMarkdownOptions(params);
   let latestResult: SlackSendResult | undefined;
   for (const payload of params.replies) {
     if (payload.isReasoning === true) {
@@ -179,6 +182,7 @@ export async function deliverReplies(params: {
         : undefined;
     const materializeAuthoredText = !reply.hasMedia && hasSlackReplyStructuredContent(payload);
     const { authoredTextPlacement, segments } = resolveSlackReplyBlockResolution(payload, {
+      ...markdownOptions,
       materializeAuthoredText,
     });
     if (!textRaw && !reply.hasMedia && segments.length === 0) {
@@ -290,45 +294,20 @@ export async function deliverReplies(params: {
         delivered ||= mediaDelivery !== "empty";
       }
 
-      for (const segment of segments) {
-        if (segment.kind === "text") {
-          const text = [outsideText, segment.text].filter(Boolean).join("\n\n");
-          outsideText = "";
-          if (!text) {
-            continue;
-          }
-          hookParts.push(text);
-          for (const chunk of chunkSlackTextAtHardLimit(text)) {
-            lastResult = await sendReply({ text: chunk, threadTs, textIsSlackPlainText: true });
-            delivered = true;
-          }
-          continue;
+      const messages = resolveSlackReplyDeliveryMessages({
+        authoredTextPlacement,
+        segments,
+        text: outsideText,
+      });
+      for (const message of messages) {
+        hookParts.push(message.text);
+        const chunks = message.textIsSlackPlainText
+          ? chunkSlackTextAtHardLimit(message.text)
+          : [message.text];
+        for (const text of chunks) {
+          lastResult = await sendReply({ ...message, text, threadTs });
+          delivered = true;
         }
-        const baseText = outsideText;
-        outsideText = "";
-        const accessibilityText =
-          buildSlackNativeDataAccessibilityText(baseText, segment.blocks) ||
-          buildSlackBlocksFallbackText(segment.blocks);
-        hookParts.push(accessibilityText);
-        const segmentPlacement = baseText
-          ? "outside-blocks"
-          : authoredTextPlacement === "blocks"
-            ? "blocks"
-            : "none";
-        lastResult = await sendReply({
-          text: baseText,
-          threadTs,
-          blocks: segment.blocks,
-          authoredTextPlacement: segmentPlacement,
-          ...(baseText ? { nativeDataFallbackBaseText: baseText } : {}),
-        });
-        delivered = true;
-      }
-
-      if (outsideText && !reply.hasMedia) {
-        hookParts.push(outsideText);
-        lastResult = await sendReply({ text: outsideText, threadTs });
-        delivered = true;
       }
     } catch (error) {
       const hookContent = hookParts.join("\n\n") || textRaw || spokenText || "";
@@ -511,6 +490,7 @@ export async function deliverSlackSlashReplies(params: {
     const materializeAuthoredText = hasSlackReplyStructuredContent(payload);
     const { authoredTextPlacement, segments } = resolveSlackReplyBlockResolution(payload, {
       materializeAuthoredText,
+      tableMode: params.tableMode,
     });
     let outsideText = authoredTextPlacement === "outside-blocks" ? (textRaw ?? "") : "";
     const messages: PlannedSlashReplyMessage[] = [];

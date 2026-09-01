@@ -53,6 +53,26 @@ describe("chunkSlackMrkdwnText", () => {
     expect(chunks.every((chunk) => chunk.length > marker.length * 2)).toBe(true);
     expect(chunks.map((chunk) => chunk.slice(marker.length, -marker.length)).join("")).toBe(token);
   });
+
+  it.each([1, 2, 3])("preserves pending whitespace within a %s-character limit", (limit) => {
+    const chunks = chunkSlackMrkdwnText(" \t\n*y*", limit);
+    expect(chunks.every((chunk) => chunk.length <= limit)).toBe(true);
+    expect(chunks.join("").replaceAll("*", "")).toBe(" \t\ny");
+  });
+
+  it("reserves style overhead after a full leading whitespace chunk", () => {
+    const chunks = chunkSlackMrkdwnText(" ".repeat(3_000) + "*y*", 3_000);
+    expect(chunks.every((chunk) => chunk.length <= 3_000)).toBe(true);
+    expect(chunks.join("")).toBe(" ".repeat(3_000) + "*y*");
+  });
+
+  it.each(["*", "_", "~", "`", "```"])(
+    "preserves empty native %s pairs as literal bytes",
+    (marker) => {
+      const text = "x".repeat(3_000) + marker + marker + "tail";
+      expect(chunkSlackMrkdwnText(text, 3_000).join("")).toBe(text);
+    },
+  );
 });
 
 describe("normalizeSlackOutboundText", () => {

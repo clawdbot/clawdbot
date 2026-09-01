@@ -1125,7 +1125,6 @@ extensions/slack/src/approval-actions.ts	1
 extensions/slack/src/approval-handler.runtime.ts	1
 extensions/slack/src/approval-native-gates.ts	1
 extensions/slack/src/approval-native.ts	2
-extensions/slack/src/blocks-fallback.ts	2
 extensions/slack/src/blocks-input.ts	2
 extensions/slack/src/blocks-render.ts	1
 extensions/slack/src/channel-actions.ts	1
@@ -1180,7 +1179,7 @@ extensions/slack/src/post-message-identity.ts	1
 extensions/slack/src/probe.ts	2
 extensions/slack/src/progress-blocks.ts	1
 extensions/slack/src/reply-action-ids.ts	1
-extensions/slack/src/reply-blocks.ts	9
+extensions/slack/src/reply-blocks.ts	8
 extensions/slack/src/resolve-channels.ts	1
 extensions/slack/src/resolve-users.ts	1
 extensions/slack/src/scopes.ts	2

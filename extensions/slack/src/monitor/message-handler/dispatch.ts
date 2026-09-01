@@ -12,7 +12,6 @@ import {
   deliverWithFinalizableLivePreviewAdapter,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
   buildTtsSupplementMediaPayload,
   getReplyPayloadTtsSupplement,
@@ -56,6 +55,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     hasSlackCustomIdentity,
     hasRepliedRef,
     message,
+    markdownOptions,
     messageSentHookContext,
     messageSentHookTarget,
     onModelSelected,
@@ -220,7 +220,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     const reply = resolveSendableOutboundReplyParts(payload);
     const ttsSupplement = getReplyPayloadTtsSupplement(payload);
     const replySourceText = payload.text ?? ttsSupplement?.spokenText;
-    const replyRenderPlan = resolveSlackReplyRenderPlan(payload, replySourceText);
+    const replyRenderPlan = resolveSlackReplyRenderPlan(payload, replySourceText, markdownOptions);
     const plannedBlocks =
       replyRenderPlan.mode === "single"
         ? replyRenderPlan.blocks
@@ -234,13 +234,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     const previewFinalText =
       replyRenderPlan.mode === "single" && replyRenderPlan.textIsSlackMrkdwn
         ? trimmedFinalText
-        : normalizeSlackOutboundText((replySourceText ?? "").trim(), {
-            tableMode: resolveMarkdownTableMode({
-              cfg,
-              channel: "slack",
-              accountId: account.accountId,
-            }),
-          });
+        : normalizeSlackOutboundText((replySourceText ?? "").trim(), markdownOptions);
     const previewFinalTextFitsEdit =
       countSlackTextUtf8Bytes(previewFinalText) <= SLACK_EDIT_TEXT_MAX_BYTES;
     const shouldRestoreTtsSupplementTextForPreviewFallback =

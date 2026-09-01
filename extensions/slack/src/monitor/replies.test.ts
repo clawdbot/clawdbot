@@ -1,4 +1,5 @@
 // Slack tests cover replies plugin behavior.
+import { WebClient } from "@slack/web-api";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
@@ -105,6 +106,20 @@ function requireSendCall(index = 0) {
   return call;
 }
 
+async function recordRealBlockSends() {
+  const client = new WebClient("xoxb-test");
+  const postMessage = vi
+    .spyOn(client.chat, "postMessage")
+    .mockResolvedValue({ ok: true, ts: "chart-ts", channel: "C123" });
+  const { sendMessageSlack } = await vi.importActual<typeof import("../send.js")>("../send.js");
+  sendMock.mockImplementation((target, text, options) =>
+    options.blocks
+      ? sendMessageSlack(target, text, { ...options, eventScope: { teamId: "T1", client } })
+      : Promise.resolve({ messageId: "media-ts", channelId: "C123" }),
+  );
+  return postMessage;
+}
+
 function acceptedSlackSendResult(messageId: string, kind: "media" | "text" = "media") {
   return {
     messageId,
@@ -181,7 +196,7 @@ describe("deliverReplies identity passthrough", () => {
   });
 
   it("routes non-native portable tables through complete Slack-safe text delivery", async () => {
-    sendMock.mockResolvedValue({ messageId: "table-ts", channelId: "C123" });
+    const postMessage = await recordRealBlockSends();
 
     await deliverReplies(
       baseParams({
@@ -210,8 +225,10 @@ describe("deliverReplies identity passthrough", () => {
     expect(textOptions.textIsSlackPlainText).toBe(true);
     expect(textOptions.blocks).toBeUndefined();
 
-    const [_blockTarget, blockText, blockOptions] = requireSendCall(1);
-    expect(blockText).toBe("");
+    const [_blockTarget, , blockOptions] = requireSendCall(1);
+    expect(postMessage).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text: "Refresh", blocks: blockOptions.blocks }),
+    );
     expect(blockOptions.blocks).toEqual([
       expect.objectContaining({
         type: "actions",
@@ -222,9 +239,7 @@ describe("deliverReplies identity passthrough", () => {
 
   it("delivers media before native chart blocks with the same reply context", async () => {
     messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
-    sendMock
-      .mockResolvedValueOnce({ messageId: "media-ts", channelId: "C123" })
-      .mockResolvedValueOnce({ messageId: "chart-ts", channelId: "C123" });
+    const postMessage = await recordRealBlockSends();
     const identity = { username: "Bot", iconEmoji: ":chart_with_upwards_trend:" };
     const metadata = { event_type: "openclaw_test", event_payload: { source: "chart" } };
     const listenerClient = { chat: { postMessage: vi.fn() } } as never;
@@ -279,7 +294,7 @@ describe("deliverReplies identity passthrough", () => {
       identity,
       metadata,
     });
-    expect(sendMock).toHaveBeenNthCalledWith(2, "C123", "", {
+    expect(requireSendCall(1)[2]).toEqual({
       cfg: enterpriseCfg,
       token: "xoxb-test",
       threadTs: "thread-ts",
@@ -305,7 +320,13 @@ describe("deliverReplies identity passthrough", () => {
       identity,
       metadata,
     });
-    expect(result).toEqual({ messageId: "chart-ts", channelId: "C123" });
+    expect(postMessage).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        text: "Revenue mix (pie chart)\n- Product: 60\n- Services: 40",
+        blocks: requireSendCall(1)[2].blocks,
+      }),
+    );
+    expect(result).toMatchObject({ messageId: "chart-ts", channelId: "C123" });
     expect(messageHookRunner.runMessageSent).toHaveBeenCalledOnce();
     const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(event).toMatchObject({
@@ -348,7 +369,7 @@ describe("deliverReplies identity passthrough", () => {
   });
 
   it("delivers block-only replies through to sendMessageSlack", async () => {
-    sendMock.mockResolvedValue(undefined);
+    const postMessage = await recordRealBlockSends();
     const blocks = [
       {
         type: "actions",
@@ -379,9 +400,11 @@ describe("deliverReplies identity passthrough", () => {
     );
 
     expect(sendMock).toHaveBeenCalledOnce();
-    const [target, text, options] = requireSendCall();
+    const [target, , options] = requireSendCall();
     expect(target).toBe("C123");
-    expect(text).toBe("");
+    expect(postMessage).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text: "Option A", blocks }),
+    );
     expect(options.blocks).toStrictEqual(blocks);
   });
 

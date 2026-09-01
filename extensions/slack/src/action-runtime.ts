@@ -76,6 +76,7 @@ export const slackActionRuntime = {
   deleteSlackMessage: createLazySlackAction("deleteSlackMessage"),
   downloadSlackFile: createLazySlackAction("downloadSlackFile"),
   editSlackMessage: createLazySlackAction("editSlackMessage"),
+  editSlackRenderedMessage: createLazySlackAction("editSlackRenderedMessage"),
   getSlackMemberInfo: createLazySlackAction("getSlackMemberInfo"),
   listSlackEmojis: createLazySlackAction("listSlackEmojis"),
   listSlackPins: createLazySlackAction("listSlackPins"),
@@ -128,6 +129,8 @@ export type SlackActionContext = {
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   /** Slack-private ordered delivery plan prepared after presentation normalization. */
   preparedMessages?: readonly SlackReplyDeliveryMessage[];
+  /** Slack-private final edit bytes; raw direct edits still accept Markdown. */
+  preparedEditText?: string;
 };
 
 function resolveThreadTsFromContext(
@@ -846,7 +849,11 @@ export async function handleSlackAction(
         }
         await assertReadTargetAllowed(target);
         const writeOpts = buildActionOpts("write", target.teamId);
-        await slackActionRuntime.editSlackMessage(channelId, messageId, content ?? "", {
+        const edit =
+          context?.preparedEditText === undefined
+            ? slackActionRuntime.editSlackMessage
+            : slackActionRuntime.editSlackRenderedMessage;
+        await edit(channelId, messageId, context?.preparedEditText ?? content ?? "", {
           ...writeOpts,
           blocks,
         });

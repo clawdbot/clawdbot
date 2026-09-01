@@ -4,10 +4,16 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { handleSlackAction, slackActionRuntime } from "./action-runtime.js";
 import { createSlackEditTestClient, createSlackSendTestClient } from "./blocks.test-helpers.js";
 import { slackSetupPlugin } from "./channel.setup.js";
+import { handleSlackMessageAction } from "./message-action-dispatch.js";
+import { deliverReplies, deliverSlackSlashReplies } from "./monitor/replies.js";
+import { slackOutbound } from "./outbound-adapter.js";
+import { sendMessageSlack } from "./send.js";
 import { countSlackTextUtf8Bytes } from "./truncate.js";
 
 const { editSlackMessage, editSlackRenderedMessage, sendSlackMessage } =
@@ -145,6 +151,119 @@ describe("editSlackMessage blocks", () => {
     },
   );
 
+  it.each(
+    (["action", "outbound", "rendered outbound", "monitor", "slash"] as const).flatMap((path) =>
+      (["off", "code", "bullets"] as const).map((mode) => ({ path, mode })),
+    ),
+  )("preserves account table policy in $path ($mode)", async ({ path, mode }) => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        slack: {
+          botToken: "xoxb-test",
+          markdown: { tables: "off" },
+          accounts: { work: { markdown: { tables: mode } } },
+          channels: { C123: { enabled: true } },
+        },
+      },
+    };
+    const payload: ReplyPayload = {
+      text: table,
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Continue", action: { type: "callback", value: "next" } }],
+          },
+        ],
+      },
+    };
+    const expected = mode === "code" ? codeTable : mode === "bullets" ? bulletTable : table;
+    const client = createSlackSendTestClient();
+    const sendSlack: typeof sendMessageSlack = (to, text, options) =>
+      sendMessageSlack(to, text, { ...options, client });
+    const send = vi
+      .spyOn(slackActionRuntime, "sendSlackMessage")
+      .mockImplementation((to, text, options) =>
+        sendSlackMessage(to, text, { ...options, client }),
+      );
+    const metadata = vi
+      .spyOn(slackActionRuntime, "resolveSlackConversationInfo")
+      .mockResolvedValue({ type: "channel" });
+    const respond = vi.fn(async (_message: unknown) => undefined);
+    try {
+      if (path === "action") {
+        await handleSlackMessageAction({
+          providerId: "slack",
+          ctx: {
+            channel: "slack",
+            action: "send",
+            cfg,
+            accountId: "work",
+            params: { to: "channel:C123", message: table, presentation: payload.presentation },
+          },
+          invoke: (action, config, context) =>
+            handleSlackAction(action, config, {
+              ...context,
+              conversationReadOrigin: "direct-operator",
+            }),
+        });
+      } else if (path === "monitor") {
+        await deliverReplies({
+          cfg,
+          replies: [payload],
+          target: "channel:C123",
+          token: "xoxb-test",
+          accountId: "work",
+          runtime: { log: () => {}, error: () => {}, exit: () => {} },
+          textLimit: 4000,
+          replyToMode: "off",
+          eventScope: { teamId: "T123", client },
+        });
+      } else if (path === "slash") {
+        await deliverSlackSlashReplies({
+          replies: [payload],
+          respond,
+          ephemeral: true,
+          textLimit: 4000,
+          tableMode: mode,
+          accountId: "work",
+        });
+      } else {
+        const ctx = {
+          cfg,
+          accountId: "work",
+          to: "channel:C123",
+          text: table,
+          payload,
+          deps: { sendSlack },
+        };
+        let outgoing = payload;
+        if (path === "rendered outbound") {
+          const rendered = await slackOutbound.renderPresentation?.({
+            payload,
+            presentation: payload.presentation!,
+            ctx,
+          });
+          expect(rendered).toBeTruthy();
+          const { presentation: _presentation, ...prepared } = rendered!;
+          outgoing = prepared;
+        }
+        await slackOutbound.sendPayload?.({ ...ctx, payload: outgoing });
+      }
+      const calls = path === "slash" ? respond.mock.calls : client.chat.postMessage.mock.calls;
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.[0]).toMatchObject({
+        blocks: [
+          { type: "section", text: { type: "mrkdwn", text: expected } },
+          { type: "actions", elements: [{ type: "button", text: { text: "Continue" } }] },
+        ],
+      });
+    } finally {
+      send.mockRestore();
+      metadata.mockRestore();
+    }
+  });
+
   it("renders authored Markdown using the same mrkdwn dialect as sends", async () => {
     const client = createSlackEditTestClient();
 
@@ -159,6 +278,94 @@ describe("editSlackMessage blocks", () => {
       text: "*bold* and <https://example.com|OpenClaw>",
     });
   });
+
+  it.each([
+    {
+      name: "bold",
+      mode: "off" as const,
+      authored: "**Overview**",
+      presented: "*Overview*",
+      expected: "*Overview*",
+    },
+    ...(["off", "code", "bullets"] as const).map((mode) => ({
+      name: `${mode} table with literal presentation`,
+      mode,
+      authored: table,
+      presented: table,
+      expected: mode === "off" ? table : `${mode === "code" ? codeTable : bulletTable}\n\n${table}`,
+    })),
+    ...(["code", "bullets"] as const).map((mode) => ({
+      name: `${mode} table with matching presentation`,
+      mode,
+      authored: table,
+      presented: mode === "code" ? codeTable : bulletTable,
+      expected: mode === "code" ? codeTable : bulletTable,
+    })),
+  ])(
+    "preserves $name through a text-only presentation edit",
+    async ({ mode, authored, presented, expected }) => {
+      const client = createSlackEditTestClient();
+      const edit = vi
+        .spyOn(slackActionRuntime, "editSlackMessage")
+        .mockImplementation((channel, message, content, options) =>
+          editSlackMessage(channel, message, content, { ...options, client }),
+        );
+      const renderedEdit = vi
+        .spyOn(slackActionRuntime, "editSlackRenderedMessage")
+        .mockImplementation((channel, message, content, options) =>
+          editSlackRenderedMessage(channel, message, content, { ...options, client }),
+        );
+      const metadata = vi
+        .spyOn(slackActionRuntime, "resolveSlackConversationInfo")
+        .mockResolvedValue({ type: "channel" });
+      try {
+        await handleSlackMessageAction({
+          providerId: "slack",
+          ctx: {
+            action: "edit",
+            channel: "slack",
+            cfg: {
+              channels: {
+                slack: {
+                  botToken: "xoxb-test",
+                  markdown: { tables: mode },
+                  channels: { C123: { enabled: true } },
+                },
+              },
+            },
+            params: {
+              channelId: "C123",
+              messageId: "171234.567",
+              message: authored,
+              presentation: {
+                blocks: [
+                  { type: "text", text: presented },
+                  {
+                    type: "buttons",
+                    buttons: [{ label: "Status", action: { type: "command", command: "/status" } }],
+                  },
+                ],
+              },
+            },
+          },
+          invoke: (action, cfg, context) =>
+            handleSlackAction(action, cfg, {
+              ...context,
+              conversationReadOrigin: "direct-operator",
+            }),
+        });
+        expect(client.chat.update).toHaveBeenCalledExactlyOnceWith({
+          channel: "C123",
+          ts: "171234.567",
+          text: `${expected}\n\n- Status: \`/status\``,
+        });
+      } finally {
+        edit.mockRestore();
+        renderedEdit.mockRestore();
+        metadata.mockRestore();
+      }
+    },
+  );
 
   it("preserves already-rendered Slack mrkdwn when finalizing a preview", async () => {
     const client = createSlackEditTestClient();

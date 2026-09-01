@@ -22,7 +22,11 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveSlackAccount, resolveSlackOperationToken } from "./accounts.js";
+import {
+  resolveSlackAccount,
+  resolveSlackMarkdownOptions,
+  resolveSlackOperationToken,
+} from "./accounts.js";
 import {
   resolveSlackAuthoredTextPlacement,
   type SlackAuthoredTextPlacement,
@@ -131,7 +135,10 @@ function resolveSlackSendIdentity(identity?: OutboundIdentity): SlackSendIdentit
   return { username, iconUrl, iconEmoji };
 }
 
-function resolveSlackOutboundBlockResolution(payload: ReplyPayload): SlackReplyBlockResolution {
+function resolveSlackOutboundBlockResolution(
+  payload: ReplyPayload,
+  ctx: ChannelOutboundContext,
+): SlackReplyBlockResolution {
   const slackData = payload.channelData?.slack as SlackOutboundChannelData | undefined;
   const presentation = normalizeMessagePresentation(payload.presentation);
   const hasStructuredContent = Boolean(
@@ -158,7 +165,7 @@ function resolveSlackOutboundBlockResolution(payload: ReplyPayload): SlackReplyB
         slack: preservedSlackData,
       },
     },
-    { materializeAuthoredText: true },
+    { ...resolveSlackMarkdownOptions(ctx), materializeAuthoredText: true },
   );
 }
 
@@ -257,9 +264,9 @@ export const slackOutbound: ChannelOutboundAdapter = {
   chunker: null,
   textChunkLimit: SLACK_TEXT_LIMIT,
   presentationCapabilities: SLACK_PRESENTATION_CAPABILITIES,
-  renderPresentation: ({ payload }) => {
+  renderPresentation: ({ payload, ctx }) => {
     const slackData = payload.channelData?.slack as SlackOutboundChannelData | undefined;
-    const resolution = resolveSlackOutboundBlockResolution(payload);
+    const resolution = resolveSlackOutboundBlockResolution(payload, ctx);
     return resolution.segments.length > 0
       ? withSlackRenderedPresentation(payload, slackData, resolution)
       : null;
@@ -290,7 +297,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
     if (renderedResolution) {
       resolution = renderedResolution;
     } else {
-      resolution = resolveSlackOutboundBlockResolution(payload);
+      resolution = resolveSlackOutboundBlockResolution(payload, ctx);
     }
     if (resolution.segments.length === 0) {
       const sendPart = async (part: ChannelOutboundContext) =>
@@ -326,15 +333,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
             sentResults.push(
               await send({
                 ...preparedCtx,
-                text: message.text,
-                ...(message.blocks ? { blocks: message.blocks } : {}),
-                ...(message.authoredTextPlacement
-                  ? { authoredTextPlacement: message.authoredTextPlacement }
-                  : {}),
-                ...(message.nativeDataFallbackBaseText
-                  ? { nativeDataFallbackBaseText: message.nativeDataFallbackBaseText }
-                  : {}),
-                ...(message.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
+                ...message,
               }),
             );
           }

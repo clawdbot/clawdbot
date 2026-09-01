@@ -33,6 +33,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     forcedReplyThreadTs,
     isThreadReply,
     message,
+    markdownOptions,
     messageSentDeliveryHookContext,
     messageSentHookContext,
     messageSentHookTarget,
@@ -146,7 +147,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       delivery.outcome = "success";
     }
   };
-  let deliveryTracker = createSlackEventDeliveryTracker();
+  let deliveryTracker = createSlackEventDeliveryTracker(markdownOptions);
   const markPreviewPayloadDelivered = (params: {
     kind: ReplyDispatchKind;
     payload: ReplyPayload;
@@ -357,7 +358,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
 
   const isStreamingEligible = (payload: ReplyPayload, options?: { maxTextBytes?: number }) => {
     const reply = resolveSendableOutboundReplyParts(payload);
-    const renderPlan = resolveSlackReplyRenderPlan(payload);
+    const renderPlan = resolveSlackReplyRenderPlan(payload, payload.text, markdownOptions);
     const plannedBlocks =
       renderPlan.mode === "single" ? renderPlan.blocks : renderPlan.blockPart?.blocks;
     return (
@@ -578,7 +579,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     markPreviewPayloadDelivered,
     rememberDeliveredThreadTs,
     resetDeliveryTracker: () => {
-      deliveryTracker = createSlackEventDeliveryTracker();
+      deliveryTracker = createSlackEventDeliveryTracker(markdownOptions);
     },
   });
 }

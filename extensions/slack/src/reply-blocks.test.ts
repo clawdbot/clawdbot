@@ -4,7 +4,7 @@ import {
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { describe, expect, it } from "vitest";
 import { renderSlackMessagePresentationFallbackText } from "./presentation-fallback.js";
-import { resolveSlackReplyBlockResolution } from "./reply-blocks.js";
+import { resolveSlackReplyBlockResolution, resolveSlackReplyRenderPlan } from "./reply-blocks.js";
 
 describe("renderSlackMessagePresentationFallbackText", () => {
   it("includes complete portable table data in Slack accessibility text", () => {
@@ -319,26 +319,79 @@ describe("renderSlackMessagePresentationFallbackText", () => {
     expect(fallback).not.toContain("&lt;");
   });
 
-  it("recognizes authored text already carried by a fallback segment", () => {
+  it.each([true, false])(
+    "compares literal chart fallback formatting: escaped list %s",
+    (escaped) => {
+      const title = "This chart title is too long for Slack native chart rendering";
+      const text = `${title} (pie chart)\n- Open: 5`;
+      const resolution = resolveSlackReplyBlockResolution({
+        text: escaped ? text.replace("\n-", "\n\\-") : text,
+        presentation: {
+          blocks: [
+            {
+              type: "chart",
+              chartType: "pie",
+              title,
+              segments: [{ label: "Open", value: 5 }],
+            },
+          ],
+        },
+      });
+
+      expect(resolution.authoredTextPlacement).toBe(escaped ? "blocks" : "outside-blocks");
+      expect(resolution.segments).toContainEqual({ kind: "text", text, mrkdwn: false });
+    },
+  );
+
+  it("keeps a represented literal fallback out of preview edits and native streams", () => {
+    const text = "x".repeat(151);
+    expect(
+      resolveSlackReplyRenderPlan({ text, presentation: { title: text, blocks: [] } }),
+    ).toEqual({ mode: "split", fallbackText: text });
+  });
+
+  it("preserves authored list and emphasis formatting beside a literal chart fallback", () => {
     const title = "This chart title is too long for Slack native chart rendering";
-    const text = `${title} (pie chart)\n- Open: 5`;
-    const resolution = resolveSlackReplyBlockResolution({
-      text,
-      presentation: {
-        blocks: [
-          {
-            type: "chart",
-            chartType: "pie",
-            title,
-            segments: [{ label: "Open", value: 5 }],
-          },
-        ],
+    const text = `${title} (pie chart)\n- *raw*: 5`;
+    const authored = `${title} (pie chart)\n\n• _raw_: 5`;
+    expect(
+      resolveSlackReplyRenderPlan({
+        text,
+        presentation: {
+          blocks: [
+            { type: "chart", chartType: "pie", title, segments: [{ label: "*raw*", value: 5 }] },
+          ],
+        },
+      }),
+    ).toEqual({
+      mode: "split",
+      fallbackText: `${authored}\n\n${text}`,
+      blockPart: {
+        text: authored,
+        blocks: [{ type: "section", text: { type: "mrkdwn", text: authored, verbatim: true } }],
       },
     });
-
-    expect(resolution.authoredTextPlacement).toBe("blocks");
-    expect(resolution.segments).toContainEqual({ kind: "text", text, mrkdwn: false });
   });
+
+  it.each([
+    { text: "First\n\nSecond", placement: "blocks" },
+    { text: "FirstSecond", placement: "outside-blocks" },
+  ])(
+    "preserves actual authored separators across legacy text fragments: $placement",
+    ({ text, placement }) => {
+      const result = resolveSlackReplyBlockResolution({
+        text,
+        interactive: {
+          blocks: [
+            { type: "text", text: "First" },
+            { type: "buttons", buttons: [{ label: "Continue", value: "continue" }] },
+            { type: "text", text: "Second" },
+          ],
+        },
+      });
+      expect(result.authoredTextPlacement).toBe(placement);
+    },
+  );
 
   it("materializes authored text blocks as verbatim mrkdwn", () => {
     const resolution = resolveSlackReplyBlockResolution(
@@ -359,9 +412,10 @@ describe("renderSlackMessagePresentationFallbackText", () => {
     });
   });
 
-  it("recognizes authored text already represented by native chart data", () => {
+  it.each([true, false])("compares native chart summary formatting: escaped list %s", (escaped) => {
+    const text = "Revenue mix (pie chart)\n- Product: 60\n- Services: 40";
     const resolution = resolveSlackReplyBlockResolution({
-      text: "Revenue mix (pie chart)\n- Product: 60\n- Services: 40",
+      text: escaped ? text.replaceAll("\n-", "\n\\-") : text,
       presentation: {
         blocks: [
           {
@@ -378,7 +432,7 @@ describe("renderSlackMessagePresentationFallbackText", () => {
       },
     });
 
-    expect(resolution.authoredTextPlacement).toBe("blocks");
+    expect(resolution.authoredTextPlacement).toBe(escaped ? "blocks" : "outside-blocks");
   });
 
   it("preserves mixed chart, table, and control order across native and text segments", () => {

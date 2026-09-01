@@ -12,8 +12,8 @@ import { renderSlackMessagePresentationFallbackText } from "./presentation-fallb
 
 function createInvokeSpy() {
   return vi.fn(async (action: Record<string, unknown>, _cfg?: unknown, _toolContext?: unknown) => ({
-    ok: true,
-    content: action,
+    content: [],
+    details: { ok: true, action },
   }));
 }
 
@@ -331,7 +331,10 @@ describe("handleSlackMessageAction", () => {
       });
       expect(firstAction(invoke)).toMatchObject({
         action: "editMessage",
-        content: paddedMarkdownTable,
+        content:
+          tables === "off"
+            ? paddedMarkdownTable
+            : Array.from({ length: 20 }, () => "*x*\n• Value: 2").join("\n\n"),
       });
     },
   );
@@ -351,6 +354,67 @@ describe("handleSlackMessageAction", () => {
     });
 
     expect(firstAction(invoke)).toMatchObject({ action: "editMessage", content: message });
+  });
+
+  it("deduplicates represented fallback text before checking the edit byte limit", async () => {
+    const invoke = createInvokeSpy();
+    const title = "x".repeat(2_100);
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "edit",
+        cfg: {},
+        params: {
+          channelId: "C1",
+          messageId: "171234.567",
+          message: title,
+          presentation: {
+            title,
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Status", action: { type: "command", command: "/status" } }],
+              },
+            ],
+          },
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(firstAction(invoke)).toMatchObject({
+      action: "editMessage",
+      content: `${title}\n\n- Status: \`/status\``,
+      blocks: undefined,
+    });
+  });
+
+  it.each(
+    ["text", "context"].flatMap((type) => [
+      { type, format: "plain", text: "x".repeat(3_001) },
+      { type, format: "inline code", text: `\`${"x".repeat(3_001)}\`` },
+      { type, format: "fenced code", text: `\`\`\`\n${"x".repeat(3_001)}\n\`\`\`` },
+    ]),
+  )("deduplicates chunked $format $type before the edit byte limit", async ({ type, text }) => {
+    const invoke = createInvokeSpy();
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "edit",
+        channel: "slack",
+        params: {
+          channelId: "C123",
+          messageId: "123.456",
+          message: text,
+          presentation: { blocks: [{ type, text }] },
+        },
+        cfg: slackConfig(),
+      },
+      normalizeChannelId: (value) => value,
+      invoke,
+    });
+    expect(firstAction(invoke)).toMatchObject({ action: "editMessage", content: text });
+    expect(firstAction(invoke).blocks).toBeUndefined();
   });
 
   it("keeps oversized notification fallback for visibly rendered block edits", async () => {
@@ -670,8 +734,29 @@ describe("handleSlackMessageAction", () => {
     },
   );
 
+  it("measures native mrkdwn fallback bytes without a second Markdown escape", async () => {
+    const invoke = createInvokeSpy();
+    const text = `${"&".repeat(801)}${"x".repeat(2_200)}`;
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "edit",
+        channel: "slack",
+        cfg: {},
+        params: {
+          channelId: "C1",
+          messageId: "171234.567",
+          presentation: { blocks: [{ type: "text", text }] },
+        },
+      },
+      invoke,
+    });
+    expect(firstAction(invoke)).toMatchObject({ content: text, blocks: undefined });
+    expect(firstInvokeCall(invoke)[2]).toMatchObject({ preparedEditText: text });
+  });
+
   it.each([
-    { name: "Slack markdown rendering", text: `${"&".repeat(801)}${"x".repeat(2_200)}` },
+    { name: "Slack entity bytes", text: `${"&amp;".repeat(801)}${"x".repeat(2_200)}` },
     { name: "UTF-8 expansion", text: "😀".repeat(1_501) },
   ])("rejects presentation fallback edits that overflow after $name", async ({ text }) => {
     const invoke = createInvokeSpy();

@@ -20,6 +20,9 @@ const deliverRepliesMock = vi.fn(
 );
 const finalizeSlackPreviewEditMock = vi.fn(async (_input: { blocks?: unknown }) => {});
 const normalizeSlackOutboundTextMock = vi.fn((value: string) => value.trim());
+const markdownToSlackMrkdwnChunksMock = vi.fn<
+  typeof import("../../format.js").markdownToSlackMrkdwnChunks
+>((value) => [value]);
 const postMessageMock = vi.fn(async () => ({ ok: true, ts: "171234.999" }));
 const chatUpdateMock = vi.fn(async () => ({ ok: true, ts: "171234.999" }));
 const recordSlackThreadParticipationMock = vi.fn();
@@ -927,8 +930,9 @@ vi.mock("../../draft-stream.js", () => ({
   createSlackDraftStream: createSlackDraftStreamMock,
 }));
 
-vi.mock("../../format.js", () => ({
-  markdownToSlackMrkdwnChunks: (value: string) => [value],
+vi.mock("../../format.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../format.js")>()),
+  markdownToSlackMrkdwnChunks: markdownToSlackMrkdwnChunksMock,
   normalizeSlackOutboundText: normalizeSlackOutboundTextMock,
 }));
 
@@ -1210,6 +1214,65 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     vi.useRealTimers();
     resetPluginRuntimeStateForTest();
   });
+
+  it.each(["code", "bullets"] as const)(
+    "preserves account table policy in %s previews",
+    async (mode) => {
+      const actual = await vi.importActual<typeof import("../../format.js")>("../../format.js");
+      markdownToSlackMrkdwnChunksMock.mockImplementation(actual.markdownToSlackMrkdwnChunks);
+      normalizeSlackOutboundTextMock.mockImplementation(actual.normalizeSlackOutboundText);
+      try {
+        const table = "| Name | Value |\n| --- | --- |\n| Beta | 2 |";
+        const expected =
+          mode === "code"
+            ? "```\n| Name | Value |\n| ---- | ----- |\n| Beta | 2     |\n```"
+            : "*Beta*\n• Value: 2";
+        finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
+        mockedDispatchSequence = [
+          {
+            kind: "final",
+            payload: {
+              text: table,
+              presentation: {
+                blocks: [
+                  {
+                    type: "buttons",
+                    buttons: [{ label: "Continue", action: { type: "callback", value: "next" } }],
+                  },
+                ],
+              },
+            },
+          },
+        ];
+        await dispatchPreparedSlackMessage(
+          createPreparedSlackMessage({
+            cfg: {
+              channels: {
+                slack: {
+                  markdown: { tables: "off" },
+                  accounts: {
+                    default: { markdown: { tables: mode } },
+                  },
+                },
+              },
+            },
+          }),
+        );
+        expect(finalizeSlackPreviewEditMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            blocks: [
+              { type: "section", text: { type: "mrkdwn", text: expected, verbatim: true } },
+              expect.objectContaining({ type: "actions" }),
+            ],
+          }),
+        );
+        expect(deliverRepliesMock).not.toHaveBeenCalled();
+      } finally {
+        markdownToSlackMrkdwnChunksMock.mockImplementation((value) => [value]);
+        normalizeSlackOutboundTextMock.mockImplementation((value) => value.trim());
+      }
+    },
+  );
 
   it("forwards durable ingress ownership into reply options", async () => {
     const turnAdoptionLifecycle = {
@@ -1755,7 +1818,9 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       blocks: mockedSlackReplyBlocks,
       threadTs: THREAD_TS,
     });
-    expect(normalizeSlackOutboundTextMock).not.toHaveBeenCalled();
+    expect(
+      normalizeSlackOutboundTextMock.mock.calls.every(([text]) => text === "Quarterly results"),
+    ).toBe(true);
     expectMockCallArgFields(emitSlackMessageSentHooksMock, 0, "chart preview message_sent", {
       content: accessibleText,
       success: true,
@@ -1793,7 +1858,9 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     await dispatchPreparedSlackMessage(createPreparedSlackMessage());
 
-    expect(normalizeSlackOutboundTextMock).toHaveBeenCalledTimes(1);
+    expect(
+      normalizeSlackOutboundTextMock.mock.calls.every(([text]) => text === "**Summary**"),
+    ).toBe(true);
     expect(normalizeSlackOutboundTextMock).toHaveBeenCalledWith("**Summary**", {
       tableMode: "code",
     });
@@ -5271,7 +5338,9 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       text: "Spoken answer\n\nRevenue (bar chart)\n- &lt;@U123&gt;: Q1: 12; Q2: 18",
       blocks: mockedSlackReplyBlocks,
     });
-    expect(normalizeSlackOutboundTextMock).not.toHaveBeenCalled();
+    expect(
+      normalizeSlackOutboundTextMock.mock.calls.every(([text]) => text === "Spoken answer"),
+    ).toBe(true);
 
     const delivered = requireRecord(
       requireMockCall(deliverRepliesMock, 0, "deliver replies")[0],
