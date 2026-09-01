@@ -309,32 +309,39 @@ describe("embedded-agent active-run steering", () => {
   // A session with a live reply operation and no embedded handle is exactly the
   // state isEmbeddedAgentRunActive reports as active. Serving it here is what
   // keeps the activity gate and the injector from disagreeing.
-  it("injects into a reply-backed run when the caller opts in", async () => {
+  //
+  // The handle below is the shape attempt-stream-prepare.ts attaches, field for
+  // field. It is deliberately NOT a CLI handle: no CLI execution owner exposes
+  // messageInjection or queueMessage, so writing one here would assert a
+  // capability production does not have.
+  it("injects into a reply-backed run whose backend really exposes injection", async () => {
     const queueMessage = vi.fn(async () => {});
     const operation = createReplyOperation({
-      sessionKey: "agent:main:cli-opt-in-steer",
-      sessionId: "session-cli-opt-in-steer",
+      sessionKey: "agent:main:injectable-opt-in-steer",
+      sessionId: "session-injectable-opt-in-steer",
       resetTriggered: false,
     });
     operation.attachBackend({
-      kind: "cli",
-      runId: "cli-run-1",
+      kind: "embedded",
+      runId: "embedded-run-1",
       cancel: () => {},
       isStreaming: () => true,
+      isStopped: () => false,
       queueMessage,
+      messageInjection: { isAvailable: () => true, queueMessage },
     });
     operation.setPhase("running");
 
     try {
       const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
-        "session-cli-opt-in-steer",
+        "session-injectable-opt-in-steer",
         "child done",
         { steeringMode: "all", debounceMs: 0, allowReplyRunInjection: true },
       );
 
       expect(outcome).toMatchObject({
         queued: true,
-        sessionId: "session-cli-opt-in-steer",
+        sessionId: "session-injectable-opt-in-steer",
         target: "reply_run",
         gatewayHealth: "live",
       });
@@ -348,6 +355,87 @@ describe("embedded-agent active-run steering", () => {
     }
   });
 
+  // The honest counterpart to the test above, and the one that pins the limit
+  // review found: every production CLI attachment site (execute-process.ts,
+  // execute-plugin.ts, execute-node-claude.ts) builds exactly these four fields
+  // and no injection transport. Such a parent must keep the direct handoff.
+  it("keeps the direct fallback for a CLI backend, which exposes no injection transport", async () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:cli-no-injection-steer",
+      sessionId: "session-cli-no-injection-steer",
+      resetTriggered: false,
+    });
+    operation.attachBackend({
+      kind: "cli",
+      runId: "cli-run-1",
+      toolAuthorityFingerprint: "fp-cli",
+      cancel: () => {},
+    });
+    operation.setPhase("running");
+
+    try {
+      const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
+        "session-cli-no-injection-steer",
+        "child done",
+        { steeringMode: "all", debounceMs: 0, allowReplyRunInjection: true },
+      );
+
+      expect(outcome).toMatchObject({
+        queued: false,
+        sessionId: "session-cli-no-injection-steer",
+        reason: "not_streaming",
+      });
+      // The point of the route for this shape is truthfulness, not delivery:
+      // the same state used to answer `no_active_run`, which is false — the
+      // parent is emphatically running, it just cannot take an in-flight steer.
+      expect(outcome).not.toMatchObject({ reason: "no_active_run" });
+    } finally {
+      operation.complete();
+    }
+  });
+
+  // A backend that declares its injection unavailable must be refused rather
+  // than attempted. This is the cloud worker turn shape
+  // (worker-turn-run-owner.ts), whose queueMessage always throws.
+  it("refuses a reply backend that declares injection unavailable", async () => {
+    const queueMessage = vi.fn(async () => {
+      throw new Error("Cloud worker turns do not support message injection");
+    });
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:worker-unavailable-steer",
+      sessionId: "session-worker-unavailable-steer",
+      resetTriggered: false,
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "worker-run-1",
+      cancel: () => {},
+      isStopped: () => false,
+      queueMessage,
+      messageInjection: { isAvailable: () => false, queueMessage },
+    });
+    operation.setPhase("running");
+
+    try {
+      const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
+        "session-worker-unavailable-steer",
+        "child done",
+        { steeringMode: "all", debounceMs: 0, allowReplyRunInjection: true },
+      );
+
+      expect(outcome).toMatchObject({
+        queued: false,
+        sessionId: "session-worker-unavailable-steer",
+        reason: "not_streaming",
+      });
+      expect(queueMessage).not.toHaveBeenCalled();
+    } finally {
+      operation.complete();
+    }
+  });
+
+  // Uses a genuinely injectable backend so the assertion isolates the opt-in
+  // flag rather than also depending on a missing capability.
   it("refuses reply-backed steering for callers that did not opt in", () => {
     const queueMessage = vi.fn(async () => {});
     const operation = createReplyOperation({
@@ -356,10 +444,12 @@ describe("embedded-agent active-run steering", () => {
       resetTriggered: false,
     });
     operation.attachBackend({
-      kind: "cli",
+      kind: "embedded",
       cancel: () => {},
       isStreaming: () => true,
+      isStopped: () => false,
       queueMessage,
+      messageInjection: { isAvailable: () => true, queueMessage },
     });
     operation.setPhase("running");
 
@@ -386,10 +476,12 @@ describe("embedded-agent active-run steering", () => {
       resetTriggered: false,
     });
     operation.attachBackend({
-      kind: "cli",
+      kind: "embedded",
       cancel: () => {},
       isStreaming: () => true,
+      isStopped: () => false,
       queueMessage,
+      messageInjection: { isAvailable: () => true, queueMessage },
     });
     operation.setPhase("running");
 

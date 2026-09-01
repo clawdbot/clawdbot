@@ -156,6 +156,18 @@ function toReplyBackendQueueMessageOptions(
  * handle. Without this, an activity gate that treats reply-backed runs as active
  * (isEmbeddedAgentRunActive) commits to a steer that the injector then refuses as
  * `no_active_run`, reporting an emphatically busy parent as idle.
+ *
+ * Which backends this can actually serve, so the next reader does not have to
+ * infer it: a reply backend is injectable only if it exposes `messageInjection`
+ * (or the legacy `queueMessage`) AND reports itself available. The embedded
+ * attempt stream does; the cloud worker turn deliberately does not; and **no
+ * CLI execution owner does** — `execute-process.ts`, `execute-plugin.ts` and
+ * `execute-node-claude.ts` all attach identity and cancellation only, because
+ * no CLI runtime here has a mid-turn steer transport. A CLI-backed parent
+ * therefore keeps the direct handoff, and the value of this route for it is a
+ * true refusal reason (`not_streaming`) instead of a false one
+ * (`no_active_run`). Giving CLI runs a real injection transport is separate
+ * work at those three owners, not something this router can fake.
  */
 function prepareReplyRunQueueMessage(
   sessionId: string,

@@ -13,7 +13,6 @@ export type {
   ReplyOperation,
   ReplyTurnKind,
 } from "./reply-run-registry.contracts.js";
-export type { ReplyRunMessageInjectionResolution } from "./reply-run-registry.message-injection.js";
 export {
   beginReplyMessageInjectionTarget,
   finalizeReplyMessageInjectionAttempt,
