@@ -31,7 +31,7 @@ import {
   type ReturnCovenantPlan,
 } from "./protocol.js";
 
-export type ReturnCovenantDatabaseProfile = ReturnCovenantPlan["cases"][number]["databaseProfile"];
+type ReturnCovenantDatabaseProfile = ReturnCovenantPlan["cases"][number]["databaseProfile"];
 
 export type ReturnCovenantDatabaseReceipt = {
   profile: ReturnCovenantDatabaseProfile;

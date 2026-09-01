@@ -12,11 +12,10 @@ import { ADMIN_SCOPE } from "../../../gateway/method-scopes.js";
 import {
   assertReturnCovenantGatewayBinding,
   parseReturnCovenantGatewayBinding,
-  readReturnCovenantProcessStartFingerprint,
-  RETURN_COVENANT_GATEWAY_READY_PREFIX,
   type ReturnCovenantGatewayBinding,
   type ReturnCovenantGatewayRestart,
 } from "./gateway-generation.js";
+import { waitForReturnCovenantGatewayReady } from "./gateway-readiness.js";
 import { RETURN_COVENANT_GATEWAY_METHOD } from "./gateway-rpc.js";
 import {
   RETURN_COVENANT_FIXTURE_COMMAND_RELATIVE_PATH,
@@ -36,7 +35,7 @@ export type ReturnCovenantGatewayPhaseResult = {
   payload: Record<string, unknown>;
 };
 
-export interface ReturnCovenantGatewayControl {
+interface ReturnCovenantGatewayControl {
   current(): ReturnCovenantGatewayBinding;
   finalizeRun(): Promise<Record<string, unknown>>;
   invokePhase(
@@ -67,52 +66,6 @@ type GatewayCommandIdentity = {
 
 function sha256(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
-}
-
-function gatewayReadyBinding(stdout: string): ReturnCovenantGatewayBinding | undefined {
-  const line = stdout
-    .split("\n")
-    .find((entry) => entry.startsWith(RETURN_COVENANT_GATEWAY_READY_PREFIX));
-  if (!line) {
-    return undefined;
-  }
-  return parseReturnCovenantGatewayBinding(
-    JSON.parse(line.slice(RETURN_COVENANT_GATEWAY_READY_PREFIX.length)),
-  );
-}
-
-export async function waitForGatewayReady(
-  gateway: Pick<StartingGateway, "child" | "label" | "pid" | "stderr" | "stdout">,
-  port: number,
-  options: { timeoutMs?: number } = {},
-): Promise<ReturnCovenantGatewayBinding> {
-  const deadline = Date.now() + (options.timeoutMs ?? 30_000);
-  const expectedStartFingerprint = await readReturnCovenantProcessStartFingerprint(gateway.pid);
-  const expectedEndpoint = `http://127.0.0.1:${port}`;
-  while (Date.now() < deadline) {
-    if (gateway.child.exitCode !== null || gateway.child.signalCode !== null) {
-      const reason =
-        gateway.child.signalCode !== null
-          ? `signal ${gateway.child.signalCode}`
-          : `exit ${gateway.child.exitCode}`;
-      throw new Error(
-        `gateway ${gateway.label} stopped before readiness (${reason}): ${gateway.stderr.slice(-2000)}`,
-      );
-    }
-    const binding = gatewayReadyBinding(gateway.stdout);
-    if (binding) {
-      if (
-        binding.pid !== gateway.pid ||
-        binding.startFingerprint !== expectedStartFingerprint ||
-        binding.endpoint !== expectedEndpoint
-      ) {
-        throw new Error("spawned child published a mismatched gateway readiness binding");
-      }
-      return binding;
-    }
-    await delay(25);
-  }
-  throw new Error(`spawned child ${gateway.label} did not publish gateway readiness`);
 }
 
 async function stopGateway(gateway: ManagedGateway): Promise<void> {
@@ -304,7 +257,7 @@ export class ProductReturnCovenantGatewayControl implements ReturnCovenantGatewa
       child.stdout?.on("data", (chunk: Buffer | string) => append("stdout", chunk));
       child.stderr?.on("data", (chunk: Buffer | string) => append("stderr", chunk));
       await this.#assertGatewayCommandIdentity(verified.identity);
-      const binding = await waitForGatewayReady(starting, port);
+      const binding = await waitForReturnCovenantGatewayReady(starting, port);
       managed = {
         binding,
         child,

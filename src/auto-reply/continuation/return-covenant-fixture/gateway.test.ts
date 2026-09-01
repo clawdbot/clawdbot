@@ -1,7 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import net from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
-import { waitForGatewayReady } from "./gateway.js";
+import { waitForReturnCovenantGatewayReady } from "./gateway-readiness.js";
 
 const servers: net.Server[] = [];
 
@@ -30,7 +30,7 @@ describe("return-covenant gateway ownership", () => {
     }
 
     await expect(
-      waitForGatewayReady(
+      waitForReturnCovenantGatewayReady(
         {
           child: { exitCode: null, signalCode: null } as ChildProcess,
           label: "unrelated-listener",

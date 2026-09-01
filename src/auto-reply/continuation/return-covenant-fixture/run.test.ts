@@ -23,12 +23,12 @@ import type {
   ReturnCovenantGatewayRestart,
 } from "./gateway-generation.js";
 import { parseReturnCovenantPhaseRequest, sha256ReturnCovenant } from "./protocol.js";
-import { buildReturnCovenantRetentionRequest } from "./retention.js";
 import { ReturnCovenantFixtureRun } from "./run.js";
 import {
   createReturnCovenantTestAttestation,
   createReturnCovenantTestPlan,
   createReturnCovenantTestRequest,
+  createReturnCovenantTestRetentionRequest,
 } from "./test-plan.test-support.js";
 
 class TestClock {
@@ -150,7 +150,8 @@ describe("product return-covenant fixture run", () => {
       const capturedGenerations: string[] = [];
       const forbiddenCurrentGenerations: string[] = [];
       const observations: Record<string, unknown>[] = [];
-      const caseForms: Parameters<typeof buildReturnCovenantRetentionRequest>[0]["caseForms"] = [];
+      const caseForms: Parameters<typeof createReturnCovenantTestRetentionRequest>[0]["caseForms"] =
+        [];
       try {
         for (const casePlan of plan.cases) {
           for (const form of casePlan.forms) {
@@ -373,7 +374,7 @@ describe("product return-covenant fixture run", () => {
           ...cleanupBindings,
         });
         const cleanupRun = record(cleanup.cleanupRun);
-        const retentionRequest = buildReturnCovenantRetentionRequest({
+        const retentionRequest = createReturnCovenantTestRetentionRequest({
           caseForms,
           cleanupRun: {
             receiptId: stringField(cleanupRun, "receiptId"),
@@ -382,7 +383,6 @@ describe("product return-covenant fixture run", () => {
             driverAttestationSha256: stringField(cleanupRun, "driverAttestationSha256"),
           },
           plan,
-          requestNonce: sha256ReturnCovenant("return-covenant-test-retention-request"),
         });
         await expect(
           run.inspectRetention(

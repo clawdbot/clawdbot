@@ -295,3 +295,53 @@ export function createReturnCovenantTestRequest(params: {
     transitionReceiptId: params.transition.receiptId,
   });
 }
+
+export function createReturnCovenantTestRetentionRequest(params: {
+  caseForms: Array<{
+    caseId: string;
+    form: ReturnCovenantForm;
+    caseHandle: string;
+  }>;
+  cleanupRun: {
+    receiptId: string;
+    observationSetSha256: string;
+    phaseChainSha256: string;
+    driverAttestationSha256: string;
+  };
+  plan: ReturnCovenantPlan;
+}) {
+  return {
+    schema: "openclaw.k6.return-covenant-retention-request.v1",
+    rowId: params.plan.rowId,
+    runId: params.plan.runId,
+    candidateSha: params.plan.target.candidateSha,
+    productTreeSha: params.plan.target.productTreeSha,
+    runtimeBuildSha: params.plan.target.runtimeBuildSha,
+    docsHarnessSha: params.plan.target.docsHarnessSha,
+    runtimeConfigSha256: params.plan.target.runtimeConfigSha256,
+    runtimeArtifactManifestSha256: params.plan.target.runtimeArtifactManifestSha256,
+    driverAttestationSha256: params.cleanupRun.driverAttestationSha256,
+    observationSetSha256: params.cleanupRun.observationSetSha256,
+    phaseChainSha256: params.cleanupRun.phaseChainSha256,
+    cleanupRunReceiptId: params.cleanupRun.receiptId,
+    requestNonce: sha256ReturnCovenant("return-covenant-test-retention-request"),
+    caseForms: params.caseForms,
+    resources: [
+      {
+        category: "delegates",
+        method: "continuation.delegates.list",
+        limit: 101,
+      },
+      {
+        category: "queueItems",
+        method: "continuation.queue.list",
+        limit: 101,
+      },
+      {
+        category: "temporarySessions",
+        method: "sessions.list",
+        limit: 101,
+      },
+    ],
+  };
+}

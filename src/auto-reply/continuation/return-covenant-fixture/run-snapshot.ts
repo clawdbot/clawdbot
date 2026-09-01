@@ -5,11 +5,7 @@ import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { loadPendingSessionDelivery } from "../../../infra/session-delivery-queue-storage.js";
 import { decodeDelegateFlow, delegateFlowRecords } from "../delegate-flow-store.js";
 import { returnCovenantAuthorityFromDelegate } from "./case-dispatch.js";
-import {
-  returnCovenantExecutionKey,
-  type ReturnCovenantCaseState,
-  type ReturnCovenantFixtureContext,
-} from "./case-state.js";
+import { type ReturnCovenantCaseState, type ReturnCovenantFixtureContext } from "./case-state.js";
 import type { ReturnCovenantDatabaseProfilesSnapshot } from "./database.js";
 import {
   parseReturnCovenantGatewayBinding,
@@ -143,8 +139,4 @@ export async function restoreReturnCovenantActiveState(params: {
     },
     request,
   };
-}
-
-export function activeReturnCovenantExecutionKey(state: ReturnCovenantCaseState): string {
-  return returnCovenantExecutionKey(state.casePlan.id, state.form);
 }

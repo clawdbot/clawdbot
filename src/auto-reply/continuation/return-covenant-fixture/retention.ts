@@ -35,7 +35,7 @@ type ReturnCovenantRetentionCleanupBinding = Pick<
   "driverAttestationSha256" | "observationSetSha256" | "phaseChainSha256" | "receiptId"
 >;
 
-export function buildReturnCovenantRetentionRequest(params: {
+function buildReturnCovenantRetentionRequest(params: {
   caseForms: ReturnCovenantRetentionCaseForm[];
   cleanupRun: ReturnCovenantRetentionCleanupBinding;
   plan: ReturnCovenantPlan;
