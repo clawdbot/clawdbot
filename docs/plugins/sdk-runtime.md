@@ -55,6 +55,14 @@ Provider and channel execution paths must use the active runtime config snapshot
 
 ## Reusable runtime utilities
 
+Channel plugins that deliver agent replies directly can call
+`renderPresentationForDelivery(handler, payload)` from
+`openclaw/plugin-sdk/interactive-runtime` in their `preparePayload` hook. Supply
+the channel's `presentationCapabilities` and `renderPresentation` callback; the
+callback receives a payload with a normalized, adapted `presentation`. This
+shares core outbound rendering's fallback-text policy and removes the portable
+presentation fields after rendering. The callback may be synchronous or async.
+
 Use `attachErrorDiagnostic(error, text)` from `openclaw/plugin-sdk/error-runtime`
 to attach supplemental operator diagnostics to a thrown error without changing
 its identity, message, or failure classification. Mask opaque credentials first;

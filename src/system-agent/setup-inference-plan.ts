@@ -1,4 +1,5 @@
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
+import { resolveCliRuntimeCanonicalProvider } from "../agents/cli-backends.js";
 import type { CodexCliApiKeyCredential } from "../agents/cli-credentials.js";
 import { CliExecutionAuthProfileError } from "../agents/cli-execution-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
@@ -310,6 +311,15 @@ export async function buildTestPlan(params: {
         return modelRef;
       }
       const ref = parseRef(modelRef);
+      // Backend metadata owns whether a CLI runtime aliases a canonical provider.
+      // Standalone CLI backends keep their runtime provider as the durable key.
+      const persistProvider =
+        resolveCliRuntimeCanonicalProvider({
+          runtime: ref.provider,
+          config: cfg,
+          env: process.env,
+          includeSetupRegistry: true,
+        }) ?? ref.provider;
       return {
         runner: "cli",
         ...ref,
@@ -317,7 +327,7 @@ export async function buildTestPlan(params: {
         config: cfg,
         agentId: "openclaw",
         routeAgentId,
-        persistModelRef: modelRef,
+        persistModelRef: `${persistProvider}/${ref.model}`,
       };
     }
     case "gemini-cli": {

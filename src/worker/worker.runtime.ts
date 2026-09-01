@@ -10,6 +10,8 @@ import type { ComputerContextEpoch } from "../agents/tools/computer-tool.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import {
@@ -79,6 +81,10 @@ export async function createWorkerRuntimeEnvironment(sessionId: string) {
         supervisor.cancelScope(scopeKey, "manual-cancel");
         await supervisor.waitForScope?.(scopeKey);
         await waitForExecScope(scopeKey);
+        // Exec finalizers can open state; release its handle before Windows removes the file.
+        closeOpenClawStateDatabaseByPath(
+          resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir }),
+        );
         // Process completion writes its task outcome into this environment's state.
         // Restore the ambient directory only after those callbacks have settled.
         if (previousStateDir === undefined) {

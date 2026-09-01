@@ -42,6 +42,7 @@ async function installDesktopClientFake(panel: import("playwright").Locator) {
         desktopClientFactory: () => {
           connect(options: FakeDesktopConnectOptions): Promise<{
             disconnect(): void;
+            disableInput(): void;
             sendBackspace(): void;
             sendKeyboardEvent(event: KeyboardEvent): void;
             sendText(text: string): void;
@@ -61,6 +62,9 @@ async function installDesktopClientFake(panel: import("playwright").Locator) {
         options.target.replaceChildren(remote);
         options.onConnect?.();
         return {
+          disableInput() {
+            element.dataset.viewOnly = "true";
+          },
           disconnect() {
             remote.remove();
           },

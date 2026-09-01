@@ -9,6 +9,8 @@ import type {
   SkillLibrarySelection,
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { createBoundedChildOutput } from "../../../test/helpers/bounded-child-output.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { persistenceRuntimeEntrypoint } from "./persistence-runtime.test-support.js";
 
 // Source-runtime startup uses the same bound as test/helpers/openclaw-test-instance.ts.
 // Publication and child close each retain their independent 10-second bound.
@@ -98,8 +100,11 @@ export async function withPersistenceChild<T>(
     phases.push(`${phase}@${Math.round(performance.now() - started)}ms`);
   };
   const diagnostic = () => `${command.action}: ${phases.join(" -> ")}; output=${output.text()}`;
-  const child = fork(new URL("./persistence-child.test-support.ts", import.meta.url), [], {
-    execArgv: ["--import", new URL("../../../scripts/tsx.mjs", import.meta.url).href],
+  const workerUrl = resolveRuntimeWorkerUrl(persistenceRuntimeEntrypoint);
+  const child = fork(workerUrl, [], {
+    execArgv: workerUrl.pathname.endsWith(".ts")
+      ? ["--import", new URL("../../../scripts/tsx.mjs", import.meta.url).href]
+      : [],
     env: persistenceEnvironment(root),
     cwd: path.resolve(import.meta.dirname, "../../.."),
     stdio: ["ignore", "pipe", "pipe", "ipc"],

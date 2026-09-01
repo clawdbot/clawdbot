@@ -1,4 +1,5 @@
 // Overflow helpers classify provider overflow errors and retryable responses.
+import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
 import type { AssistantMessage } from "../types.js";
 
 const CONFIGURED_CONTEXT_SIZE_OVERFLOW_RE =
@@ -214,6 +215,10 @@ function resolveContextInputTokens(message: AssistantMessage): number | undefine
  * @returns true if the message indicates a context overflow
  */
 export function isContextOverflow(message: AssistantMessage, contextWindow?: number): boolean {
+  // A refusal explanation can mention overflow without authorizing compact-and-retry.
+  if (isProviderRefusalAssistantError(message)) {
+    return false;
+  }
   // Case 1: Check error message patterns
   if (message.stopReason === "error" && message.errorMessage) {
     // Hoist so the regex closures keep the narrowing without assertions.
