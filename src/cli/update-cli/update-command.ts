@@ -169,7 +169,7 @@ async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
   const shouldRestart = opts.restart !== false;
   if (timeoutMs === null) {
-    return;
+    return undefined;
   }
   const requestedChannel = normalizeUpdateChannel(opts.channel);
   if (opts.channel !== undefined && !requestedChannel) {
@@ -177,13 +177,13 @@ async function prepareUpdateCommand(opts: UpdateCommandOptions) {
       `--channel must be "stable", "extended-stable", "beta", or "dev" (got "${opts.channel}")`,
     );
     defaultRuntime.exit(1);
-    return;
+    return undefined;
   }
   let devTarget: DevUpdateTarget | undefined;
   if (requestedChannel === "dev") {
     const resolvedDevTarget = readDevUpdateTargetOrExit();
     if (!resolvedDevTarget.ok) {
-      return;
+      return undefined;
     }
     devTarget = resolvedDevTarget.target;
   }
