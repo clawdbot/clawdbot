@@ -133,6 +133,12 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
   it("shows the splash instead of the login gate while a configured token connects", async () => {
     const page = await createPage();
     const loginGateMounted = await traceLoginGateMounts(page);
+    const loginModuleRequests: string[] = [];
+    page.on("request", (request) => {
+      if (/\/login-gate(?:\.runtime)?\.ts(?:\?|$)/u.test(request.url())) {
+        loginModuleRequests.push(request.url());
+      }
+    });
     const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
 
     await page.goto(`${server.baseUrl}#token=e2e-shared-token`);
@@ -181,6 +187,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     await page.locator("openclaw-app-shell").waitFor();
     expect(await page.locator(".connect-splash").count()).toBe(0);
     expect(await loginGateMounted()).toBe(false);
+    expect(loginModuleRequests).toEqual([]);
     await captureProof(page, "02-connected-content", [
       page.locator(".sidebar-brand"),
       page.locator(".agent-chat__composer-combobox textarea"),

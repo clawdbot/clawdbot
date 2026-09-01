@@ -39,9 +39,9 @@ check(
 );
 
 const composition = registrySource.match(
-  /export const ProtocolSchemas = composeProtocolSchemaFragments\(\[([\s\S]*?)\]\s+as const\);/u,
+  /export const ProtocolSchemas: ([\s\S]*?) = composeProtocolSchemaFragments\(\[([\s\S]*?)\]\s+as const\);/u,
 );
-const composedBindings = (composition?.[1] ?? "")
+const composedBindings = (composition?.[2] ?? "")
   .split("\n")
   .map((line) => line.trim().replace(/,$/u, ""))
   .filter(Boolean);
@@ -50,8 +50,10 @@ check(Boolean(composition), `${registryPath} must explicitly compose an ordered 
 check(
   composedBindings.length === importedBindings.length &&
     new Set(composedBindings).size === composedBindings.length &&
-    importedBindings.every((binding) => composedBindings.includes(binding)),
-  `${registryPath} must compose every imported fragment exactly once`,
+    importedBindings.every((binding) => composedBindings.includes(binding)) &&
+    composition?.[1]?.replace(/\s+/gu, " ").trim() ===
+      composedBindings.map((binding) => `typeof ${binding}`).join(" & "),
+  `${registryPath} must compose and type every imported fragment exactly once in order`,
 );
 
 const fragmentFiles = fs

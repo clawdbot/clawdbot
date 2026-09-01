@@ -283,41 +283,6 @@
     },
     {
       "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/agents/github-identity-view.ts",
-      "text": "agentTools.githubStateConfiguredUnavailable"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/agents/github-identity-view.ts",
-      "text": "agentTools.githubStateRateLimited"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/agents/github-identity-view.ts",
-      "text": "agentTools.githubStateUnavailable"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/agents/github-identity-view.ts",
-      "text": "agentTools.githubStateUnverified"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/agents/github-identity-view.ts",
-      "text": "agentTools.githubStateVerified"
-    },
-    {
-      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/agents/memory/view.ts",

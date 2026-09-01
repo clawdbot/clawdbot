@@ -1,17 +1,28 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ToolsGitHubAuthorizeStartResult, ToolsGitHubStatusResult } from "../../api/types.ts";
+import type { ToolsGitHubAuthorizeStartResult } from "../../api/types.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 
-export type GitHubIdentityScope = "system" | "agent";
+type GitHubSharedScope = "system" | "agent";
+export type GitHubIdentityScope = "personal" | GitHubSharedScope;
 export type GitHubIdentityDraft = { token: string; name: string; email: string };
+type GitHubConnectionOwner =
+  | { kind: "personal"; profileId: string }
+  | { kind: "shared"; scope: GitHubSharedScope; agentId: string };
+export type GitHubConnectionTarget =
+  | Extract<GitHubConnectionOwner, { kind: "personal" }>
+  | (Extract<GitHubConnectionOwner, { kind: "shared" }> & {
+      config: Record<string, unknown> | null;
+    });
 
 export type RequestOwner = {
   client: GatewayBrowserClient;
-  agentId: string;
+  target: GitHubConnectionOwner;
   clientRevision: number;
-  agentRevision: number;
   requestRevision: number;
+};
+export type SharedRequestOwner = RequestOwner & {
+  target: Extract<GitHubConnectionOwner, { kind: "shared" }>;
 };
 
 type AuthorizationPresentation = ToolsGitHubAuthorizeStartResult & {
@@ -32,7 +43,6 @@ export type GitHubAuthorizationState =
 
 export type AuthorizationOperation = {
   owner: RequestOwner;
-  scope: GitHubIdentityScope;
   controller: AbortController;
   requestId?: string;
   start?: ToolsGitHubAuthorizeStartResult;
@@ -40,22 +50,15 @@ export type AuthorizationOperation = {
   timer?: ReturnType<typeof setTimeout>;
   cancelRequested?: boolean;
   cancelInFlight?: boolean;
+  pollInFlight?: boolean;
   cancelTooLate?: boolean;
   cancelError?: string;
 };
 
 export type GitHubIdentityHost = {
   requestUpdate: () => void;
-  runExternalMutation: RuntimeConfigCapability["runExternalMutation"];
+  runExternalMutation?: RuntimeConfigCapability["runExternalMutation"];
 };
-
-export type GitHubConfigureMutationResult =
-  | {
-      ok: true;
-      value: ToolsGitHubStatusResult;
-      refresh: { ok: true } | { ok: false; error: string };
-    }
-  | { ok: false; error: string };
 
 export function configFingerprint(value: unknown): string {
   return JSON.stringify(value ?? null);
@@ -71,11 +74,26 @@ export function readGitHubIdentityDraft(value: unknown): GitHubIdentityDraft {
   };
 }
 
+export function githubConnectionOwnerKey(target: GitHubConnectionTarget | null): string {
+  return JSON.stringify(
+    target?.kind === "shared" ? { kind: target.kind, agentId: target.agentId } : target,
+  );
+}
+
+export function githubAuthorizationMethod(
+  owner: RequestOwner,
+  operation: "start" | "poll" | "cancel",
+) {
+  return `${owner.target.kind === "personal" ? "users" : "tools"}.github.authorize.${operation}`;
+}
+
 export function cancelAuthorizationRequest(operation: AuthorizationOperation): void {
   if (!operation.requestId) {
     return;
   }
   void operation.owner.client
-    .request("tools.github.authorize.cancel", { requestId: operation.requestId })
+    .request(githubAuthorizationMethod(operation.owner, "cancel"), {
+      requestId: operation.requestId,
+    })
     .catch(() => undefined);
 }
