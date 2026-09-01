@@ -113,6 +113,30 @@ describe("silent assistant-error retry owner", () => {
     });
   });
 
+  it("keeps a structured provider refusal terminal", async () => {
+    const assistant = makeAssistant({
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      errorMessage: "HTTP 503: provider overloaded",
+      diagnostics: [
+        {
+          type: "provider_refusal",
+          timestamp: 1,
+          details: { provider: "anthropic", category: "policy" },
+        },
+      ],
+    });
+    const input = makeInput({ assistant });
+    input.maybeRetryTransient = vi.fn(async () => true);
+
+    const outcome = await handleEmbeddedAssistantFailure(input);
+
+    expect(outcome).toMatchObject({ action: "proceed", emptyErrorRetries: 0 });
+    expect(input.maybeRetryTransient).not.toHaveBeenCalled();
+    expect(input.advanceAuthProfile).not.toHaveBeenCalled();
+  });
+
   it("does not retry an error attempt after replay-unsafe tool activity", async () => {
     const outcome = await handleEmbeddedAssistantFailure(
       makeInput({

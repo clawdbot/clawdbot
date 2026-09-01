@@ -54,6 +54,63 @@ describe("incomplete-turn terminal metadata", () => {
     ).toContain("couldn't generate a response");
   });
 
+  it("surfaces a sanitized structured provider refusal", () => {
+    const assistant = buildEmbeddedRunnerAssistant({
+      stopReason: "error",
+      errorMessage: "Anthropic refusal (category: policy): private provider explanation",
+      diagnostics: [
+        {
+          type: "provider_refusal",
+          timestamp: 1,
+          details: { category: "policy", explanation: "private provider explanation" },
+        },
+      ],
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+    });
+
+    expect(
+      resolveIncompleteTurnPayloadText({
+        payloadCount: 0,
+        aborted: false,
+        externalAbort: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe("The provider refused this request (category: policy).");
+  });
+
+  it("keeps the side-effect warning ahead of a structured provider refusal", () => {
+    const assistant = buildEmbeddedRunnerAssistant({
+      stopReason: "error",
+      errorMessage: "Anthropic refusal: private provider explanation",
+      diagnostics: [
+        {
+          type: "provider_refusal",
+          timestamp: 1,
+          details: { category: "policy", explanation: "private provider explanation" },
+        },
+      ],
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+    });
+
+    expect(
+      resolveIncompleteTurnPayloadText({
+        payloadCount: 0,
+        aborted: false,
+        externalAbort: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toContain("some tool actions may have already been executed");
+  });
+
   it("emits a silent cron reply from the trailing current-attempt tool result", () => {
     const attempt = makeEmbeddedRunnerAttempt({
       toolMetas: [{ toolName: "exec" }],

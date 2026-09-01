@@ -32,7 +32,7 @@ import {
   renderRateLimitOrOverloadedCopy,
 } from "../failover/user-copy.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox/runtime-status.js";
-import { buildAssistantFailoverSignal } from "./assistant-message-failures.js";
+import { buildAssistantFailoverSignal, findProviderRefusal } from "./assistant-message-failures.js";
 import { classifyProviderRuntimeFailureKind } from "./provider-runtime-failure.js";
 const log = createSubsystemLogger("errors");
 const sandboxToolPolicyAuditMessages = new WeakSet<AssistantMessage>();
@@ -61,6 +61,18 @@ type ClassifiedAssistantErrorFacts = {
   reason: FailoverReason | null;
   status?: number;
 };
+
+function formatProviderRefusalText(msg: AssistantMessage): string | undefined {
+  const refusal = findProviderRefusal(msg);
+  if (!refusal) {
+    return undefined;
+  }
+  const category = refusal.details?.category;
+  const safeCategory =
+    typeof category === "string" && /^[a-z0-9_-]{1,64}$/i.test(category) ? category : undefined;
+  return `The provider refused this request${safeCategory ? ` (category: ${safeCategory})` : ""}.`;
+}
+
 function classifyAssistantErrorFacts(
   msg: AssistantMessage,
   opts?: AssistantErrorTextOptions,
@@ -99,6 +111,10 @@ export function formatAssistantErrorText(
   const raw = (msg.errorMessage ?? "").trim();
   if (msg.stopReason !== "error" && !raw) {
     return undefined;
+  }
+  const providerRefusalText = formatProviderRefusalText(msg);
+  if (providerRefusalText) {
+    return providerRefusalText;
   }
   const formatCopy = renderFormatErrorCopy(raw);
   const classifiedFacts = facts ?? classifyAssistantErrorFacts(msg, opts);

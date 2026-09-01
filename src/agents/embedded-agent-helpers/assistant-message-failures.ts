@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "../../llm/types.js";
+import type { AssistantMessage, AssistantMessageDiagnostic } from "../../llm/types.js";
 import { isReplayUnsafeAssistantError } from "../../llm/utils/retry.js";
 import { extractErrorHttpStatus } from "../../shared/assistant-error-format.js";
 import {
@@ -11,6 +11,14 @@ import type { PreparedProviderFailoverOwner } from "../failover/provider-pattern
 import { resolveRetryAfterMs } from "../failover/retry-evidence.js";
 import { extractFailoverSignalDetails } from "../failover/signal-details.js";
 import type { FailoverReason, FailoverSignal } from "../failover/signal.js";
+
+/** Returns the provider-owned terminal refusal diagnostic, when present. */
+export function findProviderRefusal(
+  msg: Pick<AssistantMessage, "diagnostics"> | null | undefined,
+): AssistantMessageDiagnostic | undefined {
+  return msg?.diagnostics?.find((diagnostic) => diagnostic.type === "provider_refusal");
+}
+
 export function buildAssistantFailoverSignal(
   msg: AssistantMessage,
   opts?: { provider?: string },

@@ -57,6 +57,50 @@ describe("formatAssistantErrorText streaming JSON parse classification", () => {
     },
   );
 
+  it("surfaces only the bounded category from a structured provider refusal", () => {
+    const msg = makeAssistantMessageFixture({
+      errorMessage: "HTTP 503: private provider explanation",
+      content: [],
+      diagnostics: [
+        {
+          type: "provider_refusal",
+          timestamp: 1,
+          details: {
+            provider: "anthropic",
+            category: "policy_safety-2",
+            explanation: "private provider explanation",
+          },
+        },
+      ],
+    });
+
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The provider refused this request (category: policy_safety-2).",
+    );
+    expect(formatUserFacingAssistantErrorText(msg)).toBe(
+      "The provider refused this request (category: policy_safety-2).",
+    );
+  });
+
+  it.each(["unsafe category!", "a".repeat(65)])(
+    "omits an unsafe provider refusal category %j",
+    (category) => {
+      const msg = makeAssistantMessageFixture({
+        errorMessage: "Anthropic refusal: private provider explanation",
+        content: [],
+        diagnostics: [
+          {
+            type: "provider_refusal",
+            timestamp: 1,
+            details: { category, explanation: "private provider explanation" },
+          },
+        ],
+      });
+
+      expect(formatUserFacingAssistantErrorText(msg)).toBe("The provider refused this request.");
+    },
+  );
+
   it("keeps non-streaming provider request-validation syntax diagnostics", () => {
     const msg = makeAssistantError(
       '{"type":"error","error":{"type":"invalid_request_error","message":"Expected value in JSON at position 12 for messages.0.content"}}',

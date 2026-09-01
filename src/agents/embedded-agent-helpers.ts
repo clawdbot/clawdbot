@@ -7,6 +7,7 @@ export {
 } from "./embedded-agent-helpers/bootstrap.js";
 export {
   classifyAssistantFailoverReason,
+  findProviderRefusal,
   isAuthAssistantError,
   isBillingAssistantError,
   isFailoverAssistantError,

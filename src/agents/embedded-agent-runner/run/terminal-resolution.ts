@@ -10,6 +10,7 @@ import {
   projectAgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
 import type { AuthProfileFailureReason, AuthProfileStore } from "../../auth-profiles.js";
+import { findProviderRefusal } from "../../embedded-agent-helpers/assistant-message-failures.js";
 import type { ResolvedProviderAuth } from "../../model-auth.js";
 import { log } from "../logger.js";
 import type { EmbeddedRunReplayState } from "../replay-state.js";
@@ -272,8 +273,12 @@ export async function resolveEmbeddedRunTerminal(input: {
     timedOut: terminalTimedOut,
     attempt,
   });
+  const providerRefusal =
+    findProviderRefusal(attempt.currentAttemptAssistant) ??
+    findProviderRefusal(input.attemptAssistant) ??
+    findProviderRefusal(attempt.lastAssistant);
   const nextReasoningOnlyRetryInstruction =
-    emptyAssistantReplyIsSilent || settledTurnFinalizationAttempted
+    emptyAssistantReplyIsSilent || settledTurnFinalizationAttempted || providerRefusal
       ? null
       : resolveReasoningOnlyRetryInstruction({
           provider: input.activeErrorContext.provider,
@@ -285,7 +290,7 @@ export async function resolveEmbeddedRunTerminal(input: {
           attempt,
         });
   const nextEmptyResponseRetryInstruction =
-    emptyAssistantReplyIsSilent || settledTurnFinalizationAttempted
+    emptyAssistantReplyIsSilent || settledTurnFinalizationAttempted || providerRefusal
       ? null
       : resolveEmptyResponseRetryInstruction({
           provider: input.activeErrorContext.provider,
@@ -369,6 +374,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     !promptError &&
     !attempt.lastToolError &&
     !hasAttemptTerminalState(attempt) &&
+    !providerRefusal &&
     !input.replayState.hadPotentialSideEffects,
   );
   const terminalToolPresentation = incompleteTurnFallbackSafe
@@ -386,6 +392,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     !attempt.yieldDetected &&
     !attempt.didSendDeterministicApprovalPrompt &&
     !attempt.lastToolError &&
+    !providerRefusal &&
     !input.replayState.hadPotentialSideEffects &&
     retryState.compactionContinuationAttempts < 1
   ) {

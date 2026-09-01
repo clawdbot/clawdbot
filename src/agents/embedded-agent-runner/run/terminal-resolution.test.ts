@@ -316,6 +316,58 @@ describe("terminal resolution", () => {
     expect(armPostCompactionGuard).toHaveBeenCalledTimes(1);
   });
 
+  it("completes a structured refusal after Anthropic compaction without retrying", async () => {
+    const assistant = emptyAssistant({
+      stopReason: "error",
+      errorMessage: "HTTP 503: private provider explanation",
+      diagnostics: [
+        {
+          type: "provider_refusal",
+          timestamp: 1,
+          details: { category: "policy", explanation: "private provider explanation" },
+        },
+      ],
+      providerReplay: {
+        v: 1,
+        type: "anthropic-compaction",
+        data: "summary",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        model: "claude-sonnet-4-6",
+        baseUrlHash: "route-a",
+      },
+    } as never);
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    });
+    const input = makeTerminalInput({
+      attempt,
+      attemptAssistant: assistant,
+      maxEmptyResponseRetryAttempts: 1,
+    });
+
+    const resolved = await resolveEmbeddedRunTerminal(input);
+
+    expect(resolved.action).toBe("complete");
+    if (resolved.action !== "complete") {
+      return;
+    }
+    expect(resolved.result.payloads).toEqual([
+      { text: "The provider refused this request (category: policy).", isError: true },
+    ]);
+    expect(resolved.result.meta.error).toMatchObject({
+      kind: "incomplete_turn",
+      fallbackSafe: false,
+    });
+    expect(input.activateInternalPrompt).not.toHaveBeenCalled();
+    expect(input.armPostCompactionGuard).not.toHaveBeenCalled();
+    expect(input.retryState.emptyResponseAttempts).toBe(0);
+    expect(input.retryState.compactionContinuationAttempts).toBe(0);
+  });
+
   it("completes an explicit silent reply without retrying", async () => {
     const assistant = buildEmbeddedRunnerAssistant({
       content: [{ type: "text", text: SILENT_REPLY_TOKEN }],

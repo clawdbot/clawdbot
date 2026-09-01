@@ -5,6 +5,7 @@ import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome
 import type { AuthProfileFailureReason, AuthProfileStore } from "../../auth-profiles.js";
 import {
   classifyAssistantFailoverReason,
+  findProviderRefusal,
   type FailoverReason,
   isAuthAssistantError,
   isBillingAssistantError,
@@ -123,12 +124,12 @@ export async function handleEmbeddedAssistantFailure(input: {
     },
   );
   const replayUnsafeAssistantError = isReplayUnsafeAssistantError(input.attemptAssistant);
-  if (replayUnsafeAssistantError || !isCurrentAttemptReplaySafe(input.attempt)) {
+  const providerRefusal = findProviderRefusal(input.attemptAssistant);
+  if (replayUnsafeAssistantError || providerRefusal || !isCurrentAttemptReplaySafe(input.attempt)) {
     return buildOutcome(input, {
       action: "proceed",
-      assistantProfileFailureReason: replayUnsafeAssistantError
-        ? null
-        : assistantProfileFailureReason,
+      assistantProfileFailureReason:
+        replayUnsafeAssistantError || providerRefusal ? null : assistantProfileFailureReason,
     });
   }
   if (fallbackThinking && !terminalInterrupted) {
