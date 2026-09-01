@@ -206,16 +206,39 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       if (repairedIndexIdentity.status !== "valid") {
         return [];
       }
-      const backgroundSearchSync = startAsyncSearchSync({
-        enabled:
-          (this.settings.sync.onSearch || sessionStartSync) &&
-          (this.purpose === "default" || this.purpose === "cli"),
+      const backgroundSyncEnabled =
+        (this.settings.sync.onSearch || sessionStartSync) &&
+        (this.purpose === "default" || this.purpose === "cli");
+      const runBackgroundSearchSync = (params: {
+        dirty: boolean;
+        sessionsDirty: boolean;
+        failureLabel: string;
+      }) =>
+        startAsyncSearchSync({
+          enabled: backgroundSyncEnabled,
+          dirty: params.dirty,
+          sessionsDirty: params.sessionsDirty,
+          sync: async (syncParams) => await this.syncPublishedIndexInBackground(syncParams),
+          onError: (err) => {
+            log.warn(`memory sync failed (${params.failureLabel}): ${String(err)}`);
+          },
+        });
+      const initialBackgroundSearchSync = runBackgroundSearchSync({
         dirty: this.dirty,
         sessionsDirty: this.sessionsDirty,
-        sync: async (params) => await this.syncPublishedIndexInBackground(params),
-        onError: (err) => {
-          log.warn(`memory sync failed (search): ${String(err)}`);
-        },
+        failureLabel: "search",
+      });
+      const backgroundSearchSync = initialBackgroundSearchSync?.then(async () => {
+        // The active session transcript can change while maintenance indexes its
+        // previous snapshot. Give that narrow race one bounded follow-up pass so
+        // recall converges without blocking the search or looping forever.
+        if (!this.dirty && this.sessionsDirty) {
+          await runBackgroundSearchSync({
+            dirty: false,
+            sessionsDirty: true,
+            failureLabel: "search-session-catchup",
+          });
+        }
       });
       if (backgroundSearchSync) {
         const trackedSearchSync = backgroundSearchSync.finally(() => {
