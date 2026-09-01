@@ -65,6 +65,8 @@ function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
     runsDeliveryStatuses: [],
     runsQuery: "",
     runsSortDir: "desc",
+    taskLanes: null,
+    taskLanesError: null,
     agentSuggestions: [],
     modelSuggestions: [],
     thinkingSuggestions: [],

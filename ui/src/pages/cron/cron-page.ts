@@ -21,6 +21,7 @@ import {
   loadCronModelSuggestions,
   loadCronRuns,
   loadCronStatus,
+  loadTaskLanes,
   loadMoreCronRuns,
   normalizeCronFormState,
   removeCronJob,
@@ -127,6 +128,10 @@ class CronPage extends OpenClawLightDomElement {
     );
 
   override disconnectedCallback() {
+    if (this.taskLanesReloadTimer !== null) {
+      clearTimeout(this.taskLanesReloadTimer);
+      this.taskLanesReloadTimer = null;
+    }
     this.subscriptions.clear();
     super.disconnectedCallback();
   }
@@ -166,6 +171,21 @@ class CronPage extends OpenClawLightDomElement {
       this.modelSuggestionsState = cronState;
       void this.loadModelSuggestions(cronState);
     }
+    void this.runCronTask((current) => loadTaskLanes(current));
+  }
+
+  private taskLanesReloadTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Task lanes reflect cron mutations (a run adds lane items); coalesce
+  // bursts into one trailing reload so rapid actions stay one request.
+  private scheduleTaskLanesReload() {
+    if (this.taskLanesReloadTimer !== null) {
+      clearTimeout(this.taskLanesReloadTimer);
+    }
+    this.taskLanesReloadTimer = setTimeout(() => {
+      this.taskLanesReloadTimer = null;
+      void this.runCronTask((current) => loadTaskLanes(current));
+    }, 150);
   }
 
   private requestCronUpdate(cronState: CronState = this.cron) {
@@ -427,6 +447,7 @@ class CronPage extends OpenClawLightDomElement {
     }
     await this.runCronTask(async (current) => {
       await removeCronJob(current, currentJob);
+      this.scheduleTaskLanesReload();
       // Removing the selected task drops the panel back to overview;
       // the runs scope must follow or recent activity stays empty.
       if (current.cronRunsScope === "job" && current.cronRunsJobId === null) {
@@ -455,6 +476,7 @@ class CronPage extends OpenClawLightDomElement {
       if (!result.saved) {
         return;
       }
+      this.scheduleTaskLanesReload();
       if (cronState.cronEditingJob) {
         return;
       }
@@ -536,6 +558,8 @@ class CronPage extends OpenClawLightDomElement {
           runsDeliveryStatuses: this.cron.cronRunsDeliveryStatuses,
           runsQuery: this.cron.cronRunsQuery,
           runsSortDir: this.cron.cronRunsSortDir,
+          taskLanes: this.cron.taskLanes,
+          taskLanesError: this.cron.taskLanesError,
           fieldErrors: this.cron.cronFieldErrors,
           canSubmit: !hasCronFormErrors(this.cron.cronFieldErrors),
           agentSuggestions: suggestions.agentSuggestions,
@@ -559,9 +583,15 @@ class CronPage extends OpenClawLightDomElement {
           onClosePanel: () => this.closePanel(),
           onClone: (job) => this.cloneJob(job),
           onToggle: (job, enabled) =>
-            this.runCronAdminTask((cronState) => toggleCronJob(cronState, job, enabled)),
+            this.runCronAdminTask(async (cronState) => {
+              await toggleCronJob(cronState, job, enabled);
+              this.scheduleTaskLanesReload();
+            }),
           onRun: (job, mode) =>
-            this.runCronAdminTask((cronState) => runCronJob(cronState, job.id, mode ?? "force")),
+            this.runCronAdminTask(async (cronState) => {
+              await runCronJob(cronState, job.id, mode ?? "force");
+              this.scheduleTaskLanesReload();
+            }),
           onRemove: (job) => void this.removeJob(job),
           onLoadMoreJobs: () =>
             void this.runCronTask((cronState) =>

@@ -9,6 +9,8 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 // Control UI view renders the Automations (cron) screen: a full-width list (stats, task table,
 // starter ideas) and a full-page detail view for creating or editing a single automation.
 import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
+import { isSystemOwnedCronPayloadKind } from "../../../../src/cron/types.js";
+import type { TaskLaneSnapshotPayload } from "../../../../packages/gateway-protocol/src/index.js";
 import "../../styles/chat/text.css";
 import "../../styles/cron.css";
 import type {
@@ -61,6 +63,7 @@ import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { renderSegmented } from "./segmented-control.ts";
 import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
 import { renderRunsSection, runStatusLabel } from "./view-runs.ts";
+import { renderTaskLanesPanel } from "./view-task-lanes.ts";
 
 type CronPanelMode = "overview" | "create" | "job";
 
@@ -111,6 +114,8 @@ type CronProps = {
   runsDeliveryStatuses: CronDeliveryStatus[];
   runsQuery: string;
   runsSortDir: CronSortDir;
+  taskLanes: TaskLaneSnapshotPayload | null;
+  taskLanesError: string | null;
   agentSuggestions: string[];
   modelSuggestions: string[];
   thinkingSuggestions: string[];
@@ -519,7 +524,9 @@ function renderListView(props: CronProps) {
           props.listTab === "activity"
             ? renderSettingsSection(
                 {},
-                html`<div class="cron-activity">${renderRunsSection(props)}</div>`,
+                html`<div class="cron-activity">
+                  ${renderTaskLanesPanel(props)}${renderRunsSection(props)}
+                </div>`,
               )
             : [
                 renderSettingsSection({}, renderJobsTable(props, hasAnyJobsFilters)),
