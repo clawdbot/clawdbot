@@ -1633,6 +1633,33 @@ describe("skill workshop proposals", () => {
     ).rejects.toThrow("proposal content is too large");
   });
 
+  it("does not let quarantined proposals consume the pending authoring budget", async () => {
+    const workspaceDir = await makeWorkspace();
+    const limitedConfig = { skills: { workshop: { maxPending: 1 } } };
+    const quarantined = await proposeCreateSkill({
+      workspaceDir,
+      config: limitedConfig,
+      name: "Quarantined Limited",
+      description: "Terminal quarantine must not block later authoring",
+      content: "# Quarantined Limited\n",
+    });
+    await quarantineSkillProposal({
+      workspaceDir,
+      proposalId: quarantined.record.id,
+      reason: "Needs separate operator review",
+    });
+
+    await expect(
+      proposeCreateSkill({
+        workspaceDir,
+        config: limitedConfig,
+        name: "Authoring Still Available",
+        description: "Create while quarantine is full",
+        content: "# Authoring Still Available\n",
+      }),
+    ).resolves.toMatchObject({ record: { status: "pending" } });
+  });
+
   it("bounds proposal descriptions before writing proposal state", async () => {
     const workspaceDir = await makeWorkspace();
     await expect(

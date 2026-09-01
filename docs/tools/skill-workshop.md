@@ -392,7 +392,7 @@ the proposal threshold, and troubleshooting.
 | `autonomous.mode`          | `"auto"` | `"off"` disables autonomous capture, `"propose"` creates pending captures, and `"auto"` applies captures and runs weekly cleanup that can rewrite or drop Workshop-owned skills. |
 | `allowSymlinkTargetWrites` | `false`  | Lets apply write through workspace skill symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.                                                              |
 | `approvalPolicy`           | `"auto"` | `"auto"` skips an additional prompt for agent-initiated `apply`, `reject`, or `quarantine` (the agent still has to call the action). `"pending"` requires approval.              |
-| `maxPending`               | `50`     | Caps pending and quarantined proposals per workspace (1-200).                                                                                                                    |
+| `maxPending`               | `50`     | Caps pending proposals per workspace (1-200). Quarantined proposals remain available for triage without blocking authoring.                                                      |
 | `maxSkillBytes`            | `40000`  | Caps manual and foreground proposal body size in bytes (1024-200000). Autonomous results have a 10,000-character cap.                                                            |
 
 In `propose` and `auto` modes, an isolated run of the selected model decides whether the
@@ -492,14 +492,14 @@ proposals remain listed with a previous-workspace marker instead of disappearing
 
 ## Limits
 
-| Limit                           | Value                                                                        |
-| ------------------------------- | ---------------------------------------------------------------------------- |
-| Description                     | 160 bytes                                                                    |
-| Proposal body                   | `skills.workshop.maxSkillBytes` (default 40,000; hard ceiling 200,000 bytes) |
-| Autonomous `SKILL.md`           | 10,000 characters, or strictly shorter when already over the cap             |
-| Support files                   | 64 per proposal                                                              |
-| Support file size               | 256 KiB each, 2 MiB total                                                    |
-| Pending + quarantined proposals | `skills.workshop.maxPending` per workspace (default 50)                      |
+| Limit                 | Value                                                                        |
+| --------------------- | ---------------------------------------------------------------------------- |
+| Description           | 160 bytes                                                                    |
+| Proposal body         | `skills.workshop.maxSkillBytes` (default 40,000; hard ceiling 200,000 bytes) |
+| Autonomous `SKILL.md` | 10,000 characters, or strictly shorter when already over the cap             |
+| Support files         | 64 per proposal                                                              |
+| Support file size     | 256 KiB each, 2 MiB total                                                    |
+| Pending proposals     | `skills.workshop.maxPending` per workspace (default 50)                      |
 
 ## Troubleshooting
 
@@ -512,6 +512,7 @@ proposals remain listed with a previous-workspace marker instead of disappearing
 | `untrusted symlink target`                     | Configure `skills.load.allowSymlinkTargets` and enable `skills.workshop.allowSymlinkTargetWrites` only for intentional shared skill roots.                                                                  |
 | `Support file paths must be under one of...`   | Move support files under `assets/`, `examples/`, `references/`, `scripts/`, or `templates/`.                                                                                                                |
 | Proposal does not show in list                 | Check the selected `--agent` workspace and `OPENCLAW_STATE_DIR`.                                                                                                                                            |
+| `pending proposal limit reached`               | Run `openclaw skills workshop list`, then apply, reject, or quarantine one pending proposal. Quarantined proposals do not consume the pending limit.                                                        |
 | Agent cannot call `skill_workshop`             | Check the active tool policy and run mode. `coding` includes the tool; restrictive `tools.allow` policies must list it explicitly, and sandboxed runs must use a normal host-side agent session or the CLI. |
 
 ### Tool-policy diagnostic

@@ -386,8 +386,9 @@ proposal-only permissions, and troubleshooting.
 </ParamField>
 
 <ParamField path="skills.workshop.maxPending" type="number" default="50">
-  Maximum pending and quarantined proposals retained per workspace (allowed
-  range: 1-200).
+  Maximum pending proposals retained per workspace (allowed range: 1-200).
+  Quarantined proposals remain inspectable but do not consume this authoring
+  budget.
 </ParamField>
 
 <ParamField path="skills.workshop.maxSkillBytes" type="number" default="40000">
