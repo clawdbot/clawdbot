@@ -188,6 +188,11 @@ attempt with new job IDs and their original runner details; that does not mean
 they executed again. Wait for the selected jobs and aggregate gate, then recheck
 `gh pr checks <pr-number> --required --json name,bucket,state,link`.
 
+Fork PR retries use GitHub-hosted runners for every CI job, including
+`preflight`. Fork runs cannot read the base repository's runner-backend variable,
+so this recovery path does not depend on that override. First-attempt routing
+and the selected test and check coverage stay unchanged.
+
 For genuinely missing or unrecoverable attached CI, follow the verifier's
 `scripts/pr ci-dispatch <pr-number>` recovery guidance when available. Its
 separate manual run can supply hosted preparation proof, but a successful check
