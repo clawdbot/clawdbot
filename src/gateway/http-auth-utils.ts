@@ -8,9 +8,6 @@ import {
 import { getRuntimeConfig } from "../config/io.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { verifyDeviceToken } from "../infra/device-pairing-tokens.js";
-import { listDevicePairing } from "../infra/device-pairing.js";
-import { verifyPairingToken } from "../infra/pairing-token.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import {
   ensureProfileForEmail,
@@ -30,6 +27,8 @@ import {
   type ResolvedGatewayAuth,
 } from "./auth.js";
 import type { ControlUiPluginFrameGrantAck } from "./control-ui-contract.js";
+import { verifyControlUiDeviceCredential } from "./control-ui-device-credential.js";
+import { verifyControlUiDeviceReadToken } from "./control-ui-device-token.js";
 import {
   resolveControlUiPluginAuthCookieGrants,
   setControlUiPluginAuthCookie,
@@ -54,9 +53,6 @@ import { resolveBrowserOriginPolicy } from "./origin-check.js";
 import { withSerializedCredentialFallbackAttempt } from "./rate-limit-attempt-serialization.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
-
-const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read";
-const CONTROL_UI_OPERATOR_ROLE = "operator";
 
 export function getHeader(req: IncomingMessage, name: string): string | undefined {
   const raw = req.headers[normalizeLowercaseStringOrEmpty(name)];
@@ -240,32 +236,6 @@ function resolveControlUiReadAuthToken(
   }
 }
 
-async function verifyControlUiDeviceReadToken(
-  token: string,
-  requiredSharedGatewaySessionGeneration: string | undefined,
-): Promise<string[] | null> {
-  const pairing = await listDevicePairing();
-  for (const device of pairing.paired) {
-    const operatorToken = device.tokens?.[CONTROL_UI_OPERATOR_ROLE];
-    if (
-      !operatorToken ||
-      operatorToken.revokedAtMs ||
-      !verifyPairingToken(token, operatorToken.token)
-    ) {
-      continue;
-    }
-    const verified = await verifyDeviceToken({
-      deviceId: device.deviceId,
-      token,
-      role: CONTROL_UI_OPERATOR_ROLE,
-      scopes: [CONTROL_UI_OPERATOR_READ_SCOPE],
-      requiredSharedGatewaySessionGeneration,
-    });
-    return verified.ok ? [...operatorToken.scopes] : null;
-  }
-  return null;
-}
-
 function resolveControlUiReadOperatorScopes(
   req: IncomingMessage,
   authMethod: NonNullable<GatewayAuthResult["method"]>,
@@ -350,7 +320,27 @@ export async function authorizeControlUiReadRequestOrReply(
           retryAfterMs: deviceRateCheck.retryAfterMs,
         };
       } else {
-        const verifiedScopes = await verifyControlUiDeviceReadToken(token, authGeneration);
+        // The post-connect credential is redeemable only on the managed-Serve
+        // ingress and only by the tailnet principal it was minted for, which the
+        // verifier re-resolves from this request's own whois-checked identity.
+        // Redemption re-reads `allowTailscale` because nothing rotates an
+        // outstanding credential when that flag flips: without this an operator
+        // who turns the Tailscale lane off would keep serving credential-bearing
+        // reads for the rest of the 12h TTL, on the very lane they disabled.
+        // Falling through leaves paired-device tokens their existing
+        // ingress-agnostic reach.
+        const serveIngress =
+          auth.allowTailscale && ingressAttribution.kind === "tailscale-serve"
+            ? ingressAttribution
+            : null;
+        const verifiedScopes =
+          (serveIngress
+            ? await verifyControlUiDeviceCredential({
+                credential: token,
+                authGeneration,
+                resolvePresentedPrincipal: async () => (await serveIngress.verifyIdentity())?.login,
+              })
+            : null) ?? (await verifyControlUiDeviceReadToken(token, authGeneration));
         if (verifiedScopes) {
           deviceScopes = verifiedScopes;
           params.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);

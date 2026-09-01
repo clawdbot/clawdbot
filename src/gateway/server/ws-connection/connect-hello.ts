@@ -12,9 +12,11 @@ import {
   finalizeNodePairingCleanupClaim,
   recordPairedNodeConnection,
 } from "../../../infra/device-pairing-node.js";
+import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import { hasMultipleSessionSharingIdentities } from "../../../state/user-profiles.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
 import { resolveChatAttachmentPolicy } from "../../chat-attachment-policy.js";
+import { issueControlUiDeviceCredential } from "../../control-ui-device-credential.js";
 import {
   listControlUiPluginTabs,
   listControlUiPluginWidgetKinds,
@@ -29,11 +31,13 @@ import {
 import { canReadDetailedUpdateMetadata } from "../../events.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
+import { READ_SCOPE } from "../../operator-scopes.js";
 import { MAX_BUFFERED_BYTES, MAX_PAYLOAD_BYTES, TICK_INTERVAL_MS } from "../../server-constants.js";
 import { formatError } from "../../server-utils.js";
 import { allowedSessionVisibilities } from "../../session-sharing.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { buildGatewaySnapshot, getHealthCache, getHealthVersion } from "../health-state.js";
+import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
 import { emitGatewayAuthSecurityEvent } from "./connect-auth-security.js";
 import type {
   DeviceAuthorizedGatewayConnect,
@@ -81,9 +85,50 @@ export async function sendGatewayHello(
     sessionSharedGatewaySessionGeneration,
     issuedBootstrapProfile,
     handoffBootstrapProfile,
+    controlUiPairingKind,
     deviceToken,
     bootstrapDeviceTokens,
   } = state;
+  // The Tailscale Serve lane skips pairing, so `ensureDeviceToken` has no row to
+  // bind and this browser leaves the handshake with nothing it can present on the
+  // Control UI's HTTP reads. Mint the credential here instead: the device proof is
+  // verified by now, binding it to the shared-auth generation the HTTP side
+  // recomputes keeps a secret rotation from outliving it, and binding it to this
+  // connect's verified tailnet principal keeps a copy from being redeemable by
+  // another tailnet user on the same ingress. `verifyIdentity` is the same
+  // whois-checked resolution the connect authenticated with and is memoized per
+  // attribution, so this adds no lookup. No verified principal, no credential.
+  // The credential redeems as `operator.read` over HTTP, so it is never minted
+  // beyond this session's own read authority: `scopes` here is the final
+  // post-cap set, and a session that cannot read over the socket cannot hand
+  // itself a credential that can.
+  const controlUiCredentialHasReadAuthority = roleScopesAllow({
+    role,
+    requestedScopes: [READ_SCOPE],
+    allowedScopes: scopes,
+  });
+  const controlUiCredentialIngress =
+    controlUiPairingKind === "tailscale-device" &&
+    device &&
+    !deviceToken &&
+    controlUiCredentialHasReadAuthority &&
+    context.handler.ingressAttribution.kind === "tailscale-serve"
+      ? context.handler.ingressAttribution
+      : null;
+  const controlUiCredentialPrincipal = controlUiCredentialIngress
+    ? (await controlUiCredentialIngress.verifyIdentity())?.login
+    : undefined;
+  const controlUiDeviceCredential =
+    device && controlUiCredentialPrincipal
+      ? issueControlUiDeviceCredential({
+          deviceId: device.id,
+          principal: controlUiCredentialPrincipal,
+          authGeneration: resolveSharedGatewaySessionGeneration(
+            resolvedAuth,
+            context.configSnapshot.gateway?.trustedProxies,
+          ),
+        })
+      : null;
   // Prefer the authenticated human; principal scopes never inherit device-token rows.
   const authenticatedPrincipal = authenticatedUserProfileId ?? authResult.user;
   const recoveryScopeMaterial = authenticatedPrincipal
@@ -162,6 +207,12 @@ export async function sendGatewayHello(
       scopes,
       ...(recoveryScope ? { recoveryScope } : {}),
       ...(canMigrateRecovery ? { recoveryMigrationAllowed: true as const } : {}),
+      ...(controlUiDeviceCredential
+        ? {
+            httpCredential: controlUiDeviceCredential.credential,
+            httpCredentialExpiresAtMs: controlUiDeviceCredential.expiresAtMs,
+          }
+        : {}),
       ...(deviceToken
         ? {
             deviceToken: deviceToken.token,

@@ -9,13 +9,9 @@ import {
   type ControlUiPluginFrameGrantAck,
 } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { normalizeAssistantIdentity } from "../lib/assistant-identity.ts";
-import { resolveControlUiAuthCandidates } from "./control-ui-auth.ts";
+import { resolveControlUiAuthCandidates, type ControlUiAuthSource } from "./control-ui-auth.ts";
 
-type ApplicationConfigAuthSource = {
-  hello?: { auth?: { deviceToken?: string | null } | null } | null;
-  settings?: { token?: string | null } | null;
-  password?: string | null;
-};
+type ApplicationConfigAuthSource = ControlUiAuthSource;
 
 type ApplicationConfig = {
   assistantIdentity: {

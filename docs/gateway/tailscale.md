@@ -107,9 +107,47 @@ This tokenless flow assumes the gateway host is trusted. If untrusted local code
 
 Scope of the bypass:
 
-- Applies to the Control UI WebSocket auth surface and read-only `GET`/`HEAD` requests for Control UI profile avatars. Other HTTP API endpoints (`/v1/*`, `/tools/invoke`, `/api/channels/*`, etc.) never use Tailscale identity-header auth; they always follow the gateway's normal HTTP auth mode.
+- Applies to the Control UI WebSocket auth surface and read-only `GET`/`HEAD` requests for Control UI profile avatars. No other HTTP read accepts Tailscale identity on its own: the Control UI's bootstrap config read (`/control-ui-config.json`), assistant-media metadata, media-ticket minting, and media bytes all require a real credential — a gateway token, trusted-proxy identity, a paired device token, or the principal-bound HTTP credential described below.
+- Other HTTP API endpoints (`/v1/*`, `/tools/invoke`, `/api/channels/*`, etc.) never use Tailscale identity-header auth; they always follow the gateway's normal HTTP auth mode.
 - For Control UI operator sessions that already carry browser device identity, a verified Tailscale identity skips the bootstrap-token/QR pairing round trip.
 - It does not bypass device identity itself: device-less clients are still rejected, and node-role connections still go through normal pairing and auth checks.
+
+### Principal-bound HTTP credential
+
+Because the Serve lane skips pairing, the browser holds no paired-device token for
+its HTTP reads. The gateway closes that gap on the WebSocket handshake rather than
+by accepting ambient identity on HTTP: once the connect authenticates and the
+device proves its keypair, `hello-ok` carries a short-lived credential, and the
+Control UI presents it as a bearer token on Control UI read routes.
+
+Issuance is device-gated; redemption is principal-bound and ingress-bound. The
+credential is minted only after an Ed25519 device proof verifies on an
+authenticated connect that also carries a whois-verified tailnet principal, and
+that device's `deviceId` is recorded in the signed token. Redemption then requires
+the managed Serve listener, `gateway.auth.allowTailscale` still on, a valid signed
+token, and a _current_ whois-verified principal matching the claim — it does not
+re-prove the device. The credential:
+
+- is issued only after an authenticated Control UI connect on this lane — a
+  request that never completed that handshake cannot obtain one;
+- is bound to the whois-verified tailnet principal that connect ran as, and is
+  refused when a different verified principal presents it;
+- is a bearer for its lifetime **within that principal**: another client acting as
+  the same whois-verified tailnet principal, arriving through the same managed
+  Serve listener, can present it until it expires. It is not re-bound to the
+  issuing device at redemption — the signed `deviceId` claim is recorded but never
+  re-proved;
+- carries `operator.read` and nothing else, and never trusts `x-openclaw-scopes`;
+- is accepted only on requests arriving through the managed Tailscale Serve
+  listener while `gateway.auth.allowTailscale` is still on, so a copy lifted off
+  the browser is useless elsewhere;
+- expires on its own, is invalidated by a gateway restart, and stops verifying
+  when `gateway.auth.token`/`password` rotates.
+
+The dashboard's flow is therefore: WebSocket connect (authenticated) →
+principal-bound credential → bootstrap config → assistant-media metadata → media
+ticket → bytes. Nothing before the connect reads the Gateway over HTTP: the
+Control UI defers its config fetch until it holds a credential to send.
 
 ### Externally managed Serve and Funnel
 

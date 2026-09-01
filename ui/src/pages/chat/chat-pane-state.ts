@@ -1,6 +1,6 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ArtifactDownloadResult, GatewaySessionRow } from "../../api/types.ts";
-import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
+import { resolveControlUiAuthToken, type ControlUiAuthSource } from "../../app/control-ui-auth.ts";
 
 type SelectedSessionProjectionState = {
   chatEffectiveQueueMode?: GatewaySessionRow["effectiveQueueMode"];
@@ -79,11 +79,7 @@ export class SessionParticipationTracker {
   }
 }
 
-export function resolveAssistantAttachmentAuthToken(state: {
-  hello?: { auth?: { deviceToken?: string | null } | null } | null;
-  password?: string | null;
-  settings?: { token?: string | null } | null;
-}) {
+export function resolveAssistantAttachmentAuthToken(state: ControlUiAuthSource) {
   return resolveControlUiAuthToken(state);
 }
 

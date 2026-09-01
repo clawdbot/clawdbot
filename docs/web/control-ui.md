@@ -153,7 +153,7 @@ Set an agent's display name, emoji, and avatar under **Agent settings → Overvi
 
 ## Runtime config endpoint
 
-The Control UI fetches its runtime settings from `/control-ui-config.json`, resolved relative to the gateway's Control UI base path (for example `/__openclaw__/control-ui-config.json` under base path `/__openclaw__/`). That endpoint is gated by gateway HTTP auth: unauthenticated browsers cannot fetch it, and a successful fetch requires a valid gateway token/password or trusted-proxy identity. Tailscale header auth applies to the Control UI WebSocket, not this HTTP endpoint.
+The Control UI fetches its runtime settings from `/control-ui-config.json`, resolved relative to the gateway's Control UI base path (for example `/__openclaw__/control-ui-config.json` under base path `/__openclaw__/`). That endpoint is gated by gateway HTTP auth: unauthenticated browsers cannot fetch it, and a successful fetch requires a valid gateway token/password or trusted-proxy identity. Tailscale header auth applies to the Control UI WebSocket, not this HTTP endpoint. Over Tailscale Serve, where the browser has neither, the UI defers this fetch until its WebSocket connect has authenticated and `hello-ok` has handed it the principal-bound credential to send — see [Tailscale](/gateway/tailscale).
 
 ## Gateway host status
 
@@ -924,7 +924,7 @@ If you disable gateway auth (not recommended on shared hosts), the avatar route 
 
 When gateway auth is configured, assistant local-media previews use a two-step route:
 
-- `GET /__openclaw__/assistant-media?meta=1&source=<path>` requires the normal Control UI operator auth; the browser sends the gateway token as a bearer header when checking availability.
+- `GET /__openclaw__/assistant-media?meta=1&source=<path>` requires the normal Control UI operator auth; the browser sends the gateway token as a bearer header when checking availability. Over Tailscale Serve, where there is no token, it sends the principal-bound credential from `hello-ok` instead — verified Tailscale identity alone never authorizes this read.
 - Successful metadata responses include a short-lived `mediaTicket` scoped to that exact source path.
 - Browser-rendered image, audio, video, and document URLs use `mediaTicket=<ticket>` instead of the active gateway token or password. The ticket expires quickly and cannot authorize a different source.
 

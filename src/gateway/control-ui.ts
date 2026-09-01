@@ -1,12 +1,9 @@
-import { createHmac, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { detectMime, kindFromMime } from "@openclaw/media-core/mime";
-import {
-  asDateTimestampMs,
-  resolveTimestampMsToIsoString,
-} from "@openclaw/normalization-core/number-coercion";
+import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import {
   type AgentAvatarResolution,
   resolvePublicAgentAvatarSource,
@@ -35,7 +32,6 @@ import {
   resolvePlaybackTranscode,
 } from "../media/playback-transcode.js";
 import { extractOriginalFilename } from "../media/store.js";
-import { safeEqualSecret } from "../security/secret-equal.js";
 import { AVATAR_MAX_BYTES, resolveAvatarMime } from "../shared/avatar-policy.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../version.js";
@@ -71,6 +67,7 @@ import {
   isControlUiFocusDocumentPath,
 } from "./control-ui-routing.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
+import { createControlUiSignedToken, readControlUiSignedToken } from "./control-ui-signed-token.js";
 import {
   isControlUiFileUnmodified,
   isControlUiPrecompressedAssetExtension,
@@ -255,71 +252,30 @@ type AssistantMediaAvailability =
     } & MediaProbeResult)
   | { available: false; reason: string; code: string };
 
-type AssistantMediaTicketPayload = {
-  scope: typeof CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE;
-  source: string;
-  exp: number;
-};
-
-function signAssistantMediaTicketPayload(encodedPayload: string): string {
-  return createHmac("sha256", controlUiAssistantMediaTicketSecret)
-    .update(encodedPayload)
-    .digest("base64url");
-}
-
 function createAssistantMediaTicket(source: string, nowMs = Date.now()) {
-  const now = asDateTimestampMs(nowMs);
-  if (now === undefined) {
-    return {};
-  }
-  const exp = asDateTimestampMs(now + CONTROL_UI_ASSISTANT_MEDIA_TICKET_TTL_MS);
-  if (exp === undefined) {
-    return {};
-  }
-  const payload: AssistantMediaTicketPayload = {
+  const signed = createControlUiSignedToken({
+    secret: controlUiAssistantMediaTicketSecret,
     scope: CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE,
-    source,
-    exp,
-  };
-  const encodedPayload = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
-  const sig = signAssistantMediaTicketPayload(encodedPayload);
-  return {
-    mediaTicket: `v1.${encodedPayload}.${sig}`,
-    mediaTicketExpiresAt: resolveTimestampMsToIsoString(exp),
-  };
+    claims: { source },
+    ttlMs: CONTROL_UI_ASSISTANT_MEDIA_TICKET_TTL_MS,
+    nowMs,
+  });
+  return signed
+    ? {
+        mediaTicket: signed.token,
+        mediaTicketExpiresAt: resolveTimestampMsToIsoString(signed.expiresAtMs),
+      }
+    : {};
 }
 
 function verifyAssistantMediaTicket(ticket: string | null, source: string, nowMs = Date.now()) {
-  const now = asDateTimestampMs(nowMs);
-  if (now === undefined) {
-    return false;
-  }
-  const parts = ticket?.split(".");
-  if (!parts || parts.length !== 3 || parts[0] !== "v1") {
-    return false;
-  }
-  const [, encodedPayload, sig] = parts;
-  if (!encodedPayload || !sig) {
-    return false;
-  }
-  const expectedSig = signAssistantMediaTicketPayload(encodedPayload);
-  if (!safeEqualSecret(sig, expectedSig)) {
-    return false;
-  }
-  try {
-    const payload = JSON.parse(
-      Buffer.from(encodedPayload, "base64url").toString("utf8"),
-    ) as Partial<AssistantMediaTicketPayload>;
-    return (
-      payload.scope === CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE &&
-      payload.source === source &&
-      typeof payload.exp === "number" &&
-      Number.isFinite(payload.exp) &&
-      payload.exp >= now
-    );
-  } catch {
-    return false;
-  }
+  const claims = readControlUiSignedToken({
+    secret: controlUiAssistantMediaTicketSecret,
+    scope: CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE,
+    token: ticket,
+    nowMs,
+  });
+  return typeof claims?.source === "string" && claims.source === source;
 }
 
 function classifyAssistantMediaError(err: unknown): AssistantMediaAvailability {

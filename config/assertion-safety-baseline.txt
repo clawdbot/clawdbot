@@ -2813,7 +2813,7 @@ src/gateway/cli-session-history.merge.ts	6
 src/gateway/config-reload-plan.ts	5
 src/gateway/control-ui-plugin-auth-cookie.ts	1
 src/gateway/control-ui-session-pr-subscriptions.ts	2
-src/gateway/control-ui.ts	2
+src/gateway/control-ui.ts	1
 src/gateway/conversation-turn.ts	1
 src/gateway/desktop/host-guidance.ts	1
 src/gateway/desktop/managed-linux.ts	1

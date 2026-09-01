@@ -32,6 +32,7 @@ import type {
   ApplicationGatewaySnapshot,
 } from "./context.ts";
 import { resolveControlUiAuthHeader } from "./control-ui-auth.ts";
+import { createControlUiCredentialRenewal } from "./control-ui-credential-renewal.ts";
 import {
   loadGatewaySessionSelection,
   loadSettings,
@@ -324,6 +325,16 @@ export function createApplicationGateway(
     notifyGatewayObservers(eventLogListeners, eventLog, "event", ownsEventLog);
   };
 
+  // The Gateway mints the Control UI HTTP credential only in hello-ok, so
+  // renewing it is a reconnect — the same recovery the event-gap path performs.
+  const credentialRenewal = createControlUiCredentialRenewal({
+    renew: () => {
+      if (!stopped) {
+        connect();
+      }
+    },
+  });
+
   const connect = (overrides: ApplicationGatewayConnectOptions = {}) => {
     stopped = false;
     const { sessionKey: requestedSessionKey, ...connectionOverrides } = overrides;
@@ -409,6 +420,8 @@ export function createApplicationGateway(
       persistConnectionSettings || gatewayUrlChanged,
     );
     stopCanvasSurfaceLease();
+    // The socket being replaced owns any pending renewal; the next hello re-arms.
+    credentialRenewal.stop();
     client?.stop();
 
     const nextClient = createClient({
@@ -441,6 +454,7 @@ export function createApplicationGateway(
         if (!controlUiBuildFresh) {
           // Keep every connected-only drain fenced. The stale document may
           // render the shell and refresh action, but it must not mutate state.
+          credentialRenewal.stop();
           setSnapshot({
             ...snapshot,
             client: nextClient,
@@ -510,6 +524,14 @@ export function createApplicationGateway(
           canvasLeaseGeneration,
           canvasPluginSurfaceUrl ?? undefined,
         );
+        // Same source shape the HTTP call sites resolve their header from, so a
+        // renewal is armed exactly when this hello's `httpCredential` is the
+        // credential those reads will present.
+        credentialRenewal.arm({
+          hello,
+          settings: { token: nextConnection.token },
+          password: nextConnection.password,
+        });
       },
       onRecoveryScopeChange: () => {
         if (client !== nextClient || snapshot.phase !== "connected") {
@@ -522,6 +544,7 @@ export function createApplicationGateway(
           return;
         }
         stopCanvasSurfaceLease();
+        credentialRenewal.stop();
         const mismatchedBuildId = readControlUiBuildMismatchId(error?.details);
         if (mismatchedBuildId) {
           void scheduleStaleChunkReload({ buildId: mismatchedBuildId });
@@ -649,6 +672,7 @@ export function createApplicationGateway(
       clearOfflineIndicatorTimer();
       clearRestartDeadlineTimer();
       stopCanvasSurfaceLease();
+      credentialRenewal.stop();
       client?.stop();
       client = null;
       everConnected = false;
