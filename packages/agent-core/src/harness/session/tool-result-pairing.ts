@@ -40,6 +40,7 @@ type ToolUsePairingClassification = {
   frames: ToolUsePairingFrame[];
   droppedDuplicateCount: number;
   droppedOrphanCount: number;
+  droppedResults: ToolResultMessage[];
 };
 
 type ToolCallOccurrenceQueue<T> = {
@@ -233,6 +234,7 @@ export function classifyToolUseResultPairing(
   );
   let droppedDuplicateCount = 0;
   let droppedOrphanCount = 0;
+  const droppedResults: ToolResultMessage[] = [];
   const preserveUnframed = options?.preserveUnframedToolResults === true;
   const frameRecords: Array<ToolUsePairingFrame & { unclaimedResults: ToolResultRecord[] }> =
     frameStartIndexes.map((startIndex, frameIndex) => {
@@ -287,7 +289,11 @@ export function classifyToolUseResultPairing(
           if (replaceable) {
             replaceable.result = normalizeToolResultName(normalized, replaceable.name);
             replaceable.sourceResult = message;
+          } else if (!preserveUnframed) {
+            droppedResults.push(message);
           }
+        } else if (!preserveUnframed) {
+          droppedResults.push(message);
         }
       }
       const stopReason = (assistant as { stopReason?: string }).stopReason;
@@ -326,6 +332,9 @@ export function classifyToolUseResultPairing(
         : [];
       if (candidates.length !== 1) {
         droppedOrphanCount += preserveUnframed ? 0 : 1;
+        if (!preserveUnframed) {
+          droppedResults.push(record.sourceResult);
+        }
         continue;
       }
       const candidate = candidates[0];
@@ -341,7 +350,7 @@ export function classifyToolUseResultPairing(
     }
   }
 
-  return { frames: frameRecords, droppedDuplicateCount, droppedOrphanCount };
+  return { frames: frameRecords, droppedDuplicateCount, droppedOrphanCount, droppedResults };
 }
 
 /** Select reset-tail model context without changing persisted entry bytes or order. */
