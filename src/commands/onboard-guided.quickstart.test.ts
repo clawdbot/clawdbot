@@ -130,6 +130,9 @@ describe("runGuidedOnboarding quick start", () => {
     localOnboarding.persisted.config = {
       wizard: { securityAcknowledgedAt: "2026-08-01T00:00:00.000Z", accessMode: "guarded" },
     };
+    // Declined discovery still reaches the manual picker (Custom Provider is
+    // always offered); skipping there keeps this test about consent only.
+    promptAuthChoiceGrouped.mockResolvedValueOnce("skip");
     const prompter = createWizardPrompter();
     vi.mocked(prompter.select).mockImplementation(async ({ options, initialValue }) => {
       // Accept saved defaults, but decline discovery if its consent prompt appears.
