@@ -1109,6 +1109,7 @@ export async function createGatewaySession(params: {
           storeKey: target.canonicalKey,
           agentId: target.agentId,
           preparedSessionRoot: sessionRoot,
+          preparedAgentRuntime: catalogAgentRuntime,
           // Patch appliers read key presence as caller intent (present = change,
           // null = clear), so omitted create fields must stay absent: a present
           // undefined model trips the selection lock and drops modelFallback,
