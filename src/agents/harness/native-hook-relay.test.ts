@@ -14,6 +14,7 @@ import {
   createAgentRuntimeApprovalAuthorityValidator,
   mintAgentRuntimeIdentityToken,
 } from "../../gateway/agent-runtime-identity-token.js";
+import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { validateAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
 import {
   initializeGlobalHookRunner,
@@ -457,6 +458,46 @@ describe("native hook relay registry", () => {
     expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeDefined();
     closeAdmittedRunDelegatedAuthority(admittedRunContext);
     relay.unregister();
+  });
+
+  it("retires a retained relay's registration at lifecycle rotation without waiting for a claim release", async () => {
+    const { admittedRunContext, hostCapabilities } = await createAdmittedHostCapabilityTestFixture({
+      runId: "run-retained-rotation-cleanup",
+    });
+    const relay = registerRetainedNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-retained-rotation-cleanup",
+      sessionId: "session-1",
+      runId: "run-retained-rotation-cleanup",
+      allowedEvents: ["pre_tool_use"],
+      runBeforeToolCall: hostCapabilities.runBeforeToolCall,
+      assertActive: hostCapabilities.assertActive,
+      retention: {
+        readClaim: readTestNativeAgentId,
+        shouldRetainAfterForegroundClose: () => true,
+        allowPreToolUse: (claim) => claim === "child-thread",
+        onDispose: () => {},
+      },
+    });
+    // Foreground closes while the direct child's claim retains the relay, then
+    // lifecycle rotates without that claim ever being released — the sole
+    // production rotation path always releases claims first, so this exercises
+    // the lower-level lifecycle contract the issue reports as unenforced.
+    relay.unregister();
+    expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeDefined();
+
+    rotateAgentEventLifecycleGeneration();
+
+    expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeUndefined();
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "pre_tool_use",
+        rawPayload: { agent_id: "child-thread", tool_name: "Bash", tool_input: {} },
+      }),
+    ).rejects.toThrow("native hook relay not found");
+    closeAdmittedRunDelegatedAuthority(admittedRunContext);
   });
 
   it("keeps only a claimed flat native child after foreground cleanup", async () => {

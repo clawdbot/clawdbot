@@ -4,6 +4,11 @@ import {
   MAX_TIMER_TIMEOUT_MS,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
+import {
+  getAgentEventLifecycleGeneration,
+  isAgentEventLifecycleGenerationCurrent,
+  registerAgentEventLifecycleRotationHandler,
+} from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { retainBeforeToolCallForNativeHookRelay } from "./host-capability.js";
@@ -78,6 +83,8 @@ const { relays, relayBridges, invocations } = nativeHookRelayState;
 type RelayLifetime = {
   foregroundOpen: boolean;
   foregroundToken: symbol;
+  /** Gateway lifecycle generation current when this relay was registered. */
+  lifecycleGeneration: string;
   retained?: ReturnType<typeof retainBeforeToolCallForNativeHookRelay>;
   retention?: NativeHookRelayRetention;
   removeAbortListener?: () => void;
@@ -218,6 +225,7 @@ function registerNativeHookRelayInternal(
     setRelayLifetime(registration, {
       foregroundOpen: true,
       foregroundToken: Symbol("native-hook-relay-foreground"),
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
       ...(retained ? { retained } : {}),
       ...(retention ? { retention } : {}),
     });
@@ -625,6 +633,34 @@ function pruneExpiredNativeHookRelays(now = Date.now()): void {
     }
   }
 }
+
+/** Retires every relay of the outgoing generation at the same boundary that revokes its authority. */
+function retireNativeHookRelaysForLifecycleRotation(): void {
+  const errors: unknown[] = [];
+  // Snapshot first: a reentrant `onDispose` may register a current-generation
+  // successor mid-loop, and only registrations present at rotation start are stale.
+  for (const [relayId, registration] of Array.from(relays)) {
+    // An earlier same-rotation handler may have already admitted this relay
+    // under the new generation; only the outgoing generation is stale here.
+    const lifecycleGeneration = readRelayLifetime(registration)?.lifecycleGeneration;
+    if (lifecycleGeneration && isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
+      continue;
+    }
+    try {
+      unregisterNativeHookRelay(relayId, registration);
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length > 0) {
+    throw new AggregateError(errors, "Failed to retire stale native hook relays");
+  }
+}
+
+registerAgentEventLifecycleRotationHandler(
+  "native-hook-relays",
+  retireNativeHookRelaysForLifecycleRotation,
+);
 
 function normalizeAllowedEvents(
   events: readonly NativeHookRelayEvent[] | undefined,
