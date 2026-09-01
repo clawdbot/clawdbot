@@ -388,7 +388,7 @@ describe("TwilioProvider", () => {
     expect(secondBody).not.toContain("hold-queue");
   });
 
-  it("binds a stream token to one live stream and releases it for reconnect", () => {
+  it("consumes each stream token once and mints a replacement for later TwiML", () => {
     const provider = createProvider();
     const inbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA-reconnect");
     const firstBody = requireResponseBody(provider.parseWebhookEvent(inbound).providerResponseBody);
@@ -397,19 +397,27 @@ describe("TwilioProvider", () => {
       throw new Error("expected first stream token");
     }
 
-    expect(provider.validateStreamToken("CA-reconnect", firstToken)).toBe(true);
+    expect(provider.consumeStreamToken("CA-reconnect", firstToken)).toBe(true);
     provider.registerCallStream("CA-reconnect", "MZ-first");
-    expect(provider.validateStreamToken("CA-reconnect", firstToken)).toBe(false);
+    expect(provider.consumeStreamToken("CA-reconnect", firstToken)).toBe(false);
 
     provider.unregisterCallStream("CA-reconnect", "MZ-first");
-    expect(provider.validateStreamToken("CA-reconnect", firstToken)).toBe(true);
+    expect(provider.consumeStreamToken("CA-reconnect", firstToken)).toBe(false);
+
+    const reconnectBody = requireResponseBody(
+      provider.parseWebhookEvent(inbound).providerResponseBody,
+    );
+    const reconnectToken = reconnectBody.match(/<Parameter name="token" value="([^"]+)"/u)?.[1];
+    if (!reconnectToken) {
+      throw new Error("expected reconnect stream token");
+    }
+    expect(reconnectToken).not.toBe(firstToken);
+    expect(provider.consumeStreamToken("CA-reconnect", reconnectToken)).toBe(true);
+
     provider.registerCallStream("CA-reconnect", "MZ-reconnect");
+    // A stale predecessor disconnect must not unregister the replacement stream.
     provider.unregisterCallStream("CA-reconnect", "MZ-first");
     expect(provider.hasRegisteredStream("CA-reconnect", "MZ-reconnect")).toBe(true);
-
-    provider.revokeStreamToken("CA-reconnect");
-    provider.unregisterCallStream("CA-reconnect", "MZ-reconnect");
-    expect(provider.validateStreamToken("CA-reconnect", firstToken)).toBe(false);
   });
 
   it("cleans up active inbound call on completed status callback", () => {

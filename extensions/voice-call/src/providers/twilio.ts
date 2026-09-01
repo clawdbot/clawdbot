@@ -204,16 +204,15 @@ export class TwilioProvider implements VoiceCallProvider {
     return Boolean(this.mediaStreamHandler && this.getStreamUrl());
   }
 
-  validateStreamToken(callSid: string, token?: string): boolean {
+  consumeStreamToken(callSid: string, token?: string): boolean {
     const expected = this.streamAuthTokens.get(callSid);
     if (!expected || !token || !safeEqualSecret(expected, token)) {
       return false;
     }
-    return !this.hasRegisteredStream(callSid);
-  }
-
-  revokeStreamToken(callSid: string): void {
+    // A rendered TwiML capability admits one WebSocket. Any later Stream must
+    // be created from TwiML carrying a newly minted capability.
     this.streamAuthTokens.delete(callSid);
+    return true;
   }
 
   /**

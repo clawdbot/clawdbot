@@ -335,7 +335,7 @@ export class MediaStreamHandler {
         }
       } catch (error) {
         console.error("[MediaStream] Error processing message:", error);
-        ws.close(1011, "Stream setup failed");
+        ws.close(1011, session ? "Stream processing failed" : "Stream setup failed");
       }
     });
 
@@ -390,8 +390,8 @@ export class MediaStreamHandler {
     }
 
     if (!this.config.shouldAcceptStream({ callId: callSid, streamSid, token: effectiveToken })) {
-      console.warn(`[MediaStream] Rejecting stream for unknown call: ${callSid}`);
-      ws.close(1008, "Unknown call");
+      console.warn(`[MediaStream] Rejecting unauthorized stream for call: ${callSid}`);
+      ws.close(1008, "Unauthorized stream");
       return null;
     }
 

@@ -53,11 +53,8 @@ class SpeechProvider extends FakeProvider {
   override parseWebhookEvent(ctx: WebhookContext) {
     return { events: [JSON.parse(ctx.rawBody) as NormalizedEvent], statusCode: 200 };
   }
-  validateStreamToken(callId: string) {
-    return !this.streamOwner.hasRegisteredStream(callId);
-  }
-  revokeStreamToken(callId: string) {
-    this.streamOwner.revokeStreamToken(callId);
+  consumeStreamToken() {
+    return true;
   }
   registerCallStream(callId: string, streamId: string) {
     this.streamOwner.registerCallStream(callId, streamId);
@@ -281,9 +278,6 @@ describe("automatic phone reply ownership", () => {
       const old = await call.openStream("stream-old");
       old.callbacks.onTranscript?.("old question");
       await responseAt(0);
-      const closed = waitForClose(old.ws);
-      old.ws.close();
-      await closed;
       const replacement = await call.openStream("stream-new");
       replacement.callbacks.onTranscript?.("new question");
       const current = await responseAt(1);
@@ -308,12 +302,12 @@ describe("automatic phone reply ownership", () => {
     const old = await call.openStream("stream-old");
     old.callbacks.onTranscript?.("old question");
     const first = await responseAt(0);
-    const closed = waitForClose(old.ws);
-    old.ws.close();
-    await closed;
     const replacement = await call.openStream("stream-new");
     replacement.callbacks.onTranscript?.("new question");
     const second = await responseAt(1);
+    const closed = waitForClose(old.ws);
+    old.ws.close();
+    await closed;
     await first.finish("obsolete reply");
     await second.finish("replacement reply");
     expect(call.provider.playTtsCalls.map((entry) => entry.text)).toEqual(["replacement reply"]);

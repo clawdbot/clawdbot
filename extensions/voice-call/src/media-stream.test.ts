@@ -115,6 +115,60 @@ describe("MediaStreamHandler security hardening", () => {
     }
   });
 
+  it("closes an active stream with a processing reason when audio forwarding fails", async () => {
+    const closeSession = vi.fn();
+    const onConnect = vi.fn();
+    const onDisconnect = vi.fn();
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: {
+        createSession: () => ({
+          ...createStubSession(),
+          sendAudio: () => {
+            throw new Error("synthetic audio forwarding failure");
+          },
+          close: closeSession,
+        }),
+        id: "openai",
+        label: "OpenAI",
+        isConfigured: () => true,
+      },
+      providerConfig: {},
+      shouldAcceptStream: () => true,
+      onConnect,
+      onDisconnect,
+    });
+    const server = await startWsServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          streamSid: "MZ-processing-failure",
+          start: { callSid: "CA-processing-failure" },
+        }),
+      );
+      await vi.waitFor(() => expect(onConnect).toHaveBeenCalledOnce());
+
+      const closed = waitForClose(ws);
+      ws.send(
+        JSON.stringify({
+          event: "media",
+          streamSid: "MZ-processing-failure",
+          media: { payload: Buffer.from("audio").toString("base64") },
+        }),
+      );
+
+      await expect(closed).resolves.toEqual({ code: 1011, reason: "Stream processing failed" });
+      await vi.waitFor(() => {
+        expect(onDisconnect).toHaveBeenCalledWith("CA-processing-failure", "MZ-processing-failure");
+      });
+      expect(closeSession).toHaveBeenCalledOnce();
+    } finally {
+      await server.close();
+    }
+  });
+
   it("rejects start frames when no stream acceptance validator is configured", async () => {
     const createSession = vi.fn(() => createStubSession());
     const handler = new MediaStreamHandler({

@@ -234,9 +234,6 @@ export class VoiceCallWebhookServer {
       debug: rawDebug ? (msg: string) => rawDebug(`[voice-call] ${msg}`) : undefined,
     };
     this.streamDisconnectGrace = new StreamDisconnectGrace(({ providerCallId }) => {
-      if (this.provider.name === "twilio") {
-        (this.provider as TwilioProvider).revokeStreamToken(providerCallId);
-      }
       const call = this.manager.getCallByProviderCallId(providerCallId);
       if (!call) {
         return;
@@ -416,7 +413,7 @@ export class VoiceCallWebhookServer {
           return false;
         }
         const twilio = this.provider as TwilioProvider;
-        if (!twilio.validateStreamToken(callId, token)) {
+        if (!twilio.consumeStreamToken(callId, token)) {
           this.logger.warn(`Rejecting media stream: invalid token for ${callId}`);
           return false;
         }
