@@ -27,12 +27,20 @@ const modelsCommandMock = vi.hoisted(() => ({
 const stickyModelMock = vi.hoisted(() => ({
   persistBestEffort: vi.fn(),
 }));
+const acpSessionMetaMock = vi.hoisted(() => ({
+  readForEntry: vi.fn(),
+}));
 const pluginPolicyMock = vi.hoisted(() => ({
   channels: new Map<string, Pick<ChannelPlugin, "id" | "commands">>(),
   thinkingProfiles: new Map<
     string,
     (context: ProviderDefaultThinkingPolicyContext) => ProviderThinkingProfile | null | undefined
   >(),
+}));
+
+vi.mock("../../acp/runtime/session-meta.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../acp/runtime/session-meta.js")>()),
+  readAcpSessionMetaForEntry: acpSessionMetaMock.readForEntry,
 }));
 
 function defaultModelsCommandReply() {
@@ -486,6 +494,7 @@ function setOpenAiRuntimeScopedUltraProvider(): void {
 
 beforeEach(() => {
   vi.useRealTimers();
+  acpSessionMetaMock.readForEntry.mockReset().mockReturnValue(undefined);
   setDirectiveTestProviders([]);
   pluginPolicyMock.channels.clear();
   modelsCommandMock.resolveModelsCommandReply
@@ -1694,6 +1703,36 @@ describe("/model chat UX", () => {
       'Model openai/gpt-4o requires agent harness "codex", but no enabled plugin provides it. Install and enable its plugin, restart the Gateway, then select the model again.',
     );
     expect(sessionEntry).toEqual(initialSessionEntry);
+  });
+
+  it("preserves harness selection for an existing ACP session", async () => {
+    acpSessionMetaMock.readForEntry.mockReturnValue({
+      backend: "codex",
+      agent: "main",
+      runtimeSessionName: "agent:main:dm:1",
+      mode: "persistent",
+      state: "idle",
+      lastActivityAt: 1,
+    });
+    const sessionEntry = createSessionEntry();
+    const { persisted } = await persistModelDirectiveForTest({
+      command: "/model openai/gpt-4o --runtime codex hello",
+      allowedModelKeys: ["openai/gpt-4o"],
+      sessionEntry,
+      cfg: {
+        ...baseConfig(),
+        plugins: { deny: ["codex"] },
+      },
+    });
+
+    expect(persisted.errorText).toBeUndefined();
+    expect(sessionEntry.agentRuntimeOverride).toBe("codex");
+    expect(acpSessionMetaMock.readForEntry).toHaveBeenCalledWith({
+      sessionKey: "agent:main:dm:1",
+      agentId: "main",
+      cfg: expect.objectContaining({ plugins: { deny: ["codex"] } }),
+      entry: sessionEntry,
+    });
   });
 
   it("normalizes legacy Codex app-server runtime overrides during persistence", async () => {

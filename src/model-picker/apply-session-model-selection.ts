@@ -189,6 +189,7 @@ export async function applySessionModelSelection(
     model: request.model,
     catalog: params.thinkingCatalog ?? params.modelCatalog,
     workspaceDir: resolveAgentWorkspaceDir(params.cfg, params.agentId),
+    sessionKey: params.sessionKey,
     rawRuntime:
       request.runtime.kind === "set"
         ? request.runtime.runtime

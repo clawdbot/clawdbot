@@ -1,4 +1,5 @@
 /** Prepared plugin metadata handoff for runtime model normalization. */
+import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta.js";
 import { resolveMissingAgentHarnessRuntime } from "../../agents/harness/runtime-plugin-load-plan.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import {
@@ -90,7 +91,8 @@ export async function prepareModelSelectionRuntime(params: {
   catalog: readonly ModelCatalogEntry[];
   rawRuntime?: string;
   workspaceDir: string;
-  sessionEntry?: Pick<SessionEntry, "agentRuntimeOverride">;
+  sessionKey: string;
+  sessionEntry?: SessionEntry;
 }): Promise<ModelSelectionPreparation> {
   const runtime = resolveModelRuntimeDirective(params);
   if (runtime.kind === "invalid") {
@@ -119,7 +121,15 @@ export async function prepareModelSelectionRuntime(params: {
     config: params.cfg,
     workspaceDir: params.workspaceDir,
   });
-  if (missingHarnessRuntime) {
+  if (
+    missingHarnessRuntime &&
+    !readAcpSessionMetaForEntry({
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      cfg: params.cfg,
+      entry: params.sessionEntry,
+    })
+  ) {
     return {
       status: "rejected",
       reason: "missing-harness",

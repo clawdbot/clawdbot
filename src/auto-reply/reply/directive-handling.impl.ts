@@ -181,6 +181,7 @@ export async function handleDirectiveOnly(
       catalog: thinkingCatalog ?? [],
       rawRuntime: directives.rawModelRuntime,
       workspaceDir: params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, activeAgentId),
+      sessionKey: params.sessionKey,
       sessionEntry,
     });
     if (prepared.status === "rejected") {
