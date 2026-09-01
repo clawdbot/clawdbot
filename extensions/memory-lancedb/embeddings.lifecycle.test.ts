@@ -13,7 +13,11 @@ import type { MemoryConfig } from "./config.js";
 const providerMocks = vi.hoisted(() => ({
   getMemoryEmbeddingProvider: vi.fn(),
   authMutationListeners: new Set<
-    (event: { agentDir?: string; affectsInheritedStores: boolean }) => void
+    (event: {
+      agentDir?: string;
+      affectsInheritedStores: boolean;
+      profileSetChanged: boolean;
+    }) => void
   >(),
 }));
 
@@ -206,6 +210,7 @@ describe("memory-lancedb provider lifecycle", () => {
     listener?.({
       agentDir: "/tmp/agent-private/../agent-private",
       affectsInheritedStores: false,
+      profileSetChanged: false,
     });
 
     await embed(embeddings, "other", "other warm provider");

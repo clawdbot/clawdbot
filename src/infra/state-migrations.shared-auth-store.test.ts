@@ -13,7 +13,7 @@ function makeStore(profileId: string, key: string) {
   return {
     version: 1,
     profiles: {
-      [profileId]: { type: "api_key", provider: "openai", key },
+      [profileId]: { type: "api_key" as const, provider: "openai", key },
     },
   };
 }
@@ -105,7 +105,7 @@ describe("shared auth store relocation", () => {
       sqlite.writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} }, mainAgentDir);
       sqlite.deletePersistedAuthProfileStoreRaw(mainAgentDir);
     }
-    return { env, stateDir, sourcePath, ownership, migration };
+    return { env, stateDir, sourcePath, ownership, sqlite, migration };
   }
 
   it.each([
@@ -187,6 +187,100 @@ describe("shared auth store relocation", () => {
         .prepare("SELECT value_json FROM config_machine_state WHERE state_key = 'auth.sharedStore'")
         .get(),
     ).toEqual({ value_json: JSON.stringify({ location: "state-db" }) });
+  });
+
+  it("preserves post-relocation main-agent order state without treating it as legacy", async () => {
+    const fixture = await createEmptyFixture(false);
+    const mainAgentDir = path.dirname(fixture.sourcePath);
+    const profileId = "openai:shared";
+    const [{ upsertAuthProfileWithLockOrThrow }, { setAuthProfileOrder }] = await Promise.all([
+      import("../agents/auth-profiles/upsert-with-lock.js"),
+      import("../agents/auth-profiles/profiles.js"),
+    ]);
+    await upsertAuthProfileWithLockOrThrow({
+      profileId,
+      credential: {
+        type: "api_key",
+        provider: "openai",
+        keyRef: { source: "env", provider: "default", id: "OPENCLAW_SHARED_AUTH_TEST_KEY" },
+      },
+      stateDir: fixture.stateDir,
+    });
+    await setAuthProfileOrder({ agentDir: mainAgentDir, provider: "openai", order: [profileId] });
+    const localBefore = {
+      store: fixture.sqlite.readPersistedAuthProfileStoreRaw(mainAgentDir),
+      state: fixture.sqlite.readPersistedAuthProfileStateRaw(mainAgentDir),
+    };
+    expect(localBefore).toEqual({
+      store: { version: 1, profiles: {} },
+      state: { version: 1, order: { openai: [profileId] } },
+    });
+    const sharedBefore = {
+      store: fixture.sqlite.readPersistedSharedAuthProfileStoreRaw(fixture.env),
+      state: fixture.sqlite.readPersistedSharedAuthProfileStateRaw(fixture.env),
+    };
+
+    const detected = fixture.migration.detectSharedAuthStoreMigration({
+      stateDir: fixture.stateDir,
+      env: fixture.env,
+      doctorOnlyStateMigrations: true,
+    });
+
+    expect(detected).toEqual({ sourcePath: fixture.sourcePath, hasLegacy: false });
+    expect(
+      await fixture.migration.migrateSharedAuthStore({
+        detected,
+        stateDir: fixture.stateDir,
+        env: fixture.env,
+      }),
+    ).toEqual({ changes: [], warnings: [] });
+    expect({
+      store: fixture.sqlite.readPersistedAuthProfileStoreRaw(mainAgentDir),
+      state: fixture.sqlite.readPersistedAuthProfileStateRaw(mainAgentDir),
+    }).toEqual(localBefore);
+    expect({
+      store: fixture.sqlite.readPersistedSharedAuthProfileStoreRaw(fixture.env),
+      state: fixture.sqlite.readPersistedSharedAuthProfileStateRaw(fixture.env),
+    }).toEqual(sharedBefore);
+  });
+
+  it("preserves post-relocation main-agent credential overrides without a receipt", async () => {
+    const fixture = await createEmptyFixture(false);
+    const mainAgentDir = path.dirname(fixture.sourcePath);
+    const profileId = "openai:shared";
+    const [{ upsertAuthProfileWithLockOrThrow }, { saveAuthProfileStore }] = await Promise.all([
+      import("../agents/auth-profiles/upsert-with-lock.js"),
+      import("../agents/auth-profiles/store.js"),
+    ]);
+    await upsertAuthProfileWithLockOrThrow({
+      profileId,
+      credential: { type: "api_key", provider: "openai", key: "shared-key" },
+      stateDir: fixture.stateDir,
+    });
+    const localStore = makeStore(profileId, "local-override-key");
+    saveAuthProfileStore(localStore, mainAgentDir, {
+      filterExternalAuthProfiles: false,
+      syncExternalCli: false,
+    });
+
+    const detected = fixture.migration.detectSharedAuthStoreMigration({
+      stateDir: fixture.stateDir,
+      env: fixture.env,
+      doctorOnlyStateMigrations: true,
+    });
+
+    expect(detected).toEqual({ sourcePath: fixture.sourcePath, hasLegacy: false });
+    expect(
+      await fixture.migration.migrateSharedAuthStore({
+        detected,
+        stateDir: fixture.stateDir,
+        env: fixture.env,
+      }),
+    ).toEqual({ changes: [], warnings: [] });
+    expect(fixture.sqlite.readPersistedAuthProfileStoreRaw(mainAgentDir)).toEqual(localStore);
+    expect(fixture.sqlite.readPersistedSharedAuthProfileStoreRaw(fixture.env)).toEqual(
+      makeStore(profileId, "shared-key"),
+    );
   });
 
   it.each(["absolute", "tilde"] as const)(

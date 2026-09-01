@@ -89,6 +89,7 @@ export type ActiveEmbeddedRunSnapshot = {
 export type EmbeddedRunRegistration = {
   sessionId: string;
   sessionKey?: string;
+  agentId?: string;
   delegatedAuthority?: AgentRunDelegatedAuthority;
   humanInputWaits?: Set<() => boolean>;
   onHumanInputResolved?: () => void;

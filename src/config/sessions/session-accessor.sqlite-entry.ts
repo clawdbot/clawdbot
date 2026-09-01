@@ -37,7 +37,6 @@ import {
 } from "./session-accessor.sqlite-entry-equality.js";
 import {
   collectSessionEntryLookupKeys,
-  createSessionIdentitySnapshot,
   parseReadableSqliteSessionEntryRow,
   readExactSessionEntryRowValidated,
   readSessionEntryRow,
@@ -313,13 +312,12 @@ function listSqliteSessionEntriesFromDatabase(
   scope: SessionEntryListScope,
 ): SessionEntrySummary[] {
   assertCanonicalSqliteSessionKeysCurrent(database);
-  const snapshot = readSessionEntrySnapshot(database, resolved, scope.readConsistency);
-  const entries = scope.projection === "list" ? snapshot.listEntries : snapshot.entries;
+  const snapshot = readSessionEntrySnapshot(database, resolved, scope);
   return snapshot.keys.flatMap((sessionKey) => {
     if (isInternalSessionEffectsKey(sessionKey)) {
       return [];
     }
-    const entry = entries.get(sessionKey);
+    const entry = snapshot.entries.get(sessionKey);
     if (!entry) {
       return [];
     }
@@ -341,7 +339,7 @@ function listSqliteSessionEntriesFromDatabase(
 function readSessionEntrySnapshot(
   database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
   resolved: ResolvedSqliteScope,
-  readConsistency: SessionAccessScope["readConsistency"],
+  scope: SessionEntryListScope,
 ): SessionEntryCacheSnapshot {
   const cache = !isIncognitoOpenClawAgentSqlitePath(database.path, {
     agentId: database.agentId,
@@ -349,7 +347,8 @@ function readSessionEntrySnapshot(
   });
   return readSessionEntryCache(database, {
     cache,
-    latest: readConsistency === "latest",
+    latest: scope.readConsistency === "latest",
+    projection: scope.projection ?? "full",
   });
 }
 
@@ -545,7 +544,8 @@ async function patchSqliteSessionEntrySnapshot(
         result = cloneSessionEntry(writeBase);
         return;
       }
-      previousIdentity = createSessionIdentitySnapshot(fresh);
+      // Commit reads own these entries; update callbacks only receive detached copies.
+      previousIdentity = new Map(fresh.map((row) => [row.sessionKey, row.entry]));
       const selectedPreviousEntry = fresh[0]?.entry ?? writeBase;
       const persisted = writeSessionEntry(writeDatabase, sessionKey, next, {
         previousEntry: selectedPreviousEntry,

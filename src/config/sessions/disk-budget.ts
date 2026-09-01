@@ -6,6 +6,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveRealpathOrAbsolute as canonicalizePathForComparison } from "../../infra/boundary-path.js";
 import {
   resolveTrajectoryFilePath,
   resolveTrajectoryPointerFilePath,
@@ -75,15 +76,6 @@ type SessionsDirFileStat = {
   size: number;
   mtimeMs: number;
 };
-
-function canonicalizePathForComparison(filePath: string): string {
-  const resolved = path.resolve(filePath);
-  try {
-    return fs.realpathSync(resolved);
-  } catch {
-    return resolved;
-  }
-}
 
 function measureStoreBytes(store: Record<string, SessionEntry>): number {
   return Buffer.byteLength(JSON.stringify(store, null, 2), "utf-8");

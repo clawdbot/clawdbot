@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { isRecord } from "./lib/record-shared.mjs";
@@ -14,6 +15,47 @@ function parseJson(raw, label) {
   } catch (error) {
     throw new Error(`${label} returned invalid JSON.`, { cause: error });
   }
+}
+
+export function validateNpmPreflightProducer({
+  manifest,
+  repository,
+  workflowFullRef,
+  workflowSha,
+  runId,
+  runAttempt,
+}) {
+  // Published v1 preflights did not record the original ref qualifier. Keep
+  // their existing recovery contract without inferring historical provenance.
+  if (manifest?.version === 1 && !Object.hasOwn(manifest, "producer")) {
+    return { originalWorkflowRef: null, provenance: "legacy-unrecorded" };
+  }
+  if (manifest?.version !== 2 || !isRecord(manifest.producer)) {
+    throw new Error("npm preflight producer metadata is missing or unsupported.");
+  }
+  if (
+    !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repository ?? "") ||
+    !/^refs\/(?:heads|tags)\/.+$/u.test(workflowFullRef ?? "") ||
+    !/^[a-f0-9]{40}$/u.test(workflowSha ?? "") ||
+    !/^[1-9][0-9]*$/u.test(String(runId ?? "")) ||
+    !/^[1-9][0-9]*$/u.test(String(runAttempt ?? ""))
+  ) {
+    throw new Error("npm preflight expected producer identity is invalid.");
+  }
+  const expected = {
+    repository,
+    workflowRef: `${repository}/.github/workflows/openclaw-npm-release.yml@${workflowFullRef}`,
+    workflowSha,
+    runId: String(runId),
+    runAttempt: String(runAttempt),
+  };
+  if (
+    Object.keys(manifest.producer).length !== Object.keys(expected).length ||
+    Object.entries(expected).some(([key, value]) => manifest.producer[key] !== value)
+  ) {
+    throw new Error("npm preflight immutable producer identity mismatch.");
+  }
+  return { originalWorkflowRef: expected.workflowRef, provenance: "immutable-manifest" };
 }
 
 // Actions exposes a short head branch for tags too; a matching branch makes
@@ -98,15 +140,26 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
         "workflow-full-ref": { type: "string" },
         "workflow-sha": { type: "string" },
         "publisher-sha": { type: "string" },
+        manifest: { type: "string" },
+        "run-id": { type: "string" },
+        "run-attempt": { type: "string" },
       },
     });
-    const identity = verifyReleasePreflightToolingIdentity({
+    const options = {
       repository: values.repository,
       workflowRef: values["workflow-ref"],
       workflowFullRef: values["workflow-full-ref"],
       workflowSha: values["workflow-sha"],
       publisherSha: values["publisher-sha"],
-    });
+    };
+    const identity = values.manifest
+      ? validateNpmPreflightProducer({
+          ...options,
+          manifest: parseJson(readFileSync(values.manifest, "utf8"), "npm preflight manifest"),
+          runId: values["run-id"],
+          runAttempt: values["run-attempt"],
+        })
+      : verifyReleasePreflightToolingIdentity(options);
     process.stdout.write(`${JSON.stringify(identity)}\n`);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

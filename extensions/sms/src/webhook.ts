@@ -7,6 +7,7 @@ import {
   resolveRequestClientIp,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import { sendHttpRequestRejection } from "openclaw/plugin-sdk/webhook-request-guards";
+import { assertSmsCredentialOwnerAvailable } from "./credential-availability.js";
 import {
   createSmsDeliveryRecorder,
   isTwilioDeliveryStatusForm,
@@ -119,7 +120,6 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
       respondTwiml(res, 405, "Method not allowed");
       return true;
     }
-
     const clientAddress = resolvedClientAddress({ cfg: params.cfg, req });
     const clientAddressKey = rateLimitKey({ account: params.account, subject: clientAddress });
     const invalidRequestRateLimited = invalidRequestRateLimiter.isRateLimited(clientAddressKey);
@@ -134,6 +134,7 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
       }
       throw error;
     }
+    assertSmsCredentialOwnerAvailable(params.account);
 
     if (!params.account.dangerouslyDisableSignatureValidation) {
       const ok = verifyTwilioSignature({

@@ -699,8 +699,10 @@ work. The delivery path depends on that shape.
     its own parent-owned one-shot ACP child. In that case, running A2A on top
     of task completion can wake the parent with the child's result, forward
     the parent's reply back into the child, and create a parent/child echo
-    loop. The `sessions_send` result reports `delivery.status="skipped"` for
-    that owned-child case because the completion path is already responsible
+    loop. Accepted `sessions_send` results report target admission separately
+    from announcement delivery: `targetDisposition` is `queued` or `steered`,
+    while `delivery.status` is `pending` or `skipped`. For this owned-child case,
+    `delivery.status="skipped"` because the completion path is already responsible
     for the result.
 
   </Accordion>
@@ -789,6 +791,21 @@ Current-conversation bindings and thread bindings both participate in step 2.
 
 If no target resolves, OpenClaw returns a clear error
 (`Unable to resolve session target: ...`).
+
+### Session owner and harness
+
+The OpenClaw agent that owns a session is separate from the external harness
+selected by ACP. For example, a session owned by `work` can run the `claude`
+harness. Owner-aware manager calls carry `agentId`; `agent` remains the harness
+name. Configured bindings use their OpenClaw agent owner and their configured
+ACP harness independently. Free ACP spawns keep their existing harness namespace.
+
+Bare keys such as `global` require an explicit owner when ownership is explicit.
+ACP keeps arbitrary logical keys such as `shared-project` unchanged; ACPX scopes
+the backend resource name by owner.
+An agent-qualified main alias retains its owner even when it resolves to `global`.
+Conflicting owner/key pairs fail visibly. A backend that cannot isolate bare
+sessions must be upgraded before those sessions can run.
 
 ## ACP controls
 

@@ -273,7 +273,7 @@ export function createSubagentRegistryRestorer(config: {
                 launchTerminationConfirmed = true;
                 throw error;
               }
-            });
+            }, "subagents:restore-launch");
           },
           onStartFailure: (error) => {
             if (error instanceof GatewayDrainingError) {
@@ -438,7 +438,7 @@ export function createSubagentRegistryRestorer(config: {
           return cleanupSettled && ownsCleanup();
         }
         return await cleanupCollectorLaunchResources(entry, { isCurrent: ownsCleanup });
-      }).catch((cleanupError: unknown) => {
+      }, "subagents:restore-cleanup").catch((cleanupError: unknown) => {
         warn("failed to clean restored collector after launch failure", {
           runId,
           childSessionKey: entry.childSessionKey,

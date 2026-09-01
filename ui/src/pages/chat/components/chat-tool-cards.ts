@@ -45,7 +45,7 @@ export function renderBrowserTabPreviews(
   options: { sessionKey?: string; latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection> },
 ) {
   const cards = groups.flatMap((group) =>
-    group.messages.flatMap((item) => extractToolCardsCached(item.message, item.key)),
+    group.messages.flatMap((item) => extractToolCardsCached(item.message)),
   );
   // One card per tab per rendered group: open/navigate/screenshot in a single
   // turn all describe the same tab, and stacked near-identical cards are noise.

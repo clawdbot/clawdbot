@@ -251,9 +251,11 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
     const managedDelegate = (
       managedRuntime.runtime as unknown as {
-        resolveManagedToolsDelegateForSession(sessionKey: string): typeof managedRuntime.delegate;
+        resolveManagedToolsDelegateForSession(target: {
+          sessionKey: string;
+        }): typeof managedRuntime.delegate;
       }
-    ).resolveManagedToolsDelegateForSession("agent:codex:acp:managed");
+    ).resolveManagedToolsDelegateForSession({ sessionKey: "agent:codex:acp:managed" });
     const managedTurn = vi.spyOn(managedDelegate, "runTurn").mockImplementation(async function* () {
       yield { type: "done" };
     });
@@ -297,9 +299,9 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     const readScopedMcpEnv = (sessionKey: string, serverName: string) => {
       const delegate = (
         runtime as unknown as {
-          resolveManagedToolsDelegateForSession(sessionKey: string): unknown;
+          resolveManagedToolsDelegateForSession(target: { sessionKey: string }): unknown;
         }
-      ).resolveManagedToolsDelegateForSession(sessionKey) as {
+      ).resolveManagedToolsDelegateForSession({ sessionKey }) as {
         options: {
           mcpServers?: Array<{
             env?: Array<{ name: string; value: string }>;
@@ -338,18 +340,17 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
     const exposedRuntime = runtime as unknown as {
       managedToolsSessionDelegates: Map<string, unknown>;
-      resolveManagedToolsDelegateForSession(sessionKey: string): unknown;
+      resolveManagedToolsDelegateForSession(target: { sessionKey: string }): unknown;
     };
 
-    const firstDelegate = exposedRuntime.resolveManagedToolsDelegateForSession("agent:worker:main");
+    const target = { sessionKey: "agent:worker:main" };
+    const firstDelegate = exposedRuntime.resolveManagedToolsDelegateForSession(target);
     expect(exposedRuntime.managedToolsSessionDelegates.has("agent:worker:main")).toBe(true);
 
     await runtime.prepareFreshSession({ sessionKey: "agent:worker:main" });
 
     expect(exposedRuntime.managedToolsSessionDelegates.has("agent:worker:main")).toBe(true);
-    expect(exposedRuntime.resolveManagedToolsDelegateForSession("agent:worker:main")).toBe(
-      firstDelegate,
-    );
+    expect(exposedRuntime.resolveManagedToolsDelegateForSession(target)).toBe(firstDelegate);
   });
 
   it("uses the no-MCP delegate for startup probes when the OpenClaw tools bridge is enabled", async () => {
@@ -2078,11 +2079,13 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
     const exposedRuntime = runtime as unknown as {
       managedToolsSessionDelegates: Map<string, { close: AcpRuntime["close"] }>;
-      resolveManagedToolsDelegateForSession(sessionKey: string): {
+      resolveManagedToolsDelegateForSession(target: { sessionKey: string }): {
         close: AcpRuntime["close"];
       };
     };
-    const scopedDelegate = exposedRuntime.resolveManagedToolsDelegateForSession("agent:codex:main");
+    const scopedDelegate = exposedRuntime.resolveManagedToolsDelegateForSession({
+      sessionKey: "agent:codex:main",
+    });
     const close = vi.spyOn(scopedDelegate, "close").mockResolvedValue(undefined);
 
     await runtime.close({

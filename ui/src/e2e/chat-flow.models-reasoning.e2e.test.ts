@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { t } from "../i18n/lib/translate.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
@@ -484,7 +485,10 @@ suite.define(() => {
         },
       ]);
 
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = artifactDirParent
+        ? createControlUiE2eArtifactDir("chat-flow.models-reasoning", artifactDirParent)
+        : undefined;
       if (artifactDir) {
         await menu.screenshot({
           animations: "disabled",
@@ -682,7 +686,10 @@ suite.define(() => {
   });
 
   it("shows one canonical default model with matching inherited reasoning", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactDirParent
+      ? createControlUiE2eArtifactDir("chat-flow.models-reasoning", artifactDirParent)
+      : undefined;
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",

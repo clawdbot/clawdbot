@@ -195,6 +195,8 @@ export function replaceCronRuntimeAuthorityRows(params: {
   db: DatabaseSync;
   storeKey: string;
   jobs: readonly CronStoredJob[];
+  preserveExistingForJobIds?: ReadonlySet<string>;
+  writeMissingForJobIds?: ReadonlySet<string>;
 }): void {
   const hasPersistedAuthority = params.jobs.some(
     (job) => job.runtimeAuthority || job.runtimeAuthorityRecoveryRequired === true,
@@ -204,7 +206,26 @@ export function replaceCronRuntimeAuthorityRows(params: {
   }
   ensureCronRuntimeAuthorityTable(params.db);
   const database = getCronAuthorityKysely(params.db);
+  const existingRowsByJobId = params.preserveExistingForJobIds
+    ? new Map(
+        loadCronRuntimeAuthorityRows(params.db, params.storeKey).map((row) => [row.job_id, row]),
+      )
+    : undefined;
   for (const job of params.jobs) {
+    // Doctor must not replay a pre-prompt authority snapshot. Keep the current
+    // child only while its inputs match; missing stays missing unless legacy job_json owns it.
+    if (params.preserveExistingForJobIds?.has(job.id)) {
+      const existingRow = existingRowsByJobId?.get(job.id);
+      if (existingRow) {
+        if (applyCronRuntimeAuthorityRow(job, existingRow) === "repair") {
+          writeRecoveryRow(params.db, params.storeKey, job.id);
+        }
+        continue;
+      }
+      if (!params.writeMissingForJobIds?.has(job.id)) {
+        continue;
+      }
+    }
     if (job.runtimeAuthorityRecoveryRequired === true) {
       writeRecoveryRow(params.db, params.storeKey, job.id);
       continue;

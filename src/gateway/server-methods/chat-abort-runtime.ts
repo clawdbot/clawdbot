@@ -427,6 +427,8 @@ type ChatSessionAbortParams = {
   ) => void;
   /** Internal session-wide cleanup after exact resolution and all matching owner checks. */
   onAuthorizedAfterQueuedAbort?: () => boolean;
+  /** Runs after authorized synchronous abort, before terminal/partial persistence can yield. */
+  onCancellationStarted?: () => void;
 };
 
 type ChatSessionAbortResult = {
@@ -680,6 +682,9 @@ export async function abortChatRunsForSessionKeyWithPartials(
     });
   } else {
     result = plan.abort();
+  }
+  if (!result.unauthorized && !result.error) {
+    params.onCancellationStarted?.();
   }
   await plan.finish(result);
   return { ...result, aborted: result.aborted || Boolean(descendants?.killed), descendants };

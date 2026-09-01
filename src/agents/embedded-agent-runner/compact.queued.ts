@@ -270,6 +270,7 @@ export async function compactEmbeddedAgentSession(
     handle,
     resolvedParams.sessionKey,
     resolvedParams.sessionFile,
+    resolvedParams.agentId,
   );
   try {
     return await compactEmbeddedAgentSessionImpl(

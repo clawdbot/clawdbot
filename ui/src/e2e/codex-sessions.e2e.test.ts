@@ -1,8 +1,8 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import type { SessionsCatalogHostEvent } from "../../../packages/gateway-protocol/src/index.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { controlUiSessionPath, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -15,12 +15,12 @@ const suite = createControlUiE2eSuite({
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const catalogGroupingStorageKey = "openclaw:sidebar:sessions:catalog-grouping";
 const collapsedSessionSectionsStorageKey = "openclaw:sidebar:sessions:collapsed-sections";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "native-session-discovery",
-);
+let uiProofArtifactDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    uiProofArtifactDir = createControlUiE2eArtifactDir("native-session-discovery");
+  }
+});
 
 async function expandCodingSection(page: Page, required = false) {
   const toggle = page.locator('[data-session-section="work"] .sidebar-session-group-toggle');
@@ -231,7 +231,6 @@ suite.define(() => {
       expect(groupGap).toBeGreaterThan(0);
       expect(Math.round(catalogBox!.y - (liveRowsBox!.y + liveRowsBox!.height))).toBe(groupGap);
       if (captureUiProofEnabled) {
-        await mkdir(uiProofArtifactDir, { recursive: true });
         await sessionGroups.screenshot({
           animations: "disabled",
           path: path.join(uiProofArtifactDir, "06-coding-catalog-spacing.png"),
@@ -290,7 +289,6 @@ suite.define(() => {
       await page.getByText("Progressive node result", { exact: true }).waitFor();
       expect((await gateway.getRequests("sessions.catalog.list")).length).toBe(1);
       if (captureUiProofEnabled) {
-        await mkdir(uiProofArtifactDir, { recursive: true });
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
@@ -585,7 +583,6 @@ suite.define(() => {
         await page.evaluate((key) => localStorage.getItem(key), catalogGroupingStorageKey),
       ).toBe("none");
       if (captureUiProofEnabled) {
-        await mkdir(uiProofArtifactDir, { recursive: true });
         await section.screenshot({
           animations: "disabled",
           path: path.join(uiProofArtifactDir, "04-flat-session-hosts.png"),
@@ -659,7 +656,6 @@ suite.define(() => {
       ).not.toContain("catalog-project:codex:gateway:local:project:/Users/dev/openclaw");
 
       if (captureUiProofEnabled) {
-        await mkdir(uiProofArtifactDir, { recursive: true });
         await section.screenshot({
           animations: "disabled",
           path: path.join(uiProofArtifactDir, "03-content-bearing-session-hosts.png"),
@@ -789,7 +785,6 @@ suite.define(() => {
       expect(await page.locator('[data-session-catalog-host="node:registry"]').count()).toBe(0);
 
       if (captureUiProofEnabled) {
-        await mkdir(uiProofArtifactDir, { recursive: true });
         await page.screenshot({
           animations: "disabled",
           fullPage: true,

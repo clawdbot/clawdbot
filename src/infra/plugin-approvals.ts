@@ -26,6 +26,11 @@ export type PluginApprovalRequestPayload = {
   toolName?: string | null;
   toolCallId?: string | null;
   allowedDecisions?: readonly ExecApprovalDecision[] | null;
+  /** Trusted in-process metadata; public Gateway callers cannot submit this field. */
+  externalResolution?: {
+    label: string;
+    decisions?: readonly ("allow-once" | "allow-always")[];
+  } | null;
   actions?: readonly PluginApprovalActionView[] | null;
   agentId?: string | null;
   sessionKey?: string | null;
@@ -70,6 +75,9 @@ export const DEFAULT_PLUGIN_APPROVAL_DECISIONS = [
 
 /** Caps reviewer-only plugin detail by Unicode code point without splitting surrogate pairs. */
 export function truncatePluginApprovalDetail(value: string): string {
+  if (value.length <= PLUGIN_APPROVAL_DETAIL_MAX_LENGTH) {
+    return value;
+  }
   const contentLimit =
     PLUGIN_APPROVAL_DETAIL_MAX_LENGTH - Array.from(PLUGIN_APPROVAL_DETAIL_TRUNCATION_SUFFIX).length;
   let codePointCount = 0;

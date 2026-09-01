@@ -268,13 +268,10 @@ or clear the locked native binding. The `/codex model` query and `/codex fast`,
 `/codex permissions`, and `/codex threads` remain available. Start another
 ordinary session when you want a different model or fresh thread.
 
-**Fork from here** can branch before a mirrored user message from the original
-native source. The child keeps that source's connection and model-locked harness,
-and the original source and parent Chat remain unchanged. Messages added after
-OpenClaw starts its canonical harness thread are not supported as fork points
-yet: those requests are rejected rather than rebuilding model history from an
-incomplete native transcript view. Choose an original mirrored source message
-when forking from OpenClaw.
+**Fork from here** keeps the source connection and model-locked harness without
+changing the original source or parent Chat. Original imported messages and
+canonical conversation messages use different native flows; see
+[Fork a message in a supervised Chat](/plugins/codex-supervision#fork-a-message-in-a-supervised-chat).
 
 Keep supervision enabled for this Chat. If supervision is disabled or its
 stored connection binding becomes unavailable or inconsistent, the turn fails
@@ -324,6 +321,78 @@ For a **Stored / activity unknown** row, the Chat mirror and first-turn snapshot
 pin use Codex's state through the last terminal persisted turn. The source
 thread is not resumed, interrupted, or archived. If another process has an
 in-progress turn, its latest in-flight work might not be present in the branch.
+
+## Fork a message in a supervised Chat
+
+Forking an original imported user message keeps the original-source flow: the
+source must still be readable, and the child's first turn materializes its
+bounded imported history.
+
+Forking a user message created in the canonical OpenClaw conversation instead
+creates a native child immediately, cut before that native turn. Codex retains
+its raw history, including the originally injected prefix, without another
+history import. The local Chat copies only the verified display prefix before
+the selected message and keeps the original source link. Activity monitoring
+starts after the retained native prefix, so inherited messages do not appear as
+new human input. This canonical cut does not require the original imported
+source to remain available.
+
+New canonical user turns record native prompt provenance on the existing Chat
+message after Codex accepts the prompt. This preserves the message ID, text,
+timestamp, sender metadata, and position. Older canonical turns that lack this
+provenance remain unverifiable: matching text or an adjacent assistant reply
+cannot establish the missing native boundary. A later verified turn does not
+repair an earlier unverifiable prefix. Start a fresh Chat from the original
+source, or fork an original imported message while that source remains
+available, then create new canonical turns. OpenClaw does not backfill old rows.
+
+Canonical message forks use the shipping Codex App Server's developer-message
+API. OpenClaw keeps the complete current generic instructions in native thread
+configuration and appends one developer message that replaces earlier
+OpenClaw-supplied generic policy, including removed sections or an explicit
+empty policy. Independent native managed, guardian, security, collaboration,
+and project instructions retain their authority. This is textual supersession;
+it does not delete earlier history or change native permission enforcement.
+
+The refresh is session configuration recorded before the next native user turn.
+It can contain prompt-hook output for that request and remains in native history
+even if the user turn is rejected or never starts. **Fork from here** excludes
+the selected native user turn; it does not erase configuration updates recorded
+before that turn. The refresh creates no user message or extra model turn.
+
+Before publishing the child, OpenClaw verifies the native cut, selected durable
+model and provider, immutable tool catalog, local display prefix, and exact
+creation owner. Its automatic native subscription is released before readiness.
+Preparation does not run prompt hooks or provision execution environments or
+requester MCP resources. The source's actual native declarations must match the
+fresh child's declarations; creation does not reconstruct a hypothetical run's
+tools. A child whose native policy or metadata cannot be verified is refused
+with an original-message alternative. Display copies are limited to 200 messages
+and 512 KiB of serialized message data.
+
+Inherited declarations do not grant permission to execute tools. Every admitted
+turn builds its currently available tools and approvals independently. A tool
+that is unavailable to a nonowner or a closed run remains unavailable, while the
+native descendant retains its catalog and history across turns and restarts.
+
+A creator-required sandbox needs a host-provisioned environment and is therefore
+not eligible for this direct canonical fork. Codex workspace-write alone does
+not satisfy that isolation requirement.
+
+Later turns require native unload evidence before applying current harness
+configuration. An unsubscribe acknowledgement alone does not establish that
+the thread unloaded. Once configuration is proven, OpenClaw refreshes the
+complete generic policy before starting the turn. Stop competing native work
+and reconnect if configuration application cannot be verified; the bound
+conversation is preserved. An uncertain refresh also preserves the conversation
+and retires its connection rather than replaying the operation. A failed fresh
+child with unverified cleanup remains non-ready for inspection.
+
+Fresh initial materialization already supplies generic instructions and needs
+no additional policy refresh. Ordinary nonsupervised sessions keep their existing
+resume and warm-reuse behavior. Standalone cold compaction, review, and goal
+operations do not reconstruct the last run's hook-derived generic policy; the
+next admitted supervised run supplies current configuration and refreshes it.
 
 ## Archive a local session
 
@@ -480,6 +549,16 @@ commands are advertised and permitted; terminal access alone is insufficient.
 Gateway-local stored and idle rows offer **Continue as branch** instead of
 unsafe exact-thread takeover. A row that already has a supervised Chat offers
 **Open Chat**.
+
+**Session eligibility could not be verified:** for filesystem-backed local
+sources, transcript, Continue, Archive, and terminal actions verify the selected
+thread directly, check non-archived native index membership, and validate its
+rollout metadata in the selected Codex home. These checks share one request
+budget and do not scan the full catalog. Missing, unreadable, inconsistent, or
+OpenClaw-managed metadata is not accepted. Refresh the catalog, verify the session
+in its native Codex home, and retry. This error does not prove that the thread
+does not exist. Ordinary discovery keeps its existing behavior; remote sources
+continue to use native catalog verification.
 
 **Archive is disabled:** archive is available for stored/activity-unknown and
 idle Gateway-local rows after no-other-runner confirmation. Active, error,

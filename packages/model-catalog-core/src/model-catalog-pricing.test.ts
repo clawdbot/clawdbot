@@ -1,6 +1,7 @@
 import { calculateUsageCost } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
 import {
+  normalizeModelPricingCatalog,
   normalizeModelPricingProvider,
   normalizeOpenRouterModelPricing,
   normalizeUpstreamModelPricing,
@@ -42,6 +43,37 @@ describe("model pricing source policy", () => {
   ])("ignores empty or unrecognized policy $value", ({ value }) =>
     expect(normalizeModelPricingProvider(value)).toBeUndefined(),
   );
+});
+
+describe("native pricing catalogs", () => {
+  const paid = { id: "paid", pricing: { input: 2, output: 10 } };
+
+  it("keeps declared free prices distinct from missing prices", () => {
+    expect(
+      normalizeModelPricingCatalog(
+        [paid, { id: "unknown" }, { id: "free", pricing: { input: 0, output: 0 } }],
+        normalizeUpstreamModelPricing,
+      ),
+    ).toEqual(
+      new Map([
+        ["paid", BASE_COST],
+        ["free", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }],
+      ]),
+    );
+  });
+
+  it.each([
+    { label: "non-array", rows: {} },
+    { label: "empty", rows: [] },
+    { label: "entirely unpriced", rows: [{ id: "unknown" }] },
+    { label: "invalid identity", rows: [paid, { id: " " }] },
+    { label: "malformed row", rows: [paid, null] },
+    { label: "malformed declared price", rows: [paid, { id: "bad", pricing: null }] },
+    { label: "duplicate priced identity", rows: [paid, paid] },
+    { label: "duplicate unpriced identity", rows: [paid, { id: "paid" }] },
+  ])("rejects $label rather than publishing a partial native feed", ({ rows }) => {
+    expect(normalizeModelPricingCatalog(rows, normalizeUpstreamModelPricing)).toBeUndefined();
+  });
 });
 
 describe.each([

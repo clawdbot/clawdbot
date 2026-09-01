@@ -1,10 +1,50 @@
 import { isDeepStrictEqual } from "node:util";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import type { WorkerDispatchPlacement } from "./placement-dispatch-failure.js";
 import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
-import type { WorkerPlacementDispatchRequest } from "./service-contract.js";
+import type { WorkerPlacementCancellationTarget } from "./placement-reclaim-contract.js";
+import {
+  WorkerPlacementAdmissionTargetError,
+  type WorkerPlacementDispatchAdmission,
+} from "./service-contract.js";
+
+function trackPlacementOperation<T extends WorkerDispatchPlacement | void>(
+  run: (report: (placement: WorkerDispatchPlacement) => void) => Promise<T>,
+  onTransition?: (placement: WorkerDispatchPlacement) => void,
+) {
+  let current: WorkerPlacementCancellationTarget | undefined;
+  let completed: WorkerPlacementCancellationTarget | undefined;
+  const record = (placement: WorkerDispatchPlacement) => {
+    // Retain the producer's authority by value before an observer can mutate its snapshot.
+    current = {
+      state: placement.state,
+      generation: placement.generation,
+      environmentId: placement.environmentId,
+      activeOwnerEpoch: placement.activeOwnerEpoch,
+    };
+  };
+  return {
+    currentPlacement: () => current,
+    completedPlacement: () => completed,
+    operation: run((placement) => {
+      record(placement);
+      onTransition?.({ ...placement });
+    }).then((placement) => {
+      // Completion can outlive the map entry while Stop is loading cancellation support.
+      if (placement) {
+        record(placement);
+        completed = current;
+      }
+      return placement;
+    }),
+  };
+}
 
 /** Serializes reconciliation sweeps against dispatches and deduplicates exact requests. */
 export function coordinateWorkerPlacementDispatch(
   service: WorkerPlacementDispatchService,
+  admitDispatch: WorkerPlacementDispatchAdmission,
 ): WorkerPlacementDispatchService & {
   isPlacementOperationInFlight(sessionId: string): boolean;
 } {
@@ -65,34 +105,48 @@ export function coordinateWorkerPlacementDispatch(
     placementFence = sweep;
     return current;
   };
-  const runExclusivePlacementOperation = <T>(operation: () => Promise<T>): Promise<T> => {
-    const current = (async () => {
+  const runExclusivePlacementOperation = <T>(
+    operation: () => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> => {
+    const ready = (async () => {
       const pendingFence = placementFence;
       if (pendingFence) {
         await pendingFence.promise.catch(() => undefined);
       }
       await waitForDispatchIdle();
+    })();
+    const current = (async () => {
+      await racePromiseWithAbortSignal(ready, signal);
+      signal?.throwIfAborted();
       return await operation();
     })();
-    const barrier = current.then(
-      () => undefined,
-      () => undefined,
-    );
+    // A canceled waiter releases its admission immediately, but its fence must still
+    // carry older work forward so later requests cannot overtake the predecessor.
+    const barrier = Promise.allSettled([ready, current]).then(() => undefined);
     const exclusive: PlacementFence = { promise: barrier };
     placementFence = exclusive;
-    return current.finally(() => {
+    void barrier.then(() => {
       if (placementFence === exclusive) {
         placementFence = undefined;
       }
     });
+    return current;
   };
-  const runPlacementOperation = async <T>(operation: () => Promise<T>): Promise<T> => {
+  const runPlacementOperation = async <T>(
+    operation: () => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> => {
     for (;;) {
+      signal?.throwIfAborted();
       const pendingFence = placementFence;
       if (!pendingFence) {
         break;
       }
-      await pendingFence.promise.catch(() => undefined);
+      await racePromiseWithAbortSignal(
+        pendingFence.promise.catch(() => undefined),
+        signal,
+      );
     }
     activeDispatchCount += 1;
     try {
@@ -108,28 +162,28 @@ export function coordinateWorkerPlacementDispatch(
       }
     }
   };
-  const dispatchInFlight = new Map<
-    string,
-    {
-      request: WorkerPlacementDispatchRequest;
-      operation: ReturnType<WorkerPlacementDispatchService["dispatch"]>;
-    }
-  >();
-  const moveInFlight = new Map<
-    string,
-    {
-      request: Parameters<WorkerPlacementDispatchService["move"]>[0];
-      operation: ReturnType<WorkerPlacementDispatchService["move"]>;
-    }
-  >();
-  const reclaimsInFlight = new Map<string, Set<Promise<unknown>>>();
-  const afterSessionReclaims = async <T>(sessionId: string, run: () => Promise<T>): Promise<T> => {
-    // Later caller mutations cannot replace the worker while Stop prepares. Recovery
-    // bypasses this session intent so it can release the very run Stop is draining.
-    while (reclaimsInFlight.has(sessionId)) {
-      await Promise.allSettled(reclaimsInFlight.get(sessionId)!);
-    }
-    return await run();
+  type OperationServices = Pick<WorkerPlacementDispatchService, "dispatch" | "move" | "reclaim"> & {
+    recovery: WorkerPlacementDispatchService["resumeProvisioning"];
+  };
+  type PlacementOperation = {
+    [Kind in keyof OperationServices]: {
+      kind: Kind;
+      request: Parameters<OperationServices[Kind]>[0];
+    } & ReturnType<typeof trackPlacementOperation<Awaited<ReturnType<OperationServices[Kind]>>>>;
+  }[keyof OperationServices];
+  const operationsInFlight = new Map<string, Set<PlacementOperation>>();
+  const pendingOperations = (sessionId: string) => [...(operationsInFlight.get(sessionId) ?? [])];
+  const registerOperation = (record: PlacementOperation) => {
+    const pending = operationsInFlight.get(record.request.sessionId) ?? new Set();
+    pending.add(record);
+    operationsInFlight.set(record.request.sessionId, pending);
+    const release = () => {
+      pending.delete(record);
+      if (pending.size === 0) {
+        operationsInFlight.delete(record.request.sessionId);
+      }
+    };
+    void record.operation.then(release, release);
   };
   const joinOperation = async <T>(operation: Promise<T>, authorize?: () => void): Promise<T> => {
     // Shared placement work must never inherit another caller's authority across an await.
@@ -139,73 +193,116 @@ export function coordinateWorkerPlacementDispatch(
     return result;
   };
   return {
-    isPlacementOperationInFlight: (sessionId) =>
-      dispatchInFlight.has(sessionId) ||
-      moveInFlight.has(sessionId) ||
-      reclaimsInFlight.has(sessionId),
+    isPlacementOperationInFlight: (sessionId) => operationsInFlight.has(sessionId),
     dispatch: async (request, onTransition, authorize) => {
-      const inFlight = dispatchInFlight.get(request.sessionId);
+      const inFlight = pendingOperations(request.sessionId).find(
+        (pending) => pending.kind === "dispatch",
+      );
       if (inFlight) {
         if (!isDeepStrictEqual(inFlight.request, request)) {
           throw new Error(`Session ${request.sessionKey} is already dispatching another request`);
         }
         return await joinOperation(inFlight.operation, authorize);
       }
-      const operation = afterSessionReclaims(request.sessionId, () =>
-        runPlacementOperation(() => service.dispatch(request, onTransition, authorize)),
+      // Capture predecessors before admission yields. A later Stop awaits this operation
+      // and must never become a predecessor of the dispatch it is cancelling.
+      const predecessors = pendingOperations(request.sessionId).filter(
+        (pending) => pending.kind === "reclaim",
       );
-      dispatchInFlight.set(request.sessionId, { request, operation });
-      try {
-        return await operation;
-      } finally {
-        if (dispatchInFlight.get(request.sessionId)?.operation === operation) {
-          dispatchInFlight.delete(request.sessionId);
-        }
-      }
+      const tracked = trackPlacementOperation(async (report) => {
+        await Promise.allSettled(predecessors.map((pending) => pending.operation));
+        return await admitDispatch(
+          request,
+          (signal) =>
+            runPlacementOperation(
+              () => service.dispatch(request, report, authorize, signal),
+              signal,
+            ),
+          authorize,
+        );
+      }, onTransition);
+      const { operation } = tracked;
+      registerOperation({ kind: "dispatch", request, ...tracked });
+      return await operation;
     },
     forceDestroyEnvironment: (environmentId, onCleanupError) =>
       runExclusivePlacementOperation(() =>
         service.forceDestroyEnvironment(environmentId, onCleanupError),
       ),
     move: async (request, onTransition, authorize) => {
-      const inFlight = moveInFlight.get(request.sessionId);
+      const inFlight = pendingOperations(request.sessionId).find(
+        (pending) => pending.kind === "move",
+      );
       if (inFlight) {
         if (!isDeepStrictEqual(inFlight.request, request)) {
           throw new Error(`Session ${request.sessionKey} is already moving to another target`);
         }
         return await joinOperation(inFlight.operation, authorize);
       }
-      const operation = afterSessionReclaims(request.sessionId, () =>
-        runExclusivePlacementOperation(() => service.move(request, onTransition, authorize)),
+      const predecessors = pendingOperations(request.sessionId).filter(
+        (pending) => pending.kind === "reclaim",
       );
-      moveInFlight.set(request.sessionId, { request, operation });
-      try {
-        return await operation;
-      } finally {
-        if (moveInFlight.get(request.sessionId)?.operation === operation) {
-          moveInFlight.delete(request.sessionId);
-        }
-      }
+      const tracked = trackPlacementOperation(async (report) => {
+        await Promise.allSettled(predecessors.map((pending) => pending.operation));
+        return await admitDispatch(
+          request,
+          (signal) =>
+            runExclusivePlacementOperation(
+              () => service.move(request, report, authorize, signal),
+              signal,
+            ),
+          authorize,
+        );
+      }, onTransition);
+      const { operation } = tracked;
+      registerOperation({ kind: "move", request, ...tracked });
+      return await operation;
     },
     reclaim: async (request, authorize, beforeDrain) => {
       // Cancellation may need coordinated recovery. Reserve exclusivity only after it drains.
-      const operation = service.reclaim(
-        request,
-        authorize,
-        beforeDrain,
-        runExclusivePlacementOperation,
+      // Retain only predecessors: later dispatches wait for these Stops and cannot become
+      // work a Stop awaits. Each caller still revalidates its own lifecycle and authority.
+      const operations = pendingOperations(request.sessionId).filter(
+        (operation) =>
+          operation.request.sessionKey === request.sessionKey &&
+          operation.request.agentId === request.agentId,
       );
-      const pending = reclaimsInFlight.get(request.sessionId) ?? new Set();
-      pending.add(operation);
-      reclaimsInFlight.set(request.sessionId, pending);
-      try {
-        return await operation;
-      } finally {
-        pending.delete(operation);
-        if (pending.size === 0) {
-          reclaimsInFlight.delete(request.sessionId);
-        }
-      }
+      const hasPendingDispatch = () =>
+        operations.some(
+          (operation) =>
+            operation.kind !== "reclaim" &&
+            operationsInFlight.get(request.sessionId)?.has(operation),
+        );
+      const isPending = () =>
+        operations.some((operation) => operationsInFlight.get(request.sessionId)?.has(operation));
+      // Generation increases within the lifecycle revalidated by the reclaim owner.
+      // Dispatch, Move and predecessor Stop publish through the same transition owner.
+      const latestPlacement = (read: "currentPlacement" | "completedPlacement") =>
+        operations.reduce<WorkerPlacementCancellationTarget | undefined>((latest, pending) => {
+          const current = pending[read]();
+          return current && (!latest || current.generation > latest.generation) ? current : latest;
+        }, undefined);
+      const tracked = trackPlacementOperation((report) =>
+        service.reclaim(
+          request,
+          authorize,
+          beforeDrain,
+          runExclusivePlacementOperation,
+          operations.length
+            ? {
+                isCurrent: isPending,
+                hasPendingDispatch,
+                currentPlacement: () => latestPlacement("currentPlacement"),
+                completedPlacement: () => latestPlacement("completedPlacement"),
+                settled: Promise.allSettled(operations.map((pending) => pending.operation)),
+              }
+            : undefined,
+          report,
+        ),
+      );
+      const { operation } = tracked;
+      registerOperation({ kind: "reclaim", request, ...tracked });
+      return await operation;
     },
     reconcile: (mode) => runReconciliation(() => service.reconcile(mode)),
     reconcileActive: (environmentId) =>
@@ -216,22 +313,79 @@ export function coordinateWorkerPlacementDispatch(
       // Insertion order matters: a later queued sweep must not steal a provisioning join
       // from the earlier sweep already awaiting that environment pass.
       const sweep = [...reconciliationSweeps].find((candidate) => candidate.acceptingJoins);
+      const ready = createDeferredCore();
+      const foreground =
+        createDeferredCore<
+          Awaited<ReturnType<WorkerPlacementDispatchService["resumeProvisioning"]>>
+        >();
+      let providerSettlement = Promise.resolve();
+      // Reserve the queue in this stack, before admission can yield to a newer sweep.
+      // Only foreground recovery holds that fence; a timed-out provider retains admission.
+      const recover = async () => {
+        ready.resolve();
+        await foreground.promise;
+      };
+      let queued: Promise<void>;
       if (sweep) {
-        const recovery = (async () => {
+        queued = (async () => {
           if (sweep.predecessor) {
             await sweep.predecessor.promise.catch(() => undefined);
           }
           // The sweep fence blocks new dispatches. Its environment pass still joins only after
           // dispatches admitted before that fence and older exclusive work have drained.
           await waitForDispatchIdle();
-          return await service.resumeProvisioning(placement, reconcileEnvironmentCore);
+          await recover();
         })();
-        sweep.joinedRecoveries.add(recovery);
-        return recovery;
+        sweep.joinedRecoveries.add(queued);
+      } else {
+        queued = runExclusivePlacementOperation(recover);
       }
-      return runExclusivePlacementOperation(() =>
-        service.resumeProvisioning(placement, reconcileEnvironmentCore),
-      );
+      void queued.catch(ready.reject);
+      const tracked = trackPlacementOperation(async (report) => {
+        try {
+          // Recovery joins its captured sweep, never a later Stop which awaits that sweep.
+          const result = await service.resumeProvisioning(
+            placement,
+            async (signal) => {
+              await reconcileEnvironmentCore(signal, (settled) => {
+                providerSettlement = settled;
+              });
+            },
+            report,
+            (runRecovery) =>
+              admitDispatch(placement, async (signal) => {
+                try {
+                  await racePromiseWithAbortSignal(ready.promise, signal);
+                  signal?.throwIfAborted();
+                  const recovered = await runRecovery(signal);
+                  foreground.resolve(recovered);
+                  return recovered;
+                } catch (error) {
+                  foreground.reject(error);
+                  throw error;
+                } finally {
+                  // Caller timeouts finish the sweep, not the real provider or its Stop owner.
+                  await providerSettlement;
+                }
+              }).catch(async (error: unknown) => {
+                if (error instanceof WorkerPlacementAdmissionTargetError) {
+                  // The failed reservation is released. Cleanup still follows its captured
+                  // predecessor, never a later Stop or the sweep that this recovery joins.
+                  await ready.promise;
+                }
+                throw error;
+              }),
+          );
+          // Never-admitted invalid owners still settle their exact cleanup before returning.
+          foreground.resolve(result);
+          return result;
+        } catch (error) {
+          foreground.reject(error);
+          throw error;
+        }
+      });
+      registerOperation({ kind: "recovery", request: placement, ...tracked });
+      return foreground.promise;
     },
   };
 }

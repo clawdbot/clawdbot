@@ -60,6 +60,10 @@ describe("Codex procfs command inspector", () => {
       vi.restoreAllMocks();
     });
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    // Synthetic procfs outcomes must not race host scheduling between reads.
+    let now = Date.now();
+    const deadline = now + 250;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
     const bootId = "00000000-0000-0000-0000-000000000001";
     let commandReads = 0;
     procfs.readFile.mockImplementation(async (file) => {
@@ -68,6 +72,9 @@ describe("Codex procfs command inspector", () => {
       }
       if (file === `/proc/${process.pid}/cmdline`) {
         commandReads += 1;
+        if (commandReads > 1 && mode === "empty") {
+          now = deadline;
+        }
         if (commandReads > 1 && mode === "read-error") {
           throw Object.assign(new Error("command read failed"), { code: "EIO" });
         }
@@ -91,7 +98,7 @@ describe("Codex procfs command inspector", () => {
       return `${process.pid} (codex) ${state} ${ppid} ${pgid}${" 0".repeat(16)} ${replaced ? 54321 : 12345}\n`;
     });
     const observed = (await readCodexAppServerProcessSnapshot(undefined, [process.pid]))[0]!;
-    const inspected = readCodexAppServerProcessCommand(observed, Date.now() + 250);
+    const inspected = readCodexAppServerProcessCommand(observed, deadline);
     if (mode === "ready") {
       await expect(inspected).resolves.toBe("/opt/codex app-server");
     } else {
@@ -100,7 +107,7 @@ describe("Codex procfs command inspector", () => {
           mode === "empty" ? "deadline" : mode === "permission" ? "permission" : "unavailable",
       });
     }
-    if (["ready", "read-error", "replaced after read"].includes(mode)) {
+    if (["ready", "empty", "read-error", "replaced after read"].includes(mode)) {
       expect(commandReads).toBe(2);
     }
   });

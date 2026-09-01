@@ -91,7 +91,7 @@ function signalChild(child, signal, detached) {
   }
 }
 
-async function runTsxCliShimInner(moduleUrl, options) {
+async function runCliShimInner(moduleUrl, options, nodeArgs) {
   const detached = options.detached ?? (process.platform !== "win32" && !process.stdin.isTTY);
   const forceKillDelayMs = options.forceKillDelayMs ?? DEFAULT_FORCE_KILL_DELAY_MS;
   let child = null;
@@ -126,18 +126,13 @@ async function runTsxCliShimInner(moduleUrl, options) {
   try {
     const implementationUrl = new URL(options.implementation, moduleUrl);
     const implementationPath = fileURLToPath(implementationUrl);
-    const tsxImport = new URL("../tsx.mjs", import.meta.url).href;
     const nodeExecutable = process.versions.bun ? "node" : process.execPath;
-    child = spawn(
-      nodeExecutable,
-      ["--import", tsxImport, implementationPath, ...process.argv.slice(2)],
-      {
-        cwd: process.cwd(),
-        detached,
-        env: process.env,
-        stdio: "inherit",
-      },
-    );
+    child = spawn(nodeExecutable, [...nodeArgs, implementationPath, ...process.argv.slice(2)], {
+      cwd: process.cwd(),
+      detached,
+      env: process.env,
+      stdio: "inherit",
+    });
     const result = await new Promise((resolve, reject) => {
       child.once("error", reject);
       child.once("close", (code, signal) => resolve({ code, signal }));
@@ -160,12 +155,20 @@ async function runTsxCliShimInner(moduleUrl, options) {
   }
 }
 
-export async function runTsxCliShim(moduleUrl, options = {}) {
+async function runCliShim(moduleUrl, options, nodeArgs) {
   try {
-    await runTsxCliShimInner(moduleUrl, options);
+    await runCliShimInner(moduleUrl, options, nodeArgs);
   } catch (error) {
     console.error(error);
     writeFailureTrailer(options.failureTool, 1);
     process.exitCode = 1;
   }
+}
+
+export function runNodeCliShim(moduleUrl, options = {}) {
+  return runCliShim(moduleUrl, options, []);
+}
+
+export function runTsxCliShim(moduleUrl, options = {}) {
+  return runCliShim(moduleUrl, options, ["--import", new URL("../tsx.mjs", import.meta.url).href]);
 }

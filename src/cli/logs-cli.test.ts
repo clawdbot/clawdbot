@@ -813,7 +813,11 @@ describe("logs cli", () => {
           expect.objectContaining({ type: "raw", raw: "recovered rpc line" }),
         ]),
       );
-      expect(stderrWrites.join("")).toContain("Gateway not reachable");
+      expect(JSON.parse(stderrWrites.join(""))).toMatchObject({
+        type: "error",
+        message: "stop after recovered cursor probe",
+        error: "stop after recovered cursor probe",
+      });
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
 

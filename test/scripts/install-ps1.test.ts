@@ -430,7 +430,12 @@ describe("install.ps1 failure handling", () => {
           "  function Resolve-PortableGitDownload { return @{ Tag = 'test'; Name = 'MinGit.zip'; Url = 'https://example.test/MinGit.zip' } }",
           "  function Ensure-PortableGitOnUserPath { }",
           "  function Use-PortableGitIfPresent { return (Test-Path -LiteralPath (Join-Path $portableRoot 'cmd/git.exe')) }",
-          "  function Invoke-WebRequest { param($Uri, $OutFile) New-Item -ItemType File -Force -Path $OutFile | Out-Null }",
+          "  $script:usedBasicParsing = $false",
+          "  function Invoke-WebRequest {",
+          "    param($Uri, $OutFile, [switch]$UseBasicParsing)",
+          "    $script:usedBasicParsing = $UseBasicParsing.IsPresent",
+          "    New-Item -ItemType File -Force -Path $OutFile | Out-Null",
+          "  }",
           "  function Expand-Archive {",
           "    param($Path, $DestinationPath, [switch]$Force)",
           "    New-Item -ItemType Directory -Force -Path (Join-Path $DestinationPath 'cmd') | Out-Null",
@@ -439,6 +444,7 @@ describe("install.ps1 failure handling", () => {
           "    New-Item -ItemType File -Force -Path (Join-Path $DestinationPath 'etc/gitconfig') | Out-Null",
           "  }",
           "  Install-PortableGit",
+          "  if (-not $script:usedBasicParsing) { throw 'MinGit download must use basic parsing' }",
           "  if (-not (Test-Path -LiteralPath (Join-Path $portableRoot 'cmd/git.exe'))) { throw 'missing cmd/git.exe' }",
           "  if (-not (Test-Path -LiteralPath (Join-Path $portableRoot 'etc/gitconfig'))) { throw 'missing etc/gitconfig' }",
           "  if (@(Get-ChildItem -LiteralPath $sandbox -Filter 'openclaw-portable-git-*').Count -ne 0) { throw 'temporary Git files remain' }",
@@ -1093,25 +1099,25 @@ try {
     for (const entry of parsed) {
       batchedPowerShellResults.set(entry.name, { error: entry.error, ok: entry.ok });
     }
-    // Repeat only the native bootstrap case under the other installed engine;
-    // the hosted install command still uses Windows PowerShell 5.1.
+    // The hosted installer supports Windows PowerShell 5.1 as well as PowerShell 7.
     for (const engine of bootstrapShells) {
-      const name = "pnpm-source-bootstrap-lifecycle";
       if (engine === powershell) {
         continue;
       }
-      const fixture = fixtures.find((entry) => entry.name === name);
-      if (!fixture) {
-        throw new Error("Missing native bootstrap fixture");
+      for (const name of ["pnpm-source-bootstrap-lifecycle", "portable-git-layout"]) {
+        const fixture = fixtures.find((entry) => entry.name === name);
+        if (!fixture) {
+          throw new Error(`Missing PowerShell fixture ${name}`);
+        }
+        const invocation = `$ErrorActionPreference = 'Stop'; & ([scriptblock]::Create((Get-Content -LiteralPath ${toPowerShellSingleQuotedLiteral(fixture.scriptPath)} -Raw)))`;
+        const result = spawnSync(engine, ["-NoLogo", "-NoProfile", "-Command", invocation], {
+          encoding: "utf8",
+        });
+        batchedPowerShellResults.set(`${name}:${engine}`, {
+          ok: result.status === 0,
+          error: result.status === 0 ? "" : result.stdout + result.stderr,
+        });
       }
-      const invocation = `$ErrorActionPreference = 'Stop'; & ([scriptblock]::Create((Get-Content -LiteralPath ${toPowerShellSingleQuotedLiteral(fixture.scriptPath)} -Raw)))`;
-      const result = spawnSync(engine, ["-NoLogo", "-NoProfile", "-Command", invocation], {
-        encoding: "utf8",
-      });
-      batchedPowerShellResults.set(`${name}:${engine}`, {
-        ok: result.status === 0,
-        error: result.status === 0 ? "" : result.stdout + result.stderr,
-      });
     }
   });
 
@@ -1267,7 +1273,15 @@ try {
   });
 
   runIfPowerShell("installs portable Git from multiple archive roots without collisions", () => {
+    if (process.platform === "win32") {
+      expect(bootstrapShells).toContain("powershell");
+    }
     expectBatchedPowerShellCase("portable-git-layout");
+    for (const engine of bootstrapShells) {
+      if (engine !== powershell) {
+        expectBatchedPowerShellCase(`portable-git-layout:${engine}`);
+      }
+    }
   });
 
   runIfPowerShell("upgrades and validates Node installed by Windows package managers", () => {

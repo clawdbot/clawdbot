@@ -30,6 +30,8 @@ const translations: Record<string, string> = {
   "updates.failureReasons.dirty": "Commit or stash changes, then retry.",
   "updates.failureReasons.depsInstallFailed":
     "Dependency install failed. Fix the install error and retry.",
+  "updates.failureReasons.managedServiceHandoffUnavailable":
+    "Stop the foreground Gateway, update in the terminal, then launch it again.",
   "updates.failureReasons.default":
     "See the gateway logs for the exact failure and retry once the cause is fixed.",
   "updates.verificationFailed":
@@ -46,6 +48,7 @@ const translations: Record<string, string> = {
   "updates.handoffTimeout":
     "Update handoff started, but completion was not reported after reconnect. Run `openclaw update status` for the final result.",
   "updates.campaign.countdown": "Updating in {time}",
+  "updates.campaign.applying": "Updating…",
   "updates.campaign.held": "Update held · resumes in {time}",
   "updates.campaign.waitingForIdle": "Waiting for active work · forced update in {time}",
 };
@@ -63,7 +66,7 @@ afterEach(() => {
 });
 
 async function verifyUpdate(params: {
-  pending: PendingUpdateReconciliation;
+  pending: Omit<PendingUpdateReconciliation, "handoffId" | "deadlineAtMs">;
   response: unknown;
   hello?: GatewayHelloOk | null;
   advanceToMs?: number;
@@ -72,6 +75,11 @@ async function verifyUpdate(params: {
   vi.useFakeTimers();
   vi.setSystemTime(0);
   let banner: ApplicationStatusBanner | null | undefined;
+  const pending: PendingUpdateReconciliation = {
+    ...params.pending,
+    handoffId: null,
+    deadlineAtMs: 35 * 60_000,
+  };
   const client = {
     request: vi.fn(async () => {
       if (params.advanceToMs !== undefined) {
@@ -81,7 +89,7 @@ async function verifyUpdate(params: {
     }),
   } as unknown as GatewayBrowserClient;
   const controller = createUpdateVerificationController({
-    getPending: () => params.pending,
+    getPending: () => pending,
     clearPending: vi.fn(),
     isCurrent: () => true,
     getHello: () => params.hello ?? null,
@@ -222,6 +230,15 @@ describe("update schedule hydration", () => {
         1_000,
       ),
     ).toBe("Update held · resumes in 12:41");
+    expect(
+      formatUpdateCampaignLabel(
+        {
+          ...schedule,
+          campaign: { ...schedule.campaign, state: "applying", holdUntilMs: 762_000 },
+        },
+        1_000,
+      ),
+    ).toBe("Updating…");
   });
 
   it.each([
@@ -450,26 +467,33 @@ describe("update status localization", () => {
       status: "error",
       reason: "build-failed",
       installKind: "git",
-      installedVersion: null,
-      installedSha: "before",
-      targetVersion: null,
-      targetSha: "after",
+      beforeVersion: null,
+      beforeSha: "before",
+      afterVersion: null,
+      afterSha: "after",
       failure: { step: "build", detail: "Type check failed" },
     });
   });
 
-  it("localizes known update failure guidance", () => {
+  it.each([
+    { reason: "dirty", key: "dirty", guidance: "Commit or stash changes, then retry." },
+    {
+      reason: "managed-service-handoff-unavailable",
+      key: "managedServiceHandoffUnavailable",
+      guidance: "Stop the foreground Gateway, update in the terminal, then launch it again.",
+    },
+  ])("localizes known update failure guidance for $reason", ({ reason, key, guidance }) => {
     const translate = installTranslations();
 
-    expect(resolveUpdateStatusBanner({ status: "skipped", reason: "dirty" })).toEqual({
+    expect(resolveUpdateStatusBanner({ status: "skipped", reason })).toEqual({
       tone: "warn",
-      text: "Update skipped: dirty. Commit or stash changes, then retry.",
+      text: `Update skipped: ${reason}. ${guidance}`,
     });
-    expect(translate).toHaveBeenCalledWith("updates.failureReasons.dirty", undefined);
+    expect(translate).toHaveBeenCalledWith(`updates.failureReasons.${key}`, undefined);
     expect(translate).toHaveBeenCalledWith("updates.status", {
       status: "skipped",
-      reason: "dirty",
-      guidance: "Commit or stash changes, then retry.",
+      reason,
+      guidance,
     });
   });
 

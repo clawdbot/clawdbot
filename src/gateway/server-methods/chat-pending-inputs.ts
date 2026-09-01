@@ -27,6 +27,7 @@ export function projectPendingInputMessage(input: SessionPendingInput, maxChars:
   delete metadata.runId;
   return {
     ...message,
+    timestamp: input.acceptedAt,
     idempotencyKey: undefined,
     __openclaw: { ...metadata, id: `${CHAT_PENDING_INPUT_MESSAGE_PREFIX}${input.id}` },
   };

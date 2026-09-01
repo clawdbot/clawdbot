@@ -135,6 +135,7 @@ const SessionsSendOutputSchema = Type.Union([
       runId: Type.String(),
       status: Type.Literal("accepted"),
       sessionKey: Type.String(),
+      targetDisposition: Type.Union([Type.Literal("queued"), Type.Literal("steered")]),
       delivery: SessionsSendDeliverySchema,
       watched: Type.Optional(Type.Boolean()),
     },
@@ -375,7 +376,7 @@ async function startAgentRun(params: {
   | {
       ok: true;
       runId: string;
-      activeRunQueue?: boolean;
+      targetDisposition: "queued" | "steered";
       a2aSessionKey?: string;
       a2aDisplayKey?: string;
     }
@@ -440,7 +441,7 @@ async function startAgentRun(params: {
         );
       }
       if (queueOutcome.queued) {
-        return { ok: true, runId: params.runId, activeRunQueue: true };
+        return { ok: true, runId: params.runId, targetDisposition: "steered" };
       }
       const fallbackSessionKey = resolveCronRunScopedFallbackSessionKey(params.sessionKey);
       if (
@@ -461,6 +462,7 @@ async function startAgentRun(params: {
           ok: true,
           runId:
             typeof response?.runId === "string" && response.runId ? response.runId : params.runId,
+          targetDisposition: "queued",
           a2aSessionKey: fallbackSessionKey,
           a2aDisplayKey: fallbackSessionKey,
         };
@@ -477,6 +479,7 @@ async function startAgentRun(params: {
     return {
       ok: true,
       runId: typeof response?.runId === "string" && response.runId ? response.runId : params.runId,
+      targetDisposition: "queued",
     };
   } catch (err) {
     const messageText =
@@ -1097,14 +1100,6 @@ export function createSessionsSendTool(opts?: {
           // post-return work or durable watches that could follow a reused key.
           const skipA2AFlow =
             skipAcpA2AFlow || skipNativeParentA2AFlow || Boolean(expectedSessionId);
-          // When the A2A flow is skipped, no follow-up announcement will fire and
-          // the reply (when present) is returned inline via the `reply` field.
-          // Reflect that in the metadata so the parent LLM does not wait for a
-          // second result that will never arrive.
-          const delivery = skipA2AFlow
-            ? ({ status: "skipped", mode: "announce" } as const)
-            : ({ status: "pending", mode: "announce" } as const);
-
           const startA2AFlow = (
             roundOneReply?: string,
             waitRunId?: string,
@@ -1121,27 +1116,29 @@ export function createSessionsSendTool(opts?: {
                 : baselineReply;
             // This detached flow can outlive the tool request that launched it.
             // Own a fresh root so parent release cannot retire later nested turns.
-            void runWithGatewayIndependentRootWorkContinuation(() =>
-              runWithoutOwnedSessionTranscriptWrites(() =>
-                runSessionsSendA2AFlow({
-                  callGateway: gatewayCall,
-                  targetSessionKey: flowTargetSessionKey,
-                  targetAgentId,
-                  displayKey: flowDisplayKey,
-                  message,
-                  announceTimeoutMs,
-                  // Cron runs are isolated jobs; target replies must not become new
-                  // requester turns, but the target-side announce still runs.
-                  maxPingPongTurns: isIsolatedCronRequester ? 0 : maxPingPongTurns,
-                  requesterSessionKey: replyRequesterSessionKey,
-                  requesterAgentId,
-                  requesterChannel,
-                  baseline: flowBaseline,
-                  roundOneReply,
-                  waitRunId,
-                  notifyRequesterOnWaitFailure,
-                }),
-              ),
+            void runWithGatewayIndependentRootWorkContinuation(
+              () =>
+                runWithoutOwnedSessionTranscriptWrites(() =>
+                  runSessionsSendA2AFlow({
+                    callGateway: gatewayCall,
+                    targetSessionKey: flowTargetSessionKey,
+                    targetAgentId,
+                    displayKey: flowDisplayKey,
+                    message,
+                    announceTimeoutMs,
+                    // Cron runs are isolated jobs; target replies must not become new
+                    // requester turns, but the target-side announce still runs.
+                    maxPingPongTurns: isIsolatedCronRequester ? 0 : maxPingPongTurns,
+                    requesterSessionKey: replyRequesterSessionKey,
+                    requesterAgentId,
+                    requesterChannel,
+                    baseline: flowBaseline,
+                    roundOneReply,
+                    waitRunId,
+                    notifyRequesterOnWaitFailure,
+                  }),
+                ),
+              "session:a2a-send",
             ).catch((err: unknown) => {
               log.warn("sessions_send announce flow admission failed", {
                 runId: waitRunId ?? "unknown",
@@ -1172,6 +1169,13 @@ export function createSessionsSendTool(opts?: {
             return start.result;
           }
           const acceptedTargetSessionKey = start.a2aSessionKey ?? resolvedKey;
+          // Active-run steering is consumed by the current turn and does not
+          // launch the detached A2A flow. Report that boundary directly so the
+          // caller never mistakes target admission for announcement delivery.
+          const delivery =
+            skipA2AFlow || start.targetDisposition === "steered"
+              ? ({ status: "skipped", mode: "announce" } as const)
+              : ({ status: "pending", mode: "announce" } as const);
           recordSessionToolActionFact({
             operation: "send",
             fact: "committed",
@@ -1189,13 +1193,14 @@ export function createSessionsSendTool(opts?: {
           runId = start.runId;
           const watchField = registerWatchIfRequested(acceptedTargetSessionKey);
           if (timeoutSeconds === 0) {
-            if (!start.activeRunQueue) {
+            if (start.targetDisposition !== "steered") {
               startA2AFlow(undefined, runId, start.a2aSessionKey, start.a2aDisplayKey, true);
             }
             return jsonResult({
               runId,
               status: "accepted",
               sessionKey: displayKey,
+              targetDisposition: start.targetDisposition,
               delivery,
               ...watchField,
             });
@@ -1230,6 +1235,7 @@ export function createSessionsSendTool(opts?: {
                 runId,
                 status: "accepted",
                 sessionKey: displayKey,
+                targetDisposition: start.targetDisposition,
                 delivery,
                 ...watchField,
               });
