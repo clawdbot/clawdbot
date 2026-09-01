@@ -299,6 +299,8 @@ describe("gateway plugin instance bindings", () => {
         "initial",
       );
       const initialProbe = await requestInstanceBindingProbe(initialRuntime);
+      const initialCron = initialRuntime.gateway.getCron?.();
+      expect(initialCron).toBeDefined();
 
       const socket = await connectWebchatClient({ port, scopes: ["operator.admin"] });
       sockets.push(socket);
@@ -335,6 +337,8 @@ describe("gateway plugin instance bindings", () => {
         getGatewayPluginMetadataSnapshot()?.byPluginId.get("instance-binding-probe")?.name,
       ).toBe("Startup plugin");
       expect(hotReloadRecovery).not.toHaveBeenCalled();
+      expect(reloadedRuntime.gateway.getCron?.()).toBe(initialCron);
+      expect(initialRuntime.gateway.getCron?.()).toBeUndefined();
       await expect(requestInstanceBindingProbe(initialRuntime)).rejects.toThrow(
         "In-process gateway dispatch requires a gateway request scope or instance binding",
       );

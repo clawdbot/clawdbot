@@ -1291,6 +1291,33 @@ describe("gateway startup reconciliation", () => {
     }
   });
 
+  it("reconciles managed dreaming after plugin hot reload replaces the startup generation", async () => {
+    clearInternalHooks();
+    const { api, harness, logger, onMock } = createDreamingTestContext({
+      config: createDreamingConfig({ enabled: true, phases: { deep: { limit: 0 } } }),
+    });
+    api.runtime = { gateway: { getCron: () => harness.cron } };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+
+      const result = await getBeforeAgentReplyHandler(onMock)(
+        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+        { trigger: "cron", workspaceDir: ".", sessionKey: "agent:main:cron:memory-dreaming" },
+      );
+
+      expect(harness.listCalls).toBe(1);
+      expect(harness.addCalls).toHaveLength(1);
+      expectLogNotContains(logger.warn, "cron service unavailable");
+      expect(result).toEqual({
+        handled: true,
+        reason: "memory-core: short-term dreaming disabled by limit",
+      });
+    } finally {
+      clearInternalHooks();
+    }
+  });
+
   it("still warns on gateway runtime reconciliation when cron remains unavailable", async () => {
     clearInternalHooks();
     const { api, logger, onMock } = createDreamingTestContext();

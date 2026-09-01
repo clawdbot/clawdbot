@@ -307,6 +307,9 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           const gateway = getRuntimeProperty();
           return {
             isAvailable: () => runWithPluginScope(() => gateway.isAvailable()),
+            ...(gateway.getCron
+              ? { getCron: () => runWithPluginScope(() => gateway.getCron?.()) }
+              : {}),
             request: async (method, params, options) => {
               const { assertGatewaySessionRequestOwned } = await loadSessionOwnership();
               return await runWithPluginScope(async () => {

@@ -5,6 +5,7 @@ import type { NodePluginToolDescriptor } from "../../../packages/gateway-protoco
 import type { AgentWaitResult } from "../../agents/run-wait.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/operator-scopes.js";
+import type { PluginHookGatewayCronService } from "../hook-types.js";
 import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
 
 export type { RuntimeLogger };
@@ -126,6 +127,8 @@ export type PluginRuntime = PluginRuntimeCore & {
   gateway: {
     /** Whether this process owns an active Gateway request context. */
     isAvailable: () => Promise<boolean>;
+    /** Resolve the current Gateway cron service while this runtime generation is active. */
+    getCron?: () => PluginHookGatewayCronService | undefined;
     /** Dispatch a Gateway method as the current trusted plugin. */
     request: <T = unknown>(
       method: string,

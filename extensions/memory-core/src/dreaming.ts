@@ -826,12 +826,6 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
 
 export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void {
   let resolveStartupCron: (() => CronServiceLike | null) | null = null;
-  // Hold a live reference to the gateway context so we can retry cron resolution at runtime.
-  // The startup capture may fail if the cron service isn't available yet (race condition in
-  // startGatewaySidecars — the startup event fires via setTimeout(250ms) before deps.cron is
-  // attached). By keeping the context, we can call getCron() again on later reconciliation
-  // attempts when the service is guaranteed to be ready.  Fixes #67362.
-  let gatewayContext: { getCron?: () => unknown } | null = null;
   let unavailableCronWarningEmitted = false;
   let lastRuntimeReconcileAtMs = 0;
   let lastRuntimeConfigKey: string | null = null;
@@ -863,7 +857,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
   };
 
   const hasCronManagementContext = (): boolean =>
-    Boolean(resolveStartupCron || gatewayContext?.getCron);
+    Boolean(resolveStartupCron || api.runtime.gateway?.getCron);
 
   const disposeStartupCronRetry = (): void => {
     disposed = true;
@@ -877,7 +871,6 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       clearInterval(runtimeCronReconcileTimer);
       runtimeCronReconcileTimer = null;
     }
-    gatewayContext = null;
     resolveStartupCron = null;
   };
 
@@ -917,22 +910,8 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     if (params.reason === "startup") {
       resolveStartupCron = params.startupCron ?? null;
     }
-    let cron = resolveStartupCron?.() ?? null;
-    // Runtime fallback: retry resolving the cron service from the gateway context.
-    // This handles the case where the cron service was not yet available during
-    // gateway_start (250ms deferred init race in startGatewaySidecars) but is
-    // available now.  Fixes #67362.
-    if (!cron && params.reason !== "startup" && gatewayContext) {
-      try {
-        cron = resolveCronServiceFromGatewayContext(gatewayContext);
-        if (cron) {
-          // Refresh the startup capture so subsequent calls resolve immediately.
-          resolveStartupCron = () => cron;
-        }
-      } catch {
-        // Ignore — fall through with cron = null
-      }
-    }
+    const cron =
+      resolveStartupCron?.() ?? resolveCronServiceFromCandidate(api.runtime.gateway?.getCron?.());
     const configKey = runtimeConfigKey(config);
     if (!cron && config.enabled && !unavailableCronWarningEmitted) {
       // Avoid a noisy startup-path warning when the gateway has not exposed cron yet.
@@ -1108,8 +1087,6 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       startupDreamingCleanupTimer = null;
     }
     const generation = ++gatewayLifecycleGeneration;
-    // Store the gateway context for runtime cron resolution retries.
-    gatewayContext = ctx;
     try {
       await reconcileManagedDreamingCron({
         reason: "startup",

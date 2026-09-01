@@ -7,6 +7,15 @@ import { normalizeModelRef } from "../agents/model-ref-shared.js";
 import { parseModelRef } from "../agents/model-selection-normalize.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 
+type PluginSubagentOverridePolicy = {
+  allowModelOverride: boolean;
+  allowAnyModel: boolean;
+  hasConfiguredAllowlist: boolean;
+  allowedModels: Set<string>;
+};
+
+export type PluginSubagentOverridePolicies = Record<string, PluginSubagentOverridePolicy>;
+
 export function normalizePluginSubagentAllowedModelRef(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) {

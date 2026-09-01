@@ -10,6 +10,7 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
 import { activatePluginRegistry } from "../plugins/loader-shared.js";
 import type { ChannelPluginLoadIntent } from "../plugins/loader-types.js";
@@ -56,6 +57,7 @@ import {
   normalizePluginSubagentAllowedModelRef,
   normalizePluginSubagentRunRuntime,
   resolvePluginSubagentRequestedModelRef,
+  type PluginSubagentOverridePolicies,
 } from "./server-plugin-subagent-runtime.js";
 import {
   createGatewayHooksRuntime,
@@ -71,16 +73,6 @@ export {
 };
 export type { GatewayMethodDispatchResponse } from "./server-plugin-in-process-dispatch.js";
 export { hasInProcessGatewayContext } from "./server-plugins-node-runtime.js";
-
-type PluginSubagentOverridePolicy = {
-  allowModelOverride: boolean;
-
-  allowAnyModel: boolean;
-  hasConfiguredAllowlist: boolean;
-  allowedModels: Set<string>;
-};
-
-type PluginSubagentOverridePolicies = Record<string, PluginSubagentOverridePolicy>;
 
 function resolvePluginSubagentOverridePolicies(
   cfg: OpenClawConfig,
@@ -529,6 +521,9 @@ function createGatewayPluginRuntimeBindings(
       },
       gateway: {
         isAvailable: async () => hasInProcessGatewayContext(resolveBoundGatewayContext),
+        getCron: () =>
+          // SAFETY: Gateway cron is the concrete service behind the narrower public plugin facade.
+          resolveBoundGatewayContext?.()?.cron as PluginHookGatewayCronService | undefined,
         request: (method, params, options) =>
           dispatchTrustedPluginGatewayMethod(method, params, options, resolveBoundGatewayContext),
       },
