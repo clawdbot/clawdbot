@@ -11,6 +11,7 @@ import type {
   PluginExternalVerificationAttempt,
   PluginExternalVerificationAttemptSnapshot,
   PluginExternalVerificationCompletionResult,
+  PluginExternalVerificationContext,
 } from "../plugins/external-verification-approval-types.js";
 import { getPluginExternalApprovalVerifier } from "../plugins/hook-runner-global-state.js";
 import { onPluginRegistryLifecycleChange } from "../plugins/registry-lifecycle.js";
@@ -32,6 +33,7 @@ import {
   failExternalVerificationAttempt,
   getExternalVerificationAttemptSnapshot,
   getExternalVerificationNativeActionState,
+  resolveApprovalsCoveredBySessionGrant,
   startExternalVerificationAttempt,
 } from "./plugin-external-verification-store.js";
 import {
@@ -208,6 +210,21 @@ export class PluginExternalVerificationRuntime {
         this.attemptSetups.delete(attemptId);
       }
     }
+  }
+
+  /**
+   * True while a reviewer's external ceremony for this approval is live in
+   * this process. Run-end cleanup pins such approvals: the QR in the
+   * reviewer's hand stays valid, the abandoned call itself never executes
+   * (its waiter is gone), and the approval's own expiry still bounds it.
+   */
+  hasActiveCeremonyForApproval(approvalId: string): boolean {
+    for (const live of this.liveAttempts.values()) {
+      if (live.approvalId === approvalId) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private resolveVerifier(pluginId: string): PluginExternalApprovalVerifierRegistration | null {
@@ -639,12 +656,68 @@ export class PluginExternalVerificationRuntime {
       );
       this.liveAttempts.delete(stored.attempt.id);
     }
+    if (stored.applied && stored.grantAuthorization) {
+      await this.applySessionGrantCoverage(stored.attempt.context, stored.grantAuthorization.id);
+    }
     return {
       applied: stored.applied,
       approval,
       attempt: snapshotAttemptWithRecord(stored.attempt, record),
       ...(stored.grantAuthorization ? { grantAuthorization: stored.grantAuthorization } : {}),
     };
+  }
+
+  /**
+   * An allow-always ceremony declares trust for matching actions in this
+   * session; approvals already pending when it completed (including calls
+   * racing the reviewer's scan) are covered by the grant instead of each
+   * demanding a ceremony. The store records a synthetic succeeded attempt per
+   * covered approval so the ledger explains the ceremonyless authorization.
+   */
+  private async applySessionGrantCoverage(
+    context: PluginExternalVerificationContext,
+    grantAuthorizationId: string,
+  ): Promise<void> {
+    const sessionKey = context.sessionKey?.trim();
+    const sessionId = context.sessionId?.trim();
+    if (!sessionKey || !sessionId) {
+      return;
+    }
+    const covered = resolveApprovalsCoveredBySessionGrant({
+      grantAuthorizationId,
+      grantedApprovalId: context.approvalId,
+      pluginId: context.pluginId,
+      toolName: context.toolName,
+      sessionKey,
+      sessionId,
+      runtimeEpoch: this.params.runtimeEpoch,
+      databaseOptions: this.params.databaseOptions,
+    });
+    for (const { approvalId } of covered) {
+      const coveredRecord = requireApprovalRecord(approvalId, this.params.databaseOptions);
+      const liveRecord = this.params.manager.getLiveSnapshot(approvalId) ?? undefined;
+      this.params.manager.reconcileDurableTerminal(coveredRecord);
+      if (liveRecord && this.context) {
+        try {
+          await (this.params.publishResolution ?? publishAppliedApprovalResolution)({
+            record: coveredRecord,
+            liveRecord,
+            context: this.context,
+            forwarder: this.params.forwarder,
+            pluginIosPushDelivery: this.params.iosPushDelivery,
+          });
+        } catch (error) {
+          this.context.logGateway?.error?.(
+            `plugin approvals: grant coverage publication failed after durable resolution: ${formatErrorMessage(error)}`,
+          );
+        }
+      }
+    }
+    if (covered.length > 0) {
+      this.context?.logGateway?.info?.(
+        `plugin approvals: session grant covered ${covered.length} pending external verification approval(s)`,
+      );
+    }
   }
 
   shutdown(): void {

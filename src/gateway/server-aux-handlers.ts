@@ -251,6 +251,11 @@ export function createGatewayAuxHandlers(
           authority,
           reason: approvalReason,
           manager: pluginApprovalManager,
+          // Run-end cleanup pins approvals whose reviewer ceremony is live so a
+          // mid-scan QR stays valid; policy-driven closures still fail closed.
+          spare: (pending) =>
+            (!approvalReason || approvalReason === "run-aborted") &&
+            externalVerificationRuntime.hasActiveCeremonyForApproval(pending.id),
           publish: (record, liveRecord) =>
             publishAuthorityClosure({ kind: "plugin", record, liveRecord }),
         });
@@ -352,6 +357,7 @@ export function createGatewayAuxHandlers(
         cancelUnboundRunApprovals({
           runId: target,
           manager: pluginApprovalManager,
+          spare: (pending) => externalVerificationRuntime.hasActiveCeremonyForApproval(pending.id),
           publish: (record, liveRecord) => publish("plugin", record, liveRecord),
         }) +
         cancelUnboundRunApprovals({
