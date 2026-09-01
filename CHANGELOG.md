@@ -34,7 +34,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Memory response cancellation:** preserve the caller's abort error during pending response reads, preventing canceled JSON and upload requests from returning partial success or misleading parse errors.
 - **Agent prompts:** keep model-identity guidance conditional so ordinary requests are not mistaken for questions about the current model.
 
 - **Update/Doctor:** preserve `update --no-restart` by requiring an offline managed Gateway during updater-owned repair and leaving restart ownership with the parent.
