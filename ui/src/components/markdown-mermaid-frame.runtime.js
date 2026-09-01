@@ -48,7 +48,7 @@
     window.removeEventListener("message", initialize);
     const port = event.ports[0];
     let busy = false;
-    port.onmessage = async ({ data: { id, source, config, maxSvgLength, maxSvgElements } }) => {
+    const render = async ({ data: { id, source, config, maxSvgLength, maxSvgElements } }) => {
       if (busy) {
         return;
       }
@@ -109,6 +109,8 @@
         busy = false;
       }
     };
+    port.addEventListener("message", (message) => void render(message));
+    port.start();
     port.postMessage({ type: "ready" });
   };
   window.addEventListener("message", initialize);

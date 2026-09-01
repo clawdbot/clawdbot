@@ -164,7 +164,7 @@ function sanitizeMermaidSvg(source: string, backgroundColor: string): string {
       // Canvas accepts CSS colors, never paint URLs or unresolved CSS variables.
       colorParser.fillStyle = "#000000";
       colorParser.fillStyle = value;
-      element.setAttribute(attribute, String(colorParser.fillStyle));
+      element.setAttribute(attribute, colorParser.fillStyle);
     }
   }
   svg.setAttribute("xmlns", SVG_NAMESPACE);
@@ -177,7 +177,7 @@ function sanitizeMermaidSvg(source: string, backgroundColor: string): string {
   background.setAttribute("width", "100%");
   background.setAttribute("height", "100%");
   colorParser.fillStyle = backgroundColor;
-  background.setAttribute("fill", String(colorParser.fillStyle));
+  background.setAttribute("fill", colorParser.fillStyle);
   svg.prepend(background);
   return new XMLSerializer().serializeToString(svg);
 }
@@ -243,7 +243,7 @@ function createMermaidFrame(): MermaidFrame {
       });
     },
   };
-  channel.port1.onmessage = (event: MessageEvent<unknown>) => {
+  channel.port1.addEventListener("message", (event: MessageEvent<unknown>) => {
     if (disposed || !frame.isConnected) {
       return;
     }
@@ -267,7 +267,8 @@ function createMermaidFrame(): MermaidFrame {
     } else {
       request.reject(new Error("Mermaid returned an invalid diagram."));
     }
-  };
+  });
+  channel.port1.start();
   frame.addEventListener("load", () => {
     if (loaded) {
       instance.dispose(new Error("Mermaid renderer navigated unexpectedly."));

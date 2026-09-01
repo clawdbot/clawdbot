@@ -240,7 +240,7 @@ class OpenClawMermaid extends OpenClawLitElement {
           ${t("chat.mermaid.source")}
         </button>
         <span class="spacer"></span>
-        <button type="button" @click=${this.copySource}>
+        <button type="button" @click=${() => void this.copySource()}>
           ${t(
             this.copyResult === undefined
               ? "chat.mermaid.copySource"
