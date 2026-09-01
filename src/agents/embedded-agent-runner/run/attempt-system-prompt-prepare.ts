@@ -241,7 +241,10 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     embeddedSystemPrompt: {
       config: attempt.config,
       agentId: params.sessionAgentId,
-      workspaceDir: params.effectiveWorkspace,
+      // File tools sandbox to effectiveCwd; prompt Working directory must match
+      // (same rule as CLI runtimeWorkspaceDir) so models do not write to the
+      // bootstrap agent home when cwd is a managed worktree or task checkout.
+      workspaceDir: params.effectiveCwd || params.effectiveWorkspace,
       defaultThinkLevel: attempt.thinkLevel,
       reasoningLevel: attempt.reasoningLevel ?? "off",
       extraSystemPrompt,

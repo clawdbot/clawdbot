@@ -59,6 +59,14 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
     expect(toolsCall?.workspaceDir).toBe(bootstrapCall?.workspaceDir);
     expect(toolsCall?.spawnWorkspaceDir).toBe(bootstrapCall?.workspaceDir);
 
+    // Prompt Working directory must name the file-tool root (cwd), not the
+    // bootstrap agent home — otherwise models write into the wrong tree.
+    const promptInput = hoisted.embeddedSystemPromptInputs.at(-1) as
+      | { workspaceDir?: string }
+      | undefined;
+    expect(promptInput?.workspaceDir).toBe(taskRepo);
+    expect(promptInput?.workspaceDir).not.toBe(bootstrapCall?.workspaceDir);
+
     const resourceLoaderInit = hoisted.defaultResourceLoaderInitMock.mock.calls[0]?.[0] as
       | { cwd?: string }
       | undefined;

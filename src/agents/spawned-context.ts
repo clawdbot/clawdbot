@@ -97,3 +97,27 @@ export function resolveIngressWorkspaceOverrideForSessionRun(
   // also the workspace that sandbox setup must mount on every later turn.
   return normalizeOptionalString(metadata?.cwd);
 }
+
+/**
+ * Resolve the workspaceDir agentCommand prepare must bind for one session run.
+ * Session remount (managed worktree cwd) wins over an explicit call-site
+ * workspace so prompt/bootstrap and file-tool roots stay the same checkout.
+ */
+export function resolvePreparedAgentCommandWorkspaceDir(params: {
+  configuredWorkspaceDir: string;
+  explicitWorkspaceDir?: string | null;
+  session?: {
+    spawnedBy?: string | null;
+    spawnedWorkspaceDir?: string | null;
+    spawnedCwd?: string | null;
+  } | null;
+}): string {
+  const remount = resolveIngressWorkspaceOverrideForSessionRun({
+    spawnedBy: params.session?.spawnedBy,
+    workspaceDir: params.session?.spawnedWorkspaceDir,
+    cwd: params.session?.spawnedCwd,
+  });
+  return (
+    remount ?? normalizeOptionalString(params.explicitWorkspaceDir) ?? params.configuredWorkspaceDir
+  );
+}
