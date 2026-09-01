@@ -832,7 +832,6 @@ export async function modelsStatusCommand(
     const applied = getShellEnvAppliedKeys();
     const shellFallbackEnabled =
       shouldEnableShellEnvFallback(process.env) || cfg.env?.shellEnv?.enabled === true;
-
     const providerAuth = Array.from(
       new Set([
         ...providers,

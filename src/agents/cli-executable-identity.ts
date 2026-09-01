@@ -168,7 +168,15 @@ function resolveCommandPath(params: {
     // workspaces. A cwd-relative executable cannot name one durable owner.
     return undefined;
   }
-  return resolveExecutablePath(params.command, {
+  const command =
+    process.platform === "win32"
+      ? resolveWindowsExecutablePath(params.command, params.env)
+      : params.command;
+  if (process.platform === "win32" && !isDurableRootedCommand(command)) {
+    // The Windows resolver returns the raw command when PATH lookup misses.
+    return undefined;
+  }
+  return resolveExecutablePath(command, {
     ...(params.cwd ? { cwd: params.cwd } : {}),
     env: params.env,
   });
