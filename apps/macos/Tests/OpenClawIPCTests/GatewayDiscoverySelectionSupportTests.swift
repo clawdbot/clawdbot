@@ -24,7 +24,7 @@ private final class DiscoveryConnectRequestRecorder: @unchecked Sendable {
     }
 }
 
-@Suite(.serialized)
+@Suite(.serialized, .sharedTestStateIsolated)
 @MainActor
 struct GatewayDiscoverySelectionSupportTests {
     private let routeBindingKey = SymmetricKey(data: Data(repeating: 0xA5, count: 32))

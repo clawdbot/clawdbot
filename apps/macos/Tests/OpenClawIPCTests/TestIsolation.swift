@@ -30,11 +30,43 @@ actor TestIsolationLock {
     }
 }
 
+private enum TestIsolationScope {
+    @TaskLocal static var holdsSharedStateLock = false
+}
+
 @MainActor
 enum TestIsolation {
+    static func withSharedStateLock<T>(
+        _ body: () async throws -> T) async rethrows -> T
+    {
+        if TestIsolationScope.holdsSharedStateLock {
+            return try await body()
+        }
+
+        await TestIsolationLock.shared.acquire()
+        do {
+            let result = try await TestIsolationScope.$holdsSharedStateLock.withValue(true, operation: body)
+            await TestIsolationLock.shared.release()
+            return result
+        } catch {
+            await TestIsolationLock.shared.release()
+            throw error
+        }
+    }
+
     static func withIsolatedState<T>(
         env: [String: String?] = [:],
         defaults: [String: Any?] = [:],
+        _ body: () async throws -> T) async rethrows -> T
+    {
+        try await self.withSharedStateLock {
+            try await self.withIsolatedStateLocked(env: env, defaults: defaults, body)
+        }
+    }
+
+    private static func withIsolatedStateLocked<T>(
+        env: [String: String?],
+        defaults: [String: Any?],
         _ body: () async throws -> T) async rethrows -> T
     {
         precondition(!env.keys.contains("OPENCLAW_PROFILE"), "Select the app profile before launching the test process")
@@ -59,7 +91,6 @@ enum TestIsolation {
             }
         }
 
-        await TestIsolationLock.shared.acquire()
         var env = env
         // Config reads and writes also persist health/audit state. A config-only
         // fixture must not send those writes to the process-wide state directory.
@@ -106,12 +137,10 @@ enum TestIsolation {
             let result = try await body()
             restoreUserDefaults(previousDefaults)
             restoreEnv(previousEnv)
-            await TestIsolationLock.shared.release()
             return result
         } catch {
             restoreUserDefaults(previousDefaults)
             restoreEnv(previousEnv)
-            await TestIsolationLock.shared.release()
             throw error
         }
     }
@@ -134,6 +163,24 @@ enum TestIsolation {
         FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-test-config-\(UUID().uuidString).json")
             .path
+    }
+}
+
+struct SharedTestStateIsolationTrait: SuiteTrait, TestTrait, TestScoping {
+    let isRecursive = true
+
+    func provideScope(
+        for test: Test,
+        testCase: Test.Case?,
+        performing function: @Sendable () async throws -> Void) async throws
+    {
+        try await TestIsolation.withSharedStateLock(function)
+    }
+}
+
+extension Trait where Self == SharedTestStateIsolationTrait {
+    static var sharedTestStateIsolated: Self {
+        Self()
     }
 }
 
