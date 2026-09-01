@@ -695,7 +695,7 @@ export class ToolSearchRuntime {
       finalizeToolTerminalPresentation({
         toolCallId,
         runId: this.ctx.runId,
-        result: acceptedResult ?? { content: [] },
+        result: acceptedResult ?? { content: [], details: undefined },
         isError: acceptedResult === undefined || isToolResultError(acceptedResult),
       });
     }
