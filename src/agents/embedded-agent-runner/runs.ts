@@ -333,14 +333,6 @@ export function resolveEmbeddedRunAbandonment(params: {
       : undefined;
 }
 
-export function isEmbeddedRunAbandoned(params: {
-  sessionId?: string;
-  sessionKey?: string;
-  sessionFile?: string;
-}): boolean {
-  return resolveEmbeddedRunAbandonment(params) === "timeout";
-}
-
 /**
  * Temporarily releases terminal-timeout delivery suppression while a timed-out
  * attempt is performing an eligible compaction-and-retry recovery.

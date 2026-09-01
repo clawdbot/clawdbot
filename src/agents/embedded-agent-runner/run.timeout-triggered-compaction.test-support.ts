@@ -18,7 +18,7 @@ import {
 } from "./run.shared-integration-harness.test-support.js";
 import {
   clearActiveEmbeddedRun,
-  isEmbeddedRunAbandoned,
+  resolveEmbeddedRunAbandonment,
   markActiveEmbeddedRunAbandoned,
   setActiveEmbeddedRun,
 } from "./runs.js";
@@ -176,11 +176,11 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
     expect(mockedBuildAgentRuntimePlan).toHaveBeenCalledTimes(2);
     expect(
-      isEmbeddedRunAbandoned({
+      resolveEmbeddedRunAbandonment({
         sessionId: session.runParams.sessionId,
         sessionKey: session.runParams.sessionKey,
       }),
-    ).toBe(true);
+    ).toBe("timeout");
   });
 
   it("leaves timeout recovery to a forced unlocked Codex compaction owner", async () => {

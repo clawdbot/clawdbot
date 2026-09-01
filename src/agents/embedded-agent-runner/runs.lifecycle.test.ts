@@ -13,7 +13,6 @@ import {
   clearActiveEmbeddedRun,
   getActiveEmbeddedRunSnapshot,
   isEmbeddedAgentRunHandleActive,
-  isEmbeddedRunAbandoned,
   markEmbeddedRunRecoveringTimeout,
   markActiveEmbeddedRunAbandoned,
   resolveEmbeddedRunAbandonment,
@@ -303,16 +302,16 @@ describe("embedded-agent runner run lifecycle", () => {
       }),
     ).toBe(true);
 
-    expect(isEmbeddedRunAbandoned({ sessionId: "session-timeout" })).toBe(true);
-    expect(isEmbeddedRunAbandoned({ sessionKey: "agent:main:main" })).toBe(true);
-    expect(isEmbeddedRunAbandoned({ sessionFile })).toBe(true);
+    expect(resolveEmbeddedRunAbandonment({ sessionId: "session-timeout" })).toBe("timeout");
+    expect(resolveEmbeddedRunAbandonment({ sessionKey: "agent:main:main" })).toBe("timeout");
+    expect(resolveEmbeddedRunAbandonment({ sessionFile })).toBe("timeout");
 
     const nextHandle = createRunHandle();
     setActiveEmbeddedRun("session-next", nextHandle, "agent:main:main", sessionFile);
 
-    expect(isEmbeddedRunAbandoned({ sessionId: "session-timeout" })).toBe(false);
-    expect(isEmbeddedRunAbandoned({ sessionKey: "agent:main:main" })).toBe(false);
-    expect(isEmbeddedRunAbandoned({ sessionFile })).toBe(false);
+    expect(resolveEmbeddedRunAbandonment({ sessionId: "session-timeout" })).toBeUndefined();
+    expect(resolveEmbeddedRunAbandonment({ sessionKey: "agent:main:main" })).toBeUndefined();
+    expect(resolveEmbeddedRunAbandonment({ sessionFile })).toBeUndefined();
 
     expect(
       markActiveEmbeddedRunAbandoned({
@@ -324,7 +323,7 @@ describe("embedded-agent runner run lifecycle", () => {
     ).toBe(true);
     setActiveEmbeddedRun("session-third", createRunHandle(), "agent:main:main");
 
-    expect(isEmbeddedRunAbandoned({ sessionKey: "agent:main:main" })).toBe(false);
+    expect(resolveEmbeddedRunAbandonment({ sessionKey: "agent:main:main" })).toBeUndefined();
   });
 
   it("does not reject completions while a timeout is recovering", () => {
@@ -341,12 +340,11 @@ describe("embedded-agent runner run lifecycle", () => {
 
     const recoveryMarker = markEmbeddedRunRecoveringTimeout({ sessionId: "session-recovering" });
     expect(recoveryMarker).toMatchObject({ sessionId: "session-recovering" });
-    expect(isEmbeddedRunAbandoned({ sessionId: "session-recovering" })).toBe(false);
     expect(resolveEmbeddedRunAbandonment({ sessionId: "session-recovering" })).toBe(
       "recovering_timeout",
     );
     expect(restoreEmbeddedRunTimeoutAbandonment(recoveryMarker!)).toBe(true);
-    expect(isEmbeddedRunAbandoned({ sessionId: "session-recovering" })).toBe(true);
+    expect(resolveEmbeddedRunAbandonment({ sessionId: "session-recovering" })).toBe("timeout");
   });
 
   it("does not let a stale recovery marker mutate a replacement timeout", () => {
@@ -378,7 +376,9 @@ describe("embedded-agent runner run lifecycle", () => {
     ).toBe(true);
 
     expect(restoreEmbeddedRunTimeoutAbandonment(staleMarker!)).toBe(false);
-    expect(isEmbeddedRunAbandoned({ sessionId: "session-recovery-replaced" })).toBe(true);
+    expect(resolveEmbeddedRunAbandonment({ sessionId: "session-recovery-replaced" })).toBe(
+      "timeout",
+    );
   });
 
   it("ignores timeout abandonment from a stale replaced handle", () => {
@@ -397,7 +397,7 @@ describe("embedded-agent runner run lifecycle", () => {
       }),
     ).toBe(false);
 
-    expect(isEmbeddedRunAbandoned({ sessionKey: "agent:main:main" })).toBe(false);
+    expect(resolveEmbeddedRunAbandonment({ sessionKey: "agent:main:main" })).toBeUndefined();
   });
 
   it("treats repeated clears for a completed run handle as idempotent", () => {

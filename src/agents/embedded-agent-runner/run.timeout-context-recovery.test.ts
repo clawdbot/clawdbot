@@ -7,7 +7,7 @@ import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-st
 import { recoverEmbeddedRunTimeout } from "./run/timeout-context-recovery.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 import {
-  isEmbeddedRunAbandoned,
+  resolveEmbeddedRunAbandonment,
   markActiveEmbeddedRunAbandoned,
   setActiveEmbeddedRun,
 } from "./runs.js";
@@ -326,7 +326,7 @@ describe("recoverEmbeddedRunTimeout", () => {
     });
 
     await expect(recoverEmbeddedRunTimeout(input)).rejects.toThrow("after-hook failed");
-    expect(isEmbeddedRunAbandoned({ sessionId: "session-1" })).toBe(true);
+    expect(resolveEmbeddedRunAbandonment({ sessionId: "session-1" })).toBe("timeout");
   });
 
   it("restores terminal abandonment when the next attempt fails before registration", async () => {
@@ -345,12 +345,12 @@ describe("recoverEmbeddedRunTimeout", () => {
 
     const state = createEmbeddedRunContextRecoveryState();
     expect(await recoverEmbeddedRunTimeout(makeInput({ state }))).toBe(true);
-    expect(isEmbeddedRunAbandoned({ sessionId: "session-1" })).toBe(false);
+    expect(resolveEmbeddedRunAbandonment({ sessionId: "session-1" })).toBe("recovering_timeout");
 
     // The run loop owns this cleanup after recovery returns, including the
     // fallible preparation window before the next active run is registered.
     expect(state.restoreTimeoutRecoveryAbandonment()).toBe(true);
-    expect(isEmbeddedRunAbandoned({ sessionId: "session-1" })).toBe(true);
+    expect(resolveEmbeddedRunAbandonment({ sessionId: "session-1" })).toBe("timeout");
   });
 
   it.each(["durable", "detached"] as const)(
