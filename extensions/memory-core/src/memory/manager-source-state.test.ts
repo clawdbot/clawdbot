@@ -1,12 +1,8 @@
 // Memory Core tests cover manager source state plugin behavior.
-import fsSync from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   loadMemorySourceFileState,
   resolveMemorySourceExistingHash,
-  resolveMemorySourceFileEntries,
 } from "./manager-source-state.js";
 
 describe("memory source state", () => {
@@ -92,38 +88,4 @@ describe("memory source state", () => {
       },
     ]);
   });
-
-  // Real symlink on a real filesystem: this is the memory sync entry point, so a
-  // throw here is what an operator sees as a permanently dead memory index.
-  it.skipIf(process.platform === "win32")(
-    "resolves source entries past a symlinked workspace root file",
-    async () => {
-      const workspaceDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "memory-source-state-"));
-      const outsideDir = path.join(workspaceDir, "..", "memory-source-state-outside");
-      try {
-        fsSync.mkdirSync(outsideDir, { recursive: true });
-        fsSync.writeFileSync(path.join(outsideDir, "shared-user.md"), "# Outside");
-        fsSync.symlinkSync(
-          path.join(outsideDir, "shared-user.md"),
-          path.join(workspaceDir, "USER.md"),
-        );
-        fsSync.mkdirSync(path.join(workspaceDir, "memory"), { recursive: true });
-        fsSync.writeFileSync(path.join(workspaceDir, "memory", "notes.md"), "# Notes");
-
-        const entries = await resolveMemorySourceFileEntries({
-          workspaceDir,
-          settings: {
-            extraPaths: [],
-            multimodal: { enabled: false, modalities: [], maxFileBytes: 0 },
-          },
-          concurrency: 2,
-        });
-
-        expect(entries.map((entry) => entry.path)).toEqual(["memory/notes.md"]);
-      } finally {
-        fsSync.rmSync(workspaceDir, { recursive: true, force: true });
-        fsSync.rmSync(outsideDir, { recursive: true, force: true });
-      }
-    },
-  );
 });

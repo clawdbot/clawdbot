@@ -83,11 +83,8 @@ function ensureMemoryHostDir(dir: string): string {
 
 export { ensureMemoryHostDir as ensureDir };
 
-/**
- * Enumeration policy for workspace memory files: skip missing and non-regular
- * paths (a symlinked USER.md), matching walkDirectory's `symlinks: "skip"` and
- * the extraPaths symlink skip; a throw here aborts the agent's whole sync.
- */
+// File discovery skips non-regular entries. Keep the same rule when a listed
+// file changes before its index entry is built, or one path can abort the sync.
 async function statEnumerableMemoryFile(absPath: string): Promise<fsSync.Stats | null> {
   try {
     const stat = await fs.lstat(absPath);
@@ -316,8 +313,6 @@ export async function buildFileEntry(
   workspaceDir: string,
   multimodal?: MemoryMultimodalSettings,
 ): Promise<MemoryFileEntry | null> {
-  // Skip, don't throw: null reads as "not indexable" when resolving sources, and
-  // as a changed snapshot (typed retry) at the write-time hash revalidation gate.
   const stat = await statEnumerableMemoryFile(absPath);
   if (!stat) {
     return null;

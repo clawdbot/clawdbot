@@ -323,7 +323,9 @@ describe("memory host SDK package internals", () => {
       fsSync.writeFileSync(path.join(outsideDir, "shared-user.md"), "# Outside user profile");
       fsSync.writeFileSync(path.join(tmpDir, "USER.md"), "# placeholder, replaced below");
       fsSync.unlinkSync(path.join(tmpDir, "USER.md"));
-      tryCreateSymlink(path.join(outsideDir, "shared-user.md"), path.join(tmpDir, "USER.md"));
+      expect(
+        tryCreateSymlink(path.join(outsideDir, "shared-user.md"), path.join(tmpDir, "USER.md")),
+      ).toBe(true);
       const memoryDir = path.join(tmpDir, "memory");
       fsSync.mkdirSync(memoryDir, { recursive: true });
       fsSync.writeFileSync(path.join(memoryDir, "notes.md"), "# Notes");
@@ -345,7 +347,7 @@ describe("memory host SDK package internals", () => {
       const realPath = path.join(outsideDir, "kept.md");
       fsSync.writeFileSync(realPath, "# Kept");
       const linkedPath = path.join(tmpDir, "linked.md");
-      tryCreateSymlink(realPath, linkedPath);
+      expect(tryCreateSymlink(realPath, linkedPath)).toBe(true);
 
       await expect(buildFileEntry(linkedPath, tmpDir)).resolves.toBeNull();
       const entry = expectFileEntry(await buildFileEntry(realPath, tmpDir));
