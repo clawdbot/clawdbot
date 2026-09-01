@@ -162,7 +162,7 @@ export function resolveInstalledPluginKey(
   return canonical.status === "matched" ? canonical : discovered;
 }
 
-function resolveConfiguredPluginIdentity(
+export function resolveConfiguredPluginIdentity(
   entry: CodexPluginConfigEntry,
 ): { pluginName: string; marketplaceName: string } | undefined {
   if (!entry.pluginName || !entry.marketplaceName) {
