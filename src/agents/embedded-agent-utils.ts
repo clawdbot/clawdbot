@@ -36,8 +36,8 @@ function isAssistantTextContentBlockType(value: unknown): boolean {
   return value === "text" || value === "input_text" || value === "output_text";
 }
 
-export function sanitizeAssistantVisibleStreamText(text: string): string {
-  return sanitizeUserFacingText(sanitizeAssistantText(text), { errorContext: false });
+export function sanitizeAssistantVisibleStreamText(text: string, phase?: AssistantPhase): string {
+  return sanitizeUserFacingText(sanitizeAssistantText(text, phase), { errorContext: false });
 }
 
 function finalizeAssistantExtraction(msg: AssistantMessage, extracted: string): string {
@@ -50,6 +50,12 @@ function finalizeAssistantExtraction(msg: AssistantMessage, extracted: string): 
 function extractEmbeddedAssistantTextForPhase(
   msg: AssistantMessage,
   requestedPhase: AssistantPhase,
+  prepareText?: (
+    text: string,
+    final: boolean,
+    phase?: AssistantPhase,
+    contentIndex?: number,
+  ) => string,
 ): string {
   const messagePhase = normalizeAssistantPhase((msg as { phase?: unknown }).phase);
   if (typeof msg.content === "string") {
@@ -60,7 +66,13 @@ function extractEmbeddedAssistantTextForPhase(
     if (messagePhase !== selectedPhase) {
       return "";
     }
-    const text = finalizeAssistantExtraction(msg, sanitizeAssistantText(msg.content, messagePhase));
+    const text = finalizeAssistantExtraction(
+      msg,
+      sanitizeAssistantText(
+        prepareText ? prepareText(msg.content, true, messagePhase) : msg.content,
+        messagePhase,
+      ),
+    );
     return selectedPhase === "final_answer" && !text.trim() ? "" : text;
   }
   if (!Array.isArray(msg.content)) {
@@ -91,8 +103,8 @@ function extractEmbeddedAssistantTextForPhase(
     (hasExplicitPhasedTextBlocks || messagePhase !== "final_answer")
       ? undefined
       : requestedPhase;
-  const parts: string[] = [];
-  for (const block of msg.content) {
+  const parts: { text: string; phase?: AssistantPhase; contentIndex: number }[] = [];
+  for (const [contentIndex, block] of msg.content.entries()) {
     if (!block || typeof block !== "object") {
       continue;
     }
@@ -109,18 +121,36 @@ function extractEmbeddedAssistantTextForPhase(
     const sanitizerPhase =
       resolvedPhase ??
       (requestedPhase === "final_answer" && signature?.id ? "final_answer" : undefined);
-    const text = sanitizeAssistantText(record.text, sanitizerPhase);
-    if (text.trim()) {
-      parts.push(text);
-    }
+    parts.push({ text: record.text, phase: sanitizerPhase, contentIndex });
   }
-  const extracted = finalizeAssistantExtraction(msg, parts.join("\n").trim());
+  const extracted = finalizeAssistantExtraction(
+    msg,
+    // A native block boundary can divide markup; finalize only the selected snapshot.
+    parts
+      .map(({ text, phase, contentIndex }, index) =>
+        sanitizeAssistantText(
+          prepareText ? prepareText(text, index === parts.length - 1, phase, contentIndex) : text,
+          phase,
+        ),
+      )
+      .filter((text) => text.trim())
+      .join("\n")
+      .trim(),
+  );
   return selectedPhase === "final_answer" && !extracted.trim() ? "" : extracted;
 }
 
 /** Extract text intended for users, preferring explicit final-answer phase blocks. */
-export function extractAssistantVisibleText(msg: AssistantMessage): string {
-  return extractEmbeddedAssistantTextForPhase(msg, "final_answer");
+export function extractAssistantVisibleText(
+  msg: AssistantMessage,
+  prepareText?: (
+    text: string,
+    final: boolean,
+    phase?: AssistantPhase,
+    contentIndex?: number,
+  ) => string,
+): string {
+  return extractEmbeddedAssistantTextForPhase(msg, "final_answer", prepareText);
 }
 
 /** Extract the commentary/narration text of a commentary-phase assistant message. */
@@ -359,9 +389,15 @@ export function extractThinkingFromTaggedText(text: string): string {
 export function extractThinkingFromTaggedStream(
   text: string,
   state: ThinkingTagStreamState,
+  delta: string,
 ): string {
-  for (let index = state.scannedOffset; index < text.length; index += 1) {
-    const char = text[index];
+  // Indexing the growing rope flattens the entire reply on each token. Scan the
+  // appended chunk directly; a checkpoint reset still needs its unscanned prefix.
+  const unscanned =
+    text.length - state.scannedOffset === delta.length ? delta : text.slice(state.scannedOffset);
+  for (let offset = 0; offset < unscanned.length; offset += 1) {
+    const index = state.scannedOffset + offset;
+    const char = unscanned[offset];
     if (char === "<") {
       state.pendingTagStart = index;
       continue;

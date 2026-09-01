@@ -1867,16 +1867,25 @@ describe("agent event handler", () => {
     nowSpy.mockRestore();
   });
 
-  it("flushes throttled shorter replacement deltas before final", () => {
+  it.each(["Hi", "Hello", ""])("flushes a scoped replacement %j before final", (text) => {
     let now = 11_700;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
     const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
     registerNamedChatRun(chatRunState, "short-replacement-flush");
 
-    emitAgentEvent(handler, "run-short-replacement-flush", "assistant", { text: "Hello world" });
+    emitAgentEvent(handler, "run-short-replacement-flush", "assistant", {
+      text: "Hello world",
+      itemId: "message-1",
+    });
 
     now = 11_760;
-    emitAgentEvent(handler, "run-short-replacement-flush", "assistant", { text: "Hi" }, { seq: 2 });
+    emitAgentEvent(
+      handler,
+      "run-short-replacement-flush",
+      "assistant",
+      { text, itemId: "message-1" },
+      { seq: 2 },
+    );
 
     emitLifecycleEnd(handler, "run-short-replacement-flush", 3);
 
@@ -1889,9 +1898,9 @@ describe("agent event handler", () => {
       message?: { content?: Array<{ text?: string }> };
     };
     expect(replacementPayload.state).toBe("delta");
-    expect(replacementPayload.deltaText).toBe("Hi");
+    expect(replacementPayload.deltaText).toBe(text);
     expect(replacementPayload.replace).toBe(true);
-    expect(replacementPayload.message?.content?.[0]?.text).toBe("Hi");
+    expect(replacementPayload.message?.content?.[0]?.text).toBe(text);
     expect(
       (expectDefined(chatCalls[2], "chatCalls[2] test invariant")[1] as { state?: string }).state,
     ).toBe("final");
