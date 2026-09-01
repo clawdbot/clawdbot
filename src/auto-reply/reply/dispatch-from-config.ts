@@ -143,9 +143,11 @@ async function dispatchReplyFromConfigInner(
           releaseInboundDedupe(inboundDedupeClaim.key);
         }
       }
-      recordAgentDispatchCompleted("error", { error: String(err) });
-      recordProcessed("error", { error: String(err) });
-      markIdle("message_error");
+      if (!(err instanceof DispatchSessionRefreshRequiredError)) {
+        recordAgentDispatchCompleted("error", { error: String(err) });
+        recordProcessed("error", { error: String(err) });
+        markIdle("message_error");
+      }
       failDispatchReplyOperation(err);
       throw err;
     }

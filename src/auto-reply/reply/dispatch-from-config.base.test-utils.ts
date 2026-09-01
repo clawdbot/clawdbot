@@ -25,6 +25,7 @@ import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import {
   createDispatcher,
+  diagnosticMocks,
   emptyConfig,
   hookMocks,
   messageAuditMocks,
@@ -1772,7 +1773,7 @@ describe("dispatchReplyFromConfig", () => {
         To: "telegram:-1003774691297",
         BodyForAgent: "@openclaw recover",
       }),
-      cfg: automaticGroupReplyConfig,
+      cfg: { ...automaticGroupReplyConfig, diagnostics: { enabled: true } },
       dispatcher,
       fastAbortResolver: async () => {
         fastAbortCalls += 1;
@@ -1824,6 +1825,10 @@ describe("dispatchReplyFromConfig", () => {
     expect(messageAuditEvents()).toEqual([
       expect.objectContaining({ status: "succeeded", outcome: "completed" }),
     ]);
+    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledOnce();
+    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: "completed" }),
+    );
 
     const followingDispatcher = createDispatcher();
     await expect(
