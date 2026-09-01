@@ -1,9 +1,15 @@
 // Regression tests: provider auth failures re-prompt instead of killing the wizard.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  applyLocalSetupWorkspaceConfig,
+  applySkipBootstrapConfig,
+} from "../commands/onboard-config.js";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 import { runSetupModelAuthStep } from "./setup.model-auth.js";
+import { requestTelemetryConsent, requireRiskAcknowledgement } from "./setup.shared.js";
 
 type ResolveManifestProviderAuthChoice =
   typeof import("../plugins/provider-auth-choices.js").resolveManifestProviderAuthChoice;
@@ -108,52 +114,64 @@ describe("runSetupModelAuthStep", () => {
     detectAvailableSetupProviderIds.mockResolvedValue(new Set(["ollama"]));
   });
 
-  it("targets the configured default agent for auth and model setup", async () => {
-    const config = createDefaultAgentConfig();
-    promptAuthChoiceGrouped.mockResolvedValueOnce("anthropic-cli");
-    applyAuthChoice.mockResolvedValueOnce({
-      config,
-      authProfiles: [],
-      persistAuthProfiles: async () => {},
-    });
+  it.each([false, true])(
+    "targets the configured default agent across setup copies (migrated: %s)",
+    async (migrated) => {
+      let config = createDefaultAgentConfig();
+      const prompter = createPrompter();
+      if (migrated) {
+        config.agents!.entries = { alpha: {}, ...config.agents!.entries };
+        config = migratePersistedImplicitMainRoster(config).config as OpenClawConfig;
+        config = await requireRiskAcknowledgement({ config, opts: { acceptRisk: true }, prompter });
+        vi.mocked(prompter.select).mockResolvedValueOnce(false);
+        config = await requestTelemetryConsent({ config, opts: {}, prompter });
+        config = applySkipBootstrapConfig(applyLocalSetupWorkspaceConfig(config, "/tmp/requested"));
+      }
+      promptAuthChoiceGrouped.mockResolvedValueOnce("anthropic-cli");
+      applyAuthChoice.mockResolvedValueOnce({
+        config: { ...config },
+        authProfiles: [],
+        persistAuthProfiles: async () => {},
+      });
 
-    await runSetupModelAuthStep({
-      config,
-      opts: {},
-      prompter: createPrompter(),
-      runtime: createRuntime(),
-    });
+      await runSetupModelAuthStep({
+        config,
+        opts: {},
+        prompter,
+        runtime: createRuntime(),
+      });
 
-    expect(ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/ops-agent", {
-      allowKeychainPrompt: false,
-      readOnly: true,
-    });
-    expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspaceDir: "/tmp/ops-workspace",
-        detectedProviderIds: new Set(["ollama"]),
-      }),
-    );
-    expect(applyAuthChoice).toHaveBeenCalledWith(
-      expect.objectContaining({
+      expect(ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/ops-agent", {
+        allowKeychainPrompt: false,
+        readOnly: true,
+      });
+      expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workspaceDir: "/tmp/ops-workspace",
+          detectedProviderIds: new Set(["ollama"]),
+        }),
+      );
+      expect(applyAuthChoice).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "ops",
+          agentDir: "/tmp/ops-agent",
+        }),
+      );
+      expect(promptDefaultModel).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "ops",
+          agentDir: "/tmp/ops-agent",
+          workspaceDir: "/tmp/ops-workspace",
+        }),
+      );
+      expect(warnIfModelConfigLooksOff).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
         agentId: "ops",
         agentDir: "/tmp/ops-agent",
-      }),
-    );
-    expect(promptDefaultModel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "ops",
-        agentDir: "/tmp/ops-agent",
-        workspaceDir: "/tmp/ops-workspace",
-      }),
-    );
-    expect(warnIfModelConfigLooksOff).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
-      agentId: "ops",
-      agentDir: "/tmp/ops-agent",
-      pendingAuthProfiles: [],
-      validateCatalog: false,
-    });
-  });
+        pendingAuthProfiles: [],
+        validateCatalog: false,
+      });
+    },
+  );
 
   it("stages provider auth on the pending named agent without nesting its workspace", async () => {
     const workspaceDir = "/tmp/robby-workspace";

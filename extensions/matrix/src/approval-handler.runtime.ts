@@ -11,7 +11,10 @@ import {
   buildPluginApprovalPendingReplyPayload,
   type ExecApprovalReplyDecision,
 } from "openclaw/plugin-sdk/approval-reply-runtime";
-import { buildPluginApprovalResolvedReplyPayload } from "openclaw/plugin-sdk/approval-runtime";
+import {
+  buildApprovalPendingReplyPayload,
+  buildPluginApprovalResolvedReplyPayload,
+} from "openclaw/plugin-sdk/approval-runtime";
 import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
@@ -101,7 +104,16 @@ type MatrixPluginApprovalMetadata = MatrixApprovalMetadataBase & {
   toolName?: string;
   severity: MatrixPluginApprovalSeverity;
 };
-type MatrixApprovalMetadata = MatrixExecApprovalMetadata | MatrixPluginApprovalMetadata;
+type MatrixSystemAgentApprovalMetadata = MatrixApprovalMetadataBase & {
+  kind: "system-agent";
+  agentId?: string;
+  commandText: string;
+  operationSummary: string;
+};
+type MatrixApprovalMetadata =
+  | MatrixExecApprovalMetadata
+  | MatrixPluginApprovalMetadata
+  | MatrixSystemAgentApprovalMetadata;
 type MatrixApprovalExtraContent = {
   [MATRIX_APPROVAL_METADATA_KEY]: MatrixApprovalMetadata;
 };
@@ -275,6 +287,16 @@ function buildMatrixApprovalMetadata(params: {
     };
   }
 
+  if (params.view.approvalKind === "system-agent") {
+    return {
+      ...base,
+      kind: "system-agent",
+      commandText: params.view.commandText,
+      operationSummary: params.view.operationSummary,
+      ...(params.view.agentId != null ? { agentId: params.view.agentId } : {}),
+    };
+  }
+
   return {
     ...base,
     kind: "exec",
@@ -295,43 +317,55 @@ function buildPendingApprovalContent(params: {
   nowMs: number;
 }): PendingApprovalContent {
   const allowedDecisions = params.view.actions.map((action) => action.decision);
-  const payload =
-    params.view.approvalKind === "plugin"
-      ? buildPluginApprovalPendingReplyPayload({
-          request: {
-            approvalKind: "plugin",
-            id: params.view.approvalId,
-            request: {
-              title: params.view.title,
-              description: params.view.description ?? "",
-              severity: params.view.severity,
-              toolName: params.view.toolName ?? undefined,
-              pluginId: params.view.pluginId ?? undefined,
-              agentId: params.view.agentId ?? undefined,
-              scope: params.view.scope ?? undefined,
-            },
-            createdAtMs: 0,
-            expiresAtMs: params.view.expiresAtMs,
-          } satisfies PluginApprovalRequest,
-          nowMs: params.nowMs,
-          allowedDecisions,
-        })
-      : buildExecApprovalPendingReplyPayload({
-          approvalId: params.view.approvalId,
-          approvalSlug: params.view.approvalId.slice(0, 8),
-          approvalCommandId: params.view.approvalId,
-          ask: params.view.ask ?? undefined,
+  let payload;
+  if (params.view.approvalKind === "plugin") {
+    payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        approvalKind: "plugin",
+        id: params.view.approvalId,
+        request: {
+          title: params.view.title,
+          description: params.view.description ?? "",
+          severity: params.view.severity,
+          toolName: params.view.toolName ?? undefined,
+          pluginId: params.view.pluginId ?? undefined,
           agentId: params.view.agentId ?? undefined,
-          allowedDecisions,
-          command: params.view.commandText,
-          cwd: params.view.cwd ?? undefined,
-          host: params.view.host === "node" ? "node" : "gateway",
-          nodeId: params.view.nodeId ?? undefined,
           scope: params.view.scope ?? undefined,
-          sessionKey: params.view.sessionKey ?? undefined,
-          expiresAtMs: params.view.expiresAtMs,
-          nowMs: params.nowMs,
-        });
+        },
+        createdAtMs: 0,
+        expiresAtMs: params.view.expiresAtMs,
+      } satisfies PluginApprovalRequest,
+      nowMs: params.nowMs,
+      allowedDecisions,
+    });
+  } else if (params.view.approvalKind === "system-agent") {
+    payload = buildApprovalPendingReplyPayload({
+      approvalKind: "system-agent",
+      approvalId: params.view.approvalId,
+      approvalSlug: params.view.approvalId.slice(0, 8),
+      text: `OpenClaw change requires approval:\n${params.view.operationSummary}`,
+      agentId: params.view.agentId,
+      allowedDecisions,
+      sessionKey: params.view.sessionKey,
+    });
+  } else {
+    payload = buildExecApprovalPendingReplyPayload({
+      approvalId: params.view.approvalId,
+      approvalSlug: params.view.approvalId.slice(0, 8),
+      approvalCommandId: params.view.approvalId,
+      ask: params.view.ask ?? undefined,
+      agentId: params.view.agentId ?? undefined,
+      allowedDecisions,
+      command: params.view.commandText,
+      cwd: params.view.cwd ?? undefined,
+      host: params.view.host === "node" ? "node" : "gateway",
+      nodeId: params.view.nodeId ?? undefined,
+      scope: params.view.scope ?? undefined,
+      sessionKey: params.view.sessionKey ?? undefined,
+      expiresAtMs: params.view.expiresAtMs,
+      nowMs: params.nowMs,
+    });
+  }
   const hint = buildMatrixApprovalReactionHint(allowedDecisions);
   const text = payload.text ?? "";
   return {
@@ -361,15 +395,21 @@ function buildResolvedApprovalText(view: ResolvedApprovalView): string {
     );
   }
   const decisionLabel =
-    view.decision === "allow-once"
-      ? "Allowed once"
-      : view.decision === "allow-always"
-        ? "Allowed always"
-        : "Denied";
+    view.approvalKind === "system-agent" && view.terminalStatus === "cancelled"
+      ? "Cancelled"
+      : view.approvalKind === "system-agent" && view.applicationStatus === "applied"
+        ? "Applied"
+        : view.approvalKind === "system-agent" && view.applicationStatus === "not-applied"
+          ? "Not applied"
+          : view.decision === "allow-once"
+            ? "Allowed once"
+            : view.decision === "allow-always"
+              ? "Allowed always"
+              : "Denied";
   return [
-    `Exec approval: ${decisionLabel}`,
+    `${view.approvalKind === "system-agent" ? "OpenClaw change" : "Exec approval"}: ${decisionLabel}`,
     "",
-    "Command",
+    view.approvalKind === "system-agent" ? "Change" : "Command",
     buildMarkdownCodeBlock(view.commandText),
   ].join("\n");
 }
@@ -387,7 +427,7 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
   ReactionTargetRef,
   string
 >({
-  eventKinds: ["exec", "plugin"],
+  eventKinds: ["exec", "plugin", "system-agent"],
   availability: {
     isConfigured: ({ cfg, accountId, context }) => {
       const resolved = resolveHandlerContext({ cfg, accountId, context });

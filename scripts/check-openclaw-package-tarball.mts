@@ -15,8 +15,12 @@ import { collectPackageDistImportErrors } from "./lib/package-dist-imports.mjs";
 import {
   comparePackageDistInventory,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
-  PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
 } from "./lib/package-dist-inventory-contract.mts";
+import {
+  LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
+  PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH,
+  PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH,
+} from "./lib/package-lifecycle-marker.mjs";
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "./lib/workspace-bootstrap-smoke.mts";
 
 type PackageManifest = Record<string, unknown> & {
@@ -414,8 +418,8 @@ const LEGACY_SHRINKWRAP_OMISSION_COMPAT_MAX = { year: 2026, month: 5, day: 20 };
 // 2026.7.2-beta.4 is the last published artifact known to ship shrinkwrap.
 // The whole 2026.7.2 train is transitional; later trains must be lockless.
 const NPM_SHRINKWRAP_TRANSITION_TRAIN = { year: 2026, month: 7, day: 2 };
-// 2026.7.1 shipped before the guard existed. Historical inspection may still check it.
-const LEGACY_INSTALL_GUARD_COMPAT_MAX = { year: 2026, month: 7, day: 1 };
+// 2026.8.1 shipped the old dist guard. Historical inspection must still accept it.
+const LEGACY_LIFECYCLE_MARKER_COMPAT_MAX = { year: 2026, month: 8, day: 1 };
 const FORBIDDEN_LOCAL_BUILD_METADATA_FILES = new Set(LOCAL_BUILD_METADATA_DIST_PATHS);
 
 const LEGACY_OMITTED_PRIVATE_QA_INVENTORY_PREFIXES = [
@@ -478,9 +482,9 @@ function isLegacyLocalBuildMetadataCompatVersion(version: string): boolean {
   return parsed ? compareCalver(parsed, LEGACY_LOCAL_BUILD_METADATA_COMPAT_MAX) <= 0 : false;
 }
 
-function isLegacyInstallGuardCompatVersion(version: string): boolean {
+function isLegacyLifecycleMarkerCompatVersion(version: string): boolean {
   const parsed = parseCalver(version);
-  return parsed ? compareCalver(parsed, LEGACY_INSTALL_GUARD_COMPAT_MAX) <= 0 : false;
+  return parsed ? compareCalver(parsed, LEGACY_LIFECYCLE_MARKER_COMPAT_MAX) <= 0 : false;
 }
 
 function isLegacyShrinkwrapOmissionCompatVersion(version: string): boolean {
@@ -632,12 +636,22 @@ if (shouldValidateShrinkwrap) {
     errors.push(`unreadable npm-shrinkwrap.json: ${coerceErrorMessage(error)}`);
   }
 }
-if (!entrySet.has(PACKAGE_INSTALL_GUARD_RELATIVE_PATH)) {
-  if (isLegacyInstallGuardCompatVersion(packageVersion)) {
-    warnings.push("legacy package omits the preinstall completion guard");
+const usesPackageLifecycleMarker = entrySet.has(PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH);
+if (entrySet.has(PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH) && !usesPackageLifecycleMarker) {
+  errors.push(`missing required tar entry ${PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH}`);
+}
+if (!entrySet.has(PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH)) {
+  if (!usesPackageLifecycleMarker && isLegacyLifecycleMarkerCompatVersion(packageVersion)) {
+    warnings.push("legacy package omits the lifecycle pending marker");
   } else {
-    errors.push(`missing required tar entry ${PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`);
+    errors.push(`missing required tar entry ${PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH}`);
   }
+}
+if (
+  entrySet.has(LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH) &&
+  (usesPackageLifecycleMarker || !isLegacyLifecycleMarkerCompatVersion(packageVersion))
+) {
+  errors.push(`forbidden legacy tar entry ${LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`);
 }
 for (const forbiddenEntry of FORBIDDEN_LOCAL_BUILD_METADATA_FILES) {
   if (entrySet.has(forbiddenEntry)) {
@@ -660,15 +674,6 @@ if (entrySet.has(PACKAGE_DIST_INVENTORY_RELATIVE_PATH)) {
       errors.push(`invalid ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`);
     } else {
       const inventoryEntries = inventory as string[];
-      if (
-        inventoryEntries.some(
-          (entry) => entry.replace(/\\/gu, "/") === PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
-        )
-      ) {
-        errors.push(
-          `package dist inventory must omit install guard ${PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`,
-        );
-      }
       const parity = comparePackageDistInventory({
         files: normalized.filter(
           (entry) =>

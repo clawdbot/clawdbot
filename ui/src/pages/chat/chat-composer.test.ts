@@ -195,6 +195,30 @@ describe("renderChatComposer controls", () => {
     expect(textarea.matches(":placeholder-shown")).toBe(true);
   });
 
+  it("clears a live whitespace draft when the last rendered draft was already empty", () => {
+    let currentDraft = "  \n  ";
+    const onDraftChange = vi.fn((next: string) => {
+      currentDraft = next;
+    });
+    const { container } = renderComposer({
+      draft: "",
+      getDraft: () => currentDraft,
+      onDraftChange,
+    });
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) {
+      throw new Error("expected composer textarea");
+    }
+
+    textarea.value = currentDraft;
+    textarea.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+
+    expect(currentDraft).toBe("");
+    expect(textarea.value).toBe("");
+    expect(onDraftChange).toHaveBeenLastCalledWith("");
+    expect(textarea.matches(":placeholder-shown")).toBe(true);
+  });
+
   it.each([true, false])(
     "keeps the unsaved row edit visible and cancellable (source retained: %s)",
     (retained) => {

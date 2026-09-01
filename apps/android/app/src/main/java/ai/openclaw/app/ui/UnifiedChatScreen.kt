@@ -21,6 +21,7 @@ internal fun UnifiedChatShellScreen(
   onOpenSessions: () -> Unit,
   onOpenDashboard: (String) -> Unit,
   onOpenGatewaySettings: () -> Unit,
+  onOpenProvidersModels: () -> Unit,
 ) {
   val talkModeEnabled by viewModel.talkModeEnabled.collectAsState()
   val startTalk = rememberChatRealtimeTalkLauncher(viewModel)
@@ -45,6 +46,7 @@ internal fun UnifiedChatShellScreen(
       onOpenSessions = onOpenSessions,
       onOpenDashboard = onOpenDashboard,
       onOpenGatewaySettings = onOpenGatewaySettings,
+      onOpenProvidersModels = onOpenProvidersModels,
     )
   }
 }

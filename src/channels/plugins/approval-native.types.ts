@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../../infra/plugin-approvals.js";
+import type { SystemAgentApprovalRequest } from "../../infra/system-agent-approvals.js";
 
 /**
  * Native channel surface that can receive approval prompts.
@@ -29,7 +30,10 @@ type ChannelApprovalNativeDeliveryPreference = ChannelApprovalNativeSurface | "b
 /**
  * Approval request shapes supported by native channel approval delivery.
  */
-type ChannelApprovalNativeRequest = ExecApprovalRequest | PluginApprovalRequest;
+type ChannelApprovalNativeRequest =
+  | ExecApprovalRequest
+  | PluginApprovalRequest
+  | SystemAgentApprovalRequest;
 
 /**
  * Capabilities returned by native channel approval delivery inspection.

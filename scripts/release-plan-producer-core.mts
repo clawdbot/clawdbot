@@ -219,26 +219,45 @@ function withCandidateSnapshot<T>(
 ): T {
   const snapshotRoot = mkdtempSync(join(tmpdir(), "openclaw-release-candidate-"));
   try {
-    const tree = execFileSync(
+    // Select metadata inside Git before buffering or decoding paths: directory-name
+    // decoding can silently omit non-UTF-8 inventory, while source trees can exceed stdout limits.
+    // Latin1 preserves raw bytes until mode filtering; only retained blob paths need UTF-8.
+    const patterns = [
+      "package.json",
+      "extensions/*/package.json",
+      "extensions/*/README.md",
+      "packages/*/package.json",
+    ];
+    const entries = execFileSync(
       "git",
-      ["ls-tree", "-r", "-z", candidateSha, "--", "package.json", "extensions", "packages"],
+      [
+        "diff-tree",
+        "--raw",
+        "-r",
+        "-z",
+        "--no-renames",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+        git(repoRoot, ["hash-object", "-t", "tree", "--stdin"]),
+        candidateSha,
+        "--",
+        ...patterns.flatMap((path) => [`:(top,glob)${path}`, `:(top,glob,exclude)${path}/**`]),
+      ],
       { cwd: repoRoot },
-    ).toString("utf8");
+    )
+      .toString("latin1")
+      .split("\0");
+    const decoder = new TextDecoder("utf-8", { fatal: true });
     const inventoryPaths: string[] = [];
-    for (const entry of tree.split("\0").filter(Boolean)) {
-      const [metadata, path] = entry.split("\t");
-      if (
-        !path ||
-        (path !== "package.json" &&
-          !/^extensions\/[^/]+\/(?:package\.json|README\.md)$/u.test(path) &&
-          !/^packages\/[^/]+\/package\.json$/u.test(path))
-      ) {
-        continue;
-      }
-      if (metadata?.startsWith("120000 ")) {
+    for (let index = 0; index + 1 < entries.length; index += 2) {
+      const mode = entries[index]?.split(" ")[1];
+      if (mode === "120000") {
         throw new Error("candidate package inventory must not contain symbolic links");
       }
-      inventoryPaths.push(path);
+      if (mode?.startsWith("100")) {
+        inventoryPaths.push(decoder.decode(Buffer.from(entries[index + 1]!, "latin1")));
+      }
     }
     if (!inventoryPaths.includes("package.json")) {
       throw new Error("candidate package.json is missing");

@@ -1,8 +1,8 @@
-import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { decodeResumeHandoff } from "../../../src/shared/resume-handoff.js";
 import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiSessionPath,
   controlUiSessionUrl,
@@ -18,7 +18,6 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed at ${executablePath}. Run \`pnpm --dir ui exec playwright install chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
-const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/header-session-menu");
 const basePath = new URL("/nested/$&;=()+,![]{}'`/%25PATH%25", "http://localhost").pathname;
 const agentId = "runner";
 const sessionKey = `agent:${agentId}:main-'"$&;|<>^()%![]{}\\\`-%PATH%`;
@@ -67,8 +66,7 @@ const compactManagementActions = sharedManagementActions.filter(
 
 suite.define(() => {
   it("shows, copies, and retires a credential-free exact continuation command", async () => {
-    await rm(artifactDir, { recursive: true, force: true });
-    await mkdir(artifactDir, { recursive: true });
+    const artifactDir = createControlUiE2eArtifactDir("header-session-menu");
     await suite.withPage(
       {
         locale: "en-US",
@@ -164,7 +162,7 @@ suite.define(() => {
   });
 
   it("keeps the canonical session actions reachable in the mobile header menu", async () => {
-    await mkdir(artifactDir, { recursive: true });
+    const artifactDir = createControlUiE2eArtifactDir("header-session-menu");
     await suite.withPage(
       {
         locale: "en-US",

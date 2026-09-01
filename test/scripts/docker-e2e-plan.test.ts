@@ -571,6 +571,8 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "live-codex-npm-plugin",
       "codex-on-demand",
       "release-typed-onboarding",
+      "root-managed-vps-upgrade",
+      "update-restart-auth",
     ]);
     expect(
       packageInstallOpenAi.lanes
@@ -585,6 +587,34 @@ describe("scripts/lib/docker-e2e-plan", () => {
         resources: ["docker", "npm", "service"],
         stateScenario: "empty",
         timeoutMs: 1_200_000,
+        weight: 3,
+      },
+    ]);
+    expect(packageInstallOpenAi.lanes.slice(-2).map(summarizeLane)).toEqual([
+      {
+        command: trustedUpgradeSurvivorCommand(
+          "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=1",
+          'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s}"',
+        ),
+        imageKind: "bare",
+        live: false,
+        name: "root-managed-vps-upgrade",
+        resources: ["docker", "npm"],
+        stateScenario: "upgrade-survivor",
+        timeoutMs: 1_500_000,
+        weight: 3,
+      },
+      {
+        command: trustedUpgradeSurvivorCommand(
+          "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth",
+          'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s}"',
+        ),
+        imageKind: "bare",
+        live: false,
+        name: "update-restart-auth",
+        resources: ["docker", "npm"],
+        stateScenario: "upgrade-survivor",
+        timeoutMs: 1_500_000,
         weight: 3,
       },
     ]);
@@ -628,16 +658,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
         weight: 3,
       },
       {
-        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-channel-switch",
-        imageKind: "bare",
-        live: false,
-        name: "update-channel-switch",
-        resources: ["docker", "npm"],
-        stateScenario: "update-stable",
-        timeoutMs: 1_800_000,
-        weight: 3,
-      },
-      {
         command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:skill-install",
         imageKind: "bare",
         live: false,
@@ -648,13 +668,13 @@ describe("scripts/lib/docker-e2e-plan", () => {
         weight: 2,
       },
       {
-        command: trustedUpgradeSurvivorCommand(),
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-channel-switch",
         imageKind: "bare",
         live: false,
-        name: "upgrade-survivor",
+        name: "update-channel-switch",
         resources: ["docker", "npm"],
-        stateScenario: "upgrade-survivor",
-        timeoutMs: 1_200_000,
+        stateScenario: "update-stable",
+        timeoutMs: 1_800_000,
         weight: 3,
       },
       {
@@ -671,29 +691,13 @@ describe("scripts/lib/docker-e2e-plan", () => {
         weight: 3,
       },
       {
-        command: trustedUpgradeSurvivorCommand(
-          "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=1",
-          'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s}"',
-        ),
+        command: trustedUpgradeSurvivorCommand(),
         imageKind: "bare",
         live: false,
-        name: "root-managed-vps-upgrade",
+        name: "upgrade-survivor",
         resources: ["docker", "npm"],
         stateScenario: "upgrade-survivor",
-        timeoutMs: 1_500_000,
-        weight: 3,
-      },
-      {
-        command: trustedUpgradeSurvivorCommand(
-          "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth",
-          'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s}"',
-        ),
-        imageKind: "bare",
-        live: false,
-        name: "update-restart-auth",
-        resources: ["docker", "npm"],
-        stateScenario: "upgrade-survivor",
-        timeoutMs: 1_500_000,
+        timeoutMs: 1_200_000,
         weight: 3,
       },
       {
@@ -826,6 +830,27 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(missing).toStrictEqual([]);
   });
 
+  it.each(["minimum", "beta", "stable", "full"] as const)(
+    "partitions package/update core across three jobs without losing or duplicating %s proof",
+    (releaseProfile) => {
+      const options = { profile: RELEASE_PATH_PROFILE, releaseProfile };
+      const aggregate = planFor({ ...options, releaseChunk: "package-update-core" });
+      const partitions = [
+        "package-update-onboarding",
+        "package-update-migrations",
+        "package-update-self-upgrade",
+      ].map((releaseChunk) => planFor({ ...options, releaseChunk }));
+      const lanes = partitions.flatMap((partition) => partition.lanes);
+
+      expect(partitions.map((partition) => partition.lanes.length)).toEqual([5, 2, 2]);
+      expect(new Set(lanes.map((lane) => lane.name)).size).toBe(9);
+      expect(lanes.map(summarizeLane)).toEqual(aggregate.lanes.map(summarizeLane));
+      const complete = planFor({ ...options, planReleaseAll: true });
+      const packageNames = new Set(lanes.map((lane) => lane.name));
+      expect(complete.lanes.filter((lane) => packageNames.has(lane.name))).toEqual(lanes);
+    },
+  );
+
   it("keeps legacy release chunk names as aggregate aliases", () => {
     const packageUpdate = planFor({
       includeOpenWebUI: true,
@@ -853,16 +878,16 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "live-codex-npm-plugin",
       "codex-on-demand",
       "release-typed-onboarding",
+      "root-managed-vps-upgrade",
+      "update-restart-auth",
       "npm-onboard-channel-agent",
       "npm-onboard-discord-channel-agent",
       "npm-onboard-slack-channel-agent",
       "doctor-switch",
-      "update-channel-switch",
       "skill-install",
-      "upgrade-survivor",
+      "update-channel-switch",
       "published-upgrade-survivor",
-      "root-managed-vps-upgrade",
-      "update-restart-auth",
+      "upgrade-survivor",
       "update-run-package-self-upgrade",
     ]);
     expect(pluginsRuntime.lanes.map((lane) => lane.name)).toEqual([
@@ -982,7 +1007,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     ]);
   });
 
-  it.each(["prerelease-plugin-registry", "auth-profile-v2026-7-2-beta-5"])(
+  it.each(["prerelease-plugin-registry", "auth-profile-v2026-7-2-beta-5", "recovery-cleanup"])(
     "plans %s only when explicitly requested",
     (scenario) => {
       const laneName = `published-upgrade-survivor-2026.7.1-2-${scenario}`;
@@ -995,6 +1020,13 @@ describe("scripts/lib/docker-e2e-plan", () => {
       expect(explicitPlan.lanes.map(summarizeLane)).toEqual([
         publishedUpgradeSurvivorLane(laneName, "openclaw@2026.7.1-2", scenario),
       ]);
+      if (scenario === "recovery-cleanup") {
+        expect(explicitPlan.requiredPrepublishPluginPackages).toEqual([
+          "@openclaw/codex",
+          "@openclaw/discord",
+          "@openclaw/whatsapp",
+        ]);
+      }
 
       for (const aggregateScenario of ["reported-issues", "far-reaching"]) {
         const aggregateLaneNames = planFor({

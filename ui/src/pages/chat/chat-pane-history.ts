@@ -18,19 +18,20 @@ import {
   cloneChatAttachmentsForIndependentOwner,
   replaceChatAttachmentsFromEditor,
 } from "./attachment-payload-store.ts";
+import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import {
-  commitCurrentChatHistorySnapshot,
   fetchStagedOlderHistoryPage,
   isStagedOlderHistoryPageCurrent,
-  loadChatHistory,
   loadOlderChatHistoryPage,
-  resolveChatHistoryPagination,
-  rewindChatHistory,
-  switchChatHistoryBranch,
-  type ChatHistoryResult,
   type StagedOlderHistoryPage,
-} from "./chat-history.ts";
+} from "./chat-history-request.ts";
+import {
+  commitCurrentChatHistorySnapshot,
+  resolveChatHistoryPagination,
+  type ChatHistoryResult,
+} from "./chat-history-snapshot.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { ChatPaneReplyNavigation } from "./chat-pane-reply-navigation.ts";
 import {
   CHAT_HISTORY_PREFETCH_EDGE_PX,
@@ -43,6 +44,7 @@ import {
 import type { ChatState } from "./chat-state-contract.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import { persistChatComposerState } from "./composer-persistence.ts";
+import { publishChatSessionProjectionMessages } from "./history-merge.ts";
 import {
   captureChatSessionScrollPosition,
   saveChatSessionScrollPosition,
@@ -378,7 +380,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
         const messages = Array.isArray(result.messages) ? result.messages : [];
         const nextMessages = this.prependUniqueNativeMessages(messages, state.chatMessages);
         const grew = nextMessages.length > state.chatMessages.length;
-        state.chatMessages = nextMessages;
+        publishChatSessionProjectionMessages(state, nextMessages);
         const appliedPagination: ChatHistoryPagination = exhausted
           ? {
               hasMore: false,

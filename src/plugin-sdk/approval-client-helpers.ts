@@ -8,11 +8,12 @@ import { matchesApprovalRequestFilters } from "../infra/approval-request-filters
 import { getExecApprovalReplyMetadata } from "../infra/exec-approval-reply.js";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
+import type { SystemAgentApprovalRequest } from "../infra/system-agent-approvals.js";
 import type { OpenClawConfig } from "./config-runtime.js";
 import type { ReplyPayload } from "./reply-payload.js";
 import { normalizeAccountId } from "./routing.js";
 
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
+type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
 type ApprovalTarget = "dm" | "channel" | "both";
 type ChannelExecApprovalEnableMode = boolean | "auto";
 

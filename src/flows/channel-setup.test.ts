@@ -336,6 +336,21 @@ describe("setupChannels workspace shadow exclusion", () => {
     expect(resolveChannelSetupWorkspaceDir).toHaveBeenCalledWith(cfg);
   });
 
+  it("does not load or probe channels when optional deferred setup is declined", async () => {
+    const cfg = { agents: { ownership: "explicit" as const, entries: { alpha: {}, beta: {} } } };
+
+    const result = await runChannelSetup(
+      cfg,
+      { confirm: vi.fn(async () => false) },
+      { workspaceDir: "/tmp/beta-workspace", deferStatusUntilSelection: true },
+    );
+
+    expect(result).toBe(cfg);
+    expect(collectChannelStatus).not.toHaveBeenCalled();
+    expect(listTrustedChannelPluginCatalogEntries).not.toHaveBeenCalled();
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
+  });
+
   it("keeps trusted workspace overrides eligible during preload", async () => {
     listTrustedChannelPluginCatalogEntries.mockReturnValue([
       { id: "external-chat", pluginId: "trusted-external-chat-shadow", origin: "workspace" },

@@ -15,6 +15,7 @@ import {
 import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
+  SystemAgentApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import type {
   ChannelApprovalCapability,
@@ -27,7 +28,10 @@ import { getMSTeamsApprovalApprovers, msTeamsApprovalAuth } from "./approval-aut
 import { msteamsConfigAdapter, resolveMSTeamsAccount } from "./channel-config.js";
 import { normalizeMSTeamsMessagingTarget } from "./resolve-allowlist.js";
 
-type MSTeamsApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
+type MSTeamsApprovalRequest =
+  | ExecApprovalRequest
+  | PluginApprovalRequest
+  | SystemAgentApprovalRequest;
 
 function isMSTeamsApprovalTransportEnabled(params: {
   cfg: OpenClawConfig;
@@ -115,7 +119,7 @@ const resolveMSTeamsOriginTarget = createChannelNativeOriginTargetResolver({
 });
 
 const msTeamsLazyApprovalNativeRuntime = createLazyChannelApprovalNativeRuntimeAdapter({
-  eventKinds: ["exec", "plugin"],
+  eventKinds: ["exec", "plugin", "system-agent"],
   isConfigured: ({ cfg, accountId }) => isMSTeamsNativeApprovalClientEnabled({ cfg, accountId }),
   shouldHandle: ({ cfg, accountId, approvalKind, request }) =>
     shouldHandleMSTeamsNativeApprovalRequest({ cfg, accountId, approvalKind, request }),

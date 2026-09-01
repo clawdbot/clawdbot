@@ -14,6 +14,10 @@ neutral context is `observation`.
 Optional local telemetry may appear only as a short visible evidence note below
 the finding it corroborates. It never creates a finding or enters the payload.
 The visible **Test environment** profile is also excluded from the payload.
+The exact terminal result label is visible report metadata and is also excluded
+from the payload; `upgrade.result` continues to describe candidate upgrade
+behavior only. A generic **Candidate passed, but cleanup failed** label is
+allowed in visible Markdown, but cleanup details remain private tooling data.
 
 Use the live taxonomy URL fragment as a surface `id`; use `unmapped` only when
 no scorecard surface fits. Include only surfaces with non-empty **Testing

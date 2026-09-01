@@ -95,12 +95,18 @@ describe("session mutation authorization store caches", () => {
     });
   });
 
-  it("fences a replaced patchMany target with padded identity fields", async () => {
+  it("reuses metadata for padded patchMany targets and fences replacements", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:padded-batch-target";
+      const prompt = "authorization does not need this prompt snapshot".repeat(512);
       await sessionAccessor.upsertSessionEntryCore(
         { agentId: "main", sessionKey },
-        { sessionId: "session-original", updatedAt: 1, visibility: "shared" },
+        {
+          sessionId: "session-original",
+          updatedAt: 1,
+          visibility: "shared",
+          skillsSnapshot: { prompt, skills: [] },
+        },
       );
       const target = { sessionKey: ` ${sessionKey} `, agentId: " main " };
       const result = resolveSessionMutationAuthorization({
@@ -116,7 +122,10 @@ describe("session mutation authorization store caches", () => {
       expect(result.error).toBeNull();
       expect(result.authorization).toBeDefined();
       const authorization = result.authorization!;
+      const parseSpy = vi.spyOn(JSON, "parse");
       expect(() => authorization.assertTargetCurrent(target)).not.toThrow();
+      expect(parseSpy.mock.calls.some(([serialized]) => serialized.includes(prompt))).toBe(false);
+      parseSpy.mockRestore();
 
       await sessionAccessor.upsertSessionEntryCore(
         { agentId: "main", sessionKey },

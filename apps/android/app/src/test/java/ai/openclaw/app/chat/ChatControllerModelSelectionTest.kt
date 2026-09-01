@@ -1,5 +1,6 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.GatewayModelUnavailableReason
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.ui.chat.ChatComposerTextDraftStore
 import kotlinx.coroutines.CompletableDeferred
@@ -1102,6 +1103,43 @@ class ChatControllerModelSelectionTest {
     }
 
   @Test
+  fun acceptedMetadataRecoveryUnblocksPermanentAuthSendGate() =
+    runTest {
+      var available = false
+      var unavailableReason: String? = "missing-auth"
+      var sends = 0
+      val controller =
+        createScriptedChatController {
+          respond("chat.metadata") { availabilityMetadata(available, unavailableReason) }
+          respond("sessions.patch", "{}")
+          respond("chat.send") {
+            sends += 1
+            """{"runId":"recovered-send","status":"ok"}"""
+          }
+        }
+      controller.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+      assertTrue(controller.setSessionModelAwait("main", "openai/gpt-5.6-luna"))
+      assertEquals(
+        GatewayModelUnavailableReason.MissingAuth,
+        controller.modelCatalog.value
+          .single()
+          .unavailableReason,
+      )
+
+      assertFalse(controller.sendMessageAwaitAcceptance("blocked", "off", emptyList()))
+      assertEquals(0, sends)
+
+      available = true
+      unavailableReason = null
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+
+      assertTrue(controller.sendMessageAwaitAcceptance("allowed", "off", emptyList()))
+      assertEquals(1, sends)
+    }
+
+  @Test
   fun newerMetadataPublicationFencesOlderResponseAndFailure() =
     runTest {
       for (event in listOf("chat.metadata.changed", "patch", "command-metadata", "reset", "seqGap")) {
@@ -1365,7 +1403,13 @@ class ChatControllerModelSelectionTest {
       assertEquals(listOf("max"), sentThinkingLevels)
     }
 
-  private fun availabilityMetadata(available: Boolean): String = """{"swarmEnabled":false,"commands":[],"models":[{"id":"gpt-5.6-luna","provider":"openai","available":$available,"input":["text"]}]}"""
+  private fun availabilityMetadata(
+    available: Boolean,
+    unavailableReason: String? = null,
+  ): String {
+    val reasonField = unavailableReason?.let { ",\"unavailableReason\":\"$it\"" }.orEmpty()
+    return """{"swarmEnabled":false,"commands":[],"models":[{"id":"gpt-5.6-luna","provider":"openai","available":$available$reasonField,"input":["text"]}]}"""
+  }
 
   private fun thinkingFields(
     level: String?,

@@ -26,6 +26,8 @@ type PluginUninstallOptions = {
   invalidateRuntimeCache?: boolean;
   /** True when a Claw lifecycle caller already owns the package lease. */
   clawManaged?: boolean;
+  /** Synchronous authority guard at each final plugin/config mutation. */
+  beforePersistentApply?: () => void;
 };
 
 function isPromptInputClosedError(
@@ -65,7 +67,9 @@ async function runPluginUninstallCommandUnlocked(
   }
 
   const { loadInstalledPluginIndex } = await import("../plugins/installed-plugin-index.js");
-  const { resolveInstalledPluginPackageOwnership } =
+  const { createInstalledPluginIndexScopeLookup } =
+    await import("../plugins/installed-plugin-index-scope-lookup.js");
+  const { resolveInstalledPluginLifecycleOwnership } =
     await import("../plugins/installed-plugin-package-ownership.js");
   const {
     loadInstalledPluginIndexInstallRecords,
@@ -131,23 +135,31 @@ async function runPluginUninstallCommandUnlocked(
   }
   const { plugin } = selection.value;
   const requestedPluginId = selection.value.pluginId;
-  const ownership = resolveInstalledPluginPackageOwnership(installedIndex, requestedPluginId);
+  const ownership = resolveInstalledPluginLifecycleOwnership(installedIndex, requestedPluginId);
   if (!ownership.ok) {
     runtime.error(ownership.error);
     runtime.exit(1);
     return;
   }
   const { installOwner: pluginId, pluginIds: ownedPluginIds } = ownership.value;
-  const channelIds =
-    ownedPluginIds.length === 1 && ownedPluginIds[0] === requestedPluginId
-      ? plugin?.channelIds
-      : [
-          ...new Set(
-            ownedPluginIds.flatMap(
-              (entryId) => report.plugins.find((entry) => entry.id === entryId)?.channelIds ?? [],
-            ),
-          ),
-        ];
+  const policyPluginIds = ownedPluginIds.length > 0 ? ownedPluginIds : [pluginId];
+  let channelIds: string[] | undefined;
+  if (ownedPluginIds.length === 1 && ownedPluginIds[0] === requestedPluginId) {
+    channelIds = plugin?.channelIds;
+  } else if (ownedPluginIds.length > 0) {
+    channelIds = [
+      ...new Set(
+        ownedPluginIds.flatMap(
+          (entryId) => report.plugins.find((entry) => entry.id === entryId)?.channelIds ?? [],
+        ),
+      ),
+    ];
+  } else if (
+    createInstalledPluginIndexScopeLookup(installedIndex).hasChannelContributionOwners([pluginId])
+  ) {
+    // An orphan's owner-key fallback cannot remove another discovered plugin's channel policy.
+    channelIds = [];
+  }
   const initialPlan = planPluginUninstall(
     recordPluginPackageUninstallPlan(
       {
@@ -158,7 +170,7 @@ async function runPluginUninstallCommandUnlocked(
         extensionsDir,
       },
       {
-        runtimePluginIds: ownedPluginIds,
+        runtimePluginIds: policyPluginIds,
         runtimeLoadPaths: ownedPluginIds.flatMap(
           (entryId) => report.plugins.find((entry) => entry.id === entryId)?.source ?? [],
         ),
@@ -272,13 +284,23 @@ async function runPluginUninstallCommandUnlocked(
   }
 
   const uninstall = async () => {
+    const guardedWriteOptions = (writeOptions: typeof mutationWriteOptions) =>
+      opts.beforePersistentApply
+        ? {
+            ...writeOptions,
+            assertConfigPathForWrite: () => {
+              writeOptions.assertConfigPathForWrite?.();
+              opts.beforePersistentApply?.();
+            },
+          }
+        : writeOptions;
     let finalBaseHash = snapshot.hash;
     let finalWriteOptions = mutationWriteOptions;
     let directoryResult = { directoryRemoved: false, warnings: [] as string[] };
     if (plan.directoryRemoval) {
       const disabledConfig = prepareConfigForPendingPluginDirectoryRemovalSet(
         sourceConfig,
-        ownedPluginIds,
+        policyPluginIds,
       );
       const disabledCommit = await tracePluginLifecyclePhaseAsync(
         "config disable",
@@ -287,13 +309,14 @@ async function runPluginUninstallCommandUnlocked(
             nextConfig: disabledConfig,
             ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
             writeOptions: {
-              ...mutationWriteOptions,
+              ...guardedWriteOptions(mutationWriteOptions),
               afterWrite: { mode: "auto" },
             },
           }),
         { command: "uninstall" },
       );
       finalBaseHash = disabledCommit?.persistedHash ?? snapshot.hash;
+      opts.beforePersistentApply?.();
       directoryResult = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
       for (const warning of directoryResult.warnings) {
         runtime.log(theme.warn(warning));
@@ -321,7 +344,7 @@ async function runPluginUninstallCommandUnlocked(
             extensionsDir,
           },
           {
-            runtimePluginIds: ownedPluginIds,
+            runtimePluginIds: policyPluginIds,
             runtimeLoadPaths: ownedPluginIds.flatMap(
               (entryId) => report.plugins.find((entry) => entry.id === entryId)?.source ?? [],
             ),
@@ -347,7 +370,7 @@ async function runPluginUninstallCommandUnlocked(
           nextConfig,
           ...(finalBaseHash !== undefined ? { baseHash: finalBaseHash } : {}),
           writeOptions: {
-            ...finalWriteOptions,
+            ...guardedWriteOptions(finalWriteOptions),
             allowConfigSizeDrop: true,
             afterWrite: { mode: "restart", reason: "plugin source changed" },
           },

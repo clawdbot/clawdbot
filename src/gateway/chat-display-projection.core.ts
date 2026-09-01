@@ -118,7 +118,10 @@ function isContextOverflowErrorSignal(value: unknown): boolean {
   if (typeof value !== "string") {
     return false;
   }
-  return normalizeErrorSignal(value) === "context_overflow" || isContextOverflowError(value);
+  return (
+    normalizeErrorSignal(value) === "context_overflow" ||
+    isContextOverflowError(value, { providerPlugin: null })
+  );
 }
 
 function isContextOverflowAssistantError(message: Record<string, unknown>): boolean {

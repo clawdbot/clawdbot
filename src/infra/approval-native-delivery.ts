@@ -9,8 +9,9 @@ import { buildChannelApprovalNativeTargetKey } from "./approval-native-target-ke
 import type { ChannelApprovalKind } from "./approval-types.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
+import type { SystemAgentApprovalRequest } from "./system-agent-approvals.js";
 
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
+type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
 
 /** One native approval delivery target selected by the channel adapter plan. */
 export type ChannelApprovalNativePlannedTarget = {

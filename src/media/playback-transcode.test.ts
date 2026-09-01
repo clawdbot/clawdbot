@@ -66,6 +66,14 @@ async function createSource(fileName: string, contents = "source") {
   return { sourcePath, sourceStat: await fs.stat(sourcePath) };
 }
 
+// Supplied probe facts only need source identity; conversion cases keep real files.
+function createSourceMetadata(fileName: string) {
+  return {
+    sourcePath: path.join(tempHome.home, fileName),
+    sourceStat: { size: 6, mtimeMs: 1, ctimeMs: 1, dev: 1, ino: 1 },
+  };
+}
+
 function createCacheKey(source: {
   path: string;
   size: number;
@@ -150,7 +158,7 @@ describe("playback transcode policy", () => {
   ] as const)(
     "classifies accepted $0 $1 as $2 through the public source resolver",
     async (mimeType, kind, expected, codec) => {
-      const source = await createSource(`${mimeType.replaceAll("/", "-")}-${codec}`);
+      const source = createSourceMetadata(`${mimeType.replaceAll("/", "-")}-${codec}`);
       const probe =
         kind === "audio"
           ? { durationMs: 1000, audioCodec: codec, audioStreamIndex: 0 }
@@ -292,7 +300,7 @@ describe("resolvePlaybackTranscode", () => {
   });
 
   it("scopes cached codec classification by media kind and MIME", async () => {
-    const source = await createSource("dual-track.mp4");
+    const source = createSourceMetadata("dual-track.mp4");
 
     await expect(
       playback.resolvePlaybackModeForSource({
@@ -319,7 +327,7 @@ describe("resolvePlaybackTranscode", () => {
   });
 
   it("does not advertise transcode for a source over the media byte cap", async () => {
-    const source = await createSource("oversized-meta.mp4");
+    const source = createSourceMetadata("oversized-meta.mp4");
     const { mtimeMs, ctimeMs, dev, ino } = source.sourceStat;
     const sourceStat = { size: 16 * 1024 * 1024 + 1, mtimeMs, ctimeMs, dev, ino };
 
@@ -350,7 +358,7 @@ describe("resolvePlaybackTranscode", () => {
   });
 
   it("transcodes nonportable H.264 profiles and pixel formats", async () => {
-    const source = await createSource("high-10.mp4");
+    const source = createSourceMetadata("high-10.mp4");
 
     await expect(
       playback.resolvePlaybackModeForSource({
@@ -369,7 +377,7 @@ describe("resolvePlaybackTranscode", () => {
   });
 
   it("transcodes known-incompatible MP4 audio when H.264 profile facts are unknown", async () => {
-    const source = await createSource("unknown-profile-opus.mp4");
+    const source = createSourceMetadata("unknown-profile-opus.mp4");
 
     await expect(
       playback.resolvePlaybackModeForSource({
@@ -388,7 +396,7 @@ describe("resolvePlaybackTranscode", () => {
   });
 
   it("does not cache native when a selected audio stream has an unknown codec", async () => {
-    const source = await createSource("unknown-audio.mp4");
+    const source = createSourceMetadata("unknown-audio.mp4");
 
     await expect(
       playback.resolvePlaybackModeForSource({

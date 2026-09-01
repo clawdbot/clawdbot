@@ -25,6 +25,7 @@ import {
   TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "./scripts/lib/tsdown-config-groups.mts";
+import { createDeclarationInputCapture } from "./scripts/lib/tsdown-declaration-inputs.mts";
 import { tsdownPackageOutputRoot } from "./scripts/lib/tsdown-output-roots.mts";
 import { runtimeProcessDeclarationEntries } from "./scripts/lib/vitest-worker-artifacts.mts";
 import {
@@ -294,7 +295,6 @@ const rootDependencyOptions = withExternalPackageSubpaths({
     "@anthropic-ai/claude-agent-sdk",
     "@anthropic-ai/vertex-sdk",
     "@discordjs/voice",
-    "@lancedb/lancedb",
     "@larksuiteoapi/node-sdk",
     "@matrix-org/matrix-sdk-crypto-nodejs",
     "@openclaw/ai",
@@ -304,9 +304,12 @@ const rootDependencyOptions = withExternalPackageSubpaths({
     "jimp",
     "matrix-js-sdk",
     "prism-media",
-    "sharp",
     "typescript",
     "vitest",
+    // Selected plugin distributions install platform optionals beside bundled JavaScript.
+    ...bundledPluginBuildEntries.flatMap(({ packageJson }) =>
+      Object.keys(packageJson?.optionalDependencies ?? {}),
+    ),
   ],
 });
 
@@ -315,7 +318,11 @@ function shouldNeverBundleDependency(id: string): boolean {
 }
 
 function shouldNeverBundleDeclarationDependency(id: string): boolean {
-  return shouldNeverBundleDependency(id) || id === "zod" || id.startsWith("zod/");
+  // Arrow's relative module augmentations must stay beside their package modules.
+  return (
+    shouldNeverBundleDependency(id) ||
+    ["zod", "apache-arrow"].some((name) => id === name || id.startsWith(`${name}/`))
+  );
 }
 
 function shouldAlwaysBundleDependency(id: string): boolean {
@@ -363,6 +370,7 @@ function buildCoreDistEntries(): Record<string, string> {
   return {
     index: "src/index.ts",
     entry: "src/entry.ts",
+    "infra/package-lifecycle": "src/infra/package-lifecycle.ts",
     "crabbox-wrapper": "scripts/crabbox-wrapper.mts",
     "docker-healthcheck": "src/docker-healthcheck.ts",
     // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
@@ -379,10 +387,6 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
     "agents/model-provider-auth.worker": "src/agents/model-provider-auth.worker.ts",
     "agents/prepared-model-catalog.worker": "src/agents/prepared-model-catalog.worker.ts",
-    "config/sessions/session-accessor.sqlite-archive.worker":
-      "src/config/sessions/session-accessor.sqlite-archive.worker.ts",
-    "config/sessions/session-transcript-reconcile.worker":
-      "src/config/sessions/session-transcript-reconcile.worker.ts",
     ...runtimeProcessBuildEntries,
     ...runtimeProcessDeclarationEntries,
     "system-agent/setup-inference-detection.worker":
@@ -400,8 +404,6 @@ function buildCoreDistEntries(): Record<string, string> {
     "task-registry-control.runtime": "src/tasks/task-registry-control.runtime.ts",
     "link-understanding/apply.runtime": "src/link-understanding/apply.runtime.ts",
     "media-understanding/apply.runtime": "src/media-understanding/apply.runtime.ts",
-    "commands/doctor/shared/plugin-registry-migration":
-      "src/commands/doctor/shared/plugin-registry-migration.ts",
     "commands/status.summary.runtime": "src/status/summary.runtime.ts",
     "infra/boundary-file-read": "src/infra/boundary-file-read.ts",
     "plugins/provider-discovery.runtime": "src/plugins/provider-discovery.runtime.ts",
@@ -694,7 +696,11 @@ function buildUnifiedDeclarationPartitions(
     }
     return {
       name,
-      sources: partition.map(([, source]) => normalizeDeclarationEntrySource(source)),
+      // The compiler's TypeScript-only policy leaves JavaScript runtime assets
+      // without declarations; they remain in the unified runtime entry graph.
+      sources: partition
+        .filter(([, source]) => /\.[cm]?tsx?$/u.test(source))
+        .map(([, source]) => normalizeDeclarationEntrySource(source)),
     };
   });
 }
@@ -786,6 +792,7 @@ const configs = [
             name,
             entry: unifiedDistEntries,
             deps: unifiedDeps,
+            hooks: { "build:done": createDeclarationInputCapture(name) },
           },
           { emitDtsOnly: true, entry: sources },
         ),

@@ -178,8 +178,13 @@ export async function runScheduledTaskOrThrow(params: {
   ) {
     return "scheduled-task";
   }
-  await launchFallbackTaskScript(params.env);
-  return "direct-fallback";
+  if (!shouldManageGatewayListenerPort(params.env)) {
+    await launchFallbackTaskScript(params.env);
+    return "direct-fallback";
+  }
+  throw new Error(
+    `Scheduled Task ${params.taskName} did not start within ${SCHEDULED_TASK_FALLBACK_TIMEOUT_MS / 1000}s after schtasks /Run; refusing a direct fallback because the queued task could still start.`,
+  );
 }
 
 function parseScheduledTaskXmlEnabled(output: string): boolean | null {

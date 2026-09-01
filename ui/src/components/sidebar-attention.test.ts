@@ -13,6 +13,7 @@ import {
 } from "../test-helpers/application-context.ts";
 import { createStorageMock as createTestStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
+import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import {
   dismissSidebarAttention,
   dismissalStoreKey,
@@ -552,7 +553,7 @@ describe("sidebar attention refresh ownership", () => {
         { enabled: true, triggersEnabled: true, jobs: 1 },
         { enabled: true, triggersEnabled: true, jobs: 0 },
       ],
-      "models.authStatus": [{ ts: 1, providers: [] }],
+      "models.authStatus": [authStatus(1)],
     };
     const request = vi.fn((method: keyof typeof responses) => {
       const response = responses[method].shift();
@@ -565,7 +566,10 @@ describe("sidebar attention refresh ownership", () => {
     const snapshot = {
       client,
       phase: "connected",
-      hello: null,
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin"] },
+        features: { methods: ["openclaw.chat"] },
+      },
       assistantAgentId: "main",
       sessionKey: "agent:main:main",
       lastError: null,
@@ -628,6 +632,33 @@ describe("sidebar attention refresh ownership", () => {
     expect(panel.style.top).toBe("50px");
     expect(panel.style.bottom).toBe("");
     expect(panel.style.getPropertyValue("--sidebar-issues-panel-top")).toBe("50px");
+    expect(
+      Array.from(
+        panel.querySelectorAll("header button"),
+        (button) => button.getAttribute("aria-label") ?? button.textContent,
+      ).some((label) => label?.includes("Ask OpenClaw")),
+    ).toBe(false);
+
+    const { custodianAlertStore } = await import("../pages/custodian/custodian-alert-store.ts");
+    const dispatch = vi.spyOn(window, "dispatchEvent");
+    try {
+      const alertAction = panel.querySelector<HTMLButtonElement>(
+        '[data-attention-kind="modelAuthExpired"] .sidebar-issues-panel__action:not(.sidebar-issues-panel__action--primary)',
+      )!;
+      expect(alertAction.textContent?.trim()).toBe("Ask OpenClaw");
+      alertAction.click();
+      await waitForFast(() =>
+        expect(dispatch).toHaveBeenCalledWith(
+          expect.objectContaining({ type: CUSTODIAN_PANEL_TOGGLE_EVENT, detail: { open: true } }),
+        ),
+      );
+      expect(custodianAlertStore.alert?.id).toBe("modelAuthExpired:agent:main\nopenai");
+      expect(element.querySelector(".sidebar-issues-panel")).toBeNull();
+    } finally {
+      custodianAlertStore.dismiss();
+    }
+    trigger.click();
+    await waitForFast(() => expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull());
 
     eventListener?.({ type: "event", event: "cron", payload: {} });
     await waitForFast(() =>

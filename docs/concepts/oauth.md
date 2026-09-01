@@ -127,7 +127,7 @@ and [Z.AI / GLM Coding Plan](/providers/zai).
 
 ## OAuth exchange (how login works)
 
-OpenClaw's interactive login flows are implemented in `openclaw/plugin-sdk/llm.ts` and wired into the wizards/commands.
+OpenClaw's OAuth registry and adapters live in `src/llm/utils/oauth/`. Shared provider helpers live in `src/plugin-sdk/provider-oauth-runtime.ts` and `src/plugin-sdk/provider-auth-runtime.ts`. The auth commands in `src/commands/models/auth.ts` run the selected provider method and persist the returned profiles.
 
 ### Anthropic setup-token
 

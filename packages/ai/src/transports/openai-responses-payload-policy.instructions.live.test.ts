@@ -2,17 +2,9 @@ import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
+import { captureOpenAIResponses } from "./openai-responses-live-capture.test-support.js";
 
-// Live coverage for the instructions-field default against the *real* native
-// OpenAI Responses API. The committed loopback integration test
-// (openai-responses-payload-policy.instructions.integration.test.ts) proves
-// openclaw's own request-building logic; it cannot prove the real API
-// actually accepts top-level `instructions` the way openclaw assumes, or
-// that HTTP continuation still works once the system prompt moved out of
-// `input`. This test captures the literal request bytes that leave the
-// process for the real API by wrapping globalThis.fetch. This avoids a proxy
-// while retaining the explicit native OpenAI baseUrl below; a loopback proxy
-// baseUrl would itself defeat the native-route classification under test.
+// Capture the real native endpoint: a proxy base URL would disable continuation eligibility.
 const LIVE = process.env.OPENCLAW_LIVE_TEST === "1";
 const OPENAI_KEY = process.env.OPENAI_API_KEY ?? "";
 const describeLive = LIVE && OPENAI_KEY ? describe : describe.skip;
@@ -21,31 +13,6 @@ const LIVE_TIMEOUT_MS = 120_000;
 
 function userMessage(text: string, timestamp: number) {
   return { role: "user" as const, content: text, timestamp };
-}
-
-async function captureOpenAIRequests<T>(run: () => Promise<T>): Promise<{
-  result: T;
-  requests: Array<Record<string, unknown>>;
-}> {
-  const requests: Array<Record<string, unknown>> = [];
-  const realFetch = globalThis.fetch;
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    if (url.includes("api.openai.com") && typeof init?.body === "string") {
-      try {
-        requests.push(JSON.parse(init.body) as Record<string, unknown>);
-      } catch {
-        // Non-JSON body (unexpected for this endpoint) -- skip capture, still forward the real call.
-      }
-    }
-    return realFetch(input, init);
-  }) as typeof fetch;
-  try {
-    const result = await run();
-    return { result, requests };
-  } finally {
-    globalThis.fetch = realFetch;
-  }
 }
 
 async function runTurn(
@@ -72,15 +39,6 @@ describeLive("instructions-field default on the real native OpenAI Responses API
   it(
     "carries the system prompt via top-level instructions and still continues via previous_response_id",
     async () => {
-      // Explicit canonical baseUrl: usesKnownNativeOpenAIRoute classifies
-      // this as native via endpointClass "openai-public" either way, but
-      // continuation eligibility (supportsNativeOpenAIResponsesEndpoint in
-      // openai-responses-websocket.ts) is stricter -- it requires an exact
-      // https://api.openai.com/v1 origin/path match and returns false for
-      // an absent baseUrl outright, unlike this PR's own instructions-field
-      // policy which treats "no baseUrl + provider openai" as native too.
-      // A loopback proxy baseUrl would fail that same exact-match check,
-      // which is why capture happens via a fetch wrapper instead (see above).
       const model: Model<"openai-responses"> = {
         id: LIVE_MODEL_ID,
         name: LIVE_MODEL_ID,
@@ -102,7 +60,7 @@ describeLive("instructions-field default on the real native OpenAI Responses API
         1,
       );
 
-      const { result: first, requests: firstRequests } = await captureOpenAIRequests(() =>
+      const { result: first, requests: firstRequests } = await captureOpenAIResponses(() =>
         runTurn(
           model,
           { systemPrompt: "You are a terse test assistant.", messages: [firstUser], tools: [] },
@@ -116,7 +74,7 @@ describeLive("instructions-field default on the real native OpenAI Responses API
       expect(firstRequests[0]?.instructions).toBe("You are a terse test assistant.");
       expect(firstRequests[0]).not.toHaveProperty("previous_response_id");
 
-      const { result: second, requests: secondRequests } = await captureOpenAIRequests(() =>
+      const { result: second, requests: secondRequests } = await captureOpenAIResponses(() =>
         runTurn(
           model,
           {

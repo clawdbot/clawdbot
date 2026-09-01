@@ -54,22 +54,26 @@ export type BoardSnapshotWithHtmlViewMetadata = {
   htmlViewMetadata: ReadonlyMap<string, BoardWidgetHtmlViewMetadata>;
 };
 
+export type BoardSessionTarget = { sessionKey: string; agentId?: string };
+
 export interface BoardStore {
-  getSnapshot(sessionKey: string): BoardSnapshot;
-  getSnapshotWithHtmlViewMetadata(sessionKey: string): BoardSnapshotWithHtmlViewMetadata;
-  applyOps(sessionKey: string, ops: readonly BoardOp[]): BoardSnapshot;
+  getSnapshot(target: BoardSessionTarget): BoardSnapshot;
+  getSnapshotWithHtmlViewMetadata(target: BoardSessionTarget): BoardSnapshotWithHtmlViewMetadata;
+  applyOps(target: BoardSessionTarget, ops: readonly BoardOp[]): BoardSnapshot;
   putWidget(params: BoardWidgetMaterializedPutParams): BoardWidgetPutResult;
   grant(
-    sessionKey: string,
+    target: BoardSessionTarget,
     name: string,
     decision: "granted" | "rejected",
     revision: number,
     instanceId?: string,
   ): BoardSnapshot;
-  readWidgetHtml(sessionKey: string, name: string): BoardWidgetHtmlDocument | undefined;
-  readWidgetRegistered(sessionKey: string, name: string): BoardWidgetRegisteredDocument | undefined;
-  readWidgetMcpApp(sessionKey: string, name: string): BoardWidgetMcpAppDocument | undefined;
-  listSessionsWithBoards(): string[];
+  readWidgetHtml(target: BoardSessionTarget, name: string): BoardWidgetHtmlDocument | undefined;
+  readWidgetRegistered(
+    target: BoardSessionTarget,
+    name: string,
+  ): BoardWidgetRegisteredDocument | undefined;
+  readWidgetMcpApp(target: BoardSessionTarget, name: string): BoardWidgetMcpAppDocument | undefined;
 }
 
 const BOARD_MAX_WIDGETS = 48;

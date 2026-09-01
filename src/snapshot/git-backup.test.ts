@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
+import { formatCliOperatorError } from "../cli/failure-output.js";
 import { backupGitCreateCommand } from "../commands/backup-git.js";
 import { readBackupFreshness } from "../commands/backup-health.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
@@ -20,7 +21,10 @@ import { createPathResolutionEnv, withEnvAsync } from "../test-utils/env.js";
 import { dumpGitBackupDatabase, restoreGitBackupDirectory } from "./git-backup-codec.js";
 import { createGitBackup, initializeGitBackupRepository } from "./git-backup.js";
 
-const mocks = vi.hoisted(() => ({ pushDiagnostic: undefined as string | undefined }));
+const mocks = vi.hoisted(() => ({
+  pushDiagnostic: undefined as string | undefined,
+  snapshotRepositoryError: undefined as Error | undefined,
+}));
 
 vi.mock("../infra/git-exec.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/git-exec.js")>();
@@ -45,6 +49,21 @@ vi.mock("../infra/git-exec.js", async (importOriginal) => {
   };
 });
 
+vi.mock("./local-repository.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./local-repository.js")>();
+  return {
+    ...actual,
+    ensurePrivateSnapshotRepositoryRoot: async (
+      ...args: Parameters<typeof actual.ensurePrivateSnapshotRepositoryRoot>
+    ) => {
+      if (mocks.snapshotRepositoryError) {
+        throw mocks.snapshotRepositoryError;
+      }
+      return await actual.ensurePrivateSnapshotRepositoryRoot(...args);
+    },
+  };
+});
+
 const roots: string[] = [];
 
 async function tempRoot(): Promise<string> {
@@ -55,6 +74,8 @@ async function tempRoot(): Promise<string> {
 
 afterEach(async () => {
   mocks.pushDiagnostic = undefined;
+  mocks.snapshotRepositoryError = undefined;
+  vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
   await Promise.all(
     roots.splice(0).map(async (root) => await fs.rm(root, { recursive: true, force: true })),
@@ -435,6 +456,29 @@ describe("Git-backed SQLite snapshots", () => {
       );
     },
   );
+
+  it("gives Windows ACL remediation instead of a POSIX chmod command", async () => {
+    const root = await tempRoot();
+    const stateDir = path.join(root, "state");
+    const repositoryPath = path.join(root, "repository");
+    await fs.mkdir(stateDir);
+    mocks.snapshotRepositoryError = new Error(
+      "Windows ACL permits untrusted SQLite staging access on repository root: path=C:\\backups principal=S-1-1-0 rights=FullControl.",
+    );
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    const error = await initializeGitBackupRepository({ repositoryPath, stateDir }).catch(
+      (reason: unknown) => reason,
+    );
+
+    const output = formatCliOperatorError(error, { argv: [], env: {} });
+
+    expect(output).toContain("Windows ACL permits untrusted SQLite staging access");
+    expect(output).toContain("path=C:\\backups principal=S-1-1-0 rights=FullControl");
+    expect(output).toContain("Remove non-user ACL grants");
+    expect(output).toContain("Do not use a shared or synced folder");
+    expect(output).not.toContain("chmod 700");
+  });
 
   it("accepts a private adopted root", async () => {
     const root = await tempRoot();

@@ -99,7 +99,8 @@ export async function backupEnableCommand(
 ): Promise<{ id: string; updated: boolean }> {
   await assertLocalGatewayScheduleTarget(options);
   const repositoryPath = resolveRequiredBackupPath(options.repository, "--repository");
-  const every = options.every?.trim() || "24h";
+  // Explicit blanks must reach duration validation instead of creating a default schedule.
+  const every = options.every?.trim() ?? "24h";
   const everyMs = parseDurationMs(every, { defaultUnit: "ms" });
   if (!Number.isSafeInteger(everyMs) || everyMs <= 0) {
     throw new Error("--every must be a positive duration such as 6h or 24h.");

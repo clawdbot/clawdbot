@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import type { ToolsGitHubStatusResult } from "../../api/types.ts";
 import { handleCopyButton } from "../../components/copy-button.ts";
+import { icons } from "../../components/icons.ts";
 import {
   renderSettingsRow,
   renderSettingsSecretInput,
@@ -225,6 +226,15 @@ function renderGitHubAuthorization(controller: GitHubIdentityController) {
           <code class="settings-row__value settings-row__value--mono github-device-code"
             >${authorization.userCode}</code
           >
+          <button
+            type="button"
+            class="btn btn--sm"
+            @click=${(event: Event) =>
+              void handleCopyButton(event, authorization.userCode, copyLabel)}
+          >
+            ${icons.copy}
+            <span data-copy-label>${copyLabel}</span>
+          </button>
         `,
       })}
       ${renderSettingsRow({
@@ -246,14 +256,6 @@ function renderGitHubAuthorization(controller: GitHubIdentityController) {
           >
             ${t("agentTools.githubOpen")}
           </a>
-          <button
-            type="button"
-            class="btn"
-            @click=${(event: Event) =>
-              void handleCopyButton(event, authorization.userCode, copyLabel)}
-          >
-            <span data-copy-label>${copyLabel}</span>
-          </button>
           ${authorization.phase === "cancelling" || authorization.phase === "finishing"
             ? nothing
             : html`<button

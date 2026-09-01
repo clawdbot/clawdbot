@@ -27,6 +27,7 @@ type SystemAgentChatReplyAction = "none" | "exit" | "open-tui" | "open-setup";
 export type SystemAgentChatReply = {
   text: string;
   action: SystemAgentChatReplyAction;
+  applied?: boolean;
   agentDraft?: "hatch";
   sensitive?: boolean;
   wizardInputPending?: boolean;

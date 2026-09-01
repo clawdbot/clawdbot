@@ -5,11 +5,11 @@ import { CHECK_IDS } from "./check-ids.js";
 import {
   authProfileAllowModesShapeFindings,
   dataHandlingEntries,
-  dataHandlingFinding,
   dataHandlingLabel,
   dataHandlingPolicyShapeFindings,
   secretPolicyShapeFindings,
 } from "./data-auth-shapes.js";
+import { policyEvidenceFinding } from "./policy-evidence-finding.js";
 import { authProfileHasMetadata, requiredAuthProfileMetadata } from "./policy-runtime.js";
 import {
   agentScopedPolicyTargets,
@@ -116,7 +116,7 @@ function dataHandlingFindingsForRule(
         .filter(evidenceFilter)
         .filter((entry) => entry.value === true)
         .map((entry) =>
-          dataHandlingFinding(entry, {
+          policyEvidenceFinding(entry, {
             checkId: CHECK_IDS.policyDataHandlingTelemetryContentCapture,
             message: "Telemetry content capture is enabled.",
             requirement: `oc://${policyDocName}/${requirementBase}/telemetry/denyContentCapture`,
@@ -131,7 +131,7 @@ function dataHandlingFindingsForRule(
         .filter(evidenceFilter)
         .filter((entry) => entry.value !== "enforce")
         .map((entry) =>
-          dataHandlingFinding(entry, {
+          policyEvidenceFinding(entry, {
             checkId: CHECK_IDS.policyDataHandlingSessionRetentionNotEnforced,
             message: `Session retention maintenance mode is '${entry.value ?? "unknown"}'.`,
             requirement: `oc://${policyDocName}/${requirementBase}/retention/requireSessionMaintenance`,
@@ -146,7 +146,7 @@ function dataHandlingFindingsForRule(
         .filter(evidenceFilter)
         .filter((entry) => entry.value === true)
         .map((entry) =>
-          dataHandlingFinding(entry, {
+          policyEvidenceFinding(entry, {
             checkId: CHECK_IDS.policyDataHandlingSessionTranscriptMemory,
             message: `${dataHandlingLabel(entry)} enables session transcript memory indexing.`,
             requirement: `oc://${policyDocName}/${requirementBase}/memory/denySessionTranscriptIndexing`,

@@ -263,6 +263,13 @@ async function updateSlackApprovalEntry(
     ...APPROVAL_CONTEXT,
     context,
     entry: { channelId: "C123", messageTs: "1712345678.999999" },
+    request: {
+      id: "approval-1",
+      request: { command: "echo hi" },
+      createdAtMs: 0,
+      expiresAtMs: 60_000,
+    },
+    approvalKind: "exec",
     payload,
     phase: "resolved",
   });
@@ -320,8 +327,8 @@ function findApprovalMrkdwn(payload: SlackPayload, prefix: string): string {
 }
 
 describe("slackApprovalNativeRuntime", () => {
-  it("subscribes to plugin approval events", () => {
-    expect(slackApprovalNativeRuntime.eventKinds).toEqual(["exec", "plugin"]);
+  it("subscribes to all native approval events", () => {
+    expect(slackApprovalNativeRuntime.eventKinds).toEqual(["exec", "plugin", "system-agent"]);
   });
 
   it("does not leave dangling surrogates when truncating exec approval command mrkdwn", async () => {

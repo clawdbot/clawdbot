@@ -1,4 +1,5 @@
 // Projects prepared connection identity into user-turn attribution fields.
+import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   ErrorCodes,
   errorShape,
@@ -11,16 +12,14 @@ export function isGatewayClientProfilePending(client: GatewayClient | null): boo
   return Boolean(client?.authenticatedGitHubIdentitySync && !client.authenticatedUserProfile);
 }
 
-export function authenticatedProfileUnavailableError(): ErrorShape {
-  return errorShape(
-    ErrorCodes.UNAVAILABLE,
-    "Authenticated profile verification is unavailable; retry the request.",
-    {
-      retryable: true,
-      retryAfterMs: 1_000,
-      details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
-    },
-  );
+export function authenticatedProfileUnavailableError(
+  message = "Authenticated profile verification is unavailable. Retry shortly; if this continues, contact a gateway administrator.",
+): ErrorShape {
+  return errorShape(ErrorCodes.UNAVAILABLE, message, {
+    retryable: true,
+    retryAfterMs: 1_000,
+    details: { code: ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE },
+  });
 }
 
 export function gatewayClientSenderFields(client: GatewayClient | null): {

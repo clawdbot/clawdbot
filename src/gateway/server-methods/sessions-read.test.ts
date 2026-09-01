@@ -444,6 +444,45 @@ test("bare ownerless reads fail closed without blocking scoped preview siblings"
   });
 });
 
+test("sessions.describe retains each global row owner from a qualified main alias", async () => {
+  testState.sessionConfig = { scope: "global", mainKey: "workspace" };
+  await setAgentsConfig({ ownership: "explicit", entries: { main: {}, work: {} } });
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  const cfg = getRuntimeConfig();
+  expect(cfg.session).toMatchObject({ scope: "global", mainKey: "workspace" });
+  for (const agentId of ["main", "work"]) {
+    await replaceSessionEntry(
+      {
+        agentId,
+        sessionKey: "global",
+        storePath: resolveStorePath(cfg.session?.store, { agentId }),
+      },
+      { sessionId: `${agentId}-global`, updatedAt: 42, label: `${agentId} conversation` },
+    );
+  }
+
+  for (const [agentId, alias] of [
+    ["main", "main"],
+    ["work", "workspace"],
+    ["main", "workspace"],
+  ]) {
+    const described = await directSessionReq("sessions.describe", {
+      key: `agent:${agentId}:${alias}`,
+    });
+    expect(described).toMatchObject({
+      ok: true,
+      payload: {
+        session: {
+          key: "global",
+          agentId,
+          sessionId: `${agentId}-global`,
+          displayName: `${agentId} conversation`,
+        },
+      },
+    });
+  }
+});
+
 test("sessions.describe reads a pre-existing store after its agent is removed from config", async () => {
   const storePath = path.join(
     requireStateDir(),

@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { expect, it } from "vitest";
@@ -81,8 +82,12 @@ it("adopts duplicate native titles without claiming labels or replacing local na
           "",
           ` ${"界".repeat(499)}${"🦞".repeat(300)} `,
         ];
+        // WebSocket supervision selects the agent's native home, not process CODEX_HOME.
+        const sessionsRoot = path.join(state.agentDir(), "codex-home", "sessions");
+        await fs.mkdir(sessionsRoot, { recursive: true });
         const threads = titles.map((name, index) => ({
           id: `01980000-0000-7000-8000-${String(index + 1).padStart(12, "0")}`,
+          path: path.join(sessionsRoot, `rollout-${index}.jsonl`),
           name,
           cwd: state.workspaceDir,
           projectId: null,
@@ -106,6 +111,26 @@ it("adopts duplicate native titles without claiming labels or replacing local na
             },
           ],
         }));
+        for (const thread of threads) {
+          const timestamp = new Date(thread.createdAt * 1000).toISOString();
+          await fs.writeFile(
+            thread.path,
+            `${JSON.stringify({
+              timestamp,
+              type: "session_meta",
+              payload: {
+                session_id: thread.id,
+                id: thread.id,
+                timestamp,
+                cwd: thread.cwd,
+                source: thread.source,
+                originator: "codex_cli_rs",
+                cli_version: "0.151.0",
+                model_provider: thread.modelProvider,
+              },
+            })}\n`,
+          );
+        }
         server.on("connection", (socket) => {
           socket.on("message", (data) => {
             const request = JSON.parse(rawDataToString(data)) as {

@@ -1,3 +1,4 @@
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { NpmIntegrityDrift, NpmSpecResolution } from "../infra/install-source-utils.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
 import type { PluginInstallArtifactInspection } from "./install-artifact-inspection.js";
@@ -79,6 +80,8 @@ export type PluginInstallArtifactConsentRequest = {
   currentArtifactDir?: string;
   stagedArtifactDir: string;
   mode: "install" | "update";
+  /** Source facts supplied by the installer after validating the staged artifact. */
+  sourceRecord?: PluginInstallRecord;
 };
 
 export type PluginInstallArtifactConsentHandler = (
@@ -97,6 +100,7 @@ export type PackageInstallCommonParams = InstallSafetyOverrides & {
   allowSourceTypeScriptEntries?: boolean;
   installPolicyRequest?: PluginInstallPolicyRequest;
   onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
+  beforePersistentApply?: () => void;
 };
 
 export type InternalPackageInstallCommonParams = PackageInstallCommonParams & {

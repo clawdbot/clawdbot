@@ -2,7 +2,13 @@ import type {
   SystemAgentChatParams,
   SystemAgentChatResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveGatewayPublicOrigin } from "../../config/gateway-public-origin.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatExecApprovalExpiresIn } from "../../infra/exec-approval-reply.js";
+import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
 import type { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
+import { normalizeControlUiBasePath } from "../control-ui-shared.js";
+import type { ExecApprovalManager } from "../exec-approval-manager.js";
 
 type SystemAgentChatReply = Awaited<ReturnType<SystemAgentChatEngine["handle"]>>;
 type SystemAgentChatEngineInput = Pick<
@@ -122,4 +128,27 @@ export function buildSystemAgentChatResult(params: {
     ...(params.reply.step ? { step: params.reply.step } : {}),
     ...(params.proposalId ? { needsApproval: true, proposalId: params.proposalId } : {}),
   };
+}
+
+export function buildDelegatedApprovalPendingReply(params: {
+  cfg: OpenClawConfig;
+  manager: ExecApprovalManager<SystemAgentApprovalRequestPayload>;
+  approvalId: string;
+  nowMs?: number;
+}): string {
+  const snapshot = params.manager.getSnapshot(params.approvalId);
+  if (!snapshot) {
+    throw new Error("system-agent approval snapshot unavailable after registration");
+  }
+  const origin = resolveGatewayPublicOrigin(params.cfg);
+  const reviewUrl =
+    origin && params.cfg.gateway?.controlUi?.enabled !== false
+      ? `${origin}${normalizeControlUiBasePath(params.cfg.gateway?.controlUi?.basePath)}/approve/${encodeURIComponent(params.approvalId)}`
+      : undefined;
+  return [
+    `OpenClaw change pending approval: ${snapshot.request.description}.`,
+    ...(reviewUrl ? [`Review: ${reviewUrl}.`] : []),
+    "No change has been made.",
+    `Expires in ${formatExecApprovalExpiresIn(snapshot.expiresAtMs, params.nowMs ?? Date.now())}.`,
+  ].join(" ");
 }

@@ -6,7 +6,6 @@
 import { statSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import { Text } from "@earendil-works/pi-tui";
 import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { Type } from "typebox";
 import { releaseChildProcessOutputAfterExit } from "../../../process/child-process.js";
@@ -15,12 +14,13 @@ import { normalizeNativePathSeparators } from "../../../shared/ignore-rules.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
-import { appendBoundedTextTail, normalizePositiveLimit } from "./limits.js";
-import { resolveToCwd } from "./path-utils.js";
+import { appendBoundedTextTail, formatStderrTail, normalizePositiveLimit } from "./limits.js";
+import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 import {
   appendSessionToolTruncationWarning,
   formatSessionToolOutput,
   invalidArgText,
+  reuseTextComponent,
   shortenPath,
   str,
 } from "./render-utils.js";
@@ -52,6 +52,15 @@ const grepSchema = Type.Object({
   limit: Type.Optional(Type.Number({ description: "Max matches; default 100." })),
 });
 const DEFAULT_LIMIT = 100;
+
+type RipgrepJsonText = { text?: string; bytes?: string };
+
+function decodeRipgrepJsonText(value: RipgrepJsonText | undefined): string | undefined {
+  return (
+    value?.text ??
+    (value?.bytes === undefined ? undefined : Buffer.from(value.bytes, "base64").toString("utf8"))
+  );
+}
 
 /**
  * Pluggable operations for the grep tool.
@@ -120,6 +129,7 @@ export function createGrepToolDefinition(
   options?: GrepToolOptions,
 ): ToolDefinition<typeof grepSchema, GrepToolDetails | undefined> {
   const customOps = options?.operations;
+  const resolvePath = customOps ? resolveToCwd : resolveLocalPathToCwd;
   return {
     name: "grep",
     label: "grep",
@@ -208,7 +218,7 @@ export function createGrepToolDefinition(
               return;
             }
 
-            const searchPath = resolveToCwd(searchDir || ".", cwd);
+            const searchPath = resolvePath(searchDir || ".", cwd);
             let isDirectory: boolean;
             try {
               isDirectory = await (customOps?.isDirectory(searchPath) ??
@@ -258,6 +268,7 @@ export function createGrepToolDefinition(
             child = spawnedChild;
             rl = createInterface({ input: spawnedChild.stdout });
             let stderr = "";
+            let stderrDroppedBytes = 0;
             let matchCount = 0;
             let matchLimitReached = false;
             let linesTruncated = false;
@@ -267,7 +278,9 @@ export function createGrepToolDefinition(
             // cannot split multibyte characters into U+FFFD replacement noise.
             spawnedChild.stderr?.setEncoding("utf8");
             spawnedChild.stderr?.on("data", (chunk: string) => {
-              stderr = appendBoundedTextTail(stderr, chunk).tail;
+              const appended = appendBoundedTextTail(stderr, chunk);
+              stderr = appended.tail;
+              stderrDroppedBytes += appended.droppedBytes;
             });
             const onStreamError = (stream: "stdout" | "stderr", error: Error) => {
               if (settled) {
@@ -283,7 +296,12 @@ export function createGrepToolDefinition(
             spawnedChild.stdout?.on("error", (error) => onStreamError("stdout", error));
             spawnedChild.stderr?.on("error", (error) => onStreamError("stderr", error));
 
-            const matches: Array<{ filePath: string; lineNumber: number; lineText?: string }> = [];
+            const matches: Array<{
+              filePath: string;
+              pathIdentity: string;
+              lineNumber: number;
+              lineText?: string;
+            }> = [];
             const nativeFiles = new Map<string, Map<number, string>>();
             rl.on("line", (line) => {
               if (!line.trim() || settled || killedDueToLimit) {
@@ -292,9 +310,9 @@ export function createGrepToolDefinition(
               let event: {
                 type?: string;
                 data?: {
-                  path?: { text?: string };
+                  path?: RipgrepJsonText;
                   line_number?: unknown;
-                  lines?: { text?: string; bytes?: string };
+                  lines?: RipgrepJsonText;
                 };
               };
               try {
@@ -302,36 +320,41 @@ export function createGrepToolDefinition(
               } catch {
                 return;
               }
-              const filePath = event.data?.path?.text;
+              const filePath = decodeRipgrepJsonText(event.data?.path);
+              // Ripgrep emits exactly one text/bytes tag. Keep that lossless identity:
+              // distinct invalid-byte paths can have the same replacement-character display.
+              const pathIdentity = JSON.stringify(event.data?.path);
               const lineNumber = event.data?.line_number;
               const lineText = event.data?.lines?.text;
               if (event.type === "match") {
                 matchCount++;
                 matchLimitReached = matchCount > effectiveLimit;
-                if (!matchLimitReached && filePath && typeof lineNumber === "number") {
-                  matches.push({ filePath, lineNumber, lineText });
+                if (
+                  !matchLimitReached &&
+                  filePath &&
+                  pathIdentity &&
+                  typeof lineNumber === "number"
+                ) {
+                  matches.push({ filePath, pathIdentity, lineNumber, lineText });
                 }
               }
               const lastMatch = matches.at(-1);
               const windowEnd = (lastMatch?.lineNumber ?? 0) + contextValue;
               const inLastWindow =
-                filePath === lastMatch?.filePath &&
+                pathIdentity === lastMatch?.pathIdentity &&
                 typeof lineNumber === "number" &&
                 lineNumber <= windowEnd;
               if (
-                filePath &&
+                pathIdentity &&
                 typeof lineNumber === "number" &&
                 (matchCount < effectiveLimit || inLastWindow)
               ) {
                 const text =
-                  lineText ??
-                  (!customOps && event.data?.lines?.bytes !== undefined
-                    ? Buffer.from(event.data.lines.bytes, "base64").toString("utf8")
-                    : undefined);
+                  lineText ?? (!customOps ? decodeRipgrepJsonText(event.data?.lines) : undefined);
                 if (text !== undefined) {
-                  const lines = nativeFiles.get(filePath) ?? new Map<number, string>();
+                  const lines = nativeFiles.get(pathIdentity) ?? new Map<number, string>();
                   lines.set(lineNumber, text);
-                  nativeFiles.set(filePath, lines);
+                  nativeFiles.set(pathIdentity, lines);
                 }
               }
               // The extra match can be context for the last retained match. Capture its
@@ -352,7 +375,8 @@ export function createGrepToolDefinition(
                   return;
                 }
                 if (!killedDueToLimit && code !== 0 && code !== 1) {
-                  const errorMsg = stderr.trim() || `ripgrep exited with code ${code}`;
+                  const fallback = `ripgrep exited with code ${code}`;
+                  const errorMsg = formatStderrTail(stderr, stderrDroppedBytes, fallback);
                   settle(() => reject(new Error(errorMsg)));
                   return;
                 }
@@ -368,7 +392,7 @@ export function createGrepToolDefinition(
 
                 // Format matches after streaming finishes so custom readFile() backends can be async.
                 const fileCache = new Map<string, string[]>();
-                for (const { filePath, lineNumber, lineText: matchText } of matches) {
+                for (const { filePath, pathIdentity, lineNumber, lineText: matchText } of matches) {
                   const relativePath = formatPath(filePath);
                   let customLines: string[] | undefined;
                   if (customOps && (contextValue > 0 || matchText === undefined)) {
@@ -390,7 +414,7 @@ export function createGrepToolDefinition(
                       continue;
                     }
                   }
-                  const nativeLines = nativeFiles.get(filePath);
+                  const nativeLines = nativeFiles.get(pathIdentity);
                   for (
                     let current = Math.max(1, lineNumber - contextValue);
                     current <= lineNumber + contextValue;
@@ -458,14 +482,11 @@ export function createGrepToolDefinition(
       });
     },
     renderCall(args, theme, context) {
-      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      text.setText(formatGrepCall(args, theme));
-      return text;
+      return reuseTextComponent(context.lastComponent, formatGrepCall(args, theme));
     },
     renderResult(result, optionsLocal, theme, context) {
-      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      text.setText(formatGrepResult(result, optionsLocal, theme, context.showImages));
-      return text;
+      const content = formatGrepResult(result, optionsLocal, theme, context.showImages);
+      return reuseTextComponent(context.lastComponent, content);
     },
   };
 }

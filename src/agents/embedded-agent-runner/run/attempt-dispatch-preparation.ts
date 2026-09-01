@@ -180,7 +180,9 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     runtimePlan,
   });
   const trajectoryRecorder =
-    runtime.agentHarness.id === CODEX_HARNESS_ID && !params.disableTrajectory
+    runtime.agentHarness.id === CODEX_HARNESS_ID &&
+    !params.disableTrajectory &&
+    params.sessionPersistence !== "detached"
       ? createTrajectoryRuntimeRecorder({
           cfg: params.config,
           env: process.env,

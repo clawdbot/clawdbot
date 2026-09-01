@@ -85,11 +85,9 @@ export async function fishAudioTts(params: FishAudioTtsRequest): Promise<Buffer>
   const { response, release } = await requestFishAudioTts(params);
   try {
     await assertOkOrThrowProviderError(response, "Fish Audio TTS API error");
-    return Buffer.from(
-      await readProviderBinaryResponse(response, "Fish Audio TTS API error", "audio", {
-        maxBytes: params.maxBytes,
-      }),
-    );
+    return await readProviderBinaryResponse(response, "Fish Audio TTS API error", "audio", {
+      maxBytes: params.maxBytes,
+    });
   } finally {
     await release();
   }

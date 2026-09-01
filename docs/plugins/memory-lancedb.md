@@ -337,8 +337,9 @@ completed; other agents never inherit the old shared rows.
 
 ## Runtime dependencies and platform support
 
-`memory-lancedb` depends on the native `@lancedb/lancedb` package, owned by the
-plugin package (not the OpenClaw core dist). Gateway startup does not repair
+`memory-lancedb` bundles LanceDB's JavaScript. Its plugin package declares native
+`@lancedb/lancedb-*` packages as optional dependencies, so installation selects
+the matching binary for the host platform. Gateway startup does not repair
 plugin dependencies; if the native dependency is missing or fails to load,
 reinstall or update the plugin package and restart the Gateway.
 

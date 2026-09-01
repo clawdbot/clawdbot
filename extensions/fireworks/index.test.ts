@@ -1,4 +1,3 @@
-// Fireworks tests cover index plugin behavior.
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   registerSingleProviderPlugin,
@@ -132,7 +131,7 @@ describe("fireworks provider plugin", () => {
       createProviderDynamicModelContext({
         provider: "fireworks",
         modelId: "accounts/fireworks/models/kimi-k2p5",
-        models: [createFireworksDefaultRuntimeModel({ reasoning: false })],
+        models: [createFireworksDefaultRuntimeModel({ reasoning: true })],
       }),
     );
 
@@ -163,7 +162,7 @@ describe("fireworks provider plugin", () => {
       createProviderDynamicModelContext({
         provider: "fireworks",
         modelId: "accounts/fireworks/routers/kimi-k2.5-turbo",
-        models: [createFireworksDefaultRuntimeModel({ reasoning: false })],
+        models: [createFireworksDefaultRuntimeModel({ reasoning: true })],
       }),
     );
 

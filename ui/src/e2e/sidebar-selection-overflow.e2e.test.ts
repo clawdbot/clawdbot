@@ -12,13 +12,13 @@ const suite = createControlUiE2eSuite({
   },
 });
 
-const artifactDir = path.resolve(".artifacts/control-ui-e2e/sidebar-selection-overflow");
-
 suite.define(() => {
   it("keeps the active session pill clear of a classic scrollbar", async () => {
     const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
     if (captureProof) {
-      await fs.mkdir(artifactDir, { recursive: true });
+      await fs.mkdir(path.join(suite.artifactDir, "sidebar-selection-overflow"), {
+        recursive: true,
+      });
     }
     const context = await suite.newBrowserContext({
       viewport: { height: 500, width: 1280 },
@@ -72,7 +72,10 @@ suite.define(() => {
 
       if (captureProof) {
         await page.screenshot({
-          path: path.join(artifactDir, "active-session-pill.png"),
+          path: path.join(
+            path.join(suite.artifactDir, "sidebar-selection-overflow"),
+            "active-session-pill.png",
+          ),
           fullPage: true,
         });
       }

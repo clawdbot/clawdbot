@@ -29,10 +29,11 @@ import {
   type UiSessionDefaultsHost,
 } from "../../lib/sessions/session-key.ts";
 import { executeSlashCommand } from "./chat-command-executor.ts";
-import { clearChatHistory } from "./chat-history.ts";
+import { clearChatHistory } from "./chat-history-actions.ts";
 import { enqueuePendingRunMessage } from "./chat-queue.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import type { ChatExportResult } from "./export.ts";
+import { publishChatSessionProjectionMessages } from "./history-merge.ts";
 import { handleAbortChat } from "./run-lifecycle.ts";
 import { scheduleChatScroll, type ChatScrollHost } from "./scroll.ts";
 
@@ -489,12 +490,12 @@ export async function dispatchChatSlashCommand(
 }
 
 function injectCommandResult(host: ChatCommandHost, content: string) {
-  host.chatMessages = [
+  publishChatSessionProjectionMessages(host, [
     ...host.chatMessages,
     {
       role: "system",
       content,
       timestamp: Date.now(),
     },
-  ];
+  ]);
 }

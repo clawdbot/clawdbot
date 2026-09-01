@@ -33,6 +33,7 @@ export function createEvent(params: {
   text?: string;
   /** Marks the event as one part of a LINE multi-image send. */
   imageSet?: { id: string; index: number; total: number };
+  mode?: webhook.EventMode;
 }): webhook.Event {
   const message: webhook.MessageEvent["message"] = params.imageSet
     ? {
@@ -51,10 +52,10 @@ export function createEvent(params: {
   const event: webhook.MessageEvent = {
     type: "message",
     message,
-    replyToken: "test-reply-token",
+    ...(params.mode === "standby" ? {} : { replyToken: "test-reply-token" }),
     timestamp: Date.now(),
     source: { type: "user", userId: params.userId ?? "user-1" },
-    mode: "active",
+    mode: params.mode ?? "active",
     webhookEventId: params.webhookEventId,
     deliveryContext: { isRedelivery: false },
   };

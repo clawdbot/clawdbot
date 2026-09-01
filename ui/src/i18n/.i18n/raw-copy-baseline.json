@@ -27,13 +27,6 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/app/lazy-custom-element.ts",
-      "text": "custodian panel"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/app/lazy-custom-element.ts",
       "text": "dashboard document"
     },
     {

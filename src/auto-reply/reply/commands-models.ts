@@ -37,6 +37,8 @@ import { openAIModelCatalogRoutePolicy } from "../../agents/openai-model-routes.
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
 import { PreparedModelCatalogConfigReplacedError } from "../../agents/prepared-model-catalog.errors.js";
 import * as preparedModelCatalog from "../../agents/prepared-model-catalog.js";
+import { getPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
+import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.types.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -196,18 +198,25 @@ async function buildPreparedDataForConfig(
     listCliRuntimeModelBackendBindings().map((binding) => normalizeProviderId(binding.runtime)),
   );
 
+  let loadedOwner: PreparedModelRuntimeSnapshot | undefined;
   const snapshot = await loadPreparedModelCatalogSnapshotForBrowse({
     cfg,
     agentId,
     view: options.view ?? "default",
-    loadCatalog: ({ readOnly }) =>
-      preparedModelCatalog.loadPreparedModelCatalogSnapshot({
+    loadCatalog: async ({ readOnly }) => {
+      loadedOwner = await preparedModelCatalog.loadPreparedModelCatalogOwnerSnapshot({
         config: cfg,
         readOnly,
+        refreshFullCatalog: true,
         ...(agentId ? { agentId, agentDir: resolveAgentDir(cfg, agentId) } : {}),
         ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
-      }),
+      });
+      return loadedOwner.modelCatalog;
+    },
   });
+  // A timed-out read can complete later. Only pair auth with the catalog actually returned.
+  const owner = loadedOwner?.modelCatalog === snapshot ? loadedOwner : undefined;
+  const authStore = owner && getPreparedModelRuntimeAuthStore(owner);
   const catalog = snapshot.entries;
   const visibilityPolicy = createModelVisibilityPolicy({
     cfg,
@@ -224,6 +233,12 @@ async function buildPreparedDataForConfig(
     allowPluginSyntheticAuth: false,
     discoverExternalCliAuth: false,
     allowPreparedRuntimeAuth: true,
+    ...(authStore && owner
+      ? {
+          preparedAuth: { authStore, authModes: owner.authModes },
+          metadataSnapshot: owner.metadataSnapshot,
+        }
+      : {}),
   });
   const logicalModelKey = (entry: { provider: string; id: string }) =>
     openAIModelCatalogRoutePolicy.resolveIdentity(entry)?.key ?? modelCatalogLogicalKey(entry);

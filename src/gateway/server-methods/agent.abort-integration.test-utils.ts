@@ -909,6 +909,7 @@ describe("gateway agent handler chat.abort integration", () => {
     mocks.listAgentIds.mockReturnValue(["main", "work"]);
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
+      agentId: "work",
       storePath: "/tmp/sessions.json",
       entry: {
         sessionId: "work-global-session-id",
@@ -970,9 +971,14 @@ describe("gateway agent handler chat.abort integration", () => {
       }),
     );
     await waitForAssertion(() => expect(context.loadGatewayModelCatalog).toHaveBeenCalled());
+    expect(context.loadGatewayModelCatalog).toHaveBeenCalledWith({
+      agentId: "work",
+      readOnly: true,
+    });
     expect(mocks.loadSessionEntry).toHaveBeenCalledWith("global", {
       agentId: "work",
       clone: false,
+      projection: "list",
     });
     expect(context.chatAbortControllers.has(runId)).toBe(false);
 

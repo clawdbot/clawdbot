@@ -16,6 +16,7 @@ export type ApprovalNativeRuntimeAdapterStubParams = {
   prepareTarget?: ChannelApprovalNativeRuntimeAdapter["transport"]["prepareTarget"];
   deliverPending?: ChannelApprovalNativeRuntimeAdapter["transport"]["deliverPending"];
   bindPending?: NonNullable<ChannelApprovalNativeRuntimeAdapter["interactions"]>["bindPending"];
+  onFinalized?: NonNullable<ChannelApprovalNativeRuntimeAdapter["observe"]>["onFinalized"];
 };
 
 /** Build a complete native approval adapter stub with per-test overrides. */
@@ -47,6 +48,9 @@ export function createApprovalNativeRuntimeAdapterStubs(
       bindPending: params.bindPending ?? vi.fn().mockResolvedValue({ bindingId: "bound" }),
       unbindPending: params.unbindPending,
       cancelDelivered: params.cancelDelivered,
+    },
+    observe: {
+      onFinalized: params.onFinalized,
     },
   };
 }

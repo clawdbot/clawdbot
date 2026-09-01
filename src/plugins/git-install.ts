@@ -296,6 +296,7 @@ async function replaceManagedGitRepo(params: {
   persistentRepoDir: string;
   deferCommit?: boolean;
   onBeforePublish?: (stagedRepoDir: string) => Promise<void>;
+  beforePersistentApply?: () => void;
 }): Promise<{ ok: true; transaction?: PluginInstallTransaction } | { ok: false; error: string }> {
   let artifactConsentFailure: { error: unknown } | undefined;
   const reviewFinalArtifact = async (stagedRepoDir: string) => {
@@ -320,6 +321,7 @@ async function replaceManagedGitRepo(params: {
           depsLogMessage: "",
           // Deferred publication copies the clone again; review that final copy.
           afterInstall: reviewFinalArtifact,
+          beforePersistentApply: params.beforePersistentApply,
         }),
       );
       if (artifactConsentFailure) {
@@ -329,6 +331,7 @@ async function replaceManagedGitRepo(params: {
       return result.ok ? { ok: true, ...(transaction ? { transaction } : {}) } : result;
     }
     await reviewFinalArtifact(params.stagedRepoDir);
+    params.beforePersistentApply?.();
     await replaceDirectoryAtomic({
       stagedDir: params.stagedRepoDir,
       targetDir: params.persistentRepoDir,
@@ -409,6 +412,7 @@ export async function installPluginFromGitSpec(
     dryRun?: boolean;
     expectedPluginId?: string;
     onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
+    beforePersistentApply?: () => void;
   },
 ): Promise<GitPluginInstallResult> {
   const parsed = parseGitPluginSpec(params.spec);
@@ -568,6 +572,7 @@ export async function installPluginFromGitSpec(
             mode: effectiveMode,
           });
         },
+        beforePersistentApply: params.beforePersistentApply,
       });
       if (!replaceResult.ok) {
         return replaceResult;

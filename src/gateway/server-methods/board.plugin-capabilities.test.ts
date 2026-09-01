@@ -102,7 +102,8 @@ describe("board plugin capabilities", () => {
         name: "plugin-widget",
         decision: "granted",
         revision: 1,
-        instanceId: store.getSnapshot("session").widgets[0]?.instanceId,
+        instanceId: store.getSnapshot({ sessionKey: "session", agentId: "main" }).widgets[0]
+          ?.instanceId,
       });
       const board = await invoke("board.get", { sessionKey: "session" });
       const snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;

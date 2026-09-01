@@ -562,7 +562,7 @@ env:
 
 jobs:
   validate_selected_ref:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ !inputs.use_github_hosted_runners && github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     outputs:
       package_artifact_present: ${{ steps.validate.outputs.package_artifact_present }}
@@ -1035,86 +1035,46 @@ jobs:
             sleep $((attempt * 15))
           done
 
-  validate_repo_e2e:
-    name: Repo E2E (${{ matrix.name }})
+  validate_repo_e2e_gateway:
+    name: Gateway E2E
     needs: validate_selected_ref
     if: inputs.include_repo_e2e && inputs.live_suite_filter == ''
-    continue-on-error: ${{ inputs.advisory }}
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      max-parallel: 6
-      matrix:
-        include:
-          - name: Gateway 1/4
-            command: pnpm test:e2e:gateway --shard=1/4
-          - name: Gateway 2/4
-            command: pnpm test:e2e:gateway --shard=2/4
-          - name: Gateway 3/4
-            command: pnpm test:e2e:gateway --shard=3/4
-          - name: Gateway 4/4
-            command: pnpm test:e2e:gateway --shard=4/4
-          - name: UI 1/4
-            command: pnpm test:ui:e2e --shard=1/4
-          - name: UI 2/4
-            command: pnpm test:ui:e2e --shard=2/4
-          - name: UI 3/4
-            command: pnpm test:ui:e2e --shard=3/4
-          - name: UI 4/4
-            command: pnpm test:ui:e2e --shard=4/4
-          - name: Agent plugin Gateway
-            command: pnpm test:e2e:agent-plugin-gateway
-            target_script: test:e2e:agent-plugin-gateway
-    env:
-      OPENCLAW_BUILD_PRIVATE_QA: "1"
-      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
-      OPENCLAW_VITEST_MAX_WORKERS: "2"
-    steps:
-      - name: Checkout selected ref
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-          fetch-depth: 1
+    uses: ./.github/workflows/openclaw-repo-e2e-reusable.yml
+    with:
+      ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+      workflow_repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+      workflow_sha: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+      build_profile: full
+      suites: >-
+        [{"name":"Gateway 1/4","command":"pnpm test:e2e:gateway --shard=1/4"},
+         {"name":"Gateway 2/4","command":"pnpm test:e2e:gateway --shard=2/4"},
+         {"name":"Gateway 3/4","command":"pnpm test:e2e:gateway --shard=3/4"},
+         {"name":"Gateway 4/4","command":"pnpm test:e2e:gateway --shard=4/4"}]
+      use_github_hosted_runners: ${{ inputs.use_github_hosted_runners }}
+      advisory: ${{ inputs.advisory }}
+      allow_unreleased_changelog: ${{ inputs.allow_unreleased_changelog }}
+      allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
 
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: restore
-          node-version: ${{ env.NODE_VERSION }}
-          install-bun: "true"
-          build-all-cache-scope: full
-
-      - name: Build dist for repo E2E
-        env:
-          NODE_OPTIONS: --max-old-space-size=8192
-        run: pnpm build
-
-      - name: Install Playwright Chromium
-        run: pnpm --dir ui exec playwright install --with-deps chromium
-
-      - name: Build sandbox image
-        run: scripts/sandbox-setup.sh
-
-      - name: Run repo E2E suite
-        env:
-          OPENCLAW_E2E_WORKERS: "2"
-          OPENCLAW_E2E_USE_PREBUILT_DIST: "1"
-          TARGET_REQUIRED_SCRIPT: ${{ matrix.target_script || '' }}
-        run: |
-          set -euo pipefail
-          if [[ -n "$TARGET_REQUIRED_SCRIPT" ]] && ! node -e '
-            const packageJson = JSON.parse(require("node:fs").readFileSync("package.json", "utf8"));
-            if (typeof packageJson.scripts?.[process.argv[1]] !== "string") process.exit(1);
-          ' "$TARGET_REQUIRED_SCRIPT"; then
-            if [[ "$OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS" != "1" ]]; then
-              echo "::error::Selected target does not provide required repo E2E capability: $TARGET_REQUIRED_SCRIPT."
-              exit 1
-            fi
-            echo "::notice::Skipping $TARGET_REQUIRED_SCRIPT: selected target does not provide this newer repo E2E capability."
-            exit 0
-          fi
-          ${{ matrix.command }}
+  validate_repo_e2e_runtime:
+    name: UI and plugin E2E
+    needs: validate_selected_ref
+    if: inputs.include_repo_e2e && inputs.live_suite_filter == ''
+    uses: ./.github/workflows/openclaw-repo-e2e-reusable.yml
+    with:
+      ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+      workflow_repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+      workflow_sha: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+      build_profile: ciArtifacts
+      suites: >-
+        [{"name":"UI 1/4","command":"pnpm test:ui:e2e --shard=1/4"},
+         {"name":"UI 2/4","command":"pnpm test:ui:e2e --shard=2/4"},
+         {"name":"UI 3/4","command":"pnpm test:ui:e2e --shard=3/4"},
+         {"name":"UI 4/4","command":"pnpm test:ui:e2e --shard=4/4"},
+         {"name":"Agent plugin Gateway","command":"pnpm test:e2e:agent-plugin-gateway","target_script":"test:e2e:agent-plugin-gateway"}]
+      use_github_hosted_runners: ${{ inputs.use_github_hosted_runners }}
+      advisory: ${{ inputs.advisory }}
+      allow_unreleased_changelog: ${{ inputs.allow_unreleased_changelog }}
+      allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
 
   validate_special_e2e:
     needs: validate_selected_ref
@@ -1270,13 +1230,7 @@ jobs:
           fi
 
   validate_docker_e2e:
-    needs:
-      [
-        validate_selected_ref,
-        prepare_docker_e2e_image,
-        docker_e2e_image_ready,
-        plan_release_workflow_matrices,
-      ]
+    needs: [validate_selected_ref, prepare_docker_e2e_image, plan_release_workflow_matrices]
     if: inputs.include_release_path_suites && inputs.docker_lanes == '' && needs.plan_release_workflow_matrices.outputs.docker_e2e_count != '0'
     name: Docker E2E (${{ matrix.label }})
     continue-on-error: ${{ inputs.advisory }}
@@ -1542,6 +1496,7 @@ jobs:
           bash .release-harness/scripts/ci-docker-pull-retry.sh "${OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE}"
 
       - name: Validate Docker E2E credentials
+        id: validate_credentials
         if: contains(matrix.profiles, inputs.release_test_profile)
         shell: bash
         env:
@@ -1581,7 +1536,8 @@ jobs:
           fi
 
       - name: Run Docker E2E chunk
-        if: contains(matrix.profiles, inputs.release_test_profile)
+        # Missing live credentials still fail this job, but must not suppress non-live diagnostics.
+        if: ${{ !cancelled() && contains(matrix.profiles, inputs.release_test_profile) && (success() || steps.validate_credentials.outcome == 'failure') }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1657,13 +1613,7 @@ jobs:
           echo "groups_json=${groups_json}" >> "$GITHUB_OUTPUT"
 
   validate_docker_lanes:
-    needs:
-      [
-        validate_selected_ref,
-        prepare_docker_e2e_image,
-        docker_e2e_image_ready,
-        plan_docker_lane_groups,
-      ]
+    needs: [validate_selected_ref, prepare_docker_e2e_image, plan_docker_lane_groups]
     if: inputs.docker_lanes != ''
     name: Docker E2E targeted lanes (${{ matrix.group.label }})
     continue-on-error: ${{ inputs.advisory }}
@@ -1928,6 +1878,7 @@ jobs:
           bash .release-harness/scripts/ci-docker-pull-retry.sh "${OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE}"
 
       - name: Validate Docker E2E credentials
+        id: validate_credentials
         shell: bash
         env:
           CREDENTIALS: ${{ steps.plan.outputs.credentials }}
@@ -1966,6 +1917,7 @@ jobs:
           fi
 
       - name: Run targeted Docker E2E lanes
+        if: ${{ !cancelled() && (success() || steps.validate_credentials.outcome == 'failure') }}
         shell: bash
         env:
           ARTIFACT_SUFFIX: ${{ steps.plan.outputs.artifact_suffix }}
@@ -2014,7 +1966,7 @@ jobs:
           if-no-files-found: error
 
   validate_docker_openwebui:
-    needs: [validate_selected_ref, prepare_docker_e2e_image, docker_e2e_image_ready]
+    needs: [validate_selected_ref, prepare_docker_e2e_image]
     if: inputs.include_openwebui && inputs.docker_lanes == '' && (inputs.release_test_profile == 'stable' || inputs.release_test_profile == 'full')
     name: Docker E2E (openwebui)
     continue-on-error: ${{ inputs.advisory }}
@@ -2213,7 +2165,7 @@ jobs:
     name: Prepare shared Docker E2E image
     needs: validate_selected_ref
     if: inputs.prepare_only || inputs.include_release_path_suites || inputs.include_openwebui || inputs.docker_lanes != ''
-    continue-on-error: ${{ inputs.advisory }}
+    # Image preparation stays blocking even when validation suites are advisory.
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ inputs.release_test_profile == 'full' && 90 || 60 }}
     permissions:
@@ -2630,15 +2582,15 @@ jobs:
             fi
             cp "${tgzs[0]}" "$target"
           fi
-          echo "Validating Docker E2E package tarball: $target"
-          validator=(node scripts/check-openclaw-package-tarball.mjs)
+          # Local pack validates final bytes; imports need the trusted harness before identity checks.
           if [[ -n "${EXPECTED_PACKAGE_FILE_NAME// }" ]]; then
+            echo "Validating Docker E2E package tarball: $target"
             validator=(bash -c 'cd .release-harness && pnpm exec node scripts/check-openclaw-package-tarball.mjs "$1"' --)
+            started_at="$(date +%s)"
+            timeout --foreground 5m "${validator[@]}" "$GITHUB_WORKSPACE/$target"
+            finished_at="$(date +%s)"
+            echo "Docker E2E package tarball validation finished in $((finished_at - started_at))s."
           fi
-          started_at="$(date +%s)"
-          timeout --foreground 5m "${validator[@]}" "$GITHUB_WORKSPACE/$target"
-          finished_at="$(date +%s)"
-          echo "Docker E2E package tarball validation finished in $((finished_at - started_at))s."
           digest="$(sha256sum "$target" | awk '{print $1}')"
           version="$(tar -xOf "$target" package/package.json | jq -r '.version')"
           name="$(tar -xOf "$target" package/package.json | jq -r '.name')"
@@ -3029,7 +2981,7 @@ jobs:
     name: Bind full release candidate evidence
     needs: [validate_selected_ref, prepare_docker_e2e_image]
     if: inputs.emit_candidate_evidence && needs.prepare_docker_e2e_image.result == 'success'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ !inputs.use_github_hosted_runners && github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 15
     permissions:
       actions: read
@@ -3432,29 +3384,10 @@ jobs:
           )"
           printf 'json=%s\n' "$(jq -cer . <<< "$binding")" >> "$GITHUB_OUTPUT"
 
-  docker_e2e_image_ready:
-    needs: prepare_docker_e2e_image
-    if: always() && needs.prepare_docker_e2e_image.result != 'skipped'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    steps:
-      - name: Verify Docker E2E image preparation
-        env:
-          PREPARE_RESULT: ${{ needs.prepare_docker_e2e_image.result }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "$PREPARE_RESULT" != "success" ]]; then
-            echo "Docker E2E image preparation ended with ${PREPARE_RESULT}." >&2
-            exit 1
-          fi
-
   prepare_live_test_image:
     needs: [validate_selected_ref, plan_release_workflow_matrices]
     if: inputs.include_live_suites && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'live-') || startsWith(inputs.live_suite_filter, 'docker-live-models'))
-    continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
+    # Image preparation stays blocking even when validation suites are advisory.
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 60
     permissions:
@@ -3596,34 +3529,9 @@ jobs:
           compression-level: 0
           retention-days: 7
 
-  live_test_image_ready:
-    needs: prepare_live_test_image
-    if: always() && needs.prepare_live_test_image.result != 'skipped'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    steps:
-      - name: Verify live-test image preparation
-        env:
-          PREPARE_RESULT: ${{ needs.prepare_live_test_image.result }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "$PREPARE_RESULT" != "success" ]]; then
-            echo "Live-test image preparation ended with ${PREPARE_RESULT}." >&2
-            exit 1
-          fi
-
   validate_live_models_docker:
     name: Docker live models (${{ matrix.provider_label }})
-    needs:
-      [
-        validate_selected_ref,
-        prepare_live_test_image,
-        live_test_image_ready,
-        plan_release_workflow_matrices,
-      ]
+    needs: [validate_selected_ref, prepare_live_test_image, plan_release_workflow_matrices]
     if: inputs.include_live_suites && inputs.live_model_providers == '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models') && needs.plan_release_workflow_matrices.outputs.live_models_count != '0'
     continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
@@ -3799,7 +3707,7 @@ jobs:
 
   validate_live_models_docker_targeted:
     name: Docker live models (selected providers)
-    needs: [validate_selected_ref, prepare_live_test_image, live_test_image_ready]
+    needs: [validate_selected_ref, prepare_live_test_image]
     if: inputs.include_live_suites && inputs.live_model_providers != '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models')
     continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
@@ -4381,7 +4289,7 @@ jobs:
 
   validate_live_docker_provider_suites:
     name: Docker live suites (${{ matrix.label }})
-    needs: [validate_selected_ref, prepare_live_test_image, live_test_image_ready]
+    needs: [validate_selected_ref, prepare_live_test_image]
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'live-'))
     continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}

@@ -28,6 +28,7 @@ import {
   type WikiClaim,
   type WikiPageSummary,
 } from "./markdown.js";
+import { isPersonLikePage } from "./person-page.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
 const QUERY_DIRS = ["entities", "concepts", "sources", "syntheses", "reports"] as const;
@@ -567,20 +568,6 @@ function hasRouteQuestionMatch(values: readonly string[], queryLower: string): b
   return hasAnyQueryMatch(values, queryLower, buildRouteQuestionTokens(queryLower));
 }
 
-function isPersonLikeSummary(
-  page: Pick<WikiPageSummary, "entityType" | "pageType" | "personCard">,
-): boolean {
-  const entityType = normalizeLowercaseStringOrEmpty(page.entityType);
-  const pageType = normalizeLowercaseStringOrEmpty(page.pageType);
-  return (
-    Boolean(page.personCard) ||
-    entityType === "person" ||
-    entityType === "maintainer" ||
-    pageType === "person" ||
-    pageType === "maintainer"
-  );
-}
-
 function scorePageSearchModeBoost(params: {
   page: QueryableWikiPage;
   matchingClaims: readonly WikiClaim[];
@@ -593,7 +580,7 @@ function scorePageSearchModeBoost(params: {
     case "auto":
       return 0;
     case "find-person": {
-      let score = isPersonLikeSummary(page) ? 24 : -4;
+      let score = isPersonLikePage(page) ? 24 : -4;
       if (
         hasAnyQueryMatch(
           [
@@ -613,7 +600,7 @@ function scorePageSearchModeBoost(params: {
       return score;
     }
     case "route-question": {
-      let score = isPersonLikeSummary(page) ? 14 : 0;
+      let score = isPersonLikePage(page) ? 14 : 0;
       if (hasRouteQuestionMatch(buildPageRouteQuestionFields(page), queryLower)) {
         score += 32;
       }
@@ -664,7 +651,7 @@ function scoreDigestSearchModeBoost(params: {
     case "auto":
       return 0;
     case "find-person": {
-      let score = isPersonLikeSummary(page) ? 24 : -4;
+      let score = isPersonLikePage(page) ? 24 : -4;
       if (
         hasAnyQueryMatch(
           [
@@ -684,7 +671,7 @@ function scoreDigestSearchModeBoost(params: {
       return score;
     }
     case "route-question": {
-      let score = isPersonLikeSummary(page) ? 14 : 0;
+      let score = isPersonLikePage(page) ? 14 : 0;
       if (hasRouteQuestionMatch(buildDigestRouteQuestionFields(page), queryLower)) {
         score += 32;
       }

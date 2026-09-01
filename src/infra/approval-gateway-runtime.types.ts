@@ -3,9 +3,13 @@ import type { ApprovalNativeRouteCoordinator } from "./approval-native-route-coo
 import type { ApprovalRequest, ChannelApprovalKind } from "./approval-types.js";
 import type { ExecApprovalResolved } from "./exec-approvals.js";
 import type { PluginApprovalResolved } from "./plugin-approvals.js";
+import type { SystemAgentApprovalResolved } from "./system-agent-approvals.js";
 
 export type GatewayApprovalRequest = ApprovalRequest;
-export type GatewayApprovalResolved = ExecApprovalResolved | PluginApprovalResolved;
+export type GatewayApprovalResolved =
+  | ExecApprovalResolved
+  | PluginApprovalResolved
+  | SystemAgentApprovalResolved;
 
 export type GatewayApprovalEventSubscriber = {
   eventKinds: ReadonlySet<ChannelApprovalKind>;

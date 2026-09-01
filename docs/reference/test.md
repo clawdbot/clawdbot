@@ -79,6 +79,14 @@ owning its prepared environment. Direct providers use
 requested proof requires another environment; capacity or hydration failure
 does not make a different provider equivalent.
 
+The direct `.github/workflows/windows-blacksmith-testbox.yml` workflow runs
+native Windows. The wrapper's Blacksmith adapter supports Linux only; explicit
+`--provider blacksmith-testbox` prevents automatic Azure routing but does not
+enable Windows support. Blacksmith CLI 0.4.57 targets `runner` and has no native
+username override, so supported CLI sync/run on this Windows image remains
+blocked. Native SSH inspection with the per-Testbox key is not CLI end-to-end
+proof.
+
 The wrapper checks an executable sibling `../crabbox/bin/crabbox`, then `PATH`,
 then the sibling of the Git common checkout. Verify the selected binary and
 its source rather than trusting a directory name. If it needs repair or is
@@ -122,6 +130,12 @@ lease ID, and reuse it with `run --id <tbx_id>`. Stop the owned lease with
   for release proof. Direct-provider flags such as `--fresh-pr`, `--full-resync`,
   `--script*`, `--env-helper`, capture/download flags, and `--stop-after` are not
   a substitute for the delegated Testbox workflow.
+
+The native Windows Testbox idle monitor uses the running `sshd` service's local
+listener ports, not Blacksmith's externally forwarded SSH port. Established SSH
+connections keep the job alive; the `~/.testbox-last-activity` modification time
+covers short commands between the 30-second polls. Once neither indicates recent
+activity, the configured idle timeout still ends the job.
 
 The shared skill's command placeholders map to the focused commands in this
 guide. Its trusted bootstrap is `scripts/crabbox-untrusted-bootstrap.sh`; the
@@ -179,17 +193,22 @@ and runtime parents on TypeScript. Importing a declared subprocess entrypoint
 compiles the fixed test entry set and its workspace dependencies into one fresh
 invocation directory under `.artifacts/vitest-workers/`.
 
-The seven application subprocess entries run as plain Node JavaScript without a
+The ten declared application entries run as plain Node JavaScript without a
 TypeScript loader: SQLite read-only snapshots, database verification, Tailscale
-route ownership, the service relay, its POSIX and Windows anchors, and the memory
-plugin's KNN child. The same generation also compiles the fake-backend TUI
+route ownership, the service relay, its POSIX and Windows anchors, the memory
+plugin's KNN child, session transcript archive and reconciliation workers, and
+managed GitHub credential resolution. The same generation also compiles the fake-backend TUI
 fixture's four runtime roots together: the real TUI, embedded reply producer,
 reply metadata reader, and outbound normalizer. Shared chunks preserve their
 module and WeakMap identity. Generated TUI fixtures remain `.mts` files: Node
 launches them with `--import tsx` for their own syntax, while Bun handles that
 syntax natively without the Node loader. Only their runtime imports change.
-Application/package build entries and Vitest source parents stay unchanged. This
-does not convert Worker-thread entries or arbitrary source CLI fixtures.
+Existing package build entry paths and Vitest source parents stay unchanged. Other
+Worker-thread entries and arbitrary source CLI fixtures remain outside this declared set.
+
+The session-title retention test declares its title-reader and session-utils roots
+in this same generation. Each fresh heap-measurement child runs their JavaScript
+without spending its execution deadline on TypeScript imports.
 
 Preparation is lazy across both projects and shards. Config imports, listing
 tests, and tiny tests that do not import these declarations do not load the
@@ -229,6 +248,12 @@ reads current source rather than reusing a compiled snapshot. Existing Vitest
 watch dependency tracking still determines when tests rerun.
 
 Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` summary; Vitest's own duration line stays the per-shard detail.
+
+A failed invocation ends with one `[test] FAILED (exit N)` line after child
+processes, cleanup, and report publication settle. Direct `run-vitest.mts` calls
+use `[vitest]` instead. Nested runners retain their diagnostics and exit status;
+the top-level CLI owns the final failure line. Successful runs emit no failure
+trailer.
 
 | Command                                           | What it does                                                                                                                                                                                                                                                                                                                                          |
 | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -271,6 +296,15 @@ detached descendants stopped. Before manually removing an abandoned lock directo
 inspect its `owner.json` and verify all associated build, compiler, and lint
 processes, including detached descendants, have stopped; then retry the command.
 
+Lint reports its final failure on stderr after child joins and artifact ownership
+have settled, including retained ownership when cleanup is uncertain. Standalone
+Oxlint and its shard CLI end with `[oxlint] FAILED (exit N)`; `pnpm lint` owns the
+whole pipeline and ends with one `[lint] FAILED (exit N)` instead. Shard progress
+distinguishes `passed` from `failed (exit N)`, and stdout remains available for
+machine-readable tool output. Successful runs have no failure trailer. Signals
+forwarded during child execution and shard timeouts fail the command; whole-host
+loss or `SIGKILL` of the reporting process can prevent a final line.
+
 Local plugin lint and package-boundary compilation consume native declarations in
 `packages/plugin-sdk/dist` and seven separate plugin API trees in
 `.artifacts/extension-package-boundary/plugins`. Each declaration and compile
@@ -283,11 +317,17 @@ then drives obsolete declaration pruning. Missing or tampered outputs invalidate
 the owner. The content records live under
 `.artifacts/extension-package-boundary`, outside packaged build cleanup. A warm run validates the records without emitting declarations.
 
-Packaged declarations belong to the public/private tsdown SDK groups. Full and
-package builds emit them in the canonical build; `ciArtifacts` stages only those
-two groups and publishes after both succeed and their relative declaration closure
-is complete. Local preparation never overwrites packaged declarations or writes
-workspace forwarding bridges.
+Packaged SDK declarations belong to one staged owner shared by full, package, and
+`ciArtifacts` builds. It serializes the two canonical tsdown SDK groups on a miss
+and caches their complete staged generation. Each successful compiler supplies its
+source membership through a private staged receipt; missing receipts or inputs
+changed during compilation prevent publication. The shared input snapshot policy
+validates consumed bytes, inherited configuration, generator and manifest inputs,
+and resolution topology without starting a compiler on hits. Cache hits restore
+into fresh staging and pass the same entry and relative declaration closure checks
+before publication.
+Local preparation never overwrites packaged declarations or writes workspace
+forwarding bridges.
 
 Plugin SDK declaration preparation and `scripts/run-tsgo.mjs` require child work
 to finish before reporting success. On POSIX, each verifies its own managed
@@ -329,6 +369,40 @@ not sweep old directories or infer ownership from names, ages, or PIDs.
 - Selected `plugin-sdk` and `commands` test files route through dedicated light lanes that keep only `test/setup.ts`, leaving runtime-heavy cases on their existing lanes.
 - Base Vitest config defaults to `pool: "threads"` and `isolate: false`, with the shared non-isolated runner enabled across repo configs.
 - `pnpm test:channels` runs `vitest.channels.config.ts`.
+
+### Retained mocked Control UI proof
+
+Ordinary mocked browser screenshots, recordings, and reports use fresh directories
+for each test attempt or standalone capture invocation. The Node-only
+`createControlUiE2eArtifactDir(scope, parentDir?)` helper in
+`ui/src/test-helpers/control-ui-e2e-artifacts.ts` prints the actual allocated path.
+An explicit parent wins; otherwise it uses the trimmed existing
+`OPENCLAW_UI_E2E_ARTIFACT_DIR`, then the repository's `.artifacts/control-ui-e2e`
+parent. Existing feature-specific directory controls and script output arguments
+select parents, with unique children beneath them. Explicit screenshot filename
+controls preserve the basename and print the relocated path.
+
+Keep capture gates independent from allocation: `OPENCLAW_CAPTURE_UI_PROOF`,
+`OPENCLAW_UI_E2E_RECORD`, and output-presence gates retain their existing meanings.
+Allocate during scenario execution or `beforeEach`, and pass the same owner to
+shared capture helpers so screenshots, reports, and video stay together. Distinguish
+stage names within an attempt. Close the browser context before finalizing video.
+
+Successful and failed evidence is retained. Cleanup is manual: remove only exact
+directories that you own and have finished reviewing. Never recursively delete
+the shared parent before a replay. Disposable build/media fixtures and temporary
+raw video have their own cleanup. New captures cannot recover overwritten evidence;
+do not describe a replay as recovery of lost files.
+
+Timeout diagnostics allocate fresh children beneath the existing
+`OPENCLAW_UI_E2E_DIAGNOSTIC_DIR` or default timeout directory, keeping each PNG and
+JSON report together. Mantis allocates an invocation directory for setup logs,
+capture attempts, and its report; the builder preserves each attempt's relative
+paths and refuses to overwrite an existing report.
+
+Separate output owners remain: real-Gateway suites, `chat-outbox-*`, and
+`chat-attachment-read-lifecycle`. Do not assume those owners have the ordinary
+mocked proof retention guarantee.
 
 ## Gateway and E2E
 
@@ -527,9 +601,12 @@ Defaults to the built CLI entry at `dist/entry.js`; run `pnpm build` first. Pass
 pnpm test:startup:gateway -- --runs 5 --warmup 1
 pnpm test:startup:gateway -- --case skipChannels --case fiftyPlugins --runs 5
 node --import tsx scripts/bench-gateway-startup.ts --case default --runs 5 --output .artifacts/gateway-startup.json
+node --import tsx scripts/bench-gateway-startup.ts --case incidentCombined --runs 5 --warmup 1 --timeout-ms 60000 --output .artifacts/gateway-startup-incident.json
 ```
 
-Case ids: `default`, `skipChannels` (channel startup skipped), `oneInternalHook`, `allInternalHooks`, `fiftyPlugins` (50 manifest plugins), `fiftyStartupLazyPlugins` (50 startup-lazy manifest plugins).
+Case ids: `default`, `skipChannels` (channel startup skipped), `oneInternalHook`, `allInternalHooks`, `fiftyPlugins` (50 manifest plugins), `fiftyStartupLazyPlugins` (50 startup-lazy manifest plugins), `incidentDatabase`, `incidentNullMetadata`, `incidentWorkspace`, `incidentPackagedPlugins`, and `incidentCombined`.
+
+The incident cases are opt-in because each sample builds an isolated, non-sensitive load fixture: current global and agent databases, 100,000 retained audit rows with freelist fragmentation, eight agent workspaces containing 80,000 files (about 800 MB), and the packaged plugin inventory. Run the combined case only on a clean machine with enough free disk space; the fixture directory is removed after each sample. `incidentCombined` fails when `/healthz` p95 reaches 30 seconds or `/readyz` p95 reaches 60 seconds.
 
 Output includes first process output, `/healthz`, `/readyz`, HTTP listen log time, Gateway ready log time, CPU time, CPU core ratio, max RSS, heap, startup trace metrics, event-loop delay, and plugin lookup-table detail metrics. The script sets `OPENCLAW_GATEWAY_STARTUP_TRACE=1` in the child Gateway environment.
 

@@ -112,6 +112,9 @@ function collectDependencyMapViolations(
   violations: DependencyPinViolation[],
 ): void {
   for (const [name, spec] of Object.entries(asRecord(dependencyMap))) {
+    if (section === "overrides" && spec === "-") {
+      continue;
+    }
     if (!isAllowedPinnedSpec(spec)) {
       violations.push({ file, section, name, spec });
     }

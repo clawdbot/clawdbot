@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   collectRunJobsFromPages,
@@ -373,8 +373,22 @@ describe("scripts/ci-run-timings.mjs", () => {
     const fakeGhPath = path.join(fixtureDir, "gh");
     const reportPath = path.join(fixtureDir, "reports", "trend.json");
     const retryMarkerPath = path.join(fixtureDir, "retried");
+    const retryWaitsPath = path.join(fixtureDir, "retry-waits.txt");
+    const retryClockPath = path.join(fixtureDir, "retry-clock.mjs");
     const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
     const fixtureNowMs = Date.now();
+    writeFileSync(retryWaitsPath, "");
+    // Only this CLI child skips elapsed backoff; the requested delay remains asserted.
+    writeFileSync(
+      retryClockPath,
+      `import { appendFileSync } from "node:fs";
+const wait = Atomics.wait;
+Atomics.wait = (array, index, value, timeout) => {
+  appendFileSync(${JSON.stringify(retryWaitsPath)}, String(timeout) + "\\n");
+  return wait(array, index, value, 0);
+};
+`,
+    );
     writeFileSync(
       fakeGhPath,
       `#!/usr/bin/env node
@@ -424,6 +438,8 @@ if (endpoint.includes("actions/workflows/ci.yml/runs?")) {
       const result = spawnSync(
         process.execPath,
         [
+          "--import",
+          pathToFileURL(retryClockPath).href,
           "scripts/ci-run-timings.mjs",
           "--trend-hours",
           "24",
@@ -442,12 +458,14 @@ if (endpoint.includes("actions/workflows/ci.yml/runs?")) {
             ...process.env,
             FIXTURE_NOW_MS: String(fixtureNowMs),
             FIXTURE_RETRY_MARKER: retryMarkerPath,
+            GH_TOKEN: "fixture-ci-timing-token",
             OPENCLAW_GH_BIN: fakeGhPath,
           },
         },
       );
 
       expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(retryWaitsPath, "utf8")).toBe("1000\n");
       const report = JSON.parse(result.stdout);
       expect(JSON.parse(readFileSync(reportPath, "utf8"))).toEqual(report);
       expect(report.apiRequests).toEqual({ jobs: 3, runList: 1, total: 4 });
@@ -487,6 +505,61 @@ if (endpoint.includes("actions/workflows/ci.yml/runs?")) {
         "preflight",
         "checks-node-compact-large-1",
       ]);
+    } finally {
+      rmSync(fixtureDir, { force: true, recursive: true });
+    }
+  });
+  it("excludes manual, failed, and unfinished runs from recent main timings", () => {
+    const fixtureDir = mkdtempSync(path.join(tmpdir(), "openclaw-ci-timings-recent-"));
+    const fakeGhPath = path.join(fixtureDir, "gh");
+    const callsPath = path.join(fixtureDir, "calls.jsonl");
+    writeFileSync(
+      fakeGhPath,
+      `#!/usr/bin/env node
+const { appendFileSync } = require("node:fs");
+const args = process.argv.slice(2);
+appendFileSync(process.env.FIXTURE_CALLS_PATH, JSON.stringify(args) + "\\n");
+if (args[0] === "run" && args[1] === "list") {
+  console.log(JSON.stringify([
+    { databaseId: 201, event: "workflow_dispatch", headSha: "manual", status: "completed", conclusion: "success" },
+    { databaseId: 202, event: "push", headSha: "failed", status: "completed", conclusion: "failure" },
+    { databaseId: 203, event: "push", headSha: "running", status: "in_progress", conclusion: "" },
+    { databaseId: 204, event: "push", headSha: "first", status: "completed", conclusion: "success" },
+    { databaseId: 205, event: "push", headSha: "second", status: "completed", conclusion: "success" }
+  ]));
+} else if (args[0] === "run" && args[1] === "view") {
+  console.log(JSON.stringify({ status: "completed", conclusion: "success", createdAt: "2026-08-31T00:00:00Z", updatedAt: "2026-08-31T00:01:00Z" }));
+} else if (args[0] === "api" && args.some((arg) => arg.includes("/jobs?"))) {
+  console.log(JSON.stringify({ total_count: 1, jobs: [{ id: 1, name: "checks", status: "completed", conclusion: "success", started_at: "2026-08-31T00:00:10Z", completed_at: "2026-08-31T00:00:40Z" }] }));
+} else {
+  process.exit(2);
+}
+`,
+    );
+    chmodSync(fakeGhPath, 0o755);
+    try {
+      const result = spawnSync(process.execPath, ["scripts/ci-run-timings.mjs", "--recent", "2"], {
+        cwd: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.."),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GH_TOKEN: "fixture-token",
+          OPENCLAW_GH_BIN: fakeGhPath,
+          FIXTURE_CALLS_PATH: callsPath,
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.match(/CI run \d+/gu)).toEqual(["CI run 204", "CI run 205"]);
+      const calls: string[][] = readFileSync(callsPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(calls[0]?.slice(calls[0].indexOf("--event"), calls[0].indexOf("--event") + 2)).toEqual(
+        ["--event", "push"],
+      );
+      expect(
+        calls.filter((args) => args[0] === "run" && args[1] === "view").map((args) => args[2]),
+      ).toEqual(["204", "205"]);
     } finally {
       rmSync(fixtureDir, { force: true, recursive: true });
     }

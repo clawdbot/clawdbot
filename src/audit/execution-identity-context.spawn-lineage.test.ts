@@ -187,4 +187,15 @@ describe("execution identity child lineage", () => {
       "lineage.parent-run",
     ]);
   });
+
+  it("deduplicates sorted missing invoker evidence across admission and spawn lineage", () => {
+    const context = prepareContext(
+      facts("missing-invoker", {
+        spawnMissingEvidence: ["invoker.principal", "acp.native-action-callback"],
+      }),
+      { contextId: "missing-invoker-context", executionId: "missing-invoker-execution" },
+    );
+
+    expect(context.missingEvidence).toEqual(["acp.native-action-callback", "invoker.principal"]);
+  });
 });

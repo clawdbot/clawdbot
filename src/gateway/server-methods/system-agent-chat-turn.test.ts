@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
+import { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
+  buildDelegatedApprovalPendingReply,
   buildSystemAgentChatResult,
   getSystemAgentChatInputError,
   runSystemAgentChatInput,
@@ -137,5 +140,38 @@ describe("system-agent chat input", () => {
       action: "none",
       step: { id: "channel", type: "select" },
     });
+  });
+
+  it("omits the delegated approval link when the Control UI is disabled", async () => {
+    const manager = new ExecApprovalManager<SystemAgentApprovalRequestPayload>({
+      approvalKind: "system-agent",
+      resolveAllowedDecisions: (request) => request.allowedDecisions,
+    });
+    const record = manager.create(
+      {
+        title: "OpenClaw change",
+        description: "restart the Gateway",
+        command: "restart the Gateway",
+        proposalHash: "a".repeat(64),
+        allowedDecisions: ["allow-once", "deny"],
+        sessionId: "delegation-disabled-ui",
+      },
+      60_000,
+      "system-agent:disabled-ui",
+    );
+    await manager.register(record, 60_000);
+
+    expect(
+      buildDelegatedApprovalPendingReply({
+        cfg: {
+          gateway: {
+            publicOrigin: "https://control.example.com",
+            controlUi: { enabled: false },
+          },
+        },
+        manager,
+        approvalId: record.id,
+      }),
+    ).not.toContain("Review:");
   });
 });

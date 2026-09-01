@@ -13,6 +13,7 @@ import {
 import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
+  SystemAgentApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
 import {
@@ -31,7 +32,7 @@ import {
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
 } from "./accounts.js";
-import { getSlackApprovalApprovers } from "./approval-auth.js";
+import { getSlackApprovalApprovers, getSlackApprovalApproversForTeam } from "./approval-auth.js";
 import {
   getSlackExecApprovalApprovers,
   isSlackExecApprovalClientEnabled,
@@ -43,7 +44,10 @@ import {
   parseSlackTarget,
 } from "./target-parsing.js";
 
-export type SlackNativeApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
+export type SlackNativeApprovalRequest =
+  | ExecApprovalRequest
+  | PluginApprovalRequest
+  | SystemAgentApprovalRequest;
 export type SlackOriginTarget = {
   to: string;
   accountId?: string | null;
@@ -262,8 +266,9 @@ const {
 export function hasSlackPluginApprovers(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
+  teamId: string | undefined;
 }): boolean {
-  return getSlackApprovalApprovers(params).length > 0;
+  return getSlackApprovalApproversForTeam(params).length > 0;
 }
 
 function isSlackPluginNativeApprovalClientConfigEnabled(params: {
@@ -340,7 +345,10 @@ function isSlackNativeApprovalAccountEligible(params: {
   const approverCount =
     params.approvalKind === "exec"
       ? getSlackExecApprovalApprovers(params).length
-      : getSlackApprovalApprovers(params).length;
+      : getSlackApprovalApproversForTeam({
+          ...params,
+          teamId: resolveEnterpriseApprovalTeamId(params.request),
+        }).length;
   return (
     isSlackApprovalTransportEnabled(params) &&
     isChannelExecApprovalClientEnabledFromConfig({ enabled: config?.enabled, approverCount }) &&

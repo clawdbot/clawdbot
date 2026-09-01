@@ -847,7 +847,7 @@ function Install-PortableGit {
     try {
         Write-Host "  Downloading $($download.Tag)..." -ForegroundColor Gray
         $downloadTimeouts = Get-WebRequestTimeoutParameters -CommandName "Invoke-WebRequest" -LegacyTimeoutSec 600
-        Invoke-WebRequest -Uri $download.Url -OutFile $tmpZip @downloadTimeouts
+        Invoke-WebRequest -UseBasicParsing -Uri $download.Url -OutFile $tmpZip @downloadTimeouts
         Expand-Archive -Path $tmpZip -DestinationPath $tmpExtract -Force
         New-Item -ItemType Directory -Force -Path $portableRoot | Out-Null
         Move-Item -Path (Join-Path $tmpExtract "*") -Destination $portableRoot -Force
@@ -1508,8 +1508,9 @@ function Test-NpmLifecycleCompleted {
         return $false
     }
     $entryPath = Join-Path $npmRoot "openclaw\dist\entry.js"
-    $guardPath = Join-Path $npmRoot "openclaw\dist\openclaw-install-guard"
-    return (Test-Path -LiteralPath $entryPath -PathType Leaf) -and -not (Test-Path -LiteralPath $guardPath)
+    $pendingPath = Join-Path $npmRoot "openclaw\.openclaw-lifecycle-pending"
+    $legacyGuardPath = Join-Path $npmRoot "openclaw\dist\openclaw-install-guard"
+    return (Test-Path -LiteralPath $entryPath -PathType Leaf) -and -not (Test-Path -LiteralPath $pendingPath) -and -not (Test-Path -LiteralPath $legacyGuardPath)
 }
 
 function Format-OpenClawGitWrapper {

@@ -17,6 +17,7 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as pathResolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "./lib/package-lifecycle-marker.mjs";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PACKAGE_ROOT = join(scriptDir, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
@@ -533,62 +534,6 @@ export function pruneInstalledPackageDist(params = {}) {
   return removed;
 }
 
-function resolveDistModuleUrl(packageRoot, distPath) {
-  return pathToFileURL(join(packageRoot, distPath)).href;
-}
-
-async function importInstalledDistModule(params, distPath) {
-  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
-  const pathExists = params.existsSync ?? existsSync;
-  const modulePath = join(packageRoot, distPath);
-  if (!pathExists(modulePath)) {
-    return null;
-  }
-  const importModule = params.importModule ?? ((specifier) => import(specifier));
-  return await importModule(resolveDistModuleUrl(packageRoot, distPath));
-}
-
-export async function runPluginRegistryPostinstallMigration(params = {}) {
-  const log = params.log ?? console;
-  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
-  const env = params.env ?? process.env;
-  const pathExists = params.existsSync ?? existsSync;
-
-  // Registry migration belongs to installed-package upgrades. Source checkouts
-  // can contain stale dist from a different build and must not touch operator state.
-  if (isSourceCheckoutRoot({ packageRoot, existsSync: pathExists })) {
-    return { status: "skipped", reason: "source-checkout" };
-  }
-
-  try {
-    const migrationModule = await importInstalledDistModule(
-      { ...params, existsSync: pathExists },
-      "dist/commands/doctor/shared/plugin-registry-migration.js",
-    );
-    if (!migrationModule) {
-      return { status: "skipped", reason: "missing-dist-entry" };
-    }
-    if (typeof migrationModule.migratePluginRegistryForInstall !== "function") {
-      return { status: "skipped", reason: "missing-dist-contract" };
-    }
-
-    const result = await migrationModule.migratePluginRegistryForInstall({
-      env,
-      packageRoot,
-    });
-    if (result.migrated) {
-      log.log(
-        `[postinstall] migrated plugin registry: ${result.current.plugins.length} plugin(s) indexed`,
-      );
-    }
-    return result;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    log.warn(`[postinstall] could not migrate plugin registry: ${message}`);
-    return { status: "failed", error: message };
-  }
-}
-
 export function isSourceCheckoutRoot(params) {
   const pathExists = params.existsSync ?? existsSync;
   const hasPostinstallInventory = pathExists(join(params.packageRoot, DIST_INVENTORY_PATH));
@@ -648,7 +593,22 @@ export function isDirectPostinstallInvocation(params = {}) {
   }
 }
 
+export function completePackageLifecycle(params = {}, reportError = console.error) {
+  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const removePath = params.rmSync ?? rmSync;
+  const markerPath = join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH);
+  try {
+    removePath(markerPath, { force: true });
+    return true;
+  } catch (error) {
+    reportError(`[postinstall] could not complete package lifecycle: ${String(error)}`);
+    return false;
+  }
+}
+
 if (isDirectPostinstallInvocation()) {
   runBundledPluginPostinstall();
-  await runPluginRegistryPostinstallMigration();
+  if (!completePackageLifecycle()) {
+    process.exitCode = 1;
+  }
 }

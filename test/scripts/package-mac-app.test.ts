@@ -1524,7 +1524,7 @@ describe("package-mac-app plist stamping", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
       scripts?: Record<string, string>;
     };
-    const macosCi = pkg.scripts?.["test:macos:ci"] ?? "";
+    const macosCi = [1, 2, 3].map((part) => pkg.scripts?.[`test:macos:ci:${part}`] ?? "").join(" ");
 
     expect(macosCi).toContain("src/gateway/worker-environments/workspace-rsync-path.test.ts");
     expect(macosCi).toContain("test/scripts/package-mac-app.test.ts");
@@ -1532,6 +1532,8 @@ describe("package-mac-app plist stamping", () => {
     expect(macosCi).toContain("test/scripts/create-dmg.test.ts");
     expect(macosCi).toContain("test/scripts/codesign-mac-app.test.ts");
     expect(macosCi).toContain("test/scripts/notarize-mac-artifact.test.ts");
+    expect(macosCi).toContain("test/scripts/mac-elevation-host.test.ts");
+    expect(macosCi).toContain("test/scripts/mac-elevation-artifact.test.ts");
   });
 
   it("copies generated SwiftPM bundles into packaged app resources", () => {

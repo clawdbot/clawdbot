@@ -335,6 +335,7 @@ export async function mintMcpAppViewFromTranscript(params: {
 }): Promise<ReconstructionResult | undefined> {
   return await reconstructMcpAppView({
     cfg: params.cfg,
+    agentId: params.agentId,
     sessionKey: params.sessionKey,
     lookup: { descriptor: params.descriptor },
     allowedAppToolNames: params.allowedAppToolNames,

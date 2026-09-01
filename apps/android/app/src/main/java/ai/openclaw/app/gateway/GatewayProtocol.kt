@@ -452,6 +452,7 @@ enum class GatewayMethod(
   OpenclawApprovalList("openclaw.approval.list"),
   OpenclawSetupDetect("openclaw.setup.detect"),
   OpenclawSetupActivate("openclaw.setup.activate"),
+  OpenclawSetupActivateStart("openclaw.setup.activate.start"),
   OpenclawSetupAuthStart("openclaw.setup.auth.start"),
   OpenclawSetupPrepareStart("openclaw.setup.prepare.start"),
   WizardStart("wizard.start"),

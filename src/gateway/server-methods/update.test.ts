@@ -197,23 +197,11 @@ vi.mock("./restart-request.js", () => ({
   }),
 }));
 
-vi.mock("../../infra/update-managed-service-handoff.js", () => ({
+vi.mock("../../infra/update-managed-service-handoff.js", async () => ({
+  ...(await vi.importActual<typeof import("../../infra/update-managed-service-handoff.js")>(
+    "../../infra/update-managed-service-handoff.js",
+  )),
   startManagedServiceUpdateHandoff: startManagedServiceUpdateHandoffMock,
-  formatManagedServiceUpdateCommand: (params?: { timeoutMs?: number; channel?: UpdateChannel }) => {
-    const args = ["openclaw", "update", "--yes"];
-    if (params?.channel) {
-      args.push("--channel", params.channel);
-    }
-    if (params?.timeoutMs) {
-      args.push("--timeout", String(Math.ceil(params.timeoutMs / 1000)));
-    }
-    return args.join(" ");
-  },
-  buildManagedServiceHandoffUnavailableMessage: (command: string) =>
-    [
-      "OpenClaw updates cannot safely run inside the live gateway process without a managed-service handoff.",
-      `Run \`${command}\` from a shell outside the gateway service, or restart/update from the host UI.`,
-    ].join("\n"),
 }));
 
 vi.mock("./validation.js", () => ({
@@ -973,7 +961,7 @@ describe("update.run restart scheduling", () => {
       command: "openclaw update --yes --timeout 1800",
       message:
         "OpenClaw updates cannot safely run inside the live gateway process without a managed-service handoff.\n" +
-        "Run `openclaw update --yes --timeout 1800` from a shell outside the gateway service, or restart/update from the host UI.",
+        "Stop the foreground Gateway, run `openclaw update --yes --timeout 1800` from a shell, then launch the Gateway again. For a managed deployment, use its host's stop, update, and restart workflow.",
     });
   });
 

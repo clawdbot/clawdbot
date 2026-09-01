@@ -11,24 +11,135 @@ import {
 const suite = createChatFlowE2eSuite();
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "model-picker-refresh");
 
 async function screenshot(page: Page, name: string) {
   if (!captureUiProof) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
-  await page.screenshot({ animations: "disabled", path: path.join(proofDir, name) });
+  await mkdir(path.join(suite.artifactDir, "model-picker-refresh"), { recursive: true });
+  await page.screenshot({
+    animations: "disabled",
+    path: path.join(path.join(suite.artifactDir, "model-picker-refresh"), name),
+  });
 }
 
 suite.define(() => {
+  it("discloses and preserves the Gateway-resolved target across touch selection and reload", async () => {
+    const context = await suite.newBrowserContext({
+      hasTouch: true,
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+      ...(captureUiProof
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "model-picker-refresh"),
+              size: { height: 900, width: 1280 },
+            },
+          }
+        : {}),
+    });
+    const page = await context.newPage();
+    const session = {
+      key: "agent:main:main",
+      kind: "direct",
+      updatedAt: 1,
+      sessionId: "model-target-proof",
+      model: "gpt-5.6-sol",
+      modelProvider: "openai",
+    };
+    const gateway = await installMockGateway(page, {
+      sessionKey: session.key,
+      sessionInfo: session,
+      models: [
+        { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
+        { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "openai" },
+      ],
+      methodResponses: {
+        "sessions.list": {
+          ts: 1,
+          path: "",
+          count: 1,
+          sessions: [session],
+          defaults: {
+            contextTokens: null,
+            model: "gpt-5.6-sol",
+            modelProvider: "openai",
+            modelSelectionTarget: "global",
+          },
+        },
+      },
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      let picker = page.locator(
+        'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
+      );
+      await picker.locator('[data-chat-model-select="true"]').tap();
+      await picker.getByText("Selection target: Global default", { exact: true }).waitFor();
+      await screenshot(page, "05-global-target-before-touch-selection.png");
+
+      await picker.getByRole("option", { name: "GPT-5.6 Terra", exact: true }).tap();
+      const request = await gateway.waitForRequest("sessions.patch");
+      expect(request.params).toMatchObject({
+        key: "agent:main:main",
+        model: "openai/gpt-5.6-terra",
+      });
+      await expect
+        .poll(() =>
+          picker.locator('[data-chat-model-select="true"]').getAttribute("data-chat-select-value"),
+        )
+        .toBe("openai/gpt-5.6-terra");
+      await screenshot(page, "06-global-target-after-touch-selection.png");
+
+      await gateway.setMethodResponse("sessions.list", {
+        ts: 2,
+        path: "",
+        count: 1,
+        sessions: [
+          {
+            ...session,
+            model: "gpt-5.6-terra",
+            modelOverrideSource: "user",
+            updatedAt: 2,
+          },
+        ],
+        defaults: {
+          contextTokens: null,
+          model: "gpt-5.6-terra",
+          modelProvider: "openai",
+          modelSelectionTarget: "global",
+        },
+      });
+
+      await page.reload();
+      picker = page.locator('openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker');
+      await picker.locator('[data-chat-model-select="true"]').tap();
+      await picker.getByText("Selection target: Global default", { exact: true }).waitFor();
+      await picker.getByText("Only for this session", { exact: true }).waitFor();
+      await expect
+        .poll(() =>
+          picker.locator('[data-chat-model-select="true"]').getAttribute("data-chat-select-value"),
+        )
+        .toBe("openai/gpt-5.6-terra");
+      await screenshot(page, "07-global-target-after-reload.png");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("clears a persisted pin matching the default through the default model row", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
       ...(captureUiProof
-        ? { recordVideo: { dir: proofDir, size: { height: 900, width: 1280 } } }
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "model-picker-refresh"),
+              size: { height: 900, width: 1280 },
+            },
+          }
         : {}),
     });
     const page = await context.newPage();

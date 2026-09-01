@@ -1,12 +1,16 @@
 // Tests diagnostics command output and runtime diagnostic toggles.
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
 import { createPluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { createBundledPluginRecord } from "../../plugins/status.test-fixtures.js";
 import type { OpenClawPluginCommandDefinition, PluginCommandContext } from "../../plugins/types.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 
 type PluginCommandHandler = OpenClawPluginCommandDefinition["handler"];
@@ -480,6 +484,56 @@ describe("diagnostics command", () => {
     expect(requireExecCall(execCalls).defaults.approvalWarningText).toContain(
       "OpenAI Codex harness:",
     );
+  });
+
+  it("loads diagnostics inventory after authorization when the reply view contains one row", async () => {
+    await withOpenClawTestState({ label: "diagnostics-session-inventory" }, async (state) => {
+      const storePath = path.join(state.sessionsDir("main"), "sessions.json");
+      const sessionKey = "agent:main:whatsapp:direct:user-1";
+      const otherKey = "agent:main:discord:channel:123";
+      const current = { sessionId: "active-session", updatedAt: Date.now() };
+      await upsertSessionEntryCore({ agentId: "main", sessionKey, storePath }, current);
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: otherKey, storePath },
+        {
+          sessionId: "other-session",
+          updatedAt: Date.now(),
+          agentHarnessId: "codex",
+          delivery: normalizeSessionDeliveryState({ context: { channel: "discord" } }),
+          skillsSnapshot: { prompt: "unrelated diagnostics prompt ".repeat(4096), skills: [] },
+        },
+      );
+      const { calls } = registerCodexDiagnosticsCommandForTest(async () => null);
+      const { handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
+      const params = buildDiagnosticsParams("/diagnostics", {
+        agentId: "main",
+        sessionKey,
+        sessionEntry: current,
+        sessionStore: { [sessionKey]: current },
+        storePath,
+      });
+      const reads = vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly");
+      try {
+        await handleDiagnosticsCommand(
+          { ...params, command: { ...params.command, senderIsOwner: false } },
+          true,
+        );
+        expect(reads).not.toHaveBeenCalled();
+        expect(calls).toHaveLength(0);
+        await handleDiagnosticsCommand(params, true);
+        expect(requireDiagnosticsSessions(calls[0])).toEqual([
+          expect.objectContaining({ sessionKey, sessionId: "active-session" }),
+          expect.objectContaining({
+            sessionKey: otherKey,
+            sessionId: "other-session",
+            agentHarnessId: "codex",
+            channel: "discord",
+          }),
+        ]);
+      } finally {
+        reads.mockRestore();
+      }
+    });
   });
 
   it("omits the Codex section for ordinary sessions without Codex targets", async () => {
