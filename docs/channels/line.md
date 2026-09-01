@@ -287,14 +287,16 @@ as untrusted.
   alternatives reach the agent as `[emoji]`; meaningful alternatives such as
   `(hello)` and parentheses typed by the sender are preserved.
 - LINE sends several images picked in one action as one webhook event per image,
-  out of order. They are held briefly, ordered, and answered as a single turn
-  carrying every image. A set that never completes is delivered with whatever
+  out of order. They are held briefly and answered as a single turn carrying
+  every image, ordered by the index LINE reports; a sender whose client omits
+  that index - LINE 11.15 and earlier for Android - keeps the order the images
+  were delivered in. A set that never completes is delivered with whatever
   arrived a few seconds after its most recent part rather than being held
   indefinitely. Anything else arriving meanwhile - a message, or another set of
   images - waits behind it, so replies keep the order the chat was sent in; in a
   group that queue is the whole room, because LINE conversations are ordered per
-  chat rather than per member. How many of the images the model reads is set by
-  `tools.media.image.attachments`, which processes only the first one by default.
+  chat rather than per member. A model without native vision reads only the
+  first image unless `tools.media.image.attachments` raises the limit.
 
 ## Structured rich messages
 

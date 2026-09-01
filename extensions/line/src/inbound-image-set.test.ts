@@ -72,6 +72,27 @@ describe("createLineImageSetIngressBuffer", () => {
     await expect(third).resolves.toBeNull();
   });
 
+  it("does not spend the wait while the set is still queued for its lane", async () => {
+    // The holder starts its wait only once it has the lane. A part arriving
+    // before that must not start one either, or the set closes on time it spent
+    // queued and the parts still to come open a second set.
+    const occupied = await buffer.enterLane("user:U1");
+    const held = arrive({ index: 1, flushDelayMs: 100 });
+    await vi.advanceTimersByTimeAsync(60);
+    const second = arrive({ index: 2, flushDelayMs: 100 });
+    await vi.advanceTimersByTimeAsync(200);
+    occupied();
+    await vi.advanceTimersByTimeAsync(30);
+    const third = arrive({ index: 3, flushDelayMs: 100 });
+    await vi.advanceTimersByTimeAsync(120);
+
+    const delivery = await held;
+    delivery?.finish();
+    expect(delivery?.events).toEqual(["image-1", "image-2", "image-3"]);
+    await expect(second).resolves.toBeNull();
+    await expect(third).resolves.toBeNull();
+  });
+
   it("keeps one order for a set LINE indexed only partly", async () => {
     // `index` is optional per part, so a set can arrive partly indexed. Ranking
     // the unindexed part by arrival against an indexed one would make the
