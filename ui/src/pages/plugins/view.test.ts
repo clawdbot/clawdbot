@@ -625,19 +625,22 @@ describe("renderPlugins", () => {
         activeTab: "discover",
         result: createResult([createPlugin(), available]),
         canMutate: false,
-        mutationBlockedReason: "Browsing only. Plugin changes require operator.admin access.",
+        mutationBlockedReason: "Plugin changes require operator.admin access.",
         onInstall,
         onSetEnabled,
       }),
     );
 
-    expect(container.querySelector(".plugins-readonly")?.textContent).toContain("operator.admin");
-    expect(
-      container.querySelector<HTMLButtonElement>('[aria-label="Install Lobster"]')?.disabled,
-    ).toBe(true);
+    expect(container.querySelector(".plugins-readonly")).toBeNull();
+    const installButton = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Install Lobster"]',
+    );
+    expect(installButton?.disabled).toBe(true);
+    expect(installButton?.title).toBe("Plugin changes require operator.admin access.");
     const workboardRow = container.querySelector<HTMLElement>('[data-plugin-id="workboard"]')!;
     const enableItem = actionButton(workboardRow, "Enable");
     expect(enableItem?.disabled).toBe(true);
+    expect(enableItem?.title).toBe("Plugin changes require operator.admin access.");
     enableItem?.click();
     expect(onInstall).not.toHaveBeenCalled();
     expect(onSetEnabled).not.toHaveBeenCalled();
