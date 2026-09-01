@@ -51,7 +51,7 @@ dump_debug_logs() {
     node -e "const fs=require('fs'); const cfg=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); console.error(JSON.stringify({model:cfg.agents?.defaults?.model, tools:cfg.tools, provider:cfg.models?.providers?.openai && {api:cfg.models.providers.openai.api, baseUrl:cfg.models.providers.openai.baseUrl, agentRuntime:cfg.models.providers.openai.agentRuntime}}, null, 2));" "$OPENCLAW_CONFIG_PATH" || true
   fi
 }
-trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
+openclaw_e2e_enable_failure_diagnostics
 
 entry="$(openclaw_e2e_resolve_entrypoint)"
 mkdir -p "$OPENCLAW_STATE_DIR" "$OPENCLAW_TEST_WORKSPACE_DIR"

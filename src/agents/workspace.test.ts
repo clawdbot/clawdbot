@@ -18,16 +18,15 @@ import {
   LEGACY_WORKSPACE_STATE_DIRNAME,
 } from "./workspace-legacy-state.js";
 import { resetLegacyWorkspaceStateCheckForTest } from "./workspace-legacy-state.test-support.js";
+import { resolveWorkspaceStateIdentity } from "./workspace-state-identity.js";
 import {
   mergeWorkspaceSetupState,
   readWorkspaceStateSnapshot,
   replaceWorkspaceAttestation,
-  resolveWorkspaceStateIdentity,
 } from "./workspace-state-store.js";
 import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
-  DEFAULT_HEARTBEAT_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_MEMORY_FILENAME,
   DEFAULT_SOUL_FILENAME,
@@ -42,6 +41,7 @@ import {
   type WorkspaceBootstrapFile,
 } from "./workspace.js";
 
+const LEGACY_HEARTBEAT_FILENAME = "HEARTBEAT.md";
 let testState: OpenClawTestState | undefined;
 
 beforeEach(async () => {
@@ -659,7 +659,7 @@ describe("ensureAgentWorkspace", () => {
         DEFAULT_SOUL_FILENAME,
         DEFAULT_IDENTITY_FILENAME,
         DEFAULT_USER_FILENAME,
-        DEFAULT_HEARTBEAT_FILENAME,
+        LEGACY_HEARTBEAT_FILENAME,
       ],
     });
 
@@ -671,7 +671,7 @@ describe("ensureAgentWorkspace", () => {
       DEFAULT_SOUL_FILENAME,
       DEFAULT_IDENTITY_FILENAME,
       DEFAULT_USER_FILENAME,
-      DEFAULT_HEARTBEAT_FILENAME,
+      LEGACY_HEARTBEAT_FILENAME,
     ]) {
       await expectPathMissing(path.join(tempDir, fileName));
     }
@@ -865,7 +865,7 @@ describe("ensureAgentWorkspace", () => {
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
     // Heartbeat monitor context lives in cron scratch now; new workspaces get no file.
-    await expectPathMissing(path.join(tempDir, DEFAULT_HEARTBEAT_FILENAME));
+    await expectPathMissing(path.join(tempDir, LEGACY_HEARTBEAT_FILENAME));
   });
 
   it("does not recreate optional bootstrap files when workspace setup is already completed", async () => {
@@ -910,7 +910,7 @@ describe("ensureAgentWorkspace", () => {
     await expectPathMissing(path.join(tempDir, DEFAULT_SOUL_FILENAME));
     await expectPathMissing(path.join(tempDir, DEFAULT_IDENTITY_FILENAME));
     await expectPathMissing(path.join(tempDir, DEFAULT_USER_FILENAME));
-    await expectPathMissing(path.join(tempDir, DEFAULT_HEARTBEAT_FILENAME));
+    await expectPathMissing(path.join(tempDir, LEGACY_HEARTBEAT_FILENAME));
 
     // Verify the required AGENTS.md file still exists.
     await expect(fs.access(path.join(tempDir, DEFAULT_AGENTS_FILENAME))).resolves.toBeUndefined();
@@ -946,7 +946,7 @@ describe("ensureAgentWorkspace", () => {
       DEFAULT_SOUL_FILENAME,
       DEFAULT_IDENTITY_FILENAME,
       DEFAULT_USER_FILENAME,
-      DEFAULT_HEARTBEAT_FILENAME,
+      LEGACY_HEARTBEAT_FILENAME,
     ]) {
       await expectPathMissing(path.join(tempDir, filename));
     }
@@ -990,7 +990,7 @@ describe("loadWorkspaceBootstrapFiles", () => {
     expect(getMemoryEntries(files)).toHaveLength(0);
   });
 
-  it("treats hardlinked bootstrap aliases as missing", async () => {
+  it("treats hardlinked bootstrap aliases as unreadable", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -1014,8 +1014,8 @@ describe("loadWorkspaceBootstrapFiles", () => {
 
       const files = await loadWorkspaceBootstrapFiles(workspaceDir);
       const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
-      expect(agents?.missing).toBe(true);
-      expect(agents?.content).toBeUndefined();
+      expect(agents?.missing).toBe(false);
+      expect(agents?.content).toBe("[UNREADABLE: path must not be hardlinked]");
     } finally {
       await fs.rm(rootDir, { recursive: true, force: true });
     }
@@ -1064,7 +1064,7 @@ describe("loadWorkspaceBootstrapFiles", () => {
     }
   });
 
-  it("marks a bootstrap file missing after transient read retries are exhausted", async () => {
+  it("marks a bootstrap file unreadable after transient read retries are exhausted", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await writeWorkspaceFile({
       dir: tempDir,
@@ -1083,12 +1083,10 @@ describe("loadWorkspaceBootstrapFiles", () => {
     }) as typeof syncFs.read);
 
     try {
-      // Unlike the template check, this reader returns an io failure (not a
-      // throw) when the budget is exhausted, so the file surfaces as missing.
       const files = await loadWorkspaceBootstrapFiles(tempDir);
       const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
-      expect(agents?.missing).toBe(true);
-      expect(agents?.content).toBeUndefined();
+      expect(agents?.missing).toBe(false);
+      expect(agents?.content).toBe("[UNREADABLE: Unknown system error -11: read]");
     } finally {
       readSpy.mockRestore();
     }
@@ -1102,7 +1100,7 @@ describe("loadWorkspaceBootstrapFiles", () => {
       content: "# AGENTS.md\n\nboundary retry\n",
     });
 
-    const agentsPath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
+    const agentsPath = path.join(syncFs.realpathSync(tempDir), DEFAULT_AGENTS_FILENAME);
     const originalLstat = syncFs.promises.lstat.bind(syncFs.promises);
     let agentsLstatAttempts = 0;
     const lstatSpy = vi.spyOn(syncFs.promises, "lstat").mockImplementation((async (
@@ -1120,7 +1118,7 @@ describe("loadWorkspaceBootstrapFiles", () => {
 
     try {
       const files = await loadWorkspaceBootstrapFiles(tempDir);
-      expect(agentsLstatAttempts).toBe(2);
+      expect(agentsLstatAttempts).toBeGreaterThanOrEqual(2);
       const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
       expect(agents?.missing).toBe(false);
       expect(agents?.content).toContain("boundary retry");

@@ -24,6 +24,8 @@ vi.mock("../tts/tts.js", () => ({
   synthesizeSpeech: synthesizeSpeechMock,
 }));
 
+vi.mock("../tts/tts-synthesis.js", () => ({ synthesizeTalkSpeech: synthesizeSpeechMock }));
+
 type SpeechProvider = Parameters<typeof withSpeechProviders>[0][number]["provider"];
 
 const ALIAS_STUB_VOICE_ID = "VoiceAlias1234567890";

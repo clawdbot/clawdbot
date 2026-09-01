@@ -292,24 +292,19 @@ export function parseStrictNonNegativeInteger(value: unknown): number | undefine
   return parsed !== undefined && parsed >= 0 ? parsed : undefined;
 }
 
+function safeMillisecondsFromSeconds(seconds: number | undefined): number | undefined {
+  const milliseconds = seconds === undefined ? undefined : seconds * 1000;
+  return Number.isSafeInteger(milliseconds) ? milliseconds : undefined;
+}
+
 /** Converts strict positive seconds to safe millisecond counts. */
 export function positiveSecondsToSafeMilliseconds(value: unknown): number | undefined {
-  const seconds = parseStrictPositiveInteger(value);
-  if (seconds === undefined) {
-    return undefined;
-  }
-  const milliseconds = seconds * 1000;
-  return Number.isSafeInteger(milliseconds) ? milliseconds : undefined;
+  return safeMillisecondsFromSeconds(parseStrictPositiveInteger(value));
 }
 
 /** Converts strict non-negative seconds to safe millisecond counts. */
 export function nonNegativeSecondsToSafeMilliseconds(value: unknown): number | undefined {
-  const seconds = parseStrictNonNegativeInteger(value);
-  if (seconds === undefined) {
-    return undefined;
-  }
-  const milliseconds = seconds * 1000;
-  return Number.isSafeInteger(milliseconds) ? milliseconds : undefined;
+  return safeMillisecondsFromSeconds(parseStrictNonNegativeInteger(value));
 }
 
 /** Resolves an absolute expiration timestamp from a positive duration in milliseconds. */

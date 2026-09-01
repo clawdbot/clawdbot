@@ -6,17 +6,13 @@ import {
   type SessionOperationEvent,
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { listConfiguredSessionStoreAgentIds, type SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
-import {
-  resolvePluginSessionOwnershipError,
-  type PluginSessionOwnershipAction,
-} from "../session-plugin-ownership.js";
-import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "../session-store-key.js";
 import {
   resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
@@ -26,13 +22,12 @@ import {
   resolveWorkerPlacementExecutionMode,
   resolveWorkerPlacementSessionRuntime,
 } from "../worker-environments/placement-session-runtime.js";
-import { isWorkerPlacementSafeForArchive } from "../worker-environments/session-placement-lifecycle.js";
+import { resolveWorkerPlacementArchiveRestoreError } from "../worker-environments/session-placement-lifecycle.js";
+import type { GatewayRequestContext, RespondFn } from "./types.js";
 export {
   resolveSessionWorkerPlacementMutationError,
-  retireSessionWorkerPlacementBeforeMutation,
   SessionWorkerPlacementMutationError,
 } from "../worker-environments/session-placement-lifecycle.js";
-import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 export const sessionLog = createSubsystemLogger("gateway/sessions");
 
@@ -61,12 +56,28 @@ export function resolveSessionWorkerPlacementPatchError(params: {
   if (!placement || placement.state === "local") {
     return undefined;
   }
+  if (
+    "permissionMode" in params.patch &&
+    placement.executionMode === "worker-turn" &&
+    placement.turnClaim
+  ) {
+    return "This remote worker cannot apply permissions while active. Stop the worker run, then change permissions.";
+  }
   if (params.patch.archived === false) {
-    if (!isWorkerPlacementSafeForArchive(params.context, placement)) {
-      return `Session ${params.key} cannot change archive state while cloud worker placement is ${placement.state}.`;
+    const restoreError = resolveWorkerPlacementArchiveRestoreError({
+      context: params.context,
+      key: params.key,
+      placement,
+    });
+    if (restoreError) {
+      return restoreError;
     }
   }
-  if (!params.validateModelRuntime || params.patch.model === undefined || !params.entry) {
+  if (
+    !params.validateModelRuntime ||
+    params.patch.model === undefined ||
+    !params.entry?.sessionId
+  ) {
     return undefined;
   }
   const runtime = resolveWorkerPlacementSessionRuntime({
@@ -82,36 +93,6 @@ export function resolveSessionWorkerPlacementPatchError(params: {
   return executionMode
     ? `Session ${params.key} cannot change cloud placement execution mode while placement is ${placement.state}.`
     : `Session ${params.key} cannot select the ${runtime} runtime while cloud worker placement is ${placement.state}.`;
-}
-
-export function filterSessionStoreToConfiguredAgents(
-  cfg: OpenClawConfig,
-  store: Record<string, SessionEntry>,
-): Record<string, SessionEntry> {
-  const configuredAgentIds = new Set(listConfiguredSessionStoreAgentIds(cfg));
-  const isConfiguredSessionKey = (key: string | undefined) => {
-    const normalizedKey = normalizeOptionalString(key);
-    if (!normalizedKey) {
-      return false;
-    }
-    const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey: normalizedKey });
-    const agentId = resolveSessionStoreAgentId(cfg, canonicalKey);
-    return configuredAgentIds.has(normalizeAgentId(agentId));
-  };
-  return Object.fromEntries(
-    Object.entries(store).filter(([key, entry]) => {
-      if (key === "global" || key === "unknown") {
-        return true;
-      }
-      if (isConfiguredSessionKey(key)) {
-        return true;
-      }
-      // Keep spawned child sessions visible when their parent belongs to a configured agent.
-      return (
-        isConfiguredSessionKey(entry?.spawnedBy) || isConfiguredSessionKey(entry?.parentSessionKey)
-      );
-    }),
-  );
 }
 
 export const loadSessionsRuntimeModule = createLazyRuntimeModule(
@@ -135,26 +116,6 @@ export function requireSessionKey(key: unknown, respond: RespondFn): string | nu
   return normalized;
 }
 
-export function rejectPluginRuntimeSessionOwnershipMismatch(params: {
-  action: PluginSessionOwnershipAction;
-  client: GatewayClient | null;
-  key: string;
-  entry: SessionEntry | undefined;
-  respond: RespondFn;
-}): boolean {
-  const error = resolvePluginSessionOwnershipError({
-    action: params.action,
-    entry: params.entry,
-    key: params.key,
-    pluginOwnerId: params.client?.internal?.pluginRuntimeOwnerId,
-  });
-  if (!error) {
-    return false;
-  }
-  params.respond(false, undefined, error);
-  return true;
-}
-
 export function resolveGatewaySessionTargetFromKey(
   key: string,
   cfg: OpenClawConfig,
@@ -176,36 +137,16 @@ export function loadAccessorSessionEntryForGatewayTarget(params: {
   const target = resolveGatewaySessionStoreTargetWithStore({
     cfg: params.cfg,
     key: params.key,
-    clone: false,
+    exactRead: true,
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
-  let best:
-    | {
-        entry: SessionEntry;
-        sessionStoreKey: string;
-      }
-    | undefined;
-  for (const sessionStoreKey of target.storeKeys) {
-    const entry = target.store[sessionStoreKey];
-    if (entry) {
-      if (!best || (entry.updatedAt ?? 0) > (best.entry.updatedAt ?? 0)) {
-        best = { entry, sessionStoreKey };
-      }
-    }
-  }
-  if (best) {
-    return {
-      target,
-      storePath: target.storePath,
-      entry: best.entry,
-      canonicalKey: target.canonicalKey,
-      sessionStoreKey: best.sessionStoreKey,
-    };
-  }
   return {
     target,
     storePath: target.storePath,
-    entry: undefined,
+    // Exact probes include internal-effects rows that operator inventory reads hide.
+    entry: isInternalSessionEffectsKey(target.canonicalKey)
+      ? undefined
+      : resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys),
     canonicalKey: target.canonicalKey,
     sessionStoreKey: target.canonicalKey,
   };

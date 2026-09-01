@@ -12,7 +12,7 @@ type SessionTranscriptTreeEntry = {
   appendMode?: "side";
 };
 
-type SessionTranscriptTreeNode<T> = SessionTranscriptTreeEntry & {
+export type SessionTranscriptTreeNode<T> = SessionTranscriptTreeEntry & {
   entry: T;
   index: number;
 };
@@ -136,7 +136,7 @@ function parseParentlessCanonicalEntry(
 
 function resolveCanonicalParentId<T>(
   parentId: string | null,
-  byId: ReadonlyMap<string, SessionTranscriptTreeNode<T>>,
+  byId: Pick<ReadonlyMap<string, SessionTranscriptTreeNode<T>>, "get">,
 ): string | null {
   const seen = new Set<string>();
   let currentId = parentId;
@@ -163,9 +163,37 @@ function resolveCanonicalParentId<T>(
  * older appenders. Treat those rows as a linear continuation of the current
  * append cursor so a later leaf control can still address their full history.
  */
-export function scanSessionTranscriptTree<T>(entries: readonly T[]): SessionTranscriptTree<T> {
+type TranscriptNavigationSet = { has(id: string): boolean; add(id: string): void; clear(): void };
+
+/** Storage belongs to the caller: runtime uses memory, migration uses its disposable spool. */
+export type SessionTranscriptNavigationStorage<T> = {
+  byId: {
+    get(id: string): SessionTranscriptTreeNode<T> | undefined;
+    has(id: string): boolean;
+    set(id: string, node: SessionTranscriptTreeNode<T>): void;
+  };
+  addNode(node: SessionTranscriptTreeNode<T>): void;
+  resetDescendantIds: TranscriptNavigationSet;
+  invalidLeafControlIds: TranscriptNavigationSet;
+};
+
+export function scanSessionTranscriptTree<T>(entries: Iterable<T>): SessionTranscriptTree<T> {
   const nodes: SessionTranscriptTreeNode<T>[] = [];
   const byId = new Map<string, SessionTranscriptTreeNode<T>>();
+  const navigation = scanSessionTranscriptNavigation(entries, {
+    byId,
+    addNode: (node) => nodes.push(node),
+    resetDescendantIds: new Set(),
+    invalidLeafControlIds: new Set(),
+  });
+  return { nodes, byId, ...navigation };
+}
+
+export function scanSessionTranscriptNavigation<T>(
+  entries: Iterable<T>,
+  storage: SessionTranscriptNavigationStorage<T>,
+): Omit<SessionTranscriptTree<T>, "nodes" | "byId"> {
+  const { byId, resetDescendantIds, invalidLeafControlIds } = storage;
   let leafId: string | null = null;
   let appendParentId: string | null = null;
   let hasLeafControl = false;
@@ -173,10 +201,10 @@ export function scanSessionTranscriptTree<T>(entries: readonly T[]): SessionTran
   let hasExplicitLeafUpdate = false;
   let hasInvalidLeafControl = false;
   let latestResetId: string | undefined;
-  const resetDescendantIds = new Set<string>();
-  const invalidLeafControlIds = new Set<string>();
 
-  for (const [index, entry] of entries.entries()) {
+  let nextIndex = 0;
+  for (const entry of entries) {
+    const index = nextIndex++;
     let explicitTreeEntry = parseSessionTranscriptTreeEntry(entry);
     if (
       latestResetId &&
@@ -213,7 +241,7 @@ export function scanSessionTranscriptTree<T>(entries: readonly T[]): SessionTran
       };
       // Invalid controls are transparent structural markers. Descendants can
       // repair through their raw parent, but navigation state does not change.
-      nodes.push(node);
+      storage.addNode(node);
       byId.set(node.id, node);
       continue;
     }
@@ -251,7 +279,7 @@ export function scanSessionTranscriptTree<T>(entries: readonly T[]): SessionTran
       continue;
     }
     const node: SessionTranscriptTreeNode<T> = { ...treeEntry, entry, index };
-    nodes.push(node);
+    storage.addNode(node);
     byId.set(node.id, node);
     if (isRecord(entry) && entry.type === "reset") {
       latestResetId = node.id;
@@ -278,8 +306,6 @@ export function scanSessionTranscriptTree<T>(entries: readonly T[]): SessionTran
   }
 
   return {
-    nodes,
-    byId,
     leafId,
     appendParentId,
     hasLeafControl,
@@ -359,11 +385,11 @@ export function selectSessionTranscriptTreePathNodes<T>(
       break;
     }
     if (!isSessionTranscriptLeafControl(current.entry)) {
-      path.unshift(current);
+      path.push(current);
     }
     currentId = current.parentId;
   }
-  return path;
+  return path.toReversed();
 }
 
 /** Merge normalized paths in original file order and expose their retained parent links. */

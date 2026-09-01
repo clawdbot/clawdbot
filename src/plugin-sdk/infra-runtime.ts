@@ -4,6 +4,7 @@
  * Prefer injected runtime APIs or documented typed-public subpaths instead.
  */
 
+import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
 export * from "./delivery-queue-runtime.js";
 
 export * from "../infra/backoff.js";
@@ -29,7 +30,6 @@ export {
   stringifyNonErrorCause,
   toErrorObject,
 } from "../infra/errors.js";
-import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
 
 /** @deprecated Shipped compat only (removed from core in #104546); no core caller. Removal with the next plugin-SDK major. */
 export type ErrorKind = "refusal" | "timeout" | "rate_limit" | "context_length" | "unknown";

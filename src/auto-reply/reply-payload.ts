@@ -11,6 +11,7 @@ import type {
   MessagePresentation,
   ReplyPayloadDelivery,
 } from "../interactive/payload.js";
+import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
 
 export type ReplyMediaAttachment = {
   type?: "image" | "audio" | "video" | "file";
@@ -26,6 +27,16 @@ export type ReplyMediaAttachment = {
   height?: number;
   /** Internal per-URL trust carried until mixed media is split for history projection. */
   trustedLocalMedia?: boolean;
+};
+
+export type ReplyMediaFailureCode = "file-not-found" | "unsupported-format" | "delivery-failed";
+
+/** Producer-owned outcome for one attachment that could not be delivered. */
+export type ReplyMediaFailure = {
+  code: ReplyMediaFailureCode;
+  kind: "image" | "audio" | "video" | "document";
+  label: string;
+  mimeType?: string;
 };
 
 /** Channel-agnostic assistant reply payload. */
@@ -152,21 +163,51 @@ export type ReplyDeliveryContext = {
   replyToMode: ReplyToMode;
 };
 
-const REPLY_MEDIA_FAILURE_WARNING = "⚠️ Media failed.";
+const REPLY_MEDIA_FAILURE_MESSAGES: Record<ReplyMediaFailureCode, string> = {
+  "file-not-found": "File not found. Check the path and try again.",
+  "unsupported-format": "Rejected by the local attachment allowlist. Send a supported file type.",
+  "delivery-failed": "Delivery failed. Try sending this file again.",
+};
 
-/** Appends the standard media failure warning without duplicating it. */
-export function appendReplyMediaFailureWarning(text: string | undefined): string {
-  if (!text?.trim()) {
-    return REPLY_MEDIA_FAILURE_WARNING;
-  }
-  if (text.includes(REPLY_MEDIA_FAILURE_WARNING)) {
+function formatReplyMediaFailures(failures: readonly ReplyMediaFailure[]): string {
+  return failures
+    .map((failure) => `⚠️ ${failure.label}: ${REPLY_MEDIA_FAILURE_MESSAGES[failure.code]}`)
+    .join("\n");
+}
+
+/** Appends one named, actionable fallback receipt per failed attachment. */
+export function appendReplyMediaFailures(
+  text: string | undefined,
+  failures: readonly ReplyMediaFailure[],
+): string | undefined {
+  if (failures.length === 0) {
     return text;
   }
-  return `${text}\n${REPLY_MEDIA_FAILURE_WARNING}`;
+  const receipt = formatReplyMediaFailures(failures);
+  return text?.trim() ? `${text}\n${receipt}` : receipt;
+}
+
+/** Removes producer-authored fallback receipts when structured display cards supersede them. */
+export function stripReplyMediaFailureFallback(
+  text: string | undefined,
+  failures: readonly ReplyMediaFailure[],
+): string | undefined {
+  if (!text || failures.length === 0) {
+    return text;
+  }
+  const receipt = formatReplyMediaFailures(failures);
+  if (text === receipt) {
+    return undefined;
+  }
+  const suffix = `\n${receipt}`;
+  return text.endsWith(suffix) ? text.slice(0, -suffix.length) : text;
 }
 
 function hasReplyPayloadMedia(payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrls">): boolean {
-  return Boolean(payload.mediaUrl?.trim() || payload.mediaUrls?.some((url) => url.trim()));
+  return Boolean(
+    readNonBlankString(payload.mediaUrl) ||
+    (Array.isArray(payload.mediaUrls) && payload.mediaUrls.some(readNonBlankString)),
+  );
 }
 
 /** Returns normalized TTS supplement metadata only when the payload has media to carry it. */
@@ -235,24 +276,43 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
 }
 
 /** WeakMap-backed metadata attached to payload objects without changing wire shape. */
+export type SessionWriterDeliveryAuthority = {
+  agentId?: string;
+  expectedLifecycleRevision?: string;
+  expectedSessionId: string;
+  expectedWriterRunId?: string;
+  sessionKey: string;
+  storePath?: string;
+};
+
 export type ReplyPayloadMetadata = {
+  /** The model failed after a committed recovery compaction in the same turn. */
+  postCompactionModelFailure?: true;
   assistantMessageIndex?: number;
+  /** Persisted assistant speech facts; never serialized into channel payloads. */
+  tts?: AssistantDeliveryTtsFacts;
+  /** Structured message-tool speech is an explicit request, independent of auto-TTS mode. */
+  ttsExplicit?: true;
   /** Original runtime MEDIA references used to identify the persisted assistant row. */
   assistantTranscriptMediaUrls?: string[];
+  /** Ordered per-source failures retained until transcript/display projection. */
+  assistantMediaFailures?: ReplyMediaFailure[];
   /** The runtime owns the transcript decision for this assistant payload. */
   assistantTranscriptOwned?: boolean;
   /** Exact channel/account transform owner that already accepted this payload. */
   channelReplyTransformOwner?: object;
   /** Exact dispatcher that already ran its full normalization before side effects. */
   replyDispatcherNormalizationOwner?: object;
+  /** The command owner produced this terminal reply without starting an agent run. */
+  commandReply?: true;
   /** Exact key for replacing a runtime-owned assistant row after media materialization. */
   assistantTranscriptIdempotencyKey?: string;
-  /** Foreground freshness prevented a visible final after transcript persistence. */
-  foregroundDeliverySuppression?: {
-    reason: "stale-foreground";
-  };
+  /** Original session-writer claim that must still hold at final delivery. */
+  sessionWriterDeliveryAuthority?: SessionWriterDeliveryAuthority;
   /** Opaque owner for one final-delivery transcript capture on a shared dispatcher. */
   finalDeliveryCapture?: object;
+  /** One host-visible status gates a child-completion wake for this exact turn. */
+  continuationStatus?: true;
   /** Exact persisted delivery owner; WeakMap-only and never serialized. */
   pendingFinalDeliveryCompletion?: {
     deliveryId: string;
@@ -289,6 +349,8 @@ export type ReplyPayloadMetadata = {
     expectedSessionId?: string;
     /** Delivery stays live, but neither side may be appended to a transcript. */
     transcriptWriteBlocked?: boolean;
+    /** The visible reply already owns its durable transcript row. */
+    transcriptOwner?: boolean;
     text?: string;
     mediaUrls?: string[];
     idempotencyKey?: string;
@@ -319,6 +381,31 @@ export function getReplyPayloadMetadata(payload: object): ReplyPayloadMetadata |
   return replyPayloadMetadata.get(payload);
 }
 
+/** Revalidates an authority-bearing payload against a freshly loaded session row. */
+export function isReplyPayloadSessionWriterDeliveryAuthorized(
+  payload: object,
+  entry:
+    | {
+        activeWriterRunId?: string;
+        lifecycleRevision?: string;
+        sessionId?: string;
+      }
+    | undefined,
+): boolean {
+  const authority = getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority;
+  if (!authority) {
+    return true;
+  }
+  return Boolean(
+    entry &&
+    entry.sessionId === authority.expectedSessionId &&
+    (authority.expectedLifecycleRevision === undefined ||
+      entry.lifecycleRevision === authority.expectedLifecycleRevision) &&
+    (authority.expectedWriterRunId === undefined ||
+      entry.activeWriterRunId === authority.expectedWriterRunId),
+  );
+}
+
 /** Returns true when a payload is the synthesized warning for a non-terminal tool error. */
 export function isReplyPayloadNonTerminalToolErrorWarning(payload: object): boolean {
   return getReplyPayloadMetadata(payload)?.nonTerminalToolErrorWarning === true;
@@ -340,13 +427,28 @@ export function markReplyPayloadForSourceSuppressionDelivery<T extends object>(p
 export function markCommandReplyForDelivery(
   reply: ReplyPayload | ReplyPayload[] | undefined,
 ): ReplyPayload | ReplyPayload[] | undefined {
+  const markPayload = (payload: ReplyPayload): ReplyPayload =>
+    setReplyPayloadMetadata(markReplyPayloadForSourceSuppressionDelivery(payload), {
+      commandReply: true,
+    });
   if (!reply) {
     return reply;
   }
   if (Array.isArray(reply)) {
-    return reply.map((payload) => markReplyPayloadForSourceSuppressionDelivery(payload));
+    return reply.map(markPayload);
   }
-  return markReplyPayloadForSourceSuppressionDelivery(reply);
+  return markPayload(reply);
+}
+
+/** Returns true only when a command owner produced every payload in a non-empty reply. */
+export function isCommandReplyForDelivery(
+  reply: ReplyPayload | ReplyPayload[] | undefined,
+): boolean {
+  const payloads = Array.isArray(reply) ? reply : reply ? [reply] : [];
+  return (
+    payloads.length > 0 &&
+    payloads.every((payload) => getReplyPayloadMetadata(payload)?.commandReply === true)
+  );
 }
 
 /** Returns true for internal status/notice payloads, not assistant answer content. */
@@ -355,3 +457,10 @@ export function isReplyPayloadStatusNotice(
 ): boolean {
   return Boolean(payload.isCompactionNotice || payload.isFallbackNotice || payload.isStatusNotice);
 }
+
+/** Returns whether a payload carries terminal assistant content rather than a supplemental lane. */
+export const isReplyPayloadTerminalContent = (payload: ReplyPayload): boolean =>
+  payload.isReasoning !== true &&
+  payload.isCommentary !== true &&
+  !isReplyPayloadStatusNotice(payload) &&
+  !isReplyPayloadTtsSupplement(payload);

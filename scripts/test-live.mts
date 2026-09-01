@@ -1,9 +1,9 @@
 // Runs the full live Vitest suite with live-test env and heartbeat output.
 import { terminateManagedChild } from "./lib/managed-child-process.mts";
-import { spawnPnpmRunner } from "./pnpm-runner.mts";
+import { spawnOwnedVitestProcess } from "./lib/vitest-process.mts";
+import { createPnpmRunnerSpawnSpec, type PnpmRunnerParams } from "./pnpm-runner.mts";
 import { resolveVitestNoOutputTimeoutMs } from "./run-vitest.mts";
 import {
-  createVitestProcessCompletion,
   installVitestProcessGroupCleanup,
   shouldUseDetachedVitestProcessGroup,
 } from "./vitest-process-group.mts";
@@ -136,7 +136,7 @@ export function buildTestLiveSpawnParams(env: NodeJS.ProcessEnv, platform = proc
     detached: shouldUseDetachedVitestProcessGroup(platform),
     env,
     stdio: ["inherit", "pipe", "pipe"],
-  } satisfies Pick<Parameters<typeof spawnPnpmRunner>[0], "detached" | "env" | "stdio">;
+  } satisfies Pick<PnpmRunnerParams, "detached" | "env" | "stdio">;
 }
 
 /**
@@ -158,10 +158,12 @@ export function main(argv = process.argv.slice(2), baseEnv = process.env) {
   let timedOut = false;
 
   const spawnParams = buildTestLiveSpawnParams(env);
-  const child = spawnPnpmRunner({
-    pnpmArgs: buildTestLivePnpmArgs(args),
-    ...spawnParams,
-  });
+  const { child, completion } = spawnOwnedVitestProcess(
+    createPnpmRunnerSpawnSpec({
+      pnpmArgs: buildTestLivePnpmArgs(args),
+      ...spawnParams,
+    }),
+  );
   let forwardedSignal: NodeJS.Signals | null = null;
   const teardownChildCleanup = installVitestProcessGroupCleanup({
     child,
@@ -219,33 +221,31 @@ export function main(argv = process.argv.slice(2), baseEnv = process.env) {
   );
   heartbeat.unref?.();
 
-  createVitestProcessCompletion({ child, detached: spawnParams.detached })
-    .finally(teardown)
-    .then(
-      ({ code, signal }) => {
-        if (forwardedSignal) {
-          process.kill(process.pid, forwardedSignal);
-          return;
-        }
-        if (timedOut) {
-          process.exit(1);
-          return;
-        }
-        if (signal) {
-          process.stderr.write(`[test:live] vitest exited via signal=${signal}\n`);
-          process.kill(process.pid, signal);
-          return;
-        }
-        if ((code ?? 1) !== 0) {
-          process.stderr.write(`[test:live] vitest exited code=${code ?? 1}\n`);
-        }
-        process.exit(code ?? 1);
-      },
-      (error: unknown) => {
-        console.error(error);
+  completion.finally(teardown).then(
+    ({ code, signal }) => {
+      if (forwardedSignal) {
+        process.kill(process.pid, forwardedSignal);
+        return;
+      }
+      if (timedOut) {
         process.exit(1);
-      },
-    );
+        return;
+      }
+      if (signal) {
+        process.stderr.write(`[test:live] vitest exited via signal=${signal}\n`);
+        process.kill(process.pid, signal);
+        return;
+      }
+      if ((code ?? 1) !== 0) {
+        process.stderr.write(`[test:live] vitest exited code=${code ?? 1}\n`);
+      }
+      process.exit(code ?? 1);
+    },
+    (error: unknown) => {
+      console.error(error);
+      process.exit(1);
+    },
+  );
 }
 
 if (import.meta.main) {

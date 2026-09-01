@@ -5,15 +5,18 @@ import {
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
 import { coerceConfigFormNumberString } from "../../components/config-form.numeric.ts";
-import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
 import { t } from "../../i18n/index.ts";
 import {
   cloneConfigObject,
   removePathValue,
   sanitizeRedactedFormForSubmit,
+  schemaMayAcceptString,
+  schemaType,
   serializeConfigForm,
   setPathValue,
+  type JsonSchema,
 } from "../config-form-utils.ts";
+import { formatUiError } from "../format-error.ts";
 import { parseJson5Text, warmJson5 } from "../json5-runtime.ts";
 import {
   resolveAgentConfigEntryTarget,
@@ -29,7 +32,8 @@ export function clearConfigDraftTracking(state: RuntimeConfigState): void {
 }
 
 export function formatConfigMutationError(error: unknown, submittedRaw: string | null): string {
-  let message = String(error);
+  const formatted = formatUiError(error);
+  let message = error instanceof GatewayRequestError ? `${error.name}: ${formatted}` : formatted;
   if (!submittedRaw || !(error instanceof GatewayRequestError) || !isRecord(error.details)) {
     return message;
   }
@@ -137,31 +141,15 @@ export function applyConfigSnapshot(
   if (!rawAvailable && state.configFormMode === "raw") {
     state.configFormMode = "form";
   }
-  const rawFromSnapshot: string =
-    typeof snapshot.raw === "string"
-      ? snapshot.raw
-      : editableConfig
-        ? serializeConfigForm(editableConfig)
-        : state.configRaw;
-  if (!preservePendingChanges) {
-    state.configRaw = rawFromSnapshot;
-  } else if (state.configFormMode !== "raw" && state.configForm) {
-    state.configRaw = serializeConfigForm(state.configForm);
-  } else if (state.configFormMode !== "raw") {
-    state.configRaw = rawFromSnapshot;
-  }
   state.configValid = typeof snapshot.valid === "boolean" ? snapshot.valid : null;
   state.configIssues = Array.isArray(snapshot.issues) ? snapshot.issues : [];
 
   if (!preservePendingChanges) {
-    state.configForm = cloneConfigObject(editableConfig ?? {});
-    state.configFormOriginal = cloneConfigObject(editableConfig ?? {});
-    setConfigRawOriginal(state, rawFromSnapshot);
-    state.configFormDirty = false;
-    state.configFormMode = "form";
-    state.configDraftBaseHash = snapshot.hash ?? null;
-    autoAllowlistedPluginIdsByState.delete(state);
+    resetConfigPendingChanges(state);
   } else {
+    if (state.configFormMode !== "raw" && state.configForm) {
+      state.configRaw = serializeConfigForm(state.configForm);
+    }
     state.configDraftBaseHash = draftBaseHash;
   }
 }
@@ -206,6 +194,12 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
       return variant ? coerceFormValues(value, variant) : value;
     }
     if (typeof value === "string") {
+      // Editors commit branch-validated types (including boolean literals),
+      // and loaded values already passed Gateway validation. Preserve strings
+      // instead of guessing again here.
+      if (variants.some(schemaMayAcceptString)) {
+        return value;
+      }
       for (const variant of variants) {
         const variantType = schemaType(variant);
         if (variantType === "number" || variantType === "integer") {
@@ -577,27 +571,36 @@ export function updateConfigRawValue(state: RuntimeConfigState, value: string) {
   // mutateConfigForm/diff path needs it synchronously.
   void warmJson5().catch(() => undefined);
   state.configRaw = value;
-  // A raw-text edit becomes the authoritative draft; without this,
-  // serializeFormForSubmit would submit the stale form and drop raw edits.
-  state.configFormMode = "raw";
   state.configFormDirty = value !== state.configRawOriginal;
-  resetStaleAutoSaveStatus(state);
   if (state.configFormDirty) {
     state.configDraftBaseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash ?? null;
   } else {
-    state.configDraftBaseHash = state.configSnapshot?.hash ?? null;
+    resetConfigPendingChanges(state);
   }
+  // Raw edits own submission; a clean revert also restores the saved form
+  // above so a later form edit cannot resurrect discarded values.
+  state.configFormMode = "raw";
+  resetStaleAutoSaveStatus(state);
+}
+
+export function rebaseConfigDraft(state: RuntimeConfigState) {
+  const editableConfig = resolveEditableSnapshotConfig(state.configSnapshot);
+  // A retained draft can predate a reconnect snapshot. Adopt its document and
+  // revision together; pairing old originals with the new hash bypasses CAS.
+  state.configFormOriginal = cloneConfigObject(editableConfig ?? {});
+  const raw =
+    state.configSnapshot?.raw ??
+    (editableConfig ? serializeConfigForm(editableConfig) : state.configRawOriginal);
+  setConfigRawOriginal(state, raw);
+  state.configDraftBaseHash = state.configSnapshot?.hash ?? null;
 }
 
 export function resetConfigPendingChanges(state: RuntimeConfigState) {
-  const editableConfig = resolveEditableSnapshotConfig(state.configSnapshot);
-  state.configForm = cloneConfigObject(state.configFormOriginal ?? editableConfig ?? {});
-  state.configRaw =
-    state.configRawOriginal ??
-    serializeConfigForm(state.configFormOriginal ?? editableConfig ?? {});
+  rebaseConfigDraft(state);
+  state.configForm = cloneConfigObject(state.configFormOriginal ?? {});
+  state.configRaw = state.configRawOriginal;
   state.configFormDirty = false;
   state.configFormMode = "form";
-  state.configDraftBaseHash = state.configSnapshot?.hash ?? null;
   autoAllowlistedPluginIdsByState.delete(state);
 }
 

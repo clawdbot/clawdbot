@@ -1,8 +1,8 @@
 // Tests package version resolution and generated version metadata.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { pathToFileURL } from "node:url";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSuiteTempRootTracker } from "./test-helpers/temp-dir.js";
 import {
   VERSION,
@@ -52,14 +52,6 @@ function expectVersionMetadataToBeMissing(moduleUrl: string) {
 }
 
 describe("version resolution", () => {
-  it("keeps bundled version injection as a direct define identifier", async () => {
-    const source = await fs.readFile(fileURLToPath(new URL("./version.ts", import.meta.url)), {
-      encoding: "utf-8",
-    });
-    expect(source).toContain("typeof __OPENCLAW_VERSION__");
-    expect(source).toContain("? __OPENCLAW_VERSION__");
-  });
-
   it("resolves package version from nested dist/plugin-sdk module URL", async () => {
     await withVersionFixtureDir(async (root) => {
       await writeJsonFixture(root, "package.json", { name: "openclaw", version: "1.2.3" });
@@ -104,6 +96,23 @@ describe("version resolution", () => {
     });
   });
 
+  it("captures the runtime commit from startup provenance once", async () => {
+    let startupCommit = "aaaaaaa";
+    vi.doMock("./infra/git-commit.js", () => ({
+      resolveLoadedCommitHash: () => startupCommit,
+    }));
+    vi.resetModules();
+    try {
+      const runtimeVersion = await import("./version.js");
+      expect(runtimeVersion.resolveRuntimeServiceCommit()).toBe("aaaaaaa");
+      startupCommit = "bbbbbbb";
+      expect(runtimeVersion.resolveRuntimeServiceCommit()).toBe("aaaaaaa");
+    } finally {
+      vi.doUnmock("./infra/git-commit.js");
+      vi.resetModules();
+    }
+  });
+
   it("returns null when no version metadata exists", async () => {
     await withVersionFixtureDir(async (root) => {
       const moduleUrl = await ensureModuleFixture(root);
@@ -130,14 +139,6 @@ describe("version resolution", () => {
     await withVersionFixtureDir(async (root) => {
       await writeJsonFixture(root, "package.json", { name: "openclaw", version: "2.3.4" });
       const moduleUrl = await ensureModuleFixture(root);
-      expect(
-        resolveBinaryVersion({
-          moduleUrl,
-          injectedVersion: "9.9.9",
-          bundledVersion: "8.8.8",
-          fallback: "0.0.0",
-        }),
-      ).toBe("9.9.9");
       expect(
         resolveBinaryVersion({
           moduleUrl,

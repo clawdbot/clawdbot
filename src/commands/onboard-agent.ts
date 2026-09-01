@@ -2,14 +2,13 @@
 import { createAgent, validateAgentIdInput } from "../agents/agent-create.js";
 import {
   listAgentEntries,
-  resolveDefaultAgentId,
+  resolveAmbientOwnerAgentId,
   toAgentEntriesRecord,
-  tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope-config.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { readConfigFileSnapshot, resolveConfigSnapshotHash } from "../config/config.js";
-import { createMergePatch } from "../config/merge-patch.js";
-import { applyMergePatch } from "../config/merge-patch.js";
+import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import { createMergePatch, applyMergePatch } from "../config/merge-patch.js";
 import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-session-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -28,11 +27,9 @@ export function validateFirstOnboardingAgentName(value: string | undefined): str
 function isInjectedMainRoster(config: OpenClawConfig): boolean {
   const roster = listAgentEntries(config);
   const entry = roster[0];
+  // Authored bare main entries are distinguished by snapshot provenance below.
   return (
-    roster.length === 1 &&
-    entry?.id === "main" &&
-    entry?.default === true &&
-    Object.keys(entry).every((key) => key === "id" || key === "default")
+    roster.length === 1 && entry?.id === "main" && Object.keys(entry).every((key) => key === "id")
   );
 }
 
@@ -46,13 +43,13 @@ function mergeOnboardingCandidate(params: {
   // patch onto snapshot.parsed, preserving include ownership and env refs.
   const merged = applyMergePatch(params.currentRuntime, proposalPatch) as OpenClawConfig;
   const { list: _legacyList, ...agents } = merged.agents ?? {};
-  return {
+  return inheritLegacyDefaultAgentId(params.currentRuntime, {
     ...merged,
     agents: {
       ...agents,
       entries: toAgentEntriesRecord(listAgentEntries(params.currentRuntime)),
     },
-  };
+  });
 }
 
 export async function ensureOnboardingAgent(params: {
@@ -90,6 +87,9 @@ export async function ensureOnboardingAgent(params: {
   if (before && (resolveConfigSnapshotHash(before) ?? null) !== params.expectedConfigHash) {
     throw new Error("OpenClaw config changed before first-agent creation. Retry setup.");
   }
+  // Provider, gateway, and hook proposals can copy config. Restore the reader's
+  // owner before returning an existing fleet to the remaining setup effects.
+  inheritLegacyDefaultAgentId(params.baseConfig ?? params.config, params.config);
   const candidateRoster = listAgentEntries(params.config);
   if (
     candidateRoster.length > 0 &&
@@ -97,8 +97,7 @@ export async function ensureOnboardingAgent(params: {
   ) {
     return {
       config: params.config,
-      agentId:
-        tryResolveLegacyCompatibilityAgentId(params.config) ?? resolveDefaultAgentId(params.config),
+      agentId: resolveAmbientOwnerAgentId(params.config),
       bootstrapPending: false,
       createdAgent: false,
     };
@@ -116,7 +115,7 @@ export async function ensureOnboardingAgent(params: {
         candidate: params.config,
         currentRuntime: effective,
       }),
-      agentId: tryResolveLegacyCompatibilityAgentId(effective) ?? resolveDefaultAgentId(effective),
+      agentId: resolveAmbientOwnerAgentId(effective),
       bootstrapPending: false,
       createdAgent: false,
     };

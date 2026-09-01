@@ -1,6 +1,10 @@
 // Doctor-only runtime policy repair for migrated cron Codex model refs.
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { tryResolveDefaultAgentId } from "../../../agents/agent-scope-config.js";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { tryResolveAmbientOwnerAgentId } from "../../../agents/agent-scope-config.js";
+import {
+  inheritLegacyDefaultAgentId,
+  tryGetLegacyDefaultAgentId,
+} from "../../../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
 import {
@@ -26,12 +30,17 @@ function resolvePolicyOwner(params: {
   cfg: OpenClawConfig;
   target: CronCodexRuntimePolicyTarget;
 }): { owner: MutableRecord; path: string } | undefined {
-  const root = params.cfg as unknown as MutableRecord;
+  const root = isRecord(params.cfg) ? params.cfg : {};
   const agents = ensureRecord(root, "agents");
   const requestedAgentId = params.target.agentId
     ? normalizeAgentId(params.target.agentId)
     : undefined;
-  const defaultAgentId = tryResolveDefaultAgentId(params.cfg);
+  // The roster writer pins ownerless jobs to the retained legacy owner.
+  // Plan policy for that durable owner, which can differ from the system agent.
+  const defaultAgentId = tryResolveAmbientOwnerAgentId(
+    params.cfg,
+    tryGetLegacyDefaultAgentId(params.cfg),
+  );
   const effectiveAgentId = requestedAgentId ?? defaultAgentId;
   if (!effectiveAgentId) {
     return undefined;
@@ -79,7 +88,7 @@ export function repairCronCodexRuntimePolicies(params: {
       changedTargets: [],
     };
   }
-  const next = structuredClone(params.cfg);
+  const next = inheritLegacyDefaultAgentId(params.cfg, structuredClone(params.cfg));
   const changes: string[] = [];
   const warnings: string[] = [];
   const blockedTargets: CronCodexRuntimePolicyTarget[] = [];

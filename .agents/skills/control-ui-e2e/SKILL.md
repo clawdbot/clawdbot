@@ -28,7 +28,10 @@ node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --c
 pnpm test:ui:e2e
 ```
 
-If dependencies are missing in a Codex worktree, install once with `pnpm install`; for broad GUI proof or dependency-heavy checks, use Testbox/Crabbox instead of running a wide local pnpm lane.
+Do not install dependencies into a linked/sparse worktree. For broad GUI proof
+or dependency-heavy checks, use a prepared normal checkout on the current
+dedicated Linux worker when it has browser support; otherwise use
+Testbox/Crabbox instead of running a wide lane on a workstation.
 
 ## Visual Proof Default
 
@@ -38,7 +41,10 @@ When running mocked Control UI/dashboard validation for a user-facing feature, p
 - After or alongside the focused E2E test, run the mocked Control UI app when available, for example `pnpm dev:ui:mock -- --port <port>`.
 - Drive Chromium with Playwright against the local mock URL and capture a video plus screenshots for each meaningful state: initial view, interaction input, result state, and final/paginated/selected state.
 - Use `browser.newContext({ recordVideo: { dir, size }, viewport })`, `page.screenshot({ path })`, and close the context before reporting the video path.
-- Put artifacts under `.artifacts/control-ui-e2e/<short-feature-name>/` or another clearly named local temp directory, and report the absolute paths in the final answer.
+- Allocate retained proof with `createControlUiE2eArtifactDir(scope, parentDir?)` from `ui/src/test-helpers/control-ui-e2e-artifacts.ts`. Each call atomically creates a fresh directory and logs its actual path. An explicit parent wins, then the trimmed existing `OPENCLAW_UI_E2E_ARTIFACT_DIR`, then the repository's `.artifacts/control-ui-e2e` parent. Existing custom output controls select parents; do not add or rewrite env vars to enable capture.
+- Allocate during the test/scenario or `beforeEach`, once per attempt; standalone scripts allocate once per invocation. Pass the owner explicitly to shared capture helpers. Keep the original gates, feature/stage names, viewports, waits, and recording options. Use distinct filenames for distinct stages and keep screenshots, reports, and video together.
+- Retain successful and failed evidence. Report actual allocated paths, including relocated filename overrides. Manually delete only exact owned directories after review; never clear shared parents before a replay. Disposable build/media fixtures and owned temporary raw video may keep their cleanup. New synthetic captures do not recover overwritten evidence.
+- Timeout diagnostics use fresh children beneath their existing diagnostic parent. Mantis retains every capture attempt under an invocation-owned directory and refuses to overwrite reports. Real-Gateway suites, `chat-outbox-*`, and `chat-attachment-read-lifecycle` remain separate owners; coordinate before claiming replay-safe retention there.
 - Treat recording as validation, not only demo capture. If the recorder fails or shows surprising behavior, stop, fix the behavior, add or update a regression test, then rerecord.
 - If visual proof is blocked, state the exact blocker and still report the textual E2E evidence.
 
@@ -71,4 +77,4 @@ When recording an already-running mocked Control UI URL, use a temporary Playwri
 - Open the mock URL, interact through stable `data-*` selectors or user-facing role selectors, and wait on asserted states instead of relying on fixed sleeps.
 - Assert both visible UI state and mocked Gateway traffic for request-driven flows. For example, verify the expected count/row is visible and that `sessions.list` was called with the expected `search`, `offset`, and `limit`.
 - Use short sleeps only after assertions to make the captured video readable.
-- Store the generated video under `.artifacts/control-ui-e2e/<feature>/`; do not commit it.
+- Store the generated video in the invocation's fresh allocated directory; do not commit it or remove older captures.

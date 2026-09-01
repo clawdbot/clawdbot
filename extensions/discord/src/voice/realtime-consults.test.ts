@@ -115,7 +115,10 @@ defineDiscordVoiceTests(
         };
       });
       const { bridgeParams, entry, manager } = await createJoinedAgentProxyFixture({ client });
-      const realtime = entry.realtime as unknown as {
+      if (entry.realtimeLifecycle.status !== "active") {
+        throw new Error("expected active Discord realtime session");
+      }
+      const realtime = entry.realtimeLifecycle.instance as unknown as {
         playback: { enqueueExactSpeechMessage: (text: string) => void };
       };
       const connection = (entry as unknown as { connection: { destroy: ReturnType<typeof vi.fn> } })
@@ -125,7 +128,11 @@ defineDiscordVoiceTests(
       expect(Buffer.byteLength(accepted, "utf8")).toBe(32 * 1024);
 
       await manager.join({ guildId: "g2", channelId: "2001" });
-      const siblingRealtime = getSessionEntry(manager, "g2").realtime as unknown as {
+      const siblingEntry = getSessionEntry(manager, "g2");
+      if (siblingEntry.realtimeLifecycle.status !== "active") {
+        throw new Error("expected active sibling Discord realtime session");
+      }
+      const siblingRealtime = siblingEntry.realtimeLifecycle.instance as unknown as {
         playback: { enqueueExactSpeechMessage: (text: string) => void };
       };
 
@@ -157,7 +164,10 @@ defineDiscordVoiceTests(
 
     it("terminates realtime voice when retained exact speech exceeds the message budget", async () => {
       const { entry, manager } = await createJoinedAgentProxyFixture();
-      const realtime = entry.realtime as unknown as {
+      if (entry.realtimeLifecycle.status !== "active") {
+        throw new Error("expected active Discord realtime session");
+      }
+      const realtime = entry.realtimeLifecycle.instance as unknown as {
         playback: { enqueueExactSpeechMessage: (text: string) => void };
       };
       const connection = (entry as unknown as { connection: { destroy: ReturnType<typeof vi.fn> } })
@@ -328,7 +338,10 @@ defineDiscordVoiceTests(
 
     it("terminally satisfies a late native call for a cancelled forced consult", async () => {
       const { bridgeParams, entry } = await createJoinedAgentProxyFixture();
-      const realtime = entry.realtime as unknown as {
+      if (entry.realtimeLifecycle.status !== "active") {
+        throw new Error("expected active Discord realtime session");
+      }
+      const realtime = entry.realtimeLifecycle.instance as unknown as {
         harness: RealtimeVoiceSessionHarness;
       };
       const cancelled = realtime.harness.forcedConsults.prepare("cancelled question");
@@ -548,7 +561,7 @@ defineDiscordVoiceTests(
         config: { voice: { realtime: { debounceMs: 1 } } },
       });
       const ownerTurn = beginSpeakerTurn(entry);
-      ownerTurn?.close();
+      ownerTurn.close();
       beginSpeakerTurn(entry, { senderIsOwner: false });
 
       await emitFinalRealtimeUserTranscript(bridgeParams, "guest question");
@@ -575,11 +588,7 @@ defineDiscordVoiceTests(
           },
         },
       });
-      const ownerTurn = entry?.realtime?.beginSpeakerTurn(
-        { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
-        "u-owner",
-      );
-      ownerTurn?.sendInputAudio(Buffer.alloc(8));
+      beginSpeakerTurn(entry);
 
       expect(bridgeParams?.autoRespondToAudio).toBe(true);
       expect(bridgeParams?.interruptResponseOnInputAudio).toBe(false);
@@ -694,16 +703,8 @@ defineDiscordVoiceTests(
           },
         },
       });
-      const nonOwnerTurn = entry?.realtime?.beginSpeakerTurn(
-        { extraSystemPrompt: undefined, senderIsOwner: false, speakerLabel: "Guest" },
-        "u-guest",
-      );
-      nonOwnerTurn?.sendInputAudio(Buffer.alloc(8));
-      const ownerTurn = entry?.realtime?.beginSpeakerTurn(
-        { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
-        "u-owner",
-      );
-      ownerTurn?.sendInputAudio(Buffer.alloc(8));
+      beginSpeakerTurn(entry, { senderIsOwner: false });
+      beginSpeakerTurn(entry);
 
       void bridgeParams?.onToolCall?.(
         {
@@ -739,7 +740,7 @@ defineDiscordVoiceTests(
         },
       });
       const ownerTurn = beginSpeakerTurn(entry);
-      ownerTurn?.close();
+      ownerTurn.close();
       beginSpeakerTurn(entry, { senderIsOwner: false });
 
       void bridgeParams?.onToolCall?.(

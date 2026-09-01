@@ -9,8 +9,8 @@ import { collectErrorGraphCandidates, extractErrorCode } from "openclaw/plugin-s
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-runtime";
-import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { classifyTransientNetworkErrorCode, retryAsync } from "openclaw/plugin-sdk/retry-runtime";
+import { sleep, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
@@ -142,53 +142,36 @@ export async function sendMessage(
   text: string,
   userId?: string | number,
   allowInsecureSsl = false,
+  onPlatformSendDispatch?: () => Promise<void>,
 ): Promise<boolean> {
   const chunks = chunkTextForOutbound(text, SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT);
   for (const chunk of chunks.length > 0 ? chunks : [text]) {
-    if (!(await sendMessageChunk(incomingUrl, chunk, userId, allowInsecureSsl))) {
+    // Synology Chat API requires numeric user_ids to specify the recipient.
+    const body = buildWebhookBody({ text: chunk }, userId);
+    // Retry only proven pre-connect failures; ambiguous webhook replays can duplicate messages.
+    await waitForSendSlot();
+    await onPlatformSendDispatch?.();
+    let result: SynologyHostedFileSendResult["status"];
+    try {
+      result = await retryAsync(() => doPost(incomingUrl, body, allowInsecureSsl), {
+        attempts: 3,
+        minDelayMs: 0,
+        shouldRetry: isProvenPreConnectFailure,
+        delayMs: ({ attempt }) => 300 * 2 ** (attempt - 1),
+        sleep: async (delayMs) => {
+          await sleepWithAbort(delayMs);
+          await waitForSendSlot();
+          await onPlatformSendDispatch?.();
+        },
+      });
+    } catch {
+      return false;
+    }
+    if (result !== "accepted") {
       return false;
     }
   }
   return true;
-}
-
-async function sendMessageChunk(
-  incomingUrl: string,
-  text: string,
-  userId?: string | number,
-  allowInsecureSsl = false,
-): Promise<boolean> {
-  // Synology Chat API requires user_ids (numeric) to specify the recipient
-  // The @mention is optional but user_ids is mandatory
-  const body = buildWebhookBody({ text }, userId);
-
-  // A webhook POST is non-idempotent. Retry only when the transport proves the
-  // request never connected; replaying an ambiguous failure can duplicate a message.
-  const maxRetries = 3;
-  const baseDelay = 300;
-
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      await waitForSendSlot();
-      const result = await doPost(incomingUrl, body, allowInsecureSsl);
-      if (result === "accepted") {
-        return true;
-      }
-      // An explicit rejection is final, while a server-side/ambiguous outcome
-      // cannot be replayed safely after a non-idempotent webhook POST.
-      return false;
-    } catch (error) {
-      if (!isProvenPreConnectFailure(error)) {
-        return false;
-      }
-    }
-
-    if (attempt < maxRetries - 1) {
-      await sleep(baseDelay * 2 ** attempt);
-    }
-  }
-
-  return false;
 }
 
 /**
@@ -199,6 +182,7 @@ export async function sendHostedFileUrl(
   fileUrl: SynologyHostedMediaUrl,
   userId?: string | number,
   allowInsecureSsl = false,
+  onPlatformSendDispatch?: () => Promise<void>,
 ): Promise<SynologyHostedFileSendResult> {
   let body: string;
   try {
@@ -208,6 +192,7 @@ export async function sendHostedFileUrl(
   }
 
   await waitForSendSlot();
+  await onPlatformSendDispatch?.();
 
   try {
     return { status: await doPost(incomingUrl, body, allowInsecureSsl) };

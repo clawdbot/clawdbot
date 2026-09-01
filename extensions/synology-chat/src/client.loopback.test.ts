@@ -1,17 +1,19 @@
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import * as http from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { synologyChatPlugin } from "./channel.js";
 import { resolveLegacyWebhookNameToChatUserId, sendMessage } from "./client.js";
 
-const { hostedCapabilityUrl } = vi.hoisted(() => ({
+const { hostedCapabilityUrl, hostedCapabilityCleanup } = vi.hoisted(() => ({
   hostedCapabilityUrl:
     "https://gateway.example.com/webhook/synology?__openclaw_synology_media_token_aaaaaaaaaaaaaaaaaaaaaaaa=secret",
+  hostedCapabilityCleanup: vi.fn(async () => undefined),
 }));
 vi.mock("./outbound-media.js", () => ({
   prepareSynologyHostedMedia: vi.fn(async () => ({
     url: hostedCapabilityUrl,
-    cleanup: vi.fn(async () => undefined),
+    cleanup: hostedCapabilityCleanup,
   })),
   resolveSynologyHostedMediaRoute: vi.fn(),
 }));
@@ -141,6 +143,78 @@ describe("Synology Chat client loopback", () => {
     );
   });
 
+  it("acquires durable send custody before webhook bytes cross the loopback boundary", async () => {
+    const receivedPayloads: Array<Record<string, unknown>> = [];
+    const port = await listenLoopback((req, res) => {
+      let formBody = "";
+      req.setEncoding("utf8");
+      req.on("data", (chunk: string) => {
+        formBody += chunk;
+      });
+      req.on("end", () => {
+        const payload = new URLSearchParams(formBody).get("payload");
+        if (payload) {
+          receivedPayloads.push(JSON.parse(payload) as Record<string, unknown>);
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: true }));
+      });
+    });
+    const incomingUrl = `http://127.0.0.1:${port}/webapi/entry.cgi`;
+    const cfg = {
+      channels: {
+        "synology-chat": {
+          enabled: true,
+          token: "synology-custody-proof",
+          incomingUrl,
+        },
+      },
+    };
+    const marker = `autoqa-synology-custody-${randomUUID()}`;
+    const custodyFailure = new Error(`fault-injected custody failure: ${marker}`);
+    const rejectedDispatch = vi.fn(async () => {
+      throw custodyFailure;
+    });
+
+    await expect(
+      synologyChatPlugin.message.send?.text?.({
+        cfg,
+        text: marker,
+        to: "42",
+        onPlatformSendDispatch: rejectedDispatch,
+      }),
+    ).rejects.toThrow(custodyFailure.message);
+    expect(rejectedDispatch).toHaveBeenCalledOnce();
+    expect(receivedPayloads).toEqual([]);
+
+    const acceptedDispatch = vi.fn(async () => undefined);
+    await synologyChatPlugin.message.send?.text?.({
+      cfg,
+      text: marker,
+      to: "42",
+      onPlatformSendDispatch: acceptedDispatch,
+    });
+    expect(acceptedDispatch).toHaveBeenCalledOnce();
+    expect(receivedPayloads).toEqual([{ text: marker, user_ids: [42] }]);
+
+    const rejectedMediaDispatch = vi.fn(async () => {
+      throw custodyFailure;
+    });
+    hostedCapabilityCleanup.mockClear();
+    await expect(
+      synologyChatPlugin.message.send?.media?.({
+        cfg,
+        text: marker,
+        mediaUrl: "https://example.com/custody-proof.png",
+        to: "42",
+        onPlatformSendDispatch: rejectedMediaDispatch,
+      }),
+    ).rejects.toThrow(custodyFailure.message);
+    expect(rejectedMediaDispatch).toHaveBeenCalledOnce();
+    expect(hostedCapabilityCleanup).toHaveBeenCalledOnce();
+    expect(receivedPayloads).toHaveLength(1);
+  });
+
   it("delivers authenticated text and media without inventing platform message ids", async () => {
     const receivedPayloads: Array<Record<string, unknown>> = [];
     const port = await listenLoopback((req, res) => {
@@ -223,7 +297,7 @@ describe("Synology Chat client loopback", () => {
       expect(result).toMatchObject({
         channel: "synology-chat",
         messageId: "",
-        chatId: "42",
+        target: { kind: "chat", id: "42" },
         receipt: {
           platformMessageIds: [],
           parts: [],
@@ -386,7 +460,7 @@ describe("Synology Chat client loopback", () => {
     });
     const incomingUrl =
       `http://127.0.0.1:${port}/webapi/entry.cgi?` +
-      "api=SYNO.Chat.External&method=chatbot&version=2";
+      `api=SYNO.Chat.External&method=chatbot&version=2&token=${randomUUID()}`;
     const now = vi.spyOn(Date, "now");
     now.mockReturnValue(1_700_000_100_000);
 

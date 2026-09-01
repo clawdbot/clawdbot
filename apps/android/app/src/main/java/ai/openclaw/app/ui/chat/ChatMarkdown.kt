@@ -3,12 +3,6 @@ package ai.openclaw.app.ui.chat
 import ai.openclaw.app.chat.CHAT_IMAGE_MAX_BASE64_CHARS
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawTheme
-import ai.openclaw.app.ui.mobileAccent
-import ai.openclaw.app.ui.mobileCallout
-import ai.openclaw.app.ui.mobileCaption1
-import ai.openclaw.app.ui.mobileCodeBg
-import ai.openclaw.app.ui.mobileCodeText
-import ai.openclaw.app.ui.mobileTextSecondary
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -26,7 +20,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -120,7 +113,12 @@ fun ChatMarkdown(
 ) {
   val blocks = remember(text, isStreaming) { segmentChatMarkdown(text, isStreaming) }
   val inlineStyles =
-    InlineStyles(inlineCodeBg = mobileCodeBg, inlineCodeColor = mobileCodeText, linkColor = mobileAccent, baseCallout = mobileCallout)
+    InlineStyles(
+      inlineCodeBg = ClawTheme.colors.codeBg,
+      inlineCodeColor = ClawTheme.colors.codeText,
+      linkColor = ClawTheme.colors.accent,
+      baseCallout = ClawTheme.type.body,
+    )
 
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
     for (block in blocks) {
@@ -194,21 +192,17 @@ private fun RenderCommonMarkBlock(
       )
     }
     is FencedCodeBlock -> {
-      SelectionContainer(modifier = Modifier.fillMaxWidth()) {
-        ChatCodeBlock(
-          code = current.literal.orEmpty(),
-          language = current.info?.trim()?.ifEmpty { null },
-          // Streaming: an unclosed fence grows on every delta, so keep it plain until the
-          // closing marker arrives. Finalized messages may validly end at EOF without a
-          // closing fence (CommonMark), so completeness comes from stream state, not syntax.
-          isComplete = !isStreaming || current.closingFenceLength != null,
-        )
-      }
+      ChatCodeBlock(
+        code = current.literal.orEmpty(),
+        language = current.info?.trim()?.ifEmpty { null },
+        // Streaming: an unclosed fence grows on every delta, so keep it plain until the
+        // closing marker arrives. Finalized messages may validly end at EOF without a
+        // closing fence (CommonMark), so completeness comes from stream state, not syntax.
+        isComplete = !isStreaming || current.closingFenceLength != null,
+      )
     }
     is IndentedCodeBlock -> {
-      SelectionContainer(modifier = Modifier.fillMaxWidth()) {
-        ChatCodeBlock(code = current.literal.orEmpty(), language = null)
-      }
+      ChatCodeBlock(code = current.literal.orEmpty(), language = null)
     }
     is BlockQuote -> {
       Row(
@@ -225,7 +219,7 @@ private fun RenderCommonMarkBlock(
             Modifier
               .width(2.dp)
               .fillMaxHeight()
-              .background(mobileTextSecondary.copy(alpha = 0.35f)),
+              .background(ClawTheme.colors.textMuted.copy(alpha = 0.35f)),
         )
         Column(
           modifier = Modifier.weight(1f),
@@ -272,7 +266,7 @@ private fun RenderCommonMarkBlock(
           Modifier
             .fillMaxWidth()
             .height(1.dp)
-            .background(mobileTextSecondary.copy(alpha = 0.25f)),
+            .background(ClawTheme.colors.textMuted.copy(alpha = 0.25f)),
       )
     }
     is HtmlBlock -> {
@@ -290,7 +284,7 @@ private fun RenderLiteralHtml(
   if (literal.isNotEmpty()) {
     Text(
       text = literal,
-      style = mobileCallout.copy(fontFamily = FontFamily.Monospace),
+      style = ClawTheme.type.body.copy(fontFamily = FontFamily.Monospace),
       color = textColor,
     )
   }
@@ -326,11 +320,11 @@ private fun RenderMarkdownDisclosure(
       ) {
         Text(
           text = if (isExpanded) "▾" else "▸",
-          style = mobileCallout.copy(fontWeight = FontWeight.SemiBold),
+          style = ClawTheme.type.body.copy(fontWeight = FontWeight.SemiBold),
         )
         Text(
           text = summary,
-          style = mobileCallout.copy(fontWeight = FontWeight.SemiBold),
+          style = ClawTheme.type.body.copy(fontWeight = FontWeight.SemiBold),
           color = textColor,
         )
       }
@@ -499,7 +493,7 @@ private fun RenderTableBlock(
       Modifier
         .fillMaxWidth()
         .horizontalScroll(scrollState)
-        .border(1.dp, mobileTextSecondary.copy(alpha = 0.25f)),
+        .border(1.dp, ClawTheme.colors.textMuted.copy(alpha = 0.25f)),
   ) {
     for (row in rows) {
       Row(
@@ -509,11 +503,11 @@ private fun RenderTableBlock(
           val cell = row.cells.getOrNull(index) ?: AnnotatedString("")
           Text(
             text = cell,
-            style = if (row.isHeader) mobileCaption1.copy(fontWeight = FontWeight.SemiBold) else inlineStyles.baseCallout,
+            style = if (row.isHeader) ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold) else inlineStyles.baseCallout,
             color = textColor,
             modifier =
               Modifier
-                .border(1.dp, mobileTextSecondary.copy(alpha = 0.22f))
+                .border(1.dp, ClawTheme.colors.textMuted.copy(alpha = 0.22f))
                 .padding(horizontal = 8.dp, vertical = 6.dp)
                 .width(160.dp),
           )
@@ -1213,8 +1207,8 @@ private fun InlineBase64Image(
     Text(
       text = nativeString("Image unavailable"),
       modifier = Modifier.padding(vertical = 2.dp),
-      style = mobileCaption1,
-      color = mobileTextSecondary,
+      style = ClawTheme.type.caption,
+      color = ClawTheme.colors.textMuted,
     )
   }
 }

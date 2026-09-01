@@ -16,9 +16,12 @@ vi.mock("../config/sessions/paths.js", () => ({
     `/tmp/${scope.agentId}/sessions.json`,
 }));
 vi.mock("../config/sessions/session-accessor.js", () => ({
-  listSessionEntriesReadOnly: () => [],
+  readSessionStoreSummaryReadOnly: () => ({ count: 0, recent: [], byAgent: new Map() }),
 }));
-vi.mock("../infra/fs-safe.js", () => ({ pathExists: async () => false }));
+vi.mock("../infra/fs-safe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/fs-safe.js")>()),
+  pathExists: async () => false,
+}));
 
 describe("getAgentLocalStatuses", () => {
   beforeEach(() => {
@@ -53,6 +56,7 @@ describe("getAgentLocalStatuses", () => {
       defaultId: "alpha",
       ownership: "sole",
       selectionRequired: false,
+      agents: [{ id: "alpha", sessionsPath: "/tmp/alpha/openclaw-agent.alpha.sqlite" }],
     });
   });
 });

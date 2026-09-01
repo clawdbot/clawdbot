@@ -17,7 +17,14 @@ import {
 import { isPathInside } from "../security/scan-paths.js";
 import { getGlobalHookRunner } from "./hook-runner-global.js";
 import { createBeforeInstallHookPayload } from "./install-policy-context.js";
-import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
+import type {
+  InstallSecurityScanResult,
+  SkillInstallSpecMetadata,
+} from "./install-security-scan.js";
+import type {
+  InstallPolicyWarningDetails,
+  InstallSafetyOverrides,
+} from "./install-security-scan.types.js";
 
 type InstallScanLogger = {
   warn?: (message: string) => void;
@@ -87,29 +94,6 @@ type PackageTraversalLimits = {
 type InstalledPackageScanRoot = {
   packageDir: string;
   realPath: string;
-};
-
-type SkillInstallSpec = {
-  id?: string;
-  kind: "brew" | "node" | "go" | "uv" | "download";
-  label?: string;
-  bins?: string[];
-  os?: string[];
-  formula?: string;
-  package?: string;
-  module?: string;
-  url?: string;
-  archive?: string;
-  extract?: boolean;
-  stripComponents?: number;
-  targetDir?: string;
-};
-
-export type InstallSecurityScanResult = {
-  blocked?: {
-    code?: "security_scan_blocked" | "security_scan_failed";
-    reason: string;
-  };
 };
 
 function failOversizedInstallPolicyWarning(params: {
@@ -578,7 +562,7 @@ async function runBeforeInstallHook(params: {
   requestedSpecifier?: string;
   skill?: {
     installId: string;
-    installSpec?: SkillInstallSpec;
+    installSpec?: SkillInstallSpecMetadata;
   };
   plugin?: {
     contentType: "bundle" | "package" | "file";
@@ -729,7 +713,7 @@ async function runOperatorInstallPolicy(params: {
   requestedSpecifier?: string;
   skill?: {
     installId: string;
-    installSpec?: SkillInstallSpec;
+    installSpec?: SkillInstallSpecMetadata;
   };
   plugin?: {
     contentType: "bundle" | "package" | "file" | "dependency-tree";
@@ -821,10 +805,18 @@ async function runOperatorInstallPolicy(params: {
     logPolicyResult(result);
     return undefined;
   }
+  const installPolicyWarning: InstallPolicyWarningDetails = {
+    targetName: params.targetName,
+    targetType: params.targetType,
+    requestMode: params.requestMode,
+    reason: result.warning.reason,
+    ...(result.findings?.length ? { findings: result.findings } : {}),
+  };
   if (!params.onInstallPolicyWarning) {
     return {
       blocked: {
         code: "security_scan_blocked",
+        installPolicyWarning,
         reason: formatInstallPolicyNotice({
           decision: "warn",
           findings: result.findings,
@@ -838,9 +830,7 @@ async function runOperatorInstallPolicy(params: {
   }
   logPolicyResult(result);
   const acknowledgement = await params.onInstallPolicyWarning({
-    targetName: params.targetName,
-    targetType: params.targetType,
-    requestMode: params.requestMode,
+    ...installPolicyWarning,
   });
   if (acknowledgement.status === "approved") {
     const reevaluated = await evaluatePolicy();
@@ -866,6 +856,13 @@ async function runOperatorInstallPolicy(params: {
         return {
           blocked: {
             code: "security_scan_blocked",
+            installPolicyWarning: {
+              targetName: params.targetName,
+              targetType: params.targetType,
+              requestMode: params.requestMode,
+              reason: reevaluated.warning.reason,
+              ...(reevaluated.findings?.length ? { findings: reevaluated.findings } : {}),
+            },
             reason: formatInstallPolicyNotice({
               decision: "warn",
               findings: reevaluated.findings,
@@ -888,6 +885,7 @@ async function runOperatorInstallPolicy(params: {
   return {
     blocked: {
       code: "security_scan_blocked",
+      installPolicyWarning,
       reason: "Install cancelled: the install policy warning was not approved.",
     },
   };
@@ -1228,7 +1226,7 @@ export async function preflightPluginGitInstallPolicyRuntime(params: {
 export async function evaluateSkillInstallPolicyRuntime(params: {
   config?: OpenClawConfig;
   installId: string;
-  installSpec?: SkillInstallSpec;
+  installSpec?: SkillInstallSpecMetadata;
   logger: InstallScanLogger;
   mode?: "install" | "update";
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];

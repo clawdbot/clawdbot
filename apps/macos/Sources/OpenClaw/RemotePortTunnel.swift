@@ -74,10 +74,6 @@ final class RemotePortTunnel: @unchecked Sendable {
     deinit {
         Self.cleanupStderr(self.stderrHandle)
         let receipt = self.guardianReceipt
-        guard self.process.isRunning else {
-            Task { await PortGuardian.shared.removeRecord(receipt) }
-            return
-        }
         // deinit cannot wait. Leave the receipt durable until a later sweep proves
         // the child exited; deleting it after TERM alone can orphan a resistant SSH.
         Task { await PortGuardian.shared.relinquishRecord(receipt) }
@@ -87,8 +83,8 @@ final class RemotePortTunnel: @unchecked Sendable {
     func terminate() async {
         await self.process.terminate()
         Self.cleanupStderr(self.stderrHandle)
-        let receipt = self.guardianReceipt
-        Task { await PortGuardian.shared.removeRecord(receipt) }
+        // Finish retiring this receipt before a replacement spawn reserves the ledger.
+        await PortGuardian.shared.removeRecord(self.guardianReceipt)
     }
 
     static func configuration(remotePort: Int) throws -> Configuration {
@@ -179,7 +175,7 @@ final class RemotePortTunnel: @unchecked Sendable {
         var platformOptions = PlatformOptions()
         platformOptions.qualityOfService = .userInitiated
         let processConfiguration = Subprocess.Configuration(
-            .path(.init("/usr/bin/ssh")),
+            executable: .path(.init("/usr/bin/ssh")),
             arguments: Arguments(args),
             environment: ManagedProcess.environment(from: CommandResolver.sshEnvironment()),
             platformOptions: platformOptions)
@@ -195,6 +191,9 @@ final class RemotePortTunnel: @unchecked Sendable {
         do {
             processIdentifier = try await process.waitUntilStarted()
         } catch {
+            // Cancellation abandons the waiter, not the detached spawn. Reap the
+            // child before releasing its reservation or closing inherited handles.
+            await process.terminate(gracefully: false)
             await PortGuardian.shared.cancelTunnelSpawn(spawnPreparation)
             Self.cleanupStderr(stderrHandle)
             throw error

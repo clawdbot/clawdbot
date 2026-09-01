@@ -1,4 +1,5 @@
 import type { Message, MessageEntity } from "grammy/types";
+import { markdownToIR } from "openclaw/plugin-sdk/text-chunking";
 import { describe, expect, it } from "vitest";
 import { getTelegramTextParts, joinTelegramTextParts } from "./body-helpers.js";
 import { renderTelegramTextEntities } from "./inbound-text-entities.js";
@@ -50,6 +51,31 @@ describe("getTelegramTextParts", () => {
       entities: [],
     });
   });
+
+  it("preserves native poll links with Markdown-sensitive labels and destinations", () => {
+    const label = "docs]more";
+    const url = "https://example.com/report)final";
+    const result = getTelegramTextParts(
+      asTelegramMessage({
+        poll: {
+          id: "poll-links",
+          question: "Review the report?",
+          options: [{ text: "Yes", voter_count: 1 }],
+          total_voter_count: 1,
+          is_closed: false,
+          is_anonymous: true,
+          type: "regular",
+          allows_multiple_answers: false,
+          description: `Read ${label}`,
+          description_entities: [{ type: "text_link", offset: 5, length: label.length, url }],
+        },
+      }),
+    );
+
+    const parsed = markdownToIR(result.text);
+    expect(parsed.text).toContain(`Read ${label}`);
+    expect(parsed.links.map((link) => link.href)).toEqual([url]);
+  });
 });
 
 describe("joinTelegramTextParts", () => {
@@ -96,6 +122,72 @@ describe("joinTelegramTextParts", () => {
       text: "bold",
       entities: [{ type: "bold", offset: 0, length: 4 }],
     });
+  });
+
+  it("preserves links from joined messages and captions through the real Markdown parser", () => {
+    const messageLabel = "😀 report]";
+    const captionLabel = "[caption";
+    const messageUrl = "https://example.com/message)final";
+    const captionUrl = "https://example.com/caption(a)b)";
+    const result = joinTelegramTextParts(
+      [
+        asTelegramMessage({
+          text: `Read ${messageLabel}`,
+          entities: [
+            { type: "text_link", offset: 5, length: messageLabel.length, url: messageUrl },
+          ],
+        }),
+        asTelegramMessage({
+          caption: `Open ${captionLabel}`,
+          caption_entities: [
+            { type: "text_link", offset: 5, length: captionLabel.length, url: captionUrl },
+          ],
+        }),
+      ],
+      "\n",
+    );
+
+    const parsed = markdownToIR(renderTelegramTextEntities(result.text, result.entities));
+
+    expect(parsed.text).toBe(result.text);
+    expect(parsed.links.map((link) => link.href)).toEqual([messageUrl, captionUrl]);
+  });
+
+  it.each([
+    "npm test",
+    "a`b",
+    "`npm",
+    "npm`",
+    "`npm`",
+    "``npm```",
+    "`",
+    " npm",
+    "npm ",
+    " npm ",
+    " ",
+    "   ",
+  ])("preserves literal inline code %j from joined text and captions", (code) => {
+    const prefix = "😀 Code: ";
+    const text = `${prefix}${code} end`;
+    const entities: MessageEntity[] = [
+      { type: "code", offset: prefix.length, length: code.length },
+    ];
+    const result = joinTelegramTextParts(
+      [
+        asTelegramMessage({ text, entities }),
+        asTelegramMessage({ caption: text, caption_entities: entities }),
+      ],
+      "\n",
+    );
+
+    const parsed = markdownToIR(renderTelegramTextEntities(result.text, result.entities));
+
+    expect(parsed.text).toBe(result.text);
+    expect(
+      parsed.styles
+        .filter((span) => span.style === "code")
+        .map((span) => parsed.text.slice(span.start, span.end)),
+    ).toEqual([code, code]);
   });
 });
 

@@ -2,8 +2,11 @@
 import http from "node:http";
 import net from "node:net";
 import type { AddressInfo } from "node:net";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { WebSocketServer, type WebSocket } from "ws";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayClient } from "./client.js";
+import { rawDataToString } from "./websocket-data.js";
 
 describe("GatewayClient websocket opening handshakeTimeout", () => {
   const servers: net.Server[] = [];
@@ -38,6 +41,78 @@ describe("GatewayClient websocket opening handshakeTimeout", () => {
     });
     return (server.address() as AddressInfo).port;
   }
+
+  it("keeps a hello received during WebSocket closing in the pre-hello failure path", async () => {
+    const server = http.createServer();
+    const wss = new WebSocketServer({ server });
+    const port = await listen(server);
+    const onHelloOk = vi.fn();
+    const onConnectError = vi.fn();
+    const onClose = vi.fn();
+    let peer: WebSocket;
+    let markerReceived = false;
+    const closed = createDeferred();
+    const client = new GatewayClient({
+      url: `ws://127.0.0.1:${port}`,
+      deviceIdentity: null,
+      onHelloOk,
+      onConnectError,
+      onClose: (...args) => {
+        onClose(...args);
+        closed.resolve();
+      },
+      onEvent: (event) => {
+        if (event.event === "late-hello-marker") {
+          markerReceived = true;
+          peer.resume();
+        }
+      },
+    });
+    clients.push(client);
+    wss.on("connection", (socket) => {
+      peer = socket;
+      socket.send(
+        JSON.stringify({
+          type: "event",
+          event: "connect.challenge",
+          payload: { nonce: "synthetic-nonce", ts: Date.now() },
+        }),
+      );
+      socket.once("message", (raw) => {
+        const frame = JSON.parse(rawDataToString(raw)) as { id: string };
+        // Hold the peer's close reply until the real client has received both
+        // frames. updateNodeManifest starts closing through the public API.
+        socket.pause();
+        client.updateNodeManifest({ caps: [], commands: [] });
+        socket.send(
+          JSON.stringify({ type: "res", id: frame.id, ok: true, payload: { type: "hello-ok" } }),
+        );
+        socket.send(JSON.stringify({ type: "event", event: "late-hello-marker" }));
+      });
+    });
+    try {
+      client.start();
+      await closed.promise;
+      expect(markerReceived).toBe(true);
+      expect(onHelloOk).not.toHaveBeenCalled();
+      expect(onConnectError).toHaveBeenCalledExactlyOnceWith(
+        new Error("gateway closed (1012): node manifest changed"),
+      );
+      expect(onClose).toHaveBeenCalledExactlyOnceWith(
+        1012,
+        "node manifest changed",
+        expect.objectContaining({ phase: "pre-hello", connectRequestSent: true }),
+      );
+    } finally {
+      await client.stopAndWait();
+      for (const socket of wss.clients) {
+        socket.terminate();
+      }
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
+    }
+  });
 
   it("fails when a peer accepts TCP but never completes the websocket upgrade", async () => {
     // Accept TCP but never complete the websocket upgrade so missing
@@ -138,11 +213,53 @@ describe("GatewayClient websocket opening handshakeTimeout", () => {
     });
     await retried;
     expect(requestCount).toBe(2);
-    expect(errors).toHaveLength(2);
     expect(errors.map((error) => error.message)).toEqual([
       "gateway rejected websocket upgrade (HTTP 503): Gateway websocket admission closed",
       "gateway rejected websocket upgrade (HTTP 503): Gateway websocket admission closed",
     ]);
+  });
+
+  it.each([
+    {
+      name: "a typed Gateway rejection",
+      body: JSON.stringify({
+        error: {
+          type: "proxy_attribution_required",
+          message: "Configure gateway.trustedProxies narrowly",
+        },
+      }),
+      expectedDetails: {
+        gatewayErrorType: "proxy_attribution_required",
+        gatewayErrorMessage: "Configure gateway.trustedProxies narrowly",
+      },
+    },
+    { name: "malformed JSON", body: "{", expectedDetails: {} },
+    { name: "a non-object JSON body", body: "null", expectedDetails: {} },
+  ])("preserves structured upgrade details for $name", async ({ body, expectedDetails }) => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(body);
+    });
+    const port = await listen(server);
+    const error = await new Promise<Error>((resolve) => {
+      const client = new GatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        onConnectError: resolve,
+      });
+      clients.push(client);
+      client.start();
+    });
+
+    expect(error).toMatchObject({
+      details: {
+        reason: "websocket-upgrade-rejected",
+        httpStatus: 403,
+        ...expectedDetails,
+      },
+    });
+    if (!("gatewayErrorType" in expectedDetails)) {
+      expect(error).not.toMatchObject({ details: { gatewayErrorType: expect.anything() } });
+    }
   });
 
   it("caps a rejected websocket upgrade body before the peer ends it", async () => {

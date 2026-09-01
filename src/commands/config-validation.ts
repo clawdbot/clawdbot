@@ -6,7 +6,7 @@ import {
   type OpenClawConfig,
   readConfigFileSnapshot,
 } from "../config/config.js";
-import { formatConfigIssueLines } from "../config/issue-format.js";
+import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
 import {
   buildPluginCompatibilitySnapshotNotices,
@@ -17,15 +17,28 @@ import type { RuntimeEnv } from "../runtime.js";
 /** Read the config file and exit through the runtime when validation fails. */
 export async function requireValidConfigFileSnapshot(
   runtime: RuntimeEnv,
-  opts?: { includeCompatibilityAdvisory?: boolean; skipPluginValidation?: boolean },
+  opts?: {
+    includeCompatibilityAdvisory?: boolean;
+    observe?: boolean;
+    skipPluginValidation?: boolean;
+    adoptPluginMetadata?: boolean;
+  },
 ): Promise<ConfigFileSnapshot | null> {
-  const snapshot = await readConfigFileSnapshot(
-    opts?.skipPluginValidation ? { skipPluginValidation: true } : undefined,
-  );
+  const readOptions = {
+    ...(opts?.observe === false ? { observe: false } : {}),
+    ...(opts?.skipPluginValidation ? { skipPluginValidation: true } : {}),
+  };
+  const snapshot = opts?.adoptPluginMetadata
+    ? (
+        await (
+          await import("../cli/command-config-snapshot.js")
+        ).readCommandConfigSnapshot(readOptions)
+      ).snapshot
+    : await readConfigFileSnapshot(Object.keys(readOptions).length > 0 ? readOptions : undefined);
   if (snapshot.exists && !snapshot.valid) {
     const issues =
       snapshot.issues.length > 0
-        ? formatConfigIssueLines(snapshot.issues, "-").join("\n")
+        ? renderConfigValidationIssueLines(snapshot).join("\n")
         : "Unknown validation issue.";
     runtime.error(`OpenClaw config is invalid: ${snapshot.path}\n${issues}`);
     runtime.error(
@@ -59,7 +72,12 @@ export async function requireValidConfigFileSnapshot(
 /** Read and return a valid OpenClaw config, or null after reporting validation errors. */
 export async function requireValidConfig(
   runtime: RuntimeEnv,
-  opts?: { includeCompatibilityAdvisory?: boolean; skipPluginValidation?: boolean },
+  opts?: {
+    includeCompatibilityAdvisory?: boolean;
+    observe?: boolean;
+    skipPluginValidation?: boolean;
+    adoptPluginMetadata?: boolean;
+  },
 ): Promise<OpenClawConfig | null> {
   return (await requireValidConfigFileSnapshot(runtime, opts))?.config ?? null;
 }

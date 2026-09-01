@@ -1,16 +1,14 @@
 import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
 import type { LobsterPetPaletteId } from "../../components/lobster-pet-contract.ts";
-import { LOBSTER_PALETTE_LORE } from "../../components/lobster-pet-lore.ts";
 import {
-  LOBSTER_PET_PALETTES,
   canonicalLobsterLook,
   lobsterLookStyle,
-  lobsterPaletteName,
   renderLobsterSvg,
-} from "../../components/lobster-pet.ts";
+} from "../../components/lobster-pet-look.ts";
+import { LOBSTER_PALETTE_LORE, lobsterPaletteName } from "../../components/lobster-pet-lore.ts";
+import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import { i18n, t } from "../../i18n/index.ts";
-import "../../styles/lobster-pet.css";
 
 type LobsterdexViewEntry = {
   firstSeenAt: number | null;
@@ -20,8 +18,13 @@ type LobsterdexViewEntry = {
 
 type LobsterdexViewEntries = ReadonlyMap<string, LobsterdexViewEntry>;
 
+export type LobsterdexCopyFeedback = {
+  paletteId: LobsterPetPaletteId;
+  status: "copied" | "error";
+};
+
 type LobsterdexViewProps = {
-  copiedPaletteId?: LobsterPetPaletteId | null;
+  copyFeedback?: LobsterdexCopyFeedback | null;
   onCopyLink?: (paletteId: LobsterPetPaletteId) => void;
 };
 
@@ -47,6 +50,9 @@ export function renderLobsterdex(entries: LobsterdexViewEntries, props: Lobsterd
         </div>
         <span class="lobsterdex-page__count">${countLabel}</span>
       </header>
+      ${props.copyFeedback?.status === "error"
+        ? html`<div class="callout danger" role="alert">${t("common.copyFailed")}</div>`
+        : nothing}
       <div class="lobsterdex-page__grid" aria-label=${countLabel}>
         ${LOBSTER_PET_PALETTES.map((palette) => {
           const look = canonicalLobsterLook(palette);
@@ -78,7 +84,10 @@ export function renderLobsterdex(entries: LobsterdexViewEntries, props: Lobsterd
                 @click=${() => props.onCopyLink?.(palette.id)}
               >
                 <span aria-hidden="true"
-                  >${props.copiedPaletteId === palette.id ? icons.check : icons.link}</span
+                  >${props.copyFeedback?.status === "copied" &&
+                  props.copyFeedback.paletteId === palette.id
+                    ? icons.check
+                    : icons.link}</span
                 >
               </button>
               <div

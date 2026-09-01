@@ -402,7 +402,6 @@ describe("plugin management Featured authority", () => {
 
   it.each([
     { id: "workboard", name: "Workboard", packageName: "@openclaw/workboard" },
-    { id: "open-prose", name: "OpenProse", packageName: "@openclaw/open-prose" },
     { id: "memory-wiki", name: "Memory Wiki", packageName: "@openclaw/memory-wiki" },
   ])("keeps local curation for private bundled-only $name", async (plugin) => {
     mocks.metadata.mockReturnValue(metadataSnapshot(plugin));

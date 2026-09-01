@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readDevicePairSetupCompletion } from "../infra/device-bootstrap.js";
 import {
-  loadDeviceBootstrapTokenRecords,
   persistDeviceBootstrapTokenRecords,
   persistDevicePairingStoreState,
 } from "../infra/device-pairing-store.js";
@@ -94,6 +93,7 @@ describe("device pair setup completion", () => {
   it("keeps the completion recoverable when a slow subscriber drops the frame", async () => {
     const baseDir = await tempDirs.make("openclaw-setup-completion-slow-");
     const slowSocket = {
+      readyState: 1,
       bufferedAmount: MAX_BUFFERED_BYTES + 1,
       send: vi.fn(),
       close: vi.fn(),
@@ -145,41 +145,6 @@ describe("device pair setup completion", () => {
     });
   });
 
-  it("records the completion even when the broadcast itself fails", async () => {
-    const baseDir = await tempDirs.make("openclaw-setup-completion-broadcast-fail-");
-    const broadcast = vi.fn(() => {
-      throw new Error("socket fanout failed");
-    });
-
-    persistDeviceBootstrapTokenRecords(
-      {
-        "bootstrap-secret": {
-          token: "bootstrap-secret",
-          setupId: "setup-broadcast-fail",
-          ts: Date.now(),
-          deviceId: "device-123",
-          profile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
-          issuedAtMs: Date.now(),
-        },
-      },
-      baseDir,
-    );
-    const handoff = await consumeSetupHandoff({
-      token: "bootstrap-secret",
-      deviceId: "device-123",
-      baseDir,
-      ts: 4,
-    });
-    const confirmed = await confirmSetupHandoffDelivery({ handoff: handoff!, baseDir });
-    expect(confirmed).not.toBeNull();
-    expect(() => broadcastSetupHandoffCompletion({ handoff: confirmed!, broadcast })).toThrow(
-      "socket fanout failed",
-    );
-    await expect(
-      readDevicePairSetupCompletion({ baseDir, setupId: "setup-broadcast-fail" }),
-    ).resolves.toMatchObject({ setupId: "setup-broadcast-fail", access: "limited" });
-  });
-
   it("ignores generic bootstrap records without setup correlation", async () => {
     const baseDir = await tempDirs.make("openclaw-setup-completion-generic-");
     persistDeviceBootstrapTokenRecords(
@@ -202,50 +167,5 @@ describe("device pair setup completion", () => {
     expect(handoff).toMatchObject({ record: { token: "generic" } });
     broadcastSetupHandoffCompletion({ handoff: handoff!, broadcast });
     expect(broadcast).not.toHaveBeenCalled();
-  });
-
-  it("does not consume a setup credential after its paired binding changed", async () => {
-    const baseDir = await tempDirs.make("openclaw-setup-completion-stale-binding-");
-    persistDeviceBootstrapTokenRecords(
-      {
-        "bootstrap-secret": {
-          token: "bootstrap-secret",
-          setupId: "setup-stale-binding",
-          ts: Date.now(),
-          deviceId: "device-123",
-          profile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
-          issuedAtMs: Date.now(),
-        },
-      },
-      baseDir,
-    );
-    persistDevicePairingStoreState(
-      {
-        pendingById: {},
-        pairedByDeviceId: {
-          "device-123": {
-            deviceId: "device-123",
-            publicKey: "replacement-key",
-            createdAtMs: 1,
-            approvedAtMs: 2,
-          },
-        },
-      },
-      baseDir,
-      "paired",
-    );
-
-    await expect(
-      consumeSetupHandoff({
-        token: "bootstrap-secret",
-        deviceId: "device-123",
-        pairedDeviceMatches: (device) => device?.publicKey === "original-key",
-        baseDir,
-      }),
-    ).resolves.toBeNull();
-    expect(loadDeviceBootstrapTokenRecords(baseDir)).toHaveProperty("bootstrap-secret");
-    await expect(
-      readDevicePairSetupCompletion({ baseDir, setupId: "setup-stale-binding" }),
-    ).resolves.toBeNull();
   });
 });

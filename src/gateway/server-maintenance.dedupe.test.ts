@@ -12,6 +12,11 @@ const cleanupManagedOutgoingMediaRecordsMock = vi.fn(async () => ({
   deletedFileCount: 0,
   retainedCount: 0,
 }));
+const pruneExpiredDevicePairSetupCompletionsMock = vi.fn(async () => 0);
+
+vi.mock("../infra/device-bootstrap.js", () => ({
+  pruneExpiredDevicePairSetupCompletions: pruneExpiredDevicePairSetupCompletionsMock,
+}));
 
 vi.mock("../infra/delivery-queue-sqlite.js", async () => {
   const actual = await vi.importActual<typeof import("../infra/delivery-queue-sqlite.js")>(
@@ -59,7 +64,6 @@ function createMaintenanceTimerDeps() {
     logHealth: { info: vi.fn(), error: vi.fn() },
     runWorktreeGc: vi.fn(async () => undefined),
     runDeliveryQueueMediaGc: vi.fn(async () => undefined),
-    runDevicePairSetupCompletionGc: vi.fn(async () => undefined),
     runManagedOutgoingMediaGc: cleanupManagedOutgoingMediaRecordsMock,
   };
 }
@@ -87,14 +91,12 @@ async function stopMaintenanceTimers(timers: {
   startMediaCleanup: () => void;
   stopMediaCleanup: () => Promise<"drained" | "timed-out">;
   worktreeCleanup: NodeJS.Timeout;
-  skillCuratorCleanup: () => void;
 }) {
   clearInterval(timers.tickInterval);
   clearInterval(timers.healthInterval);
   clearInterval(timers.dedupeCleanup);
   clearInterval(timers.worktreeCleanup);
   await timers.stopMediaCleanup();
-  timers.skillCuratorCleanup();
   vi.useRealTimers();
 }
 
@@ -103,6 +105,7 @@ describe("gateway dedupe maintenance", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.clearAllMocks();
+    pruneExpiredDevicePairSetupCompletionsMock.mockReset().mockResolvedValue(0);
   });
 
   it("keeps active exec approval dedupe aliases past the normal ttl", async () => {

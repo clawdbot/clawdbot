@@ -1,7 +1,9 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { loadSettings, patchSettings, type UiSettings } from "../../app/settings.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import {
   createRealtimeTalkConversationState,
+  orderRealtimeTalkConversation,
   updateRealtimeTalkConversation,
   type RealtimeTalkConversationEntry,
   type RealtimeTalkConversationState,
@@ -92,7 +94,7 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
     state.settings = patchSettings({ talkCameraAutoEnable: enabled });
   };
   const showCameraError = (error: unknown) => {
-    state.realtimeTalkDetail = error instanceof Error ? error.message : String(error);
+    state.realtimeTalkDetail = formatUiError(error);
     state.realtimeTalkCameraError = true;
     state.requestUpdate();
   };
@@ -184,7 +186,8 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
             return;
           }
           state.realtimeTalkStatus = status;
-          state.realtimeTalkDetail = detail ?? null;
+          state.realtimeTalkDetail =
+            status === "error" && detail ? formatUiExternalText(detail) : (detail ?? null);
           state.realtimeTalkCameraError = false;
           state.realtimeTalkActive = status !== "idle";
           if (status === "idle" || status === "error") {
@@ -228,6 +231,17 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
           state.realtimeTalkConversation = state.realtimeTalkConversationState.entries;
           state.requestUpdate();
         },
+        onTranscriptOrder: (orders) => {
+          if (state.realtimeTalkSession !== session) {
+            return;
+          }
+          state.realtimeTalkConversationState = orderRealtimeTalkConversation(
+            state.realtimeTalkConversationState,
+            orders,
+          );
+          state.realtimeTalkConversation = state.realtimeTalkConversationState.entries;
+          state.requestUpdate();
+        },
         onVideoStream: (stream) => {
           if (state.realtimeTalkSession !== session) {
             return;
@@ -261,7 +275,7 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
       if (state.realtimeTalkSession !== session) {
         return;
       }
-      const detail = error instanceof Error ? error.message : String(error);
+      const detail = formatUiError(error);
       stopChatRealtimeTalk(state);
       state.realtimeTalkStatus = "error";
       state.realtimeTalkDetail = detail;

@@ -6,10 +6,13 @@ import {
   setCommandLaneConcurrency,
 } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import type { CronEvent, CronServiceDeps } from "./service/state.js";
 import { loadCronStore, saveCronStore } from "./store.js";
+import { cronStoreKey } from "./store/key.js";
+import { readCronTaskRunHistoryPage } from "./task-run-history.js";
 import type { CronJob } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
@@ -167,19 +170,46 @@ describe("cron one-shot schedule ownership", () => {
           expect(replacement?.state.runningAtMs).toBeUndefined();
         }
 
-        if (mode === "queued") {
-          // Removal aborts the in-flight run: the original run must end as the
-          // operator's explicit stop, never finalize "ok" into the replacement.
-          expect(
-            events.filter((event) => event.action === "finished" && event.jobId === original.id),
-          ).toEqual([
-            expect.objectContaining({
-              status: "error",
-              error: "Cron job removed by operator.",
-              job: expect.objectContaining({ name: "removed original one-shot" }),
-            }),
-          ]);
-        }
+        // Removal aborts the in-flight run: both direct and queued callers need
+        // one durable, visible terminal result for the original run.
+        const finishedEvents = events.filter(
+          (event) => event.action === "finished" && event.jobId === original.id,
+        );
+        expect(finishedEvents).toEqual([
+          expect.objectContaining({
+            status: "error",
+            error: "Cron job removed by operator.",
+            deliveryStatus: "not-requested",
+            job: expect.objectContaining({ name: "removed original one-shot" }),
+          }),
+        ]);
+        const history = readCronTaskRunHistoryPage({
+          storeKey: cronStoreKey(store.storePath),
+          jobId: original.id,
+        });
+        expect(history.entries).toEqual([
+          expect.objectContaining({
+            status: "error",
+            error: "Cron job removed by operator.",
+            deliveryStatus: "not-requested",
+            runId: finishedEvents[0]?.runId,
+          }),
+        ]);
+        const receipts = openOpenClawStateDatabase()
+          .db.prepare(
+            "SELECT receipt_id AS receiptId, status, error_text AS error FROM cron_run_receipts WHERE store_key = ? AND job_id = ?",
+          )
+          .all(cronStoreKey(store.storePath), original.id) as Array<{
+          receiptId: string;
+          status: string;
+          error: string | null;
+        }>;
+        expect(receipts).toEqual([
+          expect.objectContaining({
+            status: "error",
+            error: "Cron job removed by operator.",
+          }),
+        ]);
       } finally {
         release.resolve({ status: "ok", summary: "original run finished" });
         cron.stop();

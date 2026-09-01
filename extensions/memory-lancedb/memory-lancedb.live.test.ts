@@ -82,10 +82,11 @@ describeLive("memory plugin live tests", () => {
     const storeTool = materialize("memory_store");
     const recallTool = materialize("memory_recall");
     const forgetTool = materialize("memory_forget");
+    const storedText = "The user prefers dark mode for all applications";
 
     // Test store
     const storeResult = await storeTool.execute("test-call-1", {
-      text: "The user prefers dark mode for all applications",
+      text: storedText,
       importance: 0.8,
       category: "preference",
     });
@@ -105,10 +106,14 @@ describeLive("memory plugin live tests", () => {
 
     // Test duplicate detection
     const duplicateResult = await storeTool.execute("test-call-3", {
-      text: "The user prefers dark mode for all applications",
+      text: storedText,
     });
 
-    expect(duplicateResult.details?.action).toBe("duplicate");
+    expect(duplicateResult.details).toEqual({
+      action: "already_present",
+      existingId: storedId,
+      existingText: storedText,
+    });
 
     // Test forget
     const forgetResult = await forgetTool.execute("test-call-4", {

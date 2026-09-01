@@ -10,8 +10,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   ensureModel: vi.fn(),
   prepareServer: vi.fn(),
-  selectAsset: vi.fn(() => ({ backend: "metal" })),
-  resolvePaths: vi.fn(() => ({ presetPath: "/runtime/models.ini" })),
+  removeProfiles: vi.fn(),
+  progressUpdate: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-runtime")>()),
+  removeProviderAuthProfilesWithLock: mocks.removeProfiles,
 }));
 
 vi.mock("./managed-server.js", async (importOriginal) => ({
@@ -20,23 +25,22 @@ vi.mock("./managed-server.js", async (importOriginal) => ({
   prepareManagedLlamaServer: mocks.prepareServer,
 }));
 
-vi.mock("./llama-server-install.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./llama-server-install.js")>()),
-  selectLlamaServerAsset: mocks.selectAsset,
-  resolveManagedLlamaServerPaths: mocks.resolvePaths,
-}));
-
 import {
-  DEFAULT_LLAMA_CPP_MODEL_REF,
+  DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE,
+  DEFAULT_LLAMA_CPP_MODEL_ID,
   DEFAULT_LLAMA_CPP_MODEL_SHA256,
   DEFAULT_LLAMA_CPP_MODEL_SIZE_BYTES,
   DEFAULT_LLAMA_CPP_MODEL_URI,
   LLAMA_CPP_PROVIDER_ID,
   meetsLlamaCppDefaultModelRamFloor,
 } from "./defaults.js";
-import { detectLlamaCppSetup, runLlamaCppSetup } from "./setup.js";
+import { detectLlamaCppSetup, prepareLlamaCppSetup, runLlamaCppSetup } from "./setup.js";
 
 const GIB = 1024 ** 3;
+const CUSTOM_EMBEDDING_MODEL =
+  "hf:ggml-org/embeddinggemma-300M-qat-q4_0-GGUF/embeddinggemma-300M-qat-Q4_0.gguf";
+const OTHER_CUSTOM_EMBEDDING_MODEL = "hf:example/other-embedding-GGUF/other-Q4_K_M.gguf";
+const NON_LOCAL_EMBEDDING_MODEL = "hf:example/non-local-embedding-GGUF/non-local-Q4.gguf";
 let tempRoot: string;
 let modelPath: string;
 
@@ -54,12 +58,12 @@ beforeEach(async () => {
   });
   mocks.prepareServer.mockReset().mockResolvedValue({
     command: path.join(tempRoot, "llama-server"),
-    presetPath: path.join(tempRoot, "models.ini"),
     baseUrl: "http://127.0.0.1:19432/v1",
     healthUrl: "http://127.0.0.1:19432/health",
     args: ["--host", "127.0.0.1", "--port", "19432"],
-    backend: "metal",
   });
+  mocks.removeProfiles.mockReset().mockResolvedValue({ version: 1, profiles: {} });
+  mocks.progressUpdate.mockReset();
 });
 
 afterEach(async () => {
@@ -88,11 +92,64 @@ function authContext(confirm: boolean): ProviderAuthContext {
     prompter: {
       confirm: vi.fn(async () => confirm),
       note: vi.fn(async () => {}),
-      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      progress: vi.fn(() => ({ update: mocks.progressUpdate, stop: vi.fn() })),
     },
     runtime: {},
   } as unknown as ProviderAuthContext;
 }
+
+function requestUnconfiguredLocalMemory(ctx: ProviderAuthContext): void {
+  ctx.config.memory = { search: { provider: "local" } };
+  delete ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+}
+
+const externalChatRoutes: Array<{
+  name: string;
+  agents: NonNullable<ProviderAppGuidedSetupContext["config"]["agents"]>;
+}> = [
+  {
+    name: "the default primary",
+    agents: { defaults: { model: { primary: "llama-cpp/external-chat" } } },
+  },
+  {
+    name: "a default fallback",
+    agents: {
+      defaults: {
+        model: {
+          primary: "openai/gpt-5.4",
+          fallbacks: ["llama-cpp/external-chat"],
+        },
+      },
+    },
+  },
+  {
+    name: "an agent primary",
+    agents: {
+      defaults: { model: { primary: "openai/gpt-5.4" } },
+      entries: {
+        helper: { model: { primary: "llama-cpp/external-chat" } },
+      },
+    },
+  },
+  {
+    name: "the default subagent model",
+    agents: {
+      defaults: {
+        model: { primary: "openai/gpt-5.4" },
+        subagents: { model: "llama-cpp/external-chat" },
+      },
+    },
+  },
+  {
+    name: "an agent subagent model",
+    agents: {
+      defaults: { model: { primary: "openai/gpt-5.4" } },
+      entries: {
+        helper: { subagents: { model: "llama-cpp/external-chat" } },
+      },
+    },
+  },
+];
 
 describe("llama.cpp managed setup", () => {
   it("pins the default model identity and integrity", () => {
@@ -149,6 +206,36 @@ describe("llama.cpp managed setup", () => {
     });
   });
 
+  it("does not detect chat from a cached model when the managed inventory is empty", async () => {
+    const command = path.join(tempRoot, "llama-server");
+    const preset = path.join(tempRoot, "models.ini");
+    const cachedDefault = path.join(tempRoot, DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE);
+    await Promise.all([
+      fs.writeFile(command, "binary"),
+      fs.writeFile(preset, "version = 1"),
+      fs.writeFile(cachedDefault, "GGUF"),
+    ]);
+    const cfg = config();
+    const provider = cfg.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+    if (!provider) {
+      throw new Error("missing fixture provider");
+    }
+    provider.localService = {
+      command,
+      args: ["--models-preset", preset],
+      healthUrl: "http://127.0.0.1:19432/health",
+    };
+
+    await expect(detectLlamaCppSetup({ config: cfg, env: {} })).resolves.toBeNull();
+    await expect(
+      prepareLlamaCppSetup({
+        config: cfg,
+        env: {},
+        modelRef: `${LLAMA_CPP_PROVIDER_ID}/${DEFAULT_LLAMA_CPP_MODEL_ID}`,
+      }),
+    ).resolves.toBeNull();
+  });
+
   it("does not offer the default download below the RAM floor", async () => {
     vi.mocked(os.totalmem).mockReturnValue(8 * GIB);
     const ctx = authContext(true);
@@ -157,6 +244,291 @@ describe("llama.cpp managed setup", () => {
     expect(ctx.prompter.confirm).not.toHaveBeenCalled();
     expect(mocks.ensureModel).not.toHaveBeenCalledWith(expect.objectContaining({ download: true }));
   });
+
+  it("offers embedding-only setup for local memory below the chat RAM floor", async () => {
+    vi.mocked(os.totalmem).mockReturnValue(8 * GIB);
+    const ctx = authContext(true);
+    requestUnconfiguredLocalMemory(ctx);
+    ctx.config.agents = { defaults: { model: { primary: "openai/gpt-5.4" } } };
+
+    const result = await runLlamaCppSetup(ctx);
+
+    expect(ctx.prompter.confirm).toHaveBeenCalledWith({
+      message:
+        "OpenClaw can install a verified llama.cpp server and download only the local embedding model (about 0.3 GB). This will not install or change your chat model. Continue?",
+      initialValue: false,
+    });
+    expect(result.defaultModel).toBeUndefined();
+    expect(result.configPatch?.models?.providers?.[LLAMA_CPP_PROVIDER_ID]?.models).toEqual([]);
+    expect(ctx.config.agents?.defaults?.model).toEqual({ primary: "openai/gpt-5.4" });
+    expect(
+      mocks.ensureModel.mock.calls.filter(([options]) => options.download === true),
+    ).toHaveLength(1);
+    expect(mocks.prepareServer).toHaveBeenCalledWith({
+      chatModel: { mode: "remove" },
+      embeddingModelIsDefault: true,
+      embeddingModelPath: path.join(tempRoot, "embedding.gguf"),
+      port: undefined,
+    });
+  });
+
+  it.each([
+    { name: "embedding-only", totalmem: 8 * GIB },
+    { name: "chat", totalmem: 16 * GIB },
+  ])("uses the configured embedding model during $name setup", async ({ totalmem }) => {
+    vi.mocked(os.totalmem).mockReturnValue(totalmem);
+    const ctx = authContext(true);
+    requestUnconfiguredLocalMemory(ctx);
+    ctx.config.memory = {
+      search: {
+        provider: "local",
+        local: { modelPath: CUSTOM_EMBEDDING_MODEL },
+      },
+    };
+    ctx.config.agents = {
+      entries: {
+        alpha: { memory: { search: { provider: "local" } } },
+        beta: { memory: { search: { provider: "local" } } },
+      },
+    };
+
+    await runLlamaCppSetup(ctx);
+
+    expect(ctx.prompter.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("your configured local embedding model"),
+      }),
+    );
+    expect(mocks.ensureModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: CUSTOM_EMBEDDING_MODEL,
+        download: true,
+      }),
+    );
+    expect(mocks.prepareServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        embeddingModelIsDefault: false,
+        embeddingModelPath: path.join(tempRoot, "embedding.gguf"),
+      }),
+    );
+    const customDownload = mocks.ensureModel.mock.calls.find(
+      ([options]) => options.source === CUSTOM_EMBEDDING_MODEL && options.download === true,
+    );
+    if (!customDownload) {
+      throw new Error("configured embedding download was not requested");
+    }
+    customDownload[0].onProgress({
+      downloadedSize: 150_000_000,
+      totalSize: 300_000_000,
+      bytesPerSecond: 12_000_000,
+    });
+    expect(mocks.progressUpdate).toHaveBeenCalledWith(
+      expect.stringContaining("Downloading configured embedding model"),
+    );
+  });
+
+  it("requires consent before embedding-only setup", async () => {
+    vi.mocked(os.totalmem).mockReturnValue(8 * GIB);
+    const ctx = authContext(false);
+    requestUnconfiguredLocalMemory(ctx);
+
+    await expect(runLlamaCppSetup(ctx)).resolves.toEqual({ profiles: [] });
+
+    expect(ctx.prompter.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("only the local embedding model"),
+      }),
+    );
+    expect(mocks.ensureModel).not.toHaveBeenCalledWith(expect.objectContaining({ download: true }));
+  });
+
+  it("offers embedding-only setup after the chat download is declined", async () => {
+    const ctx = authContext(false);
+    requestUnconfiguredLocalMemory(ctx);
+    vi.mocked(ctx.prompter.confirm).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+    const result = await runLlamaCppSetup(ctx);
+
+    expect(ctx.prompter.confirm).toHaveBeenCalledTimes(2);
+    expect(result.defaultModel).toBeUndefined();
+    expect(result.configPatch?.models?.providers?.[LLAMA_CPP_PROVIDER_ID]?.models).toEqual([]);
+    expect(
+      mocks.ensureModel.mock.calls.filter(([options]) => options.download === true),
+    ).toHaveLength(1);
+  });
+
+  it("uses the sole effective per-agent embedding model", async () => {
+    vi.mocked(os.totalmem).mockReturnValue(8 * GIB);
+    const ctx = authContext(true);
+    delete ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+    ctx.config.agents = {
+      defaults: { model: { primary: "openai/gpt-5.4" } },
+      entries: {
+        helper: {
+          memory: {
+            search: {
+              provider: "local",
+              local: { modelPath: CUSTOM_EMBEDDING_MODEL },
+            },
+          },
+        },
+        cloud: {
+          memory: {
+            search: {
+              provider: "openai",
+              local: { modelPath: NON_LOCAL_EMBEDDING_MODEL },
+            },
+          },
+        },
+        paused: {
+          memory: {
+            search: {
+              enabled: false,
+              provider: "local",
+              local: { modelPath: OTHER_CUSTOM_EMBEDDING_MODEL },
+            },
+          },
+        },
+      },
+    };
+
+    const result = await runLlamaCppSetup(ctx);
+
+    expect(ctx.prompter.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("your configured local embedding model"),
+      }),
+    );
+    expect(result.configPatch?.models?.providers?.[LLAMA_CPP_PROVIDER_ID]?.models).toEqual([]);
+    expect(mocks.ensureModel).toHaveBeenCalledWith(
+      expect.objectContaining({ source: CUSTOM_EMBEDDING_MODEL, download: true }),
+    );
+    expect(mocks.ensureModel).not.toHaveBeenCalledWith(
+      expect.objectContaining({ source: OTHER_CUSTOM_EMBEDDING_MODEL }),
+    );
+    expect(mocks.ensureModel).not.toHaveBeenCalledWith(
+      expect.objectContaining({ source: NON_LOCAL_EMBEDDING_MODEL }),
+    );
+    expect(mocks.prepareServer).toHaveBeenCalledWith(
+      expect.objectContaining({ embeddingModelIsDefault: false }),
+    );
+  });
+
+  it.each([
+    { name: "embedding-only", totalmem: 8 * GIB },
+    { name: "chat", totalmem: 16 * GIB },
+  ])("stops $name setup when local-memory agents use different models", async ({ totalmem }) => {
+    vi.mocked(os.totalmem).mockReturnValue(totalmem);
+    const ctx = authContext(true);
+    delete ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+    ctx.config.agents = {
+      entries: {
+        alpha: {
+          memory: {
+            search: {
+              provider: "local",
+              local: { modelPath: CUSTOM_EMBEDDING_MODEL },
+            },
+          },
+        },
+        beta: {
+          memory: {
+            search: {
+              provider: "local",
+              local: { modelPath: OTHER_CUSTOM_EMBEDDING_MODEL },
+            },
+          },
+        },
+      },
+    };
+
+    await expect(runLlamaCppSetup(ctx)).resolves.toEqual({ profiles: [] });
+
+    expect(ctx.prompter.note).toHaveBeenCalledWith(
+      expect.stringContaining("different local embedding models"),
+      "Setup skipped",
+    );
+    expect(ctx.prompter.confirm).not.toHaveBeenCalled();
+    expect(mocks.ensureModel).not.toHaveBeenCalledWith(expect.objectContaining({ download: true }));
+    expect(mocks.prepareServer).not.toHaveBeenCalled();
+    expect(mocks.removeProfiles).not.toHaveBeenCalled();
+  });
+
+  it.each(externalChatRoutes)(
+    "does not replace an external llama.cpp provider used as $name",
+    async ({ agents }) => {
+      vi.mocked(os.totalmem).mockReturnValue(8 * GIB);
+      const ctx = authContext(true);
+      ctx.config.memory = { search: { provider: "local" } };
+      ctx.config.agents = agents;
+      const provider = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+      if (!provider) {
+        throw new Error("missing external provider fixture");
+      }
+      provider.models = [
+        {
+          id: "external-chat",
+          name: "External chat",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 8192,
+          maxTokens: 2048,
+        },
+      ];
+
+      await expect(runLlamaCppSetup(ctx)).resolves.toEqual({ profiles: [] });
+
+      expect(ctx.prompter.confirm).not.toHaveBeenCalled();
+      expect(ctx.prompter.note).toHaveBeenCalledWith(
+        expect.stringContaining("existing llama.cpp server"),
+        "Setup skipped",
+      );
+      expect(mocks.ensureModel).not.toHaveBeenCalledWith(
+        expect.objectContaining({ download: true }),
+      );
+      expect(ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID]).toBe(provider);
+    },
+  );
+
+  it.each(externalChatRoutes.filter(({ name }) => name !== "an agent primary"))(
+    "does not replace a managed llama.cpp provider used as $name",
+    async ({ agents }) => {
+      vi.mocked(os.totalmem).mockReturnValue(8 * GIB);
+      const ctx = authContext(true);
+      ctx.config.memory = { search: { provider: "local" } };
+      ctx.config.agents = agents;
+      const provider = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+      if (!provider) {
+        throw new Error("missing managed provider fixture");
+      }
+      provider.localService = {
+        command: path.join(tempRoot, "llama-server"),
+        args: ["--models-preset", path.join(tempRoot, "models.ini")],
+        healthUrl: "http://127.0.0.1:19432/health",
+      };
+      provider.models = [
+        {
+          id: "external-chat",
+          name: "Managed chat",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 8192,
+          maxTokens: 2048,
+        },
+      ];
+
+      await expect(runLlamaCppSetup(ctx)).resolves.toEqual({ profiles: [] });
+
+      expect(ctx.prompter.confirm).not.toHaveBeenCalled();
+      expect(ctx.prompter.note).toHaveBeenCalledWith(
+        expect.stringContaining("chat routes"),
+        "Setup skipped",
+      );
+      expect(ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID]).toBe(provider);
+    },
+  );
 
   it("requires consent before installing and downloading", async () => {
     const ctx = authContext(false);
@@ -173,7 +545,7 @@ describe("llama.cpp managed setup", () => {
 
     await expect(runLlamaCppSetup(ctx)).resolves.toMatchObject({
       profiles: [],
-      defaultModel: DEFAULT_LLAMA_CPP_MODEL_REF,
+      defaultModel: `${LLAMA_CPP_PROVIDER_ID}/${DEFAULT_LLAMA_CPP_MODEL_ID}`,
       configPatch: {
         models: {
           providers: {
@@ -196,9 +568,107 @@ describe("llama.cpp managed setup", () => {
     ).toHaveLength(2);
     expect(mocks.prepareServer).toHaveBeenCalledWith(
       expect.objectContaining({
-        chatModelPath: modelPath,
+        chatModel: expect.objectContaining({ mode: "configure", path: modelPath }),
         embeddingModelPath: path.join(tempRoot, "embedding.gguf"),
       }),
+    );
+  });
+
+  it("preserves custom model config when refreshing an existing managed server", async () => {
+    const customModelPath = path.join(tempRoot, "custom.gguf");
+    await fs.writeFile(customModelPath, "GGUF");
+    const ctx = authContext(true);
+    const provider = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+    if (!provider) {
+      throw new Error("missing managed provider fixture");
+    }
+    provider.localService = {
+      command: path.join(tempRoot, "old-llama-server"),
+      args: ["--models-preset", path.join(tempRoot, "old-models.ini")],
+      healthUrl: "http://127.0.0.1:19432/health",
+    };
+    provider.timeoutSeconds = 321;
+    provider.models = [
+      {
+        id: "custom",
+        name: "Custom model",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32_768,
+        maxTokens: 4096,
+        params: { modelPath: customModelPath, contextSize: 16_384 },
+      },
+    ];
+
+    const result = await runLlamaCppSetup(ctx);
+    const managed = result.configPatch?.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+
+    expect(managed?.timeoutSeconds).toBe(321);
+    expect(managed?.models[0]).toEqual(provider.models[0]);
+    expect(mocks.prepareServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatModel: expect.objectContaining({
+          mode: "configure",
+          id: "custom",
+          path: customModelPath,
+        }),
+      }),
+    );
+  });
+
+  it("replaces external endpoint state when switching to managed setup", async () => {
+    const ctx = authContext(true);
+    ctx.agentDir = path.join(tempRoot, "agent");
+    ctx.config.auth = {
+      profiles: { "llama-cpp:default": { provider: "llama-cpp", mode: "api_key" } },
+      order: { "llama-cpp": ["llama-cpp:default"] },
+    };
+    const provider = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+    if (!provider) {
+      throw new Error("missing external provider fixture");
+    }
+    provider.baseUrl = "http://127.0.0.1:8080/v1";
+    provider.apiKey = "external-key";
+    provider.auth = "api-key";
+    provider.headers = { Authorization: "Bearer external-header" };
+    provider.params = { endpointOnly: true };
+    provider.models = [
+      {
+        id: "external-model",
+        name: "External model",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 2048,
+      },
+    ];
+
+    const result = await runLlamaCppSetup(ctx);
+    const managed = result.configPatch?.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+
+    expect(managed).toMatchObject({
+      baseUrl: "http://127.0.0.1:19432/v1",
+      apiKey: "llama-cpp-local",
+      localService: { command: path.join(tempRoot, "llama-server") },
+    });
+    expect(managed).not.toHaveProperty("auth");
+    expect(managed).not.toHaveProperty("headers");
+    expect(managed).not.toHaveProperty("params");
+    expect(managed?.models.some((model) => model.id === "external-model")).toBe(false);
+    expect(result.configPatch?.auth).toEqual({
+      profiles: { "llama-cpp:default": undefined },
+      order: { "llama-cpp": undefined },
+    });
+    expect(mocks.removeProfiles).toHaveBeenCalledWith({
+      provider: "llama-cpp",
+      profileIds: ["llama-cpp:default"],
+      agentDir: ctx.agentDir,
+    });
+    expect(mocks.prepareServer).toHaveBeenCalledWith(expect.objectContaining({ port: undefined }));
+    expect(mocks.ensureModel).toHaveBeenCalledWith(
+      expect.not.objectContaining({ cacheDir: tempRoot }),
     );
   });
 });

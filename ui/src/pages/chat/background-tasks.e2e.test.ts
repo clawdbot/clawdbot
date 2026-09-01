@@ -1,6 +1,7 @@
 import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { openChatSidePanelType } from "../../e2e/chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import { installMockGateway, type MockGatewayRequest } from "../../test-helpers/control-ui-e2e.ts";
 
@@ -154,13 +155,22 @@ suite.define(() => {
         expect(response?.status()).toBe(200);
         await page.getByText("Background tasks rail proof.").waitFor({ timeout: 10_000 });
 
-        // The snapshot loads eagerly, so the collapsed toggle badge already
-        // detects the two active tasks before the rail is ever opened.
-        const badge = page.locator(".chat-tasks-toggle__badge");
-        await badge.waitFor({ state: "visible" });
-        expect(await badge.textContent()).toBe("2");
+        // The snapshot loads eagerly, so the panel action already carries the
+        // two-active-task badge before the tab is opened.
+        await expect
+          .poll(() =>
+            page.locator("openclaw-chat-header-session-menu").evaluate(
+              (element) =>
+                (
+                  element as HTMLElement & {
+                    panelActions: Array<{ id: string; badge?: number }>;
+                  }
+                ).panelActions.find((action) => action.id === "background-tasks")?.badge,
+            ),
+          )
+          .toBe(2);
 
-        await page.getByRole("button", { name: "Show background tasks" }).click();
+        await openChatSidePanelType(page, "Tasks");
         const rail = page.locator(".chat-tasks-rail");
         await rail.locator('[data-task-id="task-subagent"]').waitFor({ state: "visible" });
         await rail.locator('[data-task-id="task-cron"]').waitFor({ state: "visible" });
@@ -179,8 +189,10 @@ suite.define(() => {
         const listRequests = await gateway.getRequests("tasks.list");
         expect(listRequests.length).toBeGreaterThanOrEqual(2);
         for (const request of listRequests) {
-          expect(request.params).toMatchObject({ sessionKey: "main" });
-          expect(request.params).not.toHaveProperty("agentId");
+          expect(request.params).toMatchObject({
+            sessionKey: "agent:main:main",
+            agentId: "main",
+          });
         }
         await page.screenshot({ path: path.join(railFlowDir, "01-rail-open.png"), fullPage: true });
 
@@ -212,7 +224,7 @@ suite.define(() => {
         );
         expect(transcriptRequest?.params).toEqual({
           sessionKey: runningSubagent.childSessionKey,
-          limit: 100,
+          limit: 800,
         });
         expect(page.url()).toBe(chatUrl);
         expect(withoutElapsedLabels(await mainTranscript.textContent())).toBe(mainTranscriptBefore);
@@ -231,6 +243,10 @@ suite.define(() => {
           },
         });
         await detailPanel.getByText("Completed").waitFor({ state: "visible" });
+        await page
+          .locator(".side-panel__header .tabstrip wa-tab")
+          .filter({ hasText: "Tasks" })
+          .click();
         const completedRow = rail.locator(
           '[data-tasks-section="finished"] [data-task-id="task-subagent"]',
         );
@@ -253,6 +269,10 @@ suite.define(() => {
         const cancelRequest = await gateway.waitForRequest("tasks.cancel");
         expect(cancelRequest.params).toEqual({ taskId: "task-cron" });
         expect(page.url()).toBe(chatUrl);
+        await page
+          .locator(".side-panel__header .tabstrip wa-tab")
+          .filter({ hasText: "Review" })
+          .click();
         await detailPanel.waitFor({ state: "visible" });
         await page.getByText("Background tasks rail proof.").waitFor({ state: "visible" });
         expect(await mainTranscript.textContent()).not.toContain("Subagent transcript proof.");
@@ -263,7 +283,7 @@ suite.define(() => {
 
         // Region close leaves sidebarContent set; the rail highlight must
         // follow panel visibility, not retained content.
-        await page.getByRole("button", { name: "Close Details" }).click();
+        await page.getByRole("button", { name: "Close Review" }).click();
         await detailPanel.waitFor({ state: "detached" });
         expect(await completedRow.getAttribute("aria-current")).toBe(null);
         expect(
@@ -375,7 +395,7 @@ suite.define(() => {
         );
         expect(childHistoryRequest?.params).toEqual({
           sessionKey: first.childSessionKey,
-          limit: 100,
+          limit: 800,
         });
 
         await gateway.emitGatewayEvent("task", {
@@ -420,7 +440,7 @@ suite.define(() => {
           path: path.join(activityDir, "02-one-subagent-finished.png"),
           fullPage: true,
         });
-        await page.getByRole("button", { name: "Close Details" }).click();
+        await page.getByRole("button", { name: "Close Review" }).click();
         await detailPanel.waitFor({ state: "detached" });
       },
     );
@@ -452,7 +472,18 @@ suite.define(() => {
         await page
           .getByText("I started the CLI command in the background.")
           .waitFor({ timeout: 10_000 });
-        expect(await page.locator(".chat-tasks-toggle__badge").textContent()).toBe("1");
+        await expect
+          .poll(() =>
+            page.locator("openclaw-chat-header-session-menu").evaluate(
+              (element) =>
+                (
+                  element as HTMLElement & {
+                    panelActions: Array<{ id: string; badge?: number }>;
+                  }
+                ).panelActions.find((action) => action.id === "background-tasks")?.badge,
+            ),
+          )
+          .toBe(1);
         expect(await page.locator(".chat-tasks-status__link").textContent()).toContain(
           "1 running task",
         );
@@ -478,7 +509,7 @@ suite.define(() => {
           fullPage: true,
         });
 
-        await page.getByRole("button", { name: "Show background tasks" }).click();
+        await openChatSidePanelType(page, "Tasks");
         const row = page.locator('[data-task-id="task-exec"]');
         await row.waitFor({ state: "visible" });
         expect(await row.textContent()).toContain("CLI command");

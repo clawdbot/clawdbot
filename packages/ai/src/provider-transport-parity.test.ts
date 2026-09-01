@@ -8,6 +8,7 @@ type OpenAIChunk = Record<string, unknown>;
 
 const openAiMockState = vi.hoisted(() => ({
   error: undefined as Error | undefined,
+  streamError: undefined as Error | undefined,
   chunks: [] as OpenAIChunk[],
   payloads: [] as unknown[],
 }));
@@ -25,6 +26,9 @@ vi.mock("openai", () => ({
             async *[Symbol.asyncIterator]() {
               for (const chunk of openAiMockState.chunks) {
                 yield chunk;
+              }
+              if (openAiMockState.streamError) {
+                throw openAiMockState.streamError;
               }
             },
           });
@@ -80,6 +84,19 @@ const openAiModel = {
   contextWindow: 128_000,
   maxTokens: 4096,
 } satisfies Model<"openai-completions">;
+
+const openRouterModel = {
+  ...openAiModel,
+  id: "openrouter/minimax/minimax-m2.7",
+  name: "MiniMax M2.7",
+  provider: "openrouter",
+  baseUrl: "https://openrouter.ai/api/v1",
+} satisfies Model<"openai-completions">;
+
+const openRouterModelWithoutBaseUrl = {
+  ...openRouterModel,
+  baseUrl: undefined,
+} as unknown as Model<"openai-completions">;
 
 const context = {
   systemPrompt: "Be exact.",
@@ -166,6 +183,112 @@ const openAiChunks = [
   },
 ] satisfies OpenAIChunk[];
 
+function makeOpenAiChunk(
+  delta: Record<string, unknown>,
+  finishReason: string | null = null,
+): OpenAIChunk {
+  return {
+    id: "chatcmpl-parity",
+    model: "gpt-5.5-response",
+    choices: [{ index: 0, delta, finish_reason: finishReason }],
+  };
+}
+
+const openAiInterleavedReasoningChunks = [
+  makeOpenAiChunk({ reasoning_content: "First thought." }),
+  makeOpenAiChunk({ content: "Interim." }),
+  makeOpenAiChunk({ reasoning_content: "Second thought." }),
+  makeOpenAiChunk({ content: "Final." }),
+  makeOpenAiChunk({}, "stop"),
+] satisfies OpenAIChunk[];
+
+const openAiCoalescedReasoningChunks = [
+  makeOpenAiChunk({ reasoning_content: "First thought." }),
+  makeOpenAiChunk({ content: "Interim." }),
+  makeOpenAiChunk({ content: "Final.", reasoning_content: "Second thought." }),
+  makeOpenAiChunk({}, "stop"),
+] satisfies OpenAIChunk[];
+
+const openAiTypedReasoningChunks = [
+  makeOpenAiChunk({ content: { type: "reasoning", text: "First thought." } }),
+  makeOpenAiChunk({ content: "Interim." }),
+  makeOpenAiChunk({ content: { type: "reasoning", text: "Second thought." } }),
+  makeOpenAiChunk({ content: "Final." }),
+  makeOpenAiChunk({}, "stop"),
+] satisfies OpenAIChunk[];
+
+const openAiStructuredReasoningChunks = [
+  makeOpenAiChunk({
+    reasoning_details: [{ type: "reasoning.text", text: "First thought." }],
+  }),
+  makeOpenAiChunk({ content: "Interim." }),
+  makeOpenAiChunk({
+    reasoning_details: [{ type: "reasoning.text", text: "Second thought." }],
+  }),
+  makeOpenAiChunk({ content: "Final." }),
+  makeOpenAiChunk({}, "stop"),
+] satisfies OpenAIChunk[];
+
+const openAiOrderedVisibleReasoningDetailsChunks = [
+  makeOpenAiChunk({
+    reasoning_details: [
+      { type: "response.output_text", text: "Visible first." },
+      { type: "reasoning.text", text: " Hidden second." },
+      { type: "response.text", text: " Visible third." },
+    ],
+  }),
+  makeOpenAiChunk({}, "stop"),
+] satisfies OpenAIChunk[];
+
+const openAiSplitVisibleReasoningDetailsChunks = [
+  makeOpenAiChunk({
+    reasoning_details: [{ type: "response.output_text", text: "Visible first." }],
+  }),
+  makeOpenAiChunk({
+    reasoning_details: [{ type: "reasoning.text", text: " Hidden second." }],
+  }),
+  makeOpenAiChunk({
+    reasoning_details: [{ type: "response.text", text: " Visible third." }],
+  }),
+  makeOpenAiChunk({}, "stop"),
+] satisfies OpenAIChunk[];
+
+const openAiVisibleDetailBeforeInterruptedContentChunks = [
+  makeOpenAiChunk({
+    reasoning_details: [{ type: "response.output_text", text: "Visible first." }],
+  }),
+  makeOpenAiChunk({
+    reasoning_details: [{ type: "reasoning.text", text: " Hidden second." }],
+  }),
+  makeOpenAiChunk({ content: "Interim." }),
+  makeOpenAiChunk({ reasoning_content: "Hidden fourth." }),
+  makeOpenAiChunk({ content: "Final." }),
+  makeOpenAiChunk({}, "stop"),
+] satisfies OpenAIChunk[];
+
+const openAiTrailingReasoningChunks = [
+  makeOpenAiChunk({ reasoning_content: "First thought." }),
+  makeOpenAiChunk({ content: "Answer." }),
+  makeOpenAiChunk({ reasoning_content: "Trailing thought." }),
+  makeOpenAiChunk({ content: " " }),
+  makeOpenAiChunk({}, "stop"),
+] satisfies OpenAIChunk[];
+
+const openAiInterleavedThenTrailingReasoningChunks = [
+  makeOpenAiChunk({ reasoning_content: "First thought." }),
+  makeOpenAiChunk({ content: "Interim." }),
+  makeOpenAiChunk({ reasoning_content: "Second thought." }),
+  makeOpenAiChunk({ content: "Final." }),
+  makeOpenAiChunk({ reasoning_content: "Trailing thought." }),
+  makeOpenAiChunk({}, "stop"),
+] satisfies OpenAIChunk[];
+
+const openAiInterruptedErrorChunks = [
+  makeOpenAiChunk({ reasoning_content: "First thought." }),
+  makeOpenAiChunk({ content: "Interim." }),
+  makeOpenAiChunk({ reasoning_content: "Second thought." }),
+] satisfies OpenAIChunk[];
+
 const anthropicFailure = {
   status: 429,
   body: {
@@ -212,6 +335,7 @@ async function observeStream(stream: AssistantMessageEventStreamLike): Promise<{
       "model",
       "responseId",
       "responseModel",
+      "openclawDelivery",
       "usage",
       "stopReason",
       "diagnostics",
@@ -220,9 +344,13 @@ async function observeStream(stream: AssistantMessageEventStreamLike): Promise<{
   };
 }
 
-function resetOpenAiMock(outcome: ParityFixture["outcome"]): void {
+function resetOpenAiMock(
+  outcome: ParityFixture["outcome"],
+  chunks: readonly OpenAIChunk[] = openAiChunks,
+): void {
   openAiMockState.payloads = [];
-  openAiMockState.chunks = outcome === "success" ? [...openAiChunks] : [];
+  openAiMockState.streamError = undefined;
+  openAiMockState.chunks = outcome === "success" ? [...chunks] : [];
   openAiMockState.error =
     outcome === "error"
       ? Object.assign(new Error("synthetic OpenAI rejection"), {
@@ -237,8 +365,15 @@ function resetOpenAiMock(outcome: ParityFixture["outcome"]): void {
 async function runOpenAi(
   implementation: "provider" | "transport",
   outcome: ParityFixture["outcome"],
+  chunks: readonly OpenAIChunk[] = openAiChunks,
+  emitReasoning = true,
+  modelOverride?: Model<"openai-completions">,
+  streamError?: Error,
 ): Promise<ParityOutput> {
-  resetOpenAiMock(outcome);
+  resetOpenAiMock(outcome, chunks);
+  openAiMockState.streamError = streamError;
+  const baseModel = modelOverride ?? openAiModel;
+  const model = emitReasoning ? baseModel : { ...baseModel, reasoning: false };
   const [{ streamOpenAICompletions }, { createOpenAICompletionsTransportStreamFn }] =
     await Promise.all([
       import("./providers/openai-completions.js"),
@@ -246,12 +381,12 @@ async function runOpenAi(
     ]);
   const stream =
     implementation === "provider"
-      ? streamOpenAICompletions(openAiModel, context, {
+      ? streamOpenAICompletions(model, context, {
           apiKey: "sk-test",
           reasoningEffort: "medium",
         })
       : await Promise.resolve(
-          createOpenAICompletionsTransportStreamFn()(openAiModel, context, {
+          createOpenAICompletionsTransportStreamFn()(model, context, {
             apiKey: "sk-test",
             reasoningEffort: "medium",
           } as never),
@@ -398,5 +533,270 @@ describe("provider and transport observable parity fixtures", () => {
     ).toMatchFileSnapshot(
       path.join(import.meta.dirname, "../test/fixtures/provider-transport-parity", snapshot),
     );
+  });
+
+  it("marks content interrupted by native reasoning as commentary", async () => {
+    for (const implementation of ["provider", "transport"] as const) {
+      for (const chunks of [openAiInterleavedReasoningChunks, openAiCoalescedReasoningChunks]) {
+        const result = await runOpenAi(implementation, "success", chunks);
+
+        expect(result.terminal.content).toEqual([
+          {
+            type: "thinking",
+            thinking: "First thought.",
+            thinkingSignature: "reasoning_content",
+          },
+          {
+            type: "text",
+            text: "Interim.",
+            textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+          },
+          {
+            type: "thinking",
+            thinking: "Second thought.",
+            thinkingSignature: "reasoning_content",
+          },
+          {
+            type: "text",
+            text: "Final.",
+            textSignature: '{"v":1,"id":"final-answer-0","phase":"final_answer"}',
+          },
+        ]);
+      }
+
+      const typedReasoningResult = await runOpenAi(
+        implementation,
+        "success",
+        openAiTypedReasoningChunks,
+      );
+      expect(typedReasoningResult.terminal.content).toEqual([
+        { type: "thinking", thinking: "First thought." },
+        {
+          type: "text",
+          text: "Interim.",
+          textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+        },
+        { type: "thinking", thinking: "Second thought." },
+        {
+          type: "text",
+          text: "Final.",
+          textSignature: '{"v":1,"id":"final-answer-0","phase":"final_answer"}',
+        },
+      ]);
+
+      const structuredReasoningResult = await runOpenAi(
+        implementation,
+        "success",
+        openAiStructuredReasoningChunks,
+      );
+      expect(structuredReasoningResult.terminal.content).toEqual([
+        {
+          type: "thinking",
+          thinking: "First thought.",
+          thinkingSignature: "reasoning_details",
+        },
+        {
+          type: "text",
+          text: "Interim.",
+          textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+        },
+        {
+          type: "thinking",
+          thinking: "Second thought.",
+          thinkingSignature: "reasoning_details",
+        },
+        {
+          type: "text",
+          text: "Final.",
+          textSignature: '{"v":1,"id":"final-answer-0","phase":"final_answer"}',
+        },
+      ]);
+
+      const hiddenReasoningResult = await runOpenAi(
+        implementation,
+        "success",
+        openAiInterleavedReasoningChunks,
+        false,
+      );
+      expect(hiddenReasoningResult.terminal.content).toEqual([
+        {
+          type: "text",
+          text: "Interim.",
+          textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+        },
+        {
+          type: "text",
+          text: "Final.",
+          textSignature: '{"v":1,"id":"final-answer-0","phase":"final_answer"}',
+        },
+      ]);
+      expect(hiddenReasoningResult.terminal.openclawDelivery).toEqual({
+        textPhaseRequiresTerminal: true,
+      });
+
+      const trailingReasoningResult = await runOpenAi(
+        implementation,
+        "success",
+        openAiTrailingReasoningChunks,
+      );
+      expect(trailingReasoningResult.terminal.content).toEqual([
+        {
+          type: "thinking",
+          thinking: "First thought.",
+          thinkingSignature: "reasoning_content",
+        },
+        { type: "text", text: "Answer." },
+        {
+          type: "thinking",
+          thinking: "Trailing thought.",
+          thinkingSignature: "reasoning_content",
+        },
+        { type: "text", text: " " },
+      ]);
+
+      const interleavedThenTrailingReasoningResult = await runOpenAi(
+        implementation,
+        "success",
+        openAiInterleavedThenTrailingReasoningChunks,
+      );
+      expect(interleavedThenTrailingReasoningResult.terminal.content).toEqual([
+        {
+          type: "thinking",
+          thinking: "First thought.",
+          thinkingSignature: "reasoning_content",
+        },
+        {
+          type: "text",
+          text: "Interim.",
+          textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+        },
+        {
+          type: "thinking",
+          thinking: "Second thought.",
+          thinkingSignature: "reasoning_content",
+        },
+        {
+          type: "text",
+          text: "Final.",
+          textSignature: '{"v":1,"id":"final-answer-0","phase":"final_answer"}',
+        },
+        {
+          type: "thinking",
+          thinking: "Trailing thought.",
+          thinkingSignature: "reasoning_content",
+        },
+      ]);
+    }
+  });
+
+  it("keeps interrupted text non-deliverable when the stream errors", async () => {
+    for (const implementation of ["provider", "transport"] as const) {
+      const result = await runOpenAi(
+        implementation,
+        "success",
+        openAiInterruptedErrorChunks,
+        true,
+        undefined,
+        new Error("synthetic interrupted stream"),
+      );
+
+      expect(result.terminal.stopReason).toBe("error");
+      expect(result.terminal.content).toEqual([
+        {
+          type: "thinking",
+          thinking: "First thought.",
+          thinkingSignature: "reasoning_content",
+        },
+        {
+          type: "text",
+          text: "Interim.",
+          textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+        },
+        {
+          type: "thinking",
+          thinking: "Second thought.",
+          thinkingSignature: "reasoning_content",
+        },
+      ]);
+    }
+  });
+
+  it("preserves ordered visible OpenRouter reasoning details across both producers", async () => {
+    for (const implementation of ["provider", "transport"] as const) {
+      for (const chunks of [
+        openAiOrderedVisibleReasoningDetailsChunks,
+        openAiSplitVisibleReasoningDetailsChunks,
+      ]) {
+        const result = await runOpenAi(implementation, "success", chunks, true, openRouterModel);
+
+        expect(result.terminal.content).toEqual([
+          { type: "text", text: "Visible first." },
+          {
+            type: "thinking",
+            thinking: " Hidden second.",
+            thinkingSignature: "reasoning_details",
+          },
+          { type: "text", text: " Visible third." },
+        ]);
+      }
+    }
+  });
+
+  it("fails closed before using the OpenAI default endpoint for another provider", async () => {
+    for (const implementation of ["provider", "transport"] as const) {
+      const result = await runOpenAi(
+        implementation,
+        "success",
+        openAiChunks,
+        true,
+        openRouterModelWithoutBaseUrl,
+      );
+
+      expect(result.terminal.stopReason).toBe("error");
+      expect(result.errorFields.errorMessage).toContain(
+        'Provider "openrouter" requires an explicit base URL',
+      );
+      expect(openAiMockState.payloads).toEqual([]);
+    }
+  });
+
+  it("preserves earlier visible details when later ordinary content is interrupted", async () => {
+    for (const implementation of ["provider", "transport"] as const) {
+      const result = await runOpenAi(
+        implementation,
+        "success",
+        openAiVisibleDetailBeforeInterruptedContentChunks,
+        true,
+        openRouterModel,
+      );
+
+      expect(result.terminal.content).toEqual([
+        {
+          type: "text",
+          text: "Visible first.",
+          textSignature: '{"v":1,"id":"final-answer-0","phase":"final_answer"}',
+        },
+        {
+          type: "thinking",
+          thinking: " Hidden second.",
+          thinkingSignature: "reasoning_details",
+        },
+        {
+          type: "text",
+          text: "Interim.",
+          textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+        },
+        {
+          type: "thinking",
+          thinking: "Hidden fourth.",
+          thinkingSignature: "reasoning_content",
+        },
+        {
+          type: "text",
+          text: "Final.",
+          textSignature: '{"v":1,"id":"final-answer-1","phase":"final_answer"}',
+        },
+      ]);
+    }
   });
 });

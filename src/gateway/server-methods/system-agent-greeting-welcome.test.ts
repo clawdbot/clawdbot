@@ -13,7 +13,9 @@ const inferenceFallbackMocks = vi.hoisted(() => ({
 const transcriptStoreMocks = vi.hoisted(() => ({
   appendTranscriptReset: vi.fn(),
   appendTranscriptTurn: vi.fn(),
-  readTranscriptTail: vi.fn(() => []),
+  readTranscriptTail: vi.fn(
+    (): Array<{ role: "user" | "assistant"; text: string; at: number }> => [],
+  ),
 }));
 const greetingMocks = vi.hoisted(() => ({
   acknowledgeSystemAgentGreetingDelivery: vi.fn(),
@@ -53,15 +55,16 @@ type FakeEngine = {
   loadOverview: ReturnType<typeof vi.fn>;
   noteAssistantMessage: ReturnType<typeof vi.fn>;
   planGreeting: ReturnType<typeof vi.fn>;
+  decorateRejoinReply: ReturnType<typeof vi.fn>;
 };
 
 function makeEngine(): FakeEngine {
-  // Mirrors persistEngineHistory's contract: noted assistant messages appear
-  // in historySince so the welcome is persisted before acknowledgement.
   const history: Array<{ role: "user" | "assistant"; text: string }> = [];
   return {
     handle: vi.fn(async () => ({ text: "did the thing", action: "none" })),
-    seedHistory: vi.fn(),
+    seedHistory: vi.fn((turns: typeof history) => {
+      history.push(...turns);
+    }),
     historyLength: vi.fn(() => history.length),
     historySince: vi.fn((index: number) => history.slice(index)),
     getPendingOperatorProposal: vi.fn(() => null),
@@ -72,6 +75,7 @@ function makeEngine(): FakeEngine {
       history.push({ role: "assistant", text });
     }),
     planGreeting: vi.fn(),
+    decorateRejoinReply: vi.fn((reply: unknown) => reply),
   };
 }
 
@@ -124,6 +128,8 @@ const quickActions = {
 
 beforeEach(() => {
   createdEngines.length = 0;
+  transcriptStoreMocks.appendTranscriptTurn.mockReset();
+  transcriptStoreMocks.readTranscriptTail.mockReset().mockReturnValue([]);
   inferenceFallbackMocks.verifySystemAgentInferenceWithFallback.mockResolvedValue({
     ok: true,
     binding: {},
@@ -139,9 +145,13 @@ beforeEach(() => {
     source: "model",
   });
   greetingMocks.buildSystemAgentGreetingQuestion.mockReturnValue(quickActions);
-  onboardingWelcomeMocks.buildOnboardingWelcome.mockResolvedValue({
-    text: "Inference is ready. Let's finish setup.",
-  });
+  onboardingWelcomeMocks.buildOnboardingWelcome.mockImplementation(
+    async ({ engine }: { engine: { noteAssistantMessage: (text: string) => void } }) => {
+      const text = "Inference is ready. Let's finish setup.";
+      engine.noteAssistantMessage(text);
+      return { text };
+    },
+  );
 });
 
 afterEach(() => {
@@ -151,6 +161,37 @@ afterEach(() => {
 });
 
 describe("openclaw.chat caretaker welcome", () => {
+  it.each([
+    { label: "caretaker", welcomeVariant: undefined },
+    { label: "onboarding", welcomeVariant: "onboarding" },
+    { label: "new-agent", welcomeVariant: "new-agent" },
+  ])(
+    "does not replay an earlier passive $label welcome on reconnect",
+    async ({ welcomeVariant }) => {
+      const transcript: Array<{ role: "user" | "assistant"; text: string; at: number }> = [];
+      transcriptStoreMocks.appendTranscriptTurn.mockImplementation(
+        (turn: { role: "user" | "assistant"; text: string; at: number }) => {
+          transcript.push(turn);
+        },
+      );
+      transcriptStoreMocks.readTranscriptTail.mockImplementation(() => transcript.slice());
+      const context = makeContext(new Map());
+      const variant = welcomeVariant ? { welcomeVariant } : {};
+
+      const first = await callChat(context, { sessionId: "first-welcome", ...variant });
+      const second = await callChat(context, { sessionId: "second-welcome", ...variant });
+
+      expect(first.ok).toBe(true);
+      expect(second.payload).toMatchObject({
+        reply: expectDefined(first.payload as { reply?: string }, "first welcome").reply,
+      });
+      expect(
+        expectDefined(createdEngines[1], "second welcome engine").seedHistory,
+      ).toHaveBeenCalledWith([]);
+      expect(transcript).toEqual([]);
+    },
+  );
+
   it("returns caretaker quick actions and persists the resolved greeting", async () => {
     greetingMocks.loadSystemAgentGreetingFacts.mockReturnValueOnce({
       updateAvailable: "2026.7.20",

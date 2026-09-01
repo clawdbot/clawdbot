@@ -5,6 +5,7 @@ import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
+import type { MsgContext } from "../auto-reply/templating.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -23,6 +24,7 @@ import {
 } from "../test-utils/channel-plugins.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import {
   type HeartbeatDeps,
   isHeartbeatEnabledForAgent,
@@ -227,12 +229,12 @@ function expectReplyCall(
 function replyBody(
   replySpy: ReturnType<typeof vi.fn>,
   index = 0,
-): { Body?: string; Provider?: string } {
+): Pick<MsgContext, "Body" | "InternalTurnSource"> {
   const call = replySpy.mock.calls[index];
-  return requireRecord(call?.[0], `reply call ${index} body`) as {
-    Body?: string;
-    Provider?: string;
-  };
+  return requireRecord(call?.[0], `reply call ${index} body`) as Pick<
+    MsgContext,
+    "Body" | "InternalTurnSource"
+  >;
 }
 
 type HeartbeatSeedOverride = Partial<Parameters<typeof seedSessionStore>[2]>;
@@ -337,6 +339,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   resetSystemEventsForTest();
+  resetHeartbeatEventsForTest();
   if (testRegistry) {
     setActivePluginRegistry(testRegistry);
   }
@@ -372,6 +375,43 @@ describe("resolveHeartbeatIntervalMs", () => {
 
     expect(resolveHeartbeatSummaryForAgent(cfg, "main").session).toBe("telegram:alerts");
   });
+
+  it.each([
+    {
+      label: "global",
+      cfg: {
+        agents: {
+          defaults: {
+            heartbeat: { every: "0m", target: "last", session: "telegram:default" },
+          },
+        },
+      },
+      session: "telegram:default",
+    },
+    {
+      label: "per-agent",
+      cfg: {
+        agents: {
+          defaults: {
+            heartbeat: { every: "30m", target: "last", session: "telegram:default" },
+          },
+          list: [{ id: "main", heartbeat: { every: "0m", session: "telegram:alerts" } }],
+        },
+      },
+      session: "telegram:alerts",
+    },
+  ] satisfies Array<{ label: string; cfg: OpenClawConfig; session: string }>)(
+    "reports a disabled $label heartbeat as disabled",
+    ({ cfg, session }) => {
+      expect(resolveHeartbeatSummaryForAgent(cfg, "main")).toMatchObject({
+        enabled: false,
+        every: "disabled",
+        everyMs: null,
+        target: "last",
+        session,
+      });
+    },
+  );
 
   it("returns default when unset", () => {
     expect(resolveHeartbeatIntervalMs({})).toBe(30 * 60_000);
@@ -813,6 +853,49 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+  it("runs an exec-event wake for a configured agent when cadence is disabled", async () => {
+    const tmpDir = await createCaseDir("hb-disabled-exec-event");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: { every: "0m", target: "none" },
+        },
+        list: [{ id: "main" }],
+      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    await seedWhatsAppSession(storePath, sessionKey);
+    enqueueSystemEvent("exec finished: backup completed", {
+      sessionKey,
+      contextKey: "exec:backup",
+    });
+
+    const replySpy = vi.fn();
+    replySpy.mockResolvedValue({ text: "Handled internally" });
+    const sendWhatsApp = vi
+      .fn<
+        (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; toJid: string }>
+      >()
+      .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+    const res = await runHeartbeatOnce({
+      cfg,
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      sessionKey,
+      deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
+    });
+
+    expect(res.status).toBe("ran");
+    expect(sendWhatsApp).not.toHaveBeenCalled();
+    expect(replyBody(replySpy).InternalTurnSource).toBe("exec");
+  });
+
   it.each([
     ["the heartbeat main session", (cfg: OpenClawConfig) => resolveMainSessionKey(cfg)],
     ["another session for the same agent", () => "agent:main:telegram:alerts"],
@@ -862,6 +945,8 @@ describe("runHeartbeatOnce", () => {
     if (res.status === "skipped") {
       expect(res.reason).toBe("quiet-hours");
     }
+    // Documented observable skip: `system heartbeat last` must show the window.
+    expect(getLastHeartbeatEvent()).toMatchObject({ status: "skipped", reason: "quiet-hours" });
   });
 
   it("skips a routeless interval poll before the agent run", async () => {
@@ -1145,7 +1230,8 @@ describe("runHeartbeatOnce", () => {
           To: "120363401234567890@g.us",
           OriginatingChannel: "whatsapp",
           OriginatingTo: "120363401234567890@g.us",
-          Provider: "heartbeat",
+          InternalTurnSource: "heartbeat",
+          Provider: undefined,
         },
         { isHeartbeat: true, suppressToolErrorWarnings: false },
         cfg,
@@ -1220,7 +1306,8 @@ describe("runHeartbeatOnce", () => {
           SessionKey: sessionKey,
           From: "120363401234567890@g.us",
           To: "120363401234567890@g.us",
-          Provider: "heartbeat",
+          InternalTurnSource: "heartbeat",
+          Provider: undefined,
         },
         { isHeartbeat: true, suppressToolErrorWarnings: false },
         cfg,
@@ -1319,7 +1406,8 @@ describe("runHeartbeatOnce", () => {
             SessionKey: overrideSessionKey,
             From: peerId,
             To: peerId,
-            Provider: "heartbeat",
+            InternalTurnSource: "heartbeat",
+            Provider: undefined,
           },
           { isHeartbeat: true, suppressToolErrorWarnings: false },
           cfg,
@@ -2125,7 +2213,7 @@ tasks:
         }
         if (expectCronContext) {
           const calledCtx = replyBody(replySpy);
-          expect(calledCtx.Provider, name).toBe("cron-event");
+          expect(calledCtx.InternalTurnSource, name).toBe("cron");
           expect(calledCtx.Body, name).toContain("scheduled reminder has been triggered");
         }
       } finally {
@@ -2173,7 +2261,7 @@ tasks:
       expect(res.status).toBe("ran");
       expect(sendWhatsApp).toHaveBeenCalledTimes(0);
       const calledCtx = replyBody(replySpy);
-      expect(calledCtx.Provider).toBe("cron-event");
+      expect(calledCtx.InternalTurnSource).toBe("cron");
       expect(calledCtx.Body).toContain("Handle this reminder internally");
       expect(calledCtx.Body).not.toContain("Please relay this reminder to the user");
     } finally {
@@ -2220,7 +2308,7 @@ tasks:
       expect(res.status).toBe("ran");
       expect(sendWhatsApp).toHaveBeenCalledTimes(0);
       const calledCtx = replyBody(replySpy);
-      expect(calledCtx.Provider).toBe("exec-event");
+      expect(calledCtx.InternalTurnSource).toBe("exec");
       expect(calledCtx.Body).toContain("Handle the result internally");
       expect(calledCtx.Body).not.toContain("Please relay the command output to the user");
     } finally {

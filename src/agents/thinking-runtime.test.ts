@@ -148,17 +148,29 @@ describe("resolveEffectiveAgentRuntime", () => {
     expect(supports).not.toHaveBeenCalled();
   });
 
-  it("prefers explicit session overrides", () => {
-    const cfg = openAIConfig("openclaw");
-    expect(
-      resolveEffectiveAgentRuntime({
-        cfg,
-        provider: "openai",
-        modelId: "gpt-5.6-luna",
-        sessionEntry: { agentRuntimeOverride: "codex", agentHarnessId: "openclaw" },
-      }),
-    ).toBe("codex");
-  });
+  it.each([false, true])(
+    "projects explicit session overrides with declared fallback=%s",
+    (fallback) => {
+      registerAgentHarness({
+        id: "codex",
+        label: "Codex",
+        supports: () =>
+          fallback ? { supported: false, fallbackRuntime: "openclaw" } : { supported: true },
+        runAttempt: async () => {
+          throw new Error("projection must not execute");
+        },
+      });
+      const cfg = openAIConfig("openclaw");
+      expect(
+        resolveEffectiveAgentRuntime({
+          cfg,
+          provider: "openai",
+          modelId: "gpt-5.6-luna",
+          sessionEntry: { agentRuntimeOverride: "codex", agentHarnessId: "openclaw" },
+        }),
+      ).toBe(fallback ? "openclaw" : "codex");
+    },
+  );
 
   it("ignores legacy harness ids when choosing a runtime", () => {
     const cfg = openAIConfig("openclaw");

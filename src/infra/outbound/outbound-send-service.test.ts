@@ -560,6 +560,7 @@ describe("executeSendAction", () => {
         cfg: {},
         channel: "discord",
         params: { to: "channel:123", presentation },
+        runId: "run-presentation-delivery",
         dryRun: false,
         mirror: {
           sessionKey: "agent:main:discord:channel:123",
@@ -575,6 +576,7 @@ describe("executeSendAction", () => {
     expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
     const sendArgs = expectSingleCallFields(mocks.sendMessage, {
       content: "",
+      runId: "run-presentation-delivery",
       mirror: {
         sessionKey: "agent:main:discord:channel:123",
         agentId: "main",
@@ -800,6 +802,64 @@ describe("executeSendAction", () => {
     expect(result.deliveredText).toBeUndefined();
     expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
     expect(mocks.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "implicit first reply",
+      reply: { source: "implicit", replyToId: "source-1", mode: "first" } as const,
+    },
+    {
+      label: "explicit reply while configured replies are off",
+      reply: { source: "explicit", replyToId: "explicit-1" } as const,
+    },
+  ])("passes the host-owned $label through direct plugin fallback", async ({ reply }) => {
+    const prepareSendPayload = vi.fn(({ ctx }) => {
+      expect(ctx.reply).toEqual(reply);
+      return null;
+    });
+    const handleAction = vi.fn(async (ctx) => {
+      expect(ctx.params.components).toBeTypeOf("function");
+      return { content: [], details: { ok: true } };
+    });
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({ id: "discord" }),
+      outbound: {
+        deliveryMode: "direct",
+        sendText: async () => ({ channel: "discord", messageId: "unused-core-send" }),
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"], capabilities: [] }),
+        prepareSendPayload,
+        handleAction,
+      },
+    };
+    mocks.dispatchChannelMessageAction.mockImplementation(async (ctx) => {
+      return await plugin.actions?.handleAction?.(ctx);
+    });
+
+    const components = () => [];
+    const result = await executeSendAction({
+      ctx: {
+        plugin,
+        cfg: {},
+        channel: "discord",
+        params: { to: "channel:123", message: "hello", components, replyTo: reply.replyToId },
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+      reply,
+    });
+
+    expect(result.handledBy).toBe("plugin");
+    expect(prepareSendPayload).toHaveBeenCalledOnce();
+    expect(handleAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({ components, replyTo: reply.replyToId }),
+        reply,
+      }),
+    );
   });
 
   it("uses plugin poll action when available", async () => {
@@ -1089,8 +1149,7 @@ describe("executeSendAction", () => {
       to: "channel:123",
       message: "hello",
       payload: { text: "hello", presentation },
-      replyToId: "reply-1",
-      replyToIdSource: "explicit",
+      reply: { replyToId: "reply-1", source: "explicit" },
       threadId: "thread-1",
     });
 
@@ -1107,7 +1166,7 @@ describe("executeSendAction", () => {
     const sendArgs = expectSingleCallFields(mocks.sendMessage, {
       channel: "discord",
       queuePolicy: "best_effort",
-      replyToId: "reply-1",
+      reply: { replyToId: "reply-1", source: "explicit" },
       threadId: "thread-1",
       conversationReadOrigin: "delegated",
     });
@@ -1179,11 +1238,14 @@ describe("executeSendAction", () => {
         channel: "demo-outbound",
         params: {},
         accountId: "acc-1",
+        sessionKey: "agent:main:demo-outbound:channel:123",
+        inboundEventKind: "room_event",
         dryRun: false,
       },
       resolveCorePoll: () => ({
         to: "channel:123",
         question: "Lunch?",
+        content: "Vote now",
         options: ["Pizza", "Sushi"],
         maxSelections: 1,
         durationSeconds: 300,
@@ -1197,11 +1259,14 @@ describe("executeSendAction", () => {
       accountId: "acc-1",
       to: "channel:123",
       question: "Lunch?",
+      content: "Vote now",
       options: ["Pizza", "Sushi"],
       maxSelections: 1,
       durationSeconds: 300,
       threadId: "thread-1",
       isAnonymous: true,
+      sessionKey: "agent:main:demo-outbound:channel:123",
+      inboundEventKind: "room_event",
     });
   });
 

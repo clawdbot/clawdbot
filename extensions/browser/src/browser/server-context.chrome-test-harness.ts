@@ -41,5 +41,6 @@ vi.mock("./chrome.js", () => ({
     throw new Error("unexpected launch");
   }),
   resolveOpenClawUserDataDir: vi.fn(() => chromeUserDataDir.dir),
+  stopOwnedOpenClawChrome: vi.fn(async () => false),
   stopOpenClawChrome: vi.fn(async () => {}),
 }));

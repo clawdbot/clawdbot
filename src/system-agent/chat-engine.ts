@@ -51,6 +51,8 @@ export type SystemAgentChatEngineOptions = {
   surface?: "cli" | "gateway";
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
   operatorApprovalOnly?: boolean;
+  /** Host-recorded origin for delegated create-agent proposals. */
+  requesterAgentId?: string;
 };
 
 type SystemAgentChatEngineInternals = {
@@ -110,10 +112,6 @@ export class SystemAgentChatEngine {
     return this.router.propose(operation);
   }
 
-  hasPendingProposal(): boolean {
-    return this.router.hasPendingProposal();
-  }
-
   getPendingOperatorProposal(): { operation: SystemAgentOperation; hash: string } | null {
     return this.router.getPendingOperatorProposal();
   }
@@ -121,9 +119,14 @@ export class SystemAgentChatEngine {
   async resolveOperatorApproval(
     decision: "allow-once" | "allow-always" | "deny" | null,
     proposalHash: string,
+    beforePersistentApply?: () => void,
   ): Promise<SystemAgentChatReply | null> {
     const turn = this.turnQueue.then(async () => {
-      const reply = await this.router.resolveOperatorApproval(decision, proposalHash);
+      const reply = await this.router.resolveOperatorApproval(
+        decision,
+        proposalHash,
+        beforePersistentApply,
+      );
       if (reply?.text) {
         this.history.push({ role: "assistant", text: reply.text });
       }
@@ -157,6 +160,15 @@ export class SystemAgentChatEngine {
   async dispose(): Promise<void> {
     this.wizard.dispose();
     await cleanupSystemAgentSession(this.agentSession);
+  }
+
+  /**
+   * Project the live hosted-wizard interaction onto a rejoin reply so a
+   * reconnecting client re-renders the answer controls this session still
+   * awaits; a no-op when no wizard is active.
+   */
+  decorateRejoinReply(reply: SystemAgentChatReply): SystemAgentChatReply {
+    return this.wizard.decorateReply(reply);
   }
 
   async handle(text: string, options?: SystemAgentChatTurnOptions): Promise<SystemAgentChatReply> {

@@ -28,6 +28,10 @@ export type AssistantMessageOptions = {
   promptError: unknown;
 };
 
+export type CodexAsyncAssistantMessage = AssistantMessage & {
+  openclawAsyncDelivery: { itemId: string };
+};
+
 const ZERO_USAGE: Usage = {
   input: 0,
   output: 0,
@@ -103,7 +107,9 @@ export function createAssistantCommentaryMessage(
   timestamp: number,
 ): AssistantMessage {
   const attribution = resolveCodexLocalRuntimeAttribution(params);
-  return {
+  const message: AssistantMessage & {
+    openclawStreamFallback: { replacementText: string; source: "segment"; itemId: string };
+  } = {
     role: "assistant",
     content: [{ type: "text", text }],
     api: attribution.api ?? "openai-chatgpt-responses",
@@ -119,7 +125,28 @@ export function createAssistantCommentaryMessage(
       source: "segment",
       itemId,
     },
-  } as unknown as AssistantMessage;
+  };
+  return message;
+}
+
+export function createAssistantAsyncMessage(
+  params: CodexAssistantMessageParams,
+  text: string,
+  itemId: string,
+  timestamp: number,
+): CodexAsyncAssistantMessage {
+  const attribution = resolveCodexLocalRuntimeAttribution(params);
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    api: attribution.api ?? "openai-chatgpt-responses",
+    provider: attribution.provider,
+    model: params.modelId,
+    usage: ZERO_USAGE,
+    stopReason: "stop",
+    timestamp,
+    openclawAsyncDelivery: { itemId },
+  };
 }
 
 export function createAssistantMirrorMessage(

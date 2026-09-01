@@ -19,6 +19,7 @@ import { googleFlashSupportsMinimalThinking } from "../transports/google-thinkin
 import {
   assignTransportErrorDetails,
   coerceTransportToolCallArguments,
+  notifyProviderStreamOpened,
   transportAbortError,
 } from "../transports/transport-stream-shared.js";
 import type {
@@ -47,6 +48,10 @@ import {
 } from "./tool-result-text.js";
 
 type GoogleApiType = "google-generative-ai" | "google-vertex";
+
+// Google-owned SDK resource spellings identify the same model; other publishers do not.
+const GOOGLE_MODEL_RESOURCE_PREFIX =
+  /^(?:(?:projects\/[^/]+\/locations\/[^/]+\/)?publishers\/google\/models\/|google\/|models\/)/u;
 
 type GoogleThinkingLevel = `${ThinkingLevel}`;
 
@@ -183,6 +188,7 @@ export function convertMessages<T extends GoogleApiType>(
   // Parallel calls need one immediate function-response turn. Gemini < 3 images cannot
   // live inside functionResponse, so hold them until the consecutive result run ends.
   const pendingToolResultImageTurns: Content[] = [];
+  const sameRouteToolCallIds = new Set<string>();
   let activeToolResultParts: Part[] | undefined;
   const flushToolResultRun = (): void => {
     contents.push(...pendingToolResultImageTurns);
@@ -262,6 +268,9 @@ export function convertMessages<T extends GoogleApiType>(
             });
           }
         } else if (block.type === "toolCall") {
+          if (isSameProviderAndModel && model.provider !== "google-gemini-cli") {
+            sameRouteToolCallIds.add(block.id);
+          }
           const args = coerceTransportToolCallArguments(block.arguments);
           const ownSignature = resolveThoughtSignature(
             isSameProviderAndModel,
@@ -277,7 +286,9 @@ export function convertMessages<T extends GoogleApiType>(
             functionCall: {
               name: block.name,
               args,
-              ...(requiresToolCallId(model.id) ? { id: block.id } : {}),
+              ...(sameRouteToolCallIds.has(block.id) || requiresToolCallId(model.id)
+                ? { id: block.id }
+                : {}),
             },
             ...(thoughtSignature && { thoughtSignature }),
           };
@@ -318,7 +329,7 @@ export function convertMessages<T extends GoogleApiType>(
         },
       }));
 
-      const includeId = requiresToolCallId(model.id);
+      const includeId = sameRouteToolCallIds.has(msg.toolCallId) || requiresToolCallId(model.id);
       const functionResponsePart: Part = {
         functionResponse: {
           name: msg.toolName,
@@ -436,8 +447,15 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
       requestParams = nextParams as GenerateContentParameters;
     }
     const googleStream = await client.models.generateContentStream(requestParams);
+    const googleIterator = googleStream[Symbol.asyncIterator]();
+    await notifyProviderStreamOpened({
+      options,
+      cancelStream: async () => {
+        await googleIterator.return?.();
+      },
+    });
     await consumeGoogleGenerateContentStream({
-      chunks: googleStream,
+      chunks: { [Symbol.asyncIterator]: () => googleIterator },
       model,
       output,
       stream,
@@ -723,6 +741,7 @@ function mapStopReason(reason: FinishReason): StopReason {
     case FinishReason.OTHER:
     case FinishReason.LANGUAGE:
     case FinishReason.MALFORMED_FUNCTION_CALL:
+    case FinishReason.TOO_MANY_TOOL_CALLS:
     case FinishReason.UNEXPECTED_TOOL_CALL:
     case FinishReason.NO_IMAGE:
       return "error";
@@ -786,6 +805,14 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
 
   for await (const chunk of params.chunks) {
     params.output.responseId ||= chunk.responseId;
+    const responseModel = chunk.modelVersion?.trim();
+    if (
+      responseModel &&
+      params.model.id.replace(GOOGLE_MODEL_RESOURCE_PREFIX, "") !==
+        responseModel.replace(GOOGLE_MODEL_RESOURCE_PREFIX, "")
+    ) {
+      params.output.responseModel ||= responseModel;
+    }
     if (chunk.usageMetadata) {
       for (const field of Object.keys(knownUsage) as Array<keyof typeof knownUsage>) {
         const value = chunk.usageMetadata[field];
@@ -963,7 +990,10 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
       }
     }
 
-    if (candidate?.finishReason) {
+    if (
+      candidate?.finishReason &&
+      candidate.finishReason !== FinishReason.FINISH_REASON_UNSPECIFIED
+    ) {
       sawTerminalReason = true;
       params.output.stopReason = mapStopReason(candidate.finishReason);
       if (params.output.stopReason === "error") {

@@ -11,8 +11,8 @@ import {
 import {
   HISTORY_SCAN_MAX_PROPOSAL_MUTATIONS,
   resolveSkillHistoryScanReviewOutcome,
-  resolveSkillHistoryScanRunFailure,
-} from "./history-scan-review-outcome.js";
+  assertSkillReviewRunSucceeded,
+} from "./review-outcome.js";
 import type { SkillWorkshopProposalReviewProgress } from "./types.js";
 
 export const HISTORY_SCAN_SESSION_SEGMENT = "skill-workshop-history-scan";
@@ -89,11 +89,11 @@ export async function runSkillHistoryScanReview(params: {
       provider: modelRef.provider,
       model: modelRef.model,
       // A smaller configured fallback must not receive a prompt sized for the primary model.
+      modelSelectionLocked: true,
       modelFallbacksOverride: [],
       timeoutMs: HISTORY_SCAN_TIMEOUT_MS,
       runId,
       toolsAllow: ["skill_workshop"],
-      disableMessageTool: true,
       disableTrajectory: true,
       skillWorkshopProposalOnly: true,
       skillWorkshopProposalEnv: params.env,
@@ -107,7 +107,7 @@ export async function runSkillHistoryScanReview(params: {
       reasoningLevel: "off",
       suppressToolErrorWarnings: true,
     });
-    runError = resolveSkillHistoryScanRunFailure(result);
+    assertSkillReviewRunSucceeded(result);
   } catch (error) {
     runError = error;
   } finally {

@@ -3,16 +3,20 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
-import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
+import { readAcpSessionMeta, readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
+import {
+  resolveCurrentSessionAgentRuntimeMetadata,
+  resolveModelAgentRuntimeMetadata,
+} from "../agents/agent-runtime-metadata.js";
 import { resolveAgentConfig, resolveSessionAgentId } from "../agents/agent-scope.js";
-import { lookupContextTokens } from "../agents/context.js";
+import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
   findModelCatalogEntry,
   type ModelCatalogEntry,
   modelSupportsInput,
 } from "../agents/model-catalog.js";
+import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import {
   findNormalizedProviderValue,
   inferUniqueProviderFromConfiguredModels,
@@ -25,7 +29,6 @@ import {
 import { resolveThinkingDefaultCore } from "../agents/model-thinking-default-core.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../agents/prepared-model-catalog-owner.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
-import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import {
   concretizeAgentRuntime,
   resolveEffectiveAgentRuntime,
@@ -37,6 +40,8 @@ import {
 } from "../auto-reply/thinking.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveAgentMainSessionKey, type SessionEntry } from "../config/sessions.js";
+import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
@@ -57,6 +62,7 @@ function listGatewayThinkingLevelOptions(params: {
   model: string;
   modelCatalog?: ModelCatalogEntry[];
   agentRuntime: string;
+  configuredReasoning?: boolean;
   providerPolicySource?: ThinkingProviderPolicySource;
 }) {
   return resolveThinkingProfile({
@@ -64,28 +70,36 @@ function listGatewayThinkingLevelOptions(params: {
     model: params.model,
     catalog: params.modelCatalog,
     agentRuntime: params.agentRuntime,
+    configuredReasoning: params.configuredReasoning,
     providerPolicySource: params.providerPolicySource,
   }).levels.map(({ id, label }) => ({ id, label }));
 }
 
 function resolveGatewaySessionThinkingLevel(params: {
   provider: string;
+  catalogProvider?: string;
   model: string;
   level: NonNullable<ReturnType<typeof normalizeThinkLevel>>;
   modelCatalog?: ModelCatalogEntry[];
   agentRuntime: string;
+  configuredReasoning?: boolean;
   providerPolicySource?: ThinkingProviderPolicySource;
 }) {
   const catalogEntry = params.modelCatalog
     ? findModelCatalogEntry(params.modelCatalog, {
-        provider: params.provider,
+        provider: params.catalogProvider ?? params.provider,
         modelId: params.model,
       })
     : undefined;
-  // Lightweight sessions.changed projections intentionally omit the catalog.
+  // Lightweight projections can omit the catalog or carry identity-only entries.
   // Runtime/model patches normalize persisted state with authoritative metadata;
   // projections must not reinterpret an already-validated level without it.
-  if (!catalogEntry) {
+  if (
+    !catalogEntry ||
+    (params.providerPolicySource !== undefined &&
+      params.providerPolicySource !== "active-or-bundled" &&
+      catalogEntry.reasoning === undefined)
+  ) {
     return params.level;
   }
   return resolveSupportedThinkingLevel({
@@ -94,6 +108,7 @@ function resolveGatewaySessionThinkingLevel(params: {
     level: params.level,
     catalog: params.modelCatalog,
     agentRuntime: params.agentRuntime,
+    configuredReasoning: params.configuredReasoning,
     providerPolicySource: params.providerPolicySource,
   });
 }
@@ -101,19 +116,24 @@ function resolveGatewaySessionThinkingLevel(params: {
 function resolveGatewaySessionThinkingDefault(params: {
   cfg: OpenClawConfig;
   provider: string;
+  thinkingPolicyProvider?: string;
   model: string;
   agentId?: string;
   modelCatalog?: ModelCatalogEntry[];
   agentRuntime: string;
+  configuredReasoning?: boolean;
   providerPolicySource?: ThinkingProviderPolicySource;
 }) {
   const agentThinkingDefault = params.agentId
     ? resolveAgentConfig(params.cfg, params.agentId)?.thinkingDefault
     : undefined;
   const resolveDefault =
-    params.providerPolicySource === "active"
+    params.providerPolicySource !== undefined && params.providerPolicySource !== "active-or-bundled"
       ? (defaultParams: Parameters<typeof resolveThinkingDefault>[0]) =>
-          resolveThinkingDefaultCore({ ...defaultParams, providerPolicySource: "active" })
+          resolveThinkingDefaultCore({
+            ...defaultParams,
+            providerPolicySource: params.providerPolicySource,
+          })
       : resolveThinkingDefault;
   const defaultLevel =
     agentThinkingDefault ??
@@ -125,11 +145,13 @@ function resolveGatewaySessionThinkingDefault(params: {
       agentRuntime: params.agentRuntime,
     });
   return resolveGatewaySessionThinkingLevel({
-    provider: params.provider,
+    provider: params.thinkingPolicyProvider ?? params.provider,
+    catalogProvider: params.provider,
     model: params.model,
     level: defaultLevel,
     modelCatalog: params.modelCatalog,
     agentRuntime: params.agentRuntime,
+    configuredReasoning: params.configuredReasoning,
     providerPolicySource: params.providerPolicySource,
   });
 }
@@ -140,6 +162,8 @@ export function resolveGatewayModelThinkingProfile(params: {
   provider: string;
   model: string;
   agentRuntime?: string;
+  configuredReasoning?: boolean;
+  thinkingPolicyProvider?: string;
   modelCatalog?: ModelCatalogEntry[];
   rowContext?: SessionListRowContext;
   sessionKey?: string;
@@ -162,53 +186,39 @@ export function resolveGatewayModelThinkingProfile(params: {
       agentId: params.agentId,
       sessionKey: params.sessionKey,
     });
-  if (!params.rowContext) {
-    return {
-      thinkingLevels: listGatewayThinkingLevelOptions({
-        provider: params.provider,
-        model: params.model,
-        modelCatalog: params.modelCatalog,
-        agentRuntime,
-        providerPolicySource: params.providerPolicySource,
-      }),
-      thinkingDefault: resolveGatewaySessionThinkingDefault({
-        cfg: params.cfg,
-        provider: params.provider,
-        model: params.model,
-        agentId: params.agentId,
-        modelCatalog: params.modelCatalog,
-        agentRuntime,
-        providerPolicySource: params.providerPolicySource,
-      }),
-    };
-  }
-  const key = `${normalizeAgentId(params.agentId)}\0${agentRuntime}\0${params.providerPolicySource ?? "active-or-bundled"}\0${createSessionRowModelCacheKey(
+  const thinkingPolicyProvider = params.thinkingPolicyProvider ?? params.provider;
+  const policySource =
+    typeof params.providerPolicySource === "object" ? "prepared" : params.providerPolicySource;
+  const key = `${normalizeAgentId(params.agentId)}\0${agentRuntime}\0${normalizeLowercaseStringOrEmpty(thinkingPolicyProvider)}\0${String(params.configuredReasoning)}\0${policySource ?? "active-or-bundled"}\0${createSessionRowModelCacheKey(
     params.provider,
     params.model,
   )}`;
-  const cached = params.rowContext.thinkingMetadataByModelRef.get(key);
+  const cached = params.rowContext?.thinkingMetadataByModelRef.get(key);
   if (cached) {
     return cached;
   }
   const metadata = {
     thinkingLevels: listGatewayThinkingLevelOptions({
-      provider: params.provider,
+      provider: thinkingPolicyProvider,
       model: params.model,
       modelCatalog: params.modelCatalog,
       agentRuntime,
+      configuredReasoning: params.configuredReasoning,
       providerPolicySource: params.providerPolicySource,
     }),
     thinkingDefault: resolveGatewaySessionThinkingDefault({
       cfg: params.cfg,
       provider: params.provider,
+      thinkingPolicyProvider,
       model: params.model,
       agentId: params.agentId,
       modelCatalog: params.modelCatalog,
       agentRuntime,
+      configuredReasoning: params.configuredReasoning,
       providerPolicySource: params.providerPolicySource,
     }),
   };
-  params.rowContext.thinkingMetadataByModelRef.set(key, metadata);
+  params.rowContext?.thinkingMetadataByModelRef.set(key, metadata);
   return metadata;
 }
 
@@ -227,35 +237,27 @@ type GatewaySessionThinkingProjectionParams = {
 export function resolveGatewaySessionThinkingProjectionInternal(
   params: GatewaySessionThinkingProjectionParams,
 ) {
+  const { cfg, agentId, sessionKey, entry } = params;
   const cachedAcpMeta = params.rowContext?.acpSessionMetaByEntry;
+  // Keep metadata bound to the projected row; rereading its key can adopt a
+  // replacement lifecycle while projecting the original entry.
   const acpMeta =
-    params.entry?.acp ??
-    (params.entry && cachedAcpMeta?.has(params.entry)
-      ? cachedAcpMeta.get(params.entry)
-      : readAcpSessionMeta({ sessionKey: params.sessionKey, agentId: params.agentId }));
-  const configuredAgentRuntime = resolveModelAgentRuntimeMetadata({
+    entry?.acp ??
+    (entry && cachedAcpMeta?.has(entry)
+      ? cachedAcpMeta.get(entry)
+      : entry
+        ? readAcpSessionMetaForEntry({ cfg, sessionKey, agentId, entry })
+        : readAcpSessionMeta({ sessionKey, agentId }));
+  const agentRuntime = resolveCurrentSessionAgentRuntimeMetadata({
     cfg: params.cfg,
     agentId: params.agentId,
     provider: params.provider,
     model: params.model,
     sessionKey: params.sessionKey,
+    sessionEntry: params.entry,
     acpRuntime: acpMeta != null,
     acpBackend: acpMeta?.backend,
   });
-  const persistedAgentRuntime = resolveSessionRuntimeOverrideForProvider({
-    provider: params.provider,
-    entry: params.entry,
-    cfg: params.cfg,
-  });
-  const persistedAgentRuntimeSource: "session" | "session-key" =
-    params.entry?.modelSelectionLocked === true ? "session" : "session-key";
-  const agentRuntime =
-    acpMeta || !persistedAgentRuntime
-      ? configuredAgentRuntime
-      : {
-          id: persistedAgentRuntime,
-          source: persistedAgentRuntimeSource,
-        };
   const catalogEntry = params.modelCatalog
     ? findModelCatalogEntry(params.modelCatalog, {
         provider: params.provider,
@@ -309,7 +311,11 @@ export function resolveGatewaySessionThinkingProjectionInternal(
 export function getSessionDefaults(
   cfg: OpenClawConfig,
   modelCatalog?: ModelCatalogEntry[],
-  options?: { agentId?: string; allowPluginNormalization?: boolean },
+  options?: {
+    agentId?: string;
+    allowPluginNormalization?: boolean;
+    providerPolicySource?: ThinkingProviderPolicySource;
+  },
 ): GatewaySessionsDefaults {
   const agentId = normalizeAgentId(
     options?.agentId ?? tryResolveLegacyCompatibilityAgentId(cfg) ?? LEGACY_IMPLICIT_AGENT_ID,
@@ -326,11 +332,25 @@ export function getSessionDefaults(
         defaultModel: DEFAULT_MODEL,
         allowPluginNormalization: options?.allowPluginNormalization,
       });
-  const contextTokens =
-    resolveAgentConfig(cfg, agentId)?.contextTokens ??
-    cfg.agents?.defaults?.contextTokens ??
-    lookupContextTokens(resolved.model, { allowAsyncLoad: false }) ??
-    DEFAULT_CONTEXT_TOKENS;
+  const catalogEntry = modelCatalog
+    ? findModelCatalogEntry(modelCatalog, {
+        provider: resolved.provider,
+        modelId: resolved.model,
+      })
+    : undefined;
+  const contextWindowProfile = resolveModelContextWindowProfile({ catalogEntry });
+  const resolvedContextTokens =
+    resolveContextTokensForModel({
+      cfg,
+      provider: resolved.provider,
+      model: resolved.model,
+      modelContextTokens: catalogEntry?.contextTokens,
+      modelContextWindow: contextWindowProfile.contextTokens,
+      allowAsyncLoad: false,
+    }) ?? DEFAULT_CONTEXT_TOKENS;
+  const contextTokens = contextWindowProfile.contextTokens
+    ? Math.min(resolvedContextTokens, contextWindowProfile.contextTokens)
+    : resolvedContextTokens;
   const sessionKey = resolveAgentMainSessionKey({ cfg, agentId });
   const agentRuntime = projectWorkerPlacementAgentRuntime(
     resolveModelAgentRuntimeMetadata({
@@ -347,13 +367,22 @@ export function getSessionDefaults(
     provider: resolved.provider,
     model: resolved.model,
     agentId,
-    modelCatalog,
+    modelCatalog:
+      modelCatalog ??
+      (options?.providerPolicySource !== undefined &&
+      options.providerPolicySource !== "active-or-bundled"
+        ? []
+        : undefined),
     sessionKey,
+    providerPolicySource: options?.providerPolicySource,
   });
   return {
     modelProvider: resolved.provider ?? null,
     model: resolved.model ?? null,
     contextTokens: contextTokens ?? null,
+    contextWindow: contextWindowProfile.contextWindow,
+    contextWindows: contextWindowProfile.contextWindows,
+    contextWindowDefault: contextWindowProfile.contextWindowDefault,
     agentRuntime,
     // Preserve the established serialized projection order for byte-stable responses.
     thinkingLevels: thinkingProfile.thinkingLevels,
@@ -617,6 +646,7 @@ function resolveSessionDisplayModelIdentityRef(params: {
   const inferredProvider = inferUniqueProviderFromConfiguredModels({
     cfg: params.cfg,
     model,
+    agentId: params.agentId,
   });
   if (inferredProvider && !isCliProvider(inferredProvider, params.cfg)) {
     return { provider: inferredProvider, model };
@@ -663,17 +693,31 @@ export async function projectSessionPatchResult(params: {
     entry: params.entry,
     modelCatalog,
   });
+  const catalogEntry = modelCatalog
+    ? findModelCatalogEntry(modelCatalog, {
+        provider: displayModel.provider ?? resolved.provider,
+        modelId: displayModel.model ?? resolved.model,
+      })
+    : undefined;
+  const contextWindow = resolveModelContextWindowProfile({
+    catalogEntry,
+    selected: params.entry.contextWindow,
+  });
   return {
     ok: true,
-    path: params.storePath,
+    path: resolveSqliteTargetFromSessionStorePath(params.storePath, {
+      agentId: params.targetAgentId,
+    }).path,
     key: params.canonicalKey,
-    entry: params.entry,
+    entry: projectPublicSessionEntry(params.entry),
     resolved: {
       modelProvider: displayModel.provider,
       model: displayModel.model,
       agentRuntime: thinking.agentRuntime,
       ...(modelCatalog
         ? {
+            contextWindow: contextWindow.contextWindow,
+            contextWindows: contextWindow.contextWindows,
             thinkingLevel: thinking.effectiveThinkingLevel,
             thinkingLevels: thinking.thinkingLevels,
           }

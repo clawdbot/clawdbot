@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { isUiBrowserTestFile } from "../../test/vitest/vitest.ui-paths.mjs";
 import { detectChangedLanes } from "../changed-lanes.mts";
 import {
   buildVitestRunPlans,
@@ -9,24 +10,34 @@ import {
   isTestSupportFileTarget,
   resolveChangedTestTargetPlan,
 } from "../test-projects.test-support.mts";
+import { listAvailableExtensionIds } from "./changed-extensions.mts";
 import {
   createNodeTestShards,
   isPolicyTestOwnedPath,
   resolvePolicyTestTargets,
 } from "./ci-node-test-plan.mts";
 import {
+  estimateExtensionTestCost,
   listExtensionTestFilesForRoots,
   resolveExtensionTestConfig,
   shouldSplitExtensionTestProcesses,
   splitExtensionTestJobTargets,
 } from "./extension-test-plan.mts";
 import { buildPluginSdkEntrySources, publicPluginSdkEntrypoints } from "./plugin-sdk-entries.mts";
+import {
+  resolveVitestPretestBuildMode,
+  type VitestPretestBuildMode,
+} from "./vitest-build-prerequisites.mts";
+import { VITEST_PRETEST_BUILD_SECONDS } from "./vitest-shard-metadata.mts";
 
 type ChangedNodeTestShard = {
   checkName: string;
   configs: string[];
+  env?: Record<string, string>;
   includePatterns?: string[];
   planConcurrency?: number;
+  predictedSeconds?: number;
+  pretestBuildMode?: VitestPretestBuildMode;
   requiresDist: boolean;
   runner: string;
   shardName: string;
@@ -44,6 +55,25 @@ const CHANGED_NODE_TEST_TARGETS_PER_JOB = 12;
 // integration tests past the global timeout.
 const SERIAL_CHANGED_TARGET_RE = /^extensions\/memory-core\//u;
 const BOUNDARY_NODE_TEST_CONFIG = "test/vitest/vitest.boundary.config.ts";
+const MCP_DOCKER_SEED_LANES = [
+  "mcp-channels",
+  "cron-mcp-cleanup",
+  "mcp-code-mode-gateway",
+] as const;
+const DOCKER_SEED_LANE_ORDER = [...MCP_DOCKER_SEED_LANES, "update-channel-switch"] as const;
+type DockerSeedLane = (typeof DOCKER_SEED_LANE_ORDER)[number];
+const DOCKER_SEED_LANES_BY_PATH: Readonly<Record<string, readonly DockerSeedLane[]>> = {
+  ".github/workflows/ci.yml": MCP_DOCKER_SEED_LANES,
+  "scripts/e2e/cron-mcp-cleanup-seed.ts": ["cron-mcp-cleanup"],
+  "scripts/e2e/docker-openai-seed.ts": MCP_DOCKER_SEED_LANES,
+  "scripts/e2e/lib/mcp-code-mode-probe-server.ts": ["mcp-code-mode-gateway"],
+  "scripts/e2e/lib/mcp-code-mode/scenario.sh": ["mcp-code-mode-gateway"],
+  "scripts/e2e/lib/update-channel-switch/assertions.mjs": ["update-channel-switch"],
+  "scripts/e2e/mcp-channels-seed.ts": ["mcp-channels"],
+  "scripts/e2e/mcp-code-mode-gateway-seed.ts": ["mcp-code-mode-gateway"],
+  "scripts/e2e/update-channel-switch-docker.sh": ["update-channel-switch"],
+  "scripts/lib/ci-changed-node-test-plan.mts": MCP_DOCKER_SEED_LANES,
+};
 const publicPluginSdkEntrySources = Object.values(
   buildPluginSdkEntrySources(publicPluginSdkEntrypoints),
 );
@@ -60,6 +90,17 @@ const splitNodeTestConfigs = new Set(
   fullNodeTestShards.filter((shard) => shard.includePatterns).flatMap((shard) => shard.configs),
 );
 
+export function resolveChangedDockerSeedLanes(changedPaths: string[]) {
+  const selected = new Set<DockerSeedLane>();
+  for (const changedPath of changedPaths) {
+    const normalizedPath = changedPath.replaceAll("\\", "/");
+    for (const lane of DOCKER_SEED_LANES_BY_PATH[normalizedPath] ?? []) {
+      selected.add(lane);
+    }
+  }
+  return DOCKER_SEED_LANE_ORDER.filter((lane) => selected.has(lane));
+}
+
 function isTestOnlyPath(changedPath: string) {
   return (
     isTestFileTarget(changedPath) ||
@@ -69,21 +110,28 @@ function isTestOnlyPath(changedPath: string) {
 }
 
 // Inputs `build:ci-artifacts` consumes: runtime/plugin/package sources plus
-// the build pipeline itself (mirrors the build-all cache key in ci.yml).
-// Paths outside this set — repo scripts, workflows, qa scenarios, docs mixes —
-// cannot change dist or bundled plugin asset bytes.
+// the build pipeline itself, including shared declaration publication and cache owners.
+// Built-artifact test inputs below also require this lane even though they do
+// not change the bytes under test.
 const BUILD_INPUT_RE =
-  /^(?:src|extensions|packages)\/|^(?:openclaw\.mjs|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)$|^tsconfig[^/]*\.json$|^scripts\/(?:build-[^/]+|runtime-postbuild\.mts|write-plugin-sdk-entry-dts\.ts)$|^scripts\/lib\/(?:copy-assets\.ts|plugin-sdk-entries\.mts)$/u;
+  /^(?:src|extensions|packages)\/|^(?:openclaw\.mjs|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)$|^tsconfig[^/]*\.json$|^tsdown(?:\.[^/]+)?\.config\.ts$|^scripts\/(?:build-[^/]+|runtime-postbuild\.mts|tsdown-build\.mts|write-(?:plugin-sdk|unified)-entry-dts\.ts)$|^scripts\/lib\/(?:copy-assets\.ts|plugin-sdk-entries\.mts|(?:build-artifact-cache|compiler-input-snapshot|declaration-stage|tsdown-[^/]+)\.mts)$/u;
+const BUILT_ARTIFACT_TEST_INPUTS = new Set([
+  "extensions/browser/chrome-extension/relay-key.test-support.ts",
+  "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts",
+  "extensions/browser/src/browser/extension-install.test-support.ts",
+]);
 
 /**
  * True when a changed path can influence built dist/packaging bytes: a
- * non-test build-input source or the build pipeline itself. Diffs entirely
- * outside that set (tests, repo scripts, workflows, qa scenarios) let the
+ * non-test build-input source, build pipeline, or built-artifact test input.
+ * Diffs entirely outside that set (ordinary tests, repo scripts, workflows) let the
  * manifest skip the build-artifacts lane.
  */
 export function hasBuildArtifactAffectingChange(changedPaths: string[]) {
   return changedPaths.some(
-    (changedPath) => BUILD_INPUT_RE.test(changedPath) && !isTestOnlyPath(changedPath),
+    (changedPath) =>
+      BUILT_ARTIFACT_TEST_INPUTS.has(changedPath) ||
+      (BUILD_INPUT_RE.test(changedPath) && !isTestOnlyPath(changedPath)),
   );
 }
 
@@ -118,6 +166,11 @@ const PROMPT_SNAPSHOT_SURFACE_RE =
 // is the snapshot helper's import graph (auto-reply prompts, channel typing,
 // plugin-sdk agent harness, codex catalog fixtures).
 const PROMPT_SNAPSHOT_ENTRY = "test/helpers/agents/happy-path-prompt-snapshots.ts";
+
+// The fallback planner and chunk-policy owner are part of the gate surface; changes to the
+// gate must not be able to skip the gated lane (#124412).
+const CORE_EXTENSION_IMPACT_SURFACE_RE =
+  /^scripts\/lib\/(?:changed-extensions|ci-changed-node-test-plan|extension-test-plan)\.mts$/u;
 
 /**
  * True when a changed path can influence generated prompt snapshots: it
@@ -287,6 +340,10 @@ function createChangedTargetShards(
       shardName: `${names.shardName}${suffix}`,
       targets: chunk,
     };
+    const pretestBuildMode = resolveVitestPretestBuildMode([{ includePatterns: chunk }]);
+    if (pretestBuildMode) {
+      shard.pretestBuildMode = pretestBuildMode;
+    }
     if (chunk.some((target) => SERIAL_CHANGED_TARGET_RE.test(target))) {
       shard.planConcurrency = 1;
     }
@@ -311,31 +368,68 @@ function createChangedExtensionConfigShards(extensionRoots: string[]) {
     const config = resolveExtensionTestConfig(root);
     rootsByConfig.set(config, [...(rootsByConfig.get(config) ?? []), root]);
   }
-  const plans: Array<{ config: string; includePatterns?: string[]; roots: string[] }> = [
-    ...rootsByConfig,
-  ].flatMap(([config, roots]) => {
-    const testFiles = shouldSplitExtensionTestProcesses(config)
-      ? listExtensionTestFilesForRoots(roots)
-      : [];
+  const filesByConfig = new Map<string, string[]>();
+  for (const file of rootsByConfig.size > 0 ? listExtensionTestFilesForRoots(["extensions"]) : []) {
+    const config = resolveExtensionTestConfig(file.split("/").slice(0, 2).join("/"));
+    filesByConfig.set(config, [...(filesByConfig.get(config) ?? []), file]);
+  }
+  const plans: Array<{
+    config: string;
+    env?: Record<string, string>;
+    includePatterns?: string[];
+    predictedSeconds: number;
+  }> = [...rootsByConfig].flatMap(([config, roots]) => {
+    const splitProcesses = shouldSplitExtensionTestProcesses(config);
+    const testFiles = (filesByConfig.get(config) ?? []).filter(
+      (file) => !splitProcesses || roots.some((root) => file.startsWith(`${root}/`)),
+    );
     const chunks = testFiles.length > 0 ? splitExtensionTestJobTargets(config, testFiles) : [roots];
+    const predictedSeconds = Math.ceil(
+      estimateExtensionTestCost(config, testFiles.length) / chunks.length,
+    );
     return chunks.length > 1
-      ? chunks.map((includePatterns) => ({ config, includePatterns, roots }))
-      : [{ config, roots }];
+      ? chunks.map((includePatterns, index) =>
+          Object.assign(
+            { config, predictedSeconds },
+            splitProcesses
+              ? { includePatterns }
+              : {
+                  // Counts size jobs only. Vitest owns the complete config inventory,
+                  // including unrelated plugin roots, excludes and untracked tests.
+                  env: {
+                    OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify([
+                      `--shard=${index + 1}/${chunks.length}`,
+                    ]),
+                  },
+                },
+          ),
+        )
+      : [{ config, predictedSeconds }];
   });
-  return plans.map(({ config, includePatterns, roots }, index) => {
+  return plans.map(({ config, env, includePatterns, predictedSeconds }, index) => {
     const suffix = plans.length === 1 ? "" : `-${index + 1}`;
     const shard: ChangedNodeTestShard = {
       checkName: `checks-node-changed-extensions-config${suffix}`,
       configs: [config],
+      // No plans overlap in this row, so CI can scale the single process's worker budget.
+      planConcurrency: 1,
+      predictedSeconds,
       requiresDist: false,
       runner: DEFAULT_NODE_TEST_RUNNER,
       shardName: `changed-extensions-config${suffix}`,
     };
+    const pretestBuildMode = resolveVitestPretestBuildMode([
+      { configs: [config], includePatterns },
+    ]);
+    if (pretestBuildMode) {
+      shard.pretestBuildMode = pretestBuildMode;
+      shard.predictedSeconds = predictedSeconds + VITEST_PRETEST_BUILD_SECONDS[pretestBuildMode];
+    }
     if (includePatterns) {
       shard.includePatterns = includePatterns;
     }
-    if (roots.some((root) => SERIAL_CHANGED_TARGET_RE.test(`${root}/`))) {
-      shard.planConcurrency = 1;
+    if (env) {
+      shard.env = env;
     }
     return shard;
   });
@@ -351,14 +445,41 @@ function createChangedExtensionConfigShardsForPaths(changedPaths: string[], cwd:
 }
 
 /**
- * The fail-safe cause leaves the non-extension diff's extension impact unbounded,
- * so whole extension configs are required; precise targets would under-cover.
+ * True when core or fallback-gate changes can affect extension consumers beyond
+ * the changed extension paths.
+ */
+export function hasCoreExtensionImpact(changedPaths: string[], options: CwdOptions = {}) {
+  if (changedPaths.some((changedPath) => CORE_EXTENSION_IMPACT_SURFACE_RE.test(changedPath))) {
+    return true;
+  }
+  const cwd = options.cwd ?? process.cwd();
+  const regularLivePaths = changedPaths.filter(
+    (changedPath) =>
+      existsSync(path.join(cwd, changedPath)) &&
+      !changedPath.startsWith("extensions/") &&
+      !isPolicyTestOwnedPath(changedPath),
+  );
+  return (
+    detectChangedLanes(changedPaths).extensionImpactFromCore ||
+    (regularLivePaths.some((changedPath) => changedPath.startsWith("src/")) &&
+      hasImportGraphImpactOnTargets(regularLivePaths, publicPluginSdkEntrySources, cwd))
+  );
+}
+
+/**
+ * Covers changed extensions plus the full core-impact blast radius when precise
+ * planning falls back. See #124412.
  */
 export function createChangedExtensionFallbackShards(
   changedPaths: string[],
   options: CwdOptions = {},
 ): ChangedNodeTestShard[] {
   const cwd = options.cwd ?? process.cwd();
+  if (hasCoreExtensionImpact(changedPaths, { cwd })) {
+    return createChangedExtensionConfigShards(
+      listAvailableExtensionIds().map((extensionId) => `extensions/${extensionId}`),
+    );
+  }
   return createChangedExtensionConfigShardsForPaths(changedPaths, cwd);
 }
 
@@ -405,19 +526,18 @@ export function createChangedNodeTestShards(
 
   // Package-specifier consumers are invisible to the relative import graph.
   // Fail safe when a core change reaches a public SDK entrypoint indirectly.
-  if (
-    detectChangedLanes(changedPaths).extensionImpactFromCore ||
-    (regularLivePaths.some((changedPath) => changedPath.startsWith("src/")) &&
-      hasImportGraphImpactOnTargets(regularLivePaths, publicPluginSdkEntrySources, cwd))
-  ) {
+  if (hasCoreExtensionImpact(changedPaths, { cwd })) {
     return null;
   }
 
-  const targets = resolvePreciseChangedTargets(
-    regularLivePaths,
-    cwd,
-    [...policyTargetsByPath.values()].flat(),
-  );
+  const targets = resolvePreciseChangedTargets(regularLivePaths, cwd, [
+    ...[...policyTargetsByPath.values()].flat(),
+    // Plugin changes normally select only extension suites. This host-owned
+    // proof also exercises the real Copilot entrypoint and manifest discovery.
+    ...(livePaths.some((changedPath) => changedPath.startsWith("extensions/copilot/"))
+      ? ["src/agents/prepared-model-runtime.copilot.integration.test.ts"]
+      : []),
+  ]);
   if (targets === null) {
     return null;
   }
@@ -426,10 +546,14 @@ export function createChangedNodeTestShards(
   // suite scans the checked-out tree and never consumes the built dist.
   const shards = [
     ...createChangedExtensionConfigShardsForPaths(livePaths, cwd),
-    ...createChangedTargetShards(targets, {
-      checkName: "checks-node-changed",
-      shardName: "changed",
-    }),
+    // Native browser files run in checks-ui, including precise changed-file plans.
+    ...createChangedTargetShards(
+      targets.filter((target) => !isUiBrowserTestFile(target)),
+      {
+        checkName: "checks-node-changed",
+        shardName: "changed",
+      },
+    ),
     ...(hasBuildArtifactAffectingChange(changedPaths) ? [] : [createBoundaryShard()]),
   ];
   return shards.length > 0 ? shards : null;

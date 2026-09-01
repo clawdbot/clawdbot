@@ -1,12 +1,11 @@
-/**
- * Client-side execution engine for slash commands.
- * Calls gateway RPC methods and returns formatted results.
- */
-
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
+/**
+ * Client-side execution engine for slash commands.
+ * Calls gateway RPC methods and returns formatted results.
+ */
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentsListResult,
@@ -22,11 +21,6 @@ import {
   SLASH_COMMANDS,
 } from "../../lib/chat/commands.ts";
 import {
-  type ChatModelOverride,
-  createChatModelOverride,
-  resolvePreferredServerChatModelValue,
-} from "../../lib/chat/model-ref.ts";
-import {
   normalizeChatFastModeInput,
   resolveChatFastModeStatus,
 } from "../../lib/chat/model-select-state.ts";
@@ -36,9 +30,9 @@ import {
   resolveCurrentThinkingLevel,
   resolveThinkingLevelInput,
 } from "../../lib/chat/thinking.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   DEFAULT_AGENT_ID,
@@ -53,10 +47,8 @@ type SlashCommandResult = {
   content: string;
   /** Side-effect action the caller should perform after displaying the result. */
   action?: "refresh" | "export" | "new-session" | "reset" | "stop" | "clear" | "navigate-usage";
-  /** Optional session-level directive changes that the caller should mirror locally. */
-  sessionPatch?: {
-    modelOverride?: ChatModelOverride | null;
-  };
+  /** Model-dependent tools need refreshing after a confirmed selection. */
+  modelChanged?: boolean;
   /** When set, the caller should track this as the active run (enables Abort, blocks concurrent sends). */
   trackRunId?: string;
   /** When set, the caller should surface a visible pending item tied to the current run. */
@@ -220,7 +212,7 @@ async function executeCompact(
     });
     const result = await context.sessions.compact(sessionKey, options);
     if (result?.ok !== true) {
-      const reason = typeof result?.reason === "string" ? result.reason.trim() : "";
+      const reason = typeof result?.reason === "string" ? formatUiExternalText(result.reason) : "";
       return {
         content: reason
           ? t("chat.commandResults.compaction.failedWithReason", { reason })
@@ -246,7 +238,7 @@ async function executeCompact(
     if (typeof result?.reason === "string" && result.reason.trim()) {
       return {
         content: t("chat.commandResults.compaction.skippedWithReason", {
-          reason: result.reason,
+          reason: formatUiExternalText(result.reason),
         }),
         action: "refresh",
       };
@@ -254,7 +246,7 @@ async function executeCompact(
     return { content: t("chat.commandResults.compaction.skipped"), action: "refresh" };
   } catch (err) {
     return {
-      content: t("chat.commandResults.compaction.failedWithReason", { reason: String(err) }),
+      content: t("chat.commandResults.compaction.failedWithReason", { reason: formatUiError(err) }),
       failed: true,
     };
   }
@@ -297,7 +289,7 @@ async function executeModel(
       return { content: lines.join("\n") };
     } catch (err) {
       return {
-        content: t("chat.commandResults.model.getFailed", { error: String(err) }),
+        content: t("chat.commandResults.model.getFailed", { error: formatUiError(err) }),
         failed: true,
       };
     }
@@ -305,10 +297,6 @@ async function executeModel(
 
   try {
     const requestedModel = args.trim();
-    const resolvedModelCatalog = modelCatalog
-      ? Promise.resolve(modelCatalog)
-      : loadModelCatalog(client, agentId, { allowFailure: true });
-    let resolvedOverride: ChatModelOverride | null = null;
     await patchSession(
       context,
       sessionKey,
@@ -316,41 +304,17 @@ async function executeModel(
         model: requestedModel,
       },
       {
-        deferModelOverride: true,
         ownsModelOverride: context.ownsModelOverride,
-        reconcile: async (result) => {
-          const resolvedModel = result.resolved?.model ?? requestedModel;
-          let resolvedValue = resolvePreferredServerChatModelValue(
-            resolvedModel,
-            result.resolved?.modelProvider,
-            await resolvedModelCatalog,
-          );
-          const requestedOverride = createChatModelOverride(requestedModel);
-          const resolvedProvider = result.resolved?.modelProvider?.trim();
-          if (
-            requestedOverride?.kind === "qualified" &&
-            resolvedProvider &&
-            resolvedValue &&
-            !resolvedValue.toLowerCase().startsWith(`${resolvedProvider.toLowerCase()}/`) &&
-            requestedOverride.value.toLowerCase().endsWith(`/${resolvedModel.trim().toLowerCase()}`)
-          ) {
-            resolvedValue = requestedOverride.value;
-          }
-          resolvedOverride = createChatModelOverride(resolvedValue);
-          if (context.ownsModelOverride?.() !== false) {
-            context.sessions.setModelOverride(sessionKey, resolvedOverride?.value ?? null);
-          }
-        },
       },
     );
     return {
       content: t("chat.commandResults.model.set", { model: `\`${requestedModel}\`` }),
       action: "refresh",
-      sessionPatch: { modelOverride: resolvedOverride },
+      modelChanged: true,
     };
   } catch (err) {
     return {
-      content: t("chat.commandResults.model.setFailed", { error: String(err) }),
+      content: t("chat.commandResults.model.setFailed", { error: formatUiError(err) }),
       failed: true,
     };
   }
@@ -376,12 +340,12 @@ async function executeThink(
           t("chat.commandResults.thinking.current", {
             level: resolveCurrentThinkingLevel(session, defaults, models),
           }),
-          formatThinkingCommandOptionsForSession(session, defaults),
+          formatThinkingCommandOptionsForSession(session, defaults, models),
         ),
       };
     } catch (err) {
       return {
-        content: t("chat.commandResults.thinking.getFailed", { error: String(err) }),
+        content: t("chat.commandResults.thinking.getFailed", { error: formatUiError(err) }),
         failed: true,
       };
     }
@@ -398,7 +362,7 @@ async function executeThink(
       };
     } catch (err) {
       return {
-        content: t("chat.commandResults.thinking.resetFailed", { error: String(err) }),
+        content: t("chat.commandResults.thinking.resetFailed", { error: formatUiError(err) }),
         failed: true,
       };
     }
@@ -406,20 +370,21 @@ async function executeThink(
 
   try {
     const { session, defaults } = await loadCurrentSessionState(context, sessionKey);
-    const level = resolveThinkingLevelInput(rawLevel, session, defaults);
+    const modelCatalog = context.chatModelCatalog ?? context.modelCatalog ?? [];
+    const level = resolveThinkingLevelInput(rawLevel, session, defaults, modelCatalog);
     if (!level) {
       return {
         content: t("chat.commandResults.thinking.unrecognized", {
           level: rawLevel,
-          options: formatThinkingCommandOptionsForSession(session, defaults),
+          options: formatThinkingCommandOptionsForSession(session, defaults, modelCatalog),
         }),
       };
     }
-    if (!isThinkingLevelOptionForSession(session, defaults, level)) {
+    if (!isThinkingLevelOptionForSession(session, defaults, level, modelCatalog)) {
       return {
         content: t("chat.commandResults.thinking.unsupported", {
           level: rawLevel,
-          options: formatThinkingCommandOptionsForSession(session, defaults),
+          options: formatThinkingCommandOptionsForSession(session, defaults, modelCatalog),
         }),
       };
     }
@@ -432,7 +397,7 @@ async function executeThink(
     };
   } catch (err) {
     return {
-      content: t("chat.commandResults.thinking.setFailed", { error: String(err) }),
+      content: t("chat.commandResults.thinking.setFailed", { error: formatUiError(err) }),
       failed: true,
     };
   }
@@ -459,7 +424,7 @@ async function executeVerbose(
       };
     } catch (err) {
       return {
-        content: t("chat.commandResults.verbose.getFailed", { error: String(err) }),
+        content: t("chat.commandResults.verbose.getFailed", { error: formatUiError(err) }),
         failed: true,
       };
     }
@@ -482,7 +447,7 @@ async function executeVerbose(
     };
   } catch (err) {
     return {
-      content: t("chat.commandResults.verbose.setFailed", { error: String(err) }),
+      content: t("chat.commandResults.verbose.setFailed", { error: formatUiError(err) }),
       failed: true,
     };
   }
@@ -513,7 +478,7 @@ async function executeFast(
       };
     } catch (err) {
       return {
-        content: t("chat.commandResults.fast.getFailed", { error: String(err) }),
+        content: t("chat.commandResults.fast.getFailed", { error: formatUiError(err) }),
         failed: true,
       };
     }
@@ -530,7 +495,7 @@ async function executeFast(
       };
     } catch (err) {
       return {
-        content: t("chat.commandResults.fast.resetFailed", { error: String(err) }),
+        content: t("chat.commandResults.fast.resetFailed", { error: formatUiError(err) }),
         failed: true,
       };
     }
@@ -556,7 +521,7 @@ async function executeFast(
     };
   } catch (err) {
     return {
-      content: t("chat.commandResults.fast.setFailed", { error: String(err) }),
+      content: t("chat.commandResults.fast.setFailed", { error: formatUiError(err) }),
       failed: true,
     };
   }
@@ -615,7 +580,7 @@ async function executeUsage(
     return { content: lines.join("\n") };
   } catch (err) {
     return {
-      content: t("chat.commandResults.usage.failed", { error: String(err) }),
+      content: t("chat.commandResults.usage.failed", { error: formatUiError(err) }),
       failed: true,
     };
   }
@@ -641,7 +606,7 @@ async function executeAgents(client: GatewayBrowserClient): Promise<SlashCommand
     return { content: lines.join("\n") };
   } catch (err) {
     return {
-      content: t("chat.commandResults.agents.failed", { error: String(err) }),
+      content: t("chat.commandResults.agents.failed", { error: formatUiError(err) }),
       failed: true,
     };
   }
@@ -792,29 +757,21 @@ async function loadThinkingCommandState(
 async function loadModelCatalog(
   client: GatewayBrowserClient,
   agentId: string | undefined,
-  opts?: { allowFailure?: boolean },
 ): Promise<ModelCatalogEntry[]> {
   if (!agentId) {
     return [];
   }
-  try {
-    const result = await client.request<{ models: ModelCatalogEntry[] }>("models.list", {
-      agentId,
-      view: "configured",
-    });
-    return result?.models ?? [];
-  } catch (err) {
-    if (opts?.allowFailure) {
-      return [];
-    }
-    throw err;
-  }
+  const result = await client.request<{ models: ModelCatalogEntry[] }>("models.list", {
+    agentId,
+    view: "configured",
+  });
+  return result?.models ?? [];
 }
 
-async function resolveSteerTarget(
+function resolveCommandMessage(
   sessionKey: string,
   args: string,
-): Promise<{ key: string; message: string } | { error: string }> {
+): { key: string; message: string } | { error: string } {
   const trimmed = args.trim();
   if (!trimmed) {
     return { error: "empty" };
@@ -825,13 +782,8 @@ async function resolveSteerTarget(
   };
 }
 
-function isActiveSteerSession(
-  session: GatewaySessionRow | undefined,
-): session is GatewaySessionRow & { activeRunIds: [string] } {
-  return Boolean(session && isSessionRunActive(session) && session.activeRunIds?.length === 1);
-}
-
 type SteerChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
+type SteerChatSendAck = { runId?: unknown; status?: unknown };
 
 function normalizeSteerChatSendAckStatus(payload: unknown): SteerChatSendAckStatus {
   if (!payload || typeof payload !== "object") {
@@ -871,19 +823,10 @@ async function executeSteer(
   context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
   try {
-    const resolved = await resolveSteerTarget(sessionKey, args);
+    const resolved = resolveCommandMessage(sessionKey, args);
     if ("error" in resolved) {
       return {
         content: resolved.error === "empty" ? t("chat.commandResults.steer.usage") : resolved.error,
-      };
-    }
-    const sessions =
-      context.sessionsResult ??
-      (await listSessions(context, selectedGlobalScope(sessionKey, context)));
-    const targetSession = resolveCurrentSession(sessions, resolved.key);
-    if (!isActiveSteerSession(targetSession)) {
-      return {
-        content: t("chat.commandResults.steer.noActiveRun"),
       };
     }
     assertCurrentSlashCommand(context);
@@ -894,10 +837,6 @@ async function executeSteer(
         message: resolved.message,
         deliver: false,
         queueMode: "steer",
-        expectedRunId: targetSession.activeRunIds[0],
-        ...(targetSession.activeLeafEntryId !== undefined
-          ? { expectedLeafEntryId: targetSession.activeLeafEntryId }
-          : {}),
         idempotencyKey: generateUUID(),
       }),
     );
@@ -912,7 +851,7 @@ async function executeSteer(
     return result;
   } catch (err) {
     return {
-      content: t("chat.commandResults.steer.requestFailed", { error: String(err) }),
+      content: t("chat.commandResults.steer.requestFailed", { error: formatUiError(err) }),
       failed: true,
     };
   }
@@ -920,13 +859,13 @@ async function executeSteer(
 
 /** Hard redirect — aborts the active run and restarts with a new message. */
 async function executeRedirect(
-  _client: GatewayBrowserClient,
+  client: GatewayBrowserClient,
   sessionKey: string,
   args: string,
   context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
   try {
-    const resolved = await resolveSteerTarget(sessionKey, args);
+    const resolved = resolveCommandMessage(sessionKey, args);
     if ("error" in resolved) {
       return {
         content:
@@ -934,11 +873,13 @@ async function executeRedirect(
       };
     }
     assertCurrentSlashCommand(context);
-    const resp = await context.sessions.steer(
-      resolved.key,
-      resolved.message,
-      selectedGlobalScope(resolved.key, context),
-    );
+    const resp = await client.request<SteerChatSendAck>("chat.send", {
+      sessionKey: resolved.key,
+      ...selectedGlobalScope(resolved.key, context),
+      message: resolved.message,
+      queueMode: "interrupt",
+      idempotencyKey: generateUUID(),
+    });
     const ackStatus = normalizeSteerChatSendAckStatus(resp);
     const terminalAckContent = formatTerminalRedirectAckContent(ackStatus);
     if (terminalAckContent) {
@@ -951,7 +892,7 @@ async function executeRedirect(
     };
   } catch (err) {
     return {
-      content: t("chat.commandResults.redirect.requestFailed", { error: String(err) }),
+      content: t("chat.commandResults.redirect.requestFailed", { error: formatUiError(err) }),
       failed: true,
     };
   }

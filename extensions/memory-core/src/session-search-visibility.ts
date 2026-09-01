@@ -1,8 +1,11 @@
+import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 // Memory Core plugin module implements session search visibility behavior.
 import { buildSessionEntry } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  resolveCanonicalMainSessionKey,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
-import { resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { sessionDeliveryOrigin } from "openclaw/plugin-sdk/session-store-runtime";
 import {
@@ -14,6 +17,7 @@ import {
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
   resolveEffectiveSessionToolsVisibility,
+  resolveSandboxSessionToolsVisibility,
 } from "openclaw/plugin-sdk/session-visibility";
 import {
   readSessionArchiveReasonFromHitPath,
@@ -153,7 +157,7 @@ function filterSessionKeysByScopedAgent(params: {
     if (isGlobalSessionKeyForSharedScope(params.cfg, key)) {
       return true;
     }
-    const ownerAgentId = resolveSessionAgentId({
+    const ownerAgentId = resolveSessionAgentIdStrict({
       sessionKey: key,
       config: params.cfg,
     });
@@ -177,9 +181,10 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
   });
   const a2aPolicy = createAgentToAgentPolicy(params.cfg);
   const requesterAgentId = params.requesterSessionKey
-    ? resolveSessionAgentId({
+    ? resolveSessionAgentIdStrict({
         sessionKey: params.requesterSessionKey,
         config: params.cfg,
+        agentId: params.agentId,
       })
     : undefined;
   const scopedAgentId = params.agentId?.trim() || requesterAgentId;
@@ -187,6 +192,16 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     ? await createSessionVisibilityGuard({
         action: "history",
         requesterSessionKey: params.requesterSessionKey,
+        requesterAgentId,
+        mainSessionKey:
+          requesterAgentId &&
+          (!params.sandboxed || resolveSandboxSessionToolsVisibility(params.cfg) === "all")
+            ? resolveCanonicalMainSessionKey({
+                agentId: requesterAgentId,
+                mainKey: params.cfg.session?.mainKey,
+                sessionScope: params.cfg.session?.scope,
+              })
+            : undefined,
         visibility,
         a2aPolicy,
       })
@@ -203,7 +218,7 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
   );
   const anchorSessionKey = conversationRecall?.anchorSessionKey.trim();
   const recallAgentId = anchorSessionKey
-    ? resolveSessionAgentId({ sessionKey: anchorSessionKey, config: params.cfg })
+    ? resolveSessionAgentIdStrict({ sessionKey: anchorSessionKey, config: params.cfg })
     : undefined;
   const anchorEntry = anchorSessionKey ? combinedSessionStore[anchorSessionKey] : undefined;
   let anchorResetCutoffPromise: Promise<SessionResetRecallCutoff> | undefined;
@@ -275,7 +290,7 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     ) {
       return false;
     }
-    const candidateAgentId = resolveSessionAgentId({ sessionKey: key, config: params.cfg });
+    const candidateAgentId = resolveSessionAgentIdStrict({ sessionKey: key, config: params.cfg });
     if (
       normalizeAgentIdForCompare(candidateAgentId) !== normalizeAgentIdForCompare(recallAgentId)
     ) {

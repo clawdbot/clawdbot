@@ -81,10 +81,14 @@ vi.mock("../plugins/setup-registry.js", () => ({
   resolvePluginSetupProviderCore: () => undefined,
 }));
 
+vi.mock("../plugins/provider-external-auth.js", () => ({
+  resolveExternalAuthProfilesWithPlugins: () => [],
+}));
+
 vi.mock("../plugins/provider-runtime.js", () => {
   return {
     buildProviderMissingAuthMessageWithPlugin: () => undefined,
-    resolveExternalAuthProfilesWithPlugins: () => [],
+    resolveProviderDeprecatedAuthProfileIds: () => [],
     shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {
       context?: { resolvedApiKey?: string };
     }) => params.context?.resolvedApiKey === "synthetic-defer",
@@ -539,6 +543,49 @@ describe("resolveUsableCustomProviderApiKey", () => {
       source: "models.json",
     });
   });
+
+  it.each([
+    { name: "unresolved bare shorthand", authored: "$MISSING", env: {}, expected: null },
+    { name: "unresolved braced shorthand", authored: "${MISSING}", env: {}, expected: null },
+    {
+      name: "substituted template-looking literal",
+      authored: "${SOURCE}",
+      env: { SOURCE: "${OTHER}" },
+      expected: "${OTHER}",
+    },
+  ])(
+    "preserves authored custom-provider credentials: $name",
+    async ({ authored, env, expected }) => {
+      const [{ resolveConfigForRead }, { setConfigResolutionFacts }] = await Promise.all([
+        import("../config/io.read-helpers.js"),
+        import("../config/resolution-facts.js"),
+      ]);
+      const read = resolveConfigForRead(
+        {
+          models: {
+            providers: {
+              custom: {
+                baseUrl: "https://example.com/v1",
+                apiKey: authored,
+                models: [],
+              },
+            },
+          },
+        },
+        env,
+      );
+      const cfg = read.resolvedConfigRaw as NonNullable<
+        Parameters<typeof resolveUsableCustomProviderApiKey>[0]["cfg"]
+      >;
+      setConfigResolutionFacts(cfg, read.resolutionFacts);
+
+      const resolved = resolveUsableCustomProviderApiKey({ cfg, provider: "custom", env: {} });
+
+      expect(resolved).toEqual(
+        expected === null ? null : { apiKey: expected, source: "models.json" },
+      );
+    },
+  );
 
   it("does not treat non-env markers as usable credentials", () => {
     const resolved = resolveUsableCustomProviderApiKey({
@@ -1210,7 +1257,7 @@ describe("resolveApiKeyForProviderCore", () => {
     });
   });
 
-  it.each([
+  it.each<{ name: string; apiKey: ModelProviderConfig["apiKey"]; runtimeKey?: string }>([
     {
       name: "generated marker",
       apiKey: NON_ENV_SECRETREF_MARKER,
@@ -1223,58 +1270,74 @@ describe("resolveApiKeyForProviderCore", () => {
       name: "file SecretRef",
       apiKey: { source: "file", provider: "vault", id: "/cliproxy/api-key" } as const,
     },
-  ])("resolves custom provider $name auth from the active runtime snapshot", async ({ apiKey }) => {
-    const sourceConfig = {
-      models: {
-        providers: {
-          cliproxyapi: {
-            api: "openai-responses" as const,
-            apiKey,
-            baseUrl: "https://cliproxy.example/v1",
-            models: [],
+    ...(
+      [
+        ["opaque synthetic marker", CUSTOM_LOCAL_AUTH_MARKER],
+        ["opaque managed marker", NON_ENV_SECRETREF_MARKER],
+        ["opaque env marker", "OLLAMA_API_KEY"],
+        ["opaque env template", "${OPAQUE_KEY}"],
+        ["opaque whitespace", "  synthetic-byte-exact-key  "],
+      ] as const
+    ).map(([name, runtimeKey]) => ({
+      name,
+      runtimeKey,
+      apiKey: { source: "store", provider: "default", id: "OPAQUE_KEY" } as const,
+    })),
+  ])(
+    "resolves custom provider $name auth from the active runtime snapshot",
+    async ({ apiKey, runtimeKey = "sk-runtime-cliproxy" }) => {
+      const sourceConfig = {
+        models: {
+          providers: {
+            cliproxyapi: {
+              api: "openai-responses" as const,
+              apiKey,
+              baseUrl: "https://cliproxy.example/v1",
+              models: [],
+            },
           },
         },
-      },
-    };
-    const runtimeConfig = {
-      models: {
-        providers: {
-          cliproxyapi: {
-            ...sourceConfig.models.providers.cliproxyapi,
-            apiKey: "sk-runtime-cliproxy", // pragma: allowlist secret
+      };
+      const runtimeConfig = {
+        models: {
+          providers: {
+            cliproxyapi: {
+              ...sourceConfig.models.providers.cliproxyapi,
+              apiKey: runtimeKey,
+            },
           },
         },
-      },
-    };
-    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+      };
+      setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
 
-    const resolved = await resolveApiKeyForProviderCore({
-      provider: "cliproxyapi",
-      cfg: sourceConfig,
-      secretSentinels: true,
-      store: { version: 1, profiles: {} },
-    });
-
-    expectSecretSentinelAuth(resolved, {
-      value: "sk-runtime-cliproxy",
-      source: "models.providers.cliproxyapi",
-      mode: "api-key",
-    });
-    await expect(
-      hasAvailableAuthForProvider({
+      const resolved = await resolveApiKeyForProviderCore({
         provider: "cliproxyapi",
         cfg: sourceConfig,
+        secretSentinels: true,
         store: { version: 1, profiles: {} },
-      }),
-    ).resolves.toBe(true);
-    expect(
-      hasRuntimeAvailableProviderAuth({
-        provider: "cliproxyapi",
-        cfg: sourceConfig,
-        allowPluginSyntheticAuth: false,
-      }),
-    ).toBe(true);
-  });
+      });
+
+      expectSecretSentinelAuth(resolved, {
+        value: runtimeKey,
+        source: "models.providers.cliproxyapi",
+        mode: "api-key",
+      });
+      await expect(
+        hasAvailableAuthForProvider({
+          provider: "cliproxyapi",
+          cfg: sourceConfig,
+          store: { version: 1, profiles: {} },
+        }),
+      ).resolves.toBe(true);
+      expect(
+        hasRuntimeAvailableProviderAuth({
+          provider: "cliproxyapi",
+          cfg: sourceConfig,
+          allowPluginSyntheticAuth: false,
+        }),
+      ).toBe(true);
+    },
+  );
 
   it("preserves SecretRef provenance for resolved runtime config clones", async () => {
     const sourceConfig = {

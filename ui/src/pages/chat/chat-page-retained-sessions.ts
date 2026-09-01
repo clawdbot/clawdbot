@@ -6,7 +6,8 @@ import {
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { clearPaneSessionHandoff, clearPaneSessionHandoffs } from "./chat-pane-shared.ts";
 import type { ChatPaneElement } from "./route-draft-focus-handoff.ts";
-import { findPane, type ChatSplitLayout, type ChatSplitPane } from "./split-layout.ts";
+import type { ChatSplitLayout, ChatSplitPane } from "./split-layout-types.ts";
+import { findPane } from "./split-layout.ts";
 
 const RETAINED_SESSIONS_PER_PANE = 3;
 const SESSION_NAVIGATION_PREVIEW_TIMEOUT_MS = 5_000;
@@ -97,16 +98,19 @@ export class ChatPageRetainedSessions {
     paneId: string,
     sessionKey: string,
     replacementSessionKey: string,
+    preserveDraft = false,
   ): void => {
     const deletedPane = this.findPane(paneId, sessionKey);
-    deletedPane?.discardStagedAttachments?.();
+    if (!preserveDraft) {
+      deletedPane?.discardStagedAttachments?.();
+    }
     const retained = this.sessionsByPane.get(paneId);
     const retainedIndex = retained?.findIndex((key) => areUiSessionKeysEquivalent(key, sessionKey));
     if (retained && retainedIndex !== undefined && retainedIndex >= 0) {
       retained.splice(retainedIndex, 1);
     }
     const context = this.bindings.context();
-    if (context) {
+    if (context && !preserveDraft) {
       clearPaneSessionHandoff(context, paneId, sessionKey);
     }
     if (
@@ -189,6 +193,7 @@ export class ChatPageRetainedSessions {
       }
       const presented = areUiSessionKeysEquivalent(pane.sessionKey ?? "", sessionKey);
       pane.classList.toggle("chat-pane-cache__pane--visible", presented);
+      pane.visuallyPresented = presented;
       if (preview) {
         pane.toggleAttribute("inert", true);
         continue;

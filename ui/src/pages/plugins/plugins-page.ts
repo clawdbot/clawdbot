@@ -4,8 +4,7 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { serializeSidebarEntry, subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
-import { pathForPluginsHubTab, pathForRoute } from "../../app-route-paths.ts";
+import { pathForPluginsHubTab } from "../../app-route-paths.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -13,58 +12,37 @@ import {
 } from "../../app/context.ts";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import { renderHubTabs } from "../../components/hub-tabs.ts";
-import type { McpServerForm } from "../../components/mcp-server-form.ts";
-import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
-import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
+import { inspectPlugin } from "../../lib/plugins/capability-consent-error.ts";
 import {
-  buildAddMcpServerPatch,
-  buildRemoveMcpServerPatch,
-  buildToggleMcpServerPatch,
-  MCP_SERVER_NAME_PATTERN,
-  parseMcpTarget,
-  patchMcpServers,
-  summarizeMcpServers,
-  type McpServerSummary,
-  type McpServersPatchBuildResult,
-} from "../../lib/config/mcp-servers.ts";
-import { formatUiError } from "../../lib/format-error.ts";
-import {
-  installPlugin,
-  pluginInstallNeedsRiskAcknowledgement,
-  readPluginInstallTrustError,
-  runPluginConfigMutation,
-  setPluginEnabled,
   uninstallPlugin,
   type PluginCatalogItem,
-  type PluginInstallRequest,
   type PluginListResult,
   type PluginMutationResult,
   type PluginSearchResult,
+  type PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
 import {
   GatewayPageController,
   type GatewayPageChange,
 } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { fetchPluginIconBlobUrl } from "./icon-loader.ts";
-import { PLUGINS_HUB_PANEL_ID, pluginsHubTabs, type PluginsHubTab } from "./plugins-hub.ts";
-import type { ConnectorSuggestion } from "./presentation.ts";
+import { confirmPluginUninstall } from "./plugin-lifecycle-confirmation.ts";
+import { PluginsConsentController } from "./plugins-consent-controller.ts";
+import { renderPluginsHubHeader } from "./plugins-hub-header.ts";
+import type { PluginsHubTab } from "./plugins-hub.ts";
+import { PluginsMcpController } from "./plugins-mcp-controller.ts";
 import { pluginArtPath } from "./presentation.ts";
 import { canonicalPluginsRouteLocation, pluginsHubTabForRoute } from "./route-data.ts";
 import {
-  connectorRowKey,
-  pluginRowKey,
   renderPlugins,
   type InstalledFilter,
   type PluginRowMessage,
   type PluginsTab,
 } from "./view.ts";
-
-const PLUGINS_DOCS_URL = "https://docs.openclaw.ai/plugins/manage-plugins";
 
 export type PluginsRouteData = {
   gateway: ApplicationContext["gateway"];
@@ -73,18 +51,6 @@ export type PluginsRouteData = {
   error: string | null;
   location: RouteLocation;
 };
-
-function committedMutationMessage(success: string, refreshError: string | null): PluginRowMessage {
-  return {
-    kind: "success",
-    text: [
-      success,
-      refreshError ? t("pluginsPage.configRefreshFailed", { error: refreshError }) : null,
-    ]
-      .filter(Boolean)
-      .join("\n"),
-  };
-}
 
 function withPlugin(
   current: PluginListResult | null,
@@ -103,18 +69,6 @@ function withPlugin(
   return { ...current, plugins };
 }
 
-function mutationSuccessMessage(
-  action: "installed" | "enabled" | "disabled",
-  result: PluginMutationResult,
-): string {
-  const key = result.restartRequired
-    ? `pluginsPage.${action}Restart`
-    : `pluginsPage.${action}Success`;
-  const warnings = "warnings" in result ? (result.warnings ?? []) : [];
-  const lines = [t(key, { name: result.plugin.name }), ...warnings];
-  return lines.filter(Boolean).join("\n");
-}
-
 class PluginsPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
@@ -129,20 +83,16 @@ class PluginsPage extends OpenClawLightDomElement {
   @state() private debouncedSearchQuery = "";
   @state() private busy: Record<string, boolean> = {};
   @state() private messages: Record<string, PluginRowMessage> = {};
-  @state() private pendingRemoval: Record<string, boolean> = {};
-  @state() private detailPluginId: string | null = null;
+  @state() private detail: {
+    pluginId: string;
+    inspection: PluginsInspectResult | null;
+    error: string | null;
+  } | null = null;
   @state() private iconUrls: Record<string, string> = {};
   @state() private pageNotice: PluginRowMessage | null = null;
-  @state() private mcpServers: McpServerSummary[] | null = null;
-  @state() private mcpMessage: PluginRowMessage | null = null;
-  @state() private mcpBusy = false;
-  @state() private mcpFormOpen = false;
-
   private routeDataConsumed = false;
   private normalizedLocation = "";
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
-  private mutationToken = 0;
-  private readonly mutationTokens = new Map<string, number>();
   private readonly iconMisses = new Set<string>();
   private readonly iconRequests = new Map<
     string,
@@ -155,14 +105,31 @@ class PluginsPage extends OpenClawLightDomElement {
       this.result = null;
       this.error = null;
       this.messages = {};
-      this.pendingRemoval = {};
-      this.detailPluginId = null;
       this.pageNotice = null;
-      this.mcpMessage = null;
+      this.mcpController.resetMessage();
     },
     invalidateRequests: (change) =>
       this.invalidateRequests(change.snapshot.phase !== "connected" || !change.snapshot.client),
     onSnapshot: (change) => this.handleGatewaySnapshot(change),
+  });
+
+  private readonly consentController = new PluginsConsentController({
+    gateway: this.gateway,
+    getContext: () => this.context,
+    getResult: () => this.result,
+    canMutate: () => this.canMutate(),
+    isBusy: (rowKey) => Boolean(this.busy[rowKey]),
+    setBusy: (rowKey, busy) => this.setBusy(rowKey, busy),
+    setMessage: (rowKey, message) => this.setMessage(rowKey, message),
+    clearPageNotice: () => {
+      this.pageNotice = null;
+    },
+    closeDetails: () => {
+      this.detail = null;
+    },
+    applyMutationResult: (result) => this.applyMutationResult(result),
+    refreshCatalogAfterMutation: (client) => this.refreshCatalogAfterMutation(client),
+    requestUpdate: () => this.requestUpdate(),
   });
 
   private readonly catalogTask = new Task(this, {
@@ -178,26 +145,13 @@ class PluginsPage extends OpenClawLightDomElement {
     },
   });
 
-  private readonly configTask = new Task(this, {
-    autoRun: false,
-    args: () =>
-      [
-        this.gateway.connected ? this.gateway.client : null,
-        this.context?.runtimeConfig ?? null,
-      ] as const,
-    task: async ([client, runtimeConfig]) => {
-      if (!client || !runtimeConfig) {
-        return initialState;
-      }
-      await runtimeConfig.refresh();
-      return runtimeConfig.state.lastError;
-    },
-    onComplete: () => {
-      this.syncMcpServers();
-    },
-    onError: () => {
-      this.syncMcpServers();
-    },
+  private readonly mcpController = new PluginsMcpController({
+    element: this,
+    gateway: this.gateway,
+    getContext: () => this.context,
+    canMutate: () => this.canMutate(),
+    setRowBusy: (rowKey, busy) => this.setBusy(rowKey, busy),
+    setRowMessage: (rowKey, message) => this.setMessage(rowKey, message),
   });
 
   private readonly searchTask = new Task(this, {
@@ -219,14 +173,6 @@ class PluginsPage extends OpenClawLightDomElement {
     },
   });
 
-  private readonly subscriptions = new SubscriptionsController(this).effect(
-    () => this.context?.runtimeConfig,
-    (runtimeConfig) => {
-      this.syncMcpServers();
-      return runtimeConfig.subscribe(() => this.syncMcpServers());
-    },
-  );
-
   override willUpdate(changed: PropertyValues<this>) {
     if (changed.has("routeData")) {
       this.applyRouteData();
@@ -242,18 +188,26 @@ class PluginsPage extends OpenClawLightDomElement {
 
   override disconnectedCallback() {
     document.removeEventListener("keydown", this.handleDocumentKeydown, true);
-    this.subscriptions.clear();
+    this.mcpController.disconnect();
     this.clearSearchTimer();
     this.resetPluginIcons();
     super.disconnectedCallback();
   }
 
   private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
+    if (document.querySelector(".shell-nav[aria-modal='true']")) {
+      return;
+    }
     if (event.key !== "Escape") {
       return;
     }
-    if (this.detailPluginId) {
-      this.detailPluginId = null;
+    if (this.consentController.consent) {
+      this.consentController.close();
+      event.stopPropagation();
+      return;
+    }
+    if (this.detail) {
+      this.detail = null;
       event.stopPropagation();
     }
   };
@@ -291,17 +245,15 @@ class PluginsPage extends OpenClawLightDomElement {
     ) {
       this.resetPluginIcons();
       this.busy = {};
-      this.mcpBusy = false;
+      this.mcpController.resetBusy();
       this.debouncedSearchQuery = "";
     }
     if (shouldRefreshAfterChange) {
-      void this.refreshPage();
+      void this.mcpController.refreshPage(() => this.refreshCatalog());
     } else {
       this.ensureInitialData();
     }
-    if (snapshot.phase === "connected") {
-      void this.context?.runtimeConfig.ensureLoaded().then(() => this.syncMcpServers());
-    }
+    this.mcpController.ensureLoaded(snapshot.phase === "connected");
     if (
       !change.initial &&
       (change.identityChanged || change.connectionChanged || iconAuthChanged) &&
@@ -359,9 +311,11 @@ class PluginsPage extends OpenClawLightDomElement {
     if (invalidateCatalog) {
       void this.catalogTask.run([null]);
     }
-    void this.configTask.run([null, this.context.runtimeConfig]);
+    this.mcpController.invalidate();
     void this.searchTask.run([null, ""]);
-    this.mutationTokens.clear();
+    // Inspection results belong to one connection epoch, including same-client reconnects.
+    this.detail = null;
+    this.consentController.reset();
   }
 
   private replaceResult(result: PluginListResult | null, preserveIcons = false) {
@@ -444,7 +398,7 @@ class PluginsPage extends OpenClawLightDomElement {
     this.iconRequests.set(pluginId, request);
     void fetchPluginIconBlobUrl({
       pluginId,
-      basePath: this.context.basePath,
+      resourceBasePath: this.context.resourceBasePath,
       gatewayUrl: this.context.gateway.connection.gatewayUrl,
       auth: {
         hello: this.context.gateway.snapshot.hello,
@@ -534,16 +488,6 @@ class PluginsPage extends OpenClawLightDomElement {
       : null;
   }
 
-  private get configRefreshError(): string | null {
-    const failure =
-      this.configTask.status === TaskStatus.ERROR
-        ? formatUiError(this.configTask.error)
-        : this.configTask.status === TaskStatus.COMPLETE
-          ? this.configTask.value
-          : null;
-    return failure ? t("pluginsPage.configRefreshFailed", { error: failure }) : null;
-  }
-
   private ensureInitialData() {
     if (
       !this.gateway.connected ||
@@ -567,24 +511,6 @@ class PluginsPage extends OpenClawLightDomElement {
     }
     this.error = null;
     await this.catalogTask.run([client]);
-  }
-
-  private async refreshRuntimeConfig(): Promise<void> {
-    const client = this.gateway.client;
-    if (!client || !this.gateway.connected) {
-      return;
-    }
-    const runtimeConfig = this.context.runtimeConfig;
-    await this.configTask.run([client, runtimeConfig]);
-  }
-
-  private async refreshPage(): Promise<void> {
-    await Promise.all([this.refreshCatalog(), this.refreshRuntimeConfig()]);
-  }
-
-  private syncMcpServers() {
-    const snapshot = this.context?.runtimeConfig.state.configSnapshot;
-    this.mcpServers = summarizeMcpServers(resolveEditableSnapshotConfig(snapshot));
   }
 
   private selectHubTab(tab: PluginsHubTab) {
@@ -681,31 +607,9 @@ class PluginsPage extends OpenClawLightDomElement {
     this.messages = next;
   }
 
-  private setPendingRemoval(key: string, value: boolean) {
-    const next = { ...this.pendingRemoval };
-    if (value) {
-      next[key] = true;
-    } else {
-      delete next[key];
-    }
-    this.pendingRemoval = next;
-  }
-
   private applyMutationResult(result: PluginMutationResult) {
     this.invalidatePluginIcon(result.plugin.id);
     this.replaceResult(withPlugin(this.result, result.plugin), true);
-  }
-
-  private pinEnabledPluginRoute(pluginId: string) {
-    const navigation = this.context.navigation;
-    if (pluginId !== "workboard" || !navigation) {
-      return;
-    }
-    const entry = serializeSidebarEntry({ type: "route", route: "workboard" });
-    const current = navigation.snapshot.sidebarEntries;
-    if (!current.includes(entry)) {
-      navigation.update({ sidebarEntries: [...current, entry] });
-    }
   }
 
   /** Plugin changes can affect both catalog state and route visibility (for example Workboard). */
@@ -714,291 +618,73 @@ class PluginsPage extends OpenClawLightDomElement {
     await this.catalogTask.run([client]);
   }
 
-  private pageError(): string | null {
-    const errors = [this.error, this.configRefreshError].filter((message): message is string =>
-      Boolean(message),
-    );
-    return errors.length > 0 ? errors.join(" ") : null;
-  }
-
-  private async runPluginMutation<Result>(
-    rowKey: string,
-    mutate: (client: GatewayBrowserClient) => Promise<Result>,
-    onSuccess: (
-      result: Result,
-      refreshError: string | null,
-      client: GatewayBrowserClient,
-      isCurrent: () => boolean,
-    ) => Promise<void>,
-    onError: (error: unknown) => void = (error) => {
-      this.setMessage(rowKey, {
-        kind: "error",
-        text: formatUiError(error),
-      });
-    },
-  ): Promise<void> {
-    const scope = this.gateway.capture();
-    if (!scope || !this.canMutate() || this.busy[rowKey]) {
+  private async showDetails(pluginId: string | null) {
+    const detail = pluginId ? { pluginId, inspection: null, error: null } : null;
+    this.detail = detail;
+    const plugin = pluginId
+      ? this.result?.plugins.find((entry) => entry.id === pluginId)
+      : undefined;
+    if (!plugin?.installed || !detail) {
       return;
     }
-    const mutationToken = ++this.mutationToken;
-    this.mutationTokens.set(rowKey, mutationToken);
-    const isCurrent = () =>
-      this.gateway.isCurrent(scope) && this.mutationTokens.get(rowKey) === mutationToken;
-    this.setBusy(rowKey, true);
-    this.setMessage(rowKey, null);
+    const scope = this.gateway.capture();
+    if (!scope) {
+      return;
+    }
     try {
-      const mutation = await runPluginConfigMutation(
-        this.context.runtimeConfig,
-        scope.client,
-        mutate,
-      );
-      if (!isCurrent()) {
-        return;
+      const inspection = await inspectPlugin(scope.client, plugin.id);
+      if (this.gateway.isCurrent(scope) && this.detail === detail) {
+        this.detail = { ...detail, inspection };
       }
-      await onSuccess(mutation.value, mutation.refreshError, scope.client, isCurrent);
     } catch (error) {
-      if (isCurrent()) {
-        onError(error);
-      }
-    } finally {
-      if (this.mutationTokens.get(rowKey) === mutationToken) {
-        this.mutationTokens.delete(rowKey);
-        this.setBusy(rowKey, false);
+      if (this.gateway.isCurrent(scope) && this.detail === detail) {
+        this.detail = { ...detail, error: formatUiError(error) };
       }
     }
   }
 
-  private async install(rowKey: string, request: PluginInstallRequest): Promise<void> {
-    await this.runPluginMutation(
-      rowKey,
-      (client) => installPlugin(client, request),
-      async (result, refreshError, client) => {
-        this.applyMutationResult(result);
-        this.setMessage(
-          rowKey,
-          committedMutationMessage(mutationSuccessMessage("installed", result), refreshError),
-        );
-        await this.refreshCatalogAfterMutation(client);
-      },
-      (error) => {
-        const trust = readPluginInstallTrustError(error);
-        const packageName = request.source === "clawhub" ? request.packageName : null;
-        if (packageName && pluginInstallNeedsRiskAcknowledgement(error)) {
-          this.setMessage(rowKey, {
-            kind: "error",
-            text: trust?.warning ?? t("pluginsPage.defaultRiskWarning"),
-            acknowledge: {
-              packageName,
-              ...(trust?.version ? { version: trust.version } : {}),
-            },
-          });
-          return;
-        }
-        this.setMessage(rowKey, {
-          kind: "error",
-          text: formatUiError(error),
-        });
-      },
-    );
-  }
-
-  private async updateEnabled(
-    pluginId: string,
-    enabled: boolean,
-    key = pluginRowKey(pluginId),
-  ): Promise<void> {
-    await this.runPluginMutation(
-      key,
-      (client) => setPluginEnabled(client, pluginId, enabled),
-      async (result, refreshError, client, isCurrent) => {
-        this.applyMutationResult(result);
-        this.setMessage(
-          key,
-          committedMutationMessage(
-            mutationSuccessMessage(enabled ? "enabled" : "disabled", result),
-            refreshError,
-          ),
-        );
-        if (enabled) {
-          this.pinEnabledPluginRoute(pluginId);
-        }
-        await this.refreshCatalogAfterMutation(client);
-        if (isCurrent() && !result.restartRequired) {
-          // Plugin tabs come from hello; reconnect after the registry refresh.
-          this.context.gateway.connect();
-        }
-      },
-    );
+  private updateEnabled(pluginId: string, enabled: boolean, key?: string): Promise<void> {
+    return this.consentController.updateEnabled(pluginId, enabled, key);
   }
 
   private async uninstall(pluginId: string, rowKey: string): Promise<void> {
-    await this.runPluginMutation(
+    const name = this.result?.plugins.find((plugin) => plugin.id === pluginId)?.name ?? pluginId;
+    await this.consentController.runMutation(
       rowKey,
       (client) => uninstallPlugin(client, pluginId),
-      async (result, refreshError, client) => {
-        this.setPendingRemoval(rowKey, false);
+      async (result, refreshError, client, _isCurrent, isLatest) => {
         // Removal hides its row, so keep the restart reminder on the page.
-        this.pageNotice = {
-          kind: "success",
-          text: [
-            t("pluginsPage.removedRestart", { name: result.pluginId }),
-            ...(result.warnings ?? []),
-            refreshError ? t("pluginsPage.configRefreshFailed", { error: refreshError }) : null,
-          ]
-            .filter(Boolean)
-            .join("\n"),
-        };
+        if (isLatest()) {
+          this.pageNotice = {
+            kind: "success",
+            text: [
+              t("pluginsPage.removedRestart", { name: result.pluginId }),
+              ...(result.warnings ?? []).map((warning) => formatUiExternalText(warning)),
+              refreshError ? t("pluginsPage.configRefreshFailed", { error: refreshError }) : null,
+            ]
+              .filter(Boolean)
+              .join("\n"),
+          };
+        }
         await this.refreshCatalogAfterMutation(client);
       },
+      { confirm: () => confirmPluginUninstall(name) },
     );
-  }
-
-  private async mutateMcpServers(params: {
-    buildPatch: (servers: Readonly<Record<string, unknown>>) => McpServersPatchBuildResult;
-    note: string;
-    successText: string;
-    busyKey?: string;
-  }): Promise<boolean> {
-    if (!this.canMutate() || this.mcpBusy) {
-      return false;
-    }
-    const runtimeConfig = this.context.runtimeConfig;
-    this.mcpBusy = true;
-    if (params.busyKey) {
-      this.setBusy(params.busyKey, true);
-      this.setMessage(params.busyKey, null);
-    }
-    this.mcpMessage = null;
-    // Failures surface where the action started: on the triggering card when
-    // one exists (Discover connectors), otherwise in the MCP section.
-    const fail = (text: string) => {
-      if (params.busyKey) {
-        this.setMessage(params.busyKey, { kind: "error", text });
-      } else {
-        this.mcpMessage = { kind: "error", text };
-      }
-      return false;
-    };
-    try {
-      const result = await patchMcpServers(runtimeConfig, {
-        buildPatch: params.buildPatch,
-        note: params.note,
-      });
-      if (!result.ok) {
-        return fail(result.error);
-      }
-      this.syncMcpServers();
-      this.mcpMessage = { kind: "success", text: params.successText };
-      return true;
-    } catch (error) {
-      return fail(formatUiError(error));
-    } finally {
-      this.mcpBusy = false;
-      if (params.busyKey) {
-        this.setBusy(params.busyKey, false);
-      }
-    }
-  }
-
-  private async addMcpServer(form: McpServerForm) {
-    const name = form.name.trim();
-    if (!MCP_SERVER_NAME_PATTERN.test(name)) {
-      this.mcpMessage = { kind: "error", text: t("mcpServers.nameInvalid") };
-      return;
-    }
-    const config = parseMcpTarget(form.target, form.transport);
-    if (!config) {
-      this.mcpMessage = { kind: "error", text: t("mcpServers.targetInvalid") };
-      return;
-    }
-    const added = await this.mutateMcpServers({
-      buildPatch: (servers) => buildAddMcpServerPatch(servers, name, config),
-      note: `plugins: add MCP server ${name}`,
-      successText: t("mcpServers.addedSuccess", { name }),
-    });
-    if (added) {
-      this.mcpFormOpen = false;
-    }
-  }
-
-  private async toggleMcpServer(name: string, enabled: boolean) {
-    await this.mutateMcpServers({
-      buildPatch: (servers) => buildToggleMcpServerPatch(servers, name, enabled),
-      note: `plugins: ${enabled ? "enable" : "disable"} MCP server ${name}`,
-      successText: t(enabled ? "mcpServers.enabledSuccess" : "mcpServers.disabledSuccess", {
-        name,
-      }),
-    });
-  }
-
-  private async removeMcpServer(name: string) {
-    await this.mutateMcpServers({
-      buildPatch: (servers) => buildRemoveMcpServerPatch(servers, name),
-      note: `plugins: remove MCP server ${name}`,
-      successText: t("mcpServers.removedSuccess", { name }),
-    });
-  }
-
-  private async addConnector(connector: ConnectorSuggestion) {
-    if (connector.action.kind !== "mcp") {
-      return;
-    }
-    const mcp = connector.action.mcp;
-    const rowKey = connectorRowKey(connector.id);
-    const successText =
-      mcp.followUp === "oauth"
-        ? t("pluginsPage.connectorAddedOauth", {
-            name: connector.name,
-            command: `openclaw mcp login ${mcp.serverName}`,
-          })
-        : mcp.followUp === "endpoint"
-          ? t("pluginsPage.connectorAddedEndpoint", { name: connector.name })
-          : t("pluginsPage.connectorAddedReady", { name: connector.name });
-    const added = await this.mutateMcpServers({
-      buildPatch: (servers) =>
-        buildAddMcpServerPatch(servers, mcp.serverName, structuredClone(mcp.config)),
-      note: `plugins: add MCP connector ${mcp.serverName}`,
-      successText,
-      busyKey: rowKey,
-    });
-    if (added) {
-      this.setMessage(rowKey, { kind: "success", text: successText });
-      this.mcpMessage = null;
-    }
   }
 
   override render() {
     const blockedReason = this.mutationBlockedReason();
     return html`
-      <section class="content-header content-header--page plugins-content-header">
-        <div>
-          <h1 class="page-title">${titleForRoute("plugins")}</h1>
-          <div class="page-subtitle">
-            ${subtitleForRoute("plugins")}
-            ${renderDocsLink(PLUGINS_DOCS_URL, t("common.learnMore"))}
-          </div>
-        </div>
-      </section>
+      ${renderPluginsHubHeader({
+        active: this.activeTab,
+        onSelect: (tab) => this.selectHubTab(tab),
+      })}
       ${renderSettingsWorkspace(html`
-        <div class="plugins-hub-tabs-row">
-          ${renderHubTabs({
-            id: "plugins",
-            active: this.activeTab,
-            tabs: pluginsHubTabs(
-              this.result?.plugins.filter((plugin) => plugin.installed).length ?? 0,
-            ),
-            ariaLabel: t("pluginsPage.hubTablistLabel"),
-            panelId: PLUGINS_HUB_PANEL_ID,
-            className: "plugins-tabs",
-            onSelect: (tab) => this.selectHubTab(tab),
-          })}
-        </div>
         ${renderPlugins({
           connected: this.gateway.connected,
           loading: this.loading,
           result: this.result,
-          error: this.pageError(),
+          error: this.mcpController.pageError(this.error),
           activeTab: this.activeTab,
           query: this.query,
           installedFilter: this.installedFilter,
@@ -1007,43 +693,35 @@ class PluginsPage extends OpenClawLightDomElement {
           searchError: this.searchError,
           busy: this.busy,
           messages: this.messages,
-          pendingRemoval: this.pendingRemoval,
-          detailPluginId: this.detailPluginId,
+          detailPluginId: this.detail?.pluginId ?? null,
+          detailInspection: this.detail?.inspection ?? null,
+          detailInspectionError: this.detail?.error ?? null,
+          consent: this.consentController.consent,
+          consentInspection: this.consentController.inspection,
+          consentInspectionLoading: this.consentController.inspectionLoading,
+          consentInspectionError: this.consentController.inspectionError,
           iconUrls: this.iconUrls,
           canMutate: this.canMutate(),
           mutationBlockedReason: blockedReason,
           pageNotice: this.pageNotice,
-          mcpSettingsHref: pathForRoute("mcp", this.context?.basePath ?? ""),
-          mcpServers: this.mcpServers,
-          mcpMessage: this.mcpMessage,
-          mcpBusy: this.mcpBusy,
-          mcpFormOpen: this.mcpFormOpen,
+          ...this.mcpController.viewState,
           onQueryChange: (query) => this.changeQuery(query),
           onFilterChange: (filter) => {
             this.installedFilter = filter;
           },
-          onRefresh: () => void this.refreshPage(),
+          onRefresh: () => void this.mcpController.refreshPage(() => this.refreshCatalog()),
           onIconError: (pluginId) => this.handlePluginIconError(pluginId),
-          onShowDetails: (pluginId) => {
-            this.detailPluginId = pluginId;
-          },
+          onShowDetails: (pluginId) => void this.showDetails(pluginId),
           onSetEnabled: (pluginId, enabled, rowKey) =>
             void this.updateEnabled(pluginId, enabled, rowKey),
-          onInstall: (rowKey, request) => void this.install(rowKey, request),
-          onRequestUninstall: (rowKey) => this.setPendingRemoval(rowKey, true),
-          onCancelUninstall: (rowKey) => this.setPendingRemoval(rowKey, false),
+          onInstall: (request, installIdentity) =>
+            void this.consentController.install(request, installIdentity),
+          onCancelConsent: () => this.consentController.close(),
+          onConfirmConsent: () => this.consentController.confirm(),
+          onRetryConsentInspection: () => void this.consentController.inspect(),
+          onDismissMessage: (rowKey) => this.setMessage(rowKey, null),
           onUninstall: (pluginId, rowKey) => void this.uninstall(pluginId, rowKey),
-          onAddConnector: (connector) => void this.addConnector(connector),
           onSearchClawHub: (query) => this.openClawHubSearch(query),
-          onMcpToggle: (name, enabled) => void this.toggleMcpServer(name, enabled),
-          onMcpRemove: (name) => void this.removeMcpServer(name),
-          onMcpFormToggle: (open) => {
-            this.mcpFormOpen = open;
-            if (open) {
-              this.mcpMessage = null;
-            }
-          },
-          onMcpAdd: (form) => void this.addMcpServer(form),
         })}
       `)}
     `;
@@ -1061,4 +739,3 @@ declare global {
 }
 
 export { PluginsPage };
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

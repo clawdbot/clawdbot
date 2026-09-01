@@ -1,5 +1,10 @@
 // Cron runtime model thinking tests cover live metadata hydration for payload overrides.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  runFallbackModelAttempt,
+  runInitialModelFallbackAttempt,
+  type TestModelFallbackRunnerParams,
+} from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import {
   clearFastTestEnv,
@@ -93,10 +98,10 @@ describe("runCronIsolatedAgentTurn runtime model thinking", () => {
         level === "off" || catalog?.some((entry) => entry.reasoning === true) === true,
     );
     resolveSupportedThinkingLevelMock.mockReturnValue("off");
-    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => ({
-      result: await run(provider, model),
-      provider,
-      model,
+    runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => ({
+      result: await runInitialModelFallbackAttempt(params),
+      provider: params.provider,
+      model: params.model,
       attempts: [],
     }));
 
@@ -147,10 +152,10 @@ describe("runCronIsolatedAgentTurn runtime model thinking", () => {
       ref: { provider: "ollama", model: "minimax-m3:cloud" },
     });
     loadModelCatalogMock.mockResolvedValue([]);
-    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => ({
-      result: await run(provider, model),
-      provider,
-      model,
+    runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => ({
+      result: await runInitialModelFallbackAttempt(params),
+      provider: params.provider,
+      model: params.model,
       attempts: [],
     }));
 
@@ -195,12 +200,14 @@ describe("runCronIsolatedAgentTurn runtime model thinking", () => {
         ref: { provider: "ollama", model: "minimax-m3:cloud" },
       });
       loadModelCatalogMock.mockResolvedValue([]);
-      runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => ({
-        result: await run(provider, model),
-        provider,
-        model,
-        attempts: [],
-      }));
+      runWithModelFallbackMock.mockImplementation(
+        async (params: TestModelFallbackRunnerParams) => ({
+          result: await runInitialModelFallbackAttempt(params),
+          provider: params.provider,
+          model: params.model,
+          attempts: [],
+        }),
+      );
 
       await runCronIsolatedAgentTurn({
         cfg: {
@@ -242,9 +249,9 @@ describe("runCronIsolatedAgentTurn runtime model thinking", () => {
       { provider: "openai", id: "gpt-5.6-sol", reasoning: true },
     ]);
     resolveThinkingDefaultMock.mockReturnValue("medium");
-    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
-      await run(provider, model);
-      const result = await run("ollama", "minimax-m3:cloud");
+    runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => {
+      await runInitialModelFallbackAttempt(params);
+      const result = await runFallbackModelAttempt(params, "ollama", "minimax-m3:cloud", "unknown");
       return {
         result,
         provider: "ollama",
@@ -313,9 +320,9 @@ describe("runCronIsolatedAgentTurn runtime model thinking", () => {
           ? "medium"
           : "off",
     );
-    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
-      await run(provider, model);
-      const result = await run("ollama", "minimax-m3:cloud");
+    runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => {
+      await runInitialModelFallbackAttempt(params);
+      const result = await runFallbackModelAttempt(params, "ollama", "minimax-m3:cloud", "unknown");
       return {
         result,
         provider: "ollama",

@@ -80,10 +80,12 @@ Most skills configuration lives under `skills` in
 
 <ParamField path="skills.install.nodeManager" type='"npm" | "pnpm" | "yarn" | "bun"' default='"npm"'>
   Node package manager preference for skill installs. This only affects skill
-  installs - the OpenClaw CLI and Gateway runtime require Node because the
-  canonical state store uses `node:sqlite`. `openclaw setup --node-manager` and
-  `openclaw onboard --node-manager` accept `npm`, `pnpm`, or `bun`; set
-  `"yarn"` directly in config for Yarn-backed skill installs.
+  installs. Node remains the primary and recommended OpenClaw runtime; Bun 1.4+
+  with WAL-reset-safe `node:sqlite` is supported as an explicit runtime opt-in.
+  `openclaw setup --node-manager` and `openclaw onboard --node-manager` accept
+  `npm`, `pnpm`, or `bun`; set `"yarn"` directly in config for Yarn-backed skill
+  installs. Setup preserves this preference unless you pass `--node-manager`;
+  fresh configurations default to `npm`.
 </ParamField>
 
 <ParamField path="skills.install.allowUploadedArchives" type="boolean" default="false">
@@ -199,11 +201,13 @@ then run policy again before continuing. Declined and non-interactive commands
 on the direct CLI may use `--acknowledge-install-policy-warning` as explicit
 approval after review for every warning in that command invocation;
 every approved warning is re-evaluated before continuing.
-Gateway-backed and automatic installs remain blocked on warnings because they
-have no operator-confirmation flow. Use an equivalent direct plugin or skill
-command to review and approve the warning when one exists. Otherwise, change
-`security.installPolicy` to return `allow` for the reviewed request, then retry
-the managed flow. `--force` does not approve policy warnings. A `block`,
+The Control UI can review and approve warnings for its plugin install request;
+that approval covers every warning in the invocation, and each warning is
+still re-evaluated. Other Gateway-backed and automatic installs remain blocked
+when they have no operator-confirmation flow. Use an equivalent direct plugin
+or skill command to review and approve the warning when one exists. Otherwise,
+change `security.installPolicy` to return `allow` for the reviewed request,
+then retry the managed flow. `--force` does not approve policy warnings. A `block`,
 non-zero exit, timeout, invalid JSON, non-object response, missing or invalid
 protocol version or decision, or missing or empty `warn`/`block` reason always
 fails closed.
@@ -480,9 +484,13 @@ workspace/skills      (highest)
 workspace/.agents/skills
 ~/.agents/skills
 ~/.openclaw/skills
-bundled skills
+bundled + Custodian skills
 skills.load.extraDirs (lowest)
 ```
+
+Custodian skills share bundled precedence but load only for the agent selected
+by `agents.defaults.systemAgent.agentId` (or the existing sole-agent fallback).
+See [Custodian skills](/tools/custodian-skills).
 
 Changes to skills and config take effect on the next new session when the
 watcher is enabled, or on the next agent turn when the watcher detects a

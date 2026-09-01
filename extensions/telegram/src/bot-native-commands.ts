@@ -71,6 +71,7 @@ type RegisterTelegramNativeCommandsParams = {
     | "groupAllowFrom"
     | "replyToMode"
     | "accountAbortSignal"
+    | "dispatchReplyFromConfig"
   >;
 };
 

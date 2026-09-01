@@ -353,7 +353,7 @@ export class MatrixVerificationManager {
   }
 
   private ensureVerificationRequestTracked(session: MatrixVerificationSession): void {
-    const requestObj = session.request as unknown as object;
+    const requestObj = session.request;
     if (this.trackedVerificationRequests.has(requestObj)) {
       return;
     }
@@ -465,7 +465,7 @@ export class MatrixVerificationManager {
       session.reciprocateQrCallbacks = maybeReciprocateQr;
     }
 
-    const verifierObj = verifier as unknown as object;
+    const verifierObj = verifier;
     if (this.trackedVerificationVerifiers.has(verifierObj)) {
       this.ensureVerificationStarted(session);
       return;
@@ -577,9 +577,9 @@ export class MatrixVerificationManager {
 
   trackVerificationRequest(request: MatrixVerificationRequestLike): MatrixVerificationSummary {
     this.pruneVerificationSessions(Date.now());
-    const requestObj = request as unknown as object;
+    const requestObj = request;
     for (const existing of this.verificationSessions.values()) {
-      if ((existing.request as unknown as object) === requestObj) {
+      if (existing.request === requestObj) {
         this.touchVerificationSession(existing);
         return this.buildVerificationSummary(existing);
       }

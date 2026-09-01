@@ -1,8 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
+  findTranscriptEvent,
   loadSessionEntry,
-  loadTranscriptEvents,
   resolveSessionTranscriptRuntimeTarget,
   updateSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
@@ -28,8 +28,7 @@ function isMidTurnPrecheckAssistantError(message: AgentMessage | undefined): boo
   if (!message || message.role !== "assistant") {
     return false;
   }
-  const record = message as unknown as { stopReason?: unknown; errorMessage?: unknown };
-  return record.stopReason === "error" && record.errorMessage === MID_TURN_PRECHECK_ERROR_MESSAGE;
+  return message.stopReason === "error" && message.errorMessage === MID_TURN_PRECHECK_ERROR_MESSAGE;
 }
 
 export function removeTrailingMidTurnPrecheckAssistantError(params: {
@@ -167,10 +166,19 @@ export async function resolveExistingAttemptTranscriptState(params: {
   agentId: string;
   config?: OpenClawConfig;
   sessionFile: string;
+  sessionManager?: EmbeddedRunAttemptParams["sessionManager"];
   sessionId: string;
   sessionKey?: string;
   sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
 }): Promise<ExistingAttemptTranscriptState> {
+  // The supplied manager owns this transcript; a borrowed durable identity is not its history.
+  if (params.sessionManager) {
+    return {
+      hasBootstrapTranscriptState: params.sessionManager
+        .getEntries()
+        .some(isTranscriptMessageEvent),
+    };
+  }
   const agentId = normalizeOptionalString(params.sessionTarget?.agentId) ?? params.agentId;
   const storePath =
     normalizeOptionalString(params.sessionTarget?.storePath) ??
@@ -182,13 +190,12 @@ export async function resolveExistingAttemptTranscriptState(params: {
   let hasBootstrapTranscriptState = false;
   if (storePath && sessionKey) {
     try {
-      const sqliteEvents = await loadTranscriptEvents({
-        agentId,
-        sessionId,
-        sessionKey,
-        storePath,
-      });
-      hasBootstrapTranscriptState = sqliteEvents.some(isTranscriptMessageEvent);
+      hasBootstrapTranscriptState = Boolean(
+        await findTranscriptEvent(
+          { agentId, sessionId, sessionKey, storePath },
+          isTranscriptMessageEvent,
+        ),
+      );
     } catch {
       hasBootstrapTranscriptState = false;
     }

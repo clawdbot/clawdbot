@@ -1,4 +1,5 @@
 import { finalizeEvent, type Event, type Relay } from "nostr-tools";
+import { isNewerBuzzRevision } from "../event-order.js";
 import {
   buildBuzzMessageTags,
   parseBuzzMessageEvent,
@@ -8,7 +9,6 @@ import { connectAuthenticatedBuzzRelaySession, parseBuzzAuthTag } from "../relay
 import { openBuzzRelaySubscription } from "../relay-subscription.js";
 import {
   BUZZ_ROOM_MEMBERSHIP_KIND,
-  isNewerBuzzRoomMembership,
   parseBuzzRoomMembershipEvent,
   type BuzzRoomMembership,
 } from "../room-membership.js";
@@ -75,10 +75,7 @@ async function loadBuzzQaRoomMembership(params: {
         {
           onevent: (event) => {
             const membership = parseBuzzRoomMembershipEvent(event, params.relayPublicKey);
-            if (
-              membership?.roomId === params.roomId &&
-              isNewerBuzzRoomMembership(membership, latest)
-            ) {
+            if (membership?.roomId === params.roomId && isNewerBuzzRevision(membership, latest)) {
               latest = membership;
             }
           },

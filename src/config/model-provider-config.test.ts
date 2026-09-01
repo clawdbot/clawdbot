@@ -50,15 +50,37 @@ describe("resolveMergedModelProviderModels", () => {
 });
 
 describe("resolveModelProviderRouteOverridePresence", () => {
-  it("treats authored model compatibility as request behavior", () => {
+  it.each([
+    ["empty metadata", {}, "none"],
+    ["affirmative reasoning support", { supportsReasoningEffort: true }, "none"],
+    [
+      "native reasoning efforts",
+      { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
+      "none",
+    ],
+    [
+      "combined reasoning metadata",
+      { supportsReasoningEffort: true, supportedReasoningEfforts: ["low", "high"] },
+      "none",
+    ],
+    ["disabled reasoning", { supportsReasoningEffort: false }, "present"],
+    ["malformed reasoning support", { supportsReasoningEffort: "true" }, "present"],
+    ["empty effort list", { supportedReasoningEfforts: [] }, "present"],
+    ["non-native effort", { supportedReasoningEfforts: ["high", "custom"] }, "present"],
+    ["disabled effort", { supportedReasoningEfforts: ["none"] }, "present"],
+    ["malformed effort", { supportedReasoningEfforts: ["high", false] }, "present"],
+    ["store behavior", { supportsStore: false }, "present"],
+    [
+      "mixed metadata and behavior",
+      { supportsReasoningEffort: true, supportedReasoningEfforts: ["high"], supportsStore: false },
+      "present",
+    ],
+  ])("classifies %s without discarding request behavior", (_label, compat, expected) => {
     const config = {
       models: {
         providers: {
           openai: {
-            models: [
-              { id: "gpt-5.5", compat: { supportsStore: false } },
-              { id: "gpt-5.5-empty", compat: {} },
-            ],
+            models: [{ id: "gpt-5.6-sol", compat }],
           },
         },
       },
@@ -67,17 +89,10 @@ describe("resolveModelProviderRouteOverridePresence", () => {
     expect(
       resolveModelProviderRouteOverridePresence({
         provider: "openai",
-        modelId: "gpt-5.5",
-        config,
+        modelId: "gpt-5.6-sol",
+        authoredConfig: config,
       }),
-    ).toBe("present");
-    expect(
-      resolveModelProviderRouteOverridePresence({
-        provider: "openai",
-        modelId: "gpt-5.5-empty",
-        config,
-      }),
-    ).toBe("none");
+    ).toBe(expected);
   });
 
   it("treats a provider request timeout as authored behavior", () => {
@@ -85,7 +100,7 @@ describe("resolveModelProviderRouteOverridePresence", () => {
       resolveModelProviderRouteOverridePresence({
         provider: "openai",
         modelId: "gpt-5.5",
-        config: {
+        authoredConfig: {
           models: {
             providers: {
               openai: { baseUrl: "", timeoutSeconds: 90, models: [model("gpt-5.5")] },

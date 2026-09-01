@@ -1,9 +1,10 @@
+import type { ActionGate } from "openclaw/plugin-sdk/channel-actions";
 // Discord tests cover runtime.presence plugin behavior.
-import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { DiscordActionConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayPlugin } from "../internal/gateway.js";
 import { clearGateways, registerGateway } from "../monitor/gateway-registry.js";
-import type { ActionGate } from "../runtime-api.js";
+import { handleDiscordAction } from "./runtime.js";
 import { handleDiscordPresenceAction } from "./runtime.presence.js";
 
 const mockUpdatePresence = vi.fn();
@@ -14,19 +15,27 @@ function createMockGateway(connected = true): GatewayPlugin {
 
 const presenceEnabled: ActionGate<DiscordActionConfig> = (key) => key === "presence";
 const presenceDisabled: ActionGate<DiscordActionConfig> = () => false;
+const defaultDiscordConfig = {
+  channels: { discord: { token: "test-token", actions: { presence: true } } },
+} as OpenClawConfig;
 
 describe("handleDiscordPresenceAction", () => {
   async function setPresence(
     params: Record<string, unknown>,
     actionGate: ActionGate<DiscordActionConfig> = presenceEnabled,
   ) {
-    return await handleDiscordPresenceAction("setPresence", params, actionGate);
+    return await handleDiscordPresenceAction(
+      "setPresence",
+      params,
+      actionGate,
+      defaultDiscordConfig,
+    );
   }
 
   beforeEach(() => {
     mockUpdatePresence.mockClear();
     clearGateways();
-    registerGateway(undefined, createMockGateway());
+    registerGateway("default", createMockGateway());
   });
 
   it("sets playing activity", async () => {
@@ -34,6 +43,7 @@ describe("handleDiscordPresenceAction", () => {
       "setPresence",
       { activityType: "playing", activityName: "with fire", status: "online" },
       presenceEnabled,
+      defaultDiscordConfig,
     );
     expect(mockUpdatePresence).toHaveBeenCalledWith({
       since: null,
@@ -141,16 +151,65 @@ describe("handleDiscordPresenceAction", () => {
 
   it("errors when gateway is not connected", async () => {
     clearGateways();
-    registerGateway(undefined, createMockGateway(false));
+    registerGateway("default", createMockGateway(false));
     await expect(setPresence({ status: "dnd" })).rejects.toThrow(/not connected/);
   });
 
-  it("uses accountId to resolve gateway", async () => {
-    const accountGateway = createMockGateway();
-    registerGateway("my-account", accountGateway);
-    await setPresence({ accountId: "my-account", activityType: "playing", activityName: "test" });
-    expect(mockUpdatePresence).toHaveBeenCalled();
-  });
+  it.each([
+    { name: "implicit default account", cfg: defaultDiscordConfig, accountId: "default" },
+    {
+      name: "configured named default account",
+      cfg: {
+        channels: {
+          discord: {
+            actions: { presence: true },
+            defaultAccount: "ops",
+            accounts: { ops: { token: "ops-token" } },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "ops",
+    },
+    {
+      name: "explicit named account override",
+      cfg: {
+        channels: {
+          discord: {
+            token: "default-token",
+            actions: { presence: true },
+            accounts: { ops: { token: "ops-token" } },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "ops",
+      requestedAccountId: "ops",
+    },
+  ])(
+    "routes the full presence action to the $name",
+    async ({ cfg, accountId, requestedAccountId }) => {
+      const updatePresence = vi.fn();
+      registerGateway(accountId, {
+        isConnected: true,
+        updatePresence,
+      } as unknown as GatewayPlugin);
+
+      await handleDiscordAction(
+        {
+          action: "setPresence",
+          status: "idle",
+          ...(requestedAccountId ? { accountId: requestedAccountId } : {}),
+        },
+        cfg,
+      );
+
+      expect(updatePresence).toHaveBeenCalledWith({
+        since: null,
+        activities: [],
+        status: "idle",
+        afk: false,
+      });
+    },
+  );
 
   it("requires activityType when activityName is provided", async () => {
     await expect(setPresence({ activityName: "My Game" })).rejects.toThrow(
@@ -159,8 +218,8 @@ describe("handleDiscordPresenceAction", () => {
   });
 
   it("rejects unknown presence actions", async () => {
-    await expect(handleDiscordPresenceAction("unknownAction", {}, presenceEnabled)).rejects.toThrow(
-      /Unknown presence action/,
-    );
+    await expect(
+      handleDiscordPresenceAction("unknownAction", {}, presenceEnabled, defaultDiscordConfig),
+    ).rejects.toThrow(/Unknown presence action/);
   });
 });

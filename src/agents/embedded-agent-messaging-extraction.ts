@@ -1,4 +1,5 @@
 /** Extracts message delivery evidence from embedded-agent tool calls and results. */
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
@@ -6,10 +7,10 @@ import {
   normalizeOptionalStringifiedId,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelMessageActionName } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isDeliveredCurrentSourceReply } from "../infra/outbound/source-reply-mirror.js";
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
 import {
   normalizeLegacyInteractiveReply,
@@ -48,11 +49,48 @@ export function extractMessagingToolSourceReplyPayload(
     : Array.isArray(details.mediaUrls)
       ? details.mediaUrls
       : [];
-  const mediaUrls = uniqueStrings(
-    rawMediaUrls.filter((value): value is string => typeof value === "string"),
-  );
+  const mediaUrls = rawMediaUrls.filter((value): value is string => typeof value === "string");
   if (mediaUrls.length > 0) {
     payload.mediaUrls = mediaUrls;
+  }
+  if (Array.isArray(sourceReply.attachments)) {
+    const attachments = sourceReply.attachments.flatMap((value) => {
+      const attachment = readRecord(value);
+      if (!attachment) {
+        return [];
+      }
+      const durationMs = asNonNegativeFiniteNumber(attachment.durationMs);
+      const width = asNonNegativeFiniteNumber(attachment.width);
+      const height = asNonNegativeFiniteNumber(attachment.height);
+      const attachmentPath = readStringValue(attachment.path);
+      const attachmentUrl = readStringValue(attachment.url);
+      const attachmentMediaUrl = readStringValue(attachment.mediaUrl);
+      const filePath = readStringValue(attachment.filePath);
+      const mimeType = readStringValue(attachment.mimeType);
+      const name = readStringValue(attachment.name);
+      return [
+        {
+          ...(attachmentPath ? { path: attachmentPath } : {}),
+          ...(attachmentUrl ? { url: attachmentUrl } : {}),
+          ...(attachmentMediaUrl ? { mediaUrl: attachmentMediaUrl } : {}),
+          ...(filePath ? { filePath } : {}),
+          ...(mimeType ? { mimeType } : {}),
+          ...(name ? { name } : {}),
+          ...(typeof attachment.trustedLocalMedia === "boolean"
+            ? { trustedLocalMedia: attachment.trustedLocalMedia }
+            : {}),
+          ...(durationMs !== undefined ? { durationMs } : {}),
+          ...(width !== undefined ? { width } : {}),
+          ...(height !== undefined ? { height } : {}),
+        },
+      ];
+    });
+    if (attachments.length > 0) {
+      payload.attachments = attachments;
+    }
+  }
+  if (typeof sourceReply.trustedLocalMedia === "boolean") {
+    payload.trustedLocalMedia = sourceReply.trustedLocalMedia;
   }
   if (sourceReply.audioAsVoice === true || details.audioAsVoice === true) {
     payload.audioAsVoice = true;
@@ -73,6 +111,9 @@ export function extractMessagingToolSourceReplyPayload(
     readStringValue(sourceReply.idempotencyKey) ?? readStringValue(details.idempotencyKey);
   if (idempotencyKey) {
     payload.idempotencyKey = idempotencyKey;
+  }
+  if (details.sourceReplyTranscriptOwner === true) {
+    payload.transcriptOwner = true;
   }
   return Object.keys(payload).length > 0 ? payload : undefined;
 }
@@ -227,11 +268,11 @@ export function extractMessagingToolSend(
       return undefined;
     }
     const provider = providerId ?? normalizeOptionalLowercaseString(providerHint) ?? "message";
-    const to = normalizeTargetForProvider(provider, toRaw);
     const pluginExtractionArgs = { ...args, to: toRaw };
     const pluginExtracted = providerId
       ? getChannelPlugin(providerId)?.actions?.extractToolSend?.({ args: pluginExtractionArgs })
       : null;
+    const to = normalizeTargetForProvider(provider, pluginExtracted?.to ?? toRaw);
     const resolvedAccountId = normalizeOptionalString(pluginExtracted?.accountId) ?? accountId;
     const threadId =
       normalizeOptionalString(pluginExtracted?.threadId) ?? normalizeOptionalString(args.threadId);
@@ -346,4 +387,44 @@ export function extractMessagingToolSendResult(
     threadImplicit: threadEvidence.threadImplicit === true ? true : undefined,
     threadSuppressed: threadEvidence.threadSuppressed === true ? true : undefined,
   };
+}
+
+export function isDeliveredMessagingToolSendToCurrentSource(params: {
+  send: MessagingToolSend | undefined;
+  config?: OpenClawConfig;
+  currentProvider?: string;
+  currentAccountId?: string;
+  currentChannelId?: string;
+  currentMessagingTarget?: string;
+  currentThreadId?: string;
+  sessionKey?: string;
+  deliveredPayload?: unknown;
+}): boolean {
+  const send = params.send;
+  if (!send?.to) {
+    return false;
+  }
+  return isDeliveredCurrentSourceReply({
+    action: "send",
+    channel: send.provider,
+    accountId: send.accountId,
+    currentAccountId: params.currentAccountId,
+    actionParams: {
+      target: send.to,
+      ...(send.threadSuppressed
+        ? { topLevel: true }
+        : send.threadId
+          ? { threadId: send.threadId }
+          : {}),
+    },
+    cfg: params.config ?? {},
+    sessionKey: params.sessionKey,
+    toolContext: {
+      currentChannelProvider: params.currentProvider,
+      currentChannelId: params.currentChannelId,
+      currentMessagingTarget: params.currentMessagingTarget,
+      currentThreadTs: params.currentThreadId,
+    },
+    deliveredPayload: params.deliveredPayload,
+  });
 }

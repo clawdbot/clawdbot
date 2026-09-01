@@ -3,7 +3,7 @@ import Observation
 import OpenClawKit
 import OSLog
 
-struct NodeInfo: Identifiable, Codable {
+struct NodeInfo: Identifiable, Decodable {
     let nodeId: String
     let displayName: String?
     let platform: String?
@@ -32,7 +32,7 @@ struct NodeInfo: Identifiable, Codable {
     }
 }
 
-private struct NodeListResponse: Codable {
+private struct NodeListResponse: Decodable {
     let ts: Double?
     let nodes: [NodeInfo]
 }

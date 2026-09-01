@@ -3,6 +3,7 @@
  * token usage, chooses chunking strategy, and preserves active tool-use pairs
  * while splitting history for summaries.
  */
+import { estimateTokens } from "../../packages/agent-core/src/harness/compaction/compaction.js";
 import { createToolCallOccurrenceQueue } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import {
   projectCompactionPlanningMessages,
@@ -11,7 +12,6 @@ import {
 import { stripRuntimeContextCustomMessages } from "./internal-runtime-context.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
-import { estimateTokens } from "./sessions/index.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
 /** Default share of context window targeted for compaction chunks. */
@@ -224,12 +224,6 @@ export function computeAdaptiveChunkRatio(messages: AgentMessage[], contextWindo
   }
 
   return BASE_CHUNK_RATIO;
-}
-
-/** Returns whether one message exceeds the safe summarization context share. */
-export function isOversizedForSummary(msg: AgentMessage, contextWindow: number): boolean {
-  const tokens = estimateMessagesTokens([msg]) * SAFETY_MARGIN;
-  return tokens > contextWindow * 0.5;
 }
 
 /** Builds sanitized chunks for summarization prompts. */

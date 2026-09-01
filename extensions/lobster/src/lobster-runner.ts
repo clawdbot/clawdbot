@@ -3,6 +3,7 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 
 export type LobsterEnvelope =
   | {
@@ -80,11 +81,6 @@ type EmbeddedToolRuntime = {
 
 const workflowExts = new Set([".lobster", ".yaml", ".yml", ".json"]);
 
-function normalizeForCwdSandbox(p: string): string {
-  const normalized = path.normalize(p);
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
-}
-
 export function resolveLobsterCwd(cwdRaw: unknown): string {
   if (typeof cwdRaw !== "string" || !cwdRaw.trim()) {
     return process.cwd();
@@ -96,11 +92,7 @@ export function resolveLobsterCwd(cwdRaw: unknown): string {
   const base = process.cwd();
   const resolved = path.resolve(base, cwd);
 
-  const rel = path.relative(normalizeForCwdSandbox(base), normalizeForCwdSandbox(resolved));
-  if (rel === "" || rel === ".") {
-    return resolved;
-  }
-  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+  if (!isPathInside(base, resolved)) {
     throw new Error("cwd must stay within the gateway working directory");
   }
   return resolved;
@@ -120,14 +112,17 @@ function createLimitedSink(maxBytes: number, label: "stdout" | "stderr") {
   });
 }
 
-function normalizeEnvelope(envelope: EmbeddedToolEnvelope): Extract<LobsterEnvelope, { ok: true }> {
+function normalizeEnvelope(
+  envelope: EmbeddedToolEnvelope,
+  maxStdoutBytes: number,
+): Extract<LobsterEnvelope, { ok: true }> {
   if (!envelope.ok) {
     throw new Error(envelope.error?.message ?? "lobster runtime failed");
   }
   if (envelope.status === "needs_input") {
     throw new Error("Lobster input requests are not supported by the OpenClaw Lobster tool yet");
   }
-  return {
+  const normalized: Extract<LobsterEnvelope, { ok: true }> = {
     ok: true,
     status: envelope.status ?? "ok",
     output: Array.isArray(envelope.output) ? envelope.output : [],
@@ -145,6 +140,10 @@ function normalizeEnvelope(envelope: EmbeddedToolEnvelope): Extract<LobsterEnvel
         }
       : null,
   };
+  if (Buffer.byteLength(JSON.stringify(normalized, null, 2), "utf8") > maxStdoutBytes) {
+    throw new Error("lobster runtime result exceeded maxStdoutBytes");
+  }
+  return normalized;
 }
 
 function isMissingPathError(error: unknown) {
@@ -237,6 +236,7 @@ export function createEmbeddedLobsterRunner(options?: {
       const runtime = await runtimePromise;
       return await withTimeout(params.timeoutMs, async (signal) => {
         const ctx = createEmbeddedToolContext(params, signal);
+        let envelope: EmbeddedToolEnvelope;
 
         if (params.action === "run") {
           const pipeline = params.pipeline?.trim() ?? "";
@@ -255,29 +255,27 @@ export function createEmbeddedLobsterRunner(options?: {
                 throw new Error("run --args-json must be valid JSON");
               }
             }
-            return normalizeEnvelope(await runtime.runToolRequest({ filePath, args, ctx }));
+            envelope = await runtime.runToolRequest({ filePath, args, ctx });
+          } else {
+            envelope = await runtime.runToolRequest({ pipeline, ctx });
           }
-
-          return normalizeEnvelope(await runtime.runToolRequest({ pipeline, ctx }));
-        }
-
-        const token = params.token?.trim() ?? "";
-        const approvalId = params.approvalId?.trim() ?? "";
-        if (!token && !approvalId) {
-          throw new Error("token or approvalId required");
-        }
-        if (typeof params.approve !== "boolean") {
-          throw new Error("approve required");
-        }
-
-        return normalizeEnvelope(
-          await runtime.resumeToolRequest({
+        } else {
+          const token = params.token?.trim() ?? "";
+          const approvalId = params.approvalId?.trim() ?? "";
+          if (!token && !approvalId) {
+            throw new Error("token or approvalId required");
+          }
+          if (typeof params.approve !== "boolean") {
+            throw new Error("approve required");
+          }
+          envelope = await runtime.resumeToolRequest({
             ...(token ? { token } : {}),
             ...(approvalId ? { approvalId } : {}),
             approved: params.approve,
             ctx,
-          }),
-        );
+          });
+        }
+        return normalizeEnvelope(envelope, Math.max(1024, params.maxStdoutBytes));
       });
     },
   };

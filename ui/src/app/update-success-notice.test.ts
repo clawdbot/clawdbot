@@ -18,17 +18,21 @@ vi.mock("../local-storage.ts", () => ({
   getSafeSessionStorage: getSafeSessionStorageMock,
 }));
 
-import { announceVerifiedUpdateInstall } from "./update-success-notice.ts";
-
 describe("update success notice", () => {
   beforeEach(() => {
+    vi.resetModules();
     vi.clearAllMocks();
     getSafeSessionStorageMock.mockReturnValue(null);
     reloadControlUiIfStaleMock.mockReturnValue(false);
   });
 
-  it("announces a non-reloading success when session storage is unavailable", () => {
-    announceVerifiedUpdateInstall({ version: "2026.8.11", sha: "abcdef1234567890" });
+  it("announces a non-reloading success when session storage is unavailable", async () => {
+    const { announceVerifiedUpdateInstall } = await import("./update-success-notice.ts");
+
+    announceVerifiedUpdateInstall(
+      { version: "2026.8.11", sha: "abcdef1234567890" },
+      { gateway: "ws://gateway.test", profileId: null },
+    );
 
     expect(showToastMock).toHaveBeenCalledWith({
       message: "Gateway updated · now on abcdef1.",

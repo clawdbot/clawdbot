@@ -88,9 +88,11 @@ describe.skipIf(!hasBrowserLayout)("Sessions hub header browser layout", () => {
     const onSelect = vi.fn();
     const sessions = await mount("sessions", true, onSelect);
     const header = sessions.querySelector<HTMLElement>(".hub-page-header");
+    const title = sessions.querySelector<HTMLElement>(".page-title");
     const tabs = sessions.querySelector<HTMLElement>(".sessions-hub-tabs");
     const actions = sessions.querySelector<HTMLElement>(".hub-page-header__actions");
     expect(getComputedStyle(header!).display).toBe("grid");
+    expect(title?.getBoundingClientRect().width).toBeGreaterThan(0);
     expect(tabs?.getBoundingClientRect().width).toBeGreaterThan(0);
     expect(actions?.getBoundingClientRect().width).toBeGreaterThan(0);
 

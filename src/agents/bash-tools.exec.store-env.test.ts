@@ -1,6 +1,7 @@
 /** Store-backed exec environment tests cover run snapshots, precedence, and security filtering. */
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withInstallationTarget } from "../infra/installation-target-context.js";
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "../secrets/sentinel.js";
 import { writeSecretStoreEntry } from "../secrets/store/secret-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -35,6 +36,7 @@ vi.mock("../secrets/egress-proxy/registry.js", () => ({
     return {
       HTTPS_PROXY: mocks.proxyUrl,
       HTTP_PROXY: mocks.proxyUrl,
+      NODE_USE_ENV_PROXY: "1",
       NODE_EXTRA_CA_CERTS: "/state/secret-egress/root-ca.pem",
       SSL_CERT_FILE: "/state/secret-egress/root-ca.pem",
       CURL_CA_BUNDLE: "/state/secret-egress/root-ca.pem",
@@ -126,6 +128,7 @@ type StoreEnvHost = "gateway" | "sandbox" | "node";
 const EGRESS_ENV = {
   HTTPS_PROXY: mocks.proxyUrl,
   HTTP_PROXY: mocks.proxyUrl,
+  NODE_USE_ENV_PROXY: "1",
   NODE_EXTRA_CA_CERTS: "/state/secret-egress/root-ca.pem",
   SSL_CERT_FILE: "/state/secret-egress/root-ca.pem",
   CURL_CA_BUNDLE: "/state/secret-egress/root-ca.pem",
@@ -194,6 +197,61 @@ async function captureStoreExecEnvironment(params: {
 }
 
 describe("exec store environment", () => {
+  it.each(["gateway", "sandbox", "node"] as const)(
+    "retains a lazy tool's local target outside its construction scope and fences %s",
+    async (host) => {
+      await withTeamStoreEntries([], async () => {
+        const target = {
+          stateDir: "/fixture/diagnosed",
+          configPath: "/fixture/custom.json",
+          defaultWorkspaceDir: "/fixture/default-workspace",
+        };
+        const buildExecSpec = vi.fn<NonNullable<BashSandboxConfig["buildExecSpec"]>>();
+        const tool = withInstallationTarget(target, () =>
+          createLazyExecTool({
+            host,
+            security: "full",
+            ask: "off",
+            ...(host === "sandbox"
+              ? {
+                  sandbox: {
+                    containerName: "fixture-sandbox",
+                    workspaceDir: process.cwd(),
+                    containerWorkdir: "/workspace",
+                    buildExecSpec,
+                  },
+                }
+              : {}),
+          }),
+        );
+        const run = tool.execute("target-probe", { command: "echo ok", yieldMs: 120_000 });
+        if (host === "gateway") {
+          await run;
+          expect(mocks.spawnInputs.at(-1)?.env).toMatchObject({
+            OPENCLAW_STATE_DIR: target.stateDir,
+            OPENCLAW_CONFIG_PATH: target.configPath,
+            OPENCLAW_WORKSPACE_DIR: target.defaultWorkspaceDir,
+          });
+          const ordinary = createLazyExecTool({ host, security: "full", ask: "off" });
+          await withInstallationTarget(target, () =>
+            ordinary.execute("ordinary-probe", { command: "echo ok", yieldMs: 120_000 }),
+          );
+          expect(mocks.spawnInputs.at(-1)?.env?.OPENCLAW_STATE_DIR).toBe(
+            process.env.OPENCLAW_STATE_DIR,
+          );
+          expect(mocks.spawnInputs.at(-1)?.env?.OPENCLAW_WORKSPACE_DIR).toBe(
+            process.env.OPENCLAW_WORKSPACE_DIR,
+          );
+        } else {
+          await expect(run).rejects.toThrow("saved prompt");
+          expect(buildExecSpec).not.toHaveBeenCalled();
+          expect(mocks.nodeHostParams).toEqual([]);
+          expect(mocks.spawnInputs).toEqual([]);
+        }
+      });
+    },
+  );
+  afterEach(() => vi.unstubAllEnvs());
   beforeAll(async () => {
     ({ createExecTool } = await import("./bash-tools.exec-run.js"));
     ({ createLazyExecTool } = await import("./lazy-exec-tool.js"));
@@ -303,7 +361,7 @@ describe("exec store environment", () => {
     }
   });
 
-  it("filters sandbox store env and surfaces credential-shaped drops", async () => {
+  it("keeps agent-readable store environment out of sandbox exec", async () => {
     await withTeamStoreEntries(
       [
         { name: "AWS_REGION", value: "us-west-2", kind: "env" },
@@ -335,12 +393,9 @@ describe("exec store environment", () => {
           yieldMs: 120_000,
         });
 
-        expect(buildExecSpec.mock.calls[0]?.[0]?.env).toMatchObject({ AWS_REGION: "us-west-2" });
+        expect(buildExecSpec.mock.calls[0]?.[0]?.env).not.toHaveProperty("AWS_REGION");
         expect(buildExecSpec.mock.calls[0]?.[0]?.env).not.toHaveProperty("FOO_TOKEN");
-        expect(result.content[0]).toMatchObject({
-          type: "text",
-          text: expect.stringContaining("FOO_TOKEN"),
-        });
+        expect(result.content[0]).not.toMatchObject({ text: expect.stringContaining("FOO_TOKEN") });
       },
     );
   });
@@ -403,9 +458,14 @@ describe("exec store environment", () => {
     },
   );
 
-  it.each(["gateway", "sandbox", "node"] as const)(
-    "applies enabled secret egress correctly for %s exec",
-    async (host) => {
+  it.each(
+    (["gateway", "sandbox", "node"] as const).flatMap((host) =>
+      [undefined, "off", "0", "false"].map((sentinelMode) => ({ host, sentinelMode })),
+    ),
+  )(
+    "applies enabled secret egress for $host exec with provider sentinels $sentinelMode",
+    async ({ host, sentinelMode }) => {
+      vi.stubEnv("OPENCLAW_SECRET_SENTINELS", sentinelMode);
       await withTeamStoreEntries(
         [
           { name: "AWS_REGION", value: "us-west-2", kind: "env" },
@@ -423,11 +483,14 @@ describe("exec store environment", () => {
             callId: `call-egress-enabled-${host}`,
             config: { secrets: { egressProxy: { enabled: true } } },
           });
-          expect(env.AWS_REGION).toBe("us-west-2");
           if (host === "gateway") {
+            expect(env.AWS_REGION).toBe("us-west-2");
             expect(looksLikeSecretSentinel(env.SERVICE_API_KEY ?? "")).toBe(true);
             expect(resolveSecretSentinel(env.SERVICE_API_KEY ?? "")).toBe("enabled-secret");
             expect(env).toMatchObject(EGRESS_ENV);
+            const childEnv = mocks.spawnInputs.at(-1)?.env;
+            expect(childEnv?.SERVICE_API_KEY).toBe(env.SERVICE_API_KEY);
+            expect(JSON.stringify(childEnv)).not.toContain("enabled-secret");
             expect(JSON.stringify(env)).not.toContain("enabled-secret");
             expect(mocks.proxyBindings).toEqual([
               [
@@ -441,6 +504,7 @@ describe("exec store environment", () => {
             return;
           }
 
+          expect(env).not.toHaveProperty("AWS_REGION");
           expect(env).not.toHaveProperty("SERVICE_API_KEY");
           expect(JSON.stringify(env)).not.toContain("oc-sent-v2.");
           for (const [key, value] of Object.entries(EGRESS_ENV)) {

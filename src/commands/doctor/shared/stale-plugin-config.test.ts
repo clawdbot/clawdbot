@@ -106,29 +106,32 @@ describe("doctor stale plugin config helpers", () => {
     });
   });
 
-  it("removes retired thread-ownership config while retaining valid plugin ids", () => {
-    const result = maybeRepairStalePluginConfig({
-      plugins: {
-        allow: ["discord", "thread-ownership"],
-        deny: ["thread-ownership", "openai"],
-        entries: {
-          discord: { enabled: true },
-          "thread-ownership": { enabled: true },
+  it.each(["thread-ownership", "open-prose"])(
+    "removes retired %s config while retaining valid plugin ids",
+    (retiredPluginId) => {
+      const result = maybeRepairStalePluginConfig({
+        plugins: {
+          allow: ["discord", retiredPluginId],
+          deny: [retiredPluginId, "openai"],
+          entries: {
+            discord: { enabled: true },
+            [retiredPluginId]: { enabled: true },
+          },
         },
-      },
-    } as OpenClawConfig);
+      } as OpenClawConfig);
 
-    expect(result.config.plugins).toEqual({
-      allow: ["discord"],
-      deny: ["openai"],
-      entries: { discord: { enabled: true } },
-    });
-    expect(result.changes).toEqual([
-      "- plugins.allow: removed 1 stale plugin id (thread-ownership)",
-      "- plugins.deny: removed 1 stale plugin id (thread-ownership)",
-      "- plugins.entries: removed 1 stale plugin entry (thread-ownership)",
-    ]);
-  });
+      expect(result.config.plugins).toEqual({
+        allow: ["discord"],
+        deny: ["openai"],
+        entries: { discord: { enabled: true } },
+      });
+      expect(result.changes).toEqual([
+        `- plugins.allow: removed 1 stale plugin id (${retiredPluginId})`,
+        `- plugins.deny: removed 1 stale plugin id (${retiredPluginId})`,
+        `- plugins.entries: removed 1 stale plugin entry (${retiredPluginId})`,
+      ]);
+    },
+  );
 
   it("resets stale plugin slots without changing valid slot sentinels", () => {
     const cfg = {
@@ -161,19 +164,30 @@ describe("doctor stale plugin config helpers", () => {
     expect(result.changes).toEqual([
       "- plugins.slots: reset 2 stale plugin slots (memory: acpx -> memory-core, contextEngine: missing-engine -> legacy)",
     ]);
-    expect(result.config.plugins?.slots).toEqual({
-      memory: "memory-core",
-      contextEngine: "legacy",
-    });
+    expect(result.config.plugins?.slots).toBeUndefined();
   });
 
-  it("preserves official external plugin config before installation", () => {
+  it("preserves unrelated slot state when removing a stale slot override", () => {
     const result = maybeRepairStalePluginConfig({
       plugins: {
-        allow: ["codex", "missing-plugin"],
-        deny: ["codex", "missing-deny"],
+        slots: {
+          memory: "missing-memory",
+          contextEngine: "none",
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(result.config.plugins?.slots).toEqual({ contextEngine: "none" });
+  });
+
+  it("preserves official external plugin lookup ids before installation", () => {
+    const result = maybeRepairStalePluginConfig({
+      plugins: {
+        allow: ["codex", "qqbot", "missing-plugin"],
+        deny: ["codex", "qqbot", "missing-deny"],
         entries: {
           codex: { enabled: true },
+          qqbot: { enabled: false },
           "missing-plugin": { enabled: true },
         },
       },
@@ -184,9 +198,12 @@ describe("doctor stale plugin config helpers", () => {
       "- plugins.deny: removed 1 stale plugin id (missing-deny)",
       "- plugins.entries: removed 1 stale plugin entry (missing-plugin)",
     ]);
-    expect(result.config.plugins?.allow).toEqual(["codex"]);
-    expect(result.config.plugins?.deny).toEqual(["codex"]);
-    expect(result.config.plugins?.entries).toEqual({ codex: { enabled: true } });
+    expect(result.config.plugins?.allow).toEqual(["codex", "qqbot"]);
+    expect(result.config.plugins?.deny).toEqual(["codex", "qqbot"]);
+    expect(result.config.plugins?.entries).toEqual({
+      codex: { enabled: true },
+      qqbot: { enabled: false },
+    });
   });
 
   it("preserves codex in policy surfaces while the version-bound plugin is absent", () => {
@@ -241,7 +258,7 @@ describe("doctor stale plugin config helpers", () => {
 
     expect(result.config.plugins?.allow).toEqual(["codex"]);
     expect(result.config.plugins?.entries?.codex?.enabled).toBe(false);
-    expect(result.config.plugins?.slots?.memory).toBe("memory-core");
+    expect(result.config.plugins?.slots).toBeUndefined();
     expect(result.changes).toEqual([
       "- plugins.slots: reset 1 stale plugin slot (memory: codex -> memory-core)",
     ]);

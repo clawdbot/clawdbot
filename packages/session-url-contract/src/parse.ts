@@ -6,6 +6,8 @@ import {
   parseShortSessionRef,
 } from "./grammar.js";
 
+export { matchControlUiCatalogSharePath, type ControlUiCatalogSharePathMatch } from "./share.js";
+
 export type ControlUiSessionPathTarget =
   | { namespace: "chat" | "dashboard"; kind: "main"; agentId: string }
   | {
@@ -13,6 +15,8 @@ export type ControlUiSessionPathTarget =
       kind: "short";
       agentId: string;
       shortId: string;
+      /** Exact decoded key candidate for route resolution after a short lookup misses. */
+      literalSessionKey: string;
       /**
        * Display-name slug that preceded the id, when the reference carried one. The id
        * stays authoritative; this only breaks a tie between sessions whose ids share the
@@ -103,7 +107,7 @@ export function parseControlUiSessionPath(
     if (!shortRef) {
       return { namespace, kind: "literal", agentId, sessionKey, slugCandidate: segment };
     }
-    return { namespace, kind: "short", agentId, ...shortRef };
+    return { namespace, kind: "short", agentId, literalSessionKey: sessionKey, ...shortRef };
   }
   return null;
 }

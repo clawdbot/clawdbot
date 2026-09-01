@@ -2,7 +2,6 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext, ApplicationThemeServerSelection } from "../../app/context.ts";
-import * as customTheme from "../../app/custom-theme.ts";
 import type { ImportedCustomTheme } from "../../app/custom-theme.ts";
 import { loadSettings, patchSettings, type UiSettings } from "../../app/settings.ts";
 import type { ThemeName } from "../../app/theme.ts";
@@ -10,6 +9,7 @@ import { createImportedCustomThemeFixture } from "../../test-helpers/custom-them
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { ConfigPage } from "./config-page.ts";
 import type { CustomThemeImportOwner } from "./custom-theme-import-owner.ts";
+import * as customTheme from "./custom-theme-import.ts";
 
 const importCustomThemeFromUrl = vi.fn<typeof customTheme.importCustomThemeFromUrl>();
 

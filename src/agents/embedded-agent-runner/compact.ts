@@ -52,6 +52,7 @@ import { resolveCompactionTimeoutMs } from "./compaction-safety-timeout.js";
 import { prepareCompactionSessionAgent } from "./compaction-session-agent.js";
 import type { PreparedCompactEmbeddedAgentSessionParams } from "./direct-compaction-preparation.js";
 import { compactEmbeddedAgentSessionDirectOnce } from "./direct-compaction.js";
+import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 import { prepareEmbeddedSessionActiveProjectKeys } from "./session-prompt-state.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
@@ -144,9 +145,13 @@ export async function compactNativeCliSession(params: {
       ...(params.compactParams.sessionEntry
         ? { sessionEntry: params.compactParams.sessionEntry }
         : {}),
+      contextWindow: params.compactParams.sessionEntry?.contextWindow,
       trigger: "manual",
       controlOperation: "compact",
       disableCliLiveSession: true,
+      // Compaction rewrites the persisted session behind any idle SDK query. Retire that query
+      // after the control turn so the next user turn reloads the compacted conversation.
+      cleanupCliLiveSessionOnRunEnd: true,
       allowEmptyAssistantReplyAsSilent: true,
       abortSignal: params.compactParams.abortSignal,
     });
@@ -245,16 +250,31 @@ export async function compactEmbeddedAgentSessionDirect(
   ) {
     return lockedHarnessCompactionFailure(lockedHarnessRuntime);
   }
-  const runSessionTarget = await resolveAgentRunSessionTarget({
-    ...paramsBase,
-    missingSessionKey: "resolve-existing",
-  });
+  const memoryTranscript = readCompactionAccountingRecorder(
+    paramsBase.contextEngineRuntimeContext,
+  )?.memoryTranscript;
+  memoryTranscript?.assertActive();
+  const runSessionTarget =
+    memoryTranscript?.sessionTarget ??
+    (await resolveAgentRunSessionTarget({
+      ...paramsBase,
+      missingSessionKey: "resolve-existing",
+    }));
   const requestedParams: CompactEmbeddedAgentSessionParamsWithSessionFile = {
     ...paramsBase,
     agentId: runSessionTarget.agentId,
     sessionId: runSessionTarget.sessionId,
     sessionKey: runSessionTarget.sessionKey,
-    sessionTarget: runSessionTarget,
+    // SQLite resolves storage identity; the request still owns thread routing.
+    sessionTarget: {
+      agentId: runSessionTarget.agentId,
+      sessionId: runSessionTarget.sessionId,
+      sessionKey: runSessionTarget.sessionKey,
+      storePath: runSessionTarget.storePath,
+      ...(paramsBase.sessionTarget?.threadId !== undefined
+        ? { threadId: paramsBase.sessionTarget.threadId }
+        : {}),
+    },
     sessionFile: runSessionTarget.sessionKey,
   };
   const requestedAgentIds = resolveSessionAgentIds({
@@ -309,7 +329,8 @@ export async function compactEmbeddedAgentSessionDirect(
   });
   const pluginPlanCandidates = resolveModelCandidateChain({
     cfg: requestedParams.config,
-    manifestPlugins: currentPluginMetadataSnapshot?.plugins ?? [],
+    agentId: requestedAgentIds.sessionAgentId,
+    manifestPlugins: currentPluginMetadataSnapshot ?? [],
     provider: pluginPlanCompactionTarget.provider ?? DEFAULT_PROVIDER,
     model: pluginPlanCompactionTarget.model ?? DEFAULT_MODEL,
     requestedRouteResolution: "resolved",
@@ -410,23 +431,24 @@ export async function compactEmbeddedAgentSessionDirect(
         [primaryProvider, requestedPrimaryProvider].map(resolveAuthProvider),
       );
       const fallbacksOverride = resolveCompactionFallbacksOverride(params);
+      const fallbackAgentId = resolveSessionAgentIds({
+        sessionKey: params.sandboxSessionKey ?? params.sessionKey,
+        config: params.config,
+        agentId: params.sandboxAgentId ?? params.agentId,
+      }).sessionAgentId;
       const resolvedPrimaryCandidate = resolveModelCandidateChain({
         cfg: params.config,
-        manifestPlugins: preparedModelRuntime.metadataSnapshot.plugins,
+        agentId: fallbackAgentId,
+        manifestPlugins: preparedModelRuntime.metadataSnapshot,
         provider: primaryProvider,
         model: primaryModel,
         requestedRouteResolution: "resolved",
         fallbacksOverride,
       })[0];
-      const fallbackAgentId = resolveSessionAgentIds({
-        sessionKey: params.sandboxSessionKey ?? params.sessionKey,
-        config: params.config,
-        agentId: params.agentId,
-      }).sessionAgentId;
       const fallbackSessionKey = params.sandboxSessionKey ?? params.sessionKey ?? params.sessionId;
       const fallbackResult = await runWithModelFallback<EmbeddedAgentCompactResult>({
         cfg: params.config,
-        manifestPlugins: preparedModelRuntime.metadataSnapshot.plugins,
+        manifestPlugins: preparedModelRuntime.metadataSnapshot,
         provider: primaryProvider,
         model: primaryModel,
         requestedRouteResolution: "resolved",

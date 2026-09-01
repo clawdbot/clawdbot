@@ -1,5 +1,9 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  markReplyPayloadForSourceSuppressionDelivery,
+  setReplyPayloadMetadata,
+} from "../auto-reply/reply-payload.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
@@ -10,6 +14,7 @@ import {
   consumePendingToolMediaIntoReply,
   hasAssistantVisibleReply,
   readPendingToolMediaReply,
+  restorePendingToolMediaReply,
 } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
@@ -22,6 +27,7 @@ type ReplyDeliveryParams = {
 
 export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams) {
   const assistantTexts = state.assistantTexts;
+  const lastEmittedCommentaryByItem = new Map<string, string>();
   const pendingBlockReplyTasks = new Set<Promise<void>>();
   const pendingPartialReplyTasks = new Set<Promise<void>>();
   const shouldAllowSilentTurnText = (text: string | undefined) =>
@@ -30,21 +36,40 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     delivery: EmbeddedAgentSubscribeContext["state"]["deferredAssistantEvents"][number],
   ) => {
     const { data } = delivery;
-    emitAgentEvent({
-      runId: params.runId,
-      stream: "assistant",
-      data,
-    });
-    if (params.onAgentEvent) {
-      runBestEffortCallback({
-        label: "assistant agent event",
-        log,
-        callback: () =>
-          params.onAgentEvent?.({
-            stream: "assistant",
-            data,
-          }),
-      });
+    const itemId = typeof data.itemId === "string" ? data.itemId : "";
+    const progressText =
+      data.phase === "commentary" && typeof data.text === "string"
+        ? data.text.replace(/\s+/g, " ").trim()
+        : "";
+    const event = progressText
+      ? {
+          stream: "item" as const,
+          data: {
+            kind: "preamble",
+            title: "Preamble",
+            phase: "update",
+            progressText,
+            ...(itemId ? { itemId } : {}),
+          },
+        }
+      : data.phase === "commentary"
+        ? undefined
+        : { stream: "assistant" as const, data };
+    if (
+      event &&
+      (event.stream !== "item" || lastEmittedCommentaryByItem.get(itemId) !== progressText)
+    ) {
+      if (event.stream === "item") {
+        lastEmittedCommentaryByItem.set(itemId, progressText);
+      }
+      emitAgentEvent({ runId: params.runId, ...event });
+      if (params.onAgentEvent) {
+        runBestEffortCallback({
+          label: "assistant agent event",
+          log,
+          callback: () => params.onAgentEvent?.(event),
+        });
+      }
     }
     if (delivery.emitPartialReply && params.onPartialReply && state.shouldEmitPartialReplies) {
       try {
@@ -88,14 +113,39 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
   const clearDeferredAssistantEvents = () => {
     state.deferredAssistantEvents.length = 0;
   };
-  const deferredToolMediaReplies = new WeakSet<BlockReplyPayload>();
+  const deferredToolMediaReplies = new WeakMap<
+    BlockReplyPayload,
+    { pendingToolMedia: BlockReplyPayload; autoDeliveryMediaUrls: string[] }
+  >();
   const emitBlockReplySafely = (
     payload: Parameters<NonNullable<SubscribeEmbeddedAgentSessionParams["onBlockReply"]>>[0],
-    options?: { assistantMessageIndex?: number },
-  ): boolean => {
+    options?: {
+      assistantMessageIndex?: number;
+      pendingToolMedia?: BlockReplyPayload | null;
+      autoDeliveryMediaUrls?: string[];
+    },
+  ): void => {
     if (!params.onBlockReply) {
-      return false;
+      return;
     }
+    const recordDeliveredReply = () => {
+      if (!payload.isReasoning && hasAssistantVisibleReply(payload)) {
+        state.visibleBlockReplyCount += 1;
+        if (options?.pendingToolMedia) {
+          state.pendingToolMediaDeliveryFailed = false;
+          state.hasToolMediaBlockReply = true;
+        }
+        for (const url of options?.autoDeliveryMediaUrls ?? []) {
+          state.toolAutoDeliveryMediaUrls.delete(url);
+        }
+      }
+    };
+    const recordDeliveryFailure = (error: unknown) => {
+      if (options?.pendingToolMedia) {
+        restorePendingToolMediaReply(state, options.pendingToolMedia);
+      }
+      log.warn(`block reply callback failed: ${String(error)}`);
+    };
     try {
       const taggedPayload =
         options?.assistantMessageIndex !== undefined
@@ -111,19 +161,16 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
         ? params.onBlockReply(taggedPayload, context)
         : params.onBlockReply(taggedPayload);
       if (!isPromiseLike<void>(maybeTask)) {
-        return true;
+        recordDeliveredReply();
+        return;
       }
-      const task = Promise.resolve(maybeTask).catch((err: unknown) => {
-        log.warn(`block reply callback failed: ${String(err)}`);
-      });
+      const task = Promise.resolve(maybeTask).then(recordDeliveredReply, recordDeliveryFailure);
       pendingBlockReplyTasks.add(task);
       void task.finally(() => {
         pendingBlockReplyTasks.delete(task);
       });
-      return true;
     } catch (err) {
-      log.warn(`block reply callback failed: ${String(err)}`);
-      return false;
+      recordDeliveryFailure(err);
     }
   };
   const emitBlockReply = (
@@ -131,34 +178,59 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     options?: { assistantMessageIndex?: number; consumePendingToolMedia?: boolean },
   ) => {
     const withAssistantDirectives = consumePendingAssistantReplyDirectivesIntoReply(state, payload);
-    const consumesPendingToolMedia =
-      options?.consumePendingToolMedia !== false && readPendingToolMediaReply(state) !== null;
+    const pendingToolMedia =
+      payload.isReasoning || options?.consumePendingToolMedia === false
+        ? null
+        : readPendingToolMediaReply(state);
     const withToolMedia =
       options?.consumePendingToolMedia === false
         ? withAssistantDirectives
         : consumePendingToolMediaIntoReply(state, withAssistantDirectives);
+    const sentMediaUrls = new Set(state.messagingToolSentMediaUrls.map((url) => url.trim()));
+    const autoDeliveryMediaUrls =
+      params.sourceReplyDeliveryMode === "message_tool_only"
+        ? (pendingToolMedia?.mediaUrls ?? []).filter(
+            (url) =>
+              state.toolAutoDeliveryMediaUrls.has(url.trim()) && !sentMediaUrls.has(url.trim()),
+          )
+        : [];
+    const pendingAttachments = new Map(
+      (pendingToolMedia?.mediaUrls ?? []).map((url, index) => [
+        url.trim(),
+        pendingToolMedia?.attachments?.[index] ?? {},
+      ]),
+    );
+    const blockPayload =
+      autoDeliveryMediaUrls.length === 0
+        ? withToolMedia
+        : markReplyPayloadForSourceSuppressionDelivery({
+            mediaUrls: autoDeliveryMediaUrls,
+            mediaUrl: autoDeliveryMediaUrls[0],
+            attachments: autoDeliveryMediaUrls.map(
+              (url) => pendingAttachments.get(url.trim()) ?? {},
+            ),
+            audioAsVoice: pendingToolMedia?.audioAsVoice || undefined,
+            trustedLocalMedia: true,
+          });
     const assistantTranscriptMediaUrls = Array.from(new Set(payload.mediaUrls ?? []));
     const taggedPayload =
       options?.assistantMessageIndex !== undefined
-        ? setReplyPayloadMetadata(withToolMedia, {
+        ? setReplyPayloadMetadata(blockPayload, {
             assistantMessageIndex: options.assistantMessageIndex,
             ...(assistantTranscriptMediaUrls.length > 0 ? { assistantTranscriptMediaUrls } : {}),
           })
-        : withToolMedia;
+        : blockPayload;
     if (state.deferBlockReplyDelivery) {
-      if (consumesPendingToolMedia) {
-        deferredToolMediaReplies.add(taggedPayload);
+      if (pendingToolMedia) {
+        deferredToolMediaReplies.set(taggedPayload, {
+          pendingToolMedia,
+          autoDeliveryMediaUrls,
+        });
       }
       state.deferredBlockReplies.push(taggedPayload);
       return;
     }
-    const emitted = emitBlockReplySafely(taggedPayload, options);
-    if (emitted && !taggedPayload.isReasoning && hasAssistantVisibleReply(taggedPayload)) {
-      state.visibleBlockReplyCount += 1;
-      if (consumesPendingToolMedia) {
-        state.hasToolMediaBlockReply = true;
-      }
-    }
+    emitBlockReplySafely(taggedPayload, { ...options, pendingToolMedia, autoDeliveryMediaUrls });
   };
   const flushDeferredBlockReplies = () => {
     if (state.deferredBlockReplies.length === 0) {
@@ -166,27 +238,22 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     }
     const deferred = state.deferredBlockReplies.splice(0);
     for (const payload of deferred) {
-      const emitted = emitBlockReplySafely(payload);
-      if (emitted && !payload.isReasoning && hasAssistantVisibleReply(payload)) {
-        state.visibleBlockReplyCount += 1;
-        if (deferredToolMediaReplies.has(payload)) {
-          state.hasToolMediaBlockReply = true;
-        }
-      }
+      const deferredToolMedia = deferredToolMediaReplies.get(payload);
+      emitBlockReplySafely(payload, deferredToolMedia);
     }
   };
   const clearDeferredBlockReplies = () => {
     state.deferredBlockReplies.length = 0;
   };
 
-  const rememberAssistantText = (text: string) => {
+  const rememberAssistantText = (text: string, normalizedText?: string) => {
     state.lastAssistantTextMessageIndex = state.assistantMessageIndex;
     state.lastAssistantTextTrimmed = text.trimEnd();
-    const normalized = normalizeTextForComparison(text);
+    const normalized = normalizedText ?? normalizeTextForComparison(text);
     state.lastAssistantTextNormalized = normalized.length > 0 ? normalized : undefined;
   };
 
-  const shouldSkipAssistantText = (text: string) => {
+  const shouldSkipAssistantText = (text: string, normalizedText?: string) => {
     if (state.lastAssistantTextMessageIndex !== state.assistantMessageIndex) {
       return false;
     }
@@ -194,25 +261,37 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     if (trimmed && trimmed === state.lastAssistantTextTrimmed) {
       return true;
     }
-    const normalized = normalizeTextForComparison(text);
+    const normalized = normalizedText ?? normalizeTextForComparison(text);
     if (normalized.length > 0 && normalized === state.lastAssistantTextNormalized) {
       return true;
     }
     return false;
   };
 
-  const pushAssistantText = (text: string) => {
+  const pushAssistantText = (text: string, normalizedText?: string) => {
     if (!text) {
       return;
     }
     if (params.silentExpected && !shouldAllowSilentTurnText(text)) {
       return;
     }
-    if (shouldSkipAssistantText(text)) {
+    if (shouldSkipAssistantText(text, normalizedText)) {
       return;
     }
     assistantTexts.push(text);
-    rememberAssistantText(text);
+    rememberAssistantText(text, normalizedText);
+  };
+
+  const replaceCurrentAssistantText = (text: string) => {
+    const count = assistantTexts.length - state.assistantTextBaseline;
+    if (!text) {
+      assistantTexts.splice(state.assistantTextBaseline, count);
+    } else if (count > 0) {
+      assistantTexts.splice(state.assistantTextBaseline, count, text);
+      rememberAssistantText(text);
+    } else {
+      pushAssistantText(text);
+    }
   };
 
   const finalizeAssistantTexts = (args: {
@@ -222,19 +301,22 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
   }) => {
     const { text, addedDuringMessage, chunkerHasBuffered } = args;
 
+    // A run-budget timeout flush may already have committed partial text for
+    // this message. When message_end later finalizes the complete text, replace
+    // the flushed partial instead of appending a duplicate. The partial stays
+    // when message_end never arrives (hard run-budget abort) — that is the
+    // salvage the timeout flush exists for.
+    if (state.hasFlushedPartialText && text) {
+      replaceCurrentAssistantText(text);
+      state.hasFlushedPartialText = false;
+      state.assistantTextBaseline = assistantTexts.length;
+      return;
+    }
+
     // If we're not streaming block replies, ensure the final payload includes
     // the final text even when interim streaming was enabled.
     if (state.includeReasoning && text && !params.onBlockReply) {
-      if (assistantTexts.length > state.assistantTextBaseline) {
-        assistantTexts.splice(
-          state.assistantTextBaseline,
-          assistantTexts.length - state.assistantTextBaseline,
-          text,
-        );
-        rememberAssistantText(text);
-      } else {
-        pushAssistantText(text);
-      }
+      replaceCurrentAssistantText(text);
       state.suppressBlockChunks = true;
     } else if (!addedDuringMessage && !chunkerHasBuffered && text) {
       // Non-streaming models (no text_delta): ensure assistantTexts gets the final
@@ -245,14 +327,17 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     state.assistantTextBaseline = assistantTexts.length;
   };
 
-  const waitForPendingEvents = async () => {
+  const waitForPendingEvents = async (options?: { includePartialReplies?: boolean }) => {
     // Partial presentation stays concurrent with provider events, but terminal
     // settlement must observe callbacks launched while the event chain drains.
-    while (state.pendingEventChain || pendingPartialReplyTasks.size > 0) {
-      await Promise.allSettled([
-        ...(state.pendingEventChain ? [state.pendingEventChain] : []),
-        ...pendingPartialReplyTasks,
-      ]);
+    const includePartialReplies = options?.includePartialReplies !== false;
+    while (true) {
+      const eventChain = state.pendingEventChain;
+      const partialReplyTasks = includePartialReplies ? [...pendingPartialReplyTasks] : [];
+      if (!eventChain && partialReplyTasks.length === 0) {
+        return;
+      }
+      await Promise.allSettled([...(eventChain ? [eventChain] : []), ...partialReplyTasks]);
     }
   };
 
@@ -267,6 +352,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     flushDeferredBlockReplies,
     pendingBlockReplyTasks,
     pushAssistantText,
+    replaceCurrentAssistantText,
     shouldSkipAssistantText,
     waitForPendingEvents,
   };

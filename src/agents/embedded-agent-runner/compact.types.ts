@@ -21,6 +21,8 @@ import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
 
 export type CompactEmbeddedAgentSessionParams = {
+  /** Explicit session owner captured before fallback agent resolution. */
+  contextEngineAgentId?: string;
   sessionId: string;
   runId?: string;
   sessionKey?: string;
@@ -30,12 +32,16 @@ export type CompactEmbeddedAgentSessionParams = {
   agentId?: string;
   /** Session key used only for runtime policy/sandbox resolution. Defaults to sessionKey. */
   sandboxSessionKey?: string;
+  /** Owner captured with the sandbox policy before execution identity changes. */
+  sandboxAgentId?: string;
   messageChannel?: string;
   messageProvider?: string;
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
   chatType?: ChatType;
   agentAccountId?: string;
+  /** Raw peer observed by the inbound routing owner, before identity linking. */
+  conversationRoutePeerId?: string;
   conversationToolPolicy?: GroupToolPolicyConfig;
   currentChannelId?: string;
   currentThreadTs?: string;
@@ -71,8 +77,12 @@ export type CompactEmbeddedAgentSessionParams = {
   /** Optional caller-observed live prompt tokens used for compaction diagnostics. */
   currentTokenCount?: number;
   workspaceDir: string;
+  /** Canonical agent workspace used for bootstrap files when execution runs elsewhere. */
+  bootstrapWorkspaceDir?: string;
   /** Optional task working directory; workspaceDir remains the agent bootstrap workspace. */
   cwd?: string;
+  permissionMode?: SessionEntry["permissionMode"];
+  sessionRoot?: string;
   agentDir?: string;
   config?: OpenClawConfig;
   toolOverrides?: SessionToolOverrides;
@@ -106,7 +116,7 @@ export type CompactEmbeddedAgentSessionParams = {
   runtimeAuthPlan?: AgentRuntimeAuthPlan;
   thinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
-  execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node" | "nodeCwd">;
+  execOverrides?: Pick<ExecToolDefaults, "host" | "mode" | "security" | "ask" | "node" | "nodeCwd">;
   bashElevated?: ExecElevatedDefaults;
   customInstructions?: string;
   tokenBudget?: number;
@@ -132,6 +142,8 @@ export type CompactEmbeddedAgentSessionParams = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   ownerNumbers?: string[];
   abortSignal?: AbortSignal;
+  /** @internal Refreshes the host watchdog when delegated native compaction makes progress. */
+  compactionTimeoutReset?: () => void;
   onCompactionHookMessages?: (payload: {
     phase: "before" | "after";
     messages: string[];

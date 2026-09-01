@@ -14,7 +14,7 @@ import type { ReplyPayload } from "../types.js";
 import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
 import { resolveAdmittedRunSessionFile } from "./agent-runner-core.js";
 import { buildPreflightCompactionFailureText } from "./agent-runner-failure-reply.js";
-import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
+import { runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
 import {
   resolveQueuedReplyExecutionConfig,
   resolveQueuedReplyRuntimeConfig,
@@ -49,7 +49,6 @@ export type FollowupRunnerParams = {
   sessionKey?: string;
   storePath?: string;
   defaultModel: string;
-  agentCfgContextTokens?: number;
   toolProgressDetail?: "explain" | "raw";
 };
 
@@ -151,12 +150,13 @@ export async function admitFollowupTurn(params: {
     routeThreadId: params.queued.originatingThreadId,
     originatingLeafEntryId: params.queued.turnAdoptionLifecycle?.originatingLeafEntryId,
     upstreamAbortSignal: resolveFollowupAbortSignal(params.queued),
-    onReplyAdmissionWaitChange: params.queued.onReplyAdmissionWaitChange,
   });
   if (admission.status === "skipped") {
-    return admission.reason === "active-run"
-      ? { kind: "deferred", reason: "active-run" }
-      : { kind: "skipped", reason: admission.reason };
+    if (admission.reason !== "active-run") {
+      return { kind: "skipped", reason: admission.reason };
+    }
+    params.queued.turnAdoptionLifecycle?.onDeferredHeartbeat?.();
+    return { kind: "deferred", reason: "active-run" };
   }
   const operation = admission.operation;
   operation.retainFailureUntilComplete();
@@ -376,18 +376,19 @@ export async function admitFollowupTurn(params: {
         : undefined;
     const preflightEntry = session.current();
     try {
-      activeEntry = await runPreflightCompactionIfNeeded({
+      activeEntry = await runSessionCompactionIfNeeded({
         cfg: config,
         followupRun: turn.queued,
         promptForEstimate: turn.queued.prompt,
         defaultModel: params.defaults.defaultModel,
-        agentCfgContextTokens: params.defaults.agentCfgContextTokens,
         sessionEntry: activeEntry,
         sessionStore,
         sessionKey: replySessionKey,
         storePath: params.defaults.storePath,
         isHeartbeat: params.defaults.opts?.isHeartbeat === true,
-        replyOperation: operation,
+        abortSignal: operation.abortSignal,
+        onCompactionStart: () => operation.setPhase("preflight_compacting"),
+        onSessionIdChanged: (sessionId) => operation.updateSessionId(sessionId),
         onCompactionNotice: notifyPreflightCompaction,
       });
       if (compactionNoticeGenerationInvalidated) {

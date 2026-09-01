@@ -7,8 +7,7 @@ import {
 import type { queueAgentHarnessMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AttemptTranscriptJournal } from "./attempt-transcript-journal.js";
 import type { AttemptParamsLike } from "./attempt-types.js";
-import type { attachEventBridge } from "./event-bridge.js";
-import type { SessionLike } from "./event-bridge.js";
+import type { attachEventBridge, SessionLike } from "./event-bridge.js";
 import type { CopilotUserInputBridge } from "./user-input-bridge.js";
 
 const DEFAULT_STEERING_DELIVERY_TIMEOUT_MS = 120_000;
@@ -18,6 +17,7 @@ export function registerCopilotActiveRun(params: {
   abortActiveSession: () => void;
   bridge: ReturnType<typeof attachEventBridge> | undefined;
   canAcceptSteering: () => boolean;
+  startedAtMs?: number;
   input: AttemptParamsLike;
   isAborted: () => boolean;
   isSettled: () => boolean;
@@ -76,7 +76,10 @@ export function registerCopilotActiveRun(params: {
       if (!params.canAcceptSteering()) {
         throw new Error("Copilot steering is unavailable before initial user validation");
       }
-      messageId = await params.session.send({ prompt: text });
+      messageId = await params.transcriptJournal.sendSdkUser(
+        () => params.session.send({ prompt: text }),
+        options?.userTurnTranscriptRecorder,
+      );
       reportAcceptance(true);
     } catch (error) {
       reportAcceptance(false);
@@ -103,6 +106,7 @@ export function registerCopilotActiveRun(params: {
   const activeRunHandle = {
     kind: "embedded" as const,
     runId: params.input.runId,
+    startedAtMs: params.startedAtMs,
     toolAuthorityFingerprint: params.input.toolAuthorityFingerprint,
     claimPendingUserInputAnswer,
     cancelPendingUserInput,

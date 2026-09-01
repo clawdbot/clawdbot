@@ -6,7 +6,9 @@ import { pathForRoute, pathForWorkboardBoard } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
+import { icons } from "../../components/icons.ts";
 import { renderWorkboardBoardGlyph } from "../../components/workboard-board-glyph.ts";
+import { t } from "../../i18n/index.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import {
   resolveSessionPreferredFaceForKey,
@@ -224,8 +226,6 @@ class WorkboardPage extends OpenClawLightDomElement {
       void syncWorkboardLifecycle({
         host: context.workboard,
         client: gateway.client,
-        sessions: context.sessions.state.result?.sessions ?? [],
-        canWrite: access.canWrite,
         requestUpdate: this.requestPageUpdate,
       });
     }
@@ -368,6 +368,16 @@ class WorkboardPage extends OpenClawLightDomElement {
                 ? workboardBoardName(selectedBoard)
                 : titleForRoute("workboard")}</span
             >
+            ${selectedBoard?.automationJobId
+              ? html`<a
+                  class="chip workboard-automation-chip"
+                  href=${pathForRoute("cron", context.basePath)}
+                  title=${t("workboard.automationAttachedTitle")}
+                  aria-label=${t("workboard.automationAttachedTitle")}
+                >
+                  ${icons.calendarClock}<span>${t("workboard.automationAttached")}</span>
+                </a>`
+              : nothing}
           </div>
           ${selectedBoard
             ? html`<div class="page-subtitle">${titleForRoute("workboard")}</div>`

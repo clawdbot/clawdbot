@@ -1,5 +1,6 @@
 import type { Model } from "../../../llm/types.js";
-import { resolveAgentConfig, resolveSessionAgentIds } from "../../agent-scope.js";
+import { OPENCLAW_AGENT_RUNTIME_ID } from "../../agent-runtime-id.js";
+import { resolveAuthoredModelContextTokens } from "../../context-resolution.js";
 import {
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
@@ -32,28 +33,32 @@ export function resolveEmbeddedRunEffectiveModel(
     nativeModelOwned: boolean;
   },
 ) {
-  const { sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: params.runParams.sessionKey,
+  const contextConfigProvider = resolveContextConfigProviderForRuntime({
+    provider: params.modelConfigProvider,
+    runtimeId: params.agentHarnessId,
     config: params.runParams.config,
-    agentId: params.runParams.agentId,
   });
-  const agentContextTokens = resolveAgentConfig(
-    params.runParams.config ?? {},
-    sessionAgentId,
-  )?.contextTokens;
-  return resolveEmbeddedRuntimeModelPolicy({
+  const resolved = resolveEmbeddedRuntimeModelPolicy({
     cfg: params.runParams.config,
     provider: params.provider,
-    contextConfigProvider: resolveContextConfigProviderForRuntime({
-      provider: params.modelConfigProvider,
-      runtimeId: params.agentHarnessId,
-      config: params.runParams.config,
-    }),
+    contextConfigProvider,
     modelId: params.modelId,
     runtimeModel: params.runtimeModel,
     nativeModelOwned: params.nativeModelOwned,
-    agentContextTokens,
+    ...(params.runParams.contextWindow ? { contextWindow: params.runParams.contextWindow } : {}),
   });
+  const authoredContextTokenCap =
+    params.agentHarnessId === OPENCLAW_AGENT_RUNTIME_ID
+      ? undefined
+      : resolveAuthoredModelContextTokens({
+          cfg: params.runParams.config,
+          provider: contextConfigProvider,
+          model: params.modelId,
+        });
+  return {
+    ...resolved,
+    ...(authoredContextTokenCap === undefined ? {} : { authoredContextTokenCap }),
+  };
 }
 
 function buildHarnessModelProvider(

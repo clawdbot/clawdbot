@@ -17,11 +17,17 @@ it("labels an auto-disabled job distinctly from an operator pause", () => {
     },
   });
   const container = renderView({ jobs: [paused, autoDisabled] });
-  const rows = Array.from(container.querySelectorAll(".cron-table__row"));
-  expect(rows[0]?.textContent).toContain("Paused");
-  const note = rows[1]?.querySelector("[data-test-id='cron-row-auto-disabled-job-auto']");
+  const pausedRow = container.querySelector("[data-test-id='cron-row-job-paused']");
+  expect(pausedRow?.textContent).toContain("Paused");
+  expect(pausedRow?.querySelector(".cron-table__state--paused")?.getAttribute("aria-label")).toBe(
+    "Paused",
+  );
+  const autoDisabledRow = container.querySelector("[data-test-id='cron-row-job-auto']");
+  const note = autoDisabledRow?.querySelector("[data-test-id='cron-row-auto-disabled-job-auto']");
   expect(note?.textContent?.trim()).toBe("Auto-disabled · 10 run failures");
   expect(note?.getAttribute("title")).toBe("provider exploded");
-  // Escalated failure keeps the error dot even though the job is disabled.
-  expect(rows[1]?.querySelector(".cron-table__dot--error")).not.toBeNull();
+  // Escalated failure keeps a visible error marker even though the job is disabled.
+  expect(
+    autoDisabledRow?.querySelector(".cron-table__state--error")?.getAttribute("aria-label"),
+  ).toBe("Auto-disabled · 10 run failures");
 });

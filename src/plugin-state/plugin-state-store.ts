@@ -25,14 +25,13 @@ import type {
 } from "./plugin-state-store.types.js";
 import { PluginStateStoreError } from "./plugin-state-store.types.js";
 import {
+  createPluginStoreOptionPolicy,
   serializePluginStoreJson,
   validateOptionalPluginStoreTtlMs,
   validatePluginStoreKey,
   validatePluginStoreNamespace,
 } from "./plugin-store-validation.js";
 
-// Public plugin-state facade over the sqlite-backed store. It validates plugin
-// ids, namespaces, JSON values, TTLs, and per-plugin limits before persistence.
 // Public plugin-state facade over the sqlite-backed store. It validates plugin
 // ids, namespaces, JSON values, TTLs, and per-plugin limits before persistence.
 export type {
@@ -42,11 +41,16 @@ export type {
   PluginStateSyncKeyedStore,
 } from "./plugin-state-store.types.js";
 
+export type { PluginDoctorRawStateEntry } from "./plugin-state-store.sqlite.js";
+
 export {
   closePluginStateDatabase,
   countPluginStateLiveEntries,
   getPluginStateCapacity,
   MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
+  MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES,
+  pluginStateDeleteEntriesIfUnchanged,
+  pluginStateDoctorEntriesInKeyRange,
   pluginStateEntriesInKeyRange,
   resolveMaxPluginStateEntriesPerPlugin,
   sweepExpiredPluginStateEntries,
@@ -71,7 +75,6 @@ type PluginStateImportEntry = {
   ttlMs?: number;
 };
 
-const namespaceOptionSignatures = new Map<string, StoreOptionSignature>();
 function invalidInput(
   message: string,
   operation: PluginStateStoreOperation = "register",
@@ -111,15 +114,10 @@ function validateMaxEntries(value: number): number {
   return value;
 }
 
-function validateOverflowPolicy(value: unknown): PluginStateOverflowPolicy {
-  if (value === undefined || value === "evict-oldest") {
-    return "evict-oldest";
-  }
-  if (value === "reject-new") {
-    return value;
-  }
-  throw invalidInput("plugin state overflowPolicy must be evict-oldest or reject-new", "open");
-}
+const optionPolicy = createPluginStoreOptionPolicy<StoreOptionSignature>({
+  label: "plugin state",
+  invalid: (message) => invalidInput(message, "open"),
+});
 
 function validateOptionalTtlMs(
   value: number | undefined,
@@ -163,35 +161,10 @@ function prepareRegisterParams(
   };
 }
 
-function assertConsistentOptions(
-  pluginId: string,
-  namespace: string,
-  signature: StoreOptionSignature,
-): void {
-  const key = `${pluginId}\0${namespace}`;
-  const existing = namespaceOptionSignatures.get(key);
-  if (!existing) {
-    namespaceOptionSignatures.set(key, signature);
-    return;
-  }
-  if (
-    existing.maxEntries !== signature.maxEntries ||
-    existing.overflowPolicy !== signature.overflowPolicy ||
-    existing.defaultTtlMs !== signature.defaultTtlMs
-  ) {
-    // A namespace is a shared storage contract. Reopening it with different
-    // limits would make eviction/TTL behavior depend on call order.
-    throw invalidInput(
-      `plugin state namespace ${namespace} for ${pluginId} was reopened with incompatible options`,
-      "open",
-    );
-  }
-}
-
 function createKeyedStoreForPluginId<T>(
   pluginId: string,
   options: OpenKeyedStoreOptions,
-): PluginStateKeyedStore<T> {
+): Required<PluginStateKeyedStore<T>> {
   const store = createSyncKeyedStoreForPluginId<T>(pluginId, options);
 
   return {
@@ -213,10 +186,14 @@ function createSyncKeyedStoreForPluginId<T>(
 ): Required<PluginStateSyncKeyedStore<T>> {
   const namespace = validateNamespace(options.namespace);
   const maxEntries = validateMaxEntries(options.maxEntries);
-  const overflowPolicy = validateOverflowPolicy(options.overflowPolicy);
+  const overflowPolicy = optionPolicy.resolveOverflowPolicy(options.overflowPolicy);
   const defaultTtlMs = validateOptionalTtlMs(options.defaultTtlMs);
   const env = options.env;
-  assertConsistentOptions(pluginId, namespace, { maxEntries, overflowPolicy, defaultTtlMs });
+  optionPolicy.assertConsistent(pluginId, namespace, {
+    maxEntries,
+    overflowPolicy,
+    defaultTtlMs,
+  });
 
   return {
     register(key, value, opts) {
@@ -341,7 +318,7 @@ export function registerMigratedPluginStateEntry(params: {
   }
   const namespace = validateNamespace(params.namespace, "register");
   const maxEntries = validateMaxEntries(params.maxEntries);
-  const overflowPolicy = validateOverflowPolicy(params.overflowPolicy);
+  const overflowPolicy = optionPolicy.resolveOverflowPolicy(params.overflowPolicy);
   const defaultTtlMs = validateOptionalTtlMs(params.defaultTtlMs);
   const prepared = prepareRegisterParams(
     params.key,
@@ -366,7 +343,7 @@ export function registerMigratedPluginStateEntry(params: {
 export function createPluginStateKeyedStore<T>(
   pluginId: string,
   options: OpenKeyedStoreOptions,
-): PluginStateKeyedStore<T> {
+): Required<PluginStateKeyedStore<T>> {
   if (pluginId.startsWith("core:")) {
     throw invalidInput("Plugin ids starting with 'core:' are reserved for core consumers.", "open");
   }
@@ -377,7 +354,7 @@ export function createPluginStateKeyedStore<T>(
 export function createPluginStateSyncKeyedStore<T>(
   pluginId: string,
   options: OpenKeyedStoreOptions,
-): PluginStateSyncKeyedStore<T> {
+): Required<PluginStateSyncKeyedStore<T>> {
   if (pluginId.startsWith("core:")) {
     throw invalidInput("Plugin ids starting with 'core:' are reserved for core consumers.", "open");
   }
@@ -402,11 +379,15 @@ export function registerPluginStateSyncSequencedJournalEntry(params: {
   }
   const cursorNamespace = validateNamespace(params.cursorOptions.namespace);
   const cursorMaxEntries = validateMaxEntries(params.cursorOptions.maxEntries);
-  const cursorOverflowPolicy = validateOverflowPolicy(params.cursorOptions.overflowPolicy);
+  const cursorOverflowPolicy = optionPolicy.resolveOverflowPolicy(
+    params.cursorOptions.overflowPolicy,
+  );
   const cursorDefaultTtlMs = validateOptionalTtlMs(params.cursorOptions.defaultTtlMs);
   const journalNamespace = validateNamespace(params.journalOptions.namespace);
   const journalMaxEntries = validateMaxEntries(params.journalOptions.maxEntries);
-  const journalOverflowPolicy = validateOverflowPolicy(params.journalOptions.overflowPolicy);
+  const journalOverflowPolicy = optionPolicy.resolveOverflowPolicy(
+    params.journalOptions.overflowPolicy,
+  );
   const journalDefaultTtlMs = validateOptionalTtlMs(params.journalOptions.defaultTtlMs);
   if (
     cursorOverflowPolicy !== "evict-oldest" ||
@@ -420,12 +401,12 @@ export function registerPluginStateSyncSequencedJournalEntry(params: {
     throw invalidInput("sequenced plugin state journal stores must share one environment");
   }
   const cursorKey = validateKey(params.cursorKey);
-  assertConsistentOptions(params.pluginId, cursorNamespace, {
+  optionPolicy.assertConsistent(params.pluginId, cursorNamespace, {
     maxEntries: cursorMaxEntries,
     overflowPolicy: cursorOverflowPolicy,
     defaultTtlMs: cursorDefaultTtlMs,
   });
-  assertConsistentOptions(params.pluginId, journalNamespace, {
+  optionPolicy.assertConsistent(params.pluginId, journalNamespace, {
     maxEntries: journalMaxEntries,
     overflowPolicy: journalOverflowPolicy,
     defaultTtlMs: journalDefaultTtlMs,
@@ -475,10 +456,14 @@ export function importPluginStateEntriesForDoctor(
   }
   const namespace = validateNamespace(options.namespace);
   const maxEntries = validateMaxEntries(options.maxEntries);
-  const overflowPolicy = validateOverflowPolicy(options.overflowPolicy);
+  const overflowPolicy = optionPolicy.resolveOverflowPolicy(options.overflowPolicy);
   const defaultTtlMs = validateOptionalTtlMs(options.defaultTtlMs);
   const env = options.env;
-  assertConsistentOptions(pluginId, namespace, { maxEntries, overflowPolicy, defaultTtlMs });
+  optionPolicy.assertConsistent(pluginId, namespace, {
+    maxEntries,
+    overflowPolicy,
+    defaultTtlMs,
+  });
 
   for (const entry of entries) {
     if (!Number.isSafeInteger(entry.createdAt)) {
@@ -507,14 +492,14 @@ export function importPluginStateEntriesForDoctor(
 /** Opens a sync plugin-state namespace for a trusted core owner id. */
 export function createCorePluginStateSyncKeyedStore<T>(
   options: OpenKeyedStoreOptions & { ownerId: `core:${string}` },
-): PluginStateSyncKeyedStore<T> {
+): Required<PluginStateSyncKeyedStore<T>> {
   return createSyncKeyedStoreForPluginId<T>(options.ownerId, options);
 }
 
 /** Clears plugin-state rows and option signatures for tests. */
 function clearPluginStateStoreForTests(): void {
   clearPluginStateDatabaseForTests();
-  namespaceOptionSignatures.clear();
+  optionPolicy.clear();
 }
 
 /** Resets plugin-state module/database state for isolated tests. */
@@ -523,7 +508,7 @@ export function resetPluginStateStoreForTests(options: { closeDatabase?: boolean
     closePluginStateDatabase();
     closeOpenClawStateDatabaseForTest();
   }
-  namespaceOptionSignatures.clear();
+  optionPolicy.clear();
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

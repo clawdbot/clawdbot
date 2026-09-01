@@ -2,7 +2,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import "../test-support/browser-security.mock.js";
+import { BrowserTabNotFoundError } from "./errors.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
+import * as pwSessionConnection from "./pw-session-connection.js";
 import {
   getPwToolsCoreNavigationGuardMocks,
   getPwToolsCoreSessionMocks,
@@ -324,6 +326,177 @@ describe("pw-tools-core.snapshot navigate guard", () => {
     });
     expect(getPwToolsCoreSessionMocks().gotoPageWithNavigationGuard).toHaveBeenCalledTimes(2);
     expect(result.url).toBe("https://example.com/recovered");
+  });
+
+  it("rebinds a detached navigation to the same relay-owned tab after reconnect", async () => {
+    let attachedTarget: string | undefined = "original-target";
+    const originalPage = {
+      goto: vi.fn(async () => {
+        attachedTarget = undefined;
+        throw new Error("page.goto: Frame has been detached");
+      }),
+      url: vi.fn(() => "https://example.com/original"),
+      on: vi.fn(),
+      off: vi.fn(),
+    };
+    const replacementPage = {
+      goto: vi.fn(async () => {}),
+      url: vi.fn(() => "https://example.com/recovered"),
+      on: vi.fn(),
+      off: vi.fn(),
+    };
+    setPwToolsCoreCurrentPage(originalPage);
+    const reconnect = vi
+      .spyOn(pwSessionConnection, "connectBrowser")
+      .mockImplementation(async () => {
+        attachedTarget = "replacement-target";
+        return {} as Awaited<ReturnType<typeof pwSessionConnection.connectBrowser>>;
+      });
+    const session = getPwToolsCoreSessionMocks();
+    session.getPageForTargetId
+      .mockResolvedValueOnce(originalPage)
+      .mockImplementationOnce(async () => {
+        const selected = (
+          session.getPageForTargetId.mock.calls.at(-1) as unknown[] | undefined
+        )?.[0] as { targetId?: string } | undefined;
+        if (selected?.targetId !== "replacement-target") {
+          throw new BrowserTabNotFoundError({ input: selected?.targetId });
+        }
+        return replacementPage;
+      });
+
+    try {
+      const navigation = {
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "original-target",
+        url: "https://example.com/recovered",
+        resolveOperationTarget: () => attachedTarget,
+      };
+      const result = await mod.navigateViaPlaywright(navigation);
+
+      expect(reconnect).toHaveBeenCalledWith("http://127.0.0.1:18792", undefined, undefined);
+      expect(session.getPageForTargetId).toHaveBeenLastCalledWith(
+        expect.objectContaining({ targetId: "replacement-target" }),
+      );
+      expect(replacementPage.goto).toHaveBeenCalledTimes(1);
+      expect(session.gotoPageWithNavigationGuard).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          targetId: "replacement-target",
+          assertPageCurrent: expect.any(Function),
+        }),
+      );
+      expect(session.assertPageNavigationCompletedSafely).toHaveBeenCalledWith(
+        expect.objectContaining({ targetId: "replacement-target" }),
+      );
+      expect(result.url).toBe("https://example.com/recovered");
+    } finally {
+      reconnect.mockRestore();
+    }
+  });
+
+  it.each([
+    { reason: "owner is revoked before selection", revokeDuringLookup: false },
+    { reason: "owner changes during the exact page lookup", revokeDuringLookup: true },
+  ])("rejects detached navigation when its $reason", async ({ revokeDuringLookup }) => {
+    let attachedTarget: string | undefined = "original-target";
+    const originalPage = {
+      goto: vi.fn(async () => {
+        attachedTarget = undefined;
+        throw new Error("page.goto: Frame has been detached");
+      }),
+      url: vi.fn(() => "https://example.com/original"),
+      on: vi.fn(),
+      off: vi.fn(),
+    };
+    const replacementPage = {
+      goto: vi.fn(async () => {}),
+      url: vi.fn(() => "https://example.com/recovered"),
+      on: vi.fn(),
+      off: vi.fn(),
+    };
+    setPwToolsCoreCurrentPage(originalPage);
+    const reconnect = vi
+      .spyOn(pwSessionConnection, "connectBrowser")
+      .mockImplementation(async () => {
+        attachedTarget = revokeDuringLookup ? "replacement-target" : undefined;
+        return {} as Awaited<ReturnType<typeof pwSessionConnection.connectBrowser>>;
+      });
+    const session = getPwToolsCoreSessionMocks();
+    session.getPageForTargetId.mockResolvedValueOnce(originalPage);
+    if (revokeDuringLookup) {
+      session.getPageForTargetId.mockImplementationOnce(async () => {
+        attachedTarget = "unrelated-target";
+        return replacementPage;
+      });
+    }
+
+    try {
+      await expect(
+        mod.navigateViaPlaywright({
+          cdpUrl: "http://127.0.0.1:18792",
+          targetId: "original-target",
+          url: "https://example.com/recovered",
+          resolveOperationTarget: () => attachedTarget,
+        }),
+      ).rejects.toBeInstanceOf(BrowserTabNotFoundError);
+
+      expect(replacementPage.goto).not.toHaveBeenCalled();
+      expect(session.getPageForTargetId).toHaveBeenCalledTimes(revokeDuringLookup ? 2 : 1);
+    } finally {
+      reconnect.mockRestore();
+    }
+  });
+
+  it("closes the replacement relay target when its retried navigation violates policy", async () => {
+    let attachedTarget: string | undefined = "original-target";
+    const originalPage = {
+      goto: vi.fn(async () => {
+        attachedTarget = undefined;
+        throw new Error("page.goto: Frame has been detached");
+      }),
+      url: vi.fn(() => "https://example.com/original"),
+      on: vi.fn(),
+      off: vi.fn(),
+    };
+    const replacementPage = {
+      goto: vi.fn(async () => {}),
+      url: vi.fn(() => "https://example.com/recovered"),
+      on: vi.fn(),
+      off: vi.fn(),
+    };
+    setPwToolsCoreCurrentPage(originalPage);
+    const reconnect = vi
+      .spyOn(pwSessionConnection, "connectBrowser")
+      .mockImplementation(async () => {
+        attachedTarget = "replacement-target";
+        return {} as Awaited<ReturnType<typeof pwSessionConnection.connectBrowser>>;
+      });
+    const session = getPwToolsCoreSessionMocks();
+    session.getPageForTargetId
+      .mockResolvedValueOnce(originalPage)
+      .mockResolvedValueOnce(replacementPage);
+    session.assertPageNavigationCompletedSafely.mockRejectedValueOnce(
+      new SsrFBlockedError("blocked replacement navigation"),
+    );
+
+    try {
+      await expect(
+        mod.navigateViaPlaywright({
+          cdpUrl: "http://127.0.0.1:18792",
+          targetId: "original-target",
+          url: "https://example.com/recovered",
+          resolveOperationTarget: () => attachedTarget,
+        }),
+      ).rejects.toBeInstanceOf(SsrFBlockedError);
+
+      expect(session.closeBlockedNavigationTarget).toHaveBeenCalledWith({
+        cdpUrl: "http://127.0.0.1:18792",
+        page: replacementPage,
+        targetId: "replacement-target",
+      });
+    } finally {
+      reconnect.mockRestore();
+    }
   });
 
   it("blocks private intermediate redirect hops during navigation", async () => {

@@ -5,7 +5,6 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 // NodeSession is plugin-SDK-reachable; importing these types from the
 // gateway-protocol index would retain the whole ProtocolSchemas registry in
 // the public plugin-sdk dts (check-plugin-sdk-exports guards this).
@@ -13,15 +12,17 @@ import type {
   NodePluginToolDescriptor,
   NodeSkillDescriptor,
 } from "../../packages/gateway-protocol/src/schema/nodes.js";
-import type { WorkerAdmissionHandshake } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { setActiveNodeContext } from "../infra/active-node-context.js";
 import type { PairedDeviceNodeBinding } from "../infra/device-pairing-node-state.js";
 import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   parseComputerUseCapabilityDescriptor,
   type ComputerUseCapabilityDescriptor,
 } from "../plugins/computer-use-contract.js";
+import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";
+import { serializeNodeEvent } from "./node-invoke-request.js";
 import {
   createRegisteredNodePluginToolDescriptorMap,
   normalizeNodePluginToolDescriptors,
@@ -32,8 +33,10 @@ import {
 } from "./node-plugin-tool-snapshot.js";
 import {
   forgetNodeRunnerInventory,
+  invokeLifecycleNodeRegistry,
   invokePublicNodeRegistry,
   isNodeRegistryPendingInvokeConnectionActive,
+  reconcileNodeRunnerAvailability,
   registerNodeRegistryPrivateRuntime,
   settleNodeRegistryPairingGenerationChange,
 } from "./node-registry-private.js";
@@ -44,8 +47,9 @@ import {
   type PendingInvoke,
   type PendingSystemRunEvent,
 } from "./node-registry.invoke-stream.js";
+import { isNodeWorkerHostClientId } from "./node-runner-inventory-runtime.js";
 import { normalizeNodeSkillDescriptors } from "./node-skill-descriptors.js";
-import { MAX_BUFFERED_BYTES } from "./server-constants.js";
+import { MAX_BUFFERED_BYTES, WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 /** Connected node session advertised over Gateway websocket. */
@@ -73,9 +77,8 @@ export type NodeSession = {
   declaredCommands: string[];
   sessionCommandsCeiling?: string[];
   commands: string[];
+  declaredComputerUse?: ComputerUseCapabilityDescriptor;
   computerUse?: ComputerUseCapabilityDescriptor;
-  /** Exact node-local build admitted for worker session hosting. */
-  workerRuns?: WorkerAdmissionHandshake;
   declaredNodePluginTools: NodePluginToolDescriptor[];
   nodePluginTools: NodePluginToolDescriptor[];
   nodeSkills: NodeSkillDescriptor[];
@@ -134,8 +137,10 @@ type PingableSocket = {
 
 const SERIALIZED_EVENT_PAYLOAD = Symbol("openclaw.serializedEventPayload");
 const AUTHORIZED_SYSTEM_RUN_EVENT_GRACE_MS = 5 * 60 * 1000;
-const WEBSOCKET_OPEN_READY_STATE = 1;
 const SLOW_CONSUMER_CLOSE_CODE = 1008;
+const FAILED_EVENT_LOG_INTERVAL_MS = 30_000;
+const log = createSubsystemLogger("gateway/nodes");
+const failedEventLogAtByNode = new WeakMap<NodeSession, number>();
 export type SerializedEventPayload = {
   readonly json: string;
   readonly [SERIALIZED_EVENT_PAYLOAD]: true;
@@ -229,7 +234,8 @@ export class NodeRegistry {
       if (
         !node ||
         node.connId !== pending.connId ||
-        (!pending.onProgress && node.clientId !== GATEWAY_CLIENT_IDS.NODE_HOST)
+        (!pending.onProgress &&
+          (!isNodeWorkerHostClientId(node.clientId) || node.clientMode !== "node"))
       ) {
         return;
       }
@@ -467,6 +473,12 @@ export class NodeRegistry {
       connect.computerUse === undefined
         ? undefined
         : parseComputerUseCapabilityDescriptor(connect.computerUse);
+    const declaredComputerUseValue = (connect as { declaredComputerUse?: unknown })
+      .declaredComputerUse;
+    const declaredComputerUse =
+      declaredComputerUseValue === undefined
+        ? computerUse
+        : parseComputerUseCapabilityDescriptor(declaredComputerUseValue);
     // Session ceilings preserve protocol compatibility across later pairing
     // approvals while declared* retains the durable approval surface.
     const sessionCapsCeiling = Array.isArray(
@@ -493,7 +505,6 @@ export class NodeRegistry {
       typeof (connect as { pathEnv?: string }).pathEnv === "string"
         ? (connect as { pathEnv?: string }).pathEnv
         : undefined;
-    const workerRuns = connect.workerRuns ? structuredClone(connect.workerRuns) : undefined;
     const declaredNodePluginTools: NodePluginToolDescriptor[] = [];
     const nodePluginTools: NodePluginToolDescriptor[] = [];
     const nodeSkills: NodeSkillDescriptor[] = [];
@@ -519,8 +530,8 @@ export class NodeRegistry {
       declaredCommands,
       sessionCommandsCeiling,
       commands,
+      ...(declaredComputerUse ? { declaredComputerUse } : {}),
       ...(computerUse ? { computerUse } : {}),
-      ...(workerRuns ? { workerRuns } : {}),
       declaredNodePluginTools,
       nodePluginTools,
       nodeSkills,
@@ -565,6 +576,7 @@ export class NodeRegistry {
     if (replacesPresence) {
       this.publishActiveNodeContext();
     }
+    reconcileNodeRunnerAvailability(this, nodeId);
     return session;
   }
 
@@ -592,6 +604,7 @@ export class NodeRegistry {
         this.authorizedSystemRunEvents.delete(key);
       }
     }
+    reconcileNodeRunnerAvailability(this, nodeId);
     return unregistersCurrentNode ? nodeId : null;
   }
 
@@ -682,6 +695,7 @@ export class NodeRegistry {
         this.authorizedSystemRunEvents.delete(key);
       }
     }
+    reconcileNodeRunnerAvailability(this, node.nodeId);
     this.options.onPairingInvalidated?.({ nodeId: node.nodeId, connId: node.connId });
     return node.lastActiveAtMs !== undefined;
   }
@@ -1004,6 +1018,12 @@ export class NodeRegistry {
     const nextCommands = surface.commands.filter((command) => sessionCommandsCeiling.has(command));
     node.commands = nextCommands;
     (node.client.connect as { commands?: string[] }).commands = nextCommands;
+    const nextComputerUse = resolveEffectiveComputerUseDescriptor({
+      commands: nextCommands,
+      declared: node.declaredComputerUse,
+    });
+    node.computerUse = nextComputerUse;
+    node.client.connect.computerUse = nextComputerUse;
     this.replaceEffectiveNodePluginTools(node);
 
     if ("caps" in surface) {
@@ -1049,14 +1069,15 @@ export class NodeRegistry {
     if (generationTransition) {
       const previousPairingGeneration = node.pairingGeneration;
       node.pairingGeneration = generationTransition.nextPairingGeneration;
-      // Protocol features describe this exact live process. Keep the connection
-      // declaration while private proof resolution binds the new generation.
+      // Runner declarations are pairing-generation facts. Retire the old
+      // declaration so the live process must publish for its promoted generation.
       settleNodeRegistryPairingGenerationChange({
         registry: this,
         nodeId,
         connId: node.connId,
         nextPairingGeneration: generationTransition.nextPairingGeneration,
       });
+      reconcileNodeRunnerAvailability(this, nodeId);
       if (previousPairingGeneration) {
         this.options.onPairingGenerationChanged?.({
           nodeId,
@@ -1095,12 +1116,19 @@ export class NodeRegistry {
     signal?: AbortSignal;
     idempotencyKey?: string;
     sessionKey?: string;
-    /** Receives the id after pairing validation and a successful dispatch. */
-    onDispatchReady?: (invokeId: string) => void;
+    /** Receives the id and armed hard deadline after a successful dispatch. */
+    onDispatchReady?: (invokeId: string, deadlineAtMs?: number) => void;
     /** Revalidates caller authority at the registry-owned transport handoff. */
     isDispatchAuthorized?: () => boolean;
   }): Promise<NodeInvokeResult> {
     return await invokePublicNodeRegistry(this, params);
+  }
+
+  /** Internal cleanup retains its owner through replies without admitting new root work. */
+  invokeLifecycle(
+    params: Parameters<NodeRegistry["invoke"]>[0] & { isDispatchAuthorized: () => boolean },
+  ): Promise<NodeInvokeResult> {
+    return invokeLifecycleNodeRegistry(this, params);
   }
 
   /** Send one ordered input frame to a pending streaming invoke. */
@@ -1110,6 +1138,16 @@ export class NodeRegistry {
 
   handleInvokeProgress(params: NodeInvokeProgressParams): boolean {
     return this.invokeStreams.handleProgress(params);
+  }
+
+  /** Continues only the exact live owner of a pending node invocation. */
+  runPendingInvokeContinuation<T>(params: {
+    invokeId: string;
+    nodeId: string;
+    connId: string | undefined;
+    run: () => Promise<T>;
+  }): Promise<T> | null {
+    return this.invokeStreams.runPendingContinuation(params);
   }
 
   /** Authorize an inbound system.run event against a recently issued node invoke. */
@@ -1282,7 +1320,7 @@ export class NodeRegistry {
     if (!node) {
       return false;
     }
-    return this.sendEventRawInternal(node, event, payloadJSON);
+    return this.observeEventSend(node, event, this.sendEventRawInternal(node, event, payloadJSON));
   }
 
   /** Sends command-free events only to the exact authenticated pairing connection. */
@@ -1362,7 +1400,7 @@ export class NodeRegistry {
       }
       node = resolution.session;
     }
-    return this.sendEventRawInternal(node, event, payloadJSON);
+    return this.observeEventSend(node, event, this.sendEventRawInternal(node, event, payloadJSON));
   }
 
   private sendEventInternal(node: NodeSession, event: string, payload: unknown): boolean {
@@ -1380,13 +1418,7 @@ export class NodeRegistry {
       return false;
     }
     try {
-      node.client.socket.send(
-        JSON.stringify({
-          type: "event",
-          event,
-          payload,
-        }),
-      );
+      node.client.socket.send(serializeNodeEvent(event, payload));
       return true;
     } catch {
       return false;
@@ -1430,7 +1462,20 @@ export class NodeRegistry {
   }
 
   private sendEventToSession(node: NodeSession, event: string, payload: unknown): boolean {
-    return this.sendEventInternal(node, event, payload);
+    return this.observeEventSend(node, event, this.sendEventInternal(node, event, payload));
+  }
+
+  private observeEventSend(node: NodeSession, event: string, sent: boolean): boolean {
+    if (sent || this.nodesById.get(node.nodeId) !== node || node.client.invalidated === true) {
+      return sent;
+    }
+    const now = Date.now();
+    const lastLoggedAt = failedEventLogAtByNode.get(node);
+    if (lastLoggedAt === undefined || now - lastLoggedAt >= FAILED_EVENT_LOG_INTERVAL_MS) {
+      failedEventLogAtByNode.set(node, now);
+      log.warn("node event delivery failed", { nodeId: node.nodeId, event });
+    }
+    return sent;
   }
 
   private isNodeWebSocketOpen(node: NodeSession): boolean {
@@ -1454,6 +1499,7 @@ export class NodeRegistry {
     } catch {
       /* ignore */
     }
+    node.client.socket.terminate();
     return true;
   }
 }

@@ -24,6 +24,33 @@ import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js"
 import { setFeishuRuntime } from "./runtime.js";
 import { setFeishuSyntheticDirectPreDispatchTarget } from "./synthetic-event-target.js";
 
+const failedFinalReceipt = {
+  counts: {
+    tool: {
+      delivered: 0,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    },
+    block: {
+      delivered: 0,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    },
+    final: {
+      delivered: 0,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 1,
+      failedAfterSend: 0,
+    },
+  },
+  anyVisibleDelivered: false,
+} as const;
+
 type ConfiguredBindingRoute = ReturnType<typeof resolveConfiguredBindingRoute>;
 type BoundConversation = ReturnType<
   ReturnType<typeof getSessionBindingService>["resolveByConversation"]
@@ -571,6 +598,9 @@ describe("handleFeishuMessage ACP routing", () => {
 
     expect(mockResolveConfiguredBindingRoute).toHaveBeenCalledTimes(1);
     expect(mockEnsureConfiguredBindingRouteReady).toHaveBeenCalledTimes(1);
+    expect(finalizeInboundContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ ConversationRoutePeerId: "ou_sender_1" }),
+    );
   });
 
   it("surfaces configured ACP initialization failures to the Feishu conversation", async () => {
@@ -660,6 +690,12 @@ describe("handleFeishuMessage ACP routing", () => {
     expect(conversationRef.channel).toBe("feishu");
     expect(conversationRef.conversationId).toBe("oc_group_chat:topic:om_topic_root");
     expect(mockTouchBinding).toHaveBeenCalledWith("default:oc_group_chat:topic:om_topic_root");
+    expect(finalizeInboundContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ConversationRoutePeerId: "oc_group_chat:topic:om_topic_root",
+        ThreadParentId: "oc_group_chat",
+      }),
+    );
   });
 
   it("records Feishu DM last-route updates on the resolved session", async () => {
@@ -1179,7 +1215,7 @@ describe("handleFeishuMessage command authorization", () => {
     mockDispatchReplyFromConfig.mockResolvedValueOnce({
       queuedFinal: true,
       counts: { tool: 0, block: 0, final: 1 },
-      failedCounts: { tool: 0, block: 0, final: 1 },
+      settledReceipt: failedFinalReceipt,
     });
     const ensureNoVisibleReplyFallback = vi.fn();
     mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
@@ -2159,6 +2195,37 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
   });
 
+  it("marks server-transcribed audio at the reply boundary without local transcription", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockDownloadMessageResourceFeishu.mockResolvedValueOnce({
+      saved: { path: "/tmp/server-voice.ogg", contentType: "audio/ogg" },
+    });
+
+    await dispatchMessage({
+      cfg: createFeishuTestConfig({ dmPolicy: "open" }),
+      event: createFeishuTestEvent({
+        messageId: "msg-audio-server-transcript",
+        senderOpenId: "ou-voice",
+        messageType: "audio",
+        content: JSON.stringify({
+          file_key: "file_audio_payload",
+          duration: 1200,
+          speech_to_text: " supplied transcript ",
+        }),
+      }),
+    });
+
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(mockTranscribeFirstAudio).not.toHaveBeenCalled();
+    const { ctx } = mockCallArg<{
+      ctx: { RawBody: string; media: Array<{ kind: string; transcribed: boolean }> };
+    }>(mockDispatchReplyFromConfig, 0, 0);
+    expect(ctx.RawBody).toBe("supplied transcript");
+    expect(ctx.media).toEqual([
+      expect.objectContaining({ path: "/tmp/server-voice.ogg", kind: "audio", transcribed: true }),
+    ]);
+  });
+
   it("transcribes inbound audio before building the agent turn", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     mockDownloadMessageResourceFeishu.mockResolvedValueOnce({
@@ -2335,6 +2402,86 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockCallArg(mockSaveMediaBuffer, 0, 1)).toBe("video/mp4");
     expect(mockCallArg(mockSaveMediaBuffer, 0, 2)).toBe("inbound");
     expect(typeof mockCallArg(mockSaveMediaBuffer, 0, 3)).toBe("number");
+  });
+
+  it("delivers unique rich-post attachments in their original mixed-media order", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockDownloadMessageResourceFeishu.mockImplementation(
+      async (params: { fileKey: string; originalFilename?: string; type: "file" | "image" }) => ({
+        buffer: Buffer.from(params.fileKey),
+        contentType: params.type === "image" ? "image/png" : "video/mp4",
+        fileName: params.originalFilename ?? `${params.fileKey}.png`,
+      }),
+    );
+    mockSaveMediaBuffer.mockImplementation(
+      async (
+        buffer: Buffer,
+        contentType: string,
+        _direction: string,
+        _limit: number,
+        name: string,
+      ) => ({
+        id: name,
+        path: `/tmp/${name}`,
+        size: buffer.length,
+        contentType,
+      }),
+    );
+
+    await dispatchMessage({
+      cfg: createFeishuTestConfig({ dmPolicy: "open" }),
+      event: createFeishuTestEvent({
+        messageId: "msg-post-mixed-attachments",
+        senderOpenId: "ou-sender",
+        messageType: "post",
+        content: JSON.stringify({
+          title: "Rich text",
+          content: [
+            [
+              { tag: "media", file_key: "file_first", file_name: "first.mov" },
+              { tag: "img", image_key: "img_shared" },
+              { tag: "media", file_key: "file_last", file_name: "last.mov" },
+              { tag: "img", image_key: "img_shared" },
+              { tag: "media", file_key: "file_first", file_name: "first.mov" },
+              { tag: "img", image_key: "file_first" },
+            ],
+          ],
+        }),
+      }),
+    });
+
+    expect(
+      mockDownloadMessageResourceFeishu.mock.calls.map((_call, index) => {
+        const request = mockCallArg<{ fileKey: string; originalFilename?: string; type: string }>(
+          mockDownloadMessageResourceFeishu,
+          index,
+          0,
+        );
+        return {
+          fileKey: request.fileKey,
+          ...(request.originalFilename ? { fileName: request.originalFilename } : {}),
+          type: request.type,
+        };
+      }),
+    ).toEqual([
+      { fileKey: "file_first", fileName: "first.mov", type: "file" },
+      { fileKey: "img_shared", type: "image" },
+      { fileKey: "file_last", fileName: "last.mov", type: "file" },
+      { fileKey: "file_first", type: "image" },
+    ]);
+
+    const context = mockCallArg<{ MediaPaths?: string[]; MediaTypes?: string[] }>(
+      mockFinalizeInboundContext,
+      0,
+      0,
+    );
+    expect(context.MediaPaths).toEqual([
+      "/tmp/first.mov",
+      "/tmp/img_shared.png",
+      "/tmp/last.mov",
+      "/tmp/file_first.png",
+    ]);
+    expect(context.MediaTypes).toEqual(["video/mp4", "image/png", "video/mp4", "image/png"]);
   });
 
   it("removes failed rich-post media markers while preserving post text", async () => {

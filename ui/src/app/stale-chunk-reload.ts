@@ -10,6 +10,7 @@
 // only recovery path there.
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
+import { getSafeSessionStorage } from "../local-storage.ts";
 
 const RELOAD_GUARD_STORAGE_KEY = "openclaw.controlUi.staleChunkReloadBuildId";
 // Bounds document probes across rapid re-renders of the same error state.
@@ -38,9 +39,12 @@ type MissingStylesheetRecoveryDeps = {
   retry?: () => Promise<boolean>;
 };
 
-const lastAttemptAtByStorage = new WeakMap<object, number>();
-let lastAttemptWithoutStorage: number | null = null;
-let inFlightDocumentProbe: Promise<boolean> | null = null;
+const recoveryByStorage = new WeakMap<
+  object,
+  { attemptsByBuild: Map<string, number>; latestBuildId: string }
+>();
+const unavailableStorage = {};
+let inFlightDocumentProbe: { buildId?: string; promise: Promise<boolean> } | null = null;
 
 export function isStaleChunkImportError(error: unknown): boolean {
   return (
@@ -50,21 +54,15 @@ export function isStaleChunkImportError(error: unknown): boolean {
 }
 
 function reloadControlUiDocument(): void {
-  window.location.reload();
+  const url = new URL(window.location.href);
+  // The pre-app mount recovery strips this one-shot cache buster before bootstrap.
+  url.searchParams.set("openclaw_mount_recovery", String(Date.now()));
+  window.location.replace(url.href);
 }
 
-function sessionStorageOrNull(): Pick<Storage, "getItem" | "setItem"> | null {
-  try {
-    return window.sessionStorage;
-  } catch {
-    // Storage can be disabled; recovery then stays manual via the Retry button.
-    return null;
-  }
-}
-
-function probeControlUiDocument(): Promise<boolean> {
+function probeControlUiDocument(buildId?: string): Promise<boolean> {
   if (inFlightDocumentProbe) {
-    return inFlightDocumentProbe;
+    return inFlightDocumentProbe.promise;
   }
   const probe = (async () => {
     const controller = new AbortController();
@@ -83,11 +81,11 @@ function probeControlUiDocument(): Promise<boolean> {
     }
   })();
   const settledProbe = probe.finally(() => {
-    if (inFlightDocumentProbe === settledProbe) {
+    if (inFlightDocumentProbe?.promise === settledProbe) {
       inFlightDocumentProbe = null;
     }
   });
-  inFlightDocumentProbe = settledProbe;
+  inFlightDocumentProbe = { buildId, promise: settledProbe };
   return settledProbe;
 }
 
@@ -122,19 +120,7 @@ function persistGuardBuildId(
  * app webviews) instead of the recoverable panel error.
  */
 export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}): Promise<boolean> {
-  const now = deps.now?.() ?? Date.now();
-  const storage = deps.storage === undefined ? sessionStorageOrNull() : deps.storage;
-  const lastAttemptAt = storage
-    ? (lastAttemptAtByStorage.get(storage) ?? null)
-    : lastAttemptWithoutStorage;
-  if (lastAttemptAt !== null && now - lastAttemptAt < ATTEMPT_COOLDOWN_MS) {
-    return false;
-  }
-  if (storage) {
-    lastAttemptAtByStorage.set(storage, now);
-  } else {
-    lastAttemptWithoutStorage = now;
-  }
+  const storage = deps.storage === undefined ? getSafeSessionStorage() : deps.storage;
   const buildId = deps.buildId ?? CONTROL_UI_BUILD_INFO.buildId;
   // One automatic reload per build id: if the reloaded document still fails
   // with the same build, the build itself is broken and reloading cannot help.
@@ -142,13 +128,38 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
   if (readGuardBuildId(storage) === buildId) {
     return false;
   }
-  if (!(await probeControlUiDocument())) {
+  const now = deps.now?.() ?? Date.now();
+  const storageIdentity = storage ?? unavailableStorage;
+  const recovery = recoveryByStorage.get(storageIdentity) ?? {
+    attemptsByBuild: new Map<string, number>(),
+    latestBuildId: buildId,
+  };
+  const { attemptsByBuild } = recovery;
+  for (const [attemptedBuildId, attemptedAt] of attemptsByBuild) {
+    if (now - attemptedAt >= ATTEMPT_COOLDOWN_MS) {
+      attemptsByBuild.delete(attemptedBuildId);
+    }
+  }
+  if (attemptsByBuild.has(buildId)) {
+    return false;
+  }
+  attemptsByBuild.set(buildId, now);
+  recovery.latestBuildId = buildId;
+  recoveryByStorage.set(storageIdentity, recovery);
+  // A newer build cannot inherit the failed probe started for an older build.
+  const joinedOlderBuildProbe = Boolean(
+    inFlightDocumentProbe && inFlightDocumentProbe.buildId !== buildId,
+  );
+  if (
+    !(await probeControlUiDocument(buildId)) &&
+    (!joinedOlderBuildProbe || !(await probeControlUiDocument(buildId)))
+  ) {
     return false;
   }
   // A reload resets the in-memory state, so without a persisted guard a broken
   // build would reload forever. When storage is unavailable or rejects the
   // write, leave recovery to the manual Retry path instead of reloading.
-  if (!persistGuardBuildId(storage, buildId)) {
+  if (recovery.latestBuildId !== buildId || !persistGuardBuildId(storage, buildId)) {
     return false;
   }
   (deps.reload ?? reloadControlUiDocument)();
@@ -183,9 +194,9 @@ async function probeWithinDeadline(
 
 /**
  * User-initiated retry that survives the restart which caused the stale chunk:
- * poll until the gateway answers, then reload. Returns false only when it stays
- * unreachable for the whole window, so callers keep the recoverable panel error
- * instead of navigating into a fatal error page.
+ * poll until the gateway answers, then reload if the caller still owns recovery.
+ * Unreachable or retired requests keep the current document instead of navigating
+ * into a fatal error page or discarding a newer action.
  */
 export async function retryStaleChunkReloadWhenReachable(
   deps: StaleChunkReloadDeps & {
@@ -193,8 +204,12 @@ export async function retryStaleChunkReloadWhenReachable(
     intervalMs?: number;
     probe?: () => Promise<boolean>;
     wait?: (ms: number) => Promise<void>;
+    canReload?: () => boolean;
   } = {},
 ): Promise<boolean> {
+  if (deps.canReload?.() === false) {
+    return false;
+  }
   const now = deps.now ?? Date.now;
   const probe = deps.probe ?? probeControlUiDocument;
   const wait =
@@ -216,6 +231,10 @@ export async function retryStaleChunkReloadWhenReachable(
     // rather than "never ask"; the probe's own abort bounds that case.
     const reachable = remaining > 0 ? await probeWithinDeadline(probe, remaining) : await probe();
     if (reachable) {
+      // The probe may outlive Close, a new request, or a failed replay-state write.
+      if (deps.canReload?.() === false) {
+        return false;
+      }
       (deps.reload ?? reloadControlUiDocument)();
       return true;
     }

@@ -10,10 +10,8 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  createGatewayMethodRegistry,
-  createPluginGatewayMethodDescriptor,
-} from "./methods/registry.js";
+import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
+import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { sessionMutationHandlers } from "./server-methods/sessions-mutations.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
@@ -357,7 +355,8 @@ describe("gateway method authorization", () => {
           sessionId: "session-draft-replacement",
           updatedAt: 2,
           visibility: "draft",
-          createdActor: { type: "human", id: "owner" },
+          createdVia: "operator",
+          createdActor: { type: "human", source: "profile", id: "owner" },
         },
       );
       await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
@@ -378,6 +377,97 @@ describe("gateway method authorization", () => {
         visibility: "draft",
       });
       expect(loadSessionEntry({ agentId: "main", sessionKey })).not.toHaveProperty("label");
+    });
+  });
+
+  it("authorizes lifecycle targets from each method's protocol shape", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:lifecycle-authorization-target";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "session-lifecycle-authorization-target",
+          updatedAt: 1,
+          visibility: "read-only",
+          createdVia: "operator",
+          createdActor: { type: "human", source: "profile", id: "owner" },
+        },
+      );
+
+      const dispatchRequest = async (
+        method:
+          | "sessions.create"
+          | "sessions.fork"
+          | "sessions.github.publish"
+          | "sessions.recover",
+        requestParams: Record<string, unknown>,
+        profileId: string,
+      ) => {
+        const handler = vi.fn<GatewayRequestHandler>(({ respond, sessionMutationAuthorization }) =>
+          respond(true, { authorized: sessionMutationAuthorization !== undefined }),
+        );
+        const respond = vi.fn();
+        await handleGatewayRequest({
+          req: { type: "req", id: `${method}-${profileId}`, method, params: requestParams },
+          respond,
+          client: {
+            connId: `${method}-${profileId}`,
+            authenticatedUserId: `${profileId}@example.com`,
+            authenticatedUserProfile: {
+              profileId,
+              displayName: profileId,
+              hasAvatar: false,
+              updatedAt: 1,
+            },
+            connect: {
+              role: "operator",
+              scopes: ["operator.write"],
+              client: { id: "test", version: "1", platform: "test", mode: "test" },
+              minProtocol: 1,
+              maxProtocol: 1,
+            },
+          } as Parameters<typeof handleGatewayRequest>[0]["client"],
+          isWebchatConnect: () => false,
+          context: {
+            chatAbortControllers: new Map(),
+            getRuntimeConfig: () => ({}),
+            logGateway: { warn: vi.fn() },
+          } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
+          extraHandlers: { [method]: handler },
+        });
+        return { handler, respond };
+      };
+
+      const cases = [
+        {
+          method: "sessions.create" as const,
+          params: { parentSessionKey: sessionKey, fork: true },
+        },
+        {
+          method: "sessions.fork" as const,
+          params: { sessionKey, entryId: "user-entry" },
+        },
+        {
+          method: "sessions.github.publish" as const,
+          params: { sessionKey, idempotencyKey: "publication-1" },
+        },
+        { method: "sessions.recover" as const, params: { key: sessionKey } },
+      ];
+      for (const testCase of cases) {
+        const owner = await dispatchRequest(testCase.method, testCase.params, "owner");
+        expect(owner.handler, testCase.method).toHaveBeenCalledOnce();
+        expect(owner.respond, testCase.method).toHaveBeenCalledWith(true, { authorized: true });
+
+        const outsider = await dispatchRequest(testCase.method, testCase.params, "outsider");
+        expect(outsider.handler, testCase.method).not.toHaveBeenCalled();
+        expect(outsider.respond, testCase.method).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            details: expect.objectContaining({ code: "SESSION_PARTICIPATION_REQUIRED" }),
+          }),
+        );
+      }
     });
   });
 });
@@ -845,10 +935,19 @@ describe("sessions.patchMany orchestration", () => {
 
   it("isolates archive preparation authorization per target and continues in input order", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      for (let index = 0; index < 3; index += 1) {
+      const targets = [0, 1, 2].map((index) => ({
+        key: `agent:main:archive-auth-${index}`,
+        expectedSessionId: `session-archive-auth-${index}`,
+        expectedLifecycleRevision: `revision-archive-auth-${index}`,
+      }));
+      for (const target of targets) {
         await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: `agent:main:archive-auth-${index}` },
-          { sessionId: `session-archive-auth-${index}`, updatedAt: 1 },
+          { agentId: "main", sessionKey: target.key },
+          {
+            sessionId: target.expectedSessionId,
+            lifecycleRevision: target.expectedLifecycleRevision,
+            updatedAt: 1,
+          },
         );
       }
       const respond = vi.fn();
@@ -865,13 +964,7 @@ describe("sessions.patchMany orchestration", () => {
       });
 
       await sessionMutationHandlers["sessions.patchMany"]!({
-        params: {
-          targets: [0, 1, 2].map((index) => ({
-            key: `agent:main:archive-auth-${index}`,
-            expectedSessionId: `session-archive-auth-${index}`,
-          })),
-          patch: { archived: true },
-        },
+        params: { targets, patch: { archived: true } },
         respond,
         context: context(),
         client: { connect: { scopes: ["operator.write"] } },
@@ -879,13 +972,9 @@ describe("sessions.patchMany orchestration", () => {
       } as never);
 
       expect(assertCurrent).not.toHaveBeenCalled();
-      expect(assertTargetCurrent.mock.calls.map(([target]) => target.sessionKey)).toEqual([
-        "agent:main:archive-auth-0",
-        "agent:main:archive-auth-1",
-        "agent:main:archive-auth-2",
-        "agent:main:archive-auth-0",
-        "agent:main:archive-auth-2",
-      ]);
+      expect([
+        ...new Set(assertTargetCurrent.mock.calls.map(([target]) => target.sessionKey)),
+      ]).toEqual(targets.map(({ key }) => key));
       expect(respond).toHaveBeenCalledWith(
         true,
         {
@@ -904,15 +993,18 @@ describe("sessions.patchMany orchestration", () => {
         },
         undefined,
       );
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: "agent:main:archive-auth-0" }),
-      ).toHaveProperty("archivedAt");
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: "agent:main:archive-auth-1" }),
-      ).not.toHaveProperty("archivedAt");
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: "agent:main:archive-auth-2" }),
-      ).toHaveProperty("archivedAt");
+      for (const [index, target] of targets.entries()) {
+        const entry = loadSessionEntry({ agentId: "main", sessionKey: target.key });
+        expect(entry).toMatchObject({
+          sessionId: target.expectedSessionId,
+          lifecycleRevision: target.expectedLifecycleRevision,
+        });
+        if (index === 1) {
+          expect(entry).not.toHaveProperty("archivedAt");
+        } else {
+          expect(entry).toHaveProperty("archivedAt");
+        }
+      }
     });
   });
 

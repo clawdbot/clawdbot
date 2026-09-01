@@ -1,42 +1,48 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { transitionMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-state.js";
-import type { InternalSessionEntry } from "../config/sessions.js";
+import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import {
   applySessionEntryReplacements,
-  listSessionEntriesCore,
+  iterateDoctorSessionKeyBatches,
 } from "../config/sessions/session-accessor.js";
 
+export type MainSessionRecoveryIntegrityCandidate = {
+  clearStaleAbort: boolean;
+  key: string;
+  reason: string;
+};
+
 type MainSessionRecoveryDoctorParams = {
-  agentId: string;
   storePath: string;
+  wedged: MainSessionRecoveryIntegrityCandidate[];
   warnings: string[];
   changes: string[];
   confirmRepair: (params: { message: string; initialValue?: boolean }) => Promise<boolean>;
   countLabel: (count: number, singular: string, plural?: string) => string;
 };
 
+export function inspectMainSessionRecoveryEntry(
+  key: string,
+  entry: SessionEntry,
+): MainSessionRecoveryIntegrityCandidate | undefined {
+  const internalEntry = entry as InternalSessionEntry;
+  const tombstone = internalEntry.mainRestartRecovery?.tombstone;
+  return tombstone
+    ? {
+        clearStaleAbort: internalEntry.abortedLastRun === true,
+        key,
+        reason:
+          tombstone.reason.trim() || "main-session restart recovery is tombstoned for this session",
+      }
+    : undefined;
+}
+
 export async function noteMainSessionRecoveryIntegrity(
   params: MainSessionRecoveryDoctorParams,
-): Promise<number> {
-  const entries = listSessionEntriesCore({ agentId: params.agentId, storePath: params.storePath });
-  const wedged = entries.flatMap(({ entry, sessionKey }) => {
-    const tombstone = (entry as InternalSessionEntry).mainRestartRecovery?.tombstone;
-    return tombstone
-      ? [
-          {
-            key: sessionKey,
-            health: {
-              reason:
-                tombstone.reason.trim() ||
-                "main-session restart recovery is tombstoned for this session",
-              repair: entry.abortedLastRun === true ? "clear_stale_abort" : null,
-            },
-          },
-        ]
-      : [];
-  });
+): Promise<void> {
+  const { wedged } = params;
   if (wedged.length === 0) {
-    return entries.length;
+    return;
   }
 
   const wedgedCount = params.countLabel(wedged.length, "wedged main session");
@@ -51,14 +57,14 @@ export async function noteMainSessionRecoveryIntegrity(
     ].join("\n"),
   );
 
-  const visibleReasons = uniqueStrings(wedged.map(({ health }) => health.reason)).slice(0, 2);
+  const visibleReasons = uniqueStrings(wedged.map(({ reason }) => reason)).slice(0, 2);
   if (visibleReasons.length > 0) {
     params.warnings.push(visibleReasons.map((reason) => `  Reason: ${reason}`).join("\n"));
   }
 
-  const staleAborted = wedged.filter(({ health }) => health.repair === "clear_stale_abort");
+  const staleAborted = wedged.filter(({ clearStaleAbort }) => clearStaleAbort);
   if (staleAborted.length === 0) {
-    return entries.length;
+    return;
   }
   const staleCount = params.countLabel(staleAborted.length, "wedged main session");
   if (
@@ -67,29 +73,31 @@ export async function noteMainSessionRecoveryIntegrity(
       initialValue: true,
     }))
   ) {
-    return entries.length;
+    return;
   }
 
   const repairedAt = Date.now();
   // Revalidate under the writer lock because session state can change while Doctor prompts.
-  const repaired = await applySessionEntryReplacements<number>({
-    sessionKeys: staleAborted.map(({ key }) => key),
-    storePath: params.storePath,
-    update: (currentEntries) => {
-      const replacements = currentEntries.flatMap(({ sessionKey, entry }) => {
-        const transition = transitionMainSessionRecovery(entry, {
-          kind: "doctor_repair",
-          now: repairedAt,
+  let repaired = 0;
+  for (const sessionKeys of iterateDoctorSessionKeyBatches(staleAborted.map(({ key }) => key))) {
+    repaired += await applySessionEntryReplacements<number>({
+      sessionKeys,
+      storePath: params.storePath,
+      update: (currentEntries) => {
+        const replacements = currentEntries.flatMap(({ sessionKey, entry }) => {
+          const transition = transitionMainSessionRecovery(entry, {
+            kind: "doctor_repair",
+            now: repairedAt,
+          });
+          return transition.kind === "doctor_repaired" ? [{ sessionKey, entry }] : [];
         });
-        return transition.kind === "doctor_repaired" ? [{ sessionKey, entry }] : [];
-      });
-      return { replacements, result: replacements.length };
-    },
-  });
+        return { replacements, result: replacements.length };
+      },
+    });
+  }
   if (repaired > 0) {
     params.changes.push(
       `- Cleared aborted restart-recovery flags for ${params.countLabel(repaired, "wedged main session")}.`,
     );
   }
-  return entries.length;
 }

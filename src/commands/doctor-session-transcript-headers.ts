@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import type { DatabaseSync } from "node:sqlite";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { isIndexedSessionEntry } from "../agents/sessions/session-manager-codec.js";
@@ -18,16 +19,15 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
+  resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import {
-  readOnlySqliteTranscriptSessionIds,
-  readOnlySqliteTranscriptStorageSnapshot,
-  resolveTargetSqlitePath,
-} from "./doctor-session-sqlite-readers.js";
+import { resolveTargetSqliteOptions } from "./doctor-session-sqlite-readers.js";
+import { ReadOnlySqliteTranscriptReader } from "./doctor-session-sqlite-transcript-readers.js";
 
 const NOTE_TITLE = "Session transcript headers";
 
@@ -201,22 +201,22 @@ export async function noteSessionTranscriptHeaderHealth(params: {
   let found = 0;
   let repaired = 0;
 
-  const targetsBySqlitePath = new Map<string, { agentId: string; storePath: string }>();
+  const seenPaths = new Set<string>();
   for (const target of resolveAllAgentSessionStoreTargetsSync(params.cfg, { env })) {
-    const sqlitePath = resolveTargetSqlitePath(target);
-    if (!targetsBySqlitePath.has(sqlitePath)) {
-      targetsBySqlitePath.set(sqlitePath, target);
-    }
-  }
-
-  for (const [sqlitePath, target] of targetsBySqlitePath) {
-    if (!fs.existsSync(sqlitePath)) {
+    const databaseOptions = resolveTargetSqliteOptions(target, env);
+    const sqlitePath = resolveOpenClawAgentSqlitePath(databaseOptions);
+    if (seenPaths.has(sqlitePath) || !fs.existsSync(sqlitePath)) {
       continue;
     }
-    const databaseOptions = { agentId: target.agentId, env, path: sqlitePath };
+    seenPaths.add(sqlitePath);
+    let readDatabase: DatabaseSync | undefined;
     try {
-      for (const sessionId of readOnlySqliteTranscriptSessionIds(sqlitePath)) {
-        const snapshot = readOnlySqliteTranscriptStorageSnapshot(sqlitePath, sessionId);
+      // Each snapshot exhausts or closes its iterators before repair, so this read-only
+      // connection holds no read transaction across a guarded writer transaction.
+      readDatabase = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
+      const reader = new ReadOnlySqliteTranscriptReader(readDatabase);
+      for (const sessionId of reader.sessionIds()) {
+        const snapshot = reader.headerlessSnapshot(sessionId);
         if (!snapshot.ok) {
           const detail = formatErrorMessage(snapshot.error).replace(/\s+/g, " ").trim();
           note(
@@ -307,6 +307,8 @@ export async function noteSessionTranscriptHeaderHealth(params: {
         `- Failed to inspect transcript headers for ${target.agentId} (${sqlitePath}): ${detail}`,
         NOTE_TITLE,
       );
+    } finally {
+      readDatabase?.close();
     }
   }
 

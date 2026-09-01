@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
+  COMPUTER_STALE_OBSERVATION,
   COMPUTER_USE_V2_ACTION_NAMES,
   parseComputerActParamsJSON,
   parseComputerActResult,
@@ -11,6 +13,17 @@ import {
 import type { OpenClawPluginNodeHostCommand } from "./types.js";
 
 describe("Computer Use wire contract", () => {
+  it("owns the shared provider ref-lifecycle error code", () => {
+    const contract = JSON.parse(
+      readFileSync(
+        new URL("../../test/fixtures/computer-ref-lifecycle-contract.json", import.meta.url),
+        "utf8",
+      ),
+    ) as { staleErrorCode: string };
+
+    expect(contract.staleErrorCode).toBe(COMPUTER_STALE_OBSERVATION);
+  });
+
   it("validates the canonical computer.act payload", () => {
     expect(
       parseComputerActParamsJSON(
@@ -117,9 +130,86 @@ describe("Computer Use wire contract", () => {
         JSON.stringify({ action: "get_window_state", windowRef: "window-1", app: "wrong-family" }),
       ),
     ).toThrow("COMPUTER_INVALID_REQUEST");
-    expect(() => parseComputerActParamsJSON(JSON.stringify({ action: "browser_click" }))).toThrow(
-      "COMPUTER_INVALID_REQUEST",
-    );
+    expect(
+      parseComputerActParamsJSON(
+        JSON.stringify({
+          action: "browser_click",
+          browserRef: "browser-1",
+          pageRef: "page-1",
+          observationId: "observation-1",
+          elementRef: "element-1",
+          inputRoute: "dom_event",
+        }),
+      ),
+    ).toMatchObject({ action: "browser_click", browserRef: "browser-1" });
+    expect(() =>
+      parseComputerActParamsJSON(
+        JSON.stringify({
+          action: "browser_prepare",
+          windowRef: "window-1",
+          strategy: { kind: "existing_profile" },
+        }),
+      ),
+    ).toThrow("COMPUTER_INVALID_REQUEST");
+  });
+
+  it("accepts the portable recording family without native path or helper inputs", () => {
+    const resourceHandle = "openclaw:computer-resource:v1:123e4567-e89b-42d3-a456-426614174000";
+    for (const input of [
+      { action: "get_recording_state" },
+      { action: "start_recording", recordVideo: true },
+      { action: "stop_recording" },
+      { action: "replay_trajectory", resourceHandle, delayMs: 25, stopOnError: false },
+      {
+        action: "browser_set_input_files",
+        browserRef: "browser-1",
+        pageRef: "page-1",
+        observationId: "observation-1",
+        elementRef: "element-1",
+        resourceHandles: [resourceHandle],
+      },
+      {
+        action: "browser_download",
+        browserRef: "browser-1",
+        pageRef: "page-1",
+        observationId: "observation-1",
+        elementRef: "element-1",
+      },
+    ]) {
+      expect(parseComputerActParamsJSON(JSON.stringify(input))).toEqual(input);
+    }
+
+    for (const input of [
+      { action: "start_recording", output_dir: "/tmp/recording" },
+      { action: "start_recording", helperPath: "/tmp/ffmpeg" },
+      { action: "replay_trajectory", dir: "../outside" },
+      { action: "replay_trajectory", ffmpegPath: "/tmp/ffmpeg" },
+      { action: "get_window_state", windowRef: "window-1", session: "native-session" },
+      { action: "left_click", binaryPath: "/tmp/cua-driver" },
+      { action: "left_click", socketPath: "/tmp/cua.sock" },
+      { action: "left_click", driverArgs: ["--dangerously-bypass-approvals"] },
+      { providerTool: "click", arguments: { x: 1, y: 2 } },
+      {
+        action: "browser_set_input_files",
+        browserRef: "browser-1",
+        pageRef: "page-1",
+        observationId: "observation-1",
+        elementRef: "element-1",
+        files: ["/tmp/input.txt"],
+      },
+      {
+        action: "browser_download",
+        browserRef: "browser-1",
+        pageRef: "page-1",
+        observationId: "observation-1",
+        elementRef: "element-1",
+        destinationRoot: "/tmp/downloads",
+      },
+    ]) {
+      expect(() => parseComputerActParamsJSON(JSON.stringify(input))).toThrow(
+        "COMPUTER_INVALID_REQUEST",
+      );
+    }
   });
 
   it("caps semantic observations and provider detail records", () => {
@@ -188,6 +278,7 @@ describe("Computer Use wire contract", () => {
 
 describe("Computer Use provider registration", () => {
   it("registers one command pair and dispatches both through one execution", async () => {
+    const executionId = "123e4567-e89b-42d3-a456-426614174000";
     const commands: OpenClawPluginNodeHostCommand[] = [];
     const snapshot = vi.fn(async () => "snapshot");
     const act = vi.fn(async () => "act");
@@ -223,16 +314,69 @@ describe("Computer Use provider registration", () => {
 
     const signal = new AbortController().signal;
     const context = { sendNodeEvent: vi.fn(), sessionKey: "session-1", signal };
-    await expect(commands[0]!.handle("{}", undefined, context)).resolves.toBe("snapshot");
-    await expect(commands[1]!.handle("{}", undefined, context)).resolves.toBe("act");
+    const paramsJSON = JSON.stringify({ executionId });
+    await expect(commands[0]!.handle(paramsJSON, undefined, context)).resolves.toBe("snapshot");
+    await expect(commands[1]!.handle(paramsJSON, undefined, context)).resolves.toBe("act");
     expect(openExecution).toHaveBeenCalledOnce();
-    expect(openExecution).toHaveBeenCalledWith({ sessionKey: "session-1" });
-    expect(snapshot).toHaveBeenCalledWith("{}", signal);
-    expect(act).toHaveBeenCalledWith("{}", signal);
+    expect(openExecution).toHaveBeenCalledWith({ executionId, sessionKey: "session-1" });
+    expect(snapshot).toHaveBeenCalledWith(paramsJSON, signal);
+    expect(act).toHaveBeenCalledWith(paramsJSON, signal);
 
     const stop = commands[0]!.watchAvailability?.({ config: {} as never, env: {} }, vi.fn());
     stop?.();
     await vi.waitFor(() => expect(close).toHaveBeenCalledWith("node-host-stop"));
     expect(stopWatching).toHaveBeenCalledOnce();
+  });
+
+  it("refuses a second mutating execution and closes only the exact host execution", async () => {
+    const firstId = "123e4567-e89b-42d3-a456-426614174000";
+    const secondId = "223e4567-e89b-42d3-a456-426614174000";
+    const commands: OpenClawPluginNodeHostCommand[] = [];
+    const closes: string[] = [];
+    const openExecution = vi.fn(async () => ({
+      snapshot: vi.fn(async () => "snapshot"),
+      act: vi.fn(async () => "act"),
+      close: vi.fn(async (reason: string) => {
+        closes.push(reason);
+      }),
+    }));
+    const provider: ComputerUseProvider = {
+      id: "fixture",
+      label: "Fixture",
+      capabilities: () => ({
+        contractVersion: 2,
+        provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+        actions: ["start_recording", "stop_recording"],
+        targets: ["screen"],
+        deliveryModes: ["foreground"],
+        observations: ["image"],
+        features: { recording: true, agentCursor: false, multiDisplay: false },
+      }),
+      isAvailable: () => true,
+      openExecution,
+    };
+    registerComputerUseProvider(
+      { registerNodeHostCommand: (command) => commands.push(command) },
+      provider,
+    );
+    const computer = commands.find((command) => command.command === "computer.act")!;
+
+    await expect(
+      computer.handle(JSON.stringify({ action: "start_recording", executionId: firstId })),
+    ).resolves.toBe("act");
+    await expect(
+      computer.handle(JSON.stringify({ action: "stop_recording", executionId: secondId })),
+    ).rejects.toThrow("COMPUTER_HOST_BUSY");
+    expect(openExecution).toHaveBeenCalledOnce();
+
+    await computer.handle(
+      JSON.stringify({ action: "__close_execution", executionId: firstId, reason: "completion" }),
+    );
+    await expect(
+      computer.handle(JSON.stringify({ action: "start_recording", executionId: secondId })),
+    ).resolves.toBe("act");
+    expect(openExecution).toHaveBeenCalledTimes(2);
+    await commands.find((command) => command.command === "screen.snapshot")!.onDisconnect?.();
+    expect(closes).toEqual(["completion", "gateway-disconnect"]);
   });
 });

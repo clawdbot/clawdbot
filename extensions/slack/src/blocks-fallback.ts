@@ -19,6 +19,7 @@ type SlackNativeDataFallbackFormat = "plain" | "mrkdwn-safe";
 
 type RenderSlackBlockFallbackOptions = {
   nativeDataFormat?: SlackNativeDataFallbackFormat;
+  nativeReferenceFormat?: SlackNativeDataFallbackFormat;
 };
 
 type SlackBlockLike = {
@@ -81,8 +82,21 @@ function readTextValue(
   return normalizeOptionalString(value) ?? readTextObject(value, options);
 }
 
-function renderSlackRichTextLeaf(element: SlackRichTextElement): string {
+function renderSlackRichTextElement(
+  value: unknown,
+  renderReference: (text: string) => string,
+): string {
+  const element = asOptionalRecord(value) as SlackRichTextElement | undefined;
+  if (!element) {
+    return "";
+  }
   switch (element.type) {
+    case "rich_text_section":
+    case "rich_text_preformatted":
+    case "rich_text_quote":
+      return renderSlackRichTextElements(element.elements, "", renderReference);
+    case "rich_text_list":
+      return renderSlackRichTextElements(element.elements, "\n", renderReference);
     case "text":
       return typeof element.text === "string" ? escapeSlackMrkdwn(element.text) : "";
     case "link":
@@ -91,19 +105,19 @@ function renderSlackRichTextLeaf(element: SlackRichTextElement): string {
       );
     case "user": {
       const userId = normalizeOptionalString(element.user_id);
-      return userId ? escapeSlackMrkdwn(`<@${userId}>`) : "";
+      return userId ? renderReference(`<@${userId}>`) : "";
     }
     case "channel": {
       const channelId = normalizeOptionalString(element.channel_id);
-      return channelId ? escapeSlackMrkdwn(`<#${channelId}>`) : "";
+      return channelId ? renderReference(`<#${channelId}>`) : "";
     }
     case "usergroup": {
       const usergroupId = normalizeOptionalString(element.usergroup_id);
-      return usergroupId ? escapeSlackMrkdwn(`<!subteam^${usergroupId}>`) : "";
+      return usergroupId ? renderReference(`<!subteam^${usergroupId}>`) : "";
     }
     case "broadcast": {
       const range = normalizeOptionalString(element.range);
-      return range ? escapeSlackMrkdwn(`<!${range}>`) : "";
+      return range ? renderReference(`<!${range}>`) : "";
     }
     case "emoji": {
       const name = normalizeOptionalString(element.name);
@@ -116,28 +130,18 @@ function renderSlackRichTextLeaf(element: SlackRichTextElement): string {
   }
 }
 
-function renderSlackRichTextElement(value: unknown): string {
-  const element = asOptionalRecord(value) as SlackRichTextElement | undefined;
-  if (!element) {
-    return "";
-  }
-  switch (element.type) {
-    case "rich_text_section":
-    case "rich_text_preformatted":
-    case "rich_text_quote":
-      return renderSlackRichTextElements(element.elements, "");
-    case "rich_text_list":
-      return renderSlackRichTextElements(element.elements, "\n");
-    default:
-      return renderSlackRichTextLeaf(element);
-  }
-}
-
-function renderSlackRichTextElements(value: unknown, separator: string): string {
+function renderSlackRichTextElements(
+  value: unknown,
+  separator: string,
+  renderReference: (text: string) => string,
+): string {
   if (!Array.isArray(value)) {
     return "";
   }
-  return value.map(renderSlackRichTextElement).filter(Boolean).join(separator);
+  return value
+    .map((element) => renderSlackRichTextElement(element, renderReference))
+    .filter(Boolean)
+    .join(separator);
 }
 
 function readImageText(block: SlackBlockLike): string | undefined {
@@ -235,7 +239,15 @@ export function renderSlackBlockFallbackText(
   }
   switch (block.type) {
     case "rich_text":
-      return normalizeOptionalString(renderSlackRichTextElements(block.elements, "\n"));
+      // Inbound references must survive for name resolution; literal text stays escaped
+      // so token-shaped text cannot become a native mention. Outbound remains escaped.
+      return normalizeOptionalString(
+        renderSlackRichTextElements(
+          block.elements,
+          "\n",
+          options.nativeReferenceFormat === "plain" ? (text) => text : escapeSlackMrkdwn,
+        ),
+      );
     case "header":
       return readTextObject(block.text, options);
     case "section":

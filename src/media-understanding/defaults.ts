@@ -2,15 +2,18 @@
 // metadata, and capability declarations.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { providerSupportsCapability } from "../../packages/media-understanding-common/src/provider-supports.js";
+import {
+  normalizeMediaExecutionProviderId,
+  normalizeMediaProviderId,
+} from "../../packages/media-understanding-common/src/provider-id.js";
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { buildMediaUnderstandingManifestMetadataRegistry } from "./manifest-metadata.js";
 import {
-  normalizeMediaExecutionProviderId,
-  normalizeMediaProviderId,
-} from "./provider-registry.js";
+  resolveAutoMediaKeyProvidersFromRegistry,
+  resolveDefaultMediaModelFromRegistry,
+} from "./provider-registry-metadata.js";
 import type { MediaUnderstandingCapability, MediaUnderstandingProvider } from "./types.js";
 export {
   CLI_OUTPUT_MAX_BUFFER,
@@ -56,15 +59,6 @@ function resolveDefaultRegistry(cfg?: OpenClawConfig, workspaceDir?: string) {
   }
   const registry = buildMediaUnderstandingManifestMetadataRegistry(cfg, workspaceDir);
   return cacheConfigRegistry(cacheKey, registry);
-}
-
-function providerHasDeclaredCapability(
-  provider: MediaUnderstandingProvider | undefined,
-  capability: MediaUnderstandingCapability,
-): boolean {
-  return (
-    provider?.capabilities?.includes(capability) ?? providerSupportsCapability(provider, capability)
-  );
 }
 
 function resolveConfiguredImageProviderModel(params: {
@@ -161,14 +155,11 @@ export function resolveDefaultMediaModel(params: {
   }
   const registry =
     params.providerRegistry ?? resolveDefaultRegistry(params.cfg, params.workspaceDir);
-  const provider = registry.get(normalizeMediaProviderId(params.providerId));
-  const manifestDefaultModel = normalizeOptionalString(
-    provider?.defaultModels?.[params.capability],
-  );
-  if (manifestDefaultModel) {
-    return manifestDefaultModel;
-  }
-  return undefined;
+  return resolveDefaultMediaModelFromRegistry({
+    providerId: params.providerId,
+    capability: params.capability,
+    providerRegistry: registry,
+  });
 }
 
 /** Resolves auto-discovery provider order for a media capability using manifest priorities. */
@@ -180,27 +171,10 @@ export function resolveAutoMediaKeyProviders(params: {
 }): string[] {
   const registry =
     params.providerRegistry ?? resolveDefaultRegistry(params.cfg, params.workspaceDir);
-  type AutoProviderEntry = {
-    provider: MediaUnderstandingProvider;
-    priority: number;
-  };
-  const prioritized = [...registry.values()]
-    .filter((provider) => providerHasDeclaredCapability(provider, params.capability))
-    .map((provider): AutoProviderEntry | null => {
-      const priority = provider.autoPriority?.[params.capability];
-      return typeof priority === "number" && Number.isFinite(priority)
-        ? { provider, priority }
-        : null;
-    })
-    .filter((entry): entry is AutoProviderEntry => entry !== null)
-    .toSorted((left, right) => {
-      if (left.priority !== right.priority) {
-        return left.priority - right.priority;
-      }
-      return left.provider.id.localeCompare(right.provider.id);
-    })
-    .map((entry) => normalizeMediaProviderId(entry.provider.id))
-    .filter(Boolean);
+  const prioritized = resolveAutoMediaKeyProvidersFromRegistry({
+    capability: params.capability,
+    providerRegistry: registry,
+  });
   if (params.providerRegistry || params.capability !== "image") {
     return prioritized;
   }

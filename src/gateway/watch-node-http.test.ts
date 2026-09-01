@@ -12,6 +12,7 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION, type ConnectParams } from "../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   issueDeviceBootstrapToken,
@@ -23,14 +24,15 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { listNodePairing } from "../infra/device-pairing-node.js";
+import { withDevicePairingLock } from "../infra/device-pairing-state.js";
 import { loadDevicePairSetupCompletionRecord } from "../infra/device-pairing-store.js";
+import { revokeDeviceToken } from "../infra/device-pairing-tokens.js";
 import {
-  approveDevicePairing,
   getPairedDevice,
   requestDevicePairing,
   resolveNodePairingState,
-  revokeDeviceToken,
 } from "../infra/device-pairing.js";
 import { NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
@@ -438,18 +440,30 @@ describe("watch node HTTP transport", () => {
     expect(wrongMethod.status).toBe(405);
     expect(nodeRegistry.get(identity.deviceId)).toBeDefined();
 
-    const disconnectResponse = await fetch(`${baseUrl}/disconnect`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${sessionToken}` },
+    await waitForLastConnectedMetadata(baseDir, identity.deviceId);
+    const pairingLockReady = createDeferred();
+    const pairingLockPending = createDeferred();
+    const pairingLock = withDevicePairingLock(async () => {
+      pairingLockReady.resolve();
+      await pairingLockPending.promise;
     });
-    expect(disconnectResponse.status).toBe(200);
-    await expect(readJson(disconnectResponse)).resolves.toEqual({ ok: true });
-    expect(nodeRegistry.get(identity.deviceId)).toBeUndefined();
-    await vi.waitFor(() =>
+    await pairingLockReady.promise;
+    try {
+      const disconnectResponse = await fetch(`${baseUrl}/disconnect`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${sessionToken}` },
+      });
+      expect(disconnectResponse.status).toBe(200);
+      await expect(readJson(disconnectResponse)).resolves.toEqual({ ok: true });
+      expect(nodeRegistry.get(identity.deviceId)).toBeUndefined();
+      // Presence/subscription retirement must not wait for the unrelated history write.
       expect(disconnectedNodes).toEqual([
         { nodeId: identity.deviceId, reason: "watch disconnected" },
-      ]),
-    );
+      ]);
+    } finally {
+      pairingLockPending.resolve();
+      await pairingLock;
+    }
     await vi.waitFor(async () => {
       const paired = (await listNodePairing(baseDir)).paired.find(
         (entry) => entry.nodeId === identity.deviceId,
@@ -767,23 +781,6 @@ describe("watch node HTTP transport", () => {
       expect(connectResponse.status).toBe(200);
       await readJson(connectResponse);
       await completedRuntime.connectHandled;
-      expect(
-        completedRuntime.broadcasts.find((entry) => entry.event === "device.pair.setup.completed")
-          ?.payload,
-      ).toEqual({
-        setupId: completedBootstrap.setupId,
-        deviceId: completedIdentity.deviceId,
-        deviceName: "Test Watch",
-        access: "node",
-        ts: expect.any(Number),
-      });
-      expect(
-        loadDevicePairSetupCompletionRecord(
-          completedBootstrap.setupId,
-          Date.now(),
-          completedBaseDir,
-        ),
-      ).toMatchObject({ deliveryState: "confirmed" });
       await waitForLastConnectedMetadata(completedBaseDir, completedIdentity.deviceId);
       const resetAfterCompletion = await fetch(`${completedRuntime.baseUrl}/challenge`);
       expect(resetAfterCompletion.status).toBe(200);
@@ -853,6 +850,11 @@ describe("watch node HTTP transport", () => {
     expect(response.status).toBe(200);
     await readJson(response);
     await fixture.connectHandled;
+    const completionAfterHandoff = loadDevicePairSetupCompletionRecord(
+      fixture.issued.setupId,
+      Date.now(),
+      fixture.baseDir,
+    );
 
     expect(completionAtHandoff).toMatchObject({
       setupId: fixture.issued.setupId,
@@ -860,6 +862,16 @@ describe("watch node HTTP transport", () => {
       deviceName: "Test Watch",
       access: "node",
       deliveryState: "uncertain",
+    });
+    expect(completionAfterHandoff).toMatchObject({ deliveryState: "confirmed" });
+    expect(
+      fixture.broadcasts.find((entry) => entry.event === "device.pair.setup.completed")?.payload,
+    ).toEqual({
+      setupId: fixture.issued.setupId,
+      deviceId: fixture.identity.deviceId,
+      deviceName: "Test Watch",
+      access: "node",
+      ts: expect.any(Number),
     });
     fixture.runtime.close();
   });
@@ -895,15 +907,6 @@ describe("watch node HTTP transport", () => {
     ]);
     expect(broadcasts.map((entry) => entry.event)).toContain("device.pair.resolved");
     expect(broadcasts.map((entry) => entry.event)).toContain("node.pair.resolved");
-    expect(
-      broadcasts.find((entry) => entry.event === "device.pair.setup.completed")?.payload,
-    ).toEqual({
-      setupId: issued.setupId,
-      deviceId: identity.deviceId,
-      deviceName: "Test Watch",
-      access: "node",
-      ts: expect.any(Number),
-    });
     expect(connectedNodes).toEqual([identity.deviceId]);
 
     const reconnectResponse = await connectWatchNode({

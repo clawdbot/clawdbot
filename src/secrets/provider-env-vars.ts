@@ -220,24 +220,39 @@ function resolveManifestProviderAuthEnvVarCandidatesFromSnapshot(
   return candidates;
 }
 
-function resolveManifestProviderAuthEvidenceFromSnapshot(
+function resolveManifestRuntimeAuthFacts(
   params: ProviderEnvVarLookupParams | undefined,
   snapshot: PluginMetadataSnapshot,
   aliases: Readonly<Record<string, string>>,
-): Record<string, ProviderAuthEvidence[]> {
+) {
   const evidenceByProvider: Record<string, ProviderAuthEvidence[]> = {};
+  const refs = new Set<string>();
   for (const plugin of snapshot.plugins) {
+    const evidenceProviders = (plugin.setup?.providers ?? []).filter(
+      (provider) => provider.authEvidence?.length,
+    );
+    const fallbackProviders =
+      plugin.setup?.requiresRuntime !== false && (plugin.setup?.providers || plugin.providers)
+        ? listSetupProviderIds(plugin)
+        : [];
+    if (evidenceProviders.length === 0 && fallbackProviders.length === 0) {
+      continue;
+    }
+    // Package contributions are fixed, but their eligibility follows current config.
+    // Evaluate each contributing owner once without narrowing credential-scrubbing hints.
     if (
       snapshot.index.plugins.length > 0 &&
       !isInstalledPluginEnabled(snapshot.index, plugin.id, params?.config)
     ) {
       continue;
     }
-    if (!shouldUsePluginProviderAuthEvidence(plugin, params)) {
-      continue;
+    if (shouldUsePluginProviderAuthEvidence(plugin, params)) {
+      for (const provider of evidenceProviders) {
+        appendUniqueAuthEvidence(evidenceByProvider, provider.id, provider.authEvidence ?? []);
+      }
     }
-    for (const provider of plugin.setup?.providers ?? []) {
-      appendUniqueAuthEvidence(evidenceByProvider, provider.id, provider.authEvidence ?? []);
+    for (const providerId of fallbackProviders) {
+      appendUniqueProviderRef(refs, providerId);
     }
   }
   for (const [alias, target] of Object.entries(aliases).toSorted(([left], [right]) =>
@@ -248,39 +263,15 @@ function resolveManifestProviderAuthEvidenceFromSnapshot(
       appendUniqueAuthEvidence(evidenceByProvider, alias, evidence);
     }
   }
-  return evidenceByProvider;
-}
-
-function resolveManifestSetupProviderFallbackRefsFromSnapshot(
-  params: ProviderEnvVarLookupParams | undefined,
-  snapshot: PluginMetadataSnapshot,
-  aliases: Readonly<Record<string, string>>,
-): string[] {
-  const refs = new Set<string>();
-  for (const plugin of snapshot.plugins) {
-    if (
-      snapshot.index.plugins.length > 0 &&
-      !isInstalledPluginEnabled(snapshot.index, plugin.id, params?.config)
-    ) {
-      continue;
-    }
-    if (plugin.setup?.requiresRuntime === false) {
-      continue;
-    }
-    // Setup fallback refs are only useful for providers that may be reached at runtime.
-    if (plugin.setup?.providers === undefined && plugin.providers === undefined) {
-      continue;
-    }
-    for (const providerId of listSetupProviderIds(plugin)) {
-      appendUniqueProviderRef(refs, providerId);
-    }
-  }
   for (const [alias, target] of Object.entries(aliases)) {
     if (refs.has(target)) {
       appendUniqueProviderRef(refs, alias);
     }
   }
-  return [...refs].toSorted((a, b) => a.localeCompare(b));
+  return {
+    authEvidenceMap: evidenceByProvider,
+    setupProviderFallbackRefs: [...refs].toSorted((a, b) => a.localeCompare(b)),
+  };
 }
 
 /** Resolves provider env-var candidates used by generic auth lookup. */
@@ -310,12 +301,7 @@ export function resolveProviderAuthLookupMaps(
       ...resolveManifestProviderAuthEnvVarCandidatesFromSnapshot(params, snapshot, aliasMap),
       ...CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES,
     },
-    authEvidenceMap: resolveManifestProviderAuthEvidenceFromSnapshot(params, snapshot, aliasMap),
-    setupProviderFallbackRefs: resolveManifestSetupProviderFallbackRefsFromSnapshot(
-      params,
-      snapshot,
-      aliasMap,
-    ),
+    ...resolveManifestRuntimeAuthFacts(params, snapshot, aliasMap),
   };
 }
 

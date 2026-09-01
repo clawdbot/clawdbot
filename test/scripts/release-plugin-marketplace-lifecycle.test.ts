@@ -23,46 +23,37 @@ function writeIndex(
   const db = new DatabaseSync(databasePath);
   try {
     db.exec(`
-      CREATE TABLE IF NOT EXISTS installed_plugin_index (
-        index_key TEXT NOT NULL PRIMARY KEY,
-        version INTEGER NOT NULL,
-        host_contract_version TEXT NOT NULL,
-        compat_registry_version TEXT NOT NULL,
-        migration_version INTEGER NOT NULL,
-        policy_hash TEXT NOT NULL,
-        generated_at_ms INTEGER NOT NULL,
-        refresh_reason TEXT,
-        install_records_json TEXT NOT NULL,
-        plugins_json TEXT NOT NULL,
-        diagnostics_json TEXT NOT NULL,
-        warning TEXT,
+      CREATE TABLE IF NOT EXISTS config_machine_state (
+        state_key TEXT NOT NULL PRIMARY KEY,
+        value_json TEXT NOT NULL,
         updated_at_ms INTEGER NOT NULL
       );
     `);
     const now = Date.now();
+    const valueJson = JSON.stringify({
+      revision: now,
+      index: {
+        version: 1,
+        hostContractVersion: "test",
+        compatRegistryVersion: "test",
+        migrationVersion: 1,
+        policyHash: "test",
+        generatedAtMs: now,
+        refreshReason: "source-changed",
+        installRecords: { [pluginId]: record },
+        plugins: [{ pluginId, packageVersion }],
+        diagnostics: [],
+      },
+    });
     db.prepare(
       `
-        INSERT OR REPLACE INTO installed_plugin_index (
-          index_key, version, host_contract_version, compat_registry_version,
-          migration_version, policy_hash, generated_at_ms, refresh_reason,
-          install_records_json, plugins_json, diagnostics_json, warning, updated_at_ms
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+        VALUES ('plugins.installedIndex', ?, ?)
+        ON CONFLICT(state_key) DO UPDATE SET
+          value_json = excluded.value_json,
+          updated_at_ms = excluded.updated_at_ms
       `,
-    ).run(
-      "installed-plugin-index",
-      1,
-      "test",
-      "test",
-      1,
-      "test",
-      now,
-      "source-changed",
-      JSON.stringify({ [pluginId]: record }),
-      JSON.stringify([{ pluginId, packageVersion }]),
-      "[]",
-      null,
-      now,
-    );
+    ).run(valueJson, now);
   } finally {
     db.close();
   }
@@ -120,13 +111,16 @@ function clearMarketplaceIndex(home: string) {
   try {
     db.prepare(
       `
-        UPDATE installed_plugin_index
-           SET install_records_json = ?,
-               plugins_json = ?,
+        UPDATE config_machine_state
+           SET value_json = json_set(
+                 value_json,
+                 '$.index.installRecords', json('{}'),
+                 '$.index.plugins', json('[]')
+               ),
                updated_at_ms = ?
-         WHERE index_key = ?
+         WHERE state_key = 'plugins.installedIndex'
       `,
-    ).run("{}", "[]", Date.now(), "installed-plugin-index");
+    ).run(Date.now());
   } finally {
     db.close();
   }

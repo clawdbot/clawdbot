@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { createNonExitingRuntime, ExitError, type RuntimeEnv } from "../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   backupCreateCommand: vi.fn(),
@@ -37,8 +37,18 @@ vi.mock("../config/config.js", () => ({
   loadConfig: () => ({}),
 }));
 
+// Per-run unique + realpath'd state dir: the apply flow writes real report dirs under it and
+// the suite rm -rf's it, so concurrent runs on one machine must never share the root (macOS
+// os.tmpdir() is a /var -> /private/var symlink).
+const testStateDir = await vi.hoisted(async () => {
+  const { mkdtemp, realpath } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  return await realpath(await mkdtemp(join(tmpdir(), "openclaw-migrate-command-test-")));
+});
+
 vi.mock("../config/paths.js", () => ({
-  resolveStateDir: () => "/tmp/openclaw-migrate-command-test",
+  resolveStateDir: () => testStateDir,
 }));
 
 vi.mock("../cli/prompt.js", () => ({
@@ -290,7 +300,7 @@ describe("migrateApplyCommand", () => {
   const originalIsTty = process.stdin.isTTY;
 
   beforeEach(async () => {
-    await fs.rm("/tmp/openclaw-migrate-command-test", { force: true, recursive: true });
+    await fs.rm(testStateDir, { force: true, recursive: true });
     Object.defineProperty(process.stdin, "isTTY", {
       configurable: true,
       value: false,
@@ -317,7 +327,7 @@ describe("migrateApplyCommand", () => {
       configurable: true,
       value: originalIsTty,
     });
-    await fs.rm("/tmp/openclaw-migrate-command-test", { force: true, recursive: true });
+    await fs.rm(testStateDir, { force: true, recursive: true });
     vi.clearAllMocks();
   });
 
@@ -330,7 +340,7 @@ describe("migrateApplyCommand", () => {
 
   it("requires --yes in non-interactive apply mode", async () => {
     await expect(migrateApplyCommand(runtime, { provider: "hermes" })).rejects.toThrow(
-      "requires --yes",
+      "requires --yes in non-interactive mode. Preview first with openclaw migrate plan 'hermes'.",
     );
     expect(mocks.provider.plan).not.toHaveBeenCalled();
   });
@@ -1246,6 +1256,49 @@ describe("migrateApplyCommand", () => {
     expect(mocks.backupCreateCommand).toHaveBeenCalled();
   });
 
+  it.each(["planned", "conflict"] as const)(
+    "keeps --skill configuration inside the selected copy when unselected policy is %s",
+    async (unselectedStatus) => {
+      const planned = plan({
+        items: [
+          {
+            id: "skill:folder",
+            kind: "skill",
+            action: "copy",
+            status: "planned",
+            source: "/tmp/hermes/skills/folder",
+            details: { skillName: "selected" },
+          },
+          ...["selected", "unselected", "target-only"].map((key) => ({
+            id: `config:skill:${key}`,
+            kind: "config" as const,
+            action: "merge" as const,
+            status: key === "selected" ? ("planned" as const) : unselectedStatus,
+            details: { path: ["skills", "entries", key], value: { enabled: false } },
+          })),
+          { id: "other-config", kind: "config", action: "merge", status: "planned" },
+        ],
+      });
+      mocks.provider.plan.mockResolvedValue(planned);
+      mocks.provider.apply.mockImplementation(async (_ctx, selectedPlan: MigrationPlan) => ({
+        ...selectedPlan,
+        summary: { ...selectedPlan.summary, planned: 0, migrated: 3 },
+        items: selectedPlan.items.map((item) =>
+          item.status === "planned" ? { ...item, status: "migrated" as const } : item,
+        ),
+      }));
+
+      await migrateApplyCommand(runtime, { provider: "hermes", yes: true, skills: ["folder"] });
+
+      expect(
+        firstAppliedPlan()
+          .items.filter((item) => item.status === "planned")
+          .map((item) => item.id),
+      ).toEqual(["skill:folder", "config:skill:selected", "other-config"]);
+      expect(firstAppliedPlan().summary.conflicts).toBe(0);
+    },
+  );
+
   it("filters explicit Codex plugins before apply", async () => {
     const planned = codexPluginPlan();
     mocks.provider.plan.mockResolvedValue(planned);
@@ -1424,6 +1477,7 @@ describe("migrateApplyCommand", () => {
     const logs: string[] = [];
     const jsonRuntime: RuntimeEnv = {
       ...runtime,
+      exit: createNonExitingRuntime().exit,
       log(message) {
         logs.push(String(message));
       },
@@ -1433,7 +1487,7 @@ describe("migrateApplyCommand", () => {
 
     await expect(
       migrateApplyCommand(jsonRuntime, { provider: "hermes", yes: true, json: true }),
-    ).rejects.toThrow("Migration finished with 1 error");
+    ).rejects.toBeInstanceOf(ExitError);
 
     expect(logs).toHaveLength(1);
     const logPayload = JSON.parse(logs[0] ?? "{}") as {
@@ -1464,6 +1518,7 @@ describe("migrateApplyCommand", () => {
     const logs: string[] = [];
     const jsonRuntime: RuntimeEnv = {
       ...runtime,
+      exit: createNonExitingRuntime().exit,
       log(message) {
         logs.push(String(message));
       },
@@ -1473,7 +1528,7 @@ describe("migrateApplyCommand", () => {
 
     await expect(
       migrateApplyCommand(jsonRuntime, { provider: "hermes", yes: true, json: true }),
-    ).rejects.toThrow("Migration finished with 1 conflict");
+    ).rejects.toBeInstanceOf(ExitError);
 
     expect(logs).toHaveLength(1);
     const logPayload = JSON.parse(logs[0] ?? "{}") as {

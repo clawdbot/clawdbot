@@ -320,6 +320,9 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
    */
   getFollowUpMessages?: () => Promise<AgentMessage[]>;
 
+  /** Consumes the cancellation fact for a previously drained queue message. */
+  consumeQueuedMessageCancellation?: (message: AgentMessage) => boolean;
+
   /**
    * Tool execution mode.
    * - "sequential": execute tool calls one by one, checking for steering before each starts
@@ -427,6 +430,8 @@ export interface CustomMessage<T = unknown> {
   content: string | (TextContent | ImageContent)[];
   /** Whether UI surfaces should display this message. */
   display: boolean;
+  /** Keep display-only application activity out of future model context. */
+  excludeFromContext?: boolean;
   /** Optional application-specific metadata. */
   details?: T;
   /** Millisecond timestamp for transcript ordering. */

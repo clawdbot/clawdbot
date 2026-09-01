@@ -61,16 +61,13 @@ function resolveTapbackTextContext(bodyText: string): IMessageReactionContext | 
       continue;
     }
     const afterPrefix = bodyText.slice(pattern.prefix.length).trim();
-    if (!/^["“]/u.test(afterPrefix)) {
+    if (!/^(?:"[\s\S]*"|“[\s\S]*”)$/u.test(afterPrefix)) {
       continue;
     }
     return {
       action: pattern.action,
       emoji: pattern.emoji,
-      targetText: afterPrefix
-        .replace(/^["“]/u, "")
-        .replace(/["”]$/u, "")
-        .trim(),
+      targetText: afterPrefix.slice(1, -1).trim(),
     };
   }
   return null;

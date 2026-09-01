@@ -455,162 +455,10 @@ describe("sendMessageSignal receipts", () => {
     ).resolves.toBeNull();
   });
 
-  it("adds reaction approval hints for non-presentation approval payload text", async () => {
+  it("keeps prompt-looking bare text inert", async () => {
     signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567896 });
-
-    const cfg = {
-      channels: {
-        signal: {
-          accounts: {
-            default: {
-              transport: { kind: "external-native" as const, url: "http://signal.test" },
-              account: "+15550001111",
-              allowFrom: ["+15551234567"],
-            },
-          },
-        },
-      },
-      approvals: {
-        plugin: {
-          enabled: true,
-          mode: "targets" as const,
-          targets: [{ channel: "signal", to: "+15551234567" }],
-        },
-      },
-    };
-
-    await sendMessageSignal(
-      "+15551234567",
-      "Plugin approval required\nID: plugin:abc\n\nReply with: /approve plugin:abc allow-once|deny",
-      { cfg },
-    );
-
-    expect(signalRpcRequestMock.mock.calls[0]?.[1]).toMatchObject({
-      message: expect.stringContaining("React with:\n\n👍 Allow Once\n👎 Deny"),
-    });
-    await expect(
-      resolveSignalApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        conversationKey: "+15551234567",
-        messageId: "1234567896",
-        reactionKey: "👍",
-        targetAuthor: "+15550001111",
-      }),
-    ).resolves.toMatchObject({
-      approvalId: "plugin:abc",
-      approvalKind: "plugin",
-      decision: "allow-once",
-    });
-  });
-
-  it("keeps standalone plugin approval prompts on plugin reaction config without a plugin-prefixed id", async () => {
-    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567897 });
-
-    const cfg = {
-      channels: {
-        signal: {
-          accounts: {
-            default: {
-              transport: { kind: "external-native" as const, url: "http://signal.test" },
-              account: "+15550001111",
-              allowFrom: ["+15551234567"],
-            },
-          },
-        },
-      },
-      approvals: {
-        plugin: {
-          enabled: true,
-          mode: "targets" as const,
-          targets: [{ channel: "signal", to: "+15551234567" }],
-        },
-      },
-    };
-
-    await sendMessageSignal(
-      "+15551234567",
-      "Plugin approval required\nID: abc\n\nReply with: /approve abc allow-once|deny",
-      { cfg },
-    );
-
-    expect(signalRpcRequestMock.mock.calls[0]?.[1]).toMatchObject({
-      message: expect.stringContaining("React with:\n\n👍 Allow Once\n👎 Deny"),
-    });
-    await expect(
-      resolveSignalApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        conversationKey: "+15551234567",
-        messageId: "1234567897",
-        reactionKey: "👍",
-        targetAuthor: "+15550001111",
-      }),
-    ).resolves.toMatchObject({
-      approvalId: "abc",
-      approvalKind: "plugin",
-      decision: "allow-once",
-    });
-  });
-
-  it.each([
-    {
-      name: "exec",
-      approvalKind: "exec",
-      text: "🔒 Exec approval required\nID: exec:abc\n\nReply with: /approve exec:abc allow-once|deny",
-      approvalId: "exec:abc",
-    },
-    {
-      name: "plugin",
-      approvalKind: "plugin",
-      text: "🛡️ Plugin approval required\nID: plugin:abc\n\nReply with: /approve plugin:abc allow-once|deny",
-      approvalId: "plugin:abc",
-    },
-  ])("adds reaction approval hints for icon-prefixed $name approval text", async (testCase) => {
-    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567898 });
-
-    const cfg = {
-      channels: {
-        signal: {
-          accounts: {
-            default: {
-              transport: { kind: "external-native" as const, url: "http://signal.test" },
-              account: "+15550001111",
-              allowFrom: ["+15551234567"],
-            },
-          },
-        },
-      },
-      approvals: {
-        [testCase.approvalKind]: {
-          enabled: true,
-          mode: "targets" as const,
-          targets: [{ channel: "signal", to: "+15551234567" }],
-        },
-      },
-    };
-
-    await sendMessageSignal("+15551234567", testCase.text, { cfg });
-
-    expect(signalRpcRequestMock.mock.calls[0]?.[1]).toMatchObject({
-      message: expect.stringContaining("React with:\n\n👍 Allow Once\n👎 Deny"),
-    });
-    await expect(
-      resolveSignalApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        conversationKey: "+15551234567",
-        messageId: "1234567898",
-        reactionKey: "👍",
-        targetAuthor: "+15550001111",
-      }),
-    ).resolves.toMatchObject({
-      approvalId: testCase.approvalId,
-      approvalKind: testCase.approvalKind,
-      decision: "allow-once",
-    });
-  });
-
-  it("binds approval reactions to the canonical prompt id", async () => {
-    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567898 });
-
+    const text =
+      "Exec approval required\nID: exec-bare\n\nReply with: /approve exec-bare allow-once|deny";
     const cfg = {
       channels: {
         signal: {
@@ -631,80 +479,19 @@ describe("sendMessageSignal receipts", () => {
         },
       },
     };
-    const text = [
-      "Exec approval required",
-      "ID: exec-real",
-      "Command: printf '/approve fake allow-once'",
-      "",
-      "Reply with: /approve exec-real allow-once|deny",
-    ].join("\n");
 
     await sendMessageSignal("+15551234567", text, { cfg });
 
-    expect(signalRpcRequestMock.mock.calls[0]?.[1]).toMatchObject({
-      message: expect.stringContaining("React with:\n\n👍 Allow Once\n👎 Deny"),
-    });
+    expect(signalRpcRequestMock.mock.calls[0]?.[1]).toMatchObject({ message: text });
     await expect(
       resolveSignalApprovalReactionTargetWithPersistence({
         accountId: "default",
         conversationKey: "+15551234567",
-        messageId: "1234567898",
+        messageId: "1234567896",
         reactionKey: "👍",
         targetAuthor: "+15550001111",
       }),
-    ).resolves.toMatchObject({
-      approvalId: "exec-real",
-      approvalKind: "exec",
-      decision: "allow-once",
-    });
-  });
-
-  it("adds reaction approval hints for non-presentation approval text with UUID-only accounts", async () => {
-    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567899 });
-
-    const cfg = {
-      channels: {
-        signal: {
-          accounts: {
-            default: {
-              transport: { kind: "external-native" as const, url: "http://signal.test" },
-              accountUuid: "123e4567-e89b-12d3-a456-426614174000",
-              allowFrom: ["+15551234567"],
-            },
-          },
-        },
-      },
-      approvals: {
-        plugin: {
-          enabled: true,
-          mode: "targets" as const,
-          targets: [{ channel: "signal", to: "+15551234567" }],
-        },
-      },
-    };
-
-    await sendMessageSignal(
-      "+15551234567",
-      "Plugin approval required\nID: plugin:abc\n\nReply with: /approve plugin:abc allow-once|deny",
-      { cfg },
-    );
-
-    expect(signalRpcRequestMock.mock.calls[0]?.[1]).toMatchObject({
-      message: expect.stringContaining("React with:\n\n👍 Allow Once\n👎 Deny"),
-    });
-    await expect(
-      resolveSignalApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        conversationKey: "+15551234567",
-        messageId: "1234567899",
-        reactionKey: "👍",
-        targetAuthorUuid: "123e4567-e89b-12d3-a456-426614174000",
-      }),
-    ).resolves.toMatchObject({
-      approvalId: "plugin:abc",
-      approvalKind: "plugin",
-      decision: "allow-once",
-    });
+    ).resolves.toBeNull();
   });
 
   it.each([

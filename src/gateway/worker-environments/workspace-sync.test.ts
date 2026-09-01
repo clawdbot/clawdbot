@@ -49,15 +49,50 @@ function createWorkspaceActions(
     bundleHash: "a".repeat(64),
     environmentId: "worker:test",
     ownerSignal: new AbortController().signal,
-    isConnected: () => true,
-    getPrepared: () => prepared,
+    waitForPrepared: async () => prepared,
     runner: { run },
     tasks: new Set(),
   });
 }
 
 describe("worker workspace command transport retry", () => {
+  it.each(["never", "idempotent"] as const)(
+    "does not dispatch a %s command after its turn closes during tunnel preparation",
+    async (transportRetry) => {
+      const run = vi.fn(async () => result());
+      let current = true;
+      const actions = createWorkerWorkspaceActions({
+        bundleHash: "a".repeat(64),
+        environmentId: "worker:test",
+        ownerSignal: new AbortController().signal,
+        waitForPrepared: async () => {
+          await Promise.resolve();
+          current = false;
+          return createPreparedSsh();
+        },
+        runner: { run },
+        tasks: new Set(),
+      });
+      await expect(
+        actions.runWorkspaceCommand({
+          argv: ["printf", "stale-attachment"],
+          transportRetry,
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("turn claim closed");
+            }
+          },
+        }),
+      ).rejects.toThrow("turn claim closed");
+      expect(run).not.toHaveBeenCalled();
+    },
+  );
+
   it("runs never commands once without changing the selected port", async () => {
+    // Pin the clock: the impl derives the dispatch timeout from a Date.now()
+    // deadline, so real elapsed ms between admission and dispatch would turn
+    // the exact 777 assertion below into a loaded-runner flake.
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
     const run = vi.fn(async (argv: string[], _options: CommandOptions) =>
       argv.at(-1)?.includes("never-command") ? result(255) : result(),
     );
@@ -72,6 +107,8 @@ describe("worker workspace command transport retry", () => {
     ).resolves.toMatchObject({ code: 255, termination: "exit" });
     expect(run).toHaveBeenCalledOnce();
     expect(sshArgvPort(run.mock.calls[0]![0])).toBe(2222);
+    // The pinned clock makes the derived dispatch timeout deterministic; a
+    // less-than bound would also accept zero and mask a broken deadline.
     expect(run.mock.calls[0]![1].timeoutMs).toBe(777);
 
     await actions.runWorkspaceCommand({

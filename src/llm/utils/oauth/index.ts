@@ -10,8 +10,6 @@
 // Anthropic
 // OpenAI Codex (ChatGPT OAuth)
 
-export * from "./types.js";
-
 // ============================================================================
 // Built-in providers and instance-owned registries
 // ============================================================================
@@ -19,6 +17,7 @@ export * from "./types.js";
 import { anthropicOAuthProvider } from "./anthropic.js";
 import { openaiCodexOAuthProvider } from "./openai-chatgpt.js";
 import type { OAuthCredentials, OAuthProviderId, OAuthProviderInterface } from "./types.js";
+export * from "./types.js";
 
 const BUILT_IN_OAUTH_PROVIDERS: OAuthProviderInterface[] = [
   anthropicOAuthProvider,

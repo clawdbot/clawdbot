@@ -1,6 +1,5 @@
 import {
   createStatusReactionController,
-  DEFAULT_TIMING,
   logAckFailure,
   logTypingFailure,
   type StatusReactionAdapter,
@@ -11,7 +10,6 @@ import {
   resolveChannelMessageSourceReplyDeliveryMode,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -23,7 +21,7 @@ import { resolveSlackStreamingConfig } from "../../stream-mode.js";
 import { resolveSlackThreadTargets } from "../../threading.js";
 import { normalizeSlackAllowOwnerEntry } from "../allow-list.js";
 import { resolveStorePath, updateLastRoute } from "../config.runtime.js";
-import { createSlackReplyDeliveryPlan } from "../replies.js";
+import { createSlackReplyDeliveryPlan, sanitizeSlackMonitorReplyPayload } from "../replies.js";
 import {
   isSlackStreamingEnabled,
   resolveSlackDisableBlockStreaming,
@@ -134,22 +132,12 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
       await reactSlackMessage(message.channel, reactionMessageTs ?? "", emoji, {
         token: ctx.botToken,
         client: slackClient,
-      }).catch((err: unknown) => {
-        if (formatErrorMessage(err).includes("already_reacted")) {
-          return;
-        }
-        throw err;
       });
     },
     removeReaction: async (emoji) => {
       await removeSlackReaction(message.channel, reactionMessageTs ?? "", emoji, {
         token: ctx.botToken,
         client: slackClient,
-      }).catch((err: unknown) => {
-        if (formatErrorMessage(err).includes("no_reaction")) {
-          return;
-        }
-        throw err;
       });
     },
   };
@@ -157,8 +145,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     enabled: statusReactionsEnabled,
     adapter: slackStatusAdapter,
     initialEmoji: prepared.ackReactionValue || "eyes",
-    emojis: undefined,
-    timing: DEFAULT_TIMING,
+    presentation: "acknowledgement",
     onError: (err) => {
       logAckFailure({
         log: logVerbose,
@@ -197,12 +184,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     agentId: route.agentId,
     channel: "slack",
     accountId: route.accountId,
-    transformReplyPayload: (payload) => {
-      if (payload.isReasoning === true) {
-        return null;
-      }
-      return payload;
-    },
+    transformReplyPayload: sanitizeSlackMonitorReplyPayload,
     typing: {
       start: async () => {
         if (!threadStatusGate.hasVisibleOutput()) {

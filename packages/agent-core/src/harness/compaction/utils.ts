@@ -90,13 +90,54 @@ export function computeFileLists(fileOps: FileOperations): {
   return { readFiles: readOnly, modifiedFiles };
 }
 
-/** Format file lists as summary metadata tags. */
+// File lists ratchet across compactions (prior summary entries merge into the
+// next accumulation), so an unbounded join grows without limit in long
+// sessions. Hard caps keep the model-visible section bounded per the
+// context-budget invariant; overflow collapses to a "...and N more" line.
+export const MAX_FILE_OPS_SECTION_CHARS = 2_000;
+export const MAX_FILE_OPS_LIST_CHARS = 900;
+
+function formatBoundedFileList(tag: string, files: string[], maxChars: number): string {
+  if (files.length === 0 || maxChars <= 0) {
+    return "";
+  }
+  const openTag = `<${tag}>\n`;
+  const closeTag = `\n</${tag}>`;
+  const lines: string[] = [];
+  let usedChars = openTag.length + closeTag.length;
+
+  for (let i = 0; i < files.length; i++) {
+    const line = `${files[i]}\n`;
+    const remaining = files.length - i - 1;
+    const overflowLine = remaining > 0 ? `...and ${remaining} more\n` : "";
+    const projected = usedChars + line.length + overflowLine.length;
+    if (projected > maxChars) {
+      const overflow = `...and ${files.length - i} more\n`;
+      if (usedChars + overflow.length <= maxChars) {
+        lines.push(overflow);
+      }
+      break;
+    }
+    lines.push(line);
+    usedChars += line.length;
+  }
+
+  return lines.length > 0 ? `${openTag}${lines.join("").trimEnd()}${closeTag}` : "";
+}
+
+/** Format file lists as bounded summary metadata tags. */
 export function formatFileOperations(readFiles: string[], modifiedFiles: string[]): string {
   const sections = [
-    readFiles.length ? `<read-files>\n${readFiles.join("\n")}\n</read-files>` : "",
-    modifiedFiles.length ? `<modified-files>\n${modifiedFiles.join("\n")}\n</modified-files>` : "",
+    formatBoundedFileList("read-files", readFiles, MAX_FILE_OPS_LIST_CHARS),
+    formatBoundedFileList("modified-files", modifiedFiles, MAX_FILE_OPS_LIST_CHARS),
   ].filter(Boolean);
-  return sections.length ? `\n\n${sections.join("\n\n")}` : "";
+  if (sections.length === 0) {
+    return "";
+  }
+  const joined = `\n\n${sections.join("\n\n")}`;
+  return joined.length > MAX_FILE_OPS_SECTION_CHARS
+    ? joined.slice(0, MAX_FILE_OPS_SECTION_CHARS)
+    : joined;
 }
 
 /** Extract visible summary text without normalizing valid model output. */
@@ -159,7 +200,7 @@ function truncateForSummary(text: string, maxChars: number): string {
 }
 
 /** Extract text that compaction both estimates and includes in summary prompts. */
-export function getCompactionContentBlockText(block: {
+function getCompactionContentBlockText(block: {
   type: string;
   content?: unknown;
   text?: string;
@@ -176,29 +217,63 @@ export function getCompactionContentBlockText(block: {
     : "";
 }
 
+/** Project summary content once so rendering and token accounting share omission facts. */
+export function getCompactionContent(
+  content: string | Array<{ type: string; content?: unknown; text?: string }>,
+): { text: string; omissionText: string } {
+  const omissions = new Set<string>();
+  const text =
+    typeof content === "string"
+      ? content
+      : content
+          .map((block) => {
+            const blockText = getCompactionContentBlockText(block);
+            if (block.type !== "text" && !blockText) {
+              // This projection knows only what it omits, not whether a model processed it.
+              omissions.add(
+                block.type === "image"
+                  ? "[image data omitted from summary input]"
+                  : "[non-text data omitted from summary input]",
+              );
+            }
+            return blockText;
+          })
+          .join("");
+  return { text, omissionText: [...omissions].join("\n") };
+}
+
+const MAX_OMISSION_MESSAGES = 8;
+const OMISSION_OVERFLOW = "[More image/non-text data omitted from summary input]";
+
 /** Serialize LLM messages to plain text for summarization prompts. */
 export function serializeConversation(messages: Message[]): string {
   const parts: string[] = [];
+  let omissionMessages = 0;
 
   for (const msg of messages) {
-    if (msg.role === "user") {
-      const content =
-        typeof msg.content === "string"
-          ? msg.content
-          : msg.content.map(getCompactionContentBlockText).join("");
+    if (msg.role === "user" || msg.role === "toolResult") {
+      const { text, omissionText } = getCompactionContent(msg.content);
+      // Fixed ASCII bounds additions to 8 * (82 markers + 17 wrapper) + 55 overflow = 847 bytes.
+      // Keep the aggregate outside truncation too; later omissions must never disappear silently.
+      if (omissionText && omissionMessages++ === MAX_OMISSION_MESSAGES) {
+        parts.push(OMISSION_OVERFLOW);
+      }
+      const content = [
+        omissionMessages <= MAX_OMISSION_MESSAGES ? omissionText : "",
+        msg.role === "toolResult" ? truncateForSummary(text, TOOL_RESULT_MAX_CHARS) : text,
+      ]
+        .filter(Boolean)
+        .join("\n");
       if (content) {
-        parts.push(`[User]: ${content}`);
+        parts.push(`[${msg.role === "user" ? "User" : "Tool result"}]: ${content}`);
       }
     } else if (msg.role === "assistant") {
       const textParts: string[] = [];
-      const thinkingParts: string[] = [];
       const toolCalls: string[] = [];
 
       for (const block of msg.content) {
         if (block.type === "text") {
           textParts.push(block.text);
-        } else if (block.type === "thinking") {
-          thinkingParts.push(block.thinking);
         } else if (block.type === "toolCall") {
           const argsStr = Object.entries(block.arguments)
             .map(([k, v]) => `${k}=${stringifyCompactionValue(v)}`)
@@ -207,19 +282,11 @@ export function serializeConversation(messages: Message[]): string {
         }
       }
 
-      if (thinkingParts.length > 0) {
-        parts.push(`[Assistant thinking]: ${thinkingParts.join("\n")}`);
-      }
       if (textParts.length > 0) {
         parts.push(`[Assistant]: ${textParts.join("\n")}`);
       }
       if (toolCalls.length > 0) {
         parts.push(`[Assistant tool calls]: ${toolCalls.join("; ")}`);
-      }
-    } else if (msg.role === "toolResult") {
-      const content = msg.content.map(getCompactionContentBlockText).join("");
-      if (content) {
-        parts.push(`[Tool result]: ${truncateForSummary(content, TOOL_RESULT_MAX_CHARS)}`);
       }
     }
   }

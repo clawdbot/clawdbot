@@ -11,13 +11,13 @@ import type {
 } from "discord-api-types/v10";
 import {
   createChannelMessage,
-  createUserDmChannel,
   deleteChannelMessage,
   editChannelMessage,
   getChannelMessage,
   pinChannelMessage,
   unpinChannelMessage,
-} from "./api.js";
+} from "./api.messages.js";
+import { createUserDmChannel } from "./api.users.js";
 import { serializePayload, type MessagePayload } from "./payload.js";
 import type { RequestClient } from "./rest.js";
 
@@ -109,6 +109,12 @@ export class Guild<IsPartial extends boolean = false> extends Base {
   }
   get name() {
     return this.rawDataValue?.name ?? "";
+  }
+  get icon() {
+    return this.rawDataValue?.icon;
+  }
+  get iconUrl() {
+    return this.icon ? `https://cdn.discordapp.com/icons/${this.id}/${this.icon}.png` : null;
   }
 }
 

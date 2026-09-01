@@ -65,8 +65,24 @@ describe("formatAgo", () => {
 });
 
 describe("localized durations", () => {
+  it.each([undefined, null, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1])(
+    "preserves invalid duration fallbacks for %s",
+    (durationMs) => {
+      expect(formatDurationCompact(durationMs)).toBeUndefined();
+      expect(formatDurationHuman(durationMs, "unavailable")).toBe("unavailable");
+    },
+  );
+
+  it("keeps zero distinct from a positive duration rounded to zero", () => {
+    expect(formatDurationCompact(0)).toBeUndefined();
+    expect(formatDurationCompact(0.1)).toBe("0ms");
+    expect(formatDurationHuman(0)).toBe("0ms");
+  });
+
   it.each([
+    { durationMs: 999.5, expected: "1s" },
     { durationMs: 59_000, expected: "59s" },
+    { durationMs: 59_500, expected: "1m" },
     { durationMs: 92_000, expected: "1m 32s" },
     { durationMs: 3_660_000, expected: "1h 1m" },
     { durationMs: 49 * 60 * 60 * 1000, expected: "2d 1h" },
@@ -76,6 +92,22 @@ describe("localized durations", () => {
 
   it("switches human durations to days at 24 hours", () => {
     expect(formatDurationHuman(36 * 60 * 60 * 1000)).toBe("2d");
+  });
+
+  it("uses the active locale for both duration formats", async () => {
+    await i18n.setLocale("fr");
+    try {
+      const minute = new Intl.NumberFormat("fr", {
+        style: "unit",
+        unit: "minute",
+        unitDisplay: "narrow",
+        maximumFractionDigits: 0,
+      }).format(1);
+      expect(formatDurationCompact(60_000)).toBe(minute);
+      expect(formatDurationHuman(60_000)).toBe(minute);
+    } finally {
+      await i18n.setLocale("en");
+    }
   });
 });
 
@@ -100,6 +132,12 @@ describe("formatMs", () => {
     expect(formatMs(8_640_000_000_000_001)).toBe("n/a");
     expect(formatMs(Number.POSITIVE_INFINITY)).toBe("n/a");
   });
+
+  it("defaults to minute precision", () => {
+    const formatted = formatMs(new Date(2026, 0, 2, 15, 4, 55).getTime());
+    expect(formatted).toContain("2026");
+    expect(formatted).not.toMatch(/:55(?:\s|$)/u);
+  });
 });
 
 describe("date/time millisecond formatters", () => {
@@ -107,6 +145,14 @@ describe("date/time millisecond formatters", () => {
     expect(formatDateMs(8_640_000_000_000_001, undefined, "")).toBe("");
     expect(formatDateTimeMs(Number.NEGATIVE_INFINITY, undefined, "")).toBe("");
     expect(formatTimeMs(Number.POSITIVE_INFINITY, undefined, "")).toBe("");
+  });
+
+  it("defaults time-only values to minute precision while preserving explicit seconds", () => {
+    const timestamp = new Date(2026, 0, 2, 15, 4, 55).getTime();
+    expect(formatTimeMs(timestamp)).not.toMatch(/:55(?:\s|$)/u);
+    expect(
+      formatTimeMs(timestamp, { hour: "numeric", minute: "2-digit", second: "2-digit" }),
+    ).toMatch(/:55(?:\s|$)/u);
   });
 });
 
@@ -151,36 +197,6 @@ describe("stripThinkingTags", () => {
     // This should not crash and should handle gracefully
     expect(stripThinkingTags("<final\nHello")).toBe("<final\nHello");
     expect(stripThinkingTags("Hello</final>")).toBe("Hello");
-  });
-
-  it("strips <relevant-memories> blocks", () => {
-    const input = [
-      "<relevant-memories>",
-      "The following memories may be relevant to this conversation:",
-      "- Internal memory note",
-      "</relevant-memories>",
-      "",
-      "User-visible answer",
-    ].join("\n");
-    expect(stripThinkingTags(input)).toBe("User-visible answer");
-  });
-
-  it("keeps relevant-memories tags in fenced code blocks", () => {
-    const input = [
-      "```xml",
-      "<relevant-memories>",
-      "sample",
-      "</relevant-memories>",
-      "```",
-      "",
-      "Visible text",
-    ].join("\n");
-    expect(stripThinkingTags(input)).toBe(input);
-  });
-
-  it("hides unfinished <relevant-memories> block tails", () => {
-    const input = ["Hello", "<relevant-memories>", "internal-only"].join("\n");
-    expect(stripThinkingTags(input)).toBe("Hello\n");
   });
 });
 

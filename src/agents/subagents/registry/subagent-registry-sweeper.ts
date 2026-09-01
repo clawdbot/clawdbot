@@ -23,7 +23,6 @@ import {
   SUBAGENT_SUSPENDED_DELIVERY_HARD_CAP,
   SUBAGENT_SUSPENDED_DELIVERY_WARNING_COUNT,
 } from "./subagent-registry-suspended-delivery.js";
-export { retireSupersededSubagentRun } from "./subagent-registry-sweeper-retire.js";
 import {
   reconcileDurableSubagentKillIntent,
   reconcileProvisionalSubagentKill,
@@ -41,6 +40,7 @@ import {
   resolveSubagentRunOrphanReason,
   type SubagentSessionStoreCache,
 } from "./subagent-session-reconciliation.js";
+export { retireSupersededSubagentRun } from "./subagent-registry-sweeper-retire.js";
 
 const SESSION_RUN_TTL_MS = 5 * 60_000;
 const STALE_ACTIVE_SUBAGENT_GRACE_MS = isFastTestRuntimeEnv() ? 1_000 : 60_000;
@@ -152,7 +152,7 @@ export function createSubagentRegistrySweeper(params: {
       return;
     }
     try {
-      await runWithGatewayIndependentRootWorkAdmission(sweepOnce);
+      await runWithGatewayIndependentRootWorkAdmission(sweepOnce, "subagents:sweeper");
     } catch (error) {
       params.warn(
         `subagent run sweep failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -188,9 +188,9 @@ export function createSubagentRegistrySweeper(params: {
   });
 
   function runCleanupTail(runId: string, label: string, run: () => Promise<unknown>) {
-    void runWithGatewayIndependentRootWorkAdmission(run).catch((error: unknown) => {
-      params.warn(`subagent sweep ${label} failed`, { runId, error });
-    });
+    void runWithGatewayIndependentRootWorkAdmission(run, "subagents:sweeper-cleanup").catch(
+      (error: unknown) => params.warn(`subagent sweep ${label} failed`, { runId, error }),
+    );
   }
 
   type FrozenSessionIdentity = {

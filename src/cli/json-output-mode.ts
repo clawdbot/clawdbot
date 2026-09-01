@@ -1,5 +1,9 @@
 // Early JSON-output detection and console-log routing for parseable CLI stdout.
 import { loggingState } from "../logging/state.js";
+import { resolveCliArgvInvocation } from "./argv-invocation.js";
+import { isConfigSetJsonParseOnly } from "./config-output-mode.js";
+
+let resolvedJsonOutputMode: boolean | null = null;
 
 /** Detects CLI JSON mode before Commander parses options, stopping at the argv sentinel. */
 export function hasJsonOutputFlag(argv: readonly string[]): boolean {
@@ -12,6 +16,14 @@ export function hasJsonOutputFlag(argv: readonly string[]): boolean {
     }
   }
   return false;
+}
+
+/** Uses Commander-resolved output ownership when available, then falls back to argv. */
+export function isJsonOutputModeActive(argv: readonly string[]): boolean {
+  const commandPath = resolveCliArgvInvocation([...argv]).commandPath;
+  const parseOnlyJson =
+    commandPath[0] === "config" && commandPath[1] === "set" && isConfigSetJsonParseOnly(argv);
+  return resolvedJsonOutputMode ?? (hasJsonOutputFlag(argv) && !parseOnlyJson);
 }
 
 /** Keeps structured JSON stdout clean by routing incidental console logs to stderr. */
@@ -30,6 +42,8 @@ export async function withConsoleLogsRoutedToStderrForJson<T>(
   }
   const previousForceStderr = loggingState.forceConsoleToStderr;
   const previousEarlyRestore = loggingState.earlyConsoleRoutingRestore;
+  const previousJsonOutputMode = resolvedJsonOutputMode;
+  resolvedJsonOutputMode = null;
   if (forceStderr) {
     loggingState.earlyConsoleRoutingRestore = previousForceStderr;
     loggingState.forceConsoleToStderr = true;
@@ -41,14 +55,19 @@ export async function withConsoleLogsRoutedToStderrForJson<T>(
       // Restore the process-wide logging switch so nested/serial CLI calls keep their own output mode.
       loggingState.forceConsoleToStderr = previousForceStderr;
       loggingState.earlyConsoleRoutingRestore = previousEarlyRestore;
+      resolvedJsonOutputMode = previousJsonOutputMode;
     }
   }
 }
 
 /** Let resolved command metadata override conservative early literal-flag routing. */
-export function applyResolvedCommandOutputMode(machineOutput: boolean): void {
+export function applyResolvedCommandOutputMode(
+  jsonOutputMode: boolean,
+  machineOutputMode = jsonOutputMode,
+): void {
+  resolvedJsonOutputMode = jsonOutputMode;
   const restore = loggingState.earlyConsoleRoutingRestore;
-  if (!machineOutput && restore !== null) {
+  if (!machineOutputMode && restore !== null) {
     loggingState.forceConsoleToStderr = restore;
   }
 }

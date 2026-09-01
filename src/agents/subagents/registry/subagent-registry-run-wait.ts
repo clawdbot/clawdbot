@@ -12,6 +12,7 @@ import {
   type SubagentRunOutcome,
   withSubagentOutcomeTiming,
 } from "../announce/subagent-announce-output.js";
+import { classifySubagentTerminalOutcome } from "../subagent-terminal-outcome.js";
 import { clearDeliveryState, ensureCompletionState } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -195,11 +196,10 @@ export class SubagentWaitManager {
   }
 
   protected restoreRunRecord(entry: SubagentRunRecord, snapshot: SubagentRunRecord): void {
-    const target = entry as unknown as Record<string, unknown>;
-    for (const key of Object.keys(target)) {
-      delete target[key];
+    for (const key of Object.keys(entry)) {
+      Reflect.deleteProperty(entry, key);
     }
-    Object.assign(target, snapshot);
+    Object.assign(entry, snapshot);
   }
 
   protected markOlderKillReconciliationsSuperseded(next: SubagentRunRecord) {
@@ -290,9 +290,8 @@ export class SubagentWaitManager {
       const waitTerminalOutcome = buildAgentRunTerminalOutcomeFromWaitResult(wait);
       const waitBlocked = waitTerminalOutcome?.reason === "blocked";
       const waitAborted =
-        waitTerminalOutcome?.reason === "aborted" ||
-        waitTerminalOutcome?.reason === "cancelled" ||
-        waitTerminalOutcome?.reason === "superseded";
+        waitTerminalOutcome !== undefined &&
+        classifySubagentTerminalOutcome(waitTerminalOutcome) === "cancellation";
       const waitStatus = waitTerminalOutcome?.status ?? wait.status;
       if (wait.yielded === true && waitStatus !== "timeout" && !waitBlocked) {
         this.options.clearPendingLifecycleError(runId);

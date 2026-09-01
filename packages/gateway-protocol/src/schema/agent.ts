@@ -65,6 +65,13 @@ export const AgentEventSchema = closedObject({
   data: Type.Record(Type.String(), Type.Unknown()),
 });
 
+const MessageActionReplyModeSchema = Type.Union([
+  Type.Literal("off"),
+  Type.Literal("first"),
+  Type.Literal("all"),
+  Type.Literal("batched"),
+]);
+
 /** Caller-supplied routing hints. Authorization must use trusted runtime context. */
 const MessageActionToolContextSchema = closedObject({
   currentChannelId: Type.Optional(Type.String()),
@@ -73,14 +80,7 @@ const MessageActionToolContextSchema = closedObject({
   currentChannelProvider: Type.Optional(Type.String()),
   currentThreadTs: Type.Optional(Type.String()),
   currentMessageId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
-  replyToMode: Type.Optional(
-    Type.Union([
-      Type.Literal("off"),
-      Type.Literal("first"),
-      Type.Literal("all"),
-      Type.Literal("batched"),
-    ]),
-  ),
+  replyToMode: Type.Optional(MessageActionReplyModeSchema),
   hasRepliedRef: Type.Optional(
     closedObject({
       value: Type.Boolean(),
@@ -90,11 +90,21 @@ const MessageActionToolContextSchema = closedObject({
   skipCrossContextDecoration: Type.Optional(Type.Boolean()),
 });
 
+const MessageActionReplyFactsSchema = Type.Union([
+  closedObject({ replyToId: NonEmptyString, source: Type.Literal("explicit") }),
+  closedObject({
+    replyToId: NonEmptyString,
+    source: Type.Literal("implicit"),
+    mode: Type.Union([Type.Literal("first"), Type.Literal("all")]),
+  }),
+]);
+
 /** Request to execute a channel message action through a configured adapter. */
 export const MessageActionParamsSchema = closedObject({
   channel: NonEmptyString,
   action: NonEmptyString,
   params: Type.Record(Type.String(), Type.Unknown()),
+  reply: Type.Optional(MessageActionReplyFactsSchema),
   accountId: Type.Optional(Type.String()),
   requesterAccountId: Type.Optional(Type.String()),
   requesterSenderId: Type.Optional(Type.String()),

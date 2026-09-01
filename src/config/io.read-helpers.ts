@@ -30,6 +30,7 @@ import {
 } from "./includes.js";
 import type { ConfigIoDeps, NormalizedConfigIoDeps, ParseConfigJson5Result } from "./io.types.js";
 import { resolveConfigPath, resolveIncludeRoots, resolveStateDir } from "./paths.js";
+import { createConfigResolutionFacts, type ConfigResolutionFacts } from "./resolution-facts.js";
 import { getRuntimeConfigSourceSnapshot } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -79,6 +80,26 @@ export function resolveGatewayMode(value: unknown): string | null {
   }
   const trimmed = gateway.mode.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+export function rejectConfigNonFiniteNumbers(value: unknown): void {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new Error(`Value must be a finite number, got ${String(value)}`);
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      rejectConfigNonFiniteNumbers(entry);
+    }
+    return;
+  }
+  if (isRecord(value)) {
+    for (const entry of Object.values(value)) {
+      rejectConfigNonFiniteNumbers(entry);
+    }
+  }
 }
 
 export function collectEnvRefPaths(
@@ -297,6 +318,7 @@ type ConfigReadResolution = {
   resolvedConfigRaw: unknown;
   envSnapshotForRestore: Record<string, string | undefined>;
   envWarnings: EnvSubstitutionWarning[];
+  resolutionFacts: ConfigResolutionFacts;
 };
 
 export function resolveConfigForRead(
@@ -308,12 +330,20 @@ export function resolveConfigForRead(
     applyConfigEnvVars(resolvedIncludes as OpenClawConfig, env, { lowerPrecedenceEnv });
   }
   const envWarnings: EnvSubstitutionWarning[] = [];
+  const pendingEnvSecretRefs = new Map<string, string>();
+  const resolvedConfigRaw = resolveConfigEnvVars(resolvedIncludes, env, {
+    onMissing: (warning) => envWarnings.push(warning),
+    onPendingEnvSecretRef: (id, configPath) => pendingEnvSecretRefs.set(configPath, id),
+  });
   return {
-    resolvedConfigRaw: resolveConfigEnvVars(resolvedIncludes, env, {
-      onMissing: (warning) => envWarnings.push(warning),
-    }),
+    resolvedConfigRaw,
     envSnapshotForRestore: { ...env } as Record<string, string | undefined>,
     envWarnings,
+    resolutionFacts: createConfigResolutionFacts(
+      envWarnings,
+      pendingEnvSecretRefs,
+      coerceConfig(resolvedConfigRaw).secrets?.defaults?.env,
+    ),
   };
 }
 

@@ -56,7 +56,7 @@ it("binds delegated authority only to the exact operational instance object", ()
     }),
   ).toThrow("does not belong to this controller registration");
 
-  registration.cleanup({ force: true });
+  registration.cleanup();
   expect(validateAgentRunDelegatedAuthority(authority)).toBe(false);
 });
 
@@ -84,7 +84,7 @@ it("leaves sessionless authority with the outer admission owner", () => {
     "does not belong to this controller registration",
   );
 
-  registration.cleanup({ force: true });
+  registration.cleanup();
   expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
   expect(validateAgentRunDelegatedAuthority(unrelatedAuthority)).toBe(true);
   expect(releaseAgentRunDelegatedAuthority(authority)).toBe(true);

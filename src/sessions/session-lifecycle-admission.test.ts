@@ -13,12 +13,12 @@ import {
   beginSessionWorkAdmission,
   cancelSessionWorkAdmissionHandoff,
   consumeSessionWorkAdmissionHandoff,
-  getCurrentSessionWorkAdmissionRelease,
   getActiveSessionLifecycleMutationCount,
   getActiveSessionWorkAdmissionCount,
   getSessionWorkAdmissionRelease,
   hasOnlySessionLifecycleMutationKindActive,
   interruptSessionWorkAdmissions,
+  isCompetingSessionWorkAdmissionActive,
   isSessionLifecycleMutationActive,
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
@@ -38,95 +38,6 @@ it("counts one multi-identity admission once", async () => {
   expect(getActiveSessionWorkAdmissionCount()).toBe(0);
 });
 
-it("exposes completion only to the matching admitted session turn", async () => {
-  const scope = "store-self-archive-release";
-  const sessionKey = "agent:main:self-archive";
-  const sessionId = "session-self-archive";
-  const admission = await beginSessionWorkAdmission({
-    scope,
-    identities: [sessionKey, sessionId],
-    assertAllowed: () => {},
-  });
-  let settled = false;
-  let release: Promise<void> | undefined;
-
-  try {
-    expect(
-      getCurrentSessionWorkAdmissionRelease({ scope, identities: [sessionKey] }),
-    ).toBeUndefined();
-
-    await admission.run(async () => {
-      expect(
-        getCurrentSessionWorkAdmissionRelease({ scope, identities: ["agent:main:other"] }),
-      ).toBeUndefined();
-      release = getCurrentSessionWorkAdmissionRelease({
-        scope,
-        identities: [sessionKey, sessionId],
-      });
-      expect(release).toBeInstanceOf(Promise);
-      void release?.then(() => {
-        settled = true;
-      });
-      await Promise.resolve();
-      expect(settled).toBe(false);
-    });
-
-    expect(settled).toBe(false);
-  } finally {
-    admission.release();
-  }
-
-  await release;
-  await Promise.resolve();
-  expect(settled).toBe(true);
-});
-
-it("waits for every nested admission that owns the same session", async () => {
-  const scope = "store-self-archive-nested";
-  const sessionKey = "agent:main:nested-self-archive";
-  const outerAdmission = await beginSessionWorkAdmission({
-    scope,
-    identities: [sessionKey, "outer-session"],
-    assertAllowed: () => {},
-  });
-  let release: Promise<void> | undefined;
-  let settled = false;
-
-  try {
-    await outerAdmission.run(async () => {
-      const innerAdmission = await beginSessionWorkAdmission({
-        scope,
-        identities: [sessionKey, "inner-session"],
-        assertAllowed: () => {},
-      });
-
-      try {
-        await innerAdmission.run(async () => {
-          release = getCurrentSessionWorkAdmissionRelease({
-            scope,
-            identities: [sessionKey],
-          });
-          void release?.then(() => {
-            settled = true;
-          });
-        });
-      } finally {
-        innerAdmission.release();
-      }
-
-      await Promise.resolve();
-      expect(settled).toBe(false);
-    });
-    expect(settled).toBe(false);
-  } finally {
-    outerAdmission.release();
-  }
-
-  await release;
-  await Promise.resolve();
-  expect(settled).toBe(true);
-});
-
 it("waits for a competing session admission outside the caller context", async () => {
   const scope = "store-competing-self-archive";
   const sessionKey = "agent:main:competing-self-archive";
@@ -139,9 +50,6 @@ it("waits for a competing session admission outside the caller context", async (
   let release: Promise<void> | undefined;
 
   try {
-    expect(
-      getCurrentSessionWorkAdmissionRelease({ scope, identities: [sessionKey] }),
-    ).toBeUndefined();
     release = getSessionWorkAdmissionRelease({ scope, identities: [sessionKey] });
     expect(release).toBeInstanceOf(Promise);
     void release?.then(() => {
@@ -650,6 +558,40 @@ it("runs one-time admission work only during writer-barrier revalidation", async
     admission.release();
   }
 });
+
+it.each([false, true])(
+  "excludes its own lease during revalidation while retaining competing work (%s)",
+  async (hasCompetingWork) => {
+    const target = {
+      scope: "store-revalidation-owner",
+      identities: ["agent:main:main", "session-revalidation-owner"],
+    };
+    const competing = hasCompetingWork
+      ? await beginSessionWorkAdmission({ ...target, assertAllowed: () => {} })
+      : undefined;
+    try {
+      const admission = await beginSessionWorkAdmission({
+        ...target,
+        assertAllowed: () => {},
+        revalidateAllowed: async () => {
+          await Promise.resolve();
+          expect(isSessionWorkAdmissionActive(target.scope, target.identities)).toBe(true);
+          expect(isCompetingSessionWorkAdmissionActive(target.scope, target.identities)).toBe(
+            hasCompetingWork,
+          );
+        },
+      });
+      try {
+        expect(isCompetingSessionWorkAdmissionActive(target.scope, target.identities)).toBe(true);
+      } finally {
+        admission.release();
+      }
+      expect(isSessionWorkAdmissionActive(target.scope, target.identities)).toBe(hasCompetingWork);
+    } finally {
+      competing?.release();
+    }
+  },
+);
 
 it("rejects and releases an admission invalidated by an earlier store writer", async () => {
   const storePath = "store-writer-revalidation";

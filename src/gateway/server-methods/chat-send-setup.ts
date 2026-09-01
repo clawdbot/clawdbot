@@ -1,4 +1,5 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import { runChatSendPreAdmission } from "./chat-send-pre-admission.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
@@ -12,14 +13,22 @@ export async function prepareAndAdmitChatSend(
     respond,
     context,
     client,
-  }: Pick<GatewayRequestHandlerOptions, "params" | "respond" | "context" | "client">,
+    sessionMutationAuthorization,
+  }: Pick<
+    GatewayRequestHandlerOptions,
+    "params" | "respond" | "context" | "client" | "sessionMutationAuthorization"
+  >,
   onAdmissionOwned?: () => Promise<boolean>,
-  options?: { trustedSystemInput?: boolean },
+  options?: {
+    trustedSystemInput?: boolean;
+    goalResume?: SessionGoalOperation & { action: "resume" };
+  },
 ) {
   const normalizedRequest = normalizeChatSendRequest({
     params,
     client,
     ...(options?.trustedSystemInput ? { trustedSystemInput: true } : {}),
+    ...(options?.goalResume ? { goalResume: options.goalResume } : {}),
   });
   if (!normalizedRequest.ok) {
     respond(
@@ -54,6 +63,7 @@ export async function prepareAndAdmitChatSend(
     respond,
     context,
     client,
+    assertCurrent: sessionMutationAuthorization?.assertCurrent,
   });
   if (!shouldAdmit) {
     return undefined;

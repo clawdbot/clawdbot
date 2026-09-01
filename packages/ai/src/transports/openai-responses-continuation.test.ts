@@ -122,9 +122,33 @@ describe("OpenAI Responses continuation", () => {
     });
   });
 
+  it("still continues when instructions changed between turns, and keeps the current turn's instructions on the wire", () => {
+    const priorState: ResponsesContinuationState = {
+      ...continuationState(),
+      lastRequest: {
+        ...continuationState().lastRequest,
+        instructions: "You are a helpful assistant. Active background tasks: none.",
+      },
+    };
+    const currentRequest: ResponsesContinuationRequest = {
+      ...nextRequest(),
+      // Rebuilt fresh this turn from live runtime state (per
+      // resolveOpenAIResponsesInstructions) -- deliberately different text
+      // from priorState, same as a real second turn would produce.
+      instructions: "You are a helpful assistant. Active background tasks: 1 running.",
+    };
+
+    const resolved = resolveResponsesContinuationRequest(priorState, currentRequest);
+
+    expect(resolved.continuationStatus).toBe("continued");
+    expect(resolved.request.previous_response_id).toBe("resp_1");
+    expect(resolved.request.instructions).toBe(
+      "You are a helpful assistant. Active background tasks: 1 running.",
+    );
+  });
+
   it("ignores turn correlation headers but isolates explicit authorization", () => {
     const first = claim({ turn: "1" });
-    expect(first).toBeDefined();
     first?.commit(continuationState().lastRequest, {
       id: "resp_1",
       output: continuationState().lastResponseItems,
@@ -145,7 +169,6 @@ describe("OpenAI Responses continuation", () => {
 
   it("grants one claim and prevents a concurrent non-owner from overwriting it", () => {
     const owner = claim({});
-    expect(owner).toBeDefined();
     expect(claim({})).toBeUndefined();
 
     owner?.commit(continuationState().lastRequest, {

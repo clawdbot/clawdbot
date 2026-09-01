@@ -19,6 +19,7 @@ import {
   listSessionEntriesCore,
   loadSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { preserveCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
@@ -265,7 +266,7 @@ export function resolveCronSession(params: {
   return {
     storePath,
     store,
-    sessionEntry,
+    sessionEntry: preserveCreationStamp(sessionEntry, targetEntry),
     lifecycleRevision,
     systemSent,
     isNewSession,

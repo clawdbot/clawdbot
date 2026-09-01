@@ -1,10 +1,9 @@
 // Amazon Bedrock tests cover discovery plugin behavior.
 import type { BedrockClient } from "@aws-sdk/client-bedrock";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   discoverBedrockModels,
   mergeImplicitBedrockProvider,
-  resetBedrockDiscoveryCacheForTest,
   resolveBedrockConfigApiKey,
   resolveImplicitBedrockProvider,
 } from "./api.js";
@@ -80,15 +79,19 @@ function expectModelFields(model: unknown, expected: Record<string, unknown>): v
   }
 }
 
+function discoverFreshBedrockModels(
+  params: Parameters<typeof discoverBedrockModels>[0],
+): ReturnType<typeof discoverBedrockModels> {
+  return discoverBedrockModels({
+    ...params,
+    config: { ...params.config, refreshInterval: 0 },
+  });
+}
+
 describe("bedrock discovery", () => {
   beforeEach(() => {
     sendMock.mockClear();
     destroyMock.mockClear();
-    resetBedrockDiscoveryCacheForTest();
-  });
-
-  afterEach(() => {
-    resetBedrockDiscoveryCacheForTest();
   });
 
   it("filters to active streaming text models and maps modalities", async () => {
@@ -127,7 +130,7 @@ describe("bedrock discovery", () => {
       },
     ]);
 
-    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+    const models = await discoverFreshBedrockModels({ region: "us-east-1", clientFactory });
     expect(models).toHaveLength(1);
     expectModelFields(models[0], {
       id: "anthropic.claude-3-7-sonnet-20250219-v1:0",
@@ -143,7 +146,7 @@ describe("bedrock discovery", () => {
   it("applies provider filter", async () => {
     mockSingleActiveSummary();
 
-    const models = await discoverBedrockModels({
+    const models = await discoverFreshBedrockModels({
       region: "us-east-1",
       config: { providerFilter: ["amazon"] },
       clientFactory,
@@ -158,7 +161,7 @@ describe("bedrock discovery", () => {
       providerName: "example",
     });
 
-    const models = await discoverBedrockModels({
+    const models = await discoverFreshBedrockModels({
       region: "us-east-1",
       config: { defaultContextWindow: 64000, defaultMaxTokens: 8192 },
       clientFactory,
@@ -179,7 +182,7 @@ describe("bedrock discovery", () => {
       ],
     );
 
-    const models = await discoverBedrockModels({ region: "ap-northeast-1", clientFactory });
+    const models = await discoverFreshBedrockModels({ region: "ap-northeast-1", clientFactory });
 
     expect(models).toHaveLength(1);
     expectModelFields(models[0], {
@@ -208,7 +211,7 @@ describe("bedrock discovery", () => {
     async ({ profileId, profileName, foundationId }) => {
       mockBedrockDiscovery([], [buildBedrockProfile(profileId, profileName, [foundationId])]);
 
-      const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+      const models = await discoverFreshBedrockModels({ region: "us-east-1", clientFactory });
 
       expect(models).toHaveLength(1);
       expectModelFields(models[0], {
@@ -231,7 +234,7 @@ describe("bedrock discovery", () => {
       ],
     );
 
-    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+    const models = await discoverFreshBedrockModels({ region: "us-east-1", clientFactory });
 
     expectModelFields(models[0], {
       id: "global.anthropic.claude-opus-5",
@@ -254,7 +257,7 @@ describe("bedrock discovery", () => {
       ],
     );
 
-    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+    const models = await discoverFreshBedrockModels({ region: "us-east-1", clientFactory });
 
     expectModelFields(models[0], {
       id: "global.anthropic.claude-sonnet-5",
@@ -277,7 +280,7 @@ describe("bedrock discovery", () => {
       ],
     );
 
-    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+    const models = await discoverFreshBedrockModels({ region: "us-east-1", clientFactory });
 
     expect(models).toEqual([]);
   });
@@ -295,7 +298,7 @@ describe("bedrock discovery", () => {
       ],
     );
 
-    const models = await discoverBedrockModels({ region: "ap-northeast-1", clientFactory });
+    const models = await discoverFreshBedrockModels({ region: "ap-northeast-1", clientFactory });
 
     expectModelFields(models[0], {
       id: "jp.anthropic.claude-sonnet-4-6",
@@ -313,7 +316,7 @@ describe("bedrock discovery", () => {
       ],
     );
 
-    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+    const models = await discoverFreshBedrockModels({ region: "us-east-1", clientFactory });
 
     expectModelFields(
       models.find((model) => model.id === "anthropic.claude-opus-4.8-v1:0"),
@@ -348,7 +351,7 @@ describe("bedrock discovery", () => {
       ],
     );
 
-    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+    const models = await discoverFreshBedrockModels({ region: "us-east-1", clientFactory });
     const expected = {
       reasoning: true,
       contextWindow: 1_000_000,
@@ -372,8 +375,8 @@ describe("bedrock discovery", () => {
   it("caches results when refreshInterval is enabled", async () => {
     mockSingleActiveSummary();
 
-    await discoverBedrockModels({ region: "us-east-1", clientFactory });
-    await discoverBedrockModels({ region: "us-east-1", clientFactory });
+    await discoverBedrockModels({ region: "cache-reuse", clientFactory });
+    await discoverBedrockModels({ region: "cache-reuse", clientFactory });
     // 2 calls on first discovery (ListFoundationModels + ListInferenceProfiles), 0 on cached second.
     expect(sendMock).toHaveBeenCalledTimes(2);
   });
@@ -383,13 +386,13 @@ describe("bedrock discovery", () => {
     mockSingleActiveSummary();
 
     await discoverBedrockModels({
-      region: "us-east-1",
+      region: "cache-overflow",
       config: { refreshInterval: 1 },
       now: () => 8_640_000_000_000_000,
       clientFactory,
     });
     await discoverBedrockModels({
-      region: "us-east-1",
+      region: "cache-overflow",
       config: { refreshInterval: 1 },
       now: () => 8_640_000_000_000_000,
       clientFactory,
@@ -402,12 +405,12 @@ describe("bedrock discovery", () => {
     mockSingleActiveSummary();
 
     await discoverBedrockModels({
-      region: "us-east-1",
+      region: "cache-disabled",
       config: { refreshInterval: 0 },
       clientFactory,
     });
     await discoverBedrockModels({
-      region: "us-east-1",
+      region: "cache-disabled",
       config: { refreshInterval: 0 },
       clientFactory,
     });
@@ -436,7 +439,7 @@ describe("bedrock discovery", () => {
         });
       });
 
-      const discovery = discoverBedrockModels({ region: "us-east-1", clientFactory });
+      const discovery = discoverFreshBedrockModels({ region: "abort-timeout", clientFactory });
       await vi.advanceTimersByTimeAsync(30_000);
 
       await expect(discovery).resolves.toEqual([]);
@@ -504,7 +507,7 @@ describe("bedrock discovery", () => {
       ],
     );
 
-    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+    const models = await discoverFreshBedrockModels({ region: "us-east-1", clientFactory });
 
     // Foundation model + 3 active inference profiles = 4 models.
     expect(models).toHaveLength(4);
@@ -544,7 +547,7 @@ describe("bedrock discovery", () => {
       // Simulate AccessDeniedException for ListInferenceProfiles.
       .mockRejectedValueOnce(new Error("AccessDeniedException"));
 
-    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+    const models = await discoverFreshBedrockModels({ region: "us-east-1", clientFactory });
     // Foundation model should still be discovered despite profile discovery failure.
     expect(models).toHaveLength(1);
     expect(models[0]?.id).toBe("anthropic.claude-3-7-sonnet-20250219-v1:0");
@@ -567,7 +570,7 @@ describe("bedrock discovery", () => {
       ],
     );
 
-    const models = await discoverBedrockModels({
+    const models = await discoverFreshBedrockModels({
       region: "us-east-1",
       config: { providerFilter: ["anthropic"] },
       clientFactory,
@@ -597,7 +600,7 @@ describe("bedrock discovery", () => {
       ],
     );
 
-    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+    const models = await discoverFreshBedrockModels({ region: "us-east-1", clientFactory });
     const profile = models.find((model) => model.id === "us.my-prod-profile");
 
     expectModelFields(profile, {
@@ -621,7 +624,7 @@ describe("bedrock discovery", () => {
       ],
     );
 
-    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+    const models = await discoverFreshBedrockModels({ region: "us-east-1", clientFactory });
 
     expectModelFields(models[0], {
       id: "us.my-prod-profile",
@@ -669,6 +672,7 @@ describe("bedrock discovery", () => {
         discovery: {
           enabled: true,
           region: "us-east-1",
+          refreshInterval: 0,
         },
       },
       env: {} as NodeJS.ProcessEnv,
@@ -700,7 +704,7 @@ describe("bedrock discovery", () => {
     mockSingleActiveSummary();
 
     const provider = await resolveImplicitBedrockProvider({
-      pluginConfig: { discovery: { enabled: true } },
+      pluginConfig: { discovery: { enabled: true, refreshInterval: 0 } },
       env,
       clientFactory,
     });
@@ -738,7 +742,7 @@ describe("bedrock discovery", () => {
       ],
     );
 
-    const models = await discoverBedrockModels({ region: "ap-southeast-2", clientFactory });
+    const models = await discoverFreshBedrockModels({ region: "ap-southeast-2", clientFactory });
 
     // Foundation model + 2 regional inference profiles
     expect(models).toHaveLength(3);

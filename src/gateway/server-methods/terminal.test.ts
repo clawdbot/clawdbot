@@ -2,13 +2,16 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { createTerminalLaunchPolicy } from "../terminal/launch.js";
+import { TerminalSessionManager } from "../terminal/session-manager.js";
+import { makeFakePty } from "../terminal/session-manager.test-helpers.js";
 import type { TerminalSessionSummary } from "../terminal/session-types.js";
-import { terminalHandlers, TERMINAL_OPEN_DEADLINE_MS } from "./terminal.js";
+import { openTerminalSession, terminalHandlers, TERMINAL_OPEN_DEADLINE_MS } from "./terminal.js";
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -24,6 +27,18 @@ const policyMocks = vi.hoisted(() => ({
   })),
   applyPluginNodeInvokePolicy: vi.fn<() => Promise<{ ok: false; message: string } | null>>(
     async () => null,
+  ),
+}));
+const sessionMocks = vi.hoisted(() => ({
+  loadGatewaySessionEntryReadOnly: vi.fn(
+    (
+      _sessionKey: string,
+      _opts?: unknown,
+    ): {
+      entry?: Pick<InternalSessionEntry, "sessionId" | "pendingProjectGitUrl" | "pendingWorktree">;
+    } => ({
+      entry: { sessionId: "ui-session-id" },
+    }),
   ),
 }));
 
@@ -42,6 +57,11 @@ vi.mock("../node-command-policy.js", () => ({
 
 vi.mock("../node-invoke-plugin-policy.js", () => ({
   applyPluginNodeInvokePolicy: policyMocks.applyPluginNodeInvokePolicy,
+}));
+
+vi.mock("../session-utils.js", async () => ({
+  ...(await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js")),
+  loadGatewaySessionEntryReadOnly: sessionMocks.loadGatewaySessionEntryReadOnly,
 }));
 
 function makeOpts(
@@ -121,9 +141,100 @@ afterEach(() => {
   policyMocks.resolveNodeCommandAllowlist.mockReset();
   policyMocks.isNodeCommandAllowed.mockReset().mockReturnValue({ ok: true });
   policyMocks.applyPluginNodeInvokePolicy.mockReset().mockResolvedValue(null);
+  sessionMocks.loadGatewaySessionEntryReadOnly.mockReset().mockReturnValue({
+    entry: { sessionId: "ui-session-id" },
+  });
 });
 
 describe("terminal gateway policy", () => {
+  it("binds a UI terminal to its exact agent session while keeping the UI attached", async () => {
+    const backend = makeFakePty();
+    const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: async () => backend });
+    const agentSessionKey = "agent:main:ui-session";
+    const agentOwner = {
+      kind: "agent",
+      agentSessionKey,
+      agentSessionId: "ui-session-id",
+      agentId: "main",
+    } as const;
+    const { opts, respond } = makeOpts({}, { enabled: true });
+    opts.context.terminalSessions = manager;
+
+    await openTerminalSession(opts, {
+      agentId: "main",
+      sessionKey: agentSessionKey,
+      cols: 80,
+      rows: 24,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ agentId: "main", sessionId: expect.any(String) }),
+    );
+    const owned = manager.listAgent(agentOwner);
+    expect(owned).toHaveLength(1);
+    const session = expectDefined(owned[0], "session-owned UI terminal");
+    expect(session).toMatchObject({ attached: true, owner: `agent:${agentSessionKey}` });
+    expect(manager.write("conn-1", session.sessionId, "operator input\n")).toBe(true);
+
+    backend.emitData("ui session output");
+    expect(manager.snapshotAgent(agentOwner, session.sessionId)).toContain("ui session output");
+    expect(
+      manager.listAgent({ ...agentOwner, agentSessionKey: "agent:main:other-session" }),
+    ).toEqual([]);
+    expect(
+      manager.snapshotAgent({ ...agentOwner, agentId: "research" }, session.sessionId),
+    ).toBeUndefined();
+    expect(sessionMocks.loadGatewaySessionEntryReadOnly).toHaveBeenCalledWith(agentSessionKey, {
+      agentId: "main",
+      clone: false,
+    });
+  });
+
+  it.each([
+    { state: "is missing", entry: undefined, error: { code: ErrorCodes.UNAVAILABLE } },
+    {
+      state: "awaits project preparation",
+      entry: {
+        sessionId: "ui-session-id",
+        pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
+      },
+      error: {
+        code: ErrorCodes.INVALID_REQUEST,
+        message:
+          'Session "agent:main:pending" workspace is not ready. Wait for setup to finish or retry in chat.',
+      },
+    },
+    {
+      state: "awaits worktree preparation",
+      entry: {
+        sessionId: "ui-session-id",
+        pendingWorktree: {
+          workspace: "/tmp/project",
+          titleSource: "Prepare workspace",
+        },
+      },
+      error: {
+        code: ErrorCodes.INVALID_REQUEST,
+        message:
+          'Session "agent:main:pending" workspace is not ready. Wait for setup to finish or retry in chat.',
+      },
+    },
+  ])("rejects UI ownership when the session $state", async ({ entry, error }) => {
+    sessionMocks.loadGatewaySessionEntryReadOnly.mockReturnValue({ entry });
+    const { opts, sessions, respond } = makeOpts({}, { enabled: true });
+
+    await openTerminalSession(opts, {
+      agentId: "main",
+      sessionKey: "agent:main:pending",
+      cols: 80,
+      rows: 24,
+    });
+
+    expect(sessions.open).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
+  });
+
   it("lists agent-owned sessions with their owner marker", async () => {
     const { opts, sessions, respond } = makeOpts({}, { enabled: true });
     sessions.list.mockReturnValue([
@@ -166,6 +277,15 @@ describe("terminal gateway policy", () => {
       true,
       expect.objectContaining({ buffer: "replay", seq: 6 }),
     );
+  });
+
+  it("forwards terminal close to the session manager", async () => {
+    const { opts, sessions, respond } = makeOpts({ sessionId: "terminal-1" }, { enabled: true });
+
+    await expectDefined(terminalHandlers["terminal.close"], "terminal.close")(opts);
+
+    expect(sessions.close).toHaveBeenCalledWith("conn-1", "terminal-1");
+    expect(respond).toHaveBeenCalledWith(true, { ok: true });
   });
 
   it("keeps legacy protocol-4 attach replies within their closed schema", async () => {
@@ -254,6 +374,7 @@ describe("terminal gateway policy", () => {
     await expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
 
     expect(openTerminal).toHaveBeenCalledWith({
+      agentId: "main",
       allowProcessHomeFallback: false,
       hostId: "gateway:local",
       threadId: "thread",

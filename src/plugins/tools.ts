@@ -5,14 +5,12 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../agents/glob-pattern.js";
-import type { McpCodexToolAnnotations } from "../agents/mcp-codex-tool-approval.js";
 import {
   DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
   normalizeToolPolicyName,
 } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { normalizeConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
-import type { McpCodexToolApprovalMode } from "../config/types.mcp.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   getLoadedRuntimePluginRegistry,
@@ -31,16 +29,15 @@ import {
 } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { hasManifestToolAvailability } from "./manifest-tool-availability.js";
+import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type { PluginMetadataManifestView } from "./plugin-metadata-snapshot.types.js";
 import type { PluginRegistry, PluginToolRegistration } from "./registry-types.js";
 import {
   withPluginRuntimePluginScope,
   withPluginRuntimeRegistryScope,
 } from "./runtime/gateway-request-scope.js";
-import {
-  buildPluginRuntimeLoadOptions,
-  resolvePluginRuntimeLoadContext,
-} from "./runtime/load-context.js";
+import { buildPluginRuntimeLoadOptions } from "./runtime/load-context.js";
+import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
 import { findUndeclaredPluginToolNames } from "./tool-contracts.js";
 import {
   buildPluginToolDescriptorCacheKey,
@@ -53,33 +50,8 @@ import {
   writeCachedPluginToolDescriptors,
 } from "./tool-descriptor-cache.js";
 import { isPluginToolAllowed } from "./tool-grant-allowlist.js";
+import { copyPluginToolMeta, setPluginToolMeta } from "./tool-metadata.js";
 import type { OpenClawPluginToolContext } from "./types.js";
-
-/** MCP bridge metadata attached to plugin tools surfaced through agent tool lists. */
-export type PluginToolMcpMeta = {
-  serverName: string;
-  safeServerName: string;
-  toolName: string;
-  operation: "tool" | "resources_list" | "resources_read" | "prompts_list" | "prompts_get";
-  deniedBySession?: true;
-  codexApproval?: {
-    mode: McpCodexToolApprovalMode;
-    annotations?: McpCodexToolAnnotations;
-  };
-  node?: {
-    id: string;
-    displayName?: string;
-  };
-};
-
-/** Runtime metadata used to trace an agent tool back to its owning plugin registration. */
-type PluginToolMeta = {
-  pluginId: string;
-  optional: boolean;
-  replaySafe?: boolean;
-  trustedLocalMedia?: boolean;
-  mcp?: PluginToolMcpMeta;
-};
 
 type PluginToolFactoryTimingResult = "array" | "error" | "null" | "single";
 
@@ -100,28 +72,9 @@ const PLUGIN_TOOL_FACTORY_WARN_TOTAL_MS = 5_000;
 const PLUGIN_TOOL_FACTORY_WARN_FACTORY_MS = 1_000;
 const PLUGIN_TOOL_FACTORY_SUMMARY_LIMIT = 20;
 
-const pluginToolMeta = new WeakMap<AnyAgentTool, PluginToolMeta>();
 const scopedPluginTools = new WeakMap<AnyAgentTool, Map<string, AnyAgentTool>>();
 const pluginRegistryScopeIds = new WeakMap<PluginRegistry, number>();
 let nextPluginRegistryScopeId = 1;
-
-/** Attaches plugin ownership metadata to a concrete agent tool instance. */
-export function setPluginToolMeta(tool: AnyAgentTool, meta: PluginToolMeta): void {
-  pluginToolMeta.set(tool, meta);
-}
-
-/** Reads plugin ownership metadata for a concrete agent tool instance. */
-export function getPluginToolMeta(tool: AnyAgentTool): PluginToolMeta | undefined {
-  return pluginToolMeta.get(tool);
-}
-
-/** Copies plugin ownership metadata when wrappers replace a tool object. */
-export function copyPluginToolMeta(source: AnyAgentTool, target: AnyAgentTool): void {
-  const meta = pluginToolMeta.get(source);
-  if (meta) {
-    pluginToolMeta.set(target, meta);
-  }
-}
 
 function pluginToolScopeKey(
   entry: PluginToolRegistration,
@@ -291,33 +244,6 @@ function blocksHostRestrictedConversationReadRegistration(params: {
   );
 }
 
-function resolveCurrentManifestPlugin(params: {
-  pluginId: string;
-  ctx: OpenClawPluginToolContext;
-  loadContext: ReturnType<typeof resolvePluginRuntimeLoadContext>;
-}): PluginManifestRecord | undefined {
-  let config = params.ctx.runtimeConfig ?? params.ctx.config ?? params.loadContext.config;
-  if (params.ctx.getRuntimeConfig) {
-    try {
-      config = params.ctx.getRuntimeConfig() ?? config;
-    } catch {
-      return undefined;
-    }
-  }
-  return loadManifestContractSnapshot({
-    config,
-    workspaceDir: params.loadContext.workspaceDir,
-    env: params.loadContext.env,
-  }).plugins.find((plugin) => plugin.id === params.pluginId);
-}
-
-/**
- * Builds a collision-proof key for plugin-owned tool metadata lookups.
- */
-export function buildPluginToolMetadataKey(pluginId: string, toolName: string): string {
-  return JSON.stringify([pluginId, toolName]);
-}
-
 function normalizeAllowlist(list?: string[]) {
   return new Set(normalizeUniqueStringEntries((list ?? []).map(normalizeToolPolicyName)));
 }
@@ -379,6 +305,13 @@ function isManifestToolReplaySafe(params: {
   toolName: string;
 }): boolean {
   return params.manifestPlugin?.toolMetadata?.[params.toolName]?.replaySafe === true;
+}
+
+function isManifestToolSideEffecting(params: {
+  manifestPlugin: PluginManifestRecord | undefined;
+  toolName: string;
+}): boolean {
+  return params.manifestPlugin?.toolMetadata?.[params.toolName]?.sideEffecting === true;
 }
 
 function isTrustedManifestLocalMediaTool(params: {
@@ -649,15 +582,6 @@ function listManifestToolNamesForAllowlist(params: {
   return uniqueStrings([...defaultToolNames, ...matchedToolNames]);
 }
 
-function listManifestToolNamesForAvailability(params: {
-  plugin: PluginManifestRecord;
-  toolNames: readonly string[];
-  pluginId: string;
-  allowlist: Set<string>;
-}): string[] {
-  return listManifestToolNamesForAllowlist(params);
-}
-
 function isManifestToolNameAvailable(params: {
   plugin: PluginManifestRecord;
   toolName: string;
@@ -719,13 +643,8 @@ function resolvePluginToolRuntimePluginIds(params: {
         snapshot,
         plugin,
         config: params.config,
+        normalizedConfig: normalizedPlugins,
       })
-    ) {
-      continue;
-    }
-    if (
-      normalizedPlugins.entries[plugin.id]?.enabled === false ||
-      normalizedPlugins.deny.includes(plugin.id)
     ) {
       continue;
     }
@@ -733,7 +652,7 @@ function resolvePluginToolRuntimePluginIds(params: {
       continue;
     }
     const toolNames = plugin.contracts?.tools ?? [];
-    const selectedToolNames = listManifestToolNamesForAvailability({
+    const selectedToolNames = listManifestToolNamesForAllowlist({
       toolNames,
       plugin,
       pluginId: plugin.id,
@@ -859,11 +778,11 @@ function createCachedDescriptorPluginTool(params: {
       const resolveCandidateTool = (
         candidate: PluginToolRegistration,
       ): AnyAgentTool | undefined => {
-        const manifestPlugin = resolveCurrentManifestPlugin({
-          pluginId,
-          ctx: params.ctx,
-          loadContext: params.loadContext,
-        });
+        const manifestPlugin = resolvePluginMetadataSnapshot({
+          config: params.loadContext.config,
+          workspaceDir: params.loadContext.workspaceDir,
+          env: params.loadContext.env,
+        }).byPluginId.get(pluginId);
         if (
           blocksHostRestrictedConversationReadRegistration({
             entry: candidate,
@@ -906,8 +825,13 @@ function createCachedDescriptorPluginTool(params: {
   }
   setPluginToolMeta(tool, {
     pluginId,
+    ...(params.plugin.kind ? { kind: params.plugin.kind } : {}),
     optional: params.descriptor.optional,
     replaySafe: isManifestToolReplaySafe({
+      manifestPlugin: params.plugin,
+      toolName,
+    }),
+    sideEffecting: isManifestToolSideEffecting({
       manifestPlugin: params.plugin,
       toolName,
     }),
@@ -941,6 +865,7 @@ function resolveCachedPluginTools(params: {
   const tools: AnyAgentTool[] = [];
   const handledPluginIds = new Set<string>();
   const onlyPluginIdSet = new Set(params.onlyPluginIds);
+  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
   for (const plugin of params.snapshot.plugins) {
     if (!onlyPluginIdSet.has(plugin.id)) {
       continue;
@@ -953,12 +878,13 @@ function resolveCachedPluginTools(params: {
         snapshot: params.snapshot,
         plugin,
         config: params.config,
+        normalizedConfig,
       })
     ) {
       continue;
     }
     const contractToolNames = plugin.contracts?.tools ?? [];
-    const allowedToolNames = listManifestToolNamesForAvailability({
+    const allowedToolNames = listManifestToolNamesForAllowlist({
       plugin,
       toolNames: contractToolNames,
       pluginId: plugin.id,
@@ -1156,11 +1082,9 @@ function resolvePluginToolLoadState(params: {
   const env = params.env ?? process.env;
   const baseConfig = applyTestPluginDefaults(params.context.config ?? {}, env);
   const preparedLoadContext = params.preparedRuntime?.loadContext;
-  const usePreparedRuntime =
-    preparedLoadContext !== undefined &&
-    (baseConfig === preparedLoadContext.rawConfig || baseConfig === preparedLoadContext.config) &&
-    env === preparedLoadContext.env &&
-    params.context.workspaceDir === preparedLoadContext.workspaceDir;
+  // The prepared runtime already owns one immutable Gateway plugin generation. Per-turn config
+  // and workspace projections cannot invalidate that executable graph or reopen discovery.
+  const usePreparedRuntime = preparedLoadContext !== undefined && env === preparedLoadContext.env;
   const context = usePreparedRuntime
     ? preparedLoadContext
     : resolvePluginRuntimeLoadContext({
@@ -1168,8 +1092,7 @@ function resolvePluginToolLoadState(params: {
         env,
         workspaceDir: params.context.workspaceDir,
       });
-  const normalized = normalizePluginsConfig(context.config.plugins);
-  if (!normalized.enabled) {
+  if (context.config.plugins?.enabled === false) {
     return undefined;
   }
 
@@ -1553,10 +1476,15 @@ export function resolvePluginTools(params: {
         manifestPlugin,
         toolName: tool.name,
       });
-      pluginToolMeta.set(tool, {
+      setPluginToolMeta(tool, {
         pluginId: entry.pluginId,
+        ...(manifestPlugin?.kind ? { kind: manifestPlugin.kind } : {}),
         optional,
         replaySafe: isManifestToolReplaySafe({
+          manifestPlugin,
+          toolName: tool.name,
+        }),
+        sideEffecting: isManifestToolSideEffecting({
           manifestPlugin,
           toolName: tool.name,
         }),
@@ -1585,7 +1513,7 @@ export function resolvePluginTools(params: {
     if (!manifestPlugin) {
       continue;
     }
-    const availableToolNames = listManifestToolNamesForAvailability({
+    const availableToolNames = listManifestToolNamesForAllowlist({
       plugin: manifestPlugin,
       toolNames: manifestPlugin.contracts?.tools ?? [],
       pluginId,

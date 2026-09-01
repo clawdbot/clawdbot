@@ -17,6 +17,25 @@ describe("stripModelSpecialTokens", () => {
     expect(stripModelSpecialTokens("<｜begin▁of▁sentence｜>Hello there")).toBe("Hello there");
   });
 
+  it.each([
+    ["closing punctuation", "Hello<|assistant|>.", "Hello."],
+    ["opening punctuation", "(<|assistant|>Hello", "(Hello"],
+    ["strong emphasis", "**bold<|assistant|>**", "**bold**"],
+    ["underscore emphasis", "__bold<|assistant|>__", "__bold__"],
+    ["Cyrillic words", "Привет<|assistant|>мир", "Привет мир"],
+    ["CJK words", "你好<|assistant|>世界", "你好 世界"],
+    ["astral letters", "𐐀<|assistant|>𐐁", "𐐀 𐐁"],
+    ["Unicode digits", "١<|assistant|>٢", "١ ٢"],
+    ["left combining mark", "cafe\u0301<|assistant|>word", "cafe\u0301 word"],
+    ["right combining mark", "cafe<|assistant|>\u0301word", "cafe\u0301word"],
+    ["adjacent tokens", "first<|user|><|assistant|>second", "first second"],
+    ["mixed token runs", "first<|user|><｜assistant｜>second", "first second"],
+    ["token run before punctuation", "Hello<|user|><|assistant|>!", "Hello!"],
+    ["existing whitespace", "first <|assistant|>\nsecond", "first \nsecond"],
+  ])("preserves %s when removing tokens", (_name, input, expected) => {
+    expect(stripModelSpecialTokens(input)).toBe(expected);
+  });
+
   it("does not strip normal angle brackets or HTML", () => {
     expect(stripModelSpecialTokens("a < b && c > d")).toBe("a < b && c > d");
     expect(stripModelSpecialTokens("<div>hello</div>")).toBe("<div>hello</div>");

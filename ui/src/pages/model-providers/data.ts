@@ -1,6 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolveUsageProviderId } from "../../../../src/infra/provider-usage.shared.js";
 // Merges gateway provider signals (auth status, live usage/quota, local session
 // cost) into one card list for the Models settings page.
 import type {
@@ -16,6 +15,10 @@ import type {
   ModelCatalogProviderOutcome,
 } from "../../api/types.ts";
 import { providerDisplayLabel } from "../../components/provider-icon.ts";
+import {
+  canonicalModelAuthProviderId,
+  listEffectiveModelAuthProviders,
+} from "../../lib/model-auth.ts";
 
 export type ModelProviderAuthKind = "ok" | "expiring" | "expired" | "missing" | "api-key";
 
@@ -84,8 +87,7 @@ type CardDraft = {
 // minimax) with the same table the gateway uses, so one subscription stays
 // one card even when the optional auth-status usage embed is missing.
 function canonicalProviderId(provider: string): string {
-  const normalized = provider.trim().toLowerCase();
-  return resolveUsageProviderId(normalized) ?? normalized;
+  return canonicalModelAuthProviderId(provider);
 }
 
 function authKindForProvider(provider: ModelAuthStatusProvider): ModelProviderAuthKind {
@@ -98,34 +100,6 @@ function authKindForProvider(provider: ModelAuthStatusProvider): ModelProviderAu
     default:
       return "api-key";
   }
-}
-
-const AUTH_KIND_SEVERITY: readonly ModelProviderAuthKind[] = [
-  "expired",
-  "missing",
-  "expiring",
-  "ok",
-  "api-key",
-];
-
-// Two auth rows can share one card (provider alias ids); surface the most
-// urgent credential state and the combined profile count.
-function mergeAuth(
-  current: ModelProviderAuthSummary | undefined,
-  next: ModelProviderAuthSummary,
-): ModelProviderAuthSummary {
-  if (!current) {
-    return next;
-  }
-  const worse =
-    AUTH_KIND_SEVERITY.indexOf(next.kind) < AUTH_KIND_SEVERITY.indexOf(current.kind)
-      ? next
-      : current;
-  return {
-    kind: worse.kind,
-    profileCount: current.profileCount + next.profileCount,
-    ...(worse.expiryLabel ? { expiryLabel: worse.expiryLabel } : {}),
-  };
 }
 
 function findDraft(drafts: CardDraft[], ids: string[]): CardDraft | undefined {
@@ -271,11 +245,6 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
       draft.ids.add(candidate);
     }
     draft.card.displayName = provider.displayName || draft.card.displayName;
-    draft.card.auth = mergeAuth(draft.hasAuthRow ? draft.card.auth : undefined, {
-      kind: authKindForProvider(provider),
-      profileCount: provider.profiles.length,
-      ...(provider.expiry?.label ? { expiryLabel: provider.expiry.label } : {}),
-    });
     draft.card.profiles.push(...provider.profiles);
     if (provider.apiKey || provider.profiles.length > 0) {
       addProviderId(draft.card.credentialProviderIds, provider.provider);
@@ -298,6 +267,17 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
         ...(usage.summary ? { summary: usage.summary } : {}),
         ...(usage.plan ? { plan: usage.plan } : {}),
         ...(usage.billing?.length ? { billing: usage.billing } : {}),
+      };
+    }
+  }
+
+  for (const provider of listEffectiveModelAuthProviders(input.authStatus?.providers ?? [])) {
+    const draft = findDraft(drafts, [canonicalProviderId(provider.provider)]);
+    if (draft) {
+      draft.card.auth = {
+        kind: authKindForProvider(provider),
+        profileCount: provider.profiles.length,
+        ...(provider.expiry?.label ? { expiryLabel: provider.expiry.label } : {}),
       };
     }
   }
@@ -389,6 +369,8 @@ export function buildSelectableDefaultModels(
     (model) => model.available !== false || selected.has(modelCatalogRef(model)),
   );
   const seen = new Set(selectable.map(modelCatalogRef));
+  // An unavailable catalog cannot establish that a saved model is unavailable.
+  const availability = models === null ? {} : { available: false as const };
   for (const ref of selected) {
     if (seen.has(ref)) {
       continue;
@@ -401,7 +383,7 @@ export function buildSelectableDefaultModels(
           model.alias?.trim().toLowerCase() === normalized || model.id.trim() === ref.trim(),
       );
       selectable.push({
-        ...(match ?? { provider: "", id: ref, name: ref, available: false }),
+        ...(match ?? { provider: "", id: ref, name: ref, ...availability }),
         selectionRef: ref,
       });
       continue;
@@ -410,7 +392,7 @@ export function buildSelectableDefaultModels(
       provider: ref.slice(0, slash),
       id: ref.slice(slash + 1),
       name: ref,
-      available: false,
+      ...availability,
     });
   }
   return selectable;

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createDeferredCore } from "../../shared/deferred.js";
 import type { ConnectedRfbStream, DesktopRfbAttachment } from "./attachment.js";
 
 const DEFAULT_LINGER_MS = 60_000;
@@ -98,11 +99,11 @@ export function createDesktopSessionRegistry(
     if (entry.stopPromise) {
       return entry.stopPromise;
     }
-    entry.stopPromise = (async () => {
+    // Publish cleanup ownership before observer callbacks can reenter Stop.
+    const stopped = createDeferredCore();
+    entry.stopPromise = stopped.promise;
+    void (async () => {
       entry.stopped = true;
-      if (entries.get(entry.sourceKey) === entry) {
-        entries.delete(entry.sourceKey);
-      }
       clearTimeout(entry.lingerTimer);
       entry.lingerTimer = undefined;
       for (const observer of entry.observers) {
@@ -126,14 +127,31 @@ export function createDesktopSessionRegistry(
       await entry.teardown?.().catch(() => undefined);
       await entry.initialization?.catch(() => undefined);
       await entry.teardown?.().catch(() => undefined);
-    })();
+    })()
+      .finally(() => {
+        // Concurrent Stop and replacement acquisition must join the full teardown.
+        if (entries.get(entry.sourceKey) === entry) {
+          entries.delete(entry.sourceKey);
+        }
+      })
+      .then(stopped.resolve, stopped.reject);
     return entry.stopPromise;
   };
 
   const scheduleLinger = (entry: DesktopSessionEntry): void => {
+    if (!isCurrent(entry) || entry.observers.size > 0 || entry.observerReservations.size > 0) {
+      return;
+    }
     clearTimeout(entry.lingerTimer);
     entry.lingerTimer = setTimeout(() => void stopEntry(entry), lingerMs);
     entry.lingerTimer.unref?.();
+  };
+
+  const waitForReady = async (entry: DesktopSessionEntry): Promise<DesktopSessionStartResult> => {
+    const result = await entry.ready;
+    // Every observation gets an idle attachment window, including same-epoch reuse.
+    scheduleLinger(entry);
+    return result;
   };
 
   async function startSession(
@@ -147,8 +165,8 @@ export function createDesktopSessionRegistry(
       if (request.ownerEpoch < current.ownerEpoch) {
         throw new DesktopSessionStaleOwnerError();
       }
-      if (request.ownerEpoch === current.ownerEpoch) {
-        return await current.ready;
+      if (request.ownerEpoch === current.ownerEpoch && !current.stopped) {
+        return await waitForReady(current);
       }
     }
 
@@ -195,7 +213,7 @@ export function createDesktopSessionRegistry(
       }
       void stopEntry(entry);
     });
-    return await ready;
+    return await waitForReady(entry);
   }
 
   async function acquire(
@@ -210,14 +228,6 @@ export function createDesktopSessionRegistry(
 
   async function activate(request: DesktopSessionActivateRequest): Promise<void> {
     await startSession({ ...request, start: async () => undefined });
-    const entry = entries.get(request.sourceKey);
-    if (
-      entry?.ownerEpoch === request.ownerEpoch &&
-      entry.observers.size === 0 &&
-      entry.observerReservations.size === 0
-    ) {
-      scheduleLinger(entry);
-    }
   }
 
   function attachObserver(sourceKey: string, observer: DesktopSessionObserver) {
@@ -259,13 +269,7 @@ export function createDesktopSessionRegistry(
         if (entry.controller === attached) {
           entry.controller = undefined;
         }
-        if (
-          entry.observers.size === 0 &&
-          entry.observerReservations.size === 0 &&
-          isCurrent(entry)
-        ) {
-          scheduleLinger(entry);
-        }
+        scheduleLinger(entry);
       },
     };
   }
@@ -294,13 +298,7 @@ export function createDesktopSessionRegistry(
         }
         released = true;
         entry.observerReservations.delete(reservationId);
-        if (
-          entry.observers.size === 0 &&
-          entry.observerReservations.size === 0 &&
-          isCurrent(entry)
-        ) {
-          scheduleLinger(entry);
-        }
+        scheduleLinger(entry);
       },
     };
   }

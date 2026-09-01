@@ -1,4 +1,5 @@
 import { note } from "../../packages/terminal-core/src/note.js";
+import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import { isDefaultInstallIdentity } from "../config/paths.js";
 import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-supervision.js";
 import { runCoreContributionHealth } from "./doctor-health-contribution-core.js";
@@ -20,8 +21,14 @@ export async function runClaudeCliHealth(ctx: DoctorHealthFlowContext): Promise<
 }
 
 export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  if (ctx.gatewayMaintenanceActive) {
+    return;
+  }
   if (!isDefaultInstallIdentity(ctx.env ?? process.env)) {
     note(NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON, "Gateway");
+    return;
+  }
+  if (!(await shouldManageGatewayService(ctx.env ?? process.env))) {
     return;
   }
   const {
@@ -90,10 +97,10 @@ export async function runWebFetchProxyHealth(ctx: DoctorHealthFlowContext): Prom
 }
 
 export async function runGitHubProjectHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { githubApiToken } = await import("../gateway/control-ui-github-api.js");
-  if (!githubApiToken(ctx.env ?? process.env)) {
+  const { hasConfiguredGitHubApiCredential } = await import("../gateway/control-ui-github-api.js");
+  if (!hasConfiguredGitHubApiCredential(ctx.env ?? process.env, ctx.cfg)) {
     note(
-      "Set GH_TOKEN in the Gateway environment to enable authenticated GitHub project search, including private repositories.",
+      "Prefer gateway.controlUi.github.token for Gateway-owned GitHub project access, or set GH_TOKEN/GITHUB_TOKEN in the shared Gateway process environment. Without either, search is public-only.",
       "GitHub projects",
     );
   }
@@ -127,7 +134,7 @@ export async function runDevicePairingHealth(ctx: DoctorHealthFlowContext): Prom
 }
 
 export async function runGatewayDaemonHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  if (!isDefaultInstallIdentity(ctx.env ?? process.env)) {
+  if (ctx.gatewayMaintenanceActive || !isDefaultInstallIdentity(ctx.env ?? process.env)) {
     return;
   }
   const { maybeRepairGatewayDaemon } = await import("../commands/doctor-gateway-daemon-flow.js");

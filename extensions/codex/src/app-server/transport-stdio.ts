@@ -2,13 +2,15 @@
  * Creates and configures stdio-backed Codex app-server transports, including
  * Windows spawn normalization and environment filtering.
  */
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
 } from "openclaw/plugin-sdk/windows-spawn";
 import type { CodexAppServerStartOptions } from "./config.js";
-import type { CodexAppServerTransport } from "./transport.js";
+import { normalizeCodexAppServerArgs } from "./launch-args.js";
+import { prepareCodexAppServerProcessRegistration } from "./transport-process-registration.js";
+import { closeCodexAppServerTransportAndWait } from "./transport.js";
 
 const UNSAFE_ENVIRONMENT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 const RUNTIME_INJECTION_ENVIRONMENT_KEYS = new Set([
@@ -46,7 +48,8 @@ function resolveCodexAppServerSpawnInvocation(
     execPath: runtime.execPath,
     packageName: "@openai/codex",
   });
-  const resolved = materializeWindowsSpawnProgram(program, options.args);
+  const args = normalizeCodexAppServerArgs(options.args);
+  const resolved = materializeWindowsSpawnProgram(program, args);
   return {
     command: resolved.command,
     args: resolved.argv,
@@ -124,14 +127,21 @@ function copySafeEnvironmentEntries(
 }
 
 /** Spawns the Codex app-server process and returns the shared transport interface. */
-export function createStdioTransport(options: CodexAppServerStartOptions): CodexAppServerTransport {
-  const env = resolveCodexAppServerSpawnEnv(options);
+export async function createStdioTransport(
+  options: CodexAppServerStartOptions,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+  assertCurrent?: () => void,
+  onSpawn?: (child: ChildProcessWithoutNullStreams) => void,
+): Promise<ChildProcessWithoutNullStreams> {
+  const env = resolveCodexAppServerSpawnEnv(options, baseEnv);
   const invocation = resolveCodexAppServerSpawnInvocation(options, {
     platform: process.platform,
     env,
     execPath: process.execPath,
   });
-  return spawn(invocation.command, invocation.args, {
+  const register = await prepareCodexAppServerProcessRegistration();
+  assertCurrent?.();
+  const child = spawn(invocation.command, invocation.args, {
     // Preserve the shipped Supervisor endpoint contract: relative commands and
     // config discovery may depend on the endpoint's process working directory.
     ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
@@ -141,4 +151,15 @@ export function createStdioTransport(options: CodexAppServerStartOptions): Codex
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: invocation.windowsHide,
   });
+  try {
+    // Attach lifecycle observers before inspection can yield to an early exit.
+    onSpawn?.(child);
+    await register(child);
+    assertCurrent?.();
+    return child;
+  } catch (error) {
+    await closeCodexAppServerTransportAndWait(child, { drainStdio: true });
+    assertCurrent?.();
+    throw error;
+  }
 }

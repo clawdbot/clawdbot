@@ -164,7 +164,7 @@ export function createCronContinuationController(params: {
       params.context.logGateway.warn(
         `cron continuation release recovery exhausted for ${params.runId}`,
       );
-    });
+    }, "cron:continuation-recovery");
     return false;
   };
 
