@@ -106,7 +106,8 @@ struct OnboardingAISetupSheet: View {
                         : String(localized: "Sign-in didn’t complete"),
                     message: error.summary,
                     details: error.detail,
-                    docsSlug: "concepts/model-providers")
+                    docsSlug: "concepts/model-providers",
+                    retry: nil)
             }
         }
         .font(.callout)

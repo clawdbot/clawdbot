@@ -1948,99 +1948,162 @@ struct OnboardingAISetupTests {
 
     @Test(
         arguments: [OnboardingAISetupModel.ProviderWizardKind.auth, .prepare],
-        ["commit-locked", "purged", "failed"])
+        [
+            (outcome: "commit-locked", terminalFirst: false),
+            (outcome: "purged", terminalFirst: false),
+            (outcome: "failed", terminalFirst: false),
+            (outcome: "commit-locked", terminalFirst: true),
+            (outcome: "purged", terminalFirst: true),
+            (outcome: "failed", terminalFirst: true),
+            (outcome: "failed-unresolved", terminalFirst: true),
+            (outcome: "failed-cancelled", terminalFirst: true),
+            (outcome: "request-failed", terminalFirst: true),
+        ])
     func `provider cancellation preserves the pending terminal reply`(
-        kind: OnboardingAISetupModel.ProviderWizardKind, outcome: String) async throws
+        kind: OnboardingAISetupModel.ProviderWizardKind, scenario: (outcome: String, terminalFirst: Bool)) async throws
     {
-        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingLockedAuthCancellationTests"))
-        let nextGate = AISetupRequestGate()
-        let detections = AISetupSocketGeneration()
-        let cancelledSessions = LockIsolated<[String]>([])
-        let session = makeAISetupRequestSession(handler: { task, request in
-            switch request.method {
-            case "openclaw.setup.detect":
-                let response = detections.claim() == 0
-                    ? detectedSetupResponse(id: request.id)
-                    : persistedDetectedSetupResponse(id: request.id)
-                task.emitReceiveSuccess(.data(response))
-            case kind.startMethod:
-                let sessionID = try #require(request.params["sessionId"] as? String)
-                task.emitReceiveSuccess(.data(Data(
-                    """
-                    {"type":"res","id":"\(request.id)","ok":true,"payload":{
-                      "sessionId":"\(sessionID)","done":false,"status":"running",
-                      "step":{"id":"login","type":"text","executor":"client",
-                        "message":"Enter the sign-in response"}}}
-                    """.utf8)))
-            case "wizard.next":
-                let sessionID = try #require(request.params["sessionId"] as? String)
-                await nextGate.wait()
-                if outcome == "failed" {
+        try await withMainSerialExecutor {
+            let outcome = scenario.outcome
+            let terminalFailure = outcome.hasPrefix("failed") || outcome == "request-failed"
+            let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingLockedAuthCancellationTests"))
+            let nextGate = AISetupRequestGate()
+            let cancellationGate = AISetupRequestGate()
+            let cancellationRequests = AISetupSocketGeneration()
+            let detections = AISetupSocketGeneration()
+            let cancelledSessions = LockIsolated<[String]>([])
+            let session = makeAISetupRequestSession(handler: { task, request in
+                switch request.method {
+                case "openclaw.setup.detect":
+                    let response = detections.claim() == 0
+                        ? detectedSetupResponse(id: request.id)
+                        : persistedDetectedSetupResponse(id: request.id)
+                    task.emitReceiveSuccess(.data(response))
+                case kind.startMethod:
+                    let sessionID = try #require(request.params["sessionId"] as? String)
                     task.emitReceiveSuccess(.data(Data(
-                        #"{"type":"res","id":"\#(request.id)","ok":true,"payload":{"done":true,"status":"error","error":"Provider declined sign-in"}}"#
-                            .utf8)))
-                } else {
-                    task.emitReceiveSuccess(.data(wizardDoneResponse(
-                        id: request.id, sessionID: sessionID,
-                        preparedModelRef: kind == .prepare ? "openai/gpt-5.5" : nil)))
+                        """
+                        {"type":"res","id":"\(request.id)","ok":true,"payload":{
+                          "sessionId":"\(sessionID)","done":false,"status":"running",
+                          "step":{"id":"login","type":"text","executor":"client",
+                            "message":"Enter the sign-in response"}}}
+                        """.utf8)))
+                case "wizard.next":
+                    let sessionID = try #require(request.params["sessionId"] as? String)
+                    await nextGate.wait()
+                    if outcome == "request-failed" {
+                        task.emitReceiveSuccess(.data(Data(
+                            #"{"type":"res","id":"\#(request.id)","ok":false,"error":{"code":"UNAVAILABLE","message":"Provider declined sign-in"}}"#
+                                .utf8)))
+                    } else if terminalFailure {
+                        task.emitReceiveSuccess(.data(Data(
+                            #"{"type":"res","id":"\#(request.id)","ok":true,"payload":{"done":true,"status":"error","error":"Provider declined sign-in"}}"#
+                                .utf8)))
+                    } else {
+                        task.emitReceiveSuccess(.data(wizardDoneResponse(
+                            id: request.id, sessionID: sessionID,
+                            preparedModelRef: kind == .prepare ? "openai/gpt-5.5" : nil)))
+                    }
+                case "openclaw.setup.activate":
+                    #expect(kind == .prepare)
+                    #expect(request.params["kind"] as? String == "provider-auto:test-provider-login")
+                    task.emitReceiveSuccess(.data(successfulActivationResponse(
+                        id: request.id, modelRef: "openai/gpt-5.5", latencyMs: 1)))
+                case "wizard.cancel":
+                    let sessionID = try #require(request.params["sessionId"] as? String)
+                    cancelledSessions.withValue { $0.append(sessionID) }
+                    let cancellation = cancellationRequests.claim()
+                    if scenario.terminalFirst, cancellation == 0 {
+                        await cancellationGate.wait()
+                    }
+                    let status: String? = if outcome == "failed-cancelled" ||
+                        (outcome == "request-failed" && cancellation == 1)
+                    {
+                        "cancelled"
+                    } else if ["commit-locked", "failed-unresolved", "request-failed"].contains(outcome) {
+                        "running"
+                    } else {
+                        nil
+                    }
+                    let response = if let status {
+                        #"{"type":"res","id":"\#(request.id)","ok":true,"payload":{"status":"\#(status)"}}"#
+                    } else {
+                        #"{"type":"res","id":"\#(request.id)","ok":false,"error":{"code":"INVALID_REQUEST","message":"wizard not found"}}"#
+                    }
+                    task.emitReceiveSuccess(.data(Data(response.utf8)))
+                default:
+                    Issue.record("Unexpected setup request: \(request.method)")
                 }
-            case "openclaw.setup.activate":
-                #expect(kind == .prepare)
-                #expect(request.params["kind"] as? String == "provider-auto:test-provider-login")
-                task.emitReceiveSuccess(.data(successfulActivationResponse(
-                    id: request.id, modelRef: "openai/gpt-5.5", latencyMs: 1)))
-            case "wizard.cancel":
-                let sessionID = try #require(request.params["sessionId"] as? String)
-                cancelledSessions.withValue { $0.append(sessionID) }
-                let response = outcome == "commit-locked"
-                    ? #"{"type":"res","id":"\#(request.id)","ok":true,"payload":{"status":"running"}}"#
-                    : #"{"type":"res","id":"\#(request.id)","ok":false,"error":{"code":"INVALID_REQUEST","message":"wizard not found"}}"#
-                task.emitReceiveSuccess(.data(Data(response.utf8)))
-            default:
-                Issue.record("Unexpected setup request: \(request.method)")
-            }
-        })
-        let url = try #require(URL(string: "ws://example.invalid"))
-        let gateway = makeAISetupGateway(url: url, session: session)
-        let model = makeAISetupModel(gateway: gateway, defaults: defaults)
-        let option = OnboardingAISetupModel.AuthOption(
-            id: "test-provider-login", brandId: nil, label: "Test provider", hint: nil,
-            groupLabel: nil, icon: nil, website: nil, kind: "oauth", featured: false)
+            })
+            let url = try #require(URL(string: "ws://example.invalid"))
+            let gateway = makeAISetupGateway(url: url, session: session)
+            let model = makeAISetupModel(gateway: gateway, defaults: defaults)
+            let option = OnboardingAISetupModel.AuthOption(
+                id: "test-provider-login", brandId: nil, label: "Test provider", hint: nil,
+                groupLabel: nil, icon: nil, website: nil, kind: "oauth", featured: false)
 
-        await model.detectAndAutoConnect()
-        model.startProviderWizard(option, kind: kind)
-        await waitForAISetupState { model.authStep != nil }
-        let sessionID = try #require(model._test_authSessionID)
-        model.authText = "callback-value"
-        model.continueProviderAuth()
-        await nextGate.waitUntilStarted()
+            await model.detectAndAutoConnect()
+            model.startProviderWizard(option, kind: kind)
+            await waitForAISetupState { model.authStep != nil }
+            let sessionID = try #require(model._test_authSessionID)
+            model.authText = "callback-value"
+            model.continueProviderAuth()
+            await nextGate.waitUntilStarted()
 
-        model.cancelProviderAuth()
-        try #require(model.activeAuthOption == option)
-        #expect(model._test_authSessionID == sessionID)
-        #expect(model.authBusy)
-        await waitForAISetupState { model.providerAuthCancellation != .requesting }
-        #expect(model.providerAuthCancellation == .unconfirmed)
-
-        await nextGate.release()
-        await waitForAISetupState { model.connected || model.authError?.copyText == "Provider declined sign-in" }
-
-        #expect(!cancelledSessions.value.isEmpty)
-        #expect(cancelledSessions.value.allSatisfy { $0 == sessionID })
-        if outcome == "failed" {
-            #expect(!model.connected)
-            #expect(model.authError?.copyText == "Provider declined sign-in")
-            #expect(model.providerAuthCancellation == nil)
-            let sheet = await inspectAISetupSheet(model)
-            #expect(sheet.buttons["Cancel"] == true)
             model.cancelProviderAuth()
-            #expect(model.activeAuthOption == nil)
-        } else {
-            await waitForAISetupState { model.connected }
-            #expect(model.connected)
-            #expect(model.authError == nil)
+            try #require(model.activeAuthOption == option)
+            #expect(model._test_authSessionID == sessionID)
+            #expect(model.authBusy)
+            var terminalError: OnboardingAISetupModel.Failure?
+            if scenario.terminalFirst {
+                await cancellationGate.waitUntilStarted()
+                await nextGate.release()
+                await waitForAISetupState {
+                    model.connected || model.authError?.copyText.contains("Provider declined sign-in") == true
+                }
+                terminalError = model.authError
+                await cancellationGate.release()
+                await Task.megaYield()
+                #expect(model.authError == terminalError)
+            } else {
+                await waitForAISetupState { model.providerAuthCancellation != .requesting }
+                #expect(model.providerAuthCancellation == .unconfirmed)
+                await nextGate.release()
+                await waitForAISetupState {
+                    model.connected || model.authError?.copyText.contains("Provider declined sign-in") == true
+                }
+                terminalError = model.authError
+            }
+
+            #expect(!cancelledSessions.value.isEmpty)
+            #expect(cancelledSessions.value.allSatisfy { $0 == sessionID })
+            if terminalFailure {
+                #expect(!model.connected)
+                #expect(model.activeAuthOption == option)
+                #expect(model._test_authSessionID == nil)
+                #expect(model.authStep == nil)
+                if outcome == "request-failed" {
+                    #expect(model.authError?.copyText.contains("Provider declined sign-in") == true)
+                } else {
+                    #expect(model.authError?.copyText == "Provider declined sign-in")
+                }
+                #expect(model.providerAuthCancellation == nil)
+                #expect(!model.authBusy)
+                let sheet = await inspectAISetupSheet(model)
+                if let terminalError {
+                    #expect(sheet.labels.contains(terminalError.summary))
+                    #expect(sheet.buttons[terminalError.detail == nil ? "Copy error" : "Show details"] == true)
+                }
+                #expect(sheet.buttons["Submit"] == nil)
+                #expect(sheet.buttons["Cancel"] == true)
+                model.cancelProviderAuth()
+                #expect(model.activeAuthOption == nil)
+            } else {
+                await waitForAISetupState { model.connected }
+                #expect(model.connected)
+                #expect(model.authError == nil)
+            }
+            await gateway.shutdown()
         }
-        await gateway.shutdown()
     }
 
     @Test(
