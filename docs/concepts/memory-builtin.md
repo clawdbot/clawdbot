@@ -119,6 +119,10 @@ Full reindexes build a replacement in a temporary database and publish the
 memory tables atomically. Concurrent searches and status reads keep using the
 published index; a failed rebuild leaves that index intact.
 
+After an upgrade, automatic project and trigger recall may need to repair
+legacy provenance. That repair runs in the background. Replies continue while
+automatic recall stays empty until the affected sources have been reclassified.
+
 <Info>
 You can also index Markdown files outside the workspace with
 `memory.search.extraPaths`. See the

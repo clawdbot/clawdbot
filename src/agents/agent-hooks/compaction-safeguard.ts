@@ -239,6 +239,7 @@ type SummaryQualityRetention = {
   identifiers: string[];
   latestAsk: string | null;
   latestAskInRetainedTurn?: boolean;
+  latestUnresolvedUserRequest?: string;
   requiredAskContext: string;
   identifierPolicy: "strict" | "off" | "custom";
 };
@@ -942,6 +943,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     let baseTurnPrefixMessages = stripRuntimeContextCustomMessages(
       preparation.turnPrefixMessages ?? [],
     );
+    const latestUnresolvedUserRequest = preparation.latestUnresolvedUserRequest ?? null;
     if (!containsRealConversation([...baseMessagesToSummarize, ...baseTurnPrefixMessages])) {
       // Safety net for a preparation that dropped real conversation from the
       // range it covers: summarize that boundary-scoped range instead. It is
@@ -1018,6 +1020,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     const structuredInstructions = buildCompactionStructureInstructions(
       customInstructions,
       summarizationInstructions,
+      latestUnresolvedUserRequest ?? undefined,
     );
     let workspaceContextPromise: Promise<string> | undefined;
     const finalizeSummaryText = async (
@@ -1072,7 +1075,11 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         summary,
         firstKeptEntryId: preparation.firstKeptEntryId,
         tokensBefore: preparation.tokensBefore,
-        details: { readFiles, modifiedFiles },
+        details: {
+          readFiles,
+          modifiedFiles,
+          ...(latestUnresolvedUserRequest ? { latestUnresolvedUserRequest } : {}),
+        },
       },
     });
     if (providerId) {
@@ -1256,10 +1263,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const preservedTurnsSectionLocal = buildPreservedTurnsSection(preservedRecentMessages);
       const latestPreparedAsk = extractLatestUserAsk(messagesToSummarize);
       const requiredAskContext = formatRequiredAskContext(latestUserAsk ?? "");
-      // The producer needs the preserved completion context whenever it runs; handing over the
-      // ask alone can resurrect completed work. All-preserved windows stay model-free unless
-      // verbatim capping would hide the audited ask.
       const includePreservedContext =
+        !latestUnresolvedUserRequest &&
         qualityGuardEnabled &&
         latestPreparedAsk === latestUserAsk &&
         Boolean(latestPreparedAsk) &&
@@ -1368,6 +1373,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                 identifiers,
                 latestAsk: latestUserAsk,
                 latestAskInRetainedTurn: splitUserAsk !== null,
+                latestUnresolvedUserRequest: latestUnresolvedUserRequest ?? undefined,
                 requiredAskContext,
                 identifierPolicy,
               }
@@ -1397,6 +1403,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           sourceSummaries: [historySummary, splitTurnSummaryLocal].filter(Boolean),
           identifiers,
           latestAsk: latestUserAsk,
+          latestUnresolvedUserRequest: latestUnresolvedUserRequest ?? undefined,
           retainedTurnSummary: splitUserAsk !== null ? splitTurnSummaryLocal : undefined,
           identifierPolicy,
         });

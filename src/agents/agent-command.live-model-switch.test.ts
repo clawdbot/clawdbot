@@ -14,6 +14,8 @@ import {
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { withInstallationTarget } from "../infra/installation-target-context.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
@@ -133,7 +135,6 @@ const state = vi.hoisted(() => ({
   resolveSupportedThinkingLevelMock: vi.fn(({ level }: { level?: string }) => level),
   resolveThinkingDefaultMock: vi.fn((_args: unknown) => "low"),
   loadManifestModelCatalogMock: vi.fn((): ModelCatalogSnapshot["entries"] => []),
-  manifestMetadataSnapshot: { plugins: [] },
   resolvePluginMetadataSnapshotMock: vi.fn(),
   listSkillCommandsForWorkspaceMock: vi.fn((_params: unknown) => []),
   loadProviderScopedThinkingCatalogMock: vi.fn(
@@ -164,6 +165,8 @@ const state = vi.hoisted(() => ({
   trajectoryRecorderParamsMock: vi.fn(),
   enqueueExecutionIdentityContextAtAdmissionMock: vi.fn(),
 }));
+
+const manifestMetadataSnapshot = createPluginMetadataSnapshotFixture();
 
 vi.mock("../sessions/session-diff-baseline.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../sessions/session-diff-baseline.js")>();
@@ -402,19 +405,20 @@ vi.mock("../config/io.js", () => ({
 
 vi.mock("./agent-runtime-config.js", () => {
   return {
-    resolveAgentRuntimeConfig: async () => ({
-      loadedRaw: state.runtimeConfigMock ?? state.defaultRuntimeConfig,
-      sourceConfig: state.runtimeConfigMock ?? state.defaultRuntimeConfig,
-      cfg: state.runtimeConfigMock ?? state.defaultRuntimeConfig,
-    }),
+    resolveAgentRuntimeConfig: async () => state.runtimeConfigMock ?? state.defaultRuntimeConfig,
   };
 });
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
-  isPluginMetadataSnapshotCompatible: () => false,
-  resolvePluginMetadataSnapshot: (...args: unknown[]) =>
-    state.resolvePluginMetadataSnapshotMock(...args),
-}));
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
+  const { rebasePluginMetadataSnapshotManifestRegistry } =
+    await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>();
+  return {
+    isPluginMetadataSnapshotCompatible: () => false,
+    rebasePluginMetadataSnapshotManifestRegistry,
+    resolvePluginMetadataSnapshot: (...args: unknown[]) =>
+      state.resolvePluginMetadataSnapshotMock(...args),
+  };
+});
 
 vi.mock("../skills/discovery/chat-commands.runtime.js", () => ({
   expandExplicitSkillReferences: ({ text }: { text: string }) => ({ body: text, skills: [] }),
@@ -1025,7 +1029,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.resolveThinkingDefaultMock.mockReturnValue("low");
     state.resolveAgentSkillsFilterMock.mockReturnValue(undefined);
     state.loadManifestModelCatalogMock.mockReturnValue([]);
-    state.resolvePluginMetadataSnapshotMock.mockReturnValue(state.manifestMetadataSnapshot);
+    state.resolvePluginMetadataSnapshotMock.mockReturnValue(manifestMetadataSnapshot);
     state.loadProviderScopedThinkingCatalogMock.mockReset().mockResolvedValue(undefined);
     state.loadFullModelCatalogMock.mockClear();
     state.loadPreparedModelCatalogSnapshotMock.mockResolvedValue({
@@ -1210,7 +1214,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
   it("uses Gateway command metadata without resolving the agent workspace", async () => {
     const pluginGeneration = {
-      pluginMetadataSnapshot: state.manifestMetadataSnapshot,
+      pluginMetadataSnapshot: manifestMetadataSnapshot,
     } as never;
 
     const prepared = await prepareAgentCommandExecution(
@@ -1219,10 +1223,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       { config: {}, pluginGeneration },
     );
 
-    expect(prepared.manifestMetadataSnapshot).toBe(state.manifestMetadataSnapshot);
+    expect(prepared.manifestMetadataSnapshot).toBe(manifestMetadataSnapshot);
     expect(prepared.commandRuntimeContext?.pluginGeneration).toBe(pluginGeneration);
     expect(state.listSkillCommandsForWorkspaceMock).toHaveBeenCalledWith(
-      expect.objectContaining({ pluginMetadataSnapshot: state.manifestMetadataSnapshot }),
+      expect.objectContaining({ pluginMetadataSnapshot: manifestMetadataSnapshot }),
     );
     expect(state.resolvePluginMetadataSnapshotMock).not.toHaveBeenCalled();
   });
@@ -3477,18 +3481,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
   });
 
-  it.each([
-    {
-      name: "does not overwrite another active run's restart recovery context",
-      attemptResult: makeEmptyResult("openai", "gpt-5.4"),
-    },
-    {
-      name: "does not clear another active run's restart recovery context",
-      attemptResult: makeEmptyResult("openai", "gpt-5.4"),
-    },
-  ])("$name", async ({ attemptResult }) => {
+  it("does not overwrite another active run's restart recovery context", async () => {
     setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue(attemptResult);
+    state.runAgentAttemptMock.mockResolvedValue(makeEmptyResult("openai", "gpt-5.4"));
     const staleEntry = createCommandSessionEntry();
     const laterRunEntry = createCommandSessionEntry({
       updatedAt: 2,
@@ -4189,7 +4184,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     if (allowlisted) {
       expect(state.loadManifestModelCatalogMock).toHaveBeenCalledTimes(1);
       expect(state.loadManifestModelCatalogMock).toHaveBeenCalledWith(
-        expect.objectContaining({ metadataSnapshot: state.manifestMetadataSnapshot }),
+        expect.objectContaining({ metadataSnapshot: manifestMetadataSnapshot }),
       );
     }
     const thinkingArgs = requireRecord(
@@ -5253,6 +5248,24 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(transcriptParams.transcriptBody).toContain("A background task completed.");
     expect(transcriptParams.transcriptBody).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
     expect(transcriptParams.transcriptBody).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
+  });
+
+  it("refuses a local installation target only when dispatching an ACP turn", async () => {
+    setupAcpSession();
+    await expect(
+      withInstallationTarget(
+        {
+          stateDir: "/fixture/diagnosed",
+          configPath: "/fixture/custom.json",
+          defaultWorkspaceDir: "/fixture/default-workspace",
+        },
+        runBasicAgentCommand,
+      ),
+    ).rejects.toThrow("saved prompt");
+    expect(state.acpRunTurnMock).not.toHaveBeenCalled();
+    expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+    await runBasicAgentCommand();
+    expect(state.acpRunTurnMock).toHaveBeenCalledOnce();
   });
 
   it("marks ACP execution start before prompt submission", async () => {

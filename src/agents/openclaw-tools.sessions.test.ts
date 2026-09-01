@@ -263,6 +263,7 @@ type SessionsSendDetails = {
   error?: string;
   sentBeforeError?: boolean;
   sessionKey?: string;
+  targetDisposition?: string;
   delivery?: {
     status?: string;
     mode?: string;
@@ -1106,6 +1107,7 @@ describe("sessions tools", () => {
     const fireDetails = sessionsSendDetails(fire.details);
     expect(fireDetails.status).toBe("accepted");
     expect(fireDetails.runId).toBe("run-1");
+    expect(fireDetails.targetDisposition).toBe("queued");
     expect(fireDetails.delivery?.status).toBe("pending");
     expect(fireDetails.delivery?.mode).toBe("announce");
     await waitForCalls(() => agentCallCount, 3);
@@ -1159,7 +1161,7 @@ describe("sessions tools", () => {
       }),
     ).toBe(false);
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      '{ error: string; runId: string; status: "error" | "forbidden"; sentBeforeError?: true; sessionKey?: string; watched?: boolean } | { delivery: { mode: "announce"; status: "pending" | "skipped" }; runId: string; sessionKey: string; status: "accepted"; watched?: boolean } | { error: string; runId: string; sentBeforeError: true; sessionKey: string; status: "timeout"; delivery?: { mode: "announce"; status: "pending" | "skipped" }; watched?: boolean } | { message: string; runId: string; sessionKey: string; status: "no_reply"; watched?: boolean } | { delivery: { mode: "announce"; status: "pending" | "skipped" }; reply: string; runId: string; sessionKey: string; status: "ok"; watched?: boolean }',
+      '{ error: string; runId: string; status: "error" | "forbidden"; sentBeforeError?: true; sessionKey?: string; watched?: boolean } | { delivery: { mode: "announce"; status: "pending" | "skipped" }; runId: string; sessionKey: string; status: "accepted"; targetDisposition: "queued" | "steered"; watched?: boolean } | { error: string; runId: string; sentBeforeError: true; sessionKey: string; status: "timeout"; delivery?: { mode: "announce"; status: "pending" | "skipped" }; watched?: boolean } | { message: string; runId: string; sessionKey: string; status: "no_reply"; watched?: boolean } | { delivery: { mode: "announce"; status: "pending" | "skipped" }; reply: string; runId: string; sessionKey: string; status: "ok"; watched?: boolean }',
     );
     await waitForCalls(() => agentCallCount, 6);
     await waitForCalls(() => waitCallCount, 6);
@@ -1279,6 +1281,7 @@ describe("sessions tools", () => {
 
       expect(result.details).toMatchObject({
         status: "accepted",
+        targetDisposition: "queued",
         delivery: { status: "skipped", mode: "announce" },
         watched: false,
       });
@@ -1743,6 +1746,7 @@ describe("sessions tools", () => {
     const details = sessionsSendDetails(result.details);
     expect(details.status).toBe("accepted");
     expect(details.sessionKey).toBe(targetKey);
+    expect(details.targetDisposition).toBe("queued");
     expect(details.delivery?.status).toBe("pending");
     expect(details.delivery?.mode).toBe("announce");
     expect(getActiveGatewayRootWorkCount()).toBe(1);
@@ -2219,6 +2223,9 @@ describe("sessions tools", () => {
       const details = sessionsSendDetails(result.details);
       expect(details.status).toBe("accepted");
       expect(details.sessionKey).toBe(runScopedCallerKey);
+      expect(details.targetDisposition).toBe("steered");
+      expect(details.delivery?.status).toBe("skipped");
+      expect(details.delivery?.mode).toBe("announce");
       expect(queueMessage).toHaveBeenCalledOnce();
       expect(queueMessage.mock.calls[0]?.[1]?.waitForTranscriptCommit).toBe(
         supportsTranscriptCommitWait ? true : undefined,

@@ -640,7 +640,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
 
       expect(metrics).toEqual({
         chatSelection: "text",
-        chromeSelection: "none",
+        chromeSelection: "auto",
         contentScrollbar: "12px",
         hiddenRailScrollbarWidth: "none",
         inputSelection: "text",

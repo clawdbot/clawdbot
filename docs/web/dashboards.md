@@ -67,7 +67,8 @@ never needs the agent.
 - **Fluid grid.** Drag widgets by their handle; everything reflows and
   compacts automatically. Resize by handle or pick a size preset (small,
   medium, large, extra large) from the widget menu. Nobody places pixels —
-  not you, not the agent.
+  not you, not the agent. On narrow boards, widgets stack at full width in
+  their saved order; widening the board restores their saved column widths.
 - **Tabs.** A board can have several pages — say, an overview tab and a
   focused tab with one big widget. Each tab remembers its own chat-dock
   position.
@@ -141,6 +142,18 @@ session notices that the agent sees on its next turn. If the widget declares
 and receives the `prompt` grant, its actions can instead send a visible prompt
 into the thread. Disabling the Canvas plugin removes the A2UI kind and leaves
 stored widgets visibly unavailable until the plugin is enabled again.
+
+## Retired Workspaces
+
+The experimental Workspaces plugin, its Control UI tab, `openclaw workspaces`
+CLI, and `workspace_*` tools have been removed. Session dashboards use a
+different storage model: each board belongs to a session and lives in the
+owning agent's database. Legacy Workspaces documents and databases are not
+automatically converted.
+
+Preserve any legacy documents, data, and widget assets before running
+`openclaw doctor --fix`: its Workspaces repair deletes identified legacy state
+under `<stateDir>/workspaces`, without importing that content into a dashboard.
 
 ## Good to know
 

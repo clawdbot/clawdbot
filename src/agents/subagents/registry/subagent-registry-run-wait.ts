@@ -7,7 +7,7 @@ import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { DetachedTaskFindResult } from "../../../tasks/detached-task-runtime-contract.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
-import { isRecoverableAgentWaitError, waitForAgentRun } from "../../run-wait.js";
+import { waitForAgentRun } from "../../run-wait.js";
 import { withSubagentOutcomeTiming } from "../announce/subagent-announce-output.js";
 import type { SubagentRunOutcome } from "../announce/subagent-run-outcome.js";
 import { classifySubagentTerminalOutcome } from "../subagent-terminal-outcome.js";
@@ -305,7 +305,7 @@ export class SubagentWaitManager {
         }
         return;
       }
-      if (waitStatus === "error" && !waitAborted && isRecoverableAgentWaitError(wait.error)) {
+      if (waitStatus === "error" && !waitAborted && wait.retryableTransportError) {
         scheduleWaitRetry(entry, "subagent wait interrupted; scheduling recovery", wait.error);
         return;
       }

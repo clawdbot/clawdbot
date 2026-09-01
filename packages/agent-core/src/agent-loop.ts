@@ -15,7 +15,8 @@ import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-
 import { TranscriptNotContinuableError } from "./errors.js";
 import { uuidv7 } from "./harness/session/uuid.js";
 import {
-  copyInternalToolResultAcknowledgement,
+  appendToolLoopWarning,
+  copyInternalToolResultState,
   getInternalToolExecutionPreparer,
   getInternalSyncSteeringGetter,
   type InternalToolExecutionPreparation,
@@ -46,6 +47,7 @@ import type {
   AgentToolResult,
   StreamFn,
   ToolLoopIntervention,
+  ToolLoopWarning,
 } from "./types.js";
 import { validateToolArguments } from "./validation.js";
 
@@ -1007,6 +1009,7 @@ async function executeToolCalls(
         });
       }
       batch.lifecycle = admission ? takeInternalToolBatchLifecycle(admission) : undefined;
+      batch.warnings = admission?.warnings;
     }
   }
   let hasSequentialToolCall = false;
@@ -1046,6 +1049,7 @@ type ToolBatchContext = {
   resolved: Map<AgentToolCall, ResolvedToolCallOutcome>;
   validated: Map<AgentToolCall, ValidatedToolCallOutcome>;
   lifecycle?: InternalToolBatchLifecycle;
+  warnings?: ToolLoopWarning[];
 };
 
 type ResolvedToolCallOutcome =
@@ -1917,7 +1921,7 @@ async function finalizeExecutedToolCall(
         batch.signal,
       );
       if (afterResult) {
-        result = copyInternalToolResultAcknowledgement(result, {
+        result = copyInternalToolResultState(result, {
           ...result,
           content: afterResult.content ?? result.content,
           details: afterResult.details ?? result.details,
@@ -1954,6 +1958,16 @@ async function finalizeToolCallOutcome(
   finalized: FinalizedToolCallOutcome,
   args: unknown,
 ): Promise<FinalizedToolCallOutcome> {
+  const outcome = await applyToolOutcomeHook(batch, finalized, args);
+  const warning = batch.warnings?.find((entry) => entry.toolCallId === outcome.toolCall.id);
+  return warning ? { ...outcome, result: appendToolLoopWarning(outcome.result, warning) } : outcome;
+}
+
+async function applyToolOutcomeHook(
+  batch: ToolBatchContext,
+  finalized: FinalizedToolCallOutcome,
+  args: unknown,
+): Promise<FinalizedToolCallOutcome> {
   if (!batch.config.afterToolOutcome) {
     return finalized;
   }
@@ -1976,7 +1990,7 @@ async function finalizeToolCallOutcome(
     }
     return {
       ...finalized,
-      result: copyInternalToolResultAcknowledgement(finalized.result, {
+      result: copyInternalToolResultState(finalized.result, {
         ...finalized.result,
         content: afterResult.content ?? finalized.result.content,
         details: afterResult.details ?? finalized.result.details,
@@ -2135,7 +2149,7 @@ async function emitToolExecutionEnd(
 }
 
 function createToolResultMessage(finalized: FinalizedToolCallOutcome): ToolResultMessage {
-  return copyInternalToolResultAcknowledgement(
+  return copyInternalToolResultState(
     finalized.result,
     withToolResultContentSource(
       {

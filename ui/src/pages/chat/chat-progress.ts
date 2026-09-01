@@ -4,7 +4,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatGuardianNotice, ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
-import type { RunOutputUsage } from "./tool-stream.ts";
+import type { RunOutputUsage } from "./tool-stream-contract.ts";
 
 type WorkingProgress = {
   key: string;

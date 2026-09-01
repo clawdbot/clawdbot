@@ -1,7 +1,8 @@
 // Doctor runtime checks inspect tool names, browser residue, and runtime state.
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import { TOOL_NAME_SEPARATOR } from "../agents/agent-bundle-mcp-names.js";
+import { assignSafeServerNames, TOOL_NAME_SEPARATOR } from "../agents/agent-bundle-mcp-names.js";
+import { loadSessionMcpConfig } from "../agents/agent-bundle-mcp-runtime-config.js";
 import type {
   BundleMcpToolRuntime,
   McpToolCatalogDiagnostic,
@@ -18,6 +19,8 @@ import { resolveConversationCapabilityProfile } from "../agents/conversation-cap
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { applyFinalEffectiveToolPolicy } from "../agents/embedded-agent-runner/effective-tool-policy.js";
 import { shouldCreateBundleMcpRuntimeForAttempt } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import { resolveMcpAuthProfileId } from "../agents/mcp-auth-profile.js";
+import { partitionMcpServersByConnectionScope } from "../agents/mcp-connection-resolver.js";
 import { findModelInCatalog, type ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { supportsModelTools } from "../agents/model-tool-support.js";
@@ -1006,6 +1009,17 @@ function bundleMcpRuntimeDiagnosticFinding(diagnostic: McpToolCatalogDiagnostic)
   };
 }
 
+function bundleMcpRequesterInspectionFinding(serverName: string): HealthFinding {
+  return {
+    checkId: "core/doctor/runtime-tool-schemas",
+    severity: "info",
+    message: `Configured requester-scoped MCP server "${serverName}" was not probed without an authenticated requester.`,
+    path: `mcp.servers.${serverName}`,
+    requirement: "authenticated requester context",
+    fixHint: "Verify this server from an authenticated agent turn.",
+  };
+}
+
 function makeBundleMcpDiagnosticSentinel(name: string): AnyAgentTool {
   const sentinel: AnyAgentTool = {
     name,
@@ -1131,9 +1145,11 @@ export async function collectRuntimeToolSchemaFindings(
   options?: { runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner },
 ): Promise<readonly HealthFinding[]> {
   const findings: HealthFinding[] = [];
-  const bundleRuntimeByWorkspace = new Map<string, BundleMcpToolRuntime>();
-  const bundleRuntimeLoadErrorsByWorkspace = new Map<string, HealthFinding>();
+  const bundleRuntimeByContext = new Map<string, BundleMcpToolRuntime>();
+  const bundleRuntimeLoadErrorsByContext = new Map<string, HealthFinding>();
+  const reportedBundleRuntimeDiagnostics = new Set<string>();
   const reportedBundleRuntimeLoadErrors = new Set<string>();
+  const reportedRequesterScopedServers = new Set<string>();
   try {
     for (const agentId of listAgentIds(cfg)) {
       if (isAcpRuntimeAgent(cfg, agentId)) {
@@ -1141,10 +1157,11 @@ export async function collectRuntimeToolSchemaFindings(
       }
       const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
       const collectForAgent = async () => {
+        const agentDir = resolveAgentDir(cfg, agentId);
         const catalog = await loadPreparedModelCatalog({
           config: cfg,
           agentId,
-          agentDir: resolveAgentDir(cfg, agentId),
+          agentDir,
           readOnly: true,
           providerDiscoveryProviderIds: [],
         });
@@ -1173,36 +1190,81 @@ export async function collectRuntimeToolSchemaFindings(
         if (!shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: true })) {
           return;
         }
+        const fullMcpConfig = loadSessionMcpConfig({
+          workspaceDir,
+          cfg,
+          logDiagnostics: false,
+        });
+        const safeServerNamesByServer = assignSafeServerNames(
+          Object.keys(fullMcpConfig.loaded.mcpServers),
+        );
+        const { requesterScopedServerNames } = partitionMcpServersByConnectionScope(
+          fullMcpConfig.loaded.mcpServers,
+        );
+        for (const serverName of requesterScopedServerNames) {
+          if (reportedRequesterScopedServers.has(serverName)) {
+            continue;
+          }
+          const diagnostic: McpToolCatalogDiagnostic = {
+            serverName,
+            safeServerName: safeServerNamesByServer.get(serverName) ?? serverName,
+            launchSummary: "requester-scoped connection",
+            message: "authenticated requester context required",
+          };
+          if (shouldReportBundleMcpRuntimeDiagnostic({ cfg, agentId, modelRef, diagnostic })) {
+            findings.push(bundleMcpRequesterInspectionFinding(serverName));
+            reportedRequesterScopedServers.add(serverName);
+          }
+        }
+        const excludeServerNames = new Set(requesterScopedServerNames);
+        const staticMcpConfig = loadSessionMcpConfig({
+          workspaceDir,
+          cfg,
+          logDiagnostics: false,
+          excludeServerNames,
+          safeServerNamesByServer,
+        });
+        const credentialContext = Object.values(staticMcpConfig.loaded.mcpServers).some(
+          resolveMcpAuthProfileId,
+        )
+          ? agentDir
+          : "shared";
+        // Equivalent static catalogs share one probe. Agent-local auth profiles retain
+        // their agent directory so one agent's credentials cannot validate another's.
+        const runtimeContext = `${staticMcpConfig.fingerprint}\0${credentialContext}`;
         if (
-          !bundleRuntimeByWorkspace.has(workspaceDir) &&
-          !bundleRuntimeLoadErrorsByWorkspace.has(workspaceDir)
+          !bundleRuntimeByContext.has(runtimeContext) &&
+          !bundleRuntimeLoadErrorsByContext.has(runtimeContext)
         ) {
           try {
             const { createBundleMcpToolRuntime } =
               await import("../agents/agent-bundle-mcp-tools.js");
-            bundleRuntimeByWorkspace.set(
-              workspaceDir,
+            bundleRuntimeByContext.set(
+              runtimeContext,
               await createBundleMcpToolRuntime({
                 workspaceDir,
+                agentDir,
                 cfg,
+                excludeServerNames,
+                safeServerNamesByServer,
               }),
             );
           } catch (error) {
-            bundleRuntimeLoadErrorsByWorkspace.set(
-              workspaceDir,
+            bundleRuntimeLoadErrorsByContext.set(
+              runtimeContext,
               bundleMcpRuntimeLoadFailureFinding(error),
             );
           }
         }
-        const bundleRuntimeLoadError = bundleRuntimeLoadErrorsByWorkspace.get(workspaceDir);
+        const bundleRuntimeLoadError = bundleRuntimeLoadErrorsByContext.get(runtimeContext);
         if (bundleRuntimeLoadError) {
-          if (!reportedBundleRuntimeLoadErrors.has(workspaceDir)) {
+          if (!reportedBundleRuntimeLoadErrors.has(runtimeContext)) {
             findings.push(bundleRuntimeLoadError);
-            reportedBundleRuntimeLoadErrors.add(workspaceDir);
+            reportedBundleRuntimeLoadErrors.add(runtimeContext);
           }
           return;
         }
-        const bundleRuntime = bundleRuntimeByWorkspace.get(workspaceDir);
+        const bundleRuntime = bundleRuntimeByContext.get(runtimeContext);
         if (bundleRuntime) {
           if (bundleRuntime.diagnostics && bundleRuntime.diagnostics.length > 0) {
             const policyActiveDiagnostics = filterPolicyActiveBundleMcpDiagnostics({
@@ -1211,7 +1273,13 @@ export async function collectRuntimeToolSchemaFindings(
               agentId,
               modelRef,
             });
-            findings.push(...policyActiveDiagnostics.map(bundleMcpRuntimeDiagnosticFinding));
+            for (const diagnostic of policyActiveDiagnostics) {
+              if (reportedBundleRuntimeDiagnostics.has(diagnostic.serverName)) {
+                continue;
+              }
+              findings.push(bundleMcpRuntimeDiagnosticFinding(diagnostic));
+              reportedBundleRuntimeDiagnostics.add(diagnostic.serverName);
+            }
           }
           findings.push(
             ...collectBundleMcpRuntimeToolSchemaFindings({
@@ -1232,7 +1300,7 @@ export async function collectRuntimeToolSchemaFindings(
       }
     }
   } finally {
-    await Promise.all([...bundleRuntimeByWorkspace.values()].map((runtime) => runtime.dispose()));
+    await Promise.all([...bundleRuntimeByContext.values()].map((runtime) => runtime.dispose()));
   }
   return findings;
 }

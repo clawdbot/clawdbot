@@ -1,9 +1,8 @@
 // Update failures and control-plane results share one reporting boundary.
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import type { EXTENDED_STABLE_TAG_UNSUPPORTED_REASON } from "../../infra/update-channels.js";
-import type { ExtendedStableFailureReason } from "../../infra/update-check.js";
 import {
   markControlPlaneUpdateRestartSentinelFailure,
+  resolveManagedServiceUpdateFailureExitCode,
   writeControlPlaneUpdateRestartSentinel,
   type ControlPlaneUpdateSentinelMetaFile,
 } from "../../infra/update-control-plane-sentinel.js";
@@ -15,11 +14,7 @@ import type { UpdateCommandOptions } from "./shared.js";
 export async function reportPreMutationUpdateFailure(params: {
   root: string;
   installKind: "git" | "package" | "unknown";
-  reason:
-    | ExtendedStableFailureReason
-    | typeof EXTENDED_STABLE_TAG_UNSUPPORTED_REASON
-    | "npm lifecycle policy preflight"
-    | "unsupported-package-target";
+  reason: string;
   message?: string;
   opts: UpdateCommandOptions;
   controlPlaneUpdateSentinelMeta: ControlPlaneUpdateSentinelMetaFile["meta"] | null;
@@ -29,6 +24,7 @@ export async function reportPreMutationUpdateFailure(params: {
     mode: params.installKind === "git" ? "git" : "unknown",
     root: params.root,
     reason: params.reason,
+    recovery: { serviceRestartSafe: true },
     steps: [],
     durationMs: 0,
   };
@@ -43,7 +39,7 @@ export async function reportPreMutationUpdateFailure(params: {
     defaultRuntime.error(params.message);
   }
   printResult(result, params.opts);
-  defaultRuntime.exit(1);
+  defaultRuntime.exit(resolveManagedServiceUpdateFailureExitCode(result));
 }
 
 export async function writeControlPlaneUpdateRestartSentinelBestEffort(params: {

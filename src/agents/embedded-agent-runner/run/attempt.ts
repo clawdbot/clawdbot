@@ -523,6 +523,8 @@ export async function runEmbeddedAttempt(
       return {
         ...executionResult,
         codeModeEngaged: codeModeControlsEnabledForRun,
+        providerRetryMaxRetries:
+          preparedSessionRuntime.agentSession.settingsManager.getProviderRetrySettings().maxRetries,
         ...(catalogSession
           ? {
               bridgeCalls: {

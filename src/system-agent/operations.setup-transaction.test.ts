@@ -255,7 +255,7 @@ describe("system-agent setup transaction", () => {
     setTestEnvValue("OPENCLAW_STATE_DIR", opTempDirs.make("openclaw-recovery-complete-"));
     const pending = createPendingLocalOnboarding();
     const applySetup = vi.fn(async () => createRecoverySetupResult());
-    const beforePersistentApply = vi.fn(async () => {});
+    const beforePersistentApply = vi.fn(() => {});
     const { runtime } = createSystemAgentTestRuntime();
 
     const result = await executeSystemAgentOperation({ kind: "setup" }, runtime, {
@@ -512,7 +512,7 @@ describe("system-agent setup transaction", () => {
     const pending = createPendingLocalOnboarding();
     const applySetup = vi.fn(async () => createRecoverySetupResult());
     let authorizations = 0;
-    const beforePersistentApply = vi.fn(async () => {
+    const beforePersistentApply = vi.fn(() => {
       if (++authorizations > 1) {
         throw new SystemAgentInferenceUnavailableError("conversation");
       }
@@ -538,7 +538,7 @@ describe("system-agent setup transaction", () => {
     const pending = createPendingLocalOnboarding();
     const applySetup = vi.fn(async () => createRecoverySetupResult());
     let authorizations = 0;
-    const beforePersistentApply = vi.fn(async () => {
+    const beforePersistentApply = vi.fn(() => {
       if (++authorizations > 1) {
         setRecoveryConfig(pending, "2026-08-03T00:00:00.000Z");
       }

@@ -58,44 +58,74 @@ describe("resolveExecDefaults", () => {
     expect(defaults.canRequestNode).toBe(false);
   });
 
-  it.each(["gateway", "node"] as const)(
-    "keeps required sessions sandboxed and hides nodes despite configured host=%s",
-    async (host) => {
-      const sessionKey = "agent:main:guest";
+  it.each([
+    { host: "gateway", sessionKey: "agent:main:guest" },
+    { host: "node", sessionKey: "agent:main:guest" },
+    { host: "gateway", sessionKey: "global" },
+    { host: "node", sessionKey: "global" },
+  ] as const)(
+    "keeps required $sessionKey sandboxed and hides nodes despite configured host=$host",
+    async ({ host, sessionKey }) => {
       const storePath = path.join(execStoreDirs.make("openclaw-required-exec-"), "sessions.json");
       const sessionEntry = {
         sessionId: "guest-session",
         updatedAt: 1,
         sandbox: "required" as const,
       };
-      await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
-      const cfg = withDefaultAgent({
+      await replaceSessionEntry({ agentId: "main", sessionKey, storePath }, sessionEntry);
+      const cfg: OpenClawConfig = {
         session: { store: storePath },
-        agents: { defaults: { sandbox: { mode: "off" } } },
+        agents: {
+          ownership: "explicit",
+          defaults: { sandbox: { mode: "off" } },
+          entries: { main: {}, worker: {} },
+        },
         tools: { exec: { host } },
-      });
+      };
+      const owner = { cfg, agentId: "main", sandboxAvailable: true };
 
-      expect(resolveExecDefaults({ cfg, sessionKey, sandboxAvailable: true })).toMatchObject({
+      expect(resolveExecDefaults({ ...owner, sessionKey })).toMatchObject({
         host: "auto",
         effectiveHost: "sandbox",
         canRequestNode: false,
       });
-      expect(resolveExecDefaults({ cfg, sessionEntry, sandboxAvailable: true })).toMatchObject({
+      expect(resolveExecDefaults({ ...owner, sessionEntry })).toMatchObject({
         host: "auto",
         effectiveHost: "sandbox",
         canRequestNode: false,
       });
       expect(
         resolveExecDefaults({
-          cfg,
+          ...owner,
           sessionKey,
-          sandboxAvailable: true,
           elevatedRequested: true,
         }).effectiveHost,
       ).toBe("sandbox");
-      expect(resolveNodeExecEligibility({ cfg, sessionKey, sandboxAvailable: true }).canExec).toBe(
-        false,
-      );
+      expect(resolveNodeExecEligibility({ ...owner, sessionKey }).canExec).toBe(false);
+    },
+  );
+
+  it.each([
+    { agentId: "isolated", effectiveHost: "sandbox", canExec: false },
+    { agentId: "direct", effectiveHost: "gateway", canExec: true },
+  ])(
+    "uses $agentId sandbox policy for global exec defaults",
+    ({ agentId, effectiveHost, canExec }) => {
+      const storeRoot = execStoreDirs.make("openclaw-global-exec-");
+      const cfg: OpenClawConfig = {
+        session: { store: path.join(storeRoot, "{agentId}", "sessions.json") },
+        agents: {
+          ownership: "explicit",
+          entries: {
+            isolated: { sandbox: { mode: "all" } },
+            direct: { sandbox: { mode: "off" } },
+          },
+        },
+      };
+      const params = { cfg, agentId, sessionKey: "global" };
+
+      expect(resolveExecDefaults(params)).toMatchObject({ effectiveHost, canRequestNode: canExec });
+      expect(resolveNodeExecEligibility(params)).toEqual({ canExec });
     },
   );
 

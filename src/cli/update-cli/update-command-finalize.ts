@@ -28,6 +28,7 @@ import { suppressDeprecations } from "./suppress-deprecations.js";
 import {
   createUpdateConfigSnapshot,
   persistRequestedUpdateChannel,
+  persistValidatedDowngradeConfig,
   readPostCorePreUpdateSourceConfig,
   restoreDroppedPreUpdateChannels,
 } from "./update-command-config.js";
@@ -275,6 +276,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
   });
   const pluginUpdate = completedPluginUpdate.pluginUpdate;
   configSnapshot = completedPluginUpdate.configSnapshot;
+  await persistValidatedDowngradeConfig(configSnapshot);
 
   if (opts.deferCompletionCache) {
     phaseTimings.push({

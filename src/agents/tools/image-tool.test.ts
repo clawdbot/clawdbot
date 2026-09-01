@@ -15,6 +15,7 @@ import type {
   ImagesDescriptionRequest,
   MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import {
@@ -784,6 +785,7 @@ async function expectImageToolExecOk(
     path: imagePath,
   });
   expectToolText(result, "ok");
+  expect((result as ToolTextResult).details).toMatchObject({ text: "ok" });
 }
 
 type ToolTextResult = {
@@ -2762,7 +2764,7 @@ describe("image tool MiniMax VLM routing", () => {
     vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
     const cfg = createMinimaxImageConfig();
     const tool = createRequiredImageTool({ config: cfg, agentDir });
-    return { fetch: fetchMock, tool };
+    return { fetch: fetchMock, tool, cfg, agentDir };
   }
 
   it("accepts path for single-image requests and calls minimaxUnderstandImage", async () => {
@@ -2887,14 +2889,39 @@ describe("image tool MiniMax VLM routing", () => {
   });
 
   it("surfaces MiniMax API errors from /v1/coding_plan/vlm", async () => {
-    const { tool } = await createMinimaxVlmFixture({ status_code: 1004, status_msg: "bad key" });
+    const { tool, cfg, agentDir } = await createMinimaxVlmFixture({
+      status_code: 1004,
+      status_msg: "bad key",
+    });
+    const generation = createModelGenerationFixture({
+      agentDir,
+      workspaceDir: state.workspaceDir,
+      config: cfg,
+      label: "minimax-vlm",
+      provider: "minimax",
+      requestProvider: "minimax",
+    });
+    const classifyFailoverReason = vi.fn(() => undefined);
+    expectDefined(
+      generation.pluginRegistry.providers[0],
+      "MiniMax provider registration",
+    ).provider.classifyFailoverReason = classifyFailoverReason;
 
+    // Embedded tools inherit this registry scope before provider error classification.
     await expect(
-      tool.execute("t1", {
-        prompt: "Describe the image.",
-        path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
-      }),
+      withPluginRuntimeGenerationScope(generation.preparedModelRuntime, () =>
+        tool.execute("t1", {
+          prompt: "Describe the image.",
+          path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        }),
+      ),
     ).rejects.toThrow(/MiniMax VLM API error/i);
+    expect(classifyFailoverReason).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "minimax",
+        errorMessage: "MiniMax VLM API error (1004): bad key.",
+      }),
+    );
   });
 });
 

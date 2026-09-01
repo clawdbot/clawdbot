@@ -1,4 +1,4 @@
-/** CLI entrypoint for `openclaw gateway status`. */
+/** CLI entrypoint for `openclaw gateway probe`. */
 import { isRich } from "../../packages/terminal-core/src/theme.js";
 import { parseGatewayPortOption } from "../cli/gateway-port-option.js";
 import { parseTimeoutMsWithFallback } from "../cli/parse-timeout.js";
@@ -59,7 +59,9 @@ export async function gatewayStatusCommand(
   const cfg = await readBestEffortConfig();
   const rich = isRich() && opts.json !== true;
   const defaultTimeoutMs = 3000;
-  const overallTimeoutMs = parseTimeoutMsWithFallback(opts.timeout, defaultTimeoutMs);
+  const overallTimeoutMs = parseTimeoutMsWithFallback(opts.timeout, defaultTimeoutMs, {
+    invalidType: "error",
+  });
   const portOverride = parseGatewayPortOption(opts.port);
   const wideAreaDomain = resolveWideAreaDiscoveryDomain({
     configDomain: cfg.discovery?.wideArea?.domain,
@@ -100,10 +102,10 @@ export async function gatewayStatusCommand(
     }
   }
 
-  const localTlsRuntime =
+  const localCertificate =
     cfg.gateway?.tls?.enabled === true
-      ? await loadGatewayTlsModule().then(({ loadGatewayTlsRuntime }) =>
-          loadGatewayTlsRuntime(cfg.gateway?.tls),
+      ? await loadGatewayTlsModule().then(({ inspectGatewayTlsCertificate }) =>
+          inspectGatewayTlsCertificate(cfg.gateway?.tls),
         )
       : undefined;
 
@@ -125,8 +127,8 @@ export async function gatewayStatusCommand(
         sshTarget,
         sshIdentity,
         loadSshTunnelModule,
-        localTlsFingerprint: localTlsRuntime?.enabled
-          ? localTlsRuntime.fingerprintSha256
+        localTlsFingerprint: localCertificate?.ok
+          ? localCertificate.value.fingerprintSha256
           : undefined,
       }),
   );
@@ -137,10 +139,7 @@ export async function gatewayStatusCommand(
     sshTunnelStarted: probePass.sshTunnelStarted,
     sshTunnelError: probePass.sshTunnelError,
     discoveryCount: probePass.discovery.length,
-    localTlsLoadError:
-      localTlsRuntime && !localTlsRuntime.enabled && localTlsRuntime.required
-        ? (localTlsRuntime.error ?? "gateway tls is enabled but local TLS runtime could not load")
-        : null,
+    localTlsLoadError: localCertificate && !localCertificate.ok ? localCertificate.error : null,
   });
   const primary = pickPrimaryProbedTarget(probePass.probed);
 

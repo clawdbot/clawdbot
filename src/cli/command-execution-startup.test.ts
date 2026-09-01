@@ -1,5 +1,5 @@
 // Command execution startup tests cover startup behavior before CLI command execution.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const emitCliBannerMock = vi.hoisted(() => vi.fn());
 const routeLogsToStderrMock = vi.hoisted(() => vi.fn());
@@ -24,10 +24,13 @@ vi.mock("./command-bootstrap.js", () => ({
 describe("command-execution-startup", () => {
   let mod: typeof import("./command-execution-startup.js");
 
-  beforeEach(async () => {
-    vi.clearAllMocks();
+  beforeAll(async () => {
     vi.resetModules();
     mod = await import("./command-execution-startup.js");
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
   it("preserves console exports for a co-sharded subsystem logger", async () => {
@@ -196,7 +199,7 @@ describe("command-execution-startup", () => {
     expect(emitCliBannerMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not import the banner module for JSON output", async () => {
+  it("does not emit the banner for JSON output", async () => {
     await mod.applyCliExecutionStartupPresentation({
       startupPolicy: {
         suppressDoctorStdout: true,

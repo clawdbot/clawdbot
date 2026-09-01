@@ -1,11 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
+import { loadControlUiSourceCatalog } from "../../../scripts/lib/control-ui-i18n-catalog.ts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "../../../scripts/lib/control-ui-i18n-config.ts";
 import {
   flattenTranslations,
   type TranslationMap,
 } from "../../../scripts/lib/control-ui-i18n-sync-plan.ts";
-import { en } from "./locales/en.ts";
 
 // Feature-name keys renamed by RFC 0026. Schedule-syntax strings ("Cron
 // schedule {expr}", cron expression help) intentionally keep the word cron
@@ -35,7 +35,7 @@ const RENAMED_FEATURE_KEYS = [
 
 describe("automations rename locale catalogs", () => {
   it("renamed English source no longer says cron", () => {
-    const flat = flattenTranslations(en, "", new Map());
+    const flat = flattenTranslations(loadControlUiSourceCatalog());
     for (const key of RENAMED_FEATURE_KEYS) {
       const value = flat.get(key);
       expect(value, key).toBeDefined();

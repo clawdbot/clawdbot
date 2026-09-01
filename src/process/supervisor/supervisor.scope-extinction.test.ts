@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   createSilentIdleArgv,
@@ -24,9 +24,12 @@ vi.mock("./adapters/pty.js", () => ({
 let createProcessSupervisor: typeof import("./supervisor.js").createProcessSupervisor;
 
 describe("process supervisor scope extinction", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     ({ createProcessSupervisor } = await import("./supervisor.js"));
+  });
+
+  beforeEach(() => {
     createChildAdapterMock.mockReset();
     createPtyAdapterMock.mockReset();
     vi.useRealTimers();

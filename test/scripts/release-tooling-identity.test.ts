@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { verifyReleasePreflightToolingIdentity } from "../../scripts/npm-preflight-tooling-identity.mjs";
+import {
+  validateNpmPreflightProducer,
+  verifyReleasePreflightToolingIdentity,
+} from "../../scripts/npm-preflight-tooling-identity.mjs";
 import {
   resolveReleaseToolingIdentity,
   validateReleasePublishParentRun,
@@ -407,6 +410,50 @@ describe("release tooling identity", () => {
 });
 
 describe("historical npm preflight tooling", () => {
+  const producer = {
+    repository: "openclaw/openclaw",
+    workflowRef: `openclaw/openclaw/.github/workflows/openclaw-npm-release.yml@${FULL_REF}`,
+    workflowSha: SHA,
+    runId: RUN_ID,
+    runAttempt: "1",
+  };
+  const expectedProducer = {
+    repository: producer.repository,
+    workflowFullRef: FULL_REF,
+    workflowSha: SHA,
+    runId: RUN_ID,
+    runAttempt: "1",
+  };
+
+  it("distinguishes immutable original ref evidence from legacy unknown provenance", () => {
+    expect(
+      validateNpmPreflightProducer({ ...expectedProducer, manifest: { version: 2, producer } }),
+    ).toEqual({ originalWorkflowRef: producer.workflowRef, provenance: "immutable-manifest" });
+    expect(validateNpmPreflightProducer({ ...expectedProducer, manifest: { version: 1 } })).toEqual(
+      { originalWorkflowRef: null, provenance: "legacy-unrecorded" },
+    );
+  });
+
+  it.each([
+    { version: 2 },
+    { version: 1, producer },
+    { version: "2", producer },
+    {
+      version: 2,
+      producer: {
+        ...producer,
+        workflowRef: producer.workflowRef.replace("refs/tags/", "refs/heads/"),
+      },
+    },
+    { version: 2, producer: { ...producer, workflowSha: OTHER_SHA } },
+    { version: 2, producer: { ...producer, runId: PARENT_RUN_ID } },
+    { version: 2, producer: { ...producer, runAttempt: "2" } },
+    { version: 2, producer: { ...producer, repository: "other/repo" } },
+    { version: 2, producer: { ...producer, extra: true } },
+  ])("rejects incomplete or mismatched immutable producer evidence %j", (manifest) => {
+    expect(() => validateNpmPreflightProducer({ ...expectedProducer, manifest })).toThrow();
+  });
+
   function proof(overrides: Record<string, unknown> = {}) {
     const responses: Record<string, unknown> = {
       [`git/ref/tags/${REF}`]: { ref: FULL_REF, object: { sha: SHA, type: "commit" } },

@@ -1,9 +1,10 @@
 // Gateway chat runtime projects agent events into chat/session subscriber
 // streams, lifecycle persistence, heartbeat visibility, and live UI updates.
 import { performance } from "node:perf_hooks";
-import type {
-  ChatEvent,
-  ChatRunStartupPhase,
+import {
+  projectChatErrorDetail,
+  type ChatEvent,
+  type ChatRunStartupPhase,
 } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import {
@@ -797,6 +798,7 @@ export function createAgentEventHandler({
               abortErrorMessage: validationAbortErrorMessage,
               yielded: yieldedWaiting ? true : undefined,
               terminalFrameOwnedElsewhere: chatSendOwnsTerminal || undefined,
+              errorObservation: evt.data?.errorObservation,
             },
           );
           if (!chatSendOwnsTerminal && opts?.chatSendWasActive && chatSendStillActive) {
@@ -1174,6 +1176,7 @@ export function createAgentEventHandler({
       abortErrorMessage?: string;
       yielded?: true;
       terminalFrameOwnedElsewhere?: true;
+      errorObservation?: unknown;
     },
   ) => {
     const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId, {
@@ -1219,6 +1222,7 @@ export function createAgentEventHandler({
       sendChatPayload(sessionKey, payload, opts);
       return;
     }
+    const errorDetail = projectChatErrorDetail(opts?.errorObservation);
     const payload = {
       runId: clientRunId,
       sessionKey,
@@ -1228,6 +1232,7 @@ export function createAgentEventHandler({
       state: "error" as const,
       errorMessage: error ? formatForLog(error) : undefined,
       ...(errorKind && { errorKind }),
+      ...(errorDetail ? { errorDetail } : {}),
       ...(stopReason && { stopReason }),
     };
     sendChatPayload(sessionKey, payload, opts);
@@ -1296,9 +1301,7 @@ export function createAgentEventHandler({
     }
   };
 
-  const resolveAgentTextThrottleStream = (
-    evt: AgentEventPayload,
-  ): AgentTextThrottleStream | null =>
+  const resolveAgentTextThrottleStream = (evt: AgentEventPayload): AgentTextThrottleStream | null =>
     evt.stream === "assistant" ? "assistant" : evt.stream === "thinking" ? "thinking" : null;
 
   const shouldCoalesceAgentTextEvent = (evt: AgentEventPayload) =>

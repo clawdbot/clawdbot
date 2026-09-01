@@ -288,7 +288,7 @@ describe("agentCommand runtime config", () => {
       expect(targetIds.has("models.providers.*.apiKey")).toBe(true);
       expect(targetIds.has("channels.telegram.botToken")).toBe(false);
       expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(resolvedConfig, sourceConfig);
-      expect(prepared.cfg).toBe(resolvedConfig);
+      expect(prepared).toBe(resolvedConfig);
     });
   });
 
@@ -440,9 +440,7 @@ describe("agentCommand runtime config", () => {
       expect(readConfigFileSnapshotForWriteMock).not.toHaveBeenCalled();
       expect(resolveCommandConfigWithSecretsMock).not.toHaveBeenCalled();
       expect(setRuntimeConfigSnapshotMock).not.toHaveBeenCalled();
-      expect(prepared.cfg).toBe(loadedConfig);
-      expect(prepared.sourceConfig).toEqual(loadedConfig);
-      expect(prepared.sourceConfig).not.toBe(loadedConfig);
+      expect(prepared).toBe(loadedConfig);
     });
   });
 

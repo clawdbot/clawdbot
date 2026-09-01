@@ -14,6 +14,7 @@ import {
   recordSubagentSpawned,
 } from "../../../sessions/session-state-events.js";
 import { parseInlineAttachmentMountPath } from "../../../shared/inline-attachments.js";
+import { hasDeliveryTargetFields } from "../../../utils/delivery-context.shared.js";
 import {
   runSpawnPipeline,
   type SpawnBackendAdapter,
@@ -65,10 +66,7 @@ import { createSubagentSpawnLifecycleEmitter } from "./subagent-spawn-lifecycle.
 import { resolveSubagentSpawnRequest } from "./subagent-spawn-request.js";
 import { cleanupAcceptedSubagentSpawnFailure } from "./subagent-spawn-rollback.js";
 import { createInitialSubagentSession } from "./subagent-spawn-session-patch.js";
-import {
-  bindThreadForSubagentSpawn,
-  hasRoutableDeliveryOrigin,
-} from "./subagent-spawn-thread-binding.js";
+import { bindThreadForSubagentSpawn } from "./subagent-spawn-thread-binding.js";
 import {
   buildSubagentSystemPrompt,
   emitSessionLifecycleEvent,
@@ -285,7 +283,7 @@ export async function spawnSubagentDirect(
         };
       }
       threadBindingReady = true;
-      hasBoundThreadDeliveryOrigin = hasRoutableDeliveryOrigin(bindResult.deliveryOrigin);
+      hasBoundThreadDeliveryOrigin = hasDeliveryTargetFields(bindResult.deliveryOrigin);
       childSessionOrigin =
         mergeDeliveryContext(bindResult.deliveryOrigin, childSessionOrigin) ?? childSessionOrigin;
     }
@@ -699,6 +697,7 @@ export async function spawnSubagentDirect(
       ...(collectorAccepted ? { sessionKey: childSessionKey } : {}),
       runId: childRunId,
       mode: spawnMode,
+      expectsCompletionMessage: shouldAnnounceCompletion,
       context: preparedSpawnContext.mode,
       taskName,
       note: preparedSpawnContext.forkFallbackNote

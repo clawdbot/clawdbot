@@ -4,6 +4,8 @@
  * Keeping `server-start` behind dynamic import lets light-weight callers import
  * server types and helpers without paying the full startup dependency graph.
  */
+import { copyGatewayServerExtras } from "./server-extra-handlers.js";
+
 export { truncateCloseReason } from "./server/close-reason.js";
 export type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 
@@ -29,10 +31,13 @@ async function loadServerStart() {
 
 /** Starts the gateway server after lazily loading the full server implementation. */
 export async function startGatewayServer(
-  ...args: Parameters<typeof import("./server-start.js").startGatewayServerCore>
+  port = 18789,
+  opts: import("./server-public.js").GatewayServerOptions = {},
 ): ReturnType<typeof import("./server-start.js").startGatewayServerCore> {
+  const startupStartedAt = opts.startupStartedAt ?? Date.now();
   const mod = await loadServerStart();
-  return await mod.startGatewayServerCore(...args);
+  const startOptions = copyGatewayServerExtras(opts, { ...opts, startupStartedAt });
+  return await mod.startGatewayServerCore(port, startOptions);
 }
 
 /** Clears prepared model-catalog generations between tests. */

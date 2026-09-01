@@ -145,7 +145,9 @@ export function buildGatewaySessionSnapshot(params: {
   if (!storedRow) {
     return {};
   }
-  const lifecycleRow = { ...storedRow, updatedAt: storedRow.updatedAt ?? undefined };
+  const lifecycleRow = event
+    ? { ...storedRow, updatedAt: storedRow.updatedAt ?? undefined }
+    : undefined;
   const patch =
     event &&
     !isStaleLifecycleEventForSession({
@@ -192,12 +194,10 @@ export function buildGatewaySessionSnapshot(params: {
     activeRunIds: params.activeRunState ? (params.activeRunState.runIds ?? null) : undefined,
   });
   const session: Record<string, unknown> | undefined = params.includeSession
-    ? {
-        ...sessionRow,
-        ...Object.fromEntries(
-          Object.entries(eventFields).filter(([, value]) => value !== undefined),
-        ),
-      }
+    ? Object.assign(
+        sessionRow,
+        Object.fromEntries(Object.entries(eventFields).filter(([, value]) => value !== undefined)),
+      )
     : undefined;
   if (session && sessionRow.key === "global" && !params.agentId) {
     delete session.goal;

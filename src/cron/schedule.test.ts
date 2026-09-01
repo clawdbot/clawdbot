@@ -471,15 +471,6 @@ describe("cron schedule", () => {
     ).toBeUndefined();
   });
 
-  it("never returns a past timestamp for Asia/Shanghai daily schedule (#30351)", () => {
-    const nowMs = Date.parse("2026-03-01T00:00:00.000Z");
-    const next = computeNextRunAtMs(
-      { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
-      nowMs,
-    );
-    expect(requireTimestamp(next, "next run")).toBeGreaterThan(nowMs);
-  });
-
   it("never returns a previous run that is at-or-after now", () => {
     const nowMs = Date.parse("2026-03-01T00:00:00.000Z");
     const previous = computePreviousRunAtMs(

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { expect, it } from "vitest";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "../pages/new-session/cloud-profile-discovery.ts";
@@ -163,7 +164,7 @@ suite.define(() => {
         locale: "en-US",
         serviceWorkers: "block",
         ...(process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-          ? { recordVideo: { dir: ".artifacts/control-ui-e2e/device-runtime-gating" } }
+          ? { recordVideo: { dir: path.join(suite.artifactDir, "device-runtime-gating") } }
           : {}),
       });
       const page = await context.newPage();
@@ -226,7 +227,11 @@ suite.define(() => {
         expect(await gateway.getRequests("environments.list")).toHaveLength(
           requestsBeforeRefresh + 1,
         );
-        await captureDeviceRuntimeUiProof(page, `failed-topology-${value.replace(":", "-")}.png`);
+        await captureDeviceRuntimeUiProof(
+          suite,
+          page,
+          `failed-topology-${value.replace(":", "-")}.png`,
+        );
         expect(await start.isDisabled()).toBe(true);
         expect(await selectedDevice.isDisabled()).toBe(true);
         expect(await automaticDevice.isDisabled()).toBe(true);
@@ -534,7 +539,7 @@ suite.define(() => {
       await where.click();
       await page.locator('[data-value="device:paired-runner"]').click();
       await expect.poll(() => where.getAttribute("data-device-id")).toBe("paired-runner");
-      await captureDeviceRuntimeUiProof(page, "01-main-agent-paired-node-selected.png");
+      await captureDeviceRuntimeUiProof(suite, page, "01-main-agent-paired-node-selected.png");
 
       const agentPicker = page.locator(".new-session-page__select--agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
@@ -546,7 +551,11 @@ suite.define(() => {
       await expect
         .poll(() => where.locator(".new-session-page__trigger-label").textContent())
         .toBe("Local");
-      await captureDeviceRuntimeUiProof(page, "02-research-agent-local-destination-restored.png");
+      await captureDeviceRuntimeUiProof(
+        suite,
+        page,
+        "02-research-agent-local-destination-restored.png",
+      );
 
       const message = "run this agent locally";
       await page.locator(".new-session-page__message").fill(message);

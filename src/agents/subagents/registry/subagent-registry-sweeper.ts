@@ -89,7 +89,7 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperPar
       return;
     }
     try {
-      await runWithGatewayIndependentRootWorkAdmission(sweepOnce);
+      await runWithGatewayIndependentRootWorkAdmission(sweepOnce, "subagents:sweeper");
     } catch (error) {
       params.warn(
         `subagent run sweep failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -125,9 +125,9 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperPar
   });
 
   function runCleanupTail(runId: string, label: string, run: () => Promise<unknown>) {
-    void runWithGatewayIndependentRootWorkAdmission(run).catch((error: unknown) => {
-      params.warn(`subagent sweep ${label} failed`, { runId, error });
-    });
+    void runWithGatewayIndependentRootWorkAdmission(run, "subagents:sweeper-cleanup").catch(
+      (error: unknown) => params.warn(`subagent sweep ${label} failed`, { runId, error }),
+    );
   }
 
   const sweptContext = (entry: SubagentRunRecord) => ({

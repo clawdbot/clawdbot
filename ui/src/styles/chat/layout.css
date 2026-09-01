@@ -1462,12 +1462,6 @@ openclaw-chat-video-player {
   padding: 0;
 }
 
-.chat-assistant-attachment-card--compact,
-.chat-assistant-attachment-card--blocked {
-  display: block;
-  padding: 0;
-}
-
 .chat-assistant-attachment-card--blocked {
   color: var(--text);
 }
@@ -1647,9 +1641,59 @@ openclaw-chat-video-player {
   width: auto;
   padding: 0 12px;
   border: 1px solid var(--chat-attachment-border, var(--border-strong));
-  color: var(--text);
   font-size: 12px;
   font-weight: 600;
+}
+
+.chat-assistant-attachment-card__title--unavailable {
+  color: var(--muted);
+  text-decoration: line-through color-mix(in srgb, currentColor 35%, transparent) 1px;
+}
+
+.chat-assistant-attachment-card--recoverable {
+  color: var(--warn);
+}
+
+.chat-assistant-attachment-card--definitive {
+  color: var(--danger);
+}
+
+:is(.chat-assistant-attachment-card--recoverable, .chat-assistant-attachment-card--definitive)
+  :is(.chat-assistant-attachment-card__status-meta, .chat-attachment-file-icon) {
+  color: inherit;
+}
+
+.chat-assistant-attachment-card--checking,
+.chat-controls__model-trigger-skeleton {
+  --skeleton-base: color-mix(in srgb, var(--muted) 15%, transparent);
+  --skeleton-highlight: color-mix(in srgb, var(--text) 30%, transparent);
+}
+
+.chat-assistant-attachment-card__status-meta.skeleton {
+  inline-size: clamp(112px, 14vw, 144px);
+}
+
+.chat-assistant-attachment-card__action-skeleton {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 0;
+  width: 64px;
+  border-radius: 50%;
+}
+
+.chat-assistant-attachment-card__actions--loading {
+  position: relative;
+  padding-inline: 38px 0;
+  height: 30px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chat-assistant-attachment-card__actions--loading::before {
+  content: attr(data-label);
+  visibility: hidden;
+  padding: 0 12px;
+  border: 1px solid transparent;
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -2094,12 +2138,6 @@ button.chat-reply-preview--message:disabled {
   outline: none;
 }
 
-.chat-selection-popup button svg {
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
-  color: var(--muted);
-}
 /* Keep size containment outside the flex surface: retained mobile panes can be
    measured at zero width, and containment there collapses the editor subtree. */
 .agent-chat__composer-shell,
@@ -3383,7 +3421,6 @@ button.chat-pr__diff {
   -webkit-mask:
     linear-gradient(white 0 0) content-box,
     linear-gradient(white 0 0);
-  -webkit-mask-composite: xor;
   mask-composite: exclude;
   animation: chat-dictation-edge-orbit 6.6s linear infinite;
   pointer-events: none;
@@ -3604,13 +3641,6 @@ button.chat-pr__diff {
   --chat-composer-scroll-mask-top: currentColor;
   --chat-composer-scroll-mask-bottom: currentColor;
 
-  -webkit-mask-image: linear-gradient(
-    to bottom,
-    var(--chat-composer-scroll-mask-top) 0,
-    currentColor 16px,
-    currentColor calc(100% - 16px),
-    var(--chat-composer-scroll-mask-bottom) 100%
-  );
   mask-image: linear-gradient(
     to bottom,
     var(--chat-composer-scroll-mask-top) 0,
@@ -4778,7 +4808,7 @@ button.chat-pr__diff {
      the picker grow toward the transcript without replacing the hovered target. */
   flex-direction: row-reverse;
   align-items: center;
-  gap: 2px;
+  gap: 0;
   flex: 0 0 auto;
   border-radius: var(--radius-full);
   background: transparent;
@@ -4797,13 +4827,6 @@ button.chat-pr__diff {
 
 .agent-chat__input .chat-talk-control .chat-send-btn--voice:hover:not(:disabled) {
   background: color-mix(in srgb, var(--text-strong) 7%, transparent);
-}
-
-.chat-talk-control--active {
-  --chat-picker-background: color-mix(in srgb, var(--accent) 14%, transparent);
-  --chat-picker-color: var(--accent);
-  --chat-picker-hover-background: color-mix(in srgb, var(--accent) 20%, transparent);
-  --chat-picker-hover-color: var(--accent);
 }
 
 .chat-talk-control > openclaw-tooltip {
@@ -4837,8 +4860,8 @@ button.chat-pr__diff {
     opacity 120ms ease-out;
 }
 
-/* The captured hold outlives transient hover recalculation during rerenders.
-   Keep it as an explicit reveal owner so the mic and chevron never reflow mid-gesture. */
+/* Focus, open, and captured-hold states reveal immediately so hover dwell never
+   delays keyboard access or lets the mic and chevron reflow mid-gesture. */
 .chat-talk-control--holding .chat-talk-input-picker,
 .chat-talk-control:has(:focus-visible) .chat-talk-input-picker,
 .chat-talk-input-picker[open] {
@@ -4847,9 +4870,11 @@ button.chat-pr__diff {
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .chat-talk-control:hover .chat-talk-input-picker {
+  .chat-talk-control:hover:not(.chat-talk-control--holding):not(:has(:focus-visible))
+    .chat-talk-input-picker:not([open]) {
     width: var(--chat-microphone-picker-width);
     opacity: 1;
+    transition-delay: 750ms;
   }
 }
 
@@ -4919,11 +4944,13 @@ button.chat-pr__diff {
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .chat-talk-control:hover .chat-talk-input-picker__trigger {
+  .chat-talk-control:hover:not(.chat-talk-control--holding):not(:has(:focus-visible))
+    .chat-talk-input-picker:not([open])
+    .chat-talk-input-picker__trigger {
     width: var(--chat-microphone-picker-width);
     opacity: 1;
     transform: translateX(0);
-    transition-delay: 0ms, 0ms, 70ms, 0ms, 0ms;
+    transition-delay: 750ms, 750ms, 820ms, 0ms, 0ms;
     pointer-events: auto;
   }
 }
@@ -5216,7 +5243,6 @@ button.chat-pr__diff {
   -webkit-mask:
     linear-gradient(white 0 0) content-box,
     linear-gradient(white 0 0);
-  -webkit-mask-composite: xor;
   mask-composite: exclude;
   /* Keep the visible fill aligned with HOLD_PROGRESS_MS in composer-dictation.ts. */
   animation: chat-dictation-hold-progress 350ms linear forwards;
@@ -5722,15 +5748,15 @@ button.chat-pr__diff {
 
 .chat-attachments-preview {
   display: flex;
-  gap: 8px;
+  gap: 18px;
   flex-wrap: nowrap;
   flex-shrink: 0;
   width: 100%;
   max-width: 100%;
   margin-top: 4px;
-  padding-block-start: 10px;
+  padding-block-start: 18px;
   padding-block-end: 5px;
-  padding-inline: 10px;
+  padding-inline: 18px;
   margin-bottom: 2px;
   overflow-x: auto;
   overflow-y: hidden;
@@ -5769,7 +5795,6 @@ button.chat-pr__diff {
   height: 56px;
   border-radius: var(--chat-attachment-radius);
   corner-shape: superellipse(1.5);
-  overflow: hidden;
   border: 1px solid var(--border);
   background: var(--chat-composer-surface, var(--popover));
   transition:
@@ -5804,6 +5829,8 @@ button.chat-pr__diff {
 }
 
 .chat-browser-annotation-card__preview {
+  border-radius: calc(var(--chat-attachment-radius) - 1px) 0 0
+    calc(var(--chat-attachment-radius) - 1px);
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -5838,11 +5865,6 @@ button.chat-pr__diff {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.chat-browser-annotation-card__remove {
-  width: 20px;
-  height: 20px;
 }
 
 .chat-browser-annotation-card__remove:not(:disabled) {
@@ -5888,16 +5910,18 @@ button.chat-pr__diff {
 
 .chat-attachment-remove {
   position: absolute;
-  top: 4px;
-  right: 4px;
+  /* The rail reserves this overhang so the full target clears images and neighbors. */
+  top: -18px;
+  right: -18px;
   z-index: 1;
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  border-radius: calc(7px * var(--openclaw-corner-radius-scale));
+  width: 44px;
+  height: 44px;
+  padding: 12px;
+  border-radius: calc(12px + 7px * var(--openclaw-corner-radius-scale));
   corner-shape: superellipse(1.5);
   border: none;
   background: color-mix(in srgb, var(--bg) 82%, transparent);
+  background-clip: content-box;
   color: var(--text-strong);
   font-size: 12px;
   line-height: 1;
@@ -6090,6 +6114,13 @@ button.chat-pr__diff {
   pointer-events: none;
 }
 
+/* Collapse the empty effort slot while loading unless the open model menu
+   needs its anchor. */
+.chat-controls__model-settings:not(:has(.chat-controls__model-picker[open]))
+  .chat-controls__effort-picker--reserved {
+  display: none;
+}
+
 .chat-controls__inline-select {
   min-width: 0;
 }
@@ -6203,8 +6234,6 @@ button.chat-pr__diff {
 }
 
 .chat-controls__model-trigger-skeleton {
-  --skeleton-base: color-mix(in srgb, var(--muted) 15%, transparent);
-  --skeleton-highlight: color-mix(in srgb, var(--text) 30%, transparent);
   --skeleton-duration: 1.45s;
 
   display: block;

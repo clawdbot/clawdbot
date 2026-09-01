@@ -27,7 +27,10 @@ import {
   stripLeadingPackageManagerSeparator,
 } from "./lib/arg-utils.mts";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
-import { validateReleasePreflightTagIdentity } from "./npm-preflight-tooling-identity.mjs";
+import {
+  validateNpmPreflightProducer,
+  validateReleasePreflightTagIdentity,
+} from "./npm-preflight-tooling-identity.mjs";
 import { validatePluginSdkApiReleaseEvidence } from "./plugin-sdk-api-release-evidence.mjs";
 import {
   dedicatedSectionVersionForTag,
@@ -1799,9 +1802,15 @@ async function runTelegramIfNeeded(
   manifest: JsonRecord,
   runAttempt: number,
   sourceSha: string,
+  coveragePolicy: string | undefined,
 ): Promise<TelegramResult> {
   if (options.skipTelegram) {
     return { status: "skipped" };
+  }
+  // Only the admitted evidence policy defers this wait; legacy beta evidence
+  // still requires the separate Telegram qualification.
+  if (coveragePolicy === "npm-beta-v1") {
+    return { status: "deferred-postpublish" };
   }
   const workflowFile = "npm-telegram-beta-e2e.yml";
   const artifactInputs = buildTelegramArtifactInputs({
@@ -2002,6 +2011,14 @@ async function main() {
   downloadArtifact(options.repo, options.fullReleaseRunId, fullArtifactName, fullDir);
 
   const npmManifest = readJson(join(npmDir, "preflight-manifest.json"), "npm preflight manifest");
+  const npmPreflightProducer = validateNpmPreflightProducer({
+    manifest: npmManifest,
+    repository: options.repo,
+    workflowFullRef: `refs/${npmRun.headBranch?.startsWith("release-publish/") ? "tags" : "heads"}/${npmRun.headBranch}`,
+    workflowSha: npmRun.headSha,
+    runId: options.npmPreflightRunId,
+    runAttempt: npmRun.runAttempt,
+  });
   const immutablePluginSdkApiEvidence = readJson(
     join(pluginSdkApiDir, "plugin-sdk-api-release-evidence.json"),
     "immutable Plugin SDK API evidence",
@@ -2024,6 +2041,7 @@ async function main() {
     expectedRepository: options.repo,
     expectedRunId: options.fullReleaseRunId,
     expectedTargetSha: targetSha,
+    expectedReleaseTag: options.tag,
     expectedWorkflowBranch: options.workflowRef,
     isTrustedMainAncestor: (sha: string) => gitIsAncestor(sha, "refs/remotes/origin/main"),
     validateEvidenceReuseStrictly: ({ repository, runId }: { repository: string; runId: string }) =>
@@ -2107,6 +2125,7 @@ async function main() {
     npmManifest,
     npmRun.runAttempt,
     targetSha,
+    fullValidationEvidence.coveragePolicy,
   );
   const pluginNpmPlan = await collectPluginPlanWithRetry(
     "scripts/plugin-npm-release-plan.ts",
@@ -2140,6 +2159,7 @@ async function main() {
     npmPreflightUrl: npmRun.url,
     npmPreflightSource,
     pluginSdkApi: npmManifest.pluginSdkApi,
+    npmPreflightProducer,
     pluginSdkApiValidation,
     artifacts: {
       npmPreflight: npmArtifactName,

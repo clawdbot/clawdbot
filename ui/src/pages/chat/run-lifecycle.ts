@@ -24,14 +24,13 @@ import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { reduceChatSessionProjection, setChatRunOwner } from "./history-merge.ts";
 import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./input-history.ts";
+import type {
+  CompactionStatus,
+  FallbackStatus,
+  WaitingApprovalStatus,
+} from "./tool-stream-contract.ts";
 // Control UI chat module implements run lifecycle behavior.
-import {
-  resetToolStream,
-  resetToolStreamRun,
-  type CompactionStatus,
-  type FallbackStatus,
-  type WaitingApprovalStatus,
-} from "./tool-stream.ts";
+import { resetToolStream, resetToolStreamRun } from "./tool-stream.ts";
 
 export const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 

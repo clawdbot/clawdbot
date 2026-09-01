@@ -12,8 +12,6 @@ doc-schema-version: 1
 
 A **node** is a companion device (macOS/iOS/watchOS/Android/headless) that connects to the Gateway with `role: "node"` and exposes a command surface (e.g. `camera.*`, `device.*`, `notifications.*`, `system.*`) via `node.invoke`. Most nodes use the Gateway WebSocket on the operator port. The optional direct Apple Watch node uses signed HTTPS polling on that same port because watchOS blocks generic low-level networking for ordinary apps. Protocol details: [Gateway protocol](/gateway/protocol).
 
-Legacy transport: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL; historical only for current nodes).
-
 macOS can also run in **node mode**: the menu bar app connects to the Gateway's
 WS server as one node (so `openclaw nodes …` works against this Mac). The app
 adds native widget-panel, camera, screen, notification, and computer-control commands

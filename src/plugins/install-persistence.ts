@@ -489,6 +489,7 @@ export async function persistPluginInstall(params: {
   runtime?: RuntimeEnv;
   persistenceLogger?: PluginInstallLogger;
   onCommitted?: () => void;
+  beforePersistentApply?: () => void;
 }): Promise<OpenClawConfig> {
   const runtime = params.runtime ?? defaultRuntime;
   // Terminal diagnostics may contain paths/errors; management receives only producer-authored summaries.
@@ -625,6 +626,14 @@ export async function persistPluginInstall(params: {
         writeOptions: {
           ...params.snapshot.writeOptions,
           afterWrite: { mode: "restart", reason: "plugin source changed" },
+          ...(params.beforePersistentApply
+            ? {
+                assertConfigPathForWrite: () => {
+                  params.snapshot.writeOptions.assertConfigPathForWrite?.();
+                  params.beforePersistentApply?.();
+                },
+              }
+            : {}),
         },
       }),
     { command: "install" },

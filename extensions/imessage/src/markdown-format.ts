@@ -49,49 +49,46 @@ function codeDelimiter(content: string): string {
   return "`".repeat(longestRun + 1);
 }
 
-type TextEdit = { start: number; end: number; text: string };
-
-function applyTextEdits(text: string, edits: TextEdit[]) {
-  const ordered = edits.toSorted((left, right) => left.start - right.start);
-  let rendered = "";
-  let cursor = 0;
-  for (const edit of ordered) {
-    rendered += text.slice(cursor, edit.start) + edit.text;
-    cursor = edit.end;
-  }
-  rendered += text.slice(cursor);
-  return {
-    text: rendered,
-    mapOffset: (offset: number) =>
-      offset +
-      ordered.reduce(
-        (delta, edit) =>
-          delta + (edit.end <= offset ? edit.text.length - edit.end + edit.start : 0),
-        0,
-      ),
-  };
-}
-
 function restoreCodeMarkers(
   text: string,
   ranges: Array<{ start: number; length: number; styles: IMessageFormatStyle[] }>,
   codeRanges: Array<{ start: number; length: number }>,
 ): { text: string; ranges: IMessageFormatRange[] } {
+  let rendered = "";
+  let cursor = 0;
+  // The code-only renderer merges and sorts these non-overlapping ranges.
+  // Record each cumulative UTF-16 shift at the existing end-inclusive boundary.
   const edits = codeRanges.map((range) => {
     const end = range.start + range.length;
     const content = text.slice(range.start, end);
     const marker = codeDelimiter(content);
     const padding = content.startsWith("`") || content.endsWith("`") ? " " : "";
-    return { start: range.start, end, text: `${marker}${padding}${content}${padding}${marker}` };
+    rendered +=
+      text.slice(cursor, range.start) + `${marker}${padding}${content}${padding}${marker}`;
+    cursor = end;
+    return { end, shift: rendered.length - end };
   });
-  const edited = applyTextEdits(text, edits);
+  rendered += text.slice(cursor);
+  const mapOffset = (offset: number) => {
+    let low = 0;
+    let high = edits.length;
+    while (low < high) {
+      const middle = low + Math.floor((high - low) / 2);
+      const edit = edits[middle];
+      if (edit && edit.end <= offset) {
+        low = middle + 1;
+      } else {
+        high = middle;
+      }
+    }
+    return offset + (edits[low - 1]?.shift ?? 0);
+  };
   return {
-    text: edited.text,
-    ranges: ranges.map((range) => ({
-      ...range,
-      start: edited.mapOffset(range.start),
-      length: edited.mapOffset(range.start + range.length) - edited.mapOffset(range.start),
-    })),
+    text: rendered,
+    ranges: ranges.map((range) => {
+      const start = mapOffset(range.start);
+      return { ...range, start, length: mapOffset(range.start + range.length) - start };
+    }),
   };
 }
 

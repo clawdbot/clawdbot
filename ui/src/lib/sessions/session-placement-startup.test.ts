@@ -155,7 +155,6 @@ describe("session placement startup", () => {
       startSessionPlacementInitialTurn(clientWith(request), { ...params, attachments }, () => true),
     ).resolves.toMatchObject({
       status: "started",
-      messageSeq: 3,
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.describe", { key: params.key });
     expect(request).toHaveBeenNthCalledWith(

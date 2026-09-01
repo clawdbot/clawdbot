@@ -1,7 +1,10 @@
 /** Resolves incomplete-turn payloads, continuation evidence, and run liveness. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
-import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
+import {
+  hasAcceptedSessionSpawn,
+  hasCompletionMessageSessionSpawn,
+} from "../../accepted-session-spawn.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import { collectTextContentBlocks } from "../../content-blocks.js";
@@ -95,15 +98,15 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
-  if (hasOnlySilentAssistantReply(params.attempt.assistantTexts)) {
+  if (
+    hasOnlySilentAssistantReply(params.attempt.assistantTexts) ||
+    params.attempt.hasToolMediaBlockReply ||
+    hasCommittedMessagingToolDeliveryEvidence(params.attempt)
+  ) {
     return null;
   }
 
-  if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {
-    return null;
-  }
-
-  if (hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns)) {
+  if (hasCompletionMessageSessionSpawn(params.attempt.acceptedSessionSpawns)) {
     return null;
   }
 

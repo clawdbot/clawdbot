@@ -18,7 +18,7 @@ function runGoOrThrow(options: {
   const result = spawnSync("go", options.args, {
     cwd: options.cwd,
     encoding: "utf8",
-    env: { ...process.env, GOMODCACHE: options.modCacheDir },
+    env: { ...process.env, GOMODCACHE: options.modCacheDir, GOTOOLCHAIN: "local" },
   });
   if (result.error || result.status !== 0) {
     throw result.error ?? new Error(result.stderr || result.stdout || options.failureMessage);

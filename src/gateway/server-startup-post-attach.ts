@@ -131,7 +131,7 @@ function schedulePostAttachUpdateSentinelRefresh(params: {
       await measureStartup(params.startupTrace, "post-attach.update-sentinel", async () => {
         await params.refreshLatestUpdateRestartSentinel();
       });
-    }).catch((err: unknown) => {
+    }, "startup:update-sentinel").catch((err: unknown) => {
       params.log.warn(`restart sentinel refresh failed: ${String(err)}`);
     });
   });
@@ -193,7 +193,7 @@ function scheduleProviderAuthStatePrewarm(params: {
             scheduleAuthMapRewarm(nextReason);
           }
         }
-      });
+      }, "runtime:provider-auth-rewarm");
     };
     const scheduleAuthMapRewarm = (reason: string) => {
       // Collapse repeated auth-profile failures into one rewarm turn while a
@@ -247,12 +247,16 @@ function scheduleProviderAuthStatePrewarm(params: {
           params.log.info(
             `provider auth state pre-warmed ${formatProviderAuthWarmMetrics(metrics)}`,
           );
-        }).catch((error: unknown) => logProviderAuthWarmFailure("pre-warm", error));
+        }, "startup:provider-auth-prewarm").catch((error: unknown) =>
+          logProviderAuthWarmFailure("pre-warm", error),
+        );
       },
       Math.max(0, delayMs),
     );
     startupTimer.unref?.();
-  }).catch((error: unknown) => logProviderAuthWarmFailure("pre-warm setup", error));
+  }, "startup:provider-auth").catch((error: unknown) =>
+    logProviderAuthWarmFailure("pre-warm setup", error),
+  );
   return {
     stop: () => {
       stopped = true;
@@ -289,7 +293,7 @@ function schedulePostReadySidecarTask(params: {
         await measureStartup(params.startupTrace, params.name, () =>
           params.run(isStopped, abortController.signal),
         );
-      });
+      }, `startup:${params.name}`);
     })().catch((err: unknown) => {
       params.log.warn(`${params.name} failed after gateway ready: ${String(err)}`);
     });
@@ -309,6 +313,7 @@ function schedulePostReadySidecarTask(params: {
 
 function scheduleGatewayGenerationTimer(params: {
   delayMs: number;
+  origin: string;
   run: (isStopped: () => boolean) => Awaitable<void>;
   onError: (err: unknown) => void;
 }): GatewayPostReadySidecarHandle {
@@ -322,7 +327,7 @@ function scheduleGatewayGenerationTimer(params: {
     }
     void runWithGatewayIndependentRootWorkAdmission(async () => {
       await params.run(isStopped);
-    }).catch((err: unknown) => {
+    }, params.origin).catch((err: unknown) => {
       if (!isStopped()) {
         params.onError(err);
       }
@@ -346,6 +351,7 @@ function scheduleRestartSentinelWakeAfterReady(params: {
 }): GatewayPostReadySidecarHandle {
   return scheduleGatewayGenerationTimer({
     delayMs: 750,
+    origin: "restart-sentinel:wake",
     run: async (isStopped) => {
       const { scheduleRestartSentinelWake } = await loadGatewayRestartSentinelModule();
       if (isStopped()) {
@@ -834,6 +840,7 @@ export async function startGatewaySidecars(params: {
     postReadySidecars.push(
       scheduleGatewayGenerationTimer({
         delayMs: 250,
+        origin: "hooks:gateway-startup",
         run: async (isStopped) => {
           const { createInternalHookEvent, triggerInternalHook } = await loadInternalHooksModule();
           if (isStopped()) {
@@ -876,7 +883,7 @@ export async function startGatewaySidecars(params: {
           `acp startup identity reconcile (renderer=${ACP_SESSION_IDENTITY_RENDERER_VERSION}): checked=${result.checked} resolved=${result.resolved} failed=${result.failed}`,
         );
       });
-    }).catch((err: unknown) => {
+    }, "startup:acp-identity-reconcile").catch((err: unknown) => {
       params.log.warn(`acp startup identity reconcile failed: ${String(err)}`);
     });
   }
@@ -1123,6 +1130,7 @@ function createDeferredGatewayUpdateCheck(params: {
                 },
               }),
             ),
+          "startup:update-check",
         )
           .then((nextStop) => {
             if (stopped) {
@@ -1275,7 +1283,8 @@ export async function startGatewayPostAttachRuntime(
         params.loadStartupPlugins!(),
       );
       await params.pluginRuntimeClaim?.waitForUnblocked();
-      if (params.pluginRuntimeClaim?.isCurrent() === false) {
+      if (params.isClosing?.() || params.pluginRuntimeClaim?.isCurrent() === false) {
+        // Shutdown only owns attached bindings; retire unadopted results here.
         loaded.retireGatewayRuntimeBindings?.();
         pluginRegistry = params.getCurrentPluginRegistry?.() ?? pluginRegistry;
         startupPluginsLoaded = true;
@@ -1290,9 +1299,7 @@ export async function startGatewayPostAttachRuntime(
         ],
         ["gatewayMethodCount", loaded.gatewayMethods.length],
       ]);
-      if (params.isClosing?.() !== true) {
-        await params.onStartupPluginsLoaded?.(loaded);
-      }
+      await params.onStartupPluginsLoaded?.(loaded);
       return loaded;
     })();
     return await startupPluginsLoadPromise;
@@ -1649,7 +1656,7 @@ export async function startGatewayPostAttachRuntime(
               },
             ),
           );
-        }).catch((err: unknown) => {
+        }, "hooks:gateway-start").catch((err: unknown) => {
           params.log.warn(`gateway_start hook failed: ${String(err)}`);
         });
       }

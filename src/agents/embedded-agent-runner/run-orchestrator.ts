@@ -28,6 +28,7 @@ import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js"
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
+  resolveModelFallbackAvailability,
   resolveRunModelFallbacksOverride,
 } from "../agent-scope.js";
 import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
@@ -50,6 +51,7 @@ import {
   suspendSession,
   type SessionSuspensionParams,
 } from "../session-suspension.js";
+import { SessionManager } from "../sessions/session-manager.js";
 import { resolveSystemPromptRepoRoot } from "../system-prompt-params.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.js";
@@ -63,7 +65,6 @@ import {
 } from "./run/attempt-stage-timing.js";
 import { withExecutionPhaseDiagnostics } from "./run/execution-phase-diagnostics.js";
 import { buildEmbeddedFailureSuspension } from "./run/failure-suspension.js";
-import { hasEmbeddedRunConfiguredModelFallbacks } from "./run/fallbacks.js";
 import type {
   RunEmbeddedAgentInternalParams,
   RunEmbeddedAgentParamsWithSessionFile,
@@ -140,6 +141,12 @@ async function runEmbeddedAgentInternal(
   });
   let params: RunEmbeddedAgentParamsWithSessionFile = withExecutionPhaseDiagnostics({
     ...paramsBase,
+    // Establish one detached transcript owner for CLI dispatch and every retry.
+    sessionManager:
+      paramsBase.sessionManager ??
+      (paramsBase.sessionPersistence === "detached"
+        ? SessionManager.inMemory(paramsBase.cwd ?? paramsBase.workspaceDir)
+        : undefined),
     agentId: runSessionTarget.agentId,
     sessionId: runSessionTarget.sessionId,
     sessionKey: runSessionTarget.sessionKey,
@@ -151,8 +158,13 @@ async function runEmbeddedAgentInternal(
   const globalLane = resolveGlobalLane(params.lane);
   // Outer fallback attempts defer session suspension only while another
   // candidate remains. Direct and final-candidate runs suspend normally.
-  const failureSuspension = resolveSessionSuspensionTarget();
+  // Detached runs neither write durable metadata nor claim the outer deferral.
+  const failureSuspension =
+    params.sessionPersistence === "detached" ? undefined : resolveSessionSuspensionTarget();
   const suspendForFailure = (suspensionParams: SessionSuspensionParams) => {
+    if (!failureSuspension) {
+      return;
+    }
     const suspension = buildEmbeddedFailureSuspension({
       suspension: suspensionParams,
       runAgentId: params.agentId,
@@ -203,11 +215,13 @@ async function runEmbeddedAgentInternal(
     // Same-session reads below must see any prior deferred transcript rewrite.
     // Checkpoint before the global lane so unrelated sessions can still start
     // while this session waits on its own maintenance lane.
-    params.replyOperation?.markWaitingForDeferredMaintenance();
-    try {
-      await waitForDeferredTurnMaintenanceForSession(params.sessionKey);
-    } finally {
-      params.replyOperation?.markDeferredMaintenanceWaitEnded();
+    if (!params.sessionManager || params.sessionManager.getSessionTarget()) {
+      params.replyOperation?.markWaitingForDeferredMaintenance();
+      try {
+        await waitForDeferredTurnMaintenanceForSession(params.sessionKey);
+      } finally {
+        params.replyOperation?.markDeferredMaintenanceWaitEnded();
+      }
     }
     throwIfAborted();
     return enqueueGlobal(async () => {
@@ -262,7 +276,7 @@ async function runEmbeddedAgentInternal(
       const runtimePluginSelections = resolveModelCandidateChain({
         cfg: config,
         agentId: requestedWorkspaceResolution.agentId,
-        manifestPlugins: pluginMetadataSnapshot.plugins,
+        manifestPlugins: pluginMetadataSnapshot,
         provider: requestedRuntimeSelection.provider,
         model: requestedRuntimeSelection.modelId,
         requestedRouteResolution: "resolved",
@@ -307,7 +321,8 @@ async function runEmbeddedAgentInternal(
         noteLaneTaskProgress,
         () =>
           params.preparedModelRuntimeMode === "isolated-read-only"
-            ? acquireReadOnlyPreparedModelRuntime(preparedInput, params.abortSignal)
+            ? // Probe homes outlive only the attempt client, not independent live catalog clients.
+              acquireReadOnlyPreparedModelRuntime(preparedInput, params.abortSignal, "static")
             : acquireAgentRunPreparedModelRuntime(preparedInput, {
                 retainIdleRunOwner,
                 // Turns need only configured admission facts. Full live model inventory remains
@@ -397,12 +412,21 @@ async function runEmbeddedAgentInternal(
             model: params.model,
           });
           const normalizedSessionKey = params.sessionKey?.trim();
-          const fallbackConfigured = hasEmbeddedRunConfiguredModelFallbacks({
-            cfg: params.config,
-            agentId: params.agentId,
-            sessionKey: normalizedSessionKey,
-            modelFallbacksOverride: params.modelFallbacksOverride,
-          });
+          const modelFallbackAvailability =
+            params.modelFallbackAvailability ??
+            resolveModelFallbackAvailability({
+              cfg: params.config ?? EMPTY_EMBEDDED_AGENT_CONFIG,
+              agentId: workspaceResolution.agentId,
+              sessionKey: normalizedSessionKey,
+              hasSessionModelOverride: false,
+              modelFallbacksOverride: params.modelFallbacksOverride,
+            });
+          const fallbackConfigured = modelFallbackAvailability.kind === "active";
+          if (modelFallbackAvailability.kind === "disabled_by_model_override") {
+            log.warn(
+              `[model-fallback] configured fallbacks disabled by user model override run=${params.runId} session=${redactedSessionId}`,
+            );
+          }
           const resolvedSessionKey = normalizedSessionKey ?? runSessionTarget.sessionKey;
           const hookRunner = getGlobalHookRunner();
           const hookCtx = {

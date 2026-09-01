@@ -18,7 +18,12 @@ import {
 } from "../infra/heartbeat-wake.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { SessionBindingRecord } from "../infra/outbound/session-binding-service.js";
-import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
+import { selectAgentSystemEvents } from "../infra/system-event-ownership.js";
+import {
+  peekSystemEventEntries,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "../infra/system-events.js";
 import {
   createPluginStateKeyedStore,
   resetPluginStateStoreForTests,
@@ -569,6 +574,83 @@ describe("task-registry", () => {
     hoisted.cancelActiveCronTaskRunMock.mockReset();
     hoisted.killSubagentRunAdminMock.mockReset();
   });
+
+  it.each(["terminal", "progress"] as const)(
+    "preserves the bare-session requester on direct %s delivery",
+    async (kind) => {
+      await withTaskRegistryTempDir(async () => {
+        hoisted.sendMessageMock.mockResolvedValue({ deliveryStatus: "delivered" });
+        const task = createTaskFixture("cli", {
+          ownerKey: "global",
+          requesterAgentId: "alpha",
+          agentId: "beta",
+          requesterOrigin: NOTIFYCHAT_ORIGIN,
+          task: "Report the background result",
+          deliveryStatus: "pending",
+          notifyPolicy: "state_changes",
+        });
+        if (kind === "terminal") {
+          markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: Date.now() });
+          await maybeDeliverTaskTerminalUpdate(task.taskId);
+        } else {
+          await maybeDeliverTaskStateChangeUpdate(task.taskId, {
+            at: Date.now(),
+            kind: "progress",
+            summary: "Checking the result",
+          });
+        }
+        expect(hoisted.sendMessageMock).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            agentId: "alpha",
+            mirror: expect.objectContaining({ sessionKey: "global", agentId: "alpha" }),
+          }),
+        );
+      });
+    },
+  );
+
+  it.each(["terminal", "progress", "blocked", "fallback"] as const)(
+    "keeps bare-session %s events and wakes with the requesting agent",
+    async (kind) => {
+      await withTaskRegistryTempDir(async () => {
+        hoisted.sendMessageMock.mockRejectedValue(new Error("fixture delivery unavailable"));
+        const task = createTaskFixture("cli", {
+          ownerKey: "global",
+          requesterAgentId: "alpha",
+          agentId: "beta",
+          ...(kind === "fallback" ? { requesterOrigin: NOTIFYCHAT_ORIGIN } : {}),
+          task: "Report the background result",
+          deliveryStatus: "pending",
+          notifyPolicy: "state_changes",
+        });
+        if (kind === "progress") {
+          await maybeDeliverTaskStateChangeUpdate(task.taskId, {
+            at: Date.now(),
+            kind: "progress",
+            summary: "Checking the result",
+          });
+        } else {
+          markTaskTerminalById({
+            taskId: task.taskId,
+            status: "succeeded",
+            endedAt: Date.now(),
+            ...(kind === "blocked" ? { terminalOutcome: "blocked" } : {}),
+          });
+          await maybeDeliverTaskTerminalUpdate(task.taskId);
+        }
+        const events = peekSystemEventEntries("global");
+        expect(events).toHaveLength(kind === "blocked" ? 2 : 1);
+        expect(selectAgentSystemEvents(events, "alpha")).toEqual(events);
+        expect(selectAgentSystemEvents(events, "beta")).toEqual([]);
+        await flushHeartbeatWakeRequests();
+        const taskWakes = heartbeatWakeRequests.filter((request) =>
+          request.source.startsWith("background-task"),
+        );
+        expect(taskWakes.length).toBeGreaterThan(0);
+        expect(taskWakes.every((request) => request.agentId === "alpha")).toBe(true);
+      });
+    },
+  );
 
   it("sweeps one expired plugin-state batch per maintenance pass after restart", async () => {
     await withTaskRegistryTempDir(async () => {

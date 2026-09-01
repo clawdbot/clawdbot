@@ -1,5 +1,7 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it } from "vitest";
+import { loadControlUiSourceCatalog } from "../../../../scripts/lib/control-ui-i18n-catalog.ts";
+import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import {
@@ -26,6 +28,7 @@ describe("settings search target manifest", () => {
         target.hash,
       ]),
     ).toEqual([
+      ["updates", "/settings/updates", "", "#config-section-update"],
       ["channels", "/settings/channels", "", ""],
       ["security", "/settings/security", "", ""],
       ["secrets", "/settings/secrets", "", ""],
@@ -90,9 +93,10 @@ describe("settings search target manifest", () => {
   });
 
   it("indexes only translation keys present in the English source catalog", () => {
+    const source = flattenTranslations(loadControlUiSourceCatalog());
     for (const target of targets) {
       for (const key of [target.labelKey, ...target.searchKeys]) {
-        expect(t(key), `Missing settings search translation: ${key}`).not.toBe(key);
+        expect(source.has(key), `Missing settings search translation: ${key}`).toBe(true);
       }
     }
   });

@@ -393,6 +393,7 @@ export async function resolveSandboxContext(params: {
 
 export async function ensureSandboxWorkspaceForSession(params: {
   config?: OpenClawConfig;
+  agentId?: string;
   sessionKey?: string;
   workspaceDir?: string;
 }): Promise<SandboxWorkspaceInfo | null> {

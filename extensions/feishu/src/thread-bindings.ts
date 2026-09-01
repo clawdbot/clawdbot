@@ -275,12 +275,15 @@ export function createFeishuThreadBindingManager(params: {
       return removed;
     },
     stop: () => {
-      for (const key of getState().bindingsByAccountConversation.keys()) {
-        if (key.startsWith(`${accountId}:`)) {
-          getState().bindingsByAccountConversation.delete(key);
+      // A repeated shutdown must not remove a replacement manager's live bindings.
+      if (getState().managersByAccountId.get(accountId) === manager) {
+        for (const key of getState().bindingsByAccountConversation.keys()) {
+          if (key.startsWith(`${accountId}:`)) {
+            getState().bindingsByAccountConversation.delete(key);
+          }
         }
+        getState().managersByAccountId.delete(accountId);
       }
-      getState().managersByAccountId.delete(accountId);
       unregisterSessionBindingAdapter({
         channel: "feishu",
         accountId,

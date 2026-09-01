@@ -1,15 +1,25 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, test, vi } from "vitest";
 import { waitForFile } from "../../test/helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runWithCanonicalSkillWorkspace } from "../agents/skill-workshop-workspace-context.js";
 import { createConfiguredSkillWorkshopTool } from "../agents/tools/skill-workshop-tool-factory.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  listSessionPendingInputs,
+  loadTranscriptEventsSync,
+  loadSessionEntry,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { migrateManagedWorktreeCanonicalWorkspaces } from "../config/sessions/worktree-workspace-migration.js";
 import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
+import { readPersistedMediaFacts } from "../media/media-facts.js";
+import { resolveMediaReferenceLocalPath } from "../media/media-reference.js";
 import { ProjectCloneError } from "../projects/project-clone-runtime.js";
 import { registerProjectRegistry } from "../projects/project-registry.js";
 import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../sessions/session-lifecycle-admission.js";
@@ -55,11 +65,11 @@ afterEach(() => {
 
 test.each([
   { worktree: false, sandboxed: false },
-  { worktree: true, sandboxed: false },
+  { worktree: true, sandboxed: false, image: true },
   { worktree: false, sandboxed: true },
 ])(
   "sessions.create admits remote project work (worktree=$worktree, sandboxed=$sandboxed) before materialization and dispatches only after authoritative binding",
-  async ({ worktree, sandboxed }) => {
+  async ({ worktree, sandboxed, image }) => {
     const root = tempDirs.make("openclaw-session-remote-project-startup-");
     const workspace = await initializeRepository(root, "workspace");
     const projectRoot = await initializeRepository(sandboxed ? workspace : root, "project");
@@ -70,10 +80,22 @@ test.each([
     const project = await registerProjectRegistry({ path: projectRoot, name: "Project" });
     const materialization = createDeferredCore<typeof project>();
     projectCloneMocks.materialize.mockReturnValueOnce(materialization.promise);
-    dispatchInboundMessageMock.mockResolvedValue({
-      queuedFinal: false,
-      counts: { block: 0, final: 0, tool: 0 },
+    dispatchInboundMessageMock.mockImplementation(async (dispatchParams: unknown) => {
+      const { replyOptions } = dispatchParams as Parameters<typeof dispatchInboundMessage>[0];
+      await replyOptions?.userTurnTranscriptRecorder?.persistApproved();
+      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
     });
+    const attachments = image
+      ? [
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "synthetic.png",
+            content:
+              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
+          },
+        ]
+      : undefined;
     const broadcast = vi.fn();
     const context = {
       broadcast,
@@ -95,6 +117,7 @@ test.each([
         {
           agentId: "main",
           message: "Inspect the remote project",
+          ...(attachments ? { attachments } : {}),
           projectGitUrl: "git@github.com:OpenClaw/OpenClaw.git",
           ...(worktree ? { worktree: true, worktreeName: "remote-startup" } : {}),
         },
@@ -129,6 +152,36 @@ test.each([
         }),
       );
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      const transcriptScope = { agentId: "main", sessionKey: key, sessionId, storePath };
+      const pending = listSessionPendingInputs(transcriptScope);
+      if (image) {
+        expect(
+          loadTranscriptEventsSync(transcriptScope).filter(
+            (event) => asNullableRecord(event)?.type === "message",
+          ),
+        ).toEqual([]);
+        expect(pending).toMatchObject({
+          total: 1,
+          items: [{ runId, state: "queued", message: { idempotencyKey: `${runId}:user` } }],
+        });
+        const startup = await directSessionReq(
+          "chat.startup",
+          { sessionKey: key },
+          { ...controlUiClient, context },
+        );
+        expect(startup.ok, JSON.stringify(startup.error)).toBe(true);
+        expect(startup.payload).toMatchObject({
+          messages: [],
+          pendingInputs: { total: 1, items: [{ runId, state: "queued" }] },
+        });
+        expect(created.payload).not.toHaveProperty("messageSeq");
+        const media = readPersistedMediaFacts(pending.items[0]!.message);
+        expect(media).toHaveLength(1);
+        expect(media?.[0]?.contentType).toBe("image/png");
+        expect(await fs.readFile(await resolveMediaReferenceLocalPath(media![0]!.url!))).toEqual(
+          Buffer.from(attachments![0]!.content, "base64"),
+        );
+      }
 
       materialization.resolve(project);
       await settleWorkspaceRuns(context, storePath, key);
@@ -137,6 +190,22 @@ test.each([
       );
       expect(error?.[1]).toBeUndefined();
       expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+      const transcript = loadTranscriptEventsSync(transcriptScope).map(asNullableRecord);
+      expect(
+        transcript.filter((event) => asNullableRecord(event?.message)?.role === "user"),
+      ).toHaveLength(1);
+      expect(transcript.at(-1)).toMatchObject({ message: { idempotencyKey: `${runId}:user` } });
+      expect(listSessionPendingInputs(transcriptScope)).toEqual({ items: [], total: 0 });
+      if (image) {
+        expect(transcript.at(-1)?.id).toBe(pending.items[0]?.id);
+        const persistedMessage = expectDefined(
+          asNullableRecord(transcript.at(-1)?.message),
+          "persisted initial input",
+        );
+        expect(readPersistedMediaFacts(persistedMessage)).toEqual(
+          readPersistedMediaFacts(pending.items[0]!.message),
+        );
+      }
       const prepared = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
       expect(prepared).toMatchObject({
         sessionId,

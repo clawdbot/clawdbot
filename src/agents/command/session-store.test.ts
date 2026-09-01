@@ -1069,7 +1069,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         sessionId: first.sessionId,
         sessionKey: first.sessionKey!,
         storePath: first.storePath,
-        sessionStore: first.sessionStore!,
+        sessionStore: {},
         defaultProvider: "claude-cli",
         defaultModel: "claude-sonnet-4-6",
         result: {
@@ -1141,52 +1141,55 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
-  it("preserves previous totalTokens when provider returns no usage data (#67667)", async () => {
-    await withTempSessionStore(async ({ storePath }) => {
-      const cfg = {} as OpenClawConfig;
-      const sessionKey = "agent:main:explicit:test-no-usage";
-      const sessionId = "test-session";
+  it.each([21_225, 0])(
+    "marks previous totalTokens=%i stale without provider usage (#67667)",
+    async (totalTokens) => {
+      await withTempSessionStore(async ({ storePath }) => {
+        const cfg = {} as OpenClawConfig;
+        const sessionKey = "agent:main:explicit:test-no-usage";
+        const sessionId = "test-session";
 
-      const sessionStore: Record<string, SessionEntry> = {
-        [sessionKey]: {
-          sessionId,
-          updatedAt: 1,
-          totalTokens: 21225,
-          totalTokensFresh: true,
-        },
-      };
-      await seedSessionStore(storePath, sessionStore);
-
-      const result: EmbeddedAgentRunResult = {
-        meta: {
-          durationMs: 500,
-          agentMeta: {
+        const sessionStore: Record<string, SessionEntry> = {
+          [sessionKey]: {
             sessionId,
-            provider: "minimax",
-            model: "MiniMax-M2.7",
+            updatedAt: 1,
+            totalTokens,
+            totalTokensFresh: true,
           },
-        },
-      };
+        };
+        await seedSessionStore(storePath, sessionStore);
 
-      await updateSessionStoreAfterAgentRun({
-        cfg,
-        sessionId,
-        sessionKey,
-        storePath,
-        sessionStore,
-        defaultProvider: "minimax",
-        defaultModel: "MiniMax-M2.7",
-        result,
+        const result: EmbeddedAgentRunResult = {
+          meta: {
+            durationMs: 500,
+            agentMeta: {
+              sessionId,
+              provider: "minimax",
+              model: "MiniMax-M2.7",
+            },
+          },
+        };
+
+        await updateSessionStoreAfterAgentRun({
+          cfg,
+          sessionId,
+          sessionKey,
+          storePath,
+          sessionStore,
+          defaultProvider: "minimax",
+          defaultModel: "MiniMax-M2.7",
+          result,
+        });
+
+        expect(sessionStore[sessionKey]?.totalTokens).toBe(totalTokens);
+        expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(false);
+
+        const persisted = loadPersistedSessionStore(storePath);
+        expect(persisted[sessionKey]?.totalTokens).toBe(totalTokens);
+        expect(persisted[sessionKey]?.totalTokensFresh).toBe(false);
       });
-
-      expect(sessionStore[sessionKey]?.totalTokens).toBe(21225);
-      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(false);
-
-      const persisted = loadPersistedSessionStore(storePath);
-      expect(persisted[sessionKey]?.totalTokens).toBe(21225);
-      expect(persisted[sessionKey]?.totalTokensFresh).toBe(false);
-    });
-  });
+    },
+  );
 
   it("persists estimated context budget status without marking stale usage fresh", async () => {
     await withTempSessionStore(async ({ storePath }) => {

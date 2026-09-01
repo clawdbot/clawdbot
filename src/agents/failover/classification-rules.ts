@@ -388,7 +388,7 @@ function hasBillingApiErrorType(raw: string): boolean {
 function isAmbiguousGeneric429BalanceMessage(raw: string): boolean {
   return /\binsufficient\s+account\s+balance\b/i.test(raw) && !hasStructuredBilling429Signal(raw);
 }
-export function isBilling429MessageForProvider(raw: string, provider: string | undefined): boolean {
+function isBilling429MessageForProvider(raw: string, provider: string | undefined): boolean {
   if (!isBillingErrorMessage(raw)) {
     return false;
   }

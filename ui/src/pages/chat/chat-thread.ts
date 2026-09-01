@@ -52,9 +52,11 @@ const expandedAssistantMessagesBySession = new Map<
 >();
 const initializedToolCardsBySession = new Map<string, Set<string>>();
 const lastAutoExpandPrefBySession = new Map<string, boolean>();
+// This memo only skips repeated work. Keeping its transcript strongly would
+// retain message payloads after the owning pane and message cache release them.
 const lastToolCardItemsBySession = new Map<
   string,
-  { items: readonly (ChatItem | MessageGroup)[]; isFilteredProjection: boolean }
+  { items: WeakRef<readonly RenderChatItem[]>; isFilteredProjection: boolean }
 >();
 
 export function resetChatThreadState(paneId?: string): void {
@@ -391,17 +393,14 @@ export function getExpandedUserMessages(sessionKey: string): Map<string, boolean
   return getOrCreateSessionCacheValue(expandedUserMessagesBySession, sessionKey, () => new Map());
 }
 
-export function collectToolTitleCandidates(items: readonly (ChatItem | MessageGroup)[]) {
-  return items.flatMap((item) =>
-    item.kind === "group"
-      ? item.messages.flatMap((entry) =>
-          extractToolCardsCached(entry.message, entry.key).map(({ args, name }) => ({
-            args,
-            name,
-          })),
-        )
-      : [],
-  );
+export function* collectToolTitleCandidates(items: readonly (ChatItem | MessageGroup)[]) {
+  for (const item of items) {
+    if (item.kind === "group") {
+      for (const entry of item.messages) {
+        yield* extractToolCardsCached(entry.message);
+      }
+    }
+  }
 }
 
 export type AssistantMessageExpansionState =
@@ -452,7 +451,7 @@ export function syncToolCardExpansionState(
   const previousProjection = getSessionCacheValue(lastToolCardItemsBySession, sessionKey);
   const previousAutoExpand = getSessionCacheValue(lastAutoExpandPrefBySession, sessionKey) ?? false;
   if (
-    previousProjection?.items === items &&
+    previousProjection?.items.deref() === items &&
     previousProjection.isFilteredProjection === isFilteredProjection &&
     previousAutoExpand === autoExpandToolCalls
   ) {
@@ -464,7 +463,7 @@ export function syncToolCardExpansionState(
       continue;
     }
     for (const entry of item.messages) {
-      const cards = extractToolCardsCached(entry.message, entry.key);
+      const cards = extractToolCardsCached(entry.message);
       for (let cardIndex = 0; cardIndex < cards.length; cardIndex++) {
         const disclosureId = `${entry.key}:toolcard:${cardIndex}`;
         currentToolCardIds.add(disclosureId);
@@ -501,6 +500,9 @@ export function syncToolCardExpansionState(
       }
     }
   }
-  setSessionCacheValue(lastToolCardItemsBySession, sessionKey, { items, isFilteredProjection });
+  setSessionCacheValue(lastToolCardItemsBySession, sessionKey, {
+    items: new WeakRef(items),
+    isFilteredProjection,
+  });
   setSessionCacheValue(lastAutoExpandPrefBySession, sessionKey, autoExpandToolCalls);
 }

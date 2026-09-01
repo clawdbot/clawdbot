@@ -6,6 +6,7 @@ import path from "node:path";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import * as agentEvents from "../infra/agent-events.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
@@ -23,6 +24,7 @@ import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
 import { createOpenAiResponsesTextEvent } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
 import { SessionManager } from "./sessions/session-manager.js";
 import { recordSessionModelUsage } from "./sessions/session-model-usage.js";
+import { markCoreTtsToolResult } from "./tools/tts-tool-result-provenance.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
 const retryingCompactionEnd = () =>
@@ -1203,6 +1205,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     const { emit, subscription } = createSubscribedSessionHarness({
       runId: "run",
       builtinToolNames: new Set(["tts"]),
+      coreBuiltinToolNames: new Set(["tts"]),
     });
 
     emit({
@@ -1210,22 +1213,29 @@ describe("subscribeEmbeddedAgentSession", () => {
       toolName: "tts",
       toolCallId: "tc-1",
       isError: false,
-      result: {
-        details: {
-          media: {
-            mediaUrl: "/tmp/reply.opus",
-            audioAsVoice: true,
+      result: markCoreTtsToolResult(
+        {
+          details: {
+            media: {
+              mediaUrl: "/tmp/reply.opus",
+              audioAsVoice: true,
+              trustedLocalMedia: true,
+            },
           },
         },
-      },
+        ["/tmp/reply.opus"],
+      ),
     });
     emit({ type: "agent_end" });
     await subscription.waitForPendingEvents();
 
     expect(subscription.getPendingToolMediaReply()).toEqual({
       mediaUrls: ["/tmp/reply.opus"],
+      attachments: [{ trustedLocalMedia: true }],
       audioAsVoice: true,
+      trustedLocalMedia: true,
     });
+    expect(subscription.getToolAutoDeliveryMediaUrls()).toEqual(["/tmp/reply.opus"]);
   });
 
   it("counts orphaned tool media emitted through block replies", async () => {
@@ -1233,6 +1243,8 @@ describe("subscribeEmbeddedAgentSession", () => {
     const { emit, subscription } = createSubscribedSessionHarness({
       runId: "run",
       builtinToolNames: new Set(["tts"]),
+      coreBuiltinToolNames: new Set(["tts"]),
+      sourceReplyDeliveryMode: "message_tool_only",
       onBlockReply,
     });
 
@@ -1241,25 +1253,36 @@ describe("subscribeEmbeddedAgentSession", () => {
       toolName: "tts",
       toolCallId: "tc-1",
       isError: false,
-      result: {
-        details: {
-          media: {
-            mediaUrl: "/tmp/reply.opus",
-            audioAsVoice: true,
+      result: markCoreTtsToolResult(
+        {
+          details: {
+            media: {
+              mediaUrl: "/tmp/reply.opus",
+              audioAsVoice: true,
+              trustedLocalMedia: true,
+            },
           },
         },
-      },
+        ["/tmp/reply.opus"],
+      ),
     });
     emit({ type: "agent_end" });
     await subscription.waitForPendingEvents();
 
     expect(onBlockReply).toHaveBeenCalledWith({
       mediaUrls: ["/tmp/reply.opus"],
+      mediaUrl: "/tmp/reply.opus",
+      attachments: [{ trustedLocalMedia: true }],
       audioAsVoice: true,
+      trustedLocalMedia: true,
     });
     expect(subscription.getPendingToolMediaReply()).toBeNull();
+    expect(subscription.getToolAutoDeliveryMediaUrls()).toEqual([]);
     expect(subscription.hasToolMediaBlockReply()).toBe(true);
     expect(subscription.getVisibleBlockReplyCount()).toBe(1);
+    expect(getReplyPayloadMetadata(onBlockReply.mock.calls[0]?.[0] ?? {})).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+    });
   });
 
   it.each(THINKING_TAG_CASES)(
@@ -2056,6 +2079,7 @@ describe("subscribeEmbeddedAgentSession", () => {
           status: "accepted",
           runId: "run-child",
           childSessionKey: "agent:claude:subagent:child",
+          expectsCompletionMessage: true,
         },
       },
     });
@@ -2066,6 +2090,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       {
         runId: "run-child",
         childSessionKey: "agent:claude:subagent:child",
+        expectsCompletionMessage: true,
       },
     ]);
 

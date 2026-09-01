@@ -178,18 +178,16 @@ function resolvePersistentStoreCacheKey(pluginId: string, namespace: string): st
   return `${pluginId}\0${namespace}`;
 }
 
-function createPersistentStoreResolver(
-  options: PersistentDedupeOptions,
-): (namespace: string) => PluginStateSyncKeyedStore<PersistentDedupeEntry> {
+function createPersistentStoreResolver(options: PersistentDedupeOptions) {
   const maxEntries = resolveStateMaxEntries(options);
   const ttlMs = resolveNonNegativeIntegerOption(options.ttlMs, 0);
   const defaultTtlMs = ttlMs > 0 ? ttlMs : undefined;
-  const stores = new Map<string, PluginStateSyncKeyedStore<PersistentDedupeEntry>>();
+  const stores = new Map<string, Required<PluginStateSyncKeyedStore<PersistentDedupeEntry>>>();
 
   if (hasPluginStateOptions(options)) {
     const pluginId = options.pluginId;
     const prefix = normalizeNamespacePrefix(options.namespacePrefix);
-    return (namespace) => {
+    return (namespace: string) => {
       const stateNamespace = resolveStateNamespace(prefix, namespace);
       const cacheKey = resolvePersistentStoreCacheKey(pluginId, stateNamespace);
       const existing = stores.get(cacheKey);
@@ -208,7 +206,7 @@ function createPersistentStoreResolver(
   }
 
   const prefix = normalizeNamespacePrefix("legacy-path");
-  return (namespace) => {
+  return (namespace: string) => {
     const legacyPath = options.resolveFilePath(namespace);
     const stateNamespace = resolveStateNamespace(prefix, legacyPath);
     const cacheKey = resolvePersistentStoreCacheKey(LEGACY_PATH_OWNER_ID, stateNamespace);
@@ -311,7 +309,7 @@ export async function migratePersistentDedupeLegacyJsonFile(
   };
 
   for (const entry of legacy.entries) {
-    const changed = store.update?.(
+    const changed = store.update(
       entry.key,
       (current) => {
         const currentSeenAt = resolveEntrySeenAt(current);
@@ -359,7 +357,7 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
       const entryKey = resolveEntryKey(key);
       const store = getStore(namespace);
       let duplicateSeenAt: number | undefined;
-      store.update?.(
+      store.update(
         entryKey,
         (entry) => {
           const seenAt = resolveEntrySeenAt(entry);

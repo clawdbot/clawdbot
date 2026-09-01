@@ -1,5 +1,5 @@
 import { getSafeSessionStorage } from "../../local-storage.ts";
-import { hasUiSessionDefaults } from "../sessions/session-key.ts";
+import { resolveUiConversationIdentity, hasUiSessionDefaults } from "../sessions/session-key.ts";
 import {
   observeOutboxRecoveryOwner,
   outboxPayloadMatchesOwner,
@@ -10,7 +10,6 @@ import {
   notifyStoredChatOutboxChanges,
   readStoredOutboxStore,
   resolvePendingComposerSessions,
-  resolveStoredChatOutboxScope,
   storedChatOutboxScopeKey,
   storageTargetForGateway,
   writeStoredOutboxStore,
@@ -58,7 +57,7 @@ export function captureChatOutboxRecoveryDestination(
   const store = readStoredOutboxStore(storage, target);
   resolvePendingComposerSessions(store, state);
   const storeSessionKey = storedChatOutboxScopeKey(
-    resolveStoredChatOutboxScope(state, scope.sessionKey, scope.agentId),
+    resolveUiConversationIdentity(state, scope.sessionKey, scope.agentId),
   );
   const session = store.sessions[storeSessionKey] ?? null;
   return {
@@ -95,7 +94,7 @@ export function restoreChatOutboxRecovery(
     ) {
       return "conflict";
     }
-    const scope = resolveStoredChatOutboxScope(
+    const scope = resolveUiConversationIdentity(
       state,
       destination.scope.sessionKey,
       destination.scope.agentId,

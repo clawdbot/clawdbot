@@ -7,11 +7,10 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
-  formatUpdateChannelLabel,
   normalizeUpdateChannel,
-  resolveEffectiveUpdateChannel,
+  resolveUpdateChannelDisplay,
 } from "../../infra/update-channels.js";
-import { checkUpdateStatus } from "../../infra/update-check.js";
+import { resolveUpdateInstallIdentity } from "../../infra/update-check.js";
 import { defaultRuntime } from "../../runtime.js";
 import { pathExists } from "../../utils.js";
 import { VERSION } from "../../version.js";
@@ -41,11 +40,9 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
 
   const root = await resolveUpdateRoot();
   const [updateStatus, configSnapshot] = await Promise.all([
-    checkUpdateStatus({
+    resolveUpdateInstallIdentity({
       root,
       timeoutMs: timeoutMs ?? 3500,
-      fetchGit: false,
-      includeRegistry: false,
     }),
     readConfigFileSnapshot({ observe: false }),
   ]);
@@ -53,17 +50,10 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
   const configChannel = configSnapshot.valid
     ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
     : null;
-  const channelInfo = resolveEffectiveUpdateChannel({
+  const channelInfo = resolveUpdateChannelDisplay({
     configChannel,
     currentVersion: VERSION,
     installKind: updateStatus.installKind,
-    git: updateStatus.git
-      ? { tag: updateStatus.git.tag, branch: updateStatus.git.branch }
-      : undefined,
-  });
-  const channelLabel = formatUpdateChannelLabel({
-    channel: channelInfo.channel,
-    source: channelInfo.source,
     gitTag: updateStatus.git?.tag ?? null,
     gitBranch: updateStatus.git?.branch ?? null,
   });
@@ -74,7 +64,7 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
       {
         value: "keep",
         label: `Keep current (${channelInfo.channel})`,
-        hint: channelLabel,
+        hint: channelInfo.label,
       },
       {
         value: "stable",

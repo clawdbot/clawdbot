@@ -245,7 +245,7 @@ export function renderRecentSession(params: {
       (event.currentTarget as HTMLElement).querySelector("[data-session-menu]"),
       (trigger, x, y) => host.sidebarMenus.openSessionMenu(session, x, y, trigger),
     );
-  const pinLabel = `${t(session.pinned ? "sessionsView.unpinSession" : "sessionsView.pinSession")}: ${label}`;
+  const pinLabel = t(session.pinned ? "sessionsView.unpinSession" : "sessionsView.pinSession");
   const menuTooltip = t("chat.sidebar.openSessionMenu");
   const menuLabel = `${menuTooltip}: ${label}`;
   const menuOpen =

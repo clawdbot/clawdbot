@@ -100,6 +100,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
         <button class="shell-chrome-controls__button"></button>
         <button class="shell-chrome-controls__button"></button>
         <button class="shell-chrome-controls__button shell-chrome-controls__custodian"></button>
+        <button class="shell-chrome-controls__button shell-chrome-controls__home"></button>
       </div>
       <nav class="macos-titlebar-controls">
         ${Array.from(

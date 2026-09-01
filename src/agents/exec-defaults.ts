@@ -132,7 +132,7 @@ export function resolveExecDefaults(params: {
     globalExec,
   } = resolveExecConfigState(params);
   const sandboxRuntime = params.sessionKey
-    ? resolveSandboxRuntimeStatus({ cfg, sessionKey: params.sessionKey })
+    ? resolveSandboxRuntimeStatus({ cfg, agentId: resolvedAgentId, sessionKey: params.sessionKey })
     : undefined;
   const sandboxRequired =
     params.sessionEntry?.sandbox === "required" || sandboxRuntime?.sandboxRequired === true;

@@ -337,7 +337,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         expect(schedule).toHaveBeenCalledExactlyOnceWith(completion.runId, completion);
       } else {
         expect(completion.requesterSettleWake).toBeUndefined();
-        expect(schedule).not.toHaveBeenCalled();
+        expect(schedule).toHaveBeenCalledExactlyOnceWith(completion.runId, completion);
       }
       expect(inline.requesterTurnRunId).toBe(REQUESTER_TURN);
       expect(inline.requesterTurnYielded).toBeUndefined();

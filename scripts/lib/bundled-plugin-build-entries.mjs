@@ -7,7 +7,10 @@ import {
   bundledDistPluginFile,
   bundledPluginFile,
 } from "./bundled-plugin-paths.mjs";
-import { shouldBuildBundledCluster } from "./optional-bundled-clusters.mjs";
+import {
+  OPTIONAL_BUNDLED_BUILD_ENV,
+  shouldBuildBundledCluster,
+} from "./optional-bundled-clusters.mjs";
 import { collectRootPackageExcludedExtensionDirs } from "./root-package-bundled-plugin-excludes.mjs";
 
 export { collectRootPackageExcludedExtensionDirs };
@@ -15,10 +18,15 @@ export { collectRootPackageExcludedExtensionDirs };
 const TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
 /** Bundled plugin directories built with core but not packaged as standalone npm plugins. */
 export const NON_PACKAGED_BUNDLED_PLUGIN_DIRS = new Set(["qa-channel", "qa-lab"]);
-const EXCLUDED_CORE_BUNDLED_PLUGIN_DIRS = new Set(["qqbot", "whatsapp"]);
 const BUNDLED_PLUGIN_BUILD_IDS_ENV = "OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS";
 /** @internal Shared repository-script contract. */
 export const DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV = "OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS";
+// Declaration caches must distinguish every selector that changes this entry graph.
+export const BUNDLED_PLUGIN_BUILD_ENV_NAMES = [
+  BUNDLED_PLUGIN_BUILD_IDS_ENV,
+  DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV,
+  OPTIONAL_BUNDLED_BUILD_ENV,
+];
 const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9-]*$/u;
 const TOP_LEVEL_PRIVATE_TEST_SURFACE_RE =
   /(?:^|[._-])(?:test|spec|test-support|test-helpers|test-fixtures|test-harness|mock-setup)(?:[._-]|$)/u;
@@ -250,9 +258,6 @@ export function collectBundledPluginBuildEntries(params = {}) {
       continue;
     }
     if (!shouldBuildBundledDistEntry(packageJson) && !dockerSelectedBuildIds?.has(dirName)) {
-      continue;
-    }
-    if (EXCLUDED_CORE_BUNDLED_PLUGIN_DIRS.has(dirName)) {
       continue;
     }
 

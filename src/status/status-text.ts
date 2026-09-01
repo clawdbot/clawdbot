@@ -155,8 +155,8 @@ function shouldLoadUsageSummary(params: {
   );
 }
 
-function formatSessionTaskLine(sessionKey: string): string | undefined {
-  const snapshot = buildTaskStatusSnapshot(listTasksForSessionKeyForStatus(sessionKey));
+function formatSessionTaskLine(sessionKey: string, agentId: string): string | undefined {
+  const snapshot = buildTaskStatusSnapshot(listTasksForSessionKeyForStatus(sessionKey, agentId));
   const task = snapshot.focus;
   if (!task) {
     return undefined;
@@ -508,7 +508,7 @@ export async function buildStatusReplyParts(
     // runtime registries, not necessarily the external key passed to the command.
     taskLine = params.skipDefaultTaskLookup
       ? params.taskLineOverride
-      : (params.taskLineOverride ?? formatSessionTaskLine(requesterKey));
+      : (params.taskLineOverride ?? formatSessionTaskLine(requesterKey, statusAgentId));
     if (!taskLine && !params.skipDefaultTaskLookup) {
       taskLine = formatAgentTaskCountsLine(statusAgentId);
     }

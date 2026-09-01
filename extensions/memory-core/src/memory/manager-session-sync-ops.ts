@@ -22,6 +22,7 @@ import {
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import { listMemorySessionTombstones } from "../memory-entry-origins.js";
+import { runInMemoryBackgroundContext } from "./background-context.js";
 import { shouldSyncSessionsForReindex } from "./manager-session-reindex.js";
 import {
   isMemorySessionIndexable,
@@ -131,21 +132,23 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     if (!this.sources.has("sessions") || this.sessionUnsubscribe) {
       return;
     }
-    this.sessionUnsubscribe = this.subscribeSessionTranscriptUpdates((update) => {
-      if (this.closed) {
-        return;
-      }
-      const target = this.resolveSessionTranscriptUpdateSyncTarget(update);
-      if (target) {
-        this.scheduleSessionDirty(target);
-        return;
-      }
-      if (update.sessionFile) {
-        void this.scheduleCorpusSessionFileDirty(update.sessionFile).catch((err: unknown) => {
-          log.warn(`memory session corpus update failed: ${String(err)}`);
-        });
-      }
-    });
+    this.sessionUnsubscribe = this.subscribeSessionTranscriptUpdates((update) =>
+      runInMemoryBackgroundContext(() => {
+        if (this.closed) {
+          return;
+        }
+        const target = this.resolveSessionTranscriptUpdateSyncTarget(update);
+        if (target) {
+          this.scheduleSessionDirty(target);
+          return;
+        }
+        if (update.sessionFile) {
+          void this.scheduleCorpusSessionFileDirty(update.sessionFile).catch((err: unknown) => {
+            log.warn(`memory session corpus update failed: ${String(err)}`);
+          });
+        }
+      }),
+    );
   }
 
   protected subscribeSessionTranscriptUpdates(

@@ -11,6 +11,7 @@ import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveHeartbeatSession } from "../infra/heartbeat-runner-session.js";
+import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import {
   OutboundDeliveryError,
   PlatformMessageNotDispatchedError,
@@ -33,6 +34,7 @@ const {
   enqueueSystemEventMock,
   systemEventReceiptRemoveMock,
   requestHeartbeatMock,
+  requestHeartbeatAndWaitMock,
   runHeartbeatOnceMock,
   loadConfigMock,
   fetchWithSsrFGuardMock,
@@ -52,6 +54,9 @@ const {
   enqueueSystemEventMock: vi.fn(),
   systemEventReceiptRemoveMock: vi.fn(() => true),
   requestHeartbeatMock: vi.fn(),
+  requestHeartbeatAndWaitMock: vi.fn<(...args: unknown[]) => Promise<HeartbeatRunResult>>(
+    async () => ({ status: "ran", durationMs: 1 }),
+  ),
   runHeartbeatOnceMock: vi.fn<
     (...args: unknown[]) => Promise<{ status: "ran"; durationMs: number }>
   >(async () => ({ status: "ran", durationMs: 1 })),
@@ -136,6 +141,10 @@ function requestHeartbeat(...args: unknown[]) {
   return requestHeartbeatMock(...args);
 }
 
+function requestHeartbeatAndWait(...args: unknown[]) {
+  return requestHeartbeatAndWaitMock(...args);
+}
+
 function runHeartbeatOnce(...args: unknown[]) {
   return runHeartbeatOnceMock(...args);
 }
@@ -153,6 +162,7 @@ vi.mock("../infra/heartbeat-wake.js", async () => {
     ...actual,
     requestHeartbeat,
     requestHeartbeatRaw: requestHeartbeat,
+    requestHeartbeatAndWait,
   };
 });
 
@@ -463,6 +473,7 @@ describe("buildGatewayCronService", () => {
     enqueueSystemEventMock.mockClear();
     systemEventReceiptRemoveMock.mockClear();
     requestHeartbeatMock.mockClear();
+    requestHeartbeatAndWaitMock.mockClear();
     runHeartbeatOnceMock.mockClear();
     loadConfigMock.mockClear();
     fetchWithSsrFGuardMock.mockClear();
@@ -2735,6 +2746,45 @@ describe("buildGatewayCronService", () => {
         heartbeat: { target: "last", to: undefined, accountId: undefined },
         scheduledEveryMs: 15 * 60_000,
       });
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("returns the settled heartbeat result through the cron wake adapter", async () => {
+    requestHeartbeatAndWaitMock.mockResolvedValueOnce({
+      status: "failed",
+      reason: "agent-runner-failure",
+    });
+    const state = loadCronService(createCronConfig("server-cron-heartbeat-settlement"));
+    try {
+      const lifecycle = { abortSignal: new AbortController().signal };
+      await expect(
+        getCronState(state).deps.requestHeartbeatAndWait?.(
+          {
+            source: "interval",
+            intent: "task",
+            reason: "heartbeat-task:report",
+            agentId: "main",
+            scheduledEveryMs: 15 * 60_000,
+            tasks: [{ jobId: "report", name: "report", prompt: "Run report" }],
+          },
+          lifecycle,
+        ),
+      ).resolves.toEqual({ status: "failed", reason: "agent-runner-failure" });
+      expect(requestHeartbeatAndWaitMock).toHaveBeenCalledWith(
+        {
+          source: "interval",
+          intent: "task",
+          reason: "heartbeat-task:report",
+          agentId: "main",
+          sessionKey: undefined,
+          heartbeat: undefined,
+          scheduledEveryMs: 15 * 60_000,
+          tasks: [{ jobId: "report", name: "report", prompt: "Run report" }],
+        },
+        lifecycle,
+      );
     } finally {
       state.cron.stop();
     }

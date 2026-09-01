@@ -23,9 +23,11 @@ import { stagedPostCompactionDelegateCount } from "../continuation/delegate-stor
 import { pendingDelegateCount } from "../continuation/delegate-store.js";
 import { buildFallbackClearedNotice, buildFallbackNotice } from "../fallback-state.js";
 import {
+  getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
   isReplyPayloadTerminalContent,
   markReplyPayloadForSourceSuppressionDelivery,
+  setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -46,6 +48,7 @@ import {
 import type { accountAgentTurn } from "./agent-runner-result-accounting.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import { resolveResponseUsageLine } from "./agent-runner-usage-line.js";
+import type { PendingContinuationSettlement } from "./get-reply.types.js";
 import { attachMcpAppChannelAction } from "./mcp-app-channel-action.js";
 import { attachMcpConnectChannelAction } from "./mcp-connect-channel-action.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
@@ -91,7 +94,7 @@ export async function prepareReplyAgentPayloads(state: {
     fallbackExhausted,
     fallbackTransition,
     modelUsed,
-    payloadArray,
+    payloadArray: rawPayloadArray,
     preserveUserFacingSessionState,
     promptTokens,
     providerUsed,
@@ -109,10 +112,22 @@ export async function prepareReplyAgentPayloads(state: {
   if (deliberateSilentTerminalReply) {
     opts?.onDeliberateSilentTerminalReply?.();
   }
+  const implicitContinuation = runResult.meta?.continuationPending === true;
   const pendingContinuation =
-    runResult.meta?.yielded === true || (runResult.meta?.pendingToolCalls?.length ?? 0) > 0;
-  if (pendingContinuation) {
+    runResult.meta?.yielded === true ||
+    implicitContinuation ||
+    (runResult.meta?.pendingToolCalls?.length ?? 0) > 0;
+  if (pendingContinuation && !implicitContinuation) {
     opts?.onPendingContinuation?.();
+  }
+  let payloadArray = rawPayloadArray;
+  if (implicitContinuation && payloadArray[0]) {
+    payloadArray = [
+      setReplyPayloadMetadata(markReplyPayloadForSourceSuppressionDelivery(payloadArray[0]), {
+        continuationStatus: true,
+      }),
+      ...payloadArray.slice(1),
+    ];
   }
 
   const successfulSourceReplyDelivery = hasSuccessfulSourceReplyDelivery({
@@ -610,6 +625,35 @@ export async function prepareReplyAgentPayloads(state: {
     hasReminderCommitment && successfulCronAdds === 0 && !coveredByExistingCron
       ? appendUnscheduledReminderNote(replyPayloads)
       : replyPayloads;
+
+  if (implicitContinuation) {
+    const statusPayload = guardedReplyPayloads.find(
+      (payload) => getReplyPayloadMetadata(payload)?.continuationStatus === true,
+    );
+    const acceptedSessionSpawns = runResult.acceptedSessionSpawns;
+    if (!sessionKey || !acceptedSessionSpawns?.length || !statusPayload) {
+      throw new Error("accepted continuation status could not be prepared for delivery");
+    }
+    const settlement: PendingContinuationSettlement = {
+      statusPayload,
+      settle: async (statusDelivered) => {
+        const { settleRequesterAfterSessionSpawns } =
+          await import("../../agents/subagents/registry/subagent-registry.js");
+        if (
+          !settleRequesterAfterSessionSpawns({
+            requesterSessionKey: sessionKey,
+            requesterAgentId: followupRun.run.agentId,
+            requesterTurnRunId: runId,
+            requesterYielded: statusDelivered,
+            acceptedSessionSpawns,
+          })
+        ) {
+          throw new Error("accepted continuation children could not transfer terminal delivery");
+        }
+      },
+    };
+    opts?.onPendingContinuation?.(settlement);
+  }
 
   await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
 

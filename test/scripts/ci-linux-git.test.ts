@@ -934,6 +934,12 @@ posixIt.each([
       },
       fetchResults: [],
       worktreeResults: failure ? ["cleanup-failure"] : lanes.map(() => 0),
+      // The runner hands off the earlier allocation's output; keep setup logs
+      // inside this fixture's fresh invocation directory.
+      stepOutputs:
+        workflow === "web-ui-chat-proof"
+          ? { prepare_evidence: { output_dir: "${RUNNER_TEMP}" } }
+          : undefined,
       realClock: true,
       realDrain: false,
       poisonPython: true,

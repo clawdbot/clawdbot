@@ -109,45 +109,9 @@ function revealLabel(platform: string | null): string {
   return t("chat.sessionHeader.revealFileManager");
 }
 
-function pathBasename(value: string): string {
-  const trimmed = value.replace(/[\\/]+$/, "");
-  return trimmed.split(/[\\/]/).pop() || trimmed;
-}
-
 function branchRelativeTime(updatedAt: string | undefined): string {
   const timestamp = updatedAt ? Date.parse(updatedAt) : Number.NaN;
   return Number.isFinite(timestamp) ? formatRelativeTimestamp(timestamp, { fallback: "" }) : "";
-}
-
-export function resolveChatPaneWorkspace(params: {
-  session: GatewaySessionRow | undefined;
-  agentWorkspace?: string;
-  worktreePath?: string | null;
-}): { root: string | null; label: string | null } {
-  const row = params.session;
-  if (!row) {
-    return { root: null, label: null };
-  }
-  // Exec-node sessions live on another machine: gateway-local facts would
-  // hand the user a path for the wrong host, so only execCwd may name them.
-  // Cloud-worker sessions keep their gateway-local checkout (workers sync
-  // against it), so local facts stay correct there.
-  // Mirror the gateway's loadSessionFileRoot order (spawned workspace before
-  // spawned cwd) so copy-path and the chip tooltip name the same directory
-  // sessions.files.reveal opens.
-  const root = row.execNode
-    ? row.execCwd?.trim() || null
-    : row.spawnedWorkspaceDir?.trim() ||
-      row.spawnedCwd?.trim() ||
-      params.worktreePath?.trim() ||
-      (!row.worktree ? params.agentWorkspace?.trim() : "") ||
-      null;
-  const label = row.worktree?.repoRoot
-    ? pathBasename(row.worktree.repoRoot)
-    : root
-      ? pathBasename(root)
-      : null;
-  return { root, label };
 }
 
 export function resolveChatPaneParentSession(

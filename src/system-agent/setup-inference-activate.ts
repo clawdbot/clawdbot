@@ -6,7 +6,6 @@ import {
   type CodexCliApiKeyCredential,
   readCodexCliActiveApiKey,
 } from "../agents/cli-credentials.js";
-import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import { applyAutoLocalModelLean } from "../config/local-model-lean-auto.js";
 import { createMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -16,9 +15,8 @@ import { normalizePluginTargetConfig } from "../plugins/config-state.js";
 import { enablePluginInConfig, enablePluginWithCapabilityConsent } from "../plugins/enable.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "../plugins/runtime-state.js";
-import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveUserPath } from "../utils.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import { WizardCancelledError, WizardNavigationError } from "../wizard/prompts.js";
@@ -28,6 +26,7 @@ import {
   resolveSystemAgentConfiguredRouteFromConfig,
   sameDefaultInferenceRoute,
 } from "./inference-route.js";
+import { loadSetupInferencePluginGeneration } from "./revalidate-inference-owner.js";
 import { createQuickstartNotePrompter } from "./setup-apply.js";
 import {
   persistActivatedSetupInference,
@@ -128,6 +127,12 @@ async function activateSetupInferenceUnredacted(
   codexCliApiKey?: CodexCliApiKeyCredential,
 ): Promise<ActivateSetupInferenceResult> {
   const deps = params.deps ?? {};
+  const beforePersistentEffect = async () => {
+    throwIfSetupInferenceCancelled(params);
+    await params.beforePersistentEffect?.();
+    throwIfSetupInferenceCancelled(params);
+  };
+  const resolveRouteMetadata = deps.resolvePluginMetadataSnapshot ?? resolvePluginMetadataSnapshot;
   const readSnapshot =
     deps.readConfigFileSnapshot ?? (await import("../config/config.js")).readConfigFileSnapshot;
   const snapshot = await readSnapshot();
@@ -152,7 +157,11 @@ async function activateSetupInferenceUnredacted(
   let pendingCodexInstall: PluginInstallRecord | undefined;
   let codexInstallOwnership: "unknown" | "owned" | "unowned" = "unknown";
   let codexMetadataNeedsRestore = false;
-  let codexProbePluginRegistry: PluginRegistry | undefined;
+  let codexProbePluginGeneration: ReturnType<typeof loadSetupInferencePluginGeneration> | undefined;
+  const withProbePluginGeneration = <T>(run: () => T): T =>
+    codexProbePluginGeneration
+      ? withPluginRuntimeGenerationScope(codexProbePluginGeneration, run)
+      : run();
   try {
     const plan = await buildTestPlan({
       kind: params.kind,
@@ -218,10 +227,9 @@ async function activateSetupInferenceUnredacted(
             {
               workspaceDir: workspace,
               onCapabilityConsent: params.prompter
-                ? createPluginCapabilityConsentPrompter(params.prompter, () =>
-                    throwIfSetupInferenceCancelled(params),
-                  )
+                ? createPluginCapabilityConsentPrompter(params.prompter)
                 : undefined,
+              beforePersistentEffect,
             },
           );
           if (!enabledCodexBase.enabled) {
@@ -242,7 +250,7 @@ async function activateSetupInferenceUnredacted(
             prompter: params.prompter ?? createQuickstartNotePrompter(params.runtime),
             runtime: params.runtime,
             workspaceDir: tempDir,
-            beforePersistentEffect: () => throwIfSetupInferenceCancelled(params),
+            beforePersistentEffect,
           });
           if (!ensured.ok) {
             return {
@@ -298,8 +306,8 @@ async function activateSetupInferenceUnredacted(
             config: stagedCodexConfig,
           };
 
-          // The Gateway registry predates a runtime installed by this request.
-          // Retain the refreshed generation for both owner capture and the live probe.
+          // The installed package belongs to this probe's generation; the running
+          // Gateway keeps its startup inventory until the persisted change restarts it.
           const refreshPluginRegistry =
             deps.refreshPluginRegistryAfterConfigMutation ??
             (await import("../plugins/registry-refresh.js"))
@@ -317,21 +325,17 @@ async function activateSetupInferenceUnredacted(
             logger: { warn: (message) => (registryRefreshWarning = message) },
           });
           try {
-            codexProbePluginRegistry = loadAgentRuntimePluginRegistryHandle({
+            codexProbePluginGeneration = loadSetupInferencePluginGeneration({
               config: testPlan.config,
-              workspaceDir: tempDir,
-              selections: [
-                {
-                  provider: testPlan.provider,
-                  modelId: testPlan.model,
-                  runtime: "codex",
-                  agentId: testPlan.routeAgentId,
-                },
-              ],
+              workspaceDir: workspace,
+              selection: {
+                provider: testPlan.provider,
+                modelId: testPlan.model,
+                runtime: "codex",
+                agentId: testPlan.routeAgentId,
+              },
+              resolvePluginMetadataSnapshot: resolveRouteMetadata,
             });
-            if (!codexProbePluginRegistry) {
-              throw new Error("The Codex runtime plugin registry is unavailable.");
-            }
           } catch (error) {
             const loadError = `Could not load the Codex runtime plugin: ${formatErrorMessage(error)}`;
             return {
@@ -348,16 +352,13 @@ async function activateSetupInferenceUnredacted(
       }
     }
     const metadataWorkspaceDir = getActivePluginRegistryWorkspaceDirFromState();
-    // Manifest inventory is process-stable for one activation attempt. A plugin
-    // install is the lifecycle boundary: bypass the old process snapshot after refresh.
-    const resolveRouteMetadata =
-      deps.resolvePluginMetadataSnapshot ?? resolvePluginMetadataSnapshot;
-    const routeMetadataSnapshot = resolveRouteMetadata({
-      config: testPlan.config,
-      env: process.env,
-      ...(metadataWorkspaceDir ? { workspaceDir: metadataWorkspaceDir } : {}),
-      ...(codexMetadataNeedsRestore ? { allowCurrent: false } : {}),
-    });
+    const routeMetadataSnapshot =
+      codexProbePluginGeneration?.metadataSnapshot ??
+      resolveRouteMetadata({
+        config: testPlan.config,
+        env: process.env,
+        ...(metadataWorkspaceDir ? { workspaceDir: metadataWorkspaceDir } : {}),
+      });
     const routeDeps = { pluginMetadataPlugins: routeMetadataSnapshot.plugins };
     const requestedAgentId = params.agentId ? testPlan.routeAgentId : undefined;
     const baselineRoute = await projectInferenceRoute(cfg, requestedAgentId, routeDeps);
@@ -425,7 +426,7 @@ async function activateSetupInferenceUnredacted(
 
     let stagedOwnerPluginArtifacts: SystemAgentOwnerPluginArtifactSnapshot;
     try {
-      stagedOwnerPluginArtifacts = withPluginRuntimeRegistryScope(codexProbePluginRegistry, () =>
+      stagedOwnerPluginArtifacts = withProbePluginGeneration(() =>
         (deps.captureSystemAgentOwnerPluginArtifacts ?? captureSystemAgentOwnerPluginArtifacts)({
           config: stagedExecutionRoute.runConfig,
           executionRoute: stagedExecutionRoute,
@@ -446,7 +447,7 @@ async function activateSetupInferenceUnredacted(
     }
     let test: Awaited<ReturnType<typeof runSetupInferenceTest>>;
     try {
-      test = await withPluginRuntimeRegistryScope(codexProbePluginRegistry, () =>
+      test = await withProbePluginGeneration(() =>
         runSetupInferenceTest({
           plan: testPlan,
           tempDir,

@@ -43,7 +43,7 @@ function createAuthorityHarness(
     resolveSharedGatewaySessionGenerationForConfig: () => undefined,
     clients: [],
     channelManager: {
-      startChannel: async () => {},
+      startChannel: async () => new Map(),
       stopChannel: async () => {},
       isManuallyStopped: () => false,
       resolveRuntimeAccountId: (_channel, accountId) => accountId,

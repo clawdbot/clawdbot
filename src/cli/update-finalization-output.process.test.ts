@@ -66,6 +66,7 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
       const result = await runCliProcessChild({
         nodeArgs: ["--import", "tsx", fixture, scenario, ...args],
         env: {
+          ESBUILD_WORKER_THREADS: "0",
           PATH: path.dirname(process.execPath),
           HOME: root,
           USERPROFILE: root,

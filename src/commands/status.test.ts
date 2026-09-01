@@ -806,9 +806,6 @@ vi.mock("./status.scan.js", () => ({
 }));
 
 vi.mock("./status-runtime-shared.ts", () => ({
-  loadStatusProviderUsageModule: vi.fn(async () => ({
-    formatUsageReportLines: vi.fn(() => []),
-  })),
   resolveStatusGatewayHealth: vi.fn(async () => ({})),
   resolveStatusSecurityAudit: vi.fn(async (input: unknown) =>
     mocks.runSecurityAudit({

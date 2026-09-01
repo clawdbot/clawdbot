@@ -359,13 +359,13 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
           }
           return;
         }
-        // A session reset swaps sessionId under the same key; a digest accepted
-        // for the old session must not reach the replacement session's watchers.
+        // A deleted/reset session cannot accept this run's digest. Disable its
+        // model work so pending notes cannot keep scheduling unpersistable results.
         if (
           state.sessionId &&
           readSession(state.sessionKey, state.agentId)?.sessionId !== state.sessionId
         ) {
-          return;
+          return disableModelForRun(state);
         }
         preamblePublisher.clear(state);
         state.consecutiveFailures = 0;

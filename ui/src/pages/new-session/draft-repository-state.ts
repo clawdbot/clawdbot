@@ -41,12 +41,10 @@ function initialRepositoryState(snapshot: DraftRepositorySnapshot): DraftReposit
 export class DraftRepositoryController {
   private worktreeValue = false;
   private worktreeNameValue = "";
-  private baseRefValue = "";
+  private baseRefOverride: string | undefined;
   private repositoryValue: DraftRepositoryState = { kind: "idle" };
   private requestToken = 0;
-  private baseRefEditGeneration = 0;
   private preferredWorktreeRestore = false;
-  private preferredBaseRefRestore = "";
   private worktreeSelectedByUser = false;
   private detailsSelectedByUser = false;
 
@@ -64,7 +62,9 @@ export class DraftRepositoryController {
   }
 
   get baseRef(): string {
-    return this.baseRefValue;
+    // Discovery supplies defaults; reconnects never rewrite the operator's selection.
+    const repository = this.repositoryValue.kind === "git" ? this.repositoryValue : undefined;
+    return this.baseRefOverride ?? (repository?.defaultBranch || repository?.headBranch || "");
   }
 
   get repository(): DraftRepositoryState {
@@ -85,35 +85,37 @@ export class DraftRepositoryController {
       this.preferredWorktreeRestore = preference?.worktree === true;
     }
     if (!this.detailsSelectedByUser) {
-      this.preferredBaseRefRestore = preference?.baseRef ?? "";
+      this.baseRefOverride = preference?.baseRef || undefined;
       this.worktreeNameValue = preference?.worktreeName ?? "";
     }
     if (!this.matchesCurrentRepo()) {
       // Retire the old folder's RPC before it can consume the new preference.
       this.invalidate();
     } else if (this.repositoryValue.kind !== "checking") {
-      this.adoptResolvedRepository(
-        this.repositoryValue,
-        this.detailsSelectedByUser ? undefined : this.baseRefEditGeneration,
-      );
+      this.adoptResolvedRepository(this.repositoryValue);
     }
   }
 
   reset() {
     this.invalidate();
-    this.baseRefEditGeneration += 1;
     this.worktreeValue = false;
-    this.worktreeNameValue = "";
+    this.clearDetails();
     this.preferredWorktreeRestore = false;
-    this.preferredBaseRefRestore = "";
     this.worktreeSelectedByUser = false;
+  }
+
+  clearDetails(persist = false) {
+    this.baseRefOverride = undefined;
+    this.worktreeNameValue = "";
     this.detailsSelectedByUser = false;
+    if (persist) {
+      this.callbacks.persistPreference({ baseRef: "", worktreeName: "" });
+    }
   }
 
   invalidate() {
     this.requestToken += 1;
     this.repositoryValue = { kind: "idle" };
-    this.baseRefValue = "";
   }
 
   selectWorktree(value: boolean, clearName = true) {
@@ -121,7 +123,7 @@ export class DraftRepositoryController {
     this.worktreeSelectedByUser = true;
     this.worktreeValue = value;
     if (clearName) {
-      this.worktreeNameValue = "";
+      this.clearDetails(true);
     }
   }
 
@@ -132,6 +134,7 @@ export class DraftRepositoryController {
   rejectPreferredWorktree() {
     this.preferredWorktreeRestore = false;
     this.worktreeValue = false;
+    this.clearDetails(true);
   }
 
   toggle() {
@@ -153,9 +156,7 @@ export class DraftRepositoryController {
     if (submitting) {
       return;
     }
-    this.baseRefEditGeneration += 1;
-    this.baseRefValue = baseRef;
-    this.preferredBaseRefRestore = "";
+    this.baseRefOverride = baseRef;
     this.detailsSelectedByUser = true;
     this.callbacks.persistPreference({ baseRef });
     this.callbacks.requestUpdate();
@@ -193,16 +194,14 @@ export class DraftRepositoryController {
 
   load() {
     const requestId = ++this.requestToken;
-    const baseRefEditGeneration = this.baseRefEditGeneration;
     const snapshot = this.read();
-    this.baseRefValue = "";
     const discovery = initialRepositoryState(snapshot);
     if (discovery.kind !== "checking") {
-      return this.adoptResolvedRepository(discovery, baseRefEditGeneration);
+      return this.adoptResolvedRepository(discovery);
     }
     const client = snapshot.gateway?.client;
     if (snapshot.gateway?.phase !== "connected" || !client) {
-      return this.adoptResolvedRepository({ kind: "idle" }, baseRefEditGeneration);
+      return this.adoptResolvedRepository({ kind: "idle" });
     }
     const { repoRoot } = discovery;
     this.repositoryValue = discovery;
@@ -225,21 +224,18 @@ export class DraftRepositoryController {
                 ...(result.headBranch ? { headBranch: result.headBranch } : {}),
               }
             : { kind: result?.repositoryStatus === "not_git" ? "direct" : "unavailable", repoRoot },
-          baseRefEditGeneration,
         );
       })
       .catch(() => {
         if (requestId !== this.requestToken) {
           return;
         }
-        this.adoptResolvedRepository({ kind: "unavailable", repoRoot }, baseRefEditGeneration);
+        this.adoptResolvedRepository({ kind: "unavailable", repoRoot });
       });
   }
 
-  private adoptResolvedRepository(state: ResolvedRepository, baseRefEditGeneration?: number) {
-    // Discovery owns restore/rejection for both immediate and RPC results;
-    // Read the current preference: group defaults and user edits can arrive
-    // while an RPC is pending.
+  private adoptResolvedRepository(state: ResolvedRepository) {
+    // Worktree preferences can arrive while discovery is pending.
     this.repositoryValue = state;
     if (state.kind === "direct") {
       if (!this.read().remotePlacement) {
@@ -253,11 +249,6 @@ export class DraftRepositoryController {
       this.worktreeValue = true;
     }
     this.preferredWorktreeRestore = false;
-    if (state.kind === "git" && baseRefEditGeneration === this.baseRefEditGeneration) {
-      this.baseRefValue =
-        this.preferredBaseRefRestore || state.defaultBranch || state.headBranch || "";
-      this.preferredBaseRefRestore = "";
-    }
     this.callbacks.requestUpdate();
   }
 }

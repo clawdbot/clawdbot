@@ -4,8 +4,13 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
+import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import * as catalog from "./catalog-target.ts";
+import {
+  buildDraftSessionCreateParams,
+  type DraftSessionCreateSelection,
+} from "./create-params.ts";
 import {
   projectDevicePlacements,
   resolveAutomaticDevicePlacementDisabledReason,
@@ -85,6 +90,30 @@ export class DraftPlaceState {
           search: newSessionSearch(this.agentIdValue, { catalogId }),
         }),
     );
+  }
+
+  buildSessionCreateParams(params: DraftSessionCreateSelection): SessionCreateParams {
+    return buildDraftSessionCreateParams({
+      agentId: this.agentId,
+      message: params.message,
+      model: this.modelControl.selected,
+      contextWindow: this.modelControl.contextWindow,
+      thinkingLevel: this.modelControl.thinkingLevel,
+      fastMode: this.modelControl.fastMode,
+      toolOverrides: params.toolOverrides,
+      permissionMode: params.permissionMode,
+      visibility: params.visibility,
+      attachments: params.attachments,
+      projectId: this.browser.remoteProject?.projectId ?? this.browser.projectId,
+      projectGitUrl: this.browser.remoteProject?.cloneUrl,
+      worktree: this.worktree,
+      baseRef: this.baseRef,
+      worktreeName: this.worktreeName,
+      cwd: this.folder,
+      workspace: this.workspacePath(),
+      catalogId: params.catalogId,
+      category: params.category,
+    });
   }
 
   get agentId(): string {
@@ -391,6 +420,9 @@ export class DraftPlaceState {
   }
 
   clearProjectSelection() {
+    if (this.browser.projectId || this.browser.remoteProject) {
+      this.repositoryState.clearDetails(true);
+    }
     this.browser.clearProjectSelection();
     this.repositoryState.load();
     this.callbacks.requestUpdate();
@@ -521,6 +553,9 @@ export class DraftPlaceState {
     this.whereSelectedByUser = true;
     this.preferredWhereRestore = null;
     if ((deviceId || autoDevice) && !this.worktreeAvailable()) {
+      if (this.folderValue !== this.workspacePath() || this.browser.projectId) {
+        this.repositoryState.clearDetails(true);
+      }
       this.folderValue = this.workspacePath();
       this.folderSelectedByUser = false;
       this.browser.clearProjectSelection();

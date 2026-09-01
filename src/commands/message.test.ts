@@ -294,6 +294,9 @@ describe("messageCommand", () => {
 
   it("scopes unqualified broadcast secrets to channels accepting the explicit account", async () => {
     const slackPlugin = createAccountPlugin("slack", ["shared"]);
+    slackPlugin.config.isEnabled = vi.fn(() => {
+      throw new Error("runtime enablement must not receive inspection metadata");
+    });
     const telegramPlugin = createAccountPlugin("telegram", ["default"]);
     setActivePluginRegistry(
       createTestRegistry([
@@ -329,6 +332,7 @@ describe("messageCommand", () => {
       candidateChannels: ["slack", "telegram"],
       secretChannels: ["slack"],
     });
+    expect(slackPlugin.config.isEnabled).not.toHaveBeenCalled();
   });
 
   it("keeps unresolved SecretRefs for a legacy single-account broadcast plugin", async () => {

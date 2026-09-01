@@ -63,7 +63,6 @@ export async function activateCodexAttemptTurn(
     bindingStore,
     bindingIdentity,
     sessionAgentId,
-    sandboxSessionKey,
     contextSessionKey,
     effectiveCwd,
   } = connection;
@@ -209,7 +208,7 @@ export async function activateCodexAttemptTurn(
     params,
     agentId: sessionAgentId,
     notifyUserMessagePersisted,
-    sessionKey: sandboxSessionKey,
+    sessionKey: contextSessionKey,
     cwd: effectiveCwd,
     threadId: resourceState.thread.threadId,
     turnId: activeTurnId,

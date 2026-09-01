@@ -81,56 +81,6 @@ export function codexNodeTerminalCapability(node: {
     : {};
 }
 
-export async function requireCatalogEligibleThread(
-  control: CodexSessionCatalogControl,
-  threadId: string,
-): Promise<CodexSessionCatalogSession> {
-  // Mutating actions use a fresh pinned control and authoritative thread/read. Passive positive hits
-  // may use the cadence-safe page memo; only a miss must bypass it before rejecting a new thread.
-  const cached = await findCatalogEligibleThread(control, threadId, false);
-  if (cached) {
-    return cached;
-  }
-  const refreshed = await findCatalogEligibleThread(control, threadId, true);
-  if (refreshed) {
-    return refreshed;
-  }
-  throw new CatalogParamsError("Codex session is not a non-archived interactive Codex session");
-}
-
-async function findCatalogEligibleThread(
-  control: CodexSessionCatalogControl,
-  threadId: string,
-  forceRefresh: boolean,
-): Promise<CodexSessionCatalogSession | undefined> {
-  let cursor: string | undefined;
-  const seenCursors = new Set<string>();
-  for (let pageIndex = 0; pageIndex < MAX_ACTION_CATALOG_PAGES; pageIndex += 1) {
-    const page = await control.listPage({
-      limit: CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
-      ...(cursor ? { cursor } : {}),
-      ...(forceRefresh ? { forceRefresh: true } : {}),
-    });
-    const candidate = page.sessions.find((session) => session.threadId === threadId);
-    if (candidate) {
-      if (isInteractiveThreadSource(candidate.source)) {
-        return candidate;
-      }
-      throw new CatalogParamsError("Codex session is not a non-archived interactive Codex session");
-    }
-    const nextCursor = page.nextCursor?.trim();
-    if (!nextCursor) {
-      return undefined;
-    }
-    if (seenCursors.has(nextCursor)) {
-      throw new CatalogParamsError("Codex session eligibility could not be verified");
-    }
-    seenCursors.add(nextCursor);
-    cursor = nextCursor;
-  }
-  throw new CatalogParamsError("Codex session eligibility could not be verified");
-}
-
 export function createCodexTerminalNodeHostCommand(
   bindRequest: (paramsJSON?: string | null) => {
     agentId: string;
@@ -166,7 +116,7 @@ export function createCodexTerminalNodeHostCommand(
         }
         return value;
       });
-      const record = await requireCatalogEligibleThread(request.control, resume.threadId);
+      const record = await request.control.requireEligibleThread(resume.threadId);
       const resolution = resolveNodeHostExecutable("codex", {
         env: process.env,
         pathEnv: process.env.PATH ?? process.env.Path ?? "",
@@ -180,7 +130,7 @@ export function createCodexTerminalNodeHostCommand(
           {
             file: resolution.executable,
             args: ["resume", resume.threadId],
-            cwd: record.cwd,
+            ...(record.cwd ? { cwd: record.cwd } : {}),
             env: {
               CODEX_HOME: resolveCodexCatalogTerminalHome({
                 ...configSources,
@@ -252,7 +202,7 @@ export async function openCodexCatalogTerminal(
     params.hostId === CODEX_LOCAL_SESSION_HOST_ID ||
     params.hostId.startsWith(`${CODEX_LOCAL_SESSION_HOST_ID}:`)
   ) {
-    const record = await requireCatalogEligibleThread(params.control, params.threadId);
+    const record = await params.control.requireEligibleThread(params.threadId);
     const resolution = resolveLocalCodexTerminalResolution();
     // A managed app-server may exist without a local CLI. Fail closed so
     // terminal resume never targets a different machine or missing binary.

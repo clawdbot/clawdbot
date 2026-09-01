@@ -30,6 +30,7 @@ import {
 import { extractToolResultText, truncateLiveExecOutput } from "./embedded-agent-tool-results.js";
 import { readToolResultDetails } from "./tool-result-error.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
+import { getCoreTtsToolResultMediaUrls } from "./tools/tts-tool-result-provenance.js";
 
 type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
 
@@ -375,6 +376,7 @@ function queuePendingToolMedia(
   ctx: ToolHandlerContext,
   mediaReply: NonNullable<ReturnType<typeof extractToolResultMediaArtifact>>,
   allowedMediaUrls: string[],
+  autoDeliveryMediaUrls: ReadonlySet<string>,
 ) {
   const indexByUrl = new Map(
     ctx.state.pendingToolMediaUrls.map((url, index) => [url.trim(), index]),
@@ -394,6 +396,12 @@ function queuePendingToolMedia(
       ctx.state.pendingToolMediaTrustByUrl.set(normalized, true);
     } else if (!ctx.state.pendingToolMediaTrustByUrl.has(normalized)) {
       ctx.state.pendingToolMediaTrustByUrl.set(normalized, false);
+    }
+    if (autoDeliveryMediaUrls.has(normalized)) {
+      ctx.state.toolAutoDeliveryMediaUrls.add(normalized);
+    } else {
+      // One shared URL with mixed provenance must never inherit auto-delivery.
+      ctx.state.toolAutoDeliveryMediaUrls.delete(normalized);
     }
     const attachment = attachmentsByUrl.get(normalized);
     const existingIndex = indexByUrl.get(normalized);
@@ -661,5 +669,8 @@ export async function emitToolResultOutput(params: {
   if (mediaUrls.length === 0) {
     return;
   }
-  queuePendingToolMedia(ctx, mediaReply, mediaUrls);
+  const autoDeliveryMediaUrls = new Set(
+    mediaReply.trustedLocalMedia === true ? getCoreTtsToolResultMediaUrls(result) : [],
+  );
+  queuePendingToolMedia(ctx, mediaReply, mediaUrls, autoDeliveryMediaUrls);
 }

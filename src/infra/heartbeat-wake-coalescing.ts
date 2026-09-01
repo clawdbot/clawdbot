@@ -6,6 +6,10 @@ import type {
   HeartbeatWakeSource,
 } from "./heartbeat-wake-contracts.js";
 import {
+  activeHeartbeatWakeSettlements,
+  type HeartbeatWakeSettlement,
+} from "./heartbeat-wake-settlement.js";
+import {
   normalizeHeartbeatWakeTarget,
   resolveHeartbeatWakeTargetKey,
 } from "./heartbeat-wake-target.js";
@@ -34,6 +38,8 @@ export type PendingWakeReason = {
   notBeforeMs?: number;
   /** The wake was retained after a spacing/cooldown guard deferred its work. */
   guardRetry?: boolean;
+  /** Cron callers waiting for this wake's terminal result. */
+  settlements?: HeartbeatWakeSettlement[];
 };
 
 export type PendingWakeGroup = {
@@ -121,6 +127,7 @@ export function mergePendingWakeReasons(
   const mergedTasks = Array.from(tasksByJobId.values()).toSorted((left, right) =>
     left.jobId.localeCompare(right.jobId),
   );
+  const settlements = activeHeartbeatWakeSettlements(previous.settlements, next.settlements);
   const mixedTaskPair = (previous.intent === "task") !== (next.intent === "task");
   const preferred = mixedTaskPair
     ? previous.intent === "task"
@@ -163,6 +170,7 @@ export function mergePendingWakeReasons(
     ...(scheduledEveryMs !== undefined ? { scheduledEveryMs } : {}),
     ...(scheduledAnchorMs !== undefined ? { scheduledAnchorMs } : {}),
     ...(mergedTasks.length ? { tasks: mergedTasks } : {}),
+    ...(settlements.length ? { settlements } : {}),
   };
   if (!bypassGuardRetry && (previous.guardRetry || next.guardRetry)) {
     merged.guardRetry = true;

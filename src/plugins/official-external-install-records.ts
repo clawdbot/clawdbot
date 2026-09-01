@@ -107,11 +107,7 @@ function isOfficialClawHubInstallRecord(record: PluginInstallRecord): boolean {
 export function resolveTrustedOfficialClawHubPackageName(
   record: PluginInstallRecord,
 ): string | undefined {
-  if (
-    record.source !== "clawhub" ||
-    record.clawhubChannel !== "official" ||
-    (record.clawhubUrl ?? "").trim().replace(/\/+$/, "") !== "https://clawhub.ai"
-  ) {
+  if (!isOfficialClawHubInstallRecord(record)) {
     return undefined;
   }
   const packageNames = resolveRecordedClawHubPackageNames(record);
@@ -119,6 +115,44 @@ export function resolveTrustedOfficialClawHubPackageName(
     return undefined;
   }
   return packageNames[0];
+}
+
+/** Binds official trust to the actual package and consistent recorded source identity. */
+export function isTrustedOfficialPluginInstallRecord(params: {
+  pluginId: string;
+  packageName?: string;
+  record: PluginInstallRecord;
+}): boolean {
+  const packageName = params.packageName?.trim();
+  const entry = packageName
+    ? getOfficialExternalPluginCatalogEntryForPackage(packageName)
+    : undefined;
+  if (
+    !entry ||
+    (resolveOfficialExternalPluginId(entry) !== params.pluginId &&
+      !resolveOfficialExternalPluginLegacyIds(entry).includes(params.pluginId))
+  ) {
+    return false;
+  }
+  const install = resolveOfficialExternalPluginInstall(entry);
+  const record = params.record;
+  if (record.source === "npm") {
+    // Local npm-pack archives also persist source="npm". Catalog identity alone
+    // cannot turn a local artifact or conflicting source record into official trust.
+    return (
+      record.artifactKind === undefined &&
+      record.sourcePath === undefined &&
+      resolveNpmSpecPackageName(install?.npmSpec) === packageName &&
+      resolveUnanimousRecordedNpmPackageName(record) === packageName &&
+      (record.clawhubPackage === undefined ||
+        resolveExactNpmPackageName(record.clawhubPackage) === packageName)
+    );
+  }
+  return (
+    Boolean(install?.clawhubSpec || install?.npmSpec) &&
+    (record.clawhubPackage !== undefined || record.spec !== undefined) &&
+    resolveTrustedOfficialClawHubPackageName(record) === packageName
+  );
 }
 
 function hasTrustedClawHubSourceAuthority(

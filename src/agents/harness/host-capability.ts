@@ -1,6 +1,12 @@
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { emitAgentRunOutputTokens } from "../../infra/agent-events.js";
 import { getActiveDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
+import {
+  getInstallationTarget,
+  installationTargetEnv,
+  withInstallationTarget,
+} from "../../infra/installation-target-context.js";
 import { prepareSystemRunMutableFileApproval } from "../../infra/system-run-approval-binding.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import {
@@ -8,6 +14,7 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
+import { bindUserTurnTranscriptAnnotation } from "../../sessions/user-turn-transcript-annotation.js";
 import {
   getAdmittedRunDelegatedAuthority,
   retainAdmittedRunBeforeToolCallRecovery,
@@ -30,16 +37,25 @@ import {
   getInternalToolExecutionPreparer,
 } from "../runtime/internal-hooks.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
+import { registerTrustedToolNoStartError } from "../tool-result-error.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
+  getGatewayToolCallerIdentity,
   withGatewayToolApprovalOwner,
   withGatewayToolCallerIdentity,
   wrapToolWithGatewayCallerIdentity,
 } from "../tools/gateway-caller-context.js";
 import { callGatewayTool } from "../tools/gateway.js";
+import {
+  getCoreTtsToolResultMediaUrls,
+  transferCoreTtsToolResultProvenance,
+} from "../tools/tts-tool-result-provenance.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
-import { registerAgentHarnessScheduledToolProjectionCapability } from "./host-private-capabilities.js";
+import {
+  registerAgentHarnessScheduledToolProjectionCapability,
+  registerAgentHarnessTtsProvenanceTransferCapability,
+} from "./host-private-capabilities.js";
 import { createSessionNodeInvocation } from "./node-execution-authority.js";
 
 type AgentHarnessHostAttempt = Partial<EmbeddedRunAttemptParams> &
@@ -103,7 +119,11 @@ function cloneSnapshot<T>(value: T): T {
   return freezeSnapshot(structuredClone(value));
 }
 
-function gateBoundTool(tool: AnyAgentTool, assertActive: () => void): AnyAgentTool {
+function gateBoundTool(
+  tool: AnyAgentTool,
+  assertActive: () => void,
+  observeResult: (result: unknown) => void,
+): AnyAgentTool {
   const execute = tool.execute;
   const sourcePreparer = getInternalToolExecutionPreparer(tool);
   if (!execute && !sourcePreparer) {
@@ -114,9 +134,16 @@ function gateBoundTool(tool: AnyAgentTool, assertActive: () => void): AnyAgentTo
     ...(execute
       ? {
           execute: async (...args: Parameters<NonNullable<AnyAgentTool["execute"]>>) => {
-            assertActive();
+            try {
+              assertActive();
+            } catch (error) {
+              // This gate precedes dispatch; a revoked owner must not look like
+              // a tool that started and failed in downstream terminal evidence.
+              throw registerTrustedToolNoStartError(error);
+            }
             const result = await execute(...args);
             assertActive();
+            observeResult(result);
             return result;
           },
         }
@@ -134,6 +161,9 @@ function gateBoundTool(tool: AnyAgentTool, assertActive: () => void): AnyAgentTo
         throw error;
       }
       if (prepared.kind === "immediate") {
+        if (prepared.outcome.kind === "result") {
+          observeResult(prepared.outcome.result);
+        }
         return prepared;
       }
       return {
@@ -142,6 +172,7 @@ function gateBoundTool(tool: AnyAgentTool, assertActive: () => void): AnyAgentTo
           assertActive();
           const result = await prepared.execute(onImplementationStart);
           assertActive();
+          observeResult(result);
           return result;
         },
       };
@@ -179,6 +210,8 @@ export function createAgentHarnessHostCapabilities(params: {
   runWithScope: <T>(run: () => Promise<T>) => Promise<T>;
 } {
   const attempt = params.attempt;
+  const installationTarget = getInstallationTarget();
+  const localProcessEnv = installationTargetEnv(installationTarget);
   const { sessionKey, onAgentEvent } = attempt;
   // Capture the selected harness declaration before plugin code can mutate it.
   // Full must not cover other commands merely because the same plugin owns them.
@@ -190,10 +223,16 @@ export function createAgentHarnessHostCapabilities(params: {
   }
   const { lifecycleGeneration } = delegatedAuthority;
   const { runId } = delegatedAuthority.operationalRunInstance;
+  const coreTtsToolResults = new WeakSet<object>();
   let active = true;
   // Lexical closure must also fence work already past its entry guard. The
   // result guards below cover exact authority loss that does not use close().
   const capabilityAbortController = new AbortController();
+  const inheritedCaller = getGatewayToolCallerIdentity();
+  const sourceCaller =
+    inheritedCaller?.operationalRunInstance === operationalRunInstance
+      ? inheritedCaller
+      : undefined;
   const callerIdentity = createBoundCallerIdentity(
     attempt,
     assertActive,
@@ -209,7 +248,26 @@ export function createAgentHarnessHostCapabilities(params: {
     ) {
       throw new Error("agent harness host capability is no longer active");
     }
+    // The captured worker/source claim owns every host capability use, including
+    // native configuration writes that do not pass through prompt annotation.
+    if (
+      (sourceCaller &&
+        (sourceCaller.agentId !== attempt.agentId ||
+          sourceCaller.sessionKey !== attempt.sessionKey)) ||
+      (sourceCaller?.workerTurnClaim &&
+        (sourceCaller.workerTurnClaim.sessionId !== attempt.sessionId ||
+          sourceCaller.workerTurnClaim.runId !== attempt.runId)) ||
+      (sourceCaller?.workerTurnClaim && !sourceCaller.receiptAuthority) ||
+      sourceCaller?.receiptAuthority?.() === false
+    ) {
+      throw new Error("agent harness host capability lost its source execution claim");
+    }
   }
+  const observeCoreTtsToolResult = (result: unknown) => {
+    if (typeof result === "object" && result !== null && getCoreTtsToolResultMediaUrls(result)) {
+      coreTtsToolResults.add(result);
+    }
+  };
   const requester = {
     ...((attempt.messageChannel ?? attempt.messageProvider)
       ? { channel: attempt.messageChannel ?? attempt.messageProvider ?? undefined }
@@ -222,6 +280,47 @@ export function createAgentHarnessHostCapabilities(params: {
       : {}),
   };
   const config = attempt.config ? cloneSnapshot(attempt.config) : undefined;
+  const recorder = attempt.userTurnTranscriptRecorder;
+  const sessionTarget = attempt.sessionTarget ? cloneSnapshot(attempt.sessionTarget) : undefined;
+  const annotateCurrentUserTurn =
+    attempt.userTurnTranscriptRecorder &&
+    attempt.sessionTarget &&
+    attempt.agentId &&
+    attempt.sessionId &&
+    attempt.sessionKey &&
+    attempt.sessionTarget.storePath &&
+    !attempt.suppressNextUserMessagePersistence &&
+    attempt.trigger !== "memory"
+      ? bindUserTurnTranscriptAnnotation({
+          recorder: attempt.userTurnTranscriptRecorder,
+          target: {
+            ...attempt.sessionTarget,
+            agentId: attempt.agentId,
+            sessionId: attempt.sessionId,
+            sessionKey: attempt.sessionKey,
+            storePath: attempt.sessionTarget.storePath,
+          },
+          runId: attempt.runId,
+          config,
+          abortSignal: attempt.abortSignal
+            ? AbortSignal.any([attempt.abortSignal, capabilityAbortController.signal])
+            : capabilityAbortController.signal,
+          assertCurrent: () => {
+            assertActive();
+            if (
+              attempt.userTurnTranscriptRecorder !== recorder ||
+              !isDeepStrictEqual(attempt.sessionTarget, sessionTarget) ||
+              (sessionTarget?.agentId !== undefined && sessionTarget.agentId !== attempt.agentId) ||
+              (sessionTarget?.sessionId !== undefined &&
+                sessionTarget.sessionId !== attempt.sessionId) ||
+              (sessionTarget?.sessionKey !== undefined &&
+                sessionTarget.sessionKey !== attempt.sessionKey)
+            ) {
+              throw new Error("native prompt annotation lost its source execution claim");
+            }
+          },
+        })
+      : undefined;
   const skillsSnapshot = attempt.skillsSnapshot ? cloneSnapshot(attempt.skillsSnapshot) : undefined;
   const preparedRunEnvironment = prepareGitHubToolEnvironment({
     config: config ?? {},
@@ -340,7 +439,11 @@ export function createAgentHarnessHostCapabilities(params: {
     AnyAgentTool,
     Readonly<{ targetTool: "exec" | "process"; execute: AnyAgentTool["execute"] }>
   >();
-  const bindToolSurface: AgentHarnessHostCapabilities["bindToolSurface"] = (tools, options) => {
+  const bindTools = (
+    tools: AnyAgentTool[],
+    options: Readonly<{ cwd?: string }> | undefined,
+    observeResult: (result: unknown) => void,
+  ) => {
     assertActive();
     const boundAbortSignal = attempt.abortSignal
       ? AbortSignal.any([attempt.abortSignal, capabilityAbortController.signal])
@@ -359,8 +462,10 @@ export function createAgentHarnessHostCapabilities(params: {
         callerIdentity ? wrapToolWithGatewayCallerIdentity(tool, callerIdentity) : tool,
       )
       .map((tool) => wrapToolWithAbortSignal(tool, boundAbortSignal))
-      .map((tool) => gateBoundTool(tool, assertActive));
+      .map((tool) => gateBoundTool(tool, assertActive, observeResult));
   };
+  const bindToolSurface: AgentHarnessHostCapabilities["bindToolSurface"] = (tools, options) =>
+    bindTools(tools, options, () => {});
   const capabilities: AgentHarnessHostCapabilities = Object.freeze({
     kind: "agent-harness-host-capability" as const,
     version: 1 as const,
@@ -381,6 +486,7 @@ export function createAgentHarnessHostCapabilities(params: {
         });
       }
     },
+    ...(annotateCurrentUserTurn ? { annotateCurrentUserTurn } : {}),
     ...(trajectoryRecorder
       ? {
           trajectory: Object.freeze({
@@ -402,14 +508,20 @@ export function createAgentHarnessHostCapabilities(params: {
         credentialScrubEnv: Object.freeze({ ...preparedRunEnvironment.credentialScrubEnv }),
         localIdentityEnv: Object.freeze({ ...preparedRunEnvironment.localIdentityEnv }),
         managedLocalIdentity: preparedRunEnvironment.managedLocalIdentity,
+        ...(localProcessEnv ? { localProcessEnv } : {}),
       });
     },
     bindToolSurface,
     createToolSurface: (options, bindingOptions) => {
       assertActive();
-      const tools = bindToolSurface(
-        createOpenClawCodingTools({ ...options, operationalRunInstance }),
+      // Only host-created core tools can seed TTS provenance. Plugin-bound tools
+      // must not replay a retained core result into this attempt's authority set.
+      const tools = bindTools(
+        withInstallationTarget(installationTarget, () =>
+          createOpenClawCodingTools({ ...options, operationalRunInstance }),
+        ),
         bindingOptions,
+        observeCoreTtsToolResult,
       );
       for (const tool of tools) {
         if (tool.name === "exec" || tool.name === "process") {
@@ -516,6 +628,26 @@ export function createAgentHarnessHostCapabilities(params: {
         assertActive,
         source.targetTool,
         projection,
+      );
+    },
+  });
+  registerAgentHarnessTtsProvenanceTransferCapability({
+    hostCapabilities: capabilities,
+    ownerPluginId: params.pluginId,
+    transfer: (toolResult, attemptResult, eligibleMediaUrls) => {
+      assertActive();
+      if (
+        typeof toolResult !== "object" ||
+        toolResult === null ||
+        !coreTtsToolResults.has(toolResult)
+      ) {
+        return attemptResult;
+      }
+      return transferCoreTtsToolResultProvenance(
+        toolResult,
+        attemptResult,
+        eligibleMediaUrls,
+        operationalRunInstance,
       );
     },
   });

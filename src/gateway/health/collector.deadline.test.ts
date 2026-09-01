@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -12,6 +12,13 @@ type DeadlineAccount = {
 
 let testConfig: OpenClawConfig = {};
 let healthPluginsForTest: ChannelPlugin[] = [];
+const tempDirs = createTempDirTracker();
+let sessionStorePath: string;
+const readSessionStoreSummaryReadOnly = vi.fn(() => ({
+  count: 0,
+  recent: [],
+  byAgent: new Map(),
+}));
 let collectGatewayHealthSnapshot: typeof import("./collector.js").collectGatewayHealthSnapshot;
 let createChannelTestPluginBase: typeof import("../../test-utils/channel-plugins.js").createChannelTestPluginBase;
 
@@ -51,12 +58,6 @@ async function collectDeadlineSnapshot(params: {
   });
 }
 
-const tempDirs = createTempDirTracker();
-
-afterAll(() => {
-  tempDirs.cleanup();
-});
-
 describe("gateway health collection deadline", () => {
   beforeAll(async () => {
     vi.doMock("../../config/config.js", () => ({
@@ -64,12 +65,11 @@ describe("gateway health collection deadline", () => {
     }));
     // Store paths reach real SQLite target resolution, which inspects the agent
     // database beside them; a shared /tmp path would read machine-wide state.
-    const storePath = path.join(tempDirs.make("openclaw-health-deadline-"), "sessions.json");
     vi.doMock("../../config/sessions/paths.js", () => ({
-      resolveSessionStorePathCore: () => storePath,
+      resolveSessionStorePathCore: () => sessionStorePath,
     }));
     vi.doMock("../../config/sessions/session-accessor.js", () => ({
-      listSessionEntriesReadOnly: () => [],
+      readSessionStoreSummaryReadOnly,
     }));
     vi.doMock("../../channels/plugins/read-only.js", () => ({
       listReadOnlyChannelPluginsForConfig: () => healthPluginsForTest,
@@ -83,6 +83,11 @@ describe("gateway health collection deadline", () => {
   });
 
   beforeEach(async () => {
+    sessionStorePath = path.join(
+      tempDirs.make("openclaw-health-deadline-sessions-"),
+      "sessions.json",
+    );
+    readSessionStoreSummaryReadOnly.mockReset();
     testConfig = {};
     healthPluginsForTest = [];
     await collectGatewayHealthSnapshot({ audience: "admin", probe: false, timeoutMs: 50 });
@@ -90,7 +95,28 @@ describe("gateway health collection deadline", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    tempDirs.cleanup();
   });
+
+  it("does not start probes when session preparation exhausts the aggregate deadline", async () => {
+    vi.useFakeTimers();
+    const probe = vi.fn(async () => ({ ok: true }));
+    healthPluginsForTest = [createDeadlinePlugin({ accountIds: ["default"], probe })];
+    readSessionStoreSummaryReadOnly.mockImplementationOnce(() => {
+      vi.advanceTimersByTime(50);
+      return { count: 0, recent: [], byAgent: new Map() };
+    });
+
+    const snap = await collectDeadlineSnapshot({ timeoutMs: 50 });
+    const channel = snap.channels["deadline-test"];
+
+    expect(snap.sessions.path).toBe(
+      path.join(path.dirname(sessionStorePath), "openclaw-agent.sqlite"),
+    );
+    expect(channel?.probe).toMatchObject({ ok: false, timedOut: true });
+    expect(channel?.accounts?.default?.probe).toMatchObject({ ok: false, timedOut: true });
+    expect(probe).not.toHaveBeenCalled();
+  }, 1_000);
 
   it("preserves healthy accounts when one probe never settles", async () => {
     vi.useFakeTimers();

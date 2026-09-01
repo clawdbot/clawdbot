@@ -533,13 +533,7 @@ function buildSessionsListResult(
   // unchanged; per-agent maps resolve by the same identity.
   const preparedDefaultsCatalog =
     modelCatalog instanceof Map
-      ? modelCatalog.get(
-          opts.agentId
-            ? normalizeAgentId(opts.agentId)
-            : normalizeAgentId(
-                tryResolveLegacyCompatibilityAgentId(cfg) ?? LEGACY_IMPLICIT_AGENT_ID,
-              ),
-        )
+      ? modelCatalog.get(resolveSessionsListDefaultsAgentId(cfg, opts.agentId))
       : undefined;
   const defaultsCatalog =
     modelCatalog instanceof Map ? preparedDefaultsCatalog?.entries : modelCatalog;
@@ -568,6 +562,15 @@ function buildSessionsListResult(
     }),
     sessions,
   };
+}
+
+export function resolveSessionsListDefaultsAgentId(
+  cfg: OpenClawConfig,
+  requestedAgentId?: string,
+): string {
+  return requestedAgentId
+    ? normalizeAgentId(requestedAgentId)
+    : normalizeAgentId(tryResolveLegacyCompatibilityAgentId(cfg) ?? LEGACY_IMPLICIT_AGENT_ID);
 }
 
 export function filterAndSortSessionEntries(params: {

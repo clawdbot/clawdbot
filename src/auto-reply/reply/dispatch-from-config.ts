@@ -121,7 +121,7 @@ async function dispatchReplyFromConfigInner(
         return finishReplyOperationAbortedDispatch();
       }
       if (inboundDedupeClaim.status === "claimed") {
-        if (errorState.inboundDedupeReplayUnsafe) {
+        if (errorState.turnAdoptionState?.adopted || errorState.inboundDedupeReplayUnsafe) {
           commitInboundDedupe(inboundDedupeClaim.key);
         } else {
           releaseInboundDedupe(inboundDedupeClaim.key);

@@ -356,6 +356,12 @@ function createMigrationDatabaseHandle(
   };
 }
 
+function refreshAgentDatabasePlannerStatistics(database: DatabaseSync): void {
+  // Doctor owns a stopped-writer maintenance window here. Explicitly analyze every
+  // table because the supported pre-3.46 SQLite floor lacks optimize's all-table bit.
+  database.exec("PRAGMA analysis_limit=1000; ANALYZE main;");
+}
+
 function migrateAgentDatabase(params: {
   agentId: string;
   beforeTransaction?: () => void;
@@ -423,6 +429,7 @@ function migrateAgentDatabase(params: {
         { databaseLabel: params.pathname, operationLabel: "media-persistence-detection" },
       );
       if (detected.rewrittenSessions === 0 && detected.rewrittenTrajectoryRows === 0) {
+        refreshAgentDatabasePlannerStatistics(database);
         return { ...detected, initialVersion, finalVersion: userVersion };
       }
     }
@@ -473,6 +480,7 @@ function migrateAgentDatabase(params: {
       },
     );
     ensureOpenClawAgentDatabaseSchema(database, { agentId: params.agentId, path: params.pathname });
+    refreshAgentDatabasePlannerStatistics(database);
     return {
       ...rewritten,
       initialVersion,

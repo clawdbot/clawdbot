@@ -1,4 +1,3 @@
-// Codex tests cover run attemptynamic tools plugin behavior.
 import path from "node:path";
 import {
   onAgentEvent,
@@ -17,16 +16,11 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
-import { resolveCodexAppServerHookChannelId } from "./dynamic-tool-build.js";
 import {
   emitDynamicToolTerminalDiagnostic,
   startDynamicToolDiagnosticExecution,
 } from "./dynamic-tool-diagnostics.js";
 import { hasPendingDynamicToolTerminalDiagnostic } from "./dynamic-tool-execution.js";
-import {
-  CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
-  createCodexDynamicToolBridge,
-} from "./dynamic-tools.js";
 import type { CodexDynamicToolCallParams } from "./protocol.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
@@ -41,7 +35,6 @@ import {
 } from "./run-attempt-test-harness.js";
 const testing = {
   hasPendingDynamicToolTerminalDiagnostic,
-  resolveCodexAppServerHookChannelId,
   setOpenClawCodingToolsFactoryForTests(
     factory: NonNullable<typeof dynamicToolBuildState.openClawCodingToolsFactory>,
   ): void {
@@ -116,6 +109,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         path.join(tempDir, "session.jsonl"),
         path.join(tempDir, "workspace"),
       );
+      params.runtimePlan = createCodexRuntimePlanFixture();
       params.timeoutMs = waitMs + 120_000;
       setCodexTestModelSupportsTools(params, true);
       const closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
@@ -294,7 +288,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
           threadId: "thread-1",
           turnId: "turn-1",
           callId: "call-continue-delegate",
-          namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+          namespace: "openclaw",
           tool: "continue_delegate",
           arguments: {
             task: "Return DONE.",
@@ -969,29 +963,34 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     params.messageChannel = "telegram";
     params.messageProvider = "telegram";
     params.currentChannelId = "telegram:-100123";
-    const sessionKey = "agent:main:session-1";
-    const hookChannelId = testing.resolveCodexAppServerHookChannelId(params, sessionKey);
-
-    const bridge = createCodexDynamicToolBridge({
-      tools: [createRuntimeDynamicTool("echo")],
-      signal: new AbortController().signal,
-      hookContext: {
-        agentId: "main",
-        sessionId: "session-1",
-        sessionKey,
-        runId: "run-1",
-        channelId: hookChannelId,
-      },
-    });
-
-    await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-echo-1",
-      namespace: null,
-      tool: "echo",
-      arguments: {},
-    });
+    params.sandboxSessionKey = "agent:main:policy";
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    setCodexTestModelSupportsTools(params, true);
+    dynamicToolBuildState.openClawCodingToolsFactory = () => [createRuntimeDynamicTool("echo")];
+    const harness = createStartedThreadHarness();
+    const closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
+    const run = runCodexAppServerAttempt(params);
+    try {
+      await harness.waitForMethod("turn/start");
+      await expect(
+        harness.handleServerRequest({
+          id: "call-echo-1",
+          method: "item/tool/call",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            callId: "call-echo-1",
+            namespace: null,
+            tool: "echo",
+            arguments: {},
+          },
+        }),
+      ).resolves.toMatchObject({ success: true });
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      expect(readAttemptTerminal(await run).promptError).toBeNull();
+    } finally {
+      closeHostCapabilities();
+    }
 
     await vi.waitFor(() => {
       expect(afterToolCall).toHaveBeenCalledTimes(1);

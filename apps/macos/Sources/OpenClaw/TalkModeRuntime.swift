@@ -950,7 +950,7 @@ extension TalkModeRuntime {
         }
 
         let requestedVoice = directive?.voiceId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedVoice = self.resolveVoiceAlias(requestedVoice)
+        let resolvedVoice = TalkVoiceAliases.resolve(requestedVoice, aliases: self.voiceAliases)
         if let requestedVoice, !requestedVoice.isEmpty, resolvedVoice == nil {
             self.logger.warning("talk unknown voice alias \(requestedVoice, privacy: .public)")
         }
@@ -1219,7 +1219,7 @@ extension TalkModeRuntime {
     private func resolveVoiceId(preferred: String?, apiKey: String) async -> String? {
         let trimmed = preferred?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmed.isEmpty {
-            if let resolved = resolveVoiceAlias(trimmed) {
+            if let resolved = TalkVoiceAliases.resolve(trimmed, aliases: self.voiceAliases) {
                 return resolved
             }
             self.ttsLogger.warning("talk unknown voice alias \(trimmed, privacy: .public)")
@@ -1249,24 +1249,6 @@ extension TalkModeRuntime {
             self.ttsLogger.error("elevenlabs list voices failed: \(error.localizedDescription, privacy: .public)")
             return nil
         }
-    }
-
-    private func resolveVoiceAlias(_ value: String?) -> String? {
-        let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        let normalized = trimmed.lowercased()
-        if let mapped = voiceAliases[normalized] {
-            return mapped
-        }
-        if self.voiceAliases.values.contains(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) {
-            return trimmed
-        }
-        return Self.isLikelyVoiceId(trimmed) ? trimmed : nil
-    }
-
-    private static func isLikelyVoiceId(_ value: String) -> Bool {
-        guard value.count >= 10 else { return false }
-        return value.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
     }
 
     func stopSpeaking(

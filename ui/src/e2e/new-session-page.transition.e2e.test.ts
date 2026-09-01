@@ -1,6 +1,10 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, rename } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import {
+  controlUiBundledGatewayUrl,
+  controlUiBundledSettingsStorageKey,
+} from "../test-helpers/control-ui-e2e.ts";
 import {
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
@@ -10,9 +14,9 @@ import {
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
+const proofDir = path.join(suite.artifactDir, "new-session-transition");
 const SESSION_KEY = "agent:main:transition-proof-0f403cb8-3920-4cf1-8eb7-79f2f00ce488";
 const RUN_ID = "transition-proof-run";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "new-session-transition");
 const captureProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 async function captureProof(page: import("playwright").Page, fileName: string) {
@@ -24,6 +28,126 @@ async function captureProof(page: import("playwright").Page, fileName: string) {
 }
 
 suite.define(() => {
+  it.each([
+    { label: "desktop", viewport: { height: 900, width: 1280 } },
+    { label: "mobile", viewport: { height: 844, width: 390 } },
+  ])("starts a draft in the background on $label", async ({ label, viewport }) => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      ...(captureProofEnabled ? { recordVideo: { dir: proofDir, size: viewport } } : {}),
+      serviceWorkers: "block",
+      viewport,
+    });
+    const page = await context.newPage();
+    const video = page.video();
+    const sessionKey = `agent:main:dashboard:background-${label}`;
+    const runId = `run-background-${label}`;
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.create": {
+          key: sessionKey,
+          entry: {
+            model: "gpt-5.6-sol",
+            modelProvider: "openai",
+            sessionId: `session-background-${label}`,
+            updatedAt: Date.now(),
+          },
+          runId,
+          runStarted: true,
+        },
+      },
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      await gateway.deferNext("agent.wait");
+      const composer = page.locator(".new-session-page__message");
+      await composer.fill(`run this separately on ${label}`);
+      await captureProof(page, `background-${label}-ready.png`);
+      if (captureProofEnabled) {
+        await page.waitForTimeout(400);
+      }
+      await composer.press("Control+Enter");
+
+      await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
+        params: { agentId: "main", message: `run this separately on ${label}` },
+      });
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+      await expect.poll(() => composer.inputValue()).toBe("");
+      await expect
+        .poll(() =>
+          page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`).count(),
+        )
+        .toBe(1);
+      await captureProof(page, `background-${label}-running.png`);
+      if (captureProofEnabled) {
+        await page.waitForTimeout(600);
+      }
+
+      await expect(gateway.waitForRequest("agent.wait")).resolves.toMatchObject({
+        params: { runId, timeoutMs: 30_000 },
+      });
+      await gateway.resolveDeferred("agent.wait", { endedAt: Date.now(), runId, status: "ok" });
+      const toast = page.locator(".app-toast");
+      await toast.getByText("Done").waitFor({ timeout: 10_000 });
+      await captureProof(page, `background-${label}-complete.png`);
+      if (captureProofEnabled) {
+        await page.waitForTimeout(800);
+      }
+      await toast.getByRole("button", { name: "Open" }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
+      await waitForCommittedChatRoute(page);
+      await page.locator("openclaw-chat-page").waitFor();
+      await captureProof(page, `background-${label}-opened.png`);
+      if (captureProofEnabled) {
+        await page.waitForTimeout(400);
+      }
+    } finally {
+      await context.close();
+      if (captureProofEnabled && video) {
+        await rename(await video.path(), path.join(proofDir, `background-${label}.webm`));
+      }
+    }
+  });
+
+  it("uses shifted Enter for background start in modifier mode", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const gatewayUrl = controlUiBundledGatewayUrl(suite.server.baseUrl);
+    await context.addInitScript(
+      ({ key, url }) => {
+        localStorage.setItem(
+          key,
+          JSON.stringify({ chatSendShortcut: "modifier-enter", gatewayUrl: url }),
+        );
+      },
+      { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), url: gatewayUrl },
+    );
+    const page = await context.newPage();
+    const sessionKey = "agent:main:dashboard:modifier-background";
+    const runId = "run-modifier-background";
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "agent.wait": { endedAt: Date.now(), runId, status: "ok" },
+        "sessions.create": { key: sessionKey, runId, runStarted: true },
+      },
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      const composer = page.locator(".new-session-page__message");
+      await composer.fill("start in the background");
+      await composer.press("Control+Shift+Enter");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+      await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
+        params: { agentId: "main", message: "start in the background" },
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("creates and lists a session with the default mock Gateway", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",

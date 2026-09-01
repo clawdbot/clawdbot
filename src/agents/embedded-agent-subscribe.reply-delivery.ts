@@ -1,5 +1,9 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  markReplyPayloadForSourceSuppressionDelivery,
+  setReplyPayloadMetadata,
+} from "../auto-reply/reply-payload.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
@@ -112,13 +116,17 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
   const clearDeferredAssistantEvents = () => {
     state.deferredAssistantEvents.length = 0;
   };
-  const deferredToolMediaReplies = new WeakMap<BlockReplyPayload, BlockReplyPayload>();
+  const deferredToolMediaReplies = new WeakMap<
+    BlockReplyPayload,
+    { pendingToolMedia: BlockReplyPayload; autoDeliveryMediaUrls: string[] }
+  >();
   const deferredBlockReplyCallbacks = new WeakMap<BlockReplyPayload, () => void>();
   const failedBlockReplies: Array<{
     payload: BlockReplyPayload;
     options?: {
       assistantMessageIndex?: number;
       pendingToolMedia?: BlockReplyPayload | null;
+      autoDeliveryMediaUrls?: string[];
     };
     onDelivered?: () => void;
     deliveryGeneration: number;
@@ -182,11 +190,17 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
       payload,
     );
   };
+  const recordDeliveredAutoMedia = (mediaUrls: readonly string[] | undefined) => {
+    for (const url of mediaUrls ?? []) {
+      state.toolAutoDeliveryMediaUrls.delete(url);
+    }
+  };
   const emitBlockReplySafely = (
     payload: Parameters<NonNullable<SubscribeEmbeddedAgentSessionParams["onBlockReply"]>>[0],
     options?: {
       assistantMessageIndex?: number;
       pendingToolMedia?: BlockReplyPayload | null;
+      autoDeliveryMediaUrls?: string[];
     },
     onDelivered?: () => void,
     retrying = false,
@@ -305,17 +319,46 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
       options?.consumePendingToolMedia === false
         ? withAssistantDirectives
         : consumePendingToolMediaIntoReply(state, withAssistantDirectives);
+    const sentMediaUrls = new Set(state.messagingToolSentMediaUrls.map((url) => url.trim()));
+    const autoDeliveryMediaUrls =
+      params.sourceReplyDeliveryMode === "message_tool_only"
+        ? (pendingToolMedia?.mediaUrls ?? []).filter(
+            (url) =>
+              state.toolAutoDeliveryMediaUrls.has(url.trim()) && !sentMediaUrls.has(url.trim()),
+          )
+        : [];
+    const pendingAttachments = new Map(
+      (pendingToolMedia?.mediaUrls ?? []).map((url, index) => [
+        url.trim(),
+        pendingToolMedia?.attachments?.[index] ?? {},
+      ]),
+    );
+    const blockPayload =
+      autoDeliveryMediaUrls.length === 0
+        ? withToolMedia
+        : markReplyPayloadForSourceSuppressionDelivery({
+            mediaUrls: autoDeliveryMediaUrls,
+            mediaUrl: autoDeliveryMediaUrls[0],
+            attachments: autoDeliveryMediaUrls.map(
+              (url) => pendingAttachments.get(url.trim()) ?? {},
+            ),
+            audioAsVoice: pendingToolMedia?.audioAsVoice || undefined,
+            trustedLocalMedia: true,
+          });
     const assistantTranscriptMediaUrls = Array.from(new Set(payload.mediaUrls ?? []));
     const taggedPayload =
       options?.assistantMessageIndex !== undefined
-        ? setReplyPayloadMetadata(withToolMedia, {
+        ? setReplyPayloadMetadata(blockPayload, {
             assistantMessageIndex: options.assistantMessageIndex,
             ...(assistantTranscriptMediaUrls.length > 0 ? { assistantTranscriptMediaUrls } : {}),
           })
-        : withToolMedia;
+        : blockPayload;
     if (state.deferBlockReplyDelivery) {
       if (pendingToolMedia) {
-        deferredToolMediaReplies.set(taggedPayload, pendingToolMedia);
+        deferredToolMediaReplies.set(taggedPayload, {
+          pendingToolMedia,
+          autoDeliveryMediaUrls,
+        });
       }
       if (!taggedPayload.isReasoning) {
         recordDeferredAssistantReplyDirectives(taggedPayload);
@@ -329,17 +372,22 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
       state.deferredBlockReplies.push(taggedPayload);
       return;
     }
-    emitBlockReplySafely(taggedPayload, { ...options, pendingToolMedia }, () => {
-      if (!taggedPayload.isReasoning && hasAssistantVisibleReply(taggedPayload)) {
-        recordDeliveredAssistantReplyDirectives(taggedPayload);
-        state.visibleBlockReplyCount += 1;
-        if (pendingToolMedia) {
-          state.pendingToolMediaDeliveryFailed = false;
-          state.hasToolMediaBlockReply = true;
+    emitBlockReplySafely(
+      taggedPayload,
+      { ...options, pendingToolMedia, autoDeliveryMediaUrls },
+      () => {
+        if (!taggedPayload.isReasoning && hasAssistantVisibleReply(taggedPayload)) {
+          recordDeliveredAssistantReplyDirectives(taggedPayload);
+          state.visibleBlockReplyCount += 1;
+          if (pendingToolMedia) {
+            state.pendingToolMediaDeliveryFailed = false;
+            state.hasToolMediaBlockReply = true;
+          }
+          recordDeliveredAutoMedia(autoDeliveryMediaUrls);
         }
-      }
-      options?.onDelivered?.();
-    });
+        options?.onDelivered?.();
+      },
+    );
   };
   const flushDeferredBlockReplies = () => {
     if (state.deferredBlockReplies.length === 0) {
@@ -348,8 +396,9 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     const deferred = state.deferredBlockReplies.splice(0);
     for (const payload of deferred) {
       const onDelivered = deferredBlockReplyCallbacks.get(payload);
-      const pendingToolMedia = deferredToolMediaReplies.get(payload);
-      emitBlockReplySafely(payload, { pendingToolMedia }, () => {
+      const deferredToolMedia = deferredToolMediaReplies.get(payload);
+      const pendingToolMedia = deferredToolMedia?.pendingToolMedia;
+      emitBlockReplySafely(payload, deferredToolMedia, () => {
         if (!payload.isReasoning && hasAssistantVisibleReply(payload)) {
           recordDeliveredAssistantReplyDirectives(payload);
           state.visibleBlockReplyCount += 1;
@@ -357,6 +406,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
             state.pendingToolMediaDeliveryFailed = false;
             state.hasToolMediaBlockReply = true;
           }
+          recordDeliveredAutoMedia(deferredToolMedia?.autoDeliveryMediaUrls);
         }
         onDelivered?.();
       });

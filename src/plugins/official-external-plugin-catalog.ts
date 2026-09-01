@@ -1275,7 +1275,7 @@ export function resolveOfficialExternalChannelCompatibilityMigration(
   );
 }
 
-function resolveOfficialExternalPluginLookupIds(
+export function resolveOfficialExternalPluginLookupIds(
   entry: OfficialExternalPluginCatalogEntry,
 ): string[] {
   const manifest = getOfficialExternalPluginCatalogManifest(entry);

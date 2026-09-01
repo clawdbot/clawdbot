@@ -969,11 +969,9 @@ type SandboxToolParams = {
 };
 
 /** Create a sandbox-backed read tool with OpenClaw result normalization. */
-export function createSandboxedReadTool(
-  params: SandboxToolParams & { createTool?: typeof createReadTool },
-) {
+export function createSandboxedReadTool(params: SandboxToolParams) {
   const base = eraseSessionFileTool(
-    (params.createTool ?? createReadTool)(params.root, {
+    createReadTool(params.root, {
       operations: createSandboxReadOperations(params),
       maxBytes: resolveAdaptiveReadMaxBytes(params),
       modelBudget: resolveToolResultBudget(params.modelContextWindowTokens),
@@ -989,11 +987,9 @@ export function createSandboxedReadTool(
 }
 
 /** Create a sandbox-backed write tool with required-parameter validation. */
-export function createSandboxedWriteTool(
-  params: SandboxToolParams & { createTool?: typeof createWriteTool },
-) {
+export function createSandboxedWriteTool(params: SandboxToolParams) {
   const base = eraseSessionFileTool(
-    (params.createTool ?? createWriteTool)(params.root, {
+    createWriteTool(params.root, {
       operations: createSandboxWriteOperations(params),
     }),
   );
@@ -1001,11 +997,9 @@ export function createSandboxedWriteTool(
 }
 
 /** Create a sandbox-backed edit tool with required-parameter validation. */
-export function createSandboxedEditTool(
-  params: SandboxToolParams & { createTool?: typeof createEditTool },
-) {
+export function createSandboxedEditTool(params: SandboxToolParams) {
   const base = eraseSessionFileTool(
-    (params.createTool ?? createEditTool)(params.root, {
+    createEditTool(params.root, {
       operations: createSandboxEditOperations(params),
     }),
   );
@@ -1020,11 +1014,10 @@ export function createHostWorkspaceWriteTool(
     workspaceOnly?: boolean;
     abortSignal?: AbortSignal;
     memoryWriteProvenance?: MemoryWriteProvenanceObserver;
-    createTool?: typeof createWriteTool;
   },
 ) {
   const base = eraseSessionFileTool(
-    (options?.createTool ?? createWriteTool)(root, {
+    createWriteTool(root, {
       operations: createHostWriteOperations(options?.containmentRoot ?? root, options),
     }),
   );
@@ -1039,11 +1032,10 @@ export function createHostWorkspaceEditTool(
     workspaceOnly?: boolean;
     abortSignal?: AbortSignal;
     memoryWriteProvenance?: MemoryWriteProvenanceObserver;
-    createTool?: typeof createEditTool;
   },
 ) {
   const base = eraseSessionFileTool(
-    (options?.createTool ?? createEditTool)(root, {
+    createEditTool(root, {
       operations: createHostEditOperations(options?.containmentRoot ?? root, options),
     }),
   );

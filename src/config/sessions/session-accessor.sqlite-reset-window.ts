@@ -6,12 +6,14 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
+import { projectModelContextNavigationSql } from "./session-model-context-projection.js";
 import type { SessionTranscriptProjectionState } from "./session-transcript-index.js";
 
 type ResetWindowDatabase = Pick<
@@ -157,7 +159,7 @@ function readLatestActiveBoundaryMetadata(
   return reset && (!compaction || reset.seq > compaction.seq) ? reset : compaction;
 }
 
-function readBoundaryPayload(
+function readBoundaryWindowFacts(
   projection: ResetWindowProjection,
   seq: number,
   scope: BoundaryWindowScope,
@@ -166,7 +168,11 @@ function readBoundaryPayload(
     projection.database.db,
     getResetWindowKysely(projection.database)
       .selectFrom("transcript_events")
-      .select("event_json")
+      .select((eb) => [
+        projectModelContextNavigationSql(eb.ref("event_json")).as("event_json"),
+        /* kysely-allow-raw: window accounting needs original bytes, not summary or reset payloads. */
+        sql<number>`OCTET_LENGTH(event_json) + 1`.as("serialized_bytes"),
+      ])
       .where("session_id", "=", projection.resolved.sessionId)
       .where("seq", "=", seq)
       .limit(1),
@@ -178,10 +184,7 @@ function readBoundaryPayload(
   if (!isWindowBoundary(parsed.type, scope)) {
     throw new Error("Active transcript boundary has invalid payload");
   }
-  return {
-    event: parsed,
-    sizeBytes: Buffer.byteLength(row.event_json, "utf8") + 1,
-  };
+  return { firstKeptEntryId: parsed.firstKeptEntryId, sizeBytes: row.serialized_bytes };
 }
 
 function findLatestResetMessageWindow(
@@ -194,8 +197,7 @@ function findLatestResetMessageWindow(
   if (!latestBoundary) {
     return null;
   }
-  const boundaryPayload = readBoundaryPayload(projection, latestBoundary.seq, scope);
-  const boundary = boundaryPayload.event;
+  const boundary = readBoundaryWindowFacts(projection, latestBoundary.seq, scope);
   const postBoundaryMessagePosition =
     executeSqliteQueryTakeFirstSync(
       projection.database.db,
@@ -211,7 +213,7 @@ function findLatestResetMessageWindow(
   let keptMessagePositions: number[] = [];
   const includesBoundary = latestBoundary.event_type === "compaction";
   let contextPrefixEventCount = includesBoundary ? 1 : 0;
-  let contextPrefixSizeBytes = includesBoundary ? boundaryPayload.sizeBytes : 0;
+  let contextPrefixSizeBytes = includesBoundary ? boundary.sizeBytes : 0;
   if (typeof boundary.firstKeptEntryId === "string") {
     const firstKept = executeSqliteQueryTakeFirstSync(
       projection.database.db,
@@ -227,7 +229,7 @@ function findLatestResetMessageWindow(
         .where("identity.event_id", "=", boundary.firstKeptEntryId),
     );
     if (firstKept && firstKept.active_position < latestBoundary.active_position) {
-      const candidates = executeSqliteQuerySync(
+      const candidateRows = iterateSqliteQuerySync(
         projection.database.db,
         db
           .selectFrom("session_transcript_active_events as active")
@@ -236,20 +238,32 @@ function findLatestResetMessageWindow(
               .onRef("event.session_id", "=", "active.session_id")
               .onRef("event.seq", "=", "active.event_seq"),
           )
-          .select(["active.message_position", "event.event_json"])
+          .select((eb) => [
+            "active.message_position",
+            projectModelContextNavigationSql(eb.ref("event.event_json")).as("event_json"),
+            /* kysely-allow-raw: raw-byte accounting stays independent of the transient projection. */
+            sql<number>`OCTET_LENGTH(event.event_json) + 1`.as("serialized_bytes"),
+          ])
           .where("active.session_id", "=", projection.resolved.sessionId)
           .where("active.active_position", ">=", firstKept.active_position)
           .where("active.active_position", "<", latestBoundary.active_position)
           .where("active.message_position", "is not", null)
           .$if(scope === "context", (query) => query.where("active.context_eligible", "=", 1))
           .orderBy("active.active_position", "asc"),
-      ).rows.flatMap((row) => {
+      );
+      const candidates = Array.from(candidateRows, (row) => {
         try {
-          return [{ ...row, event: JSON.parse(row.event_json) as SessionTreeEntry }];
+          return [
+            {
+              message_position: row.message_position,
+              serialized_bytes: row.serialized_bytes,
+              event: JSON.parse(row.event_json) as SessionTreeEntry,
+            },
+          ];
         } catch {
           return [];
         }
-      });
+      }).flat();
       const candidateEntries = candidates.map((row) => row.event);
       // A compaction keeps its whole tail; a reset replays only the paired subset.
       const keptEntries = new Set(
@@ -259,10 +273,7 @@ function findLatestResetMessageWindow(
       );
       const keptRows = candidates.filter((row) => keptEntries.has(row.event));
       contextPrefixEventCount += keptRows.length;
-      contextPrefixSizeBytes += keptRows.reduce(
-        (total, row) => total + Buffer.byteLength(row.event_json, "utf8") + 1,
-        0,
-      );
+      contextPrefixSizeBytes += keptRows.reduce((total, row) => total + row.serialized_bytes, 0);
       // History presentation exposes user/assistant rows, while fresh-thread context
       // also retains paired tool results. The fuse stats above must cover that context.
       keptMessagePositions = keptRows.flatMap((row) => {

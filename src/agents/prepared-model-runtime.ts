@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { registerRuntimeAuthProfileStoreMutationListener } from "./auth-profiles/runtime-snapshots.js";
+import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   PreparedModelRuntimeAuthPublicationOwner,
   type PreparedModelRuntimeAuthMutation,
@@ -28,6 +29,7 @@ import {
   publishPreparedModelRuntimeOwnerBatch,
   publishModelRuntimeSnapshot,
   rebindInputToCommittedConfiguredOwner,
+  resolvePreparedModelRuntimeOwnerBySnapshot,
   resolveConfiguredOwnerPublication,
   resolvePublishedOwner,
   type PreparedModelRuntimeOwner,
@@ -313,12 +315,13 @@ export async function acquireAgentRunPreparedModelRuntime(
 export async function acquireReadOnlyPreparedModelRuntime(
   rawInput: PreparedModelRuntimeInput,
   abortSignal?: AbortSignal,
+  catalogMode: PreparedModelRuntimeCatalogMode = "live",
 ): Promise<PreparedModelRuntimeLease> {
   return await acquirePreparedModelRuntimeLeaseFromOwners(
     { ...rawInput, readOnly: true },
     "ephemeral",
     preparedModelRuntimeLeaseContext,
-    { abortSignal },
+    { abortSignal, catalogMode },
   );
 }
 
@@ -368,6 +371,31 @@ export async function prepareModelRuntimeSnapshot(
   throw new PreparedModelRuntimeOwnerNotPublishedError(
     `prepared model runtime owner was not published for ${input.agentDir}`,
   );
+}
+
+/** Refreshes stale inventory only for an explicit catalog read; turn admission remains static. */
+export async function refreshStalePreparedModelRuntimeCatalog(
+  snapshot: PreparedModelRuntimeSnapshot,
+): Promise<ModelCatalogSnapshot | undefined> {
+  const owner = resolvePreparedModelRuntimeOwnerBySnapshot(snapshot);
+  if (
+    !owner ||
+    owners.get(ownerKey(owner.input)) !== owner ||
+    !owner.catalogStale ||
+    !snapshot.loadFullModelCatalog
+  ) {
+    return undefined;
+  }
+  const generation = owner.generation;
+  const catalog = await snapshot.loadFullModelCatalog({ refresh: true });
+  if (
+    owner.catalogStale &&
+    owner.generation === generation &&
+    owners.get(ownerKey(owner.input)) === owner
+  ) {
+    owner.catalogStale = false;
+  }
+  return catalog;
 }
 
 /** Invalidates every published generation before config/plugin runtime replacement. */
@@ -580,12 +608,13 @@ function enqueuePreparedModelRuntimePublication(task: () => Promise<void>): Prom
 async function drainPendingAuthMutations(commit?: () => void): Promise<void> {
   await authPublication.drain({
     owners,
-    publish: async (entries) =>
+    publish: async (entries, includeCredentialProviders) =>
       await publishPreparedModelRuntimeOwnerBatch({
         entries,
         owners,
         agentBuildCompletions,
         buildTimeoutMs: modelRuntimeBuildTimeoutMs,
+        ...(includeCredentialProviders ? { includeCredentialProviders: true } : {}),
         reusePluginGenerations: true,
       }),
     publishOwners: (publishedOwners) => replyDispatchPublication.replace(publishedOwners),
@@ -618,6 +647,9 @@ function invalidateForAuthMutation(event: PreparedModelRuntimeAuthMutation): voi
     owner.generation += 1;
     owner.needsRefresh = true;
     owner.refreshError = staleError;
+    if (normalizedEvent.profileSetChanged) {
+      owner.catalogStale = true;
+    }
     if (owner.provenance === "configured" && owner.input.agentId) {
       invalidatedConfiguredAgentIds.add(owner.input.agentId);
     }
@@ -628,7 +660,7 @@ function invalidateForAuthMutation(event: PreparedModelRuntimeAuthMutation): voi
     return;
   }
   replyDispatchPublication.remove(invalidatedConfiguredAgentIds);
-  const transaction = authPublication.enqueue(invalidatedOwners);
+  const transaction = authPublication.enqueue(invalidatedOwners, normalizedEvent.profileSetChanged);
   if (pendingModelRuntimeReplacement) {
     // The active config transaction drains this event before its atomic dispatch commit. Retire
     // the superseded build gate; queuing another task would make this commit depend on future work.
@@ -650,6 +682,8 @@ function invalidateForAuthMutation(event: PreparedModelRuntimeAuthMutation): voi
       return;
     }
     await drainPendingAuthMutations(() => {
+      // Admission waits on this publication, so it must rebuild static content only. A profile-set
+      // change leaves a stale flag for the explicit catalog-read path to consume later.
       if (pendingModelRuntimeReplacement) {
         authPublication.adoptTransaction(transaction, pendingModelRuntimeReplacement.gateId);
         return;

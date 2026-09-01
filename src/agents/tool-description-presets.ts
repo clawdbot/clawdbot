@@ -9,6 +9,8 @@ export const SESSIONS_LIST_TOOL_DISPLAY_SUMMARY = "List visible sessions; filter
 export const SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY = "Read sanitized session history.";
 export const SESSIONS_SEARCH_TOOL_DISPLAY_SUMMARY = "Search past session transcripts.";
 export const SESSIONS_SEND_TOOL_DISPLAY_SUMMARY = "Run same-Gateway session/agent.";
+export const SESSIONS_SEND_RESULT_GUIDANCE =
+  'Accepted results report target admission as `targetDisposition: "queued"` or `"steered"`; `delivery.status` is only later announcement state, and neither proves target completion.';
 export const SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY =
   "Spawn hidden subagent (ephemeral) or visible work session (durable).";
 export const SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY = "Spawn subagent session.";
@@ -98,6 +100,7 @@ export function describeSessionsSendTool(): string {
   return [
     "Run a visible session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label.",
     "A session identifies model context, not an external address; its reply may still announce through established delivery context.",
+    SESSIONS_SEND_RESULT_GUIDANCE,
     'Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available; status "no_reply" is terminal, so do not wait for an announcement.',
     "watch:true: notice arrives when others later change target session.",
   ].join(" ");

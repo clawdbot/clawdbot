@@ -20,12 +20,9 @@ import {
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
 import { invalidateChatAvatarCache } from "./chat-avatar.ts";
-import {
-  applyChatAgentsList,
-  getChatHistoryLoadState,
-  resumePendingChatHistoryLoad,
-  syncSelectedSessionMessageSubscription,
-} from "./chat-history.ts";
+import { getChatHistoryLoadState } from "./chat-history-state.ts";
+import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
+import { applyChatAgentsList, resumePendingChatHistoryLoad } from "./chat-history.ts";
 import { ChatPaneLifecycle } from "./chat-pane-lifecycle.ts";
 import {
   applySelectedSessionProjection,
@@ -53,7 +50,7 @@ import { clearChatMessagesFromCache } from "./session-message-cache.ts";
 import { migrateLegacyDockVisibility } from "./sidebar-layout-legacy-migration.ts";
 import { normalizeSidebarLayout } from "./sidebar-layout.ts";
 import { maybeResetToolStream } from "./stream-reconciliation.ts";
-import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream.ts";
+import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-status.ts";
 
 export abstract class ChatPaneContext extends ChatPaneLifecycle {
   private gatewayConnectionLifecycle?: ReturnType<typeof createGatewayConnectionLifecycle>;
@@ -158,10 +155,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       selectedSession,
     );
     if (selectedSessionDeleted) {
-      const agentId =
-        parseAgentSessionKey(state.sessionKey)?.agentId ??
-        this.context.agentSelection.state.selectedId ??
-        "main";
+      const agentId = resolveChatAgentId(state);
       this.onSessionDeleted?.(
         this.paneId,
         state.sessionKey,
@@ -244,6 +238,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     // Gateway identity is its default, while each retained pane owns its routed agent.
     const assistantAgentId =
       parseAgentSessionKey(state.sessionKey)?.agentId ??
+      this.agentId ??
       this.context.agentSelection.state.selectedId ??
       snapshot.assistantAgentId;
     const previousSidebarSessionKey = canonicalUiSessionKeyForPersistence(state, state.sessionKey);
@@ -368,6 +363,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       } else if (state.sidebarLayout.columns.length > 0) {
         state.updateSidebarLayout(state.sidebarLayout);
       }
+      if (this.compact && clientChanged) {
+        state.sidebarLayout = { ...state.sidebarLayout, open: false };
+      }
       state.sidebarFocusPanelId =
         sidebarSettings.sidebarSessionActivePanels?.[sidebarSessionKey] ?? "";
       state.sidebarFocusVersion += 1;
@@ -406,7 +404,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       routeSessionKey &&
       canonicalRouteSessionKey &&
       canonicalRouteSessionKey !== routeSessionKey &&
-      this.active &&
       this.presented
     ) {
       this.onPaneSessionChange?.(this.paneId, canonicalRouteSessionKey, { replace: true });
@@ -441,7 +438,13 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       return;
     }
     this.refreshSwarmRoster();
-    if ((clientChanged || (sourceChanged && catalogRouteKey)) && snapshot.client) {
+    // Route-binding effects above can synchronously publish a new snapshot and
+    // re-enter this method; the inner application claims connectedClient, so the
+    // stale outer clientChanged must not start a second duplicate startup.
+    if (
+      (this.connectedClient !== snapshot.client || (sourceChanged && catalogRouteKey)) &&
+      snapshot.client
+    ) {
       const startupClient = snapshot.client;
       const startupGeneration = this.connectionGeneration;
       const startupSessionKey = state.sessionKey;

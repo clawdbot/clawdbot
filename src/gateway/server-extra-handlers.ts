@@ -35,3 +35,14 @@ export function readGatewayServerExtraHttpRoutes(
 ): readonly GatewayServerExtraHttpRoute[] {
   return attachedGatewayExtras.get(options)?.httpRoutes ?? [];
 }
+
+export function copyGatewayServerExtras(
+  source: GatewayServerOptions,
+  target: GatewayServerOptions,
+): GatewayServerOptions {
+  const extras = attachedGatewayExtras.get(source);
+  if (extras) {
+    attachedGatewayExtras.set(target, extras);
+  }
+  return target;
+}

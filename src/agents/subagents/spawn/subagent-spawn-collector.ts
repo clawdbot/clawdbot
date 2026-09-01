@@ -137,7 +137,7 @@ export function activateCollectorSubagentRun(params: {
           throw error;
         }
         await params.emitSpawnLifecycleHooks(gatewayRunId);
-      });
+      }, "subagents:spawn");
     },
     onStartFailure: async (error) => {
       if (error instanceof GatewayDrainingError) {

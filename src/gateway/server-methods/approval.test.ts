@@ -335,6 +335,46 @@ describe("unified approval handlers", () => {
     );
   });
 
+  it("resolves a system-agent proposal through its channel reviewer custody", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const pending = registerSystemAgent(managers.systemAgent, "system-agent:channel-reviewer");
+    prepareApprovalChannelCustodyMock.mockImplementation(
+      ({ approvalKind }: { approvalKind: string }) =>
+        approvalKind === "system-agent"
+          ? {
+              resolverId: "telegram:ops",
+              authorizes: (record: { request: SystemAgentApprovalRequestPayload }) =>
+                record.request.sessionId === "delegation-1",
+            }
+          : null,
+    );
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      systemAgentApprovalManager: managers.systemAgent,
+      databaseOptions,
+    });
+
+    const response = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body: {
+        id: pending.record.id,
+        kind: "system-agent",
+        decision: "allow-once",
+        reviewer: { channel: "telegram", accountId: "ops", senderId: "owner" },
+      },
+      client: createClient({ internal: true }),
+    });
+
+    expect(response.result).toMatchObject({
+      applied: true,
+      approval: { status: "allowed", decision: "allow-once" },
+    });
+    await expect(pending.decision).resolves.toBe("allow-once");
+  });
+
   it("checks live channel custody before the canonical resolution CAS", async () => {
     const databaseOptions = createDatabaseOptions();
     const managers = createManagers(databaseOptions);

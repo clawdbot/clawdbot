@@ -117,6 +117,14 @@ directory. After upgrading from a file-backed release, stop the Gateway and run
 `plugin-binding-approvals.json` only when it belongs to the active state
 directory.
 
+Legacy allowlist entries may contain `null` for `lastUsedAt` or
+`lastUsedCommand`. Doctor treats those two usage fields as absent during
+import, including when the config still needs repair. This does not relax
+canonical policy validation: other malformed fields or conflicting legacy
+policies remain preserved for operator recovery, and exec approvals stay
+blocked until the legacy file is resolved. After repair, verify with
+`openclaw approvals get` using the same state directory.
+
 Example schema:
 
 ```json

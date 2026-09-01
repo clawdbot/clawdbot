@@ -330,8 +330,12 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: strict session-agent resolution aliases preserve shipped Plugin SDK behavior.
       // +1: manifest-owned plugin capability secret availability guard.
       // +1: canonical diagnostic flag checker through its focused subpath.
-      // Net merge: upstream cleanup and continuation exports settle at the current surface.
-      4370,
+      // +3: typed system-agent approval request, payload, and resolution contracts for channel plugins.
+      // +2: focused provider-auth routes for shipped auth ordering and provider-map lookup.
+      // +2: bounded display-only error diagnostic attachment and rendering.
+      // +1: shared presentation delivery policy for core and channel plugins.
+      // Net merge: upstream additions and continuation exports settle at the current surface.
+      4379,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -438,8 +442,12 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: strict session-agent resolution aliases preserve shipped Plugin SDK behavior.
       // +1: manifest-owned plugin capability secret availability guard.
       // +1: canonical diagnostic flag checker through its focused subpath.
-      // Net merge: upstream cleanup and continuation callables settle at the current surface.
-      2596,
+      // +1: shared approval expiry formatter for native channel prompts.
+      // +2: focused provider-auth routes for shipped auth ordering and provider-map lookup.
+      // +2: bounded display-only error diagnostic attachment and rendering.
+      // +1: shared presentation delivery policy for core and channel plugins.
+      // Net merge: overlapping upstream additions and continuation callables settle here.
+      2602,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

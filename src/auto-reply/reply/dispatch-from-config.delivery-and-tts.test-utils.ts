@@ -93,6 +93,53 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("does not dispatch a settled final reply after its session writer is replaced", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      lifecycleRevision: "revision-a",
+      activeWriterRunId: "run-settled",
+      updatedAt: 0,
+    };
+    const payload = setReplyPayloadMetadata(
+      { text: "settled fallback" },
+      {
+        assistantTranscriptOwned: true,
+        assistantTranscriptIdempotencyKey: "run-settled:settled-finalization-fallback",
+        sessionWriterDeliveryAuthority: {
+          expectedLifecycleRevision: "revision-a",
+          expectedSessionId: "s1",
+          expectedWriterRunId: "run-settled",
+          sessionKey: "agent:main:telegram:direct:123",
+          storePath: "/tmp/mock-sessions.json",
+        },
+      },
+    );
+    const dispatcher = createDispatcher();
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: "agent:main:telegram:direct:123",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: { runId: "run-settled" },
+      replyResolver: vi.fn(async () => {
+        sessionStoreMocks.currentEntry = {
+          ...sessionStoreMocks.currentEntry,
+          activeWriterRunId: "replacement-run",
+        };
+        return payload;
+      }),
+    });
+
+    expect(result).toMatchObject({ queuedFinal: false });
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).not.toHaveBeenCalled();
+  });
+
   it("keeps a block-only channel transform veto terminal", async () => {
     setNoAbort();
     const transport = vi.fn(async () => {});

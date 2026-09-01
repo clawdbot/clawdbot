@@ -190,6 +190,32 @@ export function isReplyRunAbortableForSignal(signal: AbortSignal): boolean {
   return operation ? isReplyOperationAbortable(operation) : true;
 }
 
+/** Resolve only the live operation admitted with this exact upstream signal. */
+export function resolveActiveReplyRunOwnerForSignal(
+  signal: AbortSignal,
+): { sessionId: string; sessionKey: string; abort: () => boolean } | undefined {
+  const operation = operationsByUpstreamAbortSignal.get(signal);
+  if (!operation) {
+    return undefined;
+  }
+  const { key: sessionKey, sessionId } = operation;
+  const isCurrent = () =>
+    !signal.aborted &&
+    !operation.result &&
+    operation.key === sessionKey &&
+    operation.sessionId === sessionId &&
+    replyRunState.activeRunsByKey.get(sessionKey) === operation;
+  if (!isCurrent()) {
+    return undefined;
+  }
+  return {
+    sessionId,
+    sessionKey,
+    // A retained selector must never cancel the operation that replaced this owner.
+    abort: () => isCurrent() && operation.abortByUser(),
+  };
+}
+
 /** Keep terminal state registered until the operation owner exits via complete(). */
 export function retainReplyOperationUntilComplete(operation: ReplyOperation): void {
   retainStateUntilCompleteOperations.add(operation);

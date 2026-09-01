@@ -33,11 +33,14 @@ type InstalledSystemdGatewayScope = {
   unitPath: string;
 };
 
-export async function assertNoSystemGatewayOwnership(env: GatewayServiceEnv): Promise<void> {
+export async function assertNoSystemGatewayOwnership(
+  env: GatewayServiceEnv,
+  timeoutMs?: number,
+): Promise<void> {
   if (env.OPENCLAW_SERVICE_KIND?.trim() === "node") {
     return;
   }
-  await assertNoSystemSystemdOwnership(`${resolveSystemdServiceName(env)}.service`);
+  await assertNoSystemSystemdOwnership(`${resolveSystemdServiceName(env)}.service`, timeoutMs);
 }
 
 async function findMarkerOwnedSystemSystemdUnit(): Promise<{

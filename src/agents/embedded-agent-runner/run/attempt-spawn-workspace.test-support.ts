@@ -22,7 +22,7 @@ import { bindStreamLlmRuntime } from "../../../llm/model-runtime-binding.js";
 import type { Model } from "../../../llm/types.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
-import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
+import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
 import type {
   MessagingToolSend,
@@ -69,6 +69,7 @@ function normalizeMockProviderId(providerId?: string): string {
 
 type SessionManagerMocks = {
   getSessionTarget: Mock<() => undefined>;
+  getLeafId: Mock<() => string | null>;
   getLeafEntry: UnknownMock;
   getEntry: UnknownMock;
   getBoundaryCount: UnknownMock;
@@ -185,6 +186,7 @@ function createSubscriptionMock(): SubscriptionMock {
     getMessagingToolSourceReplyPayloads: () => [] as MessagingToolSourceReplyPayload[],
     getHeartbeatToolResponse: () => undefined,
     getPendingToolMediaReply: () => null,
+    getToolAutoDeliveryMediaUrls: () => [] as string[],
     hasToolMediaBlockReply: () => false,
     getVisibleBlockReplyCount: () => 0,
     getSuccessfulCronAdds: () => 0,
@@ -274,6 +276,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const trajectoryEvents: CapturedTrajectoryEvent[] = [];
   const sessionManager = {
     getSessionTarget: vi.fn(() => undefined),
+    getLeafId: vi.fn<() => string | null>(() => null),
     getLeafEntry: vi.fn(() => null),
     getEntry: vi.fn(() => undefined),
     getBoundaryCount: vi.fn(() => 0),
@@ -365,6 +368,7 @@ const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = {
     setupProviders: new Map(),
     commandAliases: new Map(),
     contracts: new Map(),
+    modelIdNormalizationPolicies: new Map(),
   },
   metrics: {
     registrySnapshotMs: 0,
@@ -383,14 +387,19 @@ vi.mock("../../../plugins/plugin-metadata-snapshot.js", () => ({
   resolvePluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
 
-vi.mock("../../../plugins/provider-hook-runtime.js", () => ({
-  ensureProviderRuntimePluginHandle: (params: Record<string, unknown>) =>
-    params.runtimeHandle ?? params,
-  prepareProviderExtraParams: () => undefined,
-  resolveProviderExtraParamsForTransport: () => undefined,
-  resolveProviderRuntimePluginHandle: (params: Record<string, unknown>) => params,
-  wrapProviderStreamFn: () => undefined,
-}));
+vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => {
+  const { getModelProviderRuntimePluginHandle } =
+    await importOriginal<typeof import("../../../plugins/provider-hook-runtime.js")>();
+  return {
+    getModelProviderRuntimePluginHandle,
+    ensureProviderRuntimePluginHandle: (params: Record<string, unknown>) =>
+      params.runtimeHandle ?? params,
+    prepareProviderExtraParams: () => undefined,
+    resolveProviderExtraParamsForTransport: () => undefined,
+    resolveProviderRuntimePluginHandle: (params: Record<string, unknown>) => params,
+    wrapProviderStreamFn: () => undefined,
+  };
+});
 
 vi.mock("../../../trajectory/metadata.js", () => ({
   buildTrajectoryArtifacts: (params: Record<string, unknown>) => params,
@@ -1141,6 +1150,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.embeddedSystemPromptInputs.length = 0;
   hoisted.trajectoryEvents.length = 0;
   hoisted.sessionManager.getSessionTarget.mockReset().mockReturnValue(undefined);
+  hoisted.sessionManager.getLeafId.mockReset().mockReturnValue(null);
   hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
   hoisted.sessionManager.getEntry.mockReset().mockReturnValue(undefined);
   hoisted.sessionManager.getBoundaryCount.mockReset().mockReturnValue(0);
@@ -1490,12 +1500,19 @@ export async function createContextEngineAttemptRunner(params: {
       },
       ...params.attemptOverrides,
     };
-    return await (
-      await loadRunEmbeddedAttempt()
-    )({
-      ...attempt,
-      admittedRunContext: createTestAdmittedRunContext(attempt.runId),
-    });
+    const admission = prepareSystemAgentRunAdmission(
+      attempt.config ?? {},
+      attempt.runId,
+      attempt.agentId ?? "main",
+      "embedded-attempt-test",
+    );
+    try {
+      return await (
+        await loadRunEmbeddedAttempt()
+      )({ ...attempt, admittedRunContext: await admission.admit("embedded") });
+    } finally {
+      admission.close();
+    }
   } finally {
     if (previousTrajectoryEnv === undefined) {
       delete process.env.OPENCLAW_TRAJECTORY;
