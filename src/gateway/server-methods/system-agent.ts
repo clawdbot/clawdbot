@@ -8,6 +8,7 @@ import {
   validateSystemAgentChatParams,
   validateSystemAgentChatHistoryParams,
   validateSystemAgentSetupActivateParams,
+  validateSystemAgentSetupActivateStartParams,
   validateSystemAgentSetupAuthStartParams,
   validateSystemAgentSetupDetectParams,
   validateSystemAgentSetupVerifyParams,
@@ -70,6 +71,10 @@ import {
   verifyGatewaySetupInference,
 } from "./system-agent-execution.js";
 import { resolveSystemAgentSessionOwnerKey } from "./system-agent-session-owner.js";
+import {
+  rejectExistingSetupWizardSession,
+  startSetupActivationWizard,
+} from "./system-agent-setup-wizard.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -89,6 +94,7 @@ export type SystemAgentChatSession =
 const MAX_SYSTEM_AGENT_SESSIONS = 8;
 const SYSTEM_AGENT_SEED_HISTORY_LIMIT = 30;
 const DEFAULT_SYSTEM_AGENT_HISTORY_LIMIT = 100;
+const ACTIVATION_SESSION_TIMEOUT_MS = 8 * 60 * 1000;
 const PROVIDER_AUTH_SESSION_TIMEOUT_MS = 25 * 60 * 1000;
 const PROVIDER_PREPARE_SESSION_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const systemAgentSessionQueues = new WeakMap<
@@ -202,17 +208,19 @@ function queueDelegatedApproval(params: {
     keepPendingWithoutRoute: true,
     requireDeliveryRoute: false,
     afterDecision: async (decision) =>
-      await runWithGatewayIndependentRootWorkContinuation(() =>
-        runSystemAgentGatewayTask(async () => {
-          // The original request has returned; keep approval, audit, and restart drain-visible.
-          if (params.sessions.get(params.sessionId) !== params.session) {
-            return;
-          }
-          if (params.session.pendingApproval?.id === record.id) {
-            params.session.pendingApproval = undefined;
-          }
-          await params.session.engine.resolveOperatorApproval(decision, params.proposal.hash);
-        }),
+      await runWithGatewayIndependentRootWorkContinuation(
+        () =>
+          runSystemAgentGatewayTask(async () => {
+            // The original request has returned; keep approval, audit, and restart drain-visible.
+            if (params.sessions.get(params.sessionId) !== params.session) {
+              return;
+            }
+            if (params.session.pendingApproval?.id === record.id) {
+              params.session.pendingApproval = undefined;
+            }
+            await params.session.engine.resolveOperatorApproval(decision, params.proposal.hash);
+          }),
+        "system-agent:task",
       ),
     afterDecisionErrorLabel: "OpenClaw approval apply failed",
   });
@@ -302,46 +310,35 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const sessionId = params.sessionId;
-    const session = await createAdmittedWizardSession(
-      () =>
-        new WizardSession(
-          async (prompter, signal, runnerSession) => {
-            const result = await activateGatewaySetupInference({
-              kind: "provider-auth",
-              ...(params.agentId ? { agentId: params.agentId } : {}),
-              authChoice: params.authChoice,
-              ...(params.workspace !== undefined ? { workspace: params.workspace } : {}),
-              surface: "gateway",
-              runtime: {
-                ...defaultRuntime,
-                exit: (code: number | undefined): never => {
-                  throw new Error(`setup step exited with code ${String(code)}`);
-                },
-              },
-              prompter,
-              signal,
-              isCancelled: () => signal.aborted,
-              onCommitStarted: () => runnerSession.lockCancellation(),
-            });
-            if (!result.ok) {
-              throw new Error(result.error);
-            }
-            runnerSession.setModelActivation({
-              modelRef: result.modelRef,
-              ...(result.gatewayRestartRequired ? { gatewayRestartRequired: true } : {}),
-            });
-          },
-          { timeoutMs: PROVIDER_AUTH_SESSION_TIMEOUT_MS },
-        ),
-    );
-    if (!session) {
-      respondSetupAdmissionBusy(respond);
+    const { sessionId, ...activation } = params;
+    await startSetupActivationWizard({
+      sessionId,
+      activation: { ...activation, kind: "provider-auth" },
+      timeoutMs: PROVIDER_AUTH_SESSION_TIMEOUT_MS,
+      context,
+      respond,
+    });
+  },
+  /** Activate a detected or manual route with server-owned capability review. */
+  "openclaw.setup.activate.start": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSystemAgentSetupActivateStartParams,
+        "openclaw.setup.activate.start",
+        respond,
+      )
+    ) {
       return;
     }
-    context.wizardSessions.set(sessionId, session);
-    // Return ownership immediately so the client can cancel while provider auth waits.
-    respond(true, { sessionId, done: false, status: "running" }, undefined);
+    const { sessionId, ...activation } = params;
+    await startSetupActivationWizard({
+      sessionId,
+      activation,
+      timeoutMs: ACTIVATION_SESSION_TIMEOUT_MS,
+      context,
+      respond,
+    });
   },
   /** Run one provider-owned prepare flow over the shared wizard transport. */
   "openclaw.setup.prepare.start": async ({ params, respond, context }) => {
@@ -356,6 +353,9 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       return;
     }
     const sessionId = params.sessionId;
+    if (rejectExistingSetupWizardSession({ sessionId, context, respond })) {
+      return;
+    }
     const session = await createAdmittedWizardSession(
       () =>
         new WizardSession(

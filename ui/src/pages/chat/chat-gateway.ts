@@ -6,25 +6,25 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { accumulatedStreamText } from "../../lib/chat/chat-types.ts";
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-// Control UI page module reconciles Chat Gateway events into Chat state.
-import { isUiGlobalSessionKey, resolveUiDefaultAgentId } from "../../lib/sessions/session-key.ts";
 import {
-  chatScopedEventSessionMatches,
   isHiddenAssistantStreamText,
   isSilentReplyStream,
-  materializeVisibleAssistantStreamMessages,
   shouldHideAssistantChatMessage,
-  type ChatEventPayload,
-  type ChatState,
-} from "./chat-history.ts";
+} from "../../lib/chat/message-visibility.ts";
+// Control UI page module reconciles Chat Gateway events into Chat state.
+import { isUiGlobalSessionKey, resolveUiDefaultAgentId } from "../../lib/sessions/session-key.ts";
+import { chatScopedEventSessionMatches } from "./chat-history-state.ts";
+import { materializeVisibleAssistantStreamMessages } from "./chat-history-stream.ts";
+import type { ChatEventPayload } from "./chat-history.ts";
 import { reconcileChatRunStartup } from "./chat-run-startup.ts";
+import type { ChatState } from "./chat-state-contract.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
   getChatSessionProjection,
   publishChatSessionProjectionMessages,
   readChatSessionProjectionScope,
   setChatRunOwner,
-  setChatSessionProjection,
+  publishChatSessionProjection,
 } from "./history-merge.ts";
 import {
   adoptStartedChatRun,
@@ -145,12 +145,9 @@ function normalizeFinalAssistantMessage(message: unknown): Record<string, unknow
     : assistant;
 }
 
-function stripChatErrorMarker(text: string): string {
-  return text.replace(/^⚠️\s*/u, "");
-}
-
 function normalizeChatErrorComparisonText(text: string): string {
-  return stripChatErrorMarker(text)
+  return text
+    .replace(/^⚠️\s*/u, "")
     .replace(/^Error:\s*/iu, "")
     .replace(/\s+/gu, " ")
     .trim();
@@ -163,11 +160,11 @@ function resolveGatewayErrorText(
   const errorText = payload.errorMessage?.trim();
   if (errorText) {
     return errorText.startsWith("⚠️") || errorText.startsWith("Error:")
-      ? stripChatErrorMarker(errorText)
+      ? errorText
       : `Error: ${errorText}`;
   }
   const messageText = message ? extractText(message)?.trim() : null;
-  return messageText ? stripChatErrorMarker(messageText) : "chat error";
+  return messageText || "chat error";
 }
 
 function payloadMessageIsErrorProjection(
@@ -258,13 +255,13 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   const projectedRun =
     payload.runId && payload.state !== "status"
       ? reduceSessionProjectionRunEvent(
-          getChatSessionProjection(state, state.chatMessages, scope),
+          getChatSessionProjection(state, scope),
           normalizedFinalMessage ? { ...payload, message: normalizedFinalMessage } : payload,
           scope,
         )
       : null;
   if (projectedRun) {
-    setChatSessionProjection(state, projectedRun.projection);
+    publishChatSessionProjection(state, projectedRun.projection);
   }
   const terminalRunId = payload.runId ?? state.chatRunId;
   const reconcileOwnedTerminalRun = () => {
@@ -455,7 +452,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
           terminalRunId,
         );
       } else {
-        state.chatMessages = materializeVisibleStream();
+        publishChatSessionProjectionMessages(state, materializeVisibleStream(), { scope });
       }
     }
     reconcileOwnedTerminalRun();
@@ -478,7 +475,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
         terminalRunId,
       );
     } else {
-      state.chatMessages = materializeVisibleStream();
+      publishChatSessionProjectionMessages(state, materializeVisibleStream(), { scope });
     }
     if (payload.errorMessage?.trim()) {
       setChatRunError(state, resolveGatewayErrorText(payload, null), payload.runId);
@@ -518,7 +515,11 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
           terminalRunId,
         );
       } else {
-        state.chatMessages = materializeVisibleStream({ includeCurrent: true });
+        publishChatSessionProjectionMessages(
+          state,
+          materializeVisibleStream({ includeCurrent: true }),
+          { scope },
+        );
         const materialized = state.chatMessages.findLast(
           (message) => transcriptRunId(message) === terminalRunId,
         );

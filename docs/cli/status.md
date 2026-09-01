@@ -13,6 +13,7 @@ openclaw status
 openclaw status --all
 openclaw status --deep
 openclaw status --usage
+openclaw status --all --usage
 openclaw status --usage --agent work
 ```
 
@@ -65,6 +66,7 @@ and `openclaw memory status --deep`.
 ## Usage and quota
 
 - `--usage` prints normalized provider usage windows as `X% left`.
+  It also adds usage snapshots to `--all`; `--agent` keeps the same usage-only scope.
 - In an explicit multi-agent setup, `--usage` reads the auth profiles owned by
   `agents.defaults.systemAgent.agentId` by default. Pass `--agent <id>` to
   inspect another agent; without either owner, OpenClaw does not guess one

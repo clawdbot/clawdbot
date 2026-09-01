@@ -1,3 +1,8 @@
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
   continueFailed,
@@ -1019,3 +1024,90 @@ describe("FRV strict verifier", () => {
     ).rejects.toThrow("verification failed");
   });
 });
+
+describe("FRV protected gh evidence reads", () => {
+  it.each([
+    ["getRun", ["101"], "actions/runs/101", { run_attempt: 2 }],
+    ["getRunAttempt", ["101", 2], "actions/runs/101/attempts/2", { run_attempt: 2 }],
+    [
+      "getAttemptJobs",
+      ["101", 2],
+      "actions/runs/101/attempts/2/jobs?per_page=100",
+      [{ id: 1 }, { id: 2 }],
+    ],
+    [
+      "getParentJobs",
+      ["77"],
+      "actions/runs/77/jobs?filter=all&per_page=100",
+      [{ id: 1 }, { id: 2 }],
+    ],
+    ["getJobLog", [1], "actions/jobs/1/logs", "job evidence"],
+  ])("revalidates %s through the default protected route", (method, args, endpoint, expected) => {
+    const result = runProtectedFrv(
+      String(method),
+      args as Array<string | number>,
+      String(endpoint),
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual(expected);
+    expect(result.calls).toHaveLength(1);
+  });
+
+  it("preserves protected refusal status without retry or alternate execution", () => {
+    const result = runProtectedFrv("getRun", ["101"], "actions/runs/101", true);
+    expect(result.status).toBe(19);
+    expect(result.stderr).toContain("protected refusal");
+    expect(result.calls).toHaveLength(1);
+  });
+});
+
+function runProtectedFrv(
+  method: string,
+  args: Array<string | number>,
+  endpoint: string,
+  denied = false,
+) {
+  const root = mkdtempSync(join(tmpdir(), "frv-protected-"));
+  const gh = join(root, "gh");
+  writeFileSync(
+    gh,
+    `#!${process.execPath}
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+fs.appendFileSync("calls.jsonl", JSON.stringify(args) + "\\n");
+const fail = (message, code) => { console.error(message); process.exit(code); };
+if (${denied}) fail("protected refusal", 19);
+if (args[0] !== "api" || !args.includes(${JSON.stringify(`repos/${REPOSITORY}/${endpoint}`)})) fail("unexpected request", 17);
+if (!args.some((arg, i) => ["-H", "--header"].includes(arg) && args[i+1] === "Cache-Control: max-age=0")) fail("missing live header", 18);
+if (${endpoint.includes("/jobs?")}) {
+  if (!args.includes("--paginate") || !args.includes(".jobs[] | @json")) fail("missing pagination", 17);
+  console.log('{"id":1}\\n{"id":2}');
+} else console.log(${endpoint.endsWith("/logs") ? JSON.stringify("job evidence") : JSON.stringify('{"run_attempt":2}')});
+`,
+  );
+  chmodSync(gh, 0o755);
+  try {
+    const moduleUrl = pathToFileURL(join(process.cwd(), "scripts/frv.mjs")).href;
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `
+      import {createClient} from ${JSON.stringify(moduleUrl)};
+      try {
+        console.log(JSON.stringify(await createClient(${JSON.stringify(REPOSITORY)})[${JSON.stringify(method)}](...${JSON.stringify(args)})));
+      } catch (error) { console.error(error.message); process.exitCode = error.code; }
+    `,
+      ],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: { HOME: root, PATH: `${root}${delimiter}${process.env.PATH ?? ""}` },
+      },
+    );
+    return { ...result, calls: readFileSync(join(root, "calls.jsonl"), "utf8").trim().split("\n") };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}

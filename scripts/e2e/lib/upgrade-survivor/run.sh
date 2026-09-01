@@ -128,7 +128,6 @@ SYSTEMCTL_SHIM_LOG="$ARTIFACT_ROOT/systemctl-shim.log"
 SYSTEMCTL_SHIM_PID_FILE="$ARTIFACT_ROOT/systemctl-shim.pid"
 SYSTEMCTL_SHIM_DAEMON_LOG="$ARTIFACT_ROOT/systemctl-shim-gateway.log"
 CONFIG_COVERAGE_JSON="$ARTIFACT_ROOT/config-recipe.json"
-PREPUBLISH_AUTHORED_CONFIG="$RUNTIME_ROOT/prepublish-authored-openclaw.json"
 export OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON="$CONFIG_COVERAGE_JSON"
 rm -f "$SUMMARY_JSON" "$CONFIG_COVERAGE_JSON"
 : >"$PHASE_LOG"
@@ -266,6 +265,9 @@ const summary = {
     statusSeconds: numberOrNull(process.env.SUMMARY_STATUS_SECONDS),
   },
   config: readJsonOrNull(process.env.SUMMARY_CONFIG_COVERAGE),
+  recovery: process.env.SUMMARY_SCENARIO === "recovery-cleanup"
+    ? readJsonOrNull(require("node:path").join(require("node:path").dirname(process.env.SUMMARY_JSON), "recovery-evidence.json"))
+    : undefined,
   failure: process.env.SUMMARY_STATUS === "passed"
     ? null
     : {
@@ -351,12 +353,14 @@ trap 'on_signal SIGINT 130' INT
 trap 'on_signal SIGTERM 143' TERM
 
 phase() {
-  local name="$1"
+  local name="$1" phase_status
   shift
   CURRENT_PHASE="$name"
   echo "==> upgrade-survivor:$name"
   json_event "$name" started
   "$@"
+  phase_status=$?
+  [ "$phase_status" -eq 0 ] || return "$phase_status"
   json_event "$name" passed
   CURRENT_PHASE=""
 }
@@ -478,27 +482,10 @@ configure_clawhub_fixture() {
   export OPENCLAW_CLAWHUB_URL="http://127.0.0.1:$(cat "$port_file")"
 }
 
-prepublish_auto_auth_enabled() {
-  [ "$UPDATE_RESTART_MODE" = "auto-auth" ] &&
-    [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]
-}
-
-park_prepublish_authored_config() {
-  prepublish_auto_auth_enabled || return 0
-  node "${OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER:-scripts/e2e/lib/upgrade-survivor/config-parking.mjs}" \
-    park-prepublish "$OPENCLAW_CONFIG_PATH" "$PREPUBLISH_AUTHORED_CONFIG"
-}
-
 assert_prepublish_fixture_idle() {
-  prepublish_auto_auth_enabled || return 0
+  [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] || return 0
   node "${OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER:-scripts/e2e/lib/clawhub-fixture-server.cjs}" \
     assert-no-requests "$OPENCLAW_CLAWHUB_URL"
-}
-
-restore_prepublish_authored_config() {
-  prepublish_auto_auth_enabled || return 0
-  node "${OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER:-scripts/e2e/lib/upgrade-survivor/config-parking.mjs}" \
-    restore "$OPENCLAW_CONFIG_PATH" "$PREPUBLISH_AUTHORED_CONFIG"
 }
 
 configure_plugin_registry() {
@@ -818,7 +805,7 @@ install_baseline() {
   fi
 }
 
-seed_state() {
+initialize_state() {
   local account_home=""
   openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_FUNCTION_B64:?missing OPENCLAW_TEST_STATE_FUNCTION_B64}"
   if [ "$ROOT_MANAGED_VPS" = "1" ]; then
@@ -844,6 +831,9 @@ seed_state() {
     export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
   fi
   export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION="$baseline_version"
+}
+
+seed_state() {
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed
 }
 
@@ -872,101 +862,8 @@ source scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh
 export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG="$SYSTEMCTL_SHIM_LOG"
 export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE="$SYSTEMCTL_SHIM_PID_FILE"
 export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG="$SYSTEMCTL_SHIM_DAEMON_LOG"
-
-install_update_restart_service_unit() {
-  if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw gateway install --force --json >"$BASELINE_SERVICE_INSTALL_JSON" 2>"$BASELINE_SERVICE_INSTALL_ERR"; then
-    echo "baseline gateway service install failed" >&2
-    openclaw_e2e_print_log "$BASELINE_SERVICE_INSTALL_ERR" >&2
-    openclaw_e2e_print_log "$BASELINE_SERVICE_INSTALL_JSON" >&2
-    return 1
-  fi
-}
-
-seed_update_restart_probe_device_auth() {
-  node --input-type=module <<'NODE'
-import crypto from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
-
-const stateDir = process.env.OPENCLAW_STATE_DIR;
-if (!stateDir) {
-  throw new Error("missing OPENCLAW_STATE_DIR");
-}
-
-const base64UrlEncode = (buf) =>
-  buf.toString("base64").replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
-const ed25519SpkiPrefix = Buffer.from("302a300506032b6570032100", "hex");
-const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
-const publicKeyPem = publicKey.export({ type: "spki", format: "pem" });
-const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" });
-const spki = crypto.createPublicKey(publicKeyPem).export({ type: "spki", format: "der" });
-const rawPublicKey =
-  spki.length === ed25519SpkiPrefix.length + 32 &&
-  spki.subarray(0, ed25519SpkiPrefix.length).equals(ed25519SpkiPrefix)
-    ? spki.subarray(ed25519SpkiPrefix.length)
-    : spki;
-const publicKeyRaw = base64UrlEncode(rawPublicKey);
-const deviceId = crypto.createHash("sha256").update(rawPublicKey).digest("hex");
-const token = base64UrlEncode(crypto.randomBytes(32));
-const now = Date.now();
-const scopes = ["operator.read"];
-
-function writeJson(filePath, value) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-  try {
-    fs.chmodSync(filePath, 0o600);
-  } catch {
-    // best-effort inside Docker
-  }
-}
-
-writeJson(path.join(stateDir, "identity", "device.json"), {
-  version: 1,
-  deviceId,
-  publicKeyPem,
-  privateKeyPem,
-  createdAtMs: now,
-});
-writeJson(path.join(stateDir, "identity", "device-auth.json"), {
-  version: 1,
-  deviceId,
-  tokens: {
-    operator: {
-      token,
-      role: "operator",
-      scopes,
-      updatedAtMs: now,
-    },
-  },
-});
-writeJson(path.join(stateDir, "devices", "paired.json"), {
-  [deviceId]: {
-    deviceId,
-    publicKey: publicKeyRaw,
-    displayName: "upgrade survivor restart probe",
-    platform: process.platform,
-    clientId: "upgrade-survivor",
-    clientMode: "probe",
-    role: "operator",
-    roles: ["operator"],
-    scopes,
-    approvedScopes: scopes,
-    tokens: {
-      operator: {
-        token,
-        role: "operator",
-        scopes,
-        createdAtMs: now,
-      },
-    },
-    createdAtMs: now,
-    approvedAtMs: now,
-  },
-});
-writeJson(path.join(stateDir, "devices", "pending.json"), {});
-NODE
-}
+export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_JSON="$BASELINE_SERVICE_INSTALL_JSON"
+export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_ERR="$BASELINE_SERVICE_INSTALL_ERR"
 
 write_update_restart_service_env() {
   mkdir -p "$OPENCLAW_STATE_DIR"
@@ -992,24 +889,37 @@ prepare_update_restart_probe() {
   fi
   echo "Preparing configured-auth gateway for automatic update restart."
   install_update_restart_systemctl_shim
-  seed_update_restart_probe_device_auth
-  park_prepublish_authored_config
-  local probe_status=0
-  start_gateway legacy-ready-log-ok || probe_status=$?
+  local probe_status=0 restore_status=0
+  local authored_config="$RUNTIME_ROOT/baseline-authored-openclaw.json"
+  local parking_helper="${OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER:-scripts/e2e/lib/upgrade-survivor/config-parking.mjs}"
+  # Bootstrap only service auth; authored plugins must reach the actual updater unchanged.
+  # The canonical path stays installed in the unit, with reload off until update owns restart.
+  node "$parking_helper" \
+    park-restart-probe "$OPENCLAW_CONFIG_PATH" "$authored_config" 18789 || probe_status=$?
+  if [ "$probe_status" -eq 0 ]; then
+    write_update_restart_service_env || probe_status=$?
+  fi
+  if [ "$probe_status" -eq 0 ]; then
+    run_update_restart_probe_gateway install 18789 "$COMMAND_TIMEOUT" legacy-ready-log-ok || probe_status=$?
+  fi
+  if [ "$probe_status" -eq 0 ]; then
+    local STATUS_JSON="$ARTIFACT_ROOT/baseline-status.json" STATUS_ERR="$ARTIFACT_ROOT/baseline-status.err"
+    check_gateway_status || probe_status=$?
+  fi
   if [ "$probe_status" -eq 0 ]; then
     assert_prepublish_fixture_idle || probe_status=$?
   fi
-  local restore_status=0
-  restore_prepublish_authored_config || restore_status=$?
-  if [ "$probe_status" -ne 0 ]; then
-    return "$probe_status"
+  # The installed baseline must be offline before restoring authored config or seeding state.
+  stop_update_restart_probe_gateway "$COMMAND_TIMEOUT" || return "$?"
+  if [ -e "$authored_config" ]; then
+    node "$parking_helper" restore "$OPENCLAW_CONFIG_PATH" "$authored_config" || restore_status=$?
   fi
   if [ "$restore_status" -ne 0 ]; then
     return "$restore_status"
   fi
-  assert_baseline_state
-  write_update_restart_service_env
-  install_update_restart_service_unit
+  if [ "$probe_status" -ne 0 ]; then
+    return "$probe_status"
+  fi
 }
 
 assert_baseline_state() {
@@ -1116,7 +1026,16 @@ update_candidate() {
     "NODE_OPTIONS=${NODE_OPTIONS:+$NODE_OPTIONS }--import=$PWD/scripts/e2e/lib/upgrade-survivor/diagnostics.mjs"
   )
   local update_status=0
-  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "${update_env[@]}" openclaw "${update_args[@]}" >"$update_json" 2>"$update_err" || update_status=$?
+  if [ "$SCENARIO" = "recovery-cleanup" ]; then
+    # Keep sampler output outside the old updater's JSON and join its process group.
+    openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" node scripts/e2e/lib/plugin-lifecycle-matrix/measure.mjs \
+      "$ARTIFACT_ROOT/recovery-resources.tsv" update -- bash -c \
+      'out="$1"; err="$2"; shift 2; exec "$@" >"$out" 2>"$err"' recovery-update \
+      "$update_json" "$update_err" "${update_env[@]}" openclaw "${update_args[@]}" \
+      >"$ARTIFACT_ROOT/recovery-update-metrics.log" 2>&1 || update_status=$?
+  else
+    openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "${update_env[@]}" openclaw "${update_args[@]}" >"$update_json" 2>"$update_err" || update_status=$?
+  fi
   if [ "$after_repair" != "1" ] && [ "$update_status" -le 1 ] && node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
     assert-recoverable-update-json "$update_json" "$candidate_version" "$observation_root" "$baseline_version" >"$ARTIFACT_ROOT/update-result-check.log" 2>&1; then
     update_repair_required="1"
@@ -1191,9 +1110,18 @@ repair_fixture_plugin_consent() {
     assert_survival
   fi
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
-    # Repair never restarts. Prove the candidate's automatic update handoff
-    # separately; a manual service restart cannot substitute for that proof.
+    # Start is preparation only. The following updater must replace this exact
+    # supervisor itself; its existing replacement and auth assertions remain required.
+    phase prepare-recovery-service run_update_restart_probe_gateway start 18789 "$COMMAND_TIMEOUT"
+    local preparation_status=$?
+    [ "$preparation_status" -eq 0 ] || return "$preparation_status"
+    local STATUS_JSON="$ARTIFACT_ROOT/prepared-status.json" STATUS_ERR="$ARTIFACT_ROOT/prepared-status.err"
+    phase prepared-gateway-auth check_gateway_status
+    local auth_status=$?
+    [ "$auth_status" -eq 0 ] || return "$auth_status"
     phase recovery-update-restart update_candidate 1
+    local recovery_status=$?
+    [ "$recovery_status" -eq 0 ] || return "$recovery_status"
     assert_survival
     if [ "$update_repair_required" = "1" ]; then
       node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
@@ -1283,10 +1211,7 @@ start_gateway() {
   start_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
   env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw gateway --port "$port" --bind loopback --allow-unconfigured >"$GATEWAY_LOG" 2>&1 &
   gateway_pid="$!"
-  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
-    printf '%s\n' "$gateway_pid" >"$SYSTEMCTL_SHIM_PID_FILE"
-  fi
-  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360 "$port" "${1:-strict}"
+  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360 "$port" || return "$?"
   ready_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
   start_seconds=$(((ready_epoch - start_epoch + 999) / 1000))
   if [ "$start_seconds" -gt "$budget" ]; then
@@ -1370,9 +1295,15 @@ phase storage-preflight storage_preflight
 phase validate-update-restart-mode validate_update_restart_mode
 phase reset-run-state reset_run_state
 phase install-baseline install_baseline
-phase seed-state seed_state
+phase initialize-state initialize_state
 phase apply-baseline-config-recipe apply_baseline_config_recipe
 phase validate-baseline-config validate_baseline_config
+phase resolve-candidate resolve_candidate_version
+phase configure-clawhub-fixture configure_clawhub_fixture
+phase prepare-update-restart-probe prepare_update_restart_probe
+# Start the published baseline before adding migration specimens: its startup
+# guards correctly reject them, and baseline Doctor would consume candidate proof.
+phase seed-state seed_state
 phase install-baseline-plugin-dependencies install_baseline_plugin_dependencies
 phase seed-legacy-plugin-dependency-debris seed_legacy_plugin_dependency_debris
 phase assert-legacy-plugin-dependency-debris assert_legacy_plugin_dependency_debris_present
@@ -1384,15 +1315,25 @@ if [ "$SCENARIO" = "sqlite-volume" ]; then
   phase validate-volume-baseline-config validate_baseline_config
 fi
 phase assert-baseline assert_baseline_state
+if [ "$SCENARIO" = "recovery-cleanup" ]; then
+  phase seed-recovery-state node scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs seed
+fi
 phase seed-legacy-runtime-deps-symlink seed_legacy_runtime_deps_symlink
-phase resolve-candidate resolve_candidate_version
-phase configure-clawhub-fixture configure_clawhub_fixture
-phase prepare-update-restart-probe prepare_update_restart_probe
+if [ "$SCENARIO" = "recovery-cleanup" ]; then
+  if [ "$CANDIDATE_KIND" != "tarball" ]; then
+    echo "recovery-cleanup requires one packed candidate tarball" >&2
+    exit 1
+  fi
+  phase recovery-package-evidence node scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs packages "$baseline_spec" "$CANDIDATE_SPEC"
+fi
 phase configure-plugin-registry configure_plugin_registry
 phase update-candidate update_candidate
-if [ "$SCENARIO" = "sqlite-volume" ]; then
+if [ "$SCENARIO" = "sqlite-volume" ] || [ "$SCENARIO" = "recovery-cleanup" ]; then
   # A standalone Doctor pass would conceal missing migrations in the updater.
   phase assert-automatic-migration assert_survival
+fi
+if [ "$SCENARIO" = "recovery-cleanup" ]; then
+  phase assert-recovery-migration node scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs migrated
 fi
 if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
   clawhub_security_mode="$(
@@ -1412,7 +1353,7 @@ if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
 fi
 phase root-managed-vps-cli-usable assert_root_managed_vps_cli_usable
 phase assert-legacy-plugin-dependency-debris-before-doctor assert_legacy_plugin_dependency_debris_before_doctor
-if [ "$SCENARIO" != "sqlite-volume" ]; then
+if [ "$SCENARIO" != "sqlite-volume" ] && [ "$SCENARIO" != "recovery-cleanup" ]; then
   phase doctor run_doctor
 fi
 phase assert-legacy-plugin-dependency-debris-cleaned assert_legacy_plugin_dependency_debris_cleaned
@@ -1420,6 +1361,9 @@ phase assert-legacy-runtime-deps-symlink-repaired assert_legacy_runtime_deps_sym
 phase validate-post-doctor-config validate_post_doctor_config
 phase assert-survival assert_survival
 phase fixture-plugin-consent repair_fixture_plugin_consent
+if [ "$SCENARIO" = "recovery-cleanup" ]; then
+  phase recovery-custom-restore node scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs custom-restore
+fi
 if [ "$SCENARIO" = "meeting-transcripts-sqlite" ]; then
   # Export recreates the archived source path. Finish every repeated survival
   # check before exercising the explicit artifact materialization command.
@@ -1428,6 +1372,16 @@ fi
 phase gateway-start ensure_gateway_started
 phase gateway-probes check_gateway_probes
 phase gateway-status check_gateway_status
+if [ "$SCENARIO" = "recovery-cleanup" ]; then
+  phase recovery-live node scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs live
+  phase gateway-stop stop_gateway
+  phase recovery-offline node scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs offline
+  phase gateway-restart start_gateway
+  phase gateway-restart-probes check_gateway_probes
+  phase gateway-restart-status check_gateway_status
+  phase recovery-restarted node scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs restarted
+  phase assert-restarted-survival assert_survival
+fi
 if [ "$SCENARIO" = "sqlite-volume" ]; then
   phase gateway-volume-history node scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs \
     --url ws://127.0.0.1:18789 --out "$ARTIFACT_ROOT/volume-gateway.json"

@@ -16,7 +16,11 @@ import {
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { bindModelLlmRuntime, getModelLlmRuntime } from "../llm/model-runtime-binding.js";
+import {
+  bindModelLlmRuntime,
+  getModelCompletionTransport,
+  getModelLlmRuntime,
+} from "../llm/model-runtime-binding.js";
 import { completeSimple } from "../llm/stream.js";
 import type {
   AssistantMessage,
@@ -126,7 +130,9 @@ type SimpleCompletionSelectionParams = {
   agentDir?: string;
   modelRef?: string;
   useUtilityModel?: boolean;
-  manifestPlugins?: PluginMetadataSnapshot["plugins"];
+  manifestPlugins?:
+    | PluginMetadataSnapshot["plugins"]
+    | Pick<PluginMetadataSnapshot, "plugins" | "owners">;
 };
 
 type SimpleCompletionSelectionRequest = {
@@ -152,7 +158,12 @@ function resolveSimpleCompletionSelectionRequest(
           agentId: params.agentId,
           primaryProvider: fallbackRef.provider,
           ...(params.manifestPlugins
-            ? { metadataSnapshot: { plugins: params.manifestPlugins } }
+            ? {
+                metadataSnapshot:
+                  "plugins" in params.manifestPlugins
+                    ? params.manifestPlugins
+                    : { plugins: params.manifestPlugins },
+              }
             : {}),
         })
       : undefined) ||
@@ -448,15 +459,20 @@ async function prepareSimpleCompletionModelCore(
       : fingerprintResolvedProviderAuth(auth)
     : undefined;
   const modelRuntime = getModelRegistryRuntime(resolved.modelRegistry);
+  const model = applySecretRefHeaderSentinels(
+    applyLocalNoAuthHeaderOverride(resolvedModel, resolvedAuth),
+    params.cfg,
+  );
+  // Select transport hooks before releasing this generation. Keep the logical
+  // model API visible to callers that build prompts before dispatch.
+  const completionTransport = prepareModelForSimpleCompletion({
+    apiRegistry: modelRuntime.apiRegistry,
+    model,
+    cfg: params.cfg,
+  });
 
   return {
-    model: bindModelLlmRuntime(
-      applySecretRefHeaderSentinels(
-        applyLocalNoAuthHeaderOverride(resolvedModel, resolvedAuth),
-        params.cfg,
-      ),
-      modelRuntime.llmRuntime,
-    ),
+    model: bindModelLlmRuntime(model, modelRuntime.llmRuntime, completionTransport),
     auth: resolvedAuth,
     ...(sourceAuthFingerprint ? { sourceAuthFingerprint } : {}),
   };
@@ -572,7 +588,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
   const resolveSelection = () =>
     resolveSimpleCompletionSelectionForAgent({
       ...selectionParams,
-      manifestPlugins: metadataSnapshot.plugins,
+      manifestPlugins: metadataSnapshot,
     });
   let selection = resolveSelection();
   if (!selection) {
@@ -647,13 +663,15 @@ export async function completeWithPreparedSimpleCompletionModel(params: {
   options?: SimpleCompletionModelOptions;
 }): Promise<AssistantMessage> {
   const runtime = getModelLlmRuntime(params.model);
-  let completionModel = prepareModelForSimpleCompletion({
-    // Direct SDK callers that did not use the preparation helper keep the shipped
-    // process-default behavior; all prepared host paths carry their lifecycle owner.
-    apiRegistry: runtime?.registry ?? defaultApiRegistry,
-    model: params.model,
-    cfg: params.cfg,
-  });
+  let completionModel =
+    getModelCompletionTransport(params.model) ??
+    prepareModelForSimpleCompletion({
+      // Direct SDK callers that did not use the preparation helper keep the shipped
+      // process-default behavior; all prepared host paths carry their lifecycle owner.
+      apiRegistry: runtime?.registry ?? defaultApiRegistry,
+      model: params.model,
+      cfg: params.cfg,
+    });
   if (runtime) {
     completionModel = bindModelLlmRuntime(completionModel, runtime);
   }

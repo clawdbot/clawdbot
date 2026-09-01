@@ -1,24 +1,26 @@
+import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import {
+  resolveInstalledPluginLifecycleOwnership,
   resolveInstalledPluginPackageOwnership,
-  type InstalledPluginPackageOwnership,
+  type InstalledPluginLifecycleOwnership,
 } from "./installed-plugin-package-ownership.js";
 import {
   hasMatchingPluginLoadPath,
   removePluginRuntimePolicyFromConfig,
 } from "./uninstall-package-config.js";
 
-type PluginPackageUpdateSnapshot = ReadonlyMap<string, InstalledPluginPackageOwnership>;
+type PluginPackageUpdateSnapshot = ReadonlyMap<string, InstalledPluginLifecycleOwnership>;
 
 export function capturePluginPackageUpdateSnapshot(params: {
   index: InstalledPluginIndex;
   installOwners: readonly string[];
   env?: NodeJS.ProcessEnv;
 }): { ok: true; value: PluginPackageUpdateSnapshot } | { ok: false; error: string } {
-  const snapshot = new Map<string, InstalledPluginPackageOwnership>();
+  const snapshot = new Map<string, InstalledPluginLifecycleOwnership>();
   for (const installOwner of new Set(params.installOwners)) {
-    const ownership = resolveInstalledPluginPackageOwnership(
+    const ownership = resolveInstalledPluginLifecycleOwnership(
       params.index,
       installOwner,
       params.env,
@@ -67,6 +69,25 @@ export function reconcilePluginPackageUpdateConfig(params: {
       nextInstallOwner,
       params.env,
     );
+    if (before.kind === "orphan") {
+      const lifecycleAfter = resolveInstalledPluginLifecycleOwnership(
+        params.afterIndex,
+        nextInstallOwner,
+        params.env,
+      );
+      const unchangedOrphan =
+        nextInstallOwner === installOwner &&
+        isDeepStrictEqual(
+          params.afterIndex.installRecords[nextInstallOwner],
+          before.installRecord,
+        ) &&
+        lifecycleAfter.ok &&
+        lifecycleAfter.value.kind === "orphan";
+      if (!after.ok && !unchangedOrphan) {
+        return after;
+      }
+      continue;
+    }
     if (!after.ok) {
       return after;
     }

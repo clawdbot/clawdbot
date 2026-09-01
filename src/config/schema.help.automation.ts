@@ -33,7 +33,7 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "session.store":
     "Sets the session storage file path used to persist session records across restarts. Use an explicit path only when you need custom disk layout, backup routing, or mounted-volume storage.",
   "session.mainKey":
-    'Overrides the canonical main session key used for continuity when dmScope or routing logic points to "main". Use a stable value only if you intentionally need custom session anchoring.',
+    'Accepted but ignored: the per-agent main session suffix is always "main". Omit this field; global session scope uses "global" instead.',
   "session.sendPolicy":
     "Controls cross-session send permissions using allow/deny rules evaluated against channel, chatType, and key prefixes. Use this to fence where session tools can deliver messages in complex environments.",
   "session.sendPolicy.default":

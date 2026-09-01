@@ -30,7 +30,7 @@ import {
   setExpansionState,
   syncToolCardExpansionState,
 } from "../chat-thread.ts";
-import { assistantGroupIsForwardedBoundary } from "../chat-turn-boundary.ts";
+import { hasForwardedSource } from "../chat-turn-boundary.ts";
 import { getToolTitlesVersion, scheduleToolTitlesForTranscript } from "../tool-titles.ts";
 import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
@@ -135,6 +135,10 @@ export function projectChatTranscript(
     searchOpen: state.searchOpen,
     searchQuery: state.searchQuery,
   });
+  const workingIndicator = chatItems.find((item) => item.kind === "reading-indicator");
+  const runOutputTokens = workingIndicator?.runId
+    ? (props.runUsageById?.get(workingIndicator.runId)?.outputTokens ?? null)
+    : null;
   if (props.showToolCalls && !searchFiltering) {
     scheduleToolTitlesForTranscript(collectToolTitleCandidates(chatItems));
   }
@@ -220,9 +224,7 @@ export function projectChatTranscript(
   // A forwarded cross-session message is another voice in the room: the thread
   // stops rendering as a compact direct exchange and identity chrome returns.
   const hasForwardedGroups = chatItems.some(
-    (item) =>
-      item.kind === "group" &&
-      (Boolean(item.senderSession) || assistantGroupIsForwardedBoundary(item)),
+    (item) => item.kind === "group" && hasForwardedSource(item),
   );
   const isDirectThread =
     (sessionKind === "direct" || sessionKind === "cron" || sessionKind === "spawn-child") &&
@@ -266,7 +268,7 @@ export function projectChatTranscript(
     assistant: assistantIdentity,
     startupLabel: props.startupLabel,
     waitingApproval: props.waitingApproval,
-    runOutputTokens: props.runOutputTokens,
+    runOutputTokens,
     questionPrompts,
   } satisfies StreamGroupOptions;
   // Latest ownership crosses rows: the former owner must rerender when a
@@ -339,7 +341,7 @@ export function projectChatTranscript(
   };
   // Only the working indicator shows live usage, so rows without one keep
   // memoizing across usage patches.
-  const workingUsageKey = `usage:${props.runOutputTokens ?? ""}`;
+  const workingUsageKey = `usage:${runOutputTokens ?? ""}`;
   const liveStatusSignature = (item: ChatRenderItem): string => {
     if (item.kind === "agent-run-frame") {
       const hasWorkingIndicator = item.parts.some(
@@ -430,18 +432,14 @@ export function projectChatTranscript(
     { searchActive: searchFiltering },
   );
   const collapsedItems = coalesceAgentRunFrames(semanticItems, { searchActive: searchFiltering });
-  // Watch/settle on actual indicator visibility (not runWorking): queued
-  // sends show the claw before the run starts, and the recap must never
-  // stack under a visible working row.
-  const workingIndicatorVisible = chatItems.some((item) => item.kind === "reading-indicator");
-  // runOutputTokens is the live usage-stream counter for the pane's own run;
-  // its map entry dies at lifecycle end, so the watch captures the max seen.
-  const turnRecap = resolveTurnRecap(
-    props.sessionKey,
-    workingIndicatorVisible,
-    activeSession,
-    props.runOutputTokens ?? null,
-  );
+  const resolvedRecap = resolveTurnRecap(state, {
+    sessionKey: props.sessionKey,
+    agentId: props.currentAgentId,
+    gatewayClient: props.gatewayClient,
+    indicator: workingIndicator,
+    row: activeSession,
+    usageByRun: props.runUsageById,
+  });
   const transcriptItems = collapsedItems.filter((item, index) => {
     const previous = collapsedItems[index - 1];
     const activeStatusParts =
@@ -482,6 +480,11 @@ export function projectChatTranscript(
           assistantGroupCanOwnActiveRunStatus(lastTranscriptItem)
         ? lastTranscriptItem
         : null;
+  // An unwatched background run must not inherit the visible turn's recap.
+  const turnRecap =
+    resolvedRecap && (!tailStatusOwner?.runId || tailStatusOwner.runId === resolvedRecap.runId)
+      ? resolvedRecap
+      : null;
   latestAssistantItemKey =
     !props.runActive &&
     !props.runWorking &&
@@ -523,7 +526,7 @@ export function projectChatTranscript(
   }
   transcript.syncMessageRows(messageRowKeysById);
   let turnRecapOwnerKey: string | null = null;
-  if (turnRecap !== null && tailStatusOwner) {
+  if (turnRecap !== null && tailStatusOwner?.runId === turnRecap.runId) {
     turnRecapByGroupKey.set(tailStatusOwner.key, turnRecap);
     turnRecapOwnerKey = tailStatusOwner.key;
   }
@@ -609,6 +612,7 @@ export function projectChatTranscript(
     props.resourceBasePath,
     (props.localMediaPreviewRoots ?? []).join("\u0000"),
     props.assistantAttachmentAuthToken,
+    props.connectionEpoch,
     props.canvasPluginSurfaceUrl,
     props.embedSandboxMode ?? "scripts",
     props.allowExternalEmbedUrls ?? false,

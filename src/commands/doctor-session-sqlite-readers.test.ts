@@ -2,7 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createTranscriptEventReader } from "./doctor-session-sqlite-readers.js";
+import {
+  countTranscriptEventsForPath,
+  createTranscriptEventReader,
+} from "./doctor-session-sqlite-readers.js";
 
 describe("legacy transcript row classification", () => {
   let directory: string;
@@ -13,8 +16,39 @@ describe("legacy transcript row classification", () => {
   });
   afterEach(() => fs.rmSync(directory, { recursive: true, force: true }));
 
+  it.each([1, 2, 3])("preserves records when UTF-8 splits after byte %s", (splitAfter) => {
+    const header = '\uFEFF{"type":"session","version":3}\r\n \t\r\n';
+    const prefix = '{"type":"plugin_state","payload":"';
+    const padding = "x".repeat(65_536 - Buffer.byteLength(header + prefix) - splitAfter);
+    const firstLine = `${prefix}${padding}🦞"}`;
+    const giant = { type: "plugin_state", payload: "λ".repeat(100_000) };
+    const tail = { type: "plugin_state", payload: "final unterminated row" };
+    fs.writeFileSync(
+      transcriptPath,
+      `${header}${firstLine}\r\n\n${JSON.stringify(giant)}\r\n${JSON.stringify(tail)}`,
+    );
+
+    const events: unknown[] = [];
+    const validate = createTranscriptEventReader(
+      transcriptPath,
+      "target",
+    )((event) => events.push(event));
+    validate();
+
+    expect(events[0]).toEqual({
+      type: "session",
+      version: 3,
+      id: "target",
+      timestamp: "",
+      cwd: "",
+    });
+    expect(events.slice(1)).toEqual([JSON.parse(firstLine), giant, tail]);
+    expect(countTranscriptEventsForPath(transcriptPath)).toEqual({ status: "ok", events: 4 });
+  });
+
   it.each([1, 2, 3, 4])("preserves recognized and opaque rows from version %s", (version) => {
     const unindexedHook = { type: "message", message: { role: "custom", content: "context" } };
+    const legacyMetadata = { type: "thinking_level_change", thinkingLevel: "low" };
     const opaqueRows = [
       { type: "session", id: "later-header", version: 1 },
       { type: "plugin_state", id: "opaque", payload: { keep: "exact" } },
@@ -24,6 +58,7 @@ describe("legacy transcript row classification", () => {
       { type: "session", version, sessionId: "legacy-header" },
       { ...unindexedHook, id: "hook", parentId: null },
       unindexedHook,
+      legacyMetadata,
       ...opaqueRows,
     ];
     fs.writeFileSync(transcriptPath, rows.map((row) => JSON.stringify(row)).join("\n"));
@@ -55,7 +90,16 @@ describe("legacy transcript row classification", () => {
     } else {
       expect(events[2]).toEqual(unindexedHook);
     }
-    expect(events.slice(3)).toEqual(opaqueRows);
+    expect(events[3]).toEqual(
+      version === 1
+        ? {
+            ...legacyMetadata,
+            id: expect.stringMatching(/^[a-f0-9]{16}-3$/),
+            parentId: expect.stringMatching(/^[a-f0-9]{16}-2$/),
+          }
+        : legacyMetadata,
+    );
+    expect(events.slice(4)).toEqual(opaqueRows);
   });
 
   it.each([1, 3])("enforces the target limit even during v%s prefix recovery", (version) => {

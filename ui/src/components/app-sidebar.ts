@@ -99,14 +99,9 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   }
 
   async inspectSessionGroupRepository(path?: string): Promise<WorktreeRepositoryStatus> {
-    const requestedPath = path?.trim();
-    const agent = this.activeChipAgent().agent;
+    const requestedPath = path?.trim() || this.activeChipAgent().agent?.workspace?.trim();
     if (!requestedPath) {
-      return agent?.workspaceGit === true
-        ? "git"
-        : agent?.workspaceGit === false
-          ? "not_git"
-          : "unavailable";
+      return "unavailable";
     }
     const sessions = this.context?.sessions;
     const scope = sessions?.captureConnectionScope();

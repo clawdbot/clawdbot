@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 // Doctor device pairing tests cover device-pairing checks, repair prompts, and diagnostics.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { storeDeviceAuthToken } from "../infra/device-auth-store.js";
 import {
   loadOrCreateDeviceIdentity,
@@ -92,12 +92,15 @@ describe("noteDevicePairingHealth", () => {
     });
   }
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
-    callGatewayMock.mockReset();
-    noteMock.mockReset();
     ({ collectDevicePairingHealthFindings, noteDevicePairingHealth } =
       await import("./doctor-device-pairing.js"));
+  });
+
+  beforeEach(() => {
+    callGatewayMock.mockReset();
+    noteMock.mockReset();
   });
 
   afterEach(() => {
@@ -215,13 +218,16 @@ describe("noteDevicePairingHealth", () => {
   it("warns when the local cached device token predates the gateway rotation", async () => {
     await withApprovedOperatorPairing(async ({ identity }) => {
       const now = vi.spyOn(Date, "now").mockReturnValue(1);
-      storeDeviceAuthToken({
-        deviceId: identity.deviceId,
-        role: "operator",
-        token: "stale-local-token",
-        scopes: ["operator.read"],
-      });
-      now.mockRestore();
+      try {
+        storeDeviceAuthToken({
+          deviceId: identity.deviceId,
+          role: "operator",
+          token: "stale-local-token",
+          scopes: ["operator.read"],
+        });
+      } finally {
+        now.mockRestore();
+      }
 
       const rotated = await rotateDeviceToken({
         deviceId: identity.deviceId,

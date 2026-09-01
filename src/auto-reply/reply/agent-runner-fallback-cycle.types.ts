@@ -32,6 +32,7 @@ export type AgentFallbackCandidateCommonParams = {
   runId: string;
   runAbortSignal?: AbortSignal;
   runLane: RunEmbeddedAgentParams["lane"];
+  isFallbackRetry: boolean;
   isFinalFallbackAttempt?: boolean;
   suppressQueuedUserPersistenceForCandidate: boolean;
   userTurnTranscriptRecorder: RunEmbeddedAgentParams["userTurnTranscriptRecorder"];

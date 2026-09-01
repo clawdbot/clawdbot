@@ -1,10 +1,10 @@
 import { expect, it } from "vitest";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   captureUiProof,
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
-  sessionRow,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
 
@@ -85,7 +85,7 @@ suite.define(() => {
           .locator('wa-dropdown-item[value="delete"] .session-menu__text')
           .evaluate((element) => getComputedStyle(element).color);
         expect(deleteIconColor).toBe(deleteLabelColor);
-        await captureUiProof(page, `mobile-more-followup-after-${colorScheme}.png`);
+        await captureUiProof(suite, page, `mobile-more-followup-after-${colorScheme}.png`);
 
         await expect
           .poll(() => page.getByRole("button", { name: "Session sharing" }).count())
@@ -107,7 +107,7 @@ suite.define(() => {
             publish.evaluate((element) => Math.round(element.getBoundingClientRect().height)),
           )
           .toBe(34);
-        await captureUiProof(page, `mobile-more-sharing-followup-after-${colorScheme}.png`);
+        await captureUiProof(suite, page, `mobile-more-sharing-followup-after-${colorScheme}.png`);
       } finally {
         await context.close();
       }

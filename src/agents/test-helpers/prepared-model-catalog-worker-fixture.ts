@@ -70,11 +70,13 @@ export function writeSyntheticAuthDiscoveryFixture(params: {
   pluginDir: string;
   harnessId: string;
   unrelatedId: string;
+  pluginVersion: string;
 }): void {
   const probePath = path.join(params.root, "synthetic-auth-probes.txt");
   fs.writeFileSync(
     path.join(params.pluginDir, "provider-discovery.cjs"),
     `const fs = require("node:fs");
+fs.appendFileSync(${JSON.stringify(path.join(params.root, "discovery-artifacts.txt"))}, ${JSON.stringify(params.pluginVersion)} + "\\n");
 module.exports = {
   id: ${JSON.stringify(params.harnessId)},
   hookAliases: [${JSON.stringify(params.unrelatedId)}],

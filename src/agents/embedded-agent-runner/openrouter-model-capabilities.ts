@@ -18,7 +18,7 @@
  * capabilities instead of the text-only fallback.
  */
 
-import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOpenRouterModelPricing } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { cancelUnreadResponseBody } from "../../infra/http-body.js";
 import { resolveProxyFetchFromEnv } from "../../infra/net/proxy-fetch.js";
@@ -53,12 +53,7 @@ interface OpenRouterApiModel {
     context_length?: number;
     max_completion_tokens?: number;
   };
-  pricing?: {
-    prompt?: string;
-    completion?: string;
-    input_cache_read?: string;
-    input_cache_write?: string;
-  };
+  pricing?: unknown;
 }
 
 interface OpenRouterModelCapabilities {
@@ -68,12 +63,7 @@ interface OpenRouterModelCapabilities {
   supportsTools?: boolean;
   contextWindow: number;
   maxTokens: number;
-  cost: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-  };
+  cost: NonNullable<ReturnType<typeof normalizeOpenRouterModelPricing>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -165,11 +155,11 @@ function parseModel(model: OpenRouterApiModel): OpenRouterModelCapabilities {
       model.max_completion_tokens ??
       model.max_output_tokens ??
       8192,
-    cost: {
-      input: (parseStrictFiniteNumber(model.pricing?.prompt) ?? 0) * 1_000_000,
-      output: (parseStrictFiniteNumber(model.pricing?.completion) ?? 0) * 1_000_000,
-      cacheRead: (parseStrictFiniteNumber(model.pricing?.input_cache_read) ?? 0) * 1_000_000,
-      cacheWrite: (parseStrictFiniteNumber(model.pricing?.input_cache_write) ?? 0) * 1_000_000,
+    cost: normalizeOpenRouterModelPricing(model.pricing) ?? {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
     },
   };
 }

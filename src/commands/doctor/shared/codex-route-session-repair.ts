@@ -11,6 +11,7 @@ import {
   loadPersistedSharedAuthProfileStore,
   parseLegacyCredentialEntry,
 } from "../../../agents/auth-profiles/persisted.js";
+import { isLegacyCodexProviderId } from "../../../config/legacy-codex-provider.js";
 import {
   applySessionEntryReplacements,
   iterateDoctorSessionKeyBatches,
@@ -32,7 +33,6 @@ import {
   isBlockedLegacyCodexModelPair,
   isBlockedLegacyCodexModelRef,
   isOpenAICodexModelRef,
-  isLegacyCodexProviderId,
   isProviderlessModelRef,
   normalizeRuntimeString,
   toCanonicalOpenAIModelRef,

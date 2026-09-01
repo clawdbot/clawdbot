@@ -14,7 +14,10 @@ import { buildCachedChatItems } from "../chat-thread.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
 import { renderChatNotice } from "./chat-divider.ts";
-import { getChatMediaRenderVersion } from "./chat-message-media.ts";
+import {
+  getChatMediaRenderVersion,
+  releaseChatMediaResourceSubscriber,
+} from "./chat-message-media.ts";
 import {
   dismissConfirmedActionPopovers,
   renderActivityGroup,
@@ -26,6 +29,7 @@ import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 import "./chat-sidebar.ts";
 
 const localStorageValues = new Map<string, string>();
+const mediaSubscribers = new Set<() => void>();
 const renderMarkdownHtml = markdown.toSanitizedMarkdownHtml;
 const markdownRenderMock = vi.fn(
   (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) => value,
@@ -214,6 +218,9 @@ function renderTestMessageGroup(
   group: MessageGroup,
   opts: Partial<RenderMessageGroupOptions> = {},
 ) {
+  if (opts.onRequestUpdate) {
+    mediaSubscribers.add(opts.onRequestUpdate);
+  }
   return renderMessageGroup(group, {
     showReasoning: true,
     showToolCalls: true,
@@ -656,6 +663,11 @@ function mediaTicketPayload(mediaTicket: string, ttlMs = 5 * 60 * 1000) {
 }
 
 afterEach(() => {
+  // These detached render fixtures own the callbacks a live chat pane normally releases.
+  for (const subscriber of mediaSubscribers) {
+    releaseChatMediaResourceSubscriber(subscriber);
+  }
+  mediaSubscribers.clear();
   markdownRenderMock.mockClear();
   document.querySelectorAll("[data-confirmed-action-fixture]").forEach((element) => {
     dismissConfirmedActionPopovers(element);
@@ -1788,6 +1800,7 @@ describe("grouped chat rendering", () => {
     );
     expect(container.querySelector(".chat-working-indicator__elapsed")).not.toBeNull();
     expect(container.querySelector(".chat-working-indicator__status > .sr-only")).toBeNull();
+    expect(container.querySelector("openclaw-working-phrase")).toBeNull();
   });
 
   it("formats terminal recap durations with full localized units", () => {
@@ -1812,24 +1825,28 @@ describe("grouped chat rendering", () => {
     render(renderTurnRecapRow({ runtimeMs: 30_000, outputTokens: 2_400 }), withTokens);
     expect(
       withTokens.querySelector(".chat-turn-recap")?.textContent?.replace(/\s+/g, " ").trim(),
-    ).toBe("Done in 30 seconds · 2.4k tokens");
+    ).toBe("Done in 30 seconds · 2,400 output tokens");
   });
 
-  it("shows live output usage beside elapsed time", () => {
+  it.each([
+    [0, "0 output tokens"],
+    [1, "1 output token"],
+    [5_500, "5,500 output tokens"],
+  ])("shows %i output tokens beside elapsed time", (outputTokens, label) => {
     const container = document.createElement("div");
 
     render(
       renderStreamGroup([{ kind: "reading-indicator", key: "reading", startedAt: 1_000 }], {
-        runOutputTokens: 5_500,
+        runOutputTokens: outputTokens,
       }),
       container,
     );
 
     expect(container.querySelector(".chat-working-indicator__elapsed")).not.toBeNull();
     expect(container.querySelector(".chat-working-indicator__tokens")?.textContent?.trim()).toBe(
-      "5.5k tokens",
+      label,
     );
-    // Streaming tokens replace the whimsical phrase: one liveness signal at a time.
+    // Known usage replaces the pre-usage working phrase.
     expect(container.querySelector("openclaw-working-phrase")).toBeNull();
   });
 
@@ -1845,11 +1862,13 @@ describe("grouped chat rendering", () => {
       container,
     );
 
-    expect(container.querySelector(".chat-working-indicator__status")?.textContent?.trim()).toBe(
+    expect(container.querySelector(".chat-working-indicator__status")?.textContent).toContain(
       "Waiting for approval…",
     );
     expect(container.querySelector(".chat-working-indicator__elapsed")).toBeNull();
-    expect(container.querySelector(".chat-working-indicator__tokens")).toBeNull();
+    expect(container.querySelector(".chat-working-indicator__tokens")?.textContent).toBe(
+      "5,500 output tokens",
+    );
   });
 
   it("keeps streamed assistant content in the guttered group without an avatar", () => {
@@ -1943,31 +1962,50 @@ describe("grouped chat rendering", () => {
     expect(avatar?.tagName).toBe("DIV");
   });
 
-  it("keeps the sender name visible without duplicating a gutter avatar", () => {
-    const container = document.createElement("div");
-    const message = { role: "user", content: "hello", timestamp: 1000 };
-    const group = createMessageGroup(message, "user", {
-      key: "attributed-user-group",
+  it.each([
+    {
+      behavior: "keeps a peer's recorded sender name visible",
       senderLabel: "alice",
       sender: { id: "profile-1", name: "Alice Example" },
-      messages: [createMessageEntry("attributed-user-message", message)],
-    });
+      viewer: { userName: "Local User" },
+      expectedName: "alice",
+    },
+    {
+      behavior: "uses the current display name for the signed-in user's proven profile",
+      senderLabel: "fullerstackd",
+      sender: {
+        id: "profile-1",
+        username: "fullerstackd",
+        identity: { type: "profile" as const, id: "profile-1" },
+      },
+      viewer: { userId: "profile-1", userName: "Fuller Stack" },
+      expectedName: "Fuller Stack",
+    },
+  ])(
+    "$behavior without duplicating a gutter avatar",
+    ({ senderLabel, sender, viewer, expectedName }) => {
+      const container = document.createElement("div");
+      const message = { role: "user", content: "hello", timestamp: 1000 };
+      const group = createMessageGroup(message, "user", {
+        key: "attributed-user-group",
+        senderLabel,
+        sender,
+        messages: [createMessageEntry("attributed-user-message", message)],
+      });
 
-    render(
-      renderTestMessageGroup(group, { userName: "Local User", showAvatarGutter: true }),
-      container,
-    );
+      render(renderTestMessageGroup(group, { ...viewer, showAvatarGutter: true }), container);
 
-    expect(
-      container.querySelector<HTMLElement>(".chat-group.user .chat-sender-name")?.textContent,
-    ).toBe("alice");
-    expect(
-      container.querySelector(".chat-group-footer--persistent-identity .chat-sender-name")
-        ?.textContent,
-    ).toBe("alice");
-    expect(container.querySelector(".chat-avatar.user")).not.toBeNull();
-    expect(container.querySelector(".chat-author-avatar")).toBeNull();
-  });
+      expect(
+        container.querySelector<HTMLElement>(".chat-group.user .chat-sender-name")?.textContent,
+      ).toBe(expectedName);
+      expect(
+        container.querySelector(".chat-group-footer--persistent-identity .chat-sender-name")
+          ?.textContent,
+      ).toBe(expectedName);
+      expect(container.querySelector(".chat-avatar.user")).not.toBeNull();
+      expect(container.querySelector(".chat-author-avatar")).toBeNull();
+    },
+  );
 
   it("sender provenance links only profiles and does not identify colliding legacy senders as you", () => {
     const navigate = vi.fn();
@@ -2331,47 +2369,6 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-divider__title")?.textContent).toBe("System");
     expect(container.textContent).toContain("Custom execution rules were not applied.");
     expect(container.textContent).not.toContain("Guardian warning");
-  });
-
-  it("uses the current profile display name for the signed-in user's proven profile messages", () => {
-    const container = document.createElement("div");
-    render(
-      renderMessageGroup(
-        createMessageGroup({ role: "user", content: "hello", timestamp: 1000 }, "user", {
-          key: "current-user-group",
-          senderLabel: "fullerstackd",
-          sender: {
-            id: "profile-1",
-            username: "fullerstackd",
-            identity: { type: "profile", id: "profile-1" },
-          },
-          messages: [
-            {
-              key: "current-user-message",
-              message: { role: "user", content: "hello", timestamp: 1000 },
-            },
-          ],
-          timestamp: 1000,
-        }),
-        {
-          showReasoning: true,
-          showToolCalls: true,
-          assistantName: "OpenClaw",
-          userId: "profile-1",
-          userName: "Fuller Stack",
-          showAvatarGutter: true,
-        },
-      ),
-      container,
-    );
-
-    expect(
-      container.querySelector<HTMLElement>(".chat-group.user .chat-sender-name")?.textContent,
-    ).toBe("Fuller Stack");
-    expect(
-      container.querySelector(".chat-group-footer--persistent-identity .chat-sender-name")
-        ?.textContent,
-    ).toBe("Fuller Stack");
   });
 
   it("renders a compact author avatar when the gutter is hidden", async () => {
@@ -6180,6 +6177,36 @@ describe("grouped chat rendering", () => {
       expect(container.querySelector(".chat-expand-btn")).toBeNull();
     },
   );
+
+  it("admits one full-message load for repeated source projections in a group", () => {
+    const container = document.createElement("div");
+    const previews = ["First projection", "Updated projection"];
+    let loading = false;
+    const onToggleAssistantMessageExpanded = vi.fn(() => {
+      loading = true;
+    });
+    renderAssistantMessages(
+      container,
+      previews.map((text) =>
+        createAssistantMessage(text, {
+          __openclaw: { id: "shared-source", truncated: true },
+        }),
+      ),
+      {
+        sessionKey: "global",
+        loadFullAssistantMessage: async () => null,
+        getAssistantMessageExpansion: () =>
+          loading ? { status: "loading", revision: 1 } : undefined,
+        onToggleAssistantMessageExpanded,
+      },
+    );
+
+    expect(onToggleAssistantMessageExpanded).toHaveBeenCalledTimes(1);
+    expect(onToggleAssistantMessageExpanded).toHaveBeenCalledWith("shared-source");
+    expect(
+      [...container.querySelectorAll(".chat-text")].map((element) => element.textContent),
+    ).toEqual(previews);
+  });
 
   it.each([
     { state: { status: "error" as const, revision: 2 }, retries: true, label: "bounded error" },

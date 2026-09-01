@@ -1,14 +1,17 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const sessionKey = "agent:main:main";
-const proofDir =
-  process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-    ? path.join(process.cwd(), ".artifacts", "control-ui-e2e", "chat-only-model")
-    : null;
+let proofDir: string | null;
+beforeEach(() => {
+  proofDir =
+    process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+      ? createControlUiE2eArtifactDir("chat-only-model")
+      : null;
+});
 
 const models = [
   {
@@ -59,9 +62,6 @@ function sessionsList(model: string, modelProvider: string) {
 
 suite.define(() => {
   it("explains chat-only models and keeps model switching as the recovery path", async () => {
-    if (proofDir) {
-      await mkdir(proofDir, { recursive: true });
-    }
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",

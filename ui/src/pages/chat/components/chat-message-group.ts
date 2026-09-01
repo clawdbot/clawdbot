@@ -20,18 +20,14 @@ import { summarizeToolGroup } from "../../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
-import {
-  renderChatAvatar,
-  renderSenderAgentAvatar,
-  type SenderAgentAvatarOptions,
-} from "../chat-avatar.ts";
+import { renderChatAvatar, renderForwardedAvatar } from "../chat-avatar.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import {
   persistedMessageEntryId,
   readPendingSendFailure,
   type AssistantMessageExpansionState,
 } from "../chat-thread.ts";
-import { assistantGroupIsForwardedBoundary } from "../chat-turn-boundary.ts";
+import { hasForwardedSource } from "../chat-turn-boundary.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { renderForwardedAttribution } from "./chat-forwarded-attribution.ts";
@@ -83,7 +79,7 @@ type RenderMessageGroupOptions = Omit<
   | "resolveReplyPreview"
 > &
   ChatSendStatusActions &
-  SenderAgentAvatarOptions & {
+  Parameters<typeof renderForwardedAvatar>[1] & {
     latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection>;
     /** Configured main-session key; an agent's main source labels as the agent. */
     mainKey?: string;
@@ -93,8 +89,6 @@ type RenderMessageGroupOptions = Omit<
       messageId: string,
     ) => AssistantMessageExpansionState | undefined;
     onToggleAssistantMessageExpanded?: (messageId: string) => void;
-    assistantName?: string;
-    assistantAvatar?: string | null;
     userId?: string | null;
     userName?: string | null;
     /** Routing for peer sender names; absent leaves them plain text. */
@@ -122,16 +116,18 @@ function requestMissingFullMessage(
   details: MessageActionDetails | null,
   opts: RenderMessageGroupOptions,
 ) {
-  if (!details?.shouldFetchFullMessage || !details.messageId) {
+  const messageId = details?.fullMessage?.messageId;
+  if (!messageId) {
     return;
   }
-  const expansion = opts.getAssistantMessageExpansion?.(details.messageId);
+  // Projected rows can share a source ID; a preceding row may have started its load.
+  const expansion = opts.getAssistantMessageExpansion?.(messageId);
   // Retry transient failures on later renders, bounded so a dead loader cannot hot-loop.
   if (
     !expansion ||
     (expansion.status === "error" && expansion.revision < FULL_MESSAGE_RETRY_REVISION_LIMIT)
   ) {
-    opts.onToggleAssistantMessageExpanded?.(details.messageId);
+    opts.onToggleAssistantMessageExpanded?.(messageId);
   }
 }
 
@@ -143,19 +139,14 @@ function buildGroupedMessageRenderOptions(
   actionDetails?: MessageActionDetails | null,
 ): GroupedMessageRenderOptions {
   let assistantMessageDisclosure: AssistantMessageDisclosure | undefined;
-  if (
-    actionDetails?.shouldFetchFullMessage &&
-    actionDetails.messageId &&
-    opts.loadFullAssistantMessage &&
-    opts.onToggleAssistantMessageExpanded
-  ) {
-    const messageId = actionDetails.messageId;
-    const expansion = opts.getAssistantMessageExpansion?.(messageId);
+  const fullMessage = actionDetails?.fullMessage;
+  if (fullMessage && opts.loadFullAssistantMessage && opts.onToggleAssistantMessageExpanded) {
+    const { messageId, state: expansion } = fullMessage;
     const retriesExhausted =
       expansion?.status === "error" && expansion.revision >= FULL_MESSAGE_RETRY_REVISION_LIMIT;
     assistantMessageDisclosure = {
       expanded: expansion?.status === "loaded",
-      ...(expansion?.status === "loaded" ? { markdown: actionDetails.markdown } : {}),
+      ...(expansion?.status === "loaded" ? { markdown: actionDetails?.markdown } : {}),
       // Manual re-entry once the bounded automatic retries gave up.
       ...(retriesExhausted
         ? { onRetryFullMessage: () => opts.onToggleAssistantMessageExpanded?.(messageId) }
@@ -194,12 +185,10 @@ export function renderActivityGroup(
     return nothing;
   }
   const cards = groups.flatMap((group) =>
-    group.messages.flatMap((item) => extractToolCardsCached(item.message, item.key)),
+    group.messages.flatMap((item) => extractToolCardsCached(item.message)),
   );
   const latestGroup = groups[groups.length - 1] ?? firstGroup;
-  const latestCards = latestGroup.messages.flatMap((item) =>
-    extractToolCardsCached(item.message, item.key),
-  );
+  const latestCards = latestGroup.messages.flatMap((item) => extractToolCardsCached(item.message));
   // While a run is live, the newest still-running call names the group so
   // the collapsed header reads like a status line; afterwards it aggregates.
   const runningCard = opts.runActive
@@ -320,7 +309,7 @@ function isActivityMessageGroup(group: MessageGroup): boolean {
   if (normalizeRoleForGrouping(group.role) !== "tool") {
     return false;
   }
-  const cards = group.messages.flatMap((item) => extractToolCardsCached(item.message, item.key));
+  const cards = group.messages.flatMap((item) => extractToolCardsCached(item.message));
   return (
     group.messages.length > 1 ||
     cards.length > 1 ||
@@ -361,13 +350,8 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   );
   const assistantName = opts.assistantName ?? "Assistant";
   const isPeerGroup = normalizedRole === "user" && isPeerSenderGroup(group, opts.userId);
-  const isForwarded =
-    normalizedRole === "assistant" &&
-    (Boolean(group.senderSession) || assistantGroupIsForwardedBoundary(group));
+  const isForwarded = normalizedRole === "assistant" && hasForwardedSource(group);
   const sourceSessionKey = group.senderSession?.sessionKey;
-  // Only agent-prefixed keys are navigable: the titler, hovercard, and click
-  // handlers all reject other shapes, so a legacy key must stay plain text
-  // instead of becoming a focusable link that goes nowhere.
   const who = resolveMessageGroupSenderLabel(group, opts);
   const roleClass =
     normalizedRole === "user"
@@ -472,22 +456,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
       showAvatarGutter &&
       (isForwarded || normalizedRole !== "assistant" || opts.showAssistantAvatar !== false)
         ? isForwarded
-          ? // Forwarded rows carry the source agent's identity: another
-            // agent's avatar via the sender map, the current agent's own
-            // avatar for same-agent sessions, and the forward glyph only for
-            // unresolvable or legacy sources.
-            (renderSenderAgentAvatar(group.senderSession?.agentId, opts) ??
-            (group.senderSession?.agentId && group.senderSession.agentId === opts.agentId
-              ? renderChatAvatar(
-                  "assistant",
-                  assistantAvatarIdentity,
-                  undefined,
-                  opts.resourceBasePath,
-                  opts.assistantAttachmentAuthToken,
-                )
-              : html`<div class="chat-avatar chat-avatar--forwarded" aria-hidden="true">
-                  ${icons.forward}
-                </div>`))
+          ? renderForwardedAvatar(group.senderSession?.agentId, opts)
           : renderChatAvatar(
               group.role,
               assistantAvatarIdentity,
@@ -584,5 +553,3 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     </div>
   `;
 }
-
-// ── Per-message metadata (tokens, cost, model, context %) ──

@@ -364,7 +364,8 @@ export class VoiceCallWebhookServer {
       cfgForResolve: pluginConfig ?? ({} as OpenClawConfig),
       getConfiguredProvider: (providerId) =>
         getRealtimeTranscriptionProvider(providerId, pluginConfig),
-      listProviders: () => listRealtimeTranscriptionProviders(pluginConfig),
+      listProviders: () =>
+        listRealtimeTranscriptionProviders(pluginConfig, Object.keys(streaming.providers)),
       resolveProviderConfig: ({ provider, cfg, rawConfig }) =>
         provider.resolveConfig?.({ cfg, rawConfig }) ?? rawConfig,
       isProviderConfigured: ({ provider, cfg, providerConfig }) =>

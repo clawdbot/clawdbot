@@ -198,6 +198,33 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     clearAgentHarnesses();
   });
 
+  it.each(["global", "agent:beta:main"])(
+    "preserves the prepared store owner for ACP metadata in %s",
+    async (sessionKey) => {
+      const cfg = {
+        agents: { ownership: "explicit" as const, entries: { qa: {}, beta: {} } },
+      };
+      const { resolveSessionStorePathForAcp } = await vi.importActual<
+        typeof import("../../acp/runtime/session-meta-store.js")
+      >("../../acp/runtime/session-meta-store.js");
+      await acpMocks.readAcpSessionMeta.withImplementation(
+        (params) => {
+          resolveSessionStorePathForAcp({ ...params, cfg: params.cfg ?? cfg });
+          return null;
+        },
+        async () => {
+          const result = await dispatchReplyFromConfig({
+            ctx: { ...createHookCtx(), SessionKey: sessionKey, AgentId: "qa" },
+            cfg,
+            dispatcher: createDispatcher(),
+            replyResolver: async () => ({ text: "selected owner reply" }),
+          });
+          expect(result.queuedFinal).toBe(true);
+        },
+      );
+    },
+  );
+
   it("runs a handled plugin reply hook in the registry scope", async () => {
     hookMocks.runner.runReplyDispatch.mockImplementation(async () => {
       expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(
@@ -261,6 +288,34 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       counts: { tool: 0, block: 0, final: 0 },
       sendPolicyDenied: true,
     });
+  });
+
+  it("keeps admitted session settings owner-private from takeover hooks", async () => {
+    const admittedSessionSettings = {
+      permissionMode: "guarded" as const,
+      toolOverrides: { webSearch: false, mcpToolsDeny: { github: ["delete_issue"] } },
+    };
+    hookMocks.runner.runReplyDispatch.mockResolvedValue({
+      handled: true,
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
+    const replyResolver = vi.fn(async (_ctx, options) => {
+      expect(options?.admittedSessionSettings).toEqual(admittedSessionSettings);
+      return { text: "model reply" } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyOptions: { admittedSessionSettings },
+      replyResolver,
+    });
+
+    expect(hookMocks.runner.runReplyDispatch).not.toHaveBeenCalled();
+    expect(admittedSessionSettings.toolOverrides.mcpToolsDeny.github).toEqual(["delete_issue"]);
+    expect(replyResolver).toHaveBeenCalledOnce();
   });
 
   it("clears pending final delivery after final dispatch succeeds", async () => {

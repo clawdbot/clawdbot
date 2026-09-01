@@ -6,9 +6,10 @@ import {
 } from "../../../../src/chat/tool-content.js";
 import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
-import { normalizeMessage, normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
+import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { isContextCompactionActivity } from "./chat-progress.ts";
+import { prepareMessagesForGrouping } from "./chat-thread-duplicates.ts";
 import { userTurnRunId } from "./chat-thread-items.ts";
 import {
   isKeyedAssistantStreamFallbackMessage,
@@ -19,6 +20,7 @@ import {
 import {
   assistantGroupIsForwardedBoundary,
   chatItemStartsUserTurn,
+  hasForwardedSource,
   safeNormalizeMessage,
 } from "./chat-turn-boundary.ts";
 import { indexTurnContinuations, persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
@@ -49,10 +51,7 @@ function stampReplyAttribution(
       // A sender-less user group clears attribution: no chip is safer than
       // mislabeling the reply as addressed to the previous participant.
       latestUserSender = item.sender;
-    } else if (
-      item.role === "assistant" &&
-      (item.senderSession || assistantGroupIsForwardedBoundary(item))
-    ) {
+    } else if (item.role === "assistant" && hasForwardedSource(item)) {
       // Forwarded input starts a turn without a local human reply recipient.
       latestUserSender = undefined;
     } else if (item.role === "assistant" && latestUserSender) {
@@ -66,17 +65,17 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
   let currentGroup: MessageGroup | null = null;
   let currentUserTurnIdentity: string | null = null;
 
-  for (const item of items) {
-    if (item.kind !== "message") {
+  for (const prepared of prepareMessagesForGrouping(items)) {
+    if (prepared.kind !== "message") {
       if (currentGroup) {
         result.push(currentGroup);
         currentGroup = null;
       }
-      result.push(item);
+      result.push(prepared);
       continue;
     }
 
-    const normalized = normalizeMessage(item.message);
+    const { item, normalized } = prepared;
     const role = normalizeRoleForGrouping(normalized.role);
     const senderLabel =
       role === "user" || role === "assistant" ? (normalized.senderLabel ?? null) : null;

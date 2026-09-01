@@ -1,14 +1,13 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   captureUiProof,
   captureUiProofEnabled,
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
-  sessionRow,
   sessionsListResponse,
-  uiProofArtifactDir,
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
@@ -26,7 +25,7 @@ suite.define(() => {
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
       recordVideo: captureUiProofEnabled
-        ? { dir: uiProofArtifactDir, size: { height: 900, width: 1280 } }
+        ? { dir: suite.artifactDir, size: { height: 900, width: 1280 } }
         : undefined,
     });
     const page = await context.newPage();
@@ -62,7 +61,7 @@ suite.define(() => {
       expect(
         await spinner.evaluate((element) => getComputedStyle(element).animationPlayState),
       ).toBe(playState);
-      await captureUiProof(page, `${status}-session-ring.png`);
+      await captureUiProof(suite, page, `${status}-session-ring.png`);
 
       const listRequests = (await gateway.getRequests("sessions.list")).length;
       await gateway.setMethodResponse(
@@ -94,11 +93,11 @@ suite.define(() => {
       expect(
         await spinner.evaluate((element) => getComputedStyle(element).animationPlayState),
       ).toBe("running");
-      await captureUiProof(page, `${status}-session-running.png`);
+      await captureUiProof(suite, page, `${status}-session-running.png`);
     } finally {
       await context.close();
       if (proofVideo) {
-        await proofVideo.saveAs(path.join(uiProofArtifactDir, `${status}-session-ring.webm`));
+        await proofVideo.saveAs(path.join(suite.artifactDir, `${status}-session-ring.webm`));
       }
     }
   });

@@ -86,7 +86,7 @@ struct OpenClawChatComposer: View {
     @State private var suppressNextSlashPopoverUpdate = false
     @State private var slashPanelHeight: CGFloat = 0
     @State private var slashHighlightIndex = 0
-    @State private var dictationTask: Task<Void, Never>?
+    @State var dictationTask: Task<Void, Never>?
     #if !os(macOS)
     @State private var pickerItems: [PhotosPickerItem] = []
     @State private var showsPhotoPicker = false
@@ -280,6 +280,10 @@ struct OpenClawChatComposer: View {
         if let talkControl, talkControl.isEnabled {
             ChatTalkActivityStrip(control: talkControl)
         }
+
+        if self.composerChrome == .clean {
+            self.composerCapabilityNoticeRow
+        }
     }
 
     private var presentationOwner: OpenClawChatComposerPresentationOwner {
@@ -293,7 +297,7 @@ struct OpenClawChatComposer: View {
             session: self.viewModel.currentSessionSnapshot())
     }
 
-    private var photoPickerPresentation: Binding<Bool> {
+    var photoPickerPresentation: Binding<Bool> {
         Binding(
             get: { self.showsPhotoPicker },
             set: { isPresented in
@@ -309,7 +313,7 @@ struct OpenClawChatComposer: View {
         self.showsPhotoPicker = true
     }
 
-    private var fileImporterPresentation: Binding<Bool> {
+    var fileImporterPresentation: Binding<Bool> {
         Binding(
             get: { self.showsFileImporter },
             set: { isPresented in
@@ -320,7 +324,7 @@ struct OpenClawChatComposer: View {
             })
     }
 
-    private var cameraPickerPresentation: Binding<Bool> {
+    var cameraPickerPresentation: Binding<Bool> {
         Binding(
             get: { self.showsCameraPicker },
             set: { isPresented in
@@ -384,17 +388,17 @@ struct OpenClawChatComposer: View {
                     if self.showsSessionSwitcher {
                         self.sessionPicker
                         if self.viewModel.showsThinkingPicker {
-                            self.thinkingPicker
+                            self.thinkingPicker.labelsHidden()
                         }
                         #if os(macOS)
-                        self.verbosityPicker
+                        self.verbosityPicker.labelsHidden()
                         if self.viewModel.selectedModelSupportsFastMode {
-                            self.fastModeToggle
+                            self.fastModeToggle.labelsHidden()
                         }
                         #endif
                     }
                     if self.viewModel.showsModelPicker {
-                        self.modelPicker
+                        self.modelPicker.labelsHidden()
                         if self.viewModel.modelSelectionID != OpenClawChatViewModel.defaultModelSelectionID {
                             self.modelPinButton
                         }
@@ -443,7 +447,7 @@ struct OpenClawChatComposer: View {
     }
 
     @ViewBuilder
-    private var attachmentPicker: some View {
+    var attachmentPicker: some View {
         #if os(macOS)
         if self.composerChrome == .clean {
             Button {
@@ -494,19 +498,6 @@ struct OpenClawChatComposer: View {
             .controlSize(.small)
             .disabled(!self.isAttachmentInputEnabled)
         }
-        #endif
-    }
-
-    @ViewBuilder
-    private var cleanAttachmentMenu: some View {
-        #if os(macOS)
-        self.attachmentPicker
-        #else
-        OpenClawChatAttachmentMenu(
-            showsPhotoPicker: self.photoPickerPresentation,
-            showsFileImporter: self.fileImporterPresentation,
-            showsCameraPicker: self.cameraPickerPresentation,
-            isAttachmentInputEnabled: self.isAttachmentInputEnabled)
         #endif
     }
 
@@ -562,7 +553,10 @@ struct OpenClawChatComposer: View {
                         helpText: self.talkHelpText(talkControl),
                         style: .full)
                     if ChatCameraFlipButton.isAvailable(for: talkControl) {
-                        ChatCameraFlipButton(control: talkControl, size: 32)
+                        ChatCameraFlipButton(
+                            control: talkControl,
+                            controlHeight: 32,
+                            visualSize: 32)
                     }
                 }
                 if self.showsConnectionPill {
@@ -587,21 +581,44 @@ struct OpenClawChatComposer: View {
     private var cleanComposerCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             if self.showsAttachments, !self.viewModel.attachments.isEmpty {
+                #if os(iOS)
                 self.attachmentsStrip
+                    .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
+                    .padding(.top, CleanChatComposerMetrics.footerBlockInset)
+                #else
+                self.attachmentsStrip
+                #endif
             }
 
+            #if os(iOS)
             self.composerContextRows
+                .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
+            #else
+            self.composerContextRows
+            #endif
 
             if let voiceNoteControl, voiceNoteControl.recorder.isRecording {
+                #if os(iOS)
                 OpenClawVoiceNoteRecordingRow(
                     recorder: voiceNoteControl.recorder,
                     embedded: true)
+                    .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
+                    .padding(.vertical, CleanChatComposerMetrics.footerBlockInset)
+                #else
+                OpenClawVoiceNoteRecordingRow(
+                    recorder: voiceNoteControl.recorder,
+                    embedded: true)
+                #endif
             } else {
                 self.editor
             }
         }
+        #if os(iOS)
+        .frame(minHeight: CleanChatComposerMetrics.restingMinHeight, alignment: .bottom)
+        #else
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
+        #endif
         .modifier(CleanChatComposerSurface(cornerRadius: self.cleanCornerRadius))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("chat-composer-surface")
@@ -609,7 +626,18 @@ struct OpenClawChatComposer: View {
 
     @ViewBuilder
     private var cleanEditor: some View {
-        #if os(macOS)
+        #if os(iOS)
+        VStack(alignment: .leading, spacing: CleanChatComposerMetrics.rowGap) {
+            self.cleanDraftRow
+            HStack(alignment: .center, spacing: 0) {
+                self.cleanLeadingControls
+                Spacer(minLength: 0)
+                self.cleanTrailingControls
+            }
+            .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
+            .padding(.bottom, CleanChatComposerMetrics.footerBlockInset)
+        }
+        #elseif os(macOS)
         if self.isDesktopLayout {
             self.desktopEditor
         } else {
@@ -635,18 +663,18 @@ struct OpenClawChatComposer: View {
                             self.branchMenu
                         }
                         if self.viewModel.showsModelPicker {
-                            self.modelPicker
+                            self.modelPicker.labelsHidden()
                             if self.viewModel.modelSelectionID != OpenClawChatViewModel.defaultModelSelectionID {
                                 self.modelPinButton
                             }
                         }
                         if self.viewModel.showsThinkingPicker {
-                            self.thinkingPicker
+                            self.thinkingPicker.labelsHidden()
                         }
                         Menu {
-                            self.verbosityPicker
+                            self.verbosityPicker.labelsHidden()
                             if self.viewModel.selectedModelSupportsFastMode {
-                                self.fastModeToggle
+                                self.fastModeToggle.labelsHidden()
                             }
                         } label: {
                             Image(systemName: "slider.horizontal.3")
@@ -704,14 +732,17 @@ struct OpenClawChatComposer: View {
         }
 
         if let talkControl, ChatCameraFlipButton.isAvailable(for: talkControl) {
-            ChatCameraFlipButton(control: talkControl, size: self.cleanControlHeight)
+            ChatCameraFlipButton(
+                control: talkControl,
+                controlHeight: self.cleanControlHeight,
+                visualSize: self.cleanIconControlSize)
         }
     }
 
     /// iMessage-style trailing control: the talk (mic) affordance while the
     /// draft is empty, swapping to the send button once the user types.
     @ViewBuilder
-    private var cleanTrailingControl: some View {
+    var cleanTrailingControl: some View {
         if Self.showsCompactTalkControl(
             hasDraftToSend: self.viewModel.hasDraftToSend,
             hasBlockingRunActivity: self.viewModel.hasBlockingRunActivity,
@@ -752,7 +783,7 @@ struct OpenClawChatComposer: View {
         return trimmed.isEmpty ? self.viewModel.sessionKey : trimmed
     }
 
-    private var editorOverlay: some View {
+    var editorOverlay: some View {
         ZStack(alignment: editorOverlayAlignment) {
             if self.viewModel.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text(self.placeholderText)
@@ -1128,7 +1159,7 @@ extension OpenClawChatComposer {
                     ProgressView().controlSize(.mini)
                 } else {
                     Image(systemName: "stop.fill")
-                        .font(OpenClawChatTypography.display(size: 13, weight: .semibold, relativeTo: .caption))
+                        .font(OpenClawChatTypography.display(size: 17, weight: .semibold, relativeTo: .body))
                 }
             }
             .buttonStyle(.plain)
@@ -1149,7 +1180,7 @@ extension OpenClawChatComposer {
                     ProgressView().controlSize(.mini)
                 } else {
                     Image(systemName: "arrow.up")
-                        .font(OpenClawChatTypography.display(size: 13, weight: .semibold, relativeTo: .caption))
+                        .font(OpenClawChatTypography.display(size: 18, weight: .semibold, relativeTo: .body))
                 }
             }
             .buttonStyle(.plain)
@@ -1164,7 +1195,7 @@ extension OpenClawChatComposer {
                     .strokeBorder(Color.white.opacity(self.sendButtonBorderOpacity), lineWidth: 1)
                     .frame(width: self.sendButtonVisualSize, height: self.sendButtonVisualSize))
             .contentShape(Rectangle())
-            .accessibilityLabel("Send message")
+            .accessibilityLabel(self.sendButtonAccessibilityLabel)
             .accessibilityIdentifier("chat-send-message")
             .disabled(!self.canSendMessage)
         }
@@ -1201,7 +1232,7 @@ extension OpenClawChatComposer {
         self.style == .onboarding ? 5 : (self.composerChrome == .clean ? 4 : 6)
     }
 
-    private var textMinHeight: CGFloat {
+    var textMinHeight: CGFloat {
         #if os(macOS)
         if self.isDesktopLayout { return 44 }
         #endif
@@ -1237,20 +1268,20 @@ extension OpenClawChatComposer {
         self.composerChrome == .clean ? self.cleanIconControlSize / 2 : 12
     }
 
-    private var cleanControlHeight: CGFloat {
-        CleanChatComposerMetrics.controlHeight
+    var cleanControlHeight: CGFloat {
+        CleanChatComposerMetrics.controlTouchSize
     }
 
     private var cleanCornerRadius: CGFloat {
         #if os(macOS)
         self.isDesktopLayout ? 18 : 24
         #else
-        24
+        CleanChatComposerMetrics.surfaceCornerRadius
         #endif
     }
 
-    private var cleanIconControlSize: CGFloat {
-        32
+    var cleanIconControlSize: CGFloat {
+        CleanChatComposerMetrics.primaryVisualSize
     }
 
     private var cleanFieldTextInset: CGFloat {

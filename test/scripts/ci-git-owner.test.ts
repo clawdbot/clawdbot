@@ -1,9 +1,16 @@
 import { readFileSync } from "node:fs";
-import { expect, it } from "vitest";
+import { beforeAll, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import { runCiGitStep, type FetchResult } from "./ci-git-owner.test-support.js";
 
-const linuxIt = it.skipIf(process.platform !== "linux");
+// Each case owns its checkout and process trees. Overlap their real timeout and
+// drain waits, but keep subprocess pressure bounded on the four-core CI runner.
+beforeAll(() => {
+  vi.setConfig({ maxConcurrency: 2 });
+  return () => vi.resetConfig();
+});
+
+const linuxIt = it.skipIf(process.platform !== "linux").concurrent;
 const base = "c".repeat(40);
 const head = "a".repeat(40);
 const policyImport =
@@ -21,6 +28,31 @@ it("keeps exactly one byte-identical generated CI owner", () => {
     .map((line) => line.slice(10))
     .join("\n");
   expect(body).toBe(source);
+});
+
+it("binds read-only checkout authentication only to the workflow repository", () => {
+  const workflow = parse(readFileSync(".github/workflows/ci.yml", "utf8")) as {
+    permissions: Record<string, string>;
+    jobs: Record<
+      string,
+      { permissions?: Record<string, string>; steps?: { env?: Record<string, string> }[] }
+    >;
+  };
+  let ownedCheckouts = 0;
+  for (const job of Object.values(workflow.jobs)) {
+    for (const step of job.steps ?? []) {
+      if (!step.env?.CHECKOUT_REPO) {
+        continue;
+      }
+      ownedCheckouts++;
+      const sameRepository = step.env.CHECKOUT_REPO === "${{ github.repository }}";
+      expect(step.env.CHECKOUT_TOKEN).toBe(sameRepository ? "${{ github.token }}" : undefined);
+      if (sameRepository) {
+        expect((job.permissions ?? workflow.permissions).contents).toBe("read");
+      }
+    }
+  }
+  expect(ownedCheckouts).toBeGreaterThan(0);
 });
 
 it.each([false, true])("preserves linked Git metadata (reclaim locks=%s)", async (reclaimLocks) => {
@@ -384,7 +416,7 @@ it("preserves no per-operation deadline on all six CI remote lookups", () => {
   expect(calls.map((call) => call[1])).toEqual(Array(6).fill("0"));
 });
 
-const posixIt = it.skipIf(process.platform === "win32");
+const posixIt = it.skipIf(process.platform === "win32").concurrent;
 const auditFiles = [".pre-commit-config.yaml", ".github/zizmor.yml"];
 const branch = "refs/remotes/origin/main";
 const auditObjects = Object.fromEntries(
@@ -416,7 +448,11 @@ const sanity = (options: Omit<Parameters<typeof runCiGitStep>[0], "workflow">) =
 posixIt(
   "workflow sanity drains ordinary exact failure before branch fallback and config consumption",
   async () => {
-    const report = await sanity({ fetchResults: [23, 0], realClock: true });
+    const report = await sanity({
+      fetchResults: [23, 0],
+      realClock: true,
+      realDrain: false,
+    });
     expect(report.code, report.output).toBe(0);
     expect(report.readyAttempts).toEqual([1, 2]);
     expect(report.fetches.map(({ args }) => args.at(-1))).toEqual([
@@ -1040,6 +1076,7 @@ posixIt.each(["main-ancestor", "release-tag", "release-branch-head", "floating-m
     const publicationBase = releaseBranch ? release : "main";
     const report = await maturityRun({
       realClock: true,
+      realDrain: false,
       env: {
         ...maturityEnvironment,
         EXPECTED_SHA: floating ? "" : head,

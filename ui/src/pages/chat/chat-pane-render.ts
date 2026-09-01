@@ -32,7 +32,8 @@ import {
 import { showToast } from "../../lib/toast.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
-import { clearChatHistory, getChatHistoryVersion } from "./chat-history.ts";
+import { clearChatHistory } from "./chat-history-actions.ts";
+import { getChatHistoryVersion } from "./chat-history-state.ts";
 import { resolveChatMessageAccess } from "./chat-message-access.ts";
 import { requiresChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneLayoutRender } from "./chat-pane-layout-render.ts";
@@ -69,7 +70,7 @@ import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import { maybeResetToolStream } from "./stream-reconciliation.ts";
-import { resolveActiveRunOutputTokens, resolveChatProjectionRunId } from "./tool-stream.ts";
+import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
 import { configureToolTitleFetcher } from "./tool-titles.ts";
 import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 
@@ -250,11 +251,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       presenceEntries: readPresenceEntries(this.presencePayload),
       presenceInstanceId: gatewaySnapshot.client?.instanceId,
     });
-    const runOutputTokens = resolveActiveRunOutputTokens({
-      localRunId: state.chatRunId,
-      activeRunIds: selectedSession?.activeRunIds,
-      usageByRun: state.chatRunUsageById,
-    });
     const projectionRunId = resolveChatProjectionRunId({
       localRunId: state.chatRunId,
       activeRunIds: selectedSession?.activeRunIds,
@@ -298,7 +294,6 @@ export class ChatPane extends ChatPaneLayoutRender {
           effortAccess: mutationAccess.effort,
           permissionAccess: mutationAccess.permission,
           canSelectFull: hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null),
-          toastAnchor: this,
           onModelSetup: () => this.context.navigate("model-setup"),
         });
     const props: ChatProps = {
@@ -359,7 +354,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       stream: catalogKey ? null : state.chatStream,
       streamStartedAt: catalogKey ? null : state.chatStreamStartedAt,
       runId: catalogKey ? null : projectionRunId,
-      runOutputTokens: catalogKey ? null : runOutputTokens,
+      runUsageById: catalogKey ? undefined : state.chatRunUsageById,
       assistantAvatarUrl: resolveChatAvatarUrl(state),
       sendShortcut: state.settings.chatSendShortcut,
       followUpMode: state.chatFollowUpMode,
@@ -633,7 +628,6 @@ export class ChatPane extends ChatPaneLayoutRender {
         suggestionViewer || catalogKey
           ? undefined
           : (draft, submissionAction) => submitChatGoalDraft(state, draft, submissionAction),
-      onCompanionQuestion: (question) => void this.submitSessionCompanionQuestion(question),
       onCompanionPrefill: this.prefillSessionCompanionQuestion,
       replyTarget: state.chatReplyTarget ?? null,
       onClearReply: () => {

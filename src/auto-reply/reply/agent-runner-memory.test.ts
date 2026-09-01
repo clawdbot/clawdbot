@@ -1718,41 +1718,80 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
-  it("uses runtime policy session key when checking memory-flush sandbox writability", async () => {
-    const sessionEntry = createFlushSessionEntry();
+  it.each([
+    { agentId: "main", sessionKey: "global", runtimePolicySessionKey: "global" },
+    {
+      agentId: "other",
+      sessionKey: "agent:other:main",
+      runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
+    },
+  ])(
+    "uses the policy owner's memory-flush writability for $sessionKey",
+    async ({ agentId, sessionKey, runtimePolicySessionKey }) => {
+      const sessionEntry = createFlushSessionEntry();
 
-    const result = await runMemoryFlushIfNeeded({
-      cfg: {
-        agents: {
-          defaults: {
-            sandbox: {
-              mode: "non-main",
-              scope: "agent",
-              workspaceAccess: "ro",
-            },
-            compaction: {
-              memoryFlush: {},
+      const result = await runMemoryFlushIfNeeded({
+        cfg: {
+          agents: {
+            ownership: "explicit",
+            entries: { main: {}, other: { sandbox: { workspaceAccess: "rw" } } },
+            defaults: {
+              sandbox: {
+                mode: "all",
+                scope: "agent",
+                workspaceAccess: "ro",
+              },
+              compaction: {
+                memoryFlush: {},
+              },
             },
           },
         },
+        followupRun: createTestFollowupRun({
+          agentId,
+          sessionKey,
+          runtimePolicySessionKey,
+        }),
+        sessionCtx: createTestTemplateContext({ Provider: "telegram" }),
+        defaultModel: "anthropic/claude-opus-4-6",
+        modelContextTokens: 100_000,
+        resolvedVerboseLevel: "off",
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        sessionKey,
+        runtimePolicySessionKey,
+        isHeartbeat: false,
+        replyOperation: createReplyOperation(),
+      });
+
+      expect(result).toEqual({ sessionEntry, outcome: "skipped" });
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("skips memory flush when a persisted sandbox requirement caps workspace access", async () => {
+    const sessionKey = "agent:main:guest";
+    const storePath = path.join(rootDir, "agents", "main", "sessions", "sessions.json");
+    const sessionEntry = createFlushSessionEntry({ sandbox: "required" });
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
+
+    const result = await runDefaultMemoryFlush(sessionEntry, {
+      cfg: {
+        session: { store: storePath },
+        agents: {
+          defaults: {
+            sandbox: { mode: "off", workspaceAccess: "rw" },
+            compaction: { memoryFlush: {} },
+          },
+        },
       },
-      followupRun: createTestFollowupRun({
-        sessionKey: "agent:main:main",
-        runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
-      }),
-      sessionCtx: createTestTemplateContext({ Provider: "telegram" }),
-      defaultModel: "anthropic/claude-opus-4-6",
-      modelContextTokens: 100_000,
-      resolvedVerboseLevel: "off",
-      sessionEntry,
-      sessionStore: { "agent:main:main": sessionEntry },
-      sessionKey: "agent:main:main",
-      runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
-      isHeartbeat: false,
-      replyOperation: createReplyOperation(),
+      followupRun: createTestFollowupRun({ sessionKey, workspaceDir: rootDir }),
+      sessionKey,
+      storePath,
     });
 
     expect(result).toEqual({ sessionEntry, outcome: "skipped" });
+    expect(ensureMemoryFlushTargetFileMock).not.toHaveBeenCalled();
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 

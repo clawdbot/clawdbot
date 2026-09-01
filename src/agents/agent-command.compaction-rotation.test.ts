@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
   agentCommand,
   agentCommandFromGatewayIngress,
@@ -385,7 +386,10 @@ describe("agentCommand compaction transcript rotation", () => {
     const sessionKey = `agent:main:explicit:${sessionId}`;
     const text = "cli reply generated before compaction";
     const pluginGeneration = {
-      pluginMetadataSnapshot: { workspaceDir: state.workspaceDir },
+      pluginMetadataSnapshot: {
+        ...createPluginMetadataSnapshotFixture(),
+        workspaceDir: state.workspaceDir,
+      },
     } as never;
     let storedEntryBeforeCompaction: SessionEntry | undefined;
     state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text, runner: "cli" }));

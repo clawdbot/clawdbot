@@ -411,6 +411,8 @@ describe("detectChangedScope", () => {
     "scripts/lib/mac-app-bundle.sh",
     "test/scripts/restart-mac.test.ts",
     "scripts/materialize-mac-node-worker.py",
+    "scripts/swift-build-cache-metadata.py",
+    "test/scripts/swift-build-cache-metadata.test.ts",
     "scripts/lib/mac-native-inventory.py",
     "scripts/lib/mac-bundle-mutation.py",
     "scripts/verify-mac-node-worker.mjs",
@@ -941,6 +943,7 @@ describe("detectChangedScope", () => {
   it.each([
     ["empty diff without a manifest", "", "missing", false],
     ["declared native test", "src/process/exec.windows.integration.test.ts", "valid", false],
+    ["Mac fixture helper", "test/scripts/mac-script-fixture.test-support.ts", "valid", false],
     ["unrelated process test", "src/process/exec.test.ts", "valid", false],
     ["missing manifest", "src/process/exec.test.ts", "missing", true],
     ["invalid manifest", "src/process/exec.test.ts", "invalid", true],
@@ -1004,6 +1007,8 @@ describe("detectChangedScope", () => {
         const selected =
           (failSafe && !key.startsWith("run_node_fast")) ||
           (key === "run_node" && Boolean(changedPath)) ||
+          (key === "run_macos_node" &&
+            changedPath === "test/scripts/mac-script-fixture.test-support.ts") ||
           (key === "run_windows" && changedPath === "src/process/exec.windows.integration.test.ts");
         expect(value, key).toBe(String(selected));
       }

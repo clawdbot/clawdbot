@@ -2560,16 +2560,18 @@ describe("agentCommand", () => {
       expect(callArgs?.agentId).toBe("ops");
       expect(callArgs?.sessionKey).toBe("agent:ops:incident-42");
 
-      await agentCommand({ message: "hi", agentId: "ops", sessionKey: "global" }, runtime);
+      for (const sessionKey of ["global", "unknown"]) {
+        await agentCommand({ message: "hi", agentId: "ops", sessionKey }, runtime);
 
-      callArgs = getLastEmbeddedCall();
-      expect(callArgs?.agentId).toBe("ops");
-      expect(callArgs?.sessionKey).toBe("agent:ops:global");
-      expectSqliteSessionFileMarker({
-        agentId: "ops",
-        sessionFile: callArgs?.sessionFile,
-        storePath: store,
-      });
+        callArgs = getLastEmbeddedCall();
+        expect(callArgs?.agentId).toBe("ops");
+        expect(callArgs?.sessionKey).toBe(sessionKey);
+        expectSqliteSessionFileMarker({
+          agentId: "ops",
+          sessionFile: callArgs?.sessionFile,
+          storePath: store,
+        });
+      }
     });
   });
 

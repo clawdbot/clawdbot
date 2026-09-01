@@ -1,30 +1,28 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
+import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
+import { isHiddenAssistantStreamText } from "../../lib/chat/message-visibility.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import {
   activeHistory,
   createState,
   type TestState,
 } from "./chat-history.inflight.test-support.ts";
-import {
-  isHiddenAssistantStreamText,
-  loadChatHistory,
-  type ChatHistoryResult,
-} from "./chat-history.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import {
-  admitInitialUserMessageHandoff,
+  admitChatSubmission,
   getChatSessionProjection,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
-  setChatSessionProjection,
+  publishChatSessionProjection,
 } from "./history-merge.ts";
-import { prepareInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { visibleCurrentAssistantStreamTail } from "./stream-reconciliation.ts";
+import { buildInitialChatSubmission } from "./user-message-content.ts";
 
 async function loadHistoryWithBrowserTimers(state: TestState): Promise<void> {
   const globalWithWindow = globalThis as typeof globalThis & {
@@ -97,15 +95,16 @@ describe("chat history in-flight assistant recovery", () => {
         request: vi.fn().mockResolvedValue(history),
       } as unknown as GatewayBrowserClient;
       if (method === "chat.startup") {
-        state.initialUserMessage = createInitialUserMessageHandoff();
-        prepareInitialUserMessageHandoff(
-          state.initialUserMessage,
-          state.sessionKey,
-          { text: "Inspect the unavailable project", createdAt: 1 },
-          state.client,
-          { runId: "run-first" },
+        state.chatSubmissions = createChatSubmissions();
+        state.chatSubmissions.retain(
+          buildInitialChatSubmission(
+            state.sessionKey,
+            { text: "Inspect the unavailable project", createdAt: 1 },
+            state.client,
+            "run-first",
+          ),
         );
-        admitInitialUserMessageHandoff(state, state.sessionKey);
+        admitChatSubmission(state);
       }
 
       await loadChatHistory(state, { startup: method === "chat.startup" });
@@ -185,7 +184,7 @@ describe("chat history in-flight assistant recovery", () => {
     },
   );
 
-  it("restores active tool state and authoritative preamble time from the in-flight run snapshot", async () => {
+  it("restores tools, preamble time, and output usage from the in-flight run snapshot", async () => {
     const history = activeHistory("run-live");
     (history.inFlightRun as { events?: unknown[] }).events = [
       {
@@ -213,11 +212,20 @@ describe("chat history in-flight assistant recovery", () => {
           args: { path: "README.md" },
         },
       },
+      {
+        runId: "run-live",
+        seq: 3,
+        stream: "usage",
+        ts: 1_100,
+        sessionKey: "main",
+        data: { outputTokens: 695, context: { totalTokens: 1_500, contextWindow: 8_000 } },
+      },
     ];
     const state = createState(history);
 
     await loadHistoryWithBrowserTimers(state);
 
+    expect(state.chatRunUsageById?.get("run-live")?.outputTokens).toBe(695);
     expect(state.chatToolMessages[0]).toMatchObject({
       runId: "run-live",
       toolCallId: "call-restored",
@@ -814,7 +822,7 @@ describe("chat history in-flight assistant recovery", () => {
     const loadPromise = loadChatHistory(state);
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     const projection = getChatSessionProjection(state);
-    setChatSessionProjection(state, { ...projection, runs: { ...projection.runs } });
+    publishChatSessionProjection(state, { ...projection, runs: { ...projection.runs } });
     resolveHistory(history);
     await loadPromise;
 

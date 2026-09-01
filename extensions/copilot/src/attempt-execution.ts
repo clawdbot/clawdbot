@@ -285,7 +285,7 @@ export async function runCopilotExecution(context: {
               runId: input.runId,
               agentId: sessionAgentId,
               sessionId: input.sessionId,
-              sessionKey: sandboxSessionKey,
+              sessionKey: hookContext.sessionKey,
               channelId: hookContext.channelId,
               startArgs: args,
               ...(result !== undefined ? { result } : {}),

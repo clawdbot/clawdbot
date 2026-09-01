@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createReadStream } from "node:fs";
-import fs from "node:fs/promises";
+import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { root as fsRoot } from "../../infra/fs-safe.js";
@@ -254,18 +254,18 @@ export async function runWorkspaceInventoryCommandToFile(params: {
     throw new Error("Worker workspace command requires an executable");
   }
   const output = await fs.open(params.outputPath, "wx", 0o600);
-  const input = params.inputPath ? await fs.open(params.inputPath, "r") : undefined;
+  let input: FileHandle | undefined;
   let stderr = "";
   let timer: ReturnType<typeof setTimeout> | undefined;
   let terminationTimer: ReturnType<typeof setTimeout> | undefined;
   let abort: (() => void) | undefined;
+  let abortedCommand = false;
   let outputError: Error | undefined;
   let outputBytes = 0;
   let outputWrite = Promise.resolve();
   try {
-    if (params.signal.aborted) {
-      throw new Error("Worker workspace file enumeration was aborted");
-    }
+    input = params.inputPath ? await fs.open(params.inputPath, "r") : undefined;
+    params.signal.throwIfAborted();
     const boundedOutput = params.maxOutputBytes !== undefined;
     const child = spawn(command, args, {
       env: workerSshCommandOptions({ timeoutMs: params.timeoutMs }).baseEnv,
@@ -314,7 +314,7 @@ export async function runWorkspaceInventoryCommandToFile(params: {
             child.kill("SIGKILL");
           }
           childStderr.destroy();
-          finish({ code: null });
+          finish({ code: child.exitCode });
         }, COMMAND_KILL_GRACE_MS + 1_000);
         terminationTimer.unref?.();
       };
@@ -352,12 +352,17 @@ export async function runWorkspaceInventoryCommandToFile(params: {
       }
       child.once("error", (error) => finish({ code: null, error }));
       child.once("close", (code) => finish({ code }));
-      abort = terminate;
+      abort = () => {
+        // Record interruption before pipes drain; a late abort must not hide a failed exit.
+        abortedCommand =
+          !terminationStarted && child.exitCode === null && child.signalCode === null;
+        terminate();
+      };
       params.signal.addEventListener("abort", abort, { once: true });
       timer = setTimeout(terminate, params.timeoutMs);
       timer.unref?.();
       if (params.signal.aborted) {
-        terminate();
+        abort();
       }
     });
     await outputWrite;
@@ -367,8 +372,8 @@ export async function runWorkspaceInventoryCommandToFile(params: {
     if (result.error) {
       throw result.error;
     }
-    if (params.signal.aborted) {
-      throw new Error("Worker workspace file enumeration was aborted");
+    if (abortedCommand) {
+      params.signal.throwIfAborted();
     }
     if (result.code !== 0) {
       throw new Error(
@@ -377,6 +382,7 @@ export async function runWorkspaceInventoryCommandToFile(params: {
           : "Worker workspace file enumeration failed",
       );
     }
+    params.signal.throwIfAborted();
   } finally {
     clearTimeout(timer);
     clearTimeout(terminationTimer);
@@ -481,6 +487,20 @@ async function writeEligibleGitFiles(params: {
   }
 }
 
+export async function settleWorkspaceInventoryCommands(
+  commands: Promise<void>[],
+  signal: AbortSignal,
+): Promise<void> {
+  // Join every scratch-file writer before cleanup, preserving independent failures
+  // ahead of cancellation so Move cannot mistake failed preflight for a clean Stop.
+  for (const result of await Promise.allSettled(commands)) {
+    if (result.status === "rejected" && (!signal.aborted || result.reason !== signal.reason)) {
+      throw result.reason;
+    }
+  }
+  signal.throwIfAborted();
+}
+
 export async function createWorkspaceGitTransferList(params: {
   gitRoot: string;
   temporaryDirectory: string;
@@ -516,50 +536,46 @@ export async function createWorkspaceGitTransferList(params: {
     throw error;
   });
   const hasWorktreeInclude = worktreeInclude?.isFile() === true;
-  // Both producers write into the same scratch directory. Join them before
-  // reporting either error so caller cleanup cannot race the remaining writer.
-  const results = await Promise.allSettled([
-    runWorkspaceInventoryCommandToFile({
-      argv: [
-        "git",
-        "-C",
-        params.gitRoot,
-        "ls-files",
-        "--full-name",
-        "--others",
-        "--ignored",
-        "--exclude-standard",
-        "-z",
-        ...(hasWorktreeInclude ? [] : ["--", STAGED_INPUT_GIT_PATHSPEC]),
-      ],
-      outputPath: ignoredPath,
-      signal: params.signal,
-      timeoutMs: params.timeoutMs,
-    }),
-    hasWorktreeInclude
-      ? runWorkspaceInventoryCommandToFile({
-          argv: [
-            "git",
-            "-C",
-            params.gitRoot,
-            "ls-files",
-            "--full-name",
-            "--others",
-            "--ignored",
-            `--exclude-from=${worktreeIncludePath}`,
-            "-z",
-          ],
-          outputPath: selectedPath,
-          signal: params.signal,
-          timeoutMs: params.timeoutMs,
-        })
-      : fs.writeFile(selectedPath, "", { mode: 0o600 }),
-  ]);
-  for (const result of results) {
-    if (result.status === "rejected") {
-      throw result.reason;
-    }
-  }
+  await settleWorkspaceInventoryCommands(
+    [
+      runWorkspaceInventoryCommandToFile({
+        argv: [
+          "git",
+          "-C",
+          params.gitRoot,
+          "ls-files",
+          "--full-name",
+          "--others",
+          "--ignored",
+          "--exclude-standard",
+          "-z",
+          ...(hasWorktreeInclude ? [] : ["--", STAGED_INPUT_GIT_PATHSPEC]),
+        ],
+        outputPath: ignoredPath,
+        signal: params.signal,
+        timeoutMs: params.timeoutMs,
+      }),
+      hasWorktreeInclude
+        ? runWorkspaceInventoryCommandToFile({
+            argv: [
+              "git",
+              "-C",
+              params.gitRoot,
+              "ls-files",
+              "--full-name",
+              "--others",
+              "--ignored",
+              `--exclude-from=${worktreeIncludePath}`,
+              "-z",
+            ],
+            outputPath: selectedPath,
+            signal: params.signal,
+            timeoutMs: params.timeoutMs,
+          })
+        : fs.writeFile(selectedPath, "", { mode: 0o600 }),
+    ],
+    params.signal,
+  );
   await writeEligibleGitFiles({
     gitRoot: params.gitRoot,
     eligiblePath,

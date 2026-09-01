@@ -35,8 +35,9 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   hasActiveCronJobs,
-  hasActiveCronJobsExceptMarker,
+  hasActiveCronJobsExceptMarkers,
   isCronActiveJobMarkerCurrent,
+  listCronHeartbeatWaitOwners,
   type CronActiveJobMarker,
 } from "../cron/active-jobs.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
@@ -97,6 +98,7 @@ import {
 } from "./outbound/targets.js";
 
 const log = heartbeatLog;
+const CRON_COMMAND_LANE: string = CommandLane.Cron;
 
 export type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
@@ -232,27 +234,38 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     return { kind: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT } as const;
   }
 
-  // Ignore only the exact Cron lane task that owns this wake. Other queued or active
-  // Cron work and all CronNested work remain busy signals.
-  const owningCronJobMarker = opts.owningCronJobMarker;
-  const ownsActiveCronRun = owningCronJobMarker
-    ? isCronActiveJobMarkerCurrent(owningCronJobMarker)
-    : false;
+  // Cron executions awaiting heartbeat settlement are idle owners, not competing work.
+  // Keep unrelated Cron work and all CronNested work as busy signals.
+  const heartbeatWaitOwners = listCronHeartbeatWaitOwners();
+  const directOwner =
+    opts.owningCronJobMarker && isCronActiveJobMarkerCurrent(opts.owningCronJobMarker)
+      ? opts.owningCronJobMarker
+      : undefined;
+  const owningCronJobMarkers = [
+    ...heartbeatWaitOwners.activeJobMarkers,
+    ...(directOwner ? [directOwner] : []),
+  ];
   const cronBusy =
-    ownsActiveCronRun && owningCronJobMarker
-      ? hasActiveCronJobsExceptMarker(owningCronJobMarker)
+    owningCronJobMarkers.length > 0
+      ? hasActiveCronJobsExceptMarkers(owningCronJobMarkers)
       : hasActiveCronJobs();
-  const owningCronLaneTaskMarker = opts.owningCronLaneTaskMarker;
-  const ownsCronLaneTask =
-    ownsActiveCronRun &&
-    owningCronLaneTaskMarker?.lane === CommandLane.Cron &&
-    isCommandLaneTaskMarkerCurrent(owningCronLaneTaskMarker);
+  const owningCronLaneTaskIds = new Set(
+    [
+      ...heartbeatWaitOwners.owningCronLaneTaskMarkers,
+      ...(directOwner && opts.owningCronLaneTaskMarker ? [opts.owningCronLaneTaskMarker] : []),
+    ]
+      .filter(
+        (marker): marker is CommandLaneTaskMarker =>
+          marker?.lane === CRON_COMMAND_LANE && isCommandLaneTaskMarkerCurrent(marker),
+      )
+      .map((marker) => marker.taskId),
+  );
   const cronLaneDepth = getSize(CommandLane.Cron);
   // HookDispatch is included so moving hook agent runs off `cron-nested` onto
   // their own lane does not silently stop them from suppressing heartbeats.
   // They are still active agent work; only the lane they occupy changed.
   const cronLaneBusy =
-    cronLaneDepth > (ownsCronLaneTask ? 1 : 0) ||
+    cronLaneDepth > owningCronLaneTaskIds.size ||
     getSize(CommandLane.CronNested) > 0 ||
     getSize(CommandLane.HookDispatch) > 0;
   if (cronBusy || cronLaneBusy) {

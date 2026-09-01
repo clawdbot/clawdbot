@@ -228,6 +228,7 @@ export function buildEmbeddedRunPayloads(params: {
             formatUserFacingAssistantErrorText(assistantForPayload, {
               cfg: params.config,
               sessionKey: params.sessionKey,
+              agentId: params.agentId,
               provider: params.provider,
               providerOwner: params.providerOwner,
               model: params.model,
@@ -236,6 +237,7 @@ export function buildEmbeddedRunPayloads(params: {
           : formatAssistantErrorText(assistantForPayload, {
               cfg: params.config,
               sessionKey: params.sessionKey,
+              agentId: params.agentId,
               provider: params.provider,
               providerOwner: params.providerOwner,
               model: params.model,

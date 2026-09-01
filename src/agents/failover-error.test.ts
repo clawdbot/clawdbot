@@ -2,8 +2,22 @@
  * Regression coverage for provider/model failover classification.
  * Exercises raw error coercion, remediation hints, timeout/auth/billing/rate-limit cases.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
+
+// Classification here is message/status table behavior. Provider-attributed
+// structured signals (e.g. moonshot + 429) otherwise cross the plugin-consult
+// gate and cold-materialize the full bundled provider runtime, which times the
+// unit test out under CI load (src/agents/CLAUDE.md: no full-runtime cold
+// loads for table coverage). No bundled hook classifies these fixtures anyway.
+vi.mock("../plugins/provider-hook-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/provider-hook-runtime.js")>();
+  return {
+    ...actual,
+    resolveProviderHookPlugin: () => undefined,
+    resolveProviderPluginsForHooks: () => [],
+  };
+});
 import {
   buildFailoverRemediationHint,
   buildProviderReauthCommand,
@@ -1029,13 +1043,17 @@ describe("hasProviderRequestSizeCeiling", () => {
     expect(hasProviderRequestSizeCeiling(new Error(GROQ_REQUEST_CEILING_413))).toBe(true);
   });
 
-  it("finds the fact through a wrapping error", () => {
-    const wrapped = new Error("agent run failed", {
-      cause: new FailoverError("Context overflow: prompt too large for the model.", {
-        reason: "context_overflow",
-        rawError: GROQ_REQUEST_CEILING_413,
-      }),
+  it.each(["error", "cause", "aggregate"])("finds the fact through a %s wrapper", (kind) => {
+    const ceiling = new FailoverError("Context overflow: prompt too large for the model.", {
+      reason: "context_overflow",
+      rawError: GROQ_REQUEST_CEILING_413,
     });
+    const wrapped =
+      kind === "aggregate"
+        ? new AggregateError([new Error("unrelated"), { cause: ceiling }], "agent run failed")
+        : kind === "cause"
+          ? new Error("agent run failed", { cause: ceiling })
+          : { error: ceiling };
     expect(hasProviderRequestSizeCeiling(wrapped)).toBe(true);
   });
 

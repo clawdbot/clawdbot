@@ -42,7 +42,7 @@ type PreparedSessionWrite<T> = {
 export async function runPreparedSqliteSessionWrite<T>(
   scope: ResolvedSqliteReadScope,
   prepare: () => Promise<PreparedSessionWrite<T>>,
-): Promise<T> {
+): Promise<{ deletedEntries: number; result: T }> {
   const prepared = await runExclusiveSqliteSessionWrite(scope, async () => {
     const write = await prepare();
     return write.deletedEntries.length || write.beforeCommit
@@ -50,16 +50,21 @@ export async function runPreparedSqliteSessionWrite<T>(
       : { result: await write.commit() };
   });
   if (!prepared.write) {
-    return prepared.result;
+    return { deletedEntries: 0, result: prepared.result };
   }
   const write = prepared.write;
-  return await withSqliteSessionDeletions(scope, write.deletedEntries, async (assertCurrent) => {
-    await write.beforeCommit?.();
-    return await runExclusiveSqliteSessionWrite(scope, async () => {
-      assertCurrent();
-      return await write.commit();
-    });
-  });
+  const result = await withSqliteSessionDeletions(
+    scope,
+    write.deletedEntries,
+    async (assertCurrent) => {
+      await write.beforeCommit?.();
+      return await runExclusiveSqliteSessionWrite(scope, async () => {
+        assertCurrent();
+        return await write.commit();
+      });
+    },
+  );
+  return { deletedEntries: write.deletedEntries.length, result };
 }
 
 /** Prepare owner leases before entering a physical writer or changing any transcript state. */

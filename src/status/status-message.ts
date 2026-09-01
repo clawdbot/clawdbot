@@ -191,13 +191,14 @@ function resolveConfiguredTextVerbosity(params: {
 }
 
 function resolveExecutionLabel(
-  args: Pick<StatusArgs, "config" | "agent" | "sessionKey" | "sessionScope">,
+  args: Pick<StatusArgs, "config" | "agent" | "agentId" | "sessionKey" | "sessionScope">,
 ): string {
   const sessionKey = args.sessionKey?.trim();
   if (args.config && sessionKey) {
     const runtimeStatus = resolveSandboxRuntimeStatus({
       cfg: args.config,
       sessionKey,
+      agentId: args.agentId,
     });
     const sandboxMode = runtimeStatus.mode ?? "off";
     if (sandboxMode === "off") {
@@ -217,12 +218,6 @@ function resolveExecutionLabel(
     }
     if (sandboxMode === "all") {
       return true;
-    }
-    if (args.config) {
-      return resolveSandboxRuntimeStatus({
-        cfg: args.config,
-        sessionKey,
-      }).sandboxed;
     }
     const sessionScope = args.sessionScope ?? "per-sender";
     const mainKey = resolveMainSessionKey({

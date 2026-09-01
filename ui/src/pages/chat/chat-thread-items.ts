@@ -99,7 +99,7 @@ export function extractChatMessagePreview(toolMessage: unknown): ChatMessagePrev
   if (!safeNormalizeMessage(toolMessage)) {
     return null;
   }
-  const cards = extractToolCardsCached(toolMessage, "preview");
+  const cards = extractToolCardsCached(toolMessage);
   for (let index = cards.length - 1; index >= 0; index--) {
     const card = cards[index];
     if (card?.preview?.kind === "canvas") {
@@ -408,9 +408,12 @@ export function hasRenderableNormalizedMessage(
   }
   const role = normalizeRoleForGrouping(normalized.role);
   const label = role === "assistant" && normalized.senderLabel?.trim();
-  const media = role === "user" && readTranscriptMediaEntries(message).length;
   return Boolean(
-    role === "tool" || normalized.content.length || normalized.replyTarget || label || media,
+    role === "tool" ||
+    normalized.content.length ||
+    normalized.replyTarget ||
+    label ||
+    (role === "user" && readTranscriptMediaEntries(message).length),
   );
 }
 

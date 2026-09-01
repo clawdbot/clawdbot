@@ -4,6 +4,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -367,12 +368,7 @@ describe("handleModelsCommand", () => {
   });
 
   it("scopes the prepared catalog without passing plugin metadata", async () => {
-    const metadataSnapshot = {
-      plugins: [],
-      owners: {
-        cliBackends: new Map<string, string>(),
-      },
-    };
+    const metadataSnapshot = createPluginMetadataSnapshotFixture();
     pluginMetadataMocks.getCurrent.mockReturnValue(metadataSnapshot);
 
     await handleModelsCommand(buildParams("/models"), true);
@@ -501,18 +497,20 @@ describe("handleModelsCommand", () => {
   );
 
   it("shows plugin-normalized allowlist models in browse data", async () => {
-    pluginMetadataMocks.getCurrent.mockReturnValue({
-      plugins: [
-        {
-          modelIdNormalization: {
-            providers: {
-              custom: { aliases: { legacy: "modern" } },
+    pluginMetadataMocks.getCurrent.mockReturnValue(
+      createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "custom-model-normalizer",
+            modelIdNormalization: {
+              providers: {
+                custom: { aliases: { legacy: "modern" } },
+              },
             },
           },
-        },
-      ],
-      owners: { cliBackends: new Map() },
-    });
+        ],
+      }),
+    );
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
       { provider: "custom", id: "modern", name: "Modern" },
     ]);
@@ -647,12 +645,11 @@ describe("handleModelsCommand", () => {
         },
       ],
     });
-    pluginMetadataMocks.getCurrent.mockReturnValue({
-      plugins: [],
-      owners: {
-        cliBackends: new Map([["acme-cli", "acme"]]),
-      },
-    });
+    pluginMetadataMocks.getCurrent.mockReturnValue(
+      createPluginMetadataSnapshotFixture({
+        plugins: [{ id: "acme", cliBackends: ["acme-cli"] }],
+      }),
+    );
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
       { provider: "anthropic", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
       { provider: "acme-cli", id: "acme-model", name: "Acme Model" },

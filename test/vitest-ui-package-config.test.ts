@@ -1,14 +1,22 @@
 // Vitest UI package config tests validate UI package test project settings.
+import { globSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildVitestRunPlans } from "../scripts/test-projects.test-support.mts";
 import uiConfig from "../ui/vitest.config.ts";
 import uiNodeConfig from "../ui/vitest.node.config.ts";
+import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 import { normalizeConfigPath } from "./helpers/vitest-config-paths.js";
+import { loadVitestExperimentalConfig } from "./vitest/vitest.performance-config.ts";
 
 type ExpectedTestConfig = {
+  experimental?: ReturnType<typeof loadVitestExperimentalConfig>["experimental"];
+  include?: string[];
+  exclude?: string[];
   browser?: { enabled?: boolean };
   isolate?: boolean;
   name?: string;
+  maxWorkers?: number;
   pool?: string;
   projects?: unknown[];
   runner?: string;
@@ -43,16 +51,60 @@ function requireAlias(config: unknown, specifier: string): { find: string; repla
 }
 
 describe("ui package vitest config", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it("routes the standalone UI config through the canonical group executor", () => {
+    expect(buildVitestRunPlans(["ui/vitest.config.ts"])).toEqual([
+      {
+        config: "ui/vitest.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it.each([
+    [
+      ["ui/src/pages/chat/chat-view.test.ts", "ui/src/pages/chat/chat-pane-lifecycle.test.ts"],
+      ["ui/src/pages/chat/chat-pane-lifecycle.test.ts", "ui/src/pages/chat/chat-view.test.ts"],
+    ],
+    [["src/pages/chat/chat-view.test.ts"], []],
+    [[], []],
+  ])("intersects a repository include list with every project: %j", async (requested, expected) => {
+    const includeFile = path.join(tempDirs.make("ui-package-selection-"), "include.json");
+    writeFileSync(includeFile, JSON.stringify(requested));
+    vi.stubEnv("OPENCLAW_VITEST_INCLUDE_FILE", includeFile);
+    vi.resetModules();
+    const config = (await import("../ui/vitest.config.ts")).default;
+    const uiRoot = path.join(process.cwd(), "ui");
+    expect(config.root).toBe(uiRoot);
+    const selected = (requireTestConfig(config).projects ?? []).flatMap((project) => {
+      const test = requireTestConfig(project);
+      return globSync(test.include ?? [], { cwd: uiRoot, exclude: test.exclude }).map(
+        (file) => `ui/${file.replaceAll("\\", "/")}`,
+      );
+    });
+    expect(selected.toSorted()).toEqual(expected);
+  });
+
   it("keeps the standalone ui package on thread workers without broad isolation", () => {
     const testConfig = requireTestConfig(uiConfig);
 
     expect(testConfig.pool).toBe("threads");
     expect(testConfig.isolate).toBe(false);
     expect(testConfig.projects).toHaveLength(4);
+    expect(testConfig.maxWorkers).toBeGreaterThan(0);
 
     for (const project of testConfig.projects ?? []) {
       const projectTestConfig = requireTestConfig(project);
       expect(projectTestConfig.pool).toBe("threads");
+      // Project overrides would defeat CI's explicit --maxWorkers limit.
+      expect(projectTestConfig.maxWorkers).toBeUndefined();
       expect(projectTestConfig.isolate).toBe(projectTestConfig.name === "unit-mock-registry");
     }
   });
@@ -83,6 +135,18 @@ describe("ui package vitest config", () => {
       { name: "unit-node", runner: undefined },
       { name: "browser", runner: undefined },
     ]);
+  });
+
+  it("uses the repository transform-cache policy at the root and in every UI project", () => {
+    const root = requireTestConfig(uiConfig);
+    const expected = loadVitestExperimentalConfig(
+      process.env,
+      process.platform,
+      path.join(process.cwd(), "ui"),
+    ).experimental;
+    const configs = [root, ...(root.projects ?? []).map(requireTestConfig)];
+
+    expect(configs.map((config) => config.experimental)).toEqual(configs.map(() => expected));
   });
 
   it("keeps the standalone ui node config on thread workers without isolation", () => {

@@ -915,7 +915,7 @@ Reply -> TTS enabled?
       Active persona id from `personas`. Normalized to lowercase.
     </ParamField>
     <ParamField path="personas.<id>" type="object">
-      Stable spoken identity. Fields: `label`, `description`, `provider`, `fallbackPolicy`, `prompt`, `providers.<provider>`. See [Personas](#personas).
+      Stable spoken identity. Fields: `label`, `description`, `provider`, `fallbackPolicy`, `providers.<provider>`. See [Personas](#personas).
     </ParamField>
     <ParamField path="summaryModel" type="string">
       Cheap model for auto-summary; defaults to `agents.defaults.model.primary`. Accepts `provider/model` or a configured model alias.
@@ -934,8 +934,9 @@ Reply -> TTS enabled?
     </ParamField>
   </Accordion>
 
-Provider `apiKey` fields can be raw strings or SecretRefs. During cold Gateway
-startup, an unavailable TTS SecretRef marks the built-in TTS capability
+Provider `apiKey` fields, including `personas.<id>.providers.<provider>.apiKey`,
+can be raw strings or SecretRefs in global, per-agent, and Discord voice TTS config.
+During cold Gateway startup, an unavailable TTS SecretRef marks the built-in TTS capability
 configured-unavailable instead of stopping the Gateway. `tts.speak` then returns
 `UNAVAILABLE` with reason `SECRET_SURFACE_UNAVAILABLE`, and no provider request is
 sent. Status and doctor list the degraded TTS owner and its config paths. The

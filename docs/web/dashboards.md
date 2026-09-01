@@ -142,6 +142,18 @@ and receives the `prompt` grant, its actions can instead send a visible prompt
 into the thread. Disabling the Canvas plugin removes the A2UI kind and leaves
 stored widgets visibly unavailable until the plugin is enabled again.
 
+## Retired Workspaces
+
+The experimental Workspaces plugin, its Control UI tab, `openclaw workspaces`
+CLI, and `workspace_*` tools have been removed. Session dashboards use a
+different storage model: each board belongs to a session and lives in the
+owning agent's database. Legacy Workspaces documents and databases are not
+automatically converted.
+
+Preserve any legacy documents, data, and widget assets before running
+`openclaw doctor --fix`: its Workspaces repair deletes identified legacy state
+under `<stateDir>/workspaces`, without importing that content into a dashboard.
+
 ## Good to know
 
 - Resetting a thread that has a board asks for confirmation and keeps the

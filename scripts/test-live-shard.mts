@@ -30,6 +30,8 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
   ["src/agents/embedded-agent-runner.cache.live.test.ts", ["OPENCLAW_LIVE_CACHE_TEST"]],
   ["src/agents/live-cache-regression.live.test.ts", ["OPENCLAW_LIVE_CACHE_TEST"]],
   ["src/agents/provider-headers.live.test.ts", ["OPENCLAW_LIVE_CACHE_TEST"]],
+  // Frozen release candidates before the announce-family move retain this path.
+  ["src/agents/subagent-announce.live.test.ts", ["OPENCLAW_LIVE_SUBAGENT_E2E"]],
   [
     "src/agents/sessions/agent-session.openai-compaction.live.test.ts",
     ["OPENCLAW_LIVE_OPENAI_COMPACTION"],
@@ -224,6 +226,10 @@ function isExtensionInRange(file: string, start: string, end: string) {
   return first !== undefined && first >= start && first <= end;
 }
 
+function isSourceGatewayLiveTest(file: string) {
+  return file.startsWith("src/gateway/") || file.startsWith("src/system-agent/");
+}
+
 function isGatewayBackendLiveTest(file: string) {
   return (
     file === "src/gateway/gateway-acp-bind.live.test.ts" ||
@@ -291,13 +297,11 @@ export function selectLiveShardFiles(shard: string, files = collectAllLiveTestFi
     case "native-live-src-agents-zai-coding":
       return files.filter((file) => file === "src/agents/zai.live.test.ts");
     case "native-live-src-gateway":
-      return files.filter(
-        (file) => file.startsWith("src/gateway/") || file.startsWith("src/system-agent/"),
-      );
+      return files.filter(isSourceGatewayLiveTest);
     case "native-live-src-gateway-core":
       return files.filter(
         (file) =>
-          (file.startsWith("src/gateway/") || file.startsWith("src/system-agent/")) &&
+          isSourceGatewayLiveTest(file) &&
           !isGatewayBackendLiveTest(file) &&
           !isGatewayProfilesLiveTest(file),
       );
@@ -402,10 +406,10 @@ export function buildLiveShardPnpmArgs(files: string[], passthroughArgs: string[
  */
 export function resolveLiveShardPreparation(files: string[]): LiveShardPreparation | null {
   const gatewayProfiles = files.some(isGatewayProfilesLiveTest);
-  // Vision requests load provider and agent runtime plugins. Compile them before
-  // Vitest starts so cold source transforms do not consume the request deadline.
+  // Source gateways and vision requests load provider and agent runtime plugins.
+  // Compile them before Vitest so cold transforms do not consume live deadlines.
   if (
-    gatewayProfiles ||
+    files.some(isSourceGatewayLiveTest) ||
     files.includes("src/agents/tools/image-tool.providers.live.test.ts") ||
     files.includes("extensions/openai/openai.live.test.ts")
   ) {
@@ -712,6 +716,22 @@ export function buildLiveShardSpawnParams(
   } satisfies Pick<PnpmRunnerParams, "detached" | "env" | "stdio">;
 }
 
+export function resolveLiveShardBuildEntrypoint(exists = fs.existsSync): string[] {
+  // Release harnesses run this trusted shard router from a frozen candidate
+  // checkout. Prefer its current TypeScript builder, then its native ancestor.
+  if (exists("scripts/build-all.mts")) {
+    return ["--import", "tsx", "scripts/build-all.mts"];
+  }
+  if (exists("scripts/build-all.mjs")) {
+    return ["scripts/build-all.mjs"];
+  }
+  throw new Error("Live test shard cannot find scripts/build-all.{mts,mjs}");
+}
+
+export function resolveLiveShardBuildProfile(profile: string, helpOutput: string): string {
+  return helpOutput.split("\n").includes(`  ${profile}`) ? profile : "full";
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const rawArgs = process.argv.slice(2);
   const separatorIndex = rawArgs.indexOf("--");
@@ -762,14 +782,32 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     console.log(
       `[test:live:shard] preparing ${preparation.profile} for ${preparation.requiredArtifact}`,
     );
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/build-all.mts", preparation.profile],
-      {
-        env: { ...process.env, ...preparation.env },
-        stdio: "inherit",
-      },
-    );
+    const buildEntrypoint = resolveLiveShardBuildEntrypoint();
+    const help = spawnSync(process.execPath, [...buildEntrypoint, "--help"], {
+      env: { ...process.env, ...preparation.env },
+      encoding: "utf8",
+    });
+    if (help.error) {
+      console.error(help.error);
+      process.exit(1);
+    }
+    if (help.signal) {
+      process.kill(process.pid, help.signal);
+      process.exit(1);
+    }
+    if ((help.status ?? 1) !== 0) {
+      process.exit(help.status ?? 1);
+    }
+    const buildProfile = resolveLiveShardBuildProfile(preparation.profile, help.stdout);
+    if (buildProfile !== preparation.profile) {
+      console.log(
+        `[test:live:shard] ${preparation.profile} is unavailable; preparing full build instead`,
+      );
+    }
+    const result = spawnSync(process.execPath, [...buildEntrypoint, buildProfile], {
+      env: { ...process.env, ...preparation.env },
+      stdio: "inherit",
+    });
     if (result.error) {
       console.error(result.error);
       process.exit(1);

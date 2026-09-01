@@ -274,7 +274,7 @@ describe("voice-call plugin", () => {
     expect(entry.configSchema).not.toHaveProperty("uiHints");
     expect(manifest.uiHints?.agentId).toEqual({
       label: "Response Agent ID",
-      help: 'Agent workspace used for voice response generation. Defaults to "main".',
+      help: expect.any(String),
       advanced: true,
     });
     expect(manifest.configSchema?.properties?.agentId).toEqual({

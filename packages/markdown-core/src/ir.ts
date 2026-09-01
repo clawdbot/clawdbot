@@ -1670,18 +1670,17 @@ export function markdownToIRWithMeta(
   renderTokens(tokens as MarkdownToken[], state);
   closeRemainingStyles(state);
 
+  // Preserve trailing whitespace inside code; trim generated trailing separators.
   const trimmedText = state.text.trimEnd();
   const trimmedLength = trimmedText.length;
-  let codeBlockEnd = 0;
+  let codeEnd = 0;
   for (const span of state.styles) {
-    if (span.style !== "code_block") {
+    if (span.style !== "code" && span.style !== "code_block") {
       continue;
     }
-    if (span.end > codeBlockEnd) {
-      codeBlockEnd = span.end;
-    }
+    codeEnd = Math.max(codeEnd, span.end);
   }
-  const finalLength = Math.max(trimmedLength, codeBlockEnd);
+  const finalLength = Math.max(trimmedLength, codeEnd);
   const finalText =
     finalLength === state.text.length ? state.text : state.text.slice(0, finalLength);
   const annotations = mergeAnnotationSpans(clampAnnotationSpans(state.annotations, finalLength));

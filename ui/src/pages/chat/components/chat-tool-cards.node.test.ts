@@ -285,30 +285,27 @@ describe("tool-card extraction", () => {
   });
 
   it("pretty-prints structured args and pairs tool output onto the same card", () => {
-    const cards = extractToolCards(
-      {
-        role: "assistant",
-        toolCallId: "call-1",
-        content: [
-          {
-            type: "toolcall",
-            id: "call-1",
-            name: "browser.open",
-            arguments: { url: "https://example.com", retry: 0 },
-          },
-          {
-            type: "toolresult",
-            id: "call-1",
-            name: "browser.open",
-            text: "Opened page",
-          },
-        ],
-      },
-      "msg:1",
-    );
+    const cards = extractToolCards({
+      role: "assistant",
+      toolCallId: "call-1",
+      content: [
+        {
+          type: "toolcall",
+          id: "call-1",
+          name: "browser.open",
+          arguments: { url: "https://example.com", retry: 0 },
+        },
+        {
+          type: "toolresult",
+          id: "call-1",
+          name: "browser.open",
+          text: "Opened page",
+        },
+      ],
+    });
 
     expect(cards).toHaveLength(1);
-    expect(cards[0]?.id).toBe("msg:1:call-1");
+    expect(cards[0]?.id).toBe("call-1");
     expect(cards[0]?.name).toBe("browser.open");
     expect(cards[0]?.completed).toBe(true);
     expect(cards[0]?.outputText).toBe("Opened page");
@@ -319,20 +316,17 @@ describe("tool-card extraction", () => {
   });
 
   it("preserves string args verbatim and keeps empty-output cards", () => {
-    const cards = extractToolCards(
-      {
-        role: "assistant",
-        toolCallId: "call-2",
-        content: [
-          {
-            type: "toolcall",
-            name: "deck_manage",
-            arguments: "with Example Deck",
-          },
-        ],
-      },
-      "msg:2",
-    );
+    const cards = extractToolCards({
+      role: "assistant",
+      toolCallId: "call-2",
+      content: [
+        {
+          type: "toolcall",
+          name: "deck_manage",
+          arguments: "with Example Deck",
+        },
+      ],
+    });
 
     expect(cards).toHaveLength(1);
     expect(cards[0]?.inputText).toBe("with Example Deck");
@@ -341,20 +335,17 @@ describe("tool-card extraction", () => {
   });
 
   it("preserves tool-call input payloads from tool_use blocks", () => {
-    const cards = extractToolCards(
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "tool_use",
-            id: "call-2b",
-            name: "deck_manage",
-            input: { deck: "Example Deck", mode: "preview" },
-          },
-        ],
-      },
-      "msg:2b",
-    );
+    const cards = extractToolCards({
+      role: "assistant",
+      content: [
+        {
+          type: "tool_use",
+          id: "call-2b",
+          name: "deck_manage",
+          input: { deck: "Example Deck", mode: "preview" },
+        },
+      ],
+    });
 
     expect(cards).toHaveLength(1);
     expect(cards[0]?.inputText).toBe(`{
@@ -364,54 +355,48 @@ describe("tool-card extraction", () => {
   });
 
   it("preserves legacy callId tool block identities", () => {
-    const cards = extractToolCards(
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "tool_use",
-            callId: "legacy-call-id",
-            name: "bash",
-            input: { command: "pwd" },
-          },
-        ],
-      },
-      "legacy-call",
-    );
+    const cards = extractToolCards({
+      role: "assistant",
+      content: [
+        {
+          type: "tool_use",
+          callId: "legacy-call-id",
+          name: "bash",
+          input: { command: "pwd" },
+        },
+      ],
+    });
 
     expect(cards[0]?.callId).toBe("legacy-call-id");
-    expect(cards[0]?.id).toBe("legacy-call:legacy-call-id");
+    expect(cards[0]?.id).toBe("legacy-call-id");
   });
 
   it("pairs interleaved nameless tool results in content order", () => {
-    const cards = extractToolCards(
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "tool_use",
-            name: "browser.open",
-            input: { url: "https://example.com/a" },
-          },
-          {
-            type: "tool_result",
-            name: "browser.open",
-            text: "Opened A",
-          },
-          {
-            type: "tool_use",
-            name: "browser.open",
-            input: { url: "https://example.com/b" },
-          },
-          {
-            type: "tool_result",
-            name: "browser.open",
-            text: "Opened B",
-          },
-        ],
-      },
-      "msg:ordered",
-    );
+    const cards = extractToolCards({
+      role: "assistant",
+      content: [
+        {
+          type: "tool_use",
+          name: "browser.open",
+          input: { url: "https://example.com/a" },
+        },
+        {
+          type: "tool_result",
+          name: "browser.open",
+          text: "Opened A",
+        },
+        {
+          type: "tool_use",
+          name: "browser.open",
+          input: { url: "https://example.com/b" },
+        },
+        {
+          type: "tool_result",
+          name: "browser.open",
+          text: "Opened B",
+        },
+      ],
+    });
 
     expect(cards).toHaveLength(2);
     expect(cards[0]?.inputText).toBe('{\n  "url": "https://example.com/a"\n}');
@@ -421,34 +406,31 @@ describe("tool-card extraction", () => {
   });
 
   it("pairs sequential nameless same-name tool results with the earliest unmatched call", () => {
-    const cards = extractToolCards(
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "tool_use",
-            name: "read",
-            input: { path: "a.txt" },
-          },
-          {
-            type: "tool_use",
-            name: "read",
-            input: { path: "b.txt" },
-          },
-          {
-            type: "tool_result",
-            name: "read",
-            text: "A contents",
-          },
-          {
-            type: "tool_result",
-            name: "read",
-            text: "B contents",
-          },
-        ],
-      },
-      "msg:sequential",
-    );
+    const cards = extractToolCards({
+      role: "assistant",
+      content: [
+        {
+          type: "tool_use",
+          name: "read",
+          input: { path: "a.txt" },
+        },
+        {
+          type: "tool_use",
+          name: "read",
+          input: { path: "b.txt" },
+        },
+        {
+          type: "tool_result",
+          name: "read",
+          text: "A contents",
+        },
+        {
+          type: "tool_result",
+          name: "read",
+          text: "B contents",
+        },
+      ],
+    });
 
     expect(cards).toHaveLength(2);
     expect(cards[0]?.inputText).toBe('{\n  "path": "a.txt"\n}');
@@ -467,27 +449,24 @@ describe("tool-card extraction", () => {
   ])(
     "keeps a same-name result with different %s separate from an open call",
     (_label, resultId) => {
-      const cards = extractToolCards(
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "tool_use",
-              id: "call-a",
-              name: "read",
-              input: { path: "a.txt" },
-            },
-            {
-              type: "tool_result",
-              ...resultId,
-              name: "read",
-              text: "B failed",
-              isError: true,
-            },
-          ],
-        },
-        "msg:separate-owners",
-      );
+      const cards = extractToolCards({
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "call-a",
+            name: "read",
+            input: { path: "a.txt" },
+          },
+          {
+            type: "tool_result",
+            ...resultId,
+            name: "read",
+            text: "B failed",
+            isError: true,
+          },
+        ],
+      });
 
       expect(cards).toHaveLength(2);
       expect(cards[0]).toMatchObject({ callId: "call-a", name: "read" });
@@ -508,26 +487,23 @@ describe("tool-card extraction", () => {
     ["only the call owns an ID", { id: "call-a" }, {}],
     ["only the result owns an ID", {}, { tool_use_id: "call-b" }],
   ])("preserves legacy same-name fallback when %s", (_label, callId, resultId) => {
-    const cards = extractToolCards(
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "tool_use",
-            ...callId,
-            name: "read",
-            input: { path: "legacy.txt" },
-          },
-          {
-            type: "tool_result",
-            ...resultId,
-            name: "read",
-            text: "Legacy contents",
-          },
-        ],
-      },
-      "msg:legacy-owner",
-    );
+    const cards = extractToolCards({
+      role: "assistant",
+      content: [
+        {
+          type: "tool_use",
+          ...callId,
+          name: "read",
+          input: { path: "legacy.txt" },
+        },
+        {
+          type: "tool_result",
+          ...resultId,
+          name: "read",
+          text: "Legacy contents",
+        },
+      ],
+    });
 
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({
@@ -538,34 +514,31 @@ describe("tool-card extraction", () => {
   });
 
   it("does not reuse nameless same-name calls after an empty result", () => {
-    const cards = extractToolCards(
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "tool_use",
-            name: "read",
-            input: { path: "empty.txt" },
-          },
-          {
-            type: "tool_use",
-            name: "read",
-            input: { path: "next.txt" },
-          },
-          {
-            type: "tool_result",
-            name: "read",
-            text: "",
-          },
-          {
-            type: "tool_result",
-            name: "read",
-            text: "Next contents",
-          },
-        ],
-      },
-      "msg:empty-result",
-    );
+    const cards = extractToolCards({
+      role: "assistant",
+      content: [
+        {
+          type: "tool_use",
+          name: "read",
+          input: { path: "empty.txt" },
+        },
+        {
+          type: "tool_use",
+          name: "read",
+          input: { path: "next.txt" },
+        },
+        {
+          type: "tool_result",
+          name: "read",
+          text: "",
+        },
+        {
+          type: "tool_result",
+          name: "read",
+          text: "Next contents",
+        },
+      ],
+    });
 
     expect(cards).toHaveLength(2);
     expect(cards[0]?.inputText).toBe('{\n  "path": "empty.txt"\n}');
@@ -576,111 +549,96 @@ describe("tool-card extraction", () => {
   });
 
   it("extracts tool result output from text block content arrays", () => {
-    const cards = extractToolCards(
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolcall",
-            id: "call-read",
-            name: "read",
-            input: { path: "README.md" },
-          },
-          {
-            type: "tool_result",
-            id: "call-read",
-            name: "read",
-            content: [
-              { type: "text", text: "# Heading" },
-              { type: "text", text: "file body" },
-            ],
-          },
-        ],
-      },
-      "msg:read",
-    );
+    const cards = extractToolCards({
+      role: "assistant",
+      content: [
+        {
+          type: "toolcall",
+          id: "call-read",
+          name: "read",
+          input: { path: "README.md" },
+        },
+        {
+          type: "tool_result",
+          id: "call-read",
+          name: "read",
+          content: [
+            { type: "text", text: "# Heading" },
+            { type: "text", text: "file body" },
+          ],
+        },
+      ],
+    });
 
     expect(cards).toHaveLength(1);
     expect(cards[0]?.outputText).toBe("# Heading\nfile body");
   });
 
   it("preserves explicit tool error flags from tool result items and messages", () => {
-    const pairedCards = extractToolCards(
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolcall",
-            id: "call-error",
-            name: "lookup",
-          },
-          {
-            type: "tool_result",
-            id: "call-error",
-            name: "lookup",
-            text: "lookup failed",
-            isError: true,
-          },
-        ],
-      },
-      "msg:error-item",
-    );
+    const pairedCards = extractToolCards({
+      role: "assistant",
+      content: [
+        {
+          type: "toolcall",
+          id: "call-error",
+          name: "lookup",
+        },
+        {
+          type: "tool_result",
+          id: "call-error",
+          name: "lookup",
+          text: "lookup failed",
+          isError: true,
+        },
+      ],
+    });
 
     expect(pairedCards[0]?.isError).toBe(true);
 
-    const messageFlagCards = extractToolCards(
-      {
-        role: "toolResult",
-        isError: true,
-        content: [
-          {
-            type: "tool_result",
-            id: "call-message-error",
-            name: "lookup",
-            text: "lookup failed",
-          },
-        ],
-      },
-      "msg:error-message-flag",
-    );
+    const messageFlagCards = extractToolCards({
+      role: "toolResult",
+      isError: true,
+      content: [
+        {
+          type: "tool_result",
+          id: "call-message-error",
+          name: "lookup",
+          text: "lookup failed",
+        },
+      ],
+    });
 
     expect(messageFlagCards[0]?.isError).toBe(true);
 
-    const standaloneCards = extractToolCards(
-      {
-        role: "tool",
-        toolName: "lookup",
-        content: "lookup failed",
-        isError: true,
-      },
-      "msg:error-message",
-    );
+    const standaloneCards = extractToolCards({
+      role: "tool",
+      toolName: "lookup",
+      content: "lookup failed",
+      isError: true,
+    });
 
     expect(standaloneCards[0]?.isError).toBe(true);
   });
 
   it("extracts canvas handle payloads into canvas previews", () => {
-    const [card] = extractToolCards(
-      {
-        role: "tool",
-        toolName: "canvas_render",
-        content: JSON.stringify({
-          kind: "canvas",
-          view: {
-            backend: "canvas",
-            id: "cv_inline",
-            url: "/__openclaw__/canvas/documents/cv_inline/index.html",
-          },
-          presentation: {
-            target: "assistant_message",
-            title: "Inline demo",
-            preferred_height: 420,
-            sandbox: "scripts",
-          },
-        }),
-      },
-      "msg:view:1",
-    );
+    const [card] = extractToolCards({
+      role: "tool",
+      toolName: "canvas_render",
+      content: JSON.stringify({
+        kind: "canvas",
+        view: {
+          backend: "canvas",
+          id: "cv_inline",
+          url: "/__openclaw__/canvas/documents/cv_inline/index.html",
+        },
+        presentation: {
+          target: "assistant_message",
+          title: "Inline demo",
+          preferred_height: 420,
+          sandbox: "scripts",
+        },
+      }),
+    });
 
     expect(card?.preview).toMatchObject({
       kind: "canvas",
@@ -695,39 +653,33 @@ describe("tool-card extraction", () => {
   });
 
   it("uses transcript metadata ids for history-backed tool messages", () => {
-    const [card] = extractToolCards(
-      {
-        role: "tool",
-        toolName: "browser.open",
-        content: [{ type: "text", text: "Opened page" }],
-        __openclaw: { id: "msg-tool-history-1", seq: 7 },
-      },
-      "msg:history",
-    );
+    const [card] = extractToolCards({
+      role: "tool",
+      toolName: "browser.open",
+      content: [{ type: "text", text: "Opened page" }],
+      __openclaw: { id: "msg-tool-history-1", seq: 7 },
+    });
 
     expect(card?.messageId).toBe("msg-tool-history-1");
     expect(card?.outputText).toBe("Opened page");
   });
 
   it("extracts MCP App previews from sanitized result details", () => {
-    const [card] = extractToolCards(
-      {
-        role: "tool",
-        toolName: "demo__show",
-        content: [{ type: "text", text: "original result" }],
-        details: {
-          mcpAppPreview: {
-            kind: "canvas",
-            view: {
-              id: "cv_app",
-            },
-            presentation: { target: "assistant_message", sandbox: "scripts" },
-            mcpApp: { viewId: "cv_app" },
+    const [card] = extractToolCards({
+      role: "tool",
+      toolName: "demo__show",
+      content: [{ type: "text", text: "original result" }],
+      details: {
+        mcpAppPreview: {
+          kind: "canvas",
+          view: {
+            id: "cv_app",
           },
+          presentation: { target: "assistant_message", sandbox: "scripts" },
+          mcpApp: { viewId: "cv_app" },
         },
       },
-      "msg:mcp-app",
-    );
+    });
 
     expect(card?.outputText).toBe("original result");
     expect(card?.preview).toMatchObject({
@@ -799,14 +751,11 @@ describe("tool-card extraction", () => {
     ] as const;
 
     for (const testCase of cases) {
-      const [card] = extractToolCards(
-        {
-          role: "tool",
-          toolName: testCase.toolName,
-          content: testCase.content,
-        },
-        `msg:view:${testCase.name}`,
-      );
+      const [card] = extractToolCards({
+        role: "tool",
+        toolName: testCase.toolName,
+        content: testCase.content,
+      });
 
       expect(card?.preview, testCase.name).toBeUndefined();
     }

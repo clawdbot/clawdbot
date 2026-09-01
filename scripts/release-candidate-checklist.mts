@@ -27,8 +27,11 @@ import {
   stripLeadingPackageManagerSeparator,
 } from "./lib/arg-utils.mts";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import {
+  validateNpmPreflightProducer,
+  validateReleasePreflightTagIdentity,
+} from "./npm-preflight-tooling-identity.mjs";
 import { validatePluginSdkApiReleaseEvidence } from "./plugin-sdk-api-release-evidence.mjs";
-import { validateReleaseToolingIdentity } from "./release-tooling-identity.mjs";
 import {
   dedicatedSectionVersionForTag,
   extractChangelogReleaseSections,
@@ -898,18 +901,8 @@ export async function validateNpmPreflightRunSource(
       githubApi(`repos/${repository}/git/ref/tags/${ref}`, apiOptions),
       githubApi(`repos/${repository}/git/matching-refs/heads/${ref}`, apiOptions),
     ]);
-    // Actions reports a short headBranch for tags too. A same-name branch cannot
-    // establish tag provenance, even when its commit happens to match.
-    if (
-      !Array.isArray(branches) ||
-      branches.some(
-        (branch) =>
-          !isRecord(branch) || typeof branch.ref !== "string" || branch.ref === `refs/heads/${ref}`,
-      )
-    ) {
-      throw new Error(`npm preflight run ${runId} has ambiguous protected tag provenance`);
-    }
-    validateReleaseToolingIdentity({
+    validateReleasePreflightTagIdentity({
+      branches,
       workflowRef: ref,
       workflowFullRef: expectedFullRef,
       workflowSha: workflowRun.headSha,
@@ -2012,6 +2005,14 @@ async function main() {
   downloadArtifact(options.repo, options.fullReleaseRunId, fullArtifactName, fullDir);
 
   const npmManifest = readJson(join(npmDir, "preflight-manifest.json"), "npm preflight manifest");
+  const npmPreflightProducer = validateNpmPreflightProducer({
+    manifest: npmManifest,
+    repository: options.repo,
+    workflowFullRef: `refs/${npmRun.headBranch?.startsWith("release-publish/") ? "tags" : "heads"}/${npmRun.headBranch}`,
+    workflowSha: npmRun.headSha,
+    runId: options.npmPreflightRunId,
+    runAttempt: npmRun.runAttempt,
+  });
   const immutablePluginSdkApiEvidence = readJson(
     join(pluginSdkApiDir, "plugin-sdk-api-release-evidence.json"),
     "immutable Plugin SDK API evidence",
@@ -2150,6 +2151,7 @@ async function main() {
     npmPreflightUrl: npmRun.url,
     npmPreflightSource,
     pluginSdkApi: npmManifest.pluginSdkApi,
+    npmPreflightProducer,
     pluginSdkApiValidation,
     artifacts: {
       npmPreflight: npmArtifactName,

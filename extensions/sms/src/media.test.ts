@@ -23,6 +23,7 @@ import {
 import { setSmsRuntime } from "./runtime.js";
 import type { ResolvedSmsAccount } from "./types.js";
 
+const assertSmsCredentialOwnerAvailable = vi.hoisted(() => vi.fn());
 const loadWebMediaMock = vi.hoisted(() => vi.fn<typeof loadWebMediaType>());
 const unlinkIfExistsMock = vi.hoisted(() =>
   vi.fn<typeof unlinkIfExistsType>(async () => undefined),
@@ -84,6 +85,7 @@ const TWILIO_MMS_FILENAME_CASES = [
 vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia: loadWebMediaMock,
 }));
+vi.mock("./credential-availability.js", () => ({ assertSmsCredentialOwnerAvailable }));
 vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
   unlinkIfExists: unlinkIfExistsMock,
@@ -596,6 +598,7 @@ describe("SMS outbound hosted media", () => {
 
 describe("SMS inbound MMS materialization", () => {
   beforeEach(() => {
+    assertSmsCredentialOwnerAvailable.mockReset();
     unlinkIfExistsMock.mockClear();
   });
 
@@ -926,25 +929,34 @@ describe("SMS inbound MMS materialization", () => {
     expect(saveRemoteMedia).not.toHaveBeenCalled();
   });
 
-  it.each(["claim cancellation", "retryable provider failure"])(
+  it.each(["claim cancellation", "retryable provider failure", "credential loss"])(
     "cleans already-saved files when a later attachment ends with %s",
     async (failureKind) => {
       const abortController = new AbortController();
       const abortReason =
         failureKind === "claim cancellation"
           ? new Error("SMS ingress claim superseded")
-          : new MediaFetchError("http_error", "Twilio temporarily unavailable", { status: 503 });
+          : failureKind === "credential loss"
+            ? new Error("SMS credential owner became unavailable")
+            : new MediaFetchError("http_error", "Twilio temporarily unavailable", { status: 503 });
+      if (failureKind === "credential loss") {
+        assertSmsCredentialOwnerAvailable
+          .mockImplementationOnce(() => {})
+          .mockImplementationOnce(() => {
+            throw abortReason;
+          });
+      }
       const saveRemoteMedia = vi
         .fn()
-        .mockResolvedValueOnce({
-          path: "/tmp/first.jpg",
-          size: 128,
-          contentType: "image/jpeg",
+        .mockImplementationOnce(async (options) => {
+          options.beforeRequest?.();
+          return { path: "/tmp/first.jpg", size: 128, contentType: "image/jpeg" };
         })
-        .mockImplementationOnce(async () => {
+        .mockImplementationOnce(async (options) => {
           if (failureKind === "claim cancellation") {
             abortController.abort(abortReason);
           }
+          options.beforeRequest?.();
           throw abortReason;
         });
 

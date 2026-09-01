@@ -10,6 +10,7 @@ import {
 import { sanitizeApprovalScope, type ApprovalScope } from "../../infra/approval-scope.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import {
+  exceedsApprovalTextLimit,
   sanitizeExecApprovalDisplayText,
   sanitizeExecApprovalWarningText,
 } from "../../infra/exec-approval-text-sanitize.js";
@@ -165,8 +166,8 @@ export function createPluginApprovalHandlers(
       const sanitizedTitle = sanitizeExecApprovalDisplayText(p.title);
       const sanitizedDescription = sanitizeExecApprovalWarningText(p.description);
       if (
-        Array.from(sanitizedTitle).length > PLUGIN_APPROVAL_TITLE_MAX_LENGTH ||
-        Array.from(sanitizedDescription).length > PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH
+        exceedsApprovalTextLimit(sanitizedTitle, PLUGIN_APPROVAL_TITLE_MAX_LENGTH) ||
+        exceedsApprovalTextLimit(sanitizedDescription, PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH)
       ) {
         respond(
           false,

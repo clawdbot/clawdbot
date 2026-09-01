@@ -135,6 +135,20 @@ export function upsertSubagentRunRowInDatabase(
   );
 }
 
+export function readSubagentRun(
+  database: OpenClawStateDatabase,
+  runId: string,
+): SubagentRunRecord | null {
+  const row = executeSqliteQuerySync(
+    database.db,
+    getNodeSqliteKysely<SubagentRegistryDatabase>(database.db)
+      .selectFrom("subagent_runs")
+      .selectAll()
+      .where("run_id", "=", runId),
+  ).rows[0];
+  return row ? rowToSubagentRunRecord(row) : null;
+}
+
 function subagentRunRecordToSqliteUpdate(values: SubagentRunSqliteInsert): SubagentRunSqliteUpdate {
   const { run_id: _runId, ...update } = values;
   return update;
