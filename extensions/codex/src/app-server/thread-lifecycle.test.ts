@@ -303,6 +303,30 @@ describe("Codex ring-zero thread config", () => {
     );
   });
 
+  it("accepts the attested app server alongside disabled inherited servers", async () => {
+    const request = vi.fn(async () => ({
+      data: [
+        disabledMcpServerStatus("inherited"),
+        {
+          name: "codex_apps",
+          serverInfo: { name: "codex_apps", version: "1.0.0" },
+          tools: { "calendar.list": {} },
+        },
+      ],
+      nextCursor: null,
+    }));
+
+    await expect(
+      attestCodexRestrictedToolSurfaceMcpServersDisabled(
+        { request } as never,
+        "thread-restricted",
+        { mcp_servers: { inherited: { enabled: false } } },
+        undefined,
+        ["codex_apps"],
+      ),
+    ).resolves.toBeUndefined();
+  });
+
   it.each([
     {
       name: "an unexpected server",
