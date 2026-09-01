@@ -563,9 +563,8 @@ describe("perplexity web search provider", () => {
         });
         const chat = "model" in entry;
         expect(metadata).toEqual({ perplexityTransport: chat ? "chat_completions" : "search_api" });
-        if (source === "secretRef") {
-          provider.setConfiguredCredentialValue?.(config, key);
-        }
+        // Runtime credential preparation materializes every resolved source into config.
+        provider.setConfiguredCredentialValue?.(config, key);
         const tool = provider.createTool({
           config,
           runtimeMetadata: { providerSource: "configured", diagnostics: [], ...metadata },

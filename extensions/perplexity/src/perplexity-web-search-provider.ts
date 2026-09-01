@@ -11,6 +11,7 @@ import {
   hasPerplexityLegacyOverride,
   resolvePerplexityConfig,
   resolvePerplexityWebSearchRuntimeMetadata,
+  type PerplexityTransport,
 } from "./perplexity-web-search-provider.shared.js";
 
 const loadPerplexityWebSearchRuntime = createLazyRuntimeModule(
@@ -78,7 +79,7 @@ function createPerplexityParameters(transport?: string): Record<string, unknown>
 
 function createPerplexityToolDefinition(
   searchConfig?: Record<string, unknown>,
-  runtimeTransport?: string,
+  runtimeTransport?: PerplexityTransport,
 ): WebSearchProviderToolDefinition {
   const schemaTransport =
     runtimeTransport ??
@@ -95,7 +96,7 @@ function createPerplexityToolDefinition(
     execute: async (args, context) => {
       context?.signal?.throwIfAborted();
       const { executePerplexitySearch } = await loadPerplexityWebSearchRuntime();
-      return await executePerplexitySearch(args, searchConfig, context?.signal);
+      return await executePerplexitySearch(args, searchConfig, context?.signal, runtimeTransport);
     },
   };
 }

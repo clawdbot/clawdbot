@@ -25,11 +25,13 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  hasPerplexityLegacyOverride,
   isDirectPerplexityBaseUrl,
   resolvePerplexityConfig,
   resolvePerplexityRuntime,
   type PerplexityAuth,
   type PerplexityConfig,
+  type PerplexityTransport,
 } from "./perplexity-web-search-provider.shared.js";
 
 const PERPLEXITY_SEARCH_ENDPOINT = "https://api.perplexity.ai/search";
@@ -76,6 +78,22 @@ function resolvePerplexityApiKey(perplexity?: PerplexityConfig): PerplexityAuth 
     return { apiKey: fromOpenRouterEnv, source: "openrouter_env" };
   }
   return { apiKey: undefined, source: "none" };
+}
+
+function alignPerplexityAuthWithPreparedTransport(
+  perplexity: PerplexityConfig,
+  auth: PerplexityAuth,
+  preparedTransport?: PerplexityTransport,
+): PerplexityAuth {
+  if (!preparedTransport || hasPerplexityLegacyOverride(perplexity)) {
+    return auth;
+  }
+  // Credential preparation materializes env/SecretRef values into config. Preserve the
+  // already-resolved endpoint decision instead of reclassifying that value as config-owned.
+  return {
+    ...auth,
+    source: preparedTransport === "search_api" ? "perplexity_env" : "openrouter_env",
+  };
 }
 
 function resolvePerplexityRequestModel(baseUrl: string, model: string): string {
@@ -254,11 +272,16 @@ export async function executePerplexitySearch(
   args: Record<string, unknown>,
   searchConfig?: SearchConfigRecord,
   signal?: AbortSignal,
+  preparedTransport?: PerplexityTransport,
 ): Promise<Record<string, unknown>> {
   const perplexityConfig = resolvePerplexityConfig(searchConfig);
   const runtime = resolvePerplexityRuntime(
     perplexityConfig,
-    resolvePerplexityApiKey(perplexityConfig),
+    alignPerplexityAuthWithPreparedTransport(
+      perplexityConfig,
+      resolvePerplexityApiKey(perplexityConfig),
+      preparedTransport,
+    ),
   );
   if (!runtime.apiKey) {
     return {
