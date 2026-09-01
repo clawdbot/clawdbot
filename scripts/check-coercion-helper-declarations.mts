@@ -154,6 +154,9 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
     kind: "function",
     names: [
       "coerceErrorMessage",
+      "collectErrorGraphCandidates",
+      "collectNestedErrorCandidates",
+      "extractErrorCodeOrErrno",
       "stringifyNonErrorCause",
       "toErrorObject",
       "toStringifiedError",
@@ -201,6 +204,16 @@ export const CANONICAL_COERCION_MODULES = [
 const MIXED_CANONICAL_COERCION_MODULES = ["scripts/lib/arg-utils.runtime.mjs"] as const;
 
 export const DEFERRED_CANONICAL_COERCION_EXPORTS = [
+  {
+    file: "packages/normalization-core/src/error-coercion.ts",
+    name: "extractErrorCode",
+    reason: "Provider adapters share this name for nested response-code extraction.",
+  },
+  {
+    file: "packages/normalization-core/src/error-coercion.ts",
+    name: "readErrorName",
+    reason: "Diagnostic adapters share this name for filtered or non-blank error names.",
+  },
   {
     file: "packages/normalization-core/src/error-coercion.ts",
     name: "formatErrorMessage",

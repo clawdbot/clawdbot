@@ -93,20 +93,21 @@ set `talk.agentId` or send an agent-prefixed key.
 
 Omitting `sessionKey` selects the same owned main session as a bare `main` key;
 both enforce sharing, incognito, and operator-role restrictions. Main aliases
-honor `session.scope`; the [main session](/concepts/main-session) suffix is fixed at
-`main`, and custom `session.mainKey` values are ignored. A shared fixed store retains
+honor `session.scope` and the configured [main session](/concepts/main-session) key. A shared fixed store retains
 its recorded owner for unqualified keys, and conflicting explicit ownership is rejected
 even when a main alias becomes `global`. If routing or access changes during
 startup, creation fails rather than switching sessions; retry the request.
 
-Gateway-owned provider consultations and steering retain the prepared agent,
+Client tool calls, Gateway-owned provider consultations, and steering retain the prepared agent,
 canonical session key, and store. Agent replies stay in the same session as voice
 transcripts, including under global scope, while the original key continues to
 identify the voice call.
 
 Keep the original `sessionKey` for client transcript, tool-call, and close requests.
 `talk.client.close` requires both that exact key and the returned `voiceSessionId`;
-an equivalent storage alias is not a replacement. Transcription-only sessions
+an equivalent storage alias is not a replacement. A `talk.client.toolCall` acknowledgement
+returns `agentId`, `agentSessionKey`, and `runId`; use that exact target for chat
+cancellation, history, and completion events, including when the canonical key is `global`. Transcription-only sessions
 without a key remain sessionless and do not select a default chat.
 
 ## Behavior (macOS)

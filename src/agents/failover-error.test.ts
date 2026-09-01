@@ -4,6 +4,8 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
+import { attachErrorDiagnostic, formatErrorMessageForDisplay } from "../infra/error-diagnostics.js";
+import { getFailoverErrorCode } from "./failover/error.js";
 
 // Classification here is message/status table behavior. Provider-attributed
 // structured signals (e.g. moonshot + 429) otherwise cross the plugin-consult
@@ -621,7 +623,10 @@ describe("failover-error", () => {
   });
 
   it("classifies a structured prompt error independently of its wording", () => {
-    const promptError = Object.assign(new Error("quota exhausted"), { status: 429 as const });
+    const promptError = attachErrorDiagnostic(
+      Object.assign(new Error("quota exhausted"), { status: 429 as const }),
+      "stderr: authentication failed during an earlier request",
+    );
     const failoverError = coerceToFailoverError(promptError, {
       provider: "openai",
       model: "gpt-5.4",
@@ -630,6 +635,10 @@ describe("failover-error", () => {
     expect(failoverError?.reason).toBe("rate_limit");
     expect(failoverError?.status).toBe(429);
     expect(failoverError?.message).toBe("quota exhausted");
+    expect(failoverError?.rawError).toBe("quota exhausted");
+    expect(formatErrorMessageForDisplay(failoverError)).toContain(
+      "authentication failed during an earlier request",
+    );
   });
 
   it("lets wrapped causes override parent context-overflow classifications", () => {
@@ -655,26 +664,49 @@ describe("failover-error", () => {
     expect(err?.authMode).toBe("oauth");
   });
 
-  it("enriches an existing FailoverError with the active auth mode", () => {
-    const original = new FailoverError("credit balance too low", {
-      reason: "billing",
+  it("preserves typed failure facts and diagnostics when adding the active auth mode", () => {
+    const cause = Object.assign(new Error("socket closed"), { code: "ECONNRESET" });
+    const facts = {
+      reason: "timeout",
       provider: "anthropic",
-      model: "claude-opus-4-6",
+      model: "sonnet-4.6",
       profileId: "anthropic:default",
-      status: 402,
-    });
+      status: 408,
+      rawError: "request timed out",
+      authProfileFailure: { allInCooldown: false },
+      sessionId: "diagnostic-session",
+      lane: "answer",
+      cause,
+      suspend: false,
+      cliTimeout: {
+        mode: "no-output",
+        timeoutSeconds: 30,
+        observedActivity: true,
+        activeToolCount: 1,
+        backgroundTaskCount: 0,
+      },
+      attempts: [{ provider: "anthropic", model: "sonnet-4.6", reason: "timeout" }],
+      soonestCooldownExpiry: null,
+    } satisfies ConstructorParameters<typeof FailoverError>[1];
+    const original = new FailoverError("request timed out", facts);
+    attachErrorDiagnostic(original, "stderr: Rate limit exceeded during an earlier request");
 
     const err = coerceToFailoverError(original, { authMode: "token" });
 
     expect(err).not.toBe(original);
     expect(err).toMatchObject({
-      reason: "billing",
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      profileId: "anthropic:default",
+      ...facts,
       authMode: "token",
-      status: 402,
     });
+    expect(err?.cause).toBe(cause);
+    expect(err?.message).toBe("request timed out");
+    expect(getFailoverErrorCode(err)).toBeUndefined();
+    expect(findCliTimeoutError(err)).toBe(err);
+    expect(err?.requestSizeCeiling).toBe(false);
+    expect(formatErrorMessageForDisplay(err)).toContain(
+      "Rate limit exceeded during an earlier request",
+    );
+    expect(original.authMode).toBeUndefined();
   });
 
   it("preserves raw provider error text for diagnostic logs", () => {

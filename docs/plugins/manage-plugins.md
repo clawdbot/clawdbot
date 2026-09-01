@@ -126,8 +126,9 @@ enabled plugins require fresh consent when the new artifact declares additional
 capabilities; unchanged or narrower
 surfaces can refresh an existing valid acceptance. Updating a disabled
 plugin preserves disablement and defers any required consent until enablement.
-Reinstalling through `plugins install` activates the plugin and must satisfy
-consent before activation.
+Reinstalling through `plugins install` also preserves an authored `enabled: false`,
+but requires consent before committing the install when no valid acceptance can
+be reused. Run `openclaw plugins enable <plugin-id>` to activate it afterward.
 
 Already-enabled third-party legacy installations remain usable without an initial review;
 disabling and re-enabling them requires consent. Setup rechecks consent when

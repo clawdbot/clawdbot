@@ -3,6 +3,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { runtimeProcessBuildEntries } from "../scripts/lib/runtime-process-build-entries.mts";
 
 const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
 
@@ -111,6 +112,9 @@ const repositoryScriptEntries = [
   "scripts/resolve-frozen-codex-live-suite.mjs!",
   // Changed-file checks invoke this targeted UI Stylelint entrypoint by path.
   "scripts/run-stylelint.mts!",
+  // Path-spawned test roots are development entries; `!` would audit dev tools as production.
+  "scripts/run-vitest-child.mts",
+  "scripts/test-projects-child.mts",
   "scripts/secrets/openclaw-bws-resolver.mjs!",
   "scripts/sync-labels.ts!",
   "scripts/test-built-bundled-channel-entry-smoke.mts!",
@@ -149,6 +153,10 @@ function listScriptShimEntries(dir = "scripts"): string[] {
 const rootEntries = [
   ...repositoryScriptEntries,
   ...listScriptShimEntries(),
+  // Runtime launchers resolve these by URL rather than a static import edge.
+  ...Object.values(runtimeProcessBuildEntries).map(
+    (source) => `${path.relative(".", source).replaceAll("\\", "/")}!`,
+  ),
   // Knip loads these audit configurations directly by command-line path.
   "config/knip.config.ts!",
   "config/knip.all-exports.config.ts!",
@@ -164,8 +172,6 @@ const rootEntries = [
   "src/commands/status.ts!",
   "src/cli/daemon-cli.ts!",
   "src/agents/code-mode.worker.ts!",
-  // The local exec bootstrap launches credential resolution by computed subprocess URL.
-  "src/agents/github-exec-launcher.ts!",
   // Worker-thread and script entrypoints import contracts that production Knip cannot trace.
   "src/agents/compaction-planning.worker.ts!",
   "scripts/print-cli-backend-live-metadata.ts!",
@@ -181,17 +187,8 @@ const rootEntries = [
   // Docker/manual E2E executables and their nested assertion/probe entrypoints.
   "scripts/e2e/*.{js,mjs,ts}!",
   "scripts/e2e/lib/**/{assertions,probe,mock-server}.{js,mjs,ts}!",
-  // Loaded by URL from the SQLite lifecycle archive owner.
-  "src/config/sessions/session-accessor.sqlite-archive.worker.ts!",
-  "src/state/openclaw-database-verify.worker.ts!",
-  // Spawned by path from sqlite-readonly-location.ts to isolate raw-fd snapshot preparation.
-  "src/infra/sqlite-readonly-location.worker.ts!",
-  // Loaded by URL from tailscale.ts to outlive abrupt Gateway process exit.
-  "src/infra/tailscale-route-owner.worker.ts!",
   "src/agents/model-provider-auth.worker.ts!",
   "src/agents/prepared-model-catalog.worker.ts!",
-  // Spawned through computed sibling URLs by the service-child host and relay.
-  "src/process/supervisor/{service-child-relay,service-child-group-anchor,service-child-windows-job-anchor}.ts!",
   // Loaded by URL from setup-inference-detection.ts; no static import edge exists.
   "src/system-agent/setup-inference-detection.worker.ts!",
   // Split runtime loaded through a path assembled in subagent-registry.ts.

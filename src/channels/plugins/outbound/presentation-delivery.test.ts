@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { MessagePresentation } from "../../interactive/payload.js";
-import type { ChannelHandler } from "./deliver-contracts.js";
-import { renderPresentationForDelivery } from "./deliver-payload.js";
+import type { MessagePresentation } from "../../../interactive/payload.js";
+import { renderPresentationForDelivery } from "./presentation-delivery.js";
 
 const tablePresentation: MessagePresentation = {
   title: "Status",
@@ -15,33 +14,31 @@ const tablePresentation: MessagePresentation = {
   ],
 };
 
-function buildHandler(overrides: Partial<ChannelHandler>): ChannelHandler {
-  const sendResult = { channel: "telegram" as const, messageId: "1" };
-  return {
-    chunker: null,
-    supportsMedia: false,
-    buildTargetRef: () => ({ channel: "telegram", to: "target" }),
-    sendText: async () => sendResult,
-    sendMedia: async () => sendResult,
-    ...overrides,
-  };
-}
-
 describe("renderPresentationForDelivery authored fallback", () => {
-  it("keeps authored fallback text when every data block degrades to text", async () => {
+  it.each([
+    { name: "a table", presentation: tablePresentation },
+    {
+      name: "a table with native context",
+      presentation: {
+        ...tablePresentation,
+        blocks: [...tablePresentation.blocks, { type: "context", text: "Uptime: 42s" }],
+      } satisfies MessagePresentation,
+    },
+  ])("preserves authored fallback for $name", async ({ presentation }) => {
     const renderPresentation = vi.fn();
-    const handler = buildHandler({
-      presentationCapabilities: { supported: true, tables: false },
+    const handler = {
+      presentationCapabilities: { supported: true, tables: false, context: true },
       renderPresentation,
-    });
+    };
+    const authoredText = "Model: anthropic/claude-haiku-4-5\nUptime: 42s\nReference UTC: 12:00";
 
     const rendered = await renderPresentationForDelivery(handler, {
-      text: "authored plain body",
-      presentation: tablePresentation,
+      text: authoredText,
+      presentation,
       presentationTextMode: "fallback",
     });
 
-    expect(rendered.text).toBe("authored plain body");
+    expect(rendered.text).toBe(authoredText);
     expect(rendered.presentation).toBeUndefined();
     expect(renderPresentation).not.toHaveBeenCalled();
   });
@@ -51,10 +48,10 @@ describe("renderPresentationForDelivery authored fallback", () => {
       ...payload,
       text: "native table rendering",
     }));
-    const handler = buildHandler({
+    const handler = {
       presentationCapabilities: { supported: true, tables: true },
       renderPresentation,
-    });
+    };
 
     const rendered = await renderPresentationForDelivery(handler, {
       text: "authored plain body",
@@ -71,10 +68,10 @@ describe("renderPresentationForDelivery authored fallback", () => {
     const renderPresentation = vi
       .fn()
       .mockImplementation(async (payload: { text?: string }) => payload);
-    const handler = buildHandler({
+    const handler = {
       presentationCapabilities: { supported: true, buttons: true, tables: false },
       renderPresentation,
-    });
+    };
 
     await renderPresentationForDelivery(handler, {
       text: "authored plain body",

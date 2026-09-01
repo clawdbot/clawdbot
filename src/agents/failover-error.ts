@@ -6,6 +6,7 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
+import { copyErrorDiagnostic } from "../infra/error-diagnostics.js";
 import { collectErrorGraphCandidates, formatErrorMessage, readErrorName } from "../infra/errors.js";
 import { failoverReasonFromClassification } from "./failover/classification-rules.js";
 import {
@@ -638,7 +639,7 @@ export function coerceToFailoverError(
   if (isFailoverError(err)) {
     if (context?.authMode && !err.authMode) {
       const message = typeof err.message === "string" ? err.message : String(err);
-      return new FailoverError(message, {
+      const enriched = new FailoverError(message, {
         reason: err.reason,
         provider: err.provider,
         model: err.model,
@@ -656,6 +657,8 @@ export function coerceToFailoverError(
         attempts: err.attempts,
         soonestCooldownExpiry: err.soonestCooldownExpiry,
       });
+      copyErrorDiagnostic(err, enriched);
+      return enriched;
     }
     return err;
   }

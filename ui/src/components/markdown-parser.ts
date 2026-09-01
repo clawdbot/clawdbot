@@ -654,12 +654,18 @@ export function createMarkdownParser(): MarkdownItParser {
     const language = token.info.trim().split(/\s+/)[0] || "";
     // An unfinished fence consumes the remaining input; only container closers can
     // follow it. Invalid fence-looking prose must not de-highlight an earlier block.
-    const streamingOpenFence = env?.streamingOpenFence === true;
-    return renderMarkdownCodeBlock(token.content, language, env, {
+    const openFence =
+      env?.streamingOpenFence === true &&
+      tokens.findLastIndex(({ nesting }) => nesting !== -1) === index;
+    const code = renderMarkdownCodeBlock(token.content, language, env, {
       copyText: markdownCodeBlockCopyText(token.content),
-      highlight:
-        !streamingOpenFence || tokens.findLastIndex(({ nesting }) => nesting !== -1) !== index,
+      highlight: !openFence,
     });
+    // Keep source readable until the host mounts the lazy renderer. Incomplete
+    // streamed fences stay code so partial syntax never starts diagram layout.
+    return language.toLowerCase() === "mermaid" && !openFence
+      ? `<div class="markdown-mermaid">${code}</div>`
+      : code;
   };
   // Override indented code blocks (code_block) with the same treatment as fence
   markdownParser.renderer.rules.code_block = (tokens, index, _options, env) => {

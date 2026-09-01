@@ -97,6 +97,15 @@ it.each([
 });
 
 describe("CI changed Node test plan", () => {
+  it("leaves native Chromium tests to checks-ui while retaining changed Node-driven tests", () => {
+    const browser = "ui/src/components/markdown-mermaid.runtime.browser.test.ts";
+    const node = "ui/src/components/form-controls.browser.test.ts";
+    const shards = createChangedNodeTestShards([browser, node]);
+    expect(shards).not.toBeNull();
+    const targets = shards?.flatMap((shard) => shard.targets ?? []);
+    expect(targets).toContain(node);
+    expect(targets).not.toContain(browser);
+  });
   it.each([
     "extensions/copilot/index.ts",
     "extensions/copilot/harness.ts",

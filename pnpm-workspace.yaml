@@ -91,6 +91,7 @@ packageExtensions:
         optional: true
 
 patchedDependencies:
+  "@awesome.me/webawesome@3.12.0": patches/@awesome.me__webawesome@3.12.0.patch
   "@vitest/runner@4.1.11": patches/@vitest__runner@4.1.11.patch
   "vitest@4.1.11": patches/vitest@4.1.11.patch
   "matrix-js-sdk@42.2.0": patches/matrix-js-sdk@42.2.0.patch

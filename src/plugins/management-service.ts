@@ -1376,6 +1376,7 @@ async function persistManagedSourceInstall(params: {
   invalidateRuntimeCache?: boolean;
   runtime?: RuntimeEnv;
   successMessage?: string;
+  beforePersistentApply?: () => void;
 }): Promise<{ config: OpenClawConfig; warnings: string[] }> {
   const warnings: string[] = [];
   let committed = false;
@@ -1387,6 +1388,7 @@ async function persistManagedSourceInstall(params: {
       invalidateRuntimeCache: params.invalidateRuntimeCache,
       runtime: params.runtime,
       persistenceLogger: { warn: (message) => warnings.push(message) },
+      beforePersistentApply: params.beforePersistentApply,
       // Only the persistence owner can distinguish rejection from a late refresh failure.
       onCommitted: () => {
         committed = true;
@@ -1482,6 +1484,7 @@ type ManagedPluginSourceInstallParams = {
   invalidateRuntimeCache?: boolean;
   acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  beforePersistentApply?: () => void;
 };
 
 /**
@@ -1626,6 +1629,7 @@ async function installResolvedManagedPluginSource(
         : completed.install(installed),
       transaction,
       successMessage: completed.successMessage,
+      beforePersistentApply: params.beforePersistentApply,
     });
     return {
       ...installed,

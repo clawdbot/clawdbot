@@ -5748,15 +5748,15 @@ button.chat-pr__diff {
 
 .chat-attachments-preview {
   display: flex;
-  gap: 8px;
+  gap: 18px;
   flex-wrap: nowrap;
   flex-shrink: 0;
   width: 100%;
   max-width: 100%;
   margin-top: 4px;
-  padding-block-start: 10px;
+  padding-block-start: 18px;
   padding-block-end: 5px;
-  padding-inline: 10px;
+  padding-inline: 18px;
   margin-bottom: 2px;
   overflow-x: auto;
   overflow-y: hidden;
@@ -5795,7 +5795,6 @@ button.chat-pr__diff {
   height: 56px;
   border-radius: var(--chat-attachment-radius);
   corner-shape: superellipse(1.5);
-  overflow: hidden;
   border: 1px solid var(--border);
   background: var(--chat-composer-surface, var(--popover));
   transition:
@@ -5830,6 +5829,8 @@ button.chat-pr__diff {
 }
 
 .chat-browser-annotation-card__preview {
+  border-radius: calc(var(--chat-attachment-radius) - 1px) 0 0
+    calc(var(--chat-attachment-radius) - 1px);
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -5864,11 +5865,6 @@ button.chat-pr__diff {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.chat-browser-annotation-card__remove {
-  width: 20px;
-  height: 20px;
 }
 
 .chat-browser-annotation-card__remove:not(:disabled) {
@@ -5914,16 +5910,18 @@ button.chat-pr__diff {
 
 .chat-attachment-remove {
   position: absolute;
-  top: 4px;
-  right: 4px;
+  /* The rail reserves this overhang so the full target clears images and neighbors. */
+  top: -18px;
+  right: -18px;
   z-index: 1;
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  border-radius: calc(7px * var(--openclaw-corner-radius-scale));
+  width: 44px;
+  height: 44px;
+  padding: 12px;
+  border-radius: calc(12px + 7px * var(--openclaw-corner-radius-scale));
   corner-shape: superellipse(1.5);
   border: none;
   background: color-mix(in srgb, var(--bg) 82%, transparent);
+  background-clip: content-box;
   color: var(--text-strong);
   font-size: 12px;
   line-height: 1;

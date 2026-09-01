@@ -5,7 +5,7 @@ import {
   resolvePluginCapabilityProviders,
 } from "../plugins/capability-provider-runtime.js";
 import {
-  buildCapabilityProviderMaps,
+  buildCapabilityProviderIndex,
   normalizeCapabilityProviderId,
 } from "../plugins/provider-registry-shared.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
@@ -32,7 +32,7 @@ export function listRealtimeVoiceProviders(
     cfg,
     additionalProviderIds,
   });
-  return [...buildCapabilityProviderMaps(providers).canonical.values()];
+  return [...buildCapabilityProviderIndex(providers, "canonical").values()];
 }
 
 /**

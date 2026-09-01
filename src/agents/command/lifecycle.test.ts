@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { attachErrorDiagnostic } from "../../infra/error-diagnostics.js";
 import { buildAgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
 import { FailoverError } from "../failover-error.js";
 import { renderFailoverCodeUserCopy } from "../failover/user-copy.js";
@@ -171,12 +172,71 @@ describe("createAgentCommandLifecycle", () => {
     },
   );
 
+  it.each([
+    ["basic", "plain"],
+    ["post-turn", "plain"],
+    ["post-turn", "timeout"],
+    ["post-turn", "abort"],
+  ] as const)(
+    "displays diagnostics on %s errors while retaining native %s facts",
+    (source, kind) => {
+      emitAgentEvent.mockClear();
+      const controller = new AbortController();
+      if (kind === "abort") {
+        controller.abort();
+      }
+      const lifecycle = createAgentCommandLifecycle({
+        runId: "diagnostic-terminal-owner",
+        lifecycleGeneration: () => "test-generation",
+        startedAt: 100,
+        abortSignal: controller.signal,
+        state: {
+          currentTurnUserMessagePersisted: true,
+          lifecycleFinishing: false,
+          lifecycleEnded: false,
+        },
+      });
+      const error = attachErrorDiagnostic(
+        kind === "timeout"
+          ? new FailoverError("watchdog stopped the child", { reason: "timeout" })
+          : new Error("child exited with code 1"),
+        "stderr: an earlier request timed out and was aborted",
+      );
+
+      if (source === "basic") {
+        lifecycle.emitBasicError(error);
+      } else {
+        lifecycle.emitPostTurnError(error, {
+          metadata: {},
+          outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
+        });
+      }
+
+      expect(emitAgentEvent).toHaveBeenCalledOnce();
+      const event = emitAgentEvent.mock.calls[0]?.[0];
+      expect(event.data.error).toContain(error.message);
+      expect(event.data.error).toContain("an earlier request timed out and was aborted");
+      if (kind === "timeout") {
+        expect(event.data).toMatchObject({ stopReason: "timeout", timeoutPhase: "provider" });
+        expect(event.data).not.toHaveProperty("aborted");
+      } else if (kind === "abort") {
+        expect(event.data).toMatchObject({ aborted: true, stopReason: "aborted" });
+        expect(event.data).not.toHaveProperty("timeoutPhase");
+      } else {
+        for (const field of ["aborted", "stopReason", "timeoutPhase"]) {
+          expect(event.data).not.toHaveProperty(field);
+        }
+      }
+    },
+  );
+
   it.each(["basic", "post-turn"] as const)(
     "publishes bounded selected-profile recovery from %s lifecycle errors",
     (source) => {
       emitAgentEvent.mockClear();
       const profileId = "openai:private-profile";
       const rawCause = `Codex app-server auth profile "${profileId}" was not found`;
+      const secret = ["sk", "abcdefghijklmnopqrstuv"].join("-");
       const lifecycle = createAgentCommandLifecycle({
         runId: "missing-selected-profile",
         lifecycleGeneration: () => "test-generation",
@@ -193,6 +253,10 @@ describe("createAgentCommandLifecycle", () => {
         profileId,
         cause: new Error(rawCause),
       });
+      attachErrorDiagnostic(
+        error,
+        `stderr: credential staging failed. Authorization: Bearer ${secret}`,
+      );
 
       if (source === "basic") {
         lifecycle.emitBasicError(error);
@@ -204,11 +268,13 @@ describe("createAgentCommandLifecycle", () => {
       }
 
       const event = emitAgentEvent.mock.calls[0]?.[0];
-      expect(event.data.error).toBe(
+      expect(event.data.error).toContain(
         renderFailoverCodeUserCopy("selected_auth_profile_unavailable"),
       );
+      expect(event.data.error).toContain("stderr: credential staging failed.");
       expect(JSON.stringify(event)).not.toContain(profileId);
       expect(JSON.stringify(event)).not.toContain(rawCause);
+      expect(JSON.stringify(event)).not.toContain(secret);
     },
   );
 

@@ -1,5 +1,6 @@
 // Openai provider module implements model/runtime integration.
 import path from "node:path";
+import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   ImageGenerationOutputFormat,
@@ -1044,7 +1045,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
               const mimeType = image.mimeType?.trim() || DEFAULT_OUTPUT_MIME;
               form.append(
                 "image[]",
-                new Blob([new Uint8Array(image.buffer)], { type: mimeType }),
+                new Blob([bufferToBlobPart(image.buffer)], { type: mimeType }),
                 inferImageUploadFileName({
                   fileName: image.fileName,
                   mimeType,

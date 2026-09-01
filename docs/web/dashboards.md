@@ -67,7 +67,8 @@ never needs the agent.
 - **Fluid grid.** Drag widgets by their handle; everything reflows and
   compacts automatically. Resize by handle or pick a size preset (small,
   medium, large, extra large) from the widget menu. Nobody places pixels —
-  not you, not the agent.
+  not you, not the agent. On narrow boards, widgets stack at full width in
+  their saved order; widening the board restores their saved column widths.
 - **Tabs.** A board can have several pages — say, an overview tab and a
   focused tab with one big widget. Each tab remembers its own chat-dock
   position.

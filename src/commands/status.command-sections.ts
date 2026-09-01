@@ -277,7 +277,7 @@ export function buildStatusHealthRows(params: {
   warn: (value: string) => string;
   muted: (value: string) => string;
 }) {
-  const rows: Array<Record<string, string>> = [
+  const rows: Array<{ Item: string; Status: string; Detail: string }> = [
     {
       Item: "Gateway",
       Status: params.ok("reachable"),

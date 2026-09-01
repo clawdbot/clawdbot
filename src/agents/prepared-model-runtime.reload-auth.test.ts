@@ -14,6 +14,7 @@ import {
 import { loadPreparedModelCatalogOwnerSnapshot } from "./prepared-model-catalog.js";
 import {
   acquireAgentRunPreparedModelRuntime,
+  advancePreparedModelRuntimeConfig,
   loadPublishedGatewayReplyDispatchRuntime,
   prepareModelRuntimeSnapshot,
   refreshStalePreparedModelRuntimeCatalog,
@@ -68,8 +69,8 @@ describe("prepared model runtime reload auth adoption", () => {
       profileSetChanged: true,
     });
 
-    const published = await prepareModelRuntimeSnapshot(input);
-    expect(published).toMatchObject({
+    const authPublished = await prepareModelRuntimeSnapshot(input);
+    expect(authPublished).toMatchObject({
       modelCatalog: { entries: [] },
     });
     expect(
@@ -78,9 +79,14 @@ describe("prepared model runtime reload auth adoption", () => {
     expect(mocks.buildPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
     expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
 
+    const nextConfig = { logging: { level: "debug" as const } };
+    advancePreparedModelRuntimeConfig(nextConfig);
+    const readInput = { ...input, config: nextConfig };
+    const published = await prepareModelRuntimeSnapshot(readInput);
+
     let requestReadSettled = false;
     const requestRead = loadPreparedModelCatalogOwnerSnapshot({
-      ...input,
+      ...readInput,
       readOnly: true,
     }).then(() => {
       requestReadSettled = true;

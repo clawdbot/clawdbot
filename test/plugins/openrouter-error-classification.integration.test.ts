@@ -2,20 +2,38 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { AssistantMessage, Context, Model } from "@openclaw/ai";
 import { streamOpenAICompletions } from "@openclaw/ai/internal/openai";
-import { beforeAll, describe, expect, it } from "vitest";
-import { resolveProviderHookPlugin } from "../plugins/provider-hook-runtime.js";
-import { classifyAssistantFailoverReason } from "./embedded-agent-helpers/assistant-message-failures.js";
+import { aroundEach, beforeAll, describe, expect, it } from "vitest";
+import { classifyAssistantFailoverReason } from "../../src/agents/embedded-agent-helpers/assistant-message-failures.js";
+import { formatAssistantErrorText } from "../../src/agents/embedded-agent-helpers/error-text.js";
+import {
+  resolveFailoverStatus,
+  resolveModelFallbackError,
+} from "../../src/agents/failover-error.js";
+import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
+import { withPluginRuntimeRegistryScope } from "../../src/plugins/runtime/gateway-request-scope.js";
+import { loadBundledPluginFacade } from "../../src/test-utils/bundled-plugin-public-surface.js";
+import { registerSingleProviderPlugin } from "../../src/test-utils/plugin-registration.js";
 
-// This integration suite deliberately exercises the real bundled OpenRouter
-// failover hooks, and the first hook materialization compiles the plugin
-// sources in this worker (import-bound; src/agents/CLAUDE.md). Warm it once
-// under an explicit hook budget so the per-test 120s timeout measures
-// classification behavior, not cold compile under CI load.
-beforeAll(() => {
-  resolveProviderHookPlugin({ provider: "openrouter" });
-}, 300_000);
-import { formatAssistantErrorText } from "./embedded-agent-helpers/error-text.js";
-import { resolveFailoverStatus, resolveModelFallbackError } from "./failover-error.js";
+const pluginRegistry = createEmptyPluginRegistry();
+
+beforeAll(async () => {
+  const { default: openrouterPlugin } = await loadBundledPluginFacade<{
+    default: Parameters<typeof registerSingleProviderPlugin>[0];
+  }>({
+    pluginId: "openrouter",
+    artifactBasename: "index.js",
+  });
+  const provider = await registerSingleProviderPlugin(openrouterPlugin);
+  pluginRegistry.providers.push({
+    pluginId: provider.id,
+    source: "test",
+    provider,
+  });
+});
+
+// Keep the real provider hooks in an owned scope, without cold discovery or
+// publishing a registry that can leak into another shared-worker test.
+aroundEach((runTest) => withPluginRuntimeRegistryScope(pluginRegistry, runTest));
 
 const model = {
   id: "example/model",
@@ -33,6 +51,7 @@ const model = {
 async function runAgainstOpenRouterError(params: {
   message: string;
   context: Context;
+  status?: number;
 }): Promise<{ reason: string | null; requestBody: string }> {
   let requestBody = "";
   const server = createServer((request, response) => {
@@ -41,8 +60,9 @@ async function runAgainstOpenRouterError(params: {
       requestBody += chunk;
     });
     request.on("end", () => {
-      response.writeHead(404, { "content-type": "application/json" });
-      response.end(JSON.stringify({ error: { code: 404, message: params.message } }));
+      const status = params.status ?? 404;
+      response.writeHead(status, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { code: status, message: params.message } }));
     });
   });
 
@@ -213,5 +233,15 @@ describe("OpenRouter runtime error classification", () => {
     });
 
     expect(result.reason).toBe("model_not_found");
+  });
+
+  it("applies OpenRouter billing policy to an HTTP 403 key-limit error", async () => {
+    const result = await runAgainstOpenRouterError({
+      status: 403,
+      message: "Key limit exceeded",
+      context: { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+    });
+
+    expect(result.reason).toBe("billing");
   });
 });

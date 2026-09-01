@@ -63,7 +63,7 @@ function createMainRefreshTemplate(directory: string) {
   writeFileSync(join(canonical, "package.json"), '{"type":"module"}\n');
   cpSync(join(process.cwd(), "tsconfig.json"), join(canonical, "tsconfig.json"));
   writeFileSync(join(canonical, ".gitignore"), ".worktrees/\n.local/\nnode_modules\n");
-  mkdirSync(join(canonical, "src"));
+  mkdirSync(join(canonical, "src"), { recursive: true });
   writeFileSync(join(canonical, "src", "subject.ts"), "export const subject = 'base';\n");
   git(canonical, "add", ".");
   git(canonical, "commit", "-qm", "test: trusted native wrapper");
