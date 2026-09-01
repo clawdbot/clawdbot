@@ -90,6 +90,11 @@ function normalizeIMessageFullDiskAccessError(message: string): string | undefin
 
 export class IMessageRpcClient {
   private readonly cliPath: string;
+  // The private-API cache is keyed by the *configured* cliPath (see
+  // actions.ts, which passes `account.config.cliPath` to both the probe and
+  // this client), so invalidation has to use the same unexpanded string. Using
+  // the expanded one silently misses for any `~`-relative cliPath.
+  private readonly configuredCliPath: string;
   private readonly dbPath?: string;
   private readonly runtime?: RuntimeEnv;
   private readonly onNotification?: (msg: IMessageRpcNotification) => void;
@@ -109,7 +114,8 @@ export class IMessageRpcClient {
   private publicProcessError: string | null = null;
 
   constructor(opts: IMessageRpcClientOptions = {}) {
-    this.cliPath = expandIMessageUserPath(opts.cliPath?.trim() || "imsg");
+    this.configuredCliPath = opts.cliPath?.trim() || "imsg";
+    this.cliPath = expandIMessageUserPath(this.configuredCliPath);
     const dbPath = opts.dbPath?.trim();
     // An explicitly remote database belongs to the Messages Mac. Only local
     // database paths are relative to the Gateway user's home directory.
@@ -248,7 +254,7 @@ export class IMessageRpcClient {
       // "run imsg launch" guidance. Clearing the entry makes the next action
       // re-probe and report the real state.
       if (isIMessageBridgeStall(err)) {
-        invalidateCachedIMessagePrivateApiStatus(this.cliPath);
+        invalidateCachedIMessagePrivateApiStatus(this.configuredCliPath);
       }
       throw err;
     }

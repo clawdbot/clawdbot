@@ -456,6 +456,40 @@ describe("IMessageRpcClient bridge-stall cache invalidation", () => {
     await client.stop();
   });
 
+  // actions.ts caches the probe under the raw `account.config.cliPath` and
+  // hands that same unexpanded string to this client, which then expands it for
+  // spawning. Invalidating under the expanded path would miss the entry for any
+  // `~`-relative cliPath and silently do nothing, which is the exact failure
+  // mode this change exists to remove.
+  it("invalidates under the configured cli path, not the expanded one", async () => {
+    const cliPath = "~/imsg-stall-tilde/imsg";
+    privateApiStatus.setCachedIMessagePrivateApiStatus(cliPath, { ...seeded });
+
+    const client = new IMessageRpcClient({ cliPath });
+    await client.start();
+    const pending = client.request("send", {}, { timeoutMs: 0 });
+    pending.catch(() => {});
+    child.stdout.emit(
+      "data",
+      Buffer.from(
+        `${JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          error: {
+            code: -32603,
+            message: "Timed out waiting for response to 'send-message'",
+          },
+        })}\n`,
+      ),
+    );
+
+    await pending.catch((cause: unknown) => cause);
+    expect(privateApiStatus.getCachedIMessagePrivateApiStatus(cliPath)).toBeUndefined();
+
+    child.emit("close", 0, null);
+    await client.stop();
+  });
+
   // The cache is what keeps the bridge off the hot path, so an ordinary
   // rejection must not cost every later send a re-probe.
   it("keeps the cached verdict when the request is merely rejected", async () => {
