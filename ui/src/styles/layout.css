@@ -225,6 +225,10 @@ html.openclaw-native-web-chrome .sidebar-brand__new-thread {
   box-shadow: none;
 }
 
+html.openclaw-native-web-chrome .sidebar-brand__new-thread:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
 .macos-titlebar-controls {
   position: fixed;
   top: 0;

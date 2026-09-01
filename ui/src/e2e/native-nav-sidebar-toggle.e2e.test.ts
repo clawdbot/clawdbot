@@ -444,6 +444,19 @@ suite.define(() => {
         }),
       )
       .toEqual({ borderColor: "rgba(0, 0, 0, 0)", boxShadow: "none" });
+    await page.keyboard.press("Tab");
+    await sidebarNewThread.focus();
+    await expect
+      .poll(() =>
+        sidebarNewThread.evaluate((element) => {
+          const style = getComputedStyle(element);
+          return {
+            focusVisible: element.matches(":focus-visible"),
+            boxShadow: style.boxShadow,
+          };
+        }),
+      )
+      .toEqual({ focusVisible: true, boxShadow: expect.not.stringMatching(/^none$/) });
     await expect
       .poll(async () => {
         const [brandBox, newThreadBox] = await Promise.all([
