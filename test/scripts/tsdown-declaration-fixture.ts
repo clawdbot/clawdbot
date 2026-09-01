@@ -100,8 +100,10 @@ process.stdout.write(JSON.stringify({ inputs, selected, declarations }));
   };
 }
 
-export function createFixture(groups: readonly string[] = TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS) {
-  const root = path.join(fs.realpathSync(createTempDir("openclaw-sdk-declarations-")), "Project");
+export function createFixture(
+  groups: readonly string[] = TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
+  root = path.join(fs.realpathSync(createTempDir("openclaw-sdk-declarations-")), "Project"),
+) {
   fs.mkdirSync(root, { recursive: true });
   fs.mkdirSync(path.join(root, ".artifacts"));
   fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
