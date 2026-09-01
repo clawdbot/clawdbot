@@ -358,7 +358,7 @@ async function buildHealthAccountRecord(params: {
     (params.accountId === params.defaultAccountId
       ? params.runtimeSnapshot?.channels[params.plugin.id]
       : undefined);
-  const unavailable = resolveUnavailableChannelAccountSnapshot({
+  const unavailable = resolveUnavailableChannelAccountSnapshot(params.cfg, {
     channelId: params.plugin.id,
     accountId: params.accountId,
     runtime: runtimeSnapshot,

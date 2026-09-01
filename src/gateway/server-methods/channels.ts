@@ -26,6 +26,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getChannelActivity } from "../../infra/channel-activity.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
+import { isAccountEnabled } from "../../shared/account-enabled.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
@@ -383,20 +384,13 @@ export const channelsHandlers: GatewayRequestHandlers = {
     }
     const statusWarnings: string[] = [];
 
-    const isAccountEnabled = (plugin: ChannelPlugin, account: unknown) =>
-      plugin.config.isEnabled
-        ? plugin.config.isEnabled(account, cfg)
-        : !account ||
-          typeof account !== "object" ||
-          (account as { enabled?: boolean }).enabled !== false;
-
     const buildAccountSnapshot = async (
       channelId: ChannelId,
       plugin: ChannelPlugin,
       accountId: string,
     ) => {
       const runtimeSnapshot = resolveRuntimeAccountSnapshot({ runtime, channelId, accountId });
-      const unavailable = resolveUnavailableChannelAccountSnapshot({
+      const unavailable = resolveUnavailableChannelAccountSnapshot(cfg, {
         channelId,
         accountId,
         runtime: runtimeSnapshot,
@@ -407,7 +401,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
         return { accountId, snapshot: diagnosticSnapshot };
       }
       const account = plugin.config.resolveAccount(cfg, accountId);
-      const enabled = isAccountEnabled(plugin, account);
+      const enabled = plugin.config.isEnabled?.(account, cfg) ?? isAccountEnabled(account);
       let probeResult: unknown;
       let lastProbeAt: number | null = null;
       if (probe && enabled && plugin.status?.probeAccount) {

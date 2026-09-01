@@ -1,9 +1,11 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import {
   findActiveDegradedSecretOwner,
   SecretSurfaceUnavailableError,
 } from "../../secrets/runtime-degraded-state.js";
+import { isChannelAccountExplicitlyDisabled } from "../account-config-enabled.js";
 import type { ChannelAccountLinkState } from "../plugins/types.adapters.js";
 import type {
   ChannelAccountSnapshot,
@@ -36,19 +38,19 @@ type ChannelAccountStateInput = {
   unlinkedReason?: string;
 };
 
-export function resolveUnavailableChannelAccountSnapshot(params: {
-  channelId: string;
-  accountId: string;
-  runtime?: ChannelAccountSnapshot;
-}): ChannelAccountSnapshot | undefined {
-  const owner = findActiveDegradedSecretOwner(
-    "account",
-    `${params.channelId}:${normalizeAccountId(params.accountId)}`,
-  );
+export function resolveUnavailableChannelAccountSnapshot(
+  cfg: OpenClawConfig,
+  params: {
+    channelId: string;
+    accountId: string;
+    runtime?: ChannelAccountSnapshot;
+  },
+): ChannelAccountSnapshot | undefined {
+  const accountId = normalizeAccountId(params.accountId);
+  const owner = findActiveDegradedSecretOwner("account", `${params.channelId}:${accountId}`);
   const registry = getActivePluginRegistry();
-  const registered = registry?.channels.some(({ plugin }) => plugin.id === params.channelId);
   const failedPlugin =
-    !registered &&
+    !registry?.channels.some(({ plugin }) => plugin.id === params.channelId) &&
     registry?.plugins.find(
       (plugin) =>
         plugin.enabled && plugin.status === "error" && plugin.channelIds.includes(params.channelId),
@@ -62,12 +64,14 @@ export function resolveUnavailableChannelAccountSnapshot(params: {
   if (!lastError) {
     return undefined;
   }
-  // A failed plugin has no live account; prior probes and activity cannot describe this generation.
+  // Failed plugins have no live account: discard old probes/activity, but preserve config disables.
   const runtime = failedPlugin ? undefined : params.runtime;
   return {
     ...runtime,
     accountId: params.accountId,
-    enabled: runtime?.enabled ?? true,
+    enabled: failedPlugin
+      ? !isChannelAccountExplicitlyDisabled({ cfg, channel: params.channelId, accountId })
+      : (runtime?.enabled ?? true),
     configured: true,
     running: false,
     ...(typeof runtime?.connected === "boolean" ? { connected: false } : {}),

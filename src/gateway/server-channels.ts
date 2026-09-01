@@ -1405,7 +1405,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       const accounts: Record<string, ChannelAccountSnapshot> = {};
       for (const id of accountIds) {
         const current = store.runtimes.get(id) ?? cloneDefaultRuntime(plugin.id, id);
-        const unavailable = resolveUnavailableChannelAccountSnapshot({
+        const unavailable = resolveUnavailableChannelAccountSnapshot(cfg, {
           channelId: plugin.id,
           accountId: id,
           runtime: current,

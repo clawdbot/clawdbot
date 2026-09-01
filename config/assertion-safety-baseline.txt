@@ -2875,7 +2875,7 @@ src/gateway/server-methods/approval.ts	8
 src/gateway/server-methods/attachment-normalize.ts	1
 src/gateway/server-methods/base-hash.ts	1
 src/gateway/server-methods/channel-pairing.ts	3
-src/gateway/server-methods/channels.ts	13
+src/gateway/server-methods/channels.ts	12
 src/gateway/server-methods/chat-abort-authorization.ts	3
 src/gateway/server-methods/chat-abort-handler.ts	2
 src/gateway/server-methods/chat-assistant-content.ts	1

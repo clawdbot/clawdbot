@@ -320,6 +320,14 @@ describe("channelsHandlers channels.status", () => {
       const healthyProbe = vi.fn(async () => ({ ok: true }));
       const healthy = createChannelPlugin({ id: "healthy", probeAccount: healthyProbe });
       configureAutoEnabledChannels([healthy]);
+      failed.config.listAccountIds = () => ["default", "disabled"];
+      mocks.applyPluginAutoEnable.mockReturnValue({
+        config: {
+          autoEnabled: true,
+          channels: { "broken-channel": { accounts: { Disabled: { enabled: false } } } },
+        },
+        changes: [],
+      });
       mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([failed, healthy]);
       setActivePluginRegistry({
         ...createTestRegistry([]),
@@ -347,6 +355,16 @@ describe("channelsHandlers channels.status", () => {
         configured: true,
         lastError: expect.stringContaining("missing SDK export"),
       });
+      const accounts = requireGatewayRecord(payload.channelAccounts, "accounts")["broken-channel"];
+      expect(accounts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            accountId: "disabled",
+            enabled: false,
+            lastError: expect.stringContaining("missing SDK export"),
+          }),
+        ]),
+      );
       expect(failedProbe).not.toHaveBeenCalled();
       expect(healthyProbe).toHaveBeenCalledOnce();
       mocks.normalizeChannelId.mockReturnValueOnce(null);

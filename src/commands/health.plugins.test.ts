@@ -5,11 +5,12 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { SnapshotSchema } from "../../packages/gateway-protocol/src/schema/snapshot.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 
-const testConfig = { session: { store: "/tmp/x" } };
+const testConfig: OpenClawConfig = { session: { store: "/tmp/x" } };
 const tempDirs = createTempDirTracker();
 let sessionStorePath: string;
 
@@ -64,6 +65,7 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
     pluginServicesHandle = undefined;
     setActiveDegradedPlugins([]);
     inventoryPlugins = [];
+    delete testConfig.channels;
     setActivePluginRegistry(createTestRegistry([]));
     tempDirs.cleanup();
   });
@@ -147,9 +149,15 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
 
   it("projects the recorded channel load failure instead of stale successful probes", async () => {
     const probeAccount = vi.fn(async () => ({ ok: true }));
+    const base = createChannelTestPluginBase({ id: "broken-channel" });
     inventoryPlugins = [
-      { ...createChannelTestPluginBase({ id: "broken-channel" }), status: { probeAccount } },
+      {
+        ...base,
+        config: { ...base.config, listAccountIds: () => ["default", "disabled"] },
+        status: { probeAccount },
+      },
     ];
+    testConfig.channels = { "broken-channel": { accounts: { Disabled: { enabled: false } } } };
     const registry = {
       ...createTestRegistry([]),
       plugins: [
@@ -189,6 +197,11 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
       lifecycle: "blocked",
       lastError: expect.stringContaining("missing SDK export"),
     });
+    expect(snap.channels["broken-channel"]?.accounts?.disabled).toMatchObject({
+      enabled: false,
+      running: false,
+      lastError: expect.stringContaining("missing SDK export"),
+    });
     expect(snap.channels["broken-channel"]).not.toHaveProperty("probe");
     expect(probeAccount).not.toHaveBeenCalled();
 
@@ -207,7 +220,7 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
     const { resolveUnavailableChannelAccountSnapshot } =
       await import("../channels/status/account-state.js");
     expect(
-      resolveUnavailableChannelAccountSnapshot({
+      resolveUnavailableChannelAccountSnapshot(testConfig, {
         channelId: "broken-channel",
         accountId: "default",
       }),
