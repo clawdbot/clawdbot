@@ -441,6 +441,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       navDrawerOpen: this.navDrawerOpen,
       title: (catalog ? this.catalogSession?.name?.trim() : undefined) || this.paneTitle,
       session: row,
+      placementStartupStatus: this.context.placementStartup.get(key),
       showOwnerChip,
       ownerViewing,
       personActivity,
