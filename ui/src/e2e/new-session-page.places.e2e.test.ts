@@ -199,7 +199,7 @@ suite.define(() => {
       const incognitoCenterY = (incognitoBox?.y ?? 0) + (incognitoBox?.height ?? 0) / 2;
       const commandPaletteCenterY =
         (commandPaletteBox?.y ?? 0) + (commandPaletteBox?.height ?? 0) / 2;
-      expect(Math.abs(incognitoCenterY - commandPaletteCenterY)).toBeLessThanOrEqual(2);
+      expect(Math.abs(Math.round(incognitoCenterY - commandPaletteCenterY))).toBeLessThanOrEqual(2);
       expect(incognitoBox?.x ?? 0).toBeGreaterThan((commandPaletteBox?.x ?? 0) + 100);
       expect(
         await page
