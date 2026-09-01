@@ -20,6 +20,7 @@ import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.js";
 import { cronStreamScheduleKey } from "../stream-schedule.js";
+import type { CronJob } from "../types.js";
 import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { remove, update } from "./ops-mutations.js";
 import { list } from "./ops-read.js";
@@ -53,6 +54,41 @@ function expectQueuedRunAck(result: unknown) {
 }
 
 describe("cron service run admission", () => {
+  it("preserves private runtime authority across manual-run reservation", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:03.000Z");
+    const job = createDueIsolatedJob({
+      id: "manual-run-runtime-authority",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    const runtimeAuthority = {
+      version: 1 as const,
+      runtimeId: "codex",
+      namespace: "codex.apps",
+      payload: { auth: { managedRequirementsFingerprint: "f".repeat(64) } },
+    };
+    job.runtimeAuthority = runtimeAuthority;
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const runIsolatedAgentJob = vi.fn(async ({ job: runningJob }: { job: CronJob }) => {
+      expect(runningJob.runtimeAuthority).toEqual(runtimeAuthority);
+      return { status: "ok" as const };
+    });
+    const state = createAdmissionTestState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    await expect(run(state, job.id, "force")).resolves.toEqual({ ok: true, ran: true });
+    expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
+  });
+
   it("rechecks a queued if-enabled run after the job is disabled", async () => {
     vi.useRealTimers();
     clearCommandLane(CommandLane.Cron);
