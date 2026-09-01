@@ -12,6 +12,7 @@ import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-stor
 import { loadInstalledPluginIndex, type InstalledPluginIndex } from "./installed-plugin-index.js";
 import {
   hasMissingInstalledPluginOwnerMetadata,
+  resolveInstalledPluginLifecycleOwnership,
   resolveInstalledPluginPackageOwnership,
 } from "./installed-plugin-package-ownership.js";
 import { resolvePluginManifestInstallOwner } from "./manifest-install-owner.js";
@@ -548,7 +549,8 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
         },
       },
     };
-    expect(resolveInstalledPluginPackageOwnership(orphanedOwner, "orphaned")).toMatchObject({
+    expect(resolveInstalledPluginPackageOwnership(orphanedOwner, "orphaned").ok).toBe(false);
+    expect(resolveInstalledPluginLifecycleOwnership(orphanedOwner, "orphaned")).toMatchObject({
       ok: true,
       value: { installOwner: "orphaned", pluginIds: [] },
     });

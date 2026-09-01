@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import {
+  resolveInstalledPluginLifecycleOwnership,
   resolveInstalledPluginPackageOwnership,
   type InstalledPluginPackageOwnership,
 } from "./installed-plugin-package-ownership.js";
@@ -18,7 +19,7 @@ export function capturePluginPackageUpdateSnapshot(params: {
 }): { ok: true; value: PluginPackageUpdateSnapshot } | { ok: false; error: string } {
   const snapshot = new Map<string, InstalledPluginPackageOwnership>();
   for (const installOwner of new Set(params.installOwners)) {
-    const ownership = resolveInstalledPluginPackageOwnership(
+    const ownership = resolveInstalledPluginLifecycleOwnership(
       params.index,
       installOwner,
       params.env,

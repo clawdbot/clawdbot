@@ -93,7 +93,10 @@ import {
   withoutPluginInstallRecords,
 } from "./installed-plugin-index-records.js";
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
-import { resolveInstalledPluginPackageOwnership } from "./installed-plugin-package-ownership.js";
+import {
+  resolveInstalledPluginLifecycleOwnership,
+  resolveInstalledPluginPackageOwnership,
+} from "./installed-plugin-package-ownership.js";
 import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
@@ -2053,7 +2056,7 @@ export async function uninstallManagedPlugin(params: {
     if (!record && !Object.hasOwn(installRecords, pluginId)) {
       throw new ManagedPluginLifecycleError(`Plugin not found: ${pluginId}`);
     }
-    const ownership = resolveInstalledPluginPackageOwnership(metadata.index, pluginId, env);
+    const ownership = resolveInstalledPluginLifecycleOwnership(metadata.index, pluginId, env);
     if (!ownership.ok) {
       throw new ManagedPluginLifecycleError(ownership.error);
     }
