@@ -3904,7 +3904,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
   });
 
-  it("keeps the full latest preamble and turns the same Slack message into the final answer", async () => {
+  it("keeps only authored preambles before replacing the draft with the final answer", async () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
@@ -3916,16 +3916,53 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       "I found the earlier decision and am checking the owner, the current rollout, and the original feedback before deciding what would actually be useful here.";
     mockedReplyOptionEvents = [
       {
+        kind: "plan",
+        phase: "update",
+        steps: [
+          { step: "Inspect", status: "in_progress" },
+          { step: "Patch", status: "pending" },
+          { step: "Verify", status: "pending" },
+        ],
+      },
+      {
         kind: "item",
         itemKind: "preamble",
         itemId: "preamble-1",
         progressText: firstPreamble,
       },
       {
+        kind: "tool_start",
+        itemId: "tool-1",
+        name: "bash",
+        phase: "start",
+        args: { command: "pnpm test" },
+      },
+      { kind: "reasoning", text: "Considering the next step." },
+      {
+        kind: "plan",
+        phase: "update",
+        explanation: "Running the checklist.",
+        steps: [{ step: "Patch", status: "in_progress" }],
+      },
+      {
         kind: "item",
         itemKind: "preamble",
         itemId: "preamble-2",
         progressText: latestPreamble,
+      },
+      {
+        kind: "command_output",
+        itemId: "tool-1",
+        name: "bash",
+        phase: "end",
+        title: "pnpm test",
+        exitCode: 1,
+      },
+      {
+        kind: "plan",
+        phase: "update",
+        explanation: "Finishing the checklist.",
+        steps: [{ step: "Verify", status: "completed" }],
       },
     ];
 
@@ -3946,8 +3983,10 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       }),
     );
 
-    expect(draftStream.update).toHaveBeenCalledWith(`_${firstPreamble}_`);
-    expect(draftStream.update).toHaveBeenLastCalledWith(`_${latestPreamble}_`);
+    expect(draftStream.update.mock.calls.flat()).toEqual([
+      `_${firstPreamble}_`,
+      `_${latestPreamble}_`,
+    ]);
     expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
     expectMockCallArgFields(finalizeSlackPreviewEditMock, 0, "progress final edit", {
       channelId: "C123",

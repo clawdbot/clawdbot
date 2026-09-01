@@ -1526,7 +1526,8 @@ The default scope (`"group-mentions"`) does not fire ack reactions in direct mes
 - `partial` (default): replace preview text with the latest partial output.
 - `block`: append chunked preview updates.
 - `progress`: show progress status text while generating, then send final text.
-- `streaming.preview.toolProgress`: when draft preview is active, route tool/progress updates into the same edited preview message (default: `true`). Set `false` to keep separate tool/progress messages.
+- `streaming.preview.toolProgress`: when draft preview is active, route tool/progress updates into the same edited preview message (default: `true`). Set `false` to hide interim tool and plan updates.
+- `streaming.progress.toolProgress`: set `false` to keep progress drafts on authored preambles instead of tool-status lines and plan checklists. Pair with `commentary: true`, `label: false`, and `maxLines: 1` to show only the latest preamble until the final reply replaces it.
 - `streaming.preview.commandText` / `streaming.progress.commandText`: set to `status` to keep compact tool-progress lines while hiding raw command/exec text (default: `raw`).
 
 Hide raw command/exec text while keeping compact progress lines:

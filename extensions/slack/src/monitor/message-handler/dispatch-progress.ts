@@ -429,6 +429,10 @@ export function createSlackProgressRuntime(runtimeParams: {
   };
 
   const pushPlanProgress = async (steps?: AgentPlanStep[], explanation?: string) => {
+    // A plan is tool progress, not a replacement for the model's latest preamble.
+    if (!previewToolProgressEnabled) {
+      return;
+    }
     if (streamMode === "status_final") {
       await progressDraft.pushPlanProgress(steps, { explanation });
       return;
