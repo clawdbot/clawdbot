@@ -14,6 +14,15 @@ extension OpenClawChatViewModel {
             defaultProvider: defaultProvider)
     }
 
+    public var modelSelectionTargetDescription: String? {
+        switch self.sessionDefaults?.modelSelectionTarget {
+        case "session": String(localized: "Changes this session only")
+        case "agent": String(localized: "Changes this agent's default")
+        case "global": String(localized: "Changes the global default")
+        default: nil
+        }
+    }
+
     public func isDefaultModel(_ model: OpenClawChatModelChoice) -> Bool {
         ChatModelPickerStore.isDefaultModel(
             model,

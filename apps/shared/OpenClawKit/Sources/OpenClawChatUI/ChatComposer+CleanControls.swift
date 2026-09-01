@@ -127,6 +127,12 @@ extension OpenClawChatComposer {
     private func cleanInlineModelPicker(compact: Bool) -> some View {
         let sections = self.viewModel.modelPickerSections
         return Menu {
+            if let target = self.viewModel.modelSelectionTargetDescription {
+                Text(target)
+                    .font(OpenClawChatTypography.caption)
+                    .accessibilityIdentifier("chat-composer-model-selection-target")
+                Divider()
+            }
             Picker(
                 "Model",
                 selection: Binding(

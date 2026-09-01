@@ -576,6 +576,9 @@ final class OpenClawSnapshotUITests: XCTestCase {
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
 
         inlineModel.tap()
+        let inlineModelSelectionTarget = app.buttons["chat-composer-model-selection-target"]
+        XCTAssertTrue(inlineModelSelectionTarget.waitForExistence(timeout: 3))
+        XCTAssertEqual(inlineModelSelectionTarget.label, "Changes the global default")
         let inlineSelectedModel = app.buttons["openai/gpt-5.6-sol"]
         XCTAssertTrue(inlineSelectedModel.waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["Default: openai/gpt-5.6-sol"].exists)
@@ -587,6 +590,9 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(updatedInlineModel.waitForExistence(timeout: 3))
         self.waitForValue("claude-opus-4-1", of: updatedInlineModel)
         updatedInlineModel.tap()
+        let updatedInlineModelSelectionTarget = app.buttons["chat-composer-model-selection-target"]
+        XCTAssertTrue(updatedInlineModelSelectionTarget.waitForExistence(timeout: 3))
+        XCTAssertEqual(updatedInlineModelSelectionTarget.label, "Changes the global default")
         let selectedInlineModel = app.buttons["anthropic/claude-opus-4-1"]
         XCTAssertTrue(selectedInlineModel.waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["openai/gpt-5.6-sol"].exists)
@@ -1192,6 +1198,22 @@ final class OpenClawSnapshotUITests: XCTestCase {
 }
 
 extension OpenClawSnapshotUITests {
+    func testChatActionsShowsModelSelectionTarget() throws {
+        self.launchApp(for: Self.chatScreenshotTarget)
+        let app = try XCTUnwrap(self.app)
+        let actions = app.buttons["Chat actions"]
+        XCTAssertTrue(actions.waitForExistence(timeout: 8))
+        actions.tap()
+
+        let target = app.staticTexts["Changes the global default"]
+        XCTAssertTrue(target.waitForExistence(timeout: 3))
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5)).tap()
+        XCTAssertTrue(target.waitForNonExistence(timeout: 3))
+
+        actions.tap()
+        XCTAssertTrue(target.waitForExistence(timeout: 3))
+    }
+
     func testChatActionsModelRowsScreenshot() throws {
         self.launchApp(
             for: Self.chatScreenshotTarget,

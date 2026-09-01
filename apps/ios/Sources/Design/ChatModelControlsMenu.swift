@@ -290,7 +290,9 @@ struct ChatModelControlsMenuItems: View {
     private var modelPicker: some View {
         let sections = self.viewModel.modelPickerSections
         return Group {
-            ChatActionMenuSectionHeader(title: "Model")
+            ChatActionMenuSectionHeader(
+                title: "Model",
+                detail: self.viewModel.modelSelectionTargetDescription)
             self.modelOption(
                 title: self.defaultModelLabel,
                 providerID: self.defaultProviderID,

@@ -29,6 +29,7 @@ struct LocalChatFixture {
     let modelProvider: String
     let modelID: String
     let modelName: String
+    let modelSelectionTarget: String
     let additionalModels: [OpenClawChatModelChoice]
     let responsePrefix: String
     let seedMessages: [String]
@@ -43,6 +44,7 @@ struct LocalChatFixture {
         modelProvider: "demo",
         modelID: "local-demo",
         modelName: "Apple Review Demo",
+        modelSelectionTarget: "session",
         additionalModels: [],
         responsePrefix: "Demo mode is active.",
         seedMessages: [
@@ -74,6 +76,7 @@ struct LocalChatFixture {
         modelProvider: "openai",
         modelID: "gpt-5.6-sol",
         modelName: "GPT-5.6 Sol",
+        modelSelectionTarget: "global",
         additionalModels: [
             OpenClawChatModelChoice(
                 modelID: "claude-opus-4-1",
@@ -534,7 +537,8 @@ private actor LocalFixtureChatStore {
                 thinkingLevels: Self.thinkingLevels,
                 thinkingOptions: Self.thinkingOptions,
                 thinkingDefault: "auto",
-                mainSessionKey: self.fixture.sessionKey),
+                mainSessionKey: self.fixture.sessionKey,
+                modelSelectionTarget: self.fixture.modelSelectionTarget),
             sessions: [entry])
     }
 
