@@ -117,16 +117,12 @@ async function connectTrustedProxyClient(params: {
 }): Promise<GatewayClient> {
   return await new Promise<GatewayClient>((resolve, reject) => {
     let settled = false;
-    let client: GatewayClient | undefined;
-    let timer: NodeJS.Timeout | undefined;
     const finish = (error?: Error) => {
       if (settled) {
         return;
       }
       settled = true;
-      if (timer) {
-        clearTimeout(timer);
-      }
+      clearTimeout(timer);
       if (error) {
         void client?.stopAndWait({ timeoutMs: 1_000 }).catch(() => {
           client?.stop();
@@ -134,10 +130,10 @@ async function connectTrustedProxyClient(params: {
         reject(error);
         return;
       }
-      resolve(client as GatewayClient);
+      resolve(client);
     };
 
-    client = new GatewayClient({
+    const client = new GatewayClient({
       url: params.url,
       edgeAuthHeaders: {
         "x-forwarded-user": params.user,
@@ -159,7 +155,10 @@ async function connectTrustedProxyClient(params: {
       onClose: (code, reason) =>
         finish(new Error(`gateway closed during trusted-proxy connect (${code}): ${reason}`)),
     });
-    timer = setTimeout(() => finish(new Error("trusted-proxy gateway connect timeout")), 10_000);
+    const timer = setTimeout(
+      () => finish(new Error("trusted-proxy gateway connect timeout")),
+      10_000,
+    );
     timer.unref();
     client.start();
   });
@@ -419,7 +418,7 @@ async function main(): Promise<void> {
       },
       seededJobs: {
         visible: { id: visible.id, name: visibleName, ownerSessionKey: limitedSessionKey },
-        hidden: { id: hidden.id, name: hiddenName, ownerSessionKey: ownerSessionKey },
+        hidden: { id: hidden.id, name: hiddenName, ownerSessionKey },
       },
       owner: {
         beforeLimitedRoleCall: summarizeList(ownerBefore),
