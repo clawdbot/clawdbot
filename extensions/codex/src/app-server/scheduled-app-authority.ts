@@ -305,8 +305,7 @@ function readCurrentToolPolicy(
         : typeof defaultToolsEnabled === "boolean"
           ? defaultToolsEnabled
           : true,
-    approvalMode:
-      normalizeAppToolApprovalMode(tool?.approval_mode) ?? fallbackApprovalMode,
+    approvalMode: normalizeAppToolApprovalMode(tool?.approval_mode) ?? fallbackApprovalMode,
   };
 }
 
@@ -579,10 +578,7 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
             enabled: currentToolPolicy.enabled,
             approval_mode: intersectToolApprovalMode(
               intersectToolApprovalMode(capturedMode, storedAppCeiling),
-              intersectToolApprovalMode(
-                currentToolPolicy.approvalMode,
-                currentAppCeiling,
-              ),
+              intersectToolApprovalMode(currentToolPolicy.approvalMode, currentAppCeiling),
             ),
           },
         ];
