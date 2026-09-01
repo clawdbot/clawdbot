@@ -95,15 +95,13 @@ export function resolveEmbeddedRunTerminalTimeout(input: {
       replayInvalid,
       livenessState,
       ...timeoutAttribution,
-      ...(timeoutFinal
-        ? {
-            error: {
-              kind: "incomplete_turn" as const,
-              message: timeoutText,
-              fallbackSafe: false,
-            },
-          }
-        : {}),
+      // Recovery and eligible fallback already ran. Keep this final timeout out
+      // of successful settlement and prevent earlier tool errors from reopening replay.
+      error: {
+        kind: "incomplete_turn",
+        message: timeoutText,
+        fallbackSafe: false,
+      },
       toolSummary: input.terminalPrepared.attemptToolSummary,
       ...(input.terminalPrepared.failureSignal
         ? { failureSignal: input.terminalPrepared.failureSignal }

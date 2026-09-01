@@ -176,7 +176,7 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   onToolOutcome?: ToolOutcomeObserver;
   /** Reads the sticky untrusted-content flag for the current user turn. */
   isTurnTainted?: () => boolean;
-  /** Signals that the attempt's own run-timeout watchdog is active. */
+  /** Shipped harness notification; core uses onAttemptDeadlineChanged for queue ownership. */
   onAttemptTimeoutArmed?: () => void;
   /** Hands the lane an authoritative deadline, never a progress-idle estimate. */
   onAttemptDeadlineChanged?: (deadline: CommandQueueTaskDeadline) => void;

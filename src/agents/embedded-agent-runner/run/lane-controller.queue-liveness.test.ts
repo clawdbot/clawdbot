@@ -26,10 +26,8 @@ import { resetCommandQueueStateForTest } from "../../../process/command-queue.te
 import { onSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { installSessionPlacementAdmissionProvider } from "../../session-placement-admission.js";
-import { DEFAULT_AGENT_TIMEOUT_MS } from "../../timeout.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
 import { createEmbeddedRunLaneController } from "./lane-controller.js";
-import { EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS } from "./lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 
 const CONTEXT_TTL_MS = 30 * 60 * 1000;
@@ -520,50 +518,6 @@ describe("queued embedded run context liveness", () => {
       await run.catch(() => {});
     }
   });
-});
-
-describe("runtime-owned lane deadline handoff", () => {
-  test.each(["bounded", "unlimited"] as const)(
-    "keeps a %s runtime behind its own deadline and cleanup grace",
-    async (kind) => {
-      vi.useFakeTimers();
-      const entered = createDeferred();
-      const finished = createDeferred();
-      const { controller } = createRunController({ timeoutMs: 1_000 });
-      const active = controller.enqueueGlobal(async () => {
-        entered.resolve();
-        await finished.promise;
-        return { meta: { durationMs: 1 } };
-      });
-      const observed = active.catch((error: unknown) => error);
-      try {
-        await entered.promise;
-        controller.setLaneTaskDeadline({ kind: "unlimited" });
-        if (kind === "bounded") {
-          // Exact terminal receipt starts local settlement, not another progress-idle window.
-          controller.setLaneTaskDeadline({ kind, deadlineAtMs: Date.now() + 120_000 });
-          await vi.advanceTimersByTimeAsync(120_000 + EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS - 1);
-        } else {
-          await vi.advanceTimersByTimeAsync(
-            DEFAULT_AGENT_TIMEOUT_MS + EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS + 1,
-          );
-        }
-        expect(getCommandLaneSnapshot(GLOBAL_LANE).activeCount).toBe(1);
-        if (kind === "bounded") {
-          await vi.advanceTimersByTimeAsync(1);
-          await expect(observed).resolves.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
-        } else {
-          finished.resolve();
-          await expect(observed).resolves.toMatchObject({ meta: { durationMs: 1 } });
-        }
-        expect(getCommandLaneSnapshot(GLOBAL_LANE).activeCount).toBe(0);
-      } finally {
-        finished.resolve();
-        await observed;
-        vi.useRealTimers();
-      }
-    },
-  );
 });
 
 describe("scheduler capacity wait projection", () => {

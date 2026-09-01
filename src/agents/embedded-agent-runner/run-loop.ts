@@ -595,7 +595,8 @@ export async function runPreparedEmbeddedLoop(
           modelApi: effectiveModel.api,
           executionContract,
           hasTerminalToolPresentation: Boolean(terminalToolPresentationText),
-          noteLaneTaskProgress: input.laneController.noteLaneTaskProgress,
+          createAttemptControls: input.laneController.createAttemptControls,
+          abortSignal: input.laneController.abortSignal,
         },
       });
       const {

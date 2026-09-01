@@ -9,7 +9,6 @@ import { DEFAULT_AGENT_TIMEOUT_MS } from "../../timeout.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 
 export const EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS = 30_000;
-export const EMBEDDED_RUN_LANE_HEARTBEAT_MS = EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS / 2;
 
 export function shouldNoteLaneWait(snapshot: CommandLaneSnapshot): boolean {
   return (
@@ -17,21 +16,6 @@ export function shouldNoteLaneWait(snapshot: CommandLaneSnapshot): boolean {
     snapshot.activeCount >= snapshot.maxConcurrent ||
     snapshot.blockedBy != null
   );
-}
-
-export async function withEmbeddedRunLaneProgressHeartbeat<T>(
-  noteLaneTaskProgress: () => void,
-  fn: () => Promise<T>,
-): Promise<T> {
-  noteLaneTaskProgress();
-  const progressInterval = setInterval(noteLaneTaskProgress, EMBEDDED_RUN_LANE_HEARTBEAT_MS);
-  progressInterval.unref?.();
-  try {
-    return await fn();
-  } finally {
-    clearInterval(progressInterval);
-    noteLaneTaskProgress();
-  }
 }
 
 export function resolveEmbeddedRunLaneTimeoutMs(timeoutMs: number): number {

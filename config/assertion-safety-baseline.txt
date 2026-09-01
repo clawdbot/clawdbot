@@ -3258,7 +3258,7 @@ src/logging/diagnostic-stability-bundle.ts	11
 src/logging/diagnostic-stability.ts	3
 src/logging/diagnostic-support-log-redaction.ts	1
 src/logging/diagnostic-support-redaction.ts	1
-src/logging/diagnostic.ts	2
+src/logging/diagnostic.ts	1
 src/logging/json-console-line.ts	2
 src/logging/levels.ts	2
 src/logging/log-file-shared.ts	1

@@ -139,6 +139,18 @@ Run-duration metadata belongs to the current run, including when preparation fai
 | Model idle timeout                               | Cloud 120s; self-hosted 300s           | OpenClaw aborts a model request when no response chunks arrive before the idle window. `models.providers.<id>.timeoutSeconds` extends this idle watchdog for slow local/self-hosted providers, but stays bounded by any lower finite `agents.defaults.timeoutSeconds` or run-specific timeout, since those govern the whole agent run. Unlimited run budgets still keep the provider-class idle watchdog. Cron-triggered cloud model runs with no explicit model/agent timeout use the same default; with an explicit cron run timeout, cloud model stream stalls cap at 60s so configured model fallbacks can still run before the outer cron deadline. Cron-triggered runs on genuinely local endpoints (loopback/private baseUrl) keep the local idle opt-out; self-hosted providers on network baseUrls get the 300s implicit watchdog. With an explicit cron run timeout, local/self-hosted stalls cap at that timeout. Set `models.providers.<id>.timeoutSeconds` for slow local providers. |
 | Provider HTTP request timeout                    | `models.providers.<id>.timeoutSeconds` | Covers connect, headers, body, SDK request timeout, guarded-fetch abort handling, and the model stream idle watchdog for that provider. Use for slow local/self-hosted providers (for example Ollama) before raising the whole agent runtime timeout; keep the agent/runtime timeout at least as high when the model request needs to run longer.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
+The built-in OpenClaw harness publishes its execution deadline to the queue.
+Approval waits pause the unused budget; resolving all pending approvals resumes
+that same budget. Compaction can receive one bounded grace period. A question
+from `ask_user` does not pause the overall execution budget. With `0`, no
+execution timer is armed, but provider liveness, Stop, and bounded abort cleanup
+still apply. Isolated post-tool finalization gets its own deadline and cancellation
+controls rather than inheriting callbacks from the completed attempt.
+
+A terminal timeout is a failed turn, not a successful completion. Chat and
+command results retain its timeout explanation; earlier tool errors do not
+replace that explanation or restart an already-final timed-out turn.
+
 The model idle and provider HTTP rows describe the built-in OpenClaw model
 path. Codex owns its native stream deadlines and network retries. After exact
 native terminal receipt, OpenClaw allows two minutes for local settlement.
@@ -156,6 +168,11 @@ With diagnostics enabled, a built-in two-minute threshold classifies long `proce
 - `session.stuck` is reserved for recoverable stale session bookkeeping, including idle queued sessions with stale ownerless model/tool activity.
 
 The abort threshold is at least 5 minutes and 3x the warning threshold. Stale session bookkeeping releases the affected session lane immediately after recovery gates pass; stalled embedded runs are abort-drained only after the abort threshold, so queued work resumes without cutting off merely slow runs. Recovery emits structured requested/completed outcomes; diagnostic state is marked idle only if the same processing generation is still current, and repeated `session.stuck` diagnostics back off while the session stays unchanged.
+
+Pending human-input questions protect their exact active owner from stale-work
+recovery. If checking a question expires it, or diagnostic reporting resumes or
+replaces the run, that observation cannot authorize an abort of the resumed work.
+Recovery revalidates the session generation captured with the observation.
 
 A current Codex attempt waiting on native work is the exception to these idle
 thresholds: it remains `session.long_running` with reason `runtime_owned_wait`
