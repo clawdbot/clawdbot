@@ -1468,7 +1468,20 @@ export async function installPluginFromClawHub(
         timeoutMs: params.timeoutMs,
         dryRun: params.dryRun,
         expectedPluginId: runtimeIdResolution.expectedPluginId,
-        onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
+        onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit
+          ? (artifact) =>
+              params.onBeforePluginArtifactCommit!({
+                ...artifact,
+                sourceRecord: {
+                  source: "clawhub",
+                  spec: params.spec,
+                  clawhubUrl: clawhubRegistry,
+                  clawhubPackage: canonicalPackageName,
+                  clawhubChannel: detail.package!.channel,
+                  integrity: archive.integrity,
+                },
+              })
+          : undefined,
         installPolicyRequest: {
           kind: "plugin-archive",
           requestedSpecifier: params.spec,

@@ -100,6 +100,8 @@ const repositoryScriptEntries = [
   "scripts/protocol-gen.ts!",
   "scripts/pr-gates-lock.mts!",
   "scripts/pr-lib/ci-dispatch.mjs!",
+  // merge.sh invokes this native review-authority parser by path.
+  "scripts/pr-lib/clawsweeper-review-gate.mjs!",
   "scripts/pr-lib/review-artifacts.mjs!",
   "scripts/pr-lib/process-group-runner.mjs!",
   "scripts/pre-commit/filter-staged-files.mjs!",
@@ -122,6 +124,7 @@ const repositoryScriptEntries = [
   "scripts/verify-stable-main-closeout.mjs!",
   "scripts/write-package-dist-inventory.ts!",
   "scripts/write-plugin-sdk-entry-dts.ts!",
+  "scripts/write-unified-entry-dts.ts!",
   "security/opengrep/check-rule-metadata.mjs!",
   "security/opengrep/compile-rules.mjs!",
   "skills/meme-maker/scripts/meme.mjs!",
@@ -161,6 +164,8 @@ const rootEntries = [
   "src/commands/status.ts!",
   "src/cli/daemon-cli.ts!",
   "src/agents/code-mode.worker.ts!",
+  // The local exec bootstrap launches credential resolution by computed subprocess URL.
+  "src/agents/github-exec-launcher.ts!",
   // Worker-thread and script entrypoints import contracts that production Knip cannot trace.
   "src/agents/compaction-planning.worker.ts!",
   "scripts/print-cli-backend-live-metadata.ts!",
@@ -474,10 +479,8 @@ const config = {
         "highlight.js",
         "playwright-core",
         "partial-json",
-        // Optional runtime imports: the native Canvas bundle falls back without Markdown,
-        // and the meme-maker skill emits SVG when sharp is not installed.
+        // The native Canvas bundle falls back without optional Markdown support.
         "@a2ui/markdown-it",
-        "sharp",
         "sqlite-vec",
         "tree-sitter-bash",
         ...rootToolingAndWorkspaceDependencies,

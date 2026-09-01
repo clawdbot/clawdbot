@@ -56,13 +56,6 @@ export function gitHubProfileUrl(login: string): string {
   return `https://${GITHUB_HOST}/${encodeURIComponent(login)}`;
 }
 
-// Build from parsed parts because the source href may already carry its own
-// sub-path, query, or comment fragment.
-export function gitHubFilesChangedUrl(target: GitHubItemTarget): string {
-  const repoPath = `${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}`;
-  return `https://${GITHUB_HOST}/${repoPath}/pull/${target.number}/files`;
-}
-
 export function githubLinkAnchorFromEvent(event: Event): HTMLAnchorElement | null {
   for (const candidate of event.composedPath()) {
     if (candidate instanceof HTMLAnchorElement) {

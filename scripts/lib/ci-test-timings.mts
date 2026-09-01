@@ -12,7 +12,7 @@ function readTestTimings(): CiTestTimings | null {
   }
   if (cachedTimings === undefined) {
     try {
-      // Every independent UI shard must read the same checkout bytes, not a
+      // Every independent shard must read the same checkout bytes, not a
       // restored cache or downloaded artifact that may differ between jobs.
       cachedTimings = ciTestTimingsSchema.parse(
         JSON.parse(
@@ -37,4 +37,8 @@ export function readCompactGroupTimings(
   profile: "blacksmith" | "github",
 ): Readonly<Record<string, number>> {
   return readTestTimings()?.compactGroupSeconds[profile] ?? emptyGroupTimings;
+}
+
+export function readRepoE2eFileTimings(): Readonly<Record<string, number>> {
+  return readTestTimings()?.repoE2eFileSeconds ?? emptyGroupTimings;
 }

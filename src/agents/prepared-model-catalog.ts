@@ -31,6 +31,7 @@ import {
   prepareModelRuntimeSnapshot,
   PreparedModelRuntimeOwnerNotPublishedError,
   preparedModelRuntimeConfigsMatch,
+  refreshStalePreparedModelRuntimeCatalog,
   type PreparedModelRuntimeInput,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
@@ -74,9 +75,13 @@ async function materializeRequestedModelCatalog(
   if (!snapshot.loadFullModelCatalog) {
     return snapshot;
   }
+  const staleCatalog =
+    readOnly === true && refreshFullCatalog === true
+      ? await refreshStalePreparedModelRuntimeCatalog(snapshot)
+      : undefined;
   const modelCatalog =
     readOnly === true
-      ? snapshot.readFullModelCatalog?.()
+      ? (staleCatalog ?? snapshot.readFullModelCatalog?.())
       : await snapshot.loadFullModelCatalog({ refresh: refreshFullCatalog === true });
   if (!modelCatalog) {
     return snapshot;

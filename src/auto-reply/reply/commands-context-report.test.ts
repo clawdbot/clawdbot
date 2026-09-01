@@ -2,6 +2,7 @@
 import { mkdtemp, readFile, rm, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { crc32, inflateSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -380,6 +381,23 @@ describe("buildContextReply", () => {
       expect(png.subarray(12, 16).toString("ascii")).toBe("IHDR");
       expect(png.readUInt32BE(16)).toBe(1280);
       expect(png.readUInt32BE(20)).toBe(860);
+      expect(png.subarray(24, 29)).toEqual(Buffer.from([8, 6, 0, 0, 0]));
+      const imageData: Buffer[] = [];
+      for (let offset = 8; offset < png.length;) {
+        const end = offset + 8 + png.readUInt32BE(offset);
+        expect(crc32(png.subarray(offset + 4, end))).toBe(png.readUInt32BE(end));
+        if (png.toString("ascii", offset + 4, offset + 8) === "IDAT") {
+          imageData.push(png.subarray(offset + 8, end));
+        }
+        offset = end + 4;
+      }
+      const pixels = inflateSync(Buffer.concat(imageData));
+      expect(pixels).toHaveLength(860 * (1280 * 4 + 1));
+      for (let row = 0; row < 860; row += 1) {
+        expect(pixels[row * (1280 * 4 + 1)]).toBe(0);
+      }
+      expect(pixels.subarray(1, 5)).toEqual(Buffer.from([20, 26, 34, 255]));
+      expect(pixels.subarray(-4)).toEqual(Buffer.from([238, 241, 245, 255]));
     } finally {
       await unlink(result.mediaUrl);
     }

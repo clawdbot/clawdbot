@@ -544,6 +544,42 @@ export function assertAgentDatabaseIntegrityBeforeMutation(
   return hasPendingCurrentVersionMigration;
 }
 
+function persistAgentSchemaMetadata(
+  db: DatabaseSync,
+  agentId: string,
+  targetVersion: number,
+): void {
+  const now = Date.now();
+  const metadata = {
+    role: "agent" as const,
+    schema_version: targetVersion,
+    agent_id: agentId,
+    app_version: VERSION,
+  };
+  executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<OpenClawAgentMetadataDatabase>(db)
+      .insertInto("schema_meta")
+      .values({ meta_key: "primary", ...metadata, created_at: now, updated_at: now })
+      .onConflict((conflict) =>
+        conflict
+          .column("meta_key")
+          .doUpdateSet({ ...metadata, updated_at: now })
+          // updated_at records when schema metadata last changed, not when
+          // the database was last opened; unconditional bumps make every
+          // open dirty the row and defeat no-change backup detection.
+          .where((eb) =>
+            eb.or([
+              eb("schema_meta.schema_version", "!=", targetVersion),
+              eb("schema_meta.app_version", "is", null),
+              eb("schema_meta.app_version", "!=", VERSION),
+              eb("schema_meta.agent_id", "!=", agentId),
+            ]),
+          ),
+      ),
+  );
+}
+
 function ensureAgentSchema(
   db: DatabaseSync,
   agentId: string,
@@ -584,6 +620,19 @@ function ensureAgentSchema(
           `OpenClaw agent database ${pathname} uses schema version ${previousVersion}; expected at most ${targetVersion} for this migration.`,
         );
       }
+      if (previousVersion === AGENT_MEDIA_SCHEMA_VERSION) {
+        const legacySql = withLegacySessionParticipantsSchema(OPENCLAW_AGENT_SCHEMA_SQL);
+        ensureSessionAdditiveColumns(db);
+        verifyAndRepairCanonicalSqliteIndexes(db, pathname, legacySql, {
+          validateAfterRepair: () => {
+            assertAgentSchemaVersion(
+              db,
+              { agentId, pathname, version: AGENT_MEDIA_SCHEMA_VERSION },
+              legacySql,
+            );
+          },
+        });
+      }
       migrateRetiredAgentStateLeaseSchema(db, pathname, targetVersion);
       if (previousVersion === targetVersion) {
         ensureSessionAdditiveColumns(db);
@@ -598,6 +647,7 @@ function ensureAgentSchema(
         repairCanonicalSqliteIndexes(db, pathname, schemaSql, {
           verifyPhysicalIntegrity: false,
         });
+        persistAgentSchemaMetadata(db, agentId, targetVersion);
         assertAgentSchemaVersion(db, { agentId, pathname, version: targetVersion }, schemaSql);
         maintenanceAuthority.assertAgentDatabaseMaintenanceAuthorityIfPresent();
         return;
@@ -644,44 +694,8 @@ function ensureAgentSchema(
       repairCanonicalSqliteIndexes(db, pathname, schemaSql, {
         verifyPhysicalIntegrity: false,
       });
-      const kysely = getNodeSqliteKysely<OpenClawAgentMetadataDatabase>(db);
       db.exec(`PRAGMA user_version = ${targetVersion};`);
-      const now = Date.now();
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .insertInto("schema_meta")
-          .values({
-            meta_key: "primary",
-            role: "agent",
-            schema_version: targetVersion,
-            agent_id: agentId,
-            app_version: VERSION,
-            created_at: now,
-            updated_at: now,
-          })
-          .onConflict((conflict) =>
-            conflict
-              .column("meta_key")
-              .doUpdateSet({
-                role: "agent",
-                schema_version: targetVersion,
-                agent_id: agentId,
-                app_version: VERSION,
-                updated_at: now,
-              })
-              // updated_at records when schema metadata last changed, not when
-              // the database was last opened; unconditional bumps make every
-              // open dirty the row and defeat no-change backup detection.
-              .where((eb) =>
-                eb.or([
-                  eb("schema_meta.schema_version", "!=", targetVersion),
-                  eb("schema_meta.app_version", "!=", VERSION),
-                  eb("schema_meta.agent_id", "!=", agentId),
-                ]),
-              ),
-          ),
-      );
+      persistAgentSchemaMetadata(db, agentId, targetVersion);
       assertAgentSchemaVersion(db, { agentId, pathname, version: targetVersion }, schemaSql);
       if (identityMigration) {
         if (db.prepare("PRAGMA foreign_key_check").all().length > 0) {
@@ -709,23 +723,9 @@ export function ensureOpenClawAgentDatabaseSchema(
   db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
   assertSupportedAgentSchemaVersion(db, pathname);
   assertExistingAgentSchemaOwner(readExistingAgentSchemaMeta(db), agentId, pathname);
-  if (readSqliteUserVersion(db) === AGENT_MEDIA_SCHEMA_VERSION) {
-    maintenanceAuthority.assertAgentDatabaseMaintenanceAuthority();
-    const legacySql = withLegacySessionParticipantsSchema(OPENCLAW_AGENT_SCHEMA_SQL);
-    verifyAndRepairCanonicalSqliteIndexes(db, pathname, legacySql, {
-      allowMissingColumns: true,
-      validateAfterRepair: () => {
-        // Share the savepoint so schema drift rolls back additive and index repairs together.
-        ensureSessionAdditiveColumns(db);
-        assertAgentSchemaVersion(
-          db,
-          { agentId, pathname, version: AGENT_MEDIA_SCHEMA_VERSION },
-          legacySql,
-        );
-      },
-    });
+  if (readSqliteUserVersion(db) !== AGENT_MEDIA_SCHEMA_VERSION) {
+    assertAgentDatabaseIntegrityBeforeMutation(db, agentId, pathname);
   }
-  assertAgentDatabaseIntegrityBeforeMutation(db, agentId, pathname);
   configureSqlitePreSchemaPragmas(db, {
     busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   });

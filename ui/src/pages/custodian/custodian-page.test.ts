@@ -451,14 +451,13 @@ describe("custodian page", () => {
     expect(replacementRequest).not.toHaveBeenCalled();
   });
 
-  it("keeps loaded transcript rows when a welcome retry cannot refresh them", async () => {
+  it("keeps loaded transcript rows while retrying the welcome without reloading history", async () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce({
         turns: [{ role: "assistant", text: "Loaded transcript row", at: 1 }],
       })
       .mockRejectedValueOnce(new Error("temporary welcome failure"))
-      .mockRejectedValueOnce(new Error("temporary history failure"))
       .mockResolvedValueOnce({
         sessionId: "engine-session-after-retry",
         reply: "Recovered welcome.",
@@ -474,7 +473,6 @@ describe("custodian page", () => {
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "openclaw.chat.history",
       "openclaw.chat",
-      "openclaw.chat.history",
       "openclaw.chat",
     ]);
     expect(page.textContent).toContain("Loaded transcript row");

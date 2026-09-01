@@ -3,7 +3,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const MCP_ENV_REFERENCE_RE = /\$\{([^}]+)\}/gu;
 
-function normalizeHermesEnvReferenceName(value: string): string | undefined {
+export function normalizeHermesEnvReferenceName(value: string): string | undefined {
   const trimmed = value.trim();
   const name = trimmed.startsWith("env:") ? trimmed.slice("env:".length).trim() : trimmed;
   return name || undefined;

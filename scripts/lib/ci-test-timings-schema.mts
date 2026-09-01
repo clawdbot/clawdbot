@@ -1,5 +1,6 @@
 export type CiTestTimings = {
   compactGroupSeconds: { blacksmith: Record<string, number>; github: Record<string, number> };
+  repoE2eFileSeconds: Record<string, number>;
   source: string;
   uiE2e: { fileSeconds: Record<string, number>; perFileOverheadSeconds: number };
   updatedAt: string;
@@ -38,11 +39,18 @@ function isSecondsMap(value: unknown): value is Record<string, number> {
 function isCiTestTimings(value: unknown): value is CiTestTimings {
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, ["compactGroupSeconds", "source", "uiE2e", "updatedAt", "version"])
+    !hasExactKeys(value, [
+      "compactGroupSeconds",
+      "repoE2eFileSeconds",
+      "source",
+      "uiE2e",
+      "updatedAt",
+      "version",
+    ])
   ) {
     return false;
   }
-  const { compactGroupSeconds, source, uiE2e, updatedAt, version } = value;
+  const { compactGroupSeconds, repoE2eFileSeconds, source, uiE2e, updatedAt, version } = value;
   return (
     version === 1 &&
     typeof source === "string" &&
@@ -59,6 +67,7 @@ function isCiTestTimings(value: unknown): value is CiTestTimings {
     uiE2e.perFileOverheadSeconds >= 0 &&
     uiE2e.perFileOverheadSeconds <= 5 &&
     isSecondsMap(uiE2e.fileSeconds) &&
+    isSecondsMap(repoE2eFileSeconds) &&
     isRecord(compactGroupSeconds) &&
     hasExactKeys(compactGroupSeconds, ["blacksmith", "github"]) &&
     isSecondsMap(compactGroupSeconds.blacksmith) &&

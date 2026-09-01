@@ -4808,7 +4808,7 @@ button.chat-pr__diff {
      the picker grow toward the transcript without replacing the hovered target. */
   flex-direction: row-reverse;
   align-items: center;
-  gap: 2px;
+  gap: 0;
   flex: 0 0 auto;
   border-radius: var(--radius-full);
   background: transparent;
@@ -4860,8 +4860,8 @@ button.chat-pr__diff {
     opacity 120ms ease-out;
 }
 
-/* The captured hold outlives transient hover recalculation during rerenders.
-   Keep it as an explicit reveal owner so the mic and chevron never reflow mid-gesture. */
+/* Focus, open, and captured-hold states reveal immediately so hover dwell never
+   delays keyboard access or lets the mic and chevron reflow mid-gesture. */
 .chat-talk-control--holding .chat-talk-input-picker,
 .chat-talk-control:has(:focus-visible) .chat-talk-input-picker,
 .chat-talk-input-picker[open] {
@@ -4870,9 +4870,11 @@ button.chat-pr__diff {
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .chat-talk-control:hover .chat-talk-input-picker {
+  .chat-talk-control:hover:not(.chat-talk-control--holding):not(:has(:focus-visible))
+    .chat-talk-input-picker:not([open]) {
     width: var(--chat-microphone-picker-width);
     opacity: 1;
+    transition-delay: 750ms;
   }
 }
 
@@ -4942,11 +4944,13 @@ button.chat-pr__diff {
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .chat-talk-control:hover .chat-talk-input-picker__trigger {
+  .chat-talk-control:hover:not(.chat-talk-control--holding):not(:has(:focus-visible))
+    .chat-talk-input-picker:not([open])
+    .chat-talk-input-picker__trigger {
     width: var(--chat-microphone-picker-width);
     opacity: 1;
     transform: translateX(0);
-    transition-delay: 0ms, 0ms, 70ms, 0ms, 0ms;
+    transition-delay: 750ms, 750ms, 820ms, 0ms, 0ms;
     pointer-events: auto;
   }
 }

@@ -6,6 +6,7 @@ import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveLegacyStateDirs, resolveStateDir } from "../config/paths.js";
 import { root } from "../infra/fs-safe.js";
+import { pathMayExistSync } from "../infra/path-existence.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveWorkspaceStateIdentity } from "./workspace-state-identity.js";
 
@@ -108,48 +109,42 @@ export function resolveLegacyWorkspaceSourcePaths(
 }
 
 function pathOrClaimExists(filePath: string): boolean {
-  for (const candidate of [filePath, `${filePath}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`]) {
-    try {
-      fs.lstatSync(candidate);
-      return true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        return true;
-      }
-    }
-  }
-  return false;
+  return (
+    pathMayExistSync(filePath) || pathMayExistSync(`${filePath}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`)
+  );
 }
 
-function siblingPathIsOwnedMarker(filePath: string): boolean {
-  let stat: fs.Stats;
+/** Share presence-only sibling ownership checks between runtime and Doctor. */
+export function legacyWorkspaceSiblingAttestationMayExist(filePath: string): boolean {
   try {
-    stat = fs.lstatSync(filePath);
-  } catch {
-    return false;
-  }
-  if (!stat.isFile()) {
-    return false;
-  }
-  try {
+    const before = fs.lstatSync(filePath);
+    if (!before.isFile()) {
+      return false;
+    }
     const noFollow = typeof fs.constants.O_NOFOLLOW === "number" ? fs.constants.O_NOFOLLOW : 0;
-    const fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow);
+    let fd: number;
     try {
-      const buffer = Buffer.alloc(
-        Math.min(stat.size, LEGACY_WORKSPACE_ATTESTATION_HEADER.length + 1),
-      );
-      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
-      return (
-        buffer.subarray(0, bytesRead).toString("utf8") ===
-        `${LEGACY_WORKSPACE_ATTESTATION_HEADER}\n`
-      );
+      fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow);
+    } catch {
+      // An unreadable regular file could be an owned marker. Doctor must surface it.
+      return true;
+    }
+    try {
+      const opened = fs.fstatSync(fd);
+      if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) {
+        return true;
+      }
+      const expected = Buffer.from(`${LEGACY_WORKSPACE_ATTESTATION_HEADER}\n`, "utf8");
+      const bytes = Buffer.alloc(expected.length);
+      const read = fs.readSync(fd, bytes, 0, bytes.length, 0);
+      return read === expected.length && bytes.equals(expected);
+    } catch {
+      return true;
     } finally {
       fs.closeSync(fd);
     }
   } catch {
-    // A regular file at the exact retired path is ambiguous when it cannot be
-    // inspected. Doctor owns the safe decision; runtime must not assume absence.
-    return true;
+    return false;
   }
 }
 
@@ -159,8 +154,9 @@ function hasUnmigratedWorkspaceSources(sources: LegacyWorkspaceSourcePaths): boo
     sources.stateDirAttestationPaths.some(pathOrClaimExists) ||
     sources.siblingAttestationPaths.some(
       (sourcePath) =>
-        siblingPathIsOwnedMarker(`${sourcePath}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`) ||
-        siblingPathIsOwnedMarker(sourcePath),
+        legacyWorkspaceSiblingAttestationMayExist(
+          `${sourcePath}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`,
+        ) || legacyWorkspaceSiblingAttestationMayExist(sourcePath),
     )
   );
 }

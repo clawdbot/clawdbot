@@ -184,6 +184,9 @@ describe.skipIf(!hasPopoverApi)("submenu parent highlight", () => {
     await userEvent.keyboard("{ArrowDown}");
     await expect.poll(() => document.activeElement).toBe(sibling);
     await expect.poll(() => parent.getAttribute("aria-expanded")).toBe("false");
+    // Hover highlights independently of submenu expansion and keyboard focus.
+    await page.elementLocator(sibling).hover();
+    await expect.poll(() => parent.matches(":hover")).toBe(false);
     await expect.poll(() => getComputedStyle(parent).backgroundColor).toBe("rgba(0, 0, 0, 0)");
   });
 });

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { parseDurationMs } from "../cli/parse-duration.js";
@@ -302,6 +303,19 @@ export const OpenClawSchemaShape = {
   models: ModelsConfigSchema,
   nodeHost: NodeHostSchema,
   agents: AgentsSchema,
+  worktreeRoot: z
+    .string()
+    .trim()
+    .min(1)
+    .refine(
+      (value) =>
+        path.isAbsolute(value) ||
+        value === "~" ||
+        value.startsWith("~/") ||
+        value.startsWith(`~${path.sep}`),
+      "worktreeRoot must be an absolute path or a path starting with ~",
+    )
+    .optional(),
   tools: ToolsSchema,
   security: SecuritySchema,
   bindings: BindingsSchema,

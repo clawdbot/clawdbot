@@ -180,13 +180,14 @@ describe("doctor stale plugin config helpers", () => {
     expect(result.config.plugins?.slots).toEqual({ contextEngine: "none" });
   });
 
-  it("preserves official external plugin config before installation", () => {
+  it("preserves official external plugin lookup ids before installation", () => {
     const result = maybeRepairStalePluginConfig({
       plugins: {
-        allow: ["codex", "missing-plugin"],
-        deny: ["codex", "missing-deny"],
+        allow: ["codex", "qqbot", "missing-plugin"],
+        deny: ["codex", "qqbot", "missing-deny"],
         entries: {
           codex: { enabled: true },
+          qqbot: { enabled: false },
           "missing-plugin": { enabled: true },
         },
       },
@@ -197,9 +198,12 @@ describe("doctor stale plugin config helpers", () => {
       "- plugins.deny: removed 1 stale plugin id (missing-deny)",
       "- plugins.entries: removed 1 stale plugin entry (missing-plugin)",
     ]);
-    expect(result.config.plugins?.allow).toEqual(["codex"]);
-    expect(result.config.plugins?.deny).toEqual(["codex"]);
-    expect(result.config.plugins?.entries).toEqual({ codex: { enabled: true } });
+    expect(result.config.plugins?.allow).toEqual(["codex", "qqbot"]);
+    expect(result.config.plugins?.deny).toEqual(["codex", "qqbot"]);
+    expect(result.config.plugins?.entries).toEqual({
+      codex: { enabled: true },
+      qqbot: { enabled: false },
+    });
   });
 
   it("preserves codex in policy surfaces while the version-bound plugin is absent", () => {

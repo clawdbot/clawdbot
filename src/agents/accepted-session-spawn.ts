@@ -6,6 +6,8 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 export type AcceptedSessionSpawn = {
   runId: string;
   childSessionKey: string;
+  /** True only when this child owns a terminal completion for its requester. */
+  expectsCompletionMessage?: boolean;
 };
 
 /** Normalize a tool result that accepted a child session spawn. */
@@ -19,7 +21,11 @@ export function normalizeAcceptedSessionSpawnResult(result: unknown): AcceptedSe
   if (!runId || !childSessionKey) {
     return null;
   }
-  return { runId, childSessionKey };
+  return {
+    runId,
+    childSessionKey,
+    expectsCompletionMessage: details.expectsCompletionMessage === true,
+  };
 }
 
 /** Return true when a collection contains at least one accepted child spawn. */
@@ -27,4 +33,11 @@ export function hasAcceptedSessionSpawn(
   acceptedSessionSpawns?: readonly AcceptedSessionSpawn[],
 ): boolean {
   return Boolean(acceptedSessionSpawns?.length);
+}
+
+/** Return true when an accepted child owns the requester's terminal completion. */
+export function hasCompletionMessageSessionSpawn(
+  acceptedSessionSpawns?: readonly AcceptedSessionSpawn[],
+): boolean {
+  return acceptedSessionSpawns?.some((spawn) => spawn.expectsCompletionMessage === true) === true;
 }

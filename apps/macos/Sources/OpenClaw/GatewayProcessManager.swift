@@ -188,6 +188,7 @@ final class GatewayProcessManager {
     private var gatewayStartTaskGeneration: UInt64?
     #if DEBUG
     private var testingConnection: GatewayConnection?
+    private var testingLaunchAgentDisableWaitHook: (() -> Void)?
     private var testingSkipControlChannelRefresh = false
     private var testingControlChannelRefreshForces: [Bool] = []
     #endif
@@ -303,6 +304,9 @@ final class GatewayProcessManager {
         // A stop may already be uninstalling launchd. Wait until it finishes so a newer start's
         // attach/install is ordered last; loop because another stop can supersede it while waiting.
         while let disableTask = self.launchAgentDisableTask {
+            #if DEBUG
+            self.testingLaunchAgentDisableWaitHook?()
+            #endif
             await disableTask.value
         }
     }
@@ -1209,6 +1213,10 @@ extension GatewayProcessManager {
 
 #if DEBUG
 extension GatewayProcessManager {
+    func _testSetLaunchAgentDisableWaitHook(_ hook: (() -> Void)?) {
+        self.testingLaunchAgentDisableWaitHook = hook
+    }
+
     func setTestingConnection(_ connection: GatewayConnection?) {
         self.testingConnection = connection
     }

@@ -713,14 +713,13 @@ describe("subagent registry persistence resume", () => {
             requesterYieldBatch: true,
             afterRequesterYield: true,
           });
-          await vi.waitFor(() => expect(wakeRequester).toHaveBeenCalledOnce(), {
-            timeout: 1_000,
-            interval: 10,
-          });
         } else {
           expect(restored?.requesterSettleWake).toBeUndefined();
-          expect(wakeRequester).not.toHaveBeenCalled();
         }
+        await vi.waitFor(() => expect(wakeRequester).toHaveBeenCalledOnce(), {
+          timeout: 1_000,
+          interval: 10,
+        });
       });
     },
   );

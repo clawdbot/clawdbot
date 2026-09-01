@@ -1040,6 +1040,29 @@ struct OnboardingAISetupTests {
         #expect(model.connected == (decision == "accept"))
         #expect(model.pendingActivationVerification == (decision == "error" || decision == "retry-cancel"))
         #expect(model.activeAuthOption == nil)
+        if decision != "accept" {
+            let failure: OnboardingAISetupModel.Failure
+            if manual {
+                failure = try #require(model.manualError)
+            } else {
+                guard case let .failed(candidateFailure) = model.statuses["codex-cli"] else {
+                    Issue.record("Expected a visible activation failure")
+                    return
+                }
+                failure = candidateFailure
+            }
+            if decision == "decline" || decision == "cancel" {
+                #expect(failure.summary ==
+                    "AI setup was cancelled. No inference route was selected. Choose a connection to try again.")
+                #expect(failure.detail == nil)
+            } else {
+                #expect(failure.summary ==
+                    "The Gateway setup request failed. Show details to inspect or copy the error.")
+                #expect(failure.detail == (decision == "error"
+                        ? "AI access was saved, but could not be applied."
+                        : "AI setup ended before its result was received. OpenClaw will verify the Gateway before trying again."))
+            }
+        }
         let requests = await recorder.snapshot()
         #expect(!requests.methods.contains("openclaw.setup.activate"))
         #expect(requests.methods.filter { $0 == "openclaw.setup.activate.start" }.count == 1)

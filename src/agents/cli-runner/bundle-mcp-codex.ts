@@ -38,6 +38,7 @@ type CodexThreadConfigValue =
 type CodexThreadConfigObject = { [key: string]: CodexThreadConfigValue };
 
 type CodexUserMcpServersProjectionOptions = {
+  preparationOnly?: true;
   agentId?: string;
   agentDir?: string;
   allowLiteralOAuthProjection?: boolean;
@@ -192,6 +193,11 @@ export async function buildCodexUserMcpServersThreadConfigPatchForRuntime(
   options?: CodexUserMcpServersProjectionOptions,
 ): Promise<{ mcp_servers: CodexThreadConfigObject } | undefined> {
   let allowedServers = selectCodexProjectableMcpServers(cfg, options);
+  if (options?.preparationOnly && Object.values(allowedServers).some(requiresMcpBearerProjection)) {
+    throw new Error(
+      "Native fork preparation cannot resolve MCP bearer credentials. Fork an original imported message instead.",
+    );
+  }
   if (options?.preparedNativeMcpPolicy) {
     allowedServers = applyPreparedNativeMcpPolicy(
       { mcpServers: allowedServers },

@@ -22,7 +22,7 @@ import { bindStreamLlmRuntime } from "../../../llm/model-runtime-binding.js";
 import type { Model } from "../../../llm/types.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
-import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
+import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
 import type {
   MessagingToolSend,
@@ -1500,12 +1500,19 @@ export async function createContextEngineAttemptRunner(params: {
       },
       ...params.attemptOverrides,
     };
-    return await (
-      await loadRunEmbeddedAttempt()
-    )({
-      ...attempt,
-      admittedRunContext: createTestAdmittedRunContext(attempt.runId),
-    });
+    const admission = prepareSystemAgentRunAdmission(
+      attempt.config ?? {},
+      attempt.runId,
+      attempt.agentId ?? "main",
+      "embedded-attempt-test",
+    );
+    try {
+      return await (
+        await loadRunEmbeddedAttempt()
+      )({ ...attempt, admittedRunContext: await admission.admit("embedded") });
+    } finally {
+      admission.close();
+    }
   } finally {
     if (previousTrajectoryEnv === undefined) {
       delete process.env.OPENCLAW_TRAJECTORY;

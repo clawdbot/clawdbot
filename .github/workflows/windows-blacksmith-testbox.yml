@@ -225,6 +225,19 @@ jobs:
           echo "  SSH:                ssh -p ${runner_ssh_port} runner@${runner_host}"
           echo "============================================"
 
+          # Blacksmith advertises a forwarded port; native sockets use sshd's local listeners.
+          runner_ssh_local_ports="$(pwsh -NoProfile -NonInteractive -Command '
+            $ErrorActionPreference = "Stop"
+            $service = Get-CimInstance Win32_Service -Filter "Name = `"sshd`""
+            if ($service.State -ne "Running" -or $service.ProcessId -eq 0) {
+              throw "Cannot monitor activity without the running Windows SSH service."
+            }
+            $ports = @(Get-NetTCPConnection -State Listen -OwningProcess $service.ProcessId |
+              Select-Object -ExpandProperty LocalPort -Unique)
+            if ($ports.Count -eq 0) { throw "No local Windows SSH listener found." }
+            [Console]::Write(($ports -join "|"))
+          ')"
+
           last_activity="$(date +%s)"
           idle_timeout_seconds=$(( idle_timeout * 60 ))
 
@@ -232,7 +245,12 @@ jobs:
             sleep 30
             now="$(date +%s)"
 
-            if netstat -na 2>/dev/null | grep ":${runner_ssh_port}" | grep -q ESTABLISHED; then
+            connections="$(netstat -na)"
+            # Match the local endpoint exactly; consume all rows to avoid pipefail/SIGPIPE races.
+            if awk -v ports="$runner_ssh_local_ports" '
+              $1 == "TCP" && $2 ~ (":(" ports ")$") && $4 ~ /^ESTABLISHED\r?$/ { active = 1 }
+              END { exit !active }
+            ' <<< "$connections"; then
               last_activity="$now"
             elif [ -f ~/.testbox-last-activity ]; then
               file_mtime="$(stat -c %Y ~/.testbox-last-activity 2>/dev/null || stat -f %m ~/.testbox-last-activity)"

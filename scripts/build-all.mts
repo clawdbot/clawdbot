@@ -17,11 +17,9 @@ import {
   withDistArtifactOwnership,
 } from "./lib/dist-artifact-ownership.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
-import { listPluginSdkDistArtifacts } from "./lib/plugin-sdk-entries.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_UNIFIED_CONFIG_GROUP,
-  TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
 } from "./lib/tsdown-config-groups.mts";
 import {
   TSDOWN_PACKAGE_OUTPUT_ROOTS,
@@ -33,8 +31,6 @@ import {
   TSDOWN_DECLARATION_EXTENSIONS,
   TSDOWN_DECLARATION_TOOL_INPUTS,
   TSDOWN_PACKAGES_CACHE_INPUT,
-  TSDOWN_UNIFIED_CACHE_ENV,
-  TSDOWN_UNIFIED_CACHE_INPUTS,
   resolveTsdownBuildPlan,
   type MemoryLimitParams,
 } from "./tsdown-build.mts";
@@ -85,7 +81,6 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
   {
     ...tsxStep("tsdown-ai", "scripts/tsdown-build.mts", "--config", "tsdown.ai.config.ts"),
     cache: {
-      env: ["OPENCLAW_RUN_NODE_SKIP_DTS_BUILD"],
       inputs: [
         ...TSDOWN_DECLARATION_TOOL_INPUTS,
         "tsdown.ai.config.ts",
@@ -108,7 +103,6 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
       TSDOWN_PACKAGE_CONFIG_GROUP,
     ),
     cache: {
-      env: ["OPENCLAW_RUN_NODE_SKIP_DTS_BUILD"],
       inputs: [...TSDOWN_DECLARATION_TOOL_INPUTS, "tsdown.config.ts", TSDOWN_PACKAGES_CACHE_INPUT],
       outputs: declarationCacheOutputs(TSDOWN_MAIN_PACKAGE_OUTPUT_ROOTS),
       restore: "always",
@@ -125,20 +119,12 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
       "tsdown.config.ts",
       "--filter",
       TSDOWN_UNIFIED_CONFIG_GROUP,
-      ...TSDOWN_NON_SDK_DTS_CONFIG_GROUPS.flatMap((group) => ["--filter", group]),
     ),
-    cache: {
-      env: [...TSDOWN_UNIFIED_CACHE_ENV, "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD"],
-      inputs: TSDOWN_UNIFIED_CACHE_INPUTS,
-      outputs: declarationCacheOutputs(["dist"]),
-      // Shared declaration snapshots cannot make a replaced live dist complete.
-      // Rebuild the unified unit when its package artifacts are no longer intact.
-      requiredCacheHitOutputs: listPluginSdkDistArtifacts(),
-      restore: "always",
-      runOnHit: {
-        env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
-      },
-    },
+    env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
+  },
+  {
+    ...tsxStep("write-unified-entry-dts", "scripts/write-unified-entry-dts.ts"),
+    env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" },
   },
   tsxStep("external-plugins:local-dist", "scripts/build-external-plugin-local-dist.mts"),
   tsxStep("check-cli-bootstrap-imports", "scripts/check-cli-bootstrap-imports.mts"),
@@ -185,6 +171,7 @@ const FULL_BUILD_STEP_LABELS = [
   "tsdown-ai",
   "tsdown-packages",
   "tsdown-unified",
+  "write-unified-entry-dts",
   "external-plugins:local-dist",
   "check-cli-bootstrap-imports",
   "plugins:assets:copy",
@@ -375,7 +362,7 @@ export function resolveBuildAllSteps(
     throw new Error(`Unknown build profile: ${profile}`);
   }
   // A cold runtime-only build has no declarations for the canonical SDK gates.
-  // Keep the full runtime artifact surface, but use the uncached runtime graph.
+  // Its uncached graph cannot seed the declaration-only caches used by full builds.
   const runtimeOnly = buildEnv[RUN_NODE_SKIP_DTS_BUILD_ENV] === "1";
   const labels =
     profile === "full" && runtimeOnly
@@ -587,6 +574,7 @@ export async function runBuildAllSteps(
           bin: invocation.command,
           args:
             script === "scripts/tsdown-build.mts" ||
+            script === "scripts/write-unified-entry-dts.ts" ||
             script === "scripts/write-plugin-sdk-entry-dts.ts"
               ? distArtifactEntryArgs(script, invocation.args.slice(3))
               : invocation.args,

@@ -401,7 +401,9 @@ export async function applySessionEntryLifecycleMutation(params: {
         }
         if (resetBoundary && expectedEntry?.sessionId) {
           const event = buildSessionResetBoundaryEvent({
-            events: loadTranscriptEventsFromDatabase(transactionDb, expectedEntry.sessionId),
+            events: loadTranscriptEventsFromDatabase(transactionDb, expectedEntry.sessionId, {
+              projection: "reset-boundary",
+            }),
             ...resetBoundary,
           });
           const appended = appendTranscriptEventsInTransaction(

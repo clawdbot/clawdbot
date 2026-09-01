@@ -13,6 +13,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import { resolveUserTurnTranscriptAdmission } from "./user-turn-transcript-admission.js";
+import { registerUserTurnTranscriptAdmissionOwner } from "./user-turn-transcript-annotation.js";
 import {
   buildLateResolvedMediaMessage,
   isUserMessage,
@@ -295,6 +296,18 @@ export function createUserTurnTranscriptRecorder(
     admissionHandler?.(admissionReceipt);
   };
 
+  const refreshAdmission = (
+    admission: UserTurnTranscriptAdmissionReceipt,
+    persistedMessage: PersistedUserTurnMessage,
+  ) => {
+    admissionReceipt = admission;
+    admittedMessage = persistedMessage;
+    runtimePersistedMessage = persistedMessage;
+    if (persistedResult) {
+      persistedResult = { ...persistedResult, admission, message: persistedMessage };
+    }
+  };
+
   const waitForRuntimePersistence = async () => {
     if (!runtimePersistencePromise) {
       return;
@@ -331,7 +344,7 @@ export function createUserTurnTranscriptRecorder(
       const existingPromise = selfPersistencePromise;
       const existingResult = await existingPromise;
       if (existingResult || !options.retryIfUnpersisted) {
-        return existingResult;
+        return persistedResult ?? existingResult;
       }
       // A guarded store write can lose a session-generation race without appending.
       // Explicit retry callers may re-resolve the target, but concurrent ownership stays shared.
@@ -500,16 +513,7 @@ export function createUserTurnTranscriptRecorder(
         if (!confirmed) {
           return;
         }
-        admissionReceipt = confirmed.admission;
-        admittedMessage = confirmed.message;
-        runtimePersistedMessage = confirmed.message;
-        if (persistedResult) {
-          persistedResult = {
-            ...persistedResult,
-            admission: confirmed.admission,
-            message: confirmed.message,
-          };
-        }
+        refreshAdmission(confirmed.admission, confirmed.message);
       } catch (error) {
         handlePersistenceError(error);
       }
@@ -578,6 +582,12 @@ export function createUserTurnTranscriptRecorder(
       }),
   };
   pendingInputReceipts.set(recorder, () => pendingInput);
+  registerUserTurnTranscriptAdmissionOwner(recorder, {
+    receipt: () => admissionReceipt,
+    message: () => admittedMessage,
+    blocked: () => blocked || confirmedSteerTargetRunId !== undefined,
+    refresh: refreshAdmission,
+  });
   return recorder;
 }
 

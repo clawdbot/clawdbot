@@ -8,7 +8,7 @@ vi.mock("../plugins/manifest-registry-installed.js", () => ({
 }));
 
 describe("prepared model catalog worker input", () => {
-  it("preserves SecretRef identity beside materialized literals", () => {
+  it("preserves captured auth identity and distinguishes source from built artifacts", () => {
     const authStore = {
       version: 1,
       profiles: {
@@ -40,7 +40,7 @@ describe("prepared model catalog worker input", () => {
       order: { shared: ["shared:named"] },
       lastGood: { shared: "shared:named" },
     };
-    const workerInput = createPreparedModelCatalogWorkerInput({
+    const params = {
       agentFacts: {
         input: {
           agentDir: "/tmp/agent",
@@ -65,7 +65,8 @@ describe("prepared model catalog worker input", () => {
         index: {} as never,
         plugins: [],
       } as unknown as PluginMetadataSnapshot,
-    });
+    };
+    const workerInput = createPreparedModelCatalogWorkerInput(params);
 
     const cloned = structuredClone(workerInput);
     expect(cloned.authStore.profiles).toEqual({
@@ -86,5 +87,11 @@ describe("prepared model catalog worker input", () => {
     ]);
     expect(cloned.input).not.toHaveProperty("inheritedAuthDir");
     expect(cloned.input).not.toHaveProperty("loadRuntimePlugins");
+    const builtInput = structuredClone(
+      createPreparedModelCatalogWorkerInput({ ...params, preferBuiltPluginArtifacts: true }),
+    );
+    expect(cloned.preferBuiltPluginArtifacts).toBe(false);
+    expect(builtInput.preferBuiltPluginArtifacts).toBe(true);
+    expect(builtInput.generationFingerprint).not.toBe(cloned.generationFingerprint);
   });
 });

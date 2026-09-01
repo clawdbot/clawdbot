@@ -186,6 +186,13 @@ allowlist replaces the shared default, including `[]` to allow any model.
 Policy permission does not supply provider credentials or guarantee that the
 selected model is available to its runtime.
 
+Before saving a model selection, these Gateway methods check that any required
+embedded harness has an installed, activatable plugin. A missing or disabled
+plugin rejects the change and preserves the previous session selection and
+configured default. Install and enable the named harness plugin, restart the
+Gateway, then select the model again. This check does not start the runtime or
+verify provider credentials.
+
 Choose the model when you create a session whenever possible. The Control UI's
 **New Chat** composer includes the model picker for this reason: a fresh session
 gives the selected model a clean conversation boundary.

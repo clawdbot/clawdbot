@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 347792,
-  "reason": "Final automatic update lifecycle ownership and stale hold response fencing measured 347792 B in the canonical isolated production build (+1015 B, 0.29% from the original baseline); fixed 358400 B cap and allowances unchanged",
+  "startupJsGzipBytes": 348668,
+  "reason": "Model provider defaults consolidation, autosave, and contextual help add 235 B (0.07%) over the reconciled 348433 B main baseline; fixed 358400 B cap and existing allowances retained",
   "updatedAt": "2026-09-01"
 }

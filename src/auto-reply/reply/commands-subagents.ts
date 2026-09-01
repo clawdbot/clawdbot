@@ -1,11 +1,7 @@
 // Dispatches subagent inspection commands.
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { commandReply, defineAuthorizedTextCommand, matchCommandPrefix } from "./command-gates.js";
-import {
-  buildSubagentsHelp,
-  resolveRequesterSessionKey,
-  type SubagentsCommandContext,
-} from "./commands-subagents/shared.js";
+import { buildSubagentsHelp, resolveRequesterSessionKey } from "./commands-subagents/shared.js";
 import type { CommandHandler } from "./commands-types.js";
 
 const actionAgentsLoader = createLazyImportLoader(
@@ -53,26 +49,21 @@ export const handleSubagentsCommand: CommandHandler = defineAuthorizedTextComman
       return commandReply("⚠️ Missing session key.");
     }
 
-    const ctx: SubagentsCommandContext = {
+    const actionHandler =
+      action === "agents"
+        ? (await actionAgentsLoader.load()).handleSubagentsAgentsAction
+        : action === "list"
+          ? (await actionListLoader.load()).handleSubagentsListAction
+          : action === "info"
+            ? (await actionInfoLoader.load()).handleSubagentsInfoAction
+            : (await actionLogLoader.load()).handleSubagentsLogAction;
+    const { listControlledSubagentRuns } = await controlRuntimeLoader.load();
+
+    return await actionHandler({
       params,
       requesterKey,
-      runs: (await controlRuntimeLoader.load()).listControlledSubagentRuns(
-        requesterKey,
-        params.agentId,
-        params.cfg,
-      ),
+      runs: listControlledSubagentRuns(requesterKey, params.agentId, params.cfg),
       restTokens,
-    };
-
-    if (action === "agents") {
-      return (await actionAgentsLoader.load()).handleSubagentsAgentsAction(ctx);
-    }
-    if (action === "list") {
-      return (await actionListLoader.load()).handleSubagentsListAction(ctx);
-    }
-    if (action === "info") {
-      return (await actionInfoLoader.load()).handleSubagentsInfoAction(ctx);
-    }
-    return await (await actionLogLoader.load()).handleSubagentsLogAction(ctx);
+    });
   },
 );

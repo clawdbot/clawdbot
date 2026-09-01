@@ -27,7 +27,11 @@ import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { validReview, writeReviewArtifacts } from "./pr-review-artifact-fixture.js";
+import {
+  validClawsweeperReviewCommentPages,
+  validReview,
+  writeReviewArtifacts,
+} from "./pr-review-artifact-fixture.js";
 import { copyPrWrapperSources } from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -1825,6 +1829,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
         git("commit", "-qm", "test: canonical wrapper drift");
       }
       const canonicalHead = git("rev-parse", "HEAD");
+      const reviewComments = JSON.stringify(validClawsweeperReviewCommentPages(42, preparedHead));
       const localDir = join(worktreeDir, ".local");
       mkdirSync(localDir);
       for (const artifact of ["review.md", "pr-meta.env", "pr-meta.json", "prep.md"]) {
@@ -1852,6 +1857,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
         '    printf "invocation\\t%s\\n" "$PWD" >> "$OPENCLAW_TEST_LIFECYCLE"',
         `    printf '%s\\n' '{"id":"fixture-repo","url":"https://github.com/fixture/repo","nameWithOwner":"fixture/repo"}' ;;`,
         '  "repo view "*) printf "fixture/repo\\n" ;;',
+        `  "api --hostname github.com --paginate --slurp repos/fixture/repo/issues/42/comments?per_page=100 -H Cache-Control: max-age=0") printf '%s\\n' ${JSON.stringify(reviewComments)} ;;`,
         '  "api --hostname github.com --method POST repos/fixture/repo/issues/42/comments "*)',
         '    printf "comment\\n" >> "$OPENCLAW_TEST_LIFECYCLE"',
         '    printf "https://example.invalid/comment\\n" ;;',
@@ -1911,10 +1917,10 @@ describePosix("scripts/pr per-PR operation lock", () => {
       if (failure === "merge") {
         expect(result.status, output).toBe(1);
         expect(output).toContain("fixture merge failed");
-        expect(events).toBe(`invocation\t${worktreeDir}\n`);
+        expect(events).toBe(`invocation\t${repoDir}\n`);
       } else {
         const completedEvents =
-          command === "gc" ? "removed\n" : `invocation\t${worktreeDir}\nmerged\ncomment\nremoved\n`;
+          command === "gc" ? "removed\n" : `invocation\t${repoDir}\nmerged\ncomment\nremoved\n`;
         expect(events, output).toBe(completedEvents + (failure === "none" ? "released\n" : ""));
         expect(readFileSync(releaseCwd, "utf8").trim(), output).toBe(repoDir);
         expect(result.status, output).toBe(failure === "none" ? 0 : 1);

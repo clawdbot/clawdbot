@@ -91,6 +91,16 @@ function parseRetryAfterSeconds(valueText: string, nowMs: number): number | unde
   return retryAtMs === undefined ? undefined : Math.max(0, (retryAtMs - nowMs) / 1000);
 }
 
+/** Extracts a bounded retry hint from provider error text. */
+export function resolveRetryAfterMs(
+  message: string | undefined,
+  nowMs = Date.now(),
+): number | undefined {
+  const value = message?.trim() ? RETRY_AFTER_VALUE_RE.exec(message)?.[1]?.trim() : undefined;
+  const seconds = value ? parseRetryAfterSeconds(value, nowMs) : undefined;
+  return seconds === undefined ? undefined : Math.ceil(seconds * 1000);
+}
+
 /** Classify provider rate-limit text without deciding a caller's retry policy. */
 export function classifyRateLimitWindow(
   message: string | undefined,

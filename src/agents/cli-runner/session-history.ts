@@ -1,9 +1,10 @@
 /**
- * Loads and renders persisted session history for CLI session reseeding and
+ * Loads and renders owned session history for CLI session reseeding and
  * context-engine synchronization.
  */
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { selectResetKeptEntries } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import {
   readSessionTranscriptBoundedMessageTailPage,
   readSessionTranscriptWatermark,
@@ -32,7 +33,8 @@ const CHARS_PER_TOKEN_ESTIMATE = 4;
 const MAX_CLI_SESSION_HISTORY_EVENTS = 10_000;
 
 type CliSessionHistoryParams = {
-  sessionTarget: SessionTranscriptRuntimeTarget | undefined;
+  sessionManager?: SessionManager;
+  sessionTarget?: SessionTranscriptRuntimeTarget;
 };
 const CLI_SESSION_RESEED_CURRENCY_GUIDANCE =
   "[Recovered history may be stale; verify current and time-sensitive facts before acting.]";
@@ -247,9 +249,71 @@ export function buildCliSessionHistoryPrompt(params: {
   ].join("\n");
 }
 
+function loadCliMemoryEntries(sessionManager: SessionManager, hooks = false): SessionEntry[] {
+  const branch = sessionManager.getBranch();
+  const boundaryIndex = branch.findLastIndex(
+    (entry) => entry.type === "reset" || (!hooks && entry.type === "compaction"),
+  );
+  const boundary = branch[boundaryIndex];
+  let entries = branch;
+  if (boundary?.type === "reset" || boundary?.type === "compaction") {
+    const keptIndex = branch.findIndex((entry) => entry.id === boundary.firstKeptEntryId);
+    const kept = keptIndex >= 0 ? branch.slice(keptIndex, boundaryIndex) : [];
+    const resetKept = boundary.type === "reset" ? new Set(selectResetKeptEntries(kept)) : undefined;
+    entries = [
+      ...kept.filter((entry) => !resetKept || resetKept.has(entry)),
+      boundary,
+      ...branch.slice(boundaryIndex + 1),
+    ];
+  }
+  entries = entries.filter((entry) =>
+    hooks
+      ? entry.type === "message"
+      : entry.type !== "message" ||
+        !("excludeFromContext" in entry.message && entry.message.excludeFromContext === true),
+  );
+  const limit = hooks ? MAX_CLI_SESSION_HISTORY_MESSAGES : MAX_CLI_SESSION_HISTORY_EVENTS;
+  const selected: SessionEntry[] = [];
+  let bytes = 0;
+  for (const entry of entries.slice(-limit).toReversed()) {
+    const size = Buffer.byteLength(JSON.stringify(entry)) + 1;
+    if (bytes + size > MAX_CLI_SESSION_HISTORY_BYTES) {
+      if (hooks) {
+        continue;
+      }
+      break;
+    }
+    selected.push(entry);
+    bytes += size;
+  }
+  selected.reverse();
+  if (!hooks && (boundary?.type === "reset" || boundary?.type === "compaction")) {
+    if (
+      !selected.includes(boundary) &&
+      bytes + Buffer.byteLength(JSON.stringify(boundary)) + 1 <= MAX_CLI_SESSION_HISTORY_BYTES
+    ) {
+      selected.unshift(boundary);
+    }
+    // A bounded cut may omit the original retained anchor. Advance it within the
+    // selected retained range, never backward into summarized/reset history.
+    const cut = selected.indexOf(boundary);
+    if (cut >= 0) {
+      selected[cut] = { ...boundary, firstKeptEntryId: selected[0]?.id ?? boundary.id };
+    }
+  }
+  if (selected.length < entries.length) {
+    cliBackendLog.warn("cli session history truncated to bounded caller-owned context");
+  }
+  return structuredClone(selected);
+}
+
 async function loadCliSessionEntries({
+  sessionManager,
   sessionTarget,
 }: CliSessionHistoryParams): Promise<SessionEntry[]> {
+  if (sessionManager) {
+    return loadCliMemoryEntries(sessionManager);
+  }
   if (!sessionTarget) {
     return [];
   }
@@ -265,10 +329,14 @@ async function loadCliSessionEntries({
   }).getBranch();
 }
 
-/** Checks whether the canonical session has persisted transcript events. */
+/** Checks whether the transcript owner has any session events. */
 export async function hasCliSessionTranscript({
+  sessionManager,
   sessionTarget,
 }: CliSessionHistoryParams): Promise<boolean> {
+  if (sessionManager) {
+    return sessionManager.getEntries().length > 0;
+  }
   return (
     sessionTarget !== undefined && readSessionTranscriptWatermark(sessionTarget).maxSeq !== null
   );
@@ -276,8 +344,14 @@ export async function hasCliSessionTranscript({
 
 /** Loads reset-aware active transcript messages for CLI lifecycle hook context. */
 export async function loadCliSessionHistoryMessages({
+  sessionManager,
   sessionTarget,
 }: CliSessionHistoryParams): Promise<unknown[]> {
+  if (sessionManager) {
+    return loadCliMemoryEntries(sessionManager, true).flatMap((entry) =>
+      entry.type === "message" ? [entry.message] : [],
+    );
+  }
   if (!sessionTarget) {
     return [];
   }
@@ -341,6 +415,7 @@ export async function loadCliSessionReseedMessages(
   const hasSummary = summary?.role === "compactionSummary" && summary.summary.trim().length > 0;
   if (
     !hasSummary &&
+    !params.sessionManager &&
     (params.allowRawTranscriptReseed !== true ||
       !params.rawTranscriptReseedReason ||
       !RAW_TRANSCRIPT_RESEED_ALLOWED_REASONS.has(params.rawTranscriptReseedReason))

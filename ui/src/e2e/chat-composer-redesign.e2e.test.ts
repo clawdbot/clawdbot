@@ -399,10 +399,35 @@ suite.define(() => {
       const pickerWidth = () =>
         microphonePicker.evaluate((node) => node.getBoundingClientRect().width);
       await expect.poll(pickerWidth).toBe(0);
+      await page.emulateMedia({ reducedMotion: "no-preference" });
       await voice.hover();
-      await expect.poll(pickerWidth).toBeGreaterThanOrEqual(12);
-      const voiceBeforeHold = await voice.boundingBox();
+      await expect
+        .poll(() =>
+          microphonePickerShell.evaluate((node) => getComputedStyle(node).transitionDelay),
+        )
+        .toBe("0.75s");
+      await expect
+        .poll(() => microphonePicker.evaluate((node) => getComputedStyle(node).transitionDelay))
+        .toBe("0.75s, 0.75s, 0.82s, 0s, 0s");
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
+      expect(await pickerWidth()).toBe(0);
+      await expect.poll(pickerWidth).toBeGreaterThanOrEqual(27.5);
+      const [voiceBeforeHold, pickerBeforeHold] = await Promise.all([
+        voice.boundingBox(),
+        microphonePicker.boundingBox(),
+      ]);
       expect(voiceBeforeHold).not.toBeNull();
+      expect(pickerBeforeHold).not.toBeNull();
+      expect(
+        Math.abs(
+          (voiceBeforeHold?.x ?? 0) - ((pickerBeforeHold?.x ?? 0) + (pickerBeforeHold?.width ?? 0)),
+        ),
+      ).toBeLessThanOrEqual(0.5);
       await page.mouse.down();
       await expect
         .poll(() =>
@@ -418,6 +443,19 @@ suite.define(() => {
       );
       await page.mouse.up();
       await page.mouse.move(0, 0);
+      await expect.poll(pickerWidth).toBe(0);
+      await voice.hover();
+      await voice.press("Tab");
+      await expect
+        .poll(() => microphonePicker.evaluate((node) => node === document.activeElement))
+        .toBe(true);
+      await expect
+        .poll(() =>
+          microphonePickerShell.evaluate((node) => getComputedStyle(node).transitionDelay),
+        )
+        .toBe("0s, 0s");
+      await expect.poll(pickerWidth).toBeGreaterThanOrEqual(27.5);
+      await textarea.click();
       await expect.poll(pickerWidth).toBe(0);
       await expect
         .poll(() => model.evaluate((node) => node.closest(".agent-chat__composer-footer") != null))

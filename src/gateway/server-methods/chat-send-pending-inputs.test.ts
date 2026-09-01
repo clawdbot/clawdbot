@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -14,11 +15,13 @@ import {
   loadSessionEntry,
   loadTranscriptEventsSync,
   patchSessionEntryCore,
+  replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { initializeGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookBeforeMessageWriteEvent } from "../../plugins/types.js";
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
@@ -59,6 +62,11 @@ describe("ordinary browser input admission", () => {
           sessionId: scope.sessionId,
           updatedAt: Date.now(),
           status: active ? "running" : "done",
+        },
+        unrelated: {
+          sessionId: "unrelated-browser-session",
+          updatedAt: Date.now(),
+          skillsSnapshot: { prompt: "Unrelated session context. ".repeat(128), skills: [] },
         },
       },
     });
@@ -161,6 +169,7 @@ describe("ordinary browser input admission", () => {
 
   it("durably stages the approved cloud follow-up before ACK without changing the active transcript", async () => {
     const fixture = await createBrowserFollowupFixture();
+    const clone = vi.spyOn(globalThis, "structuredClone");
     const { scope, params, approvedContent, activeTranscript } = fixture;
     let transcriptAtAck: ReturnType<typeof loadTranscriptEventsSync> | undefined;
     let pendingAtAck: ReturnType<typeof listSessionPendingInputs> | undefined;
@@ -198,13 +207,21 @@ describe("ordinary browser input admission", () => {
           },
         ],
       });
+      // Initial resolution detaches the store; custody needs only the current target binding.
+      expect(
+        clone.mock.calls.filter(
+          ([entry]) => isRecord(entry) && entry.sessionId === "unrelated-browser-session",
+        ).length,
+      ).toBeLessThanOrEqual(1);
     } finally {
+      clone.mockRestore();
       await fixture.cleanup();
     }
   });
 
   it("commits an existing idle session input before ACK through restart-safe admission", async () => {
     const fixture = await createBrowserFollowupFixture({ active: false });
+    const clone = vi.spyOn(globalThis, "structuredClone");
     let transcriptAtAck: ReturnType<typeof loadTranscriptEventsSync> | undefined;
     const respond = vi.fn<RespondFn>((ok) => {
       if (ok) {
@@ -228,7 +245,13 @@ describe("ordinary browser input admission", () => {
         },
       });
       expect(listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+      expect(
+        clone.mock.calls.filter(
+          ([entry]) => isRecord(entry) && entry.sessionId === "unrelated-browser-session",
+        ).length,
+      ).toBeLessThanOrEqual(1);
     } finally {
+      clone.mockRestore();
       await fixture.cleanup();
     }
   });
@@ -278,34 +301,54 @@ describe("ordinary browser input admission", () => {
     }
   });
 
-  it("revalidates cancellation after message approval before committing custody", async () => {
-    const fixture = await createBrowserFollowupFixture();
-    fixture.beforeApprove.mockImplementation(() => {
-      const active = fixture.context.chatAbortControllers.get(fixture.params.idempotencyKey);
-      if (!active) {
-        throw new Error("Expected the browser admission to own its cancellation controller");
+  it.each(["cancellation", "lifecycle rotation", "session replacement"] as const)(
+    "revalidates %s after message approval before committing custody",
+    async (change) => {
+      const fixture = await createBrowserFollowupFixture();
+      fixture.beforeApprove.mockImplementation(() => {
+        if (change === "lifecycle rotation") {
+          rotateAgentEventLifecycleGeneration();
+          return;
+        }
+        if (change === "session replacement") {
+          replaceSessionEntrySync(fixture.scope, {
+            sessionId: "successor-session",
+            updatedAt: Date.now(),
+          });
+          return;
+        }
+        const active = fixture.context.chatAbortControllers.get(fixture.params.idempotencyKey);
+        if (!active) {
+          throw new Error("Expected the browser admission to own its cancellation controller");
+        }
+        active.abortStopReason = "rpc";
+        active.controller.abort();
+      });
+      try {
+        const respond = await fixture.send();
+        expect(fixture.beforeApprove).toHaveBeenCalledOnce();
+        expect(respond).toHaveBeenCalledOnce();
+        expect(respond).not.toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ status: "started" }),
+          undefined,
+          expect.anything(),
+        );
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+        expect(listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+        expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
+        if (change === "session replacement") {
+          expect(loadSessionEntry(fixture.scope)?.sessionId).toBe("successor-session");
+          expect(
+            loadTranscriptEventsSync({ ...fixture.scope, sessionId: "successor-session" }),
+          ).toEqual([]);
+        }
+        expect(fixture.context.chatAbortControllers.has(fixture.params.idempotencyKey)).toBe(false);
+      } finally {
+        await fixture.cleanup();
       }
-      active.abortStopReason = "rpc";
-      active.controller.abort();
-    });
-    try {
-      const respond = await fixture.send();
-      expect(fixture.beforeApprove).toHaveBeenCalledOnce();
-      expect(respond).toHaveBeenCalledOnce();
-      expect(respond).not.toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ status: "started" }),
-        undefined,
-        expect.anything(),
-      );
-      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      expect(listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
-      expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
-      expect(fixture.context.chatAbortControllers.has(fixture.params.idempotencyKey)).toBe(false);
-    } finally {
-      await fixture.cleanup();
-    }
-  });
+    },
+  );
 
   it("keeps one approved source when an accepted browser request is retried", async () => {
     const fixture = await createBrowserFollowupFixture();
