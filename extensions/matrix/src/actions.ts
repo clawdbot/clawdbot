@@ -207,7 +207,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
     if (!account || !createActionGate(account.config.actions)("messages")) {
       return null;
     }
-    if (readBooleanParam(ctx.params, "emote") !== true) {
+    if (readBooleanParam(ctx.params ?? {}, "emote") !== true) {
       return payload;
     }
 
