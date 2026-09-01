@@ -582,58 +582,73 @@ private final class DashboardGatewayTestUpdater: UpdaterProviding {
 }
 
 @MainActor
+private func withIsolatedDashboardGatewayPreference<T>(
+    _ body: () async throws -> T) async rethrows -> T
+{
+    try await TestIsolation.withUserDefaultsValues([
+        "gateway.preferredStableID": nil,
+        "bridge.preferredStableID": nil,
+        "gateway.preferredStableIDRouteBinding.v1": nil,
+    ], body)
+}
+
+@MainActor
 @Suite(.serialized)
 struct DashboardPrimaryGatewayAdapterTests {
     @Test func `token profile promotion carries its TLS pin`() async throws {
-        let state = AppState(preview: true)
-        let url = try #require(URL(string: "wss://studio.example:443/"))
-        let fingerprint = String(repeating: "a", count: 64)
-        var persistedFingerprints: [String?] = []
-        let adapter = DashboardPrimaryGatewayAdapter(
-            state: state,
-            endpoint: { _ in
-                GatewayConnection.EndpointSnapshot(
-                    config: (url: url, token: "profile-token", password: nil),
-                    tls: DashboardGatewayTestTLS.route(fingerprint: fingerprint),
-                    routeAuthority: nil)
-            },
-            currentTLSFingerprint: { nil },
-            persist: { _, fingerprint in
-                persistedFingerprints.append(fingerprint)
-                return true
-            })
+        try await withIsolatedDashboardGatewayPreference {
+            let state = AppState(preview: true)
+            let url = try #require(URL(string: "wss://studio.example:443/"))
+            let fingerprint = String(repeating: "a", count: 64)
+            var persistedFingerprints: [String?] = []
+            let adapter = DashboardPrimaryGatewayAdapter(
+                state: state,
+                endpoint: { _ in
+                    GatewayConnection.EndpointSnapshot(
+                        config: (url: url, token: "profile-token", password: nil),
+                        tls: DashboardGatewayTestTLS.route(fingerprint: fingerprint),
+                        routeAuthority: nil)
+                },
+                currentTLSFingerprint: { nil },
+                persist: { _, fingerprint in
+                    persistedFingerprints.append(fingerprint)
+                    return true
+                })
 
-        try await adapter.apply(profileID: "studio")
+            try await adapter.apply(profileID: "studio")
 
-        #expect(state.remoteTransport == .direct)
-        #expect(state.remoteUrl == url.absoluteString)
-        #expect(state.remoteToken == "profile-token")
-        #expect(state.connectionMode == .remote)
-        #expect(persistedFingerprints == [fingerprint])
+            #expect(state.remoteTransport == .direct)
+            #expect(state.remoteUrl == url.absoluteString)
+            #expect(state.remoteToken == "profile-token")
+            #expect(state.connectionMode == .remote)
+            #expect(persistedFingerprints == [fingerprint])
+        }
     }
 
     @Test func `token profile without a pin clears the previous primary pin`() async throws {
-        let state = AppState(preview: true)
-        let url = try #require(URL(string: "wss://studio.example:443/"))
-        var persistedFingerprints: [String?] = []
-        let adapter = DashboardPrimaryGatewayAdapter(
-            state: state,
-            endpoint: { _ in
-                GatewayConnection.EndpointSnapshot(
-                    config: (url: url, token: "profile-token", password: nil),
-                    tls: DashboardGatewayTestTLS.route(fingerprint: nil),
-                    routeAuthority: nil)
-            },
-            currentTLSFingerprint: { String(repeating: "b", count: 64) },
-            persist: { _, fingerprint in
-                persistedFingerprints.append(fingerprint)
-                return true
-            })
+        try await withIsolatedDashboardGatewayPreference {
+            let state = AppState(preview: true)
+            let url = try #require(URL(string: "wss://studio.example:443/"))
+            var persistedFingerprints: [String?] = []
+            let adapter = DashboardPrimaryGatewayAdapter(
+                state: state,
+                endpoint: { _ in
+                    GatewayConnection.EndpointSnapshot(
+                        config: (url: url, token: "profile-token", password: nil),
+                        tls: DashboardGatewayTestTLS.route(fingerprint: nil),
+                        routeAuthority: nil)
+                },
+                currentTLSFingerprint: { String(repeating: "b", count: 64) },
+                persist: { _, fingerprint in
+                    persistedFingerprints.append(fingerprint)
+                    return true
+                })
 
-        try await adapter.apply(profileID: "studio")
+            try await adapter.apply(profileID: "studio")
 
-        #expect(persistedFingerprints.count == 1)
-        #expect(persistedFingerprints[0] == nil)
+            #expect(persistedFingerprints.count == 1)
+            #expect(persistedFingerprints[0] == nil)
+        }
     }
 
     @Test func `password only profile cannot be promoted`() async throws {
@@ -723,35 +738,37 @@ struct DashboardPrimaryGatewayAdapterTests {
         }
     }
 
-    @Test func `deep link applies direct endpoint and clears omitted token and pin`() throws {
-        let state = AppState(preview: true)
-        state.remoteTransport = .ssh
-        state.remoteUrl = "ws://127.0.0.1:18789"
-        state.remoteToken = "stale-token"
-        state.connectionMode = .local
-        var persistedFingerprints: [String?] = []
-        let adapter = DashboardPrimaryGatewayAdapter(
-            state: state,
-            currentTLSFingerprint: { String(repeating: "b", count: 64) },
-            persist: { _, fingerprint in
-                persistedFingerprints.append(fingerprint)
-                return true
-            })
-        let link = GatewayConnectDeepLink(
-            host: "gateway.example",
-            port: 8443,
-            tls: true,
-            bootstrapToken: nil,
-            token: nil,
-            password: nil)
+    @Test func `deep link applies direct endpoint and clears omitted token and pin`() async throws {
+        try await withIsolatedDashboardGatewayPreference {
+            let state = AppState(preview: true)
+            state.remoteTransport = .ssh
+            state.remoteUrl = "ws://127.0.0.1:18789"
+            state.remoteToken = "stale-token"
+            state.connectionMode = .local
+            var persistedFingerprints: [String?] = []
+            let adapter = DashboardPrimaryGatewayAdapter(
+                state: state,
+                currentTLSFingerprint: { String(repeating: "b", count: 64) },
+                persist: { _, fingerprint in
+                    persistedFingerprints.append(fingerprint)
+                    return true
+                })
+            let link = GatewayConnectDeepLink(
+                host: "gateway.example",
+                port: 8443,
+                tls: true,
+                bootstrapToken: nil,
+                token: nil,
+                password: nil)
 
-        try adapter.apply(link: link)
+            try adapter.apply(link: link)
 
-        #expect(state.remoteTransport == .direct)
-        #expect(state.remoteUrl == "wss://gateway.example:8443")
-        #expect(state.remoteToken.isEmpty)
-        #expect(state.connectionMode == .remote)
-        #expect(persistedFingerprints == [nil])
+            #expect(state.remoteTransport == .direct)
+            #expect(state.remoteUrl == "wss://gateway.example:8443")
+            #expect(state.remoteToken.isEmpty)
+            #expect(state.connectionMode == .remote)
+            #expect(persistedFingerprints == [nil])
+        }
     }
 
     @Test func `deep link password is rejected without mutation`() throws {
@@ -826,36 +843,38 @@ struct DashboardGatewaySetupCoordinatorTests {
         #expect(openedSettings == 0)
     }
 
-    @Test func `accept applies primary and opens connection settings`() {
-        let state = AppState(preview: true)
-        var persistedFingerprints: [String?] = []
-        var openedSettings = 0
-        let adapter = DashboardPrimaryGatewayAdapter(
-            state: state,
-            currentTLSFingerprint: { nil },
-            persist: { _, fingerprint in
-                persistedFingerprints.append(fingerprint)
-                return true
-            })
-        let coordinator = DashboardGatewaySetupCoordinator(
-            adapter: adapter,
-            confirm: { _, _ in true },
-            presentError: { _, _ in Issue.record("unexpected error") },
-            openConnectionSettings: { openedSettings += 1 })
-        let link = GatewayConnectDeepLink(
-            host: "gateway.example",
-            port: 443,
-            tls: true,
-            bootstrapToken: nil,
-            token: "fixture-token",
-            password: nil)
+    @Test func `accept applies primary and opens connection settings`() async {
+        await withIsolatedDashboardGatewayPreference {
+            let state = AppState(preview: true)
+            var persistedFingerprints: [String?] = []
+            var openedSettings = 0
+            let adapter = DashboardPrimaryGatewayAdapter(
+                state: state,
+                currentTLSFingerprint: { nil },
+                persist: { _, fingerprint in
+                    persistedFingerprints.append(fingerprint)
+                    return true
+                })
+            let coordinator = DashboardGatewaySetupCoordinator(
+                adapter: adapter,
+                confirm: { _, _ in true },
+                presentError: { _, _ in Issue.record("unexpected error") },
+                openConnectionSettings: { openedSettings += 1 })
+            let link = GatewayConnectDeepLink(
+                host: "gateway.example",
+                port: 443,
+                tls: true,
+                bootstrapToken: nil,
+                token: "fixture-token",
+                password: nil)
 
-        coordinator.handle(link)
+            coordinator.handle(link)
 
-        #expect(state.remoteUrl == "wss://gateway.example:443")
-        #expect(state.remoteToken == "fixture-token")
-        #expect(persistedFingerprints == [nil])
-        #expect(openedSettings == 1)
+            #expect(state.remoteUrl == "wss://gateway.example:443")
+            #expect(state.remoteToken == "fixture-token")
+            #expect(persistedFingerprints == [nil])
+            #expect(openedSettings == 1)
+        }
     }
 
     @Test func `password route visibly rejects before prompting or mutation`() {

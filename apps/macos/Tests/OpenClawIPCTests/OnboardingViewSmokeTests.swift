@@ -228,15 +228,17 @@ struct OnboardingViewSmokeTests {
         #expect(state.connectionMode == .unconfigured)
     }
 
-    @Test func `advancing from recommended this Mac commits local mode`() {
-        let state = AppState(preview: true)
-        state.onboardingSeen = false
-        state.connectionMode = .unconfigured
-        let view = OnboardingView(state: state)
+    @Test func `advancing from recommended this Mac commits local mode`() async {
+        await withIsolatedOnboardingGatewayPreference {
+            let state = AppState(preview: true)
+            state.onboardingSeen = false
+            state.connectionMode = .unconfigured
+            let view = OnboardingView(state: state)
 
-        view.commitRecommendedConnectionIfNeeded(for: view.connectionPageIndex)
+            view.commitRecommendedConnectionIfNeeded(for: view.connectionPageIndex)
 
-        #expect(state.connectionMode == .local)
+            #expect(state.connectionMode == .local)
+        }
     }
 
     @Test func `choosing another computer never commits the recommended local gateway`() {
