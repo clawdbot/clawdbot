@@ -99,6 +99,33 @@ describe("incomplete-turn error recovery", () => {
     ).toBe(true);
   });
 
+  it("does not retry errored turns with structured provider refusals", () => {
+    const assistant = makeLastAssistant({
+      stopReason: "error",
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      errorMessage: "Anthropic refusal (category: cyber): This request is not allowed.",
+      diagnostics: [
+        {
+          type: "provider_refusal",
+          timestamp: Date.now(),
+          details: {
+            provider: "anthropic",
+            category: "cyber",
+            explanation: "This request is not allowed.",
+          },
+        },
+      ],
+      usage: { input: 3, output: 0, totalTokens: 3 },
+    });
+    expect(
+      shouldRetrySilentErrorAssistantTurn({
+        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
+        assistant,
+      }),
+    ).toBe(false);
+  });
+
   it("does not retry an ambiguous post-dispatch provider outcome", () => {
     const assistant = makeLastAssistant({
       stopReason: "error",
