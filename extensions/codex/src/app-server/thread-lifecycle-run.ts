@@ -332,7 +332,7 @@ export async function startOrResumeThread(
         threadId: binding.threadId,
         connectionClass: params.appServer.connectionClass,
       });
-      await clearCurrentBinding("rotating a stale thread binding");
+      await clearCurrentBinding("changing the app-server runtime identity");
       binding = undefined;
     }
     if (
@@ -451,7 +451,7 @@ export async function startOrResumeThread(
         embeddedAgentLog.debug("codex app-server MCP config changed; starting a new thread", {
           threadId: binding.threadId,
         });
-        await clearCurrentBinding("rotating a stale thread binding");
+        await clearCurrentBinding("changing MCP configuration");
       }
       binding = undefined;
     }
@@ -485,7 +485,7 @@ export async function startOrResumeThread(
             threadId: binding.threadId,
           },
         );
-        await clearCurrentBinding("rotating a stale thread binding");
+        await clearCurrentBinding("changing web-search configuration");
       }
       binding = undefined;
     }
@@ -529,7 +529,7 @@ export async function startOrResumeThread(
             previousPolicyFingerprint: binding.contextEngine?.policyFingerprint,
           },
         );
-        await clearCurrentBinding("rotating a stale thread binding");
+        await clearCurrentBinding("changing the context-engine binding");
         binding = undefined;
         rotatedContextEngineBinding = true;
       }
@@ -545,7 +545,7 @@ export async function startOrResumeThread(
       embeddedAgentLog.debug("codex app-server user MCP config changed; starting a new thread", {
         threadId: binding.threadId,
       });
-      await clearCurrentBinding("rotating a stale thread binding");
+      await clearCurrentBinding("changing the user MCP servers");
       binding = undefined;
     }
     if (
@@ -559,7 +559,7 @@ export async function startOrResumeThread(
           threadId: binding.threadId,
         },
       );
-      await clearCurrentBinding("rotating a stale thread binding");
+      await clearCurrentBinding("changing the network proxy configuration");
       binding = undefined;
     }
     if (binding?.threadId) {
@@ -577,7 +577,7 @@ export async function startOrResumeThread(
             threadId: binding.threadId,
           },
         );
-        await clearCurrentBinding("rotating a stale thread binding");
+        await clearCurrentBinding("changing the plugin app configuration");
         binding = undefined;
       }
     }
@@ -628,7 +628,7 @@ export async function startOrResumeThread(
               threadId: binding.threadId,
             },
           );
-          await clearCurrentBinding("rotating a stale thread binding");
+          await clearCurrentBinding("changing the dynamic tool catalog");
         }
       } else if (incognito) {
         if (

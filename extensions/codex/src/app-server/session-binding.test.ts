@@ -11,6 +11,7 @@ import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLazyCodexAppServerBindingStore } from "./session-binding-store.js";
 import {
+  assertCodexBindingMayBeReplaced,
   bindingStoreKey,
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   createCodexAppServerBindingStore,
@@ -18,6 +19,7 @@ import {
   hashCodexAppServerBindingFingerprint,
   readCodexAppServerThreadBinding,
   reclaimCurrentCodexSessionGeneration,
+  type CodexAppServerThreadBinding,
   type StoredCodexAppServerBinding,
 } from "./session-binding.js";
 
@@ -1859,6 +1861,22 @@ describe("Codex app-server binding store", () => {
     expect(() =>
       bindingStoreKey({ kind: "session", agentId: " ", sessionId: "session-1" }),
     ).toThrow("requires an agent id");
+  });
+
+  it("names the specific lifecycle operation in supervised replacement refusals", () => {
+    const supervised = {
+      connectionScope: "supervision",
+      threadId: "thread-supervised",
+    } as CodexAppServerThreadBinding;
+    expect(() =>
+      assertCodexBindingMayBeReplaced(supervised, "changing the dynamic tool loading mode"),
+    ).toThrow("while changing the dynamic tool loading mode");
+    expect(() =>
+      assertCodexBindingMayBeReplaced(
+        { threadId: "thread-plain" } as CodexAppServerThreadBinding,
+        "changing the dynamic tool loading mode",
+      ),
+    ).not.toThrow();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
