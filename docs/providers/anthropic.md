@@ -421,7 +421,8 @@ Anthropic has a recommended model for that refusal category.
    are discarded per Anthropic's replay rules (they must not be echoed back or
    executed).
 4. If the recommended model declines as well, the turn surfaces the refusal
-   as an error.
+   as an error. OpenClaw does not retry a final refusal or advance to another
+   configured model.
 
 The fallback happens at the Anthropic API level, so the serving model does not
 need to be in your configured OpenClaw fallback chain.
