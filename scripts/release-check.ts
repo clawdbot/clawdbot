@@ -206,8 +206,10 @@ export const PACKED_COMPLETION_SMOKE_ARGS = [
   "--shell",
   "zsh",
 ] as const;
-const PACKED_PLUGIN_SDK_TYPESCRIPT_SMOKE_FIXTURE = resolve(
-  "scripts/fixtures/packed-plugin-sdk-type-smoke.ts",
+// The checker owns fixture bytes; the target checkout supplies package metadata.
+const PACKED_PLUGIN_SDK_TYPESCRIPT_SMOKE_FIXTURE = new URL(
+  "./fixtures/packed-plugin-sdk-type-smoke.ts",
+  import.meta.url,
 );
 
 export function runReleaseCheckCommand(
@@ -1395,14 +1397,7 @@ async function main() {
   const files = results.flatMap((entry) => entry.files ?? []);
   const paths = new Set(files.map((file) => file.path));
 
-  const missing = requiredPathGroups
-    .flatMap((group) => {
-      if (Array.isArray(group)) {
-        return group.some((path) => paths.has(path)) ? [] : [group.join(" or ")];
-      }
-      return paths.has(group) ? [] : [group];
-    })
-    .toSorted((left, right) => left.localeCompare(right));
+  const missing = collectMissingPackPaths(paths);
   const forbidden = collectForbiddenPackPaths(paths);
   const forbiddenContent = collectForbiddenPackContentPaths(paths);
   const sizeErrors = collectNpmPackUnpackedSizeErrors(results);

@@ -68,6 +68,11 @@ describe("release-check", () => {
         join(root, "scripts/lib/plugin-sdk-private-local-only-subpaths.json"),
         JSON.stringify(["target-private"]),
       );
+      mkdirSync(join(root, "scripts", "fixtures"));
+      writeFileSync(
+        join(root, "scripts/fixtures/packed-plugin-sdk-type-smoke.ts"),
+        "stale target fixture",
+      );
       const moduleUrl = pathToFileURL(join(toolingRoot, "scripts/release-check.ts")).href;
       const output = execFileSync(
         process.execPath,
@@ -76,8 +81,10 @@ describe("release-check", () => {
           join(toolingRoot, "scripts/tsx.mjs"),
           "--input-type=module",
           "--eval",
-          `const { collectForbiddenPackPaths, collectMissingPackPaths } = await import(${JSON.stringify(moduleUrl)});\n` +
-            `console.log(JSON.stringify({ forbidden: collectForbiddenPackPaths(["dist/plugin-sdk/target-private.d.ts", "dist/plugin-sdk/target-public.d.ts"]), required: collectMissingPackPaths([]).filter(path => path.startsWith("dist/plugin-sdk/")) }));`,
+          `import { readFileSync } from "node:fs";\n` +
+            `const { collectForbiddenPackPaths, collectMissingPackPaths, createPackedPluginSdkTypescriptSmokeProject } = await import(${JSON.stringify(moduleUrl)});\n` +
+            `createPackedPluginSdkTypescriptSmokeProject({ consumerDir: "consumer", packageSpec: "file:fixture.tgz" });\n` +
+            `console.log(JSON.stringify({ forbidden: collectForbiddenPackPaths(["dist/plugin-sdk/target-private.d.ts", "dist/plugin-sdk/target-public.d.ts"]), required: collectMissingPackPaths([]).filter(path => path.startsWith("dist/plugin-sdk/")), fixture: readFileSync("consumer/src/index.ts", "utf8") }));`,
         ],
         {
           cwd: root,
@@ -86,6 +93,10 @@ describe("release-check", () => {
         },
       );
       expect(JSON.parse(output)).toEqual({
+        fixture: readFileSync(
+          join(toolingRoot, "scripts/fixtures/packed-plugin-sdk-type-smoke.ts"),
+          "utf8",
+        ),
         forbidden: ["dist/plugin-sdk/target-private.d.ts"],
         required: [
           "dist/plugin-sdk/target-private.js",
