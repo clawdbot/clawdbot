@@ -14,6 +14,7 @@ import {
   intersectCodexPluginThreadConfigWithScheduledAuthority,
   resolveScheduledCodexAppCreatorCaptureDecision,
 } from "./scheduled-app-authority.js";
+import { buildCodexManagedRequirementsFingerprint } from "./thread-requests.js";
 
 function policyContext() {
   return buildPluginAppPolicyContext(
@@ -309,6 +310,9 @@ describe("scheduled Codex app authority", () => {
   });
 
   it("captures configured app-server authority without a prepared ChatGPT account", async () => {
+    const managedRequirements = {
+      hooks: { PreToolUse: [{ matcher: "*", hooks: [{ type: "command" }] }] },
+    };
     const request = vi.fn(async (method: string) => {
       if (method === "app/installed") {
         return { apps: [{ id: "calendar", enabled: true, callable: true }] };
@@ -327,6 +331,9 @@ describe("scheduled Codex app authority", () => {
       if (method === "config/read") {
         return { config: {} };
       }
+      if (method === "configRequirements/read") {
+        return { requirements: managedRequirements };
+      }
       throw new Error(`unexpected method ${method}`);
     });
 
@@ -338,6 +345,8 @@ describe("scheduled Codex app authority", () => {
         auth: {
           kind: "configured-app-server",
           connectionFingerprint: "configured-connection",
+          managedRequirementsFingerprint:
+            buildCodexManagedRequirementsFingerprint(managedRequirements),
         },
       }),
     ).resolves.toEqual(

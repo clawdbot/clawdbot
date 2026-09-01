@@ -19,6 +19,7 @@ import {
 } from "./plugin-thread-config.js";
 import { isJsonObject, type v2 } from "./protocol.js";
 import type { CodexAttemptConnection } from "./run-attempt-connection.js";
+import { readCodexManagedRequirementsFingerprint } from "./thread-requests.js";
 import { withAbortableTimeout } from "./timeout.js";
 
 const CODEX_SCHEDULED_APP_AUTHORITY_NAMESPACE = "codex.apps";
@@ -101,6 +102,7 @@ type ScheduledCodexAppPreparedProfileAuth = {
 type ScheduledCodexAppConfiguredServerAuth = {
   kind: "configured-app-server";
   connectionFingerprint: string;
+  managedRequirementsFingerprint: string;
 };
 type ScheduledCodexAppAuthorityAuth =
   | ScheduledCodexAppPreparedProfileAuth
@@ -152,10 +154,19 @@ function parseScheduledCodexAppAuthority(
   const auth = asOptionalRecord(payload?.auth);
   const profileId = normalizeOptionalString(auth?.profileId);
   const connectionFingerprint = normalizeOptionalString(auth?.connectionFingerprint);
+  const managedRequirementsFingerprint = normalizeOptionalString(
+    auth?.managedRequirementsFingerprint,
+  );
   const accountId = normalizeOptionalString(auth?.accountId);
   const parsedAuth: ScheduledCodexAppAuthorityAuth | undefined =
-    auth?.kind === "configured-app-server" && connectionFingerprint
-      ? { kind: "configured-app-server", connectionFingerprint }
+    auth?.kind === "configured-app-server" &&
+    connectionFingerprint &&
+    managedRequirementsFingerprint
+      ? {
+          kind: "configured-app-server",
+          connectionFingerprint,
+          managedRequirementsFingerprint,
+        }
       : auth?.kind === undefined && profileId && accountId
         ? { profileId, accountId }
         : undefined;
@@ -324,8 +335,9 @@ export async function captureScheduledCodexAppAuthority(params: {
   };
   let installed: v2.AppsInstalledResponse;
   let currentPolicy: CurrentCodexScheduledAppPolicy;
+  let managedRequirementsFingerprint: string | undefined;
   try {
-    [installed, currentPolicy] = await withAbortableTimeout({
+    [installed, currentPolicy, managedRequirementsFingerprint] = await withAbortableTimeout({
       promise: Promise.all([
         boundedClient.request("app/installed", {
           threadId: params.threadId,
@@ -337,6 +349,9 @@ export async function captureScheduledCodexAppAuthority(params: {
           threadId: params.threadId,
           configCwd: params.configCwd,
         }),
+        params.auth.kind === "configured-app-server"
+          ? readCodexManagedRequirementsFingerprint(boundedClient, params.signal)
+          : Promise.resolve(undefined),
       ]),
       timeoutMs,
       signal: params.signal,
@@ -390,6 +405,13 @@ export async function captureScheduledCodexAppAuthority(params: {
       : {
           kind: "configured-app-server",
           connectionFingerprint: params.auth.connectionFingerprint,
+          managedRequirementsFingerprint:
+            managedRequirementsFingerprint ??
+            (() => {
+              throw new Error(
+                "Codex configured app-server authority capture omitted managed requirements",
+              );
+            })(),
         };
   return {
     version: 1,
@@ -576,6 +598,14 @@ function readScheduledCodexAppAuthorityAuth(
   authority: EmbeddedRunAttemptParams["scheduledRuntimeAuthority"],
 ): ScheduledCodexAppAuthorityPayload["auth"] | undefined {
   return parseScheduledCodexAppAuthority(authority)?.auth;
+}
+
+/** Returns the managed-requirements identity captured for a configured app-server job. */
+export function readScheduledCodexAppManagedRequirementsFingerprint(
+  authority: EmbeddedRunAttemptParams["scheduledRuntimeAuthority"],
+): string | undefined {
+  const auth = readScheduledCodexAppAuthorityAuth(authority);
+  return auth?.kind === "configured-app-server" ? auth.managedRequirementsFingerprint : undefined;
 }
 
 export function assertScheduledCodexAppAuthorityRuntime(

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import {
   isHostScopedAgentToolActive,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
@@ -25,6 +26,7 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import { fingerprintJsonObject } from "./thread-fingerprints.js";
 import {
   CODEX_NATIVE_PERSONALITY_NONE,
   resolveCodexAppServerModelProvider,
@@ -556,6 +558,7 @@ export async function assertCodexManagedRequirementsDoNotOverrideToolPolicy(
   options: {
     restrictedToolSurface: boolean;
     additionalDeniedFeatures?: readonly string[];
+    allowedManagedRequirementsFingerprint?: string;
   },
   signal?: AbortSignal,
 ): Promise<void> {
@@ -567,11 +570,22 @@ export async function assertCodexManagedRequirementsDoNotOverrideToolPolicy(
   if (!isJsonObject(response) || !Object.hasOwn(response, "requirements")) {
     throw new Error("Codex configRequirements/read returned an invalid response");
   }
+  if (response.requirements !== null && !isJsonObject(response.requirements)) {
+    throw new Error("Codex configRequirements/read returned invalid requirements");
+  }
+  const managedRequirementsFingerprint = buildCodexManagedRequirementsFingerprint(
+    response.requirements,
+  );
+  const managedRequirementsMatch =
+    options.allowedManagedRequirementsFingerprint !== undefined &&
+    managedRequirementsFingerprint === options.allowedManagedRequirementsFingerprint;
+  if (options.allowedManagedRequirementsFingerprint !== undefined && !managedRequirementsMatch) {
+    throw new Error(
+      "Codex managed requirements changed since this automation was authorized; reauthorize the automation from a fresh owner turn",
+    );
+  }
   if (response.requirements === null) {
     return;
-  }
-  if (!isJsonObject(response.requirements)) {
-    throw new Error("Codex configRequirements/read returned invalid requirements");
   }
   if (options.restrictedToolSurface) {
     for (const key of ["hooks", "managedHooks", "managed_hooks"] as const) {
@@ -582,7 +596,7 @@ export async function assertCodexManagedRequirementsDoNotOverrideToolPolicy(
       if (!isJsonObject(hooks)) {
         throw new Error("Codex configRequirements/read returned invalid managed hooks");
       }
-      if (hasNonEmptyJsonValue(hooks)) {
+      if (hasNonEmptyJsonValue(hooks) && !managedRequirementsMatch) {
         throw new Error("Codex restricted tool surface cannot override managed hooks");
       }
     }
@@ -605,11 +619,46 @@ export async function assertCodexManagedRequirementsDoNotOverrideToolPolicy(
         (options.restrictedToolSurface &&
           CODEX_RING_ZERO_RESTRICTED_FEATURES.has(canonicalFeature)) ||
         additionalDeniedFeatures.has(canonicalFeature);
+      if (canonicalFeature === "hooks" && managedRequirementsMatch) {
+        continue;
+      }
       if (enabled && deniedByToolPolicy) {
         throw new Error(`Codex tool policy cannot override required feature ${feature}`);
       }
     }
   }
+}
+
+/** Hashes the exact managed requirements without retaining their hook commands or policy details. */
+export function buildCodexManagedRequirementsFingerprint(requirements: JsonObject | null): string {
+  return crypto
+    .createHash("sha256")
+    .update(
+      fingerprintJsonObject({
+        version: 1,
+        requirements,
+      }),
+    )
+    .digest("hex");
+}
+
+/** Reads and fingerprints the exact managed requirements active on this app-server. */
+export async function readCodexManagedRequirementsFingerprint(
+  client: Pick<CodexAppServerClient, "request">,
+  signal?: AbortSignal,
+): Promise<string> {
+  const response: CodexConfigRequirementsReadResponse = await client.request(
+    "configRequirements/read",
+    undefined,
+    { signal },
+  );
+  if (!isJsonObject(response) || !Object.hasOwn(response, "requirements")) {
+    throw new Error("Codex configRequirements/read returned an invalid response");
+  }
+  if (response.requirements !== null && !isJsonObject(response.requirements)) {
+    throw new Error("Codex configRequirements/read returned invalid requirements");
+  }
+  return buildCodexManagedRequirementsFingerprint(response.requirements);
 }
 
 export async function attestCodexRestrictedToolSurfaceMcpServersDisabled(

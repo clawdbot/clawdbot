@@ -16,6 +16,7 @@ import { assertCodexNativeHookRelayAllowed } from "./native-hook-relay.js";
 import { resolveCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
+import { readScheduledCodexAppManagedRequirementsFingerprint } from "./scheduled-app-authority.js";
 import { hashCodexAppServerBindingFingerprint } from "./session-binding.js";
 import { buildContextEngineBinding } from "./thread-context-engine.js";
 import {
@@ -151,6 +152,10 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
         {
           restrictedToolSurface,
           additionalDeniedFeatures: imageGenerationDenied ? ["image_generation"] : undefined,
+          allowedManagedRequirementsFingerprint:
+            readScheduledCodexAppManagedRequirementsFingerprint(
+              params.params.scheduledRuntimeAuthority,
+            ),
         },
         params.signal,
       ),
