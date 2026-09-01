@@ -289,6 +289,8 @@ export async function buildTestPlan(params: {
         return modelRef;
       }
       const ref = parseRef(modelRef);
+      // Probe uses the native CLI execution ref. New config keeps the canonical
+      // Anthropic model and pins agentRuntime.id to claude-cli.
       return {
         runner: "cli",
         ...ref,
@@ -296,7 +298,7 @@ export async function buildTestPlan(params: {
         config: cfg,
         agentId: "openclaw",
         routeAgentId,
-        persistModelRef: modelRef,
+        persistModelRef: `${parseRef(ANTHROPIC_API_DEFAULT_MODEL_REF).provider}/${ref.model}`,
       };
     }
     case "gemini-cli": {

@@ -42,6 +42,7 @@ import {
 import {
   projectSetupTargetModelMetadata,
   resolveSetupAgentRuntimeId,
+  resolveSetupPersistedModelRef,
   type SetupInferenceTestPlan,
 } from "./setup-inference-plan-helpers.js";
 import { createSystemAgentModelSelectionUpdater } from "./setup-model-selection.js";
@@ -194,7 +195,7 @@ export async function persistActivatedSetupInference(input: {
     if (
       !sameDefaultInferenceRoute(initialRoute, verifiedRoute) ||
       !resolvedRoute ||
-      resolvedRoute.modelLabel !== plan.modelRef ||
+      resolvedRoute.modelLabel !== resolveSetupPersistedModelRef(plan) ||
       resolvedRoute.authProfileId !== plan.authProfileId
     ) {
       throw new Error(
@@ -282,7 +283,7 @@ export async function persistActivatedSetupInference(input: {
         const resolvedRoute = await resolveRoute(stagedRuntime);
         if (
           !resolvedRoute ||
-          resolvedRoute.modelLabel !== plan.modelRef ||
+          resolvedRoute.modelLabel !== resolveSetupPersistedModelRef(plan) ||
           (plan.authProfileId && resolvedRoute.authProfileId !== plan.authProfileId)
         ) {
           throw new Error(
@@ -310,7 +311,7 @@ export async function persistActivatedSetupInference(input: {
         if (
           !sameDefaultInferenceRoute(nextRouteProjection, expectedSourceCandidateRoute) ||
           !nextResolvedRoute ||
-          nextResolvedRoute.modelLabel !== plan.modelRef ||
+          nextResolvedRoute.modelLabel !== resolveSetupPersistedModelRef(plan) ||
           (plan.authProfileId && nextResolvedRoute.authProfileId !== plan.authProfileId)
         ) {
           throw new Error(
