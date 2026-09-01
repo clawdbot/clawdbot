@@ -165,7 +165,7 @@ Responses show up to five app links and explicitly report additional apps to
 review in Codex CLI. These links are for hosted ChatGPT apps; native MCP server
 setup remains separate.
 
-After completing sign-in, choose **Finished connecting / recheck** or run:
+After completing sign-in, choose **Recheck app tools** or run:
 
 ```text
 /codex plugins recheck security-review@company-tools

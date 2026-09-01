@@ -99,7 +99,6 @@ describe("Codex /codex plugins subcommand", () => {
       "/codex plugins list",
       "/codex plugins available",
       "/codex plugins status",
-      "/codex plugins recheck",
       "/codex plugins enable",
       "/codex plugins disable",
       "/codex plugins help",
