@@ -49,9 +49,9 @@ const APPLE_SHARED_CONTRACT_FIXTURE_RE =
 const MACOS_NATIVE_RE =
   /^(apps\/macos\/|apps\/macos-mlx-tts\/|apps\/shared\/|apps\/swabble\/|Swabble\/)/;
 const GIT_OWNER_SCOPE_RE =
-  /^(?:\.github\/(?:actions\/(?:git-owner|ensure-base-commit|publish-generated-pr|mantis-validate-trusted-ref)\/|workflows\/(?:workflow-sanity|qa-profile-evidence|maturity-scorecard|docs-agent|docs-sync-publish|openclaw-performance|linux-app-release|macos-release|npm-placeholder-bootstrap|plugin-clawhub-release|plugin-npm-release|mantis-(?:discord-(?:smoke|status-reactions|thread-attachment)|slack-desktop-smoke|web-ui-chat-proof))\.yml$)|scripts\/generate-ci-git-owner\.mts$|test\/scripts\/(?:ci-(?:checkout|git-owner|linux-git|platform-checkout)\.test(?:-support)?\.ts|generated-publisher\.test-support\.ts|openclaw-performance-(?:workflow\.test(?:-support)?|git-lifecycle\.test)\.ts|plugin-release-git-lifecycle\.test\.ts|release-workflow-git-lifecycle\.test\.ts|fixtures\/ci-platform-checkout\.mjs)$)/;
+  /^(?:\.github\/(?:actions\/(?:git-owner|ensure-base-commit|publish-generated-pr|mantis-validate-trusted-ref)\/|workflows\/(?:workflow-sanity|qa-profile-evidence|maturity-scorecard|docs-agent|docs-sync-publish|openclaw-performance|linux-app-release|macos-release|npm-placeholder-bootstrap|plugin-clawhub-release|plugin-npm-release|mantis-(?:discord-(?:smoke|status-reactions|thread-attachment)|slack-desktop-smoke|web-ui-chat-proof))\.yml$)|scripts\/generate-ci-git-owner\.mts$|test\/scripts\/(?:ci-(?:checkout|git-owner|linux-git|platform-checkout)\.test(?:-support)?\.ts|generated-publisher\.test-support\.ts|openclaw-performance-(?:workflow\.test(?:-support)?|git-lifecycle\.test)\.ts|plugin-release-git-lifecycle\.test\.ts|release-workflow-git-lifecycle\.test\.ts|fixtures\/(?:ci-platform-checkout\.mjs|ci-windows-process-census\.py))$)/;
 const MACOS_SCRIPT_SCOPE_RE =
-  /^(?:scripts\/(?:check-swift-tools|codesign-mac-app|create-dmg|format-swift|install-swift-tools|install-xcodegen|lint-swift|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist|restart-mac|stage-cua-driver-macos|stage-mac-node-worker)\.sh|scripts\/test-macos-native\.mts|scripts\/(?:verify-mac-node-worker(?:-fs)?|lib\/(?:mac-node-worker-proof-state|mac-worker-portability))\.mjs|scripts\/(?:materialize-mac-node-worker|lib\/(?:mac-native-inventory|mac-bundle-mutation))\.py|scripts\/lib\/(?:mac-app-bundle|plistbuddy|swift-toolchain)\.sh|test\/helpers\/mac-(?:native|signing)\.ts|test\/scripts\/(?:codesign-mac-app|create-dmg|mac-elevation-host|mac-node-worker|macos-native-test-launch|notarize-mac-artifact|package-mac-app|package-mac-dist|restart-mac|verify-mac-node-worker-fs)\.test\.ts|test\/scripts\/(?:mac-elevation-artifact|mac-native-fixtures|mac-node-worker-materialization)\.test-support\.ts)$/;
+  /^(?:scripts\/(?:check-swift-tools|codesign-mac-app|create-dmg|format-swift|install-swift-tools|install-xcodegen|lint-swift|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist|restart-mac|stage-cua-driver-macos|stage-mac-node-worker)\.sh|scripts\/test-macos-native\.mts|scripts\/(?:verify-mac-node-worker(?:-fs)?|lib\/(?:mac-node-worker-proof-state|mac-worker-portability))\.mjs|scripts\/(?:materialize-mac-node-worker|swift-build-cache-metadata|lib\/(?:mac-native-inventory|mac-bundle-mutation))\.py|scripts\/lib\/(?:mac-app-bundle|plistbuddy|swift-toolchain)\.sh|test\/helpers\/mac-(?:native|signing)\.ts|test\/scripts\/(?:codesign-mac-app|create-dmg|mac-elevation-artifact|mac-elevation-host|mac-node-worker|macos-native-test-launch|notarize-mac-artifact|package-mac-app|package-mac-dist|restart-mac|swift-build-cache-metadata|verify-mac-node-worker-fs)\.test\.ts|test\/scripts\/(?:mac-elevation-artifact|mac-native-fixtures|mac-node-worker-materialization)\.test-support\.ts)$/;
 const WORKSPACE_RSYNC_RECEIVER_SCOPE_RE =
   /^src\/(?:shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$/;
 const IOS_BUILD_RE =
@@ -70,7 +70,7 @@ const WINDOWS_SQLITE_SCOPE_RE = /^src\/(?:state\/|.*sqlite.*\.ts$)/;
 // to any of them that skipped the lane would merge a Windows regression unseen.
 // Not gated on isTestOnly: the proof itself is a test file and must route here.
 const WINDOWS_PROCESS_IDENTITY_SCOPE_RE =
-  /^(?:src\/(?:shared\/pid-alive(?:\.[a-z-]+)?(?:\.test)?\.ts|infra\/(?:windows-process-start|gateway-lock)(?:\.test)?\.ts|node-host\/node-worker-process-identity(?:\.test)?\.ts|cron\/store\/run-receipt-store(?:\.test)?\.ts)|test\/e2e\/windows-cron-process-identity\.e2e\.test\.ts)$/;
+  /^src\/(?:shared\/pid-alive(?:\.[a-z-]+)?(?:\.test)?\.ts|infra\/(?:windows-process-start|gateway-lock)(?:\.test)?\.ts|node-host\/node-worker-process-identity(?:\.test)?\.ts|cron\/store\/run-receipt-store(?:\.test)?\.ts)$/;
 const WINDOWS_FILE_URL_SCOPE_RE =
   /^(?:src\/agents\/tools\/(?:media-tool-file-url\.windows\.test|media-tool-shared(?:\.test)?|pdf-tool(?:\.test)?)|src\/auto-reply\/(?:reply\/stage-sandbox-media|reply\.triggers\.trigger-handling\.stages-inbound-media-into-sandbox-workspace\.test)|src\/media\/(?:local-media-path(?:\.windows\.test)?|local-roots(?:\.test)?|web-media(?:\.file-url\.windows\.test)?)|src\/channels\/inbound-event\/media(?:\.test)?|src\/gateway\/managed-image-attachments(?:\.test)?|extensions\/msteams\/src\/(?:media-helpers|messenger)(?:\.test)?)\.ts$/;
 const WINDOWS_SCOPE_RE =
@@ -171,6 +171,7 @@ export function detectChangedScope(changedPaths) {
   let runNode = false;
   let runMacos = false;
   let hasGitOwnerChanges = false;
+  let hasMacosNodeTestSupportChanges = false;
   let runIosBuild = false;
   let runAndroid = false;
   let runWindows = false;
@@ -196,6 +197,8 @@ export function detectChangedScope(changedPaths) {
 
     hasNonDocs = true;
     hasGitOwnerChanges ||= GIT_OWNER_SCOPE_RE.test(path);
+    // Native shell fixture support needs Darwin proof, not Swift or Windows builds.
+    hasMacosNodeTestSupportChanges ||= path === "test/scripts/mac-script-fixture.test-support.ts";
 
     if (SKILLS_PYTHON_SCOPE_RE.test(path)) {
       runSkillsPython = true;
@@ -280,7 +283,7 @@ export function detectChangedScope(changedPaths) {
   return {
     runNode,
     runMacos,
-    runMacosNode: runMacos || hasGitOwnerChanges,
+    runMacosNode: runMacos || hasGitOwnerChanges || hasMacosNodeTestSupportChanges,
     runIosBuild,
     runAndroid,
     runWindows: runWindows || hasGitOwnerChanges,

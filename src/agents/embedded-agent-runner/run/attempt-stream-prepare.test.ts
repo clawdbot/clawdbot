@@ -202,6 +202,7 @@ describe("prepareEmbeddedAttemptStream", () => {
         expect.objectContaining({ preemptByVisibleTurn: expect.any(Function) }),
         "agent:main:main",
         undefined,
+        "main",
       );
     } finally {
       operation.complete();

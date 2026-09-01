@@ -108,6 +108,11 @@ describe("registerBundledHealthChecks", () => {
       expected: "isolated",
     },
     {
+      title: "isolates checks selected by the post-plugin update gate",
+      selection: { updateReadiness: "post-plugin" },
+      expected: "isolated",
+    },
+    {
       title: "isolates mixed explicit selections",
       selection: {
         onlyIds: [STATE_DEFERRED_CHECK_ID, "core/doctor/final-config-validation"],

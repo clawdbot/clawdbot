@@ -12,13 +12,7 @@ import {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
 } from "./src/account-selection.js";
-import {
-  hasMatrixSyncCacheStateInStore,
-  openMatrixSyncCacheStoreOptions,
-  readLegacyMatrixSyncCacheState,
-  writeMatrixSyncCacheStateToStore,
-  type MatrixSyncCacheRecord,
-} from "./src/matrix/client/file-sync-store.js";
+import { matrixAccountStateSchemaMigration } from "./src/matrix/account-state-schema-doctor.js";
 import {
   hasMatrixStorageMetaStateInStore,
   normalizeMatrixStorageMetadata,
@@ -26,6 +20,13 @@ import {
   writeMatrixStorageMetaStateToStore,
   type MatrixStorageMetadata,
 } from "./src/matrix/client/storage.js";
+import {
+  hasMatrixSyncCacheStateInStore,
+  openMatrixSyncCacheStoreOptions,
+  readLegacyMatrixSyncCacheState,
+  writeMatrixSyncCacheStateToStore,
+  type MatrixSyncCacheRecord,
+} from "./src/matrix/client/sync-cache-state.js";
 import {
   MATRIX_CREDENTIALS_MAX_ENTRIES,
   MATRIX_CREDENTIALS_NAMESPACE,
@@ -218,6 +219,7 @@ async function archiveLegacyMatrixStateFile(params: {
 }
 
 export const stateMigrations: PluginDoctorStateMigration[] = [
+  matrixAccountStateSchemaMigration,
   {
     id: "matrix-credentials-json-to-plugin-state",
     label: "Matrix credentials",

@@ -92,6 +92,13 @@ describe("SQLite historical session disk budget", () => {
     });
     setSessionUpdatedAt("newer-history", 20);
     settlePhysicalUsage();
+    database().db.exec("ANALYZE; PRAGMA analysis_limit = 37;");
+    expect(
+      database()
+        .db.prepare("SELECT stat FROM sqlite_stat1 WHERE idx = ?")
+        .get("idx_agent_session_windows_updated_at"),
+    ).toEqual({ stat: expect.stringMatching(/^3\b/u) });
+    settlePhysicalUsage();
     const before = await measureSessionPhysicalDiskUsage(storePath);
 
     const result = await enforceSqliteSessionHistoryDiskBudget({
@@ -113,6 +120,12 @@ describe("SQLite historical session disk budget", () => {
     expect(sessionExists("live-history")).toBe(true);
     expect(readArchiveNames("oldest-history")).toHaveLength(1);
     expect(readArchiveNames("newer-history")).toHaveLength(0);
+    expect(
+      database()
+        .db.prepare("SELECT stat FROM sqlite_stat1 WHERE idx = ?")
+        .get("idx_agent_session_windows_updated_at"),
+    ).toEqual({ stat: expect.stringMatching(/^3\b/u) });
+    expect(database().db.prepare("PRAGMA analysis_limit").get()).toEqual({ analysis_limit: 37 });
   });
 
   it("remeasures incompressible archive publication before declaring high water", async () => {

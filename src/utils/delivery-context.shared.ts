@@ -57,6 +57,13 @@ export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryCon
   return normalized;
 }
 
+/** Checks raw channel/to presence only; does not normalize or validate deliverability. */
+export function hasDeliveryTargetFields(
+  context?: DeliveryContext,
+): context is DeliveryContext & { channel: string; to: string } {
+  return Boolean(context?.channel && context?.to);
+}
+
 /** Normalizes an unknown channel route payload from persisted session/plugin metadata. */
 export function normalizeDeliveryChannelRoute(route?: unknown): ChannelRouteRef | undefined {
   if (!route || typeof route !== "object" || Array.isArray(route)) {

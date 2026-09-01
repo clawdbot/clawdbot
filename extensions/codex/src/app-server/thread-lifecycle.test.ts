@@ -36,7 +36,11 @@ import {
   resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
-import { createClientHarness, createCodexTestModel } from "./test-support.js";
+import {
+  createClientHarness,
+  createCodexTestModel,
+  withLeasedCodexTestClient,
+} from "./test-support.js";
 import {
   buildDeveloperInstructions,
   buildTurnCollaborationMode,
@@ -130,6 +134,9 @@ describe("Codex managed shell environment", () => {
           GH_TOKEN: "",
           GITHUB_TOKEN: "",
           PREVIEW_SERVICE_TOKEN: "",
+          OPENCLAW_STATE_DIR: "/fixture/diagnosed",
+          OPENCLAW_CONFIG_PATH: "/fixture/custom.json",
+          OPENCLAW_WORKSPACE_DIR: "/fixture/default-workspace",
         },
         disableLoginShell: true,
       };
@@ -159,11 +166,14 @@ describe("Codex managed shell environment", () => {
           GH_TOKEN: "",
           GITHUB_TOKEN: "",
           PREVIEW_SERVICE_TOKEN: "",
+          OPENCLAW_STATE_DIR: "/fixture/diagnosed",
+          OPENCLAW_CONFIG_PATH: "/fixture/custom.json",
+          OPENCLAW_WORKSPACE_DIR: "/fixture/default-workspace",
         },
       });
       expect(request.config?.allow_login_shell).toBe(false);
       const includeOnly = shellEnvironmentPolicy.include_only;
-      expect(includeOnly).toHaveLength(5);
+      expect(includeOnly).toHaveLength(8);
       expect(includeOnly).toEqual(
         expect.arrayContaining([
           "PATH",
@@ -171,6 +181,9 @@ describe("Codex managed shell environment", () => {
           "GITHUB_TOKEN",
           "GH_TOKEN",
           "PREVIEW_SERVICE_TOKEN",
+          "OPENCLAW_STATE_DIR",
+          "OPENCLAW_CONFIG_PATH",
+          "OPENCLAW_WORKSPACE_DIR",
         ]),
       );
       expect(shellEnvironmentPolicy.experimental_use_profile).toBe(false);
@@ -916,6 +929,7 @@ async function seedPendingSupervisionBinding(params: {
   const pending = {
     connectionFingerprint: buildCodexAppServerConnectionFingerprint(
       createThreadLifecycleAppServerOptions(),
+      params.attempt.agentDir,
     ),
     ...params.pending,
   };
@@ -991,6 +1005,18 @@ function nativeThreadResult(threadId: string, model: string, modelProvider: stri
   };
 }
 
+async function writeNativeCatalogFixture(
+  rolloutPath: string,
+  threadId: string,
+  dynamicTools: unknown,
+) {
+  await fs.mkdir(path.dirname(rolloutPath), { recursive: true });
+  await fs.writeFile(
+    rolloutPath,
+    `${JSON.stringify({ type: "session_meta", payload: { id: threadId, dynamic_tools: dynamicTools } })}\n`,
+  );
+}
+
 function disabledMcpServerStatus(name: string) {
   return {
     name,
@@ -1004,7 +1030,7 @@ function disabledMcpServerStatus(name: string) {
 
 function sourceThread(params: {
   threadId: string;
-  status?: "idle" | "active";
+  status?: "idle" | "active" | "notLoaded";
   turns?: Array<Record<string, unknown>>;
 }) {
   return {
@@ -3712,6 +3738,12 @@ describe("Codex app-server supervised branch lifecycle", () => {
     const agentWorkspaceDeveloperInstructions = "Follow the frozen supervised AGENTS guidance.";
     const workspaceDir = path.join(tempDir, "workspace");
     const attempt = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    attempt.agentDir = path.join(tempDir, "agent");
+    const rolloutPath = path.join(
+      resolveCodexAppServerHomeDir(attempt.agentDir),
+      "sessions",
+      `rollout-${finalThreadId}.jsonl`,
+    );
     attempt.modelId = "outer-global-default";
     const identity = await seedPendingSupervisionBinding({
       attempt,
@@ -3749,7 +3781,10 @@ describe("Codex app-server supervised branch lifecycle", () => {
           thread:
             threadId === sourceThreadId
               ? terminalSource
-              : sourceThread({ threadId: finalThreadId }),
+              : {
+                  ...sourceThread({ threadId: finalThreadId, status: "notLoaded" }),
+                  path: rolloutPath,
+                },
         };
       }
       if (method === "thread/fork") {
@@ -3877,20 +3912,36 @@ describe("Codex app-server supervised branch lifecycle", () => {
       preserveNativeModel: true,
       agentWorkspaceDeveloperInstructions,
       conversationSourceTransferComplete: true,
-      appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(commonParams.appServer),
+      appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
+        commonParams.appServer,
+        attempt.agentDir,
+      ),
     });
 
+    await writeNativeCatalogFixture(rolloutPath, finalThreadId, startParams.dynamicTools);
     request.mockClear();
-    const resumed = await startOrResumeThread({
-      ...commonParams,
-      appServerRuntimeFingerprint: "codex-runtime-v2",
+    const resumed = await withLeasedCodexTestClient({
+      agentDir: path.join(tempDir, "agent"),
+      request,
+      run: (client) =>
+        startOrResumeThread({
+          ...commonParams,
+          client,
+          signal: AbortSignal.timeout(10_000),
+          appServerRuntimeFingerprint: "codex-runtime-v2",
+        }),
     });
 
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/read", "thread/resume"]);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/read",
+      "thread/read",
+      "thread/resume",
+      "thread/inject_items",
+    ]);
     expect(request.mock.calls[0]?.[1]).toEqual({ threadId: finalThreadId, includeTurns: false });
-    expect(request.mock.calls[1]?.[1]).not.toHaveProperty("model");
-    expect(request.mock.calls[1]?.[1]).not.toHaveProperty("modelProvider");
-    expect(request.mock.calls[1]?.[1]).toMatchObject({
+    expect(request.mock.calls[2]?.[1]).not.toHaveProperty("model");
+    expect(request.mock.calls[2]?.[1]).not.toHaveProperty("modelProvider");
+    expect(request.mock.calls[2]?.[1]).toMatchObject({
       developerInstructions: agentWorkspaceDeveloperInstructions,
     });
     expect(resumed).toMatchObject({
@@ -3900,7 +3951,10 @@ describe("Codex app-server supervised branch lifecycle", () => {
       lifecycle: { action: "resumed" },
     });
     await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
-      appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(commonParams.appServer),
+      appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
+        commonParams.appServer,
+        attempt.agentDir,
+      ),
     });
   });
 
@@ -3910,6 +3964,12 @@ describe("Codex app-server supervised branch lifecycle", () => {
     const finalThreadId = "thread-final";
     const workspaceDir = path.join(tempDir, "workspace");
     const attempt = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    attempt.agentDir = path.join(tempDir, "agent");
+    const rolloutPath = path.join(
+      resolveCodexAppServerHomeDir(attempt.agentDir),
+      "sessions",
+      `rollout-${finalThreadId}.jsonl`,
+    );
     attempt.pluginHarnessToolPolicyRestricted = true;
     attempt.toolsAllow = ["openclaw"];
     const identity = await seedPendingSupervisionBinding({
@@ -3933,7 +3993,10 @@ describe("Codex app-server supervised branch lifecycle", () => {
           thread:
             threadId === sourceThreadId
               ? sourceThread({ threadId: sourceThreadId })
-              : sourceThread({ threadId: finalThreadId }),
+              : {
+                  ...sourceThread({ threadId: finalThreadId, status: "notLoaded" }),
+                  path: rolloutPath,
+                },
         };
       }
       if (method === "thread/fork") {
@@ -3948,7 +4011,11 @@ describe("Codex app-server supervised branch lifecycle", () => {
           nextCursor: null,
         };
       }
-      if (method === "thread/archive" || method === "thread/unsubscribe") {
+      if (
+        method === "thread/archive" ||
+        method === "thread/unsubscribe" ||
+        method === "thread/inject_items"
+      ) {
         return {};
       }
       throw new Error(`unexpected method: ${method}`);
@@ -4006,20 +4073,33 @@ describe("Codex app-server supervised branch lifecycle", () => {
 
     attempt.pluginHarnessToolPolicyRestricted = false;
     attempt.toolsAllow = undefined;
+    await writeNativeCatalogFixture(rolloutPath, finalThreadId, common.dynamicTools);
     request.mockClear();
     await expect(
-      startOrResumeThread({
-        ...common,
-        hostSystemAgentActive: false,
-        nativeCodeModeEnabled: true,
+      withLeasedCodexTestClient({
+        agentDir: path.join(tempDir, "agent"),
+        request,
+        run: (client) =>
+          startOrResumeThread({
+            ...common,
+            client,
+            signal: AbortSignal.timeout(10_000),
+            hostSystemAgentActive: false,
+            nativeCodeModeEnabled: true,
+          }),
       }),
     ).resolves.toMatchObject({
       threadId: finalThreadId,
       lifecycle: { action: "resumed" },
     });
 
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/read", "thread/resume"]);
-    const resumeParams = request.mock.calls[1]?.[1] as { config?: Record<string, unknown> };
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/read",
+      "thread/read",
+      "thread/resume",
+      "thread/inject_items",
+    ]);
+    const resumeParams = request.mock.calls[2]?.[1] as { config?: Record<string, unknown> };
     expect(resumeParams.config).toMatchObject({
       mcp_servers: { "request-only": { command: "request-mcp" } },
     });

@@ -57,6 +57,7 @@ export async function runGlobalUpdate(params: {
       mode: globalManager,
       root: pkgRoot,
       reason: EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
+      recovery: { serviceRestartSafe: true },
       before: { version: beforeVersion },
       steps: [],
       durationMs: Date.now() - startedAt,
@@ -81,6 +82,7 @@ export async function runGlobalUpdate(params: {
       mode: globalManager,
       root: pkgRoot,
       reason: extendedStable.reason,
+      recovery: { serviceRestartSafe: true },
       before: { version: beforeVersion },
       steps: [],
       durationMs: Date.now() - startedAt,
@@ -162,6 +164,7 @@ export async function runGlobalUpdate(params: {
     before: { version: beforeVersion },
     after: { version: packageUpdate.afterVersion },
     steps: packageUpdate.steps,
+    recovery: packageUpdate.recovery,
     durationMs: Date.now() - startedAt,
   };
 }

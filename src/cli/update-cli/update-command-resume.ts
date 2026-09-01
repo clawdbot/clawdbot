@@ -17,6 +17,7 @@ import { readPackageVersion, type UpdateCommandOptions } from "./shared.js";
 import {
   createUpdateConfigSnapshot,
   persistRequestedUpdateChannel,
+  persistValidatedDowngradeConfig,
   readPostCorePreUpdateSourceConfig,
   restoreDroppedPreUpdateChannels,
 } from "./update-command-config.js";
@@ -126,7 +127,7 @@ export async function resumePostCoreUpdate(params: ResumePostCoreUpdateParams): 
     });
   });
   // Fresh doctor acquires this same cross-process lease; completion must run after release.
-  const { pluginUpdate } = await completePostCorePluginUpdate({
+  const completed = await completePostCorePluginUpdate({
     root: params.root,
     pluginUpdate: initialPluginUpdate,
     freshDoctorRequired: initialPluginUpdate.changed,
@@ -134,6 +135,8 @@ export async function resumePostCoreUpdate(params: ResumePostCoreUpdateParams): 
     json: params.opts.json === true,
     timeoutMs: params.timeoutMs,
   });
+  const { pluginUpdate } = completed;
+  await persistValidatedDowngradeConfig(completed.configSnapshot);
   if (process.env[POST_CORE_UPDATE_RESULT_PATH_ENV]) {
     await writePostCorePluginUpdateResultFile(
       process.env[POST_CORE_UPDATE_RESULT_PATH_ENV],

@@ -1,5 +1,6 @@
 // Covers manifest contract eligibility decisions.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizePluginsConfig } from "./config-state.js";
 
 const mocks = vi.hoisted(() => ({
   loadPluginMetadataSnapshot: vi.fn(),
@@ -213,13 +214,24 @@ describe("bundled manifest contract availability", () => {
   });
 
   it("preserves globally disabled bundled metadata for the named speech compatibility path", () => {
+    const config = { plugins: { enabled: false } };
+    const normalizedConfig = normalizePluginsConfig(config.plugins);
     expect(
       isManifestPluginAvailableForControlPlane({
         snapshot,
         plugin,
-        config: { plugins: { enabled: false } },
+        config,
+        normalizedConfig,
       }),
     ).toBe(true);
+    expect(
+      listAvailableManifestContractValues({
+        snapshot,
+        config,
+        contract: "imageGenerationProviders",
+      }),
+    ).toEqual(["google"]);
+    expect(normalizedConfig.enabled).toBe(false);
   });
 
   it("preserves the shipped provider-contract compatibility mode", () => {

@@ -14,7 +14,10 @@ import { buildCachedChatItems } from "../chat-thread.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
 import { renderChatNotice } from "./chat-divider.ts";
-import { getChatMediaRenderVersion } from "./chat-message-media.ts";
+import {
+  getChatMediaRenderVersion,
+  releaseChatMediaResourceSubscriber,
+} from "./chat-message-media.ts";
 import {
   dismissConfirmedActionPopovers,
   renderActivityGroup,
@@ -26,6 +29,7 @@ import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 import "./chat-sidebar.ts";
 
 const localStorageValues = new Map<string, string>();
+const mediaSubscribers = new Set<() => void>();
 const renderMarkdownHtml = markdown.toSanitizedMarkdownHtml;
 const markdownRenderMock = vi.fn(
   (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) => value,
@@ -214,6 +218,9 @@ function renderTestMessageGroup(
   group: MessageGroup,
   opts: Partial<RenderMessageGroupOptions> = {},
 ) {
+  if (opts.onRequestUpdate) {
+    mediaSubscribers.add(opts.onRequestUpdate);
+  }
   return renderMessageGroup(group, {
     showReasoning: true,
     showToolCalls: true,
@@ -656,6 +663,11 @@ function mediaTicketPayload(mediaTicket: string, ttlMs = 5 * 60 * 1000) {
 }
 
 afterEach(() => {
+  // These detached render fixtures own the callbacks a live chat pane normally releases.
+  for (const subscriber of mediaSubscribers) {
+    releaseChatMediaResourceSubscriber(subscriber);
+  }
+  mediaSubscribers.clear();
   markdownRenderMock.mockClear();
   document.querySelectorAll("[data-confirmed-action-fixture]").forEach((element) => {
     dismissConfirmedActionPopovers(element);

@@ -41,7 +41,7 @@ import {
   withPluginInstallRecords,
 } from "../plugins/installed-plugin-index-records.js";
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
-import { resolveInstalledPluginPackageOwnership } from "../plugins/installed-plugin-package-ownership.js";
+import { resolveInstalledPluginLifecycleOwnership } from "../plugins/installed-plugin-package-ownership.js";
 import { configReferencesNpmInstallPath } from "../plugins/installs.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import {
@@ -241,7 +241,7 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
     ...installedPluginIndex.plugins.map((plugin) => plugin.pluginId),
     ...Object.keys(pluginInstallRecords),
   ])) {
-    const ownership = resolveInstalledPluginPackageOwnership(installedPluginIndex, pluginId);
+    const ownership = resolveInstalledPluginLifecycleOwnership(installedPluginIndex, pluginId);
     if (!ownership.ok) {
       rejectedPluginIds.set(pluginId, ownership.error);
       continue;
@@ -283,7 +283,7 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
   const packageUpdateSnapshot = packageUpdateSnapshotResult.value;
   const packagePluginIds = Object.fromEntries(
     pluginSelection.pluginIds.flatMap((pluginId) => {
-      const ownership = resolveInstalledPluginPackageOwnership(installedPluginIndex, pluginId);
+      const ownership = resolveInstalledPluginLifecycleOwnership(installedPluginIndex, pluginId);
       return ownership.ok ? [[ownership.value.installOwner, ownership.value.pluginIds]] : [];
     }),
   );

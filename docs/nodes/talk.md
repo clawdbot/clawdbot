@@ -246,7 +246,7 @@ Supported keys: `voice` / `voice_id` / `voiceId`, `model` / `model_id` / `modelI
 ```
 
 OpenAI browser WebRTC and Gateway-relay Talk support native GPT-Live. Set `talk.realtime.model` to
-`gpt-live-1-codex` (recommended) or `gpt-live-1-boulder-alpha`; `gpt-live-1`
+`gpt-live-1-codex`; `gpt-live-1`
 and `gpt-live-1-mini` are not valid on this route. Browser and Gateway-relay
 WebRTC prefer a ChatGPT OAuth subscription profile and fall back to Platform
 API-key auth. OAuth creates the WebRTC call through the Codex backend using

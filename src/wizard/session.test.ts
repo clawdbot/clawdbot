@@ -312,21 +312,30 @@ describe("WizardSession", () => {
     }
   });
 
-  test("a runner finishing after cancellation cannot overwrite cancelled state", async () => {
-    let finish!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      finish = resolve;
-    });
-    const session = new WizardSession(async () => {
-      await gate;
-    });
+  test.each(["return", "commit"])(
+    "a cancelled runner stays cancelled on late %s",
+    async (action) => {
+      let finish!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      let committed = false;
+      const session = new WizardSession(async (_prompter, _signal, owner) => {
+        await gate;
+        if (action === "commit") {
+          owner.lockCancellation();
+          committed = true;
+        }
+      });
 
-    session.cancel();
-    finish();
-    await Promise.resolve();
+      session.cancel();
+      finish();
+      await session.whenSettled();
 
-    expect((await session.next()).status).toBe("cancelled");
-  });
+      expect((await session.next()).status).toBe("cancelled");
+      expect(committed).toBe(false);
+    },
+  );
 
   test("does not lose terminal completion when the last answer finishes the runner immediately", async () => {
     const session = new WizardSession(async (prompter) => {

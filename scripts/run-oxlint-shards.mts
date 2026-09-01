@@ -7,8 +7,11 @@ import {
   distArtifactEntryArgs,
   withDistArtifactOwnership,
 } from "./lib/dist-artifact-ownership.mts";
+import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import {
+  CI_PARALLEL_MIN_MEMORY_BYTES,
   ensureRepoToolNodeModulesLink,
+  isConstrainedCiCheckHost,
   resolveLocalCheckEnv,
   resolveRepoToolBinPath,
 } from "./lib/local-check-runtime.mts";
@@ -28,11 +31,7 @@ const POST_FORCE_KILL_WAIT_MS = 1_000;
 const DEFAULT_SPLIT_CORE_SHARD_CONCURRENCY = 4;
 const FAST_LOCAL_CHECK_MIN_CPUS = 12;
 const FAST_LOCAL_CHECK_MIN_MEMORY_BYTES = 48 * 1024 ** 3;
-// CI runners are dedicated: Blacksmith's 16 vCPU class carries 32GB, which the
-// local-Mac threshold above misreads as too small and forces serial shards.
-const CI_PARALLEL_MIN_CPUS = 8;
-const CI_PARALLEL_MIN_MEMORY_BYTES = 24 * 1024 ** 3;
-const EXTENSION_TS_CONFIG = "config/tsconfig/oxlint.extensions.json";
+const EXTENSION_TS_CONFIG = "extensions/tsconfig.json";
 const EXTENSIONS_DIR = "extensions";
 const OXLINT_SOURCE_FILE_PATTERN = /\.[cm]?[jt]sx?$/;
 const PARENT_TERMINATION_SIGNALS = ["SIGINT", "SIGTERM"] satisfies NodeJS.Signals[];
@@ -59,7 +58,7 @@ type ActiveShardChild = { child: ChildProcess; killGraceMs: number };
 const ACTIVE_SHARD_CHILDREN = new Set<ActiveShardChild>();
 let parentTerminationSignal: (typeof PARENT_TERMINATION_SIGNALS)[number] | null = null;
 let parentTerminationForceKill: ReturnType<typeof setTimeout> | null = null;
-let parentSignalForwardingInstalled = false;
+const parentSignalHandlers = new Map<NodeJS.Signals, () => void>();
 
 const CORE_SHARD = {
   name: "core",
@@ -200,10 +199,7 @@ export function shouldRunOxlintShardsSerial({
   }
   const resources = resolveHostResources(hostResources);
   if (env.CI === "true" || env.GITHUB_ACTIONS === "true") {
-    return (
-      resources.totalMemoryBytes < CI_PARALLEL_MIN_MEMORY_BYTES ||
-      resources.logicalCpuCount < CI_PARALLEL_MIN_CPUS
-    );
+    return isConstrainedCiCheckHost(resources);
   }
   return (
     resources.totalMemoryBytes < FAST_LOCAL_CHECK_MIN_MEMORY_BYTES ||
@@ -265,7 +261,7 @@ export async function main(
   extraArgs: string[] = process.argv.slice(2),
   runtimeEnv: NodeJS.ProcessEnv = process.env,
 ) {
-  const runner = path.resolve("scripts", "run-oxlint.mjs");
+  const runner = path.resolve("scripts", "run-oxlint.mts");
   const shardArgs = parseShardRunnerArgs(extraArgs);
   const env = resolveLocalCheckEnv(runtimeEnv);
   const hostResources = resolveHostResources();
@@ -297,8 +293,7 @@ export async function main(
         requireProcessTreeExit: process.platform !== "win32",
       });
       if (code !== 0) {
-        process.exitCode = code;
-        return;
+        return code;
       }
     }
     const shardConcurrency = resolveOxlintShardConcurrency({
@@ -319,17 +314,16 @@ export async function main(
       extraArgs: shardArgs.oxlintArgs,
       runner,
     });
-    process.exitCode = results.find((status) => status !== 0) ?? 0;
+    return results.find((status) => status !== 0) ?? 0;
   };
-  if (needsArtifacts) {
-    await withDistArtifactOwnership(process.cwd(), run);
-  } else {
-    await run();
-  }
+  return needsArtifacts ? await withDistArtifactOwnership(process.cwd(), run) : await run();
 }
 
 if (import.meta.main) {
-  await main();
+  // Imported batches leave final reporting to their outer pipeline, after ownership settles.
+  await runWithFailedTrailer("oxlint", async () => {
+    process.exitCode = await main();
+  });
 }
 
 function resolveHostResources(hostResources?: HostResources) {
@@ -525,11 +519,19 @@ export async function runShard({ env, extraArgs, runner, shard }: ShardRunnerOpt
   const heartbeatMs = resolveShardHeartbeatMs(env);
   const timeoutMs = resolveShardTimeoutMs(env);
   const killGraceMs = resolveShardKillGraceMs(env);
-  // The shard batch holds ownership through preparation and every consumer.
+  // The batch owns reporting and artifacts. Raw children must propagate cleanup
+  // errors to the private artifact entry without catching or reporting them here.
   const args =
-    runner === path.resolve("scripts", "run-oxlint.mjs") &&
-    shouldPrepareExtensionPackageBoundaryArtifactsForShards([shard], extraArgs)
-      ? distArtifactEntryArgs(path.resolve("scripts/run-oxlint.mts"), [...shard.args, ...extraArgs])
+    runner === path.resolve("scripts", "run-oxlint.mts")
+      ? shouldPrepareExtensionPackageBoundaryArtifactsForShards([shard], extraArgs)
+        ? distArtifactEntryArgs(runner, [...shard.args, ...extraArgs])
+        : [
+            "--import",
+            new URL("./tsx.mjs", import.meta.url).href,
+            runner,
+            ...shard.args,
+            ...extraArgs,
+          ]
       : [runner, ...shard.args, ...extraArgs];
   const child = spawn(process.execPath, args, {
     stdio: ["inherit", "pipe", "pipe"],
@@ -594,7 +596,9 @@ export async function runShard({ env, extraArgs, runner, shard }: ShardRunnerOpt
       }
       forceKillAt = null;
       unregisterShardChild();
-      console.error(`[oxlint:${shard.name}] finished`);
+      console.error(
+        `[oxlint:${shard.name}] ${status === 0 ? "passed" : `failed (exit ${status})`}`,
+      );
       if (error) {
         reject(error);
       } else {
@@ -607,7 +611,8 @@ export async function runShard({ env, extraArgs, runner, shard }: ShardRunnerOpt
       if (graceRemainingMs > 0) {
         await waitForChildProcessGroupExit(child, graceRemainingMs);
       }
-      if (isChildProcessGroupAlive(child)) {
+      const requiresForceKill = isChildProcessGroupAlive(child);
+      if (requiresForceKill) {
         signalChildProcess(child, "SIGKILL");
       }
       await waitForChildProcessGroupExit(child, POST_FORCE_KILL_WAIT_MS);
@@ -620,7 +625,7 @@ export async function runShard({ env, extraArgs, runner, shard }: ShardRunnerOpt
           }),
         );
       } else {
-        finish(status);
+        finish(requiresForceKill ? status || 1 : status);
       }
     };
     child.once("error", (error) => {
@@ -634,7 +639,7 @@ export async function runShard({ env, extraArgs, runner, shard }: ShardRunnerOpt
           ? 124
           : (status ?? 1);
       if (isChildProcessGroupAlive(child)) {
-        void finishAfterForcedTeardown(exitStatus || 1);
+        void finishAfterForcedTeardown(exitStatus);
         return;
       }
       finish(exitStatus);
@@ -761,28 +766,35 @@ function registerShardChild(entry: ActiveShardChild) {
       clearTimeout(parentTerminationForceKill);
       parentTerminationForceKill = null;
     }
+    if (ACTIVE_SHARD_CHILDREN.size === 0) {
+      for (const [signal, handler] of parentSignalHandlers) {
+        process.off(signal, handler);
+      }
+      parentSignalHandlers.clear();
+      process.off("exit", onParentExit);
+    }
   };
 }
 
 function installParentSignalForwarding() {
-  if (parentSignalForwardingInstalled) {
+  if (parentSignalHandlers.size > 0) {
     return;
   }
-  parentSignalForwardingInstalled = true;
   for (const signal of PARENT_TERMINATION_SIGNALS) {
-    process.on(signal, () => {
+    const handler = () => {
       parentTerminationSignal = signal;
       process.exitCode = getSignalExitCode(signal);
-      if (ACTIVE_SHARD_CHILDREN.size === 0) {
-        process.exit(process.exitCode);
-      }
       signalActiveShardChildren(signal);
       scheduleParentTerminationForceKill();
-    });
+    };
+    parentSignalHandlers.set(signal, handler);
+    process.on(signal, handler);
   }
-  process.once("exit", () => {
-    signalActiveShardChildren("SIGTERM");
-  });
+  process.once("exit", onParentExit);
+}
+
+function onParentExit() {
+  signalActiveShardChildren("SIGTERM");
 }
 
 function isParentTerminationRequested() {

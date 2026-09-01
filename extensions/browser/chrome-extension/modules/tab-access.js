@@ -640,10 +640,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
         if (listRevision !== discoveryRevision) {
           break;
         }
-        if (tabIsRevoking(tab.id)) {
-          continue;
-        }
-        if (!eligibilityForTab(tab).eligible) {
+        if (tabIsRevoking(tab.id) || !eligibilityForTab(tab).eligible) {
           continue;
         }
         if (mode === ACCESS_MODE_ALL) {
@@ -740,6 +737,9 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     initialize,
     get mode() {
       return mode;
+    },
+    get discoveryRevision() {
+      return discoveryRevision;
     },
     setMode,
     setEnabled,

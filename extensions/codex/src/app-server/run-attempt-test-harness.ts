@@ -17,6 +17,12 @@ import { clearInternalHooks, resetGlobalHookRunner } from "openclaw/plugin-sdk/h
 import { clearMemoryPluginState } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { clearPluginCommands } from "openclaw/plugin-sdk/plugin-runtime";
 import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  deleteSessionEntry,
+  resolveStorePath,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
@@ -103,6 +109,7 @@ vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => 
 });
 
 export let tempDir: string;
+const seededSessionOwnersForTest: Array<Parameters<typeof deleteSessionEntry>[0]> = [];
 let codexAppServerClientFactoryForTest: CodexAppServerClientFactory | undefined;
 const multiplexedTestClients = new WeakSet<CodexAppServerClient>();
 export const fastWait = { interval: 1, timeout: 5_000 } as const;
@@ -301,6 +308,17 @@ export function createParams(
 
 export function createTestParams(): EmbeddedRunAttemptParams {
   return createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace"));
+}
+
+/** Models the core owner required for a reusable stable-key Codex binding. */
+export async function seedRunSessionOwnerForTest(sessionId: string, sessionKey: string) {
+  const scope = {
+    agentId: "main",
+    sessionKey,
+    storePath: resolveStorePath(undefined, { agentId: "main" }),
+  };
+  await upsertSessionEntry({ ...scope, entry: { sessionId, updatedAt: Date.now() } });
+  seededSessionOwnersForTest.push({ ...scope, expectedSessionId: sessionId });
 }
 
 /** Replaces the lightweight default with the admitted host boundary used in production. */
@@ -693,6 +711,9 @@ export function setupRunAttemptTestHooks(): void {
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "");
     tempDir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-codex-run-"));
+    // createParams models an ordinary durable session; seeded native bindings
+    // must have the same authoritative core owner as a real resumed conversation.
+    await seedRunSessionOwnerForTest("session-1", "agent:main:session-1");
   });
 
   afterEach(async () => {
@@ -719,6 +740,10 @@ export function setupRunAttemptTestHooks(): void {
     vi.useRealTimers();
     vi.unstubAllEnvs();
     await sandboxExecServerRegistry.closeAll();
+    for (const owner of seededSessionOwnersForTest.splice(0)) {
+      await deleteSessionEntry(owner);
+    }
+    closeOpenClawAgentDatabasesForTest();
     await fs.rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 }

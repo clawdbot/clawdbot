@@ -668,12 +668,12 @@ export async function gatherDaemonStatus(
       : [];
 
   const tlsEnabled = daemonCfg.gateway?.tls?.enabled === true;
-  const shouldUseLocalTlsRuntime = opts.probe && !probeUrlOverride && tlsEnabled;
-  const tlsRuntime = shouldUseLocalTlsRuntime
-    ? await loadGatewayTlsModule().then(({ loadGatewayTlsRuntime }) =>
-        loadGatewayTlsRuntime(daemonCfg.gateway?.tls),
-      )
-    : undefined;
+  const localCertificate =
+    opts.probe && !probeUrlOverride && tlsEnabled
+      ? await loadGatewayTlsModule().then(({ inspectGatewayTlsCertificate }) =>
+          inspectGatewayTlsCertificate(daemonCfg.gateway?.tls),
+        )
+      : undefined;
   let daemonProbeAuth: { token?: string; password?: string } | undefined;
   let rpcAuthWarning: string | undefined;
   let allowRpcConfigCredentials = true;
@@ -719,10 +719,9 @@ export async function gatherDaemonStatus(
           token: daemonProbeAuth?.token,
           password: daemonProbeAuth?.password,
           config: daemonCfg,
-          tlsFingerprint:
-            shouldUseLocalTlsRuntime && tlsRuntime?.enabled
-              ? tlsRuntime.fingerprintSha256
-              : undefined,
+          tlsFingerprint: localCertificate?.ok
+            ? localCertificate.value.fingerprintSha256
+            : undefined,
           timeoutMs,
           json: opts.rpc.json,
           requireRpc: opts.requireRpc,
@@ -775,6 +774,8 @@ export async function gatherDaemonStatus(
   // profile/state dir, so remote/explicit URL probes need remote-owned
   // diagnostics instead.
   // Best-effort: unreadable install records omit this advisory report.
+  // Registry repair lookups belong to deep-status and Doctor command owners;
+  // readiness, support, and triage must not wait for the public registry.
   let pluginVersionDrift: PluginVersionDriftReport | undefined;
   if (shouldInspectLocalGateway) {
     try {

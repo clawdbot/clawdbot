@@ -177,6 +177,56 @@ registerHooks({
     expect(cleanOutput).not.toContain("Legacy state detected");
   }, 180_000);
 
+  it("fails repair when session import leaves a startup-blocking legacy store", () => {
+    const root = tempDirs.make("openclaw-doctor-session-convergence-");
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(root, "openclaw.json");
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const loaderPath = path.join(root, "doctor-test-loader.mjs");
+    const original = Buffer.from('{"agent:main:legacy":');
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    fs.writeFileSync(configPath, `${JSON.stringify({ heartbeat: { every: "30m" } })}\n`);
+    fs.writeFileSync(storePath, original);
+    fs.writeFileSync(
+      loaderPath,
+      `import { registerHooks } from "node:module";
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier.endsWith("/doctor-ui.js")) {
+      return {
+        shortCircuit: true,
+        url: "data:text/javascript," + encodeURIComponent(
+          [
+            "export async function detectUiProtocolFreshnessIssues() { return []; }",
+            "export function uiProtocolFreshnessIssueToHealthFinding() { return {}; }",
+            "export function uiProtocolFreshnessIssueToRepairEffects() { return []; }",
+            "export async function maybeRepairUiProtocolFreshness() {}",
+          ].join("\\n"),
+        ),
+      };
+    }
+    return nextResolve(specifier, context);
+  },
+});
+`,
+    );
+
+    const result = runDoctorFix({ root, configPath, loaderPath });
+    const output = `${result.stderr}\n${result.stdout}`;
+
+    expect(result.error, output).toBeUndefined();
+    expect(result.signal, output).toBeNull();
+    expect(result.status, output).toBe(1);
+    expect(output).toContain("Legacy session store requires migration");
+    expect(output).toContain("openclaw doctor --fix");
+    expect(output).not.toContain("Doctor complete.");
+    expect(fs.readFileSync(storePath)).toEqual(original);
+    expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toMatchObject({
+      agents: { defaults: { heartbeat: { every: "30m" } } },
+    });
+    expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).not.toHaveProperty("heartbeat");
+  }, 120_000);
+
   it("omits backup tips for Git-backed nested agent workspaces", () => {
     const root = tempDirs.make("openclaw-doctor-workspace-git-");
     const repoRoot = path.join(root, "repo");

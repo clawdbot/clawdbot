@@ -8,8 +8,8 @@ import type {
   SetupInferenceFailureStatus,
 } from "../system-agent/setup-inference.js";
 import { t } from "../wizard/i18n/index.js";
-import { WizardCancelledError, type WizardPrompter } from "../wizard/prompts.js";
-import type { AuthChoiceGroup } from "./auth-choice-options.static.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
+import { CORE_AUTH_CHOICE_OPTIONS, type AuthChoiceGroup } from "./auth-choice-options.static.js";
 
 type ActivateSetupInference =
   typeof import("../system-agent/setup-inference.js").activateSetupInference;
@@ -108,10 +108,14 @@ export async function runManualStage(params: {
   /** A working route is already persisted; skipping keeps it instead of exiting AI-less. */
   hasActiveRoute?: boolean;
 }): Promise<string[] | null> {
+  const interactiveOptions = [
+    ...params.detection.authOptions,
+    ...(params.detection.prepareOptions ?? []),
+    ...CORE_AUTH_CHOICE_OPTIONS.map((option) => ({ id: option.value, label: option.label })),
+  ];
   const allowedChoices = new Set([
     ...params.detection.manualProviders.map((provider) => provider.id),
-    ...params.detection.authOptions.map((option) => option.id),
-    ...(params.detection.prepareOptions ?? []).map((option) => option.id),
+    ...interactiveOptions.map((option) => option.id),
   ]);
   const detectedOptions = params.detection.candidates.map((candidate) => ({
     value: `candidate:${candidate.kind}`,
@@ -125,13 +129,6 @@ export async function runManualStage(params: {
       },
     ),
   }));
-  if (detectedOptions.length === 0 && allowedChoices.size === 0) {
-    await params.prompter.note(
-      t("wizard.guided.noInferenceOptions"),
-      t("wizard.guided.aiAccessTitle"),
-    );
-    throw new WizardCancelledError("no inference setup options");
-  }
   const additionalGroups: AuthChoiceGroup[] = detectedOptions.length
     ? [
         {
@@ -203,10 +200,7 @@ export async function runManualStage(params: {
       continue;
     }
 
-    const providerAuthOption = [
-      ...params.detection.authOptions,
-      ...(params.detection.prepareOptions ?? []),
-    ].find((item) => item.id === choice);
+    const providerAuthOption = interactiveOptions.find((item) => item.id === choice);
     if (providerAuthOption) {
       const result = await withConsoleSubsystemsSuppressed(() =>
         params.activate({

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { Root } from "@openclaw/fs-safe";
+import { pathMayExistSync } from "./path-existence.js";
 
 /** The stable source identity every doctor-owned import verifies before cleanup. */
 export type LegacyMigrationSourceSnapshot = {
@@ -180,24 +181,11 @@ export async function claimLegacyMigrationSourceClaims<
   }
 }
 
-/** A source may be inaccessible; only a proven absence permits skipping repair. */
-export function legacyMigrationPathMayExist(filePath: string): boolean {
-  try {
-    fs.lstatSync(filePath);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ENOENT";
-  }
-}
-
 export function legacyMigrationSourceOrClaimMayExist(
   sourcePath: string,
   claimSuffix = ".doctor-importing",
 ): boolean {
-  return (
-    legacyMigrationPathMayExist(sourcePath) ||
-    legacyMigrationPathMayExist(`${sourcePath}${claimSuffix}`)
-  );
+  return pathMayExistSync(sourcePath) || pathMayExistSync(`${sourcePath}${claimSuffix}`);
 }
 
 /** Constrain migration reads and moves to the original trusted state root. */

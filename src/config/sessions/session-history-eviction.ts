@@ -30,6 +30,7 @@ import {
   planSessionStateDeleteIfUnreferenced,
   readReferencedSessionIds,
 } from "./session-accessor.sqlite-lifecycle-state.js";
+import { refreshSqliteSessionPlannerStatisticsBestEffort } from "./session-accessor.sqlite-maintenance.js";
 import {
   getSessionKysely,
   resolveSqliteScope,
@@ -720,6 +721,10 @@ async function enforceSessionHistoryMaintenanceSerialized(
     );
     removedFiles += finalPrune.removedFiles;
     usage = finalPrune.usage;
+  }
+  if (removedEntries > 0) {
+    await refreshSqliteSessionPlannerStatisticsBestEffort(resolved, removedEntries);
+    usage = await measureSessionPhysicalDiskUsage(params.storePath);
   }
 
   return createPhysicalBudgetResult({

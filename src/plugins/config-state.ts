@@ -197,7 +197,7 @@ export function isTestDefaultMemorySlotDisabled(
   return true;
 }
 
-export function resolvePluginActivationState(params: {
+function resolvePluginActivationState(params: {
   id: string;
   origin: PluginOrigin;
   config: NormalizedPluginsConfig;

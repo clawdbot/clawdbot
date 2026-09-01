@@ -17,6 +17,7 @@ const processRecord = z.object({
   role: z.string(),
   attempt: z.number().int().nonnegative(),
   instance: z.string(),
+  creationTime: z.string().regex(/^\d+$/u).optional(),
 });
 const reportSchema = z.object({
   code: z.number().nullable(),

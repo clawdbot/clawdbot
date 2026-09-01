@@ -140,7 +140,7 @@ async function createLiveSession() {
     },
     retry: {
       enabled: false,
-      provider: { timeoutMs: STRESS_PROFILE.providerTimeoutMs, maxRetries: 0, maxRetryDelayMs: 0 },
+      provider: { timeoutMs: STRESS_PROFILE.providerTimeoutMs, maxRetryDelayMs: 0 },
     },
   });
   const contextChunk = buildContextChunk(STRESS_PROFILE.chunkChars);

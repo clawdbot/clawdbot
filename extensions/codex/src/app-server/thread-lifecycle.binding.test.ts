@@ -456,6 +456,8 @@ async function createManualResumeFixture(
             method: string;
             requestParams?: unknown;
           }) => client.request<T>(preflightMethod, preflightParams, { timeoutMs: 60_000 }),
+          client,
+          { assertCurrent: () => undefined },
         );
         const result = await client.request<JsonValue>(method, requestParams, {
           timeoutMs: 60_000,

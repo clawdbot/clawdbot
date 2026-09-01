@@ -321,7 +321,7 @@ export function getCachedPluginModuleLoader(
   return loader;
 }
 
-type PublicSurfaceModuleLoadParams = {
+type PluginModuleBoundaryParams = {
   modulePath: string;
   boundaryRoot: string;
   boundaryLabel: string;
@@ -329,7 +329,8 @@ type PublicSurfaceModuleLoadParams = {
   surfaceLabel: string;
 };
 
-function preparePublicSurfaceModule(params: PublicSurfaceModuleLoadParams) {
+/** Validates an entry once per generation without changing its module export shape. */
+export function preparePluginModule(params: PluginModuleBoundaryParams) {
   const cache = getPluginCache();
   let source = getPluginCacheSource(params.modulePath, cache);
   const boundaryKey = `${getPluginCacheRoot(params.boundaryRoot).rootDir}\0${params.rejectHardlinks}`;
@@ -366,11 +367,11 @@ function preparePublicSurfaceModule(params: PublicSurfaceModuleLoadParams) {
 
 /** Public artifacts and SDK facades share one validated module, including circular imports. */
 export function loadPluginPublicSurfaceModuleSync(
-  params: PublicSurfaceModuleLoadParams & {
+  params: PluginModuleBoundaryParams & {
     loadModule: (modulePath: string) => unknown;
   },
 ): object {
-  const { source, modulePath } = preparePublicSurfaceModule(params);
+  const { source, modulePath } = preparePluginModule(params);
   const cached = source.publicSurface?.exports;
   if (cached) {
     return cached;
@@ -389,11 +390,11 @@ export function loadPluginPublicSurfaceModuleSync(
 }
 
 export async function loadPluginPublicSurfaceModule(
-  params: PublicSurfaceModuleLoadParams & {
+  params: PluginModuleBoundaryParams & {
     loadModule: (modulePath: string) => Promise<object>;
   },
 ): Promise<object> {
-  const { source, modulePath } = preparePublicSurfaceModule(params);
+  const { source, modulePath } = preparePluginModule(params);
   const cached = source.publicSurface;
   if (cached?.exports) {
     return cached.exports;

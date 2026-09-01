@@ -3,204 +3,125 @@ import {
   formatErrorMessage,
   type AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import type { JsonValue } from "./protocol.js";
 import {
-  readCodexMirroredSessionHistoryMessages,
+  readCodexMirroredSessionHistory,
   type CodexMirroredSessionHistoryTarget,
 } from "./session-history.js";
-import {
-  readCodexMirrorSourceFingerprint,
-  serializeCodexMirrorSourceEvidence,
-} from "./transcript-mirror-attestation.js";
-import {
-  attachCodexMirrorIdentity,
-  attachUpstreamUserText,
-  readMirrorIdentity,
-  readUpstreamUserText,
-} from "./upstream-prompt-provenance.js";
+import { projectSettledCodexMessages } from "./settled-turn-projection.js";
+import { serializeCodexMirrorSourceEvidence } from "./transcript-mirror-attestation.js";
+import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 
-type SettledTurnFinalizationContext = EmbeddedRunAttemptResult["settledTurnFinalizationContext"];
-
-function collectUniqueMessageIdentities(
-  messages: readonly AgentMessage[],
-): Map<string, number> | undefined {
-  const identities = new Map<string, number>();
-  for (const [index, message] of messages.entries()) {
-    const identity = readMirrorIdentity(message);
-    if (!identity) {
-      continue;
+function freezeProjection(value: JsonValue): void {
+  if (value !== null && typeof value === "object") {
+    for (const child of Object.values(value)) {
+      freezeProjection(child);
     }
-    if (identities.has(identity)) {
-      return undefined;
-    }
-    identities.set(identity, index);
+    Object.freeze(value);
   }
-  return identities;
 }
 
-function adoptPersistedHostPrompt(params: {
-  historyMessages: readonly AgentMessage[];
+/** Only the Codex owner interprets this bounded, detached replay projection. */
+export class CodexSettledTurnContext {
+  readonly source = "harness";
+
+  constructor(readonly data: JsonValue[]) {
+    freezeProjection(data);
+    Object.freeze(this);
+  }
+}
+
+type SettledTurnMessages = {
   mirroredMessages: readonly AgentMessage[];
   settledMessages: readonly AgentMessage[];
   turnId: string;
-}): { historyMessages: readonly AgentMessage[]; mirroredMessages: readonly AgentMessage[] } {
+};
+
+function rejectEvidence(): never {
+  throw new Error("Codex settled-turn transcript does not match the settled turn");
+}
+
+/** Yields only the settled prefix, but exhausts suffix identity checks before accepting it. */
+function* verifiedSettledMessages(
+  history: Iterable<AgentMessage>,
+  params: SettledTurnMessages,
+): Generator<AgentMessage> {
   const promptIdentity = `${params.turnId}:prompt`;
-  if (params.mirroredMessages.some((message) => readMirrorIdentity(message) === promptIdentity)) {
-    return params;
-  }
-  const sourcePrompt = params.settledMessages[0];
-  const sourceKey = (sourcePrompt as { idempotencyKey?: unknown } | undefined)?.idempotencyKey;
-  if (
-    sourcePrompt?.role !== "user" ||
-    readMirrorIdentity(sourcePrompt) !== promptIdentity ||
-    typeof sourceKey !== "string" ||
-    sourceKey.trim().length === 0
-  ) {
-    return params;
-  }
-  const matches = params.historyMessages.flatMap((message, index) =>
-    message.role === "user" &&
-    (message as { idempotencyKey?: unknown }).idempotencyKey === sourceKey
-      ? [{ index, message }]
-      : [],
-  );
-  const persistedPrompt = matches.length === 1 ? matches[0] : undefined;
-  const persistedMetadata = persistedPrompt?.message as
-    | { __openclaw?: { mirrorOrigin?: unknown } }
-    | undefined;
-  if (
-    !persistedPrompt ||
-    readMirrorIdentity(persistedPrompt.message) !== undefined ||
-    readCodexMirrorSourceFingerprint(persistedPrompt.message) !== undefined ||
-    persistedMetadata?.["__openclaw"]?.mirrorOrigin === "codex-app-server"
-  ) {
-    return params;
-  }
-  const sourceUpstreamText = readUpstreamUserText(sourcePrompt);
-  const persistedUpstreamText = readUpstreamUserText(persistedPrompt.message);
-  if (persistedUpstreamText !== undefined && persistedUpstreamText !== sourceUpstreamText) {
-    return params;
-  }
-  let logicalPrompt = attachCodexMirrorIdentity(persistedPrompt.message, promptIdentity);
-  if (sourceUpstreamText !== undefined) {
-    logicalPrompt = attachUpstreamUserText(logicalPrompt, sourceUpstreamText);
-  }
-  if (
-    serializeCodexMirrorSourceEvidence(logicalPrompt) !==
-    serializeCodexMirrorSourceEvidence(sourcePrompt)
-  ) {
-    return params;
-  }
-  // Host-owned prompts are authoritative by durable turn key; adopt their identity
-  // only in verification views so canonical channel metadata remains untouched.
-  const historyMessages = [...params.historyMessages];
-  historyMessages[persistedPrompt.index] = logicalPrompt;
-  return { historyMessages, mirroredMessages: [logicalPrompt, ...params.mirroredMessages] };
-}
-
-/** Freezes one complete active transcript branch through the settled tool-result boundary. */
-function buildCodexSettledTurnFinalizationContext(params: {
-  historyMessages: readonly AgentMessage[];
-  mirroredMessages: readonly AgentMessage[];
-  settledMessages: readonly AgentMessage[];
-  turnId: string;
-}): SettledTurnFinalizationContext | undefined {
-  const { historyMessages, mirroredMessages } = adoptPersistedHostPrompt(params);
-  const boundaryMessage = params.settledMessages.findLast(
+  const boundaryIndex = params.settledMessages.findLastIndex(
     (message) => message.role === "toolResult",
   );
-  const boundaryIdentity = boundaryMessage ? readMirrorIdentity(boundaryMessage) : undefined;
+  const boundary = params.settledMessages[boundaryIndex];
+  const boundaryIdentity = boundary && readMirrorIdentity(boundary);
+  const requiredIds = params.settledMessages
+    .slice(0, boundaryIndex + 1)
+    .flatMap((message) => readMirrorIdentity(message) ?? []);
   if (
-    !boundaryMessage ||
-    !boundaryIdentity ||
-    !boundaryIdentity.startsWith(`${params.turnId}:tool:`)
+    !boundaryIdentity?.startsWith(`${params.turnId}:tool:`) ||
+    requiredIds.length !== boundaryIndex + 1 ||
+    new Set(requiredIds).size !== requiredIds.length ||
+    !requiredIds.includes(promptIdentity)
   ) {
-    return undefined;
+    rejectEvidence();
   }
-
-  const settledBoundaryIndex = params.settledMessages.indexOf(boundaryMessage);
-  const requiredIdentities = params.settledMessages
-    .slice(0, settledBoundaryIndex + 1)
-    .map(readMirrorIdentity);
-  if (
-    requiredIdentities.length === 0 ||
-    requiredIdentities.some((identity) => !identity) ||
-    new Set(requiredIdentities).size !== requiredIdentities.length ||
-    !requiredIdentities.includes(`${params.turnId}:prompt`)
-  ) {
-    return undefined;
-  }
-
-  const historyIdentities = collectUniqueMessageIdentities(historyMessages);
-  const mirroredIdentities = collectUniqueMessageIdentities(mirroredMessages);
-  if (!historyIdentities || !mirroredIdentities) {
-    return undefined;
-  }
-  const mirroredBoundaryIndex = mirroredIdentities.get(boundaryIdentity);
-  if (mirroredBoundaryIndex === undefined) {
-    return undefined;
-  }
-  const mirroredThroughBoundary = mirroredMessages.slice(0, mirroredBoundaryIndex + 1);
-  if (
-    mirroredThroughBoundary.length !== requiredIdentities.length ||
-    mirroredThroughBoundary.some(
-      (message, index) => readMirrorIdentity(message) !== requiredIdentities[index],
-    )
-  ) {
-    return undefined;
-  }
-  const historyBoundaryIndex = historyIdentities.get(boundaryIdentity);
-  if (historyBoundaryIndex === undefined) {
-    return undefined;
-  }
-  let previousHistoryIndex = -1;
-  for (const mirroredMessage of mirroredThroughBoundary) {
-    const identity = readMirrorIdentity(mirroredMessage);
-    const historyIndex = identity ? historyIdentities.get(identity) : undefined;
-    const historyMessage = historyIndex === undefined ? undefined : historyMessages[historyIndex];
-    if (
-      historyIndex === undefined ||
-      historyIndex <= previousHistoryIndex ||
-      historyIndex > historyBoundaryIndex ||
-      !historyMessage ||
-      serializeCodexMirrorSourceEvidence(historyMessage) !==
-        serializeCodexMirrorSourceEvidence(mirroredMessage)
-    ) {
-      return undefined;
-    }
-    previousHistoryIndex = historyIndex;
-  }
-
-  // Clone before returning so later transcript/cache mutation cannot change the
-  // exact application evidence authorized for the isolated finalization turn.
-  const messages = Object.freeze(
-    structuredClone(params.historyMessages.slice(0, historyBoundaryIndex + 1)),
+  const mirrored = params.mirroredMessages;
+  const mirroredIds = mirrored.flatMap((message) => readMirrorIdentity(message) ?? []);
+  const mirroredBoundaryIndex = mirrored.findIndex(
+    (message) => readMirrorIdentity(message) === boundaryIdentity,
   );
-  return { source: "openclaw-transcript", messages };
+  if (
+    new Set(mirroredIds).size !== mirroredIds.length ||
+    mirroredBoundaryIndex + 1 !== requiredIds.length ||
+    requiredIds.some((id, index) => readMirrorIdentity(mirrored[index]!) !== id)
+  ) {
+    rejectEvidence();
+  }
+  const required = new Map(requiredIds.map((id, index) => [id, mirrored[index]!]));
+  const seen = new Set<string>();
+  let matched = 0;
+  let throughBoundary = false;
+  for (const message of history) {
+    const identity = readMirrorIdentity(message);
+    if (identity) {
+      if (seen.has(identity)) {
+        rejectEvidence();
+      }
+      seen.add(identity);
+      const expected = required.get(identity);
+      if (expected) {
+        if (
+          identity !== requiredIds[matched] ||
+          serializeCodexMirrorSourceEvidence(message) !==
+            serializeCodexMirrorSourceEvidence(expected)
+        ) {
+          rejectEvidence();
+        }
+        matched += 1;
+      }
+    }
+    if (!throughBoundary) {
+      yield message;
+    }
+    throughBoundary ||= identity === boundaryIdentity;
+  }
+  if (!throughBoundary || matched !== requiredIds.length) {
+    rejectEvidence();
+  }
 }
 
-/** Reads and freezes the current active transcript branch after mirroring has settled. */
+/** Verifies and freezes a complete replay projection while reading the active branch. */
 export async function captureCodexSettledTurnFinalizationContext(
-  params: CodexMirroredSessionHistoryTarget & {
-    mirroredMessages: readonly AgentMessage[];
-    settledMessages: readonly AgentMessage[];
-    turnId: string;
-  },
-): Promise<SettledTurnFinalizationContext | undefined> {
+  params: CodexMirroredSessionHistoryTarget & SettledTurnMessages,
+): Promise<CodexSettledTurnContext | undefined> {
   try {
-    const historyMessages = await readCodexMirroredSessionHistoryMessages(params);
-    if (!historyMessages) {
-      return undefined;
-    }
-    return buildCodexSettledTurnFinalizationContext({
-      historyMessages,
-      mirroredMessages: params.mirroredMessages,
-      settledMessages: params.settledMessages,
-      turnId: params.turnId,
-    });
+    return await readCodexMirroredSessionHistory(
+      params,
+      (messages) =>
+        new CodexSettledTurnContext(
+          projectSettledCodexMessages(verifiedSettledMessages(messages, params)),
+        ),
+    );
   } catch (error) {
-    // Capture runs after tools have settled. Never let transcript I/O or cloning
-    // bypass the caller's side-effect-aware incomplete-turn result.
+    // Capture follows settled side effects; any failure must preserve the incomplete-turn result.
     embeddedAgentLog.warn("codex settled-turn finalization context capture failed", {
       error: formatErrorMessage(error),
       turnId: params.turnId,

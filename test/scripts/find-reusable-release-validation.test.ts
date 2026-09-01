@@ -430,6 +430,7 @@ exec cat "\${fixture}.json"
 const FAKE_VALIDATOR = `#!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 const runIndex = process.argv.indexOf("--validate-run");
 const repoIndex = process.argv.indexOf("--repo");
@@ -438,6 +439,7 @@ const trustedFullRefIndex = process.argv.indexOf("--trusted-workflow-full-ref");
 const trustedShaIndex = process.argv.indexOf("--trusted-workflow-sha");
 const verifierShaIndex = process.argv.indexOf("--verifier-source-sha");
 const verifierFileIndex = process.argv.indexOf("--verifier-source-file");
+const reuseRequestIndex = process.argv.indexOf("--reuse-request-json");
 if (
   runIndex < 0 ||
   repoIndex < 0 ||
@@ -446,6 +448,8 @@ if (
   trustedShaIndex < 0 ||
   verifierShaIndex < 0 ||
   verifierFileIndex < 0 ||
+  reuseRequestIndex < 0 ||
+  !isDeepStrictEqual(JSON.parse(process.argv[reuseRequestIndex + 1]), JSON.parse(process.env.FAKE_REUSE_REQUEST)) ||
   process.argv[repoIndex + 1] !== "openclaw/openclaw" ||
   process.argv[trustedRefIndex + 1] !== process.env.FAKE_TRUSTED_WORKFLOW_REF ||
   process.argv[trustedFullRefIndex + 1] !== process.env.FAKE_TRUSTED_WORKFLOW_FULL_REF ||
@@ -609,6 +613,12 @@ function runResolver(args: {
         FAKE_TRUSTED_WORKFLOW_REF: trustedWorkflowRef,
         FAKE_TRUSTED_WORKFLOW_SHA: trustedWorkflowSha,
         FAKE_VALIDATOR_FIXTURES: args.fixtures,
+        FAKE_REUSE_REQUEST: JSON.stringify({
+          targetSha: args.targetSha,
+          releaseProfile: args.releaseProfile ?? "full",
+          runReleaseSoak: args.runReleaseSoak ?? "true",
+          validationInputs: args.inputs === undefined ? DEFAULT_INPUTS : args.inputs,
+        }),
         FAKE_VERIFIER_SHA: verifierSha,
         GITHUB_OUTPUT: "",
         OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: args.validatorPath,

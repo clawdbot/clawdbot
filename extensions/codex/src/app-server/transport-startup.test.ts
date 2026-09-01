@@ -58,13 +58,13 @@ describe.skipIf(process.platform === "win32")("Codex failed launcher startup", (
   });
 
   it.each([
-    ["signal", "inspection"],
-    ["clean", "inspection"],
-    ["signal", "commit"],
-    ["clean", "commit"],
+    ["available", "inspection"],
+    ["unavailable", "inspection"],
+    ["available", "commit"],
+    ["unavailable", "commit"],
   ] as const)(
-    "reaps inherited-pipe descendants before settling a %s launcher after %s refusal",
-    async (exitMode, failure) => {
+    "reaps inherited-pipe descendants with %s containment after %s refusal",
+    async (containment, failure) => {
       const root = await fs.mkdtemp(path.join(os.tmpdir(), "codex-startup-launcher-"));
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
       const { createPluginStateSyncKeyedStore } =
@@ -89,17 +89,16 @@ fs.writeSync(2, "launcher startup diagnostic\\n");
 fs.writeFileSync(ready, String(process.pid));
 `,
       );
-      // Matches the pinned npm launcher: inherited pipes and signal forwarding,
-      // with an additional clean-exit wrapper proving cleanup cause precedence.
+      // Match the pinned npm launcher's inherited pipes and signal mirroring.
+      // Clean EOF refusal coverage lives at the shared/isolated startup owner.
       await fs.writeFile(
         wrapperPath,
         `
 import { spawn } from "node:child_process";
-const [native, ready, input, exitMode] = process.argv.slice(2);
+const [native, ready, input] = process.argv.slice(2);
 const child = spawn(process.execPath, [native, ready, input], { stdio: "inherit" });
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => child.kill(signal));
 child.on("exit", (code, signal) => {
-  if (exitMode === "clean") process.exit(0);
   if (signal) process.kill(process.pid, signal);
   else process.exit(code ?? 1);
 });
@@ -119,6 +118,19 @@ child.on("exit", (code, signal) => {
         return child;
       });
       const readCommand = processSnapshot.readCodexAppServerProcessCommand;
+      const readSnapshot = processSnapshot.readCodexAppServerProcessSnapshot;
+      let containmentRefused = false;
+      if (containment === "unavailable") {
+        vi.spyOn(processSnapshot, "readCodexAppServerProcessSnapshot").mockImplementation(
+          (deadline, pids) => {
+            if (pids === undefined) {
+              containmentRefused = true;
+              return Promise.reject(new processSnapshot.ProcessInspectionError("unavailable"));
+            }
+            return readSnapshot(deadline, pids);
+          },
+        );
+      }
       let inspected!: () => void;
       const inspection = new Promise<void>((resolve) => {
         inspected = resolve;
@@ -148,7 +160,7 @@ child.on("exit", (code, signal) => {
         transport: "stdio",
         command: process.execPath,
         commandSource: "config",
-        args: [wrapperPath, nativePath, readyPath, inputPath, exitMode],
+        args: [wrapperPath, nativePath, readyPath, inputPath],
       }).catch((error: unknown) => error);
       try {
         await Promise.race([
@@ -157,14 +169,12 @@ child.on("exit", (code, signal) => {
             throw new Error("Startup settled before fixture inspection");
           }),
         ]);
-        // Observe actual cleanup before awaiting startup: an outer acquire timeout
-        // must not make an unregistered native descendant look safely settled.
+        // Observe actual cleanup independently of the injected inspection failure;
+        // an outer acquire timeout must not make a live descendant look settled.
         await expect
           .poll(
             async () => {
-              const snapshot = await processSnapshot.readCodexAppServerProcessSnapshot(
-                Date.now() + 2_000,
-              );
+              const snapshot = await readSnapshot(Date.now() + 2_000);
               expect(snapshot?.some(({ pid }) => pid === process.pid)).toBe(true);
               const row = snapshot?.find(({ pid }) => pid === nativePid);
               return row !== undefined && !row.state.startsWith("Z");
@@ -188,8 +198,9 @@ child.on("exit", (code, signal) => {
         await expect(fs.access(inputPath)).rejects.toMatchObject({ code: "ENOENT" });
         expect(wrapper?.stdout?.destroyed).toBe(true);
         expect(wrapper?.stderr?.destroyed).toBe(true);
-        expect(wrapper?.exitCode).toBe(exitMode === "clean" ? 0 : null);
-        expect(wrapper?.signalCode).toBe(exitMode === "clean" ? null : "SIGKILL");
+        expect(containmentRefused).toBe(containment === "unavailable");
+        expect(wrapper?.exitCode).toBeNull();
+        expect(wrapper?.signalCode).toBe("SIGKILL");
       } finally {
         vi.restoreAllMocks();
         nativePid ??= Number(await fs.readFile(readyPath, "utf8").catch(() => "")) || undefined;

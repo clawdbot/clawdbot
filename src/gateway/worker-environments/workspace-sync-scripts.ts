@@ -1,5 +1,9 @@
 import { STAGED_INPUT_GIT_PATHSPEC } from "../../media/staged-inputs.js";
-import { MAX_WORKSPACE_HASH_MEMO_BYTES, workspaceStatIdentity } from "./workspace-hash-memo.js";
+import {
+  MAX_WORKSPACE_HASH_MEMO_BYTES,
+  selectWorkerWorkspaceHashMemoEntries,
+  workspaceStatIdentity,
+} from "./workspace-hash-memo.js";
 import {
   MAX_WORKSPACE_GIT_CANDIDATES,
   MAX_WORKSPACE_INVENTORY_ENTRIES,
@@ -74,8 +78,9 @@ const fs = require("node:fs");
 const path = require("node:path");
 ${WORKSPACE_PATH_EXCLUSIONS_JS}
 const workspaceStatIdentity = ${workspaceStatIdentity.toString()};
+const selectWorkerWorkspaceHashMemoEntries = ${selectWorkerWorkspaceHashMemoEntries.toString()};
 const MAX_RECONCILIATION_ENTRIES = ${MAX_RECONCILIATION_ENTRIES};
-const MAX_HASH_MEMO_BYTES = ${MAX_WORKSPACE_HASH_MEMO_BYTES};
+const MAX_WORKSPACE_HASH_MEMO_BYTES = ${MAX_WORKSPACE_HASH_MEMO_BYTES};
 const root = fs.realpathSync(process.argv[1]);
 ${WORKSPACE_STAGED_INPUT_OWNERSHIP_JS}
 const requestedBaseCommit = process.argv[2] || null;
@@ -105,13 +110,10 @@ const startedAt = performance.now();
 function fail(message) {
   throw new Error(message);
 }
-function compareHashMemoIdentity(left, right) {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
 function readHashMemo() {
   if (!memoMode) return new Map();
   const raw = fs.readFileSync(0, "utf8");
-  if (Buffer.byteLength(raw) > MAX_HASH_MEMO_BYTES) {
+  if (Buffer.byteLength(raw) > MAX_WORKSPACE_HASH_MEMO_BYTES) {
     fail("workspace hash memo exceeds its byte limit");
   }
   let entries;
@@ -384,7 +386,7 @@ async function hashFiles(entries) {
       entry.mode = Number(after.mode & 0o777n);
       entry.size = Number(after.size);
       entry.sha256 = sha256;
-      usedHashMemo.set(identity, { sha256, size: Number(after.size) });
+      usedHashMemo.set(identity, sha256);
     } finally {
       await handle.close();
     }
@@ -485,16 +487,9 @@ async function main() {
   const digest = publishManifest(manifestRoot, manifest);
   const manifestRef = "sha256:" + digest;
   if (memoMode) {
-    // Largest files preserve the most expensive hashes. Identity tie-breaking and
-    // final ordering keep the bounded cache deterministic across captures.
-    const memo = [...usedHashMemo]
-      .sort(
-        (left, right) =>
-          right[1].size - left[1].size || compareHashMemoIdentity(left[0], right[0]),
-      )
-      .slice(0, MAX_RECONCILIATION_ENTRIES)
-      .map(([identity, value]) => [identity, value.sha256])
-      .sort((left, right) => compareHashMemoIdentity(left[0], right[0]));
+    const memo = selectWorkerWorkspaceHashMemoEntries(
+      usedHashMemo, MAX_RECONCILIATION_ENTRIES, MAX_WORKSPACE_HASH_MEMO_BYTES,
+    );
     metrics.memoTruncatedCount = usedHashMemo.size - memo.length;
     const measured = { ...metrics, totalDurationMs: performance.now() - startedAt };
     process.stdout.write(JSON.stringify({

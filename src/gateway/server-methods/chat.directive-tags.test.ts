@@ -4353,6 +4353,27 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(finalBroadcasts).toStrictEqual([]);
   });
 
+  it("labels additional returned agent errors instead of flattening them", async () => {
+    await createTranscriptFixture("openclaw-chat-send-multiple-agent-errors-");
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      { kind: "final", payload: { text: "Primary execution failed", isError: true } },
+      { kind: "final", payload: { text: "Workspace recovery failed", isError: true } },
+      { kind: "final", payload: { text: "Workspace recovery failed", isError: true } },
+    ];
+    const { send } = createChatRequestFixture();
+
+    const broadcast = await send({
+      idempotencyKey: "idem-multiple-agent-errors",
+      message: "run on the worker",
+    });
+
+    expect(broadcast).toMatchObject({
+      state: "error",
+      errorMessage: "Primary execution failed\n\nAdditional error: Workspace recovery failed",
+    });
+  });
+
   it.each([
     ["error payload after start", true, "error", undefined],
     ["error payload before launch", false, "error", undefined],

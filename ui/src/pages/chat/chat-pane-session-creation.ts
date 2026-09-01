@@ -27,8 +27,6 @@ import { canCreateChatSession } from "./chat-state-route.ts";
 export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentation {
   protected recoveringSession = false;
 
-  protected abstract confirmConversationReset(): Promise<boolean>;
-
   protected sessionDisabledBanner(params: {
     catalogDisabledReason: string | null | undefined;
     modelSetupRequired: boolean;

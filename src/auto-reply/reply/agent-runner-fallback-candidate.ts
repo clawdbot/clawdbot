@@ -259,6 +259,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           runId: params.runId,
           runAbortSignal: params.runAbortSignal,
           runLane,
+          isFallbackRetry: runOptions.isFallbackRetry,
           isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
           suppressQueuedUserPersistenceForCandidate:
             (turn.followupRun.run.suppressNextUserMessagePersistence ?? false) ||

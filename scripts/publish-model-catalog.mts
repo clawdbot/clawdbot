@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   MODEL_PRICING_SOURCES,
+  normalizeModelPricingCatalog,
   normalizeModelPricingProvider,
   normalizeOpenRouterModelPricing,
   normalizeUpstreamModelPricing,
@@ -13,16 +14,14 @@ import {
 import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { parseCerebrasPricingCatalog } from "../extensions/cerebras/pricing-api.js";
+import { parseChutesPricingCatalog } from "../extensions/chutes/pricing-api.js";
 import { parseVenicePricingCatalog } from "../extensions/venice/pricing-api.js";
 import type {
   RemoteModelCatalogBundle,
   RemoteModelCatalogPricing,
 } from "../packages/model-catalog-core/src/remote-catalog-bundle.js";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
-export {
-  LITELLM_PRICING_URL,
-  OPENROUTER_MODELS_URL,
-} from "@openclaw/model-catalog-core/model-catalog-pricing";
 
 type ModelCatalogManifestInput = {
   pluginId: string;
@@ -53,6 +52,14 @@ const MAX_PRICING_CATALOG_BYTES = 5 * 1024 * 1024;
 const BUNDLE_SIZE_WARNING_BYTES = 2 * 1024 * 1024;
 const CLIENT_BUNDLE_LIMIT_BYTES = 4 * 1024 * 1024;
 const defaultRootDir = resolveRepoRoot(import.meta.url);
+const NATIVE_CATALOG_PARSERS = {
+  cerebras: parseCerebrasPricingCatalog,
+  chutes: parseChutesPricingCatalog,
+  venice: parseVenicePricingCatalog,
+} satisfies Record<
+  Exclude<Extract<PricingSource, { authoritative: true }>["id"], "openCode">,
+  (payload: unknown) => PricingCatalog | undefined
+>;
 
 function requireOptionValue(args: string[], index: number, flag: string): string {
   const value = args[index + 1]?.trim();
@@ -398,23 +405,28 @@ function parsePricingCatalog(
       if (!isRecord(provider) || provider.id !== upstreamId || !isRecord(provider.models)) {
         throw new Error(`${source.label} pricing missing provider ${upstreamId}`);
       }
-      for (const [id, model] of Object.entries(provider.models)) {
-        const pricing =
-          isRecord(model) && model.id === id
-            ? normalizeUpstreamModelPricing(model.cost)
-            : undefined;
-        if (pricing) {
-          catalog.set(`${upstreamId}/${id}`, pricing);
-        }
+      const rows = Object.entries(provider.models).map(([id, model]) =>
+        isRecord(model) && model.id === id ? model : undefined,
+      );
+      const prices = normalizeModelPricingCatalog(
+        rows,
+        normalizeUpstreamModelPricing,
+        (model) => model.cost,
+      );
+      if (!prices) {
+        throw new Error(`${source.label} pricing malformed for provider ${upstreamId}`);
+      }
+      for (const [id, pricing] of prices) {
+        catalog.set(`${upstreamId}/${id}`, pricing);
       }
     }
-  } else if (source.id === "venice") {
-    const prices = parseVenicePricingCatalog(body);
+  } else if (source.authoritative) {
+    const prices = NATIVE_CATALOG_PARSERS[source.id](body);
     if (!prices) {
       throw new Error(`${source.label} pricing response is malformed`);
     }
     for (const [id, pricing] of prices) {
-      catalog.set(`venice/${id}`, pricing);
+      catalog.set(`${source.id}/${id}`, pricing);
     }
   } else if (source.id === "openRouter") {
     for (const row of Array.isArray(body.data) ? body.data : []) {
@@ -486,11 +498,22 @@ async function fetchPricingSources(fetchImpl: typeof fetch, policies: PricingPol
   return result;
 }
 
+function selectProviderPricingSources(
+  providerId: string,
+  sources: LoadedPricingSource[],
+  policies: PricingPolicies,
+): LoadedPricingSource[] {
+  const eligible = sources.filter((source) => sourcePolicy(policies, providerId, source));
+  // A native feed owns unavailable prices too; other vendors cannot fill its gaps.
+  const native = eligible.find((source) => source.authoritative);
+  return native ? [native] : eligible;
+}
+
 function materializePolicyRuntimePricing(
   hosted: PricingCatalog,
   policies: PricingPolicies,
   sources: LoadedPricingSource[],
-  pricedModels: Set<string>,
+  metadataOwnedKeys: Set<string>,
 ): void {
   for (const [providerId] of policies) {
     for (const key of hosted.keys()) {
@@ -498,7 +521,7 @@ function materializePolicyRuntimePricing(
         hosted.delete(key);
       }
     }
-    for (const source of sources) {
+    for (const source of selectProviderPricingSources(providerId, sources, policies)) {
       const policy = sourcePolicy(policies, providerId, source);
       if (!policy) {
         continue;
@@ -521,7 +544,7 @@ function materializePolicyRuntimePricing(
           runtimeKeys.push(`${providerId}/${key}`);
         }
         for (const runtimeKey of runtimeKeys) {
-          if (!pricedModels.has(runtimeKey) && !hosted.has(runtimeKey)) {
+          if (!metadataOwnedKeys.has(runtimeKey) && !hosted.has(runtimeKey)) {
             hosted.set(runtimeKey, pricing);
           }
         }
@@ -540,10 +563,11 @@ export async function enrichModelCatalogPricing(options: {
   const sources = await fetchPricingSources(options.fetchImpl ?? fetch, policies);
   let enriched = 0;
   const coveredKeys = new Set<string>();
-  const pricedModels = new Set<string>();
+  const metadataOwnedKeys = new Set<string>();
   for (const [providerId, provider] of Object.entries(options.bundle.providers)) {
+    const providerSources = selectProviderPricingSources(providerId, sources, policies);
     for (const model of provider.models) {
-      const matches = sources.map((source) => {
+      const matches = providerSources.map((source) => {
         const candidates = buildPricingCandidates(providerId, model.id, source, policies);
         return {
           source,
@@ -551,30 +575,24 @@ export async function enrichModelCatalogPricing(options: {
           pricing: candidates.map((key) => source.catalog.get(key)).find(Boolean),
         };
       });
-      for (const { source, candidates, pricing } of matches) {
-        if (
-          source.authoritative &&
-          candidates.length > 0 &&
-          model.cost &&
-          hasKnownPricing(model.cost) &&
-          !pricing
-        ) {
-          throw new Error(
-            `${source.label} pricing missing or invalid for ${providerId}/${model.id}`,
-          );
-        }
-      }
       const chosen = matches.find(
-        ({ source, pricing }) => pricing && (source.authoritative || hasKnownPricing(pricing)),
+        ({ source, pricing }) => source.authoritative || (pricing && hasKnownPricing(pricing)),
       );
       if (chosen?.pricing) {
         model.cost = chosen.pricing;
         enriched += 1;
+      } else if (chosen) {
+        // Keep the metadata row: removing it would revive the bundled seed's stale price.
+        delete model.cost;
+        process.stderr.write(
+          `[${SCRIPT_LABEL}] warning: ${chosen.source.label} pricing unavailable for ${providerId}/${model.id}; preserving metadata without cost\n`,
+        );
       }
-      if (model.cost && hasKnownPricing(model.cost)) {
+      // Native zero prices keep standalone entries as evidence of free, not unknown, usage.
+      if ((model.cost && hasKnownPricing(model.cost)) || (chosen && !chosen.pricing)) {
         const key = `${providerId}/${model.id}`;
         coveredKeys.add(key);
-        pricedModels.add(key);
+        metadataOwnedKeys.add(key);
         for (const { candidates } of matches) {
           for (const candidate of candidates) {
             coveredKeys.add(candidate);
@@ -606,7 +624,7 @@ export async function enrichModelCatalogPricing(options: {
   for (const key of coveredKeys) {
     hosted.delete(key);
   }
-  materializePolicyRuntimePricing(hosted, policies, sources, pricedModels);
+  materializePolicyRuntimePricing(hosted, policies, sources, metadataOwnedKeys);
   options.bundle.pricing = Object.fromEntries(
     [...hosted.entries()]
       .toSorted(([left], [right]) => left.localeCompare(right))

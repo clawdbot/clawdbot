@@ -134,6 +134,85 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
     }
   });
 
+  it("releases code-block observations when navigation removes the final transcript", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    type ObservationWindow = typeof window & {
+      codeBlockObservations: () => { observed: number; connected: number; detached: number };
+    };
+    await page.addInitScript(() => {
+      const NativeResizeObserver = window.ResizeObserver;
+      const targets = new Map<ResizeObserver, Set<Element>>();
+      let observed = 0;
+      window.ResizeObserver = class extends NativeResizeObserver {
+        override observe(target: Element, options?: ResizeObserverOptions) {
+          super.observe(target, options);
+          if (target.matches(".code-block-viewport, .code-block-viewport code")) {
+            const current = targets.get(this) ?? new Set<Element>();
+            current.add(target);
+            targets.set(this, current);
+            observed += 1;
+          }
+        }
+
+        override unobserve(target: Element) {
+          super.unobserve(target);
+          targets.get(this)?.delete(target);
+        }
+
+        override disconnect() {
+          super.disconnect();
+          targets.delete(this);
+        }
+      };
+      (window as ObservationWindow).codeBlockObservations = () => {
+        let connected = 0;
+        let detached = 0;
+        for (const nodes of targets.values()) {
+          for (const node of nodes) {
+            if (node.isConnected) {
+              connected += 1;
+            } else {
+              detached += 1;
+            }
+          }
+        }
+        return { observed, connected, detached };
+      };
+    });
+    await installMockGateway(page, {
+      historyMessages: [
+        { role: "user", content: "Show the launch command.", timestamp: 1_000 },
+        { role: "assistant", content: wideFence, timestamp: 2_000 },
+      ],
+    });
+    const observations = () =>
+      page.evaluate(() => (window as ObservationWindow).codeBlockObservations());
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await expect.poll(async () => (await observations()).connected).toBe(2);
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await sidebar.locator(".sidebar-identity-card").click();
+      await sidebar
+        .locator("wa-dropdown.sidebar-identity-menu")
+        .getByRole("menuitem", { exact: true, name: "Settings" })
+        .click();
+      await page.locator('.settings-sidebar__item[href="/logs"]').click();
+      await page.locator("openclaw-logs-page").waitFor({ state: "visible" });
+      expect(await page.locator("openclaw-chat-pane").count()).toBe(0);
+      // A page reload would discard the probe too and cannot prove in-app teardown.
+      expect((await observations()).observed).toBeGreaterThanOrEqual(2);
+      await expect.poll(async () => (await observations()).detached).toBe(0);
+    } finally {
+      await context.close();
+    }
+  });
+
   it.each(["dark", "light"] as const)(
     "keeps code controls correct through disclosure, resize, and virtual remount in %s mode",
     async (theme) => {
