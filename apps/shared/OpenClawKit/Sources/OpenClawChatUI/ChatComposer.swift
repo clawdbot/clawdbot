@@ -174,7 +174,7 @@ struct OpenClawChatComposer: View {
                 self.photoPickerOwner = nil
                 self.stagePhotosPickerItems(items, owner: owner)
             }
-        #if canImport(UIKit)
+            #if canImport(UIKit)
             .fullScreenCover(
                 isPresented: self.cameraPickerPresentation,
                 onDismiss: { self.cameraCaptureOwner = nil },
@@ -186,7 +186,7 @@ struct OpenClawChatComposer: View {
                     }
                     .ignoresSafeArea()
                 })
-        #endif
+            #endif
     }
     #endif
 
@@ -616,8 +616,8 @@ struct OpenClawChatComposer: View {
         #if os(iOS)
         .frame(minHeight: CleanChatComposerMetrics.restingMinHeight, alignment: .bottom)
         #else
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
         #endif
         .modifier(CleanChatComposerSurface(cornerRadius: self.cleanCornerRadius))
         .accessibilityElement(children: .contain)
