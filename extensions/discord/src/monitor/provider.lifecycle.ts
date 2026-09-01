@@ -249,6 +249,7 @@ function createGatewayStatusObserver(params: {
     disconnectWatchdogPollId.unref?.();
     disconnectWatchdogId = setTimeout(() => {
       const elapsed = disconnectedAt !== undefined ? Date.now() - disconnectedAt : 0;
+      const preservedDisconnectedAt = disconnectedAt;
       clearDisconnectWatchdog();
       if (shouldStop() || params.gateway?.isConnected) {
         return;
@@ -265,7 +266,10 @@ function createGatewayStatusObserver(params: {
         params.runtime.log?.(
           `discord gateway: watchdog deferred — reconnect in progress (readyState=${ws.readyState}), grace ${graceCount}/${MAX_GRACE_PERIODS}`,
         );
-        startDisconnectWatchdog();
+        // Preserve the original disconnect epoch through grace re-arms so the
+        // cumulative cap is measured from the initial disconnect, not reset.
+        disconnectedAt = preservedDisconnectedAt;
+        armWatchdog(params.runtimeReadyTimeoutMs);
         return;
       }
       params.runtime.error?.(

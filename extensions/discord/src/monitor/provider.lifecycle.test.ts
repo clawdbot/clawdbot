@@ -943,4 +943,45 @@ describe("runDiscordGatewayLifecycle", () => {
       vi.useRealTimers();
     }
   });
+
+  it("preserves the cumulative cap through grace re-arms", async () => {
+    vi.useFakeTimers();
+    try {
+      const { emitter, gateway } = createGatewayHarness();
+      gateway.isConnected = true;
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+      // Socket stays CONNECTING so grace is granted, but the cumulative cap
+      // should still fire because disconnectedAt is preserved through grace.
+      const mockWs = new EventEmitter() as EventEmitter & { readyState: number };
+      mockWs.readyState = 0; // CONNECTING — never reaches OPEN
+      gateway.ws = mockWs;
+
+      waitForDiscordGatewayStopMock.mockImplementationOnce(async (stopParams) => {
+        gateway.isConnected = false;
+        emitter.emit("debug", "Gateway websocket closed: 1006");
+        stopParams.registerForceStop?.((err: unknown) => {
+          throw err;
+        });
+
+        // First watchdog fires at 30s → grace 1/2 (socket CONNECTING)
+        // The grace re-arm should preserve disconnectedAt, so the cumulative
+        // cap (150s) is measured from the original disconnect, not reset.
+        // Second watchdog fires at 30s → grace 2/2
+        // Third watchdog fires at 30s → grace exhausted → force-stop
+        // Total elapsed: ~90s, well under the 150s cap, so the force-stop
+        // happens because grace is exhausted, not because of the cap.
+        await vi.advanceTimersByTimeAsync(31_000); // first watchdog → grace 1
+        await vi.advanceTimersByTimeAsync(31_000); // second watchdog → grace 2
+        await vi.advanceTimersByTimeAsync(31_000); // third watchdog → force-stop
+      });
+
+      const { lifecycleParams } = createLifecycleHarness({ gateway });
+
+      await expect(runDiscordGatewayLifecycle(lifecycleParams)).rejects.toThrow(
+        /discord gateway stayed disconnected/,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
