@@ -29,6 +29,17 @@ describe("extractLinksFromMessage", () => {
     expect(links).toStrictEqual([]);
   });
 
+  it("ignores markdown links that carry a title", () => {
+    // CommonMark allows a title after the destination. Without it the link text
+    // is display-only, so the URL must not become a fetchable bare link.
+    expect(
+      extractLinksFromMessage('[doc](https://docs.example "Docs") https://bare.example'),
+    ).toStrictEqual(["https://bare.example"]);
+    expect(
+      extractLinksFromMessage("[doc](https://docs.example 'Docs') https://bare.example"),
+    ).toStrictEqual(["https://bare.example"]);
+  });
+
   it("blocks 127.0.0.1", () => {
     const links = extractLinksFromMessage("http://127.0.0.1/test https://ok.test");
     expect(links).toEqual(["https://ok.test"]);

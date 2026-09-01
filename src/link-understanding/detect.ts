@@ -6,7 +6,10 @@ import { DEFAULT_MAX_LINKS } from "./defaults.js";
 // The link-text portion allows "]" that is not the closing "](" boundary so
 // markdown links whose label contains brackets (e.g. "[my notes [v2]](...)")
 // are still stripped instead of leaking their URL to BARE_LINK_RE.
-const MARKDOWN_LINK_RE = /\[(?:[^\]]|](?!\())*]\((https?:\/\/\S+?)\)/gi;
+// The destination may be followed by a CommonMark title ("[doc](url \"Docs\")"),
+// which must be consumed too or the URL leaks out as a bare link.
+const MARKDOWN_LINK_RE =
+  /\[(?:[^\]]|](?!\())*]\((https?:\/\/\S+?)(?:\s+(?:"[^"]*"|'[^']*'|\([^()]*\)))?\s*\)/gi;
 const BARE_LINK_RE = /https?:\/\/\S+/gi;
 
 function stripMarkdownLinks(message: string): string {
