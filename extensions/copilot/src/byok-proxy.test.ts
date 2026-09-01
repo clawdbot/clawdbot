@@ -15,6 +15,16 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
   fetchWithSsrFGuard: ssrfRuntimeMock.fetchWithSsrFGuard,
 }));
 
+function getProxyCredentialHeader(headers: Record<string, string>): [string, string] {
+  return expectDefined(
+    Object.entries(headers).find(
+      ([name, value]) =>
+        /^x-openclaw-copilot-byok-[a-f0-9]{24}$/.test(name) && /^[a-f0-9]{24}$/.test(value),
+    ),
+    "proxy credential header",
+  );
+}
+
 describe("createCopilotByokProxy", () => {
   afterEach(() => {
     ssrfRuntimeMock.fetchWithSsrFGuard.mockReset();
@@ -331,11 +341,11 @@ describe("createCopilotByokProxy", () => {
     const proxy = await createCopilotByokProxy(resolvedProvider);
     expect(proxy?.provider.provider?.baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
     const sdkHeaders = expectDefined(proxy?.provider.provider?.headers, "Azure SDK headers");
+    const [proxyCredentialHeader] = getProxyCredentialHeader(sdkHeaders);
     expect(sdkHeaders).toMatchObject({
+      "X-OpenClaw-Copilot-Byok-Proxy-Token": "configured-value",
       "X-Trace": "test",
-      "x-openclaw-copilot-byok-proxy-token": expect.stringMatching(/^[a-f0-9]{24}$/),
     });
-    expect(sdkHeaders).not.toHaveProperty("X-OpenClaw-Copilot-Byok-Proxy-Token");
 
     try {
       const response = await fetch(
@@ -357,6 +367,7 @@ describe("createCopilotByokProxy", () => {
             headers: expect.objectContaining({
               "accept-encoding": "identity",
               "api-key": "azure-key",
+              "x-openclaw-copilot-byok-proxy-token": "configured-value",
               "x-trace": "test",
             }),
           }),
@@ -365,7 +376,7 @@ describe("createCopilotByokProxy", () => {
       const call = ssrfRuntimeMock.fetchWithSsrFGuard.mock.calls[0]?.[0] as
         | { init?: { headers?: Record<string, string> } }
         | undefined;
-      expect(call?.init?.headers).not.toHaveProperty("x-openclaw-copilot-byok-proxy-token");
+      expect(call?.init?.headers).not.toHaveProperty(proxyCredentialHeader);
     } finally {
       await proxy?.close();
     }
@@ -386,6 +397,8 @@ describe("createCopilotByokProxy", () => {
         },
       }),
     );
+    const sdkHeaders = expectDefined(proxy?.provider.provider?.headers, "Azure SDK headers");
+    const [proxyCredentialHeader] = getProxyCredentialHeader(sdkHeaders);
 
     try {
       const status = await new Promise<number>((resolve, reject) => {
@@ -414,7 +427,7 @@ describe("createCopilotByokProxy", () => {
         `${proxy?.provider.provider?.baseUrl}/openai/v1/responses`,
         {
           method: "POST",
-          headers: { "x-openclaw-copilot-byok-proxy-token": "wrong" },
+          headers: { [proxyCredentialHeader]: "wrong" },
           body: JSON.stringify({ model: "deployment-gpt" }),
         },
       );
