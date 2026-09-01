@@ -208,6 +208,19 @@ afterEach(async () => {
 });
 
 describe("personal GitHub through authenticated Gateway RPC", () => {
+  it("rejects a missing GitHub CLI before creating personal authorization state", async () => {
+    vi.stubEnv("PATH", state.root);
+
+    const response = await rpc(alice, "users.github.authorize.start");
+
+    expect(response.mock.calls[0]?.[0]).toBe(false);
+    expect(JSON.stringify(response.mock.calls)).toContain(
+      "GitHub CLI (`gh`) is required on the Gateway host. Install it and retry.",
+    );
+    expect(network.start).not.toHaveBeenCalled();
+    expect(readUserGitHubConnection(owner())).toBeUndefined();
+  });
+
   it.each(["disconnect", "role"] as const)(
     "rechecks %s after personal status verification",
     async (race) => {

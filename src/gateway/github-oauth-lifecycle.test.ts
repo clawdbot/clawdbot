@@ -280,6 +280,17 @@ afterEach(async () => {
 });
 
 describe("GitHub OAuth authorization lifecycle", () => {
+  it("rejects a missing GitHub CLI before requesting a device code", async () => {
+    vi.stubEnv("PATH", stateDir);
+    const lifecycle = createLifecycle();
+
+    await expect(startAuthorization(lifecycle, "system")).rejects.toThrow(
+      "GitHub CLI (`gh`) is required on the Gateway host. Install it and retry.",
+    );
+    expect(mocks.requestDeviceCode).not.toHaveBeenCalled();
+    expect(listGitHubDeviceAuthorizationRecords()).toEqual([]);
+  });
+
   it.each(["system", "agent"] as const)(
     "records an exact %s-scope CAS snapshot and delays the initial poll",
     async (scope) => {
