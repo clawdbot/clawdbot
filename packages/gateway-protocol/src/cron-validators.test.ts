@@ -92,6 +92,9 @@ describe("cron protocol validators", () => {
     };
     expect(Value.Check(CronAddResultSchema, { ...job, deliveryPreviews })).toBe(true);
     expect(Value.Check(CronAddResultSchema, { created: true, job, deliveryPreviews })).toBe(true);
+    // Older Gateways still return these result shapes without deliveryPreviews.
+    expect(Value.Check(CronAddResultSchema, { ...job })).toBe(true);
+    expect(Value.Check(CronAddResultSchema, { created: true, job })).toBe(true);
   });
 
   it("models the delivery trace returned in cron run history", () => {

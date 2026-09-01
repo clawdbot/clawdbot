@@ -17227,13 +17227,13 @@ public struct CronDeclarativeAddResult: Codable, Sendable {
     public let created: Bool
     public let updated: Bool?
     public let job: CronJob
-    public let deliverypreviews: [String: AnyCodable]
+    public let deliverypreviews: [String: AnyCodable]?
 
     public init(
         created: Bool,
         updated: Bool? = nil,
         job: CronJob,
-        deliverypreviews: [String: AnyCodable])
+        deliverypreviews: [String: AnyCodable]? = nil)
     {
         self.created = created
         self.updated = updated
