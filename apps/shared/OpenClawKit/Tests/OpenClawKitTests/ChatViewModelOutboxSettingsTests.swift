@@ -47,33 +47,61 @@ struct ChatViewModelOutboxSettingsTests {
         #expect(await transport.state.sentSessionSettings[0] == expectation)
     }
 
-    @Test func `CAS gateway parks a legacy command without a settings expectation`() async throws {
+    @Test(arguments: [false, true])
+    func `settings failures remain retryable before outbox reload`(gatewayRejectsSettings: Bool) async throws {
         let (store, _, databaseDirectory) = try makeOutboxStore()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
         #expect(await store.enqueueCommand(outboxTestCommand(
             id: "legacy-settings",
             text: "review before replay",
             createdAt: Date().timeIntervalSince1970,
-            expectedSessionSettings: nil)))
+            expectedSessionSettings: gatewayRejectsSettings
+                ? OpenClawChatSessionSettingsExpectation(permissionMode: nil, toolOverrides: nil)
+                : nil)))
+        let outbox = ScriptedOutbox(base: store)
         let transport = OutboxTestTransport(
-            healthy: true,
+            healthy: false,
             sessions: [outboxSessionEntry(key: "main", thinkingLevels: ["off"])],
             supportsSessionSettingsCAS: true)
-        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+        await transport.state.update { $0.sendSettingsChanged = gatewayRejectsSettings }
+        let vm = await makeOutboxViewModel(transport: transport, outbox: outbox)
 
         await MainActor.run { vm.load() }
-        try await waitUntil("legacy command parked") {
-            await store.loadCommands().first?.status == .failed
+        try await waitUntil("offline bootstrap settled") {
+            await MainActor.run { !vm.isLoading && vm.hasRestoredOutboxMessages }
         }
+        await outbox.holdLoadAfterFailure()
+        await transport.goOnline()
+        await outbox.waitUntilSnapshotCaptured()
 
-        #expect(await transport.state.sentMessages.isEmpty)
-        let failed = try #require(await store.loadCommands().first)
-        #expect(failed.lastError == OpenClawChatSQLiteTranscriptCache.outboxSettingsReviewRequiredError)
-        #expect(OpenClawChatSQLiteTranscriptCache.outboxDisplayError(failed.lastError) ==
-            "Session settings were not captured. Review and retry this message.")
+        do {
+            #expect(await transport.state.sentMessages.isEmpty)
+            let failed = try #require(await store.loadCommands().first)
+            #expect(failed.lastError == (gatewayRejectsSettings
+                    ? OpenClawChatSQLiteTranscriptCache.outboxSettingsChangedError
+                    : OpenClawChatSQLiteTranscriptCache.outboxSettingsReviewRequiredError))
+            if !gatewayRejectsSettings {
+                #expect(OpenClawChatSQLiteTranscriptCache.outboxDisplayError(failed.lastError) ==
+                    "Session settings were not captured. Review and retry this message.")
+            }
+            await transport.state.update { $0.sendSettingsChanged = false }
 
-        let messageID = try #require(await MainActor.run { vm.messages.last?.id })
-        await MainActor.run { vm.retryOutboxMessage(messageID) }
+            // A visible failure must authorize retry before any later reload can supply its version.
+            let messageID = try #require(await MainActor.run {
+                vm.messages.first { vm.outboxState(for: $0.id)?.isFailed == true }?.id
+            })
+            await MainActor.run { vm.retryOutboxMessage(messageID) }
+            try await waitUntil("reviewed settings rebound before reload") {
+                await store.loadCommands().first?.status == .queued
+            }
+        } catch {
+            await outbox.releaseSnapshot()
+            try? await waitUntil("failed proof flush released") {
+                await MainActor.run { !vm.isFlushingOutbox }
+            }
+            throw error
+        }
+        await outbox.releaseSnapshot()
         try await waitUntil("reviewed settings rebound and sent") {
             await transport.state.sentMessages == ["review before replay"]
         }
@@ -82,28 +110,49 @@ struct ChatViewModelOutboxSettingsTests {
         ])
     }
 
-    @Test func `pre CAS gateway parks a fenced command with upgrade guidance`() async throws {
+    @Test(arguments: [OpenClawChatOutboxUpdateResult.updated, .unavailable, .confirmed, .superseded])
+    func `pre CAS parking honors the terminal write result`(
+        terminalResult: OpenClawChatOutboxUpdateResult) async throws
+    {
         let (store, _, databaseDirectory) = try makeOutboxStore()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        #expect(await store.enqueueCommand(outboxTestCommand(
+        let command = outboxTestCommand(
             id: "pre-cas-settings",
             text: "wait for gateway upgrade",
             createdAt: Date().timeIntervalSince1970,
             expectedSessionSettings: OpenClawChatSessionSettingsExpectation(
                 permissionMode: .guarded,
-                toolOverrides: nil))))
-        let transport = OutboxTestTransport(
-            healthy: true,
-            supportsSessionSettingsCAS: false)
-        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+                toolOverrides: nil))
+        #expect(await store.enqueueCommand(command))
+        let outbox = ScriptedOutbox(base: store)
+        await outbox.setTerminalWriteResult(terminalResult)
+        let transport = OutboxTestTransport(healthy: false, supportsSessionSettingsCAS: false)
+        let vm = await makeOutboxViewModel(transport: transport, outbox: outbox)
 
         await MainActor.run { vm.load() }
-        try await waitUntil("pre-CAS row parked") {
-            await store.loadCommands().first?.status == .failed
+        await transport.goOnline()
+        try await waitUntil("pre-CAS terminal result settled") {
+            let commands = await store.loadCommands()
+            let storedResult = switch terminalResult {
+            case .updated: commands.first?.status == .failed
+            case .unavailable: commands.first?.status == .sending
+            case .confirmed, .missing: commands.isEmpty
+            case .superseded: commands.first?.status == .sending && commands.first?.attemptVersion == command
+                .attemptVersion + 1
+            }
+            return await MainActor.run {
+                storedResult && !vm.isFlushingOutbox && (terminalResult != .unavailable || !vm.healthOK)
+            }
         }
         #expect(await transport.state.sentMessages.isEmpty)
-        #expect(await store.loadCommands().first?.lastError ==
-            OpenClawChatSQLiteTranscriptCache.outboxSettingsGatewayUpgradeRequiredError)
+        if terminalResult == .updated {
+            #expect(await store.loadCommands().first?.lastError ==
+                OpenClawChatSQLiteTranscriptCache.outboxSettingsGatewayUpgradeRequiredError)
+        } else {
+            #expect(await MainActor.run {
+                vm.messages.allSatisfy { vm.outboxState(for: $0.id)?.isFailed != true }
+            })
+        }
     }
 
     @Test func `failed restrictive patch cannot release a later automatic flush`() async throws {

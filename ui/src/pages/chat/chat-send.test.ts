@@ -1168,6 +1168,12 @@ describe("refreshChat", () => {
         ...(workRefresh === "none" ? { contextTokens: 1500, label: "History Work label" } : {}),
       };
       pendingHistory.resolve({
+        defaults: {
+          contextTokens: null,
+          model: "model-old",
+          modelProvider: "test",
+          modelSelectionTarget: "agent",
+        },
         messages: [{ role: "assistant", content: "History really applied" }],
         sessionInfo: historyRow,
       });
@@ -1183,6 +1189,10 @@ describe("refreshChat", () => {
       expect(sessions.canonicalListRevision).toBeGreaterThan(issuedRevision);
       if (moveRoster) {
         expect(sessions.state.result?.sessions[0]).toEqual(mainRow);
+        expect(
+          expectDefined<SessionsListResult>(state.sessionsResult, "work session result").defaults
+            .modelSelectionTarget,
+        ).toBe("agent");
       }
       expect(afterResolution).toMatchObject(workRefresh === "updated" ? newerWork : historyRow);
     } finally {

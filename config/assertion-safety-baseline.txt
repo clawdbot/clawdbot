@@ -2492,7 +2492,7 @@ src/commands/doctor-skill-workshop-sqlite.ts	1
 src/commands/doctor-skills.ts	1
 src/commands/doctor-sqlite-compact.ts	3
 src/commands/doctor-sqlite-maintenance-lock.ts	2
-src/commands/doctor-state-integrity.ts	2
+src/commands/doctor-state-integrity.ts	1
 src/commands/doctor-state-sqlite-compact.ts	1
 src/commands/doctor-telegram-general-topic-conversations.ts	2
 src/commands/doctor-tools-md-migration.ts	5
@@ -4036,7 +4036,6 @@ ui/src/pages/chat/components/chat-message-timestamp.ts	4
 ui/src/pages/chat/components/chat-model-picker-options.ts	2
 ui/src/pages/chat/components/chat-model-picker.ts	7
 ui/src/pages/chat/components/chat-pane-header.ts	2
-ui/src/pages/chat/components/chat-question-card.ts	1
 ui/src/pages/chat/components/chat-selection-popup.ts	1
 ui/src/pages/chat/components/chat-session-rail.ts	4
 ui/src/pages/chat/components/chat-session-sharing.ts	1

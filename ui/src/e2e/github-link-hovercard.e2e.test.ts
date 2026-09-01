@@ -312,7 +312,8 @@ describeControlUiE2e("GitHub link hover cards", () => {
     await expectText(card, "openclaw/openclaw #99816");
     await expectText(card, "+101");
     await expectText(card, "−12");
-    await expectText(card, "3 files");
+    expect(await card.getByText("3 files", { exact: true }).count()).toBe(0);
+    expect(await card.locator(".github-link-hovercard__metric--files").count()).toBe(0);
     await page.clock.runFor(300);
     await captureArtifact(page, "github-hovercard-title-tooltip");
     await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);
@@ -466,7 +467,7 @@ describeControlUiE2e("GitHub link hover cards", () => {
 
     // The title owns the card's only underline; the other links stay quiet even
     // under the pointer, so the card keeps reading as a preview and not a menu.
-    for (const quiet of ["repo", "author", "metric--files"]) {
+    for (const quiet of ["repo", "author"]) {
       const link = card.locator(`.github-link-hovercard__${quiet}`);
       await link.hover();
       expect(await link.evaluate((el) => getComputedStyle(el).textDecorationLine)).toBe("none");
@@ -483,14 +484,6 @@ describeControlUiE2e("GitHub link hover cards", () => {
     const popup = await popupPromise;
     await popup.waitForLoadState("domcontentloaded");
     expect(popup.url()).toBe("https://github.com/openclaw/openclaw/pull/99816");
-
-    // The diff-size chip is the card's deep link into the files-changed view.
-    const filesPopupPromise = page.waitForEvent("popup");
-    await card.locator(".github-link-hovercard__metric--files").click();
-    const filesPopup = await filesPopupPromise;
-    await filesPopup.waitForLoadState("domcontentloaded");
-    expect(filesPopup.url()).toBe("https://github.com/openclaw/openclaw/pull/99816/files");
-    await filesPopup.close();
 
     // The click focused the title link inside the card; leaving the card still
     // dismisses it with no click-outside required (github-link-hovercard.runtime.ts

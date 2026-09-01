@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -52,6 +53,7 @@ type WorkflowStep = {
 
 type WorkflowJob = {
   "continue-on-error"?: boolean | string;
+  "runs-on"?: string;
   env?: Record<string, string>;
   if?: string;
   needs?: string | string[];
@@ -308,6 +310,41 @@ function executeParentFilterValidation(
 }
 
 describe("release validation no-push transport", () => {
+  it.each([
+    ["openclaw/openclaw", "hybrid", false, "blacksmith-4vcpu-ubuntu-2404"],
+    ["openclaw/openclaw", "github", false, "ubuntu-24.04"],
+    ["openclaw/openclaw", "", false, "ubuntu-24.04"],
+    ["fork/openclaw", "hybrid", false, "ubuntu-24.04"],
+    ["openclaw/openclaw", "hybrid", true, "ubuntu-24.04"],
+  ])(
+    "routes serial candidate jobs for %s/%s (hosted=%s)",
+    (repository, backend, hosted, runner) => {
+      const targets = [
+        [FULL_RELEASE, "resolve_target"],
+        [FULL_RELEASE, "evidence_reuse"],
+        [".github/workflows/full-release-candidate.yml", "discover"],
+        [".github/workflows/full-release-candidate.yml", "resolve_candidate"],
+        [LIVE_E2E, "validate_selected_ref"],
+        [LIVE_E2E, "bind_full_release_candidate_evidence"],
+      ];
+      for (const [workflowPath, name] of targets) {
+        // Only the reusable harness exposes an explicit hosted-runner override.
+        if (hosted && workflowPath !== LIVE_E2E) {
+          continue;
+        }
+        const expression = job(readWorkflow(workflowPath!), name!)["runs-on"]!;
+        const actual = expression.startsWith("${{")
+          ? runInNewContext(expression.slice(3, -2), {
+              github: { repository },
+              inputs: { use_github_hosted_runners: hosted },
+              vars: { OPENCLAW_CI_RUNNER_BACKEND: backend },
+            })
+          : expression;
+        expect(actual, `${workflowPath}:${name}`).toBe(runner);
+      }
+    },
+  );
+
   it.each([
     { name: "local validated package", imported: false, status: 0, calls: 0 },
     { name: "imported package", imported: true, status: 0, calls: 1 },

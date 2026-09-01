@@ -774,6 +774,14 @@ Stable/full always include soak; setting their soak flag explicitly does not
 create another concurrency group. Parent cancellation does not cancel adopted
 children.
 
+In the canonical repository's `hybrid` runner mode, target resolution, evidence
+reuse, candidate discovery, candidate binding, and candidate resolution use
+the small Blacksmith runner pool. These serial jobs otherwise compound hosted
+runner admission delays before tests can start. Other modes and noncanonical
+repositories retain GitHub-hosted runners; the reusable harness also honors
+its explicit hosted-runner override. Long-running decision and diagnostic
+collectors remain hosted.
+
 ## Live and E2E shards
 
 The release live/E2E child keeps broad native `pnpm test:live` coverage, but it runs it as named shards through `scripts/test-live-shard.mjs` instead of one serial job:
@@ -955,22 +963,24 @@ A lane heavier than its effective cap can still start from an empty pool, then r
 
 Repository E2E runs as nine independent jobs: four native Gateway shards, four
 duration-weighted Control UI shards, and the standalone agent-plugin Gateway
-test. At most six run concurrently, and a failure does not cancel the remaining
-jobs. Every job checks out the same selected source and prepares its own
-private-QA build, Chromium, and sandbox image. Gateway shards use the full build
-because they include packed-package type checks. UI and agent-plugin jobs use
-the existing CI artifact build, retaining runtime code, private QA entries,
-Control UI assets, and canonical SDK declarations/checks without generating
-unneeded package-wide declarations. Gateway shards retain the existing
+test. Two independent producers build the selected source once per profile:
+the full private-QA build for Gateway package/type checks, and the CI artifact
+build for UI and agent-plugin tests. Consumers restore exact producer artifacts,
+including generated plugin assets and local build metadata, and install their
+own Chromium and sandbox prerequisites. Each group has four test slots, so long
+UI shards start together without waiting for Gateway declarations or tests.
+A failed producer blocks its own consumers; other diagnostics continue.
+Gateway shards retain the existing
 four fresh-process boundaries and two-worker limit; UI shards retain serial
 files within each process. No tests are filtered out, and the existing
 90-minute job deadline is unchanged. Local `pnpm test:e2e` remains sequential.
 
-This trades nine builds and eight additional jobs per invocation for a shorter
-critical path and complete results from every E2E surface. Release checks use
-GitHub-hosted runners, so this adds no Blacksmith registrations there. A
-standalone dispatch using Blacksmith can register nine runners per invocation;
-the six-job concurrency cap does not reduce that total registration budget.
+This removes seven builds per invocation and raises peak test concurrency from
+six to eight. Release checks use GitHub-hosted runners, so this adds no
+Blacksmith registrations there. A standalone Blacksmith invocation can register
+eleven runners: two producers and nine test jobs. Producer artifact identities
+survive consumer-only retries; consumers never select an artifact by their own
+current attempt number.
 
 The reusable live/E2E workflow asks `scripts/test-docker-all.mjs --plan-json` which package, image kind, live image, lane, and credential coverage is required. `scripts/docker-e2e.mjs` then converts that plan into GitHub outputs and summaries. It either packs OpenClaw through `scripts/package-openclaw-for-docker.mjs`, downloads a current-run package artifact, or downloads a package artifact from `package_artifact_run_id`, then validates the tarball inventory. The default `no-push-artifact` path builds package-digest-tagged bare/functional images through Blacksmith's Docker layer cache, packs the exact image bytes into an immutable workflow artifact, and has each consumer verify and load that artifact. `existing-only` instead requires explicit `docker_e2e_bare_image`/`docker_e2e_functional_image` GHCR refs and never builds or pushes. Those registry pulls use a bounded 180-second per-attempt timeout so a stuck stream retries quickly instead of consuming most of the CI critical path. After successful scheduled validation, `openclaw-scheduled-live-checks.yml` passes the immutable tested-image manifest to the separate package-write publisher; read-only release and prerelease callers never traverse that writer.
 
@@ -979,11 +989,11 @@ The reusable live/E2E workflow asks `scripts/test-docker-all.mjs --plan-json` wh
 Release Docker coverage runs smaller chunked jobs with `OPENCLAW_SKIP_DOCKER_BUILD=1` so each chunk verifies and loads only the artifact-backed image kind it needs (or pulls it under explicit `existing-only` reuse) and executes multiple lanes through the same weighted scheduler:
 
 - `OPENCLAW_DOCKER_ALL_PROFILE=release-path`
-- `OPENCLAW_DOCKER_ALL_CHUNK=core | package-update-openai | package-update-core | plugins-runtime-plugins | plugins-runtime-services | plugins-runtime-install-a..h | openwebui`
+- `OPENCLAW_DOCKER_ALL_CHUNK=core | package-update-openai | package-update-onboarding | package-update-migrations | package-update-self-upgrade | plugins-runtime-plugins | plugins-runtime-services | plugins-runtime-install-a..h | openwebui`
 
-Current release Docker chunks are `core`, `package-update-openai`, `package-update-core`, `plugins-runtime-plugins`, `plugins-runtime-services`, `plugins-runtime-install-a` through `plugins-runtime-install-h`, and `openwebui`. `package-update-openai` includes the live Codex plugin package lane, which installs the candidate OpenClaw package, installs the Codex plugin from `codex_plugin_spec` or a same-ref tarball with explicit Codex CLI install approval, runs Codex CLI preflight and same-session agent turns, then runs a zero-retry medium-thinking turn that sends progress, reads randomized workspace inputs, writes their exact artifact, and sends completion. `plugins-runtime-core`, `plugins-runtime`, and `plugins-integrations` remain aggregate plugin/runtime aliases. The `install-e2e` lane alias remains the aggregate manual rerun alias for both provider installer lanes.
+Current release Docker chunks are `core`, `package-update-openai`, `package-update-onboarding`, `package-update-migrations`, `package-update-self-upgrade`, `plugins-runtime-plugins`, `plugins-runtime-services`, `plugins-runtime-install-a` through `plugins-runtime-install-h`, and `openwebui`. `package-update-openai` includes the live Codex plugin package lane, which installs the candidate OpenClaw package, installs the Codex plugin from `codex_plugin_spec` or a same-ref tarball with explicit Codex CLI install approval, runs Codex CLI preflight and same-session agent turns, then runs a zero-retry medium-thinking turn that sends progress, reads randomized workspace inputs, writes their exact artifact, and sends completion. `plugins-runtime-core`, `plugins-runtime`, and `plugins-integrations` remain aggregate plugin/runtime aliases. The `install-e2e` lane alias remains the aggregate manual rerun alias for both provider installer lanes.
 
-The `package-update-openai` row also runs root-managed VPS upgrade and authenticated update restart proof, balancing the existing package jobs without raising scheduler limits. Credential preflight failures remain blocking while the following diagnostic pool drains non-live lanes; earlier setup failures and cancellation still prevent execution.
+Provider-neutral package checks run in three balanced rows: onboarding and install switching, channel/published migrations, and self-upgrades. This avoids serializing eight npm-heavy lanes behind one runner's npm resource limit. The aggregate `package-update-core` and `package-update` names remain available for manual runs. The `package-update-openai` row also runs root-managed VPS upgrade and authenticated update restart proof. Scheduler resource limits remain unchanged. Credential preflight failures remain blocking while the following diagnostic pool drains non-live lanes; earlier setup failures and cancellation still prevent execution.
 
 OpenWebUI runs as a standalone `openwebui` chunk on a dedicated large-disk Blacksmith runner whenever stable or full release-path coverage requests it, even when the reusable workflow routes supported jobs to GitHub-hosted runners. Keeping the external image pull separate prevents the large image from competing with the shared package and plugin images in `plugins-runtime-services`; legacy aggregate plugin/runtime chunks still include OpenWebUI for compatible manual reruns. Bundled-channel update lanes retry once for transient npm network failures.
 

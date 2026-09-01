@@ -48,7 +48,7 @@ type SettingsHelpTriggerProps = {
 export type SettingsPageHeaderProps = {
   title: unknown;
   subtitle?: unknown;
-  actions?: TemplateResult;
+  actions?: TemplateResult | typeof nothing;
 };
 
 export function renderSettingsPage(
@@ -95,12 +95,14 @@ export function renderLearnMoreLink(url: string): TemplateResult {
 
 export function renderSettingsPageHeader(props: SettingsPageHeaderProps): TemplateResult {
   return html`
-    <section class="content-header">
+    <section class="content-header content-header--settings">
       <div>
         <div class="page-title">${props.title}</div>
         ${props.subtitle ? html`<div class="page-subtitle">${props.subtitle}</div>` : nothing}
       </div>
-      ${props.actions ? html`<div class="page-header-actions">${props.actions}</div>` : nothing}
+      ${props.actions && props.actions !== nothing
+        ? html`<div class="page-header-actions">${props.actions}</div>`
+        : nothing}
     </section>
   `;
 }

@@ -4502,7 +4502,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 .sidebar-recent-session--single-line .sidebar-recent-session__text {
   flex-direction: row;
   align-items: center;
-  gap: var(--sidebar-row-gap);
+  gap: calc(var(--sidebar-row-gap) + var(--sidebar-row-gap));
 }
 
 /* Basis 0 mirrors the two-line subtitle contract: the title absorbs all
