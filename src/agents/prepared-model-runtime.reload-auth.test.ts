@@ -14,6 +14,7 @@ import {
 import { loadPreparedModelCatalogOwnerSnapshot } from "./prepared-model-catalog.js";
 import {
   acquireAgentRunPreparedModelRuntime,
+  advancePreparedModelRuntimeConfig,
   loadPublishedGatewayReplyDispatchRuntime,
   prepareModelRuntimeSnapshot,
   refreshStalePreparedModelRuntimeCatalog,
@@ -809,6 +810,51 @@ describe("prepared model runtime reload auth adoption", () => {
       configBuild.resolve({ agentDir: state.agentDir("default"), wrote: false });
       await Promise.allSettled([authWaiter, reload]);
     }
+  });
+
+  it("keeps a stale catalog reachable after a model-neutral config stamp advance", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const model = {
+      provider: "catalog-refresh-fixture",
+      id: "authenticated-model",
+      name: "Authenticated model",
+      api: "openai-completions" as const,
+    };
+    mocks.runPreparedModelCatalogWorker.mockResolvedValue({
+      entries: [model],
+      routeVariants: [model],
+    });
+    const input = {
+      agentId: "default",
+      agentDir: state.agentDir("default"),
+      inheritedAuthDir: state.agentDir("default"),
+      config: {},
+    };
+    await refreshPreparedModelRuntimeSnapshots(input.config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+    });
+    await prepareModelRuntimeSnapshot(input);
+
+    mocks.mutationListener?.({
+      agentDir: input.agentDir,
+      affectsInheritedStores: false,
+      profileSetChanged: true,
+    });
+    await prepareModelRuntimeSnapshot(input);
+
+    // A model-neutral runtime config commit re-stamps every published owner in place. The stamp
+    // mints a new snapshot identity, which must stay resolvable back to the owner holding the
+    // stale flag; otherwise the next explicit browse silently serves the pre-mutation catalog.
+    advancePreparedModelRuntimeConfig({});
+
+    const advanced = await prepareModelRuntimeSnapshot(input);
+    mocks.runPreparedModelCatalogWorker.mockClear();
+    await expect(refreshStalePreparedModelRuntimeCatalog(advanced)).resolves.toMatchObject({
+      entries: [model],
+    });
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce();
+    await expect(refreshStalePreparedModelRuntimeCatalog(advanced)).resolves.toBeUndefined();
   });
 });
 

@@ -48,6 +48,8 @@ export function resolvePreparedModelRuntimeOwnerBySnapshot(
   return ownersBySnapshot.get(snapshot);
 }
 
+// Sole permitted writer of `owner.snapshot`. The map keys on snapshot identity, so any
+// assignment that bypasses this leaves the owner unreachable from the snapshot readers hold.
 function publishPreparedModelRuntimeOwnerSnapshot(
   owner: PreparedModelRuntimeOwner,
   snapshot: PreparedModelRuntimeSnapshot,
@@ -261,8 +263,12 @@ export function advancePreparedModelRuntimeOwnerConfig(
   owner.input = { ...owner.input, config };
   if (owner.snapshot) {
     // Existing leases retain their immutable snapshot. New readers receive the same prepared
-    // generation with only its planner-approved, model-neutral config stamp advanced.
-    owner.snapshot = stampPreparedModelRuntimeSnapshotConfig(owner.snapshot, config);
+    // generation with only its planner-approved, model-neutral config stamp advanced. The stamp
+    // mints a new snapshot identity, so it has to move the owner's snapshot index with it.
+    publishPreparedModelRuntimeOwnerSnapshot(
+      owner,
+      stampPreparedModelRuntimeSnapshotConfig(owner.snapshot, config),
+    );
   }
 }
 
