@@ -677,7 +677,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       )) {
         // Keep empty-state Doctor scans from materializing the IndexedDB runtime.
         const { migrateLegacyMatrixIdbSnapshot } =
-          await import("./src/matrix/crypto-snapshot-doctor.js");
+          await import("./src/matrix/crypto-snapshot-doctor.runtime.js");
         await migrateLegacyMatrixIdbSnapshot({
           storageRootDir,
           context: params.context,
