@@ -2,7 +2,10 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { CronRunDiagnostic, CronRunDiagnostics } from "./types.js";
+import type { CronRunLogEntry as CronRunLogWireEntry } from "../../packages/gateway-protocol/src/schema/cron.types.js";
+
+type CronRunDiagnostics = NonNullable<CronRunLogWireEntry["diagnostics"]>;
+type CronRunDiagnostic = CronRunDiagnostics["entries"][number];
 
 const MAX_ENTRIES = 10;
 const MAX_ENTRY_CHARS = 1_000;
