@@ -2,25 +2,11 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { CronRunDiagnostic, CronRunDiagnostics } from "./types.js";
 
 const MAX_ENTRIES = 10;
 const MAX_ENTRY_CHARS = 1_000;
 const MAX_SUMMARY_CHARS = 2_000;
-
-type NormalizedCronRunDiagnostic = {
-  ts: number;
-  source: ReturnType<typeof normalizeSource>;
-  severity: ReturnType<typeof normalizeSeverity>;
-  message: string;
-  toolName?: string;
-  exitCode?: number | null;
-  truncated?: boolean;
-};
-
-type NormalizedCronRunDiagnostics = {
-  summary?: string;
-  entries: NormalizedCronRunDiagnostic[];
-};
 
 type CronRunDiagnosticsNormalizeOptions = {
   nowMs?: () => number;
@@ -28,20 +14,11 @@ type CronRunDiagnosticsNormalizeOptions = {
   redactText?: (value: string) => string;
 };
 
-function normalizeSeverity(value: unknown): "info" | "warn" | "error" {
+function normalizeSeverity(value: unknown): CronRunDiagnostic["severity"] {
   return value === "info" || value === "warn" || value === "error" ? value : "error";
 }
 
-function normalizeSource(
-  value: unknown,
-):
-  | "cron-preflight"
-  | "cron-setup"
-  | "model-preflight"
-  | "agent-run"
-  | "tool"
-  | "exec"
-  | "delivery" {
+function normalizeSource(value: unknown): CronRunDiagnostic["source"] {
   switch (value) {
     case "cron-preflight":
     case "cron-setup":
@@ -122,7 +99,7 @@ export function normalizeCronRunDiagnosticSummary(value: string | undefined): st
 export function normalizeCronRunDiagnosticsCore(
   value: unknown,
   opts?: CronRunDiagnosticsNormalizeOptions,
-): NormalizedCronRunDiagnostics | undefined {
+): CronRunDiagnostics | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
   }
@@ -130,12 +107,12 @@ export function normalizeCronRunDiagnosticsCore(
   const nowMs = opts?.nowMs ?? Date.now;
   const redactText = opts?.redactText ?? ((text: string) => text);
   const entriesRaw = Array.isArray(record.entries) ? record.entries : [];
-  const entries: NormalizedCronRunDiagnostic[] = [];
+  const entries: CronRunDiagnostic[] = [];
   for (const item of entriesRaw) {
     if (!item || typeof item !== "object") {
       continue;
     }
-    const entry = item as Partial<NormalizedCronRunDiagnostic>;
+    const entry = item as Partial<CronRunDiagnostic>;
     const normalized = normalizeDiagnosticMessage(entry.message, redactText);
     if (!normalized.message) {
       continue;

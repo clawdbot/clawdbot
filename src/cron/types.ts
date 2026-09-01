@@ -1,3 +1,4 @@
+import type { CronRunLogEntry as CronRunLogWireEntry } from "../../packages/gateway-protocol/src/schema/cron.types.js";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 /** Cron scheduling, delivery, diagnostics, and store data contracts. */
 import type { FailoverReason } from "../agents/failover/signal.js";
@@ -125,30 +126,15 @@ export type CronRunStatus = "ok" | "error" | "skipped";
 export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
 
 /** Delivery target snapshot recorded for audit/debug output. */
-export type CronDeliveryTraceTarget = {
-  channel?: string;
-  to?: string | null;
-  accountId?: string;
-  threadId?: string | number;
-  source?: "explicit" | "last";
-};
+export type CronDeliveryTraceTarget = NonNullable<CronDeliveryTrace["intended"]>;
 
 /** Message-tool target that already sent to the cron delivery destination. */
-export type CronDeliveryTraceMessageTarget = {
-  channel: string;
-  to?: string;
-  accountId?: string;
-  threadId?: string;
-};
+export type CronDeliveryTraceMessageTarget = NonNullable<
+  CronDeliveryTrace["messageToolSentTo"]
+>[number];
 
 /** Trace of intended, resolved, and already-sent delivery decisions for one run. */
-export type CronDeliveryTrace = {
-  intended?: CronDeliveryTraceTarget;
-  resolved?: CronDeliveryTraceTarget & { ok: boolean; error?: string };
-  messageToolSentTo?: CronDeliveryTraceMessageTarget[];
-  fallbackUsed?: boolean;
-  delivered?: boolean;
-};
+export type CronDeliveryTrace = NonNullable<CronRunLogWireEntry["delivery"]>;
 
 /** Last failed-run notification delivery state stored on job state and run logs. */
 export type CronFailureNotificationDelivery = {
@@ -173,51 +159,20 @@ export type CronDeliveryPreview = {
   detail: string;
 };
 
-/** Token usage summary copied from the agent runner when available. */
-type CronUsageSummary = {
-  input_tokens?: number;
-  output_tokens?: number;
-  total_tokens?: number;
-  cache_read_tokens?: number;
-  cache_write_tokens?: number;
-};
-
 /** Model/provider/usage telemetry attached to cron run results and logs. */
-export type CronRunTelemetry = {
-  model?: string;
-  provider?: string;
-  usage?: CronUsageSummary;
-};
+export type CronRunTelemetry = Pick<CronRunLogWireEntry, "model" | "provider" | "usage">;
 
 /** Severity level for persisted cron run diagnostics. */
-export type CronRunDiagnosticSeverity = "info" | "warn" | "error";
+export type CronRunDiagnosticSeverity = CronRunDiagnostic["severity"];
 
 /** Subsystem that produced a cron run diagnostic entry. */
-export type CronRunDiagnosticSource =
-  | "cron-preflight"
-  | "cron-setup"
-  | "model-preflight"
-  | "agent-run"
-  | "tool"
-  | "exec"
-  | "delivery";
+export type CronRunDiagnosticSource = CronRunDiagnostic["source"];
 
 /** Timestamped diagnostic entry preserved for cron run troubleshooting. */
-export type CronRunDiagnostic = {
-  ts: number;
-  source: CronRunDiagnosticSource;
-  severity: CronRunDiagnosticSeverity;
-  message: string;
-  toolName?: string;
-  exitCode?: number | null;
-  truncated?: boolean;
-};
+export type CronRunDiagnostic = CronRunDiagnostics["entries"][number];
 
 /** Bounded diagnostic bundle stored on the run outcome. */
-export type CronRunDiagnostics = {
-  summary?: string;
-  entries: CronRunDiagnostic[];
-};
+export type CronRunDiagnostics = NonNullable<CronRunLogWireEntry["diagnostics"]>;
 
 /** Explicit execution-error disposition used consistently by retry, history, and alerts. */
 export type CronRunErrorClassification =
