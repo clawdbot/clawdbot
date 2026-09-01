@@ -146,6 +146,11 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
       if (entry.delivery) {
         delete entry.delivery.requesterVisibleFinal;
       }
+      if (requesterAlreadyDeliveredFinal) {
+        // The receipt proves this yielded batch already reached requester-visible delivery.
+        // Clear its provisional wake so settling the parent cannot replay the batch.
+        entry.requesterSettleWake = undefined;
+      }
       entry.requesterTurnRunId = undefined;
       entry.requesterTurnYielded = undefined;
       if (entry.retireAfterRequesterTurn === true) {
