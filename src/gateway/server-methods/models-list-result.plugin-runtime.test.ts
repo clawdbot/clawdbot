@@ -18,8 +18,11 @@ import {
 import { modelsHandlers } from "./models.js";
 import type { GatewayRequestContext } from "./types.js";
 
+type PrepareHarnessCatalog =
+  (typeof import("./models-list-harness-catalog.js"))["prepareModelsListHarnessCatalog"];
+
 const mocks = vi.hoisted(() => ({
-  prepareHarnessCatalog: vi.fn(async (params: { snapshot: ModelCatalogSnapshot }) => ({
+  prepareHarnessCatalog: vi.fn<PrepareHarnessCatalog>(async (params) => ({
     snapshot: params.snapshot,
     defaultModel: undefined,
     catalog: params.snapshot.entries,
