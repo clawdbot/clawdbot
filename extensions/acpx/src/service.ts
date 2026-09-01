@@ -121,6 +121,8 @@ function createLazyDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntime
         cwd: params.pluginConfig.cwd,
         openclawLegacyBareSessionKeys: legacyBareSessionKeys,
         openclawGatewayInstanceId: params.gatewayInstanceId,
+        openclawCodexModel: params.pluginConfig.codexModel,
+        openclawCodexModelProvider: params.pluginConfig.codexModelProvider,
         openclawProcessLeaseStore: params.processLeaseStore,
         openclawWrapperRoot: params.wrapperRoot,
         sessionStore: module.createFileSessionStore({

@@ -935,6 +935,42 @@ async function persistMigratedCodexMcpConfig(params: {
   await fs.writeFile(configPath, stringifyToml(merged as TomlTableWithoutBigInt), "utf8");
 }
 
+async function resolvePreparedCodexModelIdentity(codexHome: string): Promise<{
+  codexModel?: string;
+  codexModelProvider?: string;
+}> {
+  const configPath = path.join(codexHome, "config.toml");
+  // SAFETY: smol-toml parses a complete TOML document into its root table.
+  let config = parseToml(await fs.readFile(configPath, "utf8")) as Record<string, unknown>;
+  const envConfig = process.env.CODEX_CONFIG?.trim();
+  if (envConfig) {
+    try {
+      const parsed = JSON.parse(envConfig);
+      if (!isConfigRecord(parsed)) {
+        return {};
+      }
+      config = mergeConfigRecords(config, parsed);
+    } catch {
+      // The generated wrapper will reject the same invalid payload at launch.
+      // Keep policy identity unknown so it cannot authorize tools beforehand.
+      return {};
+    }
+  }
+  const configuredProvider = config.model_provider;
+  const codexModelProvider =
+    configuredProvider === undefined
+      ? "openai"
+      : typeof configuredProvider === "string"
+        ? configuredProvider.trim() || undefined
+        : undefined;
+  const codexModel =
+    typeof config.model === "string" ? config.model.trim() || undefined : undefined;
+  return {
+    ...(codexModel ? { codexModel } : {}),
+    ...(codexModelProvider ? { codexModelProvider } : {}),
+  };
+}
+
 function buildClaudeAcpWrapperCommand(wrapperPath: string, configuredCommand?: string): string {
   const configuredAdapterArgs = extractConfiguredAdapterArgs({
     configuredCommand,
@@ -968,6 +1004,7 @@ export async function prepareAcpxCodexAuthConfig(params: {
     codexHome,
     migratedConfig: codexLaunch?.migratedConfig,
   });
+  const codexModelIdentity = await resolvePreparedCodexModelIdentity(codexHome);
   const installedCodexBinPath = await (
     params.resolveInstalledCodexAcpBinPath ?? resolveInstalledCodexAcpBinPath
   )();
@@ -979,6 +1016,7 @@ export async function prepareAcpxCodexAuthConfig(params: {
 
   return {
     ...params.pluginConfig,
+    ...codexModelIdentity,
     agents: {
       ...params.pluginConfig.agents,
       codex: buildCodexAcpWrapperCommand(wrapperPath, configuredCodexCommand),

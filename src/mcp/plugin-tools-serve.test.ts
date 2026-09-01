@@ -4,7 +4,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   consumeAdjustedParamsForToolCall,
   type HookContext,
@@ -40,7 +40,7 @@ const loadManifestContractSnapshotMock = vi.hoisted(() =>
 );
 const resolvePluginToolsMock = vi.hoisted(() => vi.fn<() => AnyAgentTool[]>(() => []));
 const routeLogsToStderrMock = vi.hoisted(() => vi.fn());
-const tempDirs = createTempDirTracker();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../agents/tools/gateway.js", () => ({
   callGatewayTool,
@@ -90,7 +90,6 @@ afterEach(() => {
   routeLogsToStderrMock.mockReset();
   resetAdjustedParamsByToolCallIdForTests();
   resetGlobalHookRunner();
-  tempDirs.cleanup();
 });
 
 function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
@@ -191,6 +190,38 @@ describe("plugin tools MCP server", () => {
     const loadPolicy = requireToolPolicyParams(ensureStandalonePluginToolRegistryLoadedMock);
     expect(loadPolicy.toolAllowlist).toContain("profile_plugin_tool");
     expect(loadPolicy.toolAllowlist).toContain("benign_plugin_tool");
+    expect(tools.map((tool) => tool.name)).toEqual(["benign_plugin_tool"]);
+  });
+
+  it("applies global provider policy to agentless tools with exact model identity", async () => {
+    loadManifestContractSnapshotMock.mockReturnValue({
+      plugins: [{ providers: ["openai"] }],
+    });
+    resolvePluginToolsMock.mockReturnValue([
+      {
+        name: "provider_denied_tool",
+        description: "Provider-denied tool",
+        parameters: { type: "object", properties: {} },
+        execute: vi.fn(),
+      },
+      {
+        name: "benign_plugin_tool",
+        description: "Benign tool",
+        parameters: { type: "object", properties: {} },
+        execute: vi.fn(),
+      },
+    ] as unknown as AnyAgentTool[]);
+    const config = {
+      plugins: { enabled: true },
+      models: { providers: { openai: {} } },
+      tools: { byProvider: { "openai/gpt-5.6": { deny: ["provider_denied_tool"] } } },
+    } as never;
+    const { resolvePluginToolsForMcp } = await import("./plugin-tools-serve.js");
+
+    const tools = resolvePluginToolsForMcp({ config, modelRef: "openai/gpt-5.6" });
+
+    const loadPolicy = requireToolPolicyParams(ensureStandalonePluginToolRegistryLoadedMock);
+    expect(loadPolicy.toolDenylist).toContain("provider_denied_tool");
     expect(tools.map((tool) => tool.name)).toEqual(["benign_plugin_tool"]);
   });
 

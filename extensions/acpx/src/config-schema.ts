@@ -49,6 +49,9 @@ export type AcpxPluginConfig = {
 export type ResolvedAcpxPluginConfig = {
   cwd: string;
   stateDir: string;
+  /** Effective Codex identity prepared from the isolated runtime config. */
+  codexModel?: string;
+  codexModelProvider?: string;
   probeAgent?: string;
   permissionMode: AcpxPermissionMode;
   nonInteractivePermissions: AcpxNonInteractivePermissionPolicy;

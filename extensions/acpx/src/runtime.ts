@@ -61,6 +61,8 @@ type OpenClawAcpxRuntimeOptions = AcpRuntimeOptions & {
   openclawLegacyBareSessionKeys?: ReadonlySet<string>;
   openclawWrapperRoot?: string;
   openclawGatewayInstanceId?: string;
+  openclawCodexModel?: string;
+  openclawCodexModelProvider?: string;
   openclawProcessLeaseStore?: AcpxProcessLeaseStore;
   pluginToolsMcpBridgeEnabled?: boolean;
   openclawToolsMcpBridgeEnabled?: boolean;
@@ -390,7 +392,7 @@ const CODEX_ACP_OPENCLAW_PREFIX = "openai/";
 // Documented OpenClaw provider prefixes the Claude Agent SDK does not understand.
 // Strip only these; a generic first-slash split would corrupt native Bedrock
 // inference-profile ids and ARNs the SDK accepts as-is.
-const CLAUDE_ACP_OPENCLAW_PREFIX = /^(?:anthropic|amazon-bedrock)\//i;
+const CLAUDE_ACP_OPENCLAW_PREFIX = /^(?<provider>anthropic|amazon-bedrock)\//i;
 const CODEX_ACP_THINKING_ALIASES = new Map<string, string | undefined>([
   ["off", undefined],
   ["minimal", "low"],
@@ -665,6 +667,17 @@ function normalizeClaudeAcpModelOverride(rawModel: string | undefined): string |
   return raw.slice(prefix[0].length).trim() || undefined;
 }
 
+function resolveClaudeAcpManagedModelRef(
+  rawModel: string | undefined,
+  normalizedModel: string | undefined,
+): string | undefined {
+  if (!normalizedModel) {
+    return undefined;
+  }
+  const provider = rawModel?.trim().match(CLAUDE_ACP_OPENCLAW_PREFIX)?.groups?.provider;
+  return provider ? `${provider.toLowerCase()}/${normalizedModel}` : undefined;
+}
+
 function withAcpxSessionOptions(input: OpenClawRuntimeEnsureInput): AcpxDelegateEnsureInput {
   const existingOptions = (input as { sessionOptions?: SessionAgentOptions }).sessionOptions;
   const model = input.model?.trim() || existingOptions?.model;
@@ -682,17 +695,27 @@ function isAcpModelCapabilityMissingError(error: unknown): boolean {
 
 // ACPX owns the distinction between missing model capability and an invalid model id.
 // Retry only the former so explicit model mistakes remain visible to the caller.
-async function ensureDelegateSessionWithModelFallback(
-  delegate: BaseAcpxRuntime,
-  input: OpenClawRuntimeEnsureInput,
-): Promise<AcpRuntimeHandle> {
+async function ensureDelegateSessionWithModelFallback(params: {
+  delegate: BaseAcpxRuntime;
+  input: OpenClawRuntimeEnsureInput;
+  resolveFallbackDelegate?: () => BaseAcpxRuntime;
+}): Promise<{ delegate: BaseAcpxRuntime; handle: AcpRuntimeHandle }> {
   try {
-    return await delegate.ensureSession(withAcpxSessionOptions(input));
+    return {
+      delegate: params.delegate,
+      handle: await params.delegate.ensureSession(withAcpxSessionOptions(params.input)),
+    };
   } catch (error) {
-    if (!input.model || !isAcpModelCapabilityMissingError(error)) {
+    if (!params.input.model || !isAcpModelCapabilityMissingError(error)) {
       throw error;
     }
-    return await delegate.ensureSession(withAcpxSessionOptions({ ...input, model: undefined }));
+    const delegate = params.resolveFallbackDelegate?.() ?? params.delegate;
+    return {
+      delegate,
+      handle: await delegate.ensureSession(
+        withAcpxSessionOptions({ ...params.input, model: undefined }),
+      ),
+    };
   }
 }
 
@@ -840,6 +863,8 @@ export class AcpxRuntime implements CompleteAcpRuntime {
   private readonly wrapperRoot: string | undefined;
   private readonly gatewayInstanceId: string | undefined;
   private readonly processLeaseStore: AcpxProcessLeaseStore | undefined;
+  private readonly codexModel: string | undefined;
+  private readonly codexModelProvider: string | undefined;
   private readonly launchLeaseScope = new AsyncLocalStorage<AcpxLaunchLeaseContext | undefined>();
   private readonly ensureSessionTails = new Map<string, Promise<void>>();
   private readonly processLeaseTransitionTails = new Map<string, Promise<void>>();
@@ -854,6 +879,8 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     this.wrapperRoot = options.openclawWrapperRoot;
     this.gatewayInstanceId = options.openclawGatewayInstanceId;
     this.processLeaseStore = options.openclawProcessLeaseStore;
+    this.codexModel = options.openclawCodexModel?.trim() || undefined;
+    this.codexModelProvider = options.openclawCodexModelProvider?.trim() || undefined;
     this.pluginToolsMcpBridgeEnabled = options.pluginToolsMcpBridgeEnabled === true;
     this.openclawToolsMcpBridgeEnabled = options.openclawToolsMcpBridgeEnabled === true;
     this.managedToolsMcpBridgeEnabled =
@@ -1587,16 +1614,18 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       classifiedCodexOverride && Object.keys(classifiedCodexOverride).length > 0
         ? classifiedCodexOverride
         : undefined;
-    // The managed MCP child must receive only identity the adapter will actually use.
-    // An omitted model retains a cached session's identity; new Codex sessions own OpenAI.
+    // The managed MCP child receives only adapter-owned identity. Cached sessions
+    // retain their original fact; capability fallback rebuilds without the fact.
     const managedToolsModelRef = isCodexAcp
-      ? codexModelOverride?.model
-        ? `openai/${codexModelOverride.model}`
+      ? codexModelOverride?.model && this.codexModelProvider
+        ? `${this.codexModelProvider}/${codexModelOverride.model}`
         : this.managedToolsSessionModelRefs.has(input.sessionKey)
           ? this.managedToolsSessionModelRefs.get(input.sessionKey)
-          : "openai"
-      : undefined;
-    const delegate = this.resolveDelegateForSession({
+          : this.codexModelProvider
+            ? `${this.codexModelProvider}${this.codexModel ? `/${this.codexModel}` : ""}`
+            : undefined
+      : resolveClaudeAcpManagedModelRef(input.model, claudeModelOverride);
+    let delegate = this.resolveDelegateForSession({
       command,
       ...logicalTarget,
       model: managedToolsModelRef,
@@ -1624,7 +1653,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       resumeSessionId: input.resumeSessionId,
     });
 
-    const handle = !codexModelOverride
+    const ensured = !codexModelOverride
       ? await this.runWithLaunchLease({
           sessionKey: ensureInput.sessionKey,
           command: stableLaunchCommand,
@@ -1633,22 +1662,39 @@ export class AcpxRuntime implements CompleteAcpRuntime {
             this.withCodexWrapperDiagnostics({
               command: stableLaunchCommand,
               fallbackCode: "ACP_SESSION_INIT_FAILED",
-              run: () => ensureDelegateSessionWithModelFallback(delegate, ensureInput),
+              run: () =>
+                ensureDelegateSessionWithModelFallback({
+                  delegate,
+                  input: ensureInput,
+                  ...(managedToolsModelRef
+                    ? {
+                        resolveFallbackDelegate: () => {
+                          this.releaseManagedToolsDelegateForSession(input.sessionKey);
+                          return this.resolveDelegateForSession({ command, ...logicalTarget });
+                        },
+                      }
+                    : {}),
+                }),
             }),
         })
-      : await this.runWithLaunchLease({
-          sessionKey: input.sessionKey,
-          command: stableLaunchCommand,
-          reusableCommand,
-          run: () =>
-            this.codexAcpModelOverrideScope.run(codexModelOverride, () =>
-              this.withCodexWrapperDiagnostics({
-                command: stableLaunchCommand,
-                fallbackCode: "ACP_SESSION_INIT_FAILED",
-                run: () => delegate.ensureSession(withAcpxSessionOptions(ensureInput)),
-              }),
-            ),
-        });
+      : {
+          delegate,
+          handle: await this.runWithLaunchLease({
+            sessionKey: input.sessionKey,
+            command: stableLaunchCommand,
+            reusableCommand,
+            run: () =>
+              this.codexAcpModelOverrideScope.run(codexModelOverride, () =>
+                this.withCodexWrapperDiagnostics({
+                  command: stableLaunchCommand,
+                  fallbackCode: "ACP_SESSION_INIT_FAILED",
+                  run: () => delegate.ensureSession(withAcpxSessionOptions(ensureInput)),
+                }),
+              ),
+          }),
+        };
+    delegate = ensured.delegate;
+    const handle = ensured.handle;
     const resolvedHandle = {
       ...handle,
       ...logicalTarget,

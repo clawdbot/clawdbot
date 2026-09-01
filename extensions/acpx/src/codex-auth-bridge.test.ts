@@ -18,11 +18,13 @@ const execFileAsync = promisify(execFile);
 const WRAPPER_STDERR_LOG_MAX_CHARS = 256 * 1024;
 let testWorkspace: TempWorkspace;
 const previousEnv = {
+  CODEX_CONFIG: process.env.CODEX_CONFIG,
   CODEX_HOME: process.env.CODEX_HOME,
   OPENCLAW_AGENT_DIR: process.env.OPENCLAW_AGENT_DIR,
 };
 
 beforeEach(async () => {
+  delete process.env.CODEX_CONFIG;
   testWorkspace = await tempWorkspace({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "openclaw-acpx-codex-auth-",
@@ -140,6 +142,7 @@ async function captureGeneratedCodexWrapperStderr(
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  restoreEnv("CODEX_CONFIG");
   restoreEnv("CODEX_HOME");
   restoreEnv("OPENCLAW_AGENT_DIR");
   await testWorkspace.cleanup();
@@ -598,6 +601,8 @@ describe("prepareAcpxCodexAuthConfig", () => {
     const isolatedConfig = await fs.readFile(generated.configPath, "utf8");
     expect(isolatedConfig).toContain('model = "gpt-5.5-1"');
     expect(isolatedConfig).toContain('model_provider = "azure_foundry"');
+    expect(resolved.codexModel).toBe("gpt-5.5-1");
+    expect(resolved.codexModelProvider).toBe("azure_foundry");
     expect(isolatedConfig).toContain('model_reasoning_effort = "high"');
     expect(isolatedConfig).toContain('sandbox_mode = "workspace-write"');
     expect(isolatedConfig).toContain("[model_providers.azure_foundry]");

@@ -697,6 +697,11 @@ describe("createAcpxRuntimeService", () => {
   it("registers the backend lazily and forwards sessions and turns when startup probe is disabled", async () => {
     process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE = "0";
     delete process.env.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE;
+    prepareAcpxCodexAuthConfigMock.mockImplementationOnce(async ({ pluginConfig }) => ({
+      ...(pluginConfig as object),
+      codexModel: "gpt-5.5-1",
+      codexModelProvider: "azure_foundry",
+    }));
     const workspaceDir = testWorkspace.dir;
     const ctx = createServiceContext(workspaceDir);
     const service = createAcpxRuntimeService(ctx);
@@ -739,6 +744,8 @@ describe("createAcpxRuntimeService", () => {
     expect(acpxRuntimeConstructorMock).toHaveBeenCalledWith(
       expect.objectContaining({
         elicitationModes: ["form", "url"],
+        openclawCodexModel: "gpt-5.5-1",
+        openclawCodexModelProvider: "azure_foundry",
         openclawLegacyBareSessionKeys: new Set(["global", "openclaw-owner-v1-existing"]),
       }),
     );

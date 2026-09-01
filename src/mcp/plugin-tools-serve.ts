@@ -14,6 +14,10 @@ import {
 } from "@openclaw/model-catalog-core/provider-id";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
 import { resolveManifestToolProfileNames } from "../agents/conversation-capability-profile.js";
+import {
+  hasModelSpecificProviderToolPolicy,
+  resolveProviderToolPolicy,
+} from "../agents/provider-tool-policy.js";
 import { resolveRequesterToolPolicies } from "../agents/requester-tool-policy.js";
 import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 import {
@@ -84,16 +88,59 @@ function resolvePluginToolPolicy(params: {
       ],
     );
     const globalPolicy = pickSandboxToolPolicy(params.config.tools);
-    const toolAllowlist = collectExplicitAllowlist([profilePolicy, globalPolicy]);
-    const toolDenylist = collectExplicitDenylist([profilePolicy, globalPolicy]);
+    const providerPolicy = resolveProviderToolPolicy({
+      byProvider: params.config.tools?.byProvider,
+      modelProvider: params.modelProvider,
+      modelId: params.modelId,
+    });
+    const providerProfile = providerPolicy?.profile;
+    const providerProfilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(providerProfile), [
+      ...resolveManifestToolProfileNames(params.pluginMetadataSnapshot, providerProfile),
+      ...(providerPolicy?.alsoAllow ?? []),
+    ]);
+    const globalProviderPolicy = pickSandboxToolPolicy(providerPolicy);
+    const providerPolicyConfigured = Object.keys(params.config.tools?.byProvider ?? {}).length > 0;
+    const providerIdentityKnown = isKnownModelProvider({
+      config: params.config,
+      provider: params.modelProvider,
+    });
+    const unknownProviderPolicy =
+      providerPolicyConfigured &&
+      (!providerIdentityKnown ||
+        (!params.modelId &&
+          hasModelSpecificProviderToolPolicy({
+            byProvider: params.config.tools?.byProvider,
+            modelProvider: params.modelProvider,
+          })))
+        ? { deny: ["*"] }
+        : undefined;
+    if (unknownProviderPolicy) {
+      logWarn(
+        "plugin tools disabled: provider-specific tool policy requires recognized ACP provider/model identity; start a fresh session with a configured provider and model",
+      );
+    }
+    const policies = [
+      profilePolicy,
+      providerProfilePolicy,
+      globalPolicy,
+      globalProviderPolicy,
+      unknownProviderPolicy,
+    ];
+    const toolAllowlist = collectExplicitAllowlist(policies);
+    const toolDenylist = collectExplicitDenylist(policies);
     return {
       ...(toolAllowlist.length > 0 ? { toolAllowlist } : {}),
       ...(toolDenylist.length > 0 ? { toolDenylist } : {}),
       steps: buildDefaultToolPolicyPipelineSteps({
         profilePolicy,
         profile: params.config.tools?.profile,
+        providerProfilePolicy,
+        providerProfile,
         globalPolicy,
-      }).map((step) => Object.assign({}, step, { suppressUnavailableCoreToolWarning: true })),
+        globalProviderPolicy,
+      })
+        .concat({ policy: unknownProviderPolicy, label: "unknown ACP provider" })
+        .map((step) => Object.assign({}, step, { suppressUnavailableCoreToolWarning: true })),
     };
   }
   const effective = resolveEffectiveToolPolicy({

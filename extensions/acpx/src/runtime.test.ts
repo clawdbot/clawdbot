@@ -74,6 +74,7 @@ function makeRuntime(
         resolve: (agentName: string) => (agentName === "openclaw" ? "openclaw acp" : agentName),
         list: () => ["codex", "openclaw"],
       },
+      openclawCodexModelProvider: "openai",
       permissionMode: "approve-reads",
       ...options,
     },
@@ -1353,6 +1354,77 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect((secondCall?.[0] as { model?: string } | undefined)?.model).toBeUndefined();
   });
 
+  it("rebuilds the managed MCP child without stale Claude identity on capability fallback", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const claudeCommand = "npx @agentclientprotocol/claude-agent-acp@0.70.0";
+    const { runtime } = makeRuntime(baseStore, {
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "claude" ? claudeCommand : agentName),
+        list: () => ["claude"],
+      },
+      pluginToolsMcpBridgeEnabled: true,
+      mcpServers: [
+        {
+          name: "openclaw-plugin-tools",
+          command: "node",
+          args: ["dist/mcp/plugin-tools-serve.js"],
+          env: [],
+        },
+      ],
+    });
+    const sessionKey = "agent:claude:acp:test";
+    type ManagedDelegate = {
+      ensureSession: AcpRuntime["ensureSession"];
+      options?: { mcpServers?: Array<{ args?: string[]; name: string }> };
+    };
+    const exposedRuntime = runtime as unknown as {
+      managedToolsSessionDelegates: Map<string, ManagedDelegate>;
+      resolveManagedToolsDelegateForSession(target: {
+        sessionKey: string;
+        model?: string;
+      }): ManagedDelegate;
+    };
+    const firstDelegate = exposedRuntime.resolveManagedToolsDelegateForSession({
+      sessionKey,
+      model: "anthropic/claude-sonnet-4-6",
+    });
+    const ensure = vi
+      .spyOn(
+        Object.getPrototypeOf(firstDelegate) as { ensureSession: AcpRuntime["ensureSession"] },
+        "ensureSession",
+      )
+      .mockRejectedValueOnce(
+        new RequestedModelUnsupportedError(
+          "Cannot apply --model: the ACP agent did not advertise model support",
+          "missing-capability",
+        ),
+      )
+      .mockResolvedValueOnce({
+        sessionKey,
+        backend: "acpx",
+        runtimeSessionName: "claude",
+      });
+
+    await runtime.ensureSession({
+      sessionKey,
+      agent: "claude",
+      mode: "persistent",
+      model: "anthropic/claude-sonnet-4-6",
+    });
+
+    expect(ensure).toHaveBeenCalledTimes(2);
+    const secondDelegate = exposedRuntime.managedToolsSessionDelegates.get(sessionKey);
+    expect(secondDelegate).toBeDefined();
+    expect(secondDelegate).not.toBe(firstDelegate);
+    expect(secondDelegate?.options?.mcpServers?.[0]?.args).toEqual([
+      "dist/mcp/plugin-tools-serve.js",
+    ]);
+    expect(ensure.mock.calls[1]?.[0]).not.toHaveProperty("sessionOptions");
+  });
+
   it("does not retry when ACPX rejects an explicitly unsupported model id", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),
@@ -1760,6 +1832,119 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       command: CODEX_ACP_COMMAND,
       model: "openai",
       sessionKey: "agent:codex:acp:test",
+    });
+  });
+
+  it.each([
+    { inputModel: undefined, expectedModel: "azure_foundry/gpt-5.5-1" },
+    { inputModel: "openai/gpt-5.6", expectedModel: "azure_foundry/gpt-5.6" },
+  ])(
+    "projects the configured Codex provider for managed plugin tools ($expectedModel)",
+    async ({ inputModel, expectedModel }) => {
+      const baseStore: TestSessionStore = {
+        load: vi.fn(async () => undefined),
+        save: vi.fn(async () => {}),
+      };
+      const { runtime, delegate } = makeRuntime(baseStore, {
+        agentRegistry: {
+          resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
+          list: () => ["codex"],
+        },
+        pluginToolsMcpBridgeEnabled: true,
+        mcpServers: [
+          {
+            name: "openclaw-plugin-tools",
+            command: "node",
+            args: ["dist/mcp/plugin-tools-serve.js"],
+            env: [],
+          },
+        ],
+        openclawCodexModelProvider: "azure_foundry",
+        openclawCodexModel: "gpt-5.5-1",
+      });
+      const resolveDelegateForSession = vi
+        .spyOn(
+          runtime as unknown as {
+            resolveDelegateForSession(params: {
+              command?: string;
+              model?: string;
+              sessionKey: string;
+            }): typeof delegate;
+          },
+          "resolveDelegateForSession",
+        )
+        .mockReturnValue(delegate);
+      vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+        sessionKey: "agent:codex:acp:test",
+        backend: "acpx",
+        runtimeSessionName: "codex",
+      });
+
+      await runtime.ensureSession({
+        sessionKey: "agent:codex:acp:test",
+        agent: "codex",
+        mode: "persistent",
+        ...(inputModel ? { model: inputModel } : {}),
+      });
+
+      expect(resolveDelegateForSession).toHaveBeenCalledWith({
+        command: CODEX_ACP_COMMAND,
+        model: expectedModel,
+        sessionKey: "agent:codex:acp:test",
+      });
+    },
+  );
+
+  it("projects explicit Claude provider identity into managed plugin tools", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const claudeCommand = "npx @agentclientprotocol/claude-agent-acp@0.70.0";
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "claude" ? claudeCommand : agentName),
+        list: () => ["claude"],
+      },
+      pluginToolsMcpBridgeEnabled: true,
+      mcpServers: [
+        {
+          name: "openclaw-plugin-tools",
+          command: "node",
+          args: ["dist/mcp/plugin-tools-serve.js"],
+          env: [],
+        },
+      ],
+    });
+    const resolveDelegateForSession = vi
+      .spyOn(
+        runtime as unknown as {
+          resolveDelegateForSession(params: {
+            command?: string;
+            model?: string;
+            sessionKey: string;
+          }): typeof delegate;
+        },
+        "resolveDelegateForSession",
+      )
+      .mockReturnValue(delegate);
+    vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:claude:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "claude",
+    });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:claude:acp:test",
+      agent: "claude",
+      mode: "persistent",
+      model: "anthropic/claude-sonnet-4-6",
+    });
+
+    expect(resolveDelegateForSession).toHaveBeenCalledWith({
+      command: claudeCommand,
+      model: "anthropic/claude-sonnet-4-6",
+      sessionKey: "agent:claude:acp:test",
     });
   });
 
