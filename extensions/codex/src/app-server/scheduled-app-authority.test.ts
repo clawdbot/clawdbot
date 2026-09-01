@@ -345,8 +345,6 @@ describe("scheduled Codex app authority", () => {
         auth: {
           kind: "configured-app-server",
           connectionFingerprint: "configured-connection",
-          managedRequirementsFingerprint:
-            buildCodexManagedRequirementsFingerprint(managedRequirements),
         },
       }),
     ).resolves.toEqual(
@@ -354,6 +352,8 @@ describe("scheduled Codex app authority", () => {
         auth: {
           kind: "configured-app-server",
           connectionFingerprint: "configured-connection",
+          managedRequirementsFingerprint:
+            buildCodexManagedRequirementsFingerprint(managedRequirements),
         },
         apps: [
           {
