@@ -1,5 +1,6 @@
 #!/usr/bin/env -S pnpm tsx
 // Macos Smoke script supports OpenClaw repository automation.
+import { readFileSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -46,6 +47,7 @@ import { MacosDiscordSmoke } from "./macos-discord.ts";
 import { resolveMacosVmName, waitForVmStatus } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
 import {
+  installSmokeRuntimeCompanions,
   npmRegistryEnv,
   packAndServeSmokeArtifact,
   parseSmokeCliArgs,
@@ -420,6 +422,15 @@ class MacosSmoke {
     this.status.freshVersion = await this.extractLastVersion("fresh.install-main");
     await this.phase("fresh.verify-main-version", 60, () => this.verifyTargetVersion());
     await this.phase("fresh.verify-bundle-permissions", 180, () => this.verifyBundlePermissions());
+    await this.phase("fresh.install-companions", 600, () =>
+      installSmokeRuntimeCompanions({
+        provider: this.options.provider,
+        readCli: (args) => this.guestExec([guestOpenClaw, ...args]),
+        installCli: (args) => {
+          this.guestExec([guestOpenClaw, ...args]);
+        },
+      }),
+    );
     await this.phase("fresh.onboard-ref", 420, () => this.runRefOnboard());
     await this.phase("fresh.gateway-start", 180, () => this.startManualGatewayIfNeeded());
     await this.phase("fresh.gateway-status", 180, () => this.verifyGateway());
@@ -842,10 +853,15 @@ fi`);
   }
 
   private ensureGuestPnpm(): void {
+    const { packageManager } = JSON.parse(
+      readFileSync(new URL("../../../package.json", import.meta.url), "utf8"),
+    ) as { packageManager: string };
+    const spec = packageManager.replace(/\+.*$/u, "");
+    const version = spec.slice("pnpm@".length);
     this.guestSh(String.raw`set -eu
 bootstrap_root=/tmp/openclaw-smoke-pnpm-bootstrap
 bootstrap_bin="$bootstrap_root/node_modules/.bin"
-if [ -x "$bootstrap_bin/pnpm" ]; then
+if [ -x "$bootstrap_bin/pnpm" ] && [ "$("$bootstrap_bin/pnpm" --version)" = ${shellQuote(version)} ]; then
   echo "bootstrap-pnpm: reuse"
   "$bootstrap_bin/pnpm" --version
   exit 0
@@ -853,8 +869,9 @@ fi
 echo "bootstrap-pnpm: install"
 rm -rf "$bootstrap_root"
 mkdir -p "$bootstrap_root"
-npm install --prefix "$bootstrap_root" --no-save pnpm@11
-"$bootstrap_bin/pnpm" --version`);
+node -e 'require("node:fs").writeFileSync(process.argv[1], JSON.stringify({private: true, allowScripts: {[process.argv[2]]: true}}))' "$bootstrap_root/package.json" ${shellQuote(spec)}
+npm install --prefix "$bootstrap_root" --no-save ${shellQuote(spec)}
+test "$("$bootstrap_bin/pnpm" --version)" = ${shellQuote(version)}`);
   }
 
   private async runDevChannelUpdate(): Promise<void> {

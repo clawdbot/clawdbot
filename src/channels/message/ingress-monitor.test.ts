@@ -9,16 +9,14 @@ import {
   runWithGatewayIndependentRootWorkContinuation,
 } from "../../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { sleep } from "../../utils/sleep.js";
 import { createChannelIngressError } from "./ingress-errors.js";
 import {
   CHANNEL_INGRESS_RETENTION_DEFAULTS,
   createChannelIngressMonitor,
-  type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
+  type CreateChannelIngressMonitorOptions,
 } from "./ingress-monitor.js";
 import { createChannelIngressQueue, type ChannelIngressQueue } from "./ingress-queue.js";
-import type { IngressRetryPolicyConfig } from "./ingress-retry-policy.js";
 import {
   ChannelIngressUnavailableError,
   isChannelIngressUnavailableError,
@@ -26,6 +24,7 @@ import {
 
 type RawEvent = { id: string; lane: string; text: string };
 type StoredEvent = { version: 1; rawEvent: string };
+type MonitorOptions = CreateChannelIngressMonitorOptions<RawEvent, string, StoredEvent, unknown>;
 
 class PermanentIngressError extends Error {}
 
@@ -43,35 +42,12 @@ async function withQueue<T>(
 }
 
 function createMonitor(
-  queue: ChannelIngressQueue<StoredEvent> | (() => ChannelIngressQueue<StoredEvent>),
-  deliver: (
-    raw: RawEvent,
-    lifecycle: ChannelIngressMonitorLifecycle,
-  ) =>
-    | Promise<ChannelIngressMonitorDeliveryResult | void>
-    | ChannelIngressMonitorDeliveryResult
-    | void,
+  queue: MonitorOptions["queue"],
+  deliver: MonitorOptions["deliver"],
   activityOrMonitorOptions?:
-    | ((active: boolean) => void)
-    | {
-        admissionMode?: "durable-after-stop";
-        deferredClaims?: "wait-on-stop" | "settle-on-abort" | "manual";
-        inspect?: (raw: RawEvent) => { eventId: string; laneKey: string } | null;
-        retention?:
-          | "standard"
-          | Partial<{
-              pruneIntervalMs: number;
-              completedTtlMs: number;
-              completedMaxEntries: number;
-              failedTtlMs: number;
-              failedMaxEntries: number;
-            }>;
-        now?: () => number;
-        waitForDeliveryIdleBeforeRepump?: boolean;
-        waitForDeliveryIdleOnStop?: boolean;
-        retryPolicy?: IngressRetryPolicyConfig;
-        runPumpTask?: (work: () => Promise<void>) => Promise<void>;
-      },
+    | MonitorOptions["onActivityChange"]
+    | (Partial<Omit<MonitorOptions, "queue" | "deliver" | "payload" | "drain">> &
+        Pick<NonNullable<MonitorOptions["drain"]>, "retryPolicy" | "deferredLaneOccupancy">),
   onError?: (error: unknown) => void,
   abortSignal?: AbortSignal,
   pollIntervalMs = 10,
@@ -81,7 +57,7 @@ function createMonitor(
     typeof activityOrMonitorOptions === "function" ? activityOrMonitorOptions : undefined;
   const monitorOptions =
     typeof activityOrMonitorOptions === "object" ? activityOrMonitorOptions : {};
-  const { inspect, retryPolicy, ...baseMonitorOptions } = monitorOptions;
+  const { inspect, retryPolicy, deferredLaneOccupancy, ...baseMonitorOptions } = monitorOptions;
   return createChannelIngressMonitor<RawEvent, string, StoredEvent>({
     queue,
     inspect: inspect ?? ((raw) => ({ eventId: raw.id, laneKey: `lane:${raw.lane}` })),
@@ -99,6 +75,7 @@ function createMonitor(
     drain: {
       adoptionStallTimeoutMs: 5_000,
       retryPolicy: retryPolicy ?? { baseMs: retryBaseMs, maxMs: retryBaseMs },
+      ...(deferredLaneOccupancy ? { deferredLaneOccupancy } : {}),
       resolveNonRetryableFailure: (error) =>
         error instanceof PermanentIngressError
           ? { reason: "invalid-event", message: error.message }
@@ -189,11 +166,20 @@ describe("channel ingress monitor", () => {
         retention: { pruneIntervalMs: 0, completedMaxEntries: 10 },
       });
 
-      monitor.start();
-      await sleep(65);
-      await monitor.stop();
+      vi.useFakeTimers();
+      try {
+        monitor.start();
+        await vi.advanceTimersByTimeAsync(65);
+        await monitor.stop();
 
-      expect(prune).not.toHaveBeenCalled();
+        expect(prune).not.toHaveBeenCalled();
+      } finally {
+        try {
+          await monitor.stop();
+        } finally {
+          vi.useRealTimers();
+        }
+      }
     });
   });
 
@@ -462,6 +448,56 @@ describe("channel ingress monitor", () => {
         expect(delivered).toEqual(["event-first", "event-retry", "event-retry"]),
       );
       await monitor.waitForIdle();
+
+      await monitor.stop();
+    });
+  });
+
+  // Telegram and Slack release the ingress lane while a turn is deferred, so a
+  // newer same-lane event can be claimed and fail while the older one is still
+  // held. Cancelling that deferred owner reopens its row without consuming retry
+  // budget, leaving an eligible lane head behind its own newer sibling's backoff.
+  it("dispatches a reopened lane head while its newer sibling waits out backoff", async () => {
+    await withQueue(async (queue) => {
+      const delivered: string[] = [];
+      let cancelHead: (() => Promise<void>) | undefined;
+      const monitor = createMonitor(
+        queue,
+        async (raw, lifecycle) => {
+          delivered.push(raw.id);
+          if (raw.id !== "event-head") {
+            return { kind: "failed-retryable", error: new Error("tail delivery failed") };
+          }
+          if (cancelHead) {
+            return { kind: "completed" };
+          }
+          cancelHead = async () => await lifecycle.onCancelled?.();
+          return { kind: "deferred" };
+        },
+        {
+          deferredLaneOccupancy: "release",
+          retryPolicy: { baseMs: 60_000, maxMs: 60_000 },
+        },
+      );
+      monitor.start();
+      await monitor.admit({ id: "event-head", lane: "a", text: "head" });
+      await vi.waitFor(() => expect(delivered).toEqual(["event-head"]));
+      await monitor.admit({ id: "event-tail", lane: "a", text: "tail" });
+      await vi.waitFor(() => expect(delivered).toEqual(["event-head", "event-tail"]));
+      // The failed tail is pending inside its backoff; the head is still claimed.
+      await vi.waitFor(async () =>
+        expect(
+          (await queue.listPending({ limit: "all", orderBy: "received" })).map((event) => event.id),
+        ).toEqual(["event-tail"]),
+      );
+
+      expect(cancelHead).toBeDefined();
+      await cancelHead?.();
+
+      await vi.waitFor(() => expect(delivered).toEqual(["event-head", "event-tail", "event-head"]));
+      await monitor.waitForIdle();
+      // The tail still never starts early: it stays parked for its own backoff.
+      expect(delivered).toEqual(["event-head", "event-tail", "event-head"]);
 
       await monitor.stop();
     });
@@ -1005,35 +1041,50 @@ describe("channel ingress monitor", () => {
     const onError = vi.fn();
     const monitor = createMonitor(queueFactory, vi.fn(), undefined, onError, undefined, 1);
 
-    // The typed rethrow is the gateway's only way to tell dead inbound apart from
-    // an ordinary channel crash; the denial stays reachable as the cause.
-    const startError = (() => {
-      try {
-        monitor.start();
-        return expect.unreachable("start must fail while the durable queue is denied");
-      } catch (error) {
-        return error;
-      }
-    })();
-    expect(startError).toBeInstanceOf(ChannelIngressUnavailableError);
-    expect((startError as Error).cause).toBe(denial);
-    expect(isChannelIngressUnavailableError(startError)).toBe(true);
-    // A channel plugin is free to wrap the start failure in its own error.
-    expect(
-      isChannelIngressUnavailableError(new Error("slack start failed", { cause: startError })),
-    ).toBe(true);
-    expect(isChannelIngressUnavailableError(denial)).toBe(false);
-    expect(monitor.isRunning()).toBe(false);
-    // An armed poll timer would have retried the denied factory many times over this window.
-    await sleep(25);
-    expect(queueFactory).toHaveBeenCalledOnce();
-    expect(onError).not.toHaveBeenCalled();
+    vi.useFakeTimers();
+    try {
+      // The typed rethrow is the gateway's only way to tell dead inbound apart from
+      // an ordinary channel crash; the denial stays reachable as the cause.
+      const startError = (() => {
+        try {
+          monitor.start();
+          return expect.unreachable("start must fail while the durable queue is denied");
+        } catch (error) {
+          return error;
+        }
+      })();
+      expect(startError).toBeInstanceOf(ChannelIngressUnavailableError);
+      expect((startError as Error).cause).toBe(denial);
+      expect(isChannelIngressUnavailableError(startError)).toBe(true);
+      // A channel plugin is free to wrap the start failure in its own error.
+      expect(
+        isChannelIngressUnavailableError(new Error("slack start failed", { cause: startError })),
+      ).toBe(true);
+      expect(isChannelIngressUnavailableError(denial)).toBe(false);
+      expect(monitor.isRunning()).toBe(false);
+      // An armed poll timer would have retried the denied factory many times over this window.
+      await vi.advanceTimersByTimeAsync(25);
+      expect(queueFactory).toHaveBeenCalledOnce();
+      expect(onError).not.toHaveBeenCalled();
 
-    // Accepted transport input still fails closed rather than being silently dropped.
-    await expect(monitor.admit({ id: "event-denied", lane: "a", text: "hello" })).rejects.toBe(
-      denial,
-    );
-    await monitor.stop();
+      // Accepted transport input still fails closed rather than being silently dropped.
+      const admissionAssertion = expect(
+        monitor.admit({ id: "event-denied", lane: "a", text: "hello" }),
+      ).rejects.toBe(denial);
+      const timerRun = vi.runAllTimersAsync();
+      // A failed assertion can settle first; join the clock driver before restoring timers.
+      try {
+        await Promise.all([admissionAssertion, timerRun]);
+      } finally {
+        await timerRun;
+      }
+    } finally {
+      try {
+        await monitor.stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    }
   });
 
   it("can defer delivery-idle waiting to a channel-owned shutdown grace", async () => {

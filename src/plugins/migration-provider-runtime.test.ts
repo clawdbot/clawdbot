@@ -1,6 +1,7 @@
 // Covers migration provider runtime hooks supplied by plugins.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
@@ -18,6 +19,12 @@ type MockPluginIndex = {
     enabledByDefault?: boolean;
   }>;
   diagnostics: unknown[];
+};
+
+type MockPluginSnapshotLoadParams = {
+  index?: MockPluginIndex;
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
 };
 
 function createEmptyMockManifestRegistry(): MockManifestRegistry {
@@ -38,7 +45,7 @@ const mocks = vi.hoisted(() => ({
   loadPluginRegistrySnapshot: vi.fn<(_params?: unknown) => MockPluginIndex>(() =>
     createMockPluginIndex([]),
   ),
-  loadPluginRegistrySnapshotWithMetadata: vi.fn((params?: { index?: MockPluginIndex }) => ({
+  loadPluginRegistrySnapshotWithMetadata: vi.fn((params?: MockPluginSnapshotLoadParams) => ({
     source: params?.index ? "provided" : "derived",
     snapshot: params?.index ?? createMockPluginIndex([]),
     diagnostics: [],
@@ -67,6 +74,22 @@ vi.mock("./active-runtime-registry.js", () => ({
 vi.mock("./plugin-registry-snapshot.js", () => ({
   loadPluginRegistrySnapshot: mocks.loadPluginRegistrySnapshot,
   loadPluginRegistrySnapshotWithMetadata: mocks.loadPluginRegistrySnapshotWithMetadata,
+}));
+
+vi.mock("./plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: (params: { config?: OpenClawConfig; env?: NodeJS.ProcessEnv }) => {
+    const loaded = mocks.loadPluginRegistrySnapshotWithMetadata(params);
+    const manifestRegistry = mocks.loadPluginManifestRegistry({
+      index: loaded.snapshot,
+      config: params.config,
+      env: params.env,
+      includeDisabled: true,
+    });
+    return {
+      index: loaded.snapshot,
+      plugins: manifestRegistry.plugins,
+    };
+  },
 }));
 
 vi.mock("./manifest-registry-installed.js", () => ({
@@ -105,6 +128,7 @@ function requireMockCallArg(
 
 describe("migration provider runtime", () => {
   beforeEach(async () => {
+    clearPluginMetadataLifecycleCaches();
     vi.resetModules();
     vi.clearAllMocks();
     mocks.resolveRuntimePluginRegistry.mockReturnValue(createEmptyPluginRegistry());
@@ -113,7 +137,7 @@ describe("migration provider runtime", () => {
     mocks.loadPluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
     mocks.listBundledPluginMetadata.mockReturnValue([]);
     mocks.loadPluginRegistrySnapshotWithMetadata.mockImplementation(
-      (params?: { index?: MockPluginIndex }) => ({
+      (params?: MockPluginSnapshotLoadParams) => ({
         source: params?.index ? "provided" : "derived",
         snapshot: params?.index ?? mocks.loadPluginRegistrySnapshot(),
         diagnostics: [],
@@ -188,7 +212,12 @@ describe("migration provider runtime", () => {
 
   it("loads configured external migration-provider plugins from manifest contracts", async () => {
     const cfg = {
-      plugins: { entries: { "external-migration": { enabled: true } } },
+      plugins: {
+        entries: {
+          "external-migration": { enabled: true },
+          "disabled-external-migration": { enabled: false },
+        },
+      },
     } as OpenClawConfig;
     const provider = createMigrationProvider("external-import");
     const active = createEmptyPluginRegistry();
@@ -307,44 +336,60 @@ describe("migration provider runtime", () => {
     });
   });
 
-  it("does not reuse a standalone handle after the migration owner or config changes", () => {
-    const cfgA = { plugins: { allow: ["migration-a"] } } as OpenClawConfig;
-    const cfgB = { plugins: { allow: ["migration-b"] } } as OpenClawConfig;
-    const provider = createMigrationProvider("shared-import");
-    const loadedA = createEmptyPluginRegistry();
-    loadedA.migrationProviders.push({
-      pluginId: "migration-a",
-      pluginName: "Migration A",
-      source: "test",
-      provider,
-    } as never);
-    mocks.loadPluginRegistryHandle.mockReturnValue(loadedA);
-    mocks.listBundledPluginMetadata.mockReturnValue([
-      {
-        manifest: {
-          id: "migration-a",
-          contracts: { migrationProviders: ["shared-import"] },
+  it.each(["owner", "retired"])(
+    "does not reuse a standalone handle after %s changes",
+    async (change) => {
+      mocks.resolveRuntimePluginRegistry.mockReturnValue(undefined);
+      const cfgA = { plugins: { allow: ["migration-a"] } } as OpenClawConfig;
+      const cfgB = { plugins: { allow: ["migration-b"] } } as OpenClawConfig;
+      const provider = createMigrationProvider("shared-import");
+      const loadedA = createEmptyPluginRegistry();
+      loadedA.migrationProviders.push({
+        pluginId: "migration-a",
+        pluginName: "Migration A",
+        source: "test",
+        provider,
+      } as never);
+      mocks.loadPluginRegistryHandle.mockReturnValue(loadedA);
+      mocks.listBundledPluginMetadata.mockReturnValue([
+        {
+          manifest: {
+            id: "migration-a",
+            contracts: { migrationProviders: ["shared-import"] },
+          },
         },
-      },
-    ] as never);
+      ] as never);
 
-    ensureStandaloneMigrationProviderRegistryLoaded({
-      cfg: cfgA,
-      providerId: "shared-import",
-    });
-    mocks.listBundledPluginMetadata.mockReturnValue([
-      {
-        manifest: {
-          id: "migration-b",
-          contracts: { migrationProviders: ["shared-import"] },
+      ensureStandaloneMigrationProviderRegistryLoaded({
+        cfg: cfgA,
+        providerId: "shared-import",
+      });
+      expect(
+        resolvePluginMigrationProvider({ providerId: "shared-import", cfg: cfgA }),
+      ).toBeDefined();
+      if (change === "retired") {
+        const { markPluginRegistryRetired } = await import("./registry-lifecycle.js");
+        markPluginRegistryRetired(loadedA);
+        expect(
+          resolvePluginMigrationProvider({ providerId: "shared-import", cfg: cfgA }),
+        ).toBeUndefined();
+        expect(resolvePluginMigrationProviders({ cfg: cfgA })).toEqual([]);
+        return;
+      }
+      mocks.listBundledPluginMetadata.mockReturnValue([
+        {
+          manifest: {
+            id: "migration-b",
+            contracts: { migrationProviders: ["shared-import"] },
+          },
         },
-      },
-    ] as never);
+      ] as never);
 
-    expect(
-      resolvePluginMigrationProvider({ providerId: "shared-import", cfg: cfgB }),
-    ).toBeUndefined();
-  });
+      expect(
+        resolvePluginMigrationProvider({ providerId: "shared-import", cfg: cfgB }),
+      ).toBeUndefined();
+    },
+  );
 
   it("lists configured external migration providers alongside active providers", () => {
     const activeProvider = createMigrationProvider("active-import");

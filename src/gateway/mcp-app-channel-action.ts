@@ -1,4 +1,4 @@
-import { peekSessionMcpRuntime } from "../agents/agent-bundle-mcp-runtime.js";
+import { peekSessionMcpRuntime } from "../agents/agent-bundle-mcp-manager-api.js";
 import type { McpAppChannelView } from "../agents/mcp-ui-resource.js";
 import { getMcpAppViewLease } from "../agents/mcp-ui-resource.js";
 import type { MessagePresentation } from "../interactive/payload.js";

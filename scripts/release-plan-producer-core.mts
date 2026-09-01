@@ -7,6 +7,7 @@ import {
   collectPublishablePluginPackagesFromCandidates,
   type PluginPackageJson,
 } from "./lib/plugin-publication-collector.ts";
+import { pnpmLockfileDocuments } from "./lib/pnpm-lockfile-documents.mjs";
 import { parseReleaseVersion } from "./lib/release-version.mjs";
 import {
   canonicalReleasePlanJson,
@@ -151,7 +152,7 @@ function findLockfileMapping(
 }
 
 function verifyYamlLockfile(lockfileText: string) {
-  const lines = lockfileText.split("\n");
+  const lines = pnpmLockfileDocuments(lockfileText).dependencies.split("\n");
   const body = (range: LineRange) => lines.slice(range.start + 1, range.end);
   if (lines.filter((line) => line === "lockfileVersion: '9.0'").length !== 1) {
     throw new Error("pnpm lockfile must use lockfileVersion 9.0");
@@ -218,26 +219,38 @@ function withCandidateSnapshot<T>(
 ): T {
   const snapshotRoot = mkdtempSync(join(tmpdir(), "openclaw-release-candidate-"));
   try {
-    const tree = execFileSync(
-      "git",
-      ["ls-tree", "-r", "-z", candidateSha, "--", "package.json", "extensions", "packages"],
-      { cwd: repoRoot },
-    ).toString("utf8");
+    // Enumerate package directories, then metadata only. Recursive runtime listings
+    // grow with unrelated source files and can overflow the child-process buffer.
+    const metadataPaths = ["package.json"];
+    for (const directory of git(repoRoot, [
+      "ls-tree",
+      "-d",
+      "-z",
+      "--name-only",
+      candidateSha,
+      "--",
+      "extensions/",
+      "packages/",
+    ])
+      .split("\0")
+      .filter(Boolean)) {
+      metadataPaths.push(`${directory}/package.json`);
+      if (directory.startsWith("extensions/")) {
+        metadataPaths.push(`${directory}/README.md`);
+      }
+    }
+    const tree = execFileSync("git", ["ls-tree", "-z", candidateSha, "--", ...metadataPaths], {
+      cwd: repoRoot,
+    }).toString("utf8");
     const inventoryPaths: string[] = [];
     for (const entry of tree.split("\0").filter(Boolean)) {
       const [metadata, path] = entry.split("\t");
-      if (
-        !path ||
-        (path !== "package.json" &&
-          !/^extensions\/[^/]+\/(?:package\.json|README\.md)$/u.test(path) &&
-          !/^packages\/[^/]+\/package\.json$/u.test(path))
-      ) {
-        continue;
-      }
       if (metadata?.startsWith("120000 ")) {
         throw new Error("candidate package inventory must not contain symbolic links");
       }
-      inventoryPaths.push(path);
+      if (metadata?.startsWith("100") && path) {
+        inventoryPaths.push(path);
+      }
     }
     if (!inventoryPaths.includes("package.json")) {
       throw new Error("candidate package.json is missing");

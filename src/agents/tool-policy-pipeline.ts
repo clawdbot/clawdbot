@@ -4,10 +4,10 @@
  * expanded only after unknown core/plugin entries are classified.
  */
 import { isFrozenClawToolAllowPolicy } from "../claws/tool-policy-runtime.js";
-import { filterToolsByPolicy } from "./agent-tools.policy.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isKnownCoreToolId } from "./tool-catalog.js";
 import { auditToolPolicyFilter } from "./tool-policy-audit.js";
+import { filterToolsByPolicy } from "./tool-policy-match.js";
 import {
   analyzeAllowlistByToolType,
   buildPluginToolGroups,

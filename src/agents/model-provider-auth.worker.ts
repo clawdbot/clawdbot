@@ -1,40 +1,13 @@
 /**
  * Worker entrypoint for warming provider auth state off the main thread.
  */
-import { parentPort, workerData } from "node:worker_threads";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { replaceRuntimeAuthProfileStoreSnapshots, type AuthProfileStore } from "./auth-profiles.js";
-import type { RuntimeProviderAuthLookup } from "./model-auth.js";
-import { buildCurrentProviderAuthStateSnapshot } from "./model-provider-auth.js";
-
-/**
- * Worker entrypoint for warming provider auth state without blocking the foreground
- * model-selection path.
- */
-type ProviderAuthWarmRuntimeAuthStore = {
-  agentDir?: string;
-  store: AuthProfileStore;
-};
-
-type ProviderAuthWarmWorkerInput = {
-  cfg: OpenClawConfig;
-  runtimeAuthStores?: ProviderAuthWarmRuntimeAuthStore[];
-  runtimeAuthLookups?: Array<{
-    agentId: string;
-    lookup: RuntimeProviderAuthLookup;
-  }>;
-  omitFalseProviderAuth?: boolean;
-};
-
-type ProviderAuthWarmWorkerResult =
-  | {
-      status: "ok";
-      snapshot: Awaited<ReturnType<typeof buildCurrentProviderAuthStateSnapshot>>;
-    }
-  | {
-      status: "failed";
-      error: string;
-    };
+import { serveWorkerTasks } from "../infra/worker-task-pool.js";
+import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles.js";
+import {
+  buildCurrentProviderAuthStateSnapshot,
+  type ProviderAuthWarmWorkerInput,
+  type ProviderAuthWarmWorkerResult,
+} from "./model-provider-auth.js";
 
 function isWorkerInput(value: unknown): value is ProviderAuthWarmWorkerInput {
   if (!value || typeof value !== "object") {
@@ -84,8 +57,4 @@ export async function runProviderAuthWarmWorkerInput(
   }
 }
 
-if (parentPort) {
-  const sendToParent: (message: ProviderAuthWarmWorkerResult) => void =
-    parentPort.postMessage.bind(parentPort);
-  sendToParent(await runProviderAuthWarmWorkerInput(workerData));
-}
+serveWorkerTasks(runProviderAuthWarmWorkerInput);

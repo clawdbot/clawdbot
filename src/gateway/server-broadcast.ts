@@ -43,6 +43,7 @@ import { logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   agent: [READ_SCOPE],
   chat: [READ_SCOPE],
+  "chat.metadata.changed": [READ_SCOPE],
   "board.changed": [READ_SCOPE],
   "board.command": [READ_SCOPE],
   "progressCard.changed": [READ_SCOPE],
@@ -60,7 +61,8 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "plugin.approval.resolved": [APPROVALS_SCOPE],
   "openclaw.approval.requested": [APPROVALS_SCOPE],
   "openclaw.approval.resolved": [APPROVALS_SCOPE],
-  presence: [],
+  // The frame cadence itself exposes person activity; match system-presence access.
+  presence: [READ_SCOPE],
   shutdown: [],
   tick: [],
   "talk.event": [READ_SCOPE],
@@ -222,6 +224,7 @@ export function createGatewayBroadcaster(params: {
     event?: string,
     payload?: unknown,
   ) => boolean;
+  onBroadcast?: (event: string, payload: unknown, opts?: GatewayBroadcastOpts) => void;
 }) {
   const clientSeq = new WeakMap<GatewayWsClient, number>();
   const reportedSlowPayloadClients = new WeakSet<GatewayWsClient>();
@@ -416,8 +419,10 @@ export function createGatewayBroadcaster(params: {
     }
   };
 
-  const broadcast: GatewayBroadcastFn = (event, payload, opts) =>
+  const broadcast: GatewayBroadcastFn = (event, payload, opts) => {
+    params.onBroadcast?.(event, payload, opts);
     broadcastInternal(event, payload, opts);
+  };
 
   const broadcastToConnIds: GatewayBroadcastToConnIdsFn = (event, payload, connIds, opts) => {
     broadcastInternal(event, payload, opts, connIds);

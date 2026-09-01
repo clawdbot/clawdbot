@@ -1,3 +1,4 @@
+import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
@@ -13,7 +14,6 @@ import {
   type PluginCapabilityConsentHandler,
 } from "./capability-consent.js";
 import { buildClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
-import type { ClawHubRiskAcknowledgementRequest } from "./clawhub.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
@@ -49,7 +49,6 @@ import {
 import { preparePluginUpdateCapabilityConsent } from "./update-capability-consent.js";
 import {
   createTrackedNpmUpdateInstaller,
-  resolveClawHubRiskAcknowledgementOptions,
   resolveRecordedClawHubPackage,
   runPluginUpdateWithClawHubLease,
 } from "./update-claw-lifecycle.js";
@@ -106,9 +105,8 @@ export async function updateNpmInstalledPlugins(params: {
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   specOverrides?: Record<string, string>;
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
-  acknowledgeClawHubRisk?: boolean;
-  onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  beforePersistentEffect?: () => void | Promise<void>;
   packagePluginIds?: Readonly<Record<string, readonly string[]>>;
 }): Promise<PluginUpdateSummary> {
   const logger = params.logger ?? {};
@@ -127,7 +125,6 @@ export async function updateNpmInstalledPlugins(params: {
   const installNpmSpecForUpdate = createTrackedNpmUpdateInstaller(() => {
     ranNpmInstaller = true;
   });
-  const clawHubRiskAcknowledgementOptions = resolveClawHubRiskAcknowledgementOptions(params);
   const recordSkippedOutcome = (pluginId: string, message: string) => {
     outcomes.push({ pluginId, status: "skipped", message });
   };
@@ -436,7 +433,6 @@ export async function updateNpmInstalledPlugins(params: {
             pluginId,
             record,
             currentVersion,
-            effectiveSpec,
             recordSpec,
             resolution: metadataResult.metadata,
             updateChannel,
@@ -479,6 +475,7 @@ export async function updateNpmInstalledPlugins(params: {
       packagePluginIds: params.packagePluginIds?.[pluginId],
       expectedIntegrity,
       onCapabilityConsent: consentCallbacks.onCapabilityConsent,
+      beforePersistentEffect: params.beforePersistentEffect,
     });
     const runAttempt = () =>
       runPluginUpdateAttempt(
@@ -503,7 +500,6 @@ export async function updateNpmInstalledPlugins(params: {
           installNpmSpecForUpdate,
           logger,
           onIntegrityDrift: params.onIntegrityDrift,
-          clawHubRiskAcknowledgementOptions,
         }),
       );
     const attempt = await runPluginUpdateWithClawHubLease({
@@ -516,7 +512,12 @@ export async function updateNpmInstalledPlugins(params: {
     if (attempt.kind === "exception") {
       if (attempt.error instanceof ManagedPluginLifecycleError && attempt.error.capabilityConsent) {
         // Staging was rolled back; pending consent must not disable the previous installation.
-        outcomes.push({ pluginId, status: "error", message: attempt.error.message });
+        outcomes.push({
+          pluginId,
+          status: "error",
+          code: PLUGIN_CAPABILITY_CONSENT_REQUIRED,
+          message: attempt.error.message,
+        });
         continue;
       }
       recordFailure(pluginId, attempt.message);

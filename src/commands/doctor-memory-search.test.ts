@@ -29,6 +29,54 @@ const repairDreamingArtifacts = vi.hoisted(() => vi.fn());
 const repairShortTermPromotionArtifacts = vi.hoisted(() => vi.fn());
 const noteWorkspaceMemoryHealth = vi.hoisted(() => vi.fn(async () => undefined));
 const maybeRepairWorkspaceMemoryHealth = vi.hoisted(() => vi.fn(async () => undefined));
+const inspectConfiguredEmbeddingProviderSetup = vi.hoisted(() => vi.fn());
+const loadPluginManifestRegistryForPluginRegistry = vi.hoisted(() =>
+  vi.fn(() => ({ plugins: [], diagnostics: [] })),
+);
+const listTrustedExternalProviderPolicyOwners = vi.hoisted(() =>
+  vi.fn((): Array<{ id: string }> => [{ id: "llama-cpp" }]),
+);
+const loadTrustedExternalProviderPolicyArtifacts = vi.hoisted(() =>
+  vi.fn(
+    (
+      owners: Array<{ id: string }>,
+    ): {
+      owner: { id: string };
+      surface: {
+        inspectEmbeddingProviderSetup: typeof inspectConfiguredEmbeddingProviderSetup;
+      } | null;
+    } | null => {
+      const owner = owners[0];
+      return owner
+        ? {
+            owner,
+            surface: { inspectEmbeddingProviderSetup: inspectConfiguredEmbeddingProviderSetup },
+          }
+        : null;
+    },
+  ),
+);
+const resolveManifestOwnerBasePolicyBlock = vi.hoisted(() =>
+  vi.fn(
+    (_params?: {
+      plugin: { id: string };
+    }):
+      | "plugins-disabled"
+      | "blocked-by-denylist"
+      | "plugin-disabled"
+      | "not-in-allowlist"
+      | null => null,
+  ),
+);
+const getMissingLocalMemoryEmbeddingProviderMessage = vi.hoisted(() =>
+  vi.fn(
+    () =>
+      "Unknown memory embedding provider: local.\n" +
+      "Local GGUF embeddings are provided by the official llama.cpp provider plugin.\n" +
+      "Install it with: openclaw plugins install @openclaw/llama-cpp-provider\n" +
+      "Then restart OpenClaw and retry: openclaw memory status --deep",
+  ),
+);
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
@@ -42,7 +90,6 @@ vi.mock("../agents/agent-scope.js", () => ({
 }));
 
 vi.mock("../agents/memory-search.js", () => ({
-  DEFAULT_MEMORY_EMBEDDING_PROVIDER: "openai",
   resolveMemorySearchConfig,
 }));
 
@@ -63,9 +110,23 @@ vi.mock("../plugins/memory-runtime.js", () => ({
   resolveActiveMemoryBackendConfig,
 }));
 
+vi.mock("../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry,
+}));
+
+vi.mock("../plugins/manifest-owner-policy.js", () => ({
+  resolveManifestOwnerBasePolicyBlock,
+}));
+
+vi.mock("../plugins/provider-public-artifacts.js", () => ({
+  listTrustedExternalProviderPolicyOwners,
+  loadTrustedExternalProviderPolicyArtifacts,
+}));
+
 vi.mock("../plugin-sdk/memory-core-bundled-runtime.js", () => ({
   auditDreamingArtifacts,
   auditShortTermPromotionArtifacts,
+  getMissingLocalMemoryEmbeddingProviderMessage,
   repairDreamingArtifacts,
   repairShortTermPromotionArtifacts,
 }));
@@ -286,6 +347,23 @@ describe("noteMemorySearchHealth", () => {
     isConfiguredAwsSdkAuthProfileForProvider.mockReset();
     isConfiguredAwsSdkAuthProfileForProvider.mockReturnValue(false);
     getActiveMemorySearchManagerCore.mockReset();
+    getMissingLocalMemoryEmbeddingProviderMessage.mockClear();
+    inspectConfiguredEmbeddingProviderSetup.mockReset();
+    inspectConfiguredEmbeddingProviderSetup.mockResolvedValue(null);
+    listTrustedExternalProviderPolicyOwners.mockReset();
+    listTrustedExternalProviderPolicyOwners.mockReturnValue([{ id: "llama-cpp" }]);
+    loadTrustedExternalProviderPolicyArtifacts.mockReset();
+    loadTrustedExternalProviderPolicyArtifacts.mockImplementation((owners) => {
+      const owner = owners[0];
+      return owner
+        ? {
+            owner,
+            surface: { inspectEmbeddingProviderSetup: inspectConfiguredEmbeddingProviderSetup },
+          }
+        : null;
+    });
+    resolveManifestOwnerBasePolicyBlock.mockReset();
+    resolveManifestOwnerBasePolicyBlock.mockReturnValue(null);
     resolveActiveMemoryBackendConfig.mockReset();
     resolveActiveMemoryBackendConfig.mockReturnValue({ backend: "builtin" });
     getActiveMemorySearchManagerCore.mockResolvedValue({
@@ -297,16 +375,140 @@ describe("noteMemorySearchHealth", () => {
     resetMemoryRecallMocks();
   });
 
-  it("warns when local provider is set but readiness was not confirmed", async () => {
+  it("uses the memory-core recovery message when the local provider plugin is missing", async () => {
+    listTrustedExternalProviderPolicyOwners.mockReturnValueOnce([]);
     await runMemorySearchHealth("local", {});
 
     expect(note).toHaveBeenCalledTimes(1);
     expectFirstNoteContains(
-      'Memory search provider is set to "local"',
+      "Unknown memory embedding provider: local",
       "openclaw plugins install @openclaw/llama-cpp-provider",
-      "openclaw config set memory.search.provider openai",
+      "openclaw memory status --deep",
     );
-    expectFirstNoteExcludes("github-copilot");
+    expect(getMissingLocalMemoryEmbeddingProviderMessage).toHaveBeenCalledOnce();
+  });
+
+  it("updates a legacy installed provider that has no setup policy artifact", async () => {
+    loadTrustedExternalProviderPolicyArtifacts.mockReturnValueOnce({
+      owner: { id: "llama-cpp" },
+      surface: null,
+    });
+
+    await runMemorySearchHealth(
+      "local",
+      failedGatewayOptions("legacy llama.cpp server is unavailable"),
+    );
+
+    expectFirstNoteContains(
+      'Installed plugin "llama-cpp" does not provide current local-memory setup diagnostics',
+      "legacy llama.cpp server is unavailable",
+      "openclaw plugins update llama-cpp",
+    );
+    expectFirstNoteExcludes("openclaw plugins install @openclaw/llama-cpp-provider");
+  });
+
+  it.each([
+    [
+      "blocked-by-denylist",
+      'Installed plugin "llama-cpp" is blocked by plugins.deny',
+      'Remove "llama-cpp" from plugins.deny',
+    ],
+    [
+      "plugin-disabled",
+      'Installed plugin "llama-cpp" is disabled for this config',
+      "openclaw plugins enable llama-cpp --accept-capabilities",
+    ],
+    [
+      "not-in-allowlist",
+      'Installed plugin "llama-cpp" is omitted from plugins.allow',
+      'Include "llama-cpp" in plugins.allow',
+    ],
+  ] as const)("handles the %s installed-provider policy block", async (reason, message, fix) => {
+    resolveManifestOwnerBasePolicyBlock.mockReturnValueOnce(reason);
+
+    await runMemorySearchHealth("local", failedGatewayOptions("local provider is blocked"));
+
+    expectFirstNoteContains(message, "local provider is blocked", fix);
+    expectFirstNoteExcludes(
+      "openclaw plugins install @openclaw/llama-cpp-provider",
+      "openclaw plugins update llama-cpp",
+    );
+    expect(loadTrustedExternalProviderPolicyArtifacts).not.toHaveBeenCalled();
+  });
+
+  it("reports global plugin disablement before the inactive memory-runtime gate", async () => {
+    resolveActiveMemoryBackendConfig.mockReturnValueOnce(null);
+
+    await runMemorySearchHealth(
+      "local",
+      failedGatewayOptions("local provider is blocked"),
+      undefined,
+      { plugins: { enabled: false } },
+    );
+
+    expectFirstNoteContains(
+      "Plugin loading is disabled for this config",
+      "openclaw config set plugins.enabled true --strict-json",
+    );
+    expectFirstNoteExcludes("No active memory plugin is registered");
+    expect(resolveActiveMemoryBackendConfig).not.toHaveBeenCalled();
+    expect(loadTrustedExternalProviderPolicyArtifacts).not.toHaveBeenCalled();
+  });
+
+  it("uses the policy owner selected after an earlier disabled owner", async () => {
+    const earlierOwner = { id: "a-disabled" };
+    const selectedOwner = { id: "b-policy" };
+    listTrustedExternalProviderPolicyOwners.mockReturnValueOnce([earlierOwner, selectedOwner]);
+    loadTrustedExternalProviderPolicyArtifacts.mockImplementationOnce((owners) => {
+      const owner = owners[0];
+      if (!owner) {
+        throw new Error("missing selected provider owner");
+      }
+      return {
+        owner,
+        surface: { inspectEmbeddingProviderSetup: inspectConfiguredEmbeddingProviderSetup },
+      };
+    });
+    resolveManifestOwnerBasePolicyBlock.mockImplementationOnce((params) =>
+      params?.plugin.id === earlierOwner.id ? "plugin-disabled" : null,
+    );
+    inspectConfiguredEmbeddingProviderSetup.mockResolvedValueOnce({
+      provider: "local",
+      reason: "Selected provider needs setup.",
+      requirement: "selected-provider-setup",
+      fixHint: "Configure the selected provider.",
+    });
+
+    await runMemorySearchHealth("local", failedGatewayOptions("local provider is unavailable"));
+
+    expect(resolveManifestOwnerBasePolicyBlock).toHaveBeenCalledWith(
+      expect.objectContaining({ plugin: selectedOwner }),
+    );
+    expect(loadTrustedExternalProviderPolicyArtifacts).toHaveBeenCalledWith([selectedOwner]);
+    expectFirstNoteContains("Selected provider needs setup", "Configure the selected provider");
+    expectFirstNoteExcludes("openclaw plugins enable a-disabled");
+  });
+
+  it("uses installed provider setup guidance instead of reinstalling the plugin", async () => {
+    inspectConfiguredEmbeddingProviderSetup.mockResolvedValueOnce({
+      provider: "local",
+      reason: "Local embeddings need the managed llama.cpp server config.",
+      requirement: "managed-llama-cpp-setup",
+      fixHint:
+        "Run `openclaw models --agent agent-default auth login --provider llama-cpp --method local` in an interactive terminal, then rerun this check.",
+    });
+
+    await runMemorySearchHealth(
+      "local",
+      failedGatewayOptions("Managed local embeddings are unavailable."),
+    );
+
+    expectFirstNoteContains(
+      "Local embeddings need the managed llama.cpp server config",
+      "openclaw models --agent agent-default auth login --provider llama-cpp --method local",
+      "Managed local embeddings are unavailable",
+    );
+    expectFirstNoteExcludes("openclaw plugins install @openclaw/llama-cpp-provider");
   });
 
   it("supports silent structured collection through an injected note sink", async () => {
@@ -331,7 +533,9 @@ describe("noteMemorySearchHealth", () => {
     expectFirstNoteContains(
       "local embeddings are not confirmed ready",
       "managed llama-server unavailable",
+      "Repair the llama.cpp server problem reported by the Gateway",
     );
+    expectFirstNoteExcludes("openclaw plugins install @openclaw/llama-cpp-provider");
   });
 
   it("does not warn when local provider with default model and gateway probe is ready", async () => {
@@ -422,8 +626,12 @@ describe("noteMemorySearchHealth", () => {
       "Endpoints: health=unavailable models=unavailable props=unavailable metrics=unavailable",
       "Load error: GGUF load failed",
       "local embeddings are not confirmed ready",
+      "Repair the llama.cpp server problem reported by the Gateway",
     );
-    expectFirstNoteExcludes("Gateway probe: GGUF load failed");
+    expectFirstNoteExcludes(
+      "Gateway probe: GGUF load failed",
+      "openclaw plugins install @openclaw/llama-cpp-provider",
+    );
   });
 
   it("does not warn when local provider readiness probe was intentionally skipped", async () => {

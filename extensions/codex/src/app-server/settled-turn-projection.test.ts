@@ -88,6 +88,44 @@ describe("projectSettledCodexMessages", () => {
     ]);
   });
 
+  it("projects dotted namespaced tool names recorded from Codex MCP calls", () => {
+    const name = "codex_apps.slack.slack_send";
+    expect(
+      projectSettledCodexMessages([
+        message({
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call-1", name, arguments: { channel: "C1" } }],
+        }),
+        message({
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: name,
+          content: [{ type: "text", text: "Sent." }],
+        }),
+      ]),
+    ).toEqual([
+      { type: "function_call", call_id: "call-1", name, arguments: '{"channel":"C1"}' },
+      { type: "function_call_output", call_id: "call-1", output: "Sent." },
+    ]);
+  });
+
+  it("rejects tool names outside the projectable charset and names the offender", () => {
+    expect(() =>
+      projectSettledCodexMessages([
+        message({
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call-1", name: "bad tool", arguments: {} }],
+        }),
+        message({
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "bad tool",
+          content: [{ type: "text", text: "failed" }],
+        }),
+      ]),
+    ).toThrow("invalid tool name: bad tool");
+  });
+
   it("preserves failed tool-result status in the projected output", () => {
     expect(
       projectSettledCodexMessages([
@@ -170,13 +208,25 @@ describe("projectSettledCodexMessages", () => {
     ]);
   });
 
-  it("rejects an oversized item count instead of dropping earlier context", () => {
-    const oldMessages = Array.from({ length: 205 }, (_, index) =>
-      message({ role: "user", content: `old-${index}` }),
+  it.each([
+    { count: 205, text: "old", error: "exceeds the item limit" },
+    { count: 9, text: "x".repeat(60 * 1024), error: "exceeds the byte limit" },
+  ])("stops acquiring later payloads after $error", ({ count, text, error }) => {
+    let laterReads = 0;
+    const later = message({
+      role: "user",
+      get content() {
+        laterReads += 1;
+        return "must not acquire this later payload";
+      },
+    });
+    const oldMessages = Array.from({ length: count }, () =>
+      message({ role: "user", content: text }),
     );
-    expect(() => projectSettledCodexMessages([...oldMessages, toolCall(), toolResult()])).toThrow(
-      "exceeds the item limit",
-    );
+    expect(() =>
+      projectSettledCodexMessages([...oldMessages, later, toolCall(), toolResult()]),
+    ).toThrow(error);
+    expect(laterReads).toBe(0);
   });
 
   it("prefers the undecorated upstream user text", () => {

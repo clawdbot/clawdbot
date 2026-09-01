@@ -9,16 +9,16 @@ import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capab
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import type { WorkboardCapability } from "../lib/workboard/capability.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
+import type { ApplicationChatSubmissions } from "./chat-submissions.ts";
 import type { ApplicationConfigCapability } from "./config.ts";
+import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import type { ApplicationGateway } from "./gateway.ts";
-import type { ApplicationInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
 import type { NativeChatDrafts } from "./native-bridge.ts";
 import type { NativeNotificationsCapability } from "./native-notifications.ts";
 import type { ApplicationOverlays } from "./overlays-types.ts";
 import type { ApplicationPlacementStartup } from "./session-placement-startup.ts";
 import type { UiSettings } from "./settings.ts";
-import type { ApplicationSkillWorkshopRevisionAdmissions } from "./skill-workshop-revision-admissions.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
 import type { WebPushCapability } from "./web-push.ts";
 
@@ -82,6 +82,7 @@ export type ApplicationChatAttachmentHandoff = {
     fallbacks: Record<string, ChatComposerMemoryFallback>;
     message?: string;
   } | null;
+  retireScope(scopeKey: string, beforeRevision: number): void;
   clearPane(paneId: string): void;
   dispose(): void;
 };
@@ -89,7 +90,10 @@ export type ApplicationChatAttachmentHandoff = {
 export type ApplicationContext<TRouteId extends string = string> = {
   readonly basePath: string;
   readonly resourceBasePath: string;
+  readonly lifecycleAbortSignal?: AbortSignal;
   readonly gateway: ApplicationGateway;
+  /** App-owned queue for automatic Gateway reconnect bootstrap work. */
+  readonly connectionBootstrap: ConnectionBootstrapCoordinator;
   readonly agents: AgentCapability;
   readonly agentIdentity: AgentIdentityCapability;
   readonly agentSelection: AgentSelectionCapability;
@@ -106,8 +110,7 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly nativeChatDrafts: NativeChatDrafts;
   readonly nativeNotifications: NativeNotificationsCapability | null;
   readonly webPush: WebPushCapability;
-  readonly skillWorkshopRevisionAdmissions: ApplicationSkillWorkshopRevisionAdmissions;
-  readonly initialUserMessage: ApplicationInitialUserMessageHandoff;
+  readonly chatSubmissions: ApplicationChatSubmissions;
   readonly chatAttachmentHandoff: ApplicationChatAttachmentHandoff;
   readonly navigate: (routeId: TRouteId, options?: ApplicationNavigationOptions) => void;
   /** Navigates and resolves after any route-specific handoff completes. */

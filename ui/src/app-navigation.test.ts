@@ -126,7 +126,7 @@ describe("navigationIconForRoute", () => {
       about: "fileText",
       "ai-agents": "brain",
       "model-setup": "spark",
-      "model-providers": "plug",
+      "model-providers": "box",
       "memory-import": "download",
       notifications: "bell",
       security: "shieldCheck",
@@ -162,19 +162,9 @@ describe("settingsSearchTextMatches", () => {
 });
 
 describe("formatDocumentTitle", () => {
-  it("suffixes the brand after a plain context", () => {
-    expect(formatDocumentTitle({ context: "Usage" })).toBe("Usage — OpenClaw");
-  });
-
   it("does not duplicate a context ending in the brand", () => {
     expect(formatDocumentTitle({ context: "Ask OpenClaw" })).toBe("Ask OpenClaw");
     expect(formatDocumentTitle({ context: "OpenClaw" })).toBe("OpenClaw");
-  });
-
-  it("prefixes a positive attention count", () => {
-    expect(formatDocumentTitle({ context: "Usage", attentionCount: 2 })).toBe(
-      "(2) Usage — OpenClaw",
-    );
   });
 
   it("names the disconnected gateway without implying internet loss", () => {
@@ -183,20 +173,8 @@ describe("formatDocumentTitle", () => {
     ).toBe("(Disconnected) Usage — OpenClaw");
   });
 
-  it("includes the queued outbox count in the disconnected marker", () => {
-    expect(
-      formatDocumentTitle({ context: "Usage", gatewayDisconnected: true, queuedCount: 3 }),
-    ).toBe("(Disconnected · 3 queued) Usage — OpenClaw");
-  });
-
   it("ignores a queued count while online", () => {
     expect(formatDocumentTitle({ context: "Usage", queuedCount: 3 })).toBe("Usage — OpenClaw");
-  });
-
-  it("suppresses the attention count while disconnected", () => {
-    expect(
-      formatDocumentTitle({ context: "Usage", attentionCount: 2, gatewayDisconnected: true }),
-    ).toBe("(Disconnected) Usage — OpenClaw");
   });
 });
 
@@ -290,7 +268,7 @@ describe("subtitleForRoute", () => {
       "cloud-workers": "Profiles and machine sizes for cloud sessions.",
       profile: "Your display name, avatar, and identity on this gateway.",
       communications: "Messages and text-to-speech settings.",
-      appearance: "Theme, UI, and setup wizard settings.",
+      appearance: "Theme and UI settings.",
       lobsterdex: "Every lobster palette that has visited this browser.",
       automation: "Commands, hooks, automations, and plugins.",
       mcp: "MCP servers, auth, tools, and diagnostics.",

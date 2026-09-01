@@ -5,6 +5,7 @@ import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
 import { loadPluginRegistryHandle } from "./loader.js";
 import { resolveManifestContractRuntimePluginResolution } from "./manifest-contract-runtime.js";
+import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import type { MigrationProviderPlugin } from "./types.js";
@@ -62,6 +63,7 @@ function resolveMigrationProviderRegistry(params: { cfg?: OpenClawConfig; plugin
   }
   const standalone = standaloneMigrationRegistrySlot;
   return standalone &&
+    !isPluginRegistryRetired(standalone.registry) &&
     standalone.config === params.cfg &&
     standalone.pluginIdsKey === migrationPluginIdsKey(params.pluginIds)
     ? standalone.registry

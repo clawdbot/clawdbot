@@ -13,7 +13,7 @@ type MaterializationMutationEvent = {
   affectsInheritedStores: boolean;
 };
 
-function configuredOwnersAreRequestVisible(
+export function configuredOwnersAreRequestVisible(
   owners: ReadonlyMap<string, PreparedModelRuntimeOwner>,
 ): boolean {
   for (const owner of owners.values()) {

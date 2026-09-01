@@ -16,7 +16,12 @@ on:
         required: false
         type: string
       ref:
-        description: Dry-run target ref to validate; real OIDC publishes must dispatch the workflow with --ref set to the target release tag/ref
+        description: Exact target SHA for protected-tooling release publication, or a dry-run target ref
+        required: false
+        default: ""
+        type: string
+      release_tag:
+        description: Exact release tag that must peel to ref for protected-tooling publication
         required: false
         default: ""
         type: string
@@ -24,9 +29,24 @@ on:
         description: Approved OpenClaw Release Publish workflow run id
         required: false
         type: string
+      release_publish_run_attempt:
+        description: Exact approving OpenClaw Release Publish workflow run attempt
+        required: false
+        default: ""
+        type: string
       release_publish_branch:
         description: Branch name of the approving OpenClaw Release Publish workflow run
         required: false
+        type: string
+      release_publish_full_ref:
+        description: Full ref of the approving OpenClaw Release Publish workflow run
+        required: false
+        default: ""
+        type: string
+      release_publish_workflow_sha:
+        description: Exact SHA of the approving OpenClaw Release Publish workflow run
+        required: false
+        default: ""
         type: string
       dry_run:
         description: Validate the full ClawHub artifact handoff without publishing.
@@ -62,6 +82,9 @@ jobs:
       bootstrap_matrix: ${{ steps.plan.outputs.bootstrap_matrix }}
       missing_trusted_publisher_matrix: ${{ steps.plan.outputs.missing_trusted_publisher_matrix }}
     steps:
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -73,65 +96,185 @@ jobs:
       - name: Resolve checked-out ref
         id: ref
         env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
           TARGET_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || '' }}
         run: |
           set -euo pipefail
-          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin \
-            +refs/heads/main:refs/remotes/origin/main \
-            '+refs/heads/release/*:refs/remotes/origin/release/*'
-          if [[ -n "${TARGET_REF}" ]]; then
-            if git rev-parse --verify --quiet "${TARGET_REF}^{commit}" >/dev/null; then
-              target_sha="$(git rev-parse "${TARGET_REF}^{commit}")"
-            elif git rev-parse --verify --quiet "origin/${TARGET_REF}^{commit}" >/dev/null; then
-              target_sha="$(git rev-parse "origin/${TARGET_REF}^{commit}")"
-            else
-              echo "Unable to resolve requested publish ref: ${TARGET_REF}" >&2
-              exit 1
-            fi
-            git checkout --detach "${target_sha}"
-          fi
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
+          import os
+          import re
+          import subprocess
+          import sys
+
+          from ci_git_owner import GitFailure, git_output, run_git
+
+          workspace = os.environ["GITHUB_WORKSPACE"]
+          release_tag = os.environ["RELEASE_TAG"]
+          target_ref = os.environ["TARGET_REF"]
+
+          def resolve(ref):
+              try:
+                  run_git(
+                      workspace,
+                      "rev-parse",
+                      "--verify",
+                      "--quiet",
+                      ref,
+                      stdout=subprocess.DEVNULL,
+                      stderr=subprocess.DEVNULL,
+                  )
+              except GitFailure:
+                  return None
+              return git_output(workspace, "rev-parse", ref).rstrip("\n")
+
+          run_git(
+              workspace,
+              "fetch",
+              "--no-tags",
+              "origin",
+              "+refs/heads/main:refs/remotes/origin/main",
+              "+refs/heads/release/*:refs/remotes/origin/release/*",
+              timeout=120,
+              reclaim_locks=True,
+          )
+          if release_tag:
+              if not re.fullmatch(
+                  r"v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?",
+                  release_tag,
+              ):
+                  print(f"Invalid ClawHub release tag: {release_tag}", file=sys.stderr)
+                  raise SystemExit(1)
+              run_git(
+                  workspace,
+                  "fetch",
+                  "--no-tags",
+                  "origin",
+                  f"+refs/tags/{release_tag}:refs/tags/{release_tag}",
+                  timeout=120,
+                  reclaim_locks=True,
+              )
+          if target_ref:
+              target_sha = resolve(f"{target_ref}^{{commit}}")
+              if target_sha is None:
+                  target_sha = resolve(f"origin/{target_ref}^{{commit}}")
+              if target_sha is None:
+                  print(f"Unable to resolve requested publish ref: {target_ref}", file=sys.stderr)
+                  raise SystemExit(1)
+              run_git(workspace, "checkout", "--detach", target_sha)
+          head_sha = git_output(workspace, "rev-parse", "HEAD").rstrip("\n")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"sha={head_sha}\n")
+          PYTHON
 
       - name: Validate OIDC source matches workflow ref
         env:
           TARGET_SHA: ${{ steps.ref.outputs.sha }}
           WORKFLOW_SHA: ${{ github.sha }}
+          WORKFLOW_REF: ${{ github.ref }}
           DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+          RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
         run: |
           set -euo pipefail
-          if [[ "${TARGET_SHA}" != "${WORKFLOW_SHA}" ]]; then
-            if [[ "${DRY_RUN}" == "true" ]]; then
-              echo "Dry-run publish target differs from workflow ref; allowing validation-only dispatch."
-              exit 0
-            fi
-            echo "Plugin ClawHub OIDC publishes must run from the same ref that is being published." >&2
-            echo "The ref input is only supported for dry_run=true." >&2
-            echo "For real publishes, dispatch this workflow with --ref pointing at the target release tag/ref and omit the ref input." >&2
-            exit 1
-          fi
+          exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
+          import os
+          import re
+          import sys
+
+          from ci_git_owner import GitFailure, git_output
+
+          target_sha = os.environ["TARGET_SHA"]
+          workflow_sha = os.environ["WORKFLOW_SHA"]
+          if target_sha == workflow_sha:
+              raise SystemExit(0)
+          if os.environ["DRY_RUN"] == "true":
+              print("Dry-run publish target differs from workflow ref; allowing validation-only dispatch.")
+              raise SystemExit(0)
+          workflow_ref = os.environ["WORKFLOW_REF"]
+          release_tag = os.environ["RELEASE_TAG"]
+          protected = (
+              re.fullmatch(r"refs/tags/release-publish/[a-f0-9]{12}-[1-9][0-9]*", workflow_ref)
+              and os.environ["RELEASE_PUBLISH_RUN_ID"].strip()
+              and re.fullmatch(r"[1-9][0-9]*", os.environ["RELEASE_PUBLISH_RUN_ATTEMPT"])
+              and release_tag
+          )
+          if protected:
+              try:
+                  tag_sha = git_output(
+                      os.environ["GITHUB_WORKSPACE"],
+                      "rev-parse",
+                      f"{release_tag}^{{commit}}",
+                  ).rstrip("\n")
+              except GitFailure:
+                  tag_sha = None
+              if tag_sha == target_sha:
+                  print("Protected release tooling is publishing the exact immutable release tag target.")
+                  raise SystemExit(0)
+          print(
+              "Plugin ClawHub OIDC publish target is not bound to protected tooling and "
+              "the exact release tag.",
+              file=sys.stderr,
+          )
+          raise SystemExit(1)
+          PYTHON
 
       - name: Validate ref is on a trusted publish branch
         env:
           TRUSTED_PUBLISH_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}
         run: |
           set -euo pipefail
-          if git merge-base --is-ancestor HEAD origin/main; then
-            exit 0
-          fi
-          while IFS= read -r release_ref; do
-            if git merge-base --is-ancestor HEAD "${release_ref}"; then
-              exit 0
-            fi
-          done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/release)
-          if [[ "${TRUSTED_PUBLISH_BRANCH}" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
-            alpha_branch="${TRUSTED_PUBLISH_BRANCH}"
-            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
-            if git merge-base --is-ancestor HEAD "refs/remotes/origin/${alpha_branch}"; then
-              exit 0
-            fi
-          fi
-          echo "Plugin ClawHub publishes must target a commit reachable from main, release/*, or the matching Tideclaw alpha branch." >&2
-          exit 1
+          exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
+          import os
+          import re
+          import sys
+
+          from ci_git_owner import GitFailure, git_output, run_git
+
+          workspace = os.environ["GITHUB_WORKSPACE"]
+
+          def is_ancestor(ref):
+              try:
+                  run_git(workspace, "merge-base", "--is-ancestor", "HEAD", ref)
+                  return True
+              except GitFailure as error:
+                  if error.code == 1:
+                      return False
+                  raise
+
+          if is_ancestor("origin/main"):
+              raise SystemExit(0)
+          release_refs = git_output(
+              workspace,
+              "for-each-ref",
+              "--format=%(refname)",
+              "refs/remotes/origin/release",
+          ).splitlines()
+          if any(is_ancestor(ref) for ref in release_refs):
+              raise SystemExit(0)
+          trusted_branch = os.environ["TRUSTED_PUBLISH_BRANCH"]
+          if re.fullmatch(
+              r"tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z",
+              trusted_branch,
+          ):
+              run_git(
+                  workspace,
+                  "fetch",
+                  "--no-tags",
+                  "origin",
+                  f"+refs/heads/{trusted_branch}:refs/remotes/origin/{trusted_branch}",
+                  timeout=120,
+                  reclaim_locks=True,
+              )
+              if is_ancestor(f"refs/remotes/origin/{trusted_branch}"):
+                  raise SystemExit(0)
+          print(
+              "Plugin ClawHub publishes must target a commit reachable from main, release/*, "
+              "or the matching Tideclaw alpha branch.",
+              file=sys.stderr,
+          )
+          raise SystemExit(1)
+          PYTHON
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -284,25 +427,43 @@ jobs:
       - name: Validate release publish approval run
         env:
           ALLOW_COMPLETED_SUCCESSFUL_PARENT: "true"
+          DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
           GH_TOKEN: ${{ github.token }}
           RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+          EXPECTED_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
           EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}
+          EXPECTED_WORKFLOW_FULL_REF: ${{ inputs.release_publish_full_ref }}
+          EXPECTED_WORKFLOW_SHA: ${{ inputs.release_publish_workflow_sha }}
         run: |
           set -euo pipefail
           if [[ -z "${RELEASE_PUBLISH_RUN_ID// }" ]]; then
-            if [[ "${GITHUB_ACTOR}" == "github-actions[bot]" ]]; then
-              echo "Plugin ClawHub publish dispatched by another workflow must include release_publish_run_id." >&2
-              exit 1
+            if [[ "${DRY_RUN}" == "true" ]]; then
+              echo "Validation-only ClawHub package preparation; no publication authority requested."
+              exit 0
             fi
-            echo "Direct Plugin ClawHub Release dispatch; relying on this workflow's clawhub-plugin-release environment approval."
-            exit 0
+            echo "ClawHub OIDC publication requires a release parent with an exact transaction authorization receipt. Use the release parent workflow, or the separately authenticated manual ClawHub owner route." >&2
+            exit 1
           fi
           direct_recovery=false
           if [[ "${GITHUB_ACTOR}" != "github-actions[bot]" ]]; then
             direct_recovery=true
             echo "Direct Plugin ClawHub Release recovery with release_publish_run_id; relying on this workflow's clawhub-plugin-release environment approval."
           fi
-          RUN_JSON="$(gh run view "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,headBranch,event,status,conclusion,url)"
+          RUN_JSON="$(
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RELEASE_PUBLISH_RUN_ID}/attempts/${EXPECTED_RUN_ATTEMPT}" |
+              jq '{
+                repository: .repository.full_name,
+                workflowName: .name,
+                headBranch: .head_branch,
+                headSha: .head_sha,
+                event,
+                status,
+                conclusion,
+                path,
+                url: .html_url,
+                runAttempt: .run_attempt
+              }'
+          )"
           printf '%s' "$RUN_JSON" | DIRECT_RELEASE_RECOVERY="${direct_recovery}" node scripts/validate-release-publish-approval.mjs
 
   pack_plugins_clawhub_artifacts:
@@ -360,7 +521,7 @@ jobs:
           CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
           SOURCE_REPO: ${{ github.repository }}
           SOURCE_COMMIT: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
-          SOURCE_REF: ${{ github.ref }}
+          SOURCE_REF: ${{ inputs.release_tag != '' && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
           PACKAGE_TAG: ${{ matrix.plugin.publishTag }}
           PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
           OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR: ${{ runner.temp }}/clawhub-package-artifact
@@ -374,9 +535,59 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  approve_plugins_clawhub_release:
+  seal_clawhub_transactions:
+    name: Seal ClawHub package transactions
     needs: [preview_plugins_clawhub, pack_plugins_clawhub_artifacts]
-    if: always() && github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.preview_plugins_clawhub.outputs.has_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success'
+    if: github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      identity: ${{ steps.seal.outputs.identity }}
+    steps:
+      - name: Checkout trusted transaction tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.workflow_sha }}
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Download exact packed transactions
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: clawhub-package-*
+          path: ${{ runner.temp }}/clawhub-transactions/packages
+      - name: Seal actual packed inventories
+        id: seal
+        env:
+          TARGET_SHA: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
+          PACKAGE_MATRIX: ${{ needs.preview_plugins_clawhub.outputs.matrix }}
+          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+          RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+          RELEASE_PUBLISH_BRANCH: ${{ inputs.release_publish_branch }}
+          RELEASE_PUBLISH_FULL_REF: ${{ inputs.release_publish_full_ref }}
+          RELEASE_PUBLISH_WORKFLOW_SHA: ${{ inputs.release_publish_workflow_sha }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$PACKAGE_MATRIX" > "$RUNNER_TEMP/clawhub-transactions/matrix.json"
+          node scripts/clawhub-parent-authorization.mjs seal \
+            --matrix "$RUNNER_TEMP/clawhub-transactions/matrix.json" \
+            --directory "$RUNNER_TEMP/clawhub-transactions/packages" \
+            --output "$RUNNER_TEMP/clawhub-transactions/transactions.json"
+      - name: Upload exact transaction identity
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ steps.seal.outputs.artifact_name }}
+          path: ${{ runner.temp }}/clawhub-transactions/transactions.json
+          if-no-files-found: error
+          retention-days: 30
+
+  approve_plugins_clawhub_release:
+    needs: [preview_plugins_clawhub, pack_plugins_clawhub_artifacts, seal_clawhub_transactions]
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.preview_plugins_clawhub.outputs.has_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success' && needs.seal_clawhub_transactions.result == 'success'
     runs-on: ubuntu-latest
     environment: clawhub-plugin-release
     permissions:
@@ -388,9 +599,14 @@ jobs:
 
   publish_plugins_clawhub:
     needs:
-      [preview_plugins_clawhub, pack_plugins_clawhub_artifacts, approve_plugins_clawhub_release]
+      [
+        preview_plugins_clawhub,
+        pack_plugins_clawhub_artifacts,
+        seal_clawhub_transactions,
+        approve_plugins_clawhub_release,
+      ]
     if: always() && github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success' && (inputs.dry_run == true || needs.approve_plugins_clawhub_release.result == 'success')
-    uses: openclaw/clawhub/.github/workflows/package-publish.yml@87ca030c30f3cfb78ab15c8e66b5ff1469c8f9c8 # v0.23.3
+    uses: openclaw/clawhub/.github/workflows/package-publish.yml@db2a12c4625ffa162910a3e6aa2cb786ced89e2f # reviewed parent receipt contract
     permissions:
       actions: read
       contents: read
@@ -401,6 +617,8 @@ jobs:
       matrix:
         plugin: ${{ fromJson(needs.preview_plugins_clawhub.outputs.matrix) }}
     with:
+      trusted_tooling_identity_json: ${{ needs.seal_clawhub_transactions.outputs.identity }}
+      wait_for_publication: false
       package_artifact_name: ${{ matrix.plugin.artifactName }}
       dry_run: ${{ inputs.dry_run }}
       registry: https://clawhub.ai
@@ -409,57 +627,10 @@ jobs:
       tags: ${{ matrix.plugin.publishTag }}
       source_repo: ${{ github.repository }}
       source_commit: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
-      source_ref: ${{ github.ref }}
+      source_ref: ${{ inputs.release_tag != '' && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
       source_path: ${{ matrix.plugin.packageDir }}
       inspector_artifact_name: ${{ matrix.plugin.artifactName }}-inspector
       publish_json_artifact_name: ${{ matrix.plugin.artifactName }}-publish-json
 
-  verify_published_clawhub_package:
-    needs: [preview_plugins_clawhub, publish_plugins_clawhub]
-    if: github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    permissions:
-      actions: read
-      contents: read
-    strategy:
-      fail-fast: false
-      max-parallel: 32
-      matrix:
-        plugin: ${{ fromJson(needs.preview_plugins_clawhub.outputs.matrix) }}
-    steps:
-      - name: Checkout verification tooling
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          ref: ${{ github.sha }}
-          fetch-depth: 1
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: off
-          node-version: ${{ env.NODE_VERSION }}
-          install-bun: "false"
-          install-deps: "false"
-
-      - name: Download published package input
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: ${{ matrix.plugin.artifactName }}
-          path: ${{ runner.temp }}/clawhub-package-artifact
-
-      - name: Verify published ClawHub package
-        env:
-          CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
-          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
-          PACKAGE_VERSION: ${{ matrix.plugin.version }}
-          PACKAGE_TAG: ${{ matrix.plugin.publishTag }}
-        run: |
-          set -euo pipefail
-          node scripts/verify-clawhub-published-artifact.mjs \
-            --expected-artifact-dir "${RUNNER_TEMP}/clawhub-package-artifact" \
-            --package-name "${PACKAGE_NAME}" \
-            --package-version "${PACKAGE_VERSION}" \
-            --publish-tag "${PACKAGE_TAG}" \
-            --registry "${CLAWHUB_REGISTRY}"
+  # Exact public artifact verification runs in plugin-clawhub-postpublish.yml
+  # after the authorizing parent succeeds. Waiting here would deadlock staging.

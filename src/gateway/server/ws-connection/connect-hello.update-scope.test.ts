@@ -199,15 +199,16 @@ describe("sendGatewayHello update detail scope", () => {
     expect(helloPayload(context)?.features.capabilities).toContain(
       GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT,
     );
+    expect(helloPayload(context)?.features.capabilities).toContain("session-scoped-chat-metadata");
   });
 
-  it("omits package build identity for independently built configured UI roots", async () => {
+  it("reports Gateway build identity separately from configured UI source", async () => {
     const context = makeContext("operator", ["operator.read"]);
     context.configSnapshot = { gateway: { controlUi: { root: "/custom/ui" } } };
 
     await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
 
-    expect(helloPayload(context)?.server.buildId).toBeUndefined();
+    expect(helloPayload(context)?.server.buildId).toBe("build-a");
     expect(helloPayload(context)?.server.controlUiBuildSource).toBe("configured");
   });
 

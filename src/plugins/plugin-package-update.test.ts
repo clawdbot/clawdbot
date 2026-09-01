@@ -142,6 +142,95 @@ describe("plugin package update policy reconciliation", () => {
     expect(result).toMatchObject({ ok: false });
   });
 
+  it("skips an exact tombstone while reconciling another package update", () => {
+    const orphanRecord = {
+      source: "path",
+      sourcePath: "/missing/orphan-source",
+      installPath: "/missing/orphan-install",
+    } as const;
+    const beforePack = index("/packages/pack-v1", [record("pack/one", "/packages/pack-v1")]);
+    const afterPack = index("/packages/pack-v2", [record("pack/one", "/packages/pack-v2")]);
+    const before = {
+      ...beforePack,
+      installRecords: { orphan: orphanRecord, ...beforePack.installRecords },
+    };
+    const after = {
+      ...afterPack,
+      installRecords: { orphan: orphanRecord, ...afterPack.installRecords },
+    };
+    const snapshot = capturePluginPackageUpdateSnapshot({
+      index: before,
+      installOwners: ["orphan", "pack"],
+    });
+    expect(snapshot.ok).toBe(true);
+    if (!snapshot.ok) {
+      throw new Error(snapshot.error);
+    }
+    const config = { plugins: { entries: { "pack/one": { enabled: true } } } };
+
+    const result = reconcilePluginPackageUpdateConfig({
+      config,
+      beforeIndex: before,
+      afterIndex: after,
+      snapshot: snapshot.value,
+    });
+
+    expect(result).toEqual({ ok: true, config });
+  });
+
+  it("fails closed when a tombstone replacement still has no authoritative child rows", () => {
+    const before = index("/packages/pack-v1", []);
+    const snapshot = capturePluginPackageUpdateSnapshot({
+      index: before,
+      installOwners: ["pack"],
+    });
+    expect(snapshot.ok).toBe(true);
+    if (!snapshot.ok) {
+      throw new Error(snapshot.error);
+    }
+    const after = {
+      ...index("/packages/pack-v2", []),
+      installRecords: {
+        pack: {
+          ...before.installRecords.pack!,
+          installPath: "/packages/pack-v2",
+          version: "2.0.0",
+        },
+      },
+    };
+
+    const result = reconcilePluginPackageUpdateConfig({
+      config: {},
+      beforeIndex: before,
+      afterIndex: after,
+      snapshot: snapshot.value,
+    });
+
+    expect(result).toMatchObject({ ok: false });
+  });
+
+  it("accepts a valid package restored from an exact tombstone", () => {
+    const before = index("/packages/pack-v1", []);
+    const snapshot = capturePluginPackageUpdateSnapshot({
+      index: before,
+      installOwners: ["pack"],
+    });
+    expect(snapshot.ok).toBe(true);
+    if (!snapshot.ok) {
+      throw new Error(snapshot.error);
+    }
+    const after = index("/packages/pack-v2", [record("pack/one", "/packages/pack-v2")]);
+
+    const result = reconcilePluginPackageUpdateConfig({
+      config: {},
+      beforeIndex: before,
+      afterIndex: after,
+      snapshot: snapshot.value,
+    });
+
+    expect(result).toEqual({ ok: true, config: {} });
+  });
+
   it("detects exact child load-path cleanup before an update starts", () => {
     const rootDir = "/packages/pack-v1";
     const before = index(rootDir, [record("pack/one", rootDir)]);

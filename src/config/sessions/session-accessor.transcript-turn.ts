@@ -24,7 +24,7 @@ import {
   rememberCommittedTranscriptMessageSequences,
 } from "./session-accessor.sqlite-transcript-sequences.js";
 import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
-import { appendExpectedSessionTranscriptTurn } from "./session-accessor.sqlite-transcript-write.js";
+import { appendExpectedSessionTranscriptTurn } from "./session-accessor.sqlite-transcript-turn.js";
 import { resolveSessionTranscriptRuntimeTarget } from "./session-accessor.transcript-target.js";
 import { appendTranscriptMessage, emitTranscriptUpdate } from "./session-accessor.transcript.js";
 import type {
@@ -156,8 +156,8 @@ export async function persistSessionTranscriptTurn(
   if (expectedSessionId) {
     return await persistExpectedSessionTranscriptTurn(scope, { ...options, expectedSessionId });
   }
-  if (options.sessionLifecyclePatch) {
-    throw new Error("Cannot patch session lifecycle without an expected session id");
+  if (options.sessionLifecyclePatch || options.sessionTurnMutation || options.initialSessionEntry) {
+    throw new Error("Cannot mutate a session turn without an expected session id");
   }
   const target = await resolveTranscriptTurnTarget(scope, options.config);
   // Route through the guarded SQLite path when the session entry was loaded
@@ -241,6 +241,7 @@ async function appendTranscriptTurnMessages(
       },
     );
     if (result) {
+      options.onMessageCommitted?.(result);
       appendedMessages.push(result);
     }
   }
@@ -334,8 +335,8 @@ async function persistExpectedSessionTranscriptTurn(
       sessionKey: target.sessionKey,
       sessionTarget: target,
     },
-    () =>
-      appendExpectedSessionTranscriptTurn(
+    async () => {
+      const committed = await appendExpectedSessionTranscriptTurn(
         {
           agentId,
           sessionKey: resolved.normalizedKey,
@@ -346,21 +347,31 @@ async function persistExpectedSessionTranscriptTurn(
           config: options.config,
           cwd: options.cwd,
           expectedLifecycleRevision:
-            options.expectedLifecycleRevision ?? inheritedWriterFence?.expectedLifecycleRevision,
+            options.expectedLifecycleRevision !== undefined
+              ? options.expectedLifecycleRevision
+              : inheritedWriterFence?.expectedLifecycleRevision,
           expectedWriterRunId:
             options.expectedWriterRunId ?? inheritedWriterFence?.expectedWriterRunId,
           expectedSessionState: options.expectedSessionState,
           expectedSessionId,
+          initialSessionEntry: options.initialSessionEntry,
           atomicGroup: options.atomicGroup,
           messages: options.messages.map((append) => ({
             ...append,
             message: attachSessionTranscriptRunId(append.message, options.runId),
           })),
           sessionLifecyclePatch: options.sessionLifecyclePatch,
+          sessionTurnMutation: options.sessionTurnMutation,
           sessionFile: target.sessionKey!,
           touchSessionEntry: options.touchSessionEntry,
         },
-      ),
+      );
+      // Owned-write teardown can reject after commit; complete custody before that drain.
+      for (const message of committed.appendedMessages) {
+        options.onMessageCommitted?.(message);
+      }
+      return committed;
+    },
   );
 
   if (turn.rejectedReason === "session-rebound") {
@@ -390,6 +401,7 @@ async function persistExpectedSessionTranscriptTurn(
     scope.sessionStore[resolved.normalizedKey] = turn.sessionEntry;
   }
   return {
+    sessionTurnMutationResult: turn.sessionTurnMutationResult,
     appendedCount: countAppendedTranscriptMessages(turn.appendedMessages),
     messages: turn.appendedMessages,
     sessionEntry: turn.sessionEntry ?? scope.sessionEntry,

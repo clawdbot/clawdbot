@@ -144,6 +144,7 @@ describe("Plugin ClawHub New workflow", () => {
     expect(validation.run).toContain(
       "actions/runs/${RELEASE_PUBLISH_RUN_ID}/attempts/${EXPECTED_RUN_ATTEMPT}",
     );
+    expect(validation.run).toContain("repository: .repository.full_name");
     expect(validation.run).toContain(
       'EXPECTED_WORKFLOW_REF="refs/tags/${EXPECTED_WORKFLOW_BRANCH}"',
     );
@@ -339,7 +340,7 @@ describe("Plugin ClawHub New workflow", () => {
     expect(materializerSource).toContain("--ignore-scripts");
     expect(materializerSource).toContain("--omit=dev");
     expect(materializerSource).toContain(
-      "9606849698f041afdd2c2600633320f6b7c1e5136d06b98ce16c169c055c0f83",
+      "adc9d3613a752dfe00597a8826f45fab82e7651478d16ba1bf5354369157fee9",
     );
     expect(materializerSource).toContain("lock_sha256=");
     expect(materializerSource).toContain("integrity=${clawhub_integrity}");

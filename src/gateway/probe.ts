@@ -20,7 +20,11 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { SystemPresence } from "../infra/system-presence.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
-import { GatewayClient, GatewayClientRequestError } from "./client.js";
+import {
+  GatewayClient,
+  GatewayClientRequestError,
+  isGatewayProtocolResponseError,
+} from "./client.js";
 import {
   gatewayEdgeAuthValueForTarget,
   normalizeEdgeAuthHeadersConfig,
@@ -63,6 +67,8 @@ export type GatewayProbeServerSummary = {
 
 export type GatewayProbeResult = {
   ok: boolean;
+  /** Set only after a Gateway hello or a correlated protocol response. */
+  gatewayReached?: true;
   url: string;
   connectLatencyMs: number | null;
   error: string | null;
@@ -184,6 +190,7 @@ function makeDeviceRequiredShortCircuitResult(url: string): GatewayProbeResult {
     url,
     connectLatencyMs: null,
     error: formatProbeCloseError(close),
+    // This cached diagnostic does not prove the current listener still speaks Gateway.
     close,
     auth: emptyProbeAuth(),
     server: emptyProbeServer(),
@@ -274,6 +281,7 @@ export async function probeGateway(opts: {
   let connectLatencyMs: number | null = null;
   let connectError: string | null = null;
   let connectErrorDetails: unknown = null;
+  let gatewayReached = false;
   let close: GatewayProbeClose | null = null;
   let auth = emptyProbeAuth();
   let server = emptyProbeServer();
@@ -369,7 +377,11 @@ export async function probeGateway(opts: {
         }
         if (result.ok) {
           clearDeviceRequiredProbeFailures(cacheKey);
-        } else if (cacheEligible && isDeviceIdentityRequiredClose(result.close)) {
+        } else if (
+          cacheEligible &&
+          result.gatewayReached &&
+          isDeviceIdentityRequiredClose(result.close)
+        ) {
           noteDeviceRequiredProbeFailure(cacheKey, Date.now());
         }
         const { connectErrorDetails: resultConnectErrorDetails, ...rest } = result;
@@ -394,6 +406,7 @@ export async function probeGateway(opts: {
     }) => {
       settle({
         ok: params.ok,
+        ...(gatewayReached ? { gatewayReached: true as const } : {}),
         connectLatencyMs,
         error: params.error,
         ...(params.missingScopeErrorDetails
@@ -425,7 +438,12 @@ export async function probeGateway(opts: {
       token: opts.auth?.token,
       password: opts.auth?.password,
       edgeAuthHeaders,
-      tlsFingerprint: opts.tlsFingerprint,
+      // Saved pins belong to the exact configured endpoint, not an overridden probe URL.
+      tlsFingerprint:
+        opts.tlsFingerprint ||
+        (opts.url.trim() === opts.config?.gateway?.remote?.url?.trim()
+          ? opts.config?.gateway?.remote?.tlsFingerprint
+          : undefined),
       preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs,
       env: opts.env,
       scopes: [READ_SCOPE],
@@ -438,9 +456,11 @@ export async function probeGateway(opts: {
       onConnectError: (err) => {
         connectError = formatErrorMessage(err);
         connectErrorDetails = err instanceof GatewayClientRequestError ? err.details : null;
+        gatewayReached ||= isGatewayProtocolResponseError(err);
       },
       onClose: (code, reason, info) => {
         close = { code, reason };
+        gatewayReached ||= isGatewayProtocolResponseError(info?.connectError);
         if (connectLatencyMs == null) {
           // Preserve the transport boundary: request-level handshake failures
           // still prove the listener was reachable once the socket opened.
@@ -458,6 +478,7 @@ export async function probeGateway(opts: {
         }
       },
       onHelloOk: (hello) => {
+        gatewayReached = true;
         void (async () => {
           connectLatencyMs = Date.now() - startedAt;
           authMetadataPresent = typeof hello?.auth === "object" && hello.auth !== null;

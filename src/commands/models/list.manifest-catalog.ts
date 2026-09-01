@@ -64,11 +64,11 @@ function resolveConventionModelCatalogPluginIds(params: {
 
 function resolveDeclaredModelCatalogPluginIds(params: {
   cfg: OpenClawConfig;
-  index: PluginRegistrySnapshot;
+  snapshot: PluginMetadataSnapshot;
   providerFilter: string;
 }): readonly string[] {
   return resolvePluginContributionOwners({
-    index: params.index,
+    lookUpTable: params.snapshot,
     config: params.cfg,
     contribution: "modelCatalogProviders",
     matches: params.providerFilter,
@@ -77,19 +77,19 @@ function resolveDeclaredModelCatalogPluginIds(params: {
 
 function resolveModelCatalogPluginIdsForProvider(params: {
   cfg: OpenClawConfig;
-  index: PluginRegistrySnapshot;
+  snapshot: PluginMetadataSnapshot;
   provider: string;
 }): readonly string[] {
   return [
     ...new Set([
       ...resolveConventionModelCatalogPluginIds({
         cfg: params.cfg,
-        index: params.index,
+        index: params.snapshot.index,
         providerFilter: params.provider,
       }),
       ...resolveDeclaredModelCatalogPluginIds({
         cfg: params.cfg,
-        index: params.index,
+        snapshot: params.snapshot,
         providerFilter: params.provider,
       }),
     ]),
@@ -115,9 +115,6 @@ export function resolveManifestCatalogCoverageForList(params: {
       config: params.cfg,
       env: params.env ?? process.env,
     });
-  const pluginsById = new Map(
-    snapshot.manifestRegistry.plugins.map((plugin) => [plugin.id, plugin]),
-  );
   const ownedProviderIds = new Set<string>();
   const completeProviderIds = new Set<string>();
   for (const rawProvider of params.providerIds) {
@@ -127,7 +124,7 @@ export function resolveManifestCatalogCoverageForList(params: {
     }
     const pluginIds = resolveModelCatalogPluginIdsForProvider({
       cfg: params.cfg,
-      index: snapshot.index,
+      snapshot,
       provider,
     });
     if (pluginIds.length === 0) {
@@ -135,7 +132,7 @@ export function resolveManifestCatalogCoverageForList(params: {
     }
     ownedProviderIds.add(provider);
     const complete = pluginIds.every((pluginId) => {
-      const plugin = pluginsById.get(pluginId);
+      const plugin = snapshot.byPluginId.get(pluginId);
       if (!plugin) {
         return false;
       }
@@ -174,7 +171,6 @@ function loadManifestCatalogRowsForListSelection(params: {
       config: params.cfg,
       env: params.env ?? process.env,
     });
-  const index = snapshot.index;
   if (!providerFilter) {
     return planManifestCatalogRowsForPluginIds({
       cfg: params.cfg,
@@ -187,7 +183,7 @@ function loadManifestCatalogRowsForListSelection(params: {
     registry: snapshot.manifestRegistry,
     pluginIds: resolveConventionModelCatalogPluginIds({
       cfg: params.cfg,
-      index,
+      index: snapshot.index,
       providerFilter,
     }),
     providerFilter,
@@ -201,7 +197,7 @@ function loadManifestCatalogRowsForListSelection(params: {
     registry: snapshot.manifestRegistry,
     pluginIds: resolveDeclaredModelCatalogPluginIds({
       cfg: params.cfg,
-      index,
+      snapshot,
       providerFilter,
     }),
     providerFilter,

@@ -6,6 +6,7 @@ import {
   enforceRatchetScalar,
   loadRatchetReference,
   loadRatchetSnapshot,
+  loadRatchetSources,
   parseRatchetScalar,
   reportRatchetSuccess,
 } from "./lib/shrink-ratchet.mts";
@@ -53,11 +54,10 @@ export function collectEnvVarNames(root = process.cwd(), options: { staged?: boo
     .split("\0")
     .filter(isCountedSourcePath)
     .filter((file) => staged || fs.existsSync(path.join(root, file)));
+  const sources = staged ? loadRatchetSources(root, files).values() : files;
   const names = new Set<string>();
-  for (const file of files) {
-    const source = staged
-      ? execFileSync("git", ["show", `:${file}`], { cwd: root, encoding: "utf8" })
-      : fs.readFileSync(path.join(root, file), "utf8");
+  for (const entry of sources) {
+    const source = staged ? entry : fs.readFileSync(path.join(root, entry), "utf8");
     for (const match of source.matchAll(ENV_VAR_PATTERN)) {
       names.add(match[0]);
     }

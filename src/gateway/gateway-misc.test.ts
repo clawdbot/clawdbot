@@ -748,20 +748,12 @@ describe("gateway broadcaster", () => {
 
     expectSentEvents(pairingSocket, [
       "heartbeat",
-      "presence",
       "health",
       "tick",
       "shutdown",
       "update.available",
     ]);
-    expectSentEvents(nodeSocket, [
-      "heartbeat",
-      "presence",
-      "health",
-      "tick",
-      "shutdown",
-      "update.available",
-    ]);
+    expectSentEvents(nodeSocket, ["heartbeat", "health", "tick", "shutdown", "update.available"]);
     expectSentEvents(readSocket, [
       "cron",
       "voicewake.changed",
@@ -776,7 +768,6 @@ describe("gateway broadcaster", () => {
     expectSentEvents(talkSocket, [
       "talk.mode",
       "heartbeat",
-      "presence",
       "health",
       "tick",
       "shutdown",
@@ -807,9 +798,14 @@ describe("gateway broadcaster", () => {
       readSocket,
     );
 
-    const { broadcast } = createGatewayBroadcaster({ clients });
+    const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({
+      clients,
+      preparePresenceProjection: (presence) => () => presence,
+    });
 
     broadcast("chat", chatPayload());
+    broadcast("presence", { presence: [] });
+    broadcastToConnIds("presence", { presence: [] }, new Set(["c-pairing", "c-read"]));
     broadcast("heartbeat", { ts: 1 });
     broadcast("chat.side_result", chatSideResultPayload());
     broadcast("tick", { ts: 2 });
@@ -820,9 +816,11 @@ describe("gateway broadcaster", () => {
     ]);
     expect(sentEventSeq(readSocket)).toEqual([
       ["chat", 1],
-      ["heartbeat", 2],
-      ["chat.side_result", 3],
-      ["tick", 4],
+      ["presence", 2],
+      ["presence", 3],
+      ["heartbeat", 4],
+      ["chat.side_result", 5],
+      ["tick", 6],
     ]);
   });
 

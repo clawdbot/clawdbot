@@ -130,7 +130,6 @@ describe("plugin lifecycle protocol validators", () => {
         source: "clawhub",
         packageName: "memory-plus",
         version: "2.1.0",
-        acknowledgeClawHubRisk: true,
         acknowledgeInstallPolicyWarning: true,
         acknowledgeCapabilities: { reviewToken: "surface-sha256" },
       }),

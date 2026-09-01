@@ -11,6 +11,7 @@ export type SessionToolOverrides = {
 export type SessionPatch = {
   label?: string | null;
   icon?: string | null;
+  color?: string | null;
   category?: string | null;
   boardFace?: "chat" | "dashboard";
   model?: string | null;
@@ -28,7 +29,7 @@ export type SessionPatch = {
 
 export type SessionPatchOptions = {
   agentId?: string;
-  /** Durable identity observed with the row before an archive or restore action. */
+  /** Durable identity observed with the row before the action or edit began. */
   expectedSessionId?: string;
   /** Explicit unread marker observed by an automatic read acknowledgement. */
   expectedMarkedUnreadAt?: number | null;

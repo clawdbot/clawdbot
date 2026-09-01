@@ -32,25 +32,11 @@ vi.mock("./send.js", () => ({
   sendMessageTwitchInternal: vi.fn(),
 }));
 
-vi.mock("./utils/markdown.js", () => ({
-  chunkTextForTwitch: vi.fn(chunkMockTextForTwitch),
-}));
-
 vi.mock("./utils/twitch.js", () => ({
   normalizeTwitchChannel: (channel: string) => channel.toLowerCase().replace(/^#/, ""),
   missingTargetError: (channel: string, hint: string) =>
     new Error(`Missing target for ${channel}. Provide ${hint}`),
 }));
-
-function chunkMockTextForTwitch(text: string): string[] {
-  const chunks: string[] = [];
-  for (const chunk of text.split(/(.{500})/)) {
-    if (chunk.length > 0) {
-      chunks.push(chunk);
-    }
-  }
-  return chunks;
-}
 
 function assertResolvedTarget(
   result: ReturnType<NonNullable<typeof twitchOutbound.resolveTarget>>,
@@ -154,15 +140,6 @@ describe("outbound", () => {
 
     it("should have 500 character text chunk limit", () => {
       expect(twitchOutbound.textChunkLimit).toBe(500);
-    });
-
-    it("should chunk long messages at 500 characters", () => {
-      const chunker = twitchOutbound.chunker;
-      if (!chunker) {
-        throw new Error("twitch outbound.chunker unavailable");
-      }
-
-      expect(chunker("a".repeat(600), 500)).toEqual(["a".repeat(500), "a".repeat(100)]);
     });
 
     it("declares message adapter durable text and media with receipt proofs", async () => {
@@ -359,6 +336,33 @@ describe("outbound", () => {
   });
 
   describe("sendText", () => {
+    it.each([
+      { name: "outbound", send: twitchOutbound.sendText! },
+      { name: "message adapter", send: twitchMessageAdapter.send!.text! },
+    ])("preserves intentional no-send through $name", async ({ send }) => {
+      const { sendMessageTwitchInternal } = await import("./send.js");
+      setupAccountContext();
+      vi.mocked(sendMessageTwitchInternal).mockResolvedValue({
+        ok: true,
+        outcome: "not_sent",
+        messageId: "",
+        receipt: createMessageReceiptFromOutboundResults({ results: [] }),
+      });
+
+      const result = await send({
+        cfg: mockConfig,
+        to: "#testchannel",
+        text: "---",
+        accountId: "default",
+      });
+
+      expect(result).toMatchObject({
+        outcome: "not_sent",
+        receipt: { platformMessageIds: [], parts: [] },
+      });
+      expect(result.messageId ?? "").toBe("");
+    });
+
     it("should send message successfully", async () => {
       const { sendMessageTwitchInternal } = await import("./send.js");
 

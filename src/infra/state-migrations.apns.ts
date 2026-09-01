@@ -19,6 +19,7 @@ import {
   normalizeCanonicalApnsRegistration,
   type ApnsRegistration,
 } from "./push-apns-store.js";
+import { assertAllowedJsonFields } from "./state-migrations.json-fields.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {
   markLegacyMigrationSourceRemoved,
@@ -113,13 +114,6 @@ async function readLegacySourceSnapshot(
   };
 }
 
-function assertOnlyKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>): void {
-  const unexpected = Object.keys(value).find((key) => !allowed.has(key));
-  if (unexpected) {
-    throw new Error("legacy APNs registration has an unexpected field");
-  }
-}
-
 function isValidLegacyApnsTimestamp(value: unknown): value is number {
   return (
     typeof value === "number" &&
@@ -141,9 +135,11 @@ function parseLegacyApnsRegistration(
   if (transport !== "direct" && transport !== "relay") {
     throw new Error("legacy APNs registration has invalid transport");
   }
-  assertOnlyKeys(
+  assertAllowedJsonFields(
     rawRegistration,
     transport === "relay" ? RELAY_REGISTRATION_KEYS : DIRECT_REGISTRATION_KEYS,
+    "legacy APNs registration",
+    { reportField: false },
   );
   const normalizedNodeId = normalizeApnsNodeId(rawNodeId);
   if (!isValidApnsNodeId(normalizedNodeId)) {

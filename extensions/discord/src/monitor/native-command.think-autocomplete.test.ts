@@ -44,7 +44,7 @@ const resolveConfiguredBindingRouteMock = vi.hoisted(() =>
 const providerThinkingMocks = vi.hoisted(() => ({
   resolveProviderThinkingProfile: vi.fn(),
 }));
-const buildModelsProviderDataMock = vi.hoisted(() => vi.fn());
+const buildPreparedModelsProviderDataMock = vi.hoisted(() => vi.fn());
 
 type ConfiguredBindingRoute = ConfiguredBindingRouteResult;
 type ConfiguredBindingResolution = NonNullable<ConfiguredBindingRoute["bindingResolution"]>;
@@ -122,7 +122,7 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/models-provider-runtime", () => ({
-  buildModelsProviderData: buildModelsProviderDataMock,
+  buildPreparedModelsProviderData: buildPreparedModelsProviderDataMock,
 }));
 
 const STORE_PATH = path.join(
@@ -200,7 +200,7 @@ describe("discord native /think autocomplete", () => {
             }
           : undefined,
     );
-    buildModelsProviderDataMock.mockResolvedValue({
+    buildPreparedModelsProviderDataMock.mockResolvedValue({
       byProvider: new Map<string, Set<string>>(),
       providers: [],
       resolvedDefault: {

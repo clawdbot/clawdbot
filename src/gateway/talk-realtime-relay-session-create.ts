@@ -3,7 +3,6 @@ import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/n
 import { formatErrorMessage } from "../infra/errors.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../talk/agent-consult-tool.js";
 import { buildRealtimeVoiceAgentCancelProviderResult } from "../talk/agent-run-control-shared.js";
-import { resolveTalkSessionAgentId } from "../talk/agent-target.js";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   type RealtimeVoiceCloseReason,
@@ -126,42 +125,28 @@ export function createTalkRealtimeRelaySession(
       }
     },
   );
-  const relaySessionKey = params.sessionKey?.trim();
-  const relayAgentId = relaySessionKey
-    ? resolveTalkSessionAgentId(params.cfg ?? params.context.getRuntimeConfig(), relaySessionKey)
-    : undefined;
-  const consultRunner = relaySessionKey
-    ? createTalkClientAgentConsultRunner({
-        config: params.cfg ?? params.context.getRuntimeConfig(),
-        context: params.context,
-        agentId:
-          relayAgentId ??
-          resolveTalkSessionAgentId(
-            params.cfg ?? params.context.getRuntimeConfig(),
-            relaySessionKey,
-          ),
-        sessionKey: relaySessionKey,
-        ownerConnId: params.connId,
-        authority: params.consultAuthority,
-        getVoiceSessionId: () => relaySessionId,
-        initialItems: [],
-        runIdPrefix: "talk-realtime-relay-consult",
-        surface: "a gateway-relay Talk session",
-        registerRun: ({ runId }) =>
-          registerTalkRealtimeRelayAgentRun({
-            relaySessionId,
-            connId: params.connId,
-            sessionKey: relaySessionKey,
-            runId,
-          }),
-      })
-    : undefined;
+  const { agentId: relayAgentId, canonicalKey } = params.sessionTarget;
+  const consultRunner = createTalkClientAgentConsultRunner({
+    config: params.cfg ?? params.context.getRuntimeConfig(),
+    context: params.context,
+    sessionTarget: params.sessionTarget,
+    ownerConnId: params.connId,
+    authority: params.consultAuthority,
+    getVoiceSessionId: () => relaySessionId,
+    initialItems: [],
+    runIdPrefix: "talk-realtime-relay-consult",
+    surface: "a gateway-relay Talk session",
+    registerRun: ({ runId }) =>
+      registerTalkRealtimeRelayAgentRun({
+        relaySessionId,
+        connId: params.connId,
+        sessionKey: canonicalKey,
+        runId,
+      }),
+  });
   const runAgentConsult = async ({ prompt, signal }: { prompt: string; signal?: AbortSignal }) => {
     if (!getActiveRelay()) {
       throw new Error("Realtime gateway-relay session is closed");
-    }
-    if (!consultRunner) {
-      throw new Error("Realtime gateway-relay agent consult requires a pinned session key");
     }
     return await consultRunner.runPrompt({ prompt, signal });
   };
@@ -571,7 +556,6 @@ export function createTalkRealtimeRelaySession(
     }
     throw new Error(`Realtime provider closed during session creation: ${earlyTerminal.reason}`);
   }
-  const initialSessionKey = params.sessionKey?.trim() || undefined;
   const failSession = (message: string) => {
     const active = relaySessions.get(relaySessionId);
     if (!active || sessionFailureRequested) {
@@ -598,15 +582,7 @@ export function createTalkRealtimeRelaySession(
     bridge,
     harness,
     outputOwnership,
-    sessionKey: initialSessionKey,
-    ...(initialSessionKey
-      ? {
-          agentId: resolveTalkSessionAgentId(
-            params.cfg ?? params.context.getRuntimeConfig(),
-            initialSessionKey,
-          ),
-        }
-      : {}),
+    sessionTarget: params.sessionTarget,
     expiresAtMs,
     cleanupTimer: setTimeout(() => {
       const active = relaySessions.get(relaySessionId);
@@ -635,7 +611,6 @@ export function createTalkRealtimeRelaySession(
     voiceTranscriptSeq: 0,
     voiceTranscriptQueue: VOICE_TRANSCRIPT_QUEUE_POLICY.createQueue(),
     failSession,
-    pendingVoiceTranscripts: [],
   };
   relayRef.current = relay;
   relay.cleanupTimer.unref?.();

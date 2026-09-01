@@ -6,7 +6,6 @@ import {
 import { resolvePluginInstallSourcePlan } from "../../cli/plugin-install-plan.js";
 import { createPluginInstallLogger } from "../../cli/plugins-command-helpers.js";
 import { resolvePendingPluginCapabilityReview } from "../../plugins/capability-consent.js";
-import { CLAWHUB_INSTALL_ERROR_CODE } from "../../plugins/clawhub.js";
 import type { ConfigSnapshotForInstallPersist } from "../../plugins/install-persistence.js";
 import {
   formatNonClawHubInstallWarning,
@@ -108,15 +107,6 @@ export async function installPluginFromPluginsCommand(params: {
   if (!result.ok) {
     const warning = "warning" in result ? result.warning : warnings.join("\n");
     const warningPrefix = warning ? `${warning} ` : "";
-    if (
-      clawhub &&
-      result.code === CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED
-    ) {
-      return {
-        ok: false,
-        error: `${warningPrefix}${result.error} The /plugins chat command cannot acknowledge ClawHub risk; run the local openclaw plugins install command with --acknowledge-clawhub-risk from a trusted shell after reviewing the warning.`,
-      };
-    }
     return { ok: false, error: `${warningPrefix}${result.error}` };
   }
   warnings.push(...(result.warnings ?? []));

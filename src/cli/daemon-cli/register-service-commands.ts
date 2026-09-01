@@ -126,6 +126,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
   parent
     .command("restart")
     .description("Restart the Gateway service (launchd/systemd/schtasks)")
+    .option("--preserve-definition", "Keep the native service definition", false)
     .option("--force", "Restart immediately without waiting for active gateway work", false)
     .option(
       "--safe",

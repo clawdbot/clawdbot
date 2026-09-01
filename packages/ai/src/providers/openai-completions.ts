@@ -11,7 +11,7 @@ import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
-import type { OpenAICompletionsOptions } from "../provider-options.js";
+import { reasoningTagTextPolicy, type OpenAICompletionsOptions } from "../provider-options.js";
 import {
   resolveOpenAICompletionsCompat,
   type ResolvedOpenAICompletionsCompat,
@@ -132,7 +132,7 @@ export const streamOpenAICompletions: StreamFunction<
       const requestOptions = {
         signal: firstEventAbort.signal,
         ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
-        maxRetries: options?.maxRetries ?? 0,
+        maxRetries: 0,
       };
       const { data: openaiStream, response } = await client.chat.completions
         .create(
@@ -208,6 +208,7 @@ export const streamOpenAICompletions: StreamFunction<
           provisionalCommentaryTags,
           signal: options?.signal,
           emitReasoning: shouldEmitReasoning,
+          strictReasoningTags: reasoningTagTextPolicy.isStrict(options),
           firstEventTimeoutMs: getFirstStreamEventTimeoutMs(options),
           abortFirstEventStream: firstEventAbort.abort,
           onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
@@ -343,6 +344,7 @@ function createClient(
     baseURL: resolveOpenAIClientBaseUrl(model, baseUrl),
     dangerouslyAllowBrowser: true,
     defaultHeaders,
+    maxRetries: 0,
     // OpenAI supports custom fetch, so sentinels stay opaque until guarded egress.
     fetch: getAiTransportHost().buildModelFetch(model),
   });

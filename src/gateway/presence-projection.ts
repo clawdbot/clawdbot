@@ -5,7 +5,7 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { authorizeOperatorScopesForRequiredScope, READ_SCOPE } from "./method-scopes.js";
 import { isGatewayClientProfilePending } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
-import { createSessionListEntryFilter, isGatewayAdmin } from "./session-sharing.js";
+import { isGatewayAdmin, prepareSessionSharing } from "./session-sharing.js";
 import {
   resolveGatewaySessionStoreTargetWithStore,
   type GatewaySessionStoreDiscoveryCache,
@@ -44,20 +44,26 @@ export function createPresenceRecipientProjection(params: {
     return targets.get(sessionKey);
   };
   return (client) => {
-    const canRead =
-      client?.connect != null &&
-      (client.connect.role ?? "operator") === "operator" &&
-      authorizeOperatorScopesForRequiredScope(READ_SCOPE, client.connect.scopes ?? []).allowed &&
+    // Match system-presence RPC access before projecting any rows: even idle
+    // people expose timing through ts and roster ordering, not just named fields.
+    if (
+      !client?.connect ||
+      (client.connect.role ?? "operator") !== "operator" ||
+      !authorizeOperatorScopesForRequiredScope(READ_SCOPE, client.connect.scopes ?? []).allowed
+    ) {
+      return [];
+    }
+    const canReadSessions =
       // Match session reads: an established admin grant does not depend on profile verification.
-      (isGatewayAdmin(client) || !isGatewayClientProfilePending(client));
-    const entryFilter = canRead
-      ? createSessionListEntryFilter({ cfg: params.cfg, client })
+      isGatewayAdmin(client) || !isGatewayClientProfilePending(client);
+    const entryFilter = canReadSessions
+      ? prepareSessionSharing({ cfg: params.cfg, client }).entryFilter
       : undefined;
     return params.presence.map((row) => {
       if (!row.watchedSessions) {
         return row;
       }
-      const watchedSessions = canRead
+      const watchedSessions = canReadSessions
         ? row.watchedSessions.filter((key) => {
             const target = resolveTarget(key);
             return target && (entryFilter?.(target.canonicalKey, target.entry) ?? true);

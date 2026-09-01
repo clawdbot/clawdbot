@@ -5,6 +5,7 @@ import {
   CodexAppServerUnsafeSubscriptionError,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
+import { isCodexAppServerStartupError } from "./attempt-timeouts.js";
 import {
   CodexAppServerRpcError,
   isCodexAppServerOverloadError,
@@ -13,6 +14,7 @@ import {
 } from "./client.js";
 import { assertCodexThreadResumeResponse } from "./protocol-validators.js";
 import type { CodexThreadResumeParams, CodexThreadResumeResponse } from "./protocol.js";
+import { CodexAppServerScopedRequestRejectedError } from "./request.js";
 import { isCodexAppServerStartSelectionChangedError } from "./shared-client.js";
 
 /** Resumes one thread, releasing or isolating every possible native subscription. */
@@ -26,22 +28,27 @@ export async function resumeCodexAppServerThread(params: {
   /** Identifies ownership rejection by the request's physical pre-write fence only. */
   isPrewriteOwnershipError?: (error: unknown) => boolean;
   onSubscriptionReleased?: () => void;
+  requestResume?: (request: CodexThreadResumeParams) => Promise<unknown>;
 }): Promise<CodexThreadResumeResponse> {
   const threadId = params.request.threadId;
   let response: CodexThreadResumeResponse;
   try {
     response = assertCodexThreadResumeResponse(
-      await params.client.request("thread/resume", params.request, {
-        ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
-        ...(params.signal ? { signal: params.signal } : {}),
-        assertCurrent: params.assertCurrent,
-      }),
+      await (params.requestResume
+        ? params.requestResume(params.request)
+        : params.client.request("thread/resume", params.request, {
+            ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
+            ...(params.signal ? { signal: params.signal } : {}),
+            assertCurrent: params.assertCurrent,
+          })),
     );
     assertCodexThreadResumeSubscription(threadId, response.thread.id);
   } catch (error) {
     if (
       params.isPrewriteOwnershipError?.(error) ||
       isCodexAppServerStartSelectionChangedError(error) ||
+      isCodexAppServerStartupError(error) ||
+      error instanceof CodexAppServerScopedRequestRejectedError ||
       isCodexAppServerPrewriteRequestCancellationError(error) ||
       isCodexAppServerOverloadError(error)
     ) {

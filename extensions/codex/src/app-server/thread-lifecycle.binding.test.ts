@@ -13,7 +13,13 @@ import {
 import { CodexAppServerClient, CodexAppServerRpcError } from "./client.js";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
-import type { CodexDynamicToolFunctionSpec, JsonValue, RpcRequest } from "./protocol.js";
+import type { PluginAppPolicyContext } from "./plugin-thread-config.js";
+import type {
+  CodexDynamicToolFunctionSpec,
+  JsonObject,
+  JsonValue,
+  RpcRequest,
+} from "./protocol.js";
 import {
   createParams as createRunAttemptParams,
   setupRunAttemptTestHooks,
@@ -313,6 +319,7 @@ async function createManualResumeFixture(
     omitCatalog?: boolean;
     competingLease?: "read" | "release" | "resume";
     wireClient?: boolean;
+    parentControlledAfterAttach?: boolean;
   } = {},
 ) {
   const dynamicTools = options.dynamicTools ?? [];
@@ -358,6 +365,9 @@ async function createManualResumeFixture(
       return {
         thread: {
           ...thread,
+          ...(options.parentControlledAfterAttach && resumes > 0
+            ? { canAcceptDirectInput: false }
+            : {}),
           status: options.active
             ? { type: "active", activeFlags: [] }
             : { type: options.cold ? "notLoaded" : "idle" },
@@ -421,7 +431,7 @@ async function createManualResumeFixture(
       close: () => harness.close(),
     });
   }
-  const start = vi.spyOn(CodexAppServerClient, "start").mockReturnValueOnce(client);
+  const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(client);
   try {
     await getLeasedSharedCodexAppServerClient({
       startOptions: { ...createThreadLifecycleAppServerOptions().start, command: process.execPath },
@@ -438,10 +448,24 @@ async function createManualResumeFixture(
     resolveCodexCommandDeps({
       bindingStore: testCodexAppServerBindingStore,
       codexControlRequest: async (_pluginConfig, method, requestParams, requestOptions) => {
+        await requestOptions?.beforeRequest?.(
+          <T>({
+            method: preflightMethod,
+            requestParams: preflightParams,
+          }: {
+            method: string;
+            requestParams?: unknown;
+          }) => client.request<T>(preflightMethod, preflightParams, { timeoutMs: 60_000 }),
+          client,
+          { assertCurrent: () => undefined },
+        );
         const result = await client.request<JsonValue>(method, requestParams, {
           timeoutMs: 60_000,
         });
-        await requestOptions?.onResponse?.(result, client, { authProfileId: undefined });
+        await requestOptions?.onResponse?.(result, client, {
+          authProfileId: undefined,
+          assertCurrent: () => undefined,
+        });
         return result;
       },
     }),
@@ -524,7 +548,7 @@ async function createLeasedLifecycleWireClient(
     return count;
   });
   vi.spyOn(wire.client, "initialize").mockResolvedValue(undefined);
-  const start = vi.spyOn(CodexAppServerClient, "start").mockReturnValueOnce(wire.client);
+  const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(wire.client);
   try {
     await getLeasedSharedCodexAppServerClient({
       startOptions: { ...createThreadLifecycleAppServerOptions().start, command: process.execPath },
@@ -957,7 +981,13 @@ describe("Codex app-server thread lifecycle bindings", () => {
           fixture.request.mock.calls
             .map(([method]) => method)
             .filter((method) => method !== "skills/list"),
-        ).toEqual(["thread/resume", "thread/read", "thread/unsubscribe", "thread/resume"]);
+        ).toEqual([
+          "thread/read",
+          "thread/resume",
+          "thread/read",
+          "thread/unsubscribe",
+          "thread/resume",
+        ]);
       } finally {
         fixture.close();
       }
@@ -976,6 +1006,10 @@ describe("Codex app-server thread lifecycle bindings", () => {
       error: "immutable native tool catalog",
     },
     { options: { active: true }, error: "native thread is not idle" },
+    {
+      options: { parentControlledAfterAttach: true },
+      error: "controlled by its parent",
+    },
   ])(
     "preserves pending manual resume when native configuration cannot be attested: $options",
     async ({ options, error }) => {
@@ -1024,7 +1058,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
           fixture.request.mock.calls
             .map(([method]) => method)
             .filter((method) => method !== "skills/list"),
-        ).toEqual(["thread/resume"]);
+        ).toEqual(["thread/read", "thread/resume"]);
       } finally {
         fixture.close();
       }
@@ -1163,7 +1197,10 @@ describe("Codex app-server thread lifecycle bindings", () => {
       });
       release.resolve();
       await expect(starting).rejects.toThrow("acquiring a pending resume configuration");
-      expect(fixture.request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);
+      expect(fixture.request.mock.calls.map(([method]) => method)).toEqual([
+        "thread/read",
+        "thread/resume",
+      ]);
     } finally {
       release.resolve();
       await blocker;
@@ -1351,6 +1388,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(conflictBindingStore.mutate).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ kind: "patch", threadId: "thread-warm-conflict" }),
+      expect.any(Function),
     );
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "thread/start",
@@ -1938,7 +1976,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
             mcp_servers: {
               "arbitrary.server": { enabled: false },
               "local helper": { enabled: false },
-              "request-only": { enabled: false },
+              "request-only": { command: "request-mcp", enabled: false },
             },
             web_search: "disabled",
           }),
@@ -2062,7 +2100,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       "skills.include_instructions": false,
       "tools.experimental_request_user_input.enabled": false,
       "tools.update_plan.enabled": false,
-      mcp_servers: { inherited: { enabled: false } },
+      mcp_servers: { inherited: { command: "unsafe", enabled: false } },
       web_search: "disabled",
     });
   });
@@ -4399,7 +4437,61 @@ describe("Codex app-server thread lifecycle bindings", () => {
     });
   });
 
-  it("starts a new plugin app thread when full binding revalidation removes an app", async () => {
+  it.each<{
+    name: string;
+    previousFingerprint: string;
+    previousPolicyContext: PluginAppPolicyContext;
+    configPatch: JsonObject;
+    fingerprint: string;
+    policyContext: PluginAppPolicyContext;
+    enabledPluginConfigKeys: string[];
+  }>([
+    {
+      name: "full binding revalidation removes an app",
+      previousFingerprint: "plugin-apps-config-1",
+      previousPolicyContext: createPluginAppPolicyContext(),
+      configPatch: {
+        apps: {
+          _default: { enabled: false, destructive_enabled: false, open_world_enabled: false },
+        },
+      },
+      fingerprint: "plugin-apps-empty",
+      policyContext: { fingerprint: "plugin-policy-empty", apps: {}, pluginAppIds: {} },
+      enabledPluginConfigKeys: ["google-calendar"],
+    },
+    {
+      name: "app inventory recovers for an empty binding",
+      previousFingerprint: "plugin-apps-empty",
+      previousPolicyContext: { fingerprint: "plugin-policy-empty", apps: {}, pluginAppIds: {} },
+      configPatch: createPluginAppConfigPatch(),
+      fingerprint: "plugin-apps-config-1",
+      policyContext: createPluginAppPolicyContext(),
+      enabledPluginConfigKeys: [],
+    },
+    {
+      name: "another plugin recovers for a partial binding",
+      previousFingerprint: "plugin-apps-partial",
+      previousPolicyContext: createPluginAppPolicyContext(),
+      configPatch: createTwoPluginAppConfigPatch(),
+      fingerprint: "plugin-apps-config-2",
+      policyContext: createTwoPluginAppPolicyContext(),
+      enabledPluginConfigKeys: ["google-calendar", "gmail"],
+    },
+    {
+      name: "another app from the same plugin recovers for a partial binding",
+      previousFingerprint: "plugin-apps-partial",
+      previousPolicyContext: {
+        ...createPluginAppPolicyContext(),
+        pluginAppIds: {
+          "google-calendar": ["google-calendar-app", "google-calendar-secondary-app"],
+        },
+      },
+      configPatch: createTwoCalendarAppConfigPatch(),
+      fingerprint: "plugin-apps-config-calendar-2",
+      policyContext: createTwoCalendarAppPolicyContext(),
+      enabledPluginConfigKeys: ["google-calendar"],
+    },
+  ])("rotates the loaded plugin app thread when $name", async (scenario) => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     await writeCodexAppServerBinding(sessionFile, {
@@ -4408,33 +4500,29 @@ describe("Codex app-server thread lifecycle bindings", () => {
       model: "gpt-5.4-codex",
       modelProvider: "openai",
       dynamicToolsFingerprint: "[]",
-      pluginAppsFingerprint: "plugin-apps-config-1",
+      pluginAppsFingerprint: scenario.previousFingerprint,
       pluginAppsInputFingerprint: "plugin-apps-input-1",
-      pluginAppPolicyContext: createPluginAppPolicyContext(),
+      pluginAppPolicyContext: scenario.previousPolicyContext,
     });
     const params = createParams(sessionFile, workspaceDir);
-    const appServer = createThreadLifecycleAppServerOptions();
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
       if (method === "thread/start") {
-        return threadStartResult("thread-revalidated");
+        return threadStartResult("thread-recovered");
+      }
+      if (method === "thread/resume") {
+        return threadStartResult("thread-existing");
+      }
+      if (method === "thread/unsubscribe") {
+        return { status: "unsubscribed" };
       }
       throw new Error(`unexpected method: ${method}`);
     });
-    const emptyPolicyContext = { fingerprint: "plugin-policy-empty", apps: {}, pluginAppIds: {} };
     const buildPluginThreadConfig = vi.fn(async () => ({
       enabled: true,
-      configPatch: {
-        apps: {
-          _default: {
-            enabled: false,
-            destructive_enabled: false,
-            open_world_enabled: false,
-          },
-        },
-      },
-      fingerprint: "plugin-apps-empty",
+      configPatch: scenario.configPatch,
+      fingerprint: scenario.fingerprint,
       inputFingerprint: "plugin-apps-input-1",
-      policyContext: emptyPolicyContext,
+      policyContext: scenario.policyContext,
       diagnostics: [],
     }));
 
@@ -4443,32 +4531,31 @@ describe("Codex app-server thread lifecycle bindings", () => {
       params,
       cwd: workspaceDir,
       dynamicTools: [],
-      appServer,
+      appServer: createThreadLifecycleAppServerOptions(),
       pluginThreadConfig: {
         enabled: true,
         inputFingerprint: "plugin-apps-input-1",
-        enabledPluginConfigKeys: ["google-calendar"],
+        enabledPluginConfigKeys: scenario.enabledPluginConfigKeys,
         build: buildPluginThreadConfig,
       },
     });
 
     expect(buildPluginThreadConfig).toHaveBeenCalledTimes(1);
-    const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
-    expect(requestCalls.map(([method]) => method)).toEqual(["thread/start"]);
-    expect(requestCalls[0]?.[1].config).toEqual({
-      ...DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
-      apps: {
-        _default: {
-          enabled: false,
-          destructive_enabled: false,
-          open_world_enabled: false,
-        },
-      },
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/resume",
+      "thread/unsubscribe",
+      "thread/start",
+    ]);
+    expect(request.mock.calls.at(-1)?.[1]).toEqual(
+      expect.objectContaining({
+        config: { ...DEFAULT_CODEX_RUNTIME_THREAD_CONFIG, ...scenario.configPatch },
+      }),
+    );
+    expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
+      threadId: "thread-recovered",
+      pluginAppsFingerprint: scenario.fingerprint,
+      pluginAppPolicyContext: scenario.policyContext,
     });
-    const binding = await readCodexAppServerBinding(sessionFile);
-    expect(binding?.threadId).toBe("thread-revalidated");
-    expect(binding?.pluginAppsFingerprint).toBe("plugin-apps-empty");
-    expect(binding?.pluginAppPolicyContext).toEqual(emptyPolicyContext);
   });
 
   it("keeps the existing plugin app binding when revalidation fails", async () => {
@@ -4520,63 +4607,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(binding?.threadId).toBe("thread-existing");
     expect(binding?.pluginAppsFingerprint).toBe("plugin-apps-config-1");
     expect(binding?.pluginAppsInputFingerprint).toBe("plugin-apps-input-1");
-    expect(binding?.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
-  });
-
-  it("rebuilds an empty plugin app binding after app inventory recovers", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-existing",
-      cwd: workspaceDir,
-      model: "gpt-5.4-codex",
-      modelProvider: "openai",
-      dynamicToolsFingerprint: "[]",
-      pluginAppsFingerprint: "plugin-apps-empty",
-      pluginAppsInputFingerprint: "plugin-apps-input-1",
-      pluginAppPolicyContext: { fingerprint: "plugin-policy-empty", apps: {}, pluginAppIds: {} },
-    });
-    const params = createParams(sessionFile, workspaceDir);
-    const appServer = createThreadLifecycleAppServerOptions();
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start") {
-        return threadStartResult("thread-recovered");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const pluginAppPolicyContext = createPluginAppPolicyContext();
-    const buildPluginThreadConfig = vi.fn(async () => ({
-      enabled: true,
-      configPatch: createPluginAppConfigPatch(),
-      fingerprint: "plugin-apps-config-1",
-      inputFingerprint: "plugin-apps-input-1",
-      policyContext: pluginAppPolicyContext,
-      diagnostics: [],
-    }));
-
-    await startOrResumeThread({
-      client: { request } as never,
-      params,
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer,
-      pluginThreadConfig: {
-        enabled: true,
-        inputFingerprint: "plugin-apps-input-1",
-        build: buildPluginThreadConfig,
-      },
-    });
-
-    expect(buildPluginThreadConfig).toHaveBeenCalledTimes(1);
-    const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
-    expect(requestCalls.map(([method]) => method)).toEqual(["thread/start"]);
-    expect(requestCalls[0]?.[1].config).toEqual({
-      ...createPluginAppConfigPatch(),
-      ...DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
-    });
-    const binding = await readCodexAppServerBinding(sessionFile);
-    expect(binding?.threadId).toBe("thread-recovered");
-    expect(binding?.pluginAppsFingerprint).toBe("plugin-apps-config-1");
     expect(binding?.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
   });
 
@@ -4645,127 +4675,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
         },
       },
     });
-  });
-
-  it("rebuilds a partial plugin app binding after another plugin recovers", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-existing",
-      cwd: workspaceDir,
-      model: "gpt-5.4-codex",
-      modelProvider: "openai",
-      dynamicToolsFingerprint: "[]",
-      pluginAppsFingerprint: "plugin-apps-partial",
-      pluginAppsInputFingerprint: "plugin-apps-input-1",
-      pluginAppPolicyContext: createPluginAppPolicyContext(),
-    });
-    const params = createParams(sessionFile, workspaceDir);
-    const appServer = createThreadLifecycleAppServerOptions();
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start") {
-        return threadStartResult("thread-recovered");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const recoveredPolicyContext = createTwoPluginAppPolicyContext();
-    const buildPluginThreadConfig = vi.fn(async () => ({
-      enabled: true,
-      configPatch: createTwoPluginAppConfigPatch(),
-      fingerprint: "plugin-apps-config-2",
-      inputFingerprint: "plugin-apps-input-1",
-      policyContext: recoveredPolicyContext,
-      diagnostics: [],
-    }));
-
-    await startOrResumeThread({
-      client: { request } as never,
-      params,
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer,
-      pluginThreadConfig: {
-        enabled: true,
-        inputFingerprint: "plugin-apps-input-1",
-        enabledPluginConfigKeys: ["google-calendar", "gmail"],
-        build: buildPluginThreadConfig,
-      },
-    });
-
-    expect(buildPluginThreadConfig).toHaveBeenCalledTimes(1);
-    const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
-    expect(requestCalls.map(([method]) => method)).toEqual(["thread/start"]);
-    expect(requestCalls[0]?.[1].config).toEqual({
-      ...createTwoPluginAppConfigPatch(),
-      ...DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
-    });
-    const binding = await readCodexAppServerBinding(sessionFile);
-    expect(binding?.threadId).toBe("thread-recovered");
-    expect(binding?.pluginAppsFingerprint).toBe("plugin-apps-config-2");
-    expect(binding?.pluginAppPolicyContext).toEqual(recoveredPolicyContext);
-  });
-
-  it("rebuilds a partial plugin app binding after another app from the same plugin recovers", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-existing",
-      cwd: workspaceDir,
-      model: "gpt-5.4-codex",
-      modelProvider: "openai",
-      dynamicToolsFingerprint: "[]",
-      pluginAppsFingerprint: "plugin-apps-partial",
-      pluginAppsInputFingerprint: "plugin-apps-input-1",
-      pluginAppPolicyContext: {
-        ...createPluginAppPolicyContext(),
-        pluginAppIds: {
-          "google-calendar": ["google-calendar-app", "google-calendar-secondary-app"],
-        },
-      },
-    });
-    const params = createParams(sessionFile, workspaceDir);
-    const appServer = createThreadLifecycleAppServerOptions();
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start") {
-        return threadStartResult("thread-recovered");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const recoveredPolicyContext = createTwoCalendarAppPolicyContext();
-    const buildPluginThreadConfig = vi.fn(async () => ({
-      enabled: true,
-      configPatch: createTwoCalendarAppConfigPatch(),
-      fingerprint: "plugin-apps-config-calendar-2",
-      inputFingerprint: "plugin-apps-input-1",
-      policyContext: recoveredPolicyContext,
-      diagnostics: [],
-    }));
-
-    await startOrResumeThread({
-      client: { request } as never,
-      params,
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer,
-      pluginThreadConfig: {
-        enabled: true,
-        inputFingerprint: "plugin-apps-input-1",
-        enabledPluginConfigKeys: ["google-calendar"],
-        build: buildPluginThreadConfig,
-      },
-    });
-
-    expect(buildPluginThreadConfig).toHaveBeenCalledTimes(1);
-    const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
-    expect(requestCalls.map(([method]) => method)).toEqual(["thread/start"]);
-    expect(requestCalls[0]?.[1].config).toEqual({
-      ...createTwoCalendarAppConfigPatch(),
-      ...DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
-    });
-    const binding = await readCodexAppServerBinding(sessionFile);
-    expect(binding?.threadId).toBe("thread-recovered");
-    expect(binding?.pluginAppsFingerprint).toBe("plugin-apps-config-calendar-2");
-    expect(binding?.pluginAppPolicyContext).toEqual(recoveredPolicyContext);
   });
 
   it("starts a new configured thread for legacy bindings missing plugin app metadata", async () => {

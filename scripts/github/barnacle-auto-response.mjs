@@ -10,13 +10,14 @@ import {
 } from "./real-behavior-proof-policy.mjs";
 
 const activePrLimit = 20;
+const skillCloseLabel = "r: skill";
 
 const thirdPartyExtensionMessage =
   "Please publish this as a third-party plugin on [ClawHub](https://clawhub.ai) instead of adding it to the core repo. Docs: https://docs.openclaw.ai/plugin and https://docs.openclaw.ai/clawhub";
 
 const rules = [
   {
-    label: "r: skill",
+    label: skillCloseLabel,
     close: true,
     message:
       "Thanks for the contribution! New skills should be published on [ClawHub](https://clawhub.ai) for everyone to use. We’re keeping the core lean on skills, so I’m closing this out.",
@@ -79,7 +80,7 @@ const rules = [
 
 /** @type {Record<string, { color: string; description: string }>} */
 export const managedLabelSpecs = {
-  "r: skill": {
+  [skillCloseLabel]: {
     color: "5319E7",
     description: "Auto-close: skills should be published on ClawHub, not added to core.",
   },
@@ -222,7 +223,7 @@ const maintainerAuthorLabel = "maintainer";
 const privilegedAuthorAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 const privilegedRepositoryRoles = new Set(["admin", "maintain", "write"]);
 const candidateLabelValues = Object.values(candidateLabels);
-const structuralContextLabelValues = [NEEDS_PR_CONTEXT_LABEL];
+const structuralContextLabelValues = [NEEDS_PR_CONTEXT_LABEL, skillCloseLabel];
 const noisyPrMessage =
   "Closing this PR because it looks dirty (too many unrelated or unexpected changes). This usually happens when a branch picks up unrelated commits or a merge went sideways. Please recreate the PR from a clean branch.";
 
@@ -435,6 +436,31 @@ function isInfraLikeFile(filename) {
   );
 }
 
+function isStandaloneSkillSubmission(files) {
+  // Auto-close only whole submissions; rename sources stop core files from
+  // acquiring the destructive skill label by moving under a new skill root.
+  const addedSkillRoots = files
+    .filter(
+      (file) => file.status === "added" && /^skills\/(?:[^/]+\/)+SKILL\.md$/i.test(file.filename),
+    )
+    .map((file) => file.filename.slice(0, -"SKILL.md".length).toLowerCase());
+  const isInAddedSkillRoot = (filename) => {
+    const normalizedFilename = filename.toLowerCase();
+    return addedSkillRoots.some((root) => normalizedFilename.startsWith(root));
+  };
+
+  return (
+    addedSkillRoots.length > 0 &&
+    files.every(
+      (file) =>
+        isInAddedSkillRoot(file.filename) &&
+        (file.status !== "renamed" ||
+          (typeof file.previous_filename === "string" &&
+            isInAddedSkillRoot(file.previous_filename))),
+    )
+  );
+}
+
 function surfacesForFile(filename) {
   const surfaces = new Set();
   if (/\.generated\/|generated|\.snap$/i.test(filename)) {
@@ -548,6 +574,10 @@ export function classifyPullRequestCandidateLabels(pullRequest, files) {
       /\b(third[- ]party|external plugin|community plugin|clawhub)\b/i.test(lowerText))
   ) {
     labelsToAdd.push(candidateLabels.externalPluginCandidate);
+  }
+
+  if (isStandaloneSkillSubmission(files)) {
+    labelsToAdd.push(skillCloseLabel);
   }
 
   const surfaces = new Set(filenames.flatMap(surfacesForFile));
@@ -783,8 +813,15 @@ async function applyPullRequestCandidateLabels(github, context, core, pullReques
     },
     files,
   );
+  const preserveSkillCloseLabel =
+    context.payload.action === "labeled" &&
+    context.payload.label?.name === skillCloseLabel &&
+    !isAutomationActor(context);
   const staleContextLabels = structuralContextLabelValues.filter(
-    (label) => labelSet.has(label) && !candidateLabelsToApply.includes(label),
+    (label) =>
+      (!preserveSkillCloseLabel || label !== skillCloseLabel) &&
+      labelSet.has(label) &&
+      !candidateLabelsToApply.includes(label),
   );
   await removeLabels(github, context, pullRequest.number, staleContextLabels, labelSet);
   await addMissingLabels(
@@ -1018,6 +1055,7 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
   }
 
   const isLabelEvent = context.payload.action === "labeled";
+  const eventLabel = context.payload.label?.name ?? "";
   const isPrCandidateEvent =
     pullRequest &&
     ["opened", "edited", "synchronize", "reopened", "labeled", "unlabeled"].includes(
@@ -1086,6 +1124,13 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
     }
 
     await applyPullRequestCandidateLabels(github, context, core, pullRequest, labelSet);
+
+    if (isLabelEvent && eventLabel === skillCloseLabel && isAutomationActor(context)) {
+      core.info(
+        `Skipping duplicate PR auto-response for automation-applied ${skillCloseLabel} on #${pullRequest.number}.`,
+      );
+      return;
+    }
 
     if (labelSet.has(dirtyLabel)) {
       await github.rest.issues.createComment({

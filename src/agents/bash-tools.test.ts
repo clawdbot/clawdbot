@@ -96,7 +96,6 @@ vi.mock("../infra/shell-env.js", async () => {
 vi.mock("../process/supervisor/index.js", () => {
   type SpawnInput = {
     argv?: string[];
-    ptyCommand?: string;
     env?: NodeJS.ProcessEnv;
     onStdout?: (chunk: string) => void;
   };
@@ -111,7 +110,7 @@ vi.mock("../process/supervisor/index.js", () => {
   const writeEnvPath = (env: NodeJS.ProcessEnv, value: string) => {
     env[readPathKey(env)] = value;
   };
-  const extractCommand = (input: SpawnInput) => input.ptyCommand ?? input.argv?.at(-1) ?? "";
+  const extractCommand = (input: SpawnInput) => input.argv?.at(-1) ?? "";
   const parseShellSingleQuoted = (input: string) => {
     if (!input.startsWith("'")) {
       return null;

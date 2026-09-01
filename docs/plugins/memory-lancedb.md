@@ -266,7 +266,9 @@ Agents get three tools from the active memory plugin:
 
 - `memory_recall`: vector search over stored memories.
 - `memory_store`: save a fact, preference, decision, or entity (rejects text
-  that looks like a prompt-injection payload; skips near-duplicate stores).
+  that looks like a prompt-injection payload; skips exact duplicates after
+  normalizing line endings, Unicode NFC, and surrounding whitespace, but stores
+  semantically similar memories with different text).
 - `memory_forget`: delete by `memoryId`, or by `query` (auto-deletes a single
   match above 90% score, otherwise lists candidate IDs to disambiguate).
 
@@ -335,8 +337,9 @@ completed; other agents never inherit the old shared rows.
 
 ## Runtime dependencies and platform support
 
-`memory-lancedb` depends on the native `@lancedb/lancedb` package, owned by the
-plugin package (not the OpenClaw core dist). Gateway startup does not repair
+`memory-lancedb` bundles LanceDB's JavaScript. Its plugin package declares native
+`@lancedb/lancedb-*` packages as optional dependencies, so installation selects
+the matching binary for the host platform. Gateway startup does not repair
 plugin dependencies; if the native dependency is missing or fails to load,
 reinstall or update the plugin package and restart the Gateway.
 

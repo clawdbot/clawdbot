@@ -61,16 +61,12 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.FORBIDDEN, "Session companion asks require a connected client."),
+        errorShape(ErrorCodes.FORBIDDEN, "Side chat questions require a connected client."),
       );
       return;
     }
     if (!context.sessionCompanion) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "Session companion is unavailable."),
-      );
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "Side chat is unavailable."));
       return;
     }
     const target = resolveCompanionTarget({ sessionKey, agentId }, context);
@@ -92,7 +88,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "The session companion could not answer right now."),
+          errorShape(ErrorCodes.UNAVAILABLE, "Side chat could not answer right now."),
         );
         return;
       }
@@ -132,11 +128,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
       return;
     }
     if (!context.sessionCompanion) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "Session companion is unavailable."),
-      );
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "Side chat is unavailable."));
       return;
     }
     const { sessionKey, agentId } = params as SessionsCompanionStateParams;
@@ -167,11 +159,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
       return;
     }
     if (!context.sessionCompanion) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "Session companion is unavailable."),
-      );
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "Side chat is unavailable."));
       return;
     }
     const { sessionKey, agentId } = params as SessionsCompanionResetParams;

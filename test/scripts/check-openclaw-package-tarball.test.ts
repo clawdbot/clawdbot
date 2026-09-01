@@ -11,11 +11,15 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { gte as semverGte, valid as validSemver } from "semver";
 import { describe, expect, it } from "vitest";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mts";
-import { PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "../../scripts/lib/package-dist-inventory.ts";
+import {
+  LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
+  PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH,
+  PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH,
+} from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../../scripts/lib/workspace-bootstrap-smoke.mts";
 
 const CHECK_SCRIPT = "scripts/check-openclaw-package-tarball.mts";
@@ -75,7 +79,7 @@ function withTarball(
     includeCodeModeWorker?: boolean;
     includeCodeModeWorkerInInventory?: boolean;
     includeControlUi?: boolean;
-    includeInstallGuard?: boolean;
+    includeLifecycleMarker?: boolean;
     includeShrinkwrap?: boolean;
     includeWorkspaceTemplates?: boolean;
     packageJson?: Record<string, unknown>;
@@ -130,12 +134,12 @@ function withTarball(
               `# ${relativePath}\n`,
             ]),
           );
-    const installGuardFile =
-      options.includeInstallGuard === false
+    const lifecycleMarkerFile =
+      options.includeLifecycleMarker === false
         ? {}
         : {
-            [PACKAGE_INSTALL_GUARD_RELATIVE_PATH]:
-              "OpenClaw package preinstall has not completed.\n",
+            [PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH]: "pending\n",
+            [PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH]: "export {};\n",
           };
     const shrinkwrapFile =
       (options.includeShrinkwrap ?? usesLegacyShrinkwrapByDefault(version))
@@ -151,7 +155,7 @@ function withTarball(
     const tarFiles = {
       ...workspaceTemplates,
       ...controlUiFiles,
-      ...installGuardFile,
+      ...lifecycleMarkerFile,
       ...shrinkwrapFile,
       ...(includeCodeModeWorker ? { [CODE_MODE_WORKER_PATH]: "export {};\n" } : {}),
       ...files,
@@ -174,6 +178,60 @@ function withTarball(
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+}
+
+type TarballCheck = {
+  inventory?: Parameters<typeof withTarball>[0];
+  files?: Parameters<typeof withTarball>[1];
+  version?: Parameters<typeof withTarball>[3];
+  options?: Parameters<typeof withTarball>[4];
+  strict?: boolean;
+  status: 0 | "nonzero";
+  stderr?: string[];
+  notStderr?: string[];
+  successText?: boolean;
+};
+
+type NamedTarballCheck = TarballCheck & { name: string };
+
+function checkTarball({
+  inventory = ["dist/index.js"],
+  files = { "dist/index.js": "export {};\n" },
+  version,
+  options,
+  strict = false,
+  status,
+  stderr = [],
+  notStderr = [],
+  successText = false,
+}: TarballCheck) {
+  withTarball(
+    inventory,
+    files,
+    (tarball) => {
+      const args = strict
+        ? [CHECK_SCRIPT, "--require-bundled-workspace-deps", tarball]
+        : [CHECK_SCRIPT, tarball];
+      const result = spawnSync("node", args, { encoding: "utf8" });
+
+      if (status === 0) {
+        expect(result.status, result.stderr).toBe(0);
+      } else {
+        expect(result.status).not.toBe(0);
+      }
+      for (const text of stderr) {
+        expect(result.stderr).toContain(text);
+      }
+      for (const text of notStderr) {
+        expect(result.stderr).not.toContain(text);
+      }
+      if (successText) {
+        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
+      }
+    },
+    version,
+    options,
+  );
 }
 
 describe("check-openclaw-package-tarball", () => {
@@ -278,7 +336,10 @@ describe("check-openclaw-package-tarball", () => {
             "const fs = require('node:fs');",
             "const args = process.argv.slice(2);",
             "if (args[0] === '-tf') { console.log('package/package.json'); process.exit(0); }",
+            "if (args[0] === '-tvf') { console.log('-rw-r--r-- 0/0 0 2026-08-29 package/package.json'); process.exit(0); }",
+            "if (args[0] !== '-xf') { throw new Error('unexpected tar operation'); }",
             "const outputDir = args[args.indexOf('-C') + 1];",
+            "if (!fs.statSync(outputDir).isDirectory()) { throw new Error('missing extract dir'); }",
             "fs.writeFileSync(process.env.OPENCLAW_TEST_EXTRACT_DIR_FILE, outputDir);",
             "console.error('extract denied');",
             "process.exit(7);",
@@ -299,101 +360,82 @@ describe("check-openclaw-package-tarball", () => {
 
         expect(result.status).not.toBe(0);
         expect(result.stderr).toContain("extract denied");
-        expect(existsSync(readFileSync(extractDirFile, "utf8"))).toBe(false);
+        expect(result.stderr).toContain("tar -xf failed");
+        const extractDir = readFileSync(extractDirFile, "utf8");
+        expect(isAbsolute(extractDir)).toBe(true);
+        expect(existsSync(extractDir)).toBe(false);
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
     },
   );
 
-  it("allows legacy private QA inventory entries omitted from shipped tarballs through 2026.4.25", () => {
-    withTarball(
-      ["dist/index.js", "dist/extensions/qa-channel/runtime-api.js"],
-      { "dist/index.js": "export {};\n" },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+  const legacyInventoryCases: NamedTarballCheck[] = [
+    {
+      name: "allows legacy private QA inventory entries omitted from shipped tarballs through 2026.4.25",
+      inventory: ["dist/index.js", "dist/extensions/qa-channel/runtime-api.js"],
+      version: "2026.4.25-beta.10",
+      status: 0,
+      successText: true,
+      stderr: ["legacy inventory references omitted private QA"],
+    },
+    {
+      name: "rejects legacy private QA inventory omissions for newer packages",
+      inventory: ["dist/index.js", "dist/extensions/qa-channel/runtime-api.js"],
+      version: "2026.4.26",
+      status: "nonzero",
+      stderr: ["inventory references missing tar entry dist/extensions/qa-channel/runtime-api.js"],
+      notStderr: ["legacy inventory references omitted private QA"],
+    },
+  ];
+  for (const testCase of legacyInventoryCases) {
+    it(testCase.name, () => checkTarball(testCase));
+  }
 
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.stderr).toContain("legacy inventory references omitted private QA");
-        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
+  it("requires package lifecycle state outside the dist inventory", () => {
+    checkTarball({
+      version: "0.0.0",
+      options: { includeLifecycleMarker: false },
+      status: "nonzero",
+      stderr: [`missing required tar entry ${PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH}`],
+    });
+
+    checkTarball({
+      version: "2026.8.2",
+      files: {
+        "dist/index.js": "export {};\n",
+        [LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH]: "pending\n",
       },
-      "2026.4.25-beta.10",
-    );
-  });
+      status: "nonzero",
+      stderr: [`forbidden legacy tar entry ${LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`],
+    });
 
-  it("rejects legacy private QA inventory omissions for newer packages", () => {
-    withTarball(
-      ["dist/index.js", "dist/extensions/qa-channel/runtime-api.js"],
-      { "dist/index.js": "export {};\n" },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+    checkTarball({
+      version: "2026.8.1",
+      options: { includeLifecycleMarker: false },
+      status: 0,
+      stderr: ["legacy package omits the lifecycle pending marker"],
+    });
 
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(
-          "inventory references missing tar entry dist/extensions/qa-channel/runtime-api.js",
-        );
-        expect(result.stderr).not.toContain("legacy inventory references omitted private QA");
+    checkTarball({
+      version: "2026.8.1",
+      files: {
+        "dist/index.js": "export {};\n",
+        [PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH]: "export {};\n",
       },
-      "2026.4.26",
-    );
-  });
-
-  it("requires an install guard omitted from the dist inventory", () => {
-    withTarball(
-      ["dist/index.js"],
-      { "dist/index.js": "export {};\n" },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(
-          `missing required tar entry ${PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`,
-        );
-      },
-      "0.0.0",
-      { includeInstallGuard: false },
-    );
-
-    withTarball(
-      ["dist/index.js", PACKAGE_INSTALL_GUARD_RELATIVE_PATH],
-      { "dist/index.js": "export {};\n" },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(
-          `package dist inventory must omit install guard ${PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`,
-        );
-      },
-    );
-
-    withTarball(
-      ["dist/index.js"],
-      { "dist/index.js": "export {};\n" },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.stderr).toContain("legacy package omits the preinstall completion guard");
-      },
-      "2026.7.1",
-      { includeInstallGuard: false },
-    );
+      options: { includeLifecycleMarker: false },
+      status: "nonzero",
+      stderr: [`missing required tar entry ${PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH}`],
+    });
   });
 
   it("rejects stale deep plugin SDK declaration inventory entries", () => {
-    withTarball(
-      [FLAT_PLUGIN_SDK_DECLARATION, DEEP_PLUGIN_SDK_DECLARATION],
-      { [FLAT_PLUGIN_SDK_DECLARATION]: "export {};\n" },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(
-          `inventory references missing tar entry ${DEEP_PLUGIN_SDK_DECLARATION}`,
-        );
-      },
-    );
+    checkTarball({
+      inventory: [FLAT_PLUGIN_SDK_DECLARATION, DEEP_PLUGIN_SDK_DECLARATION],
+      files: { [FLAT_PLUGIN_SDK_DECLARATION]: "export {};\n" },
+      status: "nonzero",
+      stderr: [`inventory references missing tar entry ${DEEP_PLUGIN_SDK_DECLARATION}`],
+    });
   });
 
   it.each([
@@ -402,199 +444,112 @@ describe("check-openclaw-package-tarball", () => {
   ])(
     "rejects a packaged %s omitted from the postinstall inventory",
     (_, relativePath, contents) => {
-      withTarball(
-        ["dist/index.js"],
-        { "dist/index.js": "export {};\n", [relativePath]: contents },
-        (tarball) => {
-          const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-          expect(result.status).not.toBe(0);
-          expect(result.stderr).toContain(
-            `postinstall inventory omits packaged dist file ${relativePath}`,
-          );
-        },
-        "2026.7.2",
-        { postinstall: true },
-      );
+      checkTarball({
+        files: { "dist/index.js": "export {};\n", [relativePath]: contents },
+        version: "2026.7.2",
+        options: { postinstall: true },
+        status: "nonzero",
+        stderr: [`postinstall inventory omits packaged dist file ${relativePath}`],
+      });
     },
   );
 
-  it("accepts historical packages published before the Code Mode worker existed", () => {
-    withTarball(
-      ["dist/index.js"],
-      { "dist/index.js": "export {};\n" },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
-      },
-      "2026.5.14-beta.1",
-    );
-  });
-
-  it("rejects Code Mode packages that omit the dynamically loaded worker", () => {
-    withTarball(
-      ["dist/index.js"],
-      { "dist/index.js": "export {};\n" },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(`missing required tar entry ${CODE_MODE_WORKER_PATH}`);
-      },
-      FIRST_CODE_MODE_WORKER_VERSION,
-      { includeCodeModeWorker: false },
-    );
-  });
-
-  it("rejects Code Mode workers that postinstall would remove", () => {
-    withTarball(
-      ["dist/index.js"],
-      { "dist/index.js": "export {};\n" },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(
-          `postinstall inventory omits packaged dist file ${CODE_MODE_WORKER_PATH}`,
-        );
-      },
-      FIRST_CODE_MODE_WORKER_VERSION,
-      { includeCodeModeWorkerInInventory: false, postinstall: true },
-    );
-  });
-
-  it("rejects dist files that import missing relative chunks", () => {
-    withTarball(
-      ["dist/cli/run-main.js"],
-      { "dist/cli/run-main.js": 'await import("../memory-state-old.js");\n' },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(
-          "dist/cli/run-main.js imports missing dist/memory-state-old.js",
-        );
-      },
-      "2026.4.27",
-    );
-  });
-
-  it("rejects leaked private QA Docker chunks that import an omitted QA runtime", () => {
-    withTarball(
-      ["dist/docker-runtime-BVdgRgxA.js"],
-      {
+  const packageContractCases: NamedTarballCheck[] = [
+    {
+      name: "accepts historical packages published before the Code Mode worker existed",
+      version: "2026.5.14-beta.1",
+      status: 0,
+      successText: true,
+    },
+    {
+      name: "rejects Code Mode packages that omit the dynamically loaded worker",
+      version: FIRST_CODE_MODE_WORKER_VERSION,
+      options: { includeCodeModeWorker: false },
+      status: "nonzero",
+      stderr: [`missing required tar entry ${CODE_MODE_WORKER_PATH}`],
+    },
+    {
+      name: "rejects Code Mode workers that postinstall would remove",
+      version: FIRST_CODE_MODE_WORKER_VERSION,
+      options: { includeCodeModeWorkerInInventory: false, postinstall: true },
+      status: "nonzero",
+      stderr: [`postinstall inventory omits packaged dist file ${CODE_MODE_WORKER_PATH}`],
+    },
+    {
+      name: "rejects dist files that import missing relative chunks",
+      inventory: ["dist/cli/run-main.js"],
+      files: { "dist/cli/run-main.js": 'await import("../memory-state-old.js");\n' },
+      version: "2026.4.27",
+      status: "nonzero",
+      stderr: ["dist/cli/run-main.js imports missing dist/memory-state-old.js"],
+    },
+    {
+      name: "rejects leaked private QA Docker chunks that import an omitted QA runtime",
+      inventory: ["dist/docker-runtime-BVdgRgxA.js"],
+      files: {
         "dist/docker-runtime-BVdgRgxA.js":
           'import { createQaDockerRuntime } from "./qa-runtime-Bi1S3plf.js";\n' +
           "export { createQaDockerRuntime };\n",
       },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(
-          "dist/docker-runtime-BVdgRgxA.js imports missing dist/qa-runtime-Bi1S3plf.js",
-        );
-      },
-    );
-  });
-
-  it("accepts dist files whose relative chunks are present", () => {
-    withTarball(
-      ["dist/cli/run-main.js", "dist/memory-state-current.js"],
-      {
+      status: "nonzero",
+      stderr: ["dist/docker-runtime-BVdgRgxA.js imports missing dist/qa-runtime-Bi1S3plf.js"],
+    },
+    {
+      name: "accepts dist files whose relative chunks are present",
+      inventory: ["dist/cli/run-main.js", "dist/memory-state-current.js"],
+      files: {
         "dist/cli/run-main.js": 'await import("../memory-state-current.js");\n',
         "dist/memory-state-current.js": "export {};\n",
       },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
-      },
-      "2026.4.27",
-    );
-  });
-
-  it("rejects imported dist chunks omitted from the postinstall inventory", () => {
-    withTarball(
-      ["dist/cli/run-main.js"],
-      {
+      version: "2026.4.27",
+      status: 0,
+      successText: true,
+    },
+    {
+      name: "rejects imported dist chunks omitted from the postinstall inventory",
+      inventory: ["dist/cli/run-main.js"],
+      files: {
         "dist/cli/run-main.js": 'await import("../memory-state-current.js");\n',
         "dist/memory-state-current.js": "export {};\n",
       },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(
-          "postinstall inventory omits packaged dist file dist/memory-state-current.js",
-        );
-      },
-      "2026.4.27",
-      { postinstall: true },
-    );
-  });
-
-  it("rejects named imported chunks omitted from the postinstall inventory", () => {
-    withTarball(
-      ["dist/index.js"],
-      {
+      version: "2026.4.27",
+      options: { postinstall: true },
+      status: "nonzero",
+      stderr: ["postinstall inventory omits packaged dist file dist/memory-state-current.js"],
+    },
+    {
+      name: "rejects named imported chunks omitted from the postinstall inventory",
+      files: {
         "dist/index.js": 'import { value } from "./chunk.js";\nexport { value };\n',
         "dist/chunk.js": "export const value = 42;\n",
       },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(
-          "postinstall inventory omits packaged dist file dist/chunk.js",
-        );
-      },
-      "2026.4.27",
-      { postinstall: true },
-    );
-  });
-
-  it("rejects CommonJS require chunks omitted from the postinstall inventory", () => {
-    withTarball(
-      ["dist/index.cjs"],
-      {
+      version: "2026.4.27",
+      options: { postinstall: true },
+      status: "nonzero",
+      stderr: ["postinstall inventory omits packaged dist file dist/chunk.js"],
+    },
+    {
+      name: "rejects CommonJS require chunks omitted from the postinstall inventory",
+      inventory: ["dist/index.cjs"],
+      files: {
         "dist/index.cjs": 'module.exports = require("./chunk.cjs");\n',
         "dist/chunk.cjs": "module.exports = {};\n",
       },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(
-          "postinstall inventory omits packaged dist file dist/chunk.cjs",
-        );
-      },
-      "2026.4.27",
-      { postinstall: true },
-    );
-  });
-
-  it("rejects dist files with missing import.meta.url URL dependencies", () => {
-    withTarball(
-      ["dist/index.js"],
-      { "dist/index.js": 'const worker = new URL("./worker.js", import.meta.url);\n' },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain("dist/index.js imports missing dist/worker.js");
-      },
-      "2026.4.27",
-    );
-  });
-
-  it("rejects formatted import.meta.url URL dependencies", () => {
-    withTarball(
-      ["dist/index.js"],
-      {
+      version: "2026.4.27",
+      options: { postinstall: true },
+      status: "nonzero",
+      stderr: ["postinstall inventory omits packaged dist file dist/chunk.cjs"],
+    },
+    {
+      name: "rejects dist files with missing import.meta.url URL dependencies",
+      files: { "dist/index.js": 'const worker = new URL("./worker.js", import.meta.url);\n' },
+      version: "2026.4.27",
+      status: "nonzero",
+      stderr: ["dist/index.js imports missing dist/worker.js"],
+    },
+    {
+      name: "rejects formatted import.meta.url URL dependencies",
+      files: {
         "dist/index.js": [
           "const worker = new URL(",
           '  "./worker.js",',
@@ -603,151 +558,87 @@ describe("check-openclaw-package-tarball", () => {
           "",
         ].join("\n"),
       },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain("dist/index.js imports missing dist/worker.js");
-      },
-      "2026.4.27",
-    );
-  });
-
-  it("rejects import.meta.url URL dependencies omitted from the postinstall inventory", () => {
-    withTarball(
-      ["dist/index.js"],
-      {
+      version: "2026.4.27",
+      status: "nonzero",
+      stderr: ["dist/index.js imports missing dist/worker.js"],
+    },
+    {
+      name: "rejects import.meta.url URL dependencies omitted from the postinstall inventory",
+      files: {
         "dist/index.js": 'const worker = new URL("./worker.js", import.meta.url);\n',
         "dist/worker.js": "export {};\n",
       },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(
-          "postinstall inventory omits packaged dist file dist/worker.js",
-        );
-      },
-      "2026.4.27",
-      { postinstall: true },
-    );
-  });
-
-  it("allows import.meta.url package-root probes", () => {
-    withTarball(
-      ["dist/index.js"],
-      { "dist/index.js": 'const root = new URL("../..", import.meta.url);\n' },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
-      },
-      "2026.4.27",
-    );
-  });
-
-  it("rejects missing Control UI assets", () => {
-    withTarball(
-      ["dist/index.js"],
-      { "dist/index.js": "export {};\n" },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain("missing required tar entry dist/control-ui/index.html");
-        expect(result.stderr).toContain(
-          "missing required tar entries under dist/control-ui/assets/",
-        );
-      },
-      "2026.4.27",
-      { includeControlUi: false },
-    );
-  });
-
-  it("rejects package tarballs without workspace templates", () => {
-    withTarball(
-      ["dist/index.js"],
-      { "dist/index.js": "export {};\n" },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status).not.toBe(0);
-        for (const relativePath of WORKSPACE_TEMPLATE_PACK_PATHS) {
-          expect(result.stderr).toContain(`missing required tar entry ${relativePath}`);
-        }
-      },
-      "2026.6.11",
-      { includeWorkspaceTemplates: false },
-    );
-  });
-
-  it("allows package tarballs without npm lockfiles", () => {
-    withTarball(
-      ["dist/index.js"],
-      { "dist/index.js": "export {};\n" },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
-      },
-      "2026.5.20",
-      { includeShrinkwrap: false },
-    );
-  });
-
-  it("rejects package-lock.json in package tarballs", () => {
-    withTarball(
-      ["dist/index.js"],
-      { "dist/index.js": "export {};\n", "package-lock.json": "{}\n" },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain("package tarball must not contain package-lock.json");
-      },
-      "2026.4.27",
-    );
-  });
-
-  it("rejects workspace protocol dependencies in package manifests", () => {
-    withTarball(
-      ["dist/index.js"],
-      { "dist/index.js": "export {};\n" },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(
-          "package.json dependencies.@openclaw/ai must not use workspace protocol workspace:*",
-        );
-      },
-      "2026.6.11",
-      { packageJson: { dependencies: { "@openclaw/ai": "workspace:*" } } },
-    );
-  });
-
-  it("rejects npm-shrinkwrap.json after the 2026.7.2 transition train", () => {
-    withTarball(
-      ["dist/index.js"],
-      { "dist/index.js": "export {};\n", "npm-shrinkwrap.json": "{}\n" },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain("package tarball must not contain npm-shrinkwrap.json");
-      },
-      "2026.7.3",
-    );
-  });
+      version: "2026.4.27",
+      options: { postinstall: true },
+      status: "nonzero",
+      stderr: ["postinstall inventory omits packaged dist file dist/worker.js"],
+    },
+    {
+      name: "allows import.meta.url package-root probes",
+      files: { "dist/index.js": 'const root = new URL("../..", import.meta.url);\n' },
+      version: "2026.4.27",
+      status: 0,
+      successText: true,
+    },
+    {
+      name: "rejects missing Control UI assets",
+      version: "2026.4.27",
+      options: { includeControlUi: false },
+      status: "nonzero",
+      stderr: [
+        "missing required tar entry dist/control-ui/index.html",
+        "missing required tar entries under dist/control-ui/assets/",
+      ],
+    },
+    {
+      name: "rejects package tarballs without workspace templates",
+      version: "2026.6.11",
+      options: { includeWorkspaceTemplates: false },
+      status: "nonzero",
+      stderr: WORKSPACE_TEMPLATE_PACK_PATHS.map(
+        (relativePath) => `missing required tar entry ${relativePath}`,
+      ),
+    },
+    {
+      name: "allows package tarballs without npm lockfiles",
+      version: "2026.5.20",
+      options: { includeShrinkwrap: false },
+      status: 0,
+      successText: true,
+    },
+    {
+      name: "rejects package-lock.json in package tarballs",
+      files: { "dist/index.js": "export {};\n", "package-lock.json": "{}\n" },
+      version: "2026.4.27",
+      status: "nonzero",
+      stderr: ["package tarball must not contain package-lock.json"],
+    },
+    {
+      name: "rejects workspace protocol dependencies in package manifests",
+      version: "2026.6.11",
+      options: { packageJson: { dependencies: { "@openclaw/ai": "workspace:*" } } },
+      status: "nonzero",
+      stderr: [
+        "package.json dependencies.@openclaw/ai must not use workspace protocol workspace:*",
+      ],
+    },
+    {
+      name: "rejects npm-shrinkwrap.json after the 2026.7.2 transition train",
+      files: { "dist/index.js": "export {};\n", "npm-shrinkwrap.json": "{}\n" },
+      version: "2026.7.3",
+      status: "nonzero",
+      stderr: ["package tarball must not contain npm-shrinkwrap.json"],
+    },
+  ];
+  for (const testCase of packageContractCases) {
+    it(testCase.name, () => checkTarball(testCase));
+  }
 
   it.each(["2026.7.2-beta.4", "2026.7.2"])(
     "tolerates a valid shrinkwrap in the %s transition train",
     (version) => {
-      withTarball(
-        ["dist/index.js"],
-        {
+      checkTarball({
+        files: {
           "dist/index.js": "export {};\n",
           "npm-shrinkwrap.json": `${JSON.stringify({
             name: "openclaw",
@@ -756,23 +647,17 @@ describe("check-openclaw-package-tarball", () => {
             packages: { "": { name: "openclaw", version } },
           })}\n`,
         },
-        (tarball) => {
-          const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-          expect(result.status, result.stderr).toBe(0);
-          expect(result.stderr).toContain(
-            "2026.7.2 transition package contains npm-shrinkwrap.json",
-          );
-        },
         version,
-      );
+        status: 0,
+        stderr: ["2026.7.2 transition package contains npm-shrinkwrap.json"],
+      });
     },
   );
 
   it("accepts a valid shrinkwrap in an already-published package", () => {
     const version = "2026.6.11";
-    withTarball(
-      ["dist/index.js"],
-      {
+    checkTarball({
+      files: {
         "dist/index.js": "export {};\n",
         "npm-shrinkwrap.json": `${JSON.stringify({
           name: "openclaw",
@@ -781,92 +666,54 @@ describe("check-openclaw-package-tarball", () => {
           packages: { "": { name: "openclaw", version } },
         })}\n`,
       },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-        expect(result.status, result.stderr).toBe(0);
-      },
       version,
-    );
+      status: 0,
+    });
   });
 
-  it("accepts separately published private workspace dependencies by default", () => {
-    withTarball(
-      ["dist/index.js"],
-      { "dist/index.js": "export {};\n" },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
-      },
-      "2026.6.11",
-      { packageJson: { dependencies: { "@openclaw/ai": "2026.6.11" } } },
-    );
-  });
-
-  it("rejects private workspace dependencies that are not bundled when strict packaging requires it", () => {
-    withTarball(
-      ["dist/index.js"],
-      { "dist/index.js": "export {};\n" },
-      (tarball) => {
-        const result = spawnSync(
-          "node",
-          [CHECK_SCRIPT, "--require-bundled-workspace-deps", tarball],
-          { encoding: "utf8" },
-        );
-
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(
-          "package.json dependencies.@openclaw/ai must be listed in bundleDependencies because it is private to the OpenClaw workspace",
-        );
-        expect(result.stderr).toContain(
-          "package.json dependencies.@openclaw/ai must be bundled in node_modules/@openclaw/ai",
-        );
-      },
-      "2026.6.11",
-      { packageJson: { dependencies: { "@openclaw/ai": "2026.6.11" } } },
-    );
-  });
-
-  it("rejects private workspace dependencies when only metadata is bundled", () => {
-    withTarball(
-      ["dist/index.js"],
-      {
+  const bundledRuntimeCases: NamedTarballCheck[] = [
+    {
+      name: "accepts separately published private workspace dependencies by default",
+      version: "2026.6.11",
+      options: { packageJson: { dependencies: { "@openclaw/ai": "2026.6.11" } } },
+      status: 0,
+      successText: true,
+    },
+    {
+      name: "rejects private workspace dependencies that are not bundled when strict packaging requires it",
+      version: "2026.6.11",
+      options: { packageJson: { dependencies: { "@openclaw/ai": "2026.6.11" } } },
+      strict: true,
+      status: "nonzero",
+      stderr: [
+        "package.json dependencies.@openclaw/ai must be listed in bundleDependencies because it is private to the OpenClaw workspace",
+        "package.json dependencies.@openclaw/ai must be bundled in node_modules/@openclaw/ai",
+      ],
+    },
+    {
+      name: "rejects private workspace dependencies when only metadata is bundled",
+      files: {
         "dist/index.js": "export {};\n",
         "node_modules/@openclaw/ai/package.json": AI_RUNTIME_PACKAGE_JSON,
       },
-      (tarball) => {
-        const result = spawnSync(
-          "node",
-          [CHECK_SCRIPT, "--require-bundled-workspace-deps", tarball],
-          { encoding: "utf8" },
-        );
-
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(
-          "bundled @openclaw/ai is missing required runtime entry dist/index.mjs",
-        );
-        expect(result.stderr).toContain(
-          "bundled @openclaw/ai is missing required runtime entry dist/providers.mjs",
-        );
-        expect(result.stderr).toContain(
-          "bundled @openclaw/ai is missing required runtime entry dist/internal/runtime.mjs",
-        );
-      },
-      "2026.6.11",
-      {
+      version: "2026.6.11",
+      options: {
         packageJson: {
           dependencies: { "@openclaw/ai": "2026.6.11" },
           bundleDependencies: ["@openclaw/ai"],
         },
       },
-    );
-  });
-
-  it("accepts private workspace dependencies when their runtime is bundled", () => {
-    withTarball(
-      ["dist/index.js"],
-      {
+      strict: true,
+      status: "nonzero",
+      stderr: [
+        "bundled @openclaw/ai is missing required runtime entry dist/index.mjs",
+        "bundled @openclaw/ai is missing required runtime entry dist/providers.mjs",
+        "bundled @openclaw/ai is missing required runtime entry dist/internal/runtime.mjs",
+      ],
+    },
+    {
+      name: "accepts private workspace dependencies when their runtime is bundled",
+      files: {
         "dist/index.js": "export {};\n",
         "node_modules/@openclaw/ai/package.json": AI_RUNTIME_PACKAGE_JSON,
         "node_modules/@openclaw/ai/dist/index.mjs": "export {};\n",
@@ -876,60 +723,40 @@ describe("check-openclaw-package-tarball", () => {
           "export {};\n",
         "node_modules/@openclaw/ai/dist/internal/runtime.mjs": "export {};\n",
       },
-      (tarball) => {
-        const result = spawnSync(
-          "node",
-          [CHECK_SCRIPT, "--require-bundled-workspace-deps", tarball],
-          { encoding: "utf8" },
-        );
-
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
-      },
-      "2026.6.11",
-      {
+      version: "2026.6.11",
+      options: {
         packageJson: {
           dependencies: { "@openclaw/ai": "2026.6.11" },
           bundleDependencies: ["@openclaw/ai"],
         },
       },
-    );
-  });
-
-  it("accepts frozen AI runtimes that predate an optional exported subpath", () => {
-    withTarball(
-      ["dist/index.js"],
-      {
+      strict: true,
+      status: 0,
+      successText: true,
+    },
+    {
+      name: "accepts frozen AI runtimes that predate an optional exported subpath",
+      files: {
         "dist/index.js": "export {};\n",
         "node_modules/@openclaw/ai/package.json": LEGACY_AI_RUNTIME_PACKAGE_JSON,
         "node_modules/@openclaw/ai/dist/index.mjs": "export {};\n",
         "node_modules/@openclaw/ai/dist/providers.mjs": "export {};\n",
         "node_modules/@openclaw/ai/dist/internal/runtime.mjs": "export {};\n",
       },
-      (tarball) => {
-        const result = spawnSync(
-          "node",
-          [CHECK_SCRIPT, "--require-bundled-workspace-deps", tarball],
-          { encoding: "utf8" },
-        );
-
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
-      },
-      "2026.7.2-beta.4",
-      {
+      version: "2026.7.2-beta.4",
+      options: {
         packageJson: {
           dependencies: { "@openclaw/ai": "2026.7.2-beta.4" },
           bundleDependencies: ["@openclaw/ai"],
         },
       },
-    );
-  });
-
-  it("rejects a missing required bundled AI runtime entry", () => {
-    withTarball(
-      ["dist/index.js"],
-      {
+      strict: true,
+      status: 0,
+      successText: true,
+    },
+    {
+      name: "rejects a missing required bundled AI runtime entry",
+      files: {
         "dist/index.js": "export {};\n",
         "node_modules/@openclaw/ai/package.json": AI_RUNTIME_PACKAGE_JSON,
         "node_modules/@openclaw/ai/dist/index.mjs": "export {};\n",
@@ -938,32 +765,20 @@ describe("check-openclaw-package-tarball", () => {
           "export {};\n",
         "node_modules/@openclaw/ai/dist/internal/runtime.mjs": "export {};\n",
       },
-      (tarball) => {
-        const result = spawnSync(
-          "node",
-          [CHECK_SCRIPT, "--require-bundled-workspace-deps", tarball],
-          { encoding: "utf8" },
-        );
-
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(
-          "bundled @openclaw/ai is missing required runtime entry dist/providers.mjs",
-        );
-      },
-      "2026.6.11",
-      {
+      version: "2026.6.11",
+      options: {
         packageJson: {
           dependencies: { "@openclaw/ai": "2026.6.11" },
           bundleDependencies: ["@openclaw/ai"],
         },
       },
-    );
-  });
-
-  it("rejects bundled AI entries that its manifest does not export", () => {
-    withTarball(
-      ["dist/index.js"],
-      {
+      strict: true,
+      status: "nonzero",
+      stderr: ["bundled @openclaw/ai is missing required runtime entry dist/providers.mjs"],
+    },
+    {
+      name: "rejects bundled AI entries that its manifest does not export",
+      files: {
         "dist/index.js": "export {};\n",
         "node_modules/@openclaw/ai/package.json": JSON.stringify({
           name: "@openclaw/ai",
@@ -981,32 +796,20 @@ describe("check-openclaw-package-tarball", () => {
           "export {};\n",
         "node_modules/@openclaw/ai/dist/internal/runtime.mjs": "export {};\n",
       },
-      (tarball) => {
-        const result = spawnSync(
-          "node",
-          [CHECK_SCRIPT, "--require-bundled-workspace-deps", tarball],
-          { encoding: "utf8" },
-        );
-
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(
-          "bundled @openclaw/ai runtime specifier @openclaw/ai/providers is not resolvable",
-        );
-      },
-      "2026.6.11",
-      {
+      version: "2026.6.11",
+      options: {
         packageJson: {
           dependencies: { "@openclaw/ai": "2026.6.11" },
           bundleDependencies: ["@openclaw/ai"],
         },
       },
-    );
-  });
-
-  it("rejects missing relative imports from bundled AI runtime entries", () => {
-    withTarball(
-      ["dist/index.js"],
-      {
+      strict: true,
+      status: "nonzero",
+      stderr: ["bundled @openclaw/ai runtime specifier @openclaw/ai/providers is not resolvable"],
+    },
+    {
+      name: "rejects missing relative imports from bundled AI runtime entries",
+      files: {
         "dist/index.js": "export {};\n",
         "node_modules/@openclaw/ai/package.json": AI_RUNTIME_PACKAGE_JSON,
         "node_modules/@openclaw/ai/dist/index.mjs": "export {};\n",
@@ -1016,70 +819,50 @@ describe("check-openclaw-package-tarball", () => {
           "export {};\n",
         "node_modules/@openclaw/ai/dist/internal/runtime.mjs": 'export * from "./missing.mjs";\n',
       },
-      (tarball) => {
-        const result = spawnSync(
-          "node",
-          [CHECK_SCRIPT, "--require-bundled-workspace-deps", tarball],
-          { encoding: "utf8" },
-        );
-
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(
-          "bundled @openclaw/ai dist/internal/runtime.mjs imports missing dist/internal/missing.mjs",
-        );
-      },
-      "2026.6.11",
-      {
+      version: "2026.6.11",
+      options: {
         packageJson: {
           dependencies: { "@openclaw/ai": "2026.6.11" },
           bundleDependencies: ["@openclaw/ai"],
         },
       },
-    );
-  });
-
-  it("rejects local build metadata entries in package tarballs", () => {
-    withTarball(
-      ["dist/index.js", ...LOCAL_BUILD_METADATA_DIST_PATHS],
-      {
+      strict: true,
+      status: "nonzero",
+      stderr: [
+        "bundled @openclaw/ai dist/internal/runtime.mjs imports missing dist/internal/missing.mjs",
+      ],
+    },
+    {
+      name: "rejects local build metadata entries in package tarballs",
+      inventory: ["dist/index.js", ...LOCAL_BUILD_METADATA_DIST_PATHS],
+      files: {
         "dist/index.js": "export {};\n",
         ...Object.fromEntries(LOCAL_BUILD_METADATA_DIST_PATHS.map((entry) => [entry, "{}\n"])),
       },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(
-          "forbidden local build metadata tar entry dist/.buildstamp",
-        );
-        expect(result.stderr).toContain(
-          "forbidden local build metadata tar entry dist/.runtime-postbuildstamp",
-        );
-      },
-      "2026.4.27",
-    );
-  });
-
-  it("allows local build metadata in already published legacy packages through 2026.4.26", () => {
-    withTarball(
-      ["dist/index.js", ...LOCAL_BUILD_METADATA_DIST_PATHS],
-      {
+      version: "2026.4.27",
+      status: "nonzero",
+      stderr: [
+        "forbidden local build metadata tar entry dist/.buildstamp",
+        "forbidden local build metadata tar entry dist/.runtime-postbuildstamp",
+      ],
+    },
+    {
+      name: "allows local build metadata in already published legacy packages through 2026.4.26",
+      inventory: ["dist/index.js", ...LOCAL_BUILD_METADATA_DIST_PATHS],
+      files: {
         "dist/index.js": "export {};\n",
         ...Object.fromEntries(LOCAL_BUILD_METADATA_DIST_PATHS.map((entry) => [entry, "{}\n"])),
       },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.stderr).toContain(
-          "legacy package includes local build metadata tar entry dist/.buildstamp",
-        );
-        expect(result.stderr).toContain(
-          "legacy package includes local build metadata tar entry dist/.runtime-postbuildstamp",
-        );
-        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
-      },
-      "2026.4.26",
-    );
-  });
+      version: "2026.4.26",
+      status: 0,
+      successText: true,
+      stderr: [
+        "legacy package includes local build metadata tar entry dist/.buildstamp",
+        "legacy package includes local build metadata tar entry dist/.runtime-postbuildstamp",
+      ],
+    },
+  ];
+  for (const testCase of bundledRuntimeCases) {
+    it(testCase.name, () => checkTarball(testCase));
+  }
 });

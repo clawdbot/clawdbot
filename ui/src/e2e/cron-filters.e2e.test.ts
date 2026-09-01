@@ -1044,7 +1044,7 @@ suite.define(() => {
         });
 
         await page.goto(`${suite.server.baseUrl}cron`);
-        await page.locator('[data-test-id="cron-list-tab-tasks"]').waitFor();
+        await page.locator('[data-test-id="cron-tab-all"]').waitFor();
 
         await page.keyboard.press("Tab");
         await expect
@@ -1055,9 +1055,11 @@ suite.define(() => {
           .poll(() => page.evaluate(() => document.activeElement?.id))
           .toBe("control-ui-main");
 
-        const tasksTab = page.getByRole("tab", { name: "Automations", exact: true });
+        const tasksTab = page.getByRole("tab", { name: "All", exact: true });
         const activityTab = page.getByRole("tab", { name: "Run history", exact: true });
         await tasksTab.focus();
+        await page.keyboard.press("ArrowRight");
+        await page.keyboard.press("ArrowRight");
         await page.keyboard.press("ArrowRight");
         await expect
           .poll(() => activityTab.evaluate((element) => element === document.activeElement))

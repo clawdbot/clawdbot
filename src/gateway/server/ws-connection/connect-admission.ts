@@ -28,9 +28,11 @@ import {
   isBrowserOperatorUiClient,
   isOperatorUiClient,
 } from "../../../utils/message-channel.js";
+import { ControlUiGitHubError } from "../../control-ui-github-api.js";
 import type { OperatorScope } from "../../operator-scopes.js";
 import { checkBrowserOrigin, normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { parseGatewayRole } from "../../role-policy.js";
+import { authenticatedProfileUnavailableError } from "../../server-methods/gateway-client-identity.js";
 import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import { isNativeAppUiClient } from "./handshake-auth-helpers.js";
@@ -80,6 +82,23 @@ export async function rejectGatewayStartupConnect(
     }),
   }).catch(() => {});
   queueMicrotask(() => close(GATEWAY_STARTUP_CLOSE_CODE, GATEWAY_STARTUP_CLOSE_REASON));
+}
+
+export async function rejectUnavailableProfileConnect(
+  context: GatewayConnectPhaseContext,
+  error: unknown,
+): Promise<void> {
+  // Role admission needs a verified profile; an empty-scope hello hides the
+  // verification outage behind unrelated permission errors on every request.
+  const failure = authenticatedProfileUnavailableError(
+    error instanceof ControlUiGitHubError && error.statusCode === 429
+      ? "GitHub is rate limiting profile verification. Retry shortly; if this continues, ask a gateway administrator to check the GitHub API credential."
+      : undefined,
+  );
+  context.markHandshakeFailure("authenticated-profile-unavailable");
+  context.sendHandshakeErrorResponse(ErrorCodes.UNAVAILABLE, failure.message, failure);
+  await context.releasePendingNodePairingCleanup();
+  context.handler.close(1013, truncateCloseReason(failure.message));
 }
 
 export function applyConnectionScopeCap(params: {

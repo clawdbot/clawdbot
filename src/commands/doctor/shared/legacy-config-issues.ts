@@ -9,8 +9,7 @@ import type {
 } from "../../../config/types.js";
 import { withPluginMetadataSnapshotScope } from "../../../plugins/current-plugin-metadata-snapshot.js";
 import {
-  collectRelevantDoctorPluginIds,
-  collectRelevantDoctorPluginIdsForTouchedPaths,
+  collectDoctorConfigRepairPluginIds,
   listPluginDoctorLegacyConfigRules,
 } from "../../../plugins/doctor-contract-registry.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
@@ -25,11 +24,9 @@ function collectPluginLegacyConfigRules(
   touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
 ): LegacyConfigRule[] {
   const channelIds = collectConfiguredChannelIds(raw);
-  const pluginIds = (
-    touchedPaths
-      ? collectRelevantDoctorPluginIdsForTouchedPaths({ raw, touchedPaths })
-      : collectRelevantDoctorPluginIds(raw)
-  ).filter((pluginId) => !channelIds.has(pluginId));
+  const pluginIds = collectDoctorConfigRepairPluginIds(raw, touchedPaths).filter(
+    (pluginId) => !channelIds.has(pluginId),
+  );
   if (pluginIds.length === 0) {
     return [];
   }

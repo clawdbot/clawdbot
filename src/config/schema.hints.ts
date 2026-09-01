@@ -35,7 +35,7 @@ const GROUP_HINTS = [
   ["commands", "Commands", 85],
   ["session", "Session", 90],
   ["cron", "Automations", 100],
-  ["worktrees", "Worktrees", 105],
+  ["worktreeRoot", "Worktree Root", 105],
   ["hooks", "Hooks", 110],
   ["ui", "UI", 120],
   ["browser", "Browser", 130],
@@ -52,7 +52,7 @@ const GROUP_HINTS = [
 const SECTION_DOCS_URLS = {
   accessGroups: "https://docs.openclaw.ai/channels/access-groups",
   messages: "https://docs.openclaw.ai/concepts/messages",
-  tts: "https://docs.openclaw.ai/tts",
+  tts: "https://docs.openclaw.ai/tools/tts",
   commands: "https://docs.openclaw.ai/tools/slash-commands",
   hooks: "https://docs.openclaw.ai/automation/hooks",
   cron: "https://docs.openclaw.ai/automation/cron-jobs",
@@ -90,7 +90,7 @@ const SECTION_DOCS_URLS = {
   presence: "https://docs.openclaw.ai/concepts/presence",
   cloudWorkers: "https://docs.openclaw.ai/gateway/cloud-workers",
   desktop: "https://docs.openclaw.ai/gateway/configuration",
-  worktrees: "https://docs.openclaw.ai/concepts/managed-worktrees",
+  worktreeRoot: "https://docs.openclaw.ai/concepts/managed-worktrees",
   proxy: "https://docs.openclaw.ai/security/network-proxy",
   transcripts: "https://docs.openclaw.ai/plugins/meeting-plugins",
   surfaces: "https://docs.openclaw.ai/concepts/messages",
@@ -158,6 +158,12 @@ export function buildBaseHints(): ConfigUiHints {
         hints[path] = { ...hints[path], [field]: value };
       }
     }
+  }
+  for (const path of ["agents.defaults.models.*", "agents.entries.*.models.*"]) {
+    const runtimePath = `${path}.agentRuntime`;
+    const codeModePath = `${path}.codeMode`;
+    hints[runtimePath] = { ...hints[runtimePath], order: -2 };
+    hints[codeModePath] = { ...hints[codeModePath], order: -1, placeholder: "Default" };
   }
   return applyDerivedTags(applyConfigTierHints(hints));
 }

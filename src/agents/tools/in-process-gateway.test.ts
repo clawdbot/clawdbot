@@ -71,6 +71,35 @@ describe("trusted in-process Gateway session creation", () => {
     );
   });
 
+  it("uses an explicitly bound Gateway when worker creation has no ambient request scope", async () => {
+    mocks.hasContext = false;
+    const admitted = {} as GatewayRequestContext;
+    const resolveGatewayContext = () => admitted;
+    const sessionMutationCommitGuard = vi.fn();
+    const creation = {
+      via: "spawn" as const,
+      actor: { type: "agent" as const, id: "main" },
+      requesterSessionKey: "agent:main:dashboard:worker",
+      inheritedToolPolicy: { version: 1 as const, allow: ["sessions_spawn"], deny: [] },
+    };
+
+    await callInProcessGatewayToolWithCreation("sessions.create", { agentId: "main" }, creation, {
+      resolveGatewayContext,
+      sessionMutationCommitGuard,
+    });
+
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "sessions.create",
+      { agentId: "main" },
+      expect.objectContaining({
+        resolveGatewayContext: expect.any(Function),
+        sessionMutationCommitGuard,
+        sessionCreation: creation,
+      }),
+    );
+    expect(mocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("carries visible-spawn policy through signed identity on fallback dispatch", async () => {
     mocks.hasContext = false;
     const inheritedToolPolicy = {

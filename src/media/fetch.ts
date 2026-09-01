@@ -14,6 +14,7 @@ import {
 } from "../infra/http-body.js";
 import {
   fetchWithSsrFGuard,
+  type GuardedFetchOptions,
   withStrictGuardedFetchMode,
   withTrustedExplicitProxyGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
@@ -78,6 +79,8 @@ type FetchDispatcherAttempt = {
 type FetchMediaOptions = {
   url: string;
   fetchImpl?: FetchLike;
+  /** Final synchronous check repeated for every media attempt and redirect. */
+  beforeRequest?: GuardedFetchOptions["beforeRequest"];
   requestInit?: RequestInit;
   filePathHint?: string;
   maxBytes?: number;
@@ -297,6 +300,7 @@ async function fetchGuardedMediaResponse(
   const {
     url,
     fetchImpl,
+    beforeRequest,
     requestInit,
     maxRedirects,
     requireHttps,
@@ -330,6 +334,7 @@ async function fetchGuardedMediaResponse(
         : withStrictGuardedFetchMode)({
         url,
         fetchImpl,
+        ...(beforeRequest ? { beforeRequest } : {}),
         init: requestInit,
         maxRedirects,
         ...(requireHttps !== undefined ? { requireHttps } : {}),
@@ -421,16 +426,17 @@ async function assertMediaResponseOk(params: {
   );
 }
 
-async function assertMediaContentLength(params: {
+// Caller-provided responses may already be partially read; discard their remaining bytes too.
+function assertMediaContentLength(params: {
   res: Response;
   sourceUrl: string;
   maxBytes: number;
-}): Promise<void> {
+}): void {
   let length: number | null;
   try {
     length = parseMediaContentLength(params.res.headers.get("content-length"));
   } catch (err) {
-    await discardIgnoredResponseBody(params.res);
+    void params.res.body?.cancel().catch(() => undefined);
     throw new MediaFetchError(
       "http_error",
       `Failed to fetch media from ${params.sourceUrl}: ${formatErrorMessage(err)}`,
@@ -441,23 +447,11 @@ async function assertMediaContentLength(params: {
     return;
   }
   if (length > params.maxBytes) {
-    await discardIgnoredResponseBody(params.res);
+    void params.res.body?.cancel().catch(() => undefined);
     throw new MediaFetchError(
       "max_bytes",
       `Failed to fetch media from ${params.sourceUrl}: content length ${length} exceeds maxBytes ${params.maxBytes}`,
     );
-  }
-}
-
-async function discardIgnoredResponseBody(res: Response): Promise<void> {
-  const body = res.body;
-  if (!body) {
-    return;
-  }
-  try {
-    await body.cancel();
-  } catch {
-    // Best-effort cleanup after rejecting a response body.
   }
 }
 
@@ -539,7 +533,8 @@ async function* responseBodyChunks(
     }
   } finally {
     if (!completed) {
-      await reader.cancel().catch(() => undefined);
+      // Let the file writer close its handle and the request owner abort any capture tee.
+      void reader.cancel().catch(() => undefined);
     }
     try {
       reader.releaseLock();
@@ -562,7 +557,7 @@ async function saveOkMediaResponse(params: {
   subdir?: string;
   originalFilename?: string;
 }): Promise<SavedRemoteMedia> {
-  await assertMediaContentLength({
+  assertMediaContentLength({
     res: params.res,
     sourceUrl: params.sourceUrl,
     maxBytes: params.maxBytes,
@@ -727,7 +722,7 @@ async function readRemoteMediaBufferOnce(options: FetchMediaOptions): Promise<Fe
     });
 
     const effectiveMaxBytes = options.maxBytes ?? DEFAULT_FETCH_MEDIA_MAX_BYTES;
-    await assertMediaContentLength({ res, sourceUrl, maxBytes: effectiveMaxBytes });
+    assertMediaContentLength({ res, sourceUrl, maxBytes: effectiveMaxBytes });
     let buffer: Buffer;
     try {
       buffer = await readResponseWithLimit(res, effectiveMaxBytes, {

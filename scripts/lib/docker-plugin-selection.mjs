@@ -5,13 +5,12 @@ import { collectRootPackageExcludedExtensionDirs } from "./root-package-bundled-
 
 const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9-]*$/u;
 
-function readManifestId(pluginDir) {
+function readManifest(pluginDir) {
   const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
   if (!fs.existsSync(manifestPath)) {
     return null;
   }
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-  return typeof manifest.id === "string" && manifest.id.length > 0 ? manifest.id : null;
+  return JSON.parse(fs.readFileSync(manifestPath, "utf8"));
 }
 
 function collectPluginIdentities(extensionsRoot) {
@@ -21,10 +20,13 @@ function collectPluginIdentities(extensionsRoot) {
     .map((entry) => {
       const pluginDir = path.join(extensionsRoot, entry.name);
       const hasPackageJson = fs.existsSync(path.join(pluginDir, "package.json"));
-      const manifestId = readManifestId(pluginDir);
+      const manifest = readManifest(pluginDir);
+      const manifestId =
+        typeof manifest?.id === "string" && manifest.id.length > 0 ? manifest.id : null;
       return {
         dirName: entry.name,
         manifestId,
+        providers: manifest?.providers ?? [],
         known: hasPackageJson || manifestId !== null,
       };
     })
@@ -33,7 +35,7 @@ function collectPluginIdentities(extensionsRoot) {
 }
 
 /** Resolve public Docker selections to the source directories used by build and prune steps. */
-function resolveDockerPluginSelection(params) {
+export function resolveDockerPluginSelection(params) {
   const selection = typeof params.selection === "string" ? params.selection : "";
   const selectedIds = new Set(
     selection
@@ -43,6 +45,12 @@ function resolveDockerPluginSelection(params) {
   );
   const plugins = collectPluginIdentities(params.extensionsRoot);
   const resolvedDirs = new Set();
+  const providers = new Set(params.providers ?? []);
+  for (const plugin of plugins) {
+    if (plugin.providers.some((provider) => providers.has(provider))) {
+      resolvedDirs.add(plugin.dirName);
+    }
+  }
 
   for (const selectedId of selectedIds) {
     if (!PLUGIN_ID_RE.test(selectedId)) {

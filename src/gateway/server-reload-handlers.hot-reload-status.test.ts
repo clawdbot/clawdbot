@@ -85,12 +85,12 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
           reconcileExitWatchers: vi.fn(async () => {}),
           reconcileStreamWatchers: vi.fn(async () => {}),
           stopStreamWatchers: vi.fn(async () => {}),
-          reconcileHeartbeatJobs: vi.fn(async () => {}),
+          reconcileHeartbeatJobs: vi.fn(async () => "converged" as const),
         } as never,
         channelHealthMonitor: null,
       }),
       setState: vi.fn(),
-      startChannel: vi.fn(async () => {}),
+      startChannel: vi.fn(async () => new Map()),
       stopChannel: vi.fn(async () => {}),
       reloadPlugins: vi.fn(
         async (): Promise<GatewayPluginReloadResult> => ({

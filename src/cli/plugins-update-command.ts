@@ -41,7 +41,7 @@ import {
   withPluginInstallRecords,
 } from "../plugins/installed-plugin-index-records.js";
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
-import { resolveInstalledPluginPackageOwnership } from "../plugins/installed-plugin-package-ownership.js";
+import { resolveInstalledPluginLifecycleOwnership } from "../plugins/installed-plugin-package-ownership.js";
 import { configReferencesNpmInstallPath } from "../plugins/installs.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import {
@@ -57,7 +57,6 @@ import {
 } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
-import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
 import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
 import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
 import { notifyGatewayPluginMetadataChanged } from "./plugins-update-gateway-signal.js";
@@ -183,7 +182,6 @@ type RunPluginUpdateCommandParams = {
   opts: {
     all?: boolean;
     acceptCapabilities?: boolean;
-    acknowledgeClawHubRisk?: boolean;
     acknowledgeInstallPolicyWarning?: boolean;
     dryRun?: boolean;
     dangerouslyForceUnsafeInstall?: boolean;
@@ -243,7 +241,7 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
     ...installedPluginIndex.plugins.map((plugin) => plugin.pluginId),
     ...Object.keys(pluginInstallRecords),
   ])) {
-    const ownership = resolveInstalledPluginPackageOwnership(installedPluginIndex, pluginId);
+    const ownership = resolveInstalledPluginLifecycleOwnership(installedPluginIndex, pluginId);
     if (!ownership.ok) {
       rejectedPluginIds.set(pluginId, ownership.error);
       continue;
@@ -285,7 +283,7 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
   const packageUpdateSnapshot = packageUpdateSnapshotResult.value;
   const packagePluginIds = Object.fromEntries(
     pluginSelection.pluginIds.flatMap((pluginId) => {
-      const ownership = resolveInstalledPluginPackageOwnership(installedPluginIndex, pluginId);
+      const ownership = resolveInstalledPluginLifecycleOwnership(installedPluginIndex, pluginId);
       return ownership.ok ? [[ownership.value.installOwner, ownership.value.pluginIds]] : [];
     }),
   );
@@ -426,11 +424,6 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
                 ...resolvePluginCapabilityConsentCliOptions({
                   acceptCapabilities: params.opts.acceptCapabilities,
                   action: "update",
-                  allowPrompt: !params.opts.dryRun,
-                }),
-                ...resolveClawHubRiskAcknowledgementCliOptions({
-                  acknowledgeClawHubRisk: params.opts.acknowledgeClawHubRisk,
-                  action: "updating",
                   allowPrompt: !params.opts.dryRun,
                 }),
                 logger,

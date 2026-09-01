@@ -11,6 +11,7 @@ type VitestTestConfig = {
 };
 
 type VitestConfig = {
+  root?: string;
   test?: VitestTestConfig;
 };
 
@@ -54,8 +55,9 @@ async function listFullSuiteTestFileMatches(): Promise<Map<string, string[]>> {
   const matches = new Map<string, string[]>();
   const configPaths = [...new Set(fullSuiteVitestShards.flatMap((shard) => shard.projects))];
   for (const configPath of configPaths) {
-    const testConfig = (await loadRawVitestConfig(configPath)).test ?? {};
-    const dir = testConfig.dir ? path.resolve(process.cwd(), testConfig.dir) : process.cwd();
+    const config = await loadRawVitestConfig(configPath);
+    const testConfig = config.test ?? {};
+    const dir = path.resolve(config.root ?? process.cwd(), testConfig.dir ?? ".");
     const exclude = (testConfig.exclude ?? []).map((pattern) =>
       path.isAbsolute(pattern) ? toRepoPath(path.relative(dir, pattern)) : toRepoPath(pattern),
     );

@@ -2,90 +2,18 @@
 // Heavy modules stay lazily loaded so fast status output avoids security/provider/gateway costs.
 
 import type { Result } from "@openclaw/normalization-core/result";
-import {
-  resolveAmbientOwnerAgentId,
-  resolveConfiguredAgentId,
-} from "../agents/agent-scope-config.js";
-import { resolveAgentDir } from "../agents/agent-scope.js";
-import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
-import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
-import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-routing.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import {
-  buildCodexSyntheticUsageAuth,
-  mergeUsageSummaries,
-  shouldUseCodexSyntheticUsageForRuntime,
-  resolveUsageCredentialType,
-} from "../status/codex-synthetic-usage.js";
 import type { HealthSummary } from "./health.js";
+import type { StatusUsageSummaryOptions } from "./status-usage.runtime.js";
 import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
 
-const providerUsageLoader = createLazyImportLoader(() => import("../infra/provider-usage.js"));
+const statusUsageModuleLoader = createLazyImportLoader(() => import("./status-usage.runtime.js"));
 const securityAuditModuleLoader = createLazyImportLoader(
   () => import("../security/audit.runtime.js"),
 );
-const readOnlyChannelPluginsModuleLoader = createLazyImportLoader(
-  () => import("../channels/plugins/read-only.js"),
-);
 const gatewayCallModuleLoader = createLazyImportLoader(() => import("../gateway/call.js"));
-
-function loadProviderUsage() {
-  return providerUsageLoader.load();
-}
-
-function loadSecurityAuditModule() {
-  return securityAuditModuleLoader.load();
-}
-
-function loadReadOnlyChannelPluginsModule() {
-  return readOnlyChannelPluginsModuleLoader.load();
-}
-
-function loadGatewayCallModule() {
-  return gatewayCallModuleLoader.load();
-}
-
-function shouldUseConfiguredCodexSyntheticUsage(params: {
-  config: OpenClawConfig;
-  agentDir: string;
-  agentId?: string;
-}): boolean {
-  const configuredDefault = resolveDefaultModelForAgent({
-    cfg: params.config,
-    agentId: params.agentId,
-    allowPluginNormalization: false,
-  });
-  const policy = resolveAgentHarnessPolicy({
-    config: params.config,
-    agentId: params.agentId,
-    provider: configuredDefault.provider,
-    modelId: configuredDefault.model,
-  });
-  if (
-    !shouldUseCodexSyntheticUsageForRuntime({
-      provider: configuredDefault.provider,
-      effectiveHarness: policy.runtime,
-    })
-  ) {
-    return false;
-  }
-  const authLabel = resolveModelAuthLabel({
-    provider: configuredDefault.provider,
-    acceptedProviderIds: listOpenAIAuthProfileProvidersForAgentRuntime({
-      provider: configuredDefault.provider,
-      harnessRuntime: policy.runtime,
-      config: params.config,
-    }),
-    cfg: params.config,
-    agentDir: params.agentDir,
-    includeExternalProfiles: false,
-  });
-  return resolveUsageCredentialType(authLabel) !== "api_key";
-}
 
 /** Runs the lightweight security audit used by status JSON/all output. */
 export async function resolveStatusSecurityAudit(params: {
@@ -93,12 +21,9 @@ export async function resolveStatusSecurityAudit(params: {
   sourceConfig: OpenClawConfig;
   timeoutMs?: number;
 }) {
-  const { runSecurityAudit } = await loadSecurityAuditModule();
-  const { resolveReadOnlyChannelPluginsForConfig } = await loadReadOnlyChannelPluginsModule();
-  const readOnlyPlugins = resolveReadOnlyChannelPluginsForConfig(params.config, {
-    activationSourceConfig: params.sourceConfig,
-    includeSetupFallbackPlugins: false,
-  });
+  const { runSecurityAudit } = await securityAuditModuleLoader.load();
+  // The audit owns setup-backed capabilities; inventory projections can name
+  // accounts without carrying their channel security adapters.
   return await runSecurityAudit({
     config: params.config,
     sourceConfig: params.sourceConfig,
@@ -107,67 +32,12 @@ export async function resolveStatusSecurityAudit(params: {
     includeFilesystem: true,
     includeChannelSecurity: true,
     loadPluginSecurityCollectors: false,
-    // Missing configured channel plugins make plugin-specific collectors unreliable; omit plugin list then.
-    ...(readOnlyPlugins.missingConfiguredChannelIds.length === 0
-      ? { plugins: readOnlyPlugins.plugins }
-      : {}),
   });
 }
 
-type StatusUsageSummaryOptions = {
-  config: OpenClawConfig;
-  timeoutMs?: number;
-  agentId?: string;
-  agentDir?: string;
-};
-
-/** Loads provider usage for status output from an explicit or ambient system-agent scope. */
+/** Loads optional usage and its credential resolver only when requested. */
 export async function resolveStatusUsageSummary(params: StatusUsageSummaryOptions) {
-  const { loadProviderUsageSummary } = await loadProviderUsage();
-  const rawAgentId = params.agentId?.trim();
-  if (params.agentId !== undefined && !rawAgentId) {
-    throw new Error("--agent must not be blank");
-  }
-  const agentId = rawAgentId ? normalizeAgentId(rawAgentId) : undefined;
-  if (agentId) {
-    resolveConfiguredAgentId(params.config, agentId);
-  }
-  let resolvedAgentId = agentId;
-  let agentDir = params.agentDir;
-  if (!agentDir) {
-    resolvedAgentId ??= resolveAmbientOwnerAgentId(params.config, undefined, {
-      surface: "status usage credentials",
-      hint: "Set agents.defaults.systemAgent.agentId.",
-    });
-    agentDir = resolveAgentDir(params.config, resolvedAgentId);
-  }
-  const usage = await loadProviderUsageSummary({
-    timeoutMs: params.timeoutMs,
-    config: params.config,
-    agentDir,
-  });
-  if (
-    !shouldUseConfiguredCodexSyntheticUsage({
-      config: params.config,
-      agentDir,
-      agentId: resolvedAgentId,
-    })
-  ) {
-    return usage;
-  }
-  const codexUsage = await loadProviderUsageSummary({
-    timeoutMs: params.timeoutMs,
-    providers: ["openai"],
-    auth: [buildCodexSyntheticUsageAuth()],
-    config: params.config,
-    agentDir,
-  });
-  return mergeUsageSummaries(usage, codexUsage);
-}
-
-/** Exposes the lazily loaded provider-usage module for callers that need its helpers. */
-export async function loadStatusProviderUsageModule() {
-  return await loadProviderUsage();
+  return (await statusUsageModuleLoader.load()).resolveStatusUsageSummary(params);
 }
 
 /** Calls gateway health and lets errors propagate to deep status callers. */
@@ -175,7 +45,7 @@ export async function resolveStatusGatewayHealth(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
 }) {
-  const { callGateway } = await loadGatewayCallModule();
+  const { callGateway } = await gatewayCallModuleLoader.load();
   return await callGateway<HealthSummary>({
     method: "health",
     params: { probe: true },
@@ -200,7 +70,7 @@ export async function resolveStatusGatewayHealthSafe(params: {
     // Preserve the probe error so status-all can explain why health was not called.
     return { error: params.gatewayProbeError ?? "gateway unreachable" };
   }
-  const { callGateway } = await loadGatewayCallModule();
+  const { callGateway } = await gatewayCallModuleLoader.load();
   return await callGateway<HealthSummary>({
     method: "health",
     params: { probe: true },
@@ -227,7 +97,7 @@ export async function resolveStatusGatewayDiagnosticsSafe(params: {
   if (!params.gatewayReachable) {
     return { ok: false, error: "gateway unreachable" };
   }
-  const { callGateway } = await loadGatewayCallModule();
+  const { callGateway } = await gatewayCallModuleLoader.load();
   return await callGateway<unknown>({
     method: "diagnostics.stability",
     params: { limit: 1000, ...(params.type ? { type: params.type } : {}) },
@@ -249,7 +119,7 @@ async function resolveStatusLastHeartbeat(params: {
   if (!params.gatewayReachable) {
     return null;
   }
-  const { callGateway } = await loadGatewayCallModule();
+  const { callGateway } = await gatewayCallModuleLoader.load();
   return await callGateway<HeartbeatEventPayload | null>({
     method: "last-heartbeat",
     params: {},

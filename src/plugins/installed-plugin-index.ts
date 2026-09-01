@@ -1,6 +1,8 @@
 /** Public installed-plugin-index API for load, refresh, policy hash, and invalidation checks. */
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
+import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
+import { isBundledProviderCompatPlugin } from "./bundled-provider-compat.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
@@ -86,10 +88,17 @@ function buildInstalledPluginIndex(
   });
   const diagnostics = [...(registry.diagnostics ?? [])];
   const generatedAtMs = (params.now?.() ?? new Date()).getTime();
+  const activationConfig = withBundledPluginEnablementCompat({
+    config: params.config,
+    env,
+    pluginIds: registry.plugins.filter(isBundledProviderCompatPlugin).map((plugin) => plugin.id),
+    activation: "defaults",
+  });
   const plugins = buildInstalledPluginIndexRecords({
     candidates: discovery.candidates,
     registry,
-    config: params.config,
+    config: activationConfig,
+    env,
     diagnostics,
     installRecords,
   });
@@ -101,7 +110,7 @@ function buildInstalledPluginIndex(
       hostContractVersion: resolveCompatibilityHostVersion(env),
       compatRegistryVersion: resolveCompatRegistryVersion(),
       migrationVersion: INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
-      policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
+      policyHash: resolveInstalledPluginIndexPolicyHash(params.config, env),
       generatedAtMs,
       ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
       ...(params.refreshReason ? { refreshReason: params.refreshReason } : {}),
@@ -161,6 +170,7 @@ export function isInstalledPluginEnabled(
   index: InstalledPluginIndex,
   pluginId: string,
   config?: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
 ): boolean {
   const record = getInstalledPluginRecord(index, pluginId);
   if (!record) {
@@ -169,13 +179,27 @@ export function isInstalledPluginEnabled(
   if (!config) {
     return record.enabled;
   }
-  const normalizedConfig = normalizePluginsConfig(config?.plugins);
+  const activationConfig = withBundledPluginEnablementCompat({
+    config,
+    env,
+    pluginIds: isBundledProviderCompatPlugin({
+      origin: record.origin,
+      providers: record.contributions?.providers,
+      contracts: record.contributions?.contracts,
+    })
+      ? [record.pluginId]
+      : [],
+    activation: "defaults",
+  });
+  const normalizedConfig = normalizePluginsConfig(activationConfig?.plugins);
   const state = resolveEffectivePluginActivationState({
     id: record.pluginId,
     origin: record.origin,
     config: normalizedConfig,
-    rootConfig: config,
+    rootConfig: activationConfig,
     enabledByDefault: isPluginEnabledByDefaultForPlatform(record),
   });
-  return state.enabled && (record.enabled || state.explicitlyEnabled);
+  // The index records startup policy; current activation is evaluated against
+  // the same package facts without making the startup enablement sticky.
+  return state.enabled;
 }

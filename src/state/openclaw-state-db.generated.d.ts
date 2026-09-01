@@ -413,9 +413,7 @@ export interface CurrentConversationBindings {
   parent_conversation_id: string | null;
   record_json: string;
   status: string;
-  target_agent_id: string;
   target_kind: string;
-  target_session_id: string | null;
   target_session_key: string;
   updated_at: number;
 }
@@ -906,7 +904,7 @@ export interface OperatorApprovalStandingGrants {
   agent_id: string;
   created_at_ms: number;
   cron_job_id: string;
-  expires_at_ms: number;
+  expires_at_ms: number | null;
   grant_id: string;
   job_config_revision: string;
   last_used_at_ms: number | null;
@@ -1275,14 +1273,25 @@ export interface UserPreferences {
   value_json: string;
 }
 
+export interface WebPushApprovalDeliveries {
+  approval_id: string;
+  device_id: string;
+  prepared_at_ms: number;
+  subscription_id: string;
+  user_profile_id: string | null;
+}
+
 export interface WebPushSubscriptions {
   auth: string;
   created_at_ms: number;
+  device_id: string | null;
   endpoint: string;
   endpoint_hash: string;
   p256dh: string;
+  preferences_json: string | null;
   subscription_id: string;
   updated_at_ms: number;
+  user_profile_id: string | null;
 }
 
 export interface WorkerEnvironmentCredentials {
@@ -1607,6 +1616,7 @@ export interface DB {
   task_delivery_state: TaskDeliveryState;
   task_runs: TaskRuns;
   user_preferences: UserPreferences;
+  web_push_approval_deliveries: WebPushApprovalDeliveries;
   web_push_subscriptions: WebPushSubscriptions;
   worker_environment_credentials: WorkerEnvironmentCredentials;
   worker_environment_ssh_fallback_ports: WorkerEnvironmentSshFallbackPorts;

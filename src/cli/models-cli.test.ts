@@ -551,69 +551,62 @@ describe("models cli", () => {
     expectCommandOptions(modelsAuthListCommand, { agent: "poe", json: true });
   });
 
-  it.each([
+  const globalModelCommands = [
     {
       label: "set",
-      args: ["models", "--agent", "poe", "set", "anthropic/claude-sonnet-4-6"],
+      args: ["set", "anthropic/claude-sonnet-4-6"],
       command: modelsSetCommand,
     },
     {
       label: "set-image",
-      args: ["models", "--agent", "poe", "set-image", "openai/gpt-image-1"],
+      args: ["set-image", "openai/gpt-image-1"],
       command: modelsSetImageCommand,
     },
     {
       label: "aliases list",
-      args: ["models", "--agent", "poe", "aliases", "list"],
+      args: ["aliases", "list"],
       command: modelsAliasesListCommand,
     },
     {
       label: "aliases add",
-      args: ["models", "--agent", "poe", "aliases", "add", "zzz", "soraka/grok-4.6"],
+      args: ["aliases", "add", "zzz", "soraka/grok-4.6"],
       command: modelsAliasesAddCommand,
     },
     {
       label: "aliases remove",
-      args: ["models", "--agent", "poe", "aliases", "remove", "zzz"],
+      args: ["aliases", "remove", "zzz"],
       command: modelsAliasesRemoveCommand,
     },
     {
       label: "scan",
-      args: ["models", "--agent", "poe", "scan", "--no-probe", "--no-input"],
+      args: ["scan", "--no-probe", "--no-input"],
       command: modelsScanCommand,
     },
     {
       label: "refresh",
-      args: ["models", "--agent", "poe", "refresh"],
+      args: ["refresh"],
       command: modelsRefreshCommand,
     },
-  ])("rejects parent --agent for models $label", async ({ args, command }) => {
-    await expect(runModelsCommand(args)).rejects.toThrow("does not support --agent");
+  ];
 
+  it.each(
+    globalModelCommands.flatMap(({ label, args, command }) =>
+      ["poe", ""].map((agent) => ({ label, args, command, agent })),
+    ),
+  )("rejects parent --agent '$agent' for models $label", async ({ args, command, agent }) => {
+    await expect(runModelsCommand(["models", "--agent", agent, ...args])).rejects.toThrow(
+      "does not support --agent",
+    );
     expect(command).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      label: "aliases list",
-      args: ["models", "aliases", "list"],
-      command: modelsAliasesListCommand,
+  it.each(globalModelCommands)(
+    "still runs models $label without --agent",
+    async ({ args, command }) => {
+      await runModelsCommand(["models", ...args]);
+      expect(command).toHaveBeenCalledOnce();
     },
-    {
-      label: "scan",
-      args: ["models", "scan", "--no-probe", "--no-input"],
-      command: modelsScanCommand,
-    },
-    {
-      label: "refresh",
-      args: ["models", "refresh"],
-      command: modelsRefreshCommand,
-    },
-  ])("still runs models $label without --agent", async ({ args, command }) => {
-    await runModelsCommand(args);
-
-    expect(command).toHaveBeenCalled();
-  });
+  );
 
   it("shows help for models auth without error exit", async () => {
     const program = new Command();

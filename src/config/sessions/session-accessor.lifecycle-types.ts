@@ -76,6 +76,8 @@ export type DeleteSessionEntryLifecycleResult = {
 };
 
 export type DeleteSessionEntryLifecycleParams = {
+  /** Revalidate caller and external lifecycle owners at each synchronous deletion boundary. */
+  commitGuard?: () => void;
   /** Agent owner used to resolve backend transcript artifacts. */
   agentId?: string;
   /** Whether transcript artifacts should be archived/deleted with the entry. */
@@ -140,6 +142,8 @@ export class SessionEntryLifecycleUpsertConflictError extends Error {
 
 export type SessionEntryLifecycleUpsert = {
   sessionKey: string;
+  /** Apply this upsert only when the named removal was projected in the same mutation. */
+  requiresRemovalSessionKey?: string;
   /** Authoritative route observation for this write; omitted writes preserve valid evidence. */
   routeContext?: ConversationRouteContext | null;
   resetBoundary?: SessionResetBoundaryRequest;

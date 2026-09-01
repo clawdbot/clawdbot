@@ -23,15 +23,7 @@ import {
   normalizeNativeHookToolName,
   readNativeHookRelayApprovalMode,
 } from "./native-hook-relay-codec.js";
-import {
-  buildNativeHookRelayCommandWithStateDatabase,
-  resolveNativeHookRelayCommandTimeoutMs,
-} from "./native-hook-relay-command.js";
-import {
-  nativeHookRelayEventHasLocalWork,
-  nativeHookRelayEventToolMatcher,
-  processNativeHookRelayInvocation,
-} from "./native-hook-relay-events.js";
+import { processNativeHookRelayInvocation } from "./native-hook-relay-events.js";
 import {
   clearNativeHookRelayPermissionsForTests,
   formatPermissionApprovalDescriptionForTests as formatPermissionApprovalDescriptionForTestsImpl,
@@ -44,6 +36,7 @@ import {
   setNativeHookRelayPermissionApprovalRequesterForTests as setNativeHookRelayPermissionApprovalRequesterForTestsImpl,
 } from "./native-hook-relay-permissions.js";
 import type { NativeHookRelayDeferredToolApprovalRequester } from "./native-hook-relay-permissions.js";
+import { buildNativeHookRelayCommandPlan } from "./native-hook-relay-plan.js";
 import {
   MAX_NATIVE_HOOK_RELAY_INVOCATIONS,
   nativeHookRelayState,
@@ -242,23 +235,7 @@ function registerNativeHookRelayInternal(
     scheduleNativeHookRelayExpiry(relayId, registration);
     const handle: ActiveNativeHookRelayRegistrationHandle = {
       ...registration,
-      shouldRelayEvent: (event) => nativeHookRelayEventHasLocalWork(registration, event),
-      toolMatcherForEvent: (event) => nativeHookRelayEventToolMatcher(registration, event),
-      commandForEvent: (event, options) =>
-        buildNativeHookRelayCommandWithStateDatabase({
-          provider: params.provider,
-          relayId,
-          stateDbPath,
-          generation: registration.generation,
-          event,
-          nice: params.command?.nice,
-          timeoutMs: resolveNativeHookRelayCommandTimeoutMs(
-            params.command?.timeoutMs,
-            options?.timeoutMs,
-          ),
-          executable: params.command?.executable,
-          nodeExecutable: params.command?.nodeExecutable,
-        }),
+      ...buildNativeHookRelayCommandPlan({ ...params, relayId, generation }),
       renew: (ttlMs) => {
         const current = relays.get(relayId);
         if (current !== registration) {

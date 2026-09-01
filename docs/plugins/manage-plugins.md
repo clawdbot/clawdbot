@@ -51,9 +51,10 @@ that explicit trust by adding the selected plugin to an existing restrictive
 `plugins.allow` list. An explicit `plugins.deny` entry remains authoritative and
 must be removed before enabling the plugin.
 
-Installing or removing plugin code requires a Gateway restart. Enablement
-changes can be applied without a restart when the installed plugin and current
-Gateway runtime support it; otherwise the UI tells you a restart is required.
+Installing, updating, or removing plugin code requires a Gateway restart.
+Enablement changes for plugins in the startup inventory can be applied without
+a restart when the plugin and current Gateway runtime support it; otherwise
+the UI tells you a restart is required.
 OAuth-backed MCP connectors still need a one-time `openclaw mcp login <name>`
 from the CLI after they are added.
 
@@ -100,12 +101,22 @@ are enabled by default; others require `enable` after install.
 
 ## Capability consent
 
-OpenClaw asks you to review an external plugin's declared capabilities before
+OpenClaw asks you to review a third-party plugin's declared capabilities before
 installing or enabling it. The consent screen identifies the plugin, its
 version and source, artifact integrity, and available trust information. It
 also lists declared channels, providers, tools, hooks, MCP servers, CLI
 commands and backends, skills, and dangerous configuration flags, along with
 the operator grants that apply to hooks, model access, and subagents.
+
+Bundled plugins and verified first-party plugins from OpenClaw's official
+catalog do not require this capability review during install, enable, update,
+or Doctor repair. For separately installed first-party plugins, OpenClaw checks
+the actual package identity against its catalog and verified npm source record
+or official-channel record from `https://clawhub.ai`. A matching plugin id or
+package name alone is insufficient: local copies, archives, git installs,
+custom ClawHub registries, and conflicting source records still require review.
+This exemption does not grant OAuth access, operating-system permissions, or
+runtime tool approvals, and does not create an operator acceptance record.
 
 The review token hashes the exact declared capability surface, not the plugin's
 executable files. Acceptance separately records installer-provided artifact
@@ -118,7 +129,7 @@ plugin preserves disablement and defers any required consent until enablement.
 Reinstalling through `plugins install` activates the plugin and must satisfy
 consent before activation.
 
-Already-enabled legacy installations remain usable without an initial review;
+Already-enabled third-party legacy installations remain usable without an initial review;
 disabling and re-enabling them requires consent. Setup rechecks consent when
 saving its final config, so a plugin update during login cannot activate a
 replacement with unaccepted capabilities.
@@ -146,7 +157,7 @@ openclaw plugins update <plugin-id> --accept-capabilities
 openclaw plugins enable <plugin-id> --accept-capabilities
 ```
 
-Doctor uses the same review before installing or adopting a replacement plugin.
+Doctor uses the same source checks and review before installing or adopting a replacement plugin.
 `doctor --fix` and `--yes` do not approve capabilities automatically. For
 noninteractive repair, review and install the plugin with the explicit flag
 above, then rerun doctor.
@@ -161,8 +172,7 @@ with `--accept-capabilities`:
 /plugins enable <plugin-id> --accept-capabilities
 ```
 
-Bundled plugins are exempt because they ship with the OpenClaw release rather
-than arriving as separately installed artifacts. Plugins discovered directly
+Plugins discovered directly
 in a workspace or through `plugins.load.paths`, without a managed install
 record, cannot persist capability acceptance. Their details in the Control UI
 still show declared capabilities.
@@ -233,6 +243,17 @@ runtime surfaces:
 openclaw gateway restart
 openclaw plugins inspect <plugin-id> --runtime --json
 ```
+
+The Gateway keeps the plugin inventory it discovered at startup. Management
+commands can inspect a newly installed package before restart, but that does
+not make its code or metadata available to the running Gateway. Manifest edits
+and plugins added to an agent workspace also require a restart. Ordinary config,
+enablement, and account changes can still hot-apply against the existing
+inventory.
+
+For API clients, `plugins.refresh` reports `restartRequired: true` and requests
+a restart through config reload. With `gateway.reload.mode: "off"`, restart
+manually; refresh does not rescan or replace the running inventory.
 
 `inspect --runtime` loads the plugin module and proves it registered runtime
 surfaces (tools, hooks, services, Gateway methods, HTTP routes, plugin-owned

@@ -9,6 +9,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveBundledInstallPlanForCatalogEntry } from "../cli/plugin-install-plan.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../config/nix-mode-write-guard.js";
@@ -636,6 +637,7 @@ async function installLocalOnboardingPlugin(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   onCapabilityConsent: PluginCapabilityConsentHandler;
+  beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<OnboardingPluginInstallResult> {
   const consent = capturePluginCapabilityConsentHandlerErrors(params.onCapabilityConsent);
   try {
@@ -655,6 +657,7 @@ async function installLocalOnboardingPlugin(params: {
           source: "path",
           spec: params.npmSpec ?? params.localPath,
           onCapabilityConsent: consent.onCapabilityConsent,
+          beforePersistentEffect: params.beforePersistentEffect,
         });
         await capabilityConsent.onBeforePluginArtifactCommit({
           pluginId: params.entry.pluginId,
@@ -795,14 +798,15 @@ function logInstallWarningWithLineBreaks(runtime: RuntimeEnv, message: string): 
 }
 
 function isReviewRequiredClawHubTrustWarning(message: string): boolean {
-  return message.includes("WARNING - ClawHub found security risks");
+  return stripAnsi(message).startsWith("Warning\n");
 }
 
 function isClawHubTrustWarning(message: string): boolean {
+  const plain = stripAnsi(message);
   return (
     isReviewRequiredClawHubTrustWarning(message) ||
-    message.includes("BLOCKED - ClawHub") ||
-    message.includes("REVIEW RECOMMENDED - ClawHub")
+    plain.startsWith("Blocked\n") ||
+    plain.startsWith("Review\n")
   );
 }
 
@@ -828,6 +832,7 @@ async function runOnboardingPluginInstallWithProgress(params: {
   runtime: RuntimeEnv;
   spec: string;
   onCapabilityConsent: PluginCapabilityConsentHandler;
+  beforePersistentEffect?: () => void | Promise<void>;
   install: (
     logger: {
       info: (message: string) => void;
@@ -845,6 +850,7 @@ async function runOnboardingPluginInstallWithProgress(params: {
     spec: params.spec,
     expectedIntegrity: params.entry.install.expectedIntegrity,
     onCapabilityConsent: consent.onCapabilityConsent,
+    beforePersistentEffect: params.beforePersistentEffect,
   });
   const safeLabel = sanitizeTerminalText(params.entry.label);
   const progress = params.prompter.progress(formatPluginInstallProgress(safeLabel));
@@ -910,6 +916,7 @@ async function installPluginFromNpmSpecWithProgress(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   onCapabilityConsent: PluginCapabilityConsentHandler;
+  beforePersistentEffect?: () => void | Promise<void>;
   trustedSourceLinkedOfficialInstall?: boolean;
 }): Promise<InstallOutcome<InstallPluginResult>> {
   return await runOnboardingPluginInstallWithProgress({
@@ -942,6 +949,7 @@ async function installPluginFromNpmPackArchiveWithProgress(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   onCapabilityConsent: PluginCapabilityConsentHandler;
+  beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<InstallOutcome<InstallPluginResult & { npmTarballName?: string }>> {
   return await runOnboardingPluginInstallWithProgress({
     ...params,
@@ -970,6 +978,7 @@ async function installPluginFromOverride(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   onCapabilityConsent: PluginCapabilityConsentHandler;
+  beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<OnboardingPluginInstallResult> {
   const { entry, prompter, runtime } = params;
   runtime.log?.(
@@ -986,6 +995,7 @@ async function installPluginFromOverride(params: {
           prompter,
           runtime,
           onCapabilityConsent: params.onCapabilityConsent,
+          beforePersistentEffect: params.beforePersistentEffect,
           trustedSourceLinkedOfficialInstall: false,
         })
       : await installPluginFromNpmPackArchiveWithProgress({
@@ -995,6 +1005,7 @@ async function installPluginFromOverride(params: {
           prompter,
           runtime,
           onCapabilityConsent: params.onCapabilityConsent,
+          beforePersistentEffect: params.beforePersistentEffect,
         });
 
   const displaySpec =
@@ -1067,6 +1078,7 @@ async function installPluginFromClawHubSpecWithProgress(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   onCapabilityConsent: PluginCapabilityConsentHandler;
+  beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<{ result: InstallPluginFromClawHubResult; capabilityConsent: ArtifactConsent }> {
   const consent = capturePluginCapabilityConsentHandlerErrors(params.onCapabilityConsent);
   const capabilityConsent = await prepareManagedPluginArtifactConsentHandler({
@@ -1074,6 +1086,7 @@ async function installPluginFromClawHubSpecWithProgress(params: {
     source: "clawhub",
     spec: params.clawhubSpec,
     onCapabilityConsent: consent.onCapabilityConsent,
+    beforePersistentEffect: params.beforePersistentEffect,
   });
   const safeLabel = sanitizeTerminalText(params.entry.label);
   const progress = params.prompter.progress(formatPluginInstallProgress(safeLabel));
@@ -1115,24 +1128,6 @@ async function installPluginFromClawHubSpecWithProgress(params: {
           }
           logInstallWarningWithSpacing(params.runtime, message);
         },
-      },
-      onClawHubRisk: async (request) => {
-        animated.stop();
-        progress.stop("Review ClawHub warning");
-        renderTrustWarning(request.warning);
-        const packageName = sanitizeTerminalText(request.packageName);
-        const releaseLabel = `${packageName}@${sanitizeTerminalText(request.version)}`;
-        if (request.acknowledgementKind === "type-package") {
-          const answer = await params.prompter.text({
-            message: `To install anyway, type the package name for "${releaseLabel}"`,
-            placeholder: packageName,
-          });
-          return answer.trim() === packageName;
-        }
-        return await params.prompter.confirm({
-          message: `Install ClawHub package "${releaseLabel}" after reviewing the warning above?`,
-          initialValue: false,
-        });
       },
     });
     animated.stop();
@@ -1181,14 +1176,12 @@ export async function ensureOnboardingPluginInstalled(params: {
   const { entry, prompter, runtime, workspaceDir } = params;
   const next = params.cfg;
   const onCapabilityConsent =
-    params.onCapabilityConsent ??
-    createPluginCapabilityConsentPrompter(prompter, params.beforePersistentEffect);
+    params.onCapabilityConsent ?? createPluginCapabilityConsentPrompter(prompter);
   const installOverride = resolvePluginInstallOverride({ pluginId: entry.pluginId });
   if (installOverride) {
     // Any install override mutates config/install records, so guard it with the
     // same write-mode check as normal installs.
     assertConfigWriteAllowedInCurrentMode();
-    await params.beforePersistentEffect?.();
     return await withPluginLifecycleLease({}, async () =>
       installPluginFromOverride({
         cfg: next,
@@ -1197,6 +1190,7 @@ export async function ensureOnboardingPluginInstalled(params: {
         prompter,
         runtime,
         onCapabilityConsent,
+        beforePersistentEffect: params.beforePersistentEffect,
       }),
     );
   }
@@ -1277,12 +1271,12 @@ export async function ensureOnboardingPluginInstalled(params: {
         prompter,
         runtime,
         onCapabilityConsent,
+        beforePersistentEffect: params.beforePersistentEffect,
       });
     }
 
     let shouldTryNpm = choice === "npm";
     if (choice === "clawhub" && clawhubInstallSpec) {
-      await params.beforePersistentEffect?.();
       let usedClawHubSpec = clawhubInstallSpec;
       const { result, capabilityConsent } = await installWithChannelFallback({
         installSpec: clawhubInstallSpec,
@@ -1297,6 +1291,7 @@ export async function ensureOnboardingPluginInstalled(params: {
             prompter,
             runtime,
             onCapabilityConsent,
+            beforePersistentEffect: params.beforePersistentEffect,
           });
         },
         isRetryable: (attempt) => !attempt.result.ok && isUnavailableClawHubTarget(attempt.result),
@@ -1355,7 +1350,6 @@ export async function ensureOnboardingPluginInstalled(params: {
       return incompletePluginInstall(next, entry.pluginId, "failed");
     }
 
-    await params.beforePersistentEffect?.();
     const installOutcome = await installWithChannelFallback({
       installSpec: npmInstallSpec,
       // An integrity pin identifies one exact artifact, so it outranks the channel.
@@ -1368,6 +1362,7 @@ export async function ensureOnboardingPluginInstalled(params: {
           prompter,
           runtime,
           onCapabilityConsent,
+          beforePersistentEffect: params.beforePersistentEffect,
         }),
       isRetryable: (outcome) =>
         outcome.status === "completed" &&
@@ -1435,6 +1430,7 @@ export async function ensureOnboardingPluginInstalled(params: {
           prompter,
           runtime,
           onCapabilityConsent,
+          beforePersistentEffect: params.beforePersistentEffect,
         });
       }
     }

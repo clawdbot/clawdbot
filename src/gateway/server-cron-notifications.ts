@@ -227,8 +227,7 @@ async function postCronWebhookStrict(params: {
     params.onDeliveryAccepted?.();
   } finally {
     const cleanup = async () => {
-      // Guard release closes the dispatcher, not an unread response stream.
-      // Keep response cleanup inside the request deadline; a non-settling
+      // Keep response cleanup before guard release inside the request deadline; a non-settling
       // stream cancellation must not retain the dispatcher or Gateway root.
       if (!result.response.bodyUsed) {
         const cancellation = result.response.body?.cancel();
@@ -329,7 +328,10 @@ function dispatchDetachedCronNotification(params: {
   logger: CronLogger;
   deliver: () => Promise<void>;
 }): void {
-  void runWithGatewayIndependentRootWorkContinuation(params.deliver).catch((err: unknown) => {
+  void runWithGatewayIndependentRootWorkContinuation(
+    params.deliver,
+    "cron:notification-delivery",
+  ).catch((err: unknown) => {
     params.logger.warn(
       { jobId: params.jobId, err: formatErrorMessage(err) },
       "cron: detached notification delivery failed",
@@ -341,7 +343,7 @@ function dispatchDetachedCronNotification(params: {
 export async function sendGatewayCronFailureAlert(params: CronFailureAlertParams): Promise<void> {
   await runWithGatewayIndependentRootWorkContinuation(async () => {
     await sendGatewayCronFailureAlertUnderAdmission(params);
-  });
+  }, "cron:failure-alert");
 }
 
 async function sendGatewayCronFailureAlertUnderAdmission(

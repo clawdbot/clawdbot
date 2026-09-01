@@ -457,23 +457,23 @@ function finalizeMigration(params: {
 /** Detect relocation or unfinished cleanup only in the explicit Doctor repair path. */
 export function detectSharedAuthStoreMigration(params: {
   stateDir: string;
+  env?: NodeJS.ProcessEnv;
   doctorOnlyStateMigrations?: boolean;
 }): SharedAuthStoreMigrationDetection {
-  const env = { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
+  const env = { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir };
   const sourcePath = path.join(resolveSharedMainAuthAgentDir(env), "openclaw-agent.sqlite");
   if (params.doctorOnlyStateMigrations !== true) {
     return { sourcePath, hasLegacy: false };
   }
   const ownership = resolveSharedAuthStoreOwnership(env);
-  const sourceRows = inspectSharedAuthLegacyRowsReadOnly(sourcePath);
-  return {
-    sourcePath,
-    hasLegacy:
-      ownership.location === "legacy-main" ||
-      sourceRows.store !== null ||
-      sourceRows.state !== null ||
-      hasPendingSharedAuthCleanup(env, sourcePath),
-  };
+  const hasLegacy =
+    ownership.location === "legacy-main" || hasPendingSharedAuthCleanup(env, sourcePath);
+  if (hasLegacy) {
+    // Once shared ownership moves, main-agent rows are ordinary per-agent overrides.
+    // Only the ownership marker or a pending receipt authorizes inspecting them as migration input.
+    inspectSharedAuthLegacyRowsReadOnly(sourcePath);
+  }
+  return { sourcePath, hasLegacy };
 }
 
 /** Converge copy, ownership, and cleanup while excluding live Gateway writers. */

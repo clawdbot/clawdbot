@@ -99,6 +99,11 @@ export type MainSessionRecoveryCommand =
       cycleId: string;
       token: MainSessionRecoveryExecutionIdentity;
     } & RecoveryRunOwner)
+  | ({
+      kind: "register_recovery_turn";
+      attempt: number;
+      cycleId: string;
+    } & RecoveryRunOwner)
   | {
       kind: "cancel_reservation" | "abandon_reservation";
       reservation: MainSessionRecoveryReservation;

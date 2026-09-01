@@ -692,8 +692,8 @@ export function renderMemoryImport(props: MemoryImportViewProps) {
           : nothing}
         ${props.loading && !props.plan
           ? html`<div class="settings-group memory-import__loading" aria-busy="true">
-              <div class="memory-import__skeleton"></div>
-              <div class="memory-import__skeleton"></div>
+              <div class="skeleton memory-import__skeleton"></div>
+              <div class="skeleton memory-import__skeleton"></div>
             </div>`
           : (props.plan?.providers ?? []).map((provider) => renderProvider(props, provider))}
         ${renderConfirmation(props)}

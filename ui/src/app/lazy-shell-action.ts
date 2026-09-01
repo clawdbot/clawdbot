@@ -2,6 +2,7 @@ import { COMMAND_PALETTE_OPEN_EVENT } from "../components/command-palette-contra
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   CUSTODIAN_PANEL_TOGGLE_EVENT,
+  HOME_PANEL_TOGGLE_EVENT,
   DEBUG_OVERLAY_REQUEST_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
   KEYBOARD_SHORTCUTS_REQUEST_EVENT,
@@ -19,19 +20,12 @@ const eventTypes = [
   BROWSER_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
   CUSTODIAN_PANEL_TOGGLE_EVENT,
+  HOME_PANEL_TOGGLE_EVENT,
   SHELL_APPROVALS_OPEN_EVENT,
 ] as const;
 
 export type LazyShellEvent = {
-  eventType:
-    | typeof COMMAND_PALETTE_OPEN_EVENT
-    | typeof DEBUG_OVERLAY_REQUEST_EVENT
-    | typeof KEYBOARD_SHORTCUTS_REQUEST_EVENT
-    | typeof TERMINAL_PANEL_TOGGLE_EVENT
-    | typeof BROWSER_PANEL_TOGGLE_EVENT
-    | typeof DESKTOP_PANEL_TOGGLE_EVENT
-    | typeof CUSTODIAN_PANEL_TOGGLE_EVENT
-    | typeof SHELL_APPROVALS_OPEN_EVENT;
+  eventType: (typeof eventTypes)[number];
   detail?: object;
 };
 
@@ -43,14 +37,6 @@ export function lazyShellEvent(
   return detail !== null && typeof detail === "object" && !Array.isArray(detail)
     ? { eventType, detail }
     : { eventType };
-}
-
-export function hasStoredLazyShellAction(): boolean {
-  try {
-    return getSafeSessionStorage()?.getItem(STORAGE_KEY) !== null;
-  } catch {
-    return false;
-  }
 }
 
 export function readLazyShellAction(): LazyShellEvent | null {
@@ -82,21 +68,22 @@ export function readLazyShellAction(): LazyShellEvent | null {
   return null;
 }
 
-function writeStoredAction(value?: string): void {
+export function persistLazyShellAction(event: LazyShellEvent): boolean {
   try {
     const storage = getSafeSessionStorage();
-    if (value === undefined) {
-      storage?.removeItem(STORAGE_KEY);
-    } else {
-      storage?.setItem(STORAGE_KEY, value);
+    if (!storage) {
+      return false;
     }
+    storage.setItem(STORAGE_KEY, JSON.stringify(event));
+    return true;
   } catch {}
-}
-
-export function persistLazyShellAction(event: LazyShellEvent): void {
-  writeStoredAction(JSON.stringify(event));
+  // A failed replacement must not leave a superseded action to replay on reload.
+  clearLazyShellAction();
+  return false;
 }
 
 export function clearLazyShellAction(): void {
-  writeStoredAction();
+  try {
+    getSafeSessionStorage()?.removeItem(STORAGE_KEY);
+  } catch {}
 }

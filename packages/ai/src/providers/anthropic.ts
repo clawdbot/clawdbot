@@ -67,6 +67,7 @@ import {
   stripSystemPromptCacheBoundary,
 } from "../utils/system-prompt-cache-boundary.js";
 import {
+  isAnthropicOAuthApiKey,
   omitFoundryBearerCredentialHeaders,
   usesFoundryBearerAuth,
 } from "./anthropic-auth-headers.js";
@@ -422,7 +423,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
       const sdkRequestOptions = {
         ...(requestOptions?.signal ? { signal: requestOptions.signal } : {}),
         ...(requestOptions?.timeoutMs !== undefined ? { timeout: requestOptions.timeoutMs } : {}),
-        maxRetries: requestOptions?.maxRetries ?? 0,
+        maxRetries: 0,
       };
       const response = await client.messages
         .create({ ...params, stream: true }, sdkRequestOptions)
@@ -839,11 +840,6 @@ export const streamSimpleAnthropic: StreamFunction<
   } satisfies AnthropicCompactionOptions);
 };
 
-function isOAuthToken(apiKey: string): boolean {
-  // Inspect the host-resolved shape only for auth routing; the SDK still receives the sentinel.
-  return getAiTransportHost().resolveSecretSentinel(apiKey).includes("sk-ant-oat");
-}
-
 function isAnthropicPublicEndpoint(baseUrl: string | undefined): boolean {
   if (!baseUrl) {
     return true;
@@ -915,6 +911,7 @@ function createClient(
         optionsHeaders,
       ),
       fetch,
+      maxRetries: 0,
     });
 
     return { client, isOAuthToken: false, serverSideFallback: false };
@@ -938,6 +935,7 @@ function createClient(
         optionsHeaders,
       ),
       fetch,
+      maxRetries: 0,
     });
 
     return { client, isOAuthToken: false, serverSideFallback: false };
@@ -965,13 +963,14 @@ function createClient(
         optionsHeaders,
       ),
       fetch,
+      maxRetries: 0,
     });
 
     return { client, isOAuthToken: false, serverSideFallback: false };
   }
 
   // OAuth: Bearer auth, Claude Code identity headers
-  if (isOAuthToken(apiKey)) {
+  if (isAnthropicOAuthApiKey(apiKey)) {
     const client = new Anthropic({
       apiKey: null,
       authToken: apiKey,
@@ -989,6 +988,7 @@ function createClient(
         optionsHeaders,
       ),
       fetch,
+      maxRetries: 0,
     });
 
     return { client, isOAuthToken: true, serverSideFallback: false };
@@ -1019,6 +1019,7 @@ function createClient(
       optionsHeaders,
     ),
     fetch,
+    maxRetries: 0,
   });
 
   return { client, isOAuthToken: false, serverSideFallback };

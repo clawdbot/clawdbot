@@ -572,22 +572,22 @@ function toEscapedPlainTextHtml(value: string, options: MarkdownRenderEnv): stri
   );
 }
 
-export function toStreamingMarkdownHtml(
+export function toStreamingMarkdownParts(
   markdownLocal: string,
   options: MarkdownRenderOptions = {},
   streamKey?: string,
-): string {
+): [stableHtml: string, tailHtml: string] {
   const renderOptions = normalizeMarkdownRenderOptions(options);
   const rawInput = normalizeMarkdownLineBreaks(
     stripUnsupportedCitationControlMarkers(markdownLocal),
   );
   if (isMarkdownBlockArtText(rawInput)) {
-    return renderSanitizedMarkdown(rawInput, renderOptions);
+    return ["", renderSanitizedMarkdown(rawInput, renderOptions)];
   }
 
   const trimmedInput = rawInput.trim();
   if (!trimmedInput) {
-    return "";
+    return ["", ""];
   }
   const truncated = truncateText(trimmedInput, MARKDOWN_CHAR_LIMIT);
   const input = appendMarkdownTruncationNotice(truncated);
@@ -601,7 +601,7 @@ export function toStreamingMarkdownHtml(
   const streamingTail = input.slice(boundary);
   const stableHtml = boundary > 0 ? toSanitizedMarkdownHtml(stableMarkdown, options) : "";
   if (!streamingTail.trim()) {
-    return stableHtml;
+    return [stableHtml, ""];
   }
   const tailHtml =
     tailRepairStart === null
@@ -610,5 +610,5 @@ export function toStreamingMarkdownHtml(
           repairStreamingMarkdownTail(streamingTail, tailRepairStart - boundary),
           renderOptions,
         );
-  return `${stableHtml}${tailHtml}`;
+  return [stableHtml, tailHtml];
 }

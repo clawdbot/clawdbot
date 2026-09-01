@@ -88,12 +88,14 @@ function createLocalGatewayRequestContext(
         getConfig: params.getRuntimeConfig,
       }),
   });
-  return {
+  const context: GatewayRequestContext = {
     deps: params.deps,
     configRevisionProjector: loadGatewayConfigRevisionProjector({ env: process.env }),
     cron,
     cronStorePath: "",
     getRuntimeConfig: params.getRuntimeConfig,
+    // Embedded calls have no running Gateway application owner.
+    isConfigReloadSettled: () => false,
     notifyPluginMetadataChanged: () => {},
     resolveTerminalLaunchPolicy: () => ({ ok: false, block: { kind: "disabled" } }),
     isTerminalEnabled: () => false,
@@ -168,6 +170,12 @@ function createLocalGatewayRequestContext(
     broadcastVoiceWakeRoutingChanged: () => {},
     unavailableGatewayMethods: new Set(),
   };
+  context.createAgentTurnFacade = async (principal) => {
+    const { createInternalAgentTurnFacade } =
+      await import("./agent-turn/internal-facade.runtime.js");
+    return createInternalAgentTurnFacade({ ...principal, getContext: () => context });
+  };
+  return context;
 }
 
 /** Runs code inside a local gateway request scope unless an outer scope already exists. */

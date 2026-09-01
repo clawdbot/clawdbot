@@ -1,8 +1,9 @@
 import { html } from "lit";
 import type { SessionsUsageResult } from "../../api/types.ts";
-import { titleForRoute } from "../../app-navigation.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
+import { renderSettingsPageHeader } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 
 export function renderUsagePageShell(
@@ -15,16 +16,15 @@ export function renderUsagePageShell(
       .map((entry) => entry.agentId)
       .filter((agentId): agentId is string => Boolean(agentId?.trim())) ?? [];
   return html`
-    <section class="content-header content-header--page">
-      <div>
-        <div class="page-title">${titleForRoute("usage")}</div>
-      </div>
-      ${renderAgentScopeControl({
+    ${renderSettingsPageHeader({
+      title: titleForRoute("usage"),
+      subtitle: subtitleForRoute("usage"),
+      actions: renderAgentScopeControl({
         agents: context.agents.state.agentsList?.agents ?? [],
         additionalAgentIds,
         selection: context.agentSelection,
-      })}
-    </section>
+      }),
+    })}
     ${renderSettingsWorkspace(body)}
   `;
 }

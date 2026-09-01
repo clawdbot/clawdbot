@@ -38,6 +38,7 @@ type VoiceMessageOpts = Pick<
   | "mediaLocalRoots"
   | "mediaReadFile"
   | "onPlatformSendDispatch"
+  | "assertPlatformSendAuthorized"
 >;
 
 function toDiscordSendResult(
@@ -129,6 +130,7 @@ export async function sendVoiceMessageDiscord(
         opts.silent,
         token,
         opts.onPlatformSendDispatch,
+        opts.assertPlatformSendAuthorized,
       );
 
       recordChannelActivity({

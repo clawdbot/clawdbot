@@ -35,6 +35,7 @@ import {
 } from "./manifest-install-owner.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
+import type { PluginOrigin } from "./plugin-origin.types.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -42,7 +43,7 @@ import {
   rollbackStagedPluginRegistry,
   stageActivePluginRegistry,
 } from "./runtime.js";
-import { validateJsonSchemaValue } from "./schema-validator.js";
+import { validatePluginSchemaValue } from "./schema-validator.js";
 import { hasKind } from "./slots.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 import type { PluginLogger } from "./types.js";
@@ -199,15 +200,17 @@ class PluginLoadFailureError extends Error {
 }
 
 export function validatePluginConfig(params: {
+  origin: PluginOrigin;
   schema?: Record<string, unknown>;
   cacheKey?: string;
   value?: unknown;
+  sourceValue?: unknown;
 }): Result<Record<string, unknown> | undefined, string[]> {
   const { schema, value } = params;
   if (!schema) {
     return ok(value as Record<string, unknown> | undefined);
   }
-  if (isEmptyPluginConfigJsonSchema(schema)) {
+  if (params.sourceValue === undefined && isEmptyPluginConfigJsonSchema(schema)) {
     if (
       value === undefined ||
       (value &&
@@ -222,16 +225,36 @@ export function validatePluginConfig(params: {
     }
     return resultError(["<root>: config must be empty"]);
   }
-  const result = validateJsonSchemaValue({
+  const result = validatePluginSchemaValue({
+    origin: params.origin,
     schema,
     cacheKey: params.cacheKey ?? JSON.stringify(schema),
     value: value ?? {},
+    sourceValue: params.sourceValue,
     applyDefaults: true,
   });
   return result.ok
     ? ok(result.value as Record<string, unknown> | undefined)
     : resultError(result.errors.map((error) => error.text));
 }
+
+// The empty-config shortcut answers without compiling the schema, so it is only sound for
+// schemas built purely from keywords it accounts for. An allowlist holds that invariant where
+// a denylist leaked every new keyword: an extra constraint, an unresolvable `$ref`, or an
+// unknown keyword now falls through to validatePluginSchemaValue, which owns the diagnostic.
+const EMPTY_PLUGIN_CONFIG_SHORTCUT_KEYWORDS = new Set([
+  "type",
+  "additionalProperties",
+  "properties",
+  "title",
+  "description",
+  "$schema",
+  "$id",
+  "$comment",
+  "deprecated",
+  "readOnly",
+  "writeOnly",
+]);
 
 function isEmptyPluginConfigJsonSchema(schema: Record<string, unknown>): boolean {
   if (schema.type !== "object" || schema.additionalProperties !== false) {
@@ -246,20 +269,7 @@ function isEmptyPluginConfigJsonSchema(schema: Record<string, unknown>): boolean
   ) {
     return false;
   }
-  const hasConditional = "if" in schema && ("then" in schema || "else" in schema);
-  return !(
-    "required" in schema ||
-    "dependentRequired" in schema ||
-    "dependentSchemas" in schema ||
-    "dependencies" in schema ||
-    "minProperties" in schema ||
-    "allOf" in schema ||
-    "anyOf" in schema ||
-    "oneOf" in schema ||
-    "not" in schema ||
-    "patternProperties" in schema ||
-    hasConditional
-  );
+  return Object.keys(schema).every((keyword) => EMPTY_PLUGIN_CONFIG_SHORTCUT_KEYWORDS.has(keyword));
 }
 
 export function pushDiagnostics(diagnostics: PluginDiagnostic[], append: PluginDiagnostic[]): void {

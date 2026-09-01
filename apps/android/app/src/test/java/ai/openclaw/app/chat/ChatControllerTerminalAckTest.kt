@@ -203,7 +203,7 @@ class ChatControllerTerminalAckTest {
         }
       controller.handleGatewayEvent("health", null)
       val ambiguousOwner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "main")
-      assertFalse(controller.canSendForOwner(ambiguousOwner))
+      assertFalse(controller.isCurrentComposerOwner(ambiguousOwner))
       assertFalse(
         controller.sendMessageForOwnerAwaitAcceptance(
           message = "unbound main alias",
@@ -215,8 +215,8 @@ class ChatControllerTerminalAckTest {
       controller.prepareMainSessionKey("agent:main:node-test")
       controller.handleGatewayEvent("health", null)
       val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:node-test")
-      assertTrue(controller.canSendForOwner(owner))
-      assertFalse(controller.canSendForOwner(owner.copy(gatewayStableId = "gateway-b")))
+      assertTrue(controller.isCurrentComposerOwner(owner))
+      assertFalse(controller.isCurrentComposerOwner(owner.copy(gatewayStableId = "gateway-b")))
 
       assertFalse(
         controller.sendMessageForOwnerAwaitAcceptance(

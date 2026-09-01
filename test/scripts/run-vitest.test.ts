@@ -44,13 +44,19 @@ const posixIt = process.platform === "win32" ? it.skip : it;
 const LOAD_SENSITIVE_PROCESS_TIMEOUT_MS = process.env.CI ? 30_000 : 15_000;
 
 describe("scripts/run-vitest", () => {
-  it("ends argument failures with the stable failure trailer", () => {
-    const result = spawnSync(process.execPath, [nodePath.resolve("scripts/run-vitest.mjs")], {
-      encoding: "utf8",
-    });
+  it.each(["mjs", "mts"])("ends %s argument failures with one final trailer", (extension) => {
+    const result = spawnSync(
+      process.execPath,
+      [nodePath.resolve(`scripts/run-vitest.${extension}`)],
+      {
+        encoding: "utf8",
+      },
+    );
 
     expect(result.status).toBe(1);
-    expect(result.stderr.trim().split("\n").at(-1)).toBe("[test] FAILED (exit 1)");
+    const trailer = `[${extension === "mjs" ? "test" : "vitest"}] FAILED (exit 1)`;
+    expect(result.stderr.match(/^\[.*\] FAILED \(exit \d+\)$/gmu)).toEqual([trailer]);
+    expect(result.stderr.trim().split("\n").at(-1)).toBe(trailer);
   });
 
   it.each([...VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS.keys(), ...TOOLING_EXCLUDED_TESTS])(
@@ -253,6 +259,45 @@ describe("scripts/run-vitest", () => {
         },
       ),
     ).toHaveLength(2);
+  });
+
+  it("bounds the complete E2E selection without multiplying configured workers", () => {
+    const argv = ["run", "--config", "test/vitest/vitest.e2e.config.ts", "--maxWorkers", "2"];
+    expect(resolveBoundedVitestInvocations(argv, { env: {} })).toEqual([
+      [...argv, "--shard=1/4"],
+      [...argv, "--shard=2/4"],
+      [...argv, "--shard=3/4"],
+      [...argv, "--shard=4/4"],
+    ]);
+  });
+
+  it.each([
+    ["doctor"],
+    ["src/commands"],
+    ["src/commands/doctor.e2e.test.ts"],
+    ["--", "doctor"],
+    ["--shard=2/3"],
+    ["--shard", "2/3"],
+    ["--watch"],
+    ["--run=false"],
+    ["--no-run"],
+    ["--bail", "1"],
+    ["--coverage"],
+    ["--outputFile", "report.json"],
+    ["--reporter=json"],
+    ["--listTags"],
+    ["--listTags=json"],
+    ["--clearCache"],
+    ["--standalone"],
+    ["--testNamePattern", "doctor"],
+    ["-t", "doctor"],
+    ["--exclude", "src/**"],
+    ["--root", "/other"],
+    ["--project", "other"],
+    ["--help"],
+  ])("preserves explicit E2E selection or execution options %j", (...options) => {
+    const argv = ["run", "--config", "test/vitest/vitest.e2e.config.ts", ...options];
+    expect(resolveBoundedVitestInvocations(argv, { env: {} })).toEqual([argv]);
   });
 
   it.each([
@@ -572,6 +617,27 @@ describe("scripts/run-vitest", () => {
       "test/vitest/vitest.ui.config.ts",
       "ui/src/pages/chat/chat-send.test.ts",
     ]);
+  });
+
+  it.each([
+    [
+      ["ui/src/components/markdown-mermaid.runtime.browser.test.ts"],
+      "test/vitest/vitest.ui-browser.config.ts",
+    ],
+    [["ui/src/components/form-controls.browser.test.ts"], "test/vitest/vitest.ui.config.ts"],
+    [
+      [
+        "ui/src/components/markdown-mermaid.runtime.browser.test.ts",
+        "ui/src/components/form-controls.browser.test.ts",
+      ],
+      null,
+    ],
+    [["ui/src/**/*.browser.test.ts"], null],
+    [["ui/src/components", "ui/src/pages/chat/chat-message-markdown.browser.test.ts"], null],
+  ])("preserves browser ownership for implicit targets %j", (targets, config) => {
+    expect(resolveImplicitVitestArgs(["run", ...targets])).toEqual(
+      config ? ["run", "--config", config, ...targets] : ["run", ...targets],
+    );
   });
 
   it("allows opting back into Maglev explicitly", () => {

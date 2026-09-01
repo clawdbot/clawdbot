@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { setPluginToolMeta } from "../plugins/tools.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
   McpLoopbackToolCache,
   resolveMcpLoopbackPolicyTools,
@@ -317,5 +317,23 @@ describe("McpLoopbackToolCache", () => {
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
     expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).not.toHaveProperty("sourceReplyOnly");
     expect(resolveGatewayScopedTools.mock.calls[1]?.[0]).toMatchObject({ sourceReplyOnly: true });
+  });
+
+  it("does not share cache rows across delegation capabilities", () => {
+    const cache = new McpLoopbackToolCache();
+    const cfg = {} as OpenClawConfig;
+
+    cache.resolve(scopeParams({ cfg }));
+    cache.resolve(scopeParams({ cfg, delegationCapability: "report_only" }));
+
+    // A restricted attempt must neither read nor seed the full-capability row
+    // for the same session context.
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+    expect(resolveGatewayScopedTools.mock.calls[1]?.[0]).toMatchObject({
+      delegationCapability: "report_only",
+    });
+
+    cache.resolve(scopeParams({ cfg, delegationCapability: "report_only" }));
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
   });
 });

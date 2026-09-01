@@ -18,7 +18,6 @@ import {
   resolveStartupEntryPaths,
   resolveTaskName,
   resolveTaskScriptPath,
-  shouldUseHiddenWindowsTaskLauncher,
 } from "./schtasks-layout.js";
 import {
   findInstalledProcessPid,
@@ -31,13 +30,17 @@ import {
   shouldManageGatewayListenerPort,
   terminateGatewayProcessTree,
 } from "./schtasks-process.js";
-import type { GatewayServiceRuntime } from "./service-runtime.js";
+import {
+  createServiceRuntimeInspectionFailure,
+  type GatewayServiceRuntime,
+} from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceEnv,
   GatewayServiceEnvArgs,
   GatewayServiceRestartResult,
 } from "./service-types.js";
+import { WINDOWS_TASK_SUPERVISOR_FLAG } from "./windows-task-supervisor-contract.js";
 
 type ScheduledTaskInfo = {
   status?: string;
@@ -151,7 +154,7 @@ function createStartupEntryRemovalError(error: unknown): Error {
   );
 }
 
-export async function hasScheduledTaskRunningEvidence(env: GatewayServiceEnv): Promise<boolean> {
+async function hasScheduledTaskRunningEvidence(env: GatewayServiceEnv): Promise<boolean> {
   const runtime = await readScheduledTaskRuntime(env).catch(() => null);
   if (runtime?.status !== "running") {
     return false;
@@ -160,8 +163,7 @@ export async function hasScheduledTaskRunningEvidence(env: GatewayServiceEnv): P
   if (normalizedResult !== null && RUNNING_RESULT_CODES.has(normalizedResult)) {
     return true;
   }
-  // Hidden VBS exits after spawning gateway.cmd; listener-backed success proves takeover.
-  return shouldUseHiddenWindowsTaskLauncher(env) && normalizedResult === "0x0";
+  return false;
 }
 
 export async function waitForScheduledTaskRunningEvidence(
@@ -196,8 +198,15 @@ export async function launchFallbackTaskScript(
   const command =
     installedCommand === undefined ? await readScheduledTaskCommand(env) : installedCommand;
   if (command?.programArguments.length) {
+    // Task inspection intentionally hides the wrapper flag so it can match the
+    // inner Gateway. Direct fallback must restore that wrapper or it loses the
+    // Job Object owner that terminates the whole Gateway process tree.
+    const programArguments =
+      command.environment?.OPENCLAW_SERVICE_KIND === "gateway"
+        ? [...command.programArguments, WINDOWS_TASK_SUPERVISOR_FLAG]
+        : command.programArguments;
     const { child } = await spawnWithFallback({
-      argv: command.programArguments,
+      argv: programArguments,
       options: {
         cwd: command.workingDirectory || undefined,
         detached: true,
@@ -538,7 +547,7 @@ export async function readScheduledTaskRuntime(
     if (await isStartupEntryInstalled(env)) {
       return resolveFallbackRuntime(env);
     }
-    return { status: "unknown", detail: String(err) };
+    return createServiceRuntimeInspectionFailure(err);
   }
   const taskName = resolveTaskName(env);
   const res = await execSchtasks(["/Query", "/TN", taskName, "/V", "/FO", "LIST"]);
@@ -548,11 +557,9 @@ export async function readScheduledTaskRuntime(
     }
     const detail = (res.stderr || res.stdout).trim();
     const missing = probeScheduledTaskExists(taskName) === false;
-    return {
-      status: missing ? "stopped" : "unknown",
-      ...(!missing && detail ? { detail } : {}),
-      missingUnit: missing,
-    };
+    return missing
+      ? { status: "stopped", missingUnit: true }
+      : { ...createServiceRuntimeInspectionFailure(detail), missingUnit: false };
   }
   const parsed = parseSchtasksQuery(res.stdout || "");
   const derived = deriveScheduledTaskRuntimeStatus(parsed);

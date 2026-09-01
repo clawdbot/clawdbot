@@ -27,6 +27,8 @@ type CodexAppServerClientRequestParams = {
   method: string;
   requestParams?: unknown;
   timeoutMs?: number;
+  signal?: AbortSignal;
+  assertCurrent?: () => void;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
   sessionKey?: string;
   sessionId?: string;
@@ -48,7 +50,13 @@ export async function requestCodexAppServerClientJson<T = JsonValue | undefined>
   }
   const timeoutMs = params.timeoutMs ?? 60_000;
   return await withTimeout(
-    params.client.request<T>(params.method, params.requestParams, { timeoutMs }),
+    params.client.request<T>(params.method, params.requestParams, {
+      timeoutMs,
+      signal: params.signal,
+      ...(params.assertCurrent
+        ? { assertCurrent: () => assertRequestOwnerCurrent(params.assertCurrent) }
+        : {}),
+    }),
     timeoutMs,
     `codex app-server ${params.method} timed out`,
   );
@@ -70,6 +78,7 @@ type CodexAppServerJsonClientOptions = Pick<
   sessionKey?: string;
   sessionId?: string;
   isolated?: boolean;
+  assertCurrent?: () => void;
 };
 
 /** Sends a typed Codex app-server request and returns the method-specific response shape. */
@@ -107,6 +116,26 @@ export type CodexAppServerScopedRequest = <T = JsonValue | undefined>(request: {
   method: string;
   requestParams?: unknown;
 }) => Promise<T>;
+
+/** A scoped guard rejected the request before a physical write. */
+export class CodexAppServerScopedRequestRejectedError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "CodexAppServerScopedRequestRejectedError";
+  }
+}
+
+// Preserve pre-write rejection identity so callers do not retire a healthy shared client.
+function assertRequestOwnerCurrent(assertCurrent?: () => void): void {
+  try {
+    assertCurrent?.();
+  } catch (cause) {
+    throw new CodexAppServerScopedRequestRejectedError(
+      cause instanceof Error ? cause.message : String(cause),
+      { cause },
+    );
+  }
+}
 
 const CODEX_USAGE_ISOLATED_SHUTDOWN = { forceKillDelayMs: 200, exitTimeoutMs: 300 } as const;
 const CODEX_ACCOUNT_READ_MAX_TIMEOUT_MS = 4_000;
@@ -200,7 +229,11 @@ export async function withCodexAppServerJsonClient<T>(
     // to the conservative graceful/force-kill window used elsewhere.
     isolatedShutdown?: { exitTimeoutMs?: number; forceKillDelayMs?: number };
   },
-  run: (request: CodexAppServerScopedRequest, client: CodexAppServerClient) => Promise<T>,
+  run: (
+    request: CodexAppServerScopedRequest,
+    client: CodexAppServerClient,
+    scope: { assertCurrent: () => void },
+  ) => Promise<T>,
 ): Promise<T> {
   const timeoutMs = params.timeoutMs ?? 60_000;
   const timeoutMessage = params.timeoutMessage ?? "codex app-server request timed out";
@@ -209,7 +242,7 @@ export async function withCodexAppServerJsonClient<T>(
   const isPastDeadline = () => deadline !== undefined && Date.now() >= deadline;
   const throwIfAbandoned = () => {
     if (timeoutController.signal.aborted || isPastDeadline()) {
-      throw new Error(timeoutMessage);
+      throw new CodexAppServerScopedRequestRejectedError(timeoutMessage);
     }
   };
   const remainingTimeoutMs = () => {
@@ -238,8 +271,18 @@ export async function withCodexAppServerJsonClient<T>(
             config: params.config,
             abandonSignal: timeoutController.signal,
           });
-          try {
+          let scopeActive = true;
+          const assertCurrent = () => {
             throwIfAbandoned();
+            if (!scopeActive) {
+              throw new CodexAppServerScopedRequestRejectedError(
+                "Codex app-server request scope is closed",
+              );
+            }
+            assertRequestOwnerCurrent(params.assertCurrent);
+          };
+          try {
+            assertCurrent();
             const scopedRequest: CodexAppServerScopedRequest = async <R>(request: {
               method: string;
               requestParams?: unknown;
@@ -252,15 +295,16 @@ export async function withCodexAppServerJsonClient<T>(
                 sessionId: params.sessionId,
               });
               if (sandboxBlock) {
-                throw new Error(sandboxBlock);
+                throw new CodexAppServerScopedRequestRejectedError(sandboxBlock);
               }
-              throwIfAbandoned();
+              assertCurrent();
               return await client.request<R>(request.method, request.requestParams, {
                 timeoutMs: remainingTimeoutMs(),
                 signal: timeoutController.signal,
+                assertCurrent,
               });
             };
-            return await run(scopedRequest, client);
+            return await run(scopedRequest, client, { assertCurrent });
           } catch (error) {
             if (!isCodexAppServerStartSelectionChangedError(error) || attempt > 0) {
               throw error;
@@ -270,6 +314,7 @@ export async function withCodexAppServerJsonClient<T>(
             }
             throwIfAbandoned();
           } finally {
+            scopeActive = false;
             if (params.isolated) {
               // Wait for the child to actually exit (with a SIGKILL fallback) so
               // the parent process doesn't hang on an orphaned codex app-server.

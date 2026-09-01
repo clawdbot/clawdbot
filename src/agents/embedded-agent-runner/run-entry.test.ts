@@ -165,7 +165,6 @@ function recordTurnAttempt(
       },
     },
     sessionIdUsed: label,
-    sessionFile: `${label}.jsonl`,
     promptError: false,
     aborted: false,
     yieldAborted: false,
@@ -309,7 +308,7 @@ describe("runEmbeddedAgentEntry", () => {
                       {
                         provider,
                         model,
-                        result: "same_model_rate_limit",
+                        result: "same_model_transient",
                         reason: "rate_limit",
                       },
                       { provider, model, result: "success" },
@@ -363,7 +362,7 @@ describe("runEmbeddedAgentEntry", () => {
         {
           provider: "fallback-provider",
           model: "fallback-model",
-          result: "same_model_rate_limit",
+          result: "same_model_transient",
           reason: "rate_limit",
         },
         { provider: "fallback-provider", model: "fallback-model", result: "success" },

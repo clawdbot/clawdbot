@@ -149,6 +149,8 @@ export class ConversationDeliveryInputError extends Error {
   }
 }
 
+export class ConversationDeliveryMissingError extends Error {}
+
 function selectOperation(
   database: ReturnType<typeof openOpenClawAgentDatabase>,
   operationId: string,
@@ -265,7 +267,9 @@ function updateConversationDeliveryOperation(
     (database) => {
       const current = selectOperation(database, operationId);
       if (!current) {
-        throw new Error(`Conversation delivery operation not found: ${operationId}`);
+        throw new ConversationDeliveryMissingError(
+          `Conversation delivery operation not found: ${operationId}`,
+        );
       }
       if (!params.allowedFrom.includes(current.status)) {
         return current;

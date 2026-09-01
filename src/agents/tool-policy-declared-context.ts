@@ -57,17 +57,6 @@ function denylistBlocksPlugin(params: { pluginId: string; denylist: ToolDenylist
   );
 }
 
-function denylistBlocksPluginTool(params: {
-  pluginId: string;
-  toolName: string;
-  denylist: ToolDenylist;
-}): boolean {
-  return (
-    denylistBlocksPlugin({ pluginId: params.pluginId, denylist: params.denylist }) ||
-    denylistBlocksName(params.toolName, params.denylist)
-  );
-}
-
 function collectConfiguredMcpServerNames(params: {
   config?: OpenClawConfig;
   toolDenylist?: string[];
@@ -101,14 +90,7 @@ function collectAvailableManifestToolNames(params: {
   denylist: ToolDenylist;
 }): string[] {
   return (params.plugin.contracts?.tools ?? [])
-    .filter(
-      (toolName) =>
-        !denylistBlocksPluginTool({
-          pluginId: params.plugin.id,
-          toolName,
-          denylist: params.denylist,
-        }),
-    )
+    .filter((toolName) => !denylistBlocksName(toolName, params.denylist))
     .filter((toolName) =>
       hasManifestToolAvailability({
         plugin: params.plugin,
@@ -163,9 +145,8 @@ function collectDeclaredPluginContext(params: {
         snapshot,
         plugin,
         config: params.config,
+        normalizedConfig: normalizedPlugins,
       }) ||
-      normalizedPlugins.entries[plugin.id]?.enabled === false ||
-      normalizedPlugins.deny.includes(plugin.id) ||
       denylistBlocksPlugin({ pluginId: plugin.id, denylist })
     ) {
       continue;

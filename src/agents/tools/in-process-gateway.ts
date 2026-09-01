@@ -21,6 +21,7 @@ import { callGatewayTool } from "./gateway.js";
 
 type InProcessGatewayCallOptions = {
   resolveGatewayContext?: GatewayContextResolver;
+  sessionMutationCommitGuard?: () => void;
 };
 
 export type InProcessGatewayCaller = <T = Record<string, unknown>>(
@@ -198,11 +199,16 @@ export const callAgentToolGatewayRequest: AgentToolGatewayRequestCaller = async 
   );
 };
 
-export const callInProcessGatewayTool: InProcessGatewayCaller = async <T>(
+async function callInProcessGatewayToolBound<T>(
   method: string,
   params: Record<string, unknown>,
-  options: InProcessGatewayCallOptions = {},
-): Promise<T> => {
+  options: InProcessGatewayCallOptions & {
+    sessionCreation?: TrustedSessionCreation;
+    signal?: AbortSignal;
+    timeoutMs?: number | null;
+  },
+  fallback: (scopes: ReturnType<typeof resolveLeastPrivilegeOperatorScopesForMethod>) => Promise<T>,
+): Promise<T> {
   const scopes = resolveLeastPrivilegeOperatorScopesForMethod(method, params);
   const resolveGatewayContext = callerGatewayContextResolver(options.resolveGatewayContext);
   const boundGateway = resolveGatewayContext
@@ -215,35 +221,10 @@ export const callInProcessGatewayTool: InProcessGatewayCaller = async <T>(
         await dispatchGatewayMethodInProcess<T>(method, params, {
           forceSyntheticClient: true,
           syntheticScopes: scopes,
-          ...(boundResolver ? { resolveGatewayContext: boundResolver } : {}),
-        }),
-    );
-  }
-  if (boundGateway) {
-    throw new Error(`Gateway instance unavailable for ${method}`);
-  }
-  return await callGatewayTool<T>(method, {}, params, { scopes });
-};
-
-export async function callInProcessGatewayToolWithCreation<T = Record<string, unknown>>(
-  method: string,
-  params: Record<string, unknown>,
-  creation: TrustedSessionCreation,
-  options: { signal?: AbortSignal; timeoutMs?: number | null } = {},
-): Promise<T> {
-  const scopes = resolveLeastPrivilegeOperatorScopesForMethod(method, params);
-  const resolveGatewayContext = callerGatewayContextResolver();
-  const boundGateway = resolveGatewayContext
-    ? bindInProcessGatewayContext(method, resolveGatewayContext)
-    : undefined;
-  if (hasInProcessGatewayContext(boundGateway?.resolve)) {
-    return await runBoundInProcessGatewayCall(
-      boundGateway,
-      async (boundResolver) =>
-        await dispatchGatewayMethodInProcess<T>(method, params, {
-          forceSyntheticClient: true,
-          sessionCreation: creation,
-          syntheticScopes: scopes,
+          ...(options.sessionCreation ? { sessionCreation: options.sessionCreation } : {}),
+          ...(options.sessionMutationCommitGuard
+            ? { sessionMutationCommitGuard: options.sessionMutationCommitGuard }
+            : {}),
           ...(options.signal ? { signal: options.signal } : {}),
           ...(options.timeoutMs !== undefined && options.timeoutMs !== null
             ? { timeoutMs: options.timeoutMs }
@@ -255,28 +236,59 @@ export async function callInProcessGatewayToolWithCreation<T = Record<string, un
   if (boundGateway) {
     throw new Error(`Gateway instance unavailable for ${method}`);
   }
-  // The fallback is a real local Gateway request. Carry spawn policy only in
-  // the signed agent-runtime identity token, never in model-authored params.
-  if (creation.via !== "spawn" || !creation.inheritedToolPolicy) {
-    return await callGatewayTool<T>(method, {}, params, {
-      scopes,
-      ...(options.signal ? { signal: options.signal } : {}),
-      ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
-    });
-  }
-  return await runWithGatewaySessionSpawnContext(
-    {
-      ...(creation.completionOwnerSessionKey
-        ? { completionOwnerSessionKey: creation.completionOwnerSessionKey }
-        : {}),
-      inheritedToolPolicy: creation.inheritedToolPolicy,
+  return await fallback(scopes);
+}
+
+export const callInProcessGatewayTool: InProcessGatewayCaller = async <T>(
+  method: string,
+  params: Record<string, unknown>,
+  options: InProcessGatewayCallOptions = {},
+): Promise<T> => {
+  return await callInProcessGatewayToolBound(method, params, options, async (scopes) =>
+    callGatewayTool<T>(method, {}, params, { scopes }),
+  );
+};
+
+export async function callInProcessGatewayToolWithCreation<T = Record<string, unknown>>(
+  method: string,
+  params: Record<string, unknown>,
+  creation: TrustedSessionCreation,
+  options: {
+    resolveGatewayContext?: GatewayContextResolver;
+    sessionMutationCommitGuard?: () => void;
+    signal?: AbortSignal;
+    timeoutMs?: number | null;
+  } = {},
+): Promise<T> {
+  return await callInProcessGatewayToolBound(
+    method,
+    params,
+    { ...options, sessionCreation: creation },
+    async (scopes) => {
+      // The fallback is a real local Gateway request. Carry spawn policy only in
+      // the signed agent-runtime identity token, never in model-authored params.
+      if (creation.via !== "spawn" || !creation.inheritedToolPolicy) {
+        return await callGatewayTool<T>(method, {}, params, {
+          scopes,
+          ...(options.signal ? { signal: options.signal } : {}),
+          ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+        });
+      }
+      return await runWithGatewaySessionSpawnContext(
+        {
+          ...(creation.completionOwnerSessionKey
+            ? { completionOwnerSessionKey: creation.completionOwnerSessionKey }
+            : {}),
+          inheritedToolPolicy: creation.inheritedToolPolicy,
+        },
+        () =>
+          callGatewayTool<T>(method, {}, params, {
+            scopes,
+            requireAgentRuntimeIdentity: true,
+            ...(options.signal ? { signal: options.signal } : {}),
+            ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+          }),
+      );
     },
-    () =>
-      callGatewayTool<T>(method, {}, params, {
-        scopes,
-        requireAgentRuntimeIdentity: true,
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
-      }),
   );
 }

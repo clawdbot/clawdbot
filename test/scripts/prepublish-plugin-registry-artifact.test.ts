@@ -17,6 +17,10 @@ import * as packageArtifact from "../../scripts/e2e/parallels/package-artifact.t
 import { packAndServeSmokeArtifact } from "../../scripts/e2e/parallels/smoke-common.ts";
 import { resolveCrossOsCompanionPackages } from "../../scripts/lib/cross-os-release-checks/companions.ts";
 import {
+  findLaneByName,
+  requiredPrepublishPluginPackagesForLanes,
+} from "../../scripts/lib/docker-e2e-plan.mts";
+import {
   PREPUBLISH_PLUGIN_REGISTRY_MANIFEST,
   createPrepublishPluginRegistryArtifact,
   validatePrepublishPluginRegistryArtifact,
@@ -28,6 +32,18 @@ const PACKAGE_NAME = "@openclaw/discord";
 const TARBALL = "openclaw-discord-2026.8.1-beta.1.tgz";
 const SCRIPT = path.resolve("scripts/prepublish-plugin-registry-artifact.mjs");
 const tempDirs: string[] = [];
+const packageTarballs = new Map<string, Buffer>();
+const fixtureCommitArgs = [
+  "-c",
+  "user.email=release-test@example.invalid",
+  "-c",
+  "user.name=Release Test",
+  "-c",
+  "commit.gpgsign=false",
+  "commit",
+  "-m",
+  "test: seed release source",
+];
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -40,19 +56,30 @@ function sha256(file: string): string {
   return createHash("sha256").update(readFileSync(file)).digest("hex");
 }
 
+function writeFixtureTarball(root: string, tarballPath: string, name: string) {
+  const cached = packageTarballs.get(name);
+  if (cached) {
+    writeFileSync(tarballPath, cached);
+    return;
+  }
+  const packageRoot = path.join(root, "package");
+  mkdirSync(packageRoot, { recursive: true });
+  writeFileSync(
+    path.join(packageRoot, "package.json"),
+    `${JSON.stringify({ name, version: VERSION })}\n`,
+  );
+  execFileSync("tar", ["-czf", tarballPath, "-C", root, "package"]);
+  // Each test mutates its own file; only original archive bytes survive cleanup.
+  packageTarballs.set(name, readFileSync(tarballPath));
+}
+
 function fixture(packageName = PACKAGE_NAME) {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-prepublish-plugin-registry-"));
   tempDirs.push(root);
-  const packageRoot = path.join(root, "package");
   const artifactDir = path.join(root, "artifact");
-  mkdirSync(packageRoot);
   mkdirSync(artifactDir);
-  writeFileSync(
-    path.join(packageRoot, "package.json"),
-    `${JSON.stringify({ name: packageName, version: VERSION })}\n`,
-  );
   const tarballPath = path.join(artifactDir, TARBALL);
-  execFileSync("tar", ["-czf", tarballPath, "-C", root, "package"]);
+  writeFixtureTarball(root, tarballPath, packageName);
   const manifestPath = path.join(artifactDir, PREPUBLISH_PLUGIN_REGISTRY_MANIFEST);
   const manifest = {
     schema: "openclaw.prepublish-plugin-registry/v1",
@@ -98,14 +125,8 @@ function addCompanionPackage(paths: ReturnType<typeof fixture>) {
   const name = "@openclaw/feishu";
   const tarball = "openclaw-feishu-2026.8.1-beta.1.tgz";
   const archiveRoot = path.join(path.dirname(paths.artifactDir), "feishu-package");
-  const packageRoot = path.join(archiveRoot, "package");
-  mkdirSync(packageRoot, { recursive: true });
-  writeFileSync(
-    path.join(packageRoot, "package.json"),
-    `${JSON.stringify({ name, version: VERSION })}\n`,
-  );
   const tarballPath = path.join(paths.artifactDir, tarball);
-  execFileSync("tar", ["-czf", tarballPath, "-C", archiveRoot, "package"]);
+  writeFixtureTarball(archiveRoot, tarballPath, name);
   paths.manifest.packages.push({
     name,
     version: VERSION,
@@ -115,25 +136,23 @@ function addCompanionPackage(paths: ReturnType<typeof fixture>) {
   paths.writeManifest();
 }
 
-function cliFixture() {
+function cliFixture(packageNames = [PACKAGE_NAME]) {
   const repoRoot = mkdtempSync(path.join(tmpdir(), "openclaw-prepublish-plugin-cli-"));
   tempDirs.push(repoRoot);
-  const packageDir = path.join(repoRoot, "extensions", "discord");
   const scriptsDir = path.join(repoRoot, "scripts", "lib");
-  mkdirSync(packageDir, { recursive: true });
   mkdirSync(scriptsDir, { recursive: true });
   writeFileSync(
     path.join(repoRoot, "package.json"),
     `${JSON.stringify({ name: "openclaw", version: VERSION })}\n`,
   );
-  writeFileSync(
-    path.join(packageDir, "package.json"),
-    `${JSON.stringify({
-      name: PACKAGE_NAME,
-      version: VERSION,
-      openclaw: { release: { publishToNpm: true } },
-    })}\n`,
-  );
+  for (const name of packageNames) {
+    const packageDir = path.join(repoRoot, "extensions", name.split("/")[1]!);
+    mkdirSync(packageDir, { recursive: true });
+    writeFileSync(
+      path.join(packageDir, "package.json"),
+      `${JSON.stringify({ name, version: VERSION, openclaw: { release: { publishToNpm: true } } })}\n`,
+    );
+  }
   writeFileSync(
     path.join(scriptsDir, "plugin-npm-runtime-build.mjs"),
     'console.log("runtime build stdout");\n',
@@ -149,18 +168,15 @@ const outputDir = process.argv[process.argv.indexOf("--pack-destination") + 1];
 const staging = path.join(repoRoot, ".pack-fixture");
 fs.mkdirSync(path.join(staging, "package"), { recursive: true });
 fs.copyFileSync(path.join(repoRoot, packageDir, "package.json"), path.join(staging, "package", "package.json"));
-execFileSync("tar", ["-czf", path.join(outputDir, "${TARBALL}"), "-C", staging, "package"]);
+const pkg = JSON.parse(fs.readFileSync(path.join(staging, "package", "package.json"), "utf8"));
+const tarball = pkg.name.slice(1).replace("/", "-") + "-" + pkg.version + ".tgz";
+execFileSync("tar", ["-czf", path.join(outputDir, tarball), "-C", staging, "package"]);
 console.log("package manifest stdout");
 `,
   );
   execFileSync("git", ["init"], { cwd: repoRoot });
-  execFileSync("git", ["config", "user.email", "release-test@example.invalid"], {
-    cwd: repoRoot,
-  });
-  execFileSync("git", ["config", "user.name", "Release Test"], { cwd: repoRoot });
-  execFileSync("git", ["config", "commit.gpgsign", "false"], { cwd: repoRoot });
   execFileSync("git", ["add", "."], { cwd: repoRoot });
-  execFileSync("git", ["commit", "-m", "test: seed release source"], { cwd: repoRoot });
+  execFileSync("git", fixtureCommitArgs, { cwd: repoRoot });
   const sourceSha = execFileSync("git", ["rev-parse", "HEAD"], {
     cwd: repoRoot,
     encoding: "utf8",
@@ -169,6 +185,35 @@ console.log("package manifest stdout");
 }
 
 describe("prepublish plugin registry artifact", () => {
+  it.each(["discord", "slack"])(
+    "stages the planned %s candidate and Codex in one verified artifact",
+    (channel) => {
+      const lane = findLaneByName(`npm-onboard-${channel}-candidate-channel-agent`);
+      expect(lane).toBeDefined();
+      const requiredPackages = requiredPrepublishPluginPackagesForLanes([lane!]);
+      const expectedPackages = ["@openclaw/codex", `@openclaw/${channel}`];
+      const { repoRoot, sourceSha } = cliFixture(expectedPackages);
+      const artifactDir = path.join(repoRoot, "artifact");
+      const result = createPrepublishPluginRegistryArtifact({
+        repoRoot,
+        outputDir: artifactDir,
+        sourceSha,
+        candidateVersion: VERSION,
+        requiredPackages,
+      });
+      const verified = validatePrepublishPluginRegistryArtifact({
+        artifactDir,
+        expectedSourceSha: sourceSha,
+        expectedCandidateVersion: VERSION,
+        expectedManifestSha256: result.manifestSha256,
+        requiredPackages: expectedPackages,
+      });
+      expect(verified.manifest.packages.map(({ name, version }) => ({ name, version }))).toEqual(
+        expectedPackages.map((name) => ({ name, version: VERSION })),
+      );
+    },
+  );
+
   it("can be imported from stdin without running the CLI", () => {
     const result = spawnSync(process.execPath, ["--input-type=module", "-"], {
       input: `import { PREPUBLISH_PLUGIN_REGISTRY_MANIFEST } from ${JSON.stringify(pathToFileURL(SCRIPT).href)};\nconsole.log(PREPUBLISH_PLUGIN_REGISTRY_MANIFEST);\n`,
@@ -315,13 +360,8 @@ describe("prepublish plugin registry artifact", () => {
       `${JSON.stringify({ name: "openclaw", version: VERSION })}\n`,
     );
     execFileSync("git", ["init"], { cwd: repoRoot });
-    execFileSync("git", ["config", "user.email", "release-test@example.invalid"], {
-      cwd: repoRoot,
-    });
-    execFileSync("git", ["config", "user.name", "Release Test"], { cwd: repoRoot });
-    execFileSync("git", ["config", "commit.gpgsign", "false"], { cwd: repoRoot });
     execFileSync("git", ["add", "package.json"], { cwd: repoRoot });
-    execFileSync("git", ["commit", "-m", "test: seed release source"], { cwd: repoRoot });
+    execFileSync("git", fixtureCommitArgs, { cwd: repoRoot });
     const sourceSha = execFileSync("git", ["rev-parse", "HEAD"], {
       cwd: repoRoot,
       encoding: "utf8",

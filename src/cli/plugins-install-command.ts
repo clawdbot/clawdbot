@@ -4,20 +4,15 @@ import { assertConfigWriteAllowedInCurrentMode } from "../config/config.js";
 import { reportClawHubPluginInstallTelemetry } from "../infra/clawhub-packages.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { createManagedPluginArtifactConsentHandler } from "../plugins/capability-consent.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub.js";
-import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
-import { persistPluginInstall } from "../plugins/install-persistence.js";
-import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import { installManagedPluginSource } from "../plugins/management-service.js";
-import { installPluginFromMarketplace } from "../plugins/marketplace.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
 import { markClawPackageIndependentlyOwned } from "../state/claw-package-adoption.js";
 import { withClawPackageLifecycleLease } from "../state/claw-package-lifecycle-lease.js";
 import { shortenHomePath } from "../utils.js";
-import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
+import { resolveClawHubInstallConfirmation } from "./clawhub-install-confirmation.js";
 import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
 import {
   confirmNonClawHubInstall,
@@ -121,23 +116,19 @@ async function runPluginInstallCommandUnlocked(
     ) {
       return runtime.exit(1);
     }
-    const artifactConsent = createManagedPluginArtifactConsentHandler({
-      config: snapshot.config,
-      source: "marketplace",
-      spec: `${raw}@${preflight.marketplace}`,
-      ...(installMode === "update"
-        ? { previousRecords: await loadInstalledPluginIndexInstallRecords() }
-        : {}),
+    const result = await installManagedPluginSource({
+      request: {
+        source: "marketplace",
+        marketplace: preflight.marketplace,
+        plugin: raw,
+        mode: installMode,
+      },
+      snapshot,
       ...capabilityConsent,
-    });
-    const result = await installPluginFromMarketplace({
-      ...safetyOverrides,
-      marketplace: preflight.marketplace,
-      mode: installMode,
-      plugin: raw,
-      extensionsDir: resolveDefaultPluginExtensionsDir(),
+      safetyOverrides,
       logger: createPluginInstallLogger(runtime),
-      onBeforePluginArtifactCommit: artifactConsent.onBeforePluginArtifactCommit,
+      invalidateRuntimeCache,
+      runtime,
     });
     if (!result.ok) {
       if (!isClawHubBlockedCliFailure(result)) {
@@ -145,22 +136,6 @@ async function runPluginInstallCommandUnlocked(
       }
       return runtime.exit(1);
     }
-
-    const install = artifactConsent.applyAcceptedSurface(result.pluginId, {
-      source: "marketplace",
-      installPath: result.targetDir,
-      version: result.version,
-      marketplaceName: result.marketplaceName,
-      marketplaceSource: result.marketplaceSource,
-      marketplacePlugin: result.marketplacePlugin,
-    });
-    await persistPluginInstall({
-      snapshot,
-      pluginId: result.pluginId,
-      install,
-      invalidateRuntimeCache,
-      runtime,
-    });
     return;
   }
 
@@ -251,6 +226,7 @@ async function runPluginInstallCommandUnlocked(
       return runtime.exit(1);
     }
 
+    case "marketplace":
     case "npm-pack":
     case "git": {
       const result = await installManagedPluginSource({
@@ -319,19 +295,12 @@ async function runPluginInstallCommandUnlocked(
         installSnapshot = snapshot,
         installSafetyOverrides = safetyOverrides,
       ) => {
-        const acknowledgement = resolveClawHubRiskAcknowledgementCliOptions({
-          acknowledgeClawHubRisk: opts.acknowledgeClawHubRisk,
-          action: "installing",
-        });
         const result = await installManagedPluginSource({
           request: {
             ...sourceRequest,
             ...(opts.expectedIntegrity ? { expectedIntegrity: opts.expectedIntegrity } : {}),
             ...(opts.expectedPluginId ? { expectedPluginId: opts.expectedPluginId } : {}),
-            ...(acknowledgement.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
-            ...(acknowledgement.onClawHubRisk
-              ? { onClawHubRisk: acknowledgement.onClawHubRisk }
-              : {}),
+            confirmInstall: resolveClawHubInstallConfirmation(),
           },
           snapshot: installSnapshot,
           ...capabilityConsent,

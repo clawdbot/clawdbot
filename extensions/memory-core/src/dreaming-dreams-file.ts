@@ -6,7 +6,7 @@ import { replaceManagedMarkdownBlock } from "openclaw/plugin-sdk/memory-host-mar
 import { readRegularFile, replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 
-const DREAMS_FILENAMES = ["DREAMS.md", "dreams.md"] as const;
+export const DREAMS_FILENAMES = ["DREAMS.md", "dreams.md"] as const;
 const DEEP_START_MARKER = "<!-- openclaw:dreaming:deep:start -->";
 const DEEP_END_MARKER = "<!-- openclaw:dreaming:deep:end -->";
 

@@ -8,6 +8,10 @@ export type ThemeName =
   | "tide"
   | "beacon"
   | "phosphor"
+  | "crt"
+  | "manuscript"
+  | "rose"
+  | "miami"
   | "custom";
 export type ThemeMode = "system" | "light" | "dark";
 export type ResolvedTheme =
@@ -25,6 +29,14 @@ export type ResolvedTheme =
   | "beacon-light"
   | "phosphor"
   | "phosphor-light"
+  | "crt"
+  | "crt-light"
+  | "manuscript"
+  | "manuscript-light"
+  | "rose"
+  | "rose-light"
+  | "miami"
+  | "miami-light"
   | "custom"
   | "custom-light";
 
@@ -36,21 +48,12 @@ const VALID_THEME_NAMES = new Set<ThemeName>([
   "tide",
   "beacon",
   "phosphor",
+  "crt",
+  "manuscript",
+  "rose",
+  "miami",
   "custom",
 ]);
-
-const THEME_FONT_STYLESHEET_ID = "openclaw-theme-fonts";
-/* Every built-in family ships its own faces from fonts/<theme>.css; imported
-   custom themes stay on the system stack. The stylesheet is fetched only while
-   its theme is active, so no theme pays for another theme's fonts. Loading
-   with the app bundle (not the first-paint boot script) costs one
-   font-display: swap on a cold load. The href is resolved against the
-   configured Control UI mount, and the stylesheet's own url() references are
-   relative to it, so both levels follow a non-root base path. */
-function themeFontStylesheet(theme: ThemeName): ControlUiFontStylesheet | undefined {
-  return theme === "custom" ? undefined : `fonts/${theme}.css`;
-}
-type ControlUiFontStylesheet = `fonts/${string}.css`;
 
 const VALID_THEME_MODES = new Set<ThemeMode>(["system", "light", "dark"]);
 
@@ -88,31 +91,6 @@ export function resolveTheme(theme: ThemeName, mode: ThemeMode): ResolvedTheme {
   }
   const family = theme === "knot" ? "openknot" : theme;
   return resolvedMode === "light" ? `${family}-light` : family;
-}
-
-/** Loads (or drops) the webfont stylesheet a theme declares. Idempotent. */
-export function syncThemeFontStylesheet(theme: ThemeName): void {
-  if (typeof document === "undefined") {
-    return;
-  }
-  const asset = themeFontStylesheet(theme);
-  const existing = document.getElementById(THEME_FONT_STYLESHEET_ID);
-  if (!asset) {
-    existing?.remove();
-    return;
-  }
-  const href = inferControlUiPublicAssetPath(asset);
-  if (existing instanceof HTMLLinkElement) {
-    if (existing.getAttribute("href") !== href) {
-      existing.href = href;
-    }
-    return;
-  }
-  const link = document.createElement("link");
-  link.id = THEME_FONT_STYLESHEET_ID;
-  link.rel = "stylesheet";
-  link.href = href;
-  document.head.append(link);
 }
 
 /** Publish theme colors only after their stylesheet is available. */

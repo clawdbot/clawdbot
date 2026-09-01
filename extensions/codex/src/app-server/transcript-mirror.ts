@@ -76,6 +76,7 @@ function readMirroredAssistantText(message: MirroredAgentMessage | undefined): s
 
 /** Imports a bounded, user-visible Codex history tail into a new OpenClaw transcript. */
 export async function importCodexThreadHistoryToTranscript(params: {
+  assertCurrent?: () => void;
   thread: CodexThread;
   throughTurnId: string | null;
   storePath: string;
@@ -86,28 +87,27 @@ export async function importCodexThreadHistoryToTranscript(params: {
   modelProvider?: string | null;
   config?: SessionTranscriptWriteLockParams["config"];
 }): Promise<CodexThreadHistoryImportResult> {
-  const projection = projectBoundedCodexThreadHistory({
-    thread: params.thread,
-    throughTurnId: params.throughTurnId,
-    importedAt: Date.now(),
-    ...(params.modelProvider ? { modelProvider: params.modelProvider } : {}),
-  });
-  if (projection.transcriptMessages.length > 0) {
+  const { transcriptMessages, importedMessages, omittedMessages } =
+    projectBoundedCodexThreadHistory({
+      thread: params.thread,
+      throughTurnId: params.throughTurnId,
+      importedAt: Date.now(),
+      ...(params.modelProvider ? { modelProvider: params.modelProvider } : {}),
+    });
+  if (transcriptMessages.length > 0) {
     await mirror({
+      assertCurrent: params.assertCurrent,
       storePath: params.storePath,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(params.cwd ? { cwd: params.cwd } : {}),
       ...(params.config ? { config: params.config } : {}),
-      messages: projection.transcriptMessages,
+      messages: transcriptMessages,
       idempotencyScope: `codex-app-server:${params.thread.id}:history`,
     });
   }
-  return {
-    importedMessages: projection.importedMessages,
-    omittedMessages: projection.omittedMessages,
-  };
+  return { importedMessages, omittedMessages };
 }
 
 async function mirrorBestEffort(params: {
@@ -156,6 +156,7 @@ async function mirrorBestEffort(params: {
         mirrorIdentity: `${params.turnId}:assistant`,
         runId: params.params.runId,
       },
+      prepareAssistantTranscriptMessage: params.params.prepareAssistantTranscriptMessage,
       config: params.params.config,
     });
     for (const receipt of mirrorResult.userMessageReceipts) {
@@ -295,7 +296,22 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
           params.upstreamUserText,
         ),
       });
+      if (params.params.userTurnTranscriptRecorder?.getAdmissionReceipt()) {
+        const annotate = params.params.hostCapabilities.annotateCurrentUserTurn;
+        if (!annotate || userPromptMessage.role !== "user") {
+          throw new Error("current host admission is unavailable for native prompt annotation");
+        }
+        // Native turn acceptance supplies the identity. Annotate before taking the mirror lock:
+        // the anchored writer owns that same queue and must never be nested under it.
+        await annotate({
+          mirrorIdentity: `${params.turnId}:prompt`,
+          upstreamUserText: params.upstreamUserText,
+          mirrorOrigin: "codex-app-server",
+          mirrorSourceFingerprint: fingerprintCodexMirrorSourceMessage(userPromptMessage),
+        });
+      }
       const mirrorResult = await mirror({
+        assertCurrent: params.params.hostCapabilities.assertActive,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         sessionId: params.params.sessionId,
@@ -334,14 +350,13 @@ function fingerprintMirrorMessageContent(message: MirroredAgentMessage): string 
 }
 
 function buildMirrorDedupeIdentity(message: MirroredAgentMessage): string {
-  const explicit = readMirrorIdentity(message);
-  if (explicit) {
-    return explicit;
-  }
-  return `${message.role}:${fingerprintMirrorMessageContent(message)}`;
+  return (
+    readMirrorIdentity(message) || `${message.role}:${fingerprintMirrorMessageContent(message)}`
+  );
 }
 
 async function mirror(params: {
+  assertCurrent?: () => void;
   sessionId: string;
   cwd?: string;
   sessionKey?: string;
@@ -352,6 +367,7 @@ async function mirror(params: {
   runId?: string;
   runMirrorIdentityPrefix?: string;
   terminalAssistantOwner?: { mirrorIdentity: string; runId: string };
+  prepareAssistantTranscriptMessage?: EmbeddedRunAttemptParams["prepareAssistantTranscriptMessage"];
   config?: SessionTranscriptWriteLockParams["config"];
   skipBeforeMessageWriteHooks?: boolean;
 }): Promise<CodexAppServerTranscriptMirrorResult> {
@@ -385,9 +401,11 @@ async function mirror(params: {
     idempotencyKey ? [idempotencyKey] : [],
   );
   const transcriptTarget = resolveCodexMirrorTranscriptTarget(params);
+  params.assertCurrent?.();
   const mirrorBatch = await withCodexSessionTranscriptMirrorWriteLock(
     { ...transcriptTarget, config: params.config },
     async (transcript) => {
+      params.assertCurrent?.();
       const nextAppendedUpdates: Array<{
         messageId: string;
         message: AgentMessage;
@@ -402,6 +420,7 @@ async function mirror(params: {
       const mirrorFacts = await transcript.readMessageFacts({
         idempotencyKeys: candidateIdempotencyKeys,
       });
+      params.assertCurrent?.();
       for (const { dedupeIdentity, idempotencyKey, message, sourceFingerprint } of candidates) {
         const mirrorIdentity = readMirrorIdentity(message);
         const ownsRun = Boolean(
@@ -444,13 +463,16 @@ async function mirror(params: {
           }
           continue;
         }
-        const nextMessage = params.skipBeforeMessageWriteHooks
-          ? transcriptMessage
-          : runAgentHarnessBeforeMessageWriteHook({
-              message: transcriptMessage,
-              agentId: params.agentId,
-              sessionKey: params.sessionKey,
-            });
+        const nextMessage = runAgentHarnessBeforeMessageWriteHook({
+          message: transcriptMessage,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          skipBeforeMessageWriteHooks: params.skipBeforeMessageWriteHooks,
+          // Only this turn's terminal row belongs to the outer attachment dispatcher.
+          prepareAssistantTranscriptMessage: ownsTerminal
+            ? params.prepareAssistantTranscriptMessage
+            : undefined,
+        });
         if (!nextMessage) {
           if (message.role === "assistant") {
             // A transcript hook deliberately blocked this logical assistant row.
@@ -487,13 +509,23 @@ async function mirror(params: {
           hidden: (message as { display?: boolean }).display === false,
           message: messageToAppend,
         });
+        params.assertCurrent?.();
         const { messageSeq, result: appended } = await transcript.appendMessageWithMessageSequence({
           message: messageToAppend,
+          ...(params.assertCurrent
+            ? {
+                prepareMessageAfterIdempotencyCheck: (preparedMessage: typeof messageToAppend) => {
+                  params.assertCurrent?.();
+                  return preparedMessage;
+                },
+              }
+            : {}),
           // Preliminary facts avoid hooks and payload work on normal retries.
           // SQLite repeats this lookup under BEGIN IMMEDIATE for cross-process safety.
           idempotencyLookup: "scan",
           cwd: params.cwd,
         });
+        params.assertCurrent?.();
         if (!appended) {
           continue;
         }
@@ -545,6 +577,7 @@ async function mirror(params: {
       };
     },
   );
+  params.assertCurrent?.();
   const {
     appendedUpdates,
     assistantMirrorIdentitiesAppended,

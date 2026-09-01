@@ -126,14 +126,19 @@ function retirePluginRegistryIfUnused(registry: PluginRegistry | null): boolean 
 function syncPluginAgentEventBridge(): void {
   state.agentEventBridgeUnsubscribe?.();
   state.agentEventBridgeUnsubscribe = undefined;
-  if (!state.activeRegistry) {
+  const registry = asPluginRegistry(state.activeRegistry);
+  if (!registry) {
     return;
   }
+  const version = state.activeVersion;
   state.agentEventBridgeUnsubscribe = onAgentEvent((event) => {
-    const registry = asPluginRegistry(state.activeRegistry);
-    if (registry) {
-      dispatchPluginAgentEventSubscriptions({ registry, event });
-    }
+    dispatchPluginAgentEventSubscriptions({
+      registry,
+      event,
+      // The registry object can become active again after rollback. Its version
+      // keeps already-dispatched callback authority bound to this exact cutover.
+      isLive: () => state.activeRegistry === registry && state.activeVersion === version,
+    });
   });
 }
 

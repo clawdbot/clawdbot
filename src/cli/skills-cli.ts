@@ -66,7 +66,7 @@ import type {
   SkillProposalSupportFileInput,
 } from "../skills/workshop/types.js";
 import { CONFIG_DIR } from "../utils.js";
-import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
+import { resolveClawHubInstallConfirmation } from "./clawhub-install-confirmation.js";
 import { resolveOptionFromCommand, runCommandWithRuntime } from "./cli-utils.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatCliJsonFailure } from "./failure-output.js";
@@ -89,20 +89,6 @@ type ResolvedClawHubSkillVerificationTarget = Extract<
   Awaited<ReturnType<typeof resolveClawHubSkillVerificationTarget>>,
   { ok: true }
 >;
-
-function resolveSkillClawHubRiskOptions(
-  acknowledgeClawHubRisk: boolean,
-  action: "installing" | "updating",
-) {
-  const riskOptions = resolveClawHubRiskAcknowledgementCliOptions({
-    acknowledgeClawHubRisk,
-    action,
-  });
-  return {
-    ...(riskOptions.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
-    ...(riskOptions.onClawHubRisk ? { onClawHubRisk: riskOptions.onClawHubRisk } : {}),
-  };
-}
 
 function formatSkillWarning(message: string): string {
   return message.includes("╭─") ? message : theme.warn(message);
@@ -642,11 +628,6 @@ export function registerSkillsCli(program: Command) {
       false,
     )
     .option(
-      "--acknowledge-clawhub-risk",
-      "Acknowledge ClawHub release trust warnings without prompting",
-      false,
-    )
-    .option(
       "--acknowledge-install-policy-warning",
       "Acknowledge security.installPolicy warnings without prompting; blocks and failures remain terminal",
       false,
@@ -665,8 +646,6 @@ export function registerSkillsCli(program: Command) {
           version?: string;
           force?: boolean;
           forceInstall?: boolean;
-          acknowledgeClawhubRisk?: boolean;
-          acknowledgeClawHubRisk?: boolean;
           acknowledgeInstallPolicyWarning?: boolean;
           global?: boolean;
           agent?: string;
@@ -689,8 +668,6 @@ export function registerSkillsCli(program: Command) {
             const clawHubOnlyOption = [
               opts.version && "--version",
               opts.forceInstall && "--force-install",
-              (opts.acknowledgeClawhubRisk === true || opts.acknowledgeClawHubRisk === true) &&
-                "--acknowledge-clawhub-risk",
             ].find(Boolean);
             if (clawHubOnlyOption) {
               defaultRuntime.error(
@@ -745,10 +722,7 @@ export function registerSkillsCli(program: Command) {
               acknowledgeInstallPolicyWarning: opts.acknowledgeInstallPolicyWarning,
             }),
             ...(opts.forceInstall ? { forceInstall: true } : {}),
-            ...resolveSkillClawHubRiskOptions(
-              opts.acknowledgeClawhubRisk === true || opts.acknowledgeClawHubRisk === true,
-              "installing",
-            ),
+            confirmInstall: resolveClawHubInstallConfirmation(),
             logger: {
               info: (message) => defaultRuntime.log(message),
               warn: (message) => defaultRuntime.log(formatSkillWarning(message)),
@@ -781,11 +755,6 @@ export function registerSkillsCli(program: Command) {
       false,
     )
     .option(
-      "--acknowledge-clawhub-risk",
-      "Acknowledge ClawHub release trust warnings without prompting",
-      false,
-    )
-    .option(
       "--acknowledge-install-policy-warning",
       "Acknowledge security.installPolicy warnings without prompting; blocks and failures remain terminal",
       false,
@@ -799,8 +768,6 @@ export function registerSkillsCli(program: Command) {
           all?: boolean;
           force?: boolean;
           forceInstall?: boolean;
-          acknowledgeClawhubRisk?: boolean;
-          acknowledgeClawHubRisk?: boolean;
           acknowledgeInstallPolicyWarning?: boolean;
           global?: boolean;
           agent?: string;
@@ -835,10 +802,6 @@ export function registerSkillsCli(program: Command) {
             ...resolveInstallPolicyWarningAcknowledgementCliOptions({
               acknowledgeInstallPolicyWarning: opts.acknowledgeInstallPolicyWarning,
             }),
-            ...resolveSkillClawHubRiskOptions(
-              opts.acknowledgeClawhubRisk === true || opts.acknowledgeClawHubRisk === true,
-              "updating",
-            ),
             logger: {
               info: (message) => defaultRuntime.log(message),
               warn: (message) => defaultRuntime.log(formatSkillWarning(message)),
