@@ -182,13 +182,7 @@ private final class DashboardLinkBrowserTabItemView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        // SDK 27 restores AppKit's "Color" suffix; older Swift importers expose
-        // the same API as quinaryLabel.
-        #if compiler(>=6.4)
-        let hoverColor = NSColor.quinaryLabelColor
-        #else
         let hoverColor = NSColor.quinaryLabel
-        #endif
         let color: NSColor? = if self.isActive {
             .quaternaryLabelColor
         } else if self.isHovered {

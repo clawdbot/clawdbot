@@ -523,6 +523,12 @@ const swiftPMResourceBundles = [
   "SwiftMath_SwiftMath.bundle",
 ] as const;
 
+const mlxTTSResourceBundles = [
+  "mlx-swift_Cmlx.bundle",
+  "swift-crypto_Crypto.bundle",
+  "swift-transformers_Hub.bundle",
+] as const;
+
 function runSwiftPMResourceBundleHarness(missingBundle?: string) {
   const root = tempDirs.make("openclaw-package-resources-root-");
   const buildRoot = path.join(root, "build");
@@ -545,8 +551,59 @@ function runSwiftPMResourceBundleHarness(missingBundle?: string) {
     APP_ROOT=${JSON.stringify(appRoot)}
     PRIMARY_ARCH=arm64
     BUILD_CONFIG=debug
+    SKIP_MLX_TTS=1
     build_path_for_arch() {
       echo "$BUILD_ROOT/$1"
+    }
+    ${getSwiftPMResourceBundleBlock()}
+  `);
+
+  return { appRoot, result };
+}
+
+function runMLXTTSResourceBundleHarness(options?: {
+  missingBundle?: string;
+  omitMetallib?: boolean;
+  skipHelper?: boolean;
+}) {
+  const root = tempDirs.make("openclaw-package-mlx-resources-root-");
+  const buildRoot = path.join(root, "main-build");
+  const helperBuildRoot = path.join(root, "helper-build");
+  const appRoot = path.join(root, "OpenClaw.app");
+  const mainBuildProducts = path.join(buildRoot, "arm64", "debug");
+  const helperBuildProducts = path.join(helperBuildRoot, "arm64", "debug");
+
+  mkdirSync(path.join(appRoot, "Contents", "Resources"), { recursive: true });
+  for (const bundle of swiftPMResourceBundles) {
+    const source = path.join(mainBuildProducts, bundle);
+    mkdirSync(source, { recursive: true });
+    writeFileSync(path.join(source, "marker"), bundle, "utf8");
+  }
+  for (const bundle of mlxTTSResourceBundles) {
+    if (bundle === options?.missingBundle) {
+      continue;
+    }
+    const source = path.join(helperBuildProducts, bundle);
+    mkdirSync(path.join(source, "Contents", "Resources"), { recursive: true });
+    writeFileSync(path.join(source, "marker"), bundle, "utf8");
+    if (bundle === "mlx-swift_Cmlx.bundle" && !options?.omitMetallib) {
+      writeFileSync(path.join(source, "Contents", "Resources", "default.metallib"), "metal");
+    }
+  }
+
+  const result = runHelper(`
+    set -euo pipefail
+    BUILD_ROOT=${JSON.stringify(buildRoot)}
+    MLX_TTS_HELPER_BUILD_ROOT=${JSON.stringify(helperBuildRoot)}
+    APP_ROOT=${JSON.stringify(appRoot)}
+    PRIMARY_ARCH=arm64
+    BUILD_CONFIG=debug
+    SKIP_MLX_TTS=${options?.skipHelper ? "1" : "0"}
+    build_path_for_arch() {
+      echo "$BUILD_ROOT/$1"
+    }
+    helper_build_path_for_arch() {
+      echo "$MLX_TTS_HELPER_BUILD_ROOT/$1"
     }
     ${getSwiftPMResourceBundleBlock()}
   `);
@@ -1042,18 +1099,17 @@ describe("package-mac-app plist stamping", () => {
   );
 
   it.each([
-    { title: "keeps the default backend when Xcode's Metal shim works", shimExit: 0, xcrunExit: 0 },
     {
-      title: "uses the native backend when xcrun can run Metal but Xcode's shim is broken",
-      shimExit: 1,
+      title: "uses the default backend when the Metal Toolchain is installed",
       xcrunExit: 0,
+      expectedBackend: "default",
     },
     {
-      title: "keeps the default backend when no working Metal compiler is installed",
-      shimExit: 1,
+      title: "fails with installation guidance when the Metal Toolchain is unavailable",
       xcrunExit: 1,
+      expectedBackend: null,
     },
-  ])("$title", ({ shimExit, xcrunExit }) => {
+  ])("$title", ({ xcrunExit, expectedBackend }) => {
     const helperBlock = getMLXTTSHelperBuildBlock();
     const tempRoot = tempDirs.make("openclaw-package-mlx-metal-");
     const toolsDir = path.join(tempRoot, "tools");
@@ -1081,7 +1137,6 @@ describe("package-mac-app plist stamping", () => {
         '#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "$MOCK_SWIFT_ARGS"\n',
       ],
       [path.join(toolchainDir, "swift"), "#!/usr/bin/env bash\nexit 0\n"],
-      [path.join(toolchainDir, "metal"), `#!/usr/bin/env bash\nexit ${shimExit}\n`],
     ];
 
     for (const [toolPath, contents] of tools) {
@@ -1106,17 +1161,20 @@ describe("package-mac-app plist stamping", () => {
       "/bin/bash",
     );
 
+    if (expectedBackend === null) {
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("xcodebuild -downloadComponent MetalToolchain");
+      expect(existsSync(invocationPath)).toBe(false);
+      return;
+    }
+
     expect(result.status, result.stderr).toBe(0);
     const swiftArgs = readFileSync(invocationPath, "utf8").trim().split("\n");
     expect(swiftArgs[0]).toBe("build");
     expect(swiftArgs).toContain("--package-path");
     expect(swiftArgs).toContain("--arch");
     expect(swiftArgs).toContain("arm64");
-    if (shimExit === 0 || xcrunExit !== 0) {
-      expect(swiftArgs).not.toContain("--build-system");
-    } else {
-      expect(swiftArgs.slice(1, 3)).toEqual(["--build-system", "native"]);
-    }
+    expect(swiftArgs).not.toContain("--build-system");
   });
 
   it("skips the MLX TTS helper build and copy when OPENCLAW_SKIP_MLX_TTS=1", () => {
@@ -1549,6 +1607,54 @@ describe("package-mac-app plist stamping", () => {
     }
   });
 
+  it("copies every MLX TTS resource bundle and requires its default Metal library", () => {
+    const { appRoot, result } = runMLXTTSResourceBundleHarness();
+
+    expect(result.status, result.stderr).toBe(0);
+    for (const bundle of mlxTTSResourceBundles) {
+      expect(
+        readFileSync(path.join(appRoot, "Contents", "Resources", bundle, "marker"), "utf8"),
+      ).toBe(bundle);
+    }
+    expect(
+      readFileSync(
+        path.join(
+          appRoot,
+          "Contents",
+          "Resources",
+          "mlx-swift_Cmlx.bundle",
+          "Contents",
+          "Resources",
+          "default.metallib",
+        ),
+        "utf8",
+      ),
+    ).toBe("metal");
+  });
+
+  it("fails when an MLX TTS resource bundle or default Metal library is missing", () => {
+    for (const missingBundle of mlxTTSResourceBundles) {
+      const { result } = runMLXTTSResourceBundleHarness({ missingBundle });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("ERROR: Required SwiftPM resource bundle not found at");
+      expect(result.stderr).toContain(missingBundle);
+    }
+
+    const { result } = runMLXTTSResourceBundleHarness({ omitMetallib: true });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("ERROR: Required MLX Metal library not found at");
+  });
+
+  it("does not require MLX TTS resources when the helper is explicitly skipped", () => {
+    const { result } = runMLXTTSResourceBundleHarness({
+      missingBundle: "mlx-swift_Cmlx.bundle",
+      skipHelper: true,
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
   it("routes dependency resource lookups into signed app resources and restores sources", () => {
     const { fixtures, result } = runSwiftPMResourcePatchHarness();
 
@@ -1578,13 +1684,18 @@ describe("package-mac-app plist stamping", () => {
       'node --import tsx "$ROOT_DIR/scripts/apple-app-i18n.ts" compile-macos',
     );
     expect(script).toContain('--output "$APP_ROOT/Contents/Resources"');
-    expect(resourceBlock).toContain(
-      'for resource_bundle_src in "$SWIFTPM_BUILD_PRODUCTS"/*.bundle',
-    );
+    expect(resourceBlock).toContain('for resource_bundle_src in "$build_products"/*.bundle');
     expect(resourceBlock).toContain(
       'cp -R "$resource_bundle_src" "$APP_ROOT/Contents/Resources/$resource_bundle"',
     );
+    expect(resourceBlock).toContain('copy_swiftpm_resource_bundles "$SWIFTPM_BUILD_PRODUCTS"');
+    expect(resourceBlock).toContain(
+      'copy_swiftpm_resource_bundles "$MLX_TTS_SWIFTPM_BUILD_PRODUCTS"',
+    );
     for (const bundle of swiftPMResourceBundles) {
+      expect(resourceBlock).toContain(`"${bundle}"`);
+    }
+    for (const bundle of mlxTTSResourceBundles) {
       expect(resourceBlock).toContain(`"${bundle}"`);
     }
     expect(resourceBlock).toContain("ERROR: Required SwiftPM resource bundle not found");
