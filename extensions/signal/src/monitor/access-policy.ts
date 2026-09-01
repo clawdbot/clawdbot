@@ -121,14 +121,19 @@ export async function resolveSignalAccessState(params: {
   isGroup?: boolean;
   cfg?: Pick<OpenClawConfig, "accessGroups" | "commands">;
   hasControlCommand?: boolean;
+  /** Broad command-shaped probe (plugin command syntax included) that requests command authorization. */
+  shouldComputeCommandAuthorized?: boolean;
   readStoreAllowFrom?: () => Promise<string[]>;
   contextBinding?: ChannelIngressContextBinding;
 }) {
   const isGroup = params.isGroup ?? params.groupId != null;
+  // Authorization must be requested for every command-shaped message (plugin syntax included);
+  // the narrow control-command fact alone drives the control-lane drop and mention bypass.
   const command =
-    params.hasControlCommand === true
+    params.shouldComputeCommandAuthorized || params.hasControlCommand === true
       ? {
           allowTextCommands: true,
+          hasControlCommand: params.hasControlCommand === true,
           directGroupAllowFrom: "effective" as const,
         }
       : undefined;

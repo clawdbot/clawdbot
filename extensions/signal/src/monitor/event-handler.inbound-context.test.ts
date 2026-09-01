@@ -1302,6 +1302,32 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(requireCapturedContext().CommandAuthorized).toBe(true);
   });
 
+  it("authorizes plugin command syntax for allowlisted direct senders", async () => {
+    const handler = createTestHandler({
+      cfg: createDirectConfig({
+        signal: { dmPolicy: "allowlist", allowFrom: ["+15550002222"] },
+      }),
+    });
+
+    await receiveDirectMessage(handler, {
+      dataMessage: { message: "/plugin-tool run", attachments: [] },
+    });
+
+    expect(requireCapturedContext().CommandAuthorized).toBe(true);
+  });
+
+  it("authorizes plugin command syntax for group allowlist senders", async () => {
+    const handler = createTestHandler({
+      cfg: createGroupAllowlistConfig({ signal: { groupAllowFrom: ["g1"] } }),
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["g1"],
+    });
+
+    await receiveGroupMessage(handler, "/plugin-tool run");
+
+    expect(requireCapturedContext().CommandAuthorized).toBe(true);
+  });
+
   it("allows reaction-only group events when groupAllowFrom matches the reaction group id", async () => {
     const handler = createTestHandler({
       cfg: createGroupAllowlistConfig({ signal: { groupAllowFrom: ["g1"] } }),

@@ -226,6 +226,40 @@ describe("msteams group conversation allowlist authorization", () => {
     expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
   });
 
+  it("computes command authorization for plugin command text from an admitted sender", async () => {
+    runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    const { deps } = createDeps({
+      channels: {
+        msteams: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["group-member-aad"],
+          requireMention: false,
+        },
+      },
+    } as OpenClawConfig);
+
+    await createMSTeamsMessageHandler(deps)(
+      createMessageActivity({
+        id: "plugin-command-message",
+        text: "/plugin-tool run",
+        from: {
+          id: "group-member-bot-framework-id",
+          aadObjectId: "group-member-aad",
+          name: "Group Member",
+        },
+        conversation: {
+          id: "19:group@thread.tacv2",
+          conversationType: "groupChat",
+        },
+      }),
+    );
+
+    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    const dispatched = runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mock
+      .calls[0]?.[0] as { ctx?: { CommandAuthorized?: boolean } } | undefined;
+    expect(dispatched?.ctx?.CommandAuthorized).toBe(true);
+  });
+
   const rejectedCases: ConversationCase[] = [
     {
       label: "another group conversation",
