@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SKILL_LIBRARY_MAX_FILE_BYTES } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
@@ -508,8 +508,10 @@ describe("library admission and imports", () => {
     }
     expect(revisions[0]).toBe(revisions[1]);
   });
-  it("counts only unfinished imports against the active upload limit", async () => {
-    const { alice, options } = fixture();
+  it("reserves pending import capacity for other profiles without counting completed receipts", async () => {
+    const { alice, actor, options } = fixture();
+    const bob = actor(ensureProfileForEmail("bob@example.test", options).id);
+    const charlie = actor(ensureProfileForEmail("charlie@example.test", options).id);
     const { default: JSZip } = await import("jszip");
     const zip = new JSZip();
     zip.file("SKILL.md", content);
@@ -528,13 +530,20 @@ describe("library admission and imports", () => {
     if (!("entry" in receipt)) {
       throw new Error("Expected completed import receipt");
     }
-    for (let index = 0; index < 31; index++) {
-      await beginZipUpload(alice, bytes, `pending-${index}`, options);
+    for (let index = 0; index < 16; index++) {
+      await beginZipUpload(alice, bytes, `alice-pending-${index}`, options);
     }
-    await expect(beginZipUpload(alice, bytes, "last-active-slot", options)).resolves.toMatchObject({
-      offset: 0,
-    });
-    await expect(beginZipUpload(alice, bytes, "over-active-limit", options)).rejects.toMatchObject({
+    await expect(beginZipUpload(alice, bytes, "over-profile-limit", options)).rejects.toMatchObject(
+      {
+        code: "LIMIT",
+      },
+    );
+    for (let index = 0; index < 16; index++) {
+      await beginZipUpload(bob, bytes, `bob-pending-${index}`, options);
+    }
+    await expect(
+      beginZipUpload(charlie, bytes, "over-global-limit", options),
+    ).rejects.toMatchObject({
       code: "LIMIT",
     });
     await expect(
@@ -543,6 +552,47 @@ describe("library admission and imports", () => {
     expect(listSkillLibrary(alice, {}, options).entries.map((entry) => entry.skillId)).toEqual([
       receipt.entry.skillId,
     ]);
+  });
+
+  it("counts merged upload owners together while preserving completion and expiry", async () => {
+    const { alice, actor, options } = fixture();
+    const bob = actor(ensureProfileForEmail("bob@example.test", options).id);
+    const { default: JSZip } = await import("jszip");
+    const bytes = await new JSZip().file("SKILL.md", content).generateAsync({ type: "nodebuffer" });
+    const begun = await beginZipUpload(bob, bytes, "before-merge", options);
+    for (let index = 0; index < 8; index++) {
+      await beginZipUpload(alice, bytes, `alice-${index}`, options);
+      await beginZipUpload(bob, bytes, `bob-${index}`, options);
+    }
+    linkEmail("bob@example.test", alice.profileId!, options);
+    // Durable upload owners and retained connections may still carry Bob's pre-merge ID.
+    for (const authority of [alice, bob]) {
+      await expect(beginZipUpload(authority, bytes, "after-merge", options)).rejects.toMatchObject({
+        code: "LIMIT",
+      });
+    }
+    await uploadSkillLibrary(
+      alice,
+      { action: "chunk", uploadId: begun.uploadId, offset: 0, data: bytes.toString("base64") },
+      options,
+    );
+    await expect(
+      uploadSkillLibrary(bob, { action: "commit", uploadId: begun.uploadId }, options),
+    ).resolves.toMatchObject({ state: "published", entry: { ownerProfileId: alice.profileId } });
+    await expect(beginZipUpload(alice, bytes, "still-full", options)).rejects.toMatchObject({
+      code: "LIMIT",
+    });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 3_600_000);
+    try {
+      await expect(beginZipUpload(bob, bytes, "after-expiry", options)).resolves.toMatchObject({
+        offset: 0,
+      });
+      await expect(
+        uploadSkillLibrary(alice, { action: "commit", uploadId: begun.uploadId }, options),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("rejects a compressed oversized ZIP member at extraction before publishing a skill", async () => {

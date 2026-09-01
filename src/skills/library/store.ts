@@ -125,6 +125,32 @@ export function requireSkillLibraryProfile(
   return actor.profileId;
 }
 
+export function requireSkillLibraryUpload(
+  db: DatabaseSync,
+  uploadId: string,
+  authority: SkillLibraryAuthority,
+) {
+  const actor = requireSkillLibraryProfile(db, authority);
+  const upload = executeSqliteQueryTakeFirstSync(
+    db,
+    skillLibraryDb(db)
+      .selectFrom("skill_library_uploads")
+      .selectAll()
+      .where("upload_id", "=", uploadId),
+  );
+  if (
+    !upload ||
+    upload.expires_at <= Date.now() ||
+    selectResolvedUserProfileById(db, upload.owner_profile_id)?.id !== actor
+  ) {
+    throw new SkillLibraryError(
+      "NOT_FOUND",
+      "Upload not found for your profile, or expired. Start a new import.",
+    );
+  }
+  return upload;
+}
+
 export function selectSkillLibraryRow(
   db: DatabaseSync,
   skillId: string,
