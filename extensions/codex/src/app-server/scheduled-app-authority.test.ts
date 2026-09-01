@@ -8,7 +8,6 @@ import {
   type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
 import {
-  buildConfiguredCodexAccountFingerprint,
   buildLegacyScheduledCodexAppRecoveryPrompt,
   buildScheduledCodexAppAuthorityInputFingerprint,
   captureScheduledCodexAppAuthority,
@@ -309,12 +308,7 @@ describe("scheduled Codex app authority", () => {
     ).rejects.toThrow("No automation changes were saved");
   });
 
-  it("captures the configured app-server account without storing credentials", async () => {
-    const accountResponse = {
-      account: { type: "chatgpt", email: "Configured.Account@example.com", planType: "business" },
-      requiresOpenaiAuth: false,
-    };
-    const accountFingerprint = buildConfiguredCodexAccountFingerprint(accountResponse);
+  it("captures configured app-server authority without a prepared ChatGPT account", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "app/installed") {
         return { apps: [{ id: "calendar", enabled: true, callable: true }] };
@@ -329,9 +323,6 @@ describe("scheduled Codex app authority", () => {
           ],
           nextCursor: null,
         };
-      }
-      if (method === "account/read") {
-        return accountResponse;
       }
       if (method === "config/read") {
         return { config: {} };
@@ -354,7 +345,6 @@ describe("scheduled Codex app authority", () => {
         auth: {
           kind: "configured-app-server",
           connectionFingerprint: "configured-connection",
-          accountFingerprint,
         },
         apps: [
           {
@@ -366,40 +356,6 @@ describe("scheduled Codex app authority", () => {
           },
         ],
       }),
-    );
-    expect(request).toHaveBeenCalledWith(
-      "account/read",
-      { refreshToken: false },
-      expect.any(Object),
-    );
-  });
-
-  it("refuses configured app authority when the account identity is unavailable", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "app/installed") {
-        return { apps: [] };
-      }
-      if (method === "mcpServerStatus/list") {
-        return { data: [], nextCursor: null };
-      }
-      if (method === "account/read") {
-        return { account: null, requiresOpenaiAuth: true };
-      }
-      return { config: {} };
-    });
-
-    await expect(
-      captureScheduledCodexAppAuthority({
-        client: { request } as never,
-        threadId: "thread-final",
-        policyContext: policyContext(),
-        auth: {
-          kind: "configured-app-server",
-          connectionFingerprint: "configured-connection",
-        },
-      }),
-    ).rejects.toThrow(
-      "Codex app authority requires a genuine ChatGPT account identity from the configured app-server",
     );
   });
 
@@ -488,26 +444,6 @@ describe("scheduled Codex app authority", () => {
         toolNamesByApp: new Map(),
       }),
     ).toThrow("Scheduled Codex apps are unavailable under the current policy or account: calendar");
-  });
-
-  it("fails before execution when the configured app-server account changes", () => {
-    expect(() =>
-      intersectCodexPluginThreadConfigWithScheduledAuthority(
-        threadConfig(),
-        authority({
-          auth: {
-            kind: "configured-app-server",
-            connectionFingerprint: "configured-connection",
-            accountFingerprint: "creator-account",
-          },
-        }),
-        {
-          config: {},
-          toolNamesByApp: new Map([["calendar", new Set(["list"])]]),
-          accountFingerprint: "runtime-account",
-        },
-      ),
-    ).toThrow("different configured Codex ChatGPT account");
   });
 
   it.each([
