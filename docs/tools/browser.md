@@ -358,6 +358,7 @@ main model can read the screenshot directly.
 - To proxy the managed browser itself, pass explicit Chrome proxy flags through `browser.extraArgs`, such as `--proxy-server=...` or `--proxy-pac-url=...`. Strict SSRF mode blocks explicit browser proxy routing unless private-network browser access is intentionally enabled.
 - `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` is off by default; enable only when private-network browser access is intentionally trusted.
 - `browser.ssrfPolicy.allowedHostnames` grants exact hosts while the rest of the private network remains blocked.
+- `browser.ssrfPolicy.blockedHostnames` denies exact hosts and wildcard subdomains before DNS and allow rules, even when private-network access is enabled. For example, `["tracker.example.com", "*.ads.example.com"]` blocks those hosts while leaving other destinations subject to the existing policy. Wildcards do not match the apex; add `ads.example.com` separately to block it. Matching ignores case and trailing dots; use ASCII/Punycode for internationalized domains. Empty or unset adds no denials. This applies to guarded navigation, not all browser traffic; see [browser SSRF limits](/gateway/security#browser-ssrf-policy-strict-by-default).
 - `browser.ssrfPolicy.allowRfc2544BenchmarkRange` and `browser.ssrfPolicy.allowIpv6UniqueLocalRange` narrowly allow trusted fake-IP proxy ranges.
 - `browser.ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias.
 

@@ -715,6 +715,11 @@ describe("browser config", () => {
       expected: { allowedHostnames: ["example.com", "*.example.com"] },
     },
     {
+      name: "preserves blocklist-only browser SSRF policy",
+      config: { ssrfPolicy: { blockedHostnames: ["tracker.example.com", "*.ads.example.com"] } },
+      expected: { blockedHostnames: ["tracker.example.com", "*.ads.example.com"] },
+    },
+    {
       name: "keeps configured profile cdpUrls out of the shared browser SSRF policy",
       config: withProfile("remote", {
         color: "#123456",

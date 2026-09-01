@@ -48,6 +48,7 @@ function requiresPinnedChromeMcpCdpTransport(cdpPolicy?: SsrFPolicy): boolean {
     policyIntent.allowIpv6UniqueLocalRange === true ||
     hasPolicyEntries(policyIntent.allowedHostnames) ||
     hasPolicyEntries(policyIntent.hostnameAllowlist) ||
+    hasPolicyEntries(policyIntent.blockedHostnames) ||
     hasPolicyEntries(policyIntent.allowedOrigins);
   return !(
     !hasScopedPolicy &&

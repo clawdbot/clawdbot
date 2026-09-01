@@ -768,19 +768,22 @@ describe("CDP reachability policy", () => {
     ).toThrow(/cannot carry that pinned transport/i);
   });
 
-  it("does not let trusted private CDP policy override endpoint allowlists for Chrome MCP", () => {
-    const profile = createProfile({
-      driver: "existing-session",
-      cdpUrl: "http://127.0.0.1:9222",
-      cdpHost: "127.0.0.1",
-      cdpIsLoopback: true,
-    });
+  it.each([{ allowedHostnames: ["127.0.0.1"] }, { blockedHostnames: ["tracker.example.com"] }])(
+    "does not let trusted private CDP policy override scoped restrictions %j",
+    (restriction) => {
+      const profile = createProfile({
+        driver: "existing-session",
+        cdpUrl: "http://127.0.0.1:9222",
+        cdpHost: "127.0.0.1",
+        cdpIsLoopback: true,
+      });
 
-    expect(() =>
-      assertChromeMcpCdpTransportAllowed(profile, {
-        dangerouslyAllowPrivateNetwork: true,
-        allowedHostnames: ["127.0.0.1"],
-      }),
-    ).toThrow(/cannot carry that pinned transport/i);
-  });
+      expect(() =>
+        assertChromeMcpCdpTransportAllowed(profile, {
+          dangerouslyAllowPrivateNetwork: true,
+          ...restriction,
+        }),
+      ).toThrow(/cannot carry that pinned transport/i);
+    },
+  );
 });
