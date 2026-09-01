@@ -225,7 +225,9 @@ export function parseSessionEntries(content: string): FileEntry[] {
 }
 
 export function getLatestCompactionEntry(entries: SessionEntry[]): CompactionEntry | null {
-  for (const entry of entries.toReversed()) {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    // SAFETY: The reverse index stays within the canonical session entries.
+    const entry = entries[index]!;
     if (entry.type === "reset") {
       return null;
     }
