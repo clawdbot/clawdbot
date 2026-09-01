@@ -47,7 +47,6 @@ export {
   type PluginApprovalResolved,
 } from "../infra/plugin-approvals.js";
 export type {
-  SystemAgentApprovalApplicationStatus,
   SystemAgentApprovalRequest,
   SystemAgentApprovalRequestPayload,
   SystemAgentApprovalResolved,
